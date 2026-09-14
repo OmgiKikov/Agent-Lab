@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, draftPatchSchema, emptyUsage, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, settingsSchema, targetSchema, validatePreparation,
+  createInputSchema, draftPatchSchema, emptyUsage, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 
@@ -177,4 +177,54 @@ test('exact final-answer checks reject impossible combinations without constrain
   assert.throws(() => validate([exact, forbidden]), /Exact answer contains forbidden/);
   assert.throws(() => validate([forbidden, exact]), /Exact answer contains forbidden/);
   assert.doesNotThrow(() => validate([exact, { ...exact, id: 'same' }, { id: 'earlier', kind: 'answer_contains', description: 'Earlier clarification', value: 'What is your name?' }]));
+});
+
+test('user state fields are optional, unique and travel through golden cases', () => {
+  const parsed = validatePreparation(preparation([card({ user: { ...user, knows: ['Card ends with 4321', 'Two cards'], cannotKnow: ['Backend error reason'],
+    answers: [{ ifAsked: 'last four digits', reply: 'It ends with 4321.' }] } })]), [source], 'evaluate').scenarios[0]!;
+  assert.deepEqual(parsed.user.knows, ['Card ends with 4321', 'Two cards']);
+  assert.deepEqual(parsed.user.answers, [{ ifAsked: 'last four digits', reply: 'It ends with 4321.' }]);
+  assert.throws(() => validatePreparation(preparation([card({ user: { ...user, knows: ['A101', 'a101'] } })]), [source], 'evaluate'), /Duplicate known facts/);
+  const golden = goldenCaseSchema.parse({ id: 'g', goal: 'Block a lost card', opening: 'I lost my card', successCriteria: 'blocked',
+    knows: ['Last four digits 4321'], cannotKnow: ['Why the backend refused'], answers: [{ ifAsked: 'digits', reply: '4321' }] });
+  const scenario = goldenToScenario(golden);
+  assert.deepEqual([scenario.user.knows, scenario.user.cannotKnow, scenario.user.answers], [['Last four digits 4321'], ['Why the backend refused'], [{ ifAsked: 'digits', reply: '4321' }]]);
+});
+
+test('synthetic answers may only reveal values the user already knows', () => {
+  const known = card({ user: { ...user, opening: 'Move my appointment', facts: 'Appointment A103', answers: [{ ifAsked: 'ID', reply: 'It is A103.' }] } });
+  assert.doesNotThrow(() => validatePreparation(preparation([known]), [source], 'evaluate'));
+  const invented = card({ user: { ...user, answers: [{ ifAsked: 'ID', reply: 'It is A999.' }] } });
+  assert.throws(() => validatePreparation(preparation([invented]), [source], 'evaluate'), /a999/);
+  const curated = card({ provenance: 'curated', requirementIds: [], user: { ...user, answers: [{ ifAsked: 'ID', reply: 'It is A999.' }] } });
+  assert.doesNotThrow(() => validatePreparation(preparation([curated]), [source], 'evaluate'));
+  assert.deepEqual([...valueTokens('Card 4321, time 14:00. Code 202-7 and A103.')].sort(), ['14:00', '202-7', '4321', 'a103']);
+  assert.deepEqual([...valueTokens('two cards, no digits here')], []);
+});
+
+test('external world state is opaque, size-bounded and never part of the sandbox contract', () => {
+  const world = worldSchema.parse({ records: {}, writableFields: [], transientFailures: 0, external: { cards: [{ id: 'c1', status: 'active' }] } });
+  assert.deepEqual(world.external, { cards: [{ id: 'c1', status: 'active' }] });
+  assert.equal(worldSchema.safeParse({ records: {}, writableFields: [], transientFailures: 0, external: { blob: 'x'.repeat(20001) } }).success, false);
+  assert.equal(worldSchema.parse({ records: {}, writableFields: [], transientFailures: 0 }).external, undefined);
+});
+
+test('simulator checks, release hooks, release logs and prompt quotes have schemas', () => {
+  assert.deepEqual([...SIMULATOR_CHECK_IDS], ['simulator_leak', 'simulator_fabrication', 'simulator_loop']);
+  const trial = trialSchema.parse({ id: 't', revisionId: 'r', scenarioId: 's', familyId: 'f', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], events: [],
+    initialState: { records: {}, writableFields: [], transientFailures: 0 }, finalState: { records: {}, writableFields: [], transientFailures: 0 }, usage: emptyUsage(), elapsedMs: 1,
+    simulatorChecks: [{ id: 'simulator_leak', description: 'd', passed: false, evidence: 'e', seq: 3, heuristic: false }] });
+  assert.equal(trial.simulatorChecks![0]!.seq, 3);
+  assert.equal(trialSchema.safeParse({ ...trial, simulatorChecks: [{ id: 'other', description: 'd', passed: true, evidence: 'e', heuristic: false }] }).success, false);
+  const target = targetSchema.parse({ kind: 'command', command: 'python3', args: ['/abs/agent.py'], release: { command: './release.sh', args: ['candidate'] } });
+  assert.deepEqual(target.kind === 'command' ? target.release : undefined, { command: './release.sh', args: ['candidate'], timeoutMs: 120000 });
+  assert.equal(targetSchema.safeParse({ kind: 'http', url: 'http://127.0.0.1:1/a', release: { command: 'x', cwd: 'relative' } }).success, false);
+  assert.equal(targetSchema.safeParse({ kind: 'sandbox', release: { command: 'x' } }).success, false);
+  const record = experimentSchema.parse({ ...legacyRecord(), releaseLog: { command: './release.sh', exitCode: 0, signal: null, stdout: 'ok', stderr: '', startedAt: 'now', durationMs: 12 } });
+  assert.equal(record.releaseLog?.exitCode, 0);
+  const trials = [{ id: 't1', outcome: 'fail' } as unknown as Parameters<typeof validateFailureModes>[1][number]];
+  const mode = { id: 'm', name: 'Нашёл статью и отправил на линию', description: 'd', trialIds: ['t1'], promptQuotes: ['always hand off to the hotline'] };
+  validateFailureModes([mode], trials, 'You must always hand off to the hotline when unsure.');
+  assert.throws(() => validateFailureModes([mode], trials), /промпт не передавался/);
+  assert.throws(() => validateFailureModes([mode], trials, 'A different prompt.'), /дословно/);
 });

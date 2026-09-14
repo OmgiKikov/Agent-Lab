@@ -8,6 +8,21 @@ export type ToolName = typeof TOOL_NAMES[number];
 const identifier = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).refine(v => !['__proto__', 'prototype', 'constructor'].includes(v), 'Reserved identifier');
 const text = z.string().trim().min(1);
 const unique = <T>(values: T[]) => new Set(values).size === values.length;
+/**
+ * Value-like tokens: runs of letters/digits/`:./-` that contain a digit and are at least three
+ * characters long after trailing punctuation is trimmed, lower-cased. `4321`, `A103`, `14:00`,
+ * `202-7` and `11.03.2024` are tokens; `two cards` has none. Used by the answers rule and by
+ * the fabrication heuristic, so both sides of the simulator agree on what a "value" is.
+ */
+const VALUE_TOKEN = /[A-Za-zА-Яа-яЁё0-9:./-]+/g;
+export function valueTokens(text: string): Set<string> {
+  const tokens = new Set<string>();
+  for (const raw of text.match(VALUE_TOKEN) ?? []) {
+    const token = raw.replace(/[.,:]+$/, '').toLocaleLowerCase();
+    if (token.length >= 3 && /\d/.test(token)) tokens.add(token);
+  }
+  return tokens;
+}
 export const scalarSchema = z.union([z.string().max(8000), z.number().finite(), z.boolean(), z.null()]);
 export const agentSchema = z.strictObject({
   name: text.max(120),
@@ -58,26 +73,38 @@ const settingsPatchSchema = z.strictObject({
  * External targets speak a JSON contract (see targets.ts); their secrets stay in environment variables.
  */
 const promptFile = z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute prompt path required').optional();
+const absolutePath = z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required');
+/** Deploys the version under test before a run. Identity still comes from the adapter's `version`; the hook only performs the rollout. */
+const releaseSchema = z.strictObject({
+  command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
+  cwd: absolutePath.optional(), timeoutMs: z.number().int().min(1000).max(600000).default(120000),
+}).optional();
 export const targetSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('sandbox') }),
   z.strictObject({
     kind: z.literal('http'), promptFile, url: z.string().url().max(2000),
     headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/, 'Header values must name environment variables')).default({}),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),
+    release: releaseSchema,
   }),
   z.strictObject({
     kind: z.literal('module'), promptFile, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
     exportName: z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{0,99}$/).default('createSession'),
     timeoutMs: z.number().int().min(1000).max(600000).optional(),
+    release: releaseSchema,
   }),
   /** A local process (for example `python3 agent.py`) speaking one JSON request/reply per line over stdin/stdout. */
   z.strictObject({
     kind: z.literal('command'), promptFile, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
     cwd: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required').optional(),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),
+    release: releaseSchema,
   }),
 ]);
 export type Target = z.infer<typeof targetSchema>;
+export type ReleaseHook = NonNullable<Extract<Target, { kind: 'command' }>['release']>;
+export interface ReleaseLog { command: string; exitCode: number | null; signal: string | null; stdout: string; stderr: string; startedAt: string; durationMs: number }
+const releaseLogSchema = z.strictObject({ command: z.string().max(8000), exitCode: z.number().int().nullable(), signal: z.string().max(40).nullable(), stdout: z.string().max(4000), stderr: z.string().max(4000), startedAt: text, durationMs: z.number().nonnegative() });
 
 export interface Source { id: string; name: string; content: string; hash: string }
 export const requirementSchema = z.strictObject({
@@ -88,6 +115,10 @@ export const worldSchema = z.strictObject({
   records: z.record(identifier, z.record(identifier, scalarSchema)).refine(v => Object.keys(v).length <= 30, 'Too many records'),
   writableFields: z.array(identifier).max(16),
   transientFailures: z.number().int().min(0).max(2).default(0),
+  /** Opaque state for the agent's own test environment (cards, contracts, tool fixtures). The sandbox ignores it; adapters must apply and confirm it. */
+  external: z.record(z.string().max(120), z.unknown()).optional(),
+}).superRefine((v, ctx) => {
+  if (v.external !== undefined && JSON.stringify(v.external).length > 20000) ctx.addIssue({ code: 'custom', message: 'External state exceeds 20,000 characters', path: ['external'] });
 });
 export type World = z.infer<typeof worldSchema>;
 /**
@@ -167,6 +198,12 @@ export const userSchema = z.strictObject({
   persona: text.max(2000).optional(), characteristics: z.array(text.max(300)).max(12).optional(),
   script: z.array(z.string().min(1).max(3000).refine(v => !!v.trim(), 'Empty user message')).max(15).optional()
     .describe('Follow-up messages AFTER opening, never include opening itself. [] means opening only. Every line must fit maxFollowUps and maxTurns.'),
+  /** Atomic facts the user can state, with their exact values. */
+  knows: z.array(text.max(300)).max(20).refine(v => unique(v.map(x => x.toLocaleLowerCase())), 'Duplicate known facts').optional(),
+  /** What the user cannot know, in words: backend reasons, correct business answers, hidden state. */
+  cannotKnow: z.array(text.max(300)).max(20).optional(),
+  /** Complete replies to clarifications the agent is likely to ask; the simulator uses them verbatim. */
+  answers: z.array(z.strictObject({ ifAsked: text.max(300), reply: text.max(1000) })).max(20).optional(),
 });
 /**
  * The rung a card occupies. smoke: the basics that must never break, whatever else changes.
@@ -236,6 +273,7 @@ export const goldenCaseSchema = z.strictObject({
   script: z.array(text.max(3000)).max(15).optional(), maxFollowUps: z.number().int().min(0).max(15).default(1),
   successCriteria: text.max(3000), initialState: worldSchema.default({ records: {}, writableFields: [], transientFailures: 0 }),
   checks: z.array(checkSchema).max(12).default([]), metrics: z.array(rubricSchema).max(8).default([]),
+  knows: userSchema.shape.knows, cannotKnow: userSchema.shape.cannotKnow, answers: userSchema.shape.answers,
 });
 export type GoldenCase = z.infer<typeof goldenCaseSchema>;
 export function goldenToScenario(c: GoldenCase): Omit<Scenario, 'split'> {
@@ -244,6 +282,7 @@ export function goldenToScenario(c: GoldenCase): Omit<Scenario, 'split'> {
     user: {
       goal: c.goal, facts: c.facts, behavior: c.behavior, opening: c.opening, maxFollowUps: c.maxFollowUps,
       ...(c.persona ? { persona: c.persona } : {}), ...(c.characteristics.length ? { characteristics: c.characteristics } : {}), ...(c.script ? { script: c.script } : {}),
+      ...(c.knows ? { knows: c.knows } : {}), ...(c.cannotKnow ? { cannotKnow: c.cannotKnow } : {}), ...(c.answers ? { answers: c.answers } : {}),
     },
     initialState: c.initialState, checks: c.checks, successCriteria: c.successCriteria,
     assumptions: ['Curated golden case supplied by the owner; not generated by a model.'], metrics: c.metrics,
@@ -341,10 +380,14 @@ export const assessmentEventContent = (event: TraceEvent): string =>
   event.text !== undefined && [event.tool, event.args, event.result, event.state].every(value => value === undefined) ? event.text
     : JSON.stringify({ text: event.text, tool: event.tool, args: event.args, result: event.result, state: event.state });
 export interface CheckResult { id: string; description: string; passed: boolean; evidence: string }
+export const SIMULATOR_CHECK_IDS = ['simulator_leak', 'simulator_fabrication', 'simulator_loop'] as const;
+export type SimulatorCheckId = typeof SIMULATOR_CHECK_IDS[number];
+/** A code predicate over the simulated user's own replies. Never an agent grade; never shown to the judge. */
+export interface SimulatorCheck { id: SimulatorCheckId; description: string; passed: boolean; evidence: string; seq?: number; heuristic: boolean }
 export interface Trial {
   id: string; revisionId: string; scenarioId: string; familyId: string; repeat: number; userMode: UserMode;
   split: 'dev' | 'control'; manifestHash: string; outcome: Outcome; reason: string;
-  checks: CheckResult[]; events: TraceEvent[]; initialState: World; finalState: World;
+  checks: CheckResult[]; simulatorChecks?: SimulatorCheck[]; events: TraceEvent[]; initialState: World; finalState: World;
   usage: Usage; elapsedMs: number;
   assessments?: MetricAssessment[]; assessmentError?: string; judgeAudit?: JudgeAudit;
   observation?: { state: 'sandbox' | 'reported' | 'missing'; tools: 'sandbox' | 'complete' | 'partial'; resetConfirmed?: boolean; version?: string; toolScope?: string[] };
@@ -439,6 +482,7 @@ export interface Experiment {
   humanReviews: HumanReview[]; resultsReviewedAt?: string; resultsReviewHash?: string;
   /** Named clusters over the failed dialogues of this run; the bridge from evaluation to fixing. */
   failureModes?: FailureMode[];
+  releaseLog?: ReleaseLog;
   parentRunId?: string;
   selectedScenarioIds?: string[];
   targetVersion?: string;
@@ -458,6 +502,7 @@ export const trialSchema = z.strictObject({
   userMode: userModeSchema.default('reactive'),
   split: z.enum(['dev', 'control']), manifestHash: text, outcome: z.enum(['pass', 'fail', 'ungraded', 'invalid', 'cancelled']), reason: z.string(),
   checks: z.array(z.strictObject({ id: identifier, description: z.string(), passed: z.boolean(), evidence: z.string() })),
+  simulatorChecks: z.array(z.strictObject({ id: z.enum(SIMULATOR_CHECK_IDS), description: z.string(), passed: z.boolean(), evidence: z.string(), seq: z.number().int().nonnegative().optional(), heuristic: z.boolean() })).max(12).optional(),
   events: z.array(z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() })),
   initialState: worldSchema, finalState: worldSchema, usage: usageSchema, elapsedMs: z.number().finite().nonnegative(),
   assessments: z.array(metricAssessmentSchema).max(8).optional(), assessmentError: z.string().max(4000).optional(),
@@ -484,9 +529,11 @@ const comparisonSchema = z.strictObject({
 export const failureModeSchema = z.strictObject({
   id: identifier, name: text.max(160), description: text.max(2000),
   stage: text.max(80).optional(), trialIds: z.array(identifier).min(1).max(200),
+  /** Verbatim fragments of the agent's prompt that govern the broken behaviour; empty when no fragment does. */
+  promptQuotes: z.array(text.max(300)).max(5).optional(),
 });
 export type FailureMode = z.infer<typeof failureModeSchema>;
-export function validateFailureModes(modes: FailureMode[], trials: Trial[]): void {
+export function validateFailureModes(modes: FailureMode[], trials: Trial[], prompt?: string): void {
   const failed = new Set(trials.filter(t => t.outcome === 'fail' || t.outcome === 'ungraded'
     || t.outcome === 'pass' && t.assessments?.some(a => a.result === 'fail')).map(t => t.id));
   if (!unique(modes.map(m => m.id))) throw new Error('Названия провалов повторяются.');
@@ -494,6 +541,10 @@ export function validateFailureModes(modes: FailureMode[], trials: Trial[]): voi
     if (!unique(mode.trialIds)) throw new Error(`Кластер ${mode.id} ссылается на один диалог дважды.`);
     const unknown = mode.trialIds.filter(id => !failed.has(id));
     if (unknown.length) throw new Error(`Кластер ${mode.id} ссылается на диалоги, которые не проваливались: ${unknown.join(', ')}`);
+    for (const quote of mode.promptQuotes ?? []) {
+      if (prompt === undefined) throw new Error(`Кластер ${mode.id} цитирует промпт, но промпт не передавался.`);
+      if (!prompt.includes(quote)) throw new Error(`Кластер ${mode.id} цитирует фрагмент, которого нет дословно в промпте: «${quote.slice(0, 80)}»`);
+    }
   }
 }
 
@@ -514,6 +565,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
     verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000), durationMs: z.number().int().nonnegative().max(3600000).optional(),
   })).default([]), resultsReviewedAt: text.optional(), resultsReviewHash: text.optional(),
   failureModes: z.array(failureModeSchema).max(30).optional(),
+  releaseLog: releaseLogSchema.optional(),
   parentRunId: identifier.optional(), selectedScenarioIds: z.array(identifier).min(1).max(40).optional(), targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),
   clarifications: z.array(clarificationSchema).max(100).optional(),
   assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
@@ -555,7 +607,7 @@ export interface Runtime {
   assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial }, ctx: CallContext): Promise<MetricAssessment[]>;
   profiles?(input: { task: string; sources: Source[]; dialogues: Dialogue[] }, ctx: CallContext): Promise<Profile[]>;
   goals?(input: { task: string; sources: Source[]; dialogues: Dialogue[]; profiles: Profile[] }, ctx: CallContext): Promise<ObservedGoal[]>;
-  failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[] }, ctx: CallContext): Promise<FailureMode[]>;
+  failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
 }
 
 /** Stable JSON content identity; array order remains significant. */
@@ -583,6 +635,11 @@ export function validatePreparation(raw: unknown, sources: Source[], workflow: '
   for (const s of p.scenarios) {
     const synthetic = s.provenance === 'synthetic';
     if (synthetic && !s.requirementIds.length) throw new Error(`Scenario ${s.id} needs at least one grounded requirement`);
+    if (synthetic) for (const answer of s.user.answers ?? []) {
+      const known = valueTokens([s.user.opening, s.user.facts, ...(s.user.knows ?? [])].join('\n'));
+      const unknown = [...valueTokens(answer.reply)].filter(token => !known.has(token));
+      if (unknown.length) throw new Error(`Scenario ${s.id}: the reply to "${answer.ifAsked}" reveals a value the user does not know: ${unknown[0]}`);
+    }
     if (s.profileId !== undefined && !profiles.some(profile => profile.id === s.profileId)) throw new Error(`Scenario ${s.id} references an unknown profileId`);
     if (s.profileId !== undefined) {
       const profile = profiles.find(candidate => candidate.id === s.profileId)!;
