@@ -388,8 +388,11 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
             const source = input.sources.find(s => s.id === requirement.sourceId);
             if (!source) return `Requirement ${requirement.id} cites source ${requirement.sourceId}, which was not supplied.`;
             const exact = verbatimSpan(source.content, requirement.quote);
-            if (exact) requirement.quote = exact;
-            else missing.push(`${requirement.id} (not in "${source.name}")`);
+            if (exact) { requirement.quote = exact; continue; }
+            // The words are real but the attribution is wrong: a quote found in exactly one other source belongs to it.
+            const elsewhere = input.sources.filter(s => s.id !== source.id && verbatimSpan(s.content, requirement.quote));
+            if (elsewhere.length === 1) { requirement.sourceId = elsewhere[0]!.id; requirement.quote = verbatimSpan(elsewhere[0]!.content, requirement.quote)!; continue; }
+            missing.push(`${requirement.id} (not in "${source.name}")`);
           }
           if (missing.length) return `These quotes are not verbatim substrings of their sources: ${missing.join('; ')}. Copy the exact characters from the source instead of paraphrasing; a shorter contiguous fragment is safer than a long one. Keep every other requirement as it is.`;
           return undefined;

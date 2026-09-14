@@ -898,3 +898,21 @@ test('a rejection names every requirement whose quote is not in its source, so o
     assert.match(repair, /shorter/i);
   } finally { await f.close(); }
 });
+
+test('a quote that lives in another supplied source is re-attributed to it instead of being rejected', async () => {
+  const rules = 'Удали из ответа служебную информацию: данные из "СберДруг", "ЦКР".';
+  const articles = 'Терминал блокируется по инициативе банка.';
+  const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!] };
+  const outputs = [
+    { requirements: [{ id: 'req_1', text: 'No internal names', sourceId: 'article_1', quote: 'данные из "СберДруг", "ЦКР"', critical: true }], questions: [] },
+    { scenarios: [card] },
+  ];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check internal names', scenarioCount: 1, targetKind: 'command',
+      sources: [{ id: 'article_1', name: 'block.md', content: articles, hash: 'a' }, { id: 'prompt_1', name: 'prompt.md', content: rules, hash: 'p', kind: 'prompt' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.equal(prepared.requirements[0]!.sourceId, 'prompt_1');
+    assert.equal(prepared.requirements[0]!.quote, 'данные из "СберДруг", "ЦКР"');
+  } finally { await f.close(); }
+});

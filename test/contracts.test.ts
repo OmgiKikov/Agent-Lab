@@ -244,3 +244,11 @@ test('a quote that differs from its source only in typography is still that sour
   assert.equal(verbatimSpan(content, 'Раздел Эквайринг показывает тариф'), undefined);
   assert.equal(verbatimSpan(content, 'ОПЕРАТОР этого сделать не может'), undefined);
 });
+
+test('a quote that skips the list markers of its source is still that source', () => {
+  const content = 'Для заявок на установку терминала сообщай:\n- номер заявки, статус заявки, срок исполнения заявки\n- дату визита\n\nШаги:\n1. Открой раздел.\n2. Нажми «Тариф».';
+  assert.equal(verbatimSpan(content, 'сообщай: номер заявки, статус заявки'), 'сообщай:\n- номер заявки, статус заявки');
+  assert.equal(verbatimSpan(content, 'срок исполнения заявки дату визита'), 'срок исполнения заявки\n- дату визита');
+  assert.equal(verbatimSpan(content, 'Шаги: Открой раздел. Нажми "Тариф".'), 'Шаги:\n1. Открой раздел.\n2. Нажми «Тариф».');
+  assert.equal(verbatimSpan(content, 'номер заявки - статус заявки'), undefined);
+});
