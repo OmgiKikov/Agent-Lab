@@ -1,6 +1,6 @@
 # Simulator v1 and Prompt MVP Hooks — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make the user simulator the measured centre of Agent Lab: structured user state in cards, code-checked simulator failure modes, a per-run simulator scorecard, mode-value and paired-family statistics, external world state per card, and the release/prompt hooks needed to run the prompt-improvement loop against the real AIGW agent.
 
@@ -9,6 +9,8 @@
 **Tech Stack:** TypeScript 5.9 strict, Node 22 (`node:test` via `tsx`), zod 4, `@earendil-works/pi-coding-agent` 0.85.1, Python 3.12 for the AIGW local layer.
 
 **Spec:** `docs/superpowers/specs/2026-09-14-simulator-v1-design.md` (read it first; every task below cites its section).
+
+**Status (2026-09-14):** all 11 tasks done on branch `full-project-review-feature-plan`. Tasks 1–6 as written; Tasks 7–8 with the hardening the three reviews asked for: all three simulator checks are heuristics with word-boundary matching and pair-keyed loops, one `measurementUsable` rule decides eligibility for comparisons, CI exit codes, prompt proposals and the verdict, an unconfirmed external world makes the trial invalid, the family delta pairs cards before averaging and comparable runs always carry a delta object. Surface labels differ from the "exactly" names below on purpose (`Проверки симулятора · эвристики`, `Симулятор`, `Парная дельта: … п.п.`); the tests in `test/cards.test.ts`, `test/artifacts.test.ts` and `test/editor.test.ts` assert the shipped labels. Task 10 landed in aigw-local `27d56d6` with the service attesting the loaded prompt bytes through `/local/agent-lab/identity` instead of the adapter hashing a file. Task 11 is recorded in `docs/IMPLEMENTATION.md` (runs `bd193485…` and `5d7cfa9d…`). 234 tests.
 
 ## Global Constraints
 
@@ -66,7 +68,7 @@
   - `export function valueTokens(text: string): Set<string>`
   - `goldenCaseSchema` accepts `knows`, `cannotKnow`, `answers`; `goldenToScenario` copies them
 
-- [ ] **Step 1: Write the failing tests** — append to `test/contracts.test.ts`:
+- [x] **Step 1: Write the failing tests** — append to `test/contracts.test.ts`:
 
 ```ts
 import { SIMULATOR_CHECK_IDS, trialSchema, valueTokens, worldSchema } from '../src/contracts.js';
@@ -124,12 +126,12 @@ test('simulator checks, release hooks, release logs and prompt quotes have schem
 
 Also add `trialSchema, valueTokens, worldSchema, SIMULATOR_CHECK_IDS` to the existing import list at the top of the file (merge with the first import statement; do not create a second import of `../src/contracts.js` if lint complains — either form compiles).
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npm run build && npx tsx --test test/contracts.test.ts`
 Expected: FAIL — `valueTokens`/`SIMULATOR_CHECK_IDS` not exported; `unrecognized_keys` for `knows`, `external`, `release`, `promptQuotes`.
 
-- [ ] **Step 3: Implement the schemas** in `src/contracts.ts`:
+- [x] **Step 3: Implement the schemas** in `src/contracts.ts`:
 
 Add after `const unique = ...` (line 10):
 
@@ -259,17 +261,17 @@ In `validatePreparation`, inside the `for (const s of p.scenarios)` loop right a
     }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npm run build && npx tsx --test test/contracts.test.ts`
 Expected: PASS (all tests in the file, including the four new ones).
 
-- [ ] **Step 5: Run the whole suite and typecheck**
+- [x] **Step 5: Run the whole suite and typecheck**
 
 Run: `npm test && npm run typecheck`
 Expected: PASS. If `extensions/*.ts` fail typecheck because `FailureMode` literals now need `promptQuotes`, nothing should — the field is optional.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/contracts.ts test/contracts.test.ts
@@ -290,7 +292,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `valueTokens`, `simulatorWasUsed`, `SimulatorCheck`, `Scenario`, `Trial` from `./contracts.js`
 - Produces: `export function simulatorChecks(scenario: Scenario, trial: Trial): SimulatorCheck[]` (empty array unless `simulatorWasUsed(trial)` and at least one user message after the opening); `export function hiddenLiterals(scenario: Scenario): string[]` (lower-cased, deduplicated)
 
-- [ ] **Step 1: Write the failing tests** — create `test/simulator.test.ts`:
+- [x] **Step 1: Write the failing tests** — create `test/simulator.test.ts`:
 
 ```ts
 import assert from 'node:assert/strict';
@@ -363,12 +365,12 @@ test('static, scripted and opening-only dialogues get no simulator checks', () =
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npx tsx --test test/simulator.test.ts`
 Expected: FAIL with "Cannot find module '../src/simulator.js'".
 
-- [ ] **Step 3: Implement `src/simulator.ts`**
+- [x] **Step 3: Implement `src/simulator.ts`**
 
 ```ts
 import { simulatorWasUsed, valueTokens, type Scenario, type SimulatorCheck, type Trial } from './contracts.js';
@@ -447,12 +449,12 @@ export function simulatorChecks(scenario: Scenario, trial: Trial): SimulatorChec
 }
 ```
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `npx tsx --test test/simulator.test.ts`
 Expected: PASS (5 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/simulator.ts test/simulator.test.ts
@@ -473,7 +475,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `simulatorChecks` from `./simulator.js` (Task 2)
 - Produces: every trial returned by `evaluateTrial` has `simulatorChecks` set (`[]` unless reactive with follow-ups); `trial.reason` ends with ` Внешнее состояние карточки не подтверждено адаптером (resetConfirmed).` when the card has `initialState.external`, the target is external and the first reply did not confirm the reset.
 
-- [ ] **Step 1: Write the failing tests** — append to `test/evaluation.test.ts` (the file already imports `evaluateTrial`, `fixture`, `context`, `Runtime`, `Scenario`, `mkdtemp`, `writeFile`, `join`, `tmpdir`, `resolve`):
+- [x] **Step 1: Write the failing tests** — append to `test/evaluation.test.ts` (the file already imports `evaluateTrial`, `fixture`, `context`, `Runtime`, `Scenario`, `mkdtemp`, `writeFile`, `join`, `tmpdir`, `resolve`):
 
 ```ts
 test('reactive dialogues record simulator checks that never change the objective outcome', async () => {
@@ -515,12 +517,12 @@ test('an unconfirmed external world is named in the reason without inventing an 
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npm run build && npx tsx --test test/evaluation.test.ts`
 Expected: FAIL — `trial.simulatorChecks` is undefined; the reason has no suffix.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/evaluation.ts` add `import { simulatorChecks } from './simulator.js';` after the `openExternalTarget` import. Replace the two lines starting at `trial.finalState = structuredClone(state);` / `stage = 'проверка наблюдений';` (inside the `try`, right after the `for` loop) with:
 
@@ -544,12 +546,12 @@ Then extend the external-target reason block so it reads:
 
 Note `module-worker.mjs` already passes the whole `initialState` (including `external`) to `createSession`, and http/command send it in every request; nothing else changes.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `npm run build && npx tsx --test test/evaluation.test.ts test/simulator.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/evaluation.ts test/evaluation.test.ts
@@ -570,7 +572,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `valueTokens` (Task 1)
 - Produces: `USER_STATE_CLAUSE` exported from `prompts.ts`; `Runtime.userTurn` sends `knows`, `cannotKnow`, `answers`; `Runtime.failureModes` accepts `prompt` and returns validated `promptQuotes`.
 
-- [ ] **Step 1: Write the failing tests** — append to `test/pi.test.ts` (helpers `fixture`, `callContext`, `scripted`, `plainCard`, `reviewFields` already exist in the file):
+- [x] **Step 1: Write the failing tests** — append to `test/pi.test.ts` (helpers `fixture`, `callContext`, `scripted`, `plainCard`, `reviewFields` already exist in the file):
 
 ```ts
 test('the simulator receives knows, answers and cannotKnow but never the external world', async () => {
@@ -624,12 +626,12 @@ test('failure clusters may quote only a supplied prompt, verbatim', async () => 
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npm run build && npx tsx --test test/pi.test.ts`
 Expected: the three new tests FAIL (sentinel checks for `Last four digits 4321` and `never invent a value` fail; the batch with `9999` is accepted; quotes are not validated).
 
-- [ ] **Step 3: Implement the prompts** in `src/prompts.ts`:
+- [x] **Step 3: Implement the prompts** in `src/prompts.ts`:
 
 Add after `PERIMETER_CLAUSE`:
 
@@ -653,7 +655,7 @@ Append to `FAILURE_MODES_ROLE`:
 When a prompt is supplied, put in promptQuotes the exact fragments of that prompt that govern the broken behaviour: verbatim substring of the supplied prompt, at most five, each under 300 characters. If no fragment governs it, leave promptQuotes empty and say so in description. Never quote a prompt that was not supplied.
 ```
 
-- [ ] **Step 4: Implement the runtime** in `src/pi.ts`:
+- [x] **Step 4: Implement the runtime** in `src/pi.ts`:
 
 Add `valueTokens` to the `./contracts.js` import list. In `userTurn`, extend the `user` object:
 
@@ -704,12 +706,12 @@ Replace `failureModes`:
     },
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `npm run build && npx tsx --test test/pi.test.ts`
 Expected: PASS. If the assertion `/user\.answers/` fails, the cards prompt does not include `USER_STATE_CLAUSE`; check `cardsRole`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/prompts.ts src/pi.ts test/pi.test.ts
@@ -729,7 +731,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 **Interfaces:**
 - Produces: demo cards carry `user.knows` (appointment ID and desired time) and, for clarification cards, `user.answers`; demo `userTurn` answers clarifications from `answers` when present.
 
-- [ ] **Step 1: Write the failing test** — append to `test/evaluation.test.ts`:
+- [x] **Step 1: Write the failing test** — append to `test/evaluation.test.ts`:
 
 ```ts
 test('demo cards carry knows and answers, and the demo simulator answers from that table', async () => {
@@ -745,12 +747,12 @@ test('demo cards carry knows and answers, and the demo simulator answers from th
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npm run build && npx tsx --test test/evaluation.test.ts`
 Expected: FAIL — `clarify.user.knows` is undefined.
 
-- [ ] **Step 3: Implement** in `src/demo.ts`. In `sampleScenarios`, extend the `user` object:
+- [x] **Step 3: Implement** in `src/demo.ts`. In `sampleScenarios`, extend the `user` object:
 
 ```ts
     user: { goal: v.requirementIds.includes('read') ? `Learn the time of appointment ${v.id} without changing it.` : `Move appointment ${v.id} to ${v.time}.`, facts: `Your appointment ID is ${v.id}. Your desired time is ${v.time}.`, behavior: v.behavior, opening: v.opening,
@@ -779,12 +781,12 @@ Replace `userTurn`:
     },
 ```
 
-- [ ] **Step 4: Run the full suite** (the demo feeds many fixtures: cards, extension, artifacts, product-flow)
+- [x] **Step 4: Run the full suite** (the demo feeds many fixtures: cards, extension, artifacts, product-flow)
 
 Run: `npm test`
 Expected: PASS. A `cards.test.ts` or `extension.test.ts` failure that mentions width or wrapping means a new card line pushed the 80×24 layout; that is not expected, since `knows` renders only in Task 8.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/demo.ts test/evaluation.test.ts
@@ -817,7 +819,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   ```
 - `comparison.ts` produces: `EvidenceSummary.simulator: SimulatorSummary`, `EvidenceSummary.modeValue: ModeValue`, `RunComparison.delta: { families: number; mean: number | null; interval: [number, number] | null; note: string } | null`, `VerdictSummary.simulatorFlagged` now includes code-flagged dialogues, new `nextSteps` code `inspect_simulator`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `test/simulator.test.ts` (extend the import line with `modeValue, simulatorSummary` and add `settingsSchema, type Experiment, type HumanReview, type MetricAssessment, type Outcome, type UserMode` from contracts):
 
@@ -933,12 +935,12 @@ test('run comparison adds a descriptive paired family delta with a bootstrap int
 
 Also update the existing expectation on the old wording: in `test/comparison.test.ts`, any `assert.match(..., /Модель отметила/)` becomes `/кодовым проверкам или рубрике верности/` (search the file for `Модель отметила` and `simulator_flagged`; keep the codes, change only the text regexes).
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npm run build && npx tsx --test test/simulator.test.ts test/comparison.test.ts`
 Expected: FAIL — `simulatorSummary`/`modeValue` not exported; `e.simulator` undefined; `diff.delta` undefined.
 
-- [ ] **Step 3: Create `src/outcomes.ts`** by moving code verbatim from `comparison.ts`:
+- [x] **Step 3: Create `src/outcomes.ts`** by moving code verbatim from `comparison.ts`:
 
 ```ts
 import { fingerprint, metricApplies, simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type Trial } from './contracts.js';
@@ -965,7 +967,7 @@ export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentCompl
 
 `hasCompleteJudgment` stays imported from `./judge.js`. Run `npm run typecheck` here: unresolved names show exactly what still needs importing.
 
-- [ ] **Step 4: Add the scorecard and mode value to `src/simulator.ts`**
+- [x] **Step 4: Add the scorecard and mode value to `src/simulator.ts`**
 
 Extend the import: `import { metricApplies, simulatorWasUsed, valueTokens, SIMULATOR_CHECK_IDS, type Experiment, type Scenario, type SimulatorCheck, type SimulatorCheckId, type Trial, type UserMode } from './contracts.js'; import { automaticTrialResult, latestHumanReviews, measured, observedRecord } from './outcomes.js';` and append:
 
@@ -1053,7 +1055,7 @@ export function modeValue(record: Experiment): ModeValue {
 }
 ```
 
-- [ ] **Step 5: Wire `comparison.ts`**
+- [x] **Step 5: Wire `comparison.ts`**
 
 In `verdictSummary`, replace `if (!simulatorUsable(scenario, trial)) simulatorFlagged += 1;` with `if (!simulatorUsable(scenario, trial) || trial.simulatorChecks?.some(c => !c.passed)) simulatorFlagged += 1;`. Replace the `simulator_flagged` reason with:
 
@@ -1098,12 +1100,12 @@ In `RunComparison` add `delta: { families: number; mean: number | null; interval
     note: 'Описательная парная дельта доли пройденных карточек по семействам; вердикт определяют списки карточек, а не среднее.' } : null;
 ```
 
-- [ ] **Step 6: Run tests and typecheck**
+- [x] **Step 6: Run tests and typecheck**
 
 Run: `npm test && npm run typecheck`
 Expected: PASS. `wc -l src/comparison.ts` must print fewer than 894.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/outcomes.ts src/simulator.ts src/comparison.ts test/simulator.test.ts test/comparison.test.ts
@@ -1124,7 +1126,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `ReleaseHook`, `ReleaseLog`, `simulatorChecks`, `readPrompt`
 - Produces: `export async function runRelease(release: ReleaseHook, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<ReleaseLog>` in `targets.ts`; `preflightTarget` validates `release`; `resolveTarget`/`portableTarget` map `release.cwd` and `release.command`; `ExperimentLab` runs the hook before the first dialogue, clusters from one failure with `prompt`, recomputes simulator checks on reassess, accepts `checkId` of simulator checks, records the limitation `Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.`; fixture mode `external` replies `cards: <ids>` with `resetConfirmed: true`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add mode `external` to `test/fixtures/stdio-agent.mjs` — in the `rl.on('line', …)` handler, before the `time` regex line:
 
@@ -1256,12 +1258,12 @@ test('human verdicts may target simulator checks, reassessment recomputes them, 
 
 If the demo runtime rejects `scenarioCount: 0` with owner cards, the demo `prepare` guard `count < 1` is the reason: pass `scenarioCount: 1` instead and pick the golden trial with `record.trials.find(t => t.scenarioId === 'gold_cards')`.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npm run build && npx tsx --test test/targets.test.ts test/experiment.test.ts`
 Expected: FAIL — `runRelease` missing; preflight accepts a missing hook; the hook never runs; `promptQuotes` rejected because no prompt is passed; `simulator_loop` rejected; no limitation.
 
-- [ ] **Step 3: Implement `targets.ts`**
+- [x] **Step 3: Implement `targets.ts`**
 
 Extract the PATH search from `preflightTarget` into a helper placed above it:
 
@@ -1339,7 +1341,7 @@ export async function runRelease(release: ReleaseHook, env: NodeJS.ProcessEnv, s
 
 Add `type ReleaseHook, type ReleaseLog` to the contracts import.
 
-- [ ] **Step 4: Implement `connection.ts`**
+- [x] **Step 4: Implement `connection.ts`**
 
 In `resolveTarget`, before `return targetSchema.parse(target);`:
 
@@ -1361,7 +1363,7 @@ In `portableTarget`, compute a portable release and spread it into every externa
 
 and use `{ ...target, ...prompt, ...release, path: path(target.path) }`, `{ ...target, ...prompt, ...release }` and `{ ...target, ...prompt, ...release, cwd: …, command: …, args: … }`.
 
-- [ ] **Step 5: Implement `experiment.ts`**
+- [x] **Step 5: Implement `experiment.ts`**
 
 Imports: add `readPrompt, runRelease` to the `./targets.js` import and `import { simulatorChecks } from './simulator.js';`.
 
@@ -1439,12 +1441,12 @@ Replace `nameFailureModes` (and its doc comment):
 
 (`readPrompt` may throw for a missing prompt file; that is already caught by preflight before the run.)
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `npm test && npm run typecheck`
 Expected: PASS. The existing test `провалы прогона получают имена, а сорванная кластеризация не теряет прогон` may have asserted that one failure is *not* clustered; if it does, change that assertion to expect a cluster (the spec lowered the threshold on purpose) and keep its "broken clustering keeps the run" half.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/targets.ts src/connection.ts src/experiment.ts test/fixtures/stdio-agent.mjs test/targets.test.ts test/experiment.test.ts
@@ -1465,7 +1467,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `EvidenceSummary.simulator`, `EvidenceSummary.modeValue`, `RunComparison.delta`, `Trial.simulatorChecks` (Tasks 1, 6)
 - Produces: HTML/Markdown/board blocks named exactly `Симулированный пользователь · кодовые проверки` (per trial), `Симулятор · кодовые проверки` (scorecard), `Ценность режимов`, `Парная дельта по семействам`; editor labels `Что знает пользователь · по одному в строке`, `Чего пользователь не может знать · по одному в строке`, `Ответы на уточнения · JSON`, `Внешнее состояние · JSON`; annotation target label prefix `Симулятор ·`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `test/cards.test.ts` (uses its `fixture()`, `theme`, `LabBoard`, `visibleWidth`, `stripTerminalSequences`, `emptyUsage`, `evidenceBundle`, `htmlReport`, `markdownReport`):
 
@@ -1562,12 +1564,12 @@ test('user state and the external world are editable as plain fields without tou
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npm run build && npx tsx --test test/cards.test.ts test/artifacts.test.ts test/editor.test.ts`
 Expected: FAIL on the new tests (missing blocks and labels).
 
-- [ ] **Step 3: Implement `src/report.ts`**
+- [x] **Step 3: Implement `src/report.ts`**
 
 Add two helpers after `originalChecks`:
 
@@ -1610,7 +1612,7 @@ In `markdownReport`, after the `'## Режимы пользователя'` tabl
 
 and in the comparison branch after `md(comparison.headline), ''` add `...(comparison.delta ? [`Парная дельта по семействам: ${comparison.delta.mean === null ? 'нет данных' : comparison.delta.mean.toFixed(2)} (семейств ${comparison.delta.families}${comparison.delta.interval ? `, 95% ${comparison.delta.interval[0].toFixed(2)}…${comparison.delta.interval[1].toFixed(2)}` : ''}). ${md(comparison.delta.note)}`, ''] : [])`. In the per-trial markdown block, after `...originalChecks(record, t).map(c => \`- ${md(c)}\`)` add `...(t.simulatorChecks ?? []).map(c => \`- Симулятор · ${c.passed ? 'пройдено' : 'не пройдено'} · ${md(c.id)}: ${md(c.evidence)}\`)`.
 
-- [ ] **Step 4: Implement `extensions/cards.ts`**
+- [x] **Step 4: Implement `extensions/cards.ts`**
 
 In `trialLines`, after the deterministic checks block (the `line(''), line('ДЕТЕРМИНИРОВАННЫЕ ПРОВЕРКИ', 'accent'), ...` entry) add:
 
@@ -1656,7 +1658,7 @@ In `comparisonLines`, after the `ПО ЭТАПАМ` block add:
     ...(comparison.delta ? [line(''), line(`Парная дельта по семействам: ${comparison.delta.mean === null ? 'нет данных' : `${comparison.delta.mean >= 0 ? '+' : ''}${comparison.delta.mean.toFixed(2)}`} · семейств ${comparison.delta.families} · ${comparison.delta.interval ? `95% ${comparison.delta.interval[0].toFixed(2)}…${comparison.delta.interval[1].toFixed(2)}` : 'интервал недоступен'}`), line(comparison.delta.note, 'muted')] : []),
 ```
 
-- [ ] **Step 5: Implement `extensions/editor.ts` and `extensions/agent-lab.ts`**
+- [x] **Step 5: Implement `extensions/editor.ts` and `extensions/agent-lab.ts`**
 
 In `editDraft`, extend `fields` (append before `['metrics', 'Метрики · JSON']`):
 
@@ -1691,7 +1693,7 @@ In `agent-lab.ts` `humanAnnotation`, extend `targets` after the checks entry:
     ...(trial.simulatorChecks ?? []).map(c => ({ label: `Симулятор · ${safeText(c.description)} [${c.id}]`, ids: { checkId: c.id }, trialIds: [trial.id] })),
 ```
 
-- [ ] **Step 6: Implement `src/cli.ts`**
+- [x] **Step 6: Implement `src/cli.ts`**
 
 In the `diff` text output, after the tiers block add:
 
@@ -1701,12 +1703,12 @@ In the `diff` text output, after the tiers block add:
 
 In `pilot`, print both blocks: `process.stdout.write(JSON.stringify({ pilot: evidenceSummary(record).pilot, simulator: evidenceSummary(record).simulator, modeValue: evidenceSummary(record).modeValue }, null, 2) + '\n');` (call `evidenceSummary` once into a const).
 
-- [ ] **Step 7: Run the suite and typecheck**
+- [x] **Step 7: Run the suite and typecheck**
 
 Run: `npm test && npm run typecheck`
 Expected: PASS. Board width assertions in the new test guard the wrapping; if `visibleWidth` fails at 80, shorten the offending `line(...)` text rather than the test.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/report.ts src/cli.ts extensions/cards.ts extensions/editor.ts extensions/agent-lab.ts test/cards.test.ts test/artifacts.test.ts test/editor.test.ts
@@ -1724,7 +1726,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 **Interfaces:** none (prose only). The skill is loaded by `test/extension.test.ts` through the real resource loader; keep the frontmatter intact.
 
-- [ ] **Step 1: `docs/REFERENCE.md`** — after the "Подключение своего агента" section add a subsection `## Состояние пользователя и внешний мир` with this content:
+- [x] **Step 1: `docs/REFERENCE.md`** — after the "Подключение своего агента" section add a subsection `## Состояние пользователя и внешний мир` with this content:
 
 ```markdown
 ## Состояние пользователя и внешний мир
@@ -1751,7 +1753,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 У внешнего подключения может быть `release`: `{"command": "./release.sh", "args": ["candidate"], "cwd": "/abs/dir", "timeoutMs": 120000}`. Agent Lab выполняет его один раз перед первым диалогом прогона с переменными `AGENT_LAB_RUN_ID`, `AGENT_LAB_TARGET_VERSION` и, если задан `promptFile`, `AGENT_LAB_PROMPT_FILE` и `AGENT_LAB_PROMPT_HASH`. Ненулевой код завершения останавливает прогон до первого запроса; хвосты вывода сохраняются в `releaseLog`. Идентичность версии по-прежнему сообщает адаптер в `version`; хук её не подменяет. `doctor` хук не выполняет. Относительные `cwd` и путь команды в `connection.json` разрешаются относительно файла.
 ```
 
-- [ ] **Step 2: `docs/WORKFLOWS.md`** — add a section `## Симулятор: что показывает прогон` before `## CI и проверка пользы режимов`:
+- [x] **Step 2: `docs/WORKFLOWS.md`** — add a section `## Симулятор: что показывает прогон` before `## CI и проверка пользы режимов`:
 
 ```markdown
 ## Симулятор: что показывает прогон
@@ -1765,9 +1767,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 Для AIGW хук выпуска и промпт из MLS: `local/release.sh` в aigw-local копирует `AGENT_LAB_PROMPT_FILE` в каталог MLS-кэша и перезапускает сервис; адаптер возвращает `promptHash` файла, который сервис действительно загрузил. Цикл: `prompt-propose` → `prompt-apply` → `run` с `release` в подключении → `diff`.
 ```
 
-- [ ] **Step 3: `docs/EVALS-METHOD.md`** — append a section `## Заветы Anthropic в этой версии` containing the table from spec section 2 verbatim (principle → implementation), introduced by one sentence: «Таблица связывает рекомендации Anthropic по эвалам агентов и статистике с конкретными механизмами; ссылки в README предназначены для человека и не используются во время выполнения.»
+- [x] **Step 3: `docs/EVALS-METHOD.md`** — append a section `## Заветы Anthropic в этой версии` containing the table from spec section 2 verbatim (principle → implementation), introduced by one sentence: «Таблица связывает рекомендации Anthropic по эвалам агентов и статистике с конкретными механизмами; ссылки в README предназначены для человека и не используются во время выполнения.»
 
-- [ ] **Step 4: `CONTEXT.md`** — add glossary entries after **User mode**:
+- [x] **Step 4: `CONTEXT.md`** — add glossary entries after **User mode**:
 
 ```markdown
 **User state**: The structured part of a card's user: `knows` (facts the user can state), `cannotKnow` (what the user cannot know) and `answers` (complete replies to expected clarifications). Complements `facts` and `behavior`.
@@ -1791,17 +1793,17 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 **Prompt quote**: A verbatim fragment of the agent's prompt that a failure cluster names as governing the broken behaviour.
 ```
 
-- [ ] **Step 5: `README.md`** — after the paragraph that starts «Подтверждение запуска разрешает выполнение…» add:
+- [x] **Step 5: `README.md`** — after the paragraph that starts «Подтверждение запуска разрешает выполнение…» add:
 
 ```markdown
 Симулированный пользователь проверяется кодом на каждом реактивном диалоге: утечка скрытого значения, выдуманное значение (эвристика, помечается как подозрение) и повтор реплики. Итог показывает, в скольких диалогах симулятор нарушил карточку, и не считает их оценки агента надёжными. Карточка задаёт пользователя точнее: что он знает, чего знать не может и что ответит на уточнение; внешнее состояние тестового контура передаётся адаптеру и должно быть подтверждено.
 ```
 
-- [ ] **Step 6: `skills/agent-builder/SKILL.md`** — in «Working protocol» step 2 after the sentence «A card contains goal, known facts, behavior, opening, follow-up limit, assumptions, applicable initial state/checks and explicit metric rubrics;» insert: `Fill user.knows with the exact values the user can state, user.cannotKnow with what it cannot know, and user.answers with complete replies to the clarifications the agent will plausibly ask; every value in a reply must already be in knows, facts or opening. Put the test-environment data the agent must see into initialState.external only when the materials describe it; the adapter must confirm it with resetConfirmed.` In step 4 after «Bring user modes, calibration and fidelity only when they explain the finding or the user asks.» insert: `Read the simulator scorecard before trusting a reactive result: a dialogue flagged by simulator_leak, simulator_fabrication (a heuristic, refutable by a human verdict on that check) or simulator_loop has unreliable agent grades; say so and open it. Mode value lists the cards only the reactive user completed or only it failed; report them as observations with the human confirmation count.` In «External prompt-only improvement» add: `A failure cluster may cite promptQuotes, verbatim fragments of the prompt that governed the broken behaviour; cite them in the hypothesis of agent_lab_prompt propose instead of paraphrasing. A connection may carry a release hook that deploys the candidate before the run; the adapter's version and promptHash still attest what actually ran.`
+- [x] **Step 6: `skills/agent-builder/SKILL.md`** — in «Working protocol» step 2 after the sentence «A card contains goal, known facts, behavior, opening, follow-up limit, assumptions, applicable initial state/checks and explicit metric rubrics;» insert: `Fill user.knows with the exact values the user can state, user.cannotKnow with what it cannot know, and user.answers with complete replies to the clarifications the agent will plausibly ask; every value in a reply must already be in knows, facts or opening. Put the test-environment data the agent must see into initialState.external only when the materials describe it; the adapter must confirm it with resetConfirmed.` In step 4 after «Bring user modes, calibration and fidelity only when they explain the finding or the user asks.» insert: `Read the simulator scorecard before trusting a reactive result: a dialogue flagged by simulator_leak, simulator_fabrication (a heuristic, refutable by a human verdict on that check) or simulator_loop has unreliable agent grades; say so and open it. Mode value lists the cards only the reactive user completed or only it failed; report them as observations with the human confirmation count.` In «External prompt-only improvement» add: `A failure cluster may cite promptQuotes, verbatim fragments of the prompt that governed the broken behaviour; cite them in the hypothesis of agent_lab_prompt propose instead of paraphrasing. A connection may carry a release hook that deploys the candidate before the run; the adapter's version and promptHash still attest what actually ran.`
 
-- [ ] **Step 7: `examples/echo-agent.py`** — extend the docstring with: `initialState may carry "external": opaque data for your test environment (cards, contracts, tool fixtures). Apply it before the first reply and keep resetConfirmed=True only if you did; Agent Lab treats an unconfirmed external state as unmeasured.`
+- [x] **Step 7: `examples/echo-agent.py`** — extend the docstring with: `initialState may carry "external": opaque data for your test environment (cards, contracts, tool fixtures). Apply it before the first reply and keep resetConfirmed=True only if you did; Agent Lab treats an unconfirmed external state as unmeasured.`
 
-- [ ] **Step 8: Verify and commit**
+- [x] **Step 8: Verify and commit**
 
 Run: `npm test && npm run typecheck && npm pack --dry-run`
 Expected: PASS; the pack list still contains `docs/`, `skills/`, `examples/`.
@@ -1826,7 +1828,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Adapter reply gains `resetConfirmed` (first turn), `eventsComplete: true`, `eventScope: ["idp_search", "sbe_*", "agent_outcome"]`, `sessionId`, `turn`, `version`, and `promptHash` when the service loaded `agent_doc_type_prompt.json` from its MLS cache. On override registration failure it returns `measurementError`.
 - `local/release.sh <prompt-file>` copies the file into `local/mls_prompts/<repo>/<project>/<model>/<version>/agent_doc_type_prompt.json`, restarts the service with `MLS_CLIENT_ENABLED=True`, waits for `GET /health`; exit 0 only when healthy.
 
-- [ ] **Step 1: Write the failing tests** — append to `local/test_agent_lab_target.py`:
+- [x] **Step 1: Write the failing tests** — append to `local/test_agent_lab_target.py`:
 
 ```python
     def test_sbe_override_applies_only_to_its_trace(self):
@@ -1866,12 +1868,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 (add `import json` at the top; `adapter.respond(client, request, turn)` is the new pure function extracted from `run_protocol`, see Step 3.)
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd ~/Desktop/aigw-local && PYTHONPATH=local/stubs:src .venv/bin/python -m unittest local.test_agent_lab_target -q`
 Expected: FAIL — 404 on `/mock/overrides`, `adapter.respond` missing.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `local/mocks/server.py` — before `@app.post(SBE_ENDPOINT)`:
 
@@ -2020,12 +2022,12 @@ exit 1
 
 `LOCAL.md` — add a subsection «Внешнее состояние и хук выпуска» describing the three endpoints, the adapter fields, the `release.sh` contract and the Agent Lab connection JSON with `release`.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cd ~/Desktop/aigw-local && PYTHONPATH=local/stubs:src .venv/bin/python -m unittest local.test_agent_lab_target -q`
 Expected: PASS (existing 2 + new 2).
 
-- [ ] **Step 5: Commit in aigw-local**
+- [x] **Step 5: Commit in aigw-local**
 
 ```bash
 cd ~/Desktop/aigw-local && git add local/mocks/server.py local/agent_lab_target.py local/test_agent_lab_target.py local/release.sh LOCAL.md && git commit -m "feat(local): per-request SBE overrides, adapter observation metadata and release hook"
@@ -2039,7 +2041,7 @@ cd ~/Desktop/aigw-local && git add local/mocks/server.py local/agent_lab_target.
 - Create (outside the repo, gitignored): `~/Desktop/aigw-local/local/evidence/2026-09-14-simulator-v1/` with `task.json`, `connection.json`, exported reports
 - Modify: `docs/IMPLEMENTATION.md` (append a dated section with what was actually measured)
 
-- [ ] **Step 1: Start the pilot agent**
+- [x] **Step 1: Start the pilot agent**
 
 ```bash
 cd ~/Desktop/aigw-local && ./local/pg.sh start && (./local/run-mocks.sh > local/logs/mocks.log 2>&1 &) && sleep 2 && (./local/run-app.sh > local/logs/app.log 2>&1 &) && sleep 8 && curl -fsS http://127.0.0.1:8080/health && curl -fsS http://127.0.0.1:8090/mock/health
@@ -2047,9 +2049,9 @@ cd ~/Desktop/aigw-local && ./local/pg.sh start && (./local/run-mocks.sh > local/
 
 If `/mock/health` reports GigaChat mode `canned`, stop: canned answers do not measure the agent (record this in IMPLEMENTATION.md and skip Steps 3-5).
 
-- [ ] **Step 2: Write three golden cards** into `task.json` (materials: the IDP fixture articles the pilot used, from `local/mocks/fixtures/idp.json`, as `materials`), `scenarioCount: 0`, `settings: { userModes: ['static', 'scripted', 'reactive'], repeats: 1, maxCalls: 60, maxDurationMs: 1500000, judge: DEFAULT_JUDGE }`, `target` from `connection.json` (`command` → `.venv/bin/python local/agent_lab_target.py`, `timeoutMs: 180000`). Cards: terminal unblock (knows: TID `12345678`; answers: the TID when asked; cannotKnow: why the terminal is blocked in SBE), refund after close (knows: contract creation date and RRN; answers: payment method «картой»; external.sbe with the pilot's `organizationInfoByEpkId` fixture entry copied from `sbe.json` so the override path is exercised), tariff location (knows: nothing beyond the question; maxFollowUps 1). Each with an agent `goal_attainment` rubric copied from `goalToScenario` wording and `tier: regression`.
+- [x] **Step 2: Write three golden cards** into `task.json` (materials: the IDP fixture articles the pilot used, from `local/mocks/fixtures/idp.json`, as `materials`), `scenarioCount: 0`, `settings: { userModes: ['static', 'scripted', 'reactive'], repeats: 1, maxCalls: 60, maxDurationMs: 1500000, judge: DEFAULT_JUDGE }`, `target` from `connection.json` (`command` → `.venv/bin/python local/agent_lab_target.py`, `timeoutMs: 180000`). Cards: terminal unblock (knows: TID `12345678`; answers: the TID when asked; cannotKnow: why the terminal is blocked in SBE), refund after close (knows: contract creation date and RRN; answers: payment method «картой»; external.sbe with the pilot's `organizationInfoByEpkId` fixture entry copied from `sbe.json` so the override path is exercised), tariff location (knows: nothing beyond the question; maxFollowUps 1). Each with an agent `goal_attainment` rubric copied from `goalToScenario` wording and `tier: regression`.
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 ```bash
 node dist/cli.js build --input task.json --connection connection.json --data-dir ~/Desktop/aigw-local/local/evidence/2026-09-14-simulator-v1/.agent-lab
@@ -2058,9 +2060,9 @@ node dist/cli.js pilot --id <ID> --data-dir <same>
 node dist/cli.js export --id <ID> --format html --output <dir>/report.html --data-dir <same>
 ```
 
-- [ ] **Step 4: Record what was measured** in `docs/IMPLEMENTATION.md` under a new heading `## Симулятор v1 · живая проверка 2026-09-14`: the run id, dialogues completed per mode, the simulator scorecard numbers, the mode-value lists, lab cost, whether `resetConfirmed`/`eventsComplete`/`version` arrived from the adapter, and the explicit statement that no human verdicts exist yet and that all three cards are hand-written from the 12 September pilot, not production data. If any step failed, say which and why.
+- [x] **Step 4: Record what was measured** in `docs/IMPLEMENTATION.md` under a new heading `## Симулятор v1 · живая проверка 2026-09-14`: the run id, dialogues completed per mode, the simulator scorecard numbers, the mode-value lists, lab cost, whether `resetConfirmed`/`eventsComplete`/`version` arrived from the adapter, and the explicit statement that no human verdicts exist yet and that all three cards are hand-written from the 12 September pilot, not production data. If any step failed, say which and why.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/IMPLEMENTATION.md
