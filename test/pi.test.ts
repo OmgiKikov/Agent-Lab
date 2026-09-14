@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { ModelRuntime, type ProviderConfig } from '@earendil-works/pi-coding-agent';
 import { createPiRuntime, getPiStatus } from '../src/pi.js';
 import { judgeInput } from '../src/judge.js';
-import { DEFAULT_JUDGE, emptyUsage, settingsSchema, type CallContext, type Scenario, type Tool, type Trial } from '../src/contracts.js';
+import { DEFAULT_JUDGE, emptyUsage, REQUIREMENT_LIMIT, settingsSchema, type CallContext, type Scenario, type Tool, type Trial } from '../src/contracts.js';
 
 type Request = Parameters<NonNullable<ProviderConfig['streamSimple']>>[1];
 type Options = Parameters<NonNullable<ProviderConfig['streamSimple']>>[2];
@@ -807,7 +807,7 @@ test('failure clusters may quote only a supplied prompt, verbatim', async () => 
 
 test('requirements extraction states its budget and asks the model to merge when it overshoots', async () => {
   const quote = 'Reply in the formal register and never redirect the user to a phone line.';
-  const many = Array.from({ length: 41 }, (_, i) => ({ id: `req_${i}`, text: `Observable rule ${i}`, sourceId: 'prompt_1', quote, critical: false }));
+  const many = Array.from({ length: REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `req_${i}`, text: `Observable rule ${i}`, sourceId: 'prompt_1', quote, critical: false }));
   const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!] };
   const outputs = [{ requirements: many, questions: [] }, { requirements: many.slice(0, 2), questions: [] }, { scenarios: [card] }];
   const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
@@ -818,9 +818,9 @@ test('requirements extraction states its budget and asks the model to merge when
     }, callContext().ctx);
     assert.equal(prepared.requirements.length, 2);
     // The budget is stated up front, and an overshoot is answered with what to do, not with a schema dump.
-    assert.match(f.requests[0]?.systemPrompt ?? '', /at most 40 requirements/);
+    assert.match(f.requests[0]?.systemPrompt ?? '', new RegExp(`at most ${REQUIREMENT_LIMIT} requirements`));
     const repair = JSON.stringify(f.requests[1]?.messages);
-    assert.match(repair, /at most 40 requirements/);
+    assert.match(repair, new RegExp(`at most ${REQUIREMENT_LIMIT} requirements`));
     assert.match(repair, /merge closely related rules/i);
     assert.doesNotMatch(repair, /Too big/);
   } finally { await f.close(); }

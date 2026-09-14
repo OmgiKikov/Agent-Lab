@@ -111,7 +111,7 @@ const releaseLogSchema = z.strictObject({ command: z.string().max(8000), exitCod
 
 export interface Source { id: string; name: string; content: string; hash: string; kind?: SourceKind }
 /** Requirements per run: the budget is stated to the model, and an overshoot is answered with what to do. */
-export const REQUIREMENT_LIMIT = 40;
+export const REQUIREMENT_LIMIT = 80;
 /** Generated cards per run; owner cards come on top. */
 export const SCENARIO_LIMIT = 20;
 export const requirementSchema = z.strictObject({
