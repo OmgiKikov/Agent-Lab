@@ -602,3 +602,15 @@ test('an unconfirmed external world is named in the reason without inventing an 
   assert.doesNotMatch(confirmed.reason, /не подтверждено адаптером/);
   assert.equal(confirmed.observation?.resetConfirmed, true);
 });
+
+test('demo cards carry knows and answers, and the demo simulator answers from that table', async () => {
+  const f = await fixture();
+  const clarify = f.preparation.scenarios.find(s => s.id === 'c_clarify')!;
+  assert.deepEqual(clarify.user.knows, ['Appointment ID A103', 'Desired time 11:30']);
+  assert.deepEqual(clarify.user.answers, [{ ifAsked: 'appointment ID', reply: 'My appointment ID is A103.' }]);
+  const trial = await f.evaluate(clarify, f.candidate);
+  assert.equal(trial.events.filter(e => e.type === 'user')[1]?.text, 'My appointment ID is A103.');
+  assert.ok(trial.simulatorChecks!.every(c => c.passed));
+  const time = f.preparation.scenarios.find(s => s.id === 'd_clarify_control')!;
+  assert.deepEqual(time.user.answers, [{ ifAsked: 'desired time', reply: 'My desired time is 17:00.' }]);
+});
