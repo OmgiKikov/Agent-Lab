@@ -21,7 +21,7 @@ export function observedRecord(record: Experiment): Experiment {
 }
 
 /** The latest human verdict per review target (whole dialogue, one metric or one check); earlier verdicts on the same target are superseded. */
-export function latestHumanReviews(record: Experiment): Map<string, HumanReview> {
+export function latestHumanReviews(record: Pick<Experiment, 'trials' | 'humanReviews'>): Map<string, HumanReview> {
   const latest = new Map<string, HumanReview>();
   const trials = new Set(record.trials.map(t => t.id));
   for (const review of [...record.humanReviews].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
@@ -39,25 +39,38 @@ export function agentRubricResult(scenario: Scenario | undefined, trial: Trial):
   return results.includes('fail') ? 'fail' : results.every(r => r === 'pass') ? 'pass' : 'unknown';
 }
 export function isAgentFailure(record: Experiment, trial: Trial): boolean {
-  return !['invalid', 'cancelled'].includes(trial.outcome) && (trial.outcome === 'fail'
-    || agentRubricResult(record.scenarios.find(s => s.id === trial.scenarioId), trial) === 'fail');
+  const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
+  return measurementUsable(scenario, trial, record.humanReviews) && (trial.outcome === 'fail'
+    || agentRubricResult(scenario, trial) === 'fail');
 }
 /** A candidate cannot be accepted on a partially scored agent rubric. */
-export function trialAssessmentComplete(scenario: Scenario, trial: Trial): boolean {
-  const simulated = simulatorWasUsed(trial);
-  return !trial.assessmentError && (scenario.metrics ?? []).filter(m => m.subject === 'agent' || simulated)
+export function trialAssessmentComplete(scenario: Scenario, trial: Trial, reviews: HumanReview[] = []): boolean {
+  return measurementUsable(scenario, trial, reviews) && (scenario.metrics ?? []).filter(m => m.subject === 'agent')
     .every(m => { const result = trial.assessments?.find(a => a.metricId === m.id)?.result;
-      return m.subject === 'simulator' ? result === 'pass' : result === 'pass' || result === 'fail'; });
+      return result === 'pass' || result === 'fail'; });
 }
-/** The simulator rubric must have passed wherever it applied; otherwise the agent verdict of that dialogue is not usable. */
-export function simulatorUsable(scenario: Scenario | undefined, trial: Trial): boolean {
-  return !scenario?.metrics?.some(m => m.subject === 'simulator'
-    && metricApplies(m, trial)
-    && trial.assessments?.find(a => a.metricId === m.id)?.result !== 'pass');
+/** Human decisions override interpretation, never the recorded check or judge response. */
+export function simulatorUsable(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): boolean {
+  const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
+  return (simulatorWasUsed(trial) ? trial.simulatorChecks ?? [] : []).every(c => {
+    const review = latest.get(`${trial.id}|check:${c.id}`);
+    return review ? review.verdict === 'pass' : c.passed;
+  }) && (scenario?.metrics ?? []).filter(m => m.subject === 'simulator' && metricApplies(m, trial)).every(m => {
+    const review = latest.get(`${trial.id}|metric:${m.id}`);
+    return (review?.verdict ?? trial.assessments?.find(a => a.metricId === m.id)?.result) === 'pass';
+  });
+}
+/** Shared eligibility for comparisons, CI and prompt proposals. Raw outcomes remain inspectable. */
+export function measurementUsable(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): boolean {
+  const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
+  return !!scenario && measured(trial) && !trial.assessmentError
+    && latest.get(`${trial.id}|dialogue`)?.verdict !== 'invalid'
+    && (!scenario.initialState.external || trial.observation?.resetConfirmed === true)
+    && simulatorUsable(scenario, trial, reviews);
 }
 /** Combined automatic result for triage, never a replacement for the separate code and rubric scores. */
-export function automaticTrialResult(scenario: Scenario | undefined, trial: Trial): 'pass' | 'fail' | 'unknown' {
-  if (!scenario || !measured(trial) || trial.assessmentError || !simulatorUsable(scenario, trial)) return 'unknown';
+export function automaticTrialResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' {
+  if (!scenario || !measurementUsable(scenario, trial, reviews)) return 'unknown';
   const rubric = agentRubricResult(scenario, trial);
   if (trial.outcome === 'fail' || rubric === 'fail') return 'fail';
   return (!scenario.checks.length || trial.outcome === 'pass')

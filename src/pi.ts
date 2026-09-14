@@ -7,7 +7,7 @@ import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.j
 import { z } from 'zod';
 import {
   agentSchema, failureModeSchema, observedGoalSchema, observedProfileSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema,
-  TOOL_NAMES, VERSION, fingerprint, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens,
+  TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens,
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
 import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, PROFILES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
@@ -39,7 +39,7 @@ const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, m
   .describe('To stop immediately, return done:true and omit message. A nonempty message is always delivered to the target. done:true with a nonempty message means deliver this final user message, receive the target response, then end. done:true with an empty message means stop now without another target response.');
 const authHelp = 'Войдите в Pi через /login или задайте ключ выбранного провайдера, затем выберите доступную модель. Живой прогон никогда не подменяется демо.';
 
-export const evaluatorVersion = (settings: Settings): string => fingerprint({ protocol: VERSION, judge: JUDGE_PROTOCOL, simulator: SIMULATOR_ROLE,
+export const evaluatorVersion = (settings: Settings): string => fingerprint({ protocol: VERSION, judge: JUDGE_PROTOCOL, simulator: { role: SIMULATOR_ROLE, protocol: SIMULATOR_PROTOCOL },
   provider: settings.provider, model: settings.model, roles: settings.roles ?? {}, judgeModel: settings.judge });
 
 /** Explicit resources avoid global/project extensions, skills, AGENTS files and prompt discovery. */

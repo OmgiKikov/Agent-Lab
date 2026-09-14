@@ -5,7 +5,7 @@ import { delimiter, extname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { fingerprint, scalarSchema, usageSchema, type CallContext, type DialogueMessage, type Target, type TargetSession, type World } from './contracts.js';
+import { fingerprint, scalarSchema, usageSchema, type CallContext, type DialogueMessage, type ReleaseHook, type ReleaseLog, type Target, type TargetSession, type World } from './contracts.js';
 import { targetEntryPath } from './target-version.js';
 
 function httpHeaders(target: Extract<Target, { kind: 'http' }>): Record<string, string> {
@@ -18,10 +18,40 @@ function httpHeaders(target: Extract<Target, { kind: 'http' }>): Record<string, 
   return headers;
 }
 
+/** Resolves `command` the way the shell would (PATH, PATHEXT on Windows) and requires execute permission; never runs it. */
+async function ensureExecutable(command: string, cwd: string, labels: { missing: string; denied: string }): Promise<void> {
+  const windows = process.platform === 'win32';
+  const hasPath = command.includes('/') || windows && command.includes('\\');
+  const path = windows ? Object.entries(process.env).find(([key]) => key.toUpperCase() === 'PATH')?.[1] : process.env.PATH;
+  const directories = hasPath ? [''] : (path ?? (windows ? '' : '/usr/bin:/bin')).split(delimiter);
+  const suffixes = windows && !extname(command) ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';') : [''];
+  let denied: string | undefined;
+  for (const directory of directories) for (const suffix of suffixes) {
+    const candidate = resolve(cwd, directory, command + suffix);
+    try {
+      if (!(await stat(candidate)).isFile()) continue;
+      await access(candidate, constants.X_OK);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EACCES' || code === 'EPERM') denied ??= candidate;
+      else if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+    }
+  }
+  if (denied) throw new Error(`${labels.denied}: ${denied}. Проверьте права или выберите другой исполняемый файл.`);
+  throw new Error(`${labels.missing}: ${command}. Укажите полный путь к исполняемому файлу или добавьте его папку в PATH.`);
+}
+
 /** Static readiness only: never imports, starts, or sends a request to the target. Actual execution still handles drift/errors. */
 export async function preflightTarget(target: Target): Promise<void> {
   if (target.kind === 'sandbox') return;
   if (target.promptFile) await readPrompt(target.promptFile);
+  if (target.release) {
+    const cwd = target.release.cwd ?? process.cwd();
+    try { if (!(await stat(cwd)).isDirectory()) throw new Error(`Рабочая папка хука выпуска не является папкой: ${cwd}.`); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`Не найдена рабочая папка хука выпуска: ${cwd}.`); throw error; }
+    await ensureExecutable(target.release.command, cwd, { missing: 'Не найдена команда хука выпуска', denied: 'Нет права запуска команды хука выпуска' });
+  }
   if (target.kind === 'http') { httpHeaders(target); return; }
   const entry = targetEntryPath(target);
   if (entry) {
@@ -46,26 +76,36 @@ export async function preflightTarget(target: Target): Promise<void> {
     if (code === 'EACCES' || code === 'EPERM') throw new Error(`Нет доступа к рабочей папке агента: ${cwd}. Проверьте права доступа.`);
     throw error;
   }
-  const windows = process.platform === 'win32';
-  const hasPath = target.command.includes('/') || windows && target.command.includes('\\');
-  const path = windows ? Object.entries(process.env).find(([key]) => key.toUpperCase() === 'PATH')?.[1] : process.env.PATH;
-  const directories = hasPath ? [''] : (path ?? (windows ? '' : '/usr/bin:/bin')).split(delimiter);
-  const suffixes = windows && !extname(target.command) ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';') : [''];
-  let denied: string | undefined;
-  for (const directory of directories) for (const suffix of suffixes) {
-    const candidate = resolve(cwd, directory, target.command + suffix);
-    try {
-      if (!(await stat(candidate)).isFile()) continue;
-      await access(candidate, constants.X_OK);
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'EACCES' || code === 'EPERM') denied ??= candidate;
-      else if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
-    }
-  }
-  if (denied) throw new Error(`Нет права запуска команды агента: ${denied}. Проверьте права или выберите другой исполняемый файл.`);
-  throw new Error(`Не найдена команда агента: ${target.command}. Укажите полный путь к исполняемому файлу или добавьте его папку в PATH.`);
+  await ensureExecutable(target.command, cwd, { missing: 'Не найдена команда агента', denied: 'Нет права запуска команды агента' });
+}
+
+/** Deploys the version under test. Output tails are kept for the record; the adapter's `version` remains the identity. */
+export async function runRelease(release: ReleaseHook, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<ReleaseLog> {
+  signal.throwIfAborted();
+  const startedAt = new Date().toISOString();
+  const started = performance.now();
+  return new Promise((resolveLog, reject) => {
+    let child: ReturnType<typeof spawn>;
+    try { child = spawn(release.command, release.args, { cwd: release.cwd, env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (error) { reject(new Error(`Cannot start release hook ${release.command}: ${error instanceof Error ? error.message : String(error)}`)); return; }
+    let stdout = '', stderr = '', timedOut = false;
+    child.stdout?.on('data', chunk => { stdout = `${stdout}${chunk}`.slice(-4000); });
+    child.stderr?.on('data', chunk => { stderr = `${stderr}${chunk}`.slice(-4000); });
+    const kill = () => {
+      try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGKILL'); }
+      child.stdout?.destroy(); child.stderr?.destroy();
+    };
+    const timer = setTimeout(() => { timedOut = true; kill(); }, release.timeoutMs);
+    const onAbort = kill;
+    signal.addEventListener('abort', onAbort, { once: true });
+    child.once('error', error => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); reject(new Error(`Cannot start release hook ${release.command}: ${error.message}`)); });
+    child.once('close', (code, sig) => {
+      clearTimeout(timer); signal.removeEventListener('abort', onAbort);
+      if (timedOut) stderr = `${stderr}\nRelease hook exceeded ${release.timeoutMs} ms`.slice(-4000);
+      resolveLog({ command: [release.command, ...release.args].join(' '), exitCode: timedOut || signal.aborted ? null : code, signal: sig, stdout, stderr, startedAt, durationMs: Math.round(performance.now() - started) });
+    });
+  });
 }
 
 /*

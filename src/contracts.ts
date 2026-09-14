@@ -116,7 +116,7 @@ export const worldSchema = z.strictObject({
   writableFields: z.array(identifier).max(16),
   transientFailures: z.number().int().min(0).max(2).default(0),
   /** Opaque state for the agent's own test environment (cards, contracts, tool fixtures). The sandbox ignores it; adapters must apply and confirm it. */
-  external: z.record(z.string().max(120), z.unknown()).optional(),
+  external: z.record(z.string().max(120), z.json()).optional(),
 }).superRefine((v, ctx) => {
   if (v.external !== undefined && JSON.stringify(v.external).length > 20000) ctx.addIssue({ code: 'custom', message: 'External state exceeds 20,000 characters', path: ['external'] });
 });
@@ -380,6 +380,7 @@ export const assessmentEventContent = (event: TraceEvent): string =>
   event.text !== undefined && [event.tool, event.args, event.result, event.state].every(value => value === undefined) ? event.text
     : JSON.stringify({ text: event.text, tool: event.tool, args: event.args, result: event.result, state: event.state });
 export interface CheckResult { id: string; description: string; passed: boolean; evidence: string }
+export const SIMULATOR_PROTOCOL = 'simulator-2';
 export const SIMULATOR_CHECK_IDS = ['simulator_leak', 'simulator_fabrication', 'simulator_loop'] as const;
 export type SimulatorCheckId = typeof SIMULATOR_CHECK_IDS[number];
 /** A code predicate over the simulated user's own replies. Never an agent grade; never shown to the judge. */

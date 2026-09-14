@@ -1,6 +1,6 @@
 import { hasCompleteJudgment } from './judge.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type Tier, type Trial, type UserMode } from './contracts.js';
-import { agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, mean, measured, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, mean, measured, measurementUsable, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
 import { modeValue, simulatorSummary, type ModeValue, type SimulatorSummary } from './simulator.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
@@ -147,7 +147,7 @@ export function compareUserModes(record: Experiment): ModeComparison[] {
   const reviews = latestHumanReviews(record);
   const protocols = new Set(record.trials.filter(t => t.judgeAudit).map(t => fingerprint({ protocol: t.judgeAudit!.protocolHash, provider: t.judgeAudit!.provider, model: t.judgeAudit!.model })));
   const usable = (t: Trial) => measured(t) && reviews.get(`${t.id}|dialogue`)?.verdict !== 'invalid'
-    && simulatorUsable(record.scenarios.find(s => s.id === t.scenarioId), t)
+    && measurementUsable(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews)
     && (record.mode !== 'live' || !record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length || (hasCompleteJudgment({ scenario: record.scenarios.find(s => s.id === t.scenarioId)!, sources: record.sources, trial: t }) && protocols.size === 1));
   const criteria = (t: Trial) => new Map<string, 'pass' | 'fail' | 'unknown'>([
     ...t.checks.map(c => [`${t.scenarioId}/check:${c.id}`, c.passed ? 'pass' : 'fail'] as const),
@@ -164,7 +164,7 @@ export function compareUserModes(record: Experiment): ModeComparison[] {
   }
   return record.settings.userModes.map(userMode => {
     const trials = record.trials.filter(t => t.userMode === userMode);
-    const valid = trials.filter(graded);
+    const valid = trials.filter(t => graded(t) && usable(t));
     const passed = valid.filter(t => t.outcome === 'pass').length;
     const failedChecks = [...failedBy.get(userMode)!].sort();
     const others = record.settings.userModes.filter(m => m !== userMode);
@@ -336,13 +336,14 @@ export function humanFindings(record: Experiment): HumanFinding[] {
     if (!trial || !['pass', 'fail', 'invalid'].includes(review.verdict)) return [];
     const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
     const metric = scenario?.metrics?.find(m => m.id === review.metricId);
-    const check = trial.checks.find(c => c.id === review.checkId);
+    const simulatorCheck = trial.simulatorChecks?.find(c => c.id === review.checkId);
+    const check = simulatorCheck ?? trial.checks.find(c => c.id === review.checkId);
     const automatic = !measured(trial) ? 'unknown' : review.metricId ? trial.assessments?.find(a => a.metricId === review.metricId)?.result ?? 'unknown'
       : review.checkId ? check ? check.passed ? 'pass' : 'fail' : 'unknown' : automaticTrialResult(scenario, trial);
     const disagreement = automatic !== 'unknown' && review.verdict !== automatic;
     if (review.verdict !== 'fail' && review.verdict !== 'invalid' && !disagreement) return [];
     return [{ trialId: trial.id, reviewId: review.id, target: metric?.name ?? check?.description ?? review.metricId ?? review.checkId ?? 'Весь диалог',
-      subject: review.verdict === 'invalid' ? 'test' : review.checkId ? 'check' : metric?.subject ?? 'agent', verdict: review.verdict as 'pass' | 'fail' | 'invalid', automatic, disagreement, note: review.note }];
+      subject: simulatorCheck ? 'simulator' : review.verdict === 'invalid' ? 'test' : review.checkId ? 'check' : metric?.subject ?? 'agent', verdict: review.verdict as 'pass' | 'fail' | 'invalid', automatic, disagreement, note: review.note }];
   });
 }
 /** Observed repeats of the same card and user mode; no independence or future-success probability is inferred. */
@@ -352,7 +353,7 @@ export function repeatResults(record: Experiment): RepeatResult[] {
     const trials = record.trials.filter(t => t.scenarioId === scenario.id && t.userMode === userMode);
     const outcomes = Array.from({ length: record.settings.repeats }, (_, repeat) => {
       const matches = trials.filter(t => t.repeat === repeat);
-      return matches.length === 1 ? automaticTrialResult(scenario, matches[0]!) : 'unknown';
+      return matches.length === 1 ? automaticTrialResult(scenario, matches[0]!, record.humanReviews) : 'unknown';
     });
     const passed = outcomes.filter(o => o === 'pass').length;
     const failed = outcomes.filter(o => o === 'fail').length;
@@ -368,6 +369,15 @@ export function awaitingVerdict(record: Experiment): Set<string> {
   const latest = latestHumanReviews(record);
   const decided = (key: string) => ['pass', 'fail'].includes(latest.get(key)?.verdict ?? '');
   return new Set(record.trials.filter(trial => {
+    if (latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid') return false;
+    {
+      const pending = [
+        ...(simulatorWasUsed(trial) ? trial.simulatorChecks ?? [] : []).filter(c => !c.passed).map(c => `check:${c.id}`),
+        ...(record.scenarios.find(s => s.id === trial.scenarioId)?.metrics ?? [])
+          .filter(m => m.subject === 'simulator' && metricApplies(m, trial) && trial.assessments?.find(a => a.metricId === m.id)?.result !== 'pass').map(m => `metric:${m.id}`),
+      ];
+      if (pending.some(key => !['pass', 'fail', 'invalid'].includes(latest.get(`${trial.id}|${key}`)?.verdict ?? ''))) return true;
+    }
     if (!isAgentFailure(record, trial) || decided(`${trial.id}|dialogue`) || latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid') return false;
     const failed = [
       ...trial.checks.filter(c => !c.passed).map(c => `check:${c.id}`),
@@ -462,7 +472,7 @@ export function verdictSummary(record: Experiment): VerdictSummary {
       else if (agentRubricResult(scenario, trial) !== 'pass') rubric.unknown += 1;
       else rubric.passed += 1;
     }
-    if (!simulatorUsable(scenario, trial) || trial.simulatorChecks?.some(c => !c.passed)) simulatorFlagged += 1;
+    if (!simulatorUsable(scenario, trial, record.humanReviews)) simulatorFlagged += 1;
     for (const assessment of agentResults) if (assessment.result === 'fail') {
       const metric = scenario?.metrics?.find(m => m.id === assessment.metricId);
       const name = metric?.name ?? assessment.metricId;
@@ -522,7 +532,7 @@ export function verdictSummary(record: Experiment): VerdictSummary {
   else if (gradedCount < MIN_GRADED) reasons.push({ code: 'few_graded', text: `Оценено ${gradedCount} диалог(ов) — слишком мало, чтобы судить об агенте.`, count: gradedCount });
   if (invalid) reasons.push({ code: 'invalid', text: `${invalid} диалог(ов) не удалось измерить: сломалась симуляция или инфраструктура.`, count: invalid });
   if (allSynthetic) reasons.push({ code: 'all_synthetic', text: 'Все карточки синтетические: ни реальных пользователей, ни проверенного golden set.' });
-  if (simulatorFlagged) reasons.push({ code: 'simulator_flagged', text: `Симулятор нарушил карточку в ${simulatorFlagged} диалог(ах) по кодовым проверкам или рубрике верности; оценки агента в них требуют проверки.`, count: simulatorFlagged });
+  if (simulatorFlagged) reasons.push({ code: 'simulator_flagged', text: `Есть неразрешённые замечания к симулятору в ${simulatorFlagged} диалог(ах) по кодовым проверкам или рубрике верности; оценки агента в них требуют проверки.`, count: simulatorFlagged });
   if (!humanVerdicts) reasons.push({ code: 'no_human', text: 'Ни одного вердикта человека: оценки модели никем не проверены.' });
   else if (!decisiveVerdicts) reasons.push({ code: 'no_decisive_verdicts', text: 'Нет решающей оценки качества агента. Невалидный тест требует исправления и повторного запуска.' });
   else if (!finalized) reasons.push({ code: 'not_finalized', text: 'Аудит результатов человеком не завершён.' });
@@ -688,7 +698,7 @@ function runCompleteness(record: Experiment, allowPartial = false): string[] {
 function cardOutcome(record: Experiment, scenario: Scenario): 'pass' | 'fail' | 'unknown' {
   const trials = record.trials.filter(t => t.scenarioId === scenario.id);
   if (!trials.length) return 'unknown';
-  const outcomes = trials.map(t => automaticTrialResult(scenario, t));
+  const outcomes = trials.map(t => automaticTrialResult(scenario, t, record.humanReviews));
   return outcomes.includes('fail') ? 'fail' : outcomes.every(o => o === 'pass') ? 'pass' : 'unknown';
 }
 
@@ -751,9 +761,9 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   if (!pairs.length) { result.headline = 'Нет совпадающих валидных попыток. Повторите неудавшиеся диалоги, чтобы получить сравнение.'; return result; }
   result.pairs = pairs.map(trial => {
     const scenario = shared.find(s => s.id === trial.scenarioId);
-    const was = automaticTrialResult(scenario, trial);
+    const was = automaticTrialResult(scenario, trial, before.humanReviews);
     const following = afterAttempts.get(attemptKey(trial))!;
-    const now = automaticTrialResult(scenario, following);
+    const now = automaticTrialResult(scenario, following, after.humanReviews);
     let change: RunComparison['pairs'][number]['change'] = was === 'unknown' || now === 'unknown' ? 'unknown'
       : was === now ? 'unchanged' : now === 'pass' ? 'fixed' : 'regressed';
     const reviewNote = rubricReviewNote(scenario, trial, following);
@@ -779,21 +789,21 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
     else if (now === 'pass') result.unchanged.passing++;
     else result.unchanged.failing++;
   }
-  // Paired difference per family (cluster by the unit of randomization, pair the same cards). Descriptive only.
-  const familyScores = (run: Experiment) => {
-    const scores = new Map<string, number[]>();
-    for (const scenario of shared) {
-      if (result.pairs.some(p => p.scenarioId === scenario.id && p.reviewNote)) continue;
-      const outcome = cardOutcome(run, scenario);
-      if (outcome === 'unknown') continue;
-      scores.set(scenario.familyId, [...scores.get(scenario.familyId) ?? [], outcome === 'pass' ? 1 : 0]);
-    }
-    return scores;
-  };
-  const beforeScores = familyScores(before), afterScores = familyScores(after);
-  const familyDeltas = [...beforeScores].filter(([family]) => afterScores.has(family)).map(([family, was]) => mean(afterScores.get(family)!)! - mean(was)!);
-  result.delta = familyDeltas.length ? { families: familyDeltas.length, mean: mean(familyDeltas), interval: clusterInterval(familyDeltas, `${before.id}|${after.id}`),
-    note: 'Описательная парная дельта доли пройденных карточек по семействам; вердикт определяют списки карточек, а не среднее.' } : null;
+  // Pair decisive card outcomes first; never compare different cards within a family.
+  const families = new Map<string, number[]>();
+  for (const scenario of shared) {
+    if (result.pairs.some(p => p.scenarioId === scenario.id && p.reviewNote)) continue;
+    const was = cardOutcome(before, scenario), now = cardOutcome(after, scenario);
+    if (was === 'unknown' || now === 'unknown') continue;
+    const key = scenario.familyId || scenario.id;
+    families.set(key, [...families.get(key) ?? [], Number(now === 'pass') - Number(was === 'pass')]);
+  }
+  // Comparable runs always carry a delta object; `null` is reserved for incomparable runs so the surfaces can tell the two apart.
+  const familyDeltas = [...families.values()].map(values => mean(values)!);
+  result.delta = { families: familyDeltas.length, mean: mean(familyDeltas), interval: clusterInterval(familyDeltas, `${before.id}|${after.id}`),
+    note: familyDeltas.length
+      ? `Описательная парная дельта по семействам. Исключено карточек: ${result.ungraded}. Малое число семейств не позволяет надёжно оценить неопределённость; вердикт определяют карточки.`
+      : `Ни одна карточка не имеет решающего исхода в обоих прогонах; исключено карточек: ${result.ungraded}. Дельта не рассчитана.` };
   const bv = verdictSummary(before);
   const av = verdictSummary(after);
   const rate = (v: VerdictSummary, stage: string) => { const s = v.stages.find(s => s.stage === stage); return s ? s.passed / s.evaluated : null; };
@@ -818,9 +828,8 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
 export function pilotSummary(record: Experiment) {
   const reviews = latestHumanReviews(record);
   const findings = humanFindings(record);
-  const badSimulator = (t: Trial) => simulatorWasUsed(t) && (record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.some(m => m.subject === 'simulator'
-    && (t.assessments?.some(a => a.metricId === m.id && a.result === 'fail') || reviews.get(`${t.id}|metric:${m.id}`)?.verdict === 'fail')) ?? false);
-  const valid = (t: Trial) => measured(t) && reviews.get(`${t.id}|dialogue`)?.verdict !== 'invalid' && !badSimulator(t);
+  const badSimulator = (t: Trial) => !simulatorUsable(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews);
+  const valid = (t: Trial) => measurementUsable(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews);
   const modes = record.settings.userModes.map(userMode => {
     const trials = record.trials.filter(t => t.userMode === userMode);
     const failures = findings.filter(f => f.verdict === 'fail' && !['simulator', 'test'].includes(f.subject)
@@ -832,7 +841,7 @@ export function pilotSummary(record: Experiment) {
       const otherModes = record.settings.userModes.filter(m => m !== userMode && (m !== 'scripted' || scenario.user.script !== undefined));
       return otherModes.length > 0 && otherModes.every(mode => {
         const peers = record.trials.filter(t => t.scenarioId === trial.scenarioId && t.userMode === mode);
-        return peers.length === record.settings.repeats && peers.every(t => valid(t) && automaticTrialResult(scenario, t) === 'pass'
+        return peers.length === record.settings.repeats && peers.every(t => valid(t) && automaticTrialResult(scenario, t, record.humanReviews) === 'pass'
           && !findings.some(x => x.trialId === t.id && x.verdict === 'fail' && x.subject !== 'simulator'));
       });
     }).map(f => `${trials.find(t => t.id === f.trialId)!.familyId}: ${f.target}`))];
@@ -841,7 +850,7 @@ export function pilotSummary(record: Experiment) {
     return { userMode, trials: trials.length, confirmedFailures: failures.length, confirmedFailureKeys: keys, exclusiveConfirmed: exclusive,
       simulatorFailures: trials.filter(badSimulator).length, invalid: trials.filter(t => !measured(t)).length,
       excluded: trials.filter(t => measured(t) && !valid(t)).length,
-      assessmentIncomplete: trials.filter(t => !trialAssessmentComplete(record.scenarios.find(s => s.id === t.scenarioId)!, t)).length,
+      assessmentIncomplete: trials.filter(t => !trialAssessmentComplete(record.scenarios.find(s => s.id === t.scenarioId)!, t, record.humanReviews)).length,
       elapsedMs: trials.reduce((n, t) => n + t.elapsedMs, 0), reviewMs: timed.length ? timed.reduce((n, r) => n + r.durationMs!, 0) : null,
       labCostUsd: trials.some(t => t.usage.costUsd === null) ? null : trials.reduce((n, t) => n + t.usage.costUsd!, 0),
       externalCostUsd: !trials.length || external.length !== trials.length || external.some(t => t.externalUsage!.costUsd === null)
@@ -859,6 +868,12 @@ export function evaluationExitCode(record: Experiment): 0 | 1 | 2 {
   const v = verdictSummary(record);
   const incomplete = !['results_review', 'complete'].includes(record.phase) || v.execution.invalid > 0 || v.execution.cancelled > 0
     || v.execution.missing > 0 || v.rubric.unknown > 0 || v.simulatorFlagged > 0
-    || record.trials.some(t => t.assessmentError || (t.outcome === 'ungraded' && agentRubricResult(record.scenarios.find(s => s.id === t.scenarioId), t) === undefined));
+    || record.trials.some(t => automaticTrialResult(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews) === 'unknown');
   return incomplete ? 2 : record.trials.some(t => isAgentFailure(record, t)) ? 1 : 0;
+}
+
+export function familyDeltaText(delta: RunComparison['delta']): string {
+  if (!delta) return 'Парная дельта не рассчитана: прогоны несравнимы или нет ни одной валидной пары попыток.';
+  const pp = (n: number) => `${n >= 0 ? '+' : ''}${(100 * n).toFixed(1)} п.п.`;
+  return `Парная дельта: ${delta.mean === null ? 'нет оценённых пар' : pp(delta.mean)}; семейств ${delta.families}; интервал ${delta.interval ? delta.interval.map(pp).join(' … ') : 'не рассчитан'}. ${delta.note}`;
 }

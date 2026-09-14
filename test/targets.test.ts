@@ -5,7 +5,7 @@ import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { openExternalTarget, preflightTarget } from '../src/targets.js';
+import { openExternalTarget, preflightTarget, runRelease } from '../src/targets.js';
 import { type CallContext, type TraceEvent, type World } from '../src/contracts.js';
 
 function context(signal = new AbortController().signal) {
@@ -253,4 +253,37 @@ test('module sessions isolate state, bound initialization and synchronous hangs,
   await writeFile(path, 'export function createSession() { return { respond() { return "ok"; }, close() { while (true) {} } }; }');
   const closing = await open();
   const start = performance.now(); await closing.close(); assert.ok(performance.now() - start < 4000);
+});
+
+test('preflight checks the release hook executable without running it, and runRelease captures exit code, output and timeout', async () => {
+  await assert.rejects(preflightTarget({ kind: 'command', command: process.execPath, args: [stdioFixture], timeoutMs: 1000, release: { command: '/nonexistent/release.sh', args: [], timeoutMs: 1000 } }), /хука выпуска/);
+  await preflightTarget({ kind: 'command', command: process.execPath, args: [stdioFixture], timeoutMs: 1000, release: { command: process.execPath, args: ['-e', 'process.exit(0)'], timeoutMs: 1000 } });
+  const signal = new AbortController().signal;
+  const ok = await runRelease({ command: process.execPath, args: ['-e', 'console.log("deployed " + process.env.AGENT_LAB_RUN_ID)'], timeoutMs: 5000 }, { ...process.env, AGENT_LAB_RUN_ID: 'run-1' }, signal);
+  assert.equal(ok.exitCode, 0); assert.match(ok.stdout, /deployed run-1/); assert.equal(ok.signal, null);
+  const failed = await runRelease({ command: process.execPath, args: ['-e', 'console.error("deploy failed"); process.exit(3)'], timeoutMs: 5000 }, process.env, signal);
+  assert.equal(failed.exitCode, 3); assert.match(failed.stderr, /deploy failed/);
+  const started = performance.now();
+  const slow = await runRelease({ command: process.execPath, args: ['-e', 'setTimeout(() => {}, 10000)'], timeoutMs: 1000 }, process.env, signal);
+  assert.equal(slow.exitCode, null); assert.match(slow.stderr, /exceeded 1000 ms/); assert.ok(performance.now() - started < 4000);
+  await assert.rejects(runRelease({ command: '/nonexistent/release.sh', args: [], timeoutMs: 1000 }, process.env, signal), /Cannot start release hook/);
+});
+
+test('command adapters receive the external world and the fixture confirms the reset', async () => {
+  const replies: unknown[] = [];
+  const state = { ...world(), external: { cards: [{ id: 'c1', status: 'active' }, { id: 'c2', status: 'blocked' }] } };
+  const session = await openExternalTarget({ target: { kind: 'command', command: process.execPath, args: [stdioFixture, 'external'], timeoutMs: 5000 },
+    sessionId: 't', scenarioId: 's', state, history: () => [], ctx: context().ctx, onReply: reply => replies.push(reply) });
+  assert.equal(await session.respond('hi'), 'cards: c1, c2');
+  assert.equal((replies[0] as { resetConfirmed?: boolean }).resetConfirmed, true);
+  await session.close();
+});
+
+test('release cancellation cannot start work and a grandchild cannot hold the hook open past its deadline', async () => {
+  await assert.rejects(runRelease({ command: process.execPath, args: ['-e', 'throw Error("must not start")'], timeoutMs: 1000 }, process.env, AbortSignal.abort()), /abort/i);
+  const start = performance.now();
+  const result = await runRelease({ command: process.execPath, args: ['-e', `require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(()=>{},10000)'], {stdio: 'inherit'}).unref()`], timeoutMs: 1000 }, process.env, new AbortController().signal);
+  assert.equal(result.exitCode, null);
+  assert.match(result.stderr, /exceeded/);
+  assert.ok(performance.now() - start < 4000);
 });

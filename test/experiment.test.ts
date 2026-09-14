@@ -3,9 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { existsSync, readFileSync } from 'node:fs';
 import { ExperimentLab, draftHash, measurementHash, resultHash } from '../src/experiment.js';
 import { ExperimentStore } from '../src/store.js';
-import { createDemoRuntime, demoInput } from '../src/demo.js';
+import { createDemoRuntime, demoEvaluationInput, demoInput } from '../src/demo.js';
 import { createInputSchema, fingerprint, validatePreparation, type Runtime } from '../src/contracts.js';
 import { awaitingVerdict } from '../src/comparison.js';
 
@@ -694,4 +696,90 @@ test('static connection failures precede model work and a vanished target cannot
   await rm(entry);
   await assert.rejects(lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }), /Не найден файл агента/);
   assert.deepEqual(await lab.get(draft.id), draft);
+});
+
+const stdioFixture = fileURLToPath(new URL('./fixtures/stdio-agent.mjs', import.meta.url));
+function externalInput(release?: { command: string; args: string[] }, mode: 'ok' | 'external' = 'ok') {
+  const base = demoEvaluationInput();
+  return createInputSchema.parse({ ...base, scenarioCount: 1, settings: { ...base.settings, userModes: ['static'], repeats: 1 },
+    target: { kind: 'command', command: process.execPath, args: [stdioFixture, mode], timeoutMs: 5000, ...(release ? { release } : {}) } });
+}
+
+test('the release hook runs once before the first dialogue with the run identity, and a failing hook stops the run', async t => {
+  const { lab, directory } = await setup(t, createDemoRuntime());
+  const marker = join(directory, 'deployed.txt');
+  process.env.AGENT_LAB_MARKER = marker;
+  t.after(() => { delete process.env.AGENT_LAB_MARKER; });
+  const created = await lab.create(externalInput({ command: process.execPath, args: ['-e', 'require("node:fs").writeFileSync(process.env.AGENT_LAB_MARKER, process.env.AGENT_LAB_RUN_ID)'] }));
+  await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  assert.equal(existsSync(marker), false, 'preparation and preflight never run the hook');
+  await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
+  const record = await lab.get(draft.id);
+  assert.equal(record.phase, 'results_review', record.error ?? '');
+  assert.equal(readFileSync(marker, 'utf8'), record.id);
+  assert.equal(record.releaseLog?.exitCode, 0);
+  const broken = await lab.create(externalInput({ command: process.execPath, args: ['-e', 'console.error("deploy failed"); process.exit(2)'] }));
+  await lab.waitForIdle();
+  const draft2 = await lab.get(broken.id);
+  await lab.start(draft2.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft2) }); await lab.waitForIdle();
+  const failed = await lab.get(draft2.id);
+  assert.equal(failed.phase, 'error');
+  assert.match(failed.error ?? '', /Хук выпуска завершился с кодом 2/); assert.match(failed.error ?? '', /deploy failed/);
+  assert.equal(failed.trials.length, 0, 'no dialogue runs against an undeployed version');
+  assert.equal(failed.releaseLog?.exitCode, 2);
+});
+
+test('a single failed dialogue is clustered, and a cluster may quote only the agent instructions it was given', async t => {
+  const runtime = createDemoRuntime();
+  const prompts: (string | undefined)[] = [];
+  let quotes = ['Read the appointment before changing it.'];
+  runtime.failureModes = async input => { prompts.push(input.prompt); return [{ id: 'no_update', name: 'Прочитал запись, но не изменил её', description: 'd', trialIds: [input.failures[0]!.trialId], promptQuotes: quotes }]; };
+  const { lab } = await setup(t, runtime);
+  const run = async () => {
+    const base = demoEvaluationInput();
+    const created = await lab.create(createInputSchema.parse({ ...base, scenarioCount: 1, settings: { ...base.settings, userModes: ['static'], repeats: 1 } }));
+    await lab.waitForIdle();
+    const draft = await lab.get(created.id);
+    await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
+    return lab.get(draft.id);
+  };
+  const named = await run();
+  assert.equal(named.trials.length, 1); assert.equal(named.trials[0]!.outcome, 'fail');
+  assert.deepEqual(named.failureModes?.map(m => [m.name, m.promptQuotes]), [['Прочитал запись, но не изменил её', ['Read the appointment before changing it.']]]);
+  assert.equal(prompts[0], named.revisions[0]!.spec.instructions, 'sandbox clusters see the agent instructions as the prompt');
+  quotes = ['this sentence is not in the instructions'];
+  const rejected = await run();
+  assert.equal(rejected.phase, 'results_review');
+  assert.equal(rejected.failureModes, undefined);
+  assert.ok(rejected.limitations.some(l => /Не удалось назвать типы провалов/.test(l) && /дословно/.test(l)));
+});
+
+test('human verdicts may target simulator checks, reassessment recomputes them, and an unconfirmed external world is a run limitation', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const base = demoEvaluationInput();
+  const created = await lab.create(createInputSchema.parse({ ...base, scenarioCount: 3, settings: { ...base.settings, userModes: ['reactive'], repeats: 1 } }));
+  await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
+  const record = await lab.get(draft.id);
+  const clarified = record.trials.find(t => t.events.filter(e => e.type === 'user').length > 1)!;
+  assert.ok(clarified.simulatorChecks!.length >= 2);
+  await lab.addHumanReview(record.id, { trialId: clarified.id, checkId: 'simulator_loop', verdict: 'fail', note: 'looked like a loop to me' });
+  await assert.rejects(lab.addHumanReview(record.id, { trialId: clarified.id, checkId: 'simulator_missing', verdict: 'fail', note: 'x' }), /проверки симулятора/);
+  const reassessed = await lab.reassess(record.id, { codeOnly: true }); await lab.waitForIdle();
+  const again = (await lab.get(reassessed.id)).trials.find(t => t.id === clarified.id)!;
+  assert.deepEqual(again.simulatorChecks, clarified.simulatorChecks);
+  // The demo runtime refuses scenarioCount 0, so one demo card rides along; the golden card is the one under test.
+  const external = await lab.create(createInputSchema.parse({ ...externalInput(undefined, 'ok'), scenarioCount: 1,
+    goldenCases: [{ id: 'gold_cards', goal: 'List my cards', opening: 'Which cards do I have?', successCriteria: 'Two cards are listed', maxFollowUps: 0, metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'd', passCriteria: 'p', failCriteria: 'f' }],
+      initialState: { records: {}, writableFields: [], transientFailures: 0, external: { cards: [{ id: 'c1' }, { id: 'c2' }] } } }] }));
+  await lab.waitForIdle();
+  const draft2 = await lab.get(external.id);
+  await lab.start(draft2.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft2) }); await lab.waitForIdle();
+  const unconfirmed = await lab.get(draft2.id);
+  assert.ok(unconfirmed.limitations.includes('Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.'), unconfirmed.limitations.join('\n'));
+  assert.match(unconfirmed.trials.find(t => t.scenarioId === 'gold_cards')!.reason, /не подтверждено адаптером/);
+  const repeated = await lab.repeat(unconfirmed.id);
+  assert.ok(!repeated.limitations.some(l => l.startsWith('Внешнее состояние карточек')));
 });

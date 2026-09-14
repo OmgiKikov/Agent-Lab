@@ -180,12 +180,12 @@ function verdictLines(record: Experiment, expanded = false): Line[] {
   const v = verdictSummary(record);
   if (!expanded) {
     const finding = v.review.findings[0];
-    const trial = record.trials.find(t => t.outcome === 'invalid') ?? record.trials.find(t => isAgentFailure(record, t));
+    const trial = record.trials.find(t => t.outcome === 'invalid') ?? record.trials.find(t => awaitingVerdict(record).has(t.id)) ?? record.trials.find(t => isAgentFailure(record, t));
     return [line('ИТОГ', 'accent', true), line(v.headline, 'text', true), line(''),
       ...(finding ? [line(humanFindingText(finding), 'warning')] : []),
       ...(trial ? [line('ЧТО ТРЕБУЕТ ВНИМАНИЯ', 'accent'),
         line(record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId, 'text', true),
-        line(trial.checks.find(c => !c.passed)?.evidence || trial.checks.find(c => !c.passed)?.description
+        line(trial.simulatorChecks?.find(c => !c.passed)?.evidence || trial.checks.find(c => !c.passed)?.evidence || trial.checks.find(c => !c.passed)?.description
           || trial.assessments?.find(a => a.result === 'fail' && record.scenarios.find(s => s.id === trial.scenarioId)?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent'))?.rationale || trial.reason, 'warning'),
         ...trial.assessments?.filter(a => a.result === 'fail' && record.scenarios.find(s => s.id === trial.scenarioId)?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent'))
           .slice(0, 1).map(a => line(`Основание: реплики #${a.evidence.join(', #')}`, 'muted')) ?? [],

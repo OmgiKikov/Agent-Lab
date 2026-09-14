@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { fingerprint, type Experiment } from './contracts.js';
+import { measurementUsable } from './outcomes.js';
 import { humanFindings } from './comparison.js';
 import { draftHash, type ExperimentLab } from './experiment.js';
 import { targetFingerprint } from './target-version.js';
@@ -21,6 +22,7 @@ export async function proposePrompt(directory: string, record: Experiment, input
   if (!input.candidate.trim() || Buffer.byteLength(input.candidate) > 96000 || input.candidate.includes('\0')) throw new Error('Кандидат должен быть текстовым промптом до 96 КБ.');
   const findings = humanFindings(record);
   const eligible = new Set(findings.filter(f => f.verdict === 'fail' && f.subject !== 'simulator' && f.subject !== 'test'
+    && measurementUsable(record.scenarios.find(s => s.id === record.trials.find(t => t.id === f.trialId)?.scenarioId), record.trials.find(t => t.id === f.trialId)!, record.humanReviews)
     && !findings.some(x => x.trialId === f.trialId && x.subject === 'test' && x.verdict === 'invalid')).map(f => f.trialId));
   if (new Set(input.trialIds).size !== input.trialIds.length || input.trialIds.some(id => !eligible.has(id) || record.trials.find(t => t.id === id)?.split !== 'dev')) {
     throw new Error('Гипотеза должна ссылаться только на подтверждённые человеком ошибки агента из dev. Невалидные тесты и control не подходят.');

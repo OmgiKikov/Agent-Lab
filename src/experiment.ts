@@ -10,7 +10,8 @@ import { assessTrial, evaluateTrial, grade } from './evaluation.js';
 import { automaticTrialResult, trialAssessmentComplete, awaitingVerdict, compareTrials, isAgentFailure, plannedTrials } from './comparison.js';
 import { targetFingerprint } from './target-version.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from './connection.js';
-import { preflightTarget } from './targets.js';
+import { preflightTarget, readPrompt, runRelease } from './targets.js';
+import { simulatorChecks } from './simulator.js';
 import { createDemoRuntime } from './demo.js';
 import { createPiRuntime, evaluatorVersion } from './pi.js';
 
@@ -56,9 +57,10 @@ function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
     trials: [], comparisons: [], iterations: [], humanReviews: [], usage: emptyUsage(),
     reviewedAt: null, reviewMode: null, manifestHash: null, controlConsumedAt: null, error: null });
   delete record.resultsReviewedAt; delete record.resultsReviewHash; delete record.failureModes;
-  delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash;
+  delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash; delete record.releaseLog;
   record.evaluatorVersion = evaluatorVersion(record.settings);
-  record.limitations = previous.limitations.filter(note => !note.startsWith('Scripted mode skipped') && !note.startsWith('Не удалось назвать типы провалов:'));
+  record.limitations = previous.limitations.filter(note => !note.startsWith('Scripted mode skipped') && !note.startsWith('Не удалось назвать типы провалов:')
+    && !note.startsWith('Внешнее состояние карточек не подтверждено'));
   return record;
 }
 
@@ -321,6 +323,7 @@ export class ExperimentLab {
             try {
               trial.checks = [];
               trial.checks = grade(scenario, trial);
+              trial.simulatorChecks = simulatorChecks(scenario, trial);
               // Preserve execution failures (empty answer / turn budget), independent of new criteria.
               const executionFailed = original.outcome === 'fail' && original.checks.every(c => c.passed);
               trial.outcome = executionFailed || trial.checks.some(c => !c.passed) ? 'fail' : trial.checks.length ? 'pass' : 'ungraded';
@@ -351,7 +354,7 @@ export class ExperimentLab {
       const input = humanReviewInputSchema.parse(raw);
       const trial = record.trials.find(t => t.id === input.trialId);
       if (!trial) throw new Error('Такого диалога в этом эксперименте нет.');
-      if (input.checkId && !trial.checks.some(c => c.id === input.checkId)) throw new Error('Такой объективной проверки в этом диалоге нет.');
+      if (input.checkId && !trial.checks.some(c => c.id === input.checkId) && !trial.simulatorChecks?.some(c => c.id === input.checkId)) throw new Error('Такой объективной проверки или проверки симулятора в этом диалоге нет.');
       const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
       if (input.metricId && !scenario?.metrics?.some(m => m.id === input.metricId)) throw new Error('Такой рубрики в этой карточке нет.');
       (record.humanReviews ??= []).push({ ...input, id: randomUUID(), createdAt: new Date().toISOString() });
@@ -510,6 +513,10 @@ export class ExperimentLab {
               record.message = `${progress} · ${stage}`;
             } }, userMode, target: record.target });
           record.trials.push(trial);
+          if (record.target.kind !== 'sandbox' && scenario.initialState.external && trial.observation?.resetConfirmed !== true) {
+            const note = 'Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.';
+            if (!record.limitations.includes(note)) record.limitations.push(note);
+          }
           if (trial.observation?.version) {
             if (record.targetRelease && record.targetRelease !== trial.observation.version) throw new Error('Внешний агент сообщил разные версии в одном прогоне. Сравнение недоступно.');
             record.targetRelease = trial.observation.version;
@@ -526,10 +533,23 @@ export class ExperimentLab {
       }
     }
   }
+  /** The rollout of the version under test. The adapter's reported `version` remains the identity; this only performs the deployment. */
+  private async release(record: Experiment, ctx: CallContext): Promise<void> {
+    const target = record.target;
+    if (target.kind === 'sandbox' || !target.release) return;
+    const env: NodeJS.ProcessEnv = { ...process.env, AGENT_LAB_RUN_ID: record.id,
+      ...(record.targetVersion ? { AGENT_LAB_TARGET_VERSION: record.targetVersion } : {}),
+      ...(target.promptFile ? { AGENT_LAB_PROMPT_FILE: target.promptFile, AGENT_LAB_PROMPT_HASH: fingerprint(await readPrompt(target.promptFile)) } : {}) };
+    await this.checkpoint(record, record.phase, 'Разворачиваю проверяемую версию агента (хук выпуска).');
+    record.releaseLog = await runRelease(target.release, env, ctx.signal);
+    ctx.signal.throwIfAborted();
+    if (record.releaseLog.exitCode !== 0) throw new Error(`Хук выпуска завершился с кодом ${record.releaseLog.exitCode ?? record.releaseLog.signal ?? 'unknown'}: ${record.releaseLog.stderr.trim().slice(-500) || 'без вывода'}`);
+  }
   private async evaluateReviewed(record: Experiment, ctx: CallContext): Promise<void> {
     const runtime = await this.runtime(record);
     const agent = record.revisions[0];
     if (!agent || !record.manifestHash) throw new Error('Missing reviewed agent or measurement manifest.');
+    await this.release(record, ctx);
     await this.runSuite(record, runtime, agent, 'dev', '', ctx);
     this.frozenGuard(record, record.manifestHash, ctx)();
     await this.nameFailureModes(record, runtime, ctx);
@@ -540,13 +560,15 @@ export class ExperimentLab {
   }
   /**
    * Naming the failure precisely is what turns an evaluation into an improvement loop, so the
-   * failed dialogues of a finished run are clustered and named. A single failure is not a
-   * pattern, and a failed clustering must not lose a completed run: it is recorded as a
-   * limitation instead.
+   * failed dialogues of a finished run are clustered and named — a single failure gets a name
+   * too, because one named failure is already a fix to try. When the prompt of the agent is
+   * known (a promptFile, or the sandbox instructions), the cluster may quote the fragment that
+   * governed the broken behaviour; quotes are checked verbatim. A failed clustering must not
+   * lose a completed run: it is recorded as a limitation instead.
    */
   private async nameFailureModes(record: Experiment, runtime: Runtime, ctx: CallContext): Promise<void> {
     const failed = record.trials.filter(t => isAgentFailure(record, t));
-    if (!runtime.failureModes || failed.length < 2) return;
+    if (!runtime.failureModes || !failed.length) return;
     const failures = failed.map(trial => ({
       trialId: trial.id,
       card: record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId,
@@ -559,8 +581,10 @@ export class ExperimentLab {
         .map(e => `#${e.seq} ${e.type}${e.tool ? ` ${e.tool}` : ''}: ${e.text ?? JSON.stringify(e.result ?? e.args ?? '')}`).join('\n').slice(0, 12000),
     }));
     try {
-      const modes = await runtime.failureModes({ task: record.task, failures }, ctx);
-      validateFailureModes(modes, failed);
+    const prompt = record.target.kind !== 'sandbox' ? (record.target.promptFile ? await readPrompt(record.target.promptFile) : undefined)
+      : record.revisions.find(r => r.id === record.selectedRevisionId)?.spec.instructions;
+      const modes = await runtime.failureModes({ task: record.task, failures, ...(prompt !== undefined ? { prompt } : {}) }, ctx);
+      validateFailureModes(modes, failed, prompt);
       record.failureModes = modes;
     } catch (error) {
       if (ctx.signal.aborted) throw error;

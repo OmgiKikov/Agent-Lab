@@ -25,6 +25,12 @@ export function resolveTarget(raw: unknown, base: string): Target {
     target.cwd = resolve(base, typeof target.cwd === 'string' ? target.cwd : '.');
     if (typeof target.command === 'string' && target.command.includes('/')) target.command = resolve(target.cwd as string, target.command);
   }
+  if (target.kind !== 'sandbox' && target.release && typeof target.release === 'object') {
+    const release = { ...(target.release as Record<string, unknown>) };
+    release.cwd = resolve(base, typeof release.cwd === 'string' ? release.cwd : '.');
+    if (typeof release.command === 'string' && release.command.includes('/')) release.command = resolve(typeof release.cwd === 'string' ? release.cwd : base, release.command);
+    target.release = release;
+  }
   return targetSchema.parse(target);
 }
 
@@ -32,10 +38,12 @@ export function portableTarget(target: Target, base: string): unknown {
   const path = (file: string) => relative(base, file) || '.';
   const executable = (cwd: string, file: string) => { const value = relative(cwd, file); return value.includes('/') ? value : `./${value}`; };
   const prompt = target.kind !== 'sandbox' && target.promptFile ? { promptFile: path(target.promptFile) } : {};
-  if (target.kind === 'module') return { ...target, ...prompt, path: path(target.path) };
-  if (target.kind !== 'command') return { ...target, ...prompt };
+  const release = target.kind !== 'sandbox' && target.release ? { release: { ...target.release, ...(target.release.cwd ? { cwd: path(target.release.cwd) } : {}),
+    command: isAbsolute(target.release.command) ? executable(target.release.cwd ?? base, target.release.command) : target.release.command } } : {};
+  if (target.kind === 'module') return { ...target, ...prompt, ...release, path: path(target.path) };
+  if (target.kind !== 'command') return { ...target, ...prompt, ...release };
   const cwd = target.cwd ?? process.cwd();
-  return { ...target, ...prompt, cwd: path(cwd), command: isAbsolute(target.command) ? executable(cwd, target.command) : target.command,
+  return { ...target, ...prompt, ...release, cwd: path(cwd), command: isAbsolute(target.command) ? executable(cwd, target.command) : target.command,
     args: target.args.map(arg => isAbsolute(arg) && /\.(?:[cm]?js|ts|py|sh)$/.test(arg) ? relative(cwd, arg) : arg) };
 }
 

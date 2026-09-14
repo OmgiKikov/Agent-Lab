@@ -381,7 +381,13 @@ test('rubric failures in dialogues without objective checks still count as weak 
   assert.ok(v.confidenceReasons.some(n => n.code === 'rubric_only'));
   assert.ok(v.confidenceReasons.some(n => n.code === 'simulator_flagged' && n.count === 1));
   assert.equal(v.simulatorFlagged, 1);
-  assert.ok(v.nextSteps.some(n => n.code === 'record_verdicts' && n.count === 1));
+  // The dialogue flagged by the fidelity rubric is not yet a usable agent measurement: the first step is a verdict on the simulator, not on the agent.
+  assert.equal(v.review.pending, 1);
+  assert.ok(v.nextSteps.some(n => n.code === 'inspect_simulator' && n.count === 1));
+  assert.equal(v.nextSteps.some(n => n.code === 'record_verdicts'), false);
+  const simulatorCleared = verdictSummary({ ...r, humanReviews: [...r.humanReviews, review('h2', 'b', 'pass', { metricId: 'fidelity' })] });
+  assert.equal(simulatorCleared.simulatorFlagged, 0);
+  assert.ok(simulatorCleared.nextSteps.some(n => n.code === 'record_verdicts' && n.count === 1), 'once the simulator is cleared, the agent failure needs its own verdict');
 });
 
 test('high confidence requires human verdicts on every failed dialogue, not just a finalized review', () => {
@@ -689,4 +695,40 @@ test('run comparison adds a descriptive paired family delta with a bootstrap int
   const one = compareRuns({ ...before, scenarios: cards.slice(0, 1), trials: before.trials.slice(0, 1) }, { ...after, scenarios: cards.slice(0, 1), trials: after.trials.slice(0, 1) });
   assert.deepEqual([one.delta?.families, one.delta?.interval], [1, null]);
   assert.equal(compareRuns(before, { ...after, mode: 'live' }).delta, null);
+});
+
+test('simulator review controls eligibility without rewriting evidence or becoming an agent finding', async () => {
+  const { automaticTrialResult, evaluationExitCode } = await import('../src/comparison.js');
+  const card = { ...scenario('s1'), metrics: [] };
+  const t = trial('a', 's1', 'reactive', 'pass', { events: dialogue(['hello', '1234']) });
+  t.simulatorChecks = [{ id: 'simulator_leak', description: 'suspicion', evidence: '1234', passed: false, heuristic: true }];
+  const r = record({ scenarios: [card], trials: [t], settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1 }) });
+  assert.equal(automaticTrialResult(card, t), 'unknown');
+  assert.equal(evaluationExitCode(r), 2);
+  r.humanReviews = [review('sim-fail', t.id, 'fail', { checkId: 'simulator_leak' })];
+  assert.equal(humanFindings(r)[0]!.subject, 'simulator');
+  assert.equal(isAgentFailure(r, t), false);
+  r.humanReviews.push(review('sim-pass', t.id, 'pass', { checkId: 'simulator_leak' }, '2026-09-09T00:00:00Z'));
+  assert.equal(automaticTrialResult(card, t, r.humanReviews), 'pass');
+  assert.equal(verdictSummary(r).simulatorFlagged, 0);
+  assert.equal(evaluationExitCode(r), 0);
+  assert.equal(t.simulatorChecks[0]!.passed, false, 'raw evidence stays immutable');
+});
+
+test('family deltas exclude a card on both sides when either side is unknown', () => {
+  const cards = ['s1', 's2'].map(id => ({ ...scenario(id), familyId: 'same', metrics: [] }));
+  const settings = settingsSchema.parse({ userModes: ['static'], repeats: 1 });
+  const same = (id: string, scenarioId: string, outcome: Outcome) => ({ ...trial(id, scenarioId, 'static', outcome), familyId: 'same' });
+  // Third-review counterexample: A = fail → unknown, B = unknown → pass used to yield delta.mean = 1 from two half-pairs.
+  const before = record({ id: 'before', scenarios: cards, settings, trials: [same('a', 's1', 'fail'), same('b', 's2', 'ungraded')] });
+  const after = record({ id: 'after', scenarios: cards, settings, trials: [same('c', 's1', 'ungraded'), same('d', 's2', 'pass')] });
+  const result = compareRuns(before, after);
+  assert.equal(result.comparable, true);
+  assert.deepEqual([result.delta?.mean, result.delta?.families, result.delta?.interval], [null, 0, null]);
+  assert.match(result.delta!.note, /Ни одна карточка не имеет решающего исхода/);
+  assert.equal(result.ungraded, 2);
+  // Without a single valid pair the runs are not compared at all, and the delta stays null rather than pretending to be empty-but-computed.
+  const noPairs = compareRuns(before, { ...after, trials: [same('c', 's1', 'invalid'), same('d', 's2', 'invalid')] });
+  assert.equal(noPairs.comparable, false);
+  assert.equal(noPairs.delta, null);
 });

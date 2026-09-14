@@ -66,6 +66,9 @@ const stages: Record<string, string> = {
 };
 
 export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
+  if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) {
+    throw new Error('Внешнее состояние карточки не подтверждено адаптером (resetConfirmed). Измерение недействительно.');
+  }
   if (scenario.checks.some(c => c.kind === 'state_equals') && trial.observation?.state === 'missing') {
     throw new Error('Внешний агент не сообщил итоговое состояние. Проверки состояния не измерены.');
   }
@@ -248,7 +251,6 @@ export async function evaluateTrial(input: {
       trial.reason += reportedState
         ? ' Состояние сообщил сам агент, доверенный код его не наблюдал.'
         : ' Состояние внешний агент не сообщил.';
-      if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) trial.reason += ' Внешнее состояние карточки не подтверждено адаптером (resetConfirmed).';
     }
   } catch (error) {
     if (persistenceFailed) throw persistenceError;

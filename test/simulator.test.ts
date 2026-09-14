@@ -33,7 +33,7 @@ test('a leak is the user saying a hidden value before the agent did; saying it a
   assert.match(check(leaked, 'simulator_leak')!.evidence, /fraud_hold_77/i);
   const revealed = simulatorChecks(scenario(), trial(['I lost my card, please block it', 'It is on hold: FRAUD_HOLD_77. Confirm?', 'Yes, FRAUD_HOLD_77, block it', 'Done']));
   assert.equal(check(revealed, 'simulator_leak')?.passed, true);
-  assert.equal(check(revealed, 'simulator_leak')?.heuristic, false);
+  assert.equal(check(revealed, 'simulator_leak')?.heuristic, true);
   const nothingHidden = simulatorChecks({ ...scenario(), initialState: { records: {}, writableFields: [], transientFailures: 0 } }, trial(['hi', 'Which card?', '4321', 'ok']));
   assert.equal(check(nothingHidden, 'simulator_leak'), undefined, 'no hidden literals means no leak check');
 });
@@ -91,7 +91,7 @@ function attempt(id: string, scenarioId: string, userMode: UserMode, outcome: Ou
     { metricId: 'user_fidelity', result: options.fidelity ?? 'pass', rationale: 'r', evidence: [1] }];
   return { id, revisionId: 'rev', scenarioId, familyId: scenarioId, repeat: 0, userMode, split: 'dev', manifestHash: 'h', outcome, reason: '',
     checks: [{ id: 'time', description: 'time', passed: outcome === 'pass', evidence: '' }], events: options.events ?? exchange(['hello']),
-    initialState: world, finalState: world, usage: emptyUsage(), elapsedMs: 1, assessments, ...(options.simulatorChecks ? { simulatorChecks: options.simulatorChecks } : {}) };
+    initialState: world, finalState: world, observation: { state: 'reported', tools: 'none', resetConfirmed: true }, usage: emptyUsage(), elapsedMs: 1, assessments, ...(options.simulatorChecks ? { simulatorChecks: options.simulatorChecks } : {}) };
 }
 function experiment(trials: Trial[], userModes: UserMode[], humanReviews: HumanReview[] = []): Experiment {
   return { schemaVersion: '1', id: 'exp', task: 't', mode: 'demo', workflow: 'evaluate', createdAt: 'now', updatedAt: 'now', phase: 'results_review', message: '',
@@ -99,11 +99,11 @@ function experiment(trials: Trial[], userModes: UserMode[], humanReviews: HumanR
     scenarios: [card('s1'), card('s2')], revisions: [], selectedRevisionId: null, manifestHash: 'h', reviewedAt: null, reviewMode: 'human', controlConsumedAt: null,
     trials, comparisons: [], iterations: [], usage: emptyUsage(), error: null, limitations: [], humanReviews };
 }
-const leak: NonNullable<Trial['simulatorChecks']> = [{ id: 'simulator_leak', description: 'd', passed: false, evidence: 'Реплика #3 содержит скрытое значение «fraud_hold_77»', seq: 3, heuristic: false },
-  { id: 'simulator_fabrication', description: 'd', passed: true, evidence: 'ok', heuristic: true }, { id: 'simulator_loop', description: 'd', passed: true, evidence: 'ok', heuristic: false }];
+const leak: NonNullable<Trial['simulatorChecks']> = [{ id: 'simulator_leak', description: 'd', passed: false, evidence: 'Реплика #3 содержит скрытое значение «fraud_hold_77»', seq: 3, heuristic: true },
+  { id: 'simulator_fabrication', description: 'd', passed: true, evidence: 'ok', heuristic: true }, { id: 'simulator_loop', description: 'd', passed: true, evidence: 'ok', heuristic: true }];
 const clean: NonNullable<Trial['simulatorChecks']> = leak.map(c => ({ id: c.id, description: c.description, passed: true, evidence: 'ok', heuristic: c.heuristic }));
 
-test('the simulator scorecard counts code checks, judge fidelity, human verdicts, clarifications and disengagement', () => {
+test('the simulator scorecard counts code checks, judge fidelity, human verdicts and observed continuations', () => {
   const asked = attempt('t1', 's1', 'reactive', 'pass', { events: exchange(['hello', 'It ends with 4321.'], 'Which card?'), simulatorChecks: leak });
   const left = attempt('t2', 's2', 'reactive', 'fail', { events: exchange(['hello'], 'ok', 'done'), fidelity: 'fail', simulatorChecks: clean.filter(c => c.id !== 'simulator_leak') });
   const record = experiment([asked, left, attempt('t3', 's1', 'static', 'pass')], ['static', 'reactive'], [
@@ -112,12 +112,13 @@ test('the simulator scorecard counts code checks, judge fidelity, human verdicts
   ]);
   const summary = simulatorSummary(record);
   assert.equal(summary.reactiveDialogues, 2);
-  assert.deepEqual(summary.checks.map(c => [c.id, c.dialogues, c.flagged, c.heuristic]), [['simulator_leak', 1, 1, false], ['simulator_fabrication', 2, 0, true], ['simulator_loop', 2, 0, false]]);
+  assert.deepEqual(summary.checks.map(c => [c.id, c.dialogues, c.flagged, c.heuristic]), [['simulator_leak', 1, 1, true], ['simulator_fabrication', 2, 0, true], ['simulator_loop', 2, 0, true]]);
   assert.deepEqual(summary.checks[0]!.examples, [{ trialId: 't1', seq: 3, evidence: 'Реплика #3 содержит скрытое значение «fraud_hold_77»' }]);
   assert.deepEqual(summary.judge, { applicable: 2, pass: 1, fail: 1, unknown: 0, missing: 0 });
-  assert.deepEqual(summary.human, { reviewed: 2, confirmed: 1, rejected: 1 });
-  assert.deepEqual(summary.clarifications, { dialogues: 1, answered: 1 });
-  assert.equal(summary.disengaged, 1);
+  assert.deepEqual(summary.human, { reviewed: 2, confirmed: 1, rejected: 1, newFindings: 0 });
+  assert.equal(summary.continuations, 1);
+  assert.deepEqual(summary.execution, { planned: 2, started: 2, completed: 2, invalid: 0, cancelled: 0 });
+  assert.equal(summary.stoppedWithoutSuccess, 1);
   assert.deepEqual(simulatorSummary(experiment([attempt('t3', 's1', 'static', 'pass')], ['static'])).notes, ['Реактивных диалогов нет: симулятор не участвовал.']);
 });
 
@@ -127,7 +128,7 @@ test('mode value names the cards only the reactive user completed or failed, wit
     attempt('d', 's2', 'static', 'pass'), attempt('e', 's2', 'scripted', 'pass'), attempt('f', 's2', 'reactive', 'fail'),
   ], ['static', 'scripted', 'reactive'], [{ id: 'r', trialId: 'f', verdict: 'fail', note: 'agent failed', createdAt: '2026-09-14T00:00:00Z' }]);
   const value = modeValue(record);
-  assert.deepEqual(value.cards.map(c => [c.scenarioId, c.outcomes, c.clarification]), [
+  assert.deepEqual(value.cards.map(c => [c.scenarioId, c.outcomes, c.continued]), [
     ['s1', { static: 'fail', scripted: 'fail', reactive: 'pass' }, true], ['s2', { static: 'pass', scripted: 'pass', reactive: 'fail' }, false]]);
   assert.deepEqual([value.reactiveOnlyCompleted, value.reactiveOnlyFailed], [['s1'], ['s2']]);
   assert.deepEqual(value.humanConfirmed, { completed: 0, failed: 1 });
@@ -136,4 +137,25 @@ test('mode value names the cards only the reactive user completed or failed, wit
   assert.deepEqual([single.reactiveOnlyCompleted, single.reactiveOnlyFailed], [[], []]);
   assert.deepEqual(single.cards[1]!.outcomes, { reactive: 'missing' });
   assert.match(single.notes.join(' '), /один режим/);
+});
+
+test('literal boundaries and requested repetition do not invent leaks or loops', () => {
+  const result = simulatorChecks(scenario(), trial(['hello', 'Which card?', 'proactive card 4321', 'Please repeat the digits', '4321']));
+  assert.equal(check(result, 'simulator_leak')?.passed, true);
+  assert.equal(check(result, 'simulator_loop')?.passed, true);
+});
+
+test('missing repeats and invalid simulations never become reactive-only successes', () => {
+  const record = experiment([attempt('s', 's1', 'static', 'fail'), attempt('r', 's1', 'reactive', 'pass')], ['static', 'reactive']);
+  record.settings.repeats = 2;
+  assert.equal(modeValue(record).cards[0]!.outcomes.reactive, 'unknown');
+  assert.deepEqual(modeValue(record).reactiveOnlyCompleted, []);
+  record.settings.repeats = 1;
+  record.trials[1]!.simulatorChecks = leak;
+  record.trials[1]!.events = exchange(['hello', 'wrong value']);
+  assert.equal(modeValue(record).cards[0]!.outcomes.reactive, 'unknown');
+  record.trials[1]!.outcome = 'invalid';
+  const summary = simulatorSummary(record);
+  assert.equal(summary.execution.invalid, 1);
+  assert.equal(summary.checks[0]!.flagged, 1, 'invalid attempts remain in the scorecard denominator');
 });

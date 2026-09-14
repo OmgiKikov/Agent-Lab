@@ -595,7 +595,7 @@ test('an unconfirmed external world is named in the reason without inventing an 
   const run = (path: string) => evaluateTrial({ runtime: { ...f.runtime, openTarget: async () => { throw new Error('sandbox must not open'); } }, revision: f.baseline, scenario, repeat: 0, manifestHash: 'frozen',
     sources: f.sources, settings: f.input.settings, ctx: context(), userMode: 'static', target: { kind: 'module', path, exportName: 'createSession' } });
   const unconfirmed = await run(silent);
-  assert.equal(unconfirmed.outcome, 'ungraded');
+  assert.equal(unconfirmed.outcome, 'invalid');
   assert.match(unconfirmed.reason, /Внешнее состояние карточки не подтверждено адаптером/);
   assert.equal(unconfirmed.events.find(e => e.type === 'assistant')?.text, 'cards: 1', 'the external world reached the adapter');
   const confirmed = await run(confirming);
