@@ -1,5 +1,8 @@
 import { hasCompleteJudgment } from './judge.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type Tier, type Trial, type UserMode } from './contracts.js';
+import { agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, mean, measured, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { modeValue, simulatorSummary, type ModeValue, type SimulatorSummary } from './simulator.js';
+export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
 /*
  * Pure statistics over persisted records. Nothing here performs I/O or model calls,
@@ -11,20 +14,6 @@ import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Exp
  *   simulatorFidelity  reactive dialogues vs real dialogues ──► turn count · message length · question rate · disengagement
  *   evidenceSummary    everything above in one object, with the caveats spelled out
  */
-const mean = (values: number[]): number | null => values.length ? values.reduce((sum, v) => sum + v, 0) / values.length : null;
-const graded = (trial: Trial) => trial.outcome === 'pass' || trial.outcome === 'fail';
-const runningPhases = new Set(['preparing', 'evaluating', 'baseline', 'improving', 'control']);
-
-/** Legacy optimization runs contain several agents; their headline describes only the selected version. */
-export function observedRecord(record: Experiment): Experiment {
-  if (record.workflow !== 'compare') return record;
-  const split = record.controlConsumedAt && !runningPhases.has(record.phase) ? 'control' : 'dev';
-  const selected = record.selectedRevisionId ?? record.revisions[0]?.id;
-  const trials = record.trials.filter(t => t.revisionId === selected && t.split === split);
-  const ids = new Set(trials.map(t => t.id));
-  return { ...record, trials, scenarios: record.scenarios.filter(s => s.split === split), humanReviews: record.humanReviews.filter(r => ids.has(r.trialId)) };
-}
-
 function clusterInterval(values: number[], seed: string): [number, number] | null {
   if (values.length < 2) return null;
   let state = 2166136261;
@@ -203,17 +192,6 @@ export interface CalibrationRow {
   tpr: number | null; tnr: number | null; agreement: number | null; sampleSufficient: boolean;
   validationStatus: 'not_established';
 }
-/** The latest human verdict per review target (whole dialogue, one metric or one check); earlier verdicts on the same target are superseded. */
-function latestHumanReviews(record: Experiment): Map<string, HumanReview> {
-  const latest = new Map<string, HumanReview>();
-  const trials = new Set(record.trials.map(t => t.id));
-  for (const review of [...record.humanReviews].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
-    if (!trials.has(review.trialId)) continue;
-    latest.set(`${review.trialId}|${review.metricId ? `metric:${review.metricId}` : review.checkId ? `check:${review.checkId}` : 'dialogue'}`, review);
-  }
-  return latest;
-}
-
 /** Descriptive human agreement, grouped by exact criterion and judge protocol. Fail is the positive class.
  * Review labels are not a held-out judge-validation set, regardless of sample size. */
 export function judgeCalibration(record: Experiment): CalibrationRow[] {
@@ -350,38 +328,6 @@ export interface VerdictSummary {
   weakSpots: { kind: 'check' | 'metric'; description: string; failures: number; stage?: string }[];
   confidence: 'low' | 'medium' | 'high'; confidenceReasons: VerdictNote[]; nextSteps: VerdictNote[];
 }
-/** Rubric outcomes stay separate from objective checks everywhere they are presented. */
-export function agentRubricResult(scenario: Scenario | undefined, trial: Trial): 'pass' | 'fail' | 'unknown' | undefined {
-  const metrics = scenario?.metrics?.filter(m => m.subject === 'agent') ?? [];
-  if (!metrics.length) return undefined;
-  const results = metrics.map(m => trial.assessments?.find(a => a.metricId === m.id)?.result);
-  return results.includes('fail') ? 'fail' : results.every(r => r === 'pass') ? 'pass' : 'unknown';
-}
-export function isAgentFailure(record: Experiment, trial: Trial): boolean {
-  return !['invalid', 'cancelled'].includes(trial.outcome) && (trial.outcome === 'fail'
-    || agentRubricResult(record.scenarios.find(s => s.id === trial.scenarioId), trial) === 'fail');
-}
-/** A candidate cannot be accepted on a partially scored agent rubric. */
-export function trialAssessmentComplete(scenario: Scenario, trial: Trial): boolean {
-  const simulated = simulatorWasUsed(trial);
-  return !trial.assessmentError && (scenario.metrics ?? []).filter(m => m.subject === 'agent' || simulated)
-    .every(m => { const result = trial.assessments?.find(a => a.metricId === m.id)?.result;
-      return m.subject === 'simulator' ? result === 'pass' : result === 'pass' || result === 'fail'; });
-}
-/** Combined automatic result for triage, never a replacement for the separate code and rubric scores. */
-function simulatorUsable(scenario: Scenario | undefined, trial: Trial): boolean {
-  return !scenario?.metrics?.some(m => m.subject === 'simulator'
-    && metricApplies(m, trial)
-    && trial.assessments?.find(a => a.metricId === m.id)?.result !== 'pass');
-}
-
-export function automaticTrialResult(scenario: Scenario | undefined, trial: Trial): 'pass' | 'fail' | 'unknown' {
-  if (!scenario || !measured(trial) || trial.assessmentError || !simulatorUsable(scenario, trial)) return 'unknown';
-  const rubric = agentRubricResult(scenario, trial);
-  if (trial.outcome === 'fail' || rubric === 'fail') return 'fail';
-  return (!scenario.checks.length || trial.outcome === 'pass')
-    && (rubric === 'pass' || (rubric === undefined && scenario.checks.length > 0)) ? 'pass' : 'unknown';
-}
 /** Human reports and disagreements remain visible even when every automatic score is green. */
 export function humanFindings(record: Experiment): HumanFinding[] {
   record = observedRecord(record);
@@ -516,7 +462,7 @@ export function verdictSummary(record: Experiment): VerdictSummary {
       else if (agentRubricResult(scenario, trial) !== 'pass') rubric.unknown += 1;
       else rubric.passed += 1;
     }
-    if (!simulatorUsable(scenario, trial)) simulatorFlagged += 1;
+    if (!simulatorUsable(scenario, trial) || trial.simulatorChecks?.some(c => !c.passed)) simulatorFlagged += 1;
     for (const assessment of agentResults) if (assessment.result === 'fail') {
       const metric = scenario?.metrics?.find(m => m.id === assessment.metricId);
       const name = metric?.name ?? assessment.metricId;
@@ -576,7 +522,7 @@ export function verdictSummary(record: Experiment): VerdictSummary {
   else if (gradedCount < MIN_GRADED) reasons.push({ code: 'few_graded', text: `Оценено ${gradedCount} диалог(ов) — слишком мало, чтобы судить об агенте.`, count: gradedCount });
   if (invalid) reasons.push({ code: 'invalid', text: `${invalid} диалог(ов) не удалось измерить: сломалась симуляция или инфраструктура.`, count: invalid });
   if (allSynthetic) reasons.push({ code: 'all_synthetic', text: 'Все карточки синтетические: ни реальных пользователей, ни проверенного golden set.' });
-  if (simulatorFlagged) reasons.push({ code: 'simulator_flagged', text: `Модель отметила ${simulatorFlagged} диалог(ов), где симулированный пользователь мог выйти из роли.`, count: simulatorFlagged });
+  if (simulatorFlagged) reasons.push({ code: 'simulator_flagged', text: `Симулятор нарушил карточку в ${simulatorFlagged} диалог(ах) по кодовым проверкам или рубрике верности; оценки агента в них требуют проверки.`, count: simulatorFlagged });
   if (!humanVerdicts) reasons.push({ code: 'no_human', text: 'Ни одного вердикта человека: оценки модели никем не проверены.' });
   else if (!decisiveVerdicts) reasons.push({ code: 'no_decisive_verdicts', text: 'Нет решающей оценки качества агента. Невалидный тест требует исправления и повторного запуска.' });
   else if (!finalized) reasons.push({ code: 'not_finalized', text: 'Аудит результатов человеком не завершён.' });
@@ -609,6 +555,7 @@ export function verdictSummary(record: Experiment): VerdictSummary {
   if (hasResults && review.invalid) nextSteps.unshift({ code: 'repair_test', text: `Невалидных тестов: ${review.invalid}. Исправьте сценарий или ожидание и повторите проверку. Исходные оценки сохранены; они не подтверждают ошибку агента.`, count: review.invalid });
   if (hasResults && review.findings.length) nextSteps.push({ code: 'inspect_human_findings', text: `Разберите замечания человека (${review.flagged} диалогов) и расхождения с автоматикой (${review.disagreements} оценок). Откройте диалог в /agent-lab → 3; a — обсудить основания и исправление.`, count: review.findings.length });
   if (hasResults && mixed.length) nextSteps.push({ code: 'inspect_repeats', text: `На ${mixed.length} сочетаниях карточки и режима есть и успехи, и провалы. Сравните эти попытки; общий процент скрывает различия.`, count: mixed.length });
+  if (hasResults && simulatorFlagged) nextSteps.push({ code: 'inspect_simulator', text: `Откройте ${simulatorFlagged} диалог(ов) с пометкой симулятора: утечка, выдуманное значение, повтор или нарушение роли. Оценки агента в них ненадёжны; опровергнуть пометку можно вердиктом по проверке.`, count: simulatorFlagged });
   const awaiting = unreviewed + undecided;
   if (hasResults && awaiting) nextSteps.push({ code: 'record_verdicts', text: `Разберите ${awaiting} провалившихся диалог(ов) без решающего вердикта: в /agent-lab клавиши p — пройдено, n — не пройдено.`, count: awaiting });
   else if (hasResults && !finalized && record.workflow === 'evaluate' && record.phase === 'results_review') nextSteps.push({ code: 'finalize_review', text: 'Проверьте ответы и основания оценок, затем завершите разбор. Отсутствие замечаний модели ещё не означает проверку человеком.' });
@@ -641,6 +588,10 @@ export interface EvidenceSummary {
   comparison: { observed: string; status: string } | null;
   pilot: ReturnType<typeof pilotSummary>;
   modes: ModeComparison[]; calibration: CalibrationRow[]; fidelity: FidelityReport | null; notes: string[];
+  /** What the run recorded about the simulated user: code checks, judge fidelity, human verdicts, answered clarifications. */
+  simulator: SimulatorSummary;
+  /** Per card, what each user side achieved; the cards only the reactive user completed or failed. */
+  modeValue: ModeValue;
 }
 /** The one object every surface renders: the plain verdict first, observed numbers next, then what they cannot yet support. */
 export function evidenceSummary(record: Experiment): EvidenceSummary {
@@ -668,7 +619,11 @@ export function evidenceSummary(record: Experiment): EvidenceSummary {
   const reactive = modes.find(m => m.userMode === 'reactive');
   if (record.settings.userModes.length > 1) notes.push('Совпавшие ответы агента с разными оценками по рубрикам не считаются уникальным провалом режима: сначала требуется разбор контекста и оценки.');
   if (record.settings.userModes.length > 1 && reactive?.uniqueFailedChecks.length) notes.push(`Критерии с провалом только в реактивном режиме среди сопоставленных попыток (не доказательство дополнительной пользы): ${reactive.uniqueFailedChecks.join(', ')}.`);
-  return { verdict: verdictSummary(record), comparison, modes, calibration, fidelity, notes, pilot: pilotSummary(record) };
+  const simulator = simulatorSummary(record);
+  const value = modeValue(record);
+  notes.push(...simulator.notes, ...value.notes);
+  if (value.reactiveOnlyCompleted.length) notes.push(`Только реактивный пользователь довёл до завершения: ${value.reactiveOnlyCompleted.join(', ')}. Это наблюдение на измеренных карточках, не доказательство пользы.`);
+  return { verdict: verdictSummary(record), comparison, modes, calibration, fidelity, notes, pilot: pilotSummary(record), simulator, modeValue: value };
 }
 
 /**
@@ -689,6 +644,8 @@ export interface RunComparison {
   ungraded: number; includesRubrics: boolean;
   stages: { stage: string; before: number | null; after: number | null }[];
   tiers: { tier: Tier; before: { passed: number; graded: number }; after: { passed: number; graded: number } }[];
+  /** Paired difference of the share of passing cards per family, averaged over families; descriptive, never the verdict. */
+  delta: { families: number; mean: number | null; interval: [number, number] | null; note: string } | null;
   notes: string[];
 }
 
@@ -698,7 +655,6 @@ export function plannedTrials(record: Experiment): number {
   return record.scenarios.reduce((sum, s) => sum + record.settings.userModes.filter(m => m !== 'scripted' || s.user.script !== undefined).length * record.settings.repeats, 0);
 }
 const attemptKey = (trial: Trial) => `${trial.scenarioId}|${trial.userMode}|${trial.repeat}`;
-const measured = (trial: Trial) => graded(trial) || trial.outcome === 'ungraded';
 function expectedAttempts(record: Experiment): Set<string> {
   if (record.assessmentTrialIds) return new Set(record.trials.filter(t => record.assessmentTrialIds!.includes(t.id)).map(attemptKey));
   return new Set(record.scenarios.flatMap(s => record.settings.userModes.filter(m => m !== 'scripted' || s.user.script !== undefined)
@@ -760,7 +716,7 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
       onlyAfter: after.scenarios.filter(s => !beforeIds.has(s.id)).map(s => s.id) },
     fixed: [], regressed: [], unchanged: { passing: 0, failing: 0 }, ungraded: 0,
     includesRubrics: shared.some(s => s.metrics?.some(m => m.subject === 'agent')),
-    stages: [], tiers: [], notes: [],
+    stages: [], tiers: [], delta: null, notes: [],
     coverage: { plannedPairs: plannedTrials(before), validPairs: 0, excludedPairs: plannedTrials(before),
       missingBefore: Math.max(0, plannedTrials(before) - before.trials.length), missingAfter: Math.max(0, plannedTrials(after) - after.trials.length),
       invalidBefore: before.trials.filter(t => !validBefore(t)).length, invalidAfter: after.trials.filter(t => !validAfter(t)).length },
@@ -823,6 +779,21 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
     else if (now === 'pass') result.unchanged.passing++;
     else result.unchanged.failing++;
   }
+  // Paired difference per family (cluster by the unit of randomization, pair the same cards). Descriptive only.
+  const familyScores = (run: Experiment) => {
+    const scores = new Map<string, number[]>();
+    for (const scenario of shared) {
+      if (result.pairs.some(p => p.scenarioId === scenario.id && p.reviewNote)) continue;
+      const outcome = cardOutcome(run, scenario);
+      if (outcome === 'unknown') continue;
+      scores.set(scenario.familyId, [...scores.get(scenario.familyId) ?? [], outcome === 'pass' ? 1 : 0]);
+    }
+    return scores;
+  };
+  const beforeScores = familyScores(before), afterScores = familyScores(after);
+  const familyDeltas = [...beforeScores].filter(([family]) => afterScores.has(family)).map(([family, was]) => mean(afterScores.get(family)!)! - mean(was)!);
+  result.delta = familyDeltas.length ? { families: familyDeltas.length, mean: mean(familyDeltas), interval: clusterInterval(familyDeltas, `${before.id}|${after.id}`),
+    note: 'Описательная парная дельта доли пройденных карточек по семействам; вердикт определяют списки карточек, а не среднее.' } : null;
   const bv = verdictSummary(before);
   const av = verdictSummary(after);
   const rate = (v: VerdictSummary, stage: string) => { const s = v.stages.find(s => s.stage === stage); return s ? s.passed / s.evaluated : null; };

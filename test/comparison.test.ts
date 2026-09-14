@@ -657,3 +657,36 @@ test('live rubric comparisons require recorded compatible judge protocols and a 
   assert.equal(unknown.fixed.length, 0); assert.equal(unknown.comparable, false);
   assert.equal(verdictSummary(after).simulatorFlagged, 1);
 });
+
+test('code-flagged simulator dialogues count as flagged, lower confidence and reach the evidence summary', () => {
+  const flagged = { ...trial('a', 's1', 'reactive', 'pass', { events: dialogue(['hello', 'again']) }),
+    simulatorChecks: [{ id: 'simulator_loop' as const, description: 'd', passed: false, evidence: 'Реплика #3 повторяет реплику #0.', seq: 3, heuristic: false }] };
+  const r = record({ settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1 }), trials: [flagged] });
+  const v = verdictSummary(r);
+  assert.equal(v.simulatorFlagged, 1);
+  assert.notEqual(v.confidence, 'high');
+  assert.ok(v.confidenceReasons.some(n => n.code === 'simulator_flagged' && /кодовым проверкам/.test(n.text)));
+  assert.ok(v.nextSteps.some(n => n.code === 'inspect_simulator'));
+  const e = evidenceSummary(r);
+  assert.equal(e.simulator.reactiveDialogues, 1);
+  assert.equal(e.simulator.checks.find(c => c.id === 'simulator_loop')?.flagged, 1);
+  assert.deepEqual(e.modeValue.measuredModes, ['reactive']);
+  assert.match(e.notes.join(' '), /один режим/);
+});
+
+test('run comparison adds a descriptive paired family delta with a bootstrap interval', () => {
+  // Cards without agent rubrics: the builder's default assessments cover only the simulator metric, and a missing agent rubric would make every card outcome unknown.
+  const cards = ['f1', 'f2', 'f3'].map(id => ({ ...scenario(id), metrics: [] }));
+  const settings = settingsSchema.parse({ userModes: ['static'], repeats: 1 });
+  const before = record({ id: 'before', scenarios: cards, settings, trials: [trial('b1', 'f1', 'static', 'fail', { failed: ['time'] }), trial('b2', 'f2', 'static', 'pass'), trial('b3', 'f3', 'static', 'fail', { failed: ['time'] })] });
+  const after = record({ id: 'after', scenarios: cards, settings, parentRunId: 'before', trials: [trial('a1', 'f1', 'static', 'pass'), trial('a2', 'f2', 'static', 'pass'), trial('a3', 'f3', 'static', 'fail', { failed: ['time'] })] });
+  const diff = compareRuns(before, after);
+  assert.equal(diff.comparable, true);
+  assert.equal(diff.delta?.families, 3);
+  assert.ok(Math.abs((diff.delta?.mean ?? 0) - 1 / 3) < 1e-9);
+  assert.ok(diff.delta?.interval && diff.delta.interval[0] <= diff.delta.mean! && diff.delta.mean! <= diff.delta.interval[1]);
+  assert.match(diff.delta!.note, /Описательная/);
+  const one = compareRuns({ ...before, scenarios: cards.slice(0, 1), trials: before.trials.slice(0, 1) }, { ...after, scenarios: cards.slice(0, 1), trials: after.trials.slice(0, 1) });
+  assert.deepEqual([one.delta?.families, one.delta?.interval], [1, null]);
+  assert.equal(compareRuns(before, { ...after, mode: 'live' }).delta, null);
+});
