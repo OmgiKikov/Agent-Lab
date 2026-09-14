@@ -219,11 +219,32 @@ async function controlledSession(
  * guessing where an object starts is not the same as reading a delimiter. The schema
  * still decides what is valid.
  */
+/** Models put raw line breaks and tabs inside JSON strings, which JSON forbids. Escape control characters inside string literals only. */
+function escapeControlCharacters(text: string): string {
+  let out = '', inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      if (ch === '\\') { out += ch + (text[i + 1] ?? ''); i++; continue; }
+      if (ch === '"') inString = false;
+      else if (ch < ' ') { out += ch === '\n' ? '\\n' : ch === '\r' ? '\\r' : ch === '\t' ? '\\t' : `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`; continue; }
+    } else if (ch === '"') inString = true;
+    out += ch;
+  }
+  return out;
+}
+/** The raw reply, then its fenced form, each as written and with control characters repaired. The first parse error is the one worth showing the model. */
 function parseJsonOutput(output: string): unknown {
-  try { return JSON.parse(output); } catch { /* fall through to the fenced form */ }
+  const candidates = [output];
   const fenced = /```[a-zA-Z]*\s*\n?([\s\S]*?)\n?```/.exec(output);
-  if (!fenced?.[1]) throw new Error('Output is not JSON');
-  return JSON.parse(fenced[1].trim());
+  if (fenced?.[1]) candidates.push(fenced[1].trim());
+  let failure: unknown;
+  for (const candidate of candidates) {
+    for (const text of [candidate, escapeControlCharacters(candidate)]) {
+      try { return JSON.parse(text); } catch (error) { failure ??= error; }
+    }
+  }
+  throw new Error(`Output is not JSON: ${failure instanceof Error ? failure.message : 'unreadable'}`);
 }
 
 /**
@@ -249,7 +270,7 @@ async function jsonResponse<S extends z.ZodType>(
       const output = await session.respond(message);
       let parsed: unknown;
       try { parsed = parseJsonOutput(output); rejection = ''; }
-      catch { rejection = 'The reply was not a single JSON object.'; }
+      catch (error) { rejection = `The reply was not a single JSON object (${error instanceof Error ? error.message : 'unreadable'}). Return one JSON object and nothing else; escape line breaks inside strings as \\n.`; }
       if (!rejection) {
         const validated = schema.safeParse(parsed);
         if (!validated.success) {

@@ -843,3 +843,23 @@ test('requirement quotes are matched through the typography a model normalises, 
     assert.equal(prepared.requirements[0]!.quote, 'Раздел «Эквайринг» → «Мои точки продаж»');
   } finally { await f.close(); }
 });
+
+test('model JSON with raw line breaks inside strings is repaired, and an unreadable reply is rejected with the parse error', async () => {
+  const quote = 'Rule one.\nRule two.';
+  const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!] };
+  const rawNewline = '{"requirements":[{"id":"req_1","text":"Two rules","sourceId":"source_1","quote":"Rule one.\nRule two.","critical":true}],"questions":[]}';
+  const outputs = [rawNewline, JSON.stringify({ scenarios: [card] })];
+  const f = await fixture((_request, index) => outputs[index]!);
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check rules', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'source_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.equal(prepared.requirements[0]!.quote, quote);
+  } finally { await f.close(); }
+  const g = await fixture((_request, index) => index === 0 ? 'Here are the requirements: {"requirements": [}' : JSON.stringify({ requirements: [{ id: 'req_1', text: 'Two rules', sourceId: 'source_1', quote, critical: true }], questions: [] }));
+  try {
+    await assert.rejects(g.adapter.prepare({ task: 'Check rules', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'source_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' }] }, callContext({ limit: 2 }).ctx));
+    const repair = JSON.stringify(g.requests[1]?.messages);
+    assert.match(repair, /not a single JSON object/);
+    assert.match(repair, /Unexpected|position|token/i);
+  } finally { await g.close(); }
+});
