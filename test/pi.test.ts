@@ -878,3 +878,23 @@ test('unescaped double quotes inside model JSON strings are repaired from the ob
     assert.match(f.requests[0]?.systemPrompt ?? '', /inside strings/i);
   } finally { await f.close(); }
 });
+
+test('a rejection names every requirement whose quote is not in its source, so one repair fixes them all', async () => {
+  const content = 'Rule one: reply formally. Rule two: never send the user to a phone line. Rule three: numbered steps.';
+  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'source_1', quote, critical: true });
+  const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!] };
+  const outputs = [
+    { requirements: [req('req_1', 'reply formally'), req('req_2', 'never phone the user'), req('req_3', 'numbered lists')], questions: [] },
+    { requirements: [req('req_1', 'reply formally'), req('req_2', 'never send the user to a phone line'), req('req_3', 'numbered steps')], questions: [] },
+    { scenarios: [card] },
+  ];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check rules', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'source_1', name: 'prompt.md', content, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
+    assert.equal(prepared.requirements.length, 3);
+    const repair = JSON.stringify(f.requests[1]?.messages);
+    assert.match(repair, /req_2/);
+    assert.match(repair, /req_3/);
+    assert.match(repair, /shorter/i);
+  } finally { await f.close(); }
+});

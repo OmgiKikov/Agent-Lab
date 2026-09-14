@@ -2,6 +2,8 @@ import {
   createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager,
   type ResourceLoader, type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Type } from 'typebox';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.js';
 import { z } from 'zod';
@@ -321,6 +323,10 @@ async function jsonResponse<S extends z.ZodType>(
           rejection = problem;
         }
       }
+      if (process.env['AGENT_LAB_DEBUG_DIR']) {
+        await mkdir(process.env['AGENT_LAB_DEBUG_DIR'], { recursive: true });
+        await writeFile(join(process.env['AGENT_LAB_DEBUG_DIR'], `${label.replace(/[^\p{L}\p{N}]+/gu, '_')}-${Date.now()}-${attempt}.txt`), `${rejection}\n\n${output}`, { mode: 0o600 });
+      }
       message = `Your previous answer was rejected. ${rejection}\nReturn the corrected object in full, as one compact JSON object and nothing else.`;
     }
     throw new Error(`модель ${REPAIR_ATTEMPTS} раза подряд вернула ответ, который не проходит проверку. Последняя причина: ${rejection}`);
@@ -376,13 +382,16 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
         { task: input.task, sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, ...(kind ? { kind } : {}) })) },
         groundingSchema, ctx,
         value => {
+          // Name every bad quote at once: a model fixes what it is told about, and attempts are few.
+          const missing: string[] = [];
           for (const requirement of value.requirements) {
             const source = input.sources.find(s => s.id === requirement.sourceId);
             if (!source) return `Requirement ${requirement.id} cites source ${requirement.sourceId}, which was not supplied.`;
             const exact = verbatimSpan(source.content, requirement.quote);
-            if (!exact) return `Requirement ${requirement.id}: the quote is not a verbatim substring of "${source.name}". Copy the exact characters from that source instead of paraphrasing.`;
-            requirement.quote = exact;
+            if (exact) requirement.quote = exact;
+            else missing.push(`${requirement.id} (not in "${source.name}")`);
           }
+          if (missing.length) return `These quotes are not verbatim substrings of their sources: ${missing.join('; ')}. Copy the exact characters from the source instead of paraphrasing; a shorter contiguous fragment is safer than a long one. Keep every other requirement as it is.`;
           return undefined;
         },
       );
