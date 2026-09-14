@@ -934,7 +934,7 @@ test('a profile the model invents when none were supplied is dropped from the ca
 
 test('a batch with more cards than requested keeps the first ones instead of costing a repair attempt', async () => {
   const quote = 'Support is available by email.';
-  const cards = [0, 1, 2, 3].map(i => ({ ...plainCard(i), metrics: [reviewFields.metrics[0]!] }));
+  const cards = [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({ ...plainCard(i), metrics: [reviewFields.metrics[0]!] }));
   const outputs = [
     { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] },
     { scenarios: cards },
