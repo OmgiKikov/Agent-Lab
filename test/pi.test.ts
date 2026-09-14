@@ -863,3 +863,18 @@ test('model JSON with raw line breaks inside strings is repaired, and an unreada
     assert.match(repair, /Unexpected|position|token/i);
   } finally { await g.close(); }
 });
+
+test('unescaped double quotes inside model JSON strings are repaired from the object context, and the prompt says how to write them', async () => {
+  const quote = 'Удали данные из "СберДруг", "ДРУГ", "ЦКР" и не упоминай "историю вопросов".';
+  const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!] };
+  const broken = '{"requirements":[{"id":"req_1","text":"No "СберДруг", "ДРУГ" data in a reply","sourceId":"source_1","quote":"Удали данные из "СберДруг", "ДРУГ", "ЦКР" и не упоминай "историю вопросов".","critical":true}],"questions":[]}';
+  const outputs = [broken, JSON.stringify({ scenarios: [card] })];
+  const f = await fixture((_request, index) => outputs[index]!);
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check internal names', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'source_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.equal(prepared.requirements[0]!.quote, quote);
+    assert.equal(prepared.requirements[0]!.text, 'No "СберДруг", "ДРУГ" data in a reply');
+    assert.match(f.requests[0]?.systemPrompt ?? '', /inside strings/i);
+  } finally { await f.close(); }
+});

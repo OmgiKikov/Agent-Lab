@@ -233,14 +233,54 @@ function escapeControlCharacters(text: string): string {
   }
   return out;
 }
-/** The raw reply, then its fenced form, each as written and with control characters repaired. The first parse error is the one worth showing the model. */
+/**
+ * Models copy source text with straight double quotes into JSON strings without escaping them.
+ * A quote can close a string only where the container allows: a key is followed by ':', an
+ * object value by '}' or by ',' and another key, an array item by ',' or ']'. Every other
+ * double quote inside a string is escaped. Runs only after a plain parse has failed.
+ */
+function repairUnescapedQuotes(text: string): string {
+  const out: string[] = [], stack: Array<'{' | '['> = [];
+  let expectKey = false;
+  const skipSpace = (j: number) => { while (j < text.length && /\s/.test(text[j]!)) j++; return j; };
+  const keyFollows = (j: number) => {
+    if (text[j] !== '"') return false;
+    const end = text.indexOf('"', j + 1);
+    return end > 0 && text[skipSpace(end + 1)] === ':';
+  };
+  for (let i = 0; i < text.length;) {
+    const ch = text[i]!;
+    if (ch === '{' || ch === '[') { stack.push(ch); expectKey = ch === '{'; out.push(ch); i++; continue; }
+    if (ch === '}' || ch === ']') { stack.pop(); expectKey = false; out.push(ch); i++; continue; }
+    if (ch === ',') { expectKey = stack[stack.length - 1] === '{'; out.push(ch); i++; continue; }
+    if (ch === ':') { expectKey = false; out.push(ch); i++; continue; }
+    if (ch !== '"') { out.push(ch); i++; continue; }
+    const isKey = expectKey, container = stack[stack.length - 1];
+    out.push('"'); i++;
+    while (i < text.length) {
+      const c = text[i]!;
+      if (c === '\\') { out.push(c, text[i + 1] ?? ''); i += 2; continue; }
+      if (c !== '"') { out.push(c); i++; continue; }
+      const next = text[skipSpace(i + 1)] ?? '';
+      const closes = isKey ? next === ':'
+        : container === '{' ? next === '}' || (next === ',' && keyFollows(skipSpace(skipSpace(i + 1) + 1)))
+        : next === ',' || next === ']' || next === '';
+      if (closes) { out.push('"'); i++; break; }
+      out.push('\\"'); i++;
+    }
+    expectKey = false;
+  }
+  return out.join('');
+}
+/** The raw reply, then its fenced form, each as written and with control characters and quotes repaired. The first parse error is the one worth showing the model. */
 function parseJsonOutput(output: string): unknown {
   const candidates = [output];
   const fenced = /```[a-zA-Z]*\s*\n?([\s\S]*?)\n?```/.exec(output);
   if (fenced?.[1]) candidates.push(fenced[1].trim());
   let failure: unknown;
   for (const candidate of candidates) {
-    for (const text of [candidate, escapeControlCharacters(candidate)]) {
+    const escaped = escapeControlCharacters(candidate);
+    for (const text of [candidate, escaped, repairUnescapedQuotes(escaped)]) {
       try { return JSON.parse(text); } catch (error) { failure ??= error; }
     }
   }
@@ -260,7 +300,7 @@ async function jsonResponse<S extends z.ZodType>(
   modelRuntime: ModelRuntime, model: Model, label: string, role: string, input: unknown, schema: S, ctx: CallContext,
   review?: (value: z.infer<S>) => string | undefined,
 ): Promise<z.infer<S>> {
-  const prompt = `${role}\n${DATA_BOUNDARY}\nReturn exactly one compact JSON object, without markdown fences or pretty-printing whitespace, matching this JSON schema:\n${JSON.stringify(z.toJSONSchema(schema))}`;
+  const prompt = `${role}\n${DATA_BOUNDARY}\nReturn exactly one compact JSON object, without markdown fences or pretty-printing whitespace, matching this JSON schema:\n${JSON.stringify(z.toJSONSchema(schema))}\nInside strings, escape double quotes as \\" and line breaks as \\n; when copying source text, «» may stand for its straight double quotes.`;
   // Only target sessions contribute target trace events; simulator/planner events cannot affect target grades.
   const session = await controlledSession(modelRuntime, model, prompt, [], { ...ctx, onTargetEvent: undefined });
   try {
