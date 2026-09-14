@@ -131,9 +131,9 @@ export default function agentLab(pi: ExtensionAPI) {
   pi.on('session_start', async (_event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1' || !ctx.hasUI || ctx.mode !== 'tui') return;
     ctx.ui.setTitle(`Agent Lab · ${ctx.cwd.split('/').at(-1)}`);
-    ctx.ui.setHeader((_tui, theme) => new Text(theme.bold('Agent Lab') + '\nПроверьте, что сломала правка вашего агента.\n' + safeText(ctx.cwd), 1, 1));
-    ctx.ui.setWidget('agent-lab-start', ['Напишите: «Проверь агента в этой папке» или «Воспроизведи эту ошибку: …»',
-      'Один тест → доказательство → проверка исправления. /agent-lab demo — учебный пример.']);
+    ctx.ui.setHeader((_tui, theme) => new Text(theme.bold('Agent Lab') + '\nНасколько хорош ваш агент — на карточках пользователей, с причинами провалов.\n' + safeText(ctx.cwd), 1, 1));
+    ctx.ui.setWidget('agent-lab-start', ['Напишите: «Проверь агента в этой папке». Agent Lab найдёт промпт и точку входа, предложит карточки пользователей и после запуска покажет качество: справился / не справился, почему, что разметить.',
+      'Можно точнее: «Проверь, как агент отвечает про возврат по закрытому договору» или «Воспроизведи эту ошибку: …». /agent-lab — доска с карточками, диалогами и качеством · /agent-lab demo — учебный пример без модели.']);
   });
   pi.on('before_agent_start', async (event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1') return;

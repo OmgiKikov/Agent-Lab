@@ -534,9 +534,14 @@ export class LabBoard implements Component {
     if (!record) {
       const chosen = this.options.records?.[entries[this.selected]?.index ?? -1];
       detail = chosen ? [line(chosen.task, 'text', true), line(`Создан: ${chosen.createdAt}`, 'muted'), line(chosen.phase === 'review' ? 'Черновик готов. Откройте его, чтобы проверить и уточнить сценарии.' : chosen.trials.length ? verdictSummary(chosen).headline : chosen.message)]
-        : [line('ОТ ПРОВАЛА К ПРОВЕРЕННОМУ ИСПРАВЛЕНИЮ', 'accent', true), line(''), line('n  Подключить своего агента'), line('Укажите папку проекта и задачу. Pi подготовит карточки.'), line(''),
-          line('d  Попробовать за минуту · без модели и настройки'), line('Учебный агент записи: найдите пропущенное действие,'), line('исправьте инструменты и сравните повтор.'), line(''),
-          line('Карточки → диалоги → разбор → повтор → сравнение', 'muted'), line('Ваши оценки сохраняются отдельно от оценок модели.', 'muted')];
+        : [line('НАСКОЛЬКО ХОРОШ ВАШ АГЕНТ', 'accent', true), line(''),
+          line('1  Подключение', 'text', true), line('   Agent Lab читает папку агента: промпт, точку входа, базу знаний.', 'muted'),
+          line('2  Карточки', 'text', true), line('   Ситуации пользователей — из правил промпта, статей или ваших логов.', 'muted'),
+          line('3  Диалоги', 'text', true), line('   Каждая карточка проигрывается с агентом: одна реплика, по сценарию, живой пользователь.', 'muted'),
+          line('4  Качество', 'text', true), line('   Справился / не справился по карточкам, причины с цитатами, что разметить человеку.', 'muted'), line(''),
+          line('n  Проверить своего агента · укажите папку и что проверить', 'accent'),
+          line('d  Учебный пример за минуту · без модели и ключей', 'accent'), line(''),
+          line('Оценки модели и ваши вердикты хранятся отдельно; результат повторяем и сравним с прошлым прогоном.', 'muted')];
     } else if (this.section === 'cards') {
       const scenario = record.scenarios[entries[this.selected]?.index ?? -1];
       detail = scenario ? scenarioLines(scenario, record, this.expanded) : [line(this.query ? 'Ничего не найдено. Esc — сбросить поиск.' : 'Карточки появятся после подготовки.', 'muted')];
@@ -578,7 +583,7 @@ export class LabBoard implements Component {
       if (record.trials.length && !this.expanded) detail = verdictLines(record);
     }
     if (this.options.warnings?.length) detail.push(line(''), line('ДИАГНОСТИКА', 'warning'), ...this.options.warnings.map(w => line(w, 'warning')));
-    if (this.help) detail = [line('КЛАВИШИ', 'accent', true), line('1 Обзор · 2 Карточки · 3 Диалоги · 4 Статистика · 5 Сравнение'), line('a — правка или разбор словами с Pi · n в списке — новая проверка'), line('↑ ↓ или j k — выбрать карточку или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), line('Enter — раскрыть источники, инструменты и состояния'), line('p / n — вердикт на выбранный диалог · v — оценить критерий'), line('r — запустить черновик или создать повтор готового прогона'), line('d — сравнить с предыдущим прогоном · x — экспортировать'), line('c — остановить запуск · Esc — назад · q — закрыть'), line(''), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')];
+    if (this.help) detail = [line('КЛАВИШИ', 'accent', true), line('1 Обзор — качество агента · 2 Карточки · 3 Диалоги · 4 Статистика · 5 Сравнение'), line('a — правка или разбор словами с Pi · n в списке — новая проверка'), line('↑ ↓ или j k — выбрать карточку или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), line('Enter — раскрыть источники, инструменты и состояния'), line('p / n — вердикт на выбранный диалог · v — оценить критерий'), line('r — запустить черновик или создать повтор готового прогона'), line('d — сравнить с предыдущим прогоном · x — экспортировать'), line('c — остановить запуск · Esc — назад · q — закрыть'), line(''), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')];
     const content = detail.flatMap(row => wrapTextWithAnsi(row.text, inner).map(text => paint({ ...row, text })));
     const footer = record ? [
       record.workflow !== 'evaluate' ? 'Сравнительный эксперимент · только просмотр и экспорт'
