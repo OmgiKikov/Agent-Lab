@@ -287,7 +287,10 @@ test('the statistics section renders the evidence summary in narrow and wide ter
   for (const width of [16, 40, 80, 132]) for (const line of board.render(width)) assert.ok(visibleWidth(line) <= width, `overflow at ${width}`);
   const firstPage = board.render(120).join('\n');
   board.handleInput('\u001b[F');
-  const text = stripTerminalSequences(firstPage + '\n' + board.render(120).join('\n'));
+  let pages = firstPage;
+  board.handleInput('\u001b[H');
+  for (let i = 0; i < 6; i++) { pages += '\n' + board.render(120).join('\n'); board.handleInput('\u001b[6~'); }
+  const text = stripTerminalSequences(pages);
   assert.match(text, /4 Статистика/);
   assert.match(text, /static/); assert.match(text, /reactive/);
   assert.match(text, /Вердиктов человека по метрикам и проверкам ещё нет/);
@@ -368,4 +371,51 @@ test('HTML reports escape untrusted text and remain self-contained with explicit
   record.controlConsumedAt = 'now'; record.phase = 'control';
   assert.doesNotMatch(htmlReport(record), /CONTROL_CARD_SENTINEL/);
   record.phase = 'complete'; assert.match(htmlReport(record), /CONTROL_CARD_SENTINEL/);
+});
+
+test('the board shows simulator checks on a reactive dialogue, the scorecard and mode value in statistics, and the family delta in comparison', async () => {
+  const record = await fixture(); record.phase = 'results_review'; record.reviewedAt = '2026-09-14T00:00:00.000Z';
+  record.settings.userModes = ['static', 'reactive']; record.settings.repeats = 1;
+  record.scenarios = [record.scenarios[0]!];
+  const card = record.scenarios[0]!;
+  card.metrics = card.metrics?.filter(m => m.subject === 'agent');
+  const events = [{ seq: 0, type: 'user' as const, text: card.user.opening }, { seq: 1, type: 'assistant' as const, text: 'Which appointment?' },
+    { seq: 2, type: 'simulator' as const, result: { message: 'Appointment A777', done: false } }, { seq: 3, type: 'user' as const, text: 'Appointment A777' }, { seq: 4, type: 'assistant' as const, text: 'Done.' }];
+  const base = { revisionId: 'revision-1', scenarioId: card.id, familyId: card.familyId, repeat: 0, split: 'dev' as const, manifestHash: 'hash', reason: '', initialState: card.initialState, finalState: card.initialState, usage: emptyUsage(), elapsedMs: 1 };
+  // The demo card carries the agent rubric demo_task_state; without an assessment its automatic result is unknown and mode value cannot resolve.
+  const assessed = (result: 'pass' | 'fail') => [{ metricId: 'demo_task_state', result, rationale: 'fixture', evidence: [1] }];
+  record.trials = [
+    { ...base, id: 'reactive', userMode: 'reactive', outcome: 'fail', checks: card.checks.map(c => ({ id: c.id, description: c.description, passed: false, evidence: 'e' })), events, assessments: assessed('fail'),
+      simulatorChecks: [{ id: 'simulator_fabrication', description: 'Пользователь не называет значения, которых нет в карточке (эвристика)', passed: false, evidence: 'Подозрение: реплика #3 содержит значение «a777»', seq: 3, heuristic: true }] },
+    { ...base, id: 'static', userMode: 'static', outcome: 'pass', checks: card.checks.map(c => ({ id: c.id, description: c.description, passed: true, evidence: 'e' })), events: events.slice(0, 2), assessments: assessed('pass') },
+  ];
+  const results = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 60);
+  const stats = new LabBoard({ record, section: 'stats' }, theme, () => {}, () => {}, () => 80);
+  try {
+    for (const width of [80, 132]) for (const board of [results, stats]) for (const row of board.render(width)) assert.ok(visibleWidth(row) <= width, `overflow at ${width}`);
+    const dialogue = stripTerminalSequences(results.render(132).join('\n'));
+    assert.match(dialogue, /ПРОВЕРКИ СИМУЛЯТОРА · эвристики/); assert.match(dialogue, /\? .*эвристика/); assert.match(dialogue, /Подозрение: реплика #3/);
+    // The static dialogue never involved the simulator, so its checks block is absent rather than "not applied".
+    results.handleInput('\u001b[B');
+    const staticView = stripTerminalSequences(results.render(132).join('\n'));
+    assert.doesNotMatch(staticView.split('ДЕТЕРМИНИРОВАННЫЕ ПРОВЕРКИ').at(-1) ?? '', /Не применялись/);
+    const statistics = stripTerminalSequences(stats.render(132).join('\n'));
+    assert.match(statistics, /Симулятор/); assert.match(statistics, /simulator_fabrication \(эвристика\): пометок 1\/1/);
+    assert.match(statistics, /Кодовые пометки — подозрения, а не доказанные ошибки/);
+    assert.match(statistics, /Ценность режимов/);
+    // A flagged reactive dialogue is unknown until a human resolves the suspicion, so it cannot appear in "only the reactive user failed".
+    assert.match(statistics, /Только реактивный провалил: нет/); assert.match(statistics, /reactive=unknown/);
+  } finally { results.dispose(); stats.dispose(); }
+  const before = structuredClone(record); before.id = 'before'; before.settings.userModes = ['static']; before.trials = [before.trials[1]!];
+  before.trials[0]!.outcome = 'fail'; before.trials[0]!.checks = before.trials[0]!.checks.map(c => ({ ...c, passed: false })); before.trials[0]!.assessments = assessed('fail');
+  const after = structuredClone(before); after.id = 'after'; after.parentRunId = 'before'; after.trials[0]!.id = 'after_static'; after.trials[0]!.outcome = 'pass'; after.trials[0]!.checks = after.trials[0]!.checks.map(c => ({ ...c, passed: true })); after.trials[0]!.assessments = assessed('pass');
+  after.trials[0]!.events[1]!.text = 'Moved to 14:00.'; // a changed agent reply: identical replies with flipped scores would be sent to review instead
+  const bundle = await evidenceBundle(after, { get: async () => before, traceJournal: async () => '' });
+  assert.deepEqual([bundle.comparison?.delta?.families, bundle.comparison?.delta?.mean], [1, 1]);
+  const comparison = new LabBoard({ record: after, before, comparison: bundle.comparison, section: 'comparison' }, theme, () => {}, () => {}, () => 40);
+  try {
+    const text = stripTerminalSequences(comparison.render(120).join('\n'));
+    assert.match(text, /Парная дельта: \+100\.0 п\.п\.; семейств 1; интервал не рассчитан/);
+    for (const output of [htmlReport(bundle), markdownReport(bundle)]) assert.match(output, /Парная дельта: \+100\.0 п\.п\.; семейств 1/);
+  } finally { comparison.dispose(); }
 });

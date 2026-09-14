@@ -92,12 +92,14 @@ async function humanAnnotation(ctx: ExtensionContext, record: Experiment, select
     { label: 'Весь диалог', ids: {}, trialIds: [trial.id] },
     ...(similar.length > 1 ? [{ label: `Такие же сработавшие проверки · ${similar.length} диалогов`, ids: {}, trialIds: similar.map(t => t.id) }] : []),
     ...(scenario?.metrics ?? []).map(m => ({ label: `Метрика · ${safeText(m.name)} [${m.id}]`, ids: { metricId: m.id }, trialIds: [trial.id] })),
+    ...(trial.simulatorChecks ?? []).map(c => ({ label: `Симулятор · ${safeText(c.description)} [${c.id}]`, ids: { checkId: c.id }, trialIds: [trial.id] })),
     ...trial.checks.map(c => ({ label: `Проверка · ${safeText(c.description)} [${c.id}]`, ids: { checkId: c.id }, trialIds: [trial.id] })),
   ];
   const choice = await ctx.ui.select('Область вашей оценки', targets.map(t => t.label));
   const target = targets.find(t => t.label === choice);
   if (!target) return;
-  const choices = [{ value: 'fail', label: 'Ошибся агент' }, { value: 'invalid', label: 'Ошибся тест' }, { value: 'unknown', label: 'Данных недостаточно' }, { value: 'pass', label: 'Агент выполнил задачу' }] as const;
+  const simulator = !!target.ids.checkId && trial.simulatorChecks?.some(c => c.id === target.ids.checkId) || !!target.ids.metricId && scenario?.metrics?.some(m => m.id === target.ids.metricId && m.subject === 'simulator');
+  const choices = [{ value: 'fail', label: simulator ? 'Ошибся симулятор' : 'Ошибся агент' }, { value: 'invalid', label: 'Ошибся тест' }, { value: 'unknown', label: 'Данных недостаточно' }, { value: 'pass', label: simulator ? 'Симулятор соблюдает карточку' : 'Агент выполнил задачу' }] as const;
   const answer = await ctx.ui.select(`Диалог ${trial.id} · исходная оценка сохранится`, choices.map(v => v.label));
   const verdict = choices.find(v => v.label === answer)?.value;
   if (!verdict) return;

@@ -147,3 +147,29 @@ test('a human failure on a green dialogue reaches every export and keeps origina
   assert.match(markdownReport(bundle), /Расхождение оценок/);
   assert.match(jsonReport(bundle), /inspect_human_findings/);
 });
+
+test('every export renders simulator checks, the scorecard and mode value from the shared snapshot', async t => {
+  const { lab, after } = await twoRuns(t);
+  const trial = after.trials[0]!;
+  assert.equal(trial.userMode, 'reactive');
+  const seq = trial.events.length;
+  trial.events = [...trial.events, { seq, type: 'simulator', result: { message: 'again', done: false } }, { seq: seq + 1, type: 'user', text: 'again' }, { seq: seq + 2, type: 'assistant', text: 'ok' }];
+  trial.simulatorChecks = [{ id: 'simulator_loop', description: 'Повтор пары ответ агента → реплика пользователя (эвристика)', passed: false, evidence: `Подозрение: реплика #${seq + 1} повторяет реплику #0 <script>`, seq: seq + 1, heuristic: true }];
+  const bundle = await evidenceBundle(after, lab.store);
+  const html = htmlReport(bundle);
+  assert.match(html, /Проверки симулятора · эвристики/);
+  assert.match(html, new RegExp(`Подозрение: реплика #${seq + 1} повторяет реплику #0 &lt;script&gt;`)); assert.doesNotMatch(html, /#0 <script>/);
+  assert.match(html, /<section id="simulator"><h2>Симулятор<\/h2>/); assert.match(html, /<h2>Ценность режимов<\/h2>/);
+  assert.match(html, /simulator_loop \(эвристика\): пометок 1\/1/);
+  // The suspicion parks the dialogue in "needs a verdict" instead of letting a green code result stand unchallenged.
+  const attention = html.match(/<section id="attention">([\s\S]*?)<\/section>/)?.[1] ?? '';
+  assert.match(attention, /Нужен вердикт/);
+  const markdown = markdownReport(bundle);
+  assert.match(markdown, /## Симулятор/); assert.match(markdown, /simulator\\_loop .*пометок 1\/1/); assert.match(markdown, /## Ценность режимов/);
+  const json = JSON.parse(jsonReport(bundle));
+  assert.equal(json.evidence.simulator.reactiveDialogues, 1);
+  assert.equal(json.evidence.simulator.checks.find((c: { id: string }) => c.id === 'simulator_loop').flagged, 1);
+  assert.equal(json.evidence.simulator.checks.find((c: { id: string }) => c.id === 'simulator_loop').heuristic, true);
+  assert.ok(Array.isArray(json.evidence.modeValue.cards));
+  assert.equal(json.evidence.modeValue.cards[0].outcomes.reactive, 'unknown', 'a flagged simulator leaves the card undecided until a human rules on the check');
+});

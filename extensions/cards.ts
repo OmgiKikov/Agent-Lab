@@ -3,6 +3,8 @@ import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, wrap
 import type { Experiment, Scenario, Trial } from '../dist/contracts.js';
 import { describeCheck } from '../dist/contracts.js';
 import { awaitingVerdict, evidenceSummary, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
+import { simulatorSummaryLines, modeValueLines } from '../dist/simulator.js';
+import { familyDeltaText } from '../dist/comparison.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
 
 /** All material, model and persisted text crosses this boundary before terminal rendering. */
@@ -85,6 +87,10 @@ function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean
     ...(profile ? [line(`Профиль ${profile.id} · ${profile.source === 'owner' ? 'задан владельцем' : 'выведен из логов'}${profile.draftOverride ? ' · правка черновика' : ''}`, 'muted')] : []),
     ...(scenario.user.characteristics ?? []).map(v => line(`• ${v}`)),
     line(`Цель: ${scenario.user.goal}`), line(`Поведение: ${scenario.user.behavior}`),
+    ...(scenario.user.knows ?? []).map(v => line(`Известно: ${v}`)),
+    ...(scenario.user.cannotKnow ?? []).map(v => line(`Не знает: ${v}`)),
+    ...(scenario.user.answers ?? []).map(a => line(`Если спросят ${a.ifAsked}: «${a.reply}»`)),
+    ...(scenario.initialState.external ? [line('Внешний мир', 'accent'), line(json(scenario.initialState.external))] : []),
     line(`Знает: ${scenario.user.facts}`), line(`Первая реплика: «${scenario.user.opening}»`),
     line(`Лимит: ${scenario.user.maxFollowUps ?? Math.max(0, record.settings.maxTurns - 1)} ответов после первой реплики`, 'muted'),
     line(''), line('УСПЕХ', 'accent'), line(scenario.successCriteria || 'Описан проверками и метриками ниже.'),
@@ -132,6 +138,9 @@ function trialLines(trial: Trial, record: Experiment, expanded: boolean): Line[]
     ...(trial.checks.length ? trial.checks.flatMap(c => [
       line(`${c.passed ? '✓' : '×'} ${c.description} [${c.id}]`, c.passed ? 'success' : 'error'), line(c.evidence, 'muted'),
     ]) : [line('Проверок состояния нет. Итог не означает успех по всем метрикам.', 'muted')]),
+    ...(trial.userMode === 'reactive' ? [line(''), line('ПРОВЕРКИ СИМУЛЯТОРА · эвристики', 'accent'),
+      ...(trial.simulatorChecks?.length ? trial.simulatorChecks.flatMap(c => [line(`${c.passed ? '✓' : '?'} ${c.description} [${c.id}]`, c.passed ? 'success' : 'warning'), line(c.evidence, 'muted')])
+        : [line('Не применялись: симулятор не отправил реплик после первой.', 'muted')])] : []),
     line(''), line(record.mode === 'demo' ? 'СЦЕНАРНАЯ ОЦЕНКА ДЕМО — ПРОВЕРЬТЕ ПО ТРАССЕ' : 'ОЦЕНКА МОДЕЛЬЮ — ПРОВЕРЬТЕ ПО ТРАССЕ', 'accent'),
     ...(scenario?.metrics ?? []).flatMap(m => {
       const a = trial.assessments?.find(a => a.metricId === m.id);
@@ -230,6 +239,7 @@ function verdictLines(record: Experiment, expanded = false): Line[] {
       ...record.failureModes.flatMap(mode => [
         line(`• ${mode.name}${mode.stage ? ` [${mode.stage}]` : ''} — ${mode.trialIds.length} диалог(ов)`, 'warning'),
         line(`  ${mode.description}`, 'muted'),
+        ...(mode.promptQuotes ?? []).map(q => line(`  Цитата промпта · гипотеза: «${q}»`, 'muted')),
       ])] : []),
     line('Что дальше:', 'accent'), ...v.nextSteps.map(step => line(`• ${noteText(step)}`)),
   ];
@@ -257,6 +267,8 @@ function statsLines(record: Experiment): Line[] {
     rows.push(line(`${m.userMode}: ${m.passed}/${m.valid} пройдено (${pct(m.passRate)}) · диалогов ${m.trials} · реплик пользователя ${num(m.avgUserTurns, 1)} · вызовов ${m.calls} · стоимость ${m.costUsd === null ? 'неизвестна' : `$${m.costUsd.toFixed(4)}`}`));
     if (m.uniqueFailedChecks.length) rows.push(line(`  провалы, найденные только в этом режиме: ${m.uniqueFailedChecks.join(', ')}`, 'warning'));
   }
+  rows.push(line(''), line('Симулятор', 'accent'), ...simulatorSummaryLines(e.simulator).map(s => line(s)),
+    line(''), line('Ценность режимов', 'accent'), ...modeValueLines(e.modeValue).map(s => line(s)));
   if (record.trials.length) {
   rows.push(line(''), line('Подтверждённые находки и расходы', 'accent'), line(e.pilot.conclusion));
   for (const m of e.pilot.modes) rows.push(line(`${m.userMode}: групп ${m.confirmedFailureKeys.length} · только здесь ${m.exclusiveConfirmed.length} · сбои симулятора ${m.simulatorFailures} · внешний агент ${m.externalCostUsd === null ? 'цена неизвестна' : '$' + m.externalCostUsd.toFixed(4)} · форма разбора ${m.reviewMs === null ? 'время неизвестно' : (m.reviewMs / 1000).toFixed(1) + ' с'}`));
@@ -285,6 +297,7 @@ function comparisonLines(comparison?: RunComparison, before?: Experiment, after?
     ...comparison.regressed.map(c => line(`−  ${c.title} · ${tierLabels[c.tier]}`, 'error')),
     ...comparison.fixed.map(c => line(`+  ${c.title} · ${tierLabels[c.tier]}`, 'success')),
     ...(comparison.stages.length ? [line(''), line('ПО ЭТАПАМ', 'accent'), ...comparison.stages.map(s => line(`${s.stage}: ${s.before === null ? '—' : Math.round(s.before * 100) + '%'} → ${s.after === null ? '—' : Math.round(s.after * 100) + '%'}`))] : []),
+    line(familyDeltaText(comparison.delta), 'muted'),
     line(''), ...comparison.notes.map(n => line(n, 'muted'))];
   if (!pair || !before || !after) return rows;
   const original = before.trials.find(t => t.id === pair.beforeTrialId);

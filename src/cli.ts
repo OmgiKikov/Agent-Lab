@@ -7,7 +7,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab, draftHash } from './experiment.js';
 import { demoInput } from './demo.js';
 import { createInputSchema, DEFAULT_JUDGE } from './contracts.js';
-import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.js';
+import { compareRuns, evidenceSummary, evaluationExitCode, familyDeltaText } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from './prompt-edit.js';
 import { readData } from './imports.js';
@@ -71,7 +71,8 @@ async function main() {
   if (command === 'pilot') {
     if (!values.id) throw new Error('Укажите --id RUN');
     const record = await new ExperimentStore(directory).get(values.id);
-    process.stdout.write(JSON.stringify(evidenceSummary(record).pilot, null, 2) + '\n'); return;
+    const evidence = evidenceSummary(record);
+    process.stdout.write(JSON.stringify({ pilot: evidence.pilot, modeValue: evidence.modeValue, simulator: evidence.simulator }, null, 2) + '\n'); return;
   }
   if (command === 'audit-judge') {
     if (!values.id || !values.output || !values.yes) throw new Error('audit-judge --id RUN --output NEW_DIRECTORY --yes [--repeats 10]. Используются сохранённые лимиты; агент не вызывается.');
@@ -108,6 +109,7 @@ async function main() {
         ...(diff.fixed.length ? ['Исправлено:', ...diff.fixed.map(r => `  + [${r.tier}] ${r.title} (${r.scenarioId})`), ''] : []),
         ...(diff.stages.length ? ['По этапам работы агента:', ...diff.stages.map(st => `  ${st.stage}: ${percent(st.before)} → ${percent(st.after)}`), ''] : []),
         'По ступеням:', ...diff.tiers.filter(t => t.before.graded || t.after.graded).map(t => `  ${t.tier}: ${t.before.passed}/${t.before.graded} → ${t.after.passed}/${t.after.graded}`), '',
+        familyDeltaText(diff.delta), '',
         ...(diff.notes.length ? ['Оговорки:', ...diff.notes.map(n => `  · ${n}`), ''] : []),
       ].join('\n') + '\n');
       if (!diff.comparable) process.exitCode = 2;

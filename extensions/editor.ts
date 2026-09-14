@@ -184,6 +184,8 @@ export async function editDraft(ctx: ExtensionContext, action: Extract<BoardActi
       ['preview', 'Проверить ожидание на примерах'],
       ['script', 'Продолжения после первой реплики · по одному в строке'],
       ['facts', 'Факты, известные пользователю'], ['maxFollowUps', 'Максимум ответов после первой реплики'],
+      ['knows', 'Что знает пользователь · по одному в строке'], ['cannotKnow', 'Чего пользователь не может знать · по одному в строке'],
+      ['answers', 'Ответы на уточнения · JSON'], ['external', 'Внешнее состояние · JSON · пусто = убрать'],
       ['profileId', 'Профиль пользователя · выбрать или убрать'],
       ['title', 'Название'], ['persona', 'Персона'], ['characteristics', 'Характеристики · по одной в строке'],
       ['goal', 'Цель пользователя'], ['behavior', 'Поведение'], ['assumptions', 'Допущения · по одному в строке'],
@@ -243,17 +245,20 @@ export async function editDraft(ctx: ExtensionContext, action: Extract<BoardActi
       if (!tier) return;
       return commit({ scenarios: [{ ...scenario, tier }] });
     }
-    const userFields = new Set(['persona', 'characteristics', 'goal', 'behavior', 'facts', 'opening', 'maxFollowUps', 'script']);
-    const object = (userFields.has(field) ? scenario.user : scenario) as unknown as Record<string, unknown>;
-    const json = ['metrics', 'checks', 'initialState'].includes(field);
-    const array = ['characteristics', 'assumptions', 'script'].includes(field);
+    const userFields = new Set(['persona', 'characteristics', 'goal', 'behavior', 'facts', 'opening', 'maxFollowUps', 'script', 'knows', 'cannotKnow', 'answers']);
+    const object = (field === 'external' ? scenario.initialState : userFields.has(field) ? scenario.user : scenario) as unknown as Record<string, unknown>;
+    const json = ['metrics', 'checks', 'initialState', 'answers', 'external'].includes(field);
+    const array = ['characteristics', 'assumptions', 'script', 'knows', 'cannotKnow'].includes(field);
     const initial = object[field];
-    return editPatch(title, json ? JSON.stringify(initial ?? [], null, 2)
+    // An absent external world opens as an empty editor: saving it unchanged must not create `{}` that the adapter would then have to confirm.
+    return editPatch(title, json ? (field === 'external' && initial === undefined ? '' : JSON.stringify(initial ?? [], null, 2))
       : array ? (initial as string[] | undefined)?.join('\n') ?? '' : String(initial ?? ''), changed => {
       if (field === 'maxFollowUps' && !/^\d+$/.test(changed.trim())) throw new Error('Введите целое число от 0 до 15.');
+      if (field === 'external' && !changed.trim()) { delete scenario.initialState.external; return { scenarios: [scenario] }; }
       object[field] = json ? JSON.parse(changed) : field === 'script' ? changed === '' ? [] : changed.split('\n')
         : array ? changed.split('\n').map(v => v.trim()).filter(Boolean) : field === 'maxFollowUps' ? Number(changed) : changed;
       if (field === 'persona' && !changed.trim()) delete object[field];
+      if ((field === 'knows' || field === 'cannotKnow' || field === 'answers') && !(object[field] as unknown[]).length) delete object[field];
       return { scenarios: [scenario] };
     });
   }

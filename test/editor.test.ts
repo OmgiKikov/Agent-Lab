@@ -136,3 +136,38 @@ test('expectations can be edited as fields and previewed without JSON while othe
   roles = await lab.updateDraft(roles.id, draftHash(roles), { settings: { roles: { judge: null } } });
   assert.equal(roles.settings.roles.judge, undefined); assert.equal(roles.settings.roles.builder?.model, 'builder');
 });
+
+test('user state and the external world are editable as plain fields without touching other card fields', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-user-state-'));
+  const lab = new ExperimentLab(directory); await lab.init();
+  t.after(async () => { await lab.close(); await rm(directory, { recursive: true, force: true }); });
+  const created = await lab.create(demoEvaluationInput()); await lab.waitForIdle();
+  let record = await lab.get(created.id);
+  const original = structuredClone(record.scenarios[0]!);
+  const edit = async (label: string, text: string) => {
+    const choices = ['Расширенные настройки', label];
+    const ctx = { ui: { select: async () => choices.shift(), editor: async () => text } } as unknown as ExtensionContext;
+    const patch = await editDraft(ctx, { type: 'edit', record, section: 'cards', selected: 0 });
+    record = await lab.updateDraft(record.id, draftHash(record), patch!);
+    return record.scenarios[0]!;
+  };
+  assert.deepEqual((await edit('Что знает пользователь · по одному в строке', 'Appointment ID A101\nDesired time 14:00\n')).user.knows, ['Appointment ID A101', 'Desired time 14:00']);
+  assert.deepEqual((await edit('Чего пользователь не может знать · по одному в строке', 'Backend reason')).user.cannotKnow, ['Backend reason']);
+  assert.deepEqual((await edit('Ответы на уточнения · JSON', '[{"ifAsked":"ID","reply":"A101"}]')).user.answers, [{ ifAsked: 'ID', reply: 'A101' }]);
+  assert.deepEqual((await edit('Внешнее состояние · JSON · пусто = убрать', '{"cards":[{"id":"c1"}]}')).initialState.external, { cards: [{ id: 'c1' }] });
+  const cleared = await edit('Внешнее состояние · JSON · пусто = убрать', '');
+  assert.equal(cleared.initialState.external, undefined);
+  assert.equal((await edit('Что знает пользователь · по одному в строке', '\n')).user.knows, undefined, 'an emptied list is removed, not stored as []');
+  assert.deepEqual(cleared.checks, original.checks); assert.equal(cleared.user.opening, original.user.opening);
+  assert.deepEqual(record.scenarios.slice(1), (await lab.get(record.id)).scenarios.slice(1), 'other cards are untouched');
+  // Opening an absent external world shows an empty editor, so saving it unchanged cannot create `{}` that an adapter would have to confirm.
+  const opened: string[] = [];
+  const peek = ['Расширенные настройки', 'Внешнее состояние · JSON · пусто = убрать'];
+  await editDraft({ ui: { select: async () => peek.shift(), editor: async (_title: string, initial: string) => { opened.push(initial); return undefined; } } } as unknown as ExtensionContext, { type: 'edit', record, section: 'cards', selected: 0 });
+  assert.deepEqual(opened, ['']);
+  const rejected = ['Расширенные настройки', 'Ответы на уточнения · JSON'];
+  const attempts = ['not json', '[{"ifAsked":"ID","reply":"A101"}]']; const titles: string[] = [];
+  const ctx = { ui: { select: async () => rejected.shift(), editor: async (title: string) => { titles.push(title); return attempts.shift(); } } } as unknown as ExtensionContext;
+  await editDraft(ctx, { type: 'edit', record, section: 'cards', selected: 0 });
+  assert.match(titles[1]!, /Некорректный JSON/);
+});
