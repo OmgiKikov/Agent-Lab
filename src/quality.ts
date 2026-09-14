@@ -30,8 +30,8 @@ export interface QualitySummary {
   causes: QualityCause[];
   /** How sure the automatic verdict is: decided dialogues vs those the judge left unknown or a human disputes. */
   judge: { decided: number; unknown: number; disputed: number; label: string };
-  /** The minimal human queue: only what a machine could not settle. */
-  humanQueue: { unknownJudgments: number; disagreements: number; simulatorFlags: number; total: number };
+  /** The minimal human queue: only what a machine could not settle. pendingFailures counts failures the judge decided unanimously that still await the owner's verdict before the review can finish. */
+  humanQueue: { unknownJudgments: number; disagreements: number; simulatorFlags: number; total: number; pendingFailures: number };
   scope: { cards: number; dialogues: number; modes: UserMode[]; provenance: string; target: string; judgeModel?: string };
   cost: { usd: number | null; calls: number; elapsedMs: number };
   /** One sentence of limits; the detailed reasons stay in the verdict. */
@@ -52,14 +52,20 @@ export const dialogues = (n: number) => plural(n, ['диалог', 'диалог
 export const cardsWord = (n: number) => plural(n, ['карточка', 'карточки', 'карточек']);
 const cardsOf = (n: number) => plural(n, ['карточки', 'карточек', 'карточек']);
 
+/** Dialogues a card is owed: every mode it runs in, times the repeats. A card is not a pass until all of them passed. */
+function plannedForCard(record: Experiment, scenario: Scenario): number {
+  return record.settings.userModes.filter(m => m !== 'scripted' || scenario.user.script !== undefined).length * record.settings.repeats;
+}
 function cardOutcome(record: Experiment, scenario: Scenario): 'pass' | 'fail' | 'unknown' {
   const trials = record.trials.filter(t => t.scenarioId === scenario.id);
   if (!trials.length) return 'unknown';
   const outcomes = trials.map(t => automaticTrialResult(scenario, t, record.humanReviews));
-  return outcomes.includes('fail') ? 'fail' : outcomes.every(o => o === 'pass') ? 'pass' : 'unknown';
+  if (outcomes.includes('fail')) return 'fail';
+  return outcomes.every(o => o === 'pass') && trials.length >= plannedForCard(record, scenario) ? 'pass' : 'unknown';
 }
 
 function metricRows(record: Experiment): QualityMetric[] {
+  // Rows are keyed by kind, id and name: the same criterion on many cards is one row, two criteria that merely share an id are two, and the exact-check row never collides with a rubric.
   const rows = new Map<string, QualityMetric>();
   const bump = (row: QualityMetric, result: 'pass' | 'fail' | 'unknown') => { row.total++; if (result === 'pass') row.passed++; else if (result === 'fail') row.failed++; else row.unknown++; };
   const usable = (scenario: Scenario | undefined, trial: Trial) => measurementUsable(scenario, trial, record.humanReviews);
@@ -72,8 +78,9 @@ function metricRows(record: Experiment): QualityMetric[] {
       bump(row, !usable(scenario, trial) ? 'unknown' : trial.outcome === 'pass' ? 'pass' : trial.outcome === 'fail' ? 'fail' : 'unknown');
     }
     for (const metric of (scenario.metrics ?? []).filter(m => m.subject === 'agent')) {
-      const row = rows.get(metric.id) ?? { id: metric.id, name: metric.name, kind: 'rubric', passed: 0, failed: 0, unknown: 0, total: 0, accuracy: null };
-      rows.set(metric.id, row);
+      const key = `rubric:${metric.id}:${metric.name}`;
+      const row = rows.get(key) ?? { id: metric.id, name: metric.name, kind: 'rubric', passed: 0, failed: 0, unknown: 0, total: 0, accuracy: null };
+      rows.set(key, row);
       const result = trial.assessments?.find(a => a.metricId === metric.id)?.result;
       bump(row, !usable(scenario, trial) || !result ? 'unknown' : result);
     }
@@ -143,7 +150,8 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const simulatorIds = record.trials.filter(t => measured(t) && !simulatorUsable(scenarioOf(t), t, record.humanReviews)).map(t => t.id);
   const disagreements = disagreementIds.length;
   const humanQueue = { unknownJudgments: unknownIds.length, disagreements, simulatorFlags: simulatorIds.length,
-    total: new Set([...unknownIds, ...disagreementIds, ...simulatorIds]).size };
+    total: new Set([...unknownIds, ...disagreementIds, ...simulatorIds]).size,
+    pendingFailures: v.nextSteps.find(step => step.code === 'record_verdicts')?.count ?? 0 };
   const measuredTrials = record.trials.filter(measured).length;
   const judgeLabel = !measuredTrials ? 'оценок ещё нет'
     : humanQueue.total === 0 && rubricUnknown === 0 ? `все ${dialogues(decided)} решены единогласно (2 из 2 голосов на рубрику)`
@@ -169,7 +177,9 @@ export function qualityLines(q: QualitySummary): { headline: string; metrics: st
     metrics: q.metrics.map(m => `${bar(m.accuracy)} ${percent(m.accuracy).padStart(4)}  ${m.name} · ${m.passed}/${m.passed + m.failed}${m.unknown ? ` · неясно ${m.unknown}` : ''}`),
     causes: q.causes.slice(0, 3).map((c, i) => `${i + 1}. ${c.name} — ${dialogues(c.dialogues)}${c.example ? `. ${c.example.card}: «${c.example.quote}»` : ''}${c.promptQuotes[0] ? ` · правило промпта: «${c.promptQuotes[0]}»` : ''}`),
     judge: `Судья: ${q.judge.label}.`,
-    queue: q.humanQueue.total ? `Разметить человеку: ${q.humanQueue.total} (неясных ${q.humanQueue.unknownJudgments}, расхождений ${q.humanQueue.disagreements}, пометок симулятора ${q.humanQueue.simulatorFlags}). Остальное решено автоматически.` : 'Ручная разметка не требуется: спорных оценок нет.',
+    queue: q.humanQueue.total ? `Разметить человеку: ${q.humanQueue.total} (неясных ${q.humanQueue.unknownJudgments}, расхождений ${q.humanQueue.disagreements}, пометок симулятора ${q.humanQueue.simulatorFlags}). Остальное решено автоматически${q.humanQueue.pendingFailures ? `; ${plural(q.humanQueue.pendingFailures, ['провал ждёт', 'провала ждут', 'провалов ждут'])} подтверждающего вердикта p / n` : ''}.`
+      : q.humanQueue.pendingFailures ? `Спорных оценок нет: судья решил ${plural(q.humanQueue.pendingFailures, ['провал', 'провала', 'провалов'])} единогласно. Разбор завершится после подтверждающего вердикта p / n по каждому; для чтения результата он не нужен.`
+      : 'Ручная разметка не требуется: провалов и спорных оценок нет.',
     scope: `${cardsWord(q.scope.cards)} · ${dialogues(q.scope.dialogues)} · ${q.scope.modes.map(m => modeNames[m]).join(', ')} · ${q.scope.provenance} · версия ${q.scope.target}${q.scope.judgeModel ? ` · судья ${q.scope.judgeModel}` : ''} · ${q.cost.usd === null ? 'стоимость неизвестна' : `$${q.cost.usd.toFixed(2)}`} · ${Math.round(q.cost.elapsedMs / 60000)} мин`,
     limits: q.limits,
   };

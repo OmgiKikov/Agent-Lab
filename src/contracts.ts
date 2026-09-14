@@ -636,24 +636,22 @@ const LOOSE_CHARACTERS: Record<string, string> = {
   '«': '"', '»': '"', '“': '"', '”': '"', '„': '"', '‹': "'", '›': "'", '‘': "'", '’': "'",
   '–': '-', '—': '-', '−': '-', '→': '>', 'ё': 'е', 'Ё': 'Е', '\u00a0': ' ',
 };
-/** A list marker at the start of a line («- », «• », «1. ») is layout, not words; a model drops it when it quotes. */
+/** A list marker after whitespace («- », «• », «1. ») is layout, not words; a model drops it or keeps it inline when it quotes. */
 const LIST_MARKER = /^(?:[-*•–—]|\d{1,2}[.)])\s/u;
 function foldTypography(text: string): { text: string; starts: number[]; ends: number[] } {
   const out: string[] = [], starts: number[] = [], ends: number[] = [];
-  let lineStart = true;
   for (let i = 0; i < text.length; i++) {
     const raw = text[i]!;
     let ch = LOOSE_CHARACTERS[raw] ?? raw, width = 1;
     if (raw === '-' && text[i + 1] === '>') { ch = '>'; width = 2; }
-    if (lineStart && !/\s/.test(raw)) {
+    if ((!out.length || out[out.length - 1] === ' ') && !/\s/.test(raw)) {
       const marker = LIST_MARKER.exec(text.slice(i, i + 4));
       if (marker) { ch = ' '; width = marker[0].length; }
     }
     if (/\s/.test(ch)) {
-      lineStart = lineStart || raw === '\n' || raw === '\r';
       if (out.length && out[out.length - 1] === ' ') { ends[ends.length - 1] = i + width; i += width - 1; continue; }
       ch = ' ';
-    } else lineStart = false;
+    }
     out.push(ch); starts.push(i); ends.push(i + width); i += width - 1;
   }
   return { text: out.join(''), starts, ends };
@@ -663,9 +661,13 @@ export function verbatimSpan(content: string, quote: string): string | undefined
   const source = foldTypography(content);
   const needle = foldTypography(quote).text.trim();
   if (!needle) return undefined;
-  const at = source.text.indexOf(needle);
-  if (at < 0) return undefined;
-  return content.slice(source.starts[at]!, source.ends[at + needle.length - 1]!);
+  // A quote that starts mid-sentence gets capitalised; only its first letter may differ in case.
+  const first = needle[0]!, swapped = first === first.toLowerCase() ? first.toUpperCase() : first.toLowerCase();
+  for (const candidate of [needle, ...(swapped !== first ? [swapped + needle.slice(1)] : [])]) {
+    const at = source.text.indexOf(candidate);
+    if (at >= 0) return content.slice(source.starts[at]!, source.ends[at + candidate.length - 1]!);
+  }
+  return undefined;
 }
 export function fingerprint(value: unknown): string {
   const normalize = (v: unknown): unknown => Array.isArray(v) ? v.map(normalize)

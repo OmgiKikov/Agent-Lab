@@ -36,7 +36,7 @@ test('the first screen counts cards, criteria and causes from the shared outcome
   assert.equal(q.causes[0]!.example?.card, 'Карточка b');
   assert.equal(q.causes[0]!.example?.quote, 'осталось 0', 'a failed exact check is quoted before the judge');
   assert.deepEqual(q.causes[0]!.promptQuotes, ['Отвечай сразу, если данных достаточно']);
-  assert.deepEqual(q.humanQueue, { unknownJudgments: 1, disagreements: 0, simulatorFlags: 0, total: 1 });
+  assert.deepEqual(q.humanQueue, { unknownJudgments: 1, disagreements: 0, simulatorFlags: 0, total: 1, pendingFailures: 1 });
   assert.match(q.judge.label, /решено 2 из 3; спорных 1/);
   assert.match(q.limits, /судья не сверен с человеком/);
   const text = qualityLines(q);
@@ -72,4 +72,35 @@ test('plural forms and sentence-bounded shortening', () => {
   assert.equal(shorten(long, 120), 'Первое предложение довольно длинное и содержит подробности. Второе предложение тоже.…');
   assert.equal(shorten('коротко'), 'коротко');
   assert.match(shorten('слово '.repeat(60), 50), /^(слово ){1,8}слово…$/);
+});
+
+test('a card with a missing planned repeat is undecided on the first screen, not a pass', () => {
+  const r = record({ settings: settingsSchema.parse({ userModes: ['static'], repeats: 2 }), scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] });
+  const q = qualitySummary(r);
+  assert.deepEqual(q.cards, { passed: 0, failed: 0, unknown: 1, total: 1, accuracy: null });
+  assert.match(q.headline, /без решения/);
+  assert.match(q.limits, /неполный/);
+});
+
+test('the queue line never says no labelling is needed while a failure still awaits its verdict', () => {
+  const r = record({ scenarios: [scenario('a'), scenario('b')], trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'fail', 'fail')] });
+  const q = qualitySummary(r);
+  assert.equal(q.humanQueue.total, 0);
+  assert.equal(q.humanQueue.pendingFailures, 1);
+  const lines = qualityLines(q);
+  assert.doesNotMatch(lines.queue, /не требуется/);
+  assert.match(lines.queue, /1 провал/);
+  const clean = qualityLines(qualitySummary(record({ scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] })));
+  assert.match(clean.queue, /не требуется/);
+});
+
+test('criteria that share an id but not a name stay separate rows, and a rubric named code never merges with the exact checks', () => {
+  const codeRubric = { ...goal, id: 'code', name: 'Код ответа' };
+  const other = { ...goal, name: 'Другая цель' };
+  const a = { ...scenario('a'), metrics: [codeRubric] };
+  const b = { ...scenario('b'), metrics: [goal] };
+  const c = { ...scenario('c'), metrics: [other] };
+  const t = (id: string, sid: string, metricId: string) => ({ ...trial(id, sid, 'pass', 'pass'), assessments: [{ metricId, result: 'fail' as const, rationale: 'r', evidence: [1] }] });
+  const q = qualitySummary(record({ scenarios: [a, b, c], trials: [t('t1', 'a', 'code'), t('t2', 'b', 'goal'), t('t3', 'c', 'goal')] }));
+  assert.deepEqual(q.metrics.map(m => [m.kind, m.name, m.passed, m.failed]), [['code', 'Точные проверки · код', 3, 0], ['rubric', 'Код ответа', 0, 1], ['rubric', 'Цель выполнена', 0, 1], ['rubric', 'Другая цель', 0, 1]]);
 });

@@ -26,7 +26,9 @@ const familyPlanSchema = z.strictObject({ families: z.array(z.strictObject({
 })).min(4).max(16) });
 // New generated cards require an explicit interaction budget; older saved cards keep their original semantics.
 // With observed profiles the model may only choose a profileId; persona text is copied from the profile later.
-const generatedScenarioSchema = (external: boolean) => scenarioSchema.required({ successCriteria: true, assumptions: true, metrics: true })
+const RUBRIC_LIMIT = 8;
+/** external cards get harness rubrics after generation (fidelity, and prompt compliance when a prompt source exists); the model may use only what is left. */
+const generatedScenarioSchema = (external: boolean, harnessRubrics = 0) => scenarioSchema.required({ successCriteria: true, assumptions: true, metrics: true })
   .extend({ user: scenarioSchema.shape.user.required({ maxFollowUps: true }) })
   .refine(s => external ? s.checks.length > 0 || s.metrics.some(m => m.subject === 'agent')
     : s.metrics.some(m => m.subject === 'agent') && s.metrics.some(m => m.subject === 'simulator'),
@@ -34,8 +36,8 @@ const generatedScenarioSchema = (external: boolean) => scenarioSchema.required({
   .refine(s => !external || s.checks.every(c => ['answer_equals', 'answer_contains', 'answer_omits'].includes(c.kind))
     && !Object.keys(s.initialState.records).length && !s.initialState.writableFields.length && !s.initialState.transientFailures,
     'Without an external state/tool contract use only source-grounded answer checks and an empty initialState; assess semantic answers with agent rubrics')
-  .refine(s => !external || s.metrics.length < 8 && s.metrics.every(m => m.subject === 'agent' && m.id !== simulatorFidelity.id && m.id !== promptCompliance.id),
-    'External generation uses at most 7 agent rubrics only; the harness adds user_fidelity for the simulator and prompt_compliance when a prompt source is supplied');
+  .refine(s => !external || s.metrics.length <= RUBRIC_LIMIT - harnessRubrics && s.metrics.every(m => m.subject === 'agent' && m.id !== simulatorFidelity.id && m.id !== promptCompliance.id),
+    `External generation uses at most ${RUBRIC_LIMIT - harnessRubrics} agent rubrics only; the harness adds user_fidelity for the simulator${harnessRubrics > 1 ? ' and prompt_compliance for the supplied prompt source' : ' and prompt_compliance when a prompt source is supplied'}`);
 const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, message: userTurnSchema.shape.message.optional() })
   .refine(v => v.done || !!v.message?.trim(), 'A continuing user turn needs a message')
   .describe('To stop immediately, return done:true and omit message. A nonempty message is always delivered to the target. done:true with a nonempty message means deliver this final user message, receive the target response, then end. done:true with an empty message means stop now without another target response.');
@@ -403,6 +405,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       if (requirementIds.size !== grounding.requirements.length) throw new Error('Requirements: duplicate requirement IDs');
       const compare = input.workflow === 'compare';
       const external = !!input.targetKind && input.targetKind !== 'sandbox';
+      const harnessRubrics = external ? 1 + (input.sources.some(s => s.kind === 'prompt') ? 1 : 0) : 0;
       const plan = compare ? await ask(
         'План семейств сценариев',
         FAMILY_PLAN_ROLE,
@@ -443,7 +446,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
               earlierGoals: scenarios.map(s => ({ id: s.id, familyId: s.familyId, goal: s.user.goal })),
             }),
           },
-          z.strictObject({ scenarios: z.array(generatedScenarioSchema(external)).min(batchSize).max(SCENARIO_LIMIT) }), ctx,
+          z.strictObject({ scenarios: z.array(generatedScenarioSchema(external, harnessRubrics)).min(batchSize).max(SCENARIO_LIMIT) }), ctx,
           // Pure review: attribution problems are a reason for the model to rewrite the
           // batch, not a reason to lose the whole run. Nothing is recorded until it passes.
           value => {

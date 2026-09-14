@@ -243,6 +243,9 @@ test('a quote that differs from its source only in typography is still that sour
   assert.equal(verbatimSpan(content, 'через заявку - оператор'), 'через заявку — оператор');
   assert.equal(verbatimSpan(content, 'Раздел Эквайринг показывает тариф'), undefined);
   assert.equal(verbatimSpan(content, 'ОПЕРАТОР этого сделать не может'), undefined);
+  // A quote that starts mid-sentence is capitalised by the model; only its first letter may differ in case.
+  assert.equal(verbatimSpan(content, 'Оператор этого сделать не может'), 'оператор этого сделать не может');
+  assert.equal(verbatimSpan(content, 'оператор Этого сделать не может'), undefined);
 });
 
 test('a quote that skips the list markers of its source is still that source', () => {
@@ -250,5 +253,6 @@ test('a quote that skips the list markers of its source is still that source', (
   assert.equal(verbatimSpan(content, 'сообщай: номер заявки, статус заявки'), 'сообщай:\n- номер заявки, статус заявки');
   assert.equal(verbatimSpan(content, 'срок исполнения заявки дату визита'), 'срок исполнения заявки\n- дату визита');
   assert.equal(verbatimSpan(content, 'Шаги: Открой раздел. Нажми "Тариф".'), 'Шаги:\n1. Открой раздел.\n2. Нажми «Тариф».');
+  assert.equal(verbatimSpan(content, 'сообщай: - номер заявки, статус заявки, срок исполнения заявки - дату визита'), 'сообщай:\n- номер заявки, статус заявки, срок исполнения заявки\n- дату визита');
   assert.equal(verbatimSpan(content, 'номер заявки - статус заявки'), undefined);
 });

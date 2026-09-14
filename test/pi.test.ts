@@ -977,3 +977,18 @@ test('a batch with more cards than requested keeps the first ones instead of cos
     assert.deepEqual(prepared.scenarios.map(s => s.id), ['card_0', 'card_1', 'card_2']);
   } finally { await f.close(); }
 });
+
+test('generated rubrics leave room for the harness rubrics, so a card never exceeds the metric limit after preparation', async () => {
+  const quote = 'Reply formally.';
+  const rubric = (i: number) => ({ ...reviewFields.metrics[0]!, id: `m_${i}`, name: `Criterion ${i}` });
+  const seven = { ...plainCard(0), metrics: [1, 2, 3, 4, 5, 6, 7].map(rubric) };
+  const six = { ...plainCard(0), metrics: [1, 2, 3, 4, 5, 6].map(rubric) };
+  const outputs = [{ requirements: [{ id: 'req_1', text: quote, sourceId: 'prompt_1', quote, critical: true }], questions: [] }, { scenarios: [seven] }, { scenarios: [six] }];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check rules', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'prompt_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 3);
+    assert.match(JSON.stringify(f.requests[2]?.messages), /at most 6 agent rubrics/);
+    assert.equal(prepared.scenarios[0]!.metrics!.length, 8);
+  } finally { await f.close(); }
+});
