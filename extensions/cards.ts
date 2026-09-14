@@ -4,6 +4,7 @@ import type { Experiment, Scenario, Trial } from '../dist/contracts.js';
 import { describeCheck } from '../dist/contracts.js';
 import { awaitingVerdict, evidenceSummary, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
 import { simulatorSummaryLines, modeValueLines } from '../dist/simulator.js';
+import { qualitySummary, qualityLines, dialogues as dlg } from '../dist/quality.js';
 import { familyDeltaText } from '../dist/comparison.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
 
@@ -184,24 +185,33 @@ const tierLabels: Record<string, string> = { smoke: 'дымовые', regression
 /** Verdict wording comes from the record itself, so the board, the report and the CLI never disagree. */
 const noteText = (note: VerdictNote): string => note.text;
 
-/** The simple layer: what passed, where it is weak, how much to trust it, what to do next. Research statistics live in section 4. */
+/** The simple layer: how good the agent is on these cards, why it failed, what the judge could not settle, what to do next. Research statistics live in section 4. */
 function verdictLines(record: Experiment, expanded = false): Line[] {
   const v = verdictSummary(record);
   if (!expanded) {
+    const q = qualitySummary(record);
+    const text = qualityLines(q);
     const finding = v.review.findings[0];
-    const trial = record.trials.find(t => t.outcome === 'invalid') ?? record.trials.find(t => awaitingVerdict(record).has(t.id)) ?? record.trials.find(t => isAgentFailure(record, t));
-    return [line('ИТОГ', 'accent', true), line(v.headline, 'text', true), line(''),
+    const broken = record.trials.find(t => t.outcome === 'invalid');
+    const measuredAny = q.scope.dialogues > 0;
+    return [line('ИТОГ', 'accent', true),
+      ...(measuredAny ? [line(q.headline, 'text', true), line(v.headline, 'muted')] : [line(v.headline, 'text', true)]),
+      ...(measuredAny && q.metrics.length ? text.metrics.map(m => line(m)) : []),
+      line(''),
       ...(finding ? [line(humanFindingText(finding), 'warning')] : []),
-      ...(trial ? [line('ЧТО ТРЕБУЕТ ВНИМАНИЯ', 'accent'),
-        line(record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId, 'text', true),
-        line(trial.simulatorChecks?.find(c => !c.passed)?.evidence || trial.checks.find(c => !c.passed)?.evidence || trial.checks.find(c => !c.passed)?.description
-          || trial.assessments?.find(a => a.result === 'fail' && record.scenarios.find(s => s.id === trial.scenarioId)?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent'))?.rationale || trial.reason, 'warning'),
-        ...trial.assessments?.filter(a => a.result === 'fail' && record.scenarios.find(s => s.id === trial.scenarioId)?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent'))
-          .slice(0, 1).map(a => line(`Основание: реплики #${a.evidence.join(', #')}`, 'muted')) ?? [],
-        line('3 — открыть диалог и основание оценки', 'muted'),
-      ] : [line('Сохраните полезные тесты и повторите их после следующей правки.')]),
-      line(''), line(`Дальше: ${v.nextSteps[0]?.text ?? 'Повторите тест после изменения агента.'}`),
+      ...(broken ? [line('НЕ ИЗМЕРЕНО', 'error'), line(`${record.scenarios.find(s => s.id === broken.scenarioId)?.title ?? broken.scenarioId}: ${broken.reason}`, 'warning')] : []),
+      ...(q.causes.length ? [line('ЧТО ТРЕБУЕТ ВНИМАНИЯ', 'accent'),
+        ...q.causes.slice(0, 3).flatMap((c, i) => [
+          line(`${i + 1}. ${c.name} — ${dlg(c.dialogues)}${c.stage ? ` · ${c.stage}` : ''}`, 'warning'),
+          ...(c.example ? [line(`   ${c.example.card}: «${c.example.quote}»${c.example.seq !== undefined ? ` · реплики #${c.example.seq}` : ''}`, 'muted')] : []),
+          ...c.promptQuotes.slice(0, 1).map(quote => line(`   Правило промпта: «${quote}»`, 'muted')),
+        ]), line('3 — открыть диалог и основание оценки', 'muted')]
+        : measuredAny ? [line('Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.', 'success')] : [line('Сохраните полезные тесты и повторите их после следующей правки.')]),
+      line(''),
+      ...(measuredAny ? [line(text.judge), line(text.queue, q.humanQueue.total ? 'warning' : 'muted')] : []),
+      line(`Дальше: ${v.nextSteps[0]?.text ?? 'Повторите тест после изменения агента.'}`),
       line('a — обсудить результат · r — повторить набор · Enter — все детали', 'accent'),
+      ...(measuredAny ? [line(text.scope, 'muted'), line(`${text.limits} 4 — подробнее.`, 'muted')] : []),
       line(`Выполнено ${v.execution.completed}/${v.execution.planned} · ожидают разбора ${v.review.pending} · сбоев ${v.invalid} · тестов отклонено ${v.review.invalid}`, 'muted'),
     ];
   }
@@ -245,8 +255,8 @@ function verdictLines(record: Experiment, expanded = false): Line[] {
   ];
 }
 function verdictHeadline(record: Experiment): string {
-  const v = verdictSummary(record);
-  return `Итог: ${v.headline} · 1 подробнее`;
+  const q = qualitySummary(record);
+  return `Итог: ${q.headline} · 1 подробнее`;
 }
 
 /** Everything here is an observation over the record; the wording says so before any number. */

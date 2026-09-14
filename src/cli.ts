@@ -15,6 +15,7 @@ import { previewCriteria } from './preview.js';
 import { getPiStatus } from './pi.js';
 import { auditJudge } from './judge-audit.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
+import { qualityLines, qualitySummary } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { evidenceBundle, exportArtifacts } from './artifacts.js';
 
@@ -42,7 +43,7 @@ async function main() {
   } });
   const command = positionals[0];
   if (values.help || !command) {
-    process.stdout.write('  agent-lab audit-judge --id RUN --output NEW_DIRECTORY --repeats 10 --yes\n');
+    process.stdout.write('  agent-lab summary --id RUN [--json]     Качество агента: карточки, критерии, причины, что разметить\n  agent-lab audit-judge --id RUN --output NEW_DIRECTORY --repeats 10 --yes\n');
     process.stdout.write('  agent-lab preview --id RUN --scenario CASE --input examples.json --yes\n');
     process.stdout.write('Agent Lab — проверьте, что сломала правка вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
     process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  agent-lab pilot --id RUN\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
@@ -67,6 +68,15 @@ async function main() {
     if (result.passed) await rememberConnection(directory, connection);
     if (values.output) await writeFile(values.output, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
     process.stdout.write(JSON.stringify(result, null, 2) + '\n'); process.exitCode = result.passed ? 0 : 2; return;
+  }
+  if (command === 'summary') {
+    if (!values.id) throw new Error('Укажите --id RUN');
+    const record = await new ExperimentStore(directory).get(values.id);
+    const q = qualitySummary(record);
+    if (values.json) { process.stdout.write(`${JSON.stringify(q, null, 2)}\n`); return; }
+    const text = qualityLines(q);
+    process.stdout.write([text.headline, ...text.metrics, '', ...(text.causes.length ? ['Почему:', ...text.causes, ''] : []), text.judge, text.queue, '', text.scope, text.limits, ''].join('\n'));
+    return;
   }
   if (command === 'pilot') {
     if (!values.id) throw new Error('Укажите --id RUN');

@@ -567,7 +567,11 @@ export function verdictSummary(record: Experiment): VerdictSummary {
   if (hasResults && mixed.length) nextSteps.push({ code: 'inspect_repeats', text: `На ${mixed.length} сочетаниях карточки и режима есть и успехи, и провалы. Сравните эти попытки; общий процент скрывает различия.`, count: mixed.length });
   if (hasResults && simulatorFlagged) nextSteps.push({ code: 'inspect_simulator', text: `Откройте ${simulatorFlagged} диалог(ов) с пометкой симулятора: утечка, выдуманное значение, повтор или нарушение роли. Оценки агента в них ненадёжны; опровергнуть пометку можно вердиктом по проверке.`, count: simulatorFlagged });
   const awaiting = unreviewed + undecided;
-  if (hasResults && awaiting) nextSteps.push({ code: 'record_verdicts', text: `Разберите ${awaiting} провалившихся диалог(ов) без решающего вердикта: в /agent-lab клавиши p — пройдено, n — не пройдено.`, count: awaiting });
+  // A person is asked for the disputed part first; unanimous automatic failures can be confirmed for audit completeness, not to read the result.
+  const disputed = rubric.unknown + review.disagreements + simulatorFlagged;
+  if (hasResults && awaiting) nextSteps.push({ code: 'record_verdicts', count: awaiting, text: disputed
+    ? `${awaiting} провал(ов) ждут вердикта человека (p — пройдено, n — не пройдено). Начните со спорных: ${disputed} с неясной оценкой, расхождением или пометкой симулятора; остальные судья решил единогласно.`
+    : `Судья решил ${awaiting} провал(ов) единогласно; подтвердите их вердиктом p / n, если нужна высокая полнота аудита. Для чтения результата это не требуется.` });
   else if (hasResults && !finalized && record.workflow === 'evaluate' && record.phase === 'results_review') nextSteps.push({ code: 'finalize_review', text: 'Проверьте ответы и основания оценок, затем завершите разбор. Отсутствие замечаний модели ещё не означает проверку человеком.' });
   if (hasResults && smokeFailures) nextSteps.push({ code: 'smoke_failed', text: `Провалено ${smokeFailures} попыток на дымовых карточках: сначала восстановите базовое поведение.`, count: smokeFailures });
   if (hasResults && weakSpots[0]) nextSteps.push({ code: 'fix_weakest', text: `Начните с самого слабого места${weakSpots[0].stage ? ` на этапе «${weakSpots[0].stage}»` : ''}: ${weakSpots[0].description} (${weakSpots[0].failures} провал(ов)).`, detail: weakSpots[0].description, count: weakSpots[0].failures });

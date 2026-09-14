@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { ExperimentLab, draftHash, resultHash } from '../dist/experiment.js';
 import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, fingerprint, goldenCaseSchema, clarificationSchema, reassessmentSchema, ownerProfileSchema, settingsSchema, targetSchema, type Experiment, type HumanReviewInput, type Trial } from '../dist/contracts.js';
 import { awaitingVerdict, evidenceSummary, plannedTrials } from '../dist/comparison.js';
+import { qualityLines, qualitySummary } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
 import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
@@ -25,8 +26,9 @@ const toolDisplay: Pick<ToolDefinition, 'renderCall' | 'renderResult'> = {
     try {
       const data = JSON.parse(raw);
       const title = data.error ?? (data.phase === 'review' ? data.message ?? `Готово ${data.scenarioCount} сценариев. Посмотрите их перед запуском.`
-        : data.evidence?.verdict?.headline ?? data.message ?? 'Доказательства прочитаны.');
-      return new Text(theme.fg(data.error ? 'error' : 'text', safeText(title)), 0, 0);
+        : data.quality?.headline ?? data.evidence?.verdict?.headline ?? data.message ?? 'Доказательства прочитаны.');
+      const lines = [title, ...(data.quality?.causes?.slice(0, 3).map((c: { name: string; dialogues: number }, i: number) => `${i + 1}. ${c.name} — ${c.dialogues}`) ?? []), ...(data.quality?.queue ? [data.quality.queue] : [])];
+      return new Text(theme.fg(data.error ? 'error' : 'text', safeText(lines.join('\n'))), 0, 0);
     } catch { return new Text(safeText(raw), 0, 0); }
   },
 };
@@ -54,7 +56,10 @@ function runPlan(record: Experiment): string {
 function summary(record: Experiment, directory: string) {
   const comparison = record.comparisons.findLast(c => c.split === 'control');
   const evidence = evidenceSummary(record);
+  const quality = record.trials.length ? qualitySummary(record) : undefined;
   return {
+    // Lead with the answer a person asked for; the detailed evidence follows in the same object.
+    ...(quality ? { quality: { ...qualityLines(quality), cards: quality.cards, metrics: quality.metrics, causes: quality.causes.slice(0, 5), humanQueue: quality.humanQueue } } : {}),
     id: record.id, phase: record.phase, mode: record.mode, workflow: record.workflow,
     reviewMode: record.reviewMode, resultsReviewedAt: record.resultsReviewedAt,
     draftHash: draftHash(record), resultHash: record.trials.length ? resultHash(record) : undefined,

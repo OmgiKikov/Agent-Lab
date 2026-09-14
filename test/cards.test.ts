@@ -210,7 +210,12 @@ test('result cards keep model grades, missing grades, traces and human annotatio
   const overviewText = overview.render(120).join('\n');
   assert.match(overviewText, /AGENT_FAILURE_SENTINEL/); assert.doesNotMatch(overviewText, /SIMULATOR_FAILURE_SENTINEL/);
   assert.match(overviewText, /реплики #1/); overview.dispose();
-  assert.match(htmlReport(record), /Оценено моделью · предварительно<\/h3><strong>0<span class="muted"> \/ 1/);
+  const html = htmlReport(record);
+  // The simulator rubric failed, so the agent grade is not a usable measurement yet: the first screen says «—», not 0%, and queues one dialogue for a human.
+  assert.match(html, /Точность · судья, предварительно<\/h3><strong>—<\/strong>/); assert.match(html, /неясно 1/);
+  assert.match(html, /Разметить человеку<\/h3><strong>1<\/strong>/); assert.match(html, /пометок симулятора 1/);
+  assert.match(html, /Почему не справился/); assert.match(html, /AGENT_FAILURE_SENTINEL/);
+  assert.doesNotMatch(html.match(/<section id="why">[\s\S]*?<\/section>/)?.[0] ?? '', /SIMULATOR_FAILURE_SENTINEL/);
   record.phase = 'complete'; record.resultsReviewedAt = record.updatedAt; record.humanReviews = [];
   const reviewed = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 120);
   assert.match(reviewed.render(120).join('\n'), /Вердикта человека нет/);
@@ -326,7 +331,7 @@ test('the board leads with a plain verdict once dialogues exist and keeps the re
   board.dispose();
   const results = new LabBoard({ record }, theme, () => {}, () => {}, () => 40);
   assert.match(results.render(120).join('\n'), /ЧТО ТРЕБУЕТ ВНИМАНИЯ/);
-  assert.match(stripTerminalSequences(results.render(120).join('\n')), /Итог: По кодовым проверкам пройдено 2 из 3/);
+  assert.match(stripTerminalSequences(results.render(120).join('\n')), /Итог: Справился с 0 из 1 карточки \(0%\)/);
   results.dispose();
 });
 

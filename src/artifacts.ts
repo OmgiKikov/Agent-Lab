@@ -4,11 +4,14 @@ import { resolve } from 'node:path';
 import { fingerprint, type Experiment } from './contracts.js';
 import type { ExperimentStore } from './store.js';
 import { compareRuns, evidenceSummary, judgeCalibration, type CalibrationRow, type EvidenceSummary, type RunComparison } from './comparison.js';
+import { qualitySummary, type QualitySummary } from './quality.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 
 export interface EvidenceBundle {
   record: Experiment;
   evidence: EvidenceSummary;
+  /** The first-screen answer, derived from the same helpers as `evidence`; never a separate count. */
+  quality: QualitySummary;
   before?: Experiment;
   comparison?: RunComparison;
   comparisonSource?: { kind: 'parent' | 'selected'; beforeId: string; afterId: string };
@@ -21,7 +24,7 @@ const failureText = (error: unknown) => (error instanceof Error ? error.name ===
 /** Resolve the persisted relationship once, independently of navigation and export format. */
 export async function evidenceBundle(record: Experiment, store: Pick<ExperimentStore, 'get' | 'traceJournal'>, beforeId?: string): Promise<EvidenceBundle> {
   const snapshot = structuredClone(record);
-  const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), warnings: [], traceJournal: '' };
+  const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), quality: qualitySummary(snapshot), warnings: [], traceJournal: '' };
   const parent = beforeId ?? snapshot.parentRunId;
   if (parent) {
     bundle.comparisonSource = { kind: beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };
