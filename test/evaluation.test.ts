@@ -564,3 +564,41 @@ test('external module targets bypass the sandbox and are graded on reported reco
   assert.equal(infrastructure.events[3]!.text, 'Нет данных для ответа.');
   assert.match(infrastructure.reason, /В фикстуре отсутствует lookup_record/);
 });
+
+test('reactive dialogues record simulator checks that never change the objective outcome', async () => {
+  const f = await fixture();
+  const clarify = f.preparation.scenarios.find(s => s.id === 'c_clarify')!;
+  const inventing: Runtime = { ...f.runtime, async userTurn() { return { message: 'My appointment ID is A999.', done: false }; } };
+  const trial = await f.evaluate(clarify, f.candidate, inventing);
+  const fabrication = trial.simulatorChecks!.find(c => c.id === 'simulator_fabrication')!;
+  assert.equal(fabrication.passed, false);
+  assert.match(fabrication.evidence, /a999/);
+  assert.equal(trial.simulatorChecks!.find(c => c.id === 'simulator_leak')!.passed, true);
+  assert.equal(trial.outcome, 'fail', 'the agent could not find A999; the simulator check does not decide that');
+  assert.doesNotMatch(trial.reason, /симулятор/i);
+  const honest = await f.evaluate(clarify, f.candidate);
+  assert.ok(honest.simulatorChecks!.every(c => c.passed), JSON.stringify(honest.simulatorChecks));
+  assert.equal(honest.outcome, 'pass');
+  const opening = await f.evaluate(f.preparation.scenarios[0]!, f.candidate);
+  assert.deepEqual(opening.simulatorChecks, [], 'a dialogue that stops after the opening has nothing to check');
+});
+
+test('an unconfirmed external world is named in the reason without inventing an agent failure', async t => {
+  const f = await fixture();
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-external-'));
+  t.after(async () => { const { rm } = await import('node:fs/promises'); await rm(directory, { recursive: true, force: true }); });
+  const silent = join(directory, 'no-reset.mjs');
+  await writeFile(silent, 'export function createSession({ initialState }) { return { async respond() { return { reply: `cards: ${initialState.external.cards.length}`, records: initialState.records }; } }; }\n');
+  const confirming = join(directory, 'reset.mjs');
+  await writeFile(confirming, 'export function createSession({ initialState }) { return { async respond() { return { reply: `cards: ${initialState.external.cards.length}`, records: initialState.records, resetConfirmed: true }; } }; }\n');
+  const scenario: Scenario = { ...f.preparation.scenarios[0]!, checks: [], metrics: undefined, initialState: { records: {}, writableFields: [], transientFailures: 0, external: { cards: [{ id: 'c1', status: 'blocked' }] } } };
+  const run = (path: string) => evaluateTrial({ runtime: { ...f.runtime, openTarget: async () => { throw new Error('sandbox must not open'); } }, revision: f.baseline, scenario, repeat: 0, manifestHash: 'frozen',
+    sources: f.sources, settings: f.input.settings, ctx: context(), userMode: 'static', target: { kind: 'module', path, exportName: 'createSession' } });
+  const unconfirmed = await run(silent);
+  assert.equal(unconfirmed.outcome, 'ungraded');
+  assert.match(unconfirmed.reason, /Внешнее состояние карточки не подтверждено адаптером/);
+  assert.equal(unconfirmed.events.find(e => e.type === 'assistant')?.text, 'cards: 1', 'the external world reached the adapter');
+  const confirmed = await run(confirming);
+  assert.doesNotMatch(confirmed.reason, /не подтверждено адаптером/);
+  assert.equal(confirmed.observation?.resetConfirmed, true);
+});

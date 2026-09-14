@@ -6,6 +6,7 @@ import {
 } from './contracts.js';
 import { sandbox } from './sandbox.js';
 import { openExternalTarget } from './targets.js';
+import { simulatorChecks } from './simulator.js';
 
 /*
  * One trial = one fresh world, one target session, one user side.
@@ -234,6 +235,8 @@ export async function evaluateTrial(input: {
       finalUserReply = user.done;
     }
     trial.finalState = structuredClone(state);
+    // Simulator checks describe the user side only; they are computed before grading and never touch the outcome.
+    trial.simulatorChecks = simulatorChecks(scenario, trial);
     stage = 'проверка наблюдений';
     trial.checks = grade(scenario, trial);
     const allPassed = trial.checks.length > 0 && trial.checks.every(check => check.passed);
@@ -245,6 +248,7 @@ export async function evaluateTrial(input: {
       trial.reason += reportedState
         ? ' Состояние сообщил сам агент, доверенный код его не наблюдал.'
         : ' Состояние внешний агент не сообщил.';
+      if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) trial.reason += ' Внешнее состояние карточки не подтверждено адаптером (resetConfirmed).';
     }
   } catch (error) {
     if (persistenceFailed) throw persistenceError;
