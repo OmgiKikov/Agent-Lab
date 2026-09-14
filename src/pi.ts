@@ -7,7 +7,7 @@ import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.j
 import { z } from 'zod';
 import {
   agentSchema, failureModeSchema, observedGoalSchema, observedProfileSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema,
-  TOOL_NAMES, VERSION, fingerprint, simulatorFidelity, userTurnSchema, validateObservedGoals,
+  TOOL_NAMES, VERSION, fingerprint, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens,
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
 import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, PROFILES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
@@ -386,6 +386,11 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
               if (unknown.length) return `Card ${scenario.id} references requirements that do not exist: ${unknown.join(', ')}.`;
               const missing = family?.requirementIds.filter(id => !scenario.requirementIds.includes(id)) ?? [];
               if (missing.length) return `Card ${scenario.id} must cover the requirements of its family: ${missing.join(', ')}.`;
+              const known = valueTokens([scenario.user.opening, scenario.user.facts, ...(scenario.user.knows ?? [])].join('\n'));
+              for (const answer of scenario.user.answers ?? []) {
+                const unknown = [...valueTokens(answer.reply)].find(token => !known.has(token));
+                if (unknown) return `Card ${scenario.id}: the reply to "${answer.ifAsked}" contains "${unknown}", which is not in knows, facts or opening. Put every value the user can say into user.knows.`;
+              }
               seen.add(scenario.familyId);
             }
             return undefined;
@@ -424,7 +429,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       const result = await ask(
         'Разбор провалов',
         FAILURE_MODES_ROLE,
-        { task: input.task, failures: input.failures },
+        { task: input.task, failures: input.failures, ...(input.prompt !== undefined ? { prompt: input.prompt } : {}) },
         z.strictObject({ modes: z.array(failureModeSchema).min(1).max(12) }), ctx,
         value => {
           for (const mode of value.modes) {
@@ -432,6 +437,10 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
             if (unknown.length) return `Cluster ${mode.id} cites dialogues that are not in the supplied failures: ${unknown.join(', ')}.`;
             if (/^(bad|poor|wrong|incorrect|quality|agent failed|плохой|неверный)/i.test(mode.name.trim())) {
               return `Cluster ${mode.id} is named "${mode.name}", which does not say what went wrong. Name the specific behaviour visible in the traces.`;
+            }
+            for (const quote of mode.promptQuotes ?? []) {
+              if (input.prompt === undefined) return `No prompt was supplied; promptQuotes must be empty for cluster ${mode.id}.`;
+              if (!input.prompt.includes(quote)) return `Cluster ${mode.id} quotes "${quote.slice(0, 60)}", which is not a verbatim substring of the supplied prompt. Copy the exact characters.`;
             }
           }
           return undefined;
@@ -504,6 +513,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           user: {
             goal: input.user.goal, persona: input.user.persona, characteristics: input.user.characteristics,
             facts: input.user.facts, behavior: input.user.behavior, opening: input.user.opening, maxFollowUps: input.user.maxFollowUps,
+            knows: input.user.knows ?? [], cannotKnow: input.user.cannotKnow ?? [], answers: input.user.answers ?? [],
           },
           messages: input.messages.map(({ role, content }) => ({ role, content })), turn: input.turn,
         }, simulatorReplySchema, ctx,

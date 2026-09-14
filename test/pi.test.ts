@@ -731,3 +731,53 @@ test(`OpenRouter ${judge.model} sends the pinned provider and isolated rubric on
     assert.notDeepEqual(requests[0]!.body.messages, requests[2]!.body.messages);
   } finally { globalThis.fetch = originalFetch; await f.close(); }
 });
+
+test('the simulator receives knows, answers and cannotKnow but never the external world', async () => {
+  const f = await fixture(() => JSON.stringify({ message: 'It ends with 4321.', done: false }));
+  try {
+    const { ctx } = callContext();
+    const reply = await f.adapter.userTurn({ user: { goal: 'Block the lost card', facts: 'Card ends with 4321', behavior: 'Answer once', opening: 'Block my card', maxFollowUps: 1,
+      knows: ['Last four digits 4321'], cannotKnow: ['Why the hold exists'], answers: [{ ifAsked: 'digits', reply: 'It ends with 4321.' }],
+      initialState: { external: { secret: 'EXTERNAL_WORLD_SENTINEL' } } } as never, messages: [{ role: 'assistant', content: 'Which card?' }], turn: 1 }, ctx);
+    assert.equal(reply.message, 'It ends with 4321.');
+    const wire = JSON.stringify(f.requests);
+    assert.match(wire, /Last four digits 4321/);
+    assert.match(wire, /Why the hold exists/);
+    assert.match(wire, /answers.{0,20}ifAsked.{0,20}digits/);
+    assert.doesNotMatch(wire, /EXTERNAL_WORLD_SENTINEL/);
+    assert.match(wire, /never invent a value/);
+  } finally { await f.close(); }
+});
+
+test('card generation rejects an answer that reveals an unknown value and accepts the repaired batch', async () => {
+  const requirements = { requirements: [{ id: 'req_1', text: 'Block a lost card on request', sourceId: 'source_1', quote: 'Block a lost card', critical: true }], questions: [] };
+  const batch = (reply: string) => ({ scenarios: [{ ...plainCard(1), requirementIds: ['req_1'], checks: [], metrics: [reviewFields.metrics[0]!],
+    user: { ...plainCard(1).user, opening: 'I lost my card', facts: 'The card ends with 4321', knows: ['Last four digits 4321'], cannotKnow: ['Why the backend refused'], answers: [{ ifAsked: 'last four digits', reply }] } }] });
+  const f = await fixture((_request, index) => JSON.stringify(index === 0 ? requirements : index === 1 ? batch('It ends with 9999.') : batch('It ends with 4321.')));
+  try {
+    const { ctx } = callContext();
+    const prepared = await f.adapter.prepare({ task: 'Card support', sources: [{ id: 'source_1', name: 'policy', content: 'Block a lost card', hash: 'h' }], workflow: 'evaluate', scenarioCount: 1, targetKind: 'command' }, ctx);
+    assert.deepEqual(prepared.scenarios[0]!.user.answers, [{ ifAsked: 'last four digits', reply: 'It ends with 4321.' }]);
+    assert.deepEqual(prepared.scenarios[0]!.user.knows, ['Last four digits 4321']);
+    assert.match(JSON.stringify(f.requests), /not in knows, facts or opening/);
+    assert.match(JSON.stringify(f.requests), /user\.answers/);
+  } finally { await f.close(); }
+});
+
+test('failure clusters may quote only a supplied prompt, verbatim', async () => {
+  const cluster = (promptQuotes: string[]) => ({ modes: [{ id: 'hotline', name: 'Нашёл статью и всё равно отправил на линию', description: 'd', trialIds: ['t1'], promptQuotes }] });
+  const failures = [{ trialId: 't1', card: 'c', reason: 'r', failed: ['x'], trace: '#1 user: hi' }];
+  const f = await fixture((_request, index) => JSON.stringify(index === 0 ? cluster(['not in the prompt']) : cluster(['hand off to the hotline'])));
+  try {
+    const modes = await f.adapter.failureModes!({ task: 't', failures, prompt: 'When unsure, hand off to the hotline.' }, callContext().ctx);
+    assert.deepEqual(modes[0]!.promptQuotes, ['hand off to the hotline']);
+    assert.match(JSON.stringify(f.requests), /verbatim substring of the supplied prompt/);
+    assert.match(JSON.stringify(f.requests[0]), /When unsure, hand off to the hotline/);
+  } finally { await f.close(); }
+  const g = await fixture((_request, index) => JSON.stringify(index === 0 ? cluster(['anything']) : cluster([])));
+  try {
+    const modes = await g.adapter.failureModes!({ task: 't', failures }, callContext().ctx);
+    assert.deepEqual(modes[0]!.promptQuotes, []);
+    assert.match(JSON.stringify(g.requests), /No prompt was supplied/);
+  } finally { await g.close(); }
+});
