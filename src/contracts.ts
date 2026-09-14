@@ -110,6 +110,10 @@ export interface ReleaseLog { command: string; exitCode: number | null; signal: 
 const releaseLogSchema = z.strictObject({ command: z.string().max(8000), exitCode: z.number().int().nullable(), signal: z.string().max(40).nullable(), stdout: z.string().max(4000), stderr: z.string().max(4000), startedAt: text, durationMs: z.number().nonnegative() });
 
 export interface Source { id: string; name: string; content: string; hash: string; kind?: SourceKind }
+/** Requirements per run: the budget is stated to the model, and an overshoot is answered with what to do. */
+export const REQUIREMENT_LIMIT = 40;
+/** Generated cards per run; owner cards come on top. */
+export const SCENARIO_LIMIT = 20;
 export const requirementSchema = z.strictObject({
   id: identifier, text: text.max(2000), sourceId: identifier, quote: text.max(3000), critical: z.boolean(),
 });
@@ -349,7 +353,7 @@ export const createInputSchema = z.strictObject({
   existingAgent: agentSchema.optional(),
   workflow: z.enum(['evaluate', 'compare']).default('evaluate'),
   /** 0 means: run only the owner's own cards and generate nothing. */
-  scenarioCount: z.number().int().min(0).max(10).default(5),
+  scenarioCount: z.number().int().min(0).max(SCENARIO_LIMIT).default(5),
   target: targetSchema.default({ kind: 'sandbox' }),
   targetVersion: text.max(200).optional(),
   goldenCases: z.array(goldenCaseSchema).max(40).default([]),
@@ -370,7 +374,7 @@ export const createInputSchema = z.strictObject({
 export type CreateInput = z.infer<typeof createInputSchema>;
 
 export const preparationSchema = z.strictObject({
-  requirements: z.array(requirementSchema).min(1).max(30),
+  requirements: z.array(requirementSchema).min(1).max(REQUIREMENT_LIMIT),
   questions: z.array(text.max(2000)).max(12),
   agent: agentSchema,
   scenarios: z.array(scenarioSchema).max(40),

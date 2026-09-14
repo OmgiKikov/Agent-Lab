@@ -228,3 +228,9 @@ test('simulator checks, release hooks, release logs and prompt quotes have schem
   assert.throws(() => validateFailureModes([mode], trials), /промпт не передавался/);
   assert.throws(() => validateFailureModes([mode], trials, 'A different prompt.'), /дословно/);
 });
+
+test('an evaluation may ask for up to twenty generated cards', () => {
+  const base = { task: 'Check the agent', materials: [{ name: 'policy.md', content: 'Rule one.' }], mode: 'live' as const };
+  assert.equal(createInputSchema.parse({ ...base, scenarioCount: 20 }).scenarioCount, 20);
+  assert.throws(() => createInputSchema.parse({ ...base, scenarioCount: 21 }), /scenarioCount/);
+});

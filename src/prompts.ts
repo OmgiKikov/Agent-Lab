@@ -1,3 +1,5 @@
+import { REQUIREMENT_LIMIT } from './contracts.js';
+
 /*
  * Role prompts for the nested Pi sessions. The methodology lives here as data;
  * pi.ts only wires these strings into SDK sessions. Every role receives DATA_BOUNDARY
@@ -15,6 +17,7 @@ export const GOAL_SCOPE = `For goal-attainment rubrics, assess whether the user'
 
 export const PROMPT_SOURCE_CLAUSE = `A source marked «промпт агента» (kind: prompt) is the agent's own instructions, not a business policy. Extract from it, as separate requirements with exact quotes, only the rules a user can observe in a reply: response format and structure, mandatory elements, forbidden content, the declared perimeter and refusal/redirect behaviour. Build cards that exercise those rules (a request the prompt tells the agent to refuse, a case where the prescribed format matters). Do not turn tool-usage or internal reasoning instructions into requirements, and do not treat the prompt as proof of what the agent actually does.`;
 export const REQUIREMENTS_ROLE = `Extract testable business requirements from the task and source materials, citing exact existing sourceId/quote pairs. Describe obligations of the target agent, not requirements about what test cards must contain. Do not create scenarios or an implementation.
+Return at most ${REQUIREMENT_LIMIT} requirements. When the sources hold more rules than that, merge closely related rules into one requirement with one exact quote, and keep the rules a user can see violated in a reply.
 ${PROMPT_SOURCE_CLAUSE}
 Trusted execution context, NOT quotable business-source evidence: ${TOOL_GUIDE}
 This is a generic record sandbox. Field values are literal scalars supplied by the user or fixture; retryability is explicitly reported by the tool's retryable flag. No external calendar, scheduling availability, production clock or account system is involved.

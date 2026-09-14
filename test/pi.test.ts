@@ -804,3 +804,24 @@ test('failure clusters may quote only a supplied prompt, verbatim', async () => 
     assert.match(JSON.stringify(g.requests), /No prompt was supplied/);
   } finally { await g.close(); }
 });
+
+test('requirements extraction states its budget and asks the model to merge when it overshoots', async () => {
+  const quote = 'Reply in the formal register and never redirect the user to a phone line.';
+  const many = Array.from({ length: 41 }, (_, i) => ({ id: `req_${i}`, text: `Observable rule ${i}`, sourceId: 'prompt_1', quote, critical: false }));
+  const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!] };
+  const outputs = [{ requirements: many, questions: [] }, { requirements: many.slice(0, 2), questions: [] }, { scenarios: [card] }];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({
+      task: 'Check the agent against its own prompt', scenarioCount: 1, targetKind: 'command',
+      sources: [{ id: 'prompt_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' }],
+    }, callContext().ctx);
+    assert.equal(prepared.requirements.length, 2);
+    // The budget is stated up front, and an overshoot is answered with what to do, not with a schema dump.
+    assert.match(f.requests[0]?.systemPrompt ?? '', /at most 40 requirements/);
+    const repair = JSON.stringify(f.requests[1]?.messages);
+    assert.match(repair, /at most 40 requirements/);
+    assert.match(repair, /merge closely related rules/i);
+    assert.doesNotMatch(repair, /Too big/);
+  } finally { await f.close(); }
+});
