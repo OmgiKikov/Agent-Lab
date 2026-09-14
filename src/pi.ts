@@ -296,7 +296,7 @@ function parseJsonOutput(output: string): unknown {
  * spinning and spending the owner's budget. Rejection text is model-facing and stays
  * English, like the roles; what the owner reads is translated at the throw site.
  */
-const REPAIR_ATTEMPTS = 3;
+export const REPAIR_ATTEMPTS = 5;
 
 async function jsonResponse<S extends z.ZodType>(
   modelRuntime: ModelRuntime, model: Model, label: string, role: string, input: unknown, schema: S, ctx: CallContext,
@@ -441,12 +441,16 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
               earlierGoals: scenarios.map(s => ({ id: s.id, familyId: s.familyId, goal: s.user.goal })),
             }),
           },
-          z.strictObject({ scenarios: z.array(generatedScenarioSchema(external)).length(batchSize) }), ctx,
+          z.strictObject({ scenarios: z.array(generatedScenarioSchema(external)).min(batchSize).max(batchSize + 3) }), ctx,
           // Pure review: attribution problems are a reason for the model to rewrite the
           // batch, not a reason to lose the whole run. Nothing is recorded until it passes.
           value => {
+            // Surplus cards are the model overshooting a count, not a defect worth an attempt.
+            if (value.scenarios.length > batchSize) value.scenarios.splice(batchSize);
             const seen = new Set<string>();
             for (const scenario of value.scenarios) {
+              // A profile invented where none were supplied carries nothing; the card keeps its own persona.
+              if (scenario.profileId !== undefined && !profiles.length) delete scenario.profileId;
               const family = requestedFamilies?.find(f => f.familyId === scenario.familyId);
               if (requestedFamilies && !family) return `Card ${scenario.id} claims family "${scenario.familyId}", which was not requested in this batch.`;
               if (requestedFamilies && seen.has(scenario.familyId)) return `Family "${scenario.familyId}" is used by two cards in this batch; each requested family needs exactly one card.`;
@@ -462,7 +466,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
               const known = valueTokens([scenario.user.opening, scenario.user.facts, ...(scenario.user.knows ?? [])].join('\n'));
               for (const answer of scenario.user.answers ?? []) {
                 const unknown = [...valueTokens(answer.reply)].find(token => !known.has(token));
-                if (unknown) return `Card ${scenario.id}: the reply to "${answer.ifAsked}" contains "${unknown}", which is not in knows, facts or opening. Put every value the user can say into user.knows.`;
+                if (unknown) return `Card ${scenario.id}: the reply to "${answer.ifAsked}" contains "${unknown}", which is not in knows, facts or opening. Either add that value to user.knows when the user really knows it, or answer with a value already in knows, facts or opening; a reply must never contradict the card's facts.`;
               }
               seen.add(scenario.familyId);
             }

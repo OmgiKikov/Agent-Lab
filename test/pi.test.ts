@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { ModelRuntime, type ProviderConfig } from '@earendil-works/pi-coding-agent';
-import { createPiRuntime, getPiStatus } from '../src/pi.js';
+import { createPiRuntime, getPiStatus, REPAIR_ATTEMPTS } from '../src/pi.js';
 import { judgeInput } from '../src/judge.js';
 import { DEFAULT_JUDGE, emptyUsage, REQUIREMENT_LIMIT, settingsSchema, type CallContext, type Scenario, type Tool, type Trial } from '../src/contracts.js';
 
@@ -451,9 +451,8 @@ test('scenario batches reject invalid attribution and incomplete human-review ca
         workflow: 'compare',
         existingAgent: { name: 'Original', instructions: quote, tools: ['update_record'] },
       }, callContext().ctx), issue.startsWith('missing ') ? /не проходит проверку.*schema/s : /не проходит проверку.*(family|requirement|id)/s, issue);
-      // Requirements, then three bounded repair attempts on the first bad step, and nothing after it.
-      // Bounded repair: at most three attempts on the first bad step, and nothing after it.
-      assert.ok(f.requests.length <= 6, `${issue}: repair attempts must stay bounded`);
+      // Requirements, the family plan, at most one good batch, then bounded repair attempts on the bad step, and nothing after it.
+      assert.ok(f.requests.length <= 3 + REPAIR_ATTEMPTS, `${issue}: repair attempts must stay bounded`);
       assert.ok(!f.requests.some(r => /You build a declarative conversational agent/.test(r.systemPrompt ?? '')),
         'Invalid family/card output must stop before any candidate construction');
     } finally { await f.close(); }
@@ -914,5 +913,36 @@ test('a quote that lives in another supplied source is re-attributed to it inste
     assert.equal(f.requests.length, 2);
     assert.equal(prepared.requirements[0]!.sourceId, 'prompt_1');
     assert.equal(prepared.requirements[0]!.quote, 'данные из "СберДруг", "ЦКР"');
+  } finally { await f.close(); }
+});
+
+test('a profile the model invents when none were supplied is dropped from the card instead of costing a repair attempt', async () => {
+  const quote = 'Money reaches the account on the next business day after the shift is closed.';
+  const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!], profileId: 'merchant_support' };
+  const outputs = [
+    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] },
+    { scenarios: [card] },
+  ];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check crediting answers', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'source_1', name: 'crediting.md', content: quote, hash: 'h' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.equal(prepared.scenarios[0]!.profileId, undefined);
+    assert.equal(prepared.scenarios[0]!.user.persona, card.user.persona);
+  } finally { await f.close(); }
+});
+
+test('a batch with more cards than requested keeps the first ones instead of costing a repair attempt', async () => {
+  const quote = 'Support is available by email.';
+  const cards = [0, 1, 2, 3].map(i => ({ ...plainCard(i), metrics: [reviewFields.metrics[0]!] }));
+  const outputs = [
+    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] },
+    { scenarios: cards },
+  ];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check support answers', scenarioCount: 3, targetKind: 'command', sources: [{ id: 'source_1', name: 'policy.md', content: quote, hash: 'h' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.deepEqual(prepared.scenarios.map(s => s.id), ['card_0', 'card_1', 'card_2']);
   } finally { await f.close(); }
 });
