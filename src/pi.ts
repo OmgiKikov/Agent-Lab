@@ -422,9 +422,11 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       const total = plan?.families.length ?? input.scenarioCount ?? 5;
       const batchLimit = compare ? 4 : 3;
       // Evaluation needs only the requested goals; a separate family plan is reserved for version comparison.
-      for (let offset = 0; offset < total; offset += batchLimit) {
+      for (let offset = 0; offset < total;) {
         const requestedFamilies = plan?.families.slice(offset, offset + batchLimit);
         const batchSize = Math.min(batchLimit, total - offset);
+        // A reply may carry more than its batch: without a family plan the surplus fills the suite, with one it is cut to the requested families.
+        const keep = plan ? batchSize : total - offset;
         const batchLabel = `Карточки, партия ${Math.floor(offset / batchLimit) + 1}${requestedFamilies ? ` (${requestedFamilies.map(f => f.familyId).join(', ')})` : ''}`;
         const profiles = input.profiles ?? [];
         const observedGoals = input.observedGoals ?? [];
@@ -446,7 +448,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           // batch, not a reason to lose the whole run. Nothing is recorded until it passes.
           value => {
             // Surplus cards are the model overshooting a count, not a defect worth an attempt.
-            if (value.scenarios.length > batchSize) value.scenarios.splice(batchSize);
+            if (value.scenarios.length > keep) value.scenarios.splice(keep);
             const seen = new Set<string>();
             for (const scenario of value.scenarios) {
               // A profile invented where none were supplied carries nothing; the card keeps its own persona.
@@ -478,6 +480,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           if (external && input.sources.some(s => s.kind === 'prompt')) scenario.metrics.unshift({ ...promptCompliance });
           scenarioIds.add(scenario.id); scenarios.push(scenario);
         }
+        offset += cards.scenarios.length;
       }
       // An external target answers with its own agent, so a sandbox AgentSpec would be
       // built, paid for and never used.

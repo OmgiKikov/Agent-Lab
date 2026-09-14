@@ -932,6 +932,37 @@ test('a profile the model invents when none were supplied is dropped from the ca
   } finally { await f.close(); }
 });
 
+test('a reply that carries the whole suite fills it instead of being trimmed to the batch and asked again', async () => {
+  const quote = 'Support is available by email.';
+  const cards = [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({ ...plainCard(i), metrics: [reviewFields.metrics[0]!] }));
+  const outputs = [
+    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] },
+    { scenarios: cards },
+  ];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check support answers', scenarioCount: 6, targetKind: 'command', sources: [{ id: 'source_1', name: 'policy.md', content: quote, hash: 'h' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.deepEqual(prepared.scenarios.map(s => s.id), ['card_0', 'card_1', 'card_2', 'card_3', 'card_4', 'card_5']);
+  } finally { await f.close(); }
+});
+
+test('a profile the model invents when none were supplied is dropped from the card instead of costing a repair attempt', async () => {
+  const quote = 'Money reaches the account on the next business day after the shift is closed.';
+  const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!], profileId: 'merchant_support' };
+  const outputs = [
+    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] },
+    { scenarios: [card] },
+  ];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check crediting answers', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'source_1', name: 'crediting.md', content: quote, hash: 'h' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.equal(prepared.scenarios[0]!.profileId, undefined);
+    assert.equal(prepared.scenarios[0]!.user.persona, card.user.persona);
+  } finally { await f.close(); }
+});
+
 test('a batch with more cards than requested keeps the first ones instead of costing a repair attempt', async () => {
   const quote = 'Support is available by email.';
   const cards = [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({ ...plainCard(i), metrics: [reviewFields.metrics[0]!] }));
