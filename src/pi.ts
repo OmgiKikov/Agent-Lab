@@ -468,6 +468,17 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
               if (unknown.length) return `Card ${scenario.id} references requirements that do not exist: ${unknown.join(', ')}.`;
               const missing = family?.requirementIds.filter(id => !scenario.requirementIds.includes(id)) ?? [];
               if (missing.length) return `Card ${scenario.id} must cover the requirements of its family: ${missing.join(', ')}.`;
+              if (external) {
+                // A literal check on an external agent may only pin wording the source itself mandates or the user literally asked for; everything else is a rubric's job.
+                const literal = scenario.checks.filter(c => c.kind === 'answer_equals' || c.kind === 'answer_contains' || c.kind === 'answer_omits');
+                const grounds = [...grounding.requirements.filter(r => scenario.requirementIds.includes(r.id)).map(r => r.quote), scenario.user.opening];
+                for (const check of literal) {
+                  if (!grounds.some(ground => verbatimSpan(ground, check.value))) {
+                    return `Card ${scenario.id}: check ${check.id} requires the wording "${check.value.slice(0, 80)}", which is not a verbatim fragment of the card's requirement quotes or the user's opening. Literal checks only pin wording the source mandates; assess everything else with an agent rubric and drop this check.`;
+                  }
+                }
+                if (literal.length > 2) return `Card ${scenario.id} has ${literal.length} literal checks; keep at most two literal checks per card and express the rest as agent rubrics.`;
+              }
               const known = valueTokens([scenario.user.opening, scenario.user.facts, ...(scenario.user.knows ?? [])].join('\n'));
               for (const answer of scenario.user.answers ?? []) {
                 const unknown = [...valueTokens(answer.reply)].find(token => !known.has(token));

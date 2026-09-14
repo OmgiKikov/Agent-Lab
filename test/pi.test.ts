@@ -992,3 +992,21 @@ test('generated rubrics leave room for the harness rubrics, so a card never exce
     assert.equal(prepared.scenarios[0]!.metrics!.length, 8);
   } finally { await f.close(); }
 });
+
+test('literal checks on an external card must quote source-mandated wording, at most two of them; invented phrases are sent back', async () => {
+  const quote = 'Деньги поступают на счёт на следующий рабочий день после закрытия смены.';
+  const check = (id: string, value: string) => ({ id, kind: 'answer_contains' as const, description: `Ответ содержит «${value}»`, value });
+  const base = { ...plainCard(0), metrics: [reviewFields.metrics[0]!] };
+  const invented = { ...base, checks: [check('c1', 'проверьте закрытие смены')] };
+  const three = { ...base, checks: [check('c1', 'следующий рабочий день'), check('c2', 'закрытия смены'), check('c3', 'на счёт')] };
+  const grounded = { ...base, checks: [check('c1', 'следующий рабочий день'), check('c2', 'закрытия смены')] };
+  const outputs = [{ requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] }, { scenarios: [invented] }, { scenarios: [three] }, { scenarios: [grounded] }];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check crediting answers', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'source_1', name: 'crediting.md', content: quote, hash: 'h' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 4);
+    assert.match(JSON.stringify(f.requests[2]?.messages), /not a verbatim fragment/);
+    assert.match(JSON.stringify(f.requests[3]?.messages), /at most two literal checks/);
+    assert.deepEqual(prepared.scenarios[0]!.checks.map(c => c.id), ['c1', 'c2']);
+  } finally { await f.close(); }
+});
