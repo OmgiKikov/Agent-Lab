@@ -1239,7 +1239,8 @@ test('human verdicts may target simulator checks, reassessment recomputes them, 
   const reassessed = await lab.reassess(record.id, { codeOnly: true }); await lab.waitForIdle();
   const again = (await lab.get(reassessed.id)).trials.find(t => t.id === clarified.id)!;
   assert.deepEqual(again.simulatorChecks, clarified.simulatorChecks);
-  const external = await lab.create(createInputSchema.parse({ ...externalInput(undefined, 'ok'), scenarioCount: 0,
+  // The demo runtime refuses scenarioCount 0, so one demo card rides along; the golden card is the one under test.
+  const external = await lab.create(createInputSchema.parse({ ...externalInput(undefined, 'ok'), scenarioCount: 1,
     goldenCases: [{ id: 'gold_cards', goal: 'List my cards', opening: 'Which cards do I have?', successCriteria: 'Two cards are listed', maxFollowUps: 0, metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'd', passCriteria: 'p', failCriteria: 'f' }],
       initialState: { records: {}, writableFields: [], transientFailures: 0, external: { cards: [{ id: 'c1' }, { id: 'c2' }] } } }] }));
   await lab.waitForIdle();
@@ -1247,7 +1248,7 @@ test('human verdicts may target simulator checks, reassessment recomputes them, 
   await lab.start(draft2.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft2) }); await lab.waitForIdle();
   const unconfirmed = await lab.get(draft2.id);
   assert.ok(unconfirmed.limitations.includes('Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.'), unconfirmed.limitations.join('\n'));
-  assert.match(unconfirmed.trials[0]!.reason, /не подтверждено адаптером/);
+  assert.match(unconfirmed.trials.find(t => t.scenarioId === 'gold_cards')!.reason, /не подтверждено адаптером/);
   const repeated = await lab.repeat(unconfirmed.id);
   assert.ok(!repeated.limitations.some(l => l.startsWith('Внешнее состояние карточек')));
 });
@@ -1476,10 +1477,12 @@ test('the board shows simulator checks on a dialogue, the scorecard and mode val
   const events = [{ seq: 0, type: 'user' as const, text: card.user.opening }, { seq: 1, type: 'assistant' as const, text: 'Which appointment?' },
     { seq: 2, type: 'simulator' as const, result: { message: 'Appointment A777', done: false } }, { seq: 3, type: 'user' as const, text: 'Appointment A777' }, { seq: 4, type: 'assistant' as const, text: 'Done.' }];
   const base = { revisionId: 'revision-1', scenarioId: card.id, familyId: card.familyId, repeat: 0, split: 'dev' as const, manifestHash: 'hash', reason: '', initialState: card.initialState, finalState: card.initialState, usage: emptyUsage(), elapsedMs: 1 };
+  // The demo card carries the agent rubric demo_task_state; without an assessment its automatic result is unknown and mode value cannot resolve.
+  const assessed = (result: 'pass' | 'fail') => [{ metricId: 'demo_task_state', result, rationale: 'fixture', evidence: [1] }];
   record.trials = [
-    { ...base, id: 'reactive', userMode: 'reactive', outcome: 'fail', checks: card.checks.map(c => ({ id: c.id, description: c.description, passed: false, evidence: 'e' })), events,
+    { ...base, id: 'reactive', userMode: 'reactive', outcome: 'fail', checks: card.checks.map(c => ({ id: c.id, description: c.description, passed: false, evidence: 'e' })), events, assessments: assessed('fail'),
       simulatorChecks: [{ id: 'simulator_fabrication', description: 'Пользователь не называет значения, которых нет в карточке (эвристика)', passed: false, evidence: 'Подозрение: реплика #3 содержит значение «a777»', seq: 3, heuristic: true }] },
-    { ...base, id: 'static', userMode: 'static', outcome: 'pass', checks: card.checks.map(c => ({ id: c.id, description: c.description, passed: true, evidence: 'e' })), events: events.slice(0, 2) },
+    { ...base, id: 'static', userMode: 'static', outcome: 'pass', checks: card.checks.map(c => ({ id: c.id, description: c.description, passed: true, evidence: 'e' })), events: events.slice(0, 2), assessments: assessed('pass') },
   ];
   const results = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 60);
   const stats = new LabBoard({ record, section: 'stats' }, theme, () => {}, () => {}, () => 80);
@@ -1519,7 +1522,7 @@ test('every export renders simulator checks, the scorecard and mode value from t
   assert.match(html, /Реплика #7 повторяет реплику #0 &lt;script&gt;/); assert.doesNotMatch(html, /#0 <script>/);
   assert.match(html, /Симулятор · кодовые проверки/); assert.match(html, /Ценность режимов/);
   const markdown = markdownReport(bundle);
-  assert.match(markdown, /## Симулятор/); assert.match(markdown, /simulator_loop/); assert.match(markdown, /Ценность режимов/);
+  assert.match(markdown, /## Симулятор/); assert.match(markdown, /повтор реплики/); assert.match(markdown, /Ценность режимов/);
   const json = JSON.parse(jsonReport(bundle));
   assert.equal(json.evidence.simulator.reactiveDialogues, 1);
   assert.equal(json.evidence.simulator.checks.find((c: { id: string }) => c.id === 'simulator_loop').flagged, 1);
@@ -1598,7 +1601,7 @@ In `markdownReport`, after the `'## Режимы пользователя'` tabl
 ```ts
     '## Симулятор', '', `Реактивных диалогов: ${e.simulator.reactiveDialogues}. Кодовые проверки описывают реплики пользователя и не меняют исход диалога.`, '',
     '| Проверка | Отмечено / проверено | Эвристика |', '|---|---|---|',
-    ...e.simulator.checks.map(c => `| ${md(c.id)} | ${c.flagged}/${c.dialogues} | ${c.heuristic ? 'да' : 'нет'} |`), '',
+    ...e.simulator.checks.map(c => `| ${md(simulatorNames[c.id] ?? c.id)} | ${c.flagged}/${c.dialogues} | ${c.heuristic ? 'да' : 'нет'} |`), '',
     `Судья по верности: ${e.simulator.judge.pass} пройдено, ${e.simulator.judge.fail} не пройдено, ${e.simulator.judge.unknown} неясно из ${e.simulator.judge.applicable}. Человек: подтверждено ${e.simulator.human.confirmed}, опровергнуто ${e.simulator.human.rejected}. Уточнения с ответом: ${e.simulator.clarifications.answered}/${e.simulator.clarifications.dialogues}. Ушли без цели: ${e.simulator.disengaged}.`, '',
     ...e.simulator.notes.map(n => `- ${md(n)}`), '',
     '### Ценность режимов', '', ...e.modeValue.cards.map(c => `- ${md(c.title)}: ${e.modeValue.measuredModes.map(m => `${m} ${c.outcomes[m] ?? '—'}`).join(', ')}${c.clarification ? ' · уточнение' : ''}`), '',
