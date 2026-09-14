@@ -48,6 +48,28 @@ A native Pi package that turns a task, materials and real data into simulated di
 
 **User mode**: How the user side of a dialogue is produced. Reactive: a model plays the card and answers the target's actual replies. Scripted: the card's script lines are sent in order. Static: only the opening message. Running the same cards in several modes shows what the reactive simulator adds.
 
+**User state**: The structured part of a card's user: `knows` (facts the user can state, with exact values), `cannotKnow` (what the user cannot know) and `answers` (complete replies to expected clarifications). Complements `facts` and `behavior`; a generated reply may only contain values already present in `knows`, `facts` or `opening`.
+
+**External state**: `initialState.external`, opaque JSON for the agent's own test environment. The simulator never sees it; the adapter must apply it and confirm with `resetConfirmed`, otherwise the trial is invalid.
+
+**Hidden literal**: A scalar value of the initial world the card did not disclose to the user. A simulated user who says it before the agent did is suspected of leaking it.
+
+**Simulator check**: A heuristic code predicate over the simulated user's own replies: leak, fabrication or loop. Stored per trial as a suspicion with the event it cites; never an agent grade, never shown to the judge, never a change to `trial.outcome`.
+
+**Measurement usability**: Whether a dialogue measures the agent at all: it was measured, the assessment did not fail, no human marked the test invalid, any external state was confirmed by the adapter, and no simulator flag remains unresolved. One rule shared by comparisons, CI exit codes, prompt proposals and the verdict. An unusable dialogue is `unknown`, not a pass or a fail.
+
+**Simulator scorecard**: Per run: reactive dialogues planned, started, completed and invalid; checks flagged with examples; judge fidelity results; human verdicts on the simulator; continuations and stops without confirmed success.
+
+**Continuation**: A reactive dialogue in which the simulator sent at least one reply after the agent's first answer. It does not prove that the agent's question was answered.
+
+**Mode value**: Per card, the outcome under each user mode; the cards only the reactive user completed or only it failed, with human confirmations. A missing or duplicated repeat makes the mode `unknown` for that card.
+
+**Paired family delta**: For two comparable runs, each card's before/after outcome is paired first and dropped from both sides when either is unknown; the share of passing cards per family after minus before is averaged over families with a bootstrap interval. Descriptive; the card lists decide the verdict.
+
+**Release hook**: A command in the connection that Agent Lab runs once before the first dialogue to deploy the version under test. A non-zero exit stops the run; the adapter's `version` remains the identity.
+
+**Prompt quote**: A verbatim fragment of the agent's prompt that a failure cluster names as governing the broken behaviour. Non-verbatim quotes are rejected.
+
 **Family**: Scenarios sharing the same underlying situation; variations and repeated trials do not create new independent families.
 
 **Development suite**: Scenarios whose results may guide changes to the agent.
