@@ -25,7 +25,7 @@ export function judgeInput(input: Input) {
     scenario: { metrics: input.scenario.metrics, successCriteria: input.scenario.successCriteria, checks: input.scenario.checks,
       user: input.trial.userMode === 'static' ? { ...input.scenario.user, script: [], maxFollowUps: 0 } : input.scenario.user },
     evaluationScope: input.trial.userMode === 'static' ? 'Opening and first answer ONLY. Planned follow-ups were not delivered. Never penalize the agent for their absence.' : 'Evaluate only delivered requests, within the rubric stage.',
-    sources: input.sources.map(({ id, name, content }) => ({ id, name, content })),
+    sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })),
     trial: { userMode: input.trial.userMode,
       events: input.trial.events.map(event => ({ seq: event.seq, type: event.type, content: assessmentEventContent(event) })),
       observation: input.trial.observation ?? { state: 'missing', tools: 'partial' }, initialState: input.trial.initialState,

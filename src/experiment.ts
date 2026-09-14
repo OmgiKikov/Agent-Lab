@@ -116,7 +116,7 @@ export class ExperimentLab {
     const record: Experiment = {
       schemaVersion: '1', id: randomUUID(), task: input.task, mode: input.mode, createdAt: now, updatedAt: now,
       phase: 'preparing', message: 'Подключаю агента и готовлю требования и первый тест.',
-      sources: input.materials.map((m, i) => ({ id: `source-${i + 1}`, name: m.name, content: m.content, hash: fingerprint(m.content) })),
+      sources: input.materials.map((m, i) => ({ id: `source-${i + 1}`, name: m.name, content: m.content, hash: fingerprint(m.content), ...(m.kind ? { kind: m.kind } : {}) })),
       settings: input.settings, requirements: [], questions: [], scenarios: [], revisions: [], selectedRevisionId: null,
       manifestHash: null, reviewedAt: null, reviewMode: null, controlConsumedAt: null, trials: [], comparisons: [], iterations: [],
       usage: emptyUsage(), error: null,
@@ -173,7 +173,7 @@ export class ExperimentLab {
     if (new Set(parsed.map(a => a.question)).size !== previous.questions.length || parsed.length !== previous.questions.length
       || parsed.some(a => !previous.questions.includes(a.question))) throw new Error('Ответьте на каждый вопрос черновика ровно один раз.');
     const created = await this.create(createInputSchema.parse({ task: previous.task, mode: previous.mode, workflow: previous.workflow,
-      materials: [...previous.sources.map(s => ({ name: s.name, content: s.content })), { name: 'Ответы владельца на вопросы черновика',
+      materials: [...previous.sources.map(s => ({ name: s.name, content: s.content, ...(s.kind ? { kind: s.kind } : {}) })), { name: 'Ответы владельца на вопросы черновика',
         content: parsed.map(a => `Вопрос: ${a.question}\nОтвет владельца: ${a.answer}`).join('\n\n') }],
       settings: previous.settings, target: previous.target, targetVersion: previous.targetVersion, existingAgent: previous.revisions[0]?.spec,
       goldenCases: previous.goldenCases, dialogues: previous.dialogues, profiles: previous.profiles.filter(p => p.source === 'owner').map(p => { const { draftOverride: _, persona: __, ...base } = p; return { ...base, ...profileUser(p) }; }),

@@ -7,7 +7,7 @@ import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.j
 import { z } from 'zod';
 import {
   agentSchema, failureModeSchema, observedGoalSchema, observedProfileSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema,
-  TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens,
+  TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens,
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
 import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, PROFILES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
@@ -32,8 +32,8 @@ const generatedScenarioSchema = (external: boolean) => scenarioSchema.required({
   .refine(s => !external || s.checks.every(c => ['answer_equals', 'answer_contains', 'answer_omits'].includes(c.kind))
     && !Object.keys(s.initialState.records).length && !s.initialState.writableFields.length && !s.initialState.transientFailures,
     'Without an external state/tool contract use only source-grounded answer checks and an empty initialState; assess semantic answers with agent rubrics')
-  .refine(s => !external || s.metrics.length < 8 && s.metrics.every(m => m.subject === 'agent' && m.id !== simulatorFidelity.id),
-    'External generation uses at most 7 agent rubrics only; the harness adds user_fidelity for the simulator');
+  .refine(s => !external || s.metrics.length < 8 && s.metrics.every(m => m.subject === 'agent' && m.id !== simulatorFidelity.id && m.id !== promptCompliance.id),
+    'External generation uses at most 7 agent rubrics only; the harness adds user_fidelity for the simulator and prompt_compliance when a prompt source is supplied');
 const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, message: userTurnSchema.shape.message.optional() })
   .refine(v => v.done || !!v.message?.trim(), 'A continuing user turn needs a message')
   .describe('To stop immediately, return done:true and omit message. A nonempty message is always delivered to the target. done:true with a nonempty message means deliver this final user message, receive the target response, then end. done:true with an empty message means stop now without another target response.');
@@ -312,7 +312,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       const grounding = await ask(
         'Требования',
         REQUIREMENTS_ROLE,
-        { task: input.task, sources: input.sources.map(({ id, name, content }) => ({ id, name, content })) },
+        { task: input.task, sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, ...(kind ? { kind } : {}) })) },
         groundingSchema, ctx,
         value => {
           for (const requirement of value.requirements) {
@@ -398,6 +398,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
         );
         for (const scenario of cards.scenarios) {
           if (external) scenario.metrics.push({ ...simulatorFidelity });
+          if (external && input.sources.some(s => s.kind === 'prompt')) scenario.metrics.unshift({ ...promptCompliance });
           scenarioIds.add(scenario.id); scenarios.push(scenario);
         }
       }

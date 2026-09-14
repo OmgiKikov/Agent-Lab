@@ -30,7 +30,10 @@ export const agentSchema = z.strictObject({
   tools: z.array(z.enum(TOOL_NAMES)).max(3).refine(unique, 'Duplicate tools'),
 });
 export type AgentSpec = z.infer<typeof agentSchema>;
-export const materialSchema = z.strictObject({ name: text.max(180), content: text.max(120000) });
+/** `kind: 'prompt'` marks the agent's own instructions: rules the user can observe are extracted from it, and the harness grades compliance with them. */
+export const sourceKindSchema = z.enum(['knowledge', 'prompt']);
+export type SourceKind = z.infer<typeof sourceKindSchema>;
+export const materialSchema = z.strictObject({ name: text.max(180), content: text.max(120000), kind: sourceKindSchema.optional() });
 
 /*
  * How the simulated user's side of a dialogue is produced:
@@ -106,7 +109,7 @@ export type ReleaseHook = NonNullable<Extract<Target, { kind: 'command' }>['rele
 export interface ReleaseLog { command: string; exitCode: number | null; signal: string | null; stdout: string; stderr: string; startedAt: string; durationMs: number }
 const releaseLogSchema = z.strictObject({ command: z.string().max(8000), exitCode: z.number().int().nullable(), signal: z.string().max(40).nullable(), stdout: z.string().max(4000), stderr: z.string().max(4000), startedAt: text, durationMs: z.number().nonnegative() });
 
-export interface Source { id: string; name: string; content: string; hash: string }
+export interface Source { id: string; name: string; content: string; hash: string; kind?: SourceKind }
 export const requirementSchema = z.strictObject({
   id: identifier, text: text.max(2000), sourceId: identifier, quote: text.max(3000), critical: z.boolean(),
 });
@@ -163,6 +166,13 @@ export const simulatorFidelity: Rubric = {
   description: 'Соблюдение заданных фактов, цели, поведения и лимита реплик; персона и характеристики учитываются только если заданы.',
   passCriteria: 'Пользователь следует карточке, отвечает на необходимые уточнения только известными фактами и соблюдает каждое условие остановки. Если карточка требует закончить после достаточной инструкции, дальнейших реплик нет. Не оценивает агента и не выдумывает его ответы или результаты инструментов.',
   failCriteria: 'Пользователь придумывает факты, знает скрытые ответы или состояние, меняет роль, оценивает агента, пропускает обязательное уточнение или продолжает разговор вопреки карточке. Новый вопрос после достаточной инструкции нарушает требование закончить, даже если все сообщённые факты верны. Неудача агента сама по себе не является провалом симулятора.',
+};
+/** Added by the harness to generated external cards when a source is the agent's own prompt: «по правилам промпта он этого сказать не мог». */
+export const promptCompliance: Rubric = {
+  id: 'prompt_compliance', name: 'Соблюдение правил промпта', subject: 'agent',
+  description: 'Ответ соблюдает явные правила собственного промпта агента (источник с пометкой «промпт агента»): формат ответа, обязательные элементы, запреты. Проверяются только правила, которые пользователь может наблюдать в ответе; внутренние инструкции по инструментам не оцениваются.',
+  passCriteria: 'Каждое явное правило промпта, применимое к этому диалогу, соблюдено: формат, обязательные элементы и запреты выполнены. Если ни одно правило не применимо к доставленным репликам, условие выполнено.',
+  failCriteria: 'Хотя бы одно явное правило промпта нарушено: неверный формат или структура, пропущен обязательный элемент, сказано запрещённое, дан ответ вне разрешённого периметра. В rationale процитируйте нарушенное правило дословно из источника-промпта и реплику, которая его нарушает.',
 };
 export const assessmentFindingSchema = z.strictObject({
   criterion: text.max(2000), result: z.enum(['pass', 'fail', 'unknown']), rationale: text.max(1000),
@@ -553,7 +563,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
   phase: z.enum(['preparing', 'review', 'evaluating', 'results_review', 'baseline', 'improving', 'control', 'complete', 'cancelled', 'error', 'interrupted']), message: z.string(),
-  sources: z.array(z.strictObject({ id: identifier, name: text, content: text, hash: text })).max(12), settings: settingsSchema,
+  sources: z.array(z.strictObject({ id: identifier, name: text, content: text, hash: text, kind: sourceKindSchema.optional() })).max(12), settings: settingsSchema,
   target: targetSchema.default({ kind: 'sandbox' }),
   requirements: z.array(requirementSchema), questions: z.array(z.string()), scenarios: z.array(scenarioSchema.extend({ split: z.enum(['dev', 'control']) })),
   goldenCases: z.array(goldenCaseSchema).max(40).default([]), dialogues: z.array(dialogueSchema).max(200).default([]), profiles: z.array(profileSchema).max(12).default([]),

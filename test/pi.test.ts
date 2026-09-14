@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { ModelRuntime, type ProviderConfig } from '@earendil-works/pi-coding-agent';
 import { createPiRuntime, getPiStatus } from '../src/pi.js';
+import { judgeInput } from '../src/judge.js';
 import { DEFAULT_JUDGE, emptyUsage, settingsSchema, type CallContext, type Scenario, type Tool, type Trial } from '../src/contracts.js';
 
 type Request = Parameters<NonNullable<ProviderConfig['streamSimple']>>[1];
@@ -649,6 +650,28 @@ test('external generation accepts observable text checks, repairs invented state
     assert.equal(simulator.length, 1); assert.equal(simulator[0]!.id, 'user_fidelity');
     assert.equal(prepared.scenarios[0]!.metrics!.length, 1, 'literal checks do not require a duplicate agent rubric');
     assert.match(simulator[0]!.failCriteria, /Неудача агента сама по себе/);
+  } finally { await f.close(); }
+});
+
+test('a source marked as the agent prompt reaches the builder and the judge labelled, and every generated external card gets the prompt compliance rubric first', async () => {
+  const prompt = 'Отвечай только по эквайрингу. Всегда заканчивай ответ вопросом «Чем ещё помочь?». Никогда не называй внутренние системы.';
+  const card = plainCard(0); card.metrics = card.metrics.filter(m => m.subject === 'agent'); card.checks = [];
+  const outputs = [{ requirements: [{ id: 'req_1', text: 'Every reply ends with «Чем ещё помочь?»', sourceId: 'prompt_1', quote: 'Всегда заканчивай ответ вопросом «Чем ещё помочь?»', critical: true }], questions: [] }, { scenarios: [card] }];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Проверить агента эквайринга', targetKind: 'command', scenarioCount: 1,
+      sources: [{ id: 'prompt_1', name: 'system.md', content: prompt, hash: 'hash', kind: 'prompt' }, { id: 'kb_1', name: 'Статья', content: 'Тариф виден в СберБизнес.', hash: 'h2' }],
+    }, callContext().ctx);
+    assert.match(f.requests[0]?.systemPrompt ?? '', /kind: prompt\) is the agent's own instructions, not a business policy/);
+    assert.match(JSON.stringify(f.requests[0]?.messages), /system\.md \(промпт агента\)/);
+    assert.doesNotMatch(JSON.stringify(f.requests[0]?.messages), /Статья \(промпт агента\)/);
+    const metrics = prepared.scenarios[0]!.metrics!;
+    assert.equal(metrics[0]!.id, 'prompt_compliance'); assert.equal(metrics[0]!.subject, 'agent');
+    assert.match(metrics[0]!.failCriteria, /процитируйте нарушенное правило дословно/);
+    assert.deepEqual(metrics.map(m => m.id).slice(-1), ['user_fidelity']);
+    const judge = judgeInput({ scenario: prepared.scenarios[0] as Scenario, sources: [{ id: 'prompt_1', name: 'system.md', content: prompt, hash: 'hash', kind: 'prompt' }],
+      trial: { id: 't', revisionId: 'r', scenarioId: card.id, familyId: card.familyId, repeat: 0, userMode: 'static', split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], events: [], initialState: card.initialState, finalState: card.initialState, usage: emptyUsage(), elapsedMs: 1 } });
+    assert.equal(judge.sources[0]!.name, 'system.md (промпт агента)');
   } finally { await f.close(); }
 });
 
