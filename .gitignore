@@ -16,3 +16,5 @@ dist/
 /test/live/judge-controls.ts
 /test/live/judge-goal-scope.ts
 /test/live/judge-pilot.ts
+# exported OpenCode transcripts
+session-*.md

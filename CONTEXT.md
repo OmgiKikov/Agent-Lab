@@ -58,6 +58,12 @@ A native Pi package that turns a task, materials and real data into simulated di
 
 **Measurement usability**: Whether a dialogue measures the agent at all: it was measured, the assessment did not fail, no human marked the test invalid, any external state was confirmed by the adapter, and no simulator flag remains unresolved. One rule shared by comparisons, CI exit codes, prompt proposals and the verdict. An unusable dialogue is `unknown`, not a pass or a fail.
 
+**Quality summary**: The first screen. Cards passed / decided with a percentage, one row per criterion (exact checks, each agent rubric), the top causes from failure clusters with one cited reason each, how many dialogues the judge decided, the human queue and one sentence of limits. Derived from the same outcome helpers as the verdict, comparisons and CI; a dialogue whose measurement is unusable shows as undecided, never as a failure.
+
+**Human queue**: The dialogues a machine could not settle: unknown judge results, disagreements with a human on agent criteria, unresolved simulator suspicions. Confirming a unanimous automatic failure is for audit completeness, not for reading the result.
+
+**Prompt source**: A material with `kind: 'prompt'` — the agent's own instructions. Only rules a user can observe in a reply are extracted from it; every generated external card gets the `prompt_compliance` rubric, whose failure quotes the violated rule verbatim.
+
 **Simulator scorecard**: Per run: reactive dialogues planned, started, completed and invalid; checks flagged with examples; judge fidelity results; human verdicts on the simulator; continuations and stops without confirmed success.
 
 **Continuation**: A reactive dialogue in which the simulator sent at least one reply after the agent's first answer. It does not prove that the agent's question was answered.
