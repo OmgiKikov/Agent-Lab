@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, draftPatchSchema, emptyUsage, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, worldSchema,
+  createInputSchema, draftPatchSchema, emptyUsage, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, verbatimSpan, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 
@@ -233,4 +233,14 @@ test('an evaluation may ask for up to twenty generated cards', () => {
   const base = { task: 'Check the agent', materials: [{ name: 'policy.md', content: 'Rule one.' }], mode: 'live' as const };
   assert.equal(createInputSchema.parse({ ...base, scenarioCount: 20 }).scenarioCount, 20);
   assert.throws(() => createInputSchema.parse({ ...base, scenarioCount: 21 }), /scenarioCount/);
+});
+
+test('a quote that differs from its source only in typography is still that source, returned in the source\'s own characters', () => {
+  const content = 'Раздел «Эквайринг» → «Мои точки продаж» → карточка точки → «Тариф»: показана действующая ставка и дата начала её действия.\n\nИзменить тариф можно только через заявку — оператор этого сделать не может.';
+  assert.equal(verbatimSpan(content, 'карточка точки → «Тариф»'), 'карточка точки → «Тариф»');
+  assert.equal(verbatimSpan(content, 'Раздел "Эквайринг" -> "Мои точки продаж"'), 'Раздел «Эквайринг» → «Мои точки продаж»');
+  assert.equal(verbatimSpan(content, ' дата начала ее действия.  Изменить тариф '), 'дата начала её действия.\n\nИзменить тариф');
+  assert.equal(verbatimSpan(content, 'через заявку - оператор'), 'через заявку — оператор');
+  assert.equal(verbatimSpan(content, 'Раздел Эквайринг показывает тариф'), undefined);
+  assert.equal(verbatimSpan(content, 'ОПЕРАТОР этого сделать не может'), undefined);
 });

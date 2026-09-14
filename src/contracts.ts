@@ -626,6 +626,39 @@ export interface Runtime {
 }
 
 /** Stable JSON content identity; array order remains significant. */
+/**
+ * A model copies a source but normalises its typography: straight quotes for «», a hyphen for a
+ * dash, -> for →, е for ё, one space for a line break. Such a quote is still the source's own words.
+ * Find it and hand back the source's exact characters, so every stored quote is verbatim.
+ * Words, order and case must match; a paraphrase is still rejected.
+ */
+const LOOSE_CHARACTERS: Record<string, string> = {
+  '«': '"', '»': '"', '“': '"', '”': '"', '„': '"', '‹': "'", '›': "'", '‘': "'", '’': "'",
+  '–': '-', '—': '-', '−': '-', '→': '>', 'ё': 'е', 'Ё': 'Е', '\u00a0': ' ',
+};
+function foldTypography(text: string): { text: string; starts: number[]; ends: number[] } {
+  const out: string[] = [], starts: number[] = [], ends: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const raw = text[i]!;
+    let ch = LOOSE_CHARACTERS[raw] ?? raw, width = 1;
+    if (raw === '-' && text[i + 1] === '>') { ch = '>'; width = 2; }
+    if (/\s/.test(ch)) {
+      if (out.length && out[out.length - 1] === ' ') { ends[ends.length - 1] = i + 1; continue; }
+      ch = ' ';
+    }
+    out.push(ch); starts.push(i); ends.push(i + width); i += width - 1;
+  }
+  return { text: out.join(''), starts, ends };
+}
+export function verbatimSpan(content: string, quote: string): string | undefined {
+  if (content.includes(quote)) return quote;
+  const source = foldTypography(content);
+  const needle = foldTypography(quote).text.trim();
+  if (!needle) return undefined;
+  const at = source.text.indexOf(needle);
+  if (at < 0) return undefined;
+  return content.slice(source.starts[at]!, source.ends[at + needle.length - 1]!);
+}
 export function fingerprint(value: unknown): string {
   const normalize = (v: unknown): unknown => Array.isArray(v) ? v.map(normalize)
     : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, x]) => [k, normalize(x)])) : v;

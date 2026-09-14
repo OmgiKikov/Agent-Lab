@@ -7,7 +7,7 @@ import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.j
 import { z } from 'zod';
 import {
   agentSchema, failureModeSchema, observedGoalSchema, observedProfileSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema,
-  REQUIREMENT_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens,
+  REQUIREMENT_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens, verbatimSpan,
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
 import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, PROFILES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
@@ -318,9 +318,9 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           for (const requirement of value.requirements) {
             const source = input.sources.find(s => s.id === requirement.sourceId);
             if (!source) return `Requirement ${requirement.id} cites source ${requirement.sourceId}, which was not supplied.`;
-            if (!source.content.includes(requirement.quote)) {
-              return `Requirement ${requirement.id}: the quote is not a verbatim substring of "${source.name}". Copy the exact characters from that source instead of paraphrasing.`;
-            }
+            const exact = verbatimSpan(source.content, requirement.quote);
+            if (!exact) return `Requirement ${requirement.id}: the quote is not a verbatim substring of "${source.name}". Copy the exact characters from that source instead of paraphrasing.`;
+            requirement.quote = exact;
           }
           return undefined;
         },
@@ -439,9 +439,11 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
             if (/^(bad|poor|wrong|incorrect|quality|agent failed|плохой|неверный)/i.test(mode.name.trim())) {
               return `Cluster ${mode.id} is named "${mode.name}", which does not say what went wrong. Name the specific behaviour visible in the traces.`;
             }
-            for (const quote of mode.promptQuotes ?? []) {
+            for (const [index, quote] of (mode.promptQuotes ?? []).entries()) {
               if (input.prompt === undefined) return `No prompt was supplied; promptQuotes must be empty for cluster ${mode.id}.`;
-              if (!input.prompt.includes(quote)) return `Cluster ${mode.id} quotes "${quote.slice(0, 60)}", which is not a verbatim substring of the supplied prompt. Copy the exact characters.`;
+              const exact = verbatimSpan(input.prompt, quote);
+              if (!exact) return `Cluster ${mode.id} quotes "${quote.slice(0, 60)}", which is not a verbatim substring of the supplied prompt. Copy the exact characters.`;
+              mode.promptQuotes![index] = exact;
             }
           }
           return undefined;

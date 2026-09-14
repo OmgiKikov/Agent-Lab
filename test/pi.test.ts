@@ -825,3 +825,21 @@ test('requirements extraction states its budget and asks the model to merge when
     assert.doesNotMatch(repair, /Too big/);
   } finally { await f.close(); }
 });
+
+test('requirement quotes are matched through the typography a model normalises, then stored in the source\'s own characters', async () => {
+  const content = 'Раздел «Эквайринг» → «Мои точки продаж» → карточка точки → «Тариф».';
+  const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!] };
+  const outputs = [
+    { requirements: [{ id: 'req_1', text: 'Where the tariff is shown', sourceId: 'source_1', quote: 'Раздел "Эквайринг" -> "Мои точки продаж"', critical: true }], questions: [] },
+    { scenarios: [card] },
+  ];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({
+      task: 'Check tariff answers', scenarioCount: 1, targetKind: 'command',
+      sources: [{ id: 'source_1', name: 'idp/tariff_view.md', content, hash: 'h' }],
+    }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.equal(prepared.requirements[0]!.quote, 'Раздел «Эквайринг» → «Мои точки продаж»');
+  } finally { await f.close(); }
+});
