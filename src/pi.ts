@@ -27,6 +27,7 @@ const familyPlanSchema = z.strictObject({ families: z.array(z.strictObject({
 // New generated cards require an explicit interaction budget; older saved cards keep their original semantics.
 // With observed profiles the model may only choose a profileId; persona text is copied from the profile later.
 const RUBRIC_LIMIT = 8;
+const CONFIRMED_TEST_CLAUSE = `CONFIRMED HYPOTHESIS: return exactly one generated agent rubric with id "goal_attainment" and subject "agent". Its passCriteria must equal successCriteria verbatim. Generate no other rubric: the harness adds prompt_compliance when a prompt source exists and user_fidelity only for a reactive simulator mode. This overrides the general and external-target rubric instructions above.`;
 // ponytail: conservative serialized-input cap; derive it from model token metadata if legitimate score inputs regularly hit it.
 const GOALS_INPUT_LIMIT = 120_000;
 const scoredGoalSchema = observedGoalSchema.extend({ requirementIds: observedGoalSchema.shape.requirementIds.unwrap().min(1) });
@@ -454,7 +455,9 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
         const observedGoals = input.observedGoals ?? [];
         const cards = await ask(
           batchLabel,
-          cardsRole(compare, profiles.length > 0, observedGoals.length > 0) + (external ? `\n${EXTERNAL_CARDS_CLAUSE}` : ''),
+          cardsRole(compare, profiles.length > 0, observedGoals.length > 0)
+            + (external ? `\n${EXTERNAL_CARDS_CLAUSE}` : '')
+            + (confirmed ? `\n${CONFIRMED_TEST_CLAUSE}` : ''),
           {
             ...evidence,
             ...(confirmed ? {
