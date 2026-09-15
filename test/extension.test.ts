@@ -389,6 +389,58 @@ test('live preparation asks for optional logs before creating a run; explicit sk
   await assert.rejects(build({ dialoguesFile: file, withoutDialogues: true }), /JSON/);
 });
 
+test('Pi score imports recorded evidence code-only and gates every model call with native consent', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-score-extension-'));
+  const { tools, shutdown } = registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const build = tools.get('agent_lab_build')!;
+  const dialogues = [{ id: 'd1', messages: [{ role: 'user' as const, content: 'Создай заявку' }, { role: 'assistant' as const, content: 'Готово ✅' }] }];
+  const params = { mode: 'score', task: 'Проверить заявления о действиях', materials: [{ name: 'policy.md', content: 'Успех подтверждается наблюдаемым результатом.' }], dialogues };
+
+  const headless = { cwd: directory, hasUI: false, mode: 'print' } as ExtensionContext;
+  const missing = output(await build.execute('missing', { mode: 'score', task: 'Score', materials: params.materials }, undefined, undefined, headless));
+  assert.equal(missing.status, 'needs_input');
+  assert.match(missing.message, /Есть реальные диалоги с агентом/);
+
+  const updates: string[] = [];
+  const codeOnly = output(await build.execute('code-only', { ...params, codeOnly: true }, undefined,
+    value => { updates.push(value.content.filter(item => item.type === 'text').map(item => item.text).join('\n')); }, headless));
+  assert.equal(codeOnly.phase, 'results_review', codeOnly.error ?? '');
+  assert.equal(codeOnly.usage.calls, 0);
+  assert.match(codeOnly.scoreState, /без вызовов модели/);
+  assert.ok(codeOnly.artifacts.evidence && codeOnly.artifacts.report && codeOnly.artifacts.traceJournal);
+  assert.equal(updates[0], 'Читаю требования и записи…');
+  assert.ok(updates.some(line => /Оценено 1 из 1 диалогов/.test(line)));
+
+  await assert.rejects(build.execute('headless-model', params, undefined, undefined, headless), /native Pi confirmation/);
+  const confirmations: string[] = [];
+  const tui = { cwd: directory, hasUI: true, mode: 'tui', ui: { confirm: async (_title: string, body: string) => { confirmations.push(body); return false; } } } as ExtensionContext;
+  const cancelled = output(await build.execute('cancel-model', params, undefined, undefined, tui));
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(cancelled.phase, 'results_review');
+  assert.equal(cancelled.usage.calls, 0);
+  assert.match(confirmations[0]!, /Агент и симулятор не запускаются.*До \d+ вызовов/s);
+
+  const invalid = join(directory, 'invalid.jsonl');
+  await writeFile(invalid, '{bad}\n');
+  await assert.rejects(build.execute('bad-file', { ...params, dialogues: undefined, dialoguesFile: invalid, codeOnly: true }, undefined, undefined, headless), /Не удалось прочитать записи:.*повторите.*агент не запускался/is);
+});
+
+test('Pi code-only score preserves the public 200-dialogue and configured budget bounds', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-score-max-'));
+  const { tools, shutdown } = registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const dialogues = Array.from({ length: 200 }, (_, index) => ({ id: `d${index}`, messages: [{ role: 'user' as const, content: `Question ${index}` }, { role: 'assistant' as const, content: `Answer ${index}` }] }));
+  const report = output(await tools.get('agent_lab_build')!.execute('max-score', { mode: 'score', codeOnly: true, task: 'Score all records',
+    materials: [{ name: 'policy.md', content: 'Answer from the owner policy.' }], dialogues, settings: { maxCalls: 7, maxDurationMs: 14_400_000 },
+  }, undefined, undefined, { cwd: directory, hasUI: false, mode: 'print' } as ExtensionContext));
+  assert.equal(report.dialogueCount, 200);
+  assert.equal(report.trialCount, 200);
+  const saved = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
+  assert.equal(saved.settings.maxCalls, 7);
+  assert.equal(saved.settings.maxDurationMs, 14_400_000);
+});
+
 test('conversation completes human finding → prompt diff → unchanged SQLite suite → comparison', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-prompt-journey-'));
   const { tools, shutdown } = registered();

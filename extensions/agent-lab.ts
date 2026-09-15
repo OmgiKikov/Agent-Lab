@@ -138,7 +138,7 @@ export default function agentLab(pi: ExtensionAPI) {
   pi.registerTool({
     ...toolDisplay,
     name: 'agent_lab_build', label: 'Prepare agent and dialogue cards',
-    description: 'Prepare an agent and a small editable set of user simulation cards from task/material contents. Uses current Pi model unless settings override. Stops before all dialogue evaluation: use agent_lab_run to show the exact plan and obtain native execution confirmation. Does not run, improve or approve the agent. mode=demo prepares the built-in scripted example without model calls. Native workflow is evaluation, with 1 test, 1 repeat, at most 20 calls and 180 seconds by default. target selects the agent under test: the trusted sandbox (default), an http endpoint, a local module adapter, or a local process (command, e.g. python3 agent.py speaking JSON lines). Before a live build, ask once for optional real dialogue logs; use withoutDialogues=true only after the user explicitly chooses to skip. goldenCases become curated cards; dialogues (de-identified real conversations) ground observed user profiles, production cards that open with real users\' own messages, and simulator fidelity. settings.userModes may list static, scripted and reactive to compare what each user side finds. notes carry the owner\'s hints about users in their own words; profiles are owner-written user types. Both are legitimate inputs when no real data exists, and the verdict always states how much of the evidence is synthetic. preset=thorough widens the run without extra settings. Every result leads with a plain verdict: pass count, weak spots, confidence and next steps.',
+    description: 'Prepare an agent and a small editable set of user simulation cards from task/material contents. Uses current Pi model unless settings override. Stops before all dialogue evaluation: use agent_lab_run to show the exact plan and obtain native execution confirmation. Does not run, improve or approve the agent. mode=demo prepares the built-in scripted example without model calls. mode=score imports recorded dialogues without running the agent or simulator; codeOnly=true also avoids every model call. Native workflow is evaluation, with 1 test, 1 repeat, at most 20 calls and 180 seconds by default. target selects the agent under test: the trusted sandbox (default), an http endpoint, a local module adapter, or a local process (command, e.g. python3 agent.py speaking JSON lines). Before a live build, ask once for optional real dialogue logs; use withoutDialogues=true only after the user explicitly chooses to skip. goldenCases become curated cards; dialogues (de-identified real conversations) ground observed user profiles, production cards that open with real users\' own messages, and simulator fidelity. settings.userModes may list static, scripted and reactive to compare what each user side finds. notes carry the owner\'s hints about users in their own words; profiles are owner-written user types. Both are legitimate inputs when no real data exists, and the verdict always states how much of the evidence is synthetic. preset=thorough widens the run without extra settings. Every result leads with a plain verdict: pass count, weak spots, confidence and next steps.',
     parameters: Type.Object({
       task: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
       materials: Type.Optional(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 180 }), content: Type.String({ minLength: 1, maxLength: 120000 }), kind: Type.Optional(Type.Union([Type.Literal('knowledge'), Type.Literal('prompt')], { description: "'prompt' marks the agent's own system prompt: observable rules are extracted from it and every generated card gets the prompt_compliance rubric" })) }, { additionalProperties: false }), { minItems: 1, maxItems: 12 })),
@@ -147,6 +147,7 @@ export default function agentLab(pi: ExtensionAPI) {
       scenarioCount: Type.Optional(Type.Integer({ minimum: 0, maximum: SCENARIO_LIMIT })),
       connectionFile: Type.Optional(Type.String()), goldenFile: Type.Optional(Type.String()), dialoguesFile: Type.Optional(Type.String()),
       withoutDialogues: Type.Optional(Type.Boolean({ description: 'Set true only when the user explicitly chose to start without real dialogues. Otherwise ask for optional JSON/JSONL logs before building a live run.' })),
+      codeOnly: Type.Optional(Type.Boolean({ description: 'With mode=score, preserve recorded facts without any model calls.' })),
       target: Type.Optional(Type.Unsafe(z.toJSONSchema(targetSchema, { io: 'input' }))),
       targetVersion: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Agent release, commit or remote deployment version.' })),
       goldenCases: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(goldenCaseSchema).max(40), { io: 'input' }))),
@@ -154,25 +155,39 @@ export default function agentLab(pi: ExtensionAPI) {
       notes: Type.Optional(Type.String({ maxLength: 8000, description: "The owner's own hints about users, goals and situations, in their words. First-class input for synthetic cards; never treated as a business rule." })),
       profiles: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(ownerProfileSchema).max(6), { io: 'input' }))),
       preset: Type.Optional(Type.Union([Type.Literal('quick'), Type.Literal('thorough')], { description: 'quick (default): reactive simulator, one repeat. thorough: static, scripted and reactive user modes with two repeats.' })),
-      mode: Type.Optional(Type.Union([Type.Literal('live'), Type.Literal('demo')])),
+      mode: Type.Optional(Type.Union([Type.Literal('live'), Type.Literal('demo'), Type.Literal('score')])),
     }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(_callId, params, toolSignal, onUpdate, ctx) {
-      const { preset, goldenFile, dialoguesFile, connectionFile, withoutDialogues, ...rest } = params;
-      const mode = rest.mode ?? 'live';
-      const dialogues = dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues') : rest.dialogues;
-      if (mode !== 'demo' && !z.array(dialogueSchema).max(200).parse(dialogues ?? []).length && withoutDialogues !== true) {
+      const { preset, goldenFile, dialoguesFile, connectionFile, withoutDialogues, codeOnly, ...rest } = params;
+      const operation = rest.mode ?? 'live';
+      if (operation === 'score') onUpdate?.({ content: [{ type: 'text', text: 'Читаю требования и записи…' }], details: { phase: 'reading' } });
+      let dialogues: unknown;
+      try { dialogues = dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues') : rest.dialogues; }
+      catch (error) {
+        if (operation !== 'score') throw error;
+        throw new Error(safeText(`Не удалось прочитать записи: ${error instanceof Error ? error.message : String(error)}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`));
+      }
+      let parsedDialogues: z.infer<typeof dialogueSchema>[];
+      try { parsedDialogues = z.array(dialogueSchema).max(200).parse(dialogues ?? []); }
+      catch (error) {
+        if (operation !== 'score') throw error;
+        throw new Error(safeText(`Не удалось прочитать записи: ${error instanceof Error ? error.message : String(error)}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`));
+      }
+      if (operation !== 'demo' && !parsedDialogues.length && withoutDialogues !== true) {
         const output = { status: 'needs_input', message: 'Есть реальные диалоги с агентом? Укажите файл JSON/JSONL с обезличенными разговорами или скажите «начать без логов».',
           nextStep: 'Ask the user in ordinary language. Import their supplied dialoguesFile/dialogues, or set withoutDialogues=true after their explicit choice to skip. Do not silently skip or search unrelated logs.' };
         return { content: [{ type: 'text', text: JSON.stringify(output) }], details: output };
       }
+      if (operation === 'score' && !codeOnly && (!ctx.hasUI || ctx.mode !== 'tui')) throw new Error('Для модельной оценки нужен native Pi confirmation в интерактивном терминале.');
+      const mode = operation === 'demo' ? 'demo' : 'live';
       const supplied = (rest.settings ?? {}) as Partial<z.infer<typeof settingsSchema>>;
-      const connection = mode === 'demo' ? undefined : connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
+      const connection = operation !== 'live' ? undefined : connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
       const input = createInputSchema.parse({
-        ...(mode === 'demo' ? demoEvaluationInput() : {}), scenarioCount: mode === 'demo' ? 3 : 1, ...rest, mode, workflow: 'evaluate',
+        ...(mode === 'demo' ? demoEvaluationInput() : {}), ...rest, scenarioCount: operation === 'score' ? 0 : rest.scenarioCount ?? (mode === 'demo' ? 3 : 1), mode, workflow: 'evaluate',
         ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
         ...(goldenFile ? { goldenCases: await readData(resolve(ctx.cwd, goldenFile), 'golden') } : {}),
-        ...(dialogues !== undefined ? { dialogues } : {}),
+        ...(dialogues !== undefined ? { dialogues: parsedDialogues } : {}),
         settings: { ...(mode === 'demo' ? demoInput().settings : {}), repeats: 1, maxCalls: 20, maxDurationMs: 180000,
           ...(mode === 'live' ? { judge: DEFAULT_JUDGE } : {}),
           ...(preset === 'thorough' ? { userModes: ['static', 'scripted', 'reactive'], repeats: 2 } : {}), ...supplied,
@@ -188,12 +203,36 @@ export default function agentLab(pi: ExtensionAPI) {
       const progress = async () => {
         if (!id || !onUpdate) return;
         const record = await lab.get(id);
-        const text = safeText(`${record.phase === 'preparing' ? 'Готовлю требования и тест' : 'Тест готов'}: ${record.message} · вызовов ${record.usage.calls}`);
+        const text = operation === 'score' ? safeText(`Оценено ${record.trials.length} из ${parsedDialogues.length} диалогов · вызовов ${record.usage.calls}`)
+          : safeText(`${record.phase === 'preparing' ? 'Готовлю требования и тест' : 'Тест готов'}: ${record.message} · вызовов ${record.usage.calls}`);
         if (text !== lastProgress) { lastProgress = text; onUpdate({ content: [{ type: 'text', text }], details: { id, phase: record.phase } }); }
       };
       const cancel = () => { void (id ? lab.cancel(id) : close()).catch(() => {}); };
       try {
         await lab.init(); signal.addEventListener('abort', cancel, { once: true }); signal.throwIfAborted();
+        if (operation === 'score') {
+          id = (await lab.score(input, { codeOnly: true })).id;
+          if (signal.aborted) cancel();
+          await progress(); timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);
+          await lab.waitForIdle(); await progress();
+          let record = await lab.get(id);
+          if (!codeOnly) {
+            const confirmed = await ctx.ui.confirm('Оценить записанные диалоги?', safeText(`Агент и симулятор не запускаются. До ${input.settings.maxCalls} вызовов судьи.`));
+            if (!confirmed) {
+              const output = { ...summary(record, lab.store.directory), cancelled: true, artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory) };
+              return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
+            }
+            signal.throwIfAborted(); id = (await lab.score(input)).id; await lab.waitForIdle(); await progress();
+            record = await lab.get(id);
+            if (record.phase === 'results_review' && !record.error) {
+              id = (await lab.reassess(record.id)).id; await lab.waitForIdle(); await progress(); record = await lab.get(id);
+            }
+          }
+          const output = { ...summary(record, lab.store.directory), ...(codeOnly ? { scoreState: 'Оценено по коду без вызовов модели; кластеры провалов не строились.' } : {}),
+            artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory), ...(signal.aborted ? { cancelled: true } : {}) };
+          returnToBoard(ctx, id);
+          return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
+        }
         id = (await lab.create(input)).id;
         if (signal.aborted) cancel();
         await progress();
