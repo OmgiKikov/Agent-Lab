@@ -297,6 +297,7 @@ test('CLI score imports ordered JSONL evidence and exports it without calling an
   const output = JSON.parse(result.stdout);
   assert.equal(output.phase, 'results_review');
   assert.equal(output.imported, 1);
+  assert.match(output.quality.scope, /\$0\.00/);
   assert.ok(output.artifacts.report && output.artifacts.snapshot && output.artifacts.traceJournal);
   const record = JSON.parse(await readFile(output.artifacts.evidence, 'utf8'));
   assert.deepEqual(record.trials[0].events, messages.map((message, seq) => ({ seq, type: message.role, text: message.content })));
@@ -308,10 +309,14 @@ test('CLI score imports ordered JSONL evidence and exports it without calling an
   const invalidData = join(directory, 'invalid-data');
   await writeFile(dialogues, '{bad}\n');
   const invalid = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--code-only', '--data-dir', invalidData], { encoding: 'utf8' });
-  assert.equal(invalid.status, 1);
+  assert.equal(invalid.status, 2);
   assert.match(invalid.stderr, /строке 1/);
   assert.match(invalid.stderr, /агент не запускался/i);
   assert.deepEqual((await readdir(invalidData)).filter(name => name.endsWith('.json')), []);
+
+  const unconfirmed = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--data-dir', join(directory, 'unconfirmed')], { encoding: 'utf8' });
+  assert.equal(unconfirmed.status, 2);
+  assert.match(unconfirmed.stderr, /--yes/);
 });
 
 test('draft edits cannot launder provenance; clarification keeps the old questions and records owner answers as a source', async t => {

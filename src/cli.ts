@@ -179,8 +179,9 @@ async function main() {
       }
       const bundle = await evidenceBundle(record, lab.store);
       const artifacts = await exportArtifacts(bundle, directory);
+      const quality = qualityLines(qualitySummary(record));
       process.stdout.write(JSON.stringify({ id: record.id, phase: record.phase, imported: imported.trials.length,
-        ...(record.assessmentOf ? { assessmentOf: record.assessmentOf } : {}), artifacts, evidence: bundle.evidence }, null, 2) + '\n');
+        ...(record.assessmentOf ? { assessmentOf: record.assessmentOf } : {}), quality, artifacts, evidence: bundle.evidence }, null, 2) + '\n');
       process.exitCode = record.phase === 'results_review' && !record.trials.some(trial => trial.assessmentError || ['invalid', 'cancelled'].includes(trial.outcome)) ? 0 : 2;
       return;
     }
@@ -241,4 +242,4 @@ async function main() {
     await lab.close();
   }
 }
-void main().catch(error => { process.stderr.write(`Agent Lab: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = ['evaluate', 'audit-judge'].includes(process.argv[2] ?? '') ? 2 : 1; });
+void main().catch(error => { process.stderr.write(`Agent Lab: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = ['evaluate', 'audit-judge', 'score'].includes(process.argv[2] ?? '') ? 2 : 1; });

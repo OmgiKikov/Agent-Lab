@@ -189,7 +189,7 @@ export const goalAttainment: Rubric = {
 export const replyQuality: Rubric = {
   id: 'reply_quality', name: 'Качество ответа', subject: 'agent',
   description: 'Насколько ответ корректен, уместен, заземлён и исполним для пользователя независимо от результата внешнего действия.',
-  passCriteria: 'Ответ корректен по материалам владельца, отвечает на запрос и даёт пользователю исполнимый следующий шаг без выдуманных фактов.',
+  passCriteria: 'Ответ корректен по материалам владельца, отвечает на запрос и, если следующий шаг нужен, даёт его без выдуманных фактов.',
   failCriteria: 'Ответ неверен, не по существу, неисполняем, противоречит материалам владельца или выдаёт неподтверждённое за факт.',
 };
 export const assessmentFindingSchema = z.strictObject({
@@ -688,7 +688,7 @@ export interface Runtime {
   userTurn(input: { user: Scenario['user']; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserTurn>;
   assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial }, ctx: CallContext): Promise<MetricAssessment[]>;
   profiles?(input: { task: string; sources: Source[]; dialogues: Dialogue[] }, ctx: CallContext): Promise<Profile[]>;
-  goals?(input: { task: string; sources: Source[]; dialogues: Dialogue[]; profiles: Profile[] }, ctx: CallContext): Promise<ObservedGoal[]>;
+  goals?(input: { task: string; sources: Source[]; dialogues: Dialogue[]; profiles: Profile[]; requirements?: Requirement[] }, ctx: CallContext): Promise<ObservedGoal[]>;
   failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
 }
 

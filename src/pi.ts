@@ -521,12 +521,25 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
     },
     async goals(input, ctx) {
       if (!input.sources.length) throw new Error('Observed goals: без материалов владельца ожидаемое поведение остаётся неизвестным.');
+      const sources = input.sources.map(({ id, name, content, kind }) => ({ id, name, content, ...(kind ? { kind } : {}) }));
+      const profiles = input.profiles.map(({ id, persona, characteristics }) => ({ id, persona, characteristics }));
+      if (!input.requirements) {
+        const result = await ask(
+          'Цели из реальных диалогов', GOALS_ROLE,
+          { task: input.task, sources, profiles, dialogues: input.dialogues.map(dialogue => ({ id: dialogue.id, userMessages: dialogue.messages.filter(message => message.role === 'user').map(message => message.content) })) },
+          z.strictObject({ goals: z.array(observedGoalSchema).min(1).max(20) }), ctx,
+        );
+        try { validateObservedGoals(result.goals, input.dialogues, input.profiles); }
+        catch (error) { throw new Error(`Observed goals: ${error instanceof Error ? error.message : String(error)}`); }
+        return result.goals;
+      }
+      if (!input.requirements.length) throw new Error('Observed goals: нет требований владельца, на которые можно сослаться.');
+      const knownRequirements = new Set(input.requirements.map(requirement => requirement.id));
       const goals = [];
       for (const dialogue of input.dialogues) {
         const payload = {
           task: input.task,
-          sources: input.sources.map(({ id, name, content, kind }) => ({ id, name, content, ...(kind ? { kind } : {}) })),
-          profiles: input.profiles.map(({ id, persona, characteristics }) => ({ id, persona, characteristics })),
+          sources, ownerRequirements: input.requirements.map(({ id, text, sourceId, quote, critical }) => ({ id, text, sourceId, quote, critical })), profiles,
           dialogues: [{ id: dialogue.id, userMessages: dialogue.messages.filter(message => message.role === 'user').map(message => message.content) }],
         };
         if (JSON.stringify(payload).length > GOALS_INPUT_LIMIT) {
@@ -540,6 +553,8 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           value => {
             const goal = value.goals[0]!;
             if (goal.evidenceDialogueIds.length !== 1 || goal.evidenceDialogueIds[0] !== dialogue.id) return `Goal ${goal.id} must cite only dialogue ${dialogue.id}.`;
+            const unknown = goal.requirementIds.filter(id => !knownRequirements.has(id));
+            if (unknown.length) return `Goal ${goal.id} cites unknown owner requirements: ${unknown.join(', ')}.`;
             try { validateObservedGoals([goal], [dialogue], input.profiles); }
             catch (error) { return error instanceof Error ? error.message : String(error); }
             return undefined;

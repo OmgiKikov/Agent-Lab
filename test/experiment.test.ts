@@ -11,7 +11,7 @@ import { createDemoRuntime, demoEvaluationInput, demoInput } from '../src/demo.j
 import { createInputSchema, fingerprint, validatePreparation, type Runtime } from '../src/contracts.js';
 import { awaitingVerdict } from '../src/comparison.js';
 import { simulatorUsable } from '../src/outcomes.js';
-import { qualitySummary } from '../src/quality.js';
+import { qualityLines, qualitySummary } from '../src/quality.js';
 
 async function setup(t: TestContext, runtime?: Runtime) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-experiment-'));
@@ -632,6 +632,110 @@ test('recorded scoring preserves 40, 41 and 200 dialogues through reassessment w
   const again = await lab.get(repeated.id);
   assert.notEqual(again.id, largest.id);
   assert.deepEqual(again.trials.map(trial => trial.events), largest.trials.slice(0, 41).map(trial => trial.events));
+});
+
+test('model-backed recorded scoring grounds criteria, regrades copied traces and rebuilds clusters from saved sources', async t => {
+  const calls = { prepare: 0, goals: 0, assess: 0, clusters: 0, target: 0, simulator: 0 };
+  const prompts: (string | undefined)[] = [];
+  let clusterError = false;
+  const runtime: Runtime = {
+    async prepare({ sources }) {
+      calls.prepare++;
+      return { requirements: [{ id: 'owner_rule', text: 'Do not claim completion without evidence.', sourceId: sources[0]!.id,
+        quote: sources[0]!.content, critical: true }], questions: [], agent: { name: 'Recorded agent', instructions: 'Recorded only', tools: [] }, scenarios: [] };
+    },
+    async goals({ dialogues, requirements }) {
+      calls.goals++;
+      assert.deepEqual(requirements?.map(requirement => requirement.id), ['owner_rule']);
+      const dialogue = dialogues[0]!;
+      return [{ id: `goal_${dialogue.id}`, goal: 'Create the request', opening: dialogue.messages[0]!.content,
+        evidenceDialogueIds: [dialogue.id], requirementIds: ['owner_rule'], successCriteria: 'The request exists in observable state.' }];
+    },
+    async assess({ scenario, trial }, ctx) {
+      calls.assess++;
+      ctx.beforeCall();
+      ctx.addUsage({ inputTokens: 7, outputTokens: 3, costUsd: null });
+      assert.deepEqual(trial.events.map(event => event.text), ['Создай заявку', 'Готово ✅, заявка создана']);
+      return scenario.metrics!.map(metric => ({ metricId: metric.id, result: metric.id === 'goal_attainment' ? 'fail' as const : 'pass' as const,
+        rationale: metric.id === 'goal_attainment' ? 'Нет наблюдаемого результата действия.' : 'Ответ можно оценить независимо.', evidence: [1] }));
+    },
+    async failureModes(input) {
+      calls.clusters++; prompts.push(input.prompt);
+      if (clusterError) throw new Error('cluster unavailable');
+      return [{ id: `unsupported_action_${calls.clusters}`, name: `Заявил о создании без результата ${calls.clusters}`,
+        description: 'Ассистент подтвердил действие, которого нет в наблюдаемом состоянии.', trialIds: input.failures.map(failure => failure.trialId), promptQuotes: [] }];
+    },
+    async improve() { throw new Error('score must not improve'); },
+    async openTarget() { calls.target++; throw new Error('score must not open the target'); },
+    async userTurn() { calls.simulator++; throw new Error('score must not run the simulator'); },
+  };
+  const { lab, directory } = await setup(t, runtime);
+  const promptFile = join(directory, 'live-prompt.md');
+  await writeFile(promptFile, 'CHANGED_LIVE_PROMPT');
+  const savedPrompt = 'OWNER_SAVED_PROMPT: do not claim completion without observable evidence.';
+  const input = createInputSchema.parse({ task: 'Score recorded dialogue', mode: 'live',
+    materials: [{ name: 'prompt.md', content: savedPrompt, kind: 'prompt' }], scenarioCount: 0,
+    target: { kind: 'command', command: 'never-run', args: [], promptFile },
+    dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'Создай заявку' }, { role: 'assistant', content: 'Готово ✅, заявка создана' }] }],
+  });
+  const seed = await lab.score(input); await lab.waitForIdle();
+  const imported = await lab.get(seed.id);
+  assert.equal(imported.phase, 'results_review', imported.error ?? '');
+  assert.equal(imported.trials[0]!.assessments, undefined);
+  assert.equal(imported.failureModes, undefined);
+  assert.deepEqual(imported.scenarios[0]!.metrics!.map(metric => metric.id), ['prompt_compliance', 'goal_attainment', 'reply_quality']);
+  await writeFile(promptFile, 'A NEWER PROMPT THAT MUST NOT BE READ');
+
+  const first = await lab.reassess(imported.id); await lab.waitForIdle();
+  const assessed = await lab.get(first.id);
+  assert.equal(assessed.phase, 'results_review', assessed.error ?? '');
+  assert.deepEqual(assessed.trials[0]!.assessments!.map(item => item.metricId), ['prompt_compliance', 'goal_attainment', 'reply_quality']);
+  assert.deepEqual(prompts, [savedPrompt]);
+  assert.match(assessed.failureModes![0]!.id, /_1$/);
+  assert.deepEqual([calls.target, calls.simulator], [0, 0]);
+  assert.equal(assessed.usage.costUsd, null);
+  assert.match(qualityLines(qualitySummary(assessed)).scope, /стоимость неизвестна/);
+
+  const second = await lab.reassess(assessed.id); await lab.waitForIdle();
+  const rebuilt = await lab.get(second.id);
+  assert.deepEqual(rebuilt.failureModes!.map(mode => mode.id), ['unsupported_action_2']);
+  assert.deepEqual(prompts, [savedPrompt, savedPrompt]);
+
+  clusterError = true;
+  const failedCluster = await lab.reassess(imported.id); await lab.waitForIdle();
+  const survived = await lab.get(failedCluster.id);
+  assert.equal(survived.phase, 'results_review');
+  assert.ok(survived.trials[0]!.assessments?.length);
+  assert.equal(survived.failureModes, undefined);
+  assert.ok(survived.limitations.some(note => /cluster unavailable/.test(note)));
+
+  const beforeCodeOnly = { ...calls };
+  const exactOnly = await lab.reassess(imported.id, { codeOnly: true }); await lab.waitForIdle();
+  const codeOnly = await lab.get(exactOnly.id);
+  assert.deepEqual(calls, beforeCodeOnly);
+  assert.equal(codeOnly.failureModes, undefined);
+  assert.ok(codeOnly.limitations.some(note => /code-only/i.test(note)));
+});
+
+test('model-backed score rejects missing, duplicate and unknown grounded goals before publishing criteria', async t => {
+  let goals: Awaited<ReturnType<NonNullable<Runtime['goals']>>> = [];
+  const runtime: Runtime = {
+    async prepare({ sources }) { return { requirements: [{ id: 'known', text: 'Known rule', sourceId: sources[0]!.id, quote: sources[0]!.content, critical: true }], questions: [], agent: { name: 'A', instructions: 'A', tools: [] }, scenarios: [] }; },
+    async goals() { return goals; }, async improve() { throw new Error('unused'); }, async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
+  };
+  const { lab } = await setup(t, runtime);
+  const input = createInputSchema.parse({ task: 'Score', mode: 'live', materials: [{ name: 'policy', content: 'Known rule' }], scenarioCount: 0,
+    dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'Question' }, { role: 'assistant', content: 'Answer' }] }] });
+  const valid = { id: 'g', goal: 'Get an answer', opening: 'Question', evidenceDialogueIds: ['d1'], requirementIds: ['known'], successCriteria: 'Known rule' };
+  for (const value of [[], [valid, { ...valid, id: 'g2' }], [{ ...valid, requirementIds: ['missing'] }]]) {
+    goals = value;
+    const pending = await lab.score(input); await lab.waitForIdle();
+    const record = await lab.get(pending.id);
+    assert.equal(record.phase, 'error');
+    assert.match(record.error ?? '', /ровно одну цель|неизвестн/i);
+    assert.equal(record.scenarios.length, 0);
+    assert.equal(record.trials.length, 0);
+  }
 });
 
 test('recorded scoring keeps the existing one-writer rejection instead of interleaving mutations', async t => {

@@ -189,8 +189,16 @@ export class ExperimentLab {
       const scenarios: Omit<Scenario, 'split'>[] = [];
       for (const dialogue of record.dialogues) {
         ctx.signal.throwIfAborted();
-        const goal = runtime?.goals ? (await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: [structuredClone(dialogue)], profiles: [] }, ctx))[0] : undefined;
-        if (goal) validateObservedGoals([goal], [dialogue], []);
+        if (runtime && !runtime.goals) throw new Error('Модельный score не умеет извлекать цели из записанных диалогов.');
+        const goals = runtime?.goals ? await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: [structuredClone(dialogue)], profiles: [], requirements: structuredClone(grounding!.requirements) }, ctx) : [];
+        if (runtime && goals.length !== 1) throw new Error(`Модельный score должен вернуть ровно одну цель для диалога ${dialogue.id}.`);
+        const goal = goals[0];
+        if (goal) {
+          validateObservedGoals([goal], [dialogue], []);
+          const known = new Set(grounding!.requirements.map(requirement => requirement.id));
+          const unknown = (goal.requirementIds ?? []).filter(id => !known.has(id));
+          if (!goal.requirementIds?.length || unknown.length) throw new Error(`Цель диалога ${dialogue.id} ссылается на неизвестные требования владельца: ${unknown.join(', ') || 'нет ссылки'}.`);
+        }
         const opening = dialogue.messages.find(message => message.role === 'user')!.content;
         const scenario = dialogueToScenario(dialogue, goal ? {
           goal: goal.goal, successCriteria: goal.successCriteria, requirementIds: goal.requirementIds,
@@ -364,6 +372,7 @@ export class ExperimentLab {
       record.reviewedAt = new Date().toISOString(); record.reviewMode = 'automated';
       record.manifestHash = measurementHash(record);
       record.limitations.push('Переоценка сохранённых фактов: агент и симулятор не запускались. Смена критериев или судьи не доказывает улучшение агента.');
+      if (input.codeOnly) record.limitations.push('Режим code-only пересчитал только точные проверки; модельные рубрики и кластеры не оценивались.');
       record.phase = 'evaluating';
       await this.launch(record, async ctx => {
         const runtime = input.codeOnly ? undefined : await this.runtime(record);
@@ -399,6 +408,7 @@ export class ExperimentLab {
           record.trials.push(trial);
           await this.checkpoint(record, 'evaluating', `Переоценено ${record.trials.length}/${trials.length}. Агент не запускался.`);
         }
+        if (runtime) await this.nameFailureModes(record, runtime, ctx);
         await this.checkpoint(record, 'results_review', 'Переоценка готова. Исходные трассы, оценки и ручные решения сохранены в исходном прогоне.');
       }, true);
       return structuredClone(record);
@@ -663,8 +673,10 @@ export class ExperimentLab {
         .map(e => `#${e.seq} ${e.type}${e.tool ? ` ${e.tool}` : ''}: ${e.text ?? JSON.stringify(e.result ?? e.args ?? '')}`).join('\n').slice(0, 12000),
     }));
     try {
-    const prompt = record.target.kind !== 'sandbox' ? (record.target.promptFile ? await readPrompt(record.target.promptFile) : undefined)
-      : record.revisions.find(r => r.id === record.selectedRevisionId)?.spec.instructions;
+      const prompt = record.assessmentOf || record.sourceEvidence
+        ? record.sources.find(source => source.kind === 'prompt')?.content
+        : record.target.kind !== 'sandbox' ? (record.target.promptFile ? await readPrompt(record.target.promptFile) : undefined)
+          : record.revisions.find(r => r.id === record.selectedRevisionId)?.spec.instructions;
       const modes = await runtime.failureModes({ task: record.task, failures, ...(prompt !== undefined ? { prompt } : {}) }, ctx);
       validateFailureModes(modes, failed, prompt);
       record.failureModes = modes;
