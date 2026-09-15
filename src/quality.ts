@@ -173,9 +173,9 @@ export function qualityLines(q: QualitySummary): { headline: string; metrics: st
     metrics: q.metrics.map(m => `${bar(m.accuracy)} ${percent(m.accuracy).padStart(4)}  ${m.name} · ${m.passed}/${m.passed + m.failed}${m.unknown ? ` · неясно ${m.unknown}` : ''}`),
     causes: q.causes.slice(0, 3).map((c, i) => `${i + 1}. ${c.name} — ${dialogues(c.dialogues)}${c.example ? `. ${c.example.card}: «${c.example.quote}»` : ''}${c.promptQuotes[0] ? ` · правило промпта: «${c.promptQuotes[0]}»` : ''}`),
     judge: `Судья: ${q.judge.label}.`,
-    queue: q.causes.length ? `Разобрать: ${plural(q.causes.length, ['причину', 'причины', 'причин'])}. Откройте диалоги причин и поставьте каждому отдельный вердикт.`
-      : q.humanQueue.total ? `Разметить человеку: ${q.humanQueue.total} (неясных ${q.humanQueue.unknownJudgments}, расхождений ${q.humanQueue.disagreements}, пометок симулятора ${q.humanQueue.simulatorFlags}; ${plural(q.humanQueue.pendingFailures, ['провал', 'провала', 'провалов'])} без вердикта). Попросите разобрать диалог в чате или откройте его на доске.`
-        : 'Ручная разметка не требуется: провалов и спорных оценок нет.',
+    queue: !q.humanQueue.total ? 'Ручная разметка не требуется: неразобранных диалогов нет.'
+      : q.causes.length ? `Разобрать: ${plural(q.causes.length, ['причину', 'причины', 'причин'])}. Откройте диалоги причин и поставьте каждому отдельный вердикт.`
+        : `Разметить человеку: ${q.humanQueue.total} (неясных ${q.humanQueue.unknownJudgments}, расхождений ${q.humanQueue.disagreements}, пометок симулятора ${q.humanQueue.simulatorFlags}; ${plural(q.humanQueue.pendingFailures, ['провал', 'провала', 'провалов'])} без вердикта). Попросите разобрать диалог в чате или откройте его на доске.`,
     scope: `${cardsWord(q.scope.cards)} · ${dialogues(q.scope.dialogues)} · ${q.scope.modes.map(m => modeNames[m]).join(', ')} · ${q.scope.provenance} · версия ${q.scope.target}${q.scope.judgeModel ? ` · судья ${q.scope.judgeModel}` : ''} · ${q.cost.usd === null ? 'стоимость неизвестна' : `$${q.cost.usd.toFixed(2)}`} · ${Math.round(q.cost.elapsedMs / 60000)} мин`,
     limits: q.limits,
   };

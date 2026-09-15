@@ -97,6 +97,13 @@ test('the queue line never says no labelling is needed while a failure still awa
   assert.match(lines.queue, /Откройте диалоги причин и поставьте каждому отдельный вердикт/);
   const clean = qualityLines(qualitySummary(record({ scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] })));
   assert.match(clean.queue, /не требуется/);
+
+  r.humanReviews = [{ id: 'h', trialId: 't2', verdict: 'fail', note: '#1: подтверждено', reviewedDialogue: true, createdAt: '2026-09-15T10:00:00Z' }];
+  const completed = qualitySummary(r);
+  assert.equal(completed.humanQueue.total, 0);
+  assert.ok(completed.causes.length, 'the reviewed cause stays in the aggregate');
+  assert.match(qualityLines(completed).queue, /неразобранных диалогов нет/);
+  assert.doesNotMatch(qualityLines(completed).queue, /Откройте диалоги причин/);
 });
 
 test('criteria that share an id but not a name stay separate rows, and a rubric named code never merges with the exact checks', () => {
