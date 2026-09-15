@@ -318,6 +318,28 @@ test('same metric labels with different pass criteria do not merge', () => {
   assert.deepEqual(q.metrics.filter(m => m.kind === 'rubric').map(m => [m.passed, m.failed]), [[1, 0], [0, 1]]);
 });
 
+test('reserved rubric ids share stable rows while owner rubrics require identical definitions', () => {
+  const reserved = ['goal_attainment', 'prompt_compliance', 'reply_quality'] as const;
+  const owner = { ...goal, id: 'owner_rule', name: 'Критерий владельца' };
+  const a = { ...scenario('a'), metrics: [...reserved.map(id => ({ ...goal, id, name: `Служебная ${id}` })), owner] };
+  const b = { ...scenario('b'), metrics: [...reserved.map(id => ({ ...format, id, name: `Другая ${id}` })), { ...owner, description: 'другое определение' }] };
+  const c = { ...scenario('c'), metrics: [owner] };
+  const measuredTrial = (id: string, card: Scenario, result: 'pass' | 'fail') => ({
+    ...trial(id, card.id, 'pass', 'pass'),
+    assessments: card.metrics!.map(metric => ({ metricId: metric.id, result, rationale: 'r', evidence: [1] })),
+  });
+
+  const metrics = qualitySummary(record({
+    scenarios: [a, b, c],
+    trials: [measuredTrial('t1', a, 'pass'), measuredTrial('t2', b, 'fail'), measuredTrial('t3', c, 'pass')],
+  })).metrics.filter(metric => metric.kind === 'rubric');
+
+  for (const id of reserved) {
+    assert.deepEqual(metrics.filter(metric => metric.id === id).map(metric => [metric.passed, metric.failed, metric.total]), [[1, 1, 2]]);
+  }
+  assert.deepEqual(metrics.filter(metric => metric.id === 'owner_rule').map(metric => [metric.passed, metric.failed, metric.total]), [[2, 0, 2], [0, 1, 1]]);
+});
+
 test('metric rows use the same human criterion verdict as card outcomes', () => {
   const trials = [trial('t1', 'a', 'pass', 'fail'), trial('t2', 'b', 'pass', 'pass')];
   const original = JSON.stringify(trials);
