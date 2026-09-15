@@ -27,6 +27,9 @@ const familyPlanSchema = z.strictObject({ families: z.array(z.strictObject({
 // New generated cards require an explicit interaction budget; older saved cards keep their original semantics.
 // With observed profiles the model may only choose a profileId; persona text is copied from the profile later.
 const RUBRIC_LIMIT = 8;
+// ponytail: conservative serialized-input cap; derive it from model token metadata if legitimate score inputs regularly hit it.
+const GOALS_INPUT_LIMIT = 120_000;
+const scoredGoalSchema = observedGoalSchema.extend({ requirementIds: observedGoalSchema.shape.requirementIds.unwrap().min(1) });
 /** Instructions about the shape of a machine reply: an envelope the user never sees. */
 /** external cards get harness rubrics after generation (fidelity, and prompt compliance when a prompt source exists); the model may use only what is left. */
 const generatedScenarioSchema = (external: boolean, harnessRubrics = 0) => scenarioSchema.required({ successCriteria: true, assumptions: true, metrics: true })
@@ -517,19 +520,36 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       return preparationSchema.parse({ ...grounding, scenarios, agent });
     },
     async goals(input, ctx) {
-      const result = await ask(
-        'Цели из реальных диалогов',
-        GOALS_ROLE,
-        {
+      if (!input.sources.length) throw new Error('Observed goals: без материалов владельца ожидаемое поведение остаётся неизвестным.');
+      const goals = [];
+      for (const dialogue of input.dialogues) {
+        const payload = {
           task: input.task,
+          sources: input.sources.map(({ id, name, content, kind }) => ({ id, name, content, ...(kind ? { kind } : {}) })),
           profiles: input.profiles.map(({ id, persona, characteristics }) => ({ id, persona, characteristics })),
-          dialogues: input.dialogues.map(d => ({ id: d.id, outcome: d.outcome, userMessages: d.messages.filter(m => m.role === 'user').map(m => m.content) })),
-        },
-        z.strictObject({ goals: z.array(observedGoalSchema).min(1).max(20) }), ctx,
-      );
-      try { validateObservedGoals(result.goals, input.dialogues, input.profiles); }
+          dialogues: [{ id: dialogue.id, userMessages: dialogue.messages.filter(message => message.role === 'user').map(message => message.content) }],
+        };
+        if (JSON.stringify(payload).length > GOALS_INPUT_LIMIT) {
+          throw new Error(`Неизвестно: полный диалог ${dialogue.id} и материалы владельца не помещаются в контекст; критерий не опубликован.`);
+        }
+        const result = await ask(
+          `Цель из реального диалога ${dialogue.id}`,
+          GOALS_ROLE,
+          payload,
+          z.strictObject({ goals: z.array(scoredGoalSchema).length(1) }), ctx,
+          value => {
+            const goal = value.goals[0]!;
+            if (goal.evidenceDialogueIds.length !== 1 || goal.evidenceDialogueIds[0] !== dialogue.id) return `Goal ${goal.id} must cite only dialogue ${dialogue.id}.`;
+            try { validateObservedGoals([goal], [dialogue], input.profiles); }
+            catch (error) { return error instanceof Error ? error.message : String(error); }
+            return undefined;
+          },
+        );
+        goals.push(result.goals[0]!);
+      }
+      try { validateObservedGoals(goals, input.dialogues, input.profiles); }
       catch (error) { throw new Error(`Observed goals: ${error instanceof Error ? error.message : String(error)}`); }
-      return result.goals;
+      return goals;
     },
     async failureModes(input, ctx) {
       const known = new Set(input.failures.map(f => f.trialId));
