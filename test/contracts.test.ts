@@ -74,10 +74,16 @@ test('only a whole-dialogue verdict can mark an explicit complete review', () =>
   assert.equal(humanReviewInputSchema.safeParse({ ...complete, metricId: 'goal' }).success, false);
   assert.equal(humanReviewInputSchema.safeParse({ ...complete, checkId: 'state' }).success, false);
 
+  const trial = { id: 't1', revisionId: 'r', scenarioId: 's', familyId: 'f', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'pass', reason: '', checks: [], events: [{ seq: 1, type: 'assistant', text: 'ok' }],
+    initialState: { records: {}, writableFields: [], transientFailures: 0 }, finalState: { records: {}, writableFields: [], transientFailures: 0 }, usage: emptyUsage(), elapsedMs: 1 };
   const persisted = { ...complete, id: 'h1', createdAt: '2026-09-15T10:00:00Z' };
-  assert.ok(experimentSchema.safeParse({ ...legacyRecord(), humanReviews: [persisted] }).success);
-  assert.equal(experimentSchema.safeParse({ ...legacyRecord(), humanReviews: [{ ...persisted, metricId: 'goal' }] }).success, false);
-  assert.equal(experimentSchema.safeParse({ ...legacyRecord(), humanReviews: [{ ...persisted, checkId: 'state' }] }).success, false);
+  const record = { ...legacyRecord(), trials: [trial] };
+  assert.ok(experimentSchema.safeParse({ ...record, humanReviews: [persisted] }).success);
+  assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, note: 'без ссылки' }] }).success, false);
+  assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, note: '#999: чужое событие' }] }).success, false);
+  assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, trialId: 'missing' }] }).success, false);
+  assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, metricId: 'goal' }] }).success, false);
+  assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, checkId: 'state' }] }).success, false);
 });
 
 test('input and persisted human review schemas both reject two targets', () => {

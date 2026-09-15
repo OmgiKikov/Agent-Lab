@@ -590,6 +590,14 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
   evaluatorVersion: text.optional(), targetRelease: text.max(200).optional(),
   sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(40), humanReviews: z.array(humanReviewSchema).max(1000) }).optional(),
+}).superRefine((record, ctx) => {
+  record.humanReviews.forEach((review, index) => {
+    if (!review.reviewedDialogue) return;
+    const trial = record.trials.find(candidate => candidate.id === review.trialId);
+    if (!trial || ![...review.note.matchAll(/#(\d+)\b/g)].some(match => trial.events.some(event => event.seq === Number(match[1])))) {
+      ctx.addIssue({ code: 'custom', path: ['humanReviews', index, 'note'], message: 'Полный разбор должен ссылаться на событие текущего диалога.' });
+    }
+  });
 });
 export interface CallContext {
   signal: AbortSignal; timeoutMs: number;
