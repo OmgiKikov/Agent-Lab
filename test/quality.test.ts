@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { qualityLines, qualitySummary, plural, shorten } from '../src/quality.js';
-import { emptyUsage, settingsSchema, type Experiment, type Scenario, type Trial } from '../src/contracts.js';
+import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
 
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
 const goal = { id: 'goal', name: 'Цель выполнена', subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' };
@@ -23,6 +23,9 @@ function record(overrides: Partial<Experiment> = {}): Experiment {
     scenarios: [scenario('a'), scenario('b'), scenario('c')], revisions: [], selectedRevisionId: null, manifestHash: 'h', reviewedAt: null, reviewMode: 'human', controlConsumedAt: null,
     trials: [], comparisons: [], iterations: [], usage: { ...emptyUsage(), calls: 6, costUsd: 0.27 }, error: null, limitations: [], humanReviews: [], ...overrides };
 }
+const review = (trialId: string, metricId: string, verdict: HumanReview['verdict']): HumanReview => ({
+  id: `h-${trialId}-${metricId}-${verdict}`, trialId, metricId, verdict, note: 'n', createdAt: '2026-09-15T10:00:00Z',
+});
 
 test('the first screen counts cards, criteria and causes from the shared outcome rules and names what a person still has to look at', () => {
   const r = record({ trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'fail', 'fail', 'fail'), trial('t3', 'c', 'pass', 'unknown')],
@@ -120,4 +123,19 @@ test('same metric labels with different pass criteria do not merge', () => {
   const b = { ...scenario('b'), metrics: [{ ...goal, passCriteria: 'A different business requirement' }] };
   const q = qualitySummary(record({ scenarios: [a, b], trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'fail', 'fail')] }));
   assert.deepEqual(q.metrics.filter(m => m.kind === 'rubric').map(m => [m.passed, m.failed]), [[1, 0], [0, 1]]);
+});
+
+test('metric rows use the same human criterion verdict as card outcomes', () => {
+  const trials = [trial('t1', 'a', 'pass', 'fail'), trial('t2', 'b', 'pass', 'pass')];
+  const original = JSON.stringify(trials);
+  const row = (humanReviews: HumanReview[]) => qualitySummary(record({ scenarios: [scenario('a'), scenario('b')], trials, humanReviews }))
+    .metrics.find(metric => metric.id === 'goal')!;
+
+  assert.deepEqual(row([]), { id: 'goal', name: 'Цель выполнена', kind: 'rubric', passed: 1, failed: 1, unknown: 0, total: 2, accuracy: 0.5 });
+  assert.deepEqual(row([review('t1', 'goal', 'pass')]), { id: 'goal', name: 'Цель выполнена', kind: 'rubric', passed: 2, failed: 0, unknown: 0, total: 2, accuracy: 1 });
+  assert.deepEqual(row([review('t1', 'goal', 'fail')]), row([]));
+  assert.deepEqual(row([review('t1', 'goal', 'unknown')]), { id: 'goal', name: 'Цель выполнена', kind: 'rubric', passed: 1, failed: 0, unknown: 1, total: 2, accuracy: 1 });
+  assert.deepEqual(row([review('t1', 'goal', 'invalid')]), { id: 'goal', name: 'Цель выполнена', kind: 'rubric', passed: 1, failed: 0, unknown: 0, total: 1, accuracy: 1 });
+  assert.deepEqual(row([review('other-trial', 'goal', 'pass'), review('t1', 'format', 'pass')]), row([]));
+  assert.equal(JSON.stringify(trials), original, 'row aggregation never mutates saved assessments');
 });
