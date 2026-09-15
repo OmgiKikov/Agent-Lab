@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 02
-current_phase_name: Понимание агента и гипотеза
-status: planning
-stopped_at: Phase 2 UI-SPEC approved
-last_updated: "2026-09-15T13:25:24.133Z"
+current_phase: 03
+current_phase_name: Полезный тест и его принятие
+status: executing
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-09-15T19:35:57.211Z"
 last_activity: 2026-09-15
-last_activity_desc: Phase 1 complete, transitioned to Phase 02
-state_head: 6fa70bf36cae43304676e38f59098553b600d371
+last_activity_desc: Phase 03 execution started
+state_head: cd36612b256288a256a5f541045009842ce64819
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 9
+  completed_plans: 6
   percent: 20
 ---
 
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-15)
 
 **Core value:** Прочитать агента и его требования, предложить полезный тест, запустить его на настоящем агенте, показать доказательства и сохранить принятый тест как регрессию.
-**Current focus:** Phase 02 — Понимание агента и гипотеза
+**Current focus:** Phase 03 — Полезный тест и его принятие
 
 ## Current Position
 
-Phase: 02 — Понимание агента и гипотеза
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-09-15 — Phase 1 complete, transitioned to Phase 02
+Phase: 03 (Полезный тест и его принятие) — EXECUTING
+Plan: 2 of 4
+Status: Ready to execute
+Last activity: 2026-09-15 — Phase 03 execution started
 
 Progress: [██░░░░░░░░] 20%
 
@@ -60,6 +60,7 @@ Progress: [██░░░░░░░░] 20%
 |------|----------|-------|-------|
 | Phase 01 P01 | 5 min | 2 tasks | 6 files |
 | Phase 01 P02 | 13 min | 2 tasks | 8 files |
+| Phase 03 P01 | 20m | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,9 @@ Recent decisions affecting current work:
 - [Phase 01]: Existing callers without an Experiment keep the optional reviews default; record-owning callers pass persisted humanReviews explicitly.
 - [Phase 01]: Complete review requires reviewedDialogue true on the latest whole-dialogue verdict; legacy and partial reviews never count.
 - [Phase 01]: A native full-dialogue review must cite a current event and can write only one review for the shown dialogue.
+- [Phase 03]: Строгий режим одной карточки включается только explicit-полем confirmedHypothesis; scenarioCount=1 сохраняет прежнюю семантику.
+- [Phase 03]: Канал наблюдения определяется структурой executable checks, а не ключевыми словами successCriteria; assistant prose не доказывает действие.
+- [Phase 03]: В confirmed-режиме только owner sources и user-authored dialogue turns служат grounding evidence; скрытые production-кандидаты не создаются.
 
 ### Pending Todos
 
@@ -101,6 +105,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-15T13:25:24.115Z
-Stopped at: Phase 2 UI-SPEC approved
-Resume file: .planning/phases/02-ponimanie-agenta-i-gipoteza/02-UI-SPEC.md
+Last session: 2026-09-15T19:35:57.185Z
+Stopped at: Completed 03-01-PLAN.md
+Resume file: None
