@@ -59,10 +59,10 @@ export function simulatorUsable(scenario: Scenario | undefined, trial: Trial, re
   const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
   return (simulatorWasUsed(trial) ? trial.simulatorChecks ?? [] : []).every(c => {
     const review = latest.get(`${trial.id}|check:${c.id}`);
-    return review ? review.verdict === 'pass' : c.passed;
+    return review?.verdict === 'invalid' || (review ? review.verdict === 'pass' : c.passed);
   }) && (scenario?.metrics ?? []).filter(m => m.subject === 'simulator' && metricApplies(m, trial)).every(m => {
     const review = latest.get(`${trial.id}|metric:${m.id}`);
-    return (review?.verdict ?? trial.assessments?.find(a => a.metricId === m.id)?.result) === 'pass';
+    return review?.verdict === 'invalid' || (review?.verdict ?? trial.assessments?.find(a => a.metricId === m.id)?.result) === 'pass';
   });
 }
 /** Shared eligibility for comparisons, CI and prompt proposals. Raw outcomes remain inspectable. */

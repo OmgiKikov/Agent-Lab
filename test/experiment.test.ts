@@ -10,6 +10,8 @@ import { ExperimentStore } from '../src/store.js';
 import { createDemoRuntime, demoEvaluationInput, demoInput } from '../src/demo.js';
 import { createInputSchema, fingerprint, validatePreparation, type Runtime } from '../src/contracts.js';
 import { awaitingVerdict } from '../src/comparison.js';
+import { simulatorUsable } from '../src/outcomes.js';
+import { qualitySummary } from '../src/quality.js';
 
 async function setup(t: TestContext, runtime?: Runtime) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-experiment-'));
@@ -660,6 +662,30 @@ test('finalizing requires decisive failure review and preserves original evidenc
   const reopened = await lab.addHumanReview(result.id, { trialId: result.trials[0]!.id, checkId: result.trials[0]!.checks.find(c => !c.passed)!.id, verdict: 'unknown', note: 'Предыдущее решение пересмотрено.' });
   assert.equal(reopened.phase, 'results_review');
   await assert.rejects(lab.reviewResults(result.id, resultHash(reopened)), /без решения/);
+});
+
+test('invalid excludes partial simulator criteria and allows finalizing the audit', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const base = demoEvaluationInput();
+  const created = await lab.create(createInputSchema.parse({ ...base, scenarioCount: 1, settings: { ...base.settings, userModes: ['reactive'], repeats: 1 } }));
+  await lab.waitForIdle();
+  await lab.start(created.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(created.id)) }); await lab.waitForIdle();
+  const record = await lab.get(created.id);
+  const trial = record.trials[0]!;
+  const scenario = record.scenarios.find(candidate => candidate.id === trial.scenarioId)!;
+  record.scenarios = [scenario]; record.trials = [trial]; record.humanReviews = [];
+  scenario.metrics = [{ id: 'simulator_metric', name: 'Simulator metric', subject: 'simulator', description: 'd', passCriteria: 'p', failCriteria: 'f' }];
+  trial.userMode = 'reactive'; trial.outcome = 'ungraded'; trial.checks = [];
+  if (!trial.events.some(event => event.type === 'simulator')) trial.events.push({ seq: Math.max(...trial.events.map(event => event.seq)) + 1, type: 'simulator', text: 'reply' });
+  trial.simulatorChecks = [{ id: 'simulator_loop', description: 'loop', passed: false, evidence: 'e', heuristic: false }];
+  trial.assessments = [{ metricId: 'simulator_metric', result: 'fail', rationale: 'r', evidence: [trial.events[0]!.seq] }];
+  await lab.store.save(record);
+  let reviewed = await lab.addHumanReview(record.id, { trialId: trial.id, checkId: 'simulator_loop', verdict: 'invalid', note: 'ошибочна проверка' });
+  reviewed = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'simulator_metric', verdict: 'invalid', note: 'ошибочна рубрика' });
+  assert.equal(simulatorUsable(scenario, trial, reviewed.humanReviews), true);
+  assert.equal(awaitingVerdict(reviewed).size, 0);
+  assert.equal(qualitySummary(reviewed).humanQueue.simulatorFlags, 0);
+  assert.equal((await lab.reviewResults(record.id, resultHash(reviewed))).phase, 'complete');
 });
 
 test('the active snapshot names the current card and target wait before a trial finishes', async t => {
