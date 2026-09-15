@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 1
+current_phase: 01
 current_phase_name: Честный человеческий разбор
 status: executing
-stopped_at: Initial roadmap created; Phase 1 is ready to plan.
-last_updated: "2026-09-15T11:14:14.174Z"
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-09-15T11:28:58.913Z"
 last_activity: 2026-09-15
-last_activity_desc: Созданы PROJECT.md, REQUIREMENTS.md, ROADMAP.md и начальное состояние проекта.
-state_head: 2ba2eecd380adb7a8d077d8a00070abc24973672
+last_activity_desc: Phase 01 execution started
+state_head: f48cee06da79a324f888cddbc1772187fcf67991
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 2
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-15)
 
 **Core value:** Подключить агента, проверить его на карточках и записанных диалогах, увидеть заземлённые провалы и повтором понять, что починилось, сломалось или несравнимо.
-**Current focus:** Phase 1 — Честный человеческий разбор
+**Current focus:** Phase 01 — Честный человеческий разбор
 
 ## Current Position
 
-Phase: 1 (Честный человеческий разбор) — READY TO EXECUTE
-Plan: 0 of TBD in current phase
+Phase: 01 (Честный человеческий разбор) — EXECUTING
+Plan: 2 of 2
 Status: Ready to execute
-Last activity: 2026-09-15 — Созданы PROJECT.md, REQUIREMENTS.md, ROADMAP.md и начальное состояние проекта.
+Last activity: 2026-09-15 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -54,6 +54,11 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: —
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01 P01 | 5 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -65,6 +70,8 @@ Recent decisions affecting current work:
 - [Scope]: SPEC и plan от 2026-09-15 авторитетны; Simulator v1 от 2026-09-14 — superseded historical context.
 - [Cutoff]: Tasks 1–10 дают pre-demo capability; 11–17 сокращают продукт; 18 измеряет P1–P3.
 - [Evidence]: Ненаблюдавшееся действие остаётся `unknown`; человеческий вердикт не распространяется между диалогами.
+- [Phase 01]: The latest metric review is authoritative: invalid removes the occurrence, pass/fail replace the judge, and unknown remains unknown.
+- [Phase 01]: Existing callers without an Experiment keep the optional reviews default; record-owning callers pass persisted humanReviews explicitly.
 
 ### Pending Todos
 
@@ -84,6 +91,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-15
-Stopped at: Initial roadmap created; Phase 1 is ready to plan.
+Last session: 2026-09-15T11:28:58.900Z
+Stopped at: Completed 01-01-PLAN.md
 Resume file: None
