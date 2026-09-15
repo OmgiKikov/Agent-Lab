@@ -48,7 +48,7 @@
 
 ### Business-Scenario Cards
 
-- [ ] **CARD-01**: Генерируемая карточка хранит `goal`, `facts`, `knows`, `opening`, `answers`, непустой `successCriteria` и только при необходимости `initialState` с точными проверками.
+- [x] **CARD-01**: Генерируемая карточка хранит `goal`, `facts`, `knows`, `opening`, `answers`, непустой `successCriteria` и только при необходимости `initialState` с точными проверками.
 - [x] **CARD-02**: Генерируемая внешняя карточка несёт ровно одну агентскую рубрику `goal_attainment`, построенную из её `successCriteria`, без подмены цели рубрикой тона или формата.
 - [x] **CARD-03**: Harness добавляет `prompt_compliance` только при наличии промпта и `user_fidelity` для симуляции; дополнительные рубрики создаёт только владелец через `agent_lab_edit`.
 - [x] **CARD-04**: Все значения из `answers[].reply` добавляются в `knows` без модельного раунда только при полном токенном совпадении с источником без учёта регистра; неподтверждённое значение или переполнение лимита 20 возвращает карточку на починку без молчаливого обрезания.
@@ -125,7 +125,7 @@
 | DISC-05 | Phase 3 | Pending |
 | DISC-06 | Phase 3 | Pending |
 | DISC-07 | Phase 3 | Pending |
-| CARD-01 | Phase 3 | Pending |
+| CARD-01 | Phase 3 | Complete |
 | CARD-02 | Phase 3 | Complete |
 | CARD-03 | Phase 3 | Complete |
 | CARD-04 | Phase 3 | Complete |
