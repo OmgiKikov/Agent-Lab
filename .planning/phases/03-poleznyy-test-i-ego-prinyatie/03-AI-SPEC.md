@@ -8,12 +8,24 @@
 
 **System Type:** Hybrid — grounded structured test generation with human acceptance
 
-**Description:** Agent Lab turns one owner-confirmed hypothesis into one minimal business-scenario test, validates its grounding, and binds explicit owner acceptance to the exact draft before any later run or regression save.
+**Description:** Agent Lab first discovers a recurring, evidence-grounded signal in a large recorded-dialogue batch, deeply checks a few representatives and controls, then turns one owner-confirmed hypothesis into one minimal business-scenario test and binds acceptance to its exact draft before any later run or regression save.
 
 **Critical Failure Modes:**
 1. Generating a test whose criterion is not grounded in owner requirements.
 2. Smuggling unsupported values into the scenario or silently truncating them.
 3. Treating acceptance of one draft as acceptance of a later edited draft.
+4. Spending one goal/judge sequence per imported dialogue before deciding which behavior is worth testing.
+5. Reporting an anomaly-selected discovery sample as unbiased accuracy.
+6. Leaving reply-only informational goals permanently `unknown`, or accepting action self-attestation as observed completion.
+
+### 1a. Discovery Delta
+
+- `discover` and `score` are separate products: discovery selects a useful test candidate; score measures a preselected validation set.
+- Discovery batches complete dialogues at 25 items / 60,000 serialized characters, validates every requirement/event citation against canonical evidence, and never sends stored outcomes to the model.
+- One recurring cluster must span at least two dialogues. Deterministic SHA-256 ranking selects at most three representatives and two controls; only those five or fewer receive deep goal extraction and existing two-vote rubric assessment.
+- The persisted discovery record contains protocol, seed, coverage counts, validated observations/clusters and exact representative/control IDs. No vector store, embedding index, external eval framework, semantic cache, queue or new storage service is introduced.
+- The test definition carries an owner-confirmed `goalObservation: reply | tool | state`. Reply evidence can decide an informational goal; action goals still require the declared successful tool or state evidence. Legacy records with no channel remain `unknown`.
+- Pi computes and displays a nominal call budget before consent. Partial/budget/error states lead the result and cannot be replaced by the insufficient-data hypothesis copy.
 
 ---
 
@@ -169,7 +181,7 @@ try {
 2. **Using substring matches or silent truncation.** `103` must not be justified by `A103`, and `.slice(0, 20)` would hide a malformed card. Use the same normalized full-token set on both sides; unsupported values or more than 20 final `knows` entries return the whole card to bounded repair.
 3. **Mixing generator, harness, and owner rubrics.** Before harness enrichment, generated output has exactly one agent rubric: `goal_attainment`, whose `passCriteria` equals `successCriteria` verbatim. The harness adds `prompt_compliance`/`user_fidelity` only when applicable; later owner rubrics arrive only through `agent_lab_edit`.
 4. **Equating `reviewedAt` with exact acceptance.** A timestamp does not identify content. Store the accepted full hash, exclude that field from `draftHash()`, and require equality at every run/export gate. Older records with no hash are unaccepted.
-5. **Keeping acceptance coupled to execution.** The current `agent_lab_run` confirmation immediately starts sessions. Split its confirm path so Phase 3 records acceptance only; Phase 4 may consume that acceptance without a second ceremony.
+5. **Keeping acceptance coupled to execution.** Preserve `agent_lab_run` as an explicit execution action and add `agent_lab_accept` (plus CLI `accept`) as the zero-cost definition-acceptance action. Never make repeated `run` calls alternate between accept and execute.
 
 ### Recommended Project Structure
 ```text
