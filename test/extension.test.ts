@@ -9,6 +9,7 @@ import { DefaultResourceLoader, SettingsManager, type ExtensionAPI, type Extensi
 import type { Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
+import { ExperimentLab } from '../dist/experiment.js';
 
 function registered(onUserMessage?: (message: unknown) => void) {
   const tools = new Map<string, ToolDefinition>();
@@ -463,7 +464,7 @@ test('Pi score imports recorded evidence code-only and gates every model call wi
   assert.equal(cancelled.cancelled, true);
   assert.equal(cancelled.phase, 'results_review');
   assert.equal(cancelled.usage.calls, 0);
-  assert.match(confirmations[0]!, /Агент и симулятор не запускаются.*До \d+ вызовов/s);
+  assert.match(confirmations[0]!, /Агент и симулятор не запускаются.*До \d+ модельных вызовов/s);
 
   const invalid = join(directory, 'invalid.jsonl');
   await writeFile(invalid, '{bad}\n');
@@ -483,6 +484,50 @@ test('Pi code-only score preserves the public 200-dialogue and configured budget
   const saved = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
   assert.equal(saved.settings.maxCalls, 7);
   assert.equal(saved.settings.maxDurationMs, 14_400_000);
+});
+
+test('Pi score reports judge progress only after reassessment starts', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-score-progress-'));
+  const { tools, shutdown } = registered();
+  const score = ExperimentLab.prototype.score;
+  const reassess = ExperimentLab.prototype.reassess;
+  let scoreCalls = 0;
+  let reassessmentStarted = false;
+  ExperimentLab.prototype.score = async function(raw, options) {
+    scoreCalls++;
+    const result = await score.call(this, raw, { ...options, codeOnly: true });
+    if (scoreCalls === 2) {
+      await this.waitForIdle();
+      const saved = await this.get(result.id);
+      const source = saved.sources[0]!;
+      saved.requirements = [{ id: 'owner_rule', text: source.content, sourceId: source.id, quote: source.content, critical: true }];
+      for (const scenario of saved.scenarios) scenario.requirementIds = ['owner_rule'];
+      await this.store.save(saved);
+      return saved;
+    }
+    return result;
+  };
+  ExperimentLab.prototype.reassess = function(id, raw, options) {
+    reassessmentStarted = true;
+    return reassess.call(this, id, { ...raw, codeOnly: true }, options);
+  };
+  t.after(async () => {
+    ExperimentLab.prototype.score = score;
+    ExperimentLab.prototype.reassess = reassess;
+    await shutdown();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const updates: { text: string; reassessmentStarted: boolean }[] = [];
+  const result = await tools.get('agent_lab_build')!.execute('progress', {
+    mode: 'score', task: 'Проверить ответ', materials: [{ name: 'policy.md', content: 'Отвечать по правилам.' }],
+    dialogues: [{ id: 'd1', goal: 'Пользователь получает адрес поддержки.', messages: [{ role: 'user', content: 'Как связаться?' }, { role: 'assistant', content: 'Напишите в поддержку.' }] }],
+  }, undefined, value => updates.push({
+    text: value.content.filter(item => item.type === 'text').map(item => item.text).join('\n'), reassessmentStarted,
+  }), { cwd: directory, hasUI: true, mode: 'tui', ui: { confirm: async () => true } } as ExtensionContext);
+  const report = output(result);
+  assert.equal(report.phase, 'results_review', report.error ?? JSON.stringify(report));
+  assert.ok(updates.some(update => /Оценено/.test(update.text)));
+  assert.ok(updates.filter(update => /Оценено/.test(update.text)).every(update => update.reassessmentStarted));
 });
 
 test('conversation completes human finding → prompt diff → unchanged SQLite suite → comparison', async t => {

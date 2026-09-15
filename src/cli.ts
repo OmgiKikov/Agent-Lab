@@ -183,7 +183,7 @@ async function main() {
       const imported = await lab.get(seed.id);
       if (imported.phase !== 'results_review') throw new Error(imported.error ?? 'Импорт диалогов не удался; агент не запускался.');
       let record = imported;
-      if (!values['code-only']) {
+      if (!values['code-only'] && !imported.questions.length) {
         const pending = await lab.reassess(seed.id, {}, { carryUsage: true });
         await lab.waitForIdle();
         record = await lab.get(pending.id);
@@ -191,16 +191,18 @@ async function main() {
       const bundle = await evidenceBundle(record, lab.store);
       const artifacts = await exportArtifacts(bundle, directory);
       const quality = qualityLines(qualitySummary(record));
-      const output = { id: record.id, phase: record.phase, imported: imported.trials.length,
+      const output = { id: record.id, phase: record.phase, imported: imported.trials.length, questions: record.questions,
         ...(record.assessmentOf ? { assessmentOf: record.assessmentOf } : {}),
         ...(values['code-only'] ? { scoreState: 'Оценено по коду без вызовов модели; кластеры провалов не строились.' } : {}),
         brief: renderScoreBrief(scoreBrief(record)), quality, artifacts, evidence: bundle.evidence };
       if (values.json) process.stdout.write(JSON.stringify(output, null, 2) + '\n');
       else process.stdout.write([
-        ...('scoreState' in output ? [output.scoreState, ''] : []), output.brief, '', 'АРТЕФАКТЫ',
-        ...Object.entries(artifacts).map(([name, path]) => `• ${name}: ${safeText(path)}`), '',
+        ...('scoreState' in output ? [output.scoreState, ''] : []), output.brief,
+        ...(record.questions.length ? ['', 'ВОПРОСЫ ВЛАДЕЛЬЦУ', ...record.questions.map(question => `• ${safeText(question)}`)] : []),
+        '', 'АРТЕФАКТЫ', ...Object.entries(artifacts).map(([name, path]) => `• ${name}: ${safeText(path)}`), '',
       ].join('\n'));
-      process.exitCode = record.phase === 'results_review' && !record.trials.some(trial => trial.assessmentError || ['invalid', 'cancelled'].includes(trial.outcome)) ? 0 : 2;
+      process.exitCode = record.phase === 'results_review' && !record.questions.length
+        && !record.trials.some(trial => trial.assessmentError || ['invalid', 'cancelled'].includes(trial.outcome)) ? 0 : 2;
       return;
     }
     if (command === 'reassess') {

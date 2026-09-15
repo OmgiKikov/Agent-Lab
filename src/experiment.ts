@@ -185,13 +185,15 @@ export class ExperimentLab {
         task: record.task, sources: structuredClone(record.sources), existingAgent: input.existingAgent,
         workflow: 'evaluate', scenarioCount: 0, profiles: [], goldenCases: [], notes: record.notes, targetKind: record.target.kind,
       }, ctx) : undefined;
+      if (grounding) Object.assign(record, { requirements: grounding.requirements, questions: grounding.questions });
+      const unresolved = !!grounding?.questions.length;
       const hasPrompt = record.sources.some(source => source.kind === 'prompt');
       const scenarios: Omit<Scenario, 'split'>[] = [];
       for (const dialogue of record.dialogues) {
         ctx.signal.throwIfAborted();
         if (runtime && !runtime.goals) throw new Error('Модельный score не умеет извлекать цели из записанных диалогов.');
-        const goals = runtime?.goals ? await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: [structuredClone(dialogue)], profiles: [], requirements: structuredClone(grounding!.requirements) }, ctx) : [];
-        if (runtime && goals.length !== 1) throw new Error(`Модельный score должен вернуть ровно одну цель для диалога ${dialogue.id}.`);
+        const goals = runtime?.goals && !unresolved ? await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: [structuredClone(dialogue)], profiles: [], requirements: structuredClone(grounding!.requirements) }, ctx) : [];
+        if (runtime && !unresolved && goals.length !== 1) throw new Error(`Модельный score должен вернуть ровно одну цель для диалога ${dialogue.id}.`);
         const goal = goals[0];
         if (goal) {
           validateObservedGoals([goal], [dialogue], []);
@@ -210,7 +212,7 @@ export class ExperimentLab {
         scenarios.push(scenario);
       }
       const agent = input.existingAgent ?? grounding?.agent ?? { name: 'Записанный агент', instructions: 'Агент не запускался; сохранены только записанные диалоги.', tools: [] };
-      if (grounding) {
+      if (grounding && !unresolved) {
         const prepared = validatePreparation({ ...grounding, scenarios }, record.sources, 'evaluate');
         Object.assign(record, { requirements: prepared.requirements, questions: prepared.questions, scenarios: prepared.scenarios });
       } else {
@@ -226,7 +228,9 @@ export class ExperimentLab {
         for (const event of trial.events) this.store.appendTrace(record.id, trial.id, event);
         record.trials.push(trial);
       }
-      await this.checkpoint(record, 'results_review', `Импортировано ${record.trials.length} записанных диалогов. Агент и симулятор не запускались.`);
+      await this.checkpoint(record, 'results_review', unresolved
+        ? `Импортировано ${record.trials.length} записанных диалогов. Нужны ответы владельца; оценка не запускалась.`
+        : `Импортировано ${record.trials.length} записанных диалогов. Агент и симулятор не запускались.`);
     });
     return structuredClone(record);
   }
@@ -350,6 +354,7 @@ export class ExperimentLab {
       const input = reassessmentSchema.parse(raw);
       const previous = await this.store.get(id);
       if (previous.workflow !== 'evaluate' || runningPhases.has(previous.phase) || !previous.trials.length) throw new Error('Нужен завершённый прогон с сохранёнными трассами.');
+      if (previous.questions.length) throw new Error('Сначала ответьте на открытые вопросы владельца; оценка по неуточнённым требованиям не запускается.');
       if (input.trialIds?.some(id => !previous.trials.some(t => t.id === id))) throw new Error('Неизвестный исходный диалог.');
       const record = freshDraft(previous);
       if (options.carryUsage) record.usage = structuredClone(previous.usage);

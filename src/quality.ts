@@ -53,47 +53,46 @@ const insufficientScoreBrief = (): ScoreBrief => ({
 });
 
 type GroundedScore = {
-  requirement: Requirement; source: Source; quote: string; scenario: Scenario; trial: Trial;
+  requirement: Requirement; source: Source; quote: string; trial: Trial;
   assessment: NonNullable<Trial['assessments']>[number]; event: TraceEvent;
-  mode?: NonNullable<Experiment['failureModes']>[number];
 };
 const preview = (text: string): string => shorten(text.replace(/\s+/gu, ' ').trim(), 240);
+const missingEvidence = (text: string): boolean => /наблюд|неяс|неизвест|отсутств|нет (?:данных|подтверждения|результата)|observable|observed|missing|state|tool|unclear|insufficient evidence/i.test(text);
 
 function groundedScore(record: Experiment): GroundedScore | undefined {
-  const resolve = (trial: Trial, mode?: GroundedScore['mode']): GroundedScore | undefined => {
+  // Saved failure modes identify only a trial, not its metric/evidence/requirement chain.
+  const resolve = (trial: Trial, result: 'fail' | 'unknown'): GroundedScore | undefined => {
     const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
-    if (!scenario) return;
-    // ponytail: lexical missing-evidence gate; replace it with a reason code if assessments gain one.
-    const assessment = trial.assessments?.find(item => item.result === 'fail' && scenario.metrics?.some(metric => metric.id === item.metricId && metric.subject === 'agent'))
-      ?? trial.assessments?.find(item => item.result === 'unknown' && scenario.metrics?.some(metric => metric.id === item.metricId && metric.subject === 'agent')
-        && (mode || /наблюд|неяс|неизвест|отсутств|нет (?:данных|подтверждения|результата)|missing|unclear|insufficient evidence/i.test(item.rationale)));
-    if (!assessment) return;
-    const event = assessment.evidence.map(seq => trial.events.find(item => item.seq === seq)).find((item): item is TraceEvent => !!item && !!assessmentEventContent(item).trim());
-    if (!event) return;
-    for (const requirementId of scenario.requirementIds) {
-      const requirement = record.requirements.find(item => item.id === requirementId);
-      const source = requirement && record.sources.find(item => item.id === requirement.sourceId);
-      const quote = source && requirement ? verbatimSpan(source.content, requirement.quote) : undefined;
-      if (requirement && source && quote) return { requirement, source, quote, scenario, trial, assessment, event, ...(mode ? { mode } : {}) };
+    if (!scenario || scenario.requirementIds.length !== 1) return;
+    for (const assessment of trial.assessments ?? []) {
+      if (assessment.result !== result || !assessment.rationale.trim()
+        || !scenario.metrics?.some(metric => metric.id === assessment.metricId && metric.subject === 'agent')) continue;
+      // ponytail: lexical missing-evidence gate; replace it with a reason code if assessments gain one.
+      if (result === 'unknown' && !missingEvidence(assessment.rationale)) continue;
+      const event = assessment.evidence.map(seq => trial.events.find(item => item.seq === seq))
+        .find((item): item is TraceEvent => !!item && item.type !== 'user' && item.type !== 'simulator' && !!assessmentEventContent(item).trim());
+      if (!event) continue;
+      for (const requirementId of scenario.requirementIds) {
+        const requirement = record.requirements.find(item => item.id === requirementId);
+        const source = requirement && record.sources.find(item => item.id === requirement.sourceId);
+        const quote = source && requirement ? verbatimSpan(source.content, requirement.quote) : undefined;
+        if (requirement && source && quote) return { requirement, source, quote, trial, assessment, event };
+      }
     }
   };
-  for (const mode of record.failureModes ?? []) for (const trialId of mode.trialIds) {
-    const trial = record.trials.find(item => item.id === trialId);
-    const grounded = trial && resolve(trial, mode);
+  for (const result of ['fail', 'unknown'] as const) for (const trial of record.trials) {
+    const grounded = resolve(trial, result);
     if (grounded) return grounded;
-  }
-  for (const trial of record.trials) {
-    const grounded = resolve(trial);
-    if (grounded?.assessment.result === 'unknown') return grounded;
   }
 }
 
 /** Compact evidence proposal; renderers escape external text at their terminal boundary. */
 export function scoreBrief(input: Experiment): ScoreBrief {
   const record = observedRecord(input);
+  if (record.questions.length) return insufficientScoreBrief();
   const grounded = groundedScore(record);
   if (!grounded) return insufficientScoreBrief();
-  const { requirement, source, quote, scenario, trial, assessment, event, mode } = grounded;
+  const { requirement, source, quote, trial, assessment, event } = grounded;
   const reference = `диалог ${trial.id}, событие #${event.seq}`;
   const labels: Record<TraceEvent['type'], string> = {
     user: 'Реплика пользователя', assistant: 'Ответ агента', simulator: 'Реплика симулятора', tool_call: 'Вызов инструмента',
@@ -102,22 +101,18 @@ export function scoreBrief(input: Experiment): ScoreBrief {
   const status = { pass: 'ПРОЙДЕНО', fail: 'НЕ ПРОЙДЕНО', unknown: 'НЕЯСНО' } as const;
   const observations = [
     `${labels[event.type]} · ${reference}: «${preview(assessmentEventContent(event))}»`,
-    ...['goal_attainment', 'reply_quality'].flatMap(metricId => {
-      const item = trial.assessments?.find(candidate => candidate.metricId === metricId && candidate.result !== 'unknown');
-      const seq = item?.evidence.find(candidate => trial.events.some(trace => trace.seq === candidate));
-      return item && seq !== undefined ? [`${metricId} — ${status[item.result]}: ${preview(item.rationale)} · диалог ${trial.id}, событие #${seq}`] : [];
-    }),
+    `${assessment.metricId} — ${status[assessment.result]}: ${preview(assessment.rationale)} · ${reference}`,
   ].slice(0, 3);
+  const missingGoal = trial.assessments?.find(item => item.metricId === 'goal_attainment' && item.result !== 'pass' && missingEvidence(item.rationale));
+  const unknownSeq = missingGoal?.evidence.find(seq => trial.events.some(item => item.seq === seq));
   const unknowns = [
-    ...(trial.observation?.state === 'missing' || trial.observation?.tools === 'partial'
+    ...(missingGoal && (trial.observation?.state === 'missing' || trial.observation?.tools === 'partial')
       ? [`НЕЯСНО · результат действия: ${trial.observation?.state === 'missing' ? 'состояние не наблюдалось' : 'состояние наблюдалось'}; ${trial.observation?.tools === 'partial' ? 'события инструментов наблюдались частично' : 'события инструментов наблюдались полностью'} · диалог ${trial.id}`]
       : []),
-    ...(trial.assessments ?? []).filter(item => item.result === 'unknown').map(item => {
-      const seq = item.evidence.find(candidate => trial.events.some(trace => trace.seq === candidate));
-      return `${item.metricId} — НЕЯСНО: ${preview(item.rationale)} · диалог ${trial.id}${seq === undefined ? '' : `, событие #${seq}`}`;
-    }),
+    ...(missingGoal?.result === 'unknown' ? [`goal_attainment — НЕЯСНО: ${preview(missingGoal.rationale)} · диалог ${trial.id}${unknownSeq === undefined ? '' : `, событие #${unknownSeq}`}`]
+      : assessment.result === 'unknown' ? [`${assessment.metricId} — НЕЯСНО: ${preview(assessment.rationale)} · ${reference}`] : []),
   ].slice(0, 3);
-  const mechanism = mode ? preview(`${mode.name}: ${mode.description}`) : `НЕЯСНО, подтверждён ли результат: ${preview(assessment.rationale)}`;
+  const mechanism = `${assessment.result === 'unknown' ? 'НЕЯСНО: ' : ''}${preview(assessment.rationale)}`;
   return {
     status: 'ready',
     requirements: [`${requirement.id} · источник ${source.id} (${preview(source.name)}): ${preview(requirement.text)} · точная цитата «${preview(quote)}»`],

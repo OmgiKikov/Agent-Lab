@@ -744,6 +744,29 @@ test('model-backed score rejects missing, duplicate and unknown grounded goals b
   }
 });
 
+test('open owner questions preserve imported facts but stop goal extraction and reassessment', async t => {
+  const calls = { goals: 0, assess: 0 };
+  const runtime: Runtime = {
+    async prepare({ sources }) { return { requirements: [{ id: 'ambiguous', text: 'Follow the applicable policy', sourceId: sources[0]!.id,
+      quote: sources[0]!.content, critical: true }], questions: ['Which policy applies?'], agent: { name: 'Recorded', instructions: 'Recorded', tools: [] }, scenarios: [] }; },
+    async goals() { calls.goals++; throw new Error('unresolved questions must stop goals'); },
+    async assess() { calls.assess++; throw new Error('unresolved questions must stop judging'); },
+    async improve() { throw new Error('unused'); }, async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
+  };
+  const { lab } = await setup(t, runtime);
+  const input = createInputSchema.parse({ task: 'Score ambiguous dialogue', mode: 'live', scenarioCount: 0,
+    materials: [{ name: 'policy.md', content: 'Follow the applicable policy.' }],
+    dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'Сделай по правилам' }, { role: 'assistant', content: 'Готово' }] }],
+  });
+  const seed = await lab.score(input); await lab.waitForIdle();
+  const record = await lab.get(seed.id);
+  assert.equal(record.phase, 'results_review', record.error ?? '');
+  assert.deepEqual(record.questions, ['Which policy applies?']);
+  assert.equal(record.trials.length, 1);
+  assert.deepEqual(calls, { goals: 0, assess: 0 });
+  await assert.rejects(lab.reassess(record.id), /открытые вопросы владельца/);
+});
+
 test('recorded scoring keeps the existing one-writer rejection instead of interleaving mutations', async t => {
   const entered = deferred(); const release = deferred();
   const runtime: Runtime = {

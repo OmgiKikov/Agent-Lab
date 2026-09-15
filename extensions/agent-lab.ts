@@ -235,18 +235,18 @@ export default function agentLab(pi: ExtensionAPI) {
           let record = await lab.get(id);
           if (!codeOnly) {
             signal.throwIfAborted();
-            const confirmed = await ctx.ui.confirm('Оценить записанные диалоги?', safeText(`Агент и симулятор не запускаются. До ${input.settings.maxCalls} вызовов судьи.`));
+            const confirmed = await ctx.ui.confirm('Оценить записанные диалоги?', safeText(`Агент и симулятор не запускаются. До ${input.settings.maxCalls} модельных вызовов.`));
             if (!confirmed) {
               const output = { ...summary(record, lab.store.directory), cancelled: true, brief: renderScoreBrief(scoreBrief(record)),
                 artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory) };
               return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
             }
-            signal.throwIfAborted(); scoreStage = 'judge'; lastProgress = ''; id = undefined;
+            signal.throwIfAborted(); lastProgress = ''; id = undefined;
             id = (await lab.score(input)).id; if (signal.aborted) cancel();
             await lab.waitForIdle(); await progress();
             record = await lab.get(id);
-            if (record.phase === 'results_review' && !record.error) {
-              signal.throwIfAborted(); const scoredId = record.id; id = undefined;
+            if (record.phase === 'results_review' && !record.error && !record.questions.length) {
+              signal.throwIfAborted(); scoreStage = 'judge'; lastProgress = ''; const scoredId = record.id; id = undefined;
               id = (await lab.reassess(scoredId, {}, { carryUsage: true })).id; if (signal.aborted) cancel();
               await lab.waitForIdle(); await progress(); record = await lab.get(id);
             }

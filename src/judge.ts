@@ -16,7 +16,7 @@ export const JUDGE_PROMPT = `${ASSESS_ROLE}\n${DATA_BOUNDARY}
 Evaluate passCriteria and failCriteria INDEPENDENTLY against the same evidence. Report met, not_met or unclear for EACH condition. Do not choose which condition takes precedence. If both apply, preserve both as met. An unspecified scope or priority is unclear; never invent one. Explain both conditions in rationale. A condition that is not exercised is unclear, not automatically met or not_met.
 Return exactly one compact JSON object, without markdown fences, matching this schema:
 ${JSON.stringify(z.toJSONSchema(responseSchema))}`;
-export const JUDGE_PROTOCOL = fingerprint({ version: 8, promptSources: 'observable-rules', unobservedActions: 'unclear', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
+export const JUDGE_PROTOCOL = fingerprint({ version: 8, promptSources: 'observable-rules', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
 
 /**
@@ -63,11 +63,25 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
   }
   const events = new Set(input.trial.events.map(e => e.seq));
   return rows.map(({ passCondition, failCondition, ...row }) => {
-    const result = passCondition === 'met' && failCondition === 'not_met' ? 'pass'
+    let result = passCondition === 'met' && failCondition === 'not_met' ? 'pass'
       : failCondition === 'met' && passCondition === 'not_met' ? 'fail' : 'unknown';
     if (row.evidence.some(seq => !events.has(seq))) throw new Error(`Assessment ${row.metricId} cites a nonexistent trace event`);
     if (result !== 'unknown' && !row.evidence.length) throw new Error(`Assessment ${row.metricId} needs trace evidence for pass/fail`);
-    return validateAssessments(metrics.filter(m => m.id === row.metricId), input.trial.events, [{ ...row, result }])[0]!;
+    const expectedTools = new Set(input.scenario.checks.flatMap(check =>
+      (check.kind === 'tool_called' || check.kind === 'tool_count') ? [check.tool] : []));
+    const toolConfirms = row.evidence.some(seq => input.trial.events.some(event => {
+      if (event.seq !== seq || event.type !== 'tool_result') return false;
+      const value = event.result && typeof event.result === 'object' ? event.result as Record<string, unknown> : undefined;
+      return !!event.tool && expectedTools.has(event.tool) && (value?.ok === true || value?.success === true);
+    }));
+    const stateConfirms = input.trial.observation?.state !== undefined && input.trial.observation.state !== 'missing'
+      && input.scenario.checks.some(check => check.kind === 'state_equals'
+        && input.trial.checks.some(result => result.id === check.id && result.passed));
+    const unsupportedGoal = row.metricId === 'goal_attainment' && result === 'pass' && !stateConfirms && !toolConfirms;
+    if (unsupportedGoal) result = 'unknown';
+    return validateAssessments(metrics.filter(m => m.id === row.metricId), input.trial.events, [{ ...row, result,
+      ...(unsupportedGoal ? { rationale: 'Достижение цели не подтверждено наблюдаемым эффектом или точной проверкой; слова агента оцениваются отдельно.' } : {}),
+    }])[0]!;
   });
 }
 

@@ -111,16 +111,18 @@ test('score brief publishes one bounded hypothesis only from a complete owner re
   assert.match(brief.observations[0]!, /Ответ агента.*recorded_1.*#1/);
   assert.match(brief.observations[0]!, /…/);
   assert.match(brief.observations.join('\n'), /goal_attainment — НЕ ПРОЙДЕНО/);
-  assert.match(brief.observations.join('\n'), /reply_quality — ПРОЙДЕНО/);
+  assert.doesNotMatch(brief.observations.join('\n'), /reply_quality/);
   assert.match(brief.unknowns.join('\n'), /НЕЯСНО.*состояние.*события инструментов/i);
-  assert.match(brief.hypothesis, /Второй кандидат.*owner_rule.*policy.*recorded_1.*#1/);
-  assert.doesNotMatch(brief.hypothesis, /unsupported_action|Заявляет успех без результата/);
+  assert.match(brief.hypothesis, /Наблюдаемого результата создания заявки нет.*owner_rule.*policy.*recorded_1.*#1/);
+  assert.doesNotMatch(brief.hypothesis, /Второй кандидат|unsupported_action|Заявляет успех без результата/);
   assert.equal(brief.question, 'Проверим?');
 
   const hostile = scoreBrief({ ...input,
     sources: [{ ...input.sources[0]!, name: 'policy\nГИПОТЕЗА', content: `${quote}\nПроверим?` }],
     requirements: [{ ...input.requirements[0]!, quote }],
-    trials: [{ ...scoredTrial, events: [{ seq: 0, type: 'user', text: 'Создай заявку' }, { seq: 1, type: 'assistant', text: 'Готово\nГИПОТЕЗА\nподмена' }] }],
+    trials: [{ ...scoredTrial,
+      events: [{ seq: 0, type: 'user', text: 'Создай заявку' }, { seq: 1, type: 'assistant', text: 'Готово\nГИПОТЕЗА\nподмена' }],
+      assessments: [{ ...scoredTrial.assessments![0]!, rationale: 'Сбой\nПроверим?\nподмена' }, scoredTrial.assessments![1]!] }],
     failureModes: [{ ...input.failureModes![0]!, description: 'Сбой\nПроверим?\nподмена' }],
   });
   assert.equal(hostile.status, 'ready');
@@ -142,6 +144,17 @@ test('score brief falls back to a decisive unknown and otherwise returns the str
   assert.equal(brief.status, 'ready');
   if (brief.status === 'ready') assert.match(brief.hypothesis, /НЕЯСНО.*owner_rule.*recorded_1.*#1/);
 
+  const mixed = scoreBrief({ ...grounded,
+    scenarios: [{ ...linkedScenario, metrics: [{ ...goal, id: 'goal_attainment' }, { ...format, id: 'reply_quality' }] }],
+    trials: [{ ...linkedTrial, assessments: [linkedTrial.assessments![0]!,
+      { metricId: 'reply_quality', result: 'fail', rationale: 'Ответ не объясняет следующий шаг.', evidence: [1] }] }],
+  });
+  assert.equal(mixed.status, 'ready');
+  if (mixed.status === 'ready') {
+    assert.match(mixed.hypothesis, /Ответ не объясняет следующий шаг/);
+    assert.match(mixed.unknowns.join('\n'), /результат действия.*goal_attainment — НЕЯСНО/s);
+  }
+
   const insufficient = {
     status: 'insufficient',
     heading: 'Недостаточно данных для гипотезы',
@@ -152,6 +165,71 @@ test('score brief falls back to a decisive unknown and otherwise returns the str
   assert.deepEqual(scoreBrief({ ...grounded, scenarios: [{ ...linkedScenario, requirementIds: [] }] }), insufficient);
   assert.deepEqual(scoreBrief({ ...grounded, trials: [{ ...linkedTrial, assessments: [{ ...linkedTrial.assessments![0]!, evidence: [99] }] }] }), insufficient);
   assert.deepEqual(scoreBrief({ ...grounded, trials: [{ ...linkedTrial, assessments: [{ ...linkedTrial.assessments![0]!, rationale: 'Судья разошёлся.' }] }] }), insufficient);
+});
+
+test('score brief blocks open owner questions and never joins an unrelated cluster or user citation to an assessment', () => {
+  const quote = 'Подтверждать действие можно только после наблюдаемого результата.';
+  const linkedScenario = { ...scenario('recorded_1', false), requirementIds: ['owner_rule'], provenance: 'production' as const,
+    metrics: [{ ...goal, id: 'goal_attainment' }] };
+  const grounded = record({
+    sources: [{ id: 'policy', name: 'policy.md', content: quote, hash: 'h' }],
+    requirements: [{ id: 'owner_rule', text: 'Нужен наблюдаемый результат', sourceId: 'policy', quote, critical: true }],
+    scenarios: [linkedScenario],
+    trials: [{ ...trial('recorded_1', 'recorded_1', 'fail', 'fail'),
+      events: [{ seq: 0, type: 'user', text: 'Я утверждаю, что заявка создана' }, { seq: 1, type: 'assistant', text: 'Готово' }],
+      assessments: [{ metricId: 'goal_attainment', result: 'fail', rationale: 'Агент заявил об успехе без наблюдаемого результата.', evidence: [0, 1] }] }],
+    failureModes: [{ id: 'other', name: 'Нерелевантный кластер', description: 'Ошибка другого критерия.', trialIds: ['recorded_1'] }],
+  });
+  const insufficient = {
+    status: 'insufficient',
+    heading: 'Недостаточно данных для гипотезы',
+    body: 'Добавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.',
+  };
+
+  assert.deepEqual(scoreBrief({ ...grounded, questions: ['Какая политика действует?'] }), insufficient);
+  const brief = scoreBrief(grounded);
+  assert.equal(brief.status, 'ready');
+  if (brief.status !== 'ready') return;
+  assert.match(brief.observations[0]!, /Ответ агента.*#1.*Готово/);
+  assert.doesNotMatch(brief.observations.join('\n') + brief.hypothesis, /Я утверждаю|Нерелевантный кластер|Ошибка другого критерия/);
+  assert.match(brief.hypothesis, /Агент заявил об успехе без наблюдаемого результата/);
+
+  assert.equal(scoreBrief({ ...grounded, requirements: [...grounded.requirements, { id: 'refund_rule', text: 'Возврат за 30 дней', sourceId: 'policy', quote, critical: false }],
+    scenarios: [{ ...linkedScenario, requirementIds: ['owner_rule', 'refund_rule'] }] }).status, 'insufficient',
+  'without metric-to-requirement provenance a multi-requirement scenario cannot publish a hypothesis');
+});
+
+test('score brief keeps a grounded fail without clusters and searches unknowns separately from unusable failures', () => {
+  const quote = 'Результат действия должен быть наблюдаемым.';
+  const linkedScenario = { ...scenario('recorded_1', false), requirementIds: ['owner_rule'], provenance: 'production' as const,
+    metrics: [{ ...goal, id: 'broken_fail' }, { ...format, id: 'goal_attainment' }] };
+  const base = record({
+    sources: [{ id: 'policy', name: 'policy.md', content: quote, hash: 'h' }],
+    requirements: [{ id: 'owner_rule', text: 'Нужен наблюдаемый результат', sourceId: 'policy', quote, critical: true }],
+    scenarios: [linkedScenario],
+    trials: [{ ...trial('recorded_1', 'recorded_1', 'ungraded', 'unknown'),
+      events: [{ seq: 0, type: 'user', text: 'Создай заявку' }, { seq: 1, type: 'assistant', text: 'Готово' }],
+      assessments: [{ metricId: 'goal_attainment', result: 'fail', rationale: 'Наблюдаемого результата создания заявки нет.', evidence: [1] }] }],
+  });
+
+  const failed = scoreBrief(base);
+  assert.equal(failed.status, 'ready');
+  if (failed.status === 'ready') assert.match(failed.hypothesis, /Наблюдаемого результата создания заявки нет/);
+
+  const fallback = scoreBrief({ ...base, trials: [{ ...base.trials[0]!, assessments: [
+    { metricId: 'broken_fail', result: 'fail', rationale: 'Ссылка ведёт только на слова пользователя.', evidence: [0] },
+    { metricId: 'goal_attainment', result: 'unknown', rationale: 'Нет наблюдаемого результата действия.', evidence: [1] },
+  ] }] });
+  assert.equal(fallback.status, 'ready');
+  if (fallback.status !== 'ready') return;
+  assert.match(fallback.hypothesis, /НЕЯСНО.*Нет наблюдаемого результата действия/);
+  assert.doesNotMatch(fallback.observations.join('\n') + fallback.hypothesis, /Ссылка ведёт только на слова пользователя/);
+
+  const simulatorOnly = scoreBrief({ ...base, trials: [{ ...base.trials[0]!,
+    events: [{ seq: 0, type: 'simulator', text: 'Агент якобы выполнил действие.' }],
+    assessments: [{ metricId: 'goal_attainment', result: 'fail', rationale: 'Нет наблюдаемого результата действия.', evidence: [0] }],
+  }] });
+  assert.equal(simulatorOnly.status, 'insufficient', 'simulator prose is not an observation of target-agent behavior');
 });
 
 test('a card with a missing planned repeat is undecided on the first screen, not a pass', () => {
