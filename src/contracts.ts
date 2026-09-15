@@ -460,8 +460,10 @@ export interface Comparison {
 }
 export const humanReviewInputSchema = z.strictObject({
   trialId: identifier, metricId: identifier.optional(), checkId: identifier.optional(),
-  verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000), durationMs: z.number().int().nonnegative().max(3600000).optional(),
-}).refine(v => !(v.metricId && v.checkId), 'Review either one metric, one check, or the whole trial');
+  verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000), reviewedDialogue: z.literal(true).optional(),
+  durationMs: z.number().int().nonnegative().max(3600000).optional(),
+}).refine(v => !(v.metricId && v.checkId), 'Review either one metric, one check, or the whole trial')
+  .refine(v => !v.reviewedDialogue || (!v.metricId && !v.checkId), 'Only a whole-dialogue verdict can mark a complete review');
 export type HumanReviewInput = z.infer<typeof humanReviewInputSchema>;
 export type HumanReview = HumanReviewInput & { id: string; createdAt: string };
 const humanReviewSchema = humanReviewInputSchema.safeExtend({ id: identifier, createdAt: text });
@@ -582,8 +584,9 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   usage: usageSchema, error: z.string().nullable(), limitations: z.array(z.string()),
   humanReviews: z.array(z.strictObject({
     id: identifier, createdAt: text, trialId: identifier, metricId: identifier.optional(), checkId: identifier.optional(),
-    verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000), durationMs: z.number().int().nonnegative().max(3600000).optional(),
-  })).default([]), resultsReviewedAt: text.optional(), resultsReviewHash: text.optional(),
+    verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000), reviewedDialogue: z.literal(true).optional(),
+    durationMs: z.number().int().nonnegative().max(3600000).optional(),
+  }).refine(v => !v.reviewedDialogue || (!v.metricId && !v.checkId), 'Only a whole-dialogue verdict can mark a complete review')).default([]), resultsReviewedAt: text.optional(), resultsReviewHash: text.optional(),
   failureModes: z.array(failureModeSchema).max(30).optional(),
   releaseLog: releaseLogSchema.optional(),
   parentRunId: identifier.optional(), selectedScenarioIds: z.array(identifier).min(1).max(40).optional(), targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),

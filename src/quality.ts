@@ -26,13 +26,15 @@ export interface QualityCause {
 }
 export interface QualitySummary {
   /** Cards decided across all measured modes: pass only when every usable dialogue passed. */
-  cards: { passed: number; failed: number; unknown: number; total: number; accuracy: number | null };
+  cards: { passed: number; failed: number; unknown: number; notReached: number; total: number; accuracy: number | null };
   metrics: QualityMetric[];
   causes: QualityCause[];
   /** How sure the automatic verdict is: decided dialogues vs those the judge left unknown or a human disputes. */
   judge: { decided: number; unknown: number; disputed: number; label: string };
   /** Unique dialogues needing review. Categories may overlap. */
   humanQueue: { unknownJudgments: number; disagreements: number; simulatorFlags: number; total: number; pendingFailures: number };
+  /** Explicit complete reviews of individual dialogues; partial and legacy reviews do not count. */
+  human: { reviewed: number; total: number };
   scope: { cards: number; dialogues: number; modes: UserMode[]; provenance: string; target: string; judgeModel?: string };
   cost: { usd: number | null; calls: number; elapsedMs: number };
   /** One sentence of limits; the detailed reasons stay in the verdict. */
@@ -125,14 +127,17 @@ const limitTexts: Record<string, string> = {
 export function qualitySummary(input: Experiment): QualitySummary {
   const record = observedRecord(input);
   const v = verdictSummary(record);
-  const cardOutcomes = record.scenarios.map(s => cardOutcome(record, s));
-  const cards = { passed: cardOutcomes.filter(o => o === 'pass').length, failed: cardOutcomes.filter(o => o === 'fail').length,
-    unknown: cardOutcomes.filter(o => o === 'unknown').length, total: record.scenarios.length, accuracy: null as number | null };
+  const reached = new Set(record.trials.filter(measured).map(t => t.scenarioId));
+  const cardOutcomes = record.scenarios.map(s => ({ scenario: s, outcome: cardOutcome(record, s) }));
+  const cards = { passed: cardOutcomes.filter(o => o.outcome === 'pass').length, failed: cardOutcomes.filter(o => o.outcome === 'fail').length,
+    unknown: cardOutcomes.filter(o => reached.has(o.scenario.id) && o.outcome === 'unknown').length,
+    notReached: cardOutcomes.filter(o => !reached.has(o.scenario.id)).length, total: record.scenarios.length, accuracy: null as number | null };
   cards.accuracy = rate(cards.passed, cards.failed);
   const metrics = metricRows(record);
   const rubricUnknown = metrics.filter(m => m.kind === 'rubric').reduce((n, m) => n + m.unknown, 0);
   const decided = record.trials.filter(t => automaticTrialResult(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews) !== 'unknown').length;
   const reviews = latestHumanReviews(record);
+  const human = { reviewed: record.trials.filter(t => reviews.get(`${t.id}|dialogue`)?.reviewedDialogue === true).length, total: record.trials.length };
   const undecidedByHuman = (t: Trial) => !['pass', 'fail', 'invalid'].includes(reviews.get(`${t.id}|dialogue`)?.verdict ?? '');
   const scenarioOf = (t: Trial) => record.scenarios.find(s => s.id === t.scenarioId);
   const pending = awaitingVerdict(record);
@@ -153,9 +158,9 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const judgeModel = record.trials.find(t => t.judgeAudit)?.judgeAudit?.model ?? record.settings.roles?.judge?.model ?? record.settings.judge?.model;
   const limitCodes = v.confidenceReasons.map(r => r.code).filter(code => code in limitTexts);
   const limits = limitCodes.length ? `Границы: ${[...new Set(limitCodes.map(c => limitTexts[c]!))].slice(0, 4).join(' · ')}.` : 'Границы: см. статистику.';
-  const headline = !measuredTrials ? v.headline
-    : `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)})${cards.unknown ? `, ${cards.unknown} без решения` : ''}.`;
+  const headline = `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}), ${cards.unknown} без решения, ${cards.notReached} не дошли; разобрано человеком ${human.reviewed} из ${plural(human.total, ['диалога', 'диалогов', 'диалогов'])}.`;
   return { cards, metrics, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
+    human,
     scope: { cards: record.scenarios.length, dialogues: measuredTrials, modes: record.settings.userModes, provenance, target, ...(judgeModel ? { judgeModel } : {}) },
     cost: { usd: record.usage.costUsd, calls: record.usage.calls, elapsedMs: record.trials.reduce((n, t) => n + t.elapsedMs, 0) }, limits, headline };
 }
@@ -168,8 +173,9 @@ export function qualityLines(q: QualitySummary): { headline: string; metrics: st
     metrics: q.metrics.map(m => `${bar(m.accuracy)} ${percent(m.accuracy).padStart(4)}  ${m.name} · ${m.passed}/${m.passed + m.failed}${m.unknown ? ` · неясно ${m.unknown}` : ''}`),
     causes: q.causes.slice(0, 3).map((c, i) => `${i + 1}. ${c.name} — ${dialogues(c.dialogues)}${c.example ? `. ${c.example.card}: «${c.example.quote}»` : ''}${c.promptQuotes[0] ? ` · правило промпта: «${c.promptQuotes[0]}»` : ''}`),
     judge: `Судья: ${q.judge.label}.`,
-    queue: q.humanQueue.total ? `Разметить человеку: ${q.humanQueue.total} (неясных ${q.humanQueue.unknownJudgments}, расхождений ${q.humanQueue.disagreements}, пометок симулятора ${q.humanQueue.simulatorFlags}; ${plural(q.humanQueue.pendingFailures, ['провал', 'провала', 'провалов'])} без вердикта). Попросите разобрать диалог в чате или откройте его на доске.`
-      : 'Ручная разметка не требуется: провалов и спорных оценок нет.',
+    queue: q.causes.length ? `Разобрать: ${plural(q.causes.length, ['причину', 'причины', 'причин'])}. Откройте диалоги причин и поставьте каждому отдельный вердикт.`
+      : q.humanQueue.total ? `Разметить человеку: ${q.humanQueue.total} (неясных ${q.humanQueue.unknownJudgments}, расхождений ${q.humanQueue.disagreements}, пометок симулятора ${q.humanQueue.simulatorFlags}; ${plural(q.humanQueue.pendingFailures, ['провал', 'провала', 'провалов'])} без вердикта). Попросите разобрать диалог в чате или откройте его на доске.`
+        : 'Ручная разметка не требуется: провалов и спорных оценок нет.',
     scope: `${cardsWord(q.scope.cards)} · ${dialogues(q.scope.dialogues)} · ${q.scope.modes.map(m => modeNames[m]).join(', ')} · ${q.scope.provenance} · версия ${q.scope.target}${q.scope.judgeModel ? ` · судья ${q.scope.judgeModel}` : ''} · ${q.cost.usd === null ? 'стоимость неизвестна' : `$${q.cost.usd.toFixed(2)}`} · ${Math.round(q.cost.elapsedMs / 60000)} мин`,
     limits: q.limits,
   };
