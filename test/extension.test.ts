@@ -89,6 +89,56 @@ test('conversation runs only the confirmed plan, then saves and loads the same c
   assert.equal(loaded.reviewMode, null); assert.equal(loaded.usage.calls, 0);
 });
 
+test('accept tool shows and records only the current one-test definition, while refusal and edits stay inert', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-accept-'));
+  const { tools, shutdown } = registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const shown: { question: string; body: string }[] = [];
+  let consent = false;
+  const ctx = { cwd: directory, mode: 'tui', hasUI: true, ui: {
+    confirm: async (question: string, body: string) => { shown.push({ question, body }); return consent; },
+  } } as ExtensionContext;
+  const call = async (name: string, params: unknown) => output(await tools.get(name)!.execute('fixture', params, undefined, undefined, ctx));
+  const built = await call('agent_lab_build', { mode: 'demo', scenarioCount: 1 });
+  const draft = await call('agent_lab_inspect', { id: built.id });
+  draft.scenarios[0].goalObservation = 'reply';
+  draft.scenarios[0].user.opening = `Первая строка\n${'полный вход '.repeat(200)}`;
+  const prepared = await call('agent_lab_edit', { id: built.id, expectedHash: built.draftHash, patch: { scenarios: draft.scenarios } });
+
+  const refused = await call('agent_lab_accept', { id: built.id });
+  assert.equal(refused.accepted, false);
+  let current = await call('agent_lab_inspect', { id: built.id });
+  assert.equal(current.acceptedDraftHash, undefined);
+  assert.equal(current.trialCount, 0); assert.equal(current.usage.calls, prepared.usage.calls);
+  assert.equal(shown[0]!.question, 'Этот тест действительно проверяет нужное поведение?');
+  assert.match(shown[0]!.body, /^ТЕСТ\nСИТУАЦИЯ/m);
+  assert.match(shown[0]!.body, /НАБЛЮДЕНИЕ\n  ответ агента \(reply\)/);
+  assert.match(shown[0]!.body, new RegExp(`Версия: ${prepared.draftHash.slice(0, 12)}`));
+  assert.ok(shown[0]!.body.includes(draft.scenarios[0].user.opening.trimEnd().replace('\n', '\n  ')));
+  assert.ok(shown[0]!.body.includes(draft.scenarios[0].successCriteria.replace('\n', '\n  ')));
+
+  consent = true;
+  const accepted = await call('agent_lab_accept', { id: built.id });
+  assert.equal(accepted.accepted, true); assert.equal(accepted.acceptedDraftHash, prepared.draftHash);
+  current = await call('agent_lab_inspect', { id: built.id });
+  assert.equal(current.acceptedDraftHash, prepared.draftHash);
+  assert.equal(current.reviewMode, null); assert.equal(current.resultsReviewedAt, undefined); assert.equal(current.trialCount, 0);
+  assert.equal(current.usage.calls, prepared.usage.calls);
+
+  current.scenarios[0].user.opening = 'Исправленный полный вход';
+  const edited = await call('agent_lab_edit', { id: built.id, expectedHash: current.draftHash, patch: { scenarios: current.scenarios } });
+  assert.notEqual(edited.draftHash, prepared.draftHash);
+  assert.equal(edited.acceptedDraftHash, prepared.draftHash, 'old acceptance remains audit metadata but is visibly stale');
+  const acceptedAgain = await call('agent_lab_accept', { id: built.id });
+  assert.equal(acceptedAgain.acceptedDraftHash, edited.draftHash);
+  assert.match(shown.at(-1)!.body, /Исправленный полный вход/);
+  assert.match(shown.at(-1)!.body, new RegExp(`Версия: ${edited.draftHash.slice(0, 12)}`));
+  assert.equal((await call('agent_lab_inspect', { id: built.id })).trialCount, 0);
+  const run = await call('agent_lab_run', { id: built.id, expectedHash: edited.draftHash });
+  assert.equal(run.phase, 'results_review');
+  assert.equal(run.acceptedDraftHash, edited.draftHash, 'explicit execution preserves acceptance metadata');
+});
+
 test('Pi connects a new request, conversational correction, reviewed run, evidence discussion and repeat without UI JSON', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-journey-fixture-'));
   const { tools, shutdown, command, contexts, userMessages } = registered(() => {
@@ -179,7 +229,7 @@ test('headless model tools prepare and edit only; approvals and human assessment
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
   const updates: string[] = [];
   try {
-    assert.deepEqual([...tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt', 'agent_lab_clarify']);
+    assert.deepEqual([...tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt', 'agent_lab_clarify']);
     const report = output(await tools.get('agent_lab_build')!.execute('build-1', { mode: 'demo', scenarioCount: 2 }, undefined,
       value => { updates.push(JSON.stringify(value)); }, ctx));
     assert.equal(report.phase, 'review'); assert.equal(report.workflow, 'evaluate');
@@ -331,7 +381,7 @@ test('actual Pi SDK loader imports native cards, preparation-only tools and embe
     await loader.reload();
     const loaded = loader.getExtensions();
     assert.deepEqual(loaded.errors, []); assert.equal(loaded.extensions.length, 1);
-    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt', 'agent_lab_clarify']);
+    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt', 'agent_lab_clarify']);
     assert.ok(loaded.extensions[0]!.commands.has('agent-lab'));
     assert.deepEqual(loader.getAgentsFiles().agentsFiles, []);
     const skills = loader.getSkills();

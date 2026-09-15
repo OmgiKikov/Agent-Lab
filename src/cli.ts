@@ -15,7 +15,7 @@ import { previewCriteria } from './preview.js';
 import { getPiStatus } from './pi.js';
 import { auditJudge } from './judge-audit.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
-import { qualityLines, qualitySummary, scoreBrief, type ScoreBrief } from './quality.js';
+import { qualityLines, qualitySummary, scoreBrief, testPlanLines, type ScoreBrief } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { evidenceBundle, exportArtifacts } from './artifacts.js';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
@@ -33,6 +33,18 @@ const renderScoreBrief = (brief: ScoreBrief): string => brief.status === 'insuff
     'НЕИЗВЕСТНО', ...brief.unknowns.map(item => `• ${safeText(item)}`), '',
     'ГИПОТЕЗА', safeText(brief.hypothesis), '', brief.question,
   ].join('\n');
+const writeStdout = (value: string): Promise<void> => new Promise((resolve, reject) => {
+  let settled = false;
+  const finish = (error?: Error | null) => {
+    if (settled) return;
+    settled = true;
+    process.stdout.off('error', onError);
+    if (error) reject(error); else resolve();
+  };
+  const onError = (error: Error) => finish(error);
+  process.stdout.once('error', onError);
+  process.stdout.write(value, finish);
+});
 
 async function main() {
   const args = process.argv.slice(2);
@@ -58,7 +70,7 @@ async function main() {
   const command = positionals[0];
   if (values.help || !command) {
     process.stdout.write('  agent-lab summary --id RUN [--json]     Качество агента: карточки, критерии, причины, что разметить\n  agent-lab audit-judge --id RUN --output NEW_DIRECTORY --repeats 10 --yes\n');
-    process.stdout.write('  agent-lab preview --id RUN --scenario CASE --input examples.json --yes\n');
+    process.stdout.write('  agent-lab preview --id RUN --scenario CASE --input examples.json --yes\n  agent-lab accept --id RUN [--yes]\n');
     process.stdout.write('Agent Lab — проверьте, что сломала правка вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
     process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  agent-lab pilot --id RUN\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
     process.stdout.write('Дополнительно: clarify --id RUN --input answers.json · run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\nКонтракты подключения: docs/REFERENCE.md.\n'); return;
@@ -140,7 +152,7 @@ async function main() {
     }
     return;
   }
-  if (!['demo', 'prepare', 'build', 'score', 'repeat', 'run', 'save-suite', 'evaluate', 'reassess', 'clarify', 'prompt-propose', 'prompt-apply'].includes(command)) throw new Error(`Unknown command: ${command}`);
+  if (!['demo', 'prepare', 'build', 'score', 'repeat', 'run', 'accept', 'save-suite', 'evaluate', 'reassess', 'clarify', 'prompt-propose', 'prompt-apply'].includes(command)) throw new Error(`Unknown command: ${command}`);
   if (command === 'evaluate' && (!values.input || !values.yes)) throw new Error('Для запуска сохранённых тестов укажите --input suite.json --yes. Лимиты и подключение берутся из файла.');
   const lab = new ExperimentLab(directory);
   await lab.init();
@@ -165,6 +177,25 @@ async function main() {
       const draft = await promptVersion(lab, values.input, proposal.reviewHash);
       process.stdout.write(JSON.stringify({ id: draft.id, phase: draft.phase, target: draft.target,
         nextStep: `agent-lab run --id ${draft.id} --yes` }, null, 2) + '\n'); return;
+    }
+    if (command === 'accept') {
+      if (!id) throw new Error('Укажите --id RUN.');
+      const record = await lab.get(id);
+      const projection = testPlanLines(record);
+      await writeStdout(values.json
+        ? `${JSON.stringify({ type: 'test_proposal', text: projection.lines.join('\n'), lines: projection.lines, draftHash: projection.draftHash })}\n`
+        : `${projection.lines.join('\n')}\n`);
+      if (!values.yes) {
+        await writeStdout(values.json
+          ? `${JSON.stringify({ type: 'next_step', command: `agent-lab accept --id ${id} --yes` })}\n`
+          : `\nЧтобы принять этот тест: agent-lab accept --id ${id} --yes\n`);
+        return;
+      }
+      const accepted = await lab.acceptDraft(id, projection.draftHash);
+      await writeStdout(values.json
+        ? `${JSON.stringify({ type: 'accepted', id: accepted.id, acceptedDraftHash: accepted.acceptedDraftHash, agentRun: false })}\n`
+        : `\nТест принят: ${accepted.acceptedDraftHash}. Агент не запускался.\n`);
+      return;
     }
     if (command === 'score') {
       if (!values.input || !values.task || (!values.yes && !values['code-only'])) {

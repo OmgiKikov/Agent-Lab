@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { ExperimentLab, draftHash, resultHash } from '../dist/experiment.js';
 import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, goldenCaseSchema, clarificationSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput } from '../dist/contracts.js';
 import { awaitingVerdict, evidenceSummary, plannedTrials } from '../dist/comparison.js';
-import { qualityLines, qualitySummary, scoreBrief, type ScoreBrief } from '../dist/quality.js';
+import { qualityLines, qualitySummary, scoreBrief, testPlanLines, type ScoreBrief } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
 import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
@@ -63,7 +63,7 @@ function summary(record: Experiment, directory: string) {
     ...(quality ? { quality: { ...qualityLines(quality), cards: quality.cards, metrics: quality.metrics, causes: quality.causes.slice(0, 5), humanQueue: quality.humanQueue, human: quality.human } } : {}),
     id: record.id, phase: record.phase, mode: record.mode, workflow: record.workflow,
     reviewMode: record.reviewMode, resultsReviewedAt: record.resultsReviewedAt,
-    draftHash: draftHash(record), resultHash: record.trials.length ? resultHash(record) : undefined,
+    draftHash: draftHash(record), acceptedDraftHash: record.acceptedDraftHash, resultHash: record.trials.length ? resultHash(record) : undefined,
     message: record.message, error: record.error, questions: record.questions,
     scenarioCount: record.scenarios.length, revisionCount: record.revisions.length,
     target: record.target, dialogueCount: record.dialogues.length, profileCount: record.profiles.length, evidence,
@@ -143,7 +143,7 @@ export default function agentLab(pi: ExtensionAPI) {
   pi.on('before_agent_start', async (event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1') return;
     ctx.ui?.setWidget?.('agent-lab-start', undefined);
-    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for checking changes to the user's real agent. Work in their project. Follow the agent-builder skill. At the start ask once whether the user has de-identified real dialogues (JSON/JSONL). Accept their supplied path or an explicit choice to start without logs; honor an earlier answer, treat an empty answer as unresolved and never silently infer a skip. agent_lab_build returns needs_input until dialogues or withoutDialogues=true is supplied. You may use score and inspect to gather evidence. Before any non-score call that builds, edits or runs a test, require an owner source ID and exact quote plus a concrete repository path/line or dialogue/event observation. Code, assistant replies and saved outcomes are observations only; an unobserved observable action effect stays НЕЯСНО. Narrow to one candidate, use at most three bullets in each evidence section and show exactly this order: ТРЕБОВАНИЯ, НАБЛЮДАЕМОЕ, НЕИЗВЕСТНО, ГИПОТЕЗА, then literal Проверим?. Without both kinds of evidence, show no hypothesis and call no test-building tool; show exactly:\nНедостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.\nRequire an explicit answer. Yes carries the hypothesis only in Phase 3 conversation context; no or a correction leaves the conversation open for more evidence. Neither answer persists a hypothesis, builds a test, runs an agent or saves a regression by itself. Use the user's language. Keep normal work in this conversation: build, inspect, edit, agent_lab_run, inspect the actual evidence, explain one finding and the next action. agent_lab_run asks the human to authorize the exact plan; execution consent is not a human review of expectations. Never bypass its confirmation through shell or internal APIs. Do not send users to a board just to proceed; /agent-lab is an optional evidence view. Preserve budgets and model. Save useful cases with agent_lab_suite; repeat existing cases after a change instead of regenerating them. Separate a broken test from an agent failure. Use agent_lab_review to collect an actual human verdict on a cited dialogue in this conversation. For a requested prompt fix, use agent_lab_prompt propose, inspect the diff, apply with native confirmation, then agent_lab_run on the unchanged suite and explain its returned comparison. Do not modify an external agent unless the user asked to fix it. Avoid lectures about personas, rubrics, calibration or tiers unless they explain a finding. Read traces and cite actual event IDs; never invent human verdicts or claim improved quality after changing the tests.` };
+    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for checking changes to the user's real agent. Work in their project. Follow the agent-builder skill. At the start ask once whether the user has de-identified real dialogues (JSON/JSONL). Accept their supplied path or an explicit choice to start without logs; honor an earlier answer, treat an empty answer as unresolved and never silently infer a skip. agent_lab_build returns needs_input until dialogues or withoutDialogues=true is supplied. You may use score and inspect to gather evidence. Before any non-score call that builds, edits or runs a test, require an owner source ID and exact quote plus a concrete repository path/line or dialogue/event observation. Code, assistant replies and saved outcomes are observations only; an unobserved observable action effect stays НЕЯСНО. Narrow to one candidate, use at most three bullets in each evidence section and show exactly this order: ТРЕБОВАНИЯ, НАБЛЮДАЕМОЕ, НЕИЗВЕСТНО, ГИПОТЕЗА, then literal Проверим?. Without both kinds of evidence, show no hypothesis and call no test-building tool; show exactly:\nНедостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.\nRequire an explicit answer. Yes carries the hypothesis only in Phase 3 conversation context; no or a correction leaves the conversation open for more evidence. Neither answer persists a hypothesis, builds a test, runs an agent or saves a regression by itself. After the exact one-test block is shown, use agent_lab_accept for the owner's yes; use agent_lab_run only when the owner explicitly asks to execute tests. Use the user's language. Keep normal work in this conversation: build, inspect, edit, accept, run, inspect the actual evidence, explain one finding and the next action. agent_lab_run asks the human to authorize the exact execution plan; execution consent is not acceptance of the test definition or a human review of results. Never bypass its confirmation through shell or internal APIs. Do not send users to a board just to proceed; /agent-lab is an optional evidence view. Preserve budgets and model. Save useful cases with agent_lab_suite; repeat existing cases after a change instead of regenerating them. Separate a broken test from an agent failure. Use agent_lab_review to collect an actual human verdict on a cited dialogue in this conversation. For a requested prompt fix, use agent_lab_prompt propose, inspect the diff, apply with native confirmation, then agent_lab_run on the unchanged suite and explain its returned comparison. Do not modify an external agent unless the user asked to fix it. Avoid lectures about personas, rubrics, calibration or tiers unless they explain a finding. Read traces and cite actual event IDs; never invent human verdicts or claim improved quality after changing the tests.` };
   });
   pi.registerTool({
     ...toolDisplay,
@@ -313,6 +313,35 @@ export default function agentLab(pi: ExtensionAPI) {
         const record = await lab.updateDraft(params.id, params.expectedHash, draftPatchSchema.parse(params.patch));
         const output = summary(record, lab.store.directory);
         returnToBoard(ctx, record.id);
+        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
+      } finally { await close(); }
+    },
+  });
+  pi.registerTool({
+    ...toolDisplay,
+    name: 'agent_lab_accept', label: 'Accept one proposed test',
+    description: 'Show the current complete one-test definition and ask its owner whether it checks the intended behavior. Acceptance records only the exact draft hash; it never runs the agent, calls a model, or saves a suite.',
+    parameters: Type.Object({ id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }) }, { additionalProperties: false }),
+    executionMode: 'sequential',
+    async execute(_callId, params, signal, _onUpdate, ctx) {
+      if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для принятия теста нужен интерактивный терминал. В CLI используйте accept --id RUN --yes.');
+      signal?.throwIfAborted();
+      const { lab, close } = open(ctx.cwd);
+      try {
+        await lab.init();
+        const record = await lab.get(params.id);
+        const projection = testPlanLines(record);
+        const question = projection.lines.at(-1)!;
+        const body = projection.lines.slice(0, -2).join('\n');
+        if (!await ctx.ui.confirm(question, body)) {
+          return { content: [{ type: 'text', text: JSON.stringify({ id: record.id, accepted: false, draftHash: projection.draftHash,
+            message: 'Тест не принят и остался доступен для правки. Агент не запускался.' }) }], details: { id: record.id, accepted: false } };
+        }
+        signal?.throwIfAborted();
+        const accepted = await lab.acceptDraft(record.id, projection.draftHash);
+        const output = { id: accepted.id, accepted: true, draftHash: projection.draftHash, acceptedDraftHash: accepted.acceptedDraftHash,
+          message: 'Тест принят. Агент не запускался.' };
+        returnToBoard(ctx, accepted.id);
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
       } finally { await close(); }
     },

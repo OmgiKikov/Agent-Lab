@@ -45,6 +45,42 @@ async function labFixture(t, adapter) {
 const input = workflow => createInputSchema.parse({ task: 'Review fixture', mode: 'demo', materials: [material], workflow,
   settings: { repeats: 1, maxIterations: 1, userModes: ['static'] } });
 
+test('CLI accept prints the complete current test before recording its exact hash', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-cli-accept-'));
+  const data = join(directory, 'data');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const lab = new ExperimentLab(data, runtime([card()]));
+  await lab.init();
+  const created = await lab.create(input('evaluate')); await lab.waitForIdle();
+  const current = await lab.get(created.id);
+  const opening = `Что делать?\n${'полный вход '.repeat(180)}`;
+  const successCriteria = current.scenarios[0]!.successCriteria!;
+  const prepared = await lab.updateDraft(current.id, draftHash(current), { scenarios: [{ ...current.scenarios[0]!, goalObservation: 'reply',
+    user: { ...current.scenarios[0]!.user, opening } }] });
+  await lab.close();
+
+  const preview = spawnSync(process.execPath, [resolve('dist/cli.js'), 'accept', '--id', prepared.id, '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(preview.status, 0, preview.stderr);
+  assert.match(preview.stdout, /^ТЕСТ\nСИТУАЦИЯ/m);
+  assert.ok(preview.stdout.includes(opening.trimEnd().replace('\n', '\n  ')));
+  assert.ok(preview.stdout.includes(successCriteria));
+  assert.match(preview.stdout, /НАБЛЮДЕНИЕ\n  ответ агента \(reply\)/);
+  assert.match(preview.stdout, new RegExp(`Версия: ${draftHash(prepared).slice(0, 12)}`));
+  assert.match(preview.stdout, /Этот тест действительно проверяет нужное поведение\?/);
+  assert.equal(JSON.parse(await readFile(join(data, `${prepared.id}.json`), 'utf8')).acceptedDraftHash, undefined);
+
+  const accepted = spawnSync(process.execPath, [resolve('dist/cli.js'), 'accept', '--id', prepared.id, '--yes', '--json', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(accepted.status, 0, accepted.stderr);
+  const events = accepted.stdout.trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(events[0].type, 'test_proposal');
+  assert.equal(events[0].draftHash, draftHash(prepared));
+  assert.match(events[0].text, /Этот тест действительно проверяет нужное поведение\?$/);
+  assert.deepEqual(events[1], { type: 'accepted', id: prepared.id, acceptedDraftHash: events[0].draftHash, agentRun: false });
+  const stored = JSON.parse(await readFile(join(data, `${prepared.id}.json`), 'utf8'));
+  assert.equal(stored.acceptedDraftHash, events[0].draftHash);
+  assert.deepEqual(stored.trials, []); assert.equal(stored.reviewedAt, null); assert.equal(stored.reviewMode, null);
+});
+
 test('semantic answer preview grades both examples, preserves the run and rejects invented evidence', async t => {
   const lab = await labFixture(t, runtime([card()]));
   const created = await lab.create(input('evaluate')); await lab.waitForIdle();

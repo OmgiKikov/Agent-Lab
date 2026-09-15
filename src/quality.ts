@@ -2,6 +2,7 @@ import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, User
 import { assessmentEventContent, fingerprint, verbatimSpan } from './contracts.js';
 import { agentMetricResult, agentRubricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
 import { awaitingVerdict, cardOutcome, humanFindings, isAgentFailure, verdictSummary, type VerdictSummary } from './comparison.js';
+import { draftHash } from './experiment.js';
 
 /*
  * The first screen. One question — "how good is the agent on these cards?" — answered in
@@ -51,6 +52,49 @@ const insufficientScoreBrief = (): ScoreBrief => ({
   heading: 'Недостаточно данных для гипотезы',
   body: 'Добавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.',
 });
+
+export interface TestPlanLines {
+  lines: string[];
+  draftHash: string;
+}
+
+const planText = (value: string): string => value.replace(/\r\n?/g, '\n').replace(/\t/g, '  ')
+  .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '');
+const field = (label: string, value: string): string[] => [label, ...planText(value).split('\n').map(line => `  ${line}`)];
+
+/** The exact one-test proposal shown before the owner accepts its definition. */
+export function testPlanLines(record: Experiment): TestPlanLines {
+  if (record.workflow !== 'evaluate') throw new Error('Показать для принятия можно только тест workflow evaluate.');
+  if (record.phase !== 'review') throw new Error('Показать для принятия можно только незапущенный черновик.');
+  if (record.scenarios.length !== 1) throw new Error('Для принятия нужен ровно один тест.');
+  const scenario = record.scenarios[0]!;
+  if (!scenario.user.goal.trim() || !scenario.user.opening.trim() || !scenario.successCriteria?.trim()) {
+    throw new Error('У теста должны быть непустые ситуация, вход и критерий успеха.');
+  }
+  if (!scenario.goalObservation) throw new Error('У теста не указан конкретный канал наблюдения.');
+  const observation = { reply: 'ответ агента (reply)', tool: 'результат инструмента (tool)', state: 'итоговое состояние (state)' }[scenario.goalObservation];
+  const hash = draftHash(record);
+  const initialState = scenario.goalObservation === 'state' && Object.keys(scenario.initialState.records).length
+    ? `\nИсходное состояние: ${JSON.stringify(scenario.initialState.records)}` : '';
+  const input = [scenario.user.opening, ...(scenario.user.script ?? [])].join('\n');
+  return {
+    draftHash: hash,
+    lines: [
+      'ТЕСТ',
+      ...field('СИТУАЦИЯ', `${scenario.user.goal}\nФакты: ${scenario.user.facts}${initialState}`),
+      '',
+      ...field('ВХОД', input),
+      '',
+      ...field('УСПЕХ', scenario.successCriteria),
+      '',
+      ...field('НАБЛЮДЕНИЕ', observation),
+      '',
+      `Версия: ${hash.slice(0, 12)}`,
+      '',
+      'Этот тест действительно проверяет нужное поведение?',
+    ],
+  };
+}
 
 type GroundedScore = {
   requirement: Requirement; source: Source; quote: string; trial: Trial;

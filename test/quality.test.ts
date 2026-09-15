@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { rm } from 'node:fs/promises';
-import { qualityLines, qualitySummary, plural, scoreBrief, shorten } from '../src/quality.js';
+import { qualityLines, qualitySummary, plural, scoreBrief, shorten, testPlanLines } from '../src/quality.js';
 import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
+import { draftHash } from '../src/experiment.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 import { verdictSummary } from '../src/comparison.js';
 
@@ -28,6 +29,59 @@ function record(overrides: Partial<Experiment> = {}): Experiment {
 }
 const review = (trialId: string, metricId: string, verdict: HumanReview['verdict']): HumanReview => ({
   id: `h-${trialId}-${metricId}-${verdict}`, trialId, metricId, verdict, note: 'n', createdAt: '2026-09-15T10:00:00Z',
+});
+
+test('one-test acceptance projection shows the complete current definition and observation channel', () => {
+  const opening = `Первая строка\n${'длинный вход '.repeat(240)}`;
+  const success = `Ответ основан на политике.\n${'полный критерий '.repeat(220)}`;
+  const current = record({ phase: 'review', reviewMode: null, scenarios: [{
+    ...scenario('a', false),
+    goalObservation: 'reply',
+    user: { ...scenario('a').user, goal: 'Получить точный ответ', facts: 'Тариф известен владельцу', opening, script: ['Уточнение один', 'Уточнение два'] },
+    successCriteria: success,
+  }] });
+  const projection = testPlanLines(current);
+  assert.equal(projection.draftHash, draftHash(current));
+  assert.equal(projection.lines.join('\n'), [
+    'ТЕСТ',
+    'СИТУАЦИЯ',
+    '  Получить точный ответ',
+    '  Факты: Тариф известен владельцу',
+    '',
+    'ВХОД',
+    '  Первая строка',
+    `  ${'длинный вход '.repeat(240)}`,
+    '  Уточнение один',
+    '  Уточнение два',
+    '',
+    'УСПЕХ',
+    '  Ответ основан на политике.',
+    `  ${'полный критерий '.repeat(220)}`,
+    '',
+    'НАБЛЮДЕНИЕ',
+    '  ответ агента (reply)',
+    '',
+    `Версия: ${projection.draftHash.slice(0, 12)}`,
+    '',
+    'Этот тест действительно проверяет нужное поведение?',
+  ].join('\n'));
+  assert.ok(projection.lines.join('\n').includes(opening.replace('\n', '\n  ')));
+  assert.ok(projection.lines.join('\n').includes(success.replace('\n', '\n  ')));
+});
+
+test('acceptance projection rejects ambiguous drafts and names tool/state observations exactly', () => {
+  const base = record({ phase: 'review', reviewMode: null, scenarios: [{ ...scenario('a'), successCriteria: 'Готово' }] });
+  assert.throws(() => testPlanLines(base), /канал наблюдения/);
+  assert.throws(() => testPlanLines({ ...base, scenarios: [] }), /ровно один/);
+  assert.throws(() => testPlanLines({ ...base, workflow: 'compare' }), /evaluate/);
+  assert.throws(() => testPlanLines({ ...base, phase: 'results_review' }), /незапущенный/);
+  const tool = testPlanLines({ ...base, scenarios: [{ ...base.scenarios[0]!, goalObservation: 'tool' }] });
+  assert.match(tool.lines.join('\n'), /НАБЛЮДЕНИЕ\n  результат инструмента \(tool\)/);
+  const stateRecord = { ...base, scenarios: [{ ...base.scenarios[0]!, goalObservation: 'state' as const,
+    initialState: { records: { A: { status: 'new' } }, writableFields: ['status'], transientFailures: 0 } }] };
+  const state = testPlanLines(stateRecord);
+  assert.match(state.lines.join('\n'), /Исходное состояние: \{"A":\{"status":"new"\}\}/);
+  assert.match(state.lines.join('\n'), /НАБЛЮДЕНИЕ\n  итоговое состояние \(state\)/);
 });
 
 test('the first screen counts cards, criteria and causes from the shared outcome rules and names what a person still has to look at', () => {
