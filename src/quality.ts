@@ -1,5 +1,5 @@
 import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, UserMode } from './contracts.js';
-import { assessmentEventContent, fingerprint, verbatimSpan } from './contracts.js';
+import { assessmentEventContent, describeCheck, fingerprint, verbatimSpan } from './contracts.js';
 import { agentMetricResult, agentRubricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
 import { awaitingVerdict, cardOutcome, humanFindings, isAgentFailure, verdictSummary, type VerdictSummary } from './comparison.js';
 import { draftHash } from './experiment.js';
@@ -99,18 +99,64 @@ export function testPlanLines(record: Experiment): TestPlanLines {
   if (!scenario.goalObservation) throw new Error('У теста не указан конкретный канал наблюдения.');
   const observation = { reply: 'ответ агента (reply)', tool: 'результат инструмента (tool)', state: 'итоговое состояние (state)' }[scenario.goalObservation];
   const hash = draftHash(record);
-  const initialState = scenario.goalObservation === 'state' && Object.keys(scenario.initialState.records).length
-    ? `\nИсходное состояние: ${JSON.stringify(scenario.initialState.records)}` : '';
-  const input = [scenario.user.opening, ...(scenario.user.script ?? [])].join('\n');
+  const user = scenario.user;
+  const maxFollowUps = Math.min(user.maxFollowUps ?? record.settings.maxTurns - 1, record.settings.maxTurns - 1);
+  const requirements = scenario.requirementIds.map(id => {
+    const requirement = record.requirements.find(item => item.id === id);
+    if (!requirement) return `- [${id}]`;
+    const source = record.sources.find(item => item.id === requirement.sourceId);
+    return `- [${id}] ${requirement.text}${source ? ` · ${source.name}: «${requirement.quote}»` : ''}`;
+  });
+  const situation = [
+    `Название: ${scenario.title}`,
+    `Цель: ${user.goal}`,
+    `Факты: ${user.facts}`,
+    `Поведение: ${user.behavior}`,
+    `Максимум продолжений: ${maxFollowUps} (общий maxTurns: ${record.settings.maxTurns})`,
+    ...(user.persona ? [`Персона: ${user.persona}`] : []),
+    ...(user.characteristics?.length ? [`Характеристики:\n${user.characteristics.map(item => `- ${item}`).join('\n')}`] : []),
+    ...(user.knows?.length ? [`Известно пользователю:\n${user.knows.map(item => `- ${item}`).join('\n')}`] : []),
+    ...(user.cannotKnow?.length ? [`Пользователь не знает:\n${user.cannotKnow.map(item => `- ${item}`).join('\n')}`] : []),
+    ...(user.answers?.length ? [`Ответы на уточнения:\n${user.answers.map(item => `- «${item.ifAsked}» → «${item.reply}»`).join('\n')}`] : []),
+    ...(requirements.length ? [`Требования:\n${requirements.join('\n')}`] : []),
+    ...(scenario.assumptions?.length ? [`Допущения:\n${scenario.assumptions.map(item => `- ${item}`).join('\n')}`] : []),
+    ...(Object.keys(scenario.initialState.records).length || scenario.initialState.writableFields.length
+      || scenario.initialState.transientFailures || scenario.initialState.external !== undefined
+      ? [`Исходное состояние: ${JSON.stringify(scenario.initialState)}`] : []),
+  ].join('\n');
+  const input = [
+    `Режимы: ${record.settings.userModes.join(', ')}`,
+    `Начальная реплика: ${user.opening}`,
+    ...(record.settings.userModes.includes('scripted') ? [user.script?.length
+      ? `scripted · продолжения:\n${user.script.map((item, index) => `${index + 1}. ${item}`).join('\n')}`
+      : 'scripted · продолжений нет'] : []),
+    ...(record.settings.userModes.includes('reactive') ? ['reactive · продолжения генерируются из карточки в ответ на агента'] : []),
+    ...(record.settings.userModes.includes('static') ? ['static · только начальная реплика'] : []),
+  ].join('\n');
+  const success = [
+    `Критерий результата: ${scenario.successCriteria}`,
+    scenario.checks.length ? `Точные проверки:\n${scenario.checks.map(check => [
+      `- [${check.id}] ${check.description}`,
+      `  Условие: ${describeCheck(check)}`,
+      ...(check.stage ? [`  Этап: ${check.stage}`] : []),
+    ].join('\n')).join('\n')}` : 'Точные проверки: нет',
+    scenario.metrics?.length ? `Рубрики судьи:\n${scenario.metrics.map(metric => [
+      `- [${metric.id}] ${metric.name} · ${metric.subject}`,
+      `  Описание: ${metric.description}`,
+      `  PASS: ${metric.passCriteria}`,
+      `  FAIL: ${metric.failCriteria}`,
+      ...(metric.stage ? [`  Этап: ${metric.stage}`] : []),
+    ].join('\n')).join('\n')}` : 'Рубрики судьи: нет',
+  ].join('\n');
   return {
     draftHash: hash,
     lines: [
       'ТЕСТ',
-      ...field('СИТУАЦИЯ', `${scenario.user.goal}\nФакты: ${scenario.user.facts}${initialState}`),
+      ...field('СИТУАЦИЯ', situation),
       '',
       ...field('ВХОД', input),
       '',
-      ...field('УСПЕХ', scenario.successCriteria),
+      ...field('УСПЕХ', success),
       '',
       ...field('НАБЛЮДЕНИЕ', observation),
       '',
@@ -212,8 +258,7 @@ export function discoveryBrief(record: Experiment): DiscoveryBrief {
   if (discovery.phase === 'partial' || discovery.phase === 'running') return { status: 'partial', ...counts,
     lines: ['ЧАСТИЧНЫЙ РЕЗУЛЬТАТ DISCOVERY', planText(discovery.error ?? 'Discovery ещё не завершён.'), ...countLines, ...evidenceLines] };
   if (discovery.phase === 'ready' && discovery.hypothesis) {
-    const focusSupport = new Set(discovery.observations.filter(observation => observation.classification === 'candidate'
-      && observation.requirementId === discovery.focusRequirementId).map(observation => observation.dialogueId)).size;
+    const focusSupport = new Set(discovery.hypothesis.eventIds.map(event => event.dialogueId)).size;
     const hypothesis = discovery.hypothesis.text.replace(/\nНАБЛЮДЕНИЕ: ответ агента \(reply\)\s*$/u, '').trim();
     return { status: 'ready', ...counts, fromRunId: record.id, hypothesis: discovery.hypothesis.text,
       lines: [

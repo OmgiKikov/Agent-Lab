@@ -16,6 +16,7 @@ import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit
 import { readData } from '../dist/imports.js';
 import { editDraft, inputError } from './editor.ts';
 import { previewCriteria } from '../dist/preview.js';
+import { ExperimentStore } from '../dist/store.js';
 import { activePhases, reviewOrder, safeText, showBoard, trialLines, type BoardAction, type BoardOptions, type Section } from './cards.ts';
 
 const toolDisplay: Pick<ToolDefinition, 'renderCall' | 'renderResult'> = {
@@ -147,12 +148,12 @@ export default function agentLab(pi: ExtensionAPI) {
   pi.on('before_agent_start', async (event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1') return;
     ctx.ui?.setWidget?.('agent-lab-start', undefined);
-    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for checking changes to the user's real agent. Work in their project and follow the agent-builder skill. At the start ask once for de-identified real dialogues (JSON/JSONL); honor an earlier answer and never silently skip them. With supplied logs, call agent_lab_build mode=discover. Discovery itself reads owner requirements, selects bounded observations, cites saved dialogue events, proposes one hypothesis, and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If the owner answers yes, immediately call agent_lab_build again with mode=discover and the exact fromRunId and hypothesis returned by discovery. That call re-reads the saved evidence and builds exactly one editable test without accepting, running, or saving it. A refusal or correction builds nothing. After the exact one-test block is shown, use agent_lab_accept for the owner's decision about the test definition. Use agent_lab_run only when the owner explicitly asks to execute accepted tests; its execution consent is separate from accepting the test and from reviewing results. Keep normal work in this conversation, preserve budgets and model, cite actual event IDs, and never invent a human verdict. /agent-lab is only an optional evidence view. Save useful accepted cases with agent_lab_suite and repeat them after changes. Separate a broken test from an agent failure. Do not modify an external agent unless the user asked to fix it.` };
+    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for checking changes to the user's real agent. Work in their project and follow the agent-builder skill. At the start ask once for de-identified real dialogues (JSON/JSONL); honor an earlier answer and never silently skip them. With supplied logs, call agent_lab_build mode=discover. Discovery itself reads owner requirements, selects bounded observations, cites saved dialogue events, proposes one hypothesis, and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If a discovery stopped safely, call mode=discover with resumeRunId; its saved remaining call ceiling is confirmed natively before any provider call. If the owner answers yes, immediately call agent_lab_build again with mode=discover and the exact fromRunId and hypothesis returned by discovery. That call re-reads the saved evidence and builds exactly one editable test without accepting, running, or saving it. A refusal or correction builds nothing. After the exact one-test block is shown, use agent_lab_accept for the owner's decision about the test definition. Use agent_lab_run only when the owner explicitly asks to execute accepted tests; its execution consent is separate from accepting the test and from reviewing results. Keep normal work in this conversation, preserve budgets and model, cite actual event IDs, and never invent a human verdict. /agent-lab is only an optional evidence view. Save useful accepted cases with agent_lab_suite and repeat them after changes. Separate a broken test from an agent failure. Do not modify an external agent unless the user asked to fix it.` };
   });
   pi.registerTool({
     ...toolDisplay,
     name: 'agent_lab_build', label: 'Prepare agent and dialogue cards',
-    description: 'Prepare an agent test or discover one useful test from recorded dialogues. mode=discover accepts up to 300 de-identified dialogues, shows a computed call ceiling, and requires native confirmation before any provider call; it selects evidence and proposes one saved hypothesis, not an accuracy estimate. After the owner says yes, call mode=discover again with the exact returned fromRunId and hypothesis to build exactly one editable test. The handoff does not accept, run, or save it. Other modes retain the normal 20-call default. mode=demo prepares the built-in scripted example without model calls; mode=score imports recorded dialogues without running the agent or simulator.',
+    description: 'Prepare an agent test or discover one useful test from recorded dialogues. mode=discover accepts up to 300 de-identified dialogues, shows computed call and time ceilings, and requires native confirmation before any provider call; it selects evidence and proposes one saved hypothesis, not an accuracy estimate. To resume a safely interrupted discovery, pass its resumeRunId alone; the saved used/max calls and total time ceiling are confirmed before continuation. After the owner says yes, call mode=discover again with the exact returned fromRunId and hypothesis to build exactly one editable test. The handoff does not accept, run, or save it. Other modes retain the normal 20-call default. mode=demo prepares the built-in scripted example without model calls; mode=score imports recorded dialogues without running the agent or simulator.',
     parameters: Type.Object({
       task: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
       materials: Type.Optional(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 180 }), content: Type.String({ minLength: 1, maxLength: 120000 }), kind: Type.Optional(Type.Union([Type.Literal('knowledge'), Type.Literal('prompt')], { description: "'prompt' marks the agent's own system prompt: observable rules are extracted from it and every generated card gets the prompt_compliance rubric" })) }, { additionalProperties: false }), { minItems: 1, maxItems: 12 })),
@@ -170,16 +171,18 @@ export default function agentLab(pi: ExtensionAPI) {
       profiles: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(ownerProfileSchema).max(6), { io: 'input' }))),
       preset: Type.Optional(Type.Union([Type.Literal('quick'), Type.Literal('thorough')], { description: 'quick (default): reactive simulator, one repeat. thorough: static, scripted and reactive user modes with two repeats.' })),
       fromRunId: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$', description: 'Exact saved discovery run returned by the previous mode=discover call.' })),
+      resumeRunId: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$', description: 'Safely interrupted discovery run to continue after native budget confirmation. Do not combine with fromRunId or hypothesis.' })),
       hypothesis: Type.Optional(Type.String({ minLength: 1, maxLength: 3000, description: 'Exact saved hypothesis returned by the previous mode=discover call.' })),
       mode: Type.Optional(Type.Union([Type.Literal('live'), Type.Literal('demo'), Type.Literal('score'), Type.Literal('discover')])),
     }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(_callId, params, toolSignal, onUpdate, ctx) {
-      const { preset, goldenFile, dialoguesFile, connectionFile, withoutDialogues, codeOnly, fromRunId, hypothesis, ...rest } = params;
+      const { preset, goldenFile, dialoguesFile, connectionFile, withoutDialogues, codeOnly, fromRunId, resumeRunId, hypothesis, ...rest } = params;
       const operation = rest.mode ?? 'live';
       const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
       signal.throwIfAborted();
-      if (operation !== 'discover' && (fromRunId || hypothesis)) throw new Error('fromRunId и hypothesis используются только с mode=discover.');
+      if (operation !== 'discover' && (fromRunId || resumeRunId || hypothesis)) throw new Error('fromRunId, resumeRunId и hypothesis используются только с mode=discover.');
+      if (resumeRunId && (fromRunId || hypothesis)) throw new Error('resumeRunId нельзя совмещать с fromRunId или hypothesis.');
       if (operation === 'discover' && fromRunId) {
         if (!hypothesis) throw new Error('После ответа владельца передайте точную сохранённую hypothesis вместе с fromRunId.');
         const { lab, close } = open(ctx.cwd);
@@ -197,6 +200,50 @@ export default function agentLab(pi: ExtensionAPI) {
           returnToBoard(ctx, record.id);
           return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
         } finally { await close(); }
+      }
+      if (operation === 'discover' && resumeRunId) {
+        if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для возобновления discovery нужен native Pi confirmation в интерактивном терминале. CLI: discover-resume --id RUN --yes.');
+        const source = await new ExperimentStore(resolve(ctx.cwd, '.agent-lab')).get(resumeRunId);
+        if (!source.discovery) throw new Error('Указанный run не является discovery.');
+        const callsUsed = Math.max(source.usage.calls, source.discovery.callsUsed);
+        const maxCalls = source.discovery.callPlan.maxCalls;
+        const maxDurationMs = source.discovery.callPlan.maxDurationMs;
+        if (source.discovery.callPlan.legacyBudgetMissing) throw new Error('Старая discovery-запись не содержит исходный бюджет; начните новый discovery run.');
+        if (source.discovery.activeCall) throw new Error(`Discovery остановился во время модельного вызова «${source.discovery.activeCall}»; безопасное возобновление невозможно.`);
+        if (['ready', 'insufficient'].includes(source.discovery.phase)) throw new Error('Этот discovery run не требует возобновления.');
+        if (callsUsed >= maxCalls) throw new Error('Бюджет discovery исчерпан; найденные доказательства сохранены.');
+        const planText = safeText([
+          `Статус: ${source.discovery.phase}.`,
+          `Вызовы: ${callsUsed}/${maxCalls}; осталось не более ${Math.max(0, maxCalls - callsUsed)}.`,
+          `Сохранённый общий лимит времени: до ${Math.ceil(maxDurationMs / 1000)} секунд (это не обещание оставшегося времени).`,
+          'Продолжить сохранённый отбор кандидатов? Агент и симулятор не запускаются.',
+        ].join('\n'));
+        if (!await ctx.ui.confirm('Возобновить discovery?', planText)) {
+          const output = { status: 'cancelled', calls: 0, mutated: false, resumeRunId,
+            discoveryStatus: source.discovery.phase, callsUsed, maxCalls, remainingCalls: Math.max(0, maxCalls - callsUsed), maxDurationMs };
+          return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
+        }
+        signal.throwIfAborted();
+        const { lab, close } = open(ctx.cwd);
+        const cancel = () => { void lab.cancel(resumeRunId).catch(() => {}); };
+        try {
+          await lab.init(); signal.addEventListener('abort', cancel, { once: true }); signal.throwIfAborted();
+          onUpdate?.({ content: [{ type: 'text', text: 'Продолжаю поиск проверяемого сигнала…' }], details: { phase: 'discovery' } });
+          await lab.resumeDiscovery(resumeRunId);
+          if (signal.aborted) cancel();
+          await lab.waitForIdle();
+          const record = await lab.get(resumeRunId);
+          const projected = discoveryBrief(record);
+          const output = { id: record.id, phase: projected.status, resumed: true,
+            plan: { dialogueCount: source.discovery.totalDialogues, batches: source.discovery.callPlan.batches,
+              selectedCap: source.discovery.callPlan.selectedCap, nominalCalls: source.discovery.callPlan.nominalCalls,
+              maxCalls, maxDurationMs },
+            brief: projected.lines.join('\n'), discovery: projected,
+            ...(projected.fromRunId && projected.hypothesis ? { fromRunId: projected.fromRunId, hypothesis: projected.hypothesis } : {}),
+            agentRun: false, accepted: false };
+          returnToBoard(ctx, record.id);
+          return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
+        } finally { signal.removeEventListener('abort', cancel); await close(); }
       }
       if (operation === 'discover' && hypothesis) throw new Error('Для точной сборки из discovery нужны и fromRunId, и hypothesis.');
       if (operation === 'score') onUpdate?.({ content: [{ type: 'text', text: 'Читаю требования и записи…' }], details: { phase: 'reading' } });
@@ -241,12 +288,13 @@ export default function agentLab(pi: ExtensionAPI) {
         const planText = safeText([
           `${input.dialogues.length} диалогов · ${plan.batchCount} партий первичного разбора.`,
           `Подробно проверить: до ${plan.selectedCap}.`,
-          `План: ${plan.nominalCalls} модельных вызовов; потолок: ${plan.maxCalls}.`,
+          `План: ${plan.nominalCalls} модельных вызовов; потолок: ${plan.maxCalls}; время: до ${Math.ceil(plan.maxDurationMs / 1000)} секунд.`,
           'Это отбор кандидатов, не оценка accuracy. Агент и симулятор не запускаются.',
         ].join('\n'));
         if (!await ctx.ui.confirm('Найти полезный тест в записанных диалогах?', planText)) {
           const output = { status: 'cancelled', calls: 0, mutated: false,
-            plan: { dialogueCount: input.dialogues.length, batches: plan.batchCount, selectedCap: plan.selectedCap, nominalCalls: plan.nominalCalls, maxCalls: plan.maxCalls } };
+            plan: { dialogueCount: input.dialogues.length, batches: plan.batchCount, selectedCap: plan.selectedCap, nominalCalls: plan.nominalCalls,
+              maxCalls: plan.maxCalls, maxDurationMs: plan.maxDurationMs } };
           return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
         }
         signal.throwIfAborted();
@@ -262,7 +310,8 @@ export default function agentLab(pi: ExtensionAPI) {
           const record = await lab.get(id);
           const projected = discoveryBrief(record);
           const output = { id: record.id, phase: projected.status,
-            plan: { dialogueCount: input.dialogues.length, batches: plan.batchCount, selectedCap: plan.selectedCap, nominalCalls: plan.nominalCalls, maxCalls: plan.maxCalls },
+            plan: { dialogueCount: input.dialogues.length, batches: plan.batchCount, selectedCap: plan.selectedCap, nominalCalls: plan.nominalCalls,
+              maxCalls: plan.maxCalls, maxDurationMs: plan.maxDurationMs },
             brief: projected.lines.join('\n'), discovery: projected,
             ...(projected.fromRunId && projected.hypothesis ? { fromRunId: projected.fromRunId, hypothesis: projected.hypothesis } : {}),
             agentRun: false, accepted: false };

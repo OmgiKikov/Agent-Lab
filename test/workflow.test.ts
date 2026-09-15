@@ -390,7 +390,8 @@ test('CLI discovery shows the computed ceiling before consent, accepts 300 logs 
   const data = join(directory, 'no-consent-data');
   const rejectedData = join(directory, 'rejected-data');
   await writeFile(task, JSON.stringify({ task: 'Найти полезный тест', mode: 'live',
-    materials: [{ name: 'policy.md', content: 'Агент обязан назвать адрес support@example.com.' }] }));
+    materials: [{ name: 'policy.md', content: 'Агент обязан назвать адрес support@example.com.' }],
+    settings: { maxCalls: 20, maxDurationMs: 180000 } }));
   const logs = Array.from({ length: 300 }, (_, index) => ({ id: `dialogue_${index}`,
     messages: [{ role: 'user', content: `Где поддержка ${index}?` }, { role: 'assistant', content: 'Позвоните позже.' }] }));
   await writeFile(dialogues, JSON.stringify(logs));
@@ -403,6 +404,7 @@ test('CLI discovery shows the computed ceiling before consent, accepts 300 logs 
   assert.equal(events[0].dialogueCount, 300);
   assert.ok(events[0].batches > 1);
   assert.ok(events[0].maxCalls > 20, 'discovery receives its computed ceiling instead of the normal 20-call default');
+  assert.ok(events[0].maxDurationMs > 180000, 'the shown time ceiling scales with the discovery call budget');
   assert.equal(events[1].type, 'next_step');
   await assert.rejects(access(data), /ENOENT/, 'preview does not initialize or mutate the lab');
 
@@ -411,6 +413,65 @@ test('CLI discovery shows the computed ceiling before consent, accepts 300 logs 
   assert.match(rejected.stderr, /Too big|300|слишком|maximum/i);
   assert.match(rejected.stderr, /агент не запускался/i);
   await assert.rejects(access(rejectedData), /ENOENT/, 'invalid input does not initialize or mutate the lab');
+});
+
+test('CLI discovery handoff rereads the saved hypothesis and does not build before confirmation', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-discovery-build-cli-'));
+  const data = join(directory, 'data');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const lab = new ExperimentLab(data, runtime([card()]));
+  await lab.init();
+  const created = await lab.create(input('evaluate')); await lab.waitForIdle();
+  const source = await lab.get(created.id);
+  source.dialogues = [{ id: 'evidence_1', messages: [
+    { role: 'user', content: 'What is the answer?' },
+    { role: 'assistant', content: 'An incorrect answer' },
+  ], outcome: 'failure' }];
+  source.discovery = {
+    protocol: 'discovery-1', phase: 'ready', error: null, requirements: source.requirements,
+    observations: [{ dialogueId: 'evidence_1', classification: 'candidate', requirementId: 'answer',
+      summary: 'The answer conflicts with the policy.', citations: [{ seq: 1, quote: 'An incorrect answer' }] }],
+    seed: 'saved-seed', focusRequirementId: 'answer', representativeIds: ['evidence_1'], controlIds: [], selectedIds: ['evidence_1'],
+    completedBatchCount: 1, groupingComplete: true, completedDeepIds: ['evidence_1'], deep: [],
+    hypothesis: { text: 'The agent may answer against the owner policy.\nНАБЛЮДЕНИЕ: ответ агента (reply)', proposedGoalObservation: 'reply',
+      requirementId: 'answer', eventIds: [{ dialogueId: 'evidence_1', seq: 1 }] },
+    callPlan: { batches: 1, selectedCap: 1, metrics: 2, nominalCalls: 7, maxCalls: 12,
+      baseMaxCalls: 20, baseMaxDurationMs: 180000, maxDurationMs: 180000 }, callsUsed: 7,
+    totalDialogues: 1, oversizedIds: [],
+  };
+  await lab.store.save(source);
+  const resumeSource = structuredClone(source);
+  resumeSource.id = `${source.id}_resume`;
+  resumeSource.phase = 'interrupted';
+  resumeSource.discovery!.phase = 'partial';
+  await lab.store.save(resumeSource);
+  await lab.close();
+  const before = await readFile(join(data, `${source.id}.json`), 'utf8');
+  const namesBefore = (await readdir(data)).filter(name => name.endsWith('.json')).sort();
+
+  const resumePreview = spawnSync(process.execPath, [resolve('dist/cli.js'), 'discover-resume', '--id', resumeSource.id, '--json', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(resumePreview.status, 0, resumePreview.stderr);
+  const resume = JSON.parse(resumePreview.stdout);
+  assert.deepEqual({ type: resume.type, id: resume.id, status: resume.status, callsUsed: resume.callsUsed, maxCalls: resume.maxCalls }, {
+    type: 'discovery_resume', id: resumeSource.id, status: 'partial', callsUsed: 7, maxCalls: 12,
+  });
+  assert.equal(resume.maxDurationMs, JSON.parse(before).discovery.callPlan.maxDurationMs);
+  assert.match(resume.command, new RegExp(`discover-resume --id ${resumeSource.id} --yes`));
+  assert.equal(await readFile(join(data, `${source.id}.json`), 'utf8'), before, 'resume preview is read-only');
+  assert.deepEqual((await readdir(data)).filter(name => name.endsWith('.json')).sort(), namesBefore);
+
+  const readyResume = spawnSync(process.execPath, [resolve('dist/cli.js'), 'discover-resume', '--id', source.id, '--yes', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(readyResume.status, 2); assert.match(readyResume.stderr, /не требует возобновления/);
+
+  const preview = spawnSync(process.execPath, [resolve('dist/cli.js'), 'discover-build', '--id', source.id, '--json', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(preview.status, 0, preview.stderr);
+  const event = JSON.parse(preview.stdout);
+  assert.deepEqual({ type: event.type, id: event.id, hypothesis: event.hypothesis }, {
+    type: 'hypothesis_confirmation', id: source.id, hypothesis: source.discovery.hypothesis.text,
+  });
+  assert.match(event.command, new RegExp(`discover-build --id ${source.id} --yes`));
+  assert.equal(await readFile(join(data, `${source.id}.json`), 'utf8'), before);
+  assert.deepEqual((await readdir(data)).filter(name => name.endsWith('.json')).sort(), namesBefore);
 });
 
 test('draft edits cannot launder provenance; clarification keeps the old questions and records owner answers as a source', async t => {

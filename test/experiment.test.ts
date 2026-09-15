@@ -15,19 +15,20 @@ import { qualityLines, qualitySummary } from '../src/quality.js';
 
 test('staged discovery batches whole logs, selects one grounded focus, and persists one exact handoff', async t => {
   const quote = 'Answer support questions only from the approved policy.';
+  const candidateIds = new Set(['log_0', 'log_1', 'log_25']);
   const dialogues = Array.from({ length: 26 }, (_, index) => ({ id: `log_${index}`, outcome: index ? 'success' as const : 'failure' as const,
-    messages: [{ role: 'user' as const, content: `Question ${index}` }, { role: 'assistant' as const, content: index === 0 || index === 25 ? 'Invented answer' : 'Approved answer' }] }));
+    messages: [{ role: 'user' as const, content: `Question ${index}` }, { role: 'assistant' as const, content: candidateIds.has(`log_${index}`) ? 'Invented answer' : 'Approved answer' }] }));
   const seen: unknown[] = [];
   const runtime: Runtime = {
     async discover(input) {
       seen.push(structuredClone(input));
       if (input.kind === 'requirements') return { kind: 'requirements', requirements: [{ id: 'owner_rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [] };
       if (input.kind === 'coarse') return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({
-        dialogueId: dialogue.id, classification: dialogue.id === 'log_0' || dialogue.id === 'log_25' ? 'candidate' as const : 'clean' as const,
-        ...(dialogue.id === 'log_0' || dialogue.id === 'log_25' ? { requirementId: 'owner_rule' } : {}),
+        dialogueId: dialogue.id, classification: candidateIds.has(dialogue.id) ? 'candidate' as const : 'clean' as const,
+        ...(candidateIds.has(dialogue.id) ? { requirementId: 'owner_rule' } : {}),
         summary: 'Observed reply', citations: [{ seq: 1, quote: dialogue.messages[1]!.content }],
       })) };
-      if (input.kind === 'group') return { kind: 'group', groups: [{ requirementId: 'owner_rule', dialogueIds: ['log_0', 'log_25'], summary: 'Same owner rule' }] };
+      if (input.kind === 'group') return { kind: 'group', groups: [{ requirementId: 'foreign_rule', dialogueIds: ['log_0', 'log_25'], summary: 'Invalid advisory group' }] };
       return { kind: 'hypothesis', hypothesis: 'The agent may answer outside the approved support policy.' };
     },
     async goals({ dialogues }) {
@@ -36,7 +37,8 @@ test('staged discovery batches whole logs, selects one grounded focus, and persi
         requirementIds: ['owner_rule'], evidenceDialogueIds: [dialogue.id], successCriteria: quote, facts: 'Only the recorded user request.', outcome: 'unknown' }];
     },
     async assess({ scenario, trial }) {
-      return scenario.metrics!.map(metric => ({ metricId: metric.id, result: 'fail' as const, rationale: 'The recorded reply is evidence.', evidence: [1], citations: [{ seq: 1, quote: trial.events[1]!.text! }] }));
+      return scenario.metrics!.map(metric => ({ metricId: metric.id, result: scenario.id === 'log_1' ? 'pass' as const : 'fail' as const,
+        rationale: 'The recorded reply is evidence.', evidence: [1], citations: [{ seq: 1, quote: trial.events[1]!.text! }] }));
     },
     async prepare(input) {
       if (!input.confirmedHypothesis) throw new Error('discovery must not prepare cards');
@@ -51,28 +53,104 @@ test('staged discovery batches whole logs, selects one grounded focus, and persi
     async openTarget() { throw new Error('discovery must not open target'); }, async userTurn() { throw new Error('discovery must not simulate users'); },
   };
   const { lab } = await setup(t, runtime);
-  const input = { task: 'Find a useful support test', mode: 'live' as const, materials: [{ name: 'policy', content: quote }], dialogues };
+  const input = { task: 'Find a useful support test', mode: 'live' as const, materials: [{ name: 'policy', content: quote }], dialogues,
+    settings: { maxCalls: 20, maxDurationMs: 180_000 } };
   const plan = planDiscovery(input);
   assert.equal(plan.batchCount, 2); assert.ok(plan.batches.every(batch => batch.length <= 25 && JSON.stringify({ dialogues: batch }).length <= 60_000));
+  assert.deepEqual([plan.baseMaxCalls, plan.baseMaxDurationMs], [20, 180_000]);
+  assert.equal(plan.maxDurationMs, Math.ceil(180_000 * plan.maxCalls / 20));
   const started = await lab.discover(input); await lab.waitForIdle();
   const result = await lab.get(started.id);
   assert.equal(result.discovery?.callPlan.nominalCalls, plan.nominalCalls); assert.equal(result.settings.maxCalls, plan.maxCalls); assert.ok(result.settings.maxCalls > 20);
   assert.equal(result.discovery?.phase, 'ready', result.discovery?.error ?? result.error ?? '');
   assert.equal(result.discovery?.observations.length, dialogues.length);
   assert.equal(result.discovery?.focusRequirementId, 'owner_rule');
-  assert.deepEqual(new Set(result.discovery?.representativeIds), new Set(['log_0', 'log_25']));
+  assert.deepEqual(new Set(result.discovery?.representativeIds), candidateIds);
   assert.equal(result.discovery?.selectedIds.length, result.discovery!.representativeIds.length + result.discovery!.controlIds.length);
   assert.ok(result.discovery?.controlIds.every(id => !result.discovery!.representativeIds.includes(id)));
   assert.equal(result.discovery?.deep.filter(item => item.role === 'control').length, result.discovery?.controlIds.length);
   assert.match(result.discovery!.hypothesis!.text, /НАБЛЮДЕНИЕ: ответ агента \(reply\)$/);
   assert.equal(result.discovery?.hypothesis?.requirementId, 'owner_rule');
+  assert.deepEqual(new Set(result.discovery?.hypothesis?.eventIds.map(event => event.dialogueId)), new Set(['log_0', 'log_25']),
+    'a representative that passed deep goal attainment is not hypothesis evidence');
+  const hypothesisInput = (seen.find(item => !!item && typeof item === 'object' && 'kind' in item && item.kind === 'hypothesis') as
+    Extract<Parameters<NonNullable<Runtime['discover']>>[0], { kind: 'hypothesis' }> | undefined);
+  assert.deepEqual(new Set(hypothesisInput?.observations.map(item => item.dialogueId)), new Set(['log_0', 'log_25']));
+  assert.deepEqual(new Set(hypothesisInput?.deep.map(item => item.dialogueId)), new Set(['log_0', 'log_25']));
   assert.equal(JSON.stringify(seen).includes('"outcome"'), false, 'stored outcome must never enter discovery Runtime payloads');
   const built = await lab.buildFromDiscovery(result.id, result.discovery!.hypothesis!.text); await lab.waitForIdle();
   const draft = await lab.get(built.id);
   assert.equal(draft.phase, 'review', draft.error ?? ''); assert.equal(draft.scenarios.length, 1); assert.equal(draft.scenarios[0]!.goalObservation, 'reply');
+  assert.deepEqual([draft.settings.maxCalls, draft.settings.maxDurationMs], [20, 180_000], 'discovery budget must not leak into the accepted test');
+
+  const bypass = structuredClone(result); bypass.id = `${result.id}_bypass`;
+  const bypassAssessment = bypass.discovery!.deep.find(item => item.dialogueId === 'log_0')!.assessments!
+    .find(item => item.metricId === 'goal_attainment')!;
+  bypassAssessment.result = 'pass';
+  await lab.store.save(bypass);
+  await assert.rejects(lab.buildFromDiscovery(bypass.id, bypass.discovery!.hypothesis!.text), /минимум в двух representative-диалогах/);
+
+  const legacy = structuredClone(result); legacy.id = `${result.id}_legacy`;
+  const legacyPlan = legacy.discovery!.callPlan as unknown as Record<string, unknown>;
+  delete legacyPlan.baseMaxCalls; delete legacyPlan.baseMaxDurationMs; delete legacyPlan.maxDurationMs;
+  await lab.store.save(legacy);
+  const reloadedLegacy = await lab.store.get(legacy.id);
+  assert.deepEqual([reloadedLegacy.discovery!.callPlan.baseMaxCalls, reloadedLegacy.discovery!.callPlan.baseMaxDurationMs], [5, 5000]);
+  assert.equal(reloadedLegacy.discovery!.callPlan.legacyBudgetMissing, true);
+  await assert.rejects(lab.buildFromDiscovery(legacy.id, legacy.discovery!.hypothesis!.text), /не содержит исходный бюджет/);
+
+  const tampered = await lab.store.get(result.id);
+  tampered.discovery!.hypothesis!.eventIds[0]!.seq = 0;
+  await lab.store.save(tampered);
+  await assert.rejects(lab.buildFromDiscovery(result.id, tampered.discovery!.hypothesis!.text), /candidate-наблюдения/);
+  tampered.discovery!.phase = 'partial'; tampered.discovery!.activeCall = 'deep log_0';
+  await lab.store.save(tampered);
+  await assert.rejects(lab.resumeDiscovery(result.id), /стоимость неизвестна/);
 });
 
-test('ExperimentLab rejects backend checks from a custom Runtime for confirmed external reply-only RAG tests', async t => {
+test('discovery requires assistant evidence and two repeated deep goal failures before proposing a test', async t => {
+  const quote = 'Use only the approved answer.';
+  const dialogues = ['a', 'b'].map(id => ({ id, messages: [
+    { role: 'user' as const, content: `Question ${id}` }, { role: 'assistant' as const, content: `Unsupported ${id}` },
+  ] }));
+  let citationSeq = 0;
+  let judgment: 'pass' | 'fail' = 'fail';
+  let hypothesisCalls = 0;
+  const runtime: Runtime = {
+    async discover(input) {
+      if (input.kind === 'requirements') return { kind: 'requirements', requirements: [{ id: 'rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [] };
+      if (input.kind === 'coarse') return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({ dialogueId: dialogue.id,
+        classification: 'candidate' as const, requirementId: 'rule', summary: 'Possible failure',
+        citations: [{ seq: citationSeq, quote: dialogue.messages[citationSeq]!.content }] })) };
+      if (input.kind === 'group') return { kind: 'group', groups: [] };
+      hypothesisCalls++; return { kind: 'hypothesis', hypothesis: 'Repeated unsupported answer.' };
+    },
+    async goals({ dialogues: [dialogue] }) { return [{ id: `goal_${dialogue!.id}`, goal: 'Get an approved answer', opening: dialogue!.messages[0]!.content,
+      requirementIds: ['rule'], evidenceDialogueIds: [dialogue!.id], successCriteria: quote }]; },
+    async assess({ scenario, trial }) { return scenario.metrics!.map(metric => ({ metricId: metric.id, result: judgment,
+      rationale: 'Deep check result.', evidence: [1], citations: [{ seq: 1, quote: trial.events[1]!.text! }] })); },
+    async prepare() { throw new Error('unused'); }, async improve() { throw new Error('unused'); },
+    async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
+  };
+  const { lab } = await setup(t, runtime);
+  const input = { task: 'Find a test', mode: 'live' as const, materials: [{ name: 'policy', content: quote }], dialogues };
+
+  const userOnly = await lab.discover(input); await lab.waitForIdle();
+  const rejectedEvidence = await lab.get(userOnly.id);
+  assert.equal(rejectedEvidence.discovery?.phase, 'insufficient');
+  assert.ok(rejectedEvidence.discovery?.observations.every(observation => observation.classification === 'unknown'));
+  assert.equal(hypothesisCalls, 0);
+
+  citationSeq = 1; judgment = 'pass';
+  const passing = await lab.discover(input); await lab.waitForIdle();
+  const rejectedJudge = await lab.get(passing.id);
+  assert.equal(rejectedJudge.discovery?.phase, 'insufficient');
+  assert.equal(rejectedJudge.discovery?.deep.length, 2);
+  assert.equal(rejectedJudge.discovery?.hypothesis, undefined);
+  assert.equal(hypothesisCalls, 0);
+});
+
+test('ExperimentLab rejects backend checks from a custom Runtime for confirmed reply-only RAG tests, including sandbox targets', async t => {
   const quote = 'Support is available at support@example.com.';
   let invalid = true, targetCalls = 0;
   const runtime: Runtime = {
@@ -96,7 +174,7 @@ test('ExperimentLab rejects backend checks from a custom Runtime for confirmed e
   const { lab } = await setup(t, runtime);
   const input = { task: 'Check support reply', confirmedHypothesis: 'The agent may omit the support address.', goalObservation: 'reply' as const,
     mode: 'live' as const, workflow: 'evaluate' as const, scenarioCount: 1, materials: [{ name: 'Policy', content: quote }],
-    target: { kind: 'command' as const, command: process.execPath, args: [] } };
+    target: { kind: 'sandbox' as const } };
   const rejected = await lab.create(input); await lab.waitForIdle();
   const failed = await lab.get(rejected.id);
   assert.equal(failed.phase, 'error'); assert.match(failed.error ?? '', /reply-only RAG.*backend state.*tool\/state/); assert.equal(targetCalls, 0);

@@ -34,39 +34,37 @@ const review = (trialId: string, metricId: string, verdict: HumanReview['verdict
 test('one-test acceptance projection shows the complete current definition and observation channel', () => {
   const opening = `Первая строка\n${'длинный вход '.repeat(240)}`;
   const success = `Ответ основан на политике.\n${'полный критерий '.repeat(220)}`;
-  const current = record({ phase: 'review', reviewMode: null, scenarios: [{
-    ...scenario('a', false),
+  const current = record({ phase: 'review', reviewMode: null,
+    sources: [{ id: 'policy-source', name: 'policy.md', content: 'Тариф должен быть 1%.', hash: 'source-hash' }],
+    requirements: [{ id: 'policy', text: 'Назвать точный тариф.', sourceId: 'policy-source', quote: 'Тариф должен быть 1%.', critical: true }], scenarios: [{
+    ...scenario('a'), requirementIds: ['policy'], assumptions: ['Агент видит политику.'],
     goalObservation: 'reply',
-    user: { ...scenario('a').user, goal: 'Получить точный ответ', facts: 'Тариф известен владельцу', opening, script: ['Уточнение один', 'Уточнение два'] },
+    user: { ...scenario('a').user, goal: 'Получить точный ответ', facts: 'Тариф известен владельцу', behavior: 'Отвечает кратко',
+      opening, script: ['Уточнение один', 'Уточнение два'], maxFollowUps: 2, persona: 'Владелец магазина',
+      characteristics: ['Не любит жаргон'], knows: ['Номер точки 42'], cannotKnow: ['Внутренний ID'],
+      answers: [{ ifAsked: 'Какая точка?', reply: '42' }] },
+    checks: [{ id: 'answer', kind: 'answer_equals', description: 'Точный ответ', value: 'Тариф 1%' }],
     successCriteria: success,
   }] });
   const projection = testPlanLines(current);
   assert.equal(projection.draftHash, draftHash(current));
-  assert.equal(projection.lines.join('\n'), [
-    'ТЕСТ',
-    'СИТУАЦИЯ',
-    '  Получить точный ответ',
-    '  Факты: Тариф известен владельцу',
-    '',
-    'ВХОД',
-    '  Первая строка',
-    `  ${'длинный вход '.repeat(240)}`,
-    '  Уточнение один',
-    '  Уточнение два',
-    '',
-    'УСПЕХ',
-    '  Ответ основан на политике.',
-    `  ${'полный критерий '.repeat(220)}`,
-    '',
-    'НАБЛЮДЕНИЕ',
-    '  ответ агента (reply)',
-    '',
-    `Версия: ${projection.draftHash.slice(0, 12)}`,
-    '',
-    'Этот тест действительно проверяет нужное поведение?',
-  ].join('\n'));
-  assert.ok(projection.lines.join('\n').includes(opening.replace('\n', '\n  ')));
-  assert.ok(projection.lines.join('\n').includes(success.replace('\n', '\n  ')));
+  const text = projection.lines.join('\n');
+  assert.match(text, /^ТЕСТ\nСИТУАЦИЯ\n  Название: Карточка a/m);
+  for (const expected of ['Цель: Получить точный ответ', 'Факты: Тариф известен владельцу', 'Поведение: Отвечает кратко',
+    'Максимум продолжений: 2', 'Персона: Владелец магазина', 'Характеристики:', '- Не любит жаргон',
+    'Известно пользователю:', '- Номер точки 42', 'Пользователь не знает:', '- Внутренний ID',
+    'Ответы на уточнения:', '«Какая точка?» → «42»', 'Требования:', '- [policy] Назвать точный тариф. · policy.md: «Тариф должен быть 1%.»', 'Допущения:',
+    'Исходное состояние:', 'Режимы: static', 'static · только начальная реплика',
+    'Точные проверки:', '[answer] Точный ответ', 'Последний ответ в точности: "Тариф 1%"',
+    'Рубрики судьи:', '[goal] Цель выполнена · agent', 'PASS: p', 'FAIL: f']) assert.ok(text.includes(expected), expected);
+  assert.ok(text.includes(opening.replace('\n', '\n  ')));
+  assert.ok(text.includes(success.replace('\n', '\n  ')));
+  assert.doesNotMatch(text, /Уточнение один|Уточнение два/, 'script is not executed or shown in static mode');
+  assert.match(text, /НАБЛЮДЕНИЕ\n  ответ агента \(reply\)/);
+  assert.match(text, /Этот тест действительно проверяет нужное поведение\?$/);
+
+  const scripted = testPlanLines({ ...current, settings: settingsSchema.parse({ userModes: ['scripted'], maxTurns: 6 }) });
+  assert.match(scripted.lines.join('\n'), /scripted · продолжения:\n  1\. Уточнение один\n  2\. Уточнение два/);
 });
 
 test('acceptance projection rejects ambiguous drafts and names tool/state observations exactly', () => {
@@ -80,7 +78,7 @@ test('acceptance projection rejects ambiguous drafts and names tool/state observ
   const stateRecord = { ...base, scenarios: [{ ...base.scenarios[0]!, goalObservation: 'state' as const,
     initialState: { records: { A: { status: 'new' } }, writableFields: ['status'], transientFailures: 0 } }] };
   const state = testPlanLines(stateRecord);
-  assert.match(state.lines.join('\n'), /Исходное состояние: \{"A":\{"status":"new"\}\}/);
+  assert.match(state.lines.join('\n'), /Исходное состояние: \{"records":\{"A":\{"status":"new"\}\},"writableFields":\["status"\],"transientFailures":0\}/);
   assert.match(state.lines.join('\n'), /НАБЛЮДЕНИЕ\n  итоговое состояние \(state\)/);
 });
 

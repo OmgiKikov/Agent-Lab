@@ -72,7 +72,7 @@ async function main() {
     process.stdout.write('  agent-lab summary --id RUN [--json]     Качество агента: карточки, критерии, причины, что разметить\n  agent-lab audit-judge --id RUN --output NEW_DIRECTORY --repeats 10 --yes\n');
     process.stdout.write('  agent-lab preview --id RUN --scenario CASE --input examples.json --yes\n  agent-lab accept --id RUN [--yes]\n');
     process.stdout.write('Agent Lab — проверьте, что сломала правка вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
-    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  agent-lab pilot --id RUN\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
+    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab discover-resume --id RUN [--yes] [--json]\n  agent-lab discover-build --id RUN [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  agent-lab pilot --id RUN\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
     process.stdout.write('Дополнительно: clarify --id RUN --input answers.json · run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\nКонтракты подключения: docs/REFERENCE.md.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
@@ -166,11 +166,12 @@ async function main() {
     }
     const plan = planDiscovery(input);
     const shownPlan = { type: 'discovery_plan', dialogueCount: input.dialogues.length, batches: plan.batchCount,
-      selectedCap: plan.selectedCap, nominalCalls: plan.nominalCalls, maxCalls: plan.maxCalls, oversizedDialogueIds: plan.oversizedIds };
+      selectedCap: plan.selectedCap, nominalCalls: plan.nominalCalls, maxCalls: plan.maxCalls,
+      maxDurationMs: plan.maxDurationMs, oversizedDialogueIds: plan.oversizedIds };
     await writeStdout(values.json
       ? `${JSON.stringify(shownPlan)}\n`
       : ['ПЛАН DISCOVERY', `Диалогов: ${shownPlan.dialogueCount}.`, `Партий первичного разбора: ${shownPlan.batches}.`,
-        `Подробно проверить: до ${shownPlan.selectedCap}.`, `План: ${shownPlan.nominalCalls} модельных вызовов; потолок: ${shownPlan.maxCalls}.`,
+        `Подробно проверить: до ${shownPlan.selectedCap}.`, `План: ${shownPlan.nominalCalls} модельных вызовов; потолок: ${shownPlan.maxCalls}; время: до ${Math.ceil(shownPlan.maxDurationMs / 1000)} секунд.`,
         ...(shownPlan.oversizedDialogueIds.length ? [`Не войдут целиком: ${shownPlan.oversizedDialogueIds.join(', ')}.`] : []), ''].join('\n'));
     if (!values.yes) {
       await writeStdout(values.json
@@ -194,6 +195,71 @@ async function main() {
     } finally {
       process.removeListener('SIGINT', closeDiscovery); process.removeListener('SIGTERM', closeDiscovery);
       await discoveryLab.close();
+    }
+    return;
+  }
+  if (command === 'discover-resume') {
+    if (!values.id) throw new Error('Укажите --id RUN незавершённого discovery.');
+    const source = await new ExperimentStore(directory).get(values.id);
+    if (!source.discovery) throw new Error('Указанный run не является discovery.');
+    const callsUsed = Math.max(source.usage.calls, source.discovery.callsUsed);
+    const maxCalls = source.discovery.callPlan.maxCalls;
+    const maxDurationMs = source.discovery.callPlan.maxDurationMs;
+    if (source.discovery.callPlan.legacyBudgetMissing) throw new Error('Старая discovery-запись не содержит исходный бюджет; начните новый discovery run.');
+    if (source.discovery.activeCall) throw new Error(`Discovery остановился во время модельного вызова «${source.discovery.activeCall}»; безопасное возобновление невозможно.`);
+    if (['ready', 'insufficient'].includes(source.discovery.phase)) throw new Error('Этот discovery run не требует возобновления.');
+    if (callsUsed >= maxCalls) throw new Error('Бюджет discovery исчерпан; найденные доказательства сохранены.');
+    const commandLine = `agent-lab discover-resume --id ${source.id} --yes --data-dir ${JSON.stringify(directory)}${values.json ? ' --json' : ''}`;
+    const status = { type: 'discovery_resume', id: source.id, status: source.discovery.phase,
+      callsUsed, maxCalls, remainingCalls: Math.max(0, maxCalls - callsUsed), maxDurationMs, command: commandLine };
+    if (!values.yes) {
+      await writeStdout(values.json ? `${JSON.stringify(status)}\n` : [
+        'DISCOVERY RESUME', `Статус: ${status.status}.`, `Вызовы: ${callsUsed}/${maxCalls} (осталось не более ${status.remainingCalls}).`,
+        `Сохранённый общий лимит времени: до ${Math.ceil(maxDurationMs / 1000)} секунд.`, `Для возобновления: ${commandLine}`, '',
+      ].join('\n'));
+      return;
+    }
+    const resumeLab = new ExperimentLab(directory);
+    await resumeLab.init();
+    try {
+      const started = await resumeLab.resumeDiscovery(source.id);
+      await resumeLab.waitForIdle();
+      const record = await resumeLab.get(started.id);
+      const brief = discoveryBrief(record);
+      await writeStdout(values.json
+        ? `${JSON.stringify({ type: 'discovery_result', id: record.id, phase: brief.status, resumed: true, brief, text: brief.lines.join('\n') })}\n`
+        : `${brief.lines.join('\n')}\n`);
+      process.exitCode = brief.status === 'ready' ? 0 : 2;
+    } finally {
+      await resumeLab.close();
+    }
+    return;
+  }
+  if (command === 'discover-build') {
+    if (!values.id) throw new Error('Укажите --id RUN готового discovery.');
+    const source = await new ExperimentStore(directory).get(values.id);
+    const brief = discoveryBrief(source);
+    if (brief.status !== 'ready' || !brief.hypothesis) throw new Error('В discovery нет готовой сохранённой гипотезы.');
+    if (!values.yes) {
+      await writeStdout(values.json
+        ? `${JSON.stringify({ type: 'hypothesis_confirmation', id: source.id, hypothesis: brief.hypothesis,
+          command: `agent-lab discover-build --id ${source.id} --yes${values.json ? ' --json' : ''}` })}\n`
+        : `${brief.lines.join('\n')}\n\nЧтобы собрать черновик теста: agent-lab discover-build --id ${source.id} --yes\n`);
+      return;
+    }
+    const buildLab = new ExperimentLab(directory);
+    await buildLab.init();
+    try {
+      const started = await buildLab.buildFromDiscovery(source.id, brief.hypothesis);
+      await buildLab.waitForIdle();
+      const record = await buildLab.get(started.id);
+      const projection = testPlanLines(record);
+      await writeStdout(values.json
+        ? `${JSON.stringify({ type: 'test_proposal', id: record.id, fromRunId: source.id, hypothesis: brief.hypothesis,
+          text: projection.lines.join('\n'), lines: projection.lines, draftHash: projection.draftHash })}\n`
+        : `${projection.lines.join('\n')}\n\nЧерновик собран: ${record.id}. Агент не запускался.\n`);
+    } finally {
+      await buildLab.close();
     }
     return;
   }
@@ -340,4 +406,4 @@ async function main() {
     await lab.close();
   }
 }
-void main().catch(error => { process.stderr.write(`Agent Lab: ${safeLine(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = ['evaluate', 'audit-judge', 'score', 'discover'].includes(process.argv[2] ?? '') ? 2 : 1; });
+void main().catch(error => { process.stderr.write(`Agent Lab: ${safeLine(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = ['evaluate', 'audit-judge', 'score', 'discover', 'discover-resume', 'discover-build'].includes(process.argv[2] ?? '') ? 2 : 1; });

@@ -166,8 +166,11 @@ test('logs become one accepted, evidenced and reusable regression test against a
     async assess({ scenario, trial }) {
       calls.assess++;
       const reply = trial.events.findLast(event => event.type === 'assistant')!;
+      const result = reply.text!.includes('support@example.com') ? 'pass' as const : 'fail' as const;
       return scenario.metrics!.map(metric => ({
-        metricId: metric.id, result: 'pass' as const, rationale: 'The persisted assistant reply contains the approved address.',
+        metricId: metric.id, result, rationale: result === 'pass'
+          ? 'The persisted assistant reply contains the approved address.'
+          : 'The persisted assistant reply omits the approved address.',
         evidence: [reply.seq], citations: [{ seq: reply.seq, quote: reply.text! }],
       }));
     },

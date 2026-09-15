@@ -73,15 +73,20 @@ test('Pi discovery confirms a computed budget, accepts 300 logs and hands the ex
   prepared.error = null;
 
   const originalDiscover = ExperimentLab.prototype.discover;
+  const originalResume = ExperimentLab.prototype.resumeDiscovery;
   const originalBuild = ExperimentLab.prototype.buildFromDiscovery;
   const originalGet = ExperimentLab.prototype.get;
   const originalWait = ExperimentLab.prototype.waitForIdle;
   let ready: typeof prepared | undefined;
   let discoverCalls = 0;
+  let resumeCalls = 0;
+  let discoverySettings: { maxCalls: number; maxDurationMs: number } | undefined;
   let handoff: { fromRunId: string; hypothesis: string } | undefined;
   ExperimentLab.prototype.discover = async function(raw) {
     discoverCalls++;
     const plan = planDiscovery(raw);
+    discoverySettings = { maxCalls: raw.settings.maxCalls, maxDurationMs: raw.settings.maxDurationMs };
+    const { batches: _batches, batchCount: _batchCount, oversizedIds: _oversizedIds, seed: _seed, ...callPlan } = plan;
     const requirement = { id: 'support', text: 'Назвать адрес поддержки', sourceId: prepared.sources[0]!.id,
       quote: prepared.sources[0]!.content.slice(0, 20), critical: true };
     const hypothesis = 'Агент может не назвать адрес поддержки.\nНАБЛЮДЕНИЕ: ответ агента (reply)';
@@ -97,13 +102,21 @@ test('Pi discovery confirms a computed budget, accepts 300 logs and hands the ex
         completedDeepIds: [raw.dialogues[0]!.id, raw.dialogues[1]!.id, raw.dialogues[2]!.id], deep: [],
         hypothesis: { text: hypothesis, proposedGoalObservation: 'reply', requirementId: requirement.id,
           eventIds: [{ dialogueId: raw.dialogues[0]!.id, seq: 1 }, { dialogueId: raw.dialogues[1]!.id, seq: 1 }] },
-        callPlan: { batches: plan.batchCount, selectedCap: plan.selectedCap, metrics: plan.metrics, nominalCalls: plan.nominalCalls, maxCalls: plan.maxCalls },
+        callPlan: { ...callPlan, batches: plan.batchCount },
         callsUsed: plan.nominalCalls, totalDialogues: raw.dialogues.length, oversizedIds: plan.oversizedIds } };
     return structuredClone(ready);
   };
   ExperimentLab.prototype.buildFromDiscovery = async function(fromRunId, hypothesis) {
     handoff = { fromRunId, hypothesis };
     return structuredClone(prepared);
+  };
+  ExperimentLab.prototype.resumeDiscovery = async function(id) {
+    resumeCalls++;
+    assert.equal(id, 'discovery-run');
+    assert.ok(ready?.discovery);
+    ready.discovery.phase = 'ready';
+    ready.phase = 'complete';
+    return structuredClone(ready);
   };
   ExperimentLab.prototype.get = async function(id) {
     if (id === ready?.id) return structuredClone(ready);
@@ -113,6 +126,7 @@ test('Pi discovery confirms a computed budget, accepts 300 logs and hands the ex
   ExperimentLab.prototype.waitForIdle = async function() {};
   t.after(async () => {
     ExperimentLab.prototype.discover = originalDiscover;
+    ExperimentLab.prototype.resumeDiscovery = originalResume;
     ExperimentLab.prototype.buildFromDiscovery = originalBuild;
     ExperimentLab.prototype.get = originalGet;
     ExperimentLab.prototype.waitForIdle = originalWait;
@@ -136,6 +150,8 @@ test('Pi discovery confirms a computed budget, accepts 300 logs and hands the ex
   assert.equal(discoverCalls, 0);
   assert.match(confirmations[0]!.body, /потолок: (\d+)/);
   assert.ok(Number(confirmations[0]!.body.match(/потолок: (\d+)/)![1]) > 20);
+  assert.match(confirmations[0]!.body, /время: до (\d+) секунд/);
+  assert.ok(Number(confirmations[0]!.body.match(/время: до (\d+) секунд/)![1]) > 180);
   await assert.rejects(access(join(directory, '.agent-lab')), /ENOENT/);
   await assert.rejects(call({ ...base, dialogues: [...logs, { ...logs[0], id: 'dialogue_300' }] }), /300|Too big|слишком/i);
   assert.equal(discoverCalls, 0);
@@ -144,10 +160,35 @@ test('Pi discovery confirms a computed budget, accepts 300 logs and hands the ex
   const found = await call({ ...base, dialogues: logs.slice(0, 50) });
   assert.equal(discoverCalls, 1);
   assert.ok(found.plan.maxCalls > 20);
+  assert.ok(found.plan.maxDurationMs > 180000);
+  assert.deepEqual(discoverySettings, { maxCalls: 20, maxDurationMs: 180000 }, 'core derives discovery ceilings while retaining the test defaults');
   assert.equal(found.fromRunId, 'discovery-run');
   assert.match(found.brief, /отбор, не accuracy/);
   assert.match(found.brief, /диалог dialogue_0, событие #1/);
   assert.match(found.brief, /НАБЛЮДЕНИЕ: ответ агента \(reply\)\n\nПроверим\?$/);
+
+  assert.ok(ready?.discovery);
+  ready.discovery.phase = 'partial';
+  ready.phase = 'interrupted';
+  const saved = new ExperimentLab(join(directory, '.agent-lab'), createDemoRuntime());
+  await saved.init();
+  await saved.store.save(ready);
+  await saved.close();
+
+  consent = false;
+  const resumeCancelled = await call({ mode: 'discover', resumeRunId: ready.id });
+  assert.equal(resumeCancelled.status, 'cancelled'); assert.equal(resumeCancelled.mutated, false); assert.equal(resumeCalls, 0);
+  assert.match(confirmations.at(-1)!.body, /Статус: partial/);
+  assert.match(confirmations.at(-1)!.body, new RegExp(`Вызовы: ${ready.discovery.callsUsed}/${ready.discovery.callPlan.maxCalls}`));
+  assert.match(confirmations.at(-1)!.body, /Сохранённый общий лимит времени: до \d+ секунд/);
+
+  consent = true;
+  const resumed = await call({ mode: 'discover', resumeRunId: ready.id });
+  assert.equal(resumeCalls, 1); assert.equal(resumed.resumed, true); assert.equal(resumed.phase, 'ready');
+  assert.equal(resumed.brief, resumed.discovery.lines.join('\n'));
+  const completed = new ExperimentLab(join(directory, '.agent-lab'), createDemoRuntime());
+  await completed.init(); await completed.store.save(ready); await completed.close();
+  await assert.rejects(call({ mode: 'discover', resumeRunId: ready.id }), /не требует возобновления/);
 
   const built = await call({ mode: 'discover', fromRunId: found.fromRunId, hypothesis: found.hypothesis });
   assert.deepEqual(handoff, { fromRunId: found.fromRunId, hypothesis: found.hypothesis });

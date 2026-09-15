@@ -588,12 +588,22 @@ export const reassessmentSchema = z.strictObject({
 export type ReassessmentInput = z.input<typeof reassessmentSchema>;
 export type DraftPatch = z.infer<typeof draftPatchSchema>;
 export const DISCOVERY_PROTOCOL = 'discovery-1';
-export const discoveryCallPlanSchema = z.strictObject({
+const discoveryCallPlanFields = z.strictObject({
   batches: z.number().int().nonnegative(), selectedCap: z.number().int().min(0).max(5), metrics: z.number().int().min(1).max(8),
   nominalCalls: z.number().int().nonnegative(), maxCalls: z.number().int().positive(),
+  baseMaxCalls: z.number().int().positive(),
+  baseMaxDurationMs: z.number().int().positive(),
+  maxDurationMs: z.number().int().positive(),
+  legacyBudgetMissing: z.boolean().optional(),
 });
+export const discoveryCallPlanSchema = z.preprocess(value => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const plan = value as Record<string, unknown>;
+  if (plan.baseMaxCalls !== undefined && plan.baseMaxDurationMs !== undefined && plan.maxDurationMs !== undefined) return value;
+  return { ...plan, baseMaxCalls: 5, baseMaxDurationMs: 5000, maxDurationMs: 5000, legacyBudgetMissing: true };
+}, discoveryCallPlanFields);
 export type DiscoveryCallPlan = z.infer<typeof discoveryCallPlanSchema>;
-export interface DiscoveryPlan extends Omit<DiscoveryCallPlan, 'batches'> {
+export interface DiscoveryPlan extends Omit<DiscoveryCallPlan, 'batches' | 'legacyBudgetMissing'> {
   batches: DiscoveryDialogue[][];
   batchCount: number;
   oversizedIds: string[];
@@ -615,6 +625,7 @@ export const discoveryRecordSchema = z.strictObject({
   observations: z.array(discoveryObservationSchema).max(300), seed: text,
   focusRequirementId: identifier.optional(), representativeIds: z.array(identifier).max(3), controlIds: z.array(identifier).max(2), selectedIds: z.array(identifier).max(5),
   completedBatchCount: z.number().int().nonnegative(), groupingComplete: z.boolean(), completedDeepIds: z.array(identifier).max(5),
+  activeCall: text.max(200).optional(),
   deep: z.array(discoveryDeepResultSchema).max(5), hypothesis: discoveryHypothesisSchema.optional(),
   callPlan: discoveryCallPlanSchema, callsUsed: z.number().int().nonnegative(), totalDialogues: z.number().int().min(1).max(300), oversizedIds: z.array(identifier).max(300),
 });
