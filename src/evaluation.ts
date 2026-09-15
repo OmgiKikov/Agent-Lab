@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
   emptyUsage, userTurnSchema, scriptIssue, metricApplies, validateAssessments,
-  type CallContext, type CheckResult, type DialogueMessage, type Revision,
+  type CallContext, type CheckResult, type DialogueMessage, type Requirement, type Revision,
   type Runtime, type Scenario, type Settings, type Source, type Target, type TargetSession, type TraceEvent, type Trial, type UserMode,
 } from './contracts.js';
+import { observableSources } from './judge.js';
 import { sandbox } from './sandbox.js';
 import { openExternalTarget } from './targets.js';
 import { simulatorChecks } from './simulator.js';
@@ -126,10 +127,10 @@ export function previewAnswer(scenario: Scenario, answer: string) {
 
 export async function evaluateTrial(input: {
   runtime: Runtime; revision: Revision; scenario: Scenario; repeat: number; manifestHash: string;
-  sources: Source[]; settings: Settings; ctx: CallContext; userMode: UserMode; target: Target;
+  sources: Source[]; requirements: Requirement[]; settings: Settings; ctx: CallContext; userMode: UserMode; target: Target;
   onStage?(stage: 'target' | 'user' | 'assessment'): void;
 }): Promise<Trial> {
-  const { runtime, revision, scenario, repeat, manifestHash, sources, settings, ctx, userMode, target, onStage } = input;
+  const { runtime, revision, scenario, repeat, manifestHash, sources, requirements, settings, ctx, userMode, target, onStage } = input;
   const started = performance.now();
   const state = structuredClone(scenario.initialState);
   const trial: Trial = {
@@ -276,7 +277,7 @@ export async function evaluateTrial(input: {
       trial.assessments = await assessTrial(runtime, scenario, sources, trial, { ...localCtx, onJudgment: (id, audit) => {
         try { ctx.onJudgment?.(id, audit); }
         catch (error) { persistenceFailed = true; persistenceError = error; throw error; }
-      } });
+      } }, requirements);
     } catch (error) {
       if (persistenceFailed) throw persistenceError;
       trial.assessmentError = (ctx.signal.aborted ? 'Metric assessment cancelled' : error instanceof Error ? error.message : 'Metric assessment failed').slice(0, 4000);
@@ -286,12 +287,12 @@ export async function evaluateTrial(input: {
   return trial;
 }
 
-/** Shared by live evaluation and reassessment of immutable recorded evidence. */
-export async function assessTrial(runtime: Runtime, scenario: Scenario, sources: Source[], trial: Trial, ctx: CallContext) {
+/** Shared by live evaluation and reassessment of immutable recorded evidence. The judge sees the agent prompt only as its observable rules. */
+export async function assessTrial(runtime: Runtime, scenario: Scenario, sources: Source[], trial: Trial, ctx: CallContext, requirements: Requirement[]) {
   if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');
   const metrics = scenario.metrics ?? [];
   const assessments = validateAssessments(metrics, trial.events, await runtime.assess({
-    scenario: structuredClone(scenario), sources: structuredClone(sources), trial: structuredClone(trial),
+    scenario: structuredClone(scenario), sources: structuredClone(observableSources(sources, requirements)), trial: structuredClone(trial),
   }, { ...ctx, onTargetEvent: undefined, onTrace: undefined, onJudgment: (id, audit) => {
     trial.judgeAudit = structuredClone(audit);
     ctx.onJudgment?.(id, audit);

@@ -105,7 +105,7 @@ export async function doctor(connection: Connection, signal = new AbortControlle
   });
   try {
     const trials = [];
-    for (const reset of [false, true]) trials.push(await evaluateTrial({ runtime, revision, scenario: makeCard(reset), sources: [], repeat: 0,
+    for (const reset of [false, true]) trials.push(await evaluateTrial({ runtime, revision, scenario: makeCard(reset), sources: [], requirements: [], repeat: 0,
       manifestHash: fingerprint(probe), settings, userMode: 'scripted', target: connection.target,
       ctx: { signal: combined, timeoutMs: 60000, beforeCall() { combined.throwIfAborted(); if (++usage.calls > 3) throw new Error('Probe call limit exceeded'); },
         addUsage(u) { usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens; usage.costUsd = u.costUsd === null || usage.costUsd === null ? null : usage.costUsd + u.costUsd; } } }));

@@ -30,7 +30,7 @@ test('a failed case becomes a reusable regression test without changing provenan
   const malformed = { ...scenario, user: { ...scenario.user, maxFollowUps: 1, script: [scenario.user.opening, 'Now 18:00'] } };
   assert.match(scriptIssue(malformed.user, 4)!, /только реплики после opening/);
   let calls = 0;
-  const invalid = await evaluateTrial({ runtime: createDemoRuntime(), revision: draft.revisions[0]!, scenario: malformed, repeat: 0, userMode: 'scripted',
+  const invalid = await evaluateTrial({ requirements: [], runtime: createDemoRuntime(), revision: draft.revisions[0]!, scenario: malformed, repeat: 0, userMode: 'scripted',
     manifestHash: 'test', sources: draft.sources, settings: draft.settings, target: draft.target,
     ctx: { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() { calls++; }, addUsage() {} } });
   assert.equal(invalid.outcome, 'invalid'); assert.equal(calls, 0);

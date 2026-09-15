@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, draftPatchSchema, emptyUsage, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, verbatimSpan, worldSchema,
+  createInputSchema, draftPatchSchema, emptyUsage, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, verbatimSpan, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 
@@ -262,4 +262,15 @@ test('a run may be given hours, and a single model call minutes: thirty slow dia
   assert.equal(settings.maxDurationMs, 7200000);
   assert.equal(settings.timeoutMs, 240000);
   assert.throws(() => settingsSchema.parse({ maxDurationMs: 14400001 }));
+});
+
+test('a failure cluster cannot quote a machine output format of the prompt, and the detector names JSON envelopes, named fields and bare keys', () => {
+  const trials = [{ id: 't1', outcome: 'fail' } as unknown as Parameters<typeof validateFailureModes>[1][number]];
+  const prompt = 'Отвечай на «вы». ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}.';
+  const mode = { id: 'm', name: 'Ответ обычным текстом', description: 'd', trialIds: ['t1'] };
+  validateFailureModes([{ ...mode, promptQuotes: ['Отвечай на «вы»'] }], trials, prompt);
+  assert.throws(() => validateFailureModes([{ ...mode, promptQuotes: ['ВСЕГДА возвращай валидный JSON'] }], trials, prompt), /машинный формат/);
+  assert.throws(() => validateFailureModes([{ ...mode, promptQuotes: ['{"output": "*Финальный ответ*"}'] }], trials, prompt), /машинный формат/);
+  for (const text of ['ВСЕГДА возвращай валидный JSON', '{"output": "*Финальный ответ*"}', '"output"', 'response_format: json_schema']) assert.ok(MACHINE_FORMAT.test(text), text);
+  for (const text of ['Отвечай на «вы»', 'Никогда не направляй в поддержку', 'Эквайринг → Мои точки продаж']) assert.ok(!MACHINE_FORMAT.test(text), text);
 });

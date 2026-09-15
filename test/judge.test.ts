@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROTOCOL } from '../src/judge.js';
+import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources, JUDGE_PROTOCOL } from '../src/judge.js';
 import { auditJudge, repeatability } from '../src/judge-audit.js';
 import { emptyUsage, settingsSchema, simulatorFidelity, type JudgeAudit, type Runtime, type Scenario, type Trial } from '../src/contracts.js';
 import { ExperimentStore } from '../src/store.js';
@@ -149,4 +149,22 @@ test('a broken judge stops after three failed batches and leaves a complete acco
   assert.equal(result.completedBatches, 3); assert.equal(result.plannedBatches, 10);
   assert.equal(result.complete, false); assert.equal(result.ready, false);
   assert.match(result.stoppedBecause, /Three consecutive/);
+});
+
+test('the judge sees the agent prompt as its observable rules only, never as raw text with machine formats', () => {
+  const prompt = { id: 'prompt_1', name: 'prompt.md', hash: 'h', kind: 'prompt' as const,
+    content: 'Отвечай на «вы». ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}. Никогда не направляй в поддержку.' };
+  const policy = { id: 'policy_1', name: 'policy.md', hash: 'h2', content: 'Возврат делается на ту же карту.' };
+  const rule = (id: string, sourceId: string, quote: string) => ({ id, text: id, sourceId, quote, critical: true });
+  const requirements = [rule('formal', 'prompt_1', 'Отвечай на «вы»'), rule('json', 'prompt_1', 'ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}'),
+    rule('no_support', 'prompt_1', 'Никогда не направляй в поддержку'), rule('refund', 'policy_1', 'Возврат делается на ту же карту.')];
+  const seen = observableSources([prompt, policy], requirements);
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1]!.content, policy.content, 'a policy source reaches the judge unchanged');
+  assert.equal(seen[0]!.id, 'prompt_1'); assert.equal(seen[0]!.kind, 'prompt');
+  assert.match(seen[0]!.content, /1\. «Отвечай на «вы»»\n2\. «Никогда не направляй в поддержку»/);
+  assert.doesNotMatch(seen[0]!.content, /JSON|output/);
+  assert.match(observableSources([prompt], [])[0]!.content, /не извлечено/);
+  assert.doesNotMatch(observableSources([prompt], [])[0]!.content, /JSON/);
+  assert.match(JSON.stringify(judgeInput({ ...input, sources: seen })), /промпт агента/);
 });

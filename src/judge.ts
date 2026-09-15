@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { assessmentEventContent, fingerprint, metricApplies, metricAssessmentSchema, validateAssessments, type CallContext, type JudgeAudit, type MetricAssessment, type Runtime } from './contracts.js';
+import { assessmentEventContent, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, validateAssessments, type CallContext, type JudgeAudit, type MetricAssessment, type Requirement, type Runtime, type Source } from './contracts.js';
 import { ASSESS_ROLE, DATA_BOUNDARY } from './prompts.js';
 
 const condition = z.enum(['met', 'not_met', 'unclear']);
@@ -16,8 +16,24 @@ export const JUDGE_PROMPT = `${ASSESS_ROLE}\n${DATA_BOUNDARY}
 Evaluate passCriteria and failCriteria INDEPENDENTLY against the same evidence. Report met, not_met or unclear for EACH condition. Do not choose which condition takes precedence. If both apply, preserve both as met. An unspecified scope or priority is unclear; never invent one. Explain both conditions in rationale. A condition that is not exercised is unclear, not automatically met or not_met.
 Return exactly one compact JSON object, without markdown fences, matching this schema:
 ${JSON.stringify(z.toJSONSchema(responseSchema))}`;
-export const JUDGE_PROTOCOL = fingerprint({ version: 6, prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
+export const JUDGE_PROTOCOL = fingerprint({ version: 7, promptSources: 'observable-rules', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
+
+/**
+ * The judge never reads the agent's prompt as text. A prompt source reaches it as the numbered
+ * rules a user could observe, extracted at preparation and filtered again here, so an internal
+ * format or tool instruction cannot become a verdict. Every other source is passed unchanged.
+ */
+export function observableSources(sources: Source[], requirements: Requirement[]): Source[] {
+  return sources.map(source => {
+    if (source.kind !== 'prompt') return source;
+    const rules = requirements.filter(r => r.sourceId === source.id && !MACHINE_FORMAT.test(r.quote)).map((r, i) => `${i + 1}. «${r.quote}»`);
+    const content = rules.length
+      ? `Наблюдаемые правила промпта агента, извлечённые при подготовке; внутренние правила формата ответа и работы с инструментами исключены:\n${rules.join('\n')}`
+      : 'Наблюдаемых правил из промпта агента не извлечено: ни одно правило промпта к этому диалогу не применимо.';
+    return { ...source, content };
+  });
+}
 
 /** This is the complete, frozen judge input. Prior verdicts, usage and run identity are deliberately absent. */
 export function judgeInput(input: Input) {

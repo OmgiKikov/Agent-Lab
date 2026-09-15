@@ -1040,3 +1040,21 @@ test('a stage the model puts on the card itself is dropped: stages belong to cri
     assert.equal((prepared.scenarios[0] as { stage?: string }).stage, undefined);
   } finally { await f.close(); }
 });
+
+test('a generated external card drops checks and rubrics that pin a machine output format without costing an attempt', async () => {
+  const prompt = 'Отвечай на «вы». ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}. Никогда не направляй в поддержку.';
+  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'prompt_1', quote, critical: true });
+  const rubric = (id: string, name: string, text: string) => ({ id, name, subject: 'agent' as const, description: text, passCriteria: text, failCriteria: `Не так: ${text}` });
+  const card = { ...plainCard(0), requirementIds: ['formal'],
+    checks: [{ id: 'json-format', kind: 'answer_contains' as const, description: 'Ответ содержит поле output', value: '"output"' },
+      { id: 'no-support', kind: 'answer_omits' as const, description: 'Ответ не направляет в поддержку', value: 'поддержку' }],
+    metrics: [rubric('format', 'Формат финального ответа', 'Ответ является валидным JSON с полем output'), rubric('goal', 'Цель выполнена', 'Клиент получил инструкцию на «вы»')] };
+  const outputs = [{ requirements: [req('formal', 'Отвечай на «вы»'), req('no_support', 'Никогда не направляй в поддержку')], questions: [] }, { scenarios: [card] }];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check the agent against its prompt', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'prompt_1', name: 'prompt.md', content: prompt, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 2, 'dropping a machine-format criterion is deterministic and costs no repair round');
+    assert.deepEqual(prepared.scenarios[0]!.checks.map(c => c.id), ['no-support']);
+    assert.deepEqual(prepared.scenarios[0]!.metrics!.filter(m => m.subject === 'agent').map(m => m.id), ['prompt_compliance', 'goal']);
+  } finally { await f.close(); }
+});

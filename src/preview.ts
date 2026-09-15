@@ -39,7 +39,7 @@ export async function previewCriteria(record: Experiment, scenarioId: string, ra
       signal.throwIfAborted();
       if (scenario.metrics.length && !options.codeOnly) {
         runtime ??= await createPiRuntime(record.settings);
-        trial.assessments = await assessTrial(runtime, scenario, record.sources, trial, ctx);
+        trial.assessments = await assessTrial(runtime, scenario, record.sources, trial, ctx, record.requirements);
       }
     } catch (error) { trial.assessmentError = error instanceof Error ? error.message : 'Оценщик недоступен'; }
     const scores = [...exact.checks.map(c => c.passed ? 'pass' : 'fail'), ...(trial.assessments ?? []).map(a => a.result)];

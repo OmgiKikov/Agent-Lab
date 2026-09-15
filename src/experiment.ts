@@ -330,7 +330,7 @@ export class ExperimentLab {
               if (scenario.metrics?.length && runtime) trial.assessments = await assessTrial(runtime, scenario, record.sources, trial, { ...ctx,
                 beforeCall() { ctx.beforeCall(); trial.usage.calls++; },
                 addUsage(usage) { ctx.addUsage(usage); trial.usage.inputTokens += usage.inputTokens; trial.usage.outputTokens += usage.outputTokens;
-                  trial.usage.costUsd = usage.costUsd === null || trial.usage.costUsd === null ? null : trial.usage.costUsd + usage.costUsd; } });
+                  trial.usage.costUsd = usage.costUsd === null || trial.usage.costUsd === null ? null : trial.usage.costUsd + usage.costUsd; } }, record.requirements);
               else if (scenario.metrics?.length) trial.assessmentError = 'Только точные проверки; рубрики не переоценивались.';
             } catch (error) {
               trial.assessmentError = (error instanceof Error ? error.message : String(error)).slice(0, 4000);
@@ -522,7 +522,7 @@ export class ExperimentLab {
         await fingerprintCheck('Код внешнего агента изменился во время прогона. Создайте повтор с новой версией.');
         const progress = () => `${label}${prefix}${scenario.title} · диалог ${completed + 1}/${planned}${running()}`;
         record.message = `${progress()} · открываем сессию`;
-        const trial = await evaluateTrial({ runtime, revision, scenario, repeat, manifestHash: hash, sources: record.sources, settings: record.settings,
+        const trial = await evaluateTrial({ runtime, revision, scenario, repeat, manifestHash: hash, sources: record.sources, requirements: record.requirements, settings: record.settings,
           onStage: stage => { record.message = `${progress()} · ${{ target: 'ответ агента', user: 'реплика пользователя', assessment: 'оценка критериев' }[stage]}`; },
           ctx: { ...ctx, onTrace: (trialId, event) => {
             ctx.onTrace?.(trialId, event);

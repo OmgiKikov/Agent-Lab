@@ -543,6 +543,8 @@ const comparisonSchema = z.strictObject({
  * must cite the dialogues it was drawn from and may name the stage where the chain broke.
  * Clusters cover the traces of this run only; they are not a picture of production traffic.
  */
+/** A JSON envelope, a named field, a structured-output directive or a bare quoted key: an internal interface between the agent's components, never a rule a user can observe in a reply. */
+export const MACHINE_FORMAT = /\bjson\b|response_format|\{\s*"[a-z_]+"\s*:|^\s*"[a-z_]+"\s*$/i;
 export const failureModeSchema = z.strictObject({
   id: identifier, name: text.max(160), description: text.max(2000),
   stage: text.max(80).optional(), trialIds: z.array(identifier).min(1).max(200),
@@ -561,6 +563,7 @@ export function validateFailureModes(modes: FailureMode[], trials: Trial[], prom
     for (const quote of mode.promptQuotes ?? []) {
       if (prompt === undefined) throw new Error(`Кластер ${mode.id} цитирует промпт, но промпт не передавался.`);
       if (!prompt.includes(quote)) throw new Error(`Кластер ${mode.id} цитирует фрагмент, которого нет дословно в промпте: «${quote.slice(0, 80)}»`);
+      if (MACHINE_FORMAT.test(quote)) throw new Error(`Кластер ${mode.id} цитирует машинный формат ответа, а не правило, которое видит пользователь: «${quote.slice(0, 80)}»`);
     }
   }
 }

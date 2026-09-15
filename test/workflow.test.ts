@@ -107,7 +107,7 @@ test('external state must not pass when the adapter never reported it', async t 
   const scenario = { ...card(), split: 'dev', metrics: [],
     initialState: { records: { A: { time: '09:00' } }, writableFields: [], transientFailures: 0 },
     checks: [{ id: 'state', kind: 'state_equals', description: 'The backend record is unchanged', recordId: 'A', field: 'time', value: '09:00' }] };
-  const trial = await evaluateTrial({ runtime: runtime([]), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'Fixture', createdAt: new Date().toISOString() },
+  const trial = await evaluateTrial({ requirements: [], runtime: runtime([]), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'Fixture', createdAt: new Date().toISOString() },
     scenario, repeat: 0, manifestHash: 'review', sources: [], settings: settingsSchema.parse({}), userMode: 'static',
     target: { kind: 'http', url: `http://127.0.0.1:${server.address().port}`, headersEnv: {}, timeoutMs: 1000 },
     ctx: { signal: AbortSignal.timeout(5000), timeoutMs: 1000, beforeCall() {}, addUsage() {} } });
@@ -307,7 +307,7 @@ test('partial external observations, unreported costs and out-of-scope tools can
   const scenario = { ...card(), metrics: [], split: 'dev', user: { ...card().user, opening: 'Read', script: ['Read again'], maxFollowUps: 1 },
     initialState: { records: { A: { time: '09:00' } }, writableFields: [], transientFailures: 0 },
     checks: [{ id: 'state', kind: 'state_equals', recordId: 'A', field: 'time', value: '09:00', description: 'Unchanged' }] };
-  const run = (s = scenario) => evaluateTrial({ runtime: runtime([]), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'fixture', createdAt: new Date().toISOString() },
+  const run = (s = scenario) => evaluateTrial({ requirements: [], runtime: runtime([]), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'fixture', createdAt: new Date().toISOString() },
     scenario: s, repeat: 0, manifestHash: 'fixture', sources: [], settings: settingsSchema.parse({}), userMode: 'scripted',
     target: { kind: 'http', url: `http://127.0.0.1:${server.address().port}`, headersEnv: {}, timeoutMs: 1000 },
     ctx: { signal: AbortSignal.timeout(5000), timeoutMs: 1000, beforeCall() {}, addUsage() {} } });
