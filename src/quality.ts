@@ -143,9 +143,9 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const pending = awaitingVerdict(record);
   const unknownIds = record.trials.filter(t => measured(t) && agentRubricResult(scenarioOf(t), t, record.humanReviews) === 'unknown' && undecidedByHuman(t)).map(t => t.id);
   // A human overruling a simulator suspicion is the intended resolution, not a disagreement to revisit.
-  const disagreementIds = humanFindings(record).filter(f => f.disagreement && f.subject !== 'simulator').map(f => f.trialId);
+  const disagreementIds = new Set(humanFindings(record).filter(f => f.disagreement && f.subject !== 'simulator').map(f => f.trialId));
   const simulatorIds = record.trials.filter(t => pending.has(t.id) && measured(t) && !simulatorUsable(scenarioOf(t), t, record.humanReviews)).map(t => t.id);
-  const disagreements = disagreementIds.length;
+  const disagreements = disagreementIds.size;
   const humanQueue = { unknownJudgments: unknownIds.length, disagreements, simulatorFlags: simulatorIds.length,
     total: new Set([...pending, ...unknownIds, ...disagreementIds, ...simulatorIds]).size,
     pendingFailures: record.trials.filter(t => pending.has(t.id) && isAgentFailure(record, t)).length };

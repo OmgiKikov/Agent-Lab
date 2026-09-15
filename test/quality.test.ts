@@ -149,6 +149,14 @@ test('metric rows use the same human criterion verdict as card outcomes', () => 
   assert.equal(JSON.stringify(trials), original, 'row aggregation never mutates saved assessments');
 });
 
+test('multiple disputed criteria count as one disputed dialogue', () => {
+  const disputed = trial('t1', 'a', 'pass', 'fail', 'fail');
+  const q = qualitySummary(record({ scenarios: [scenario('a')], trials: [disputed], humanReviews: [review('t1', 'goal', 'pass'), review('t1', 'format', 'pass')] }));
+  assert.equal(q.humanQueue.disagreements, 1);
+  assert.equal(q.judge.disputed, 1);
+  assert.equal(q.humanQueue.total, 1);
+});
+
 test('the first screen separates reached undecided cards, not-reached cards, and all current dialogues', () => {
   const invalid = { ...trial('cancelled', 'c', 'fail', 'fail'), outcome: 'cancelled' as const };
   const q = qualitySummary(record({ scenarios: [scenario('a'), scenario('b'), scenario('c')],
