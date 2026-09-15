@@ -567,11 +567,11 @@ export function verdictSummary(record: Experiment): VerdictSummary {
   if (hasResults && mixed.length) nextSteps.push({ code: 'inspect_repeats', text: `На ${mixed.length} сочетаниях карточки и режима есть и успехи, и провалы. Сравните эти попытки; общий процент скрывает различия.`, count: mixed.length });
   if (hasResults && simulatorFlagged) nextSteps.push({ code: 'inspect_simulator', text: `Откройте ${simulatorFlagged} диалог(ов) с пометкой симулятора: утечка, выдуманное значение, повтор или нарушение роли. Оценки агента в них ненадёжны; опровергнуть пометку можно вердиктом по проверке.`, count: simulatorFlagged });
   const awaiting = unreviewed + undecided;
-  // A person is asked for the disputed part first; unanimous automatic failures can be confirmed for audit completeness, not to read the result.
+  // Prioritize disputed evidence; automatic failures still need a human verdict before prompt changes or final audit.
   const disputed = rubric.unknown + review.disagreements + simulatorFlagged;
   if (hasResults && awaiting) nextSteps.push({ code: 'record_verdicts', count: awaiting, text: disputed
-    ? `${awaiting} провал(ов) ждут вердикта человека (p — пройдено, n — не пройдено). Начните со спорных: ${disputed} с неясной оценкой, расхождением или пометкой симулятора; остальные судья решил единогласно.`
-    : `Судья решил ${awaiting} провал(ов) единогласно; подтвердите их вердиктом p / n, если нужна высокая полнота аудита. Для чтения результата это не требуется.` });
+    ? `${awaiting} провал(ов) ждут вердикта человека (p — пройдено, n — не пройдено). Начните со спорных: ${disputed} с неясной оценкой, расхождением или пометкой симулятора; остальные имеют автоматическую оценку.`
+    : `Автоматически найдено ${awaiting} провал(ов); подтвердите их вердиктом в чате или p / n на доске перед исправлением промпта или завершением аудита. Для чтения результата это не требуется.` });
   else if (hasResults && !finalized && record.workflow === 'evaluate' && record.phase === 'results_review') nextSteps.push({ code: 'finalize_review', text: 'Проверьте ответы и основания оценок, затем завершите разбор. Отсутствие замечаний модели ещё не означает проверку человеком.' });
   if (hasResults && smokeFailures) nextSteps.push({ code: 'smoke_failed', text: `Провалено ${smokeFailures} попыток на дымовых карточках: сначала восстановите базовое поведение.`, count: smokeFailures });
   if (hasResults && weakSpots[0]) nextSteps.push({ code: 'fix_weakest', text: `Начните с самого слабого места${weakSpots[0].stage ? ` на этапе «${weakSpots[0].stage}»` : ''}: ${weakSpots[0].description} (${weakSpots[0].failures} провал(ов)).`, detail: weakSpots[0].description, count: weakSpots[0].failures });
@@ -699,9 +699,10 @@ function runCompleteness(record: Experiment, allowPartial = false): string[] {
   if (!allowPartial && (unmeasured || seen.size !== expected.size || record.trials.length !== expected.size)) notes.push('Есть пропущенные или невалидные попытки.');
   return notes;
 }
-function cardOutcome(record: Experiment, scenario: Scenario): 'pass' | 'fail' | 'unknown' {
+/** The full card must be complete; comparisons explicitly report only their matched sample. */
+export function cardOutcome(record: Experiment, scenario: Scenario, allowPartial = false): 'pass' | 'fail' | 'unknown' {
   const trials = record.trials.filter(t => t.scenarioId === scenario.id);
-  if (!trials.length) return 'unknown';
+  if (!trials.length || runCompleteness({ ...record, scenarios: [scenario], trials }, allowPartial).length) return 'unknown';
   const outcomes = trials.map(t => automaticTrialResult(scenario, t, record.humanReviews));
   return outcomes.includes('fail') ? 'fail' : outcomes.every(o => o === 'pass') ? 'pass' : 'unknown';
 }
@@ -784,8 +785,8 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   result.comparable = true;
   for (const scenario of shared) {
     if (result.pairs.some(p => p.scenarioId === scenario.id && p.reviewNote)) { result.ungraded++; continue; }
-    const was = cardOutcome(before, scenario);
-    const now = cardOutcome(after, scenario);
+    const was = cardOutcome(before, scenario, true);
+    const now = cardOutcome(after, scenario, true);
     if (was === 'unknown' || now === 'unknown') { result.ungraded++; continue; }
     const row = { scenarioId: scenario.id, title: scenario.title, tier: scenario.tier ?? 'regression' };
     if (was === 'fail' && now === 'pass') result.fixed.push(row);
@@ -797,7 +798,7 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   const families = new Map<string, number[]>();
   for (const scenario of shared) {
     if (result.pairs.some(p => p.scenarioId === scenario.id && p.reviewNote)) continue;
-    const was = cardOutcome(before, scenario), now = cardOutcome(after, scenario);
+    const was = cardOutcome(before, scenario, true), now = cardOutcome(after, scenario, true);
     if (was === 'unknown' || now === 'unknown') continue;
     const key = scenario.familyId || scenario.id;
     families.set(key, [...families.get(key) ?? [], Number(now === 'pass') - Number(was === 'pass')]);

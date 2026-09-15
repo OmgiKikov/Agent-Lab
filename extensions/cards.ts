@@ -122,7 +122,7 @@ function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean
   return rows;
 }
 
-function trialLines(trial: Trial, record: Experiment, expanded: boolean): Line[] {
+export function trialLines(trial: Trial, record: Experiment, expanded: boolean): Line[] {
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   const findings = humanFindings(record).filter(f => f.trialId === trial.id);
   const rows = [

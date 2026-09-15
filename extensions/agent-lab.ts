@@ -16,7 +16,7 @@ import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit
 import { readData } from '../dist/imports.js';
 import { editDraft, inputError } from './editor.ts';
 import { previewCriteria } from '../dist/preview.js';
-import { activePhases, reviewOrder, safeText, showBoard, verdicts, type BoardAction, type BoardOptions, type Section } from './cards.ts';
+import { activePhases, reviewOrder, safeText, showBoard, trialLines, verdicts, type BoardAction, type BoardOptions, type Section } from './cards.ts';
 
 const toolDisplay: Pick<ToolDefinition, 'renderCall' | 'renderResult'> = {
   renderCall: (_args, theme) => new Text(theme.fg('accent', 'Проверка агента'), 0, 0),
@@ -65,7 +65,7 @@ function summary(record: Experiment, directory: string) {
     draftHash: draftHash(record), resultHash: record.trials.length ? resultHash(record) : undefined,
     message: record.message, error: record.error, questions: record.questions,
     scenarioCount: record.scenarios.length, revisionCount: record.revisions.length,
-    target: record.target, profileCount: record.profiles.length, evidence,
+    target: record.target, dialogueCount: record.dialogues.length, profileCount: record.profiles.length, evidence,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, parentRunId: record.parentRunId,
     trialCount: record.trials.length, humanReviews: record.humanReviews ?? [], usage: record.usage, failureModes: record.failureModes ?? [],
     comparison: comparison && {
@@ -132,18 +132,18 @@ export default function agentLab(pi: ExtensionAPI) {
     if (process.env.AGENT_LAB_SESSION !== '1' || !ctx.hasUI || ctx.mode !== 'tui') return;
     ctx.ui.setTitle(`Agent Lab · ${ctx.cwd.split('/').at(-1)}`);
     ctx.ui.setHeader((_tui, theme) => new Text(theme.bold('Agent Lab') + '\nНасколько хорош ваш агент — на карточках пользователей, с причинами провалов.\n' + safeText(ctx.cwd), 1, 1));
-    ctx.ui.setWidget('agent-lab-start', ['Напишите: «Проверь агента в этой папке». Agent Lab найдёт промпт и точку входа, предложит карточки пользователей и после запуска покажет качество: справился / не справился, почему, что разметить.',
+    ctx.ui.setWidget('agent-lab-start', ['Напишите: «Проверь агента в этой папке». Agent Lab найдёт промпт и точку входа, спросит про реальные диалоги (можно без них), предложит карточки пользователей и после запуска покажет качество: справился / не справился, почему, что разметить.',
       'Можно точнее: «Проверь, как агент отвечает про возврат по закрытому договору» или «Воспроизведи эту ошибку: …». /agent-lab — доска с карточками, диалогами и качеством · /agent-lab demo — учебный пример без модели.']);
   });
   pi.on('before_agent_start', async (event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1') return;
     ctx.ui?.setWidget?.('agent-lab-start', undefined);
-    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for checking changes to the user's real agent. Work in their project. Follow the agent-builder skill. Start with ONE useful test and a concrete expected outcome; inspect the local entry point and requirements yourself. Use the user's language. Keep normal work in this conversation: build, inspect, edit, agent_lab_run, inspect the actual evidence, explain one finding and the next action. agent_lab_run asks the human to authorize the exact plan; execution consent is not a human review of expectations. Never bypass its confirmation through shell or internal APIs. Do not send users to a board just to proceed; /agent-lab is an optional evidence view. Preserve budgets and model. Save useful cases with agent_lab_suite; repeat existing cases after a change instead of regenerating them. Separate a broken test from an agent failure. Do not modify an external agent unless the user asked to fix it. Avoid lectures about personas, rubrics, calibration or tiers unless they explain a finding. Read traces and cite actual event IDs; never invent human verdicts or claim improved quality after changing the tests.` };
+    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for checking changes to the user's real agent. Work in their project. Follow the agent-builder skill. At the start ask once whether the user has de-identified real dialogues (JSON/JSONL). Accept their supplied path or an explicit choice to start without logs; honor an earlier answer and never silently infer a skip. agent_lab_build returns needs_input until dialogues or withoutDialogues=true is supplied. Start with ONE useful test and a concrete expected outcome; inspect the local entry point and requirements yourself. Use the user's language. Keep normal work in this conversation: build, inspect, edit, agent_lab_run, inspect the actual evidence, explain one finding and the next action. agent_lab_run asks the human to authorize the exact plan; execution consent is not a human review of expectations. Never bypass its confirmation through shell or internal APIs. Do not send users to a board just to proceed; /agent-lab is an optional evidence view. Preserve budgets and model. Save useful cases with agent_lab_suite; repeat existing cases after a change instead of regenerating them. Separate a broken test from an agent failure. Use agent_lab_review to collect an actual human verdict on a cited dialogue in this conversation. For a requested prompt fix, use agent_lab_prompt propose, inspect the diff, apply with native confirmation, then agent_lab_run on the unchanged suite and explain its returned comparison. Do not modify an external agent unless the user asked to fix it. Avoid lectures about personas, rubrics, calibration or tiers unless they explain a finding. Read traces and cite actual event IDs; never invent human verdicts or claim improved quality after changing the tests.` };
   });
   pi.registerTool({
     ...toolDisplay,
     name: 'agent_lab_build', label: 'Prepare agent and dialogue cards',
-    description: 'Prepare an agent and a small editable set of user simulation cards from task/material contents. Uses current Pi model unless settings override. Stops before all dialogue evaluation: use agent_lab_run to show the exact plan and obtain native execution confirmation. Does not run, improve or approve the agent. mode=demo prepares the built-in scripted example without model calls. Native workflow is evaluation, with 1 test, 1 repeat, at most 20 calls and 180 seconds by default. target selects the agent under test: the trusted sandbox (default), an http endpoint, a local module adapter, or a local process (command, e.g. python3 agent.py speaking JSON lines). goldenCases become curated cards; dialogues (de-identified real conversations) ground observed user profiles, production cards that open with real users\' own messages, and simulator fidelity. settings.userModes may list static, scripted and reactive to compare what each user side finds. notes carry the owner\'s hints about users in their own words; profiles are owner-written user types. Both are legitimate inputs when no real data exists, and the verdict always states how much of the evidence is synthetic. preset=thorough widens the run without extra settings. Every result leads with a plain verdict: pass count, weak spots, confidence and next steps.',
+    description: 'Prepare an agent and a small editable set of user simulation cards from task/material contents. Uses current Pi model unless settings override. Stops before all dialogue evaluation: use agent_lab_run to show the exact plan and obtain native execution confirmation. Does not run, improve or approve the agent. mode=demo prepares the built-in scripted example without model calls. Native workflow is evaluation, with 1 test, 1 repeat, at most 20 calls and 180 seconds by default. target selects the agent under test: the trusted sandbox (default), an http endpoint, a local module adapter, or a local process (command, e.g. python3 agent.py speaking JSON lines). Before a live build, ask once for optional real dialogue logs; use withoutDialogues=true only after the user explicitly chooses to skip. goldenCases become curated cards; dialogues (de-identified real conversations) ground observed user profiles, production cards that open with real users\' own messages, and simulator fidelity. settings.userModes may list static, scripted and reactive to compare what each user side finds. notes carry the owner\'s hints about users in their own words; profiles are owner-written user types. Both are legitimate inputs when no real data exists, and the verdict always states how much of the evidence is synthetic. preset=thorough widens the run without extra settings. Every result leads with a plain verdict: pass count, weak spots, confidence and next steps.',
     parameters: Type.Object({
       task: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
       materials: Type.Optional(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 180 }), content: Type.String({ minLength: 1, maxLength: 120000 }), kind: Type.Optional(Type.Union([Type.Literal('knowledge'), Type.Literal('prompt')], { description: "'prompt' marks the agent's own system prompt: observable rules are extracted from it and every generated card gets the prompt_compliance rubric" })) }, { additionalProperties: false }), { minItems: 1, maxItems: 12 })),
@@ -151,6 +151,7 @@ export default function agentLab(pi: ExtensionAPI) {
       settings: Type.Optional(Type.Unsafe(z.toJSONSchema(settingsSchema, { io: 'input' }))),
       scenarioCount: Type.Optional(Type.Integer({ minimum: 0, maximum: SCENARIO_LIMIT })),
       connectionFile: Type.Optional(Type.String()), goldenFile: Type.Optional(Type.String()), dialoguesFile: Type.Optional(Type.String()),
+      withoutDialogues: Type.Optional(Type.Boolean({ description: 'Set true only when the user explicitly chose to start without real dialogues. Otherwise ask for optional JSON/JSONL logs before building a live run.' })),
       target: Type.Optional(Type.Unsafe(z.toJSONSchema(targetSchema, { io: 'input' }))),
       targetVersion: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Agent release, commit or remote deployment version.' })),
       goldenCases: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(goldenCaseSchema).max(40), { io: 'input' }))),
@@ -162,15 +163,21 @@ export default function agentLab(pi: ExtensionAPI) {
     }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(_callId, params, toolSignal, onUpdate, ctx) {
-      const { preset, goldenFile, dialoguesFile, connectionFile, ...rest } = params;
+      const { preset, goldenFile, dialoguesFile, connectionFile, withoutDialogues, ...rest } = params;
       const mode = rest.mode ?? 'live';
+      const dialogues = dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues') : rest.dialogues;
+      if (mode !== 'demo' && !z.array(dialogueSchema).max(200).parse(dialogues ?? []).length && withoutDialogues !== true) {
+        const output = { status: 'needs_input', message: 'Есть реальные диалоги с агентом? Укажите файл JSON/JSONL с обезличенными разговорами или скажите «начать без логов».',
+          nextStep: 'Ask the user in ordinary language. Import their supplied dialoguesFile/dialogues, or set withoutDialogues=true after their explicit choice to skip. Do not silently skip or search unrelated logs.' };
+        return { content: [{ type: 'text', text: JSON.stringify(output) }], details: output };
+      }
       const supplied = (rest.settings ?? {}) as Partial<z.infer<typeof settingsSchema>>;
       const connection = mode === 'demo' ? undefined : connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
       const input = createInputSchema.parse({
         ...(mode === 'demo' ? demoEvaluationInput() : {}), scenarioCount: mode === 'demo' ? 3 : 1, ...rest, mode, workflow: 'evaluate',
         ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
         ...(goldenFile ? { goldenCases: await readData(resolve(ctx.cwd, goldenFile), 'golden') } : {}),
-        ...(dialoguesFile ? { dialogues: await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues') } : {}),
+        ...(dialogues !== undefined ? { dialogues } : {}),
         settings: { ...(mode === 'demo' ? demoInput().settings : {}), repeats: 1, maxCalls: 20, maxDurationMs: 180000,
           ...(mode === 'live' ? { judge: DEFAULT_JUDGE } : {}),
           ...(preset === 'thorough' ? { userModes: ['static', 'scripted', 'reactive'], repeats: 2 } : {}), ...supplied,
@@ -396,6 +403,38 @@ export default function agentLab(pi: ExtensionAPI) {
     },
   });
   pi.registerTool({
+    ...toolDisplay, name: 'agent_lab_review', label: 'Ask for a human verdict',
+    description: 'Show a recorded dialogue and its evidence, then ask the human to choose a verdict and explanation in native Pi UI. Call after discussing a concrete finding. Only id and trialId are accepted: the model cannot supply a human verdict. Cancellation saves no annotation. After a confirmed dev failure, use agent_lab_prompt for a requested fix.',
+    parameters: Type.Object({ id: Type.String(), trialId: Type.String() }, { additionalProperties: false }),
+    executionMode: 'sequential',
+    async execute(_callId, params, toolSignal, _onUpdate, ctx) {
+      const { id, trialId } = z.strictObject({ id: z.string().uuid(), trialId: z.string().min(1) }).parse(params);
+      if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Вердикт человека требует интерактивного терминала.');
+      const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
+      signal.throwIfAborted();
+      const { lab, close } = open(ctx.cwd);
+      try {
+        await lab.init();
+        let record = await lab.get(id);
+        if (record.workflow !== 'evaluate' || !['results_review', 'complete'].includes(record.phase)) throw new Error('Нужен завершённый прогон.');
+        const selected = reviewOrder(record).findIndex(t => t.id === trialId);
+        const trial = reviewOrder(record)[selected];
+        if (!trial) throw new Error('Такого диалога в этом эксперименте нет.');
+        const started = performance.now();
+        // The native multiline viewer scrolls long traces. Its editable copy is never persisted.
+        const viewed = await ctx.ui.editor('Прочитайте диалог · Enter — к оценке, Esc — закрыть. Исходная запись сохранится.',
+          trialLines(trial, record, true).map(line => safeText(line.text)).join('\n')) !== undefined;
+        signal.throwIfAborted();
+        const reviews = viewed ? await humanAnnotation(ctx, record, selected, performance.now() - started) : undefined;
+        signal.throwIfAborted();
+        if (!reviews) return { content: [{ type: 'text', text: JSON.stringify({ id, cancelled: true, message: 'Оценка отменена. Не запрашивайте её снова без просьбы пользователя.' }) }], details: { cancelled: true } };
+        for (const review of reviews) record = await lab.addHumanReview(id, review);
+        const output = { ...summary(record, lab.store.directory), artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory) };
+        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
+      } finally { await close(); }
+    },
+  });
+  pi.registerTool({
     ...toolDisplay, name: 'agent_lab_prompt', label: 'Review one prompt change',
     description: 'propose saves an isolated candidate prompt and diff, citing human-confirmed dev failures. Never use control feedback. apply requires native diff review and creates a draft with the EXACT same capability/regression cards and a candidate promptFile; then use agent_lab_run. Adapter must attest promptHash. Original prompt file is preserved.',
     parameters: Type.Object({ action: Type.Union([Type.Literal('propose'), Type.Literal('inspect'), Type.Literal('apply')]),
@@ -490,7 +529,7 @@ export default function agentLab(pi: ExtensionAPI) {
               : await ctx.ui.editor('Папка агента и что проверить · своими словами', '');
             newRequested = false;
             if (!request?.trim()) continue;
-            handoff = { request, context: { task: 'Prepare a new Agent Lab draft. Read the authorized local agent project and relevant materials; infer or prepare its adapter. Use agent_lab_build, then explain the proposed user scenarios in plain language. Explain the first test and use agent_lab_run when the user asked to check the agent. Do not claim human review. Follow the agent-builder skill.' } };
+            handoff = { request, context: { task: 'Prepare a new Agent Lab draft. Ask once for optional real dialogue logs or an explicit choice to start without them; honor the answer already given in this conversation. Read the authorized local agent project and relevant materials; infer or prepare its adapter. Use agent_lab_build, then explain the proposed user scenarios in plain language. Explain the first test and use agent_lab_run when the user asked to check the agent. Do not claim human review. Follow the agent-builder skill.' } };
             break;
           }
           if (action.type === 'open') { id = action.id; section = undefined; selected = 0; query = ''; pendingOnly = false; beforeId = undefined; reportPath = undefined; continue; }

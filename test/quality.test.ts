@@ -36,14 +36,14 @@ test('the first screen counts cards, criteria and causes from the shared outcome
   assert.equal(q.causes[0]!.example?.card, 'Карточка b');
   assert.equal(q.causes[0]!.example?.quote, 'осталось 0', 'a failed exact check is quoted before the judge');
   assert.deepEqual(q.causes[0]!.promptQuotes, ['Отвечай сразу, если данных достаточно']);
-  assert.deepEqual(q.humanQueue, { unknownJudgments: 1, disagreements: 0, simulatorFlags: 0, total: 1, pendingFailures: 1 });
-  assert.match(q.judge.label, /решено 2 из 3; спорных 1/);
+  assert.deepEqual(q.humanQueue, { unknownJudgments: 1, disagreements: 0, simulatorFlags: 0, total: 2, pendingFailures: 1 });
+  assert.match(q.judge.label, /автоматически оценено 2 из 3; без решения 1/);
   assert.match(q.limits, /судья не сверен с человеком/);
   const text = qualityLines(q);
   assert.match(text.metrics[0]!, /^███████░░░  67%  Точные проверки · код · 2\/3$/);
   assert.match(text.causes[0]!, /^1\. Переспрашивает терминал вместо пути — 1 диалог\. Карточка b: «осталось 0» · правило промпта: «Отвечай сразу/);
   assert.match(text.scope, /3 карточки · 3 диалога · одна реплика · golden 3 · версия песочница · \$0\.27 · 3 мин/);
-  assert.match(text.queue, /Разметить человеку: 1 \(неясных 1/);
+  assert.match(text.queue, /Разметить человеку: 2 \(неясных 1/);
 });
 
 test('an unresolved simulator flag makes the card undecided on the first screen instead of counting as a failure, and clusters fall back to weak spots', () => {
@@ -60,7 +60,7 @@ test('an unresolved simulator flag makes the card undecided on the first screen 
   r.humanReviews = [{ id: 'h', trialId: 't1', verdict: 'pass', note: 'ложная тревога', createdAt: '2026-09-14T00:00:00Z', checkId: 'simulator_fabrication' }];
   const cleared = qualitySummary(r);
   assert.deepEqual([cleared.cards.passed, cleared.cards.failed, cleared.cards.unknown], [0, 1, 0]);
-  assert.equal(cleared.humanQueue.total, 0);
+  assert.equal(cleared.humanQueue.total, 1);
   assert.equal(cleared.causes[0]!.name, 'Цель выполнена');
   assert.equal(cleared.causes[0]!.example?.quote, 'Агент не назвал путь в СберБизнес. Вместо этого он переспросил терминал.', 'the judge preamble is stripped from the quote');
   assert.equal(cleared.causes[0]!.example?.seq, 1);
@@ -85,7 +85,7 @@ test('a card with a missing planned repeat is undecided on the first screen, not
 test('the queue line never says no labelling is needed while a failure still awaits its verdict', () => {
   const r = record({ scenarios: [scenario('a'), scenario('b')], trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'fail', 'fail')] });
   const q = qualitySummary(r);
-  assert.equal(q.humanQueue.total, 0);
+  assert.equal(q.humanQueue.total, 1);
   assert.equal(q.humanQueue.pendingFailures, 1);
   const lines = qualityLines(q);
   assert.doesNotMatch(lines.queue, /не требуется/);
@@ -103,4 +103,21 @@ test('criteria that share an id but not a name stay separate rows, and a rubric 
   const t = (id: string, sid: string, metricId: string) => ({ ...trial(id, sid, 'pass', 'pass'), assessments: [{ metricId, result: 'fail' as const, rationale: 'r', evidence: [1] }] });
   const q = qualitySummary(record({ scenarios: [a, b, c], trials: [t('t1', 'a', 'code'), t('t2', 'b', 'goal'), t('t3', 'c', 'goal')] }));
   assert.deepEqual(q.metrics.map(m => [m.kind, m.name, m.passed, m.failed]), [['code', 'Точные проверки · код', 3, 0], ['rubric', 'Код ответа', 0, 1], ['rubric', 'Цель выполнена', 0, 1], ['rubric', 'Другая цель', 0, 1]]);
+});
+
+test('duplicate attempts cannot replace missing repeats, and selected reassessments use their selected attempts', () => {
+  const first = trial('t1', 'a', 'pass', 'pass');
+  const r = record({ scenarios: [scenario('a')], settings: settingsSchema.parse({ userModes: ['static'], repeats: 2 }), trials: [first, { ...first, id: 't2' }] });
+  assert.equal(qualitySummary(r).cards.unknown, 1);
+  const reassessed = { ...r, assessmentTrialIds: ['t1'], trials: [first] };
+  assert.equal(qualitySummary(reassessed).cards.passed, 1);
+  const clean = qualitySummary(record({ scenarios: [scenario('a')], trials: [first] }));
+  assert.doesNotMatch(clean.judge.label, /2 из 2|единогласно/);
+});
+
+test('same metric labels with different pass criteria do not merge', () => {
+  const a = { ...scenario('a'), metrics: [goal] };
+  const b = { ...scenario('b'), metrics: [{ ...goal, passCriteria: 'A different business requirement' }] };
+  const q = qualitySummary(record({ scenarios: [a, b], trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'fail', 'fail')] }));
+  assert.deepEqual(q.metrics.filter(m => m.kind === 'rubric').map(m => [m.passed, m.failed]), [[1, 0], [0, 1]]);
 });

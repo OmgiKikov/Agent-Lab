@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, access, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, access, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -149,7 +149,7 @@ test('headless model tools prepare and edit only; approvals and human assessment
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
   const updates: string[] = [];
   try {
-    assert.deepEqual([...tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_prompt', 'agent_lab_clarify']);
+    assert.deepEqual([...tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt', 'agent_lab_clarify']);
     const report = output(await tools.get('agent_lab_build')!.execute('build-1', { mode: 'demo', scenarioCount: 2 }, undefined,
       value => { updates.push(JSON.stringify(value)); }, ctx));
     assert.equal(report.phase, 'review'); assert.equal(report.workflow, 'evaluate');
@@ -301,7 +301,7 @@ test('actual Pi SDK loader imports native cards, preparation-only tools and embe
     await loader.reload();
     const loaded = loader.getExtensions();
     assert.deepEqual(loaded.errors, []); assert.equal(loaded.extensions.length, 1);
-    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_prompt', 'agent_lab_clarify']);
+    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt', 'agent_lab_clarify']);
     assert.ok(loaded.extensions[0]!.commands.has('agent-lab'));
     assert.deepEqual(loader.getAgentsFiles().agentsFiles, []);
     const skills = loader.getSkills();
@@ -365,4 +365,86 @@ test('the plain verdict leads every surface and the thorough preset widens the r
     assert.match(markdown, /Карточки: синтетических 1, golden 0, из продакшна 0/);
     await assert.rejects(access(join(directory, '.agent-lab', '.lock')));
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('live preparation asks for optional logs before creating a run; explicit skip and imports cross that gate', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-intake-'));
+  const { tools, shutdown } = registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const ctx = { cwd: directory, hasUI: false, mode: 'print' } as ExtensionContext;
+  const build = (params: unknown) => tools.get('agent_lab_build')!.execute('intake', params, undefined, undefined, ctx);
+  const question = output(await build({ task: 'Check my agent', dialogues: [] }));
+  assert.equal(question.status, 'needs_input'); assert.match(question.message, /начать без логов/);
+  assert.deepEqual(await readdir(directory), [], 'asking must not spend, preflight or create a run');
+  // Deliberately invalid task fails input validation only after the intake gate opens, without a provider call.
+  await assert.rejects(build({ task: '', withoutDialogues: true }), /task/);
+  const dialogues = [{ id: 'provided', messages: [{ role: 'user', content: 'Move A101 to 14:00 please' }], outcome: 'success' }];
+  const file = join(directory, 'dialogues.jsonl'); await writeFile(file, JSON.stringify(dialogues[0]) + '\n');
+  await assert.rejects(build({ task: '', dialoguesFile: file }), /task/);
+  await assert.rejects(build({ task: '', dialogues }), /task/);
+  const imported = output(await build({ mode: 'demo', scenarioCount: 1, dialoguesFile: file }));
+  assert.equal(imported.phase, 'review'); assert.equal(imported.dialogueCount, 1);
+  assert.equal(imported.evidence.verdict.provenance.production.cards, 1);
+  await writeFile(file, 'invalid json');
+  await assert.rejects(build({ dialoguesFile: file, withoutDialogues: true }), /JSON/);
+});
+
+test('conversation completes human finding → prompt diff → unchanged SQLite suite → comparison', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-prompt-journey-'));
+  const { tools, shutdown } = registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const screens: string[] = [];
+  let note: string | undefined;
+  const ctx = { cwd: directory, hasUI: true, mode: 'tui', ui: {
+    confirm: async (_title: string, body: string) => { screens.push(body); return true; },
+    select: async (_title: string, choices: string[]) => choices[0],
+    editor: async (_title: string, initial: string) => { if (initial) { screens.push(initial); return initial; } return note; },
+  } } as ExtensionContext;
+  const call = async (name: string, params: unknown) => output(await tools.get(name)!.execute('journey', params, undefined, undefined, ctx));
+  const prompt = join(directory, 'prompt.md'); await writeFile(prompt, 'Updates disabled.');
+  const built = await call('agent_lab_build', { mode: 'demo', scenarioCount: 1, settings: { userModes: ['static'] } });
+  const inspection = await call('agent_lab_inspect', { id: built.id });
+  const initialState = { records: { A: { time: '09:00' } }, writableFields: ['time'], transientFailures: 0 };
+  const move = { ...inspection.scenarios[0], initialState, metrics: [], successCriteria: 'Move A to 14:00',
+    user: { ...inspection.scenarios[0].user, opening: 'Move A to 14:00' },
+    checks: [{ id: 'time', kind: 'state_equals', recordId: 'A', field: 'time', value: '14:00', description: 'Move the record' }] };
+  const guard = { ...move, id: 'read_only', familyId: 'read_only', title: 'Read without changes', successCriteria: 'Keep A at 09:00',
+    user: { ...move.user, opening: 'What time is A?' }, checks: [{ ...move.checks[0], value: '09:00', description: 'Preserve the record' }] };
+  const prepared = await call('agent_lab_edit', { id: built.id, expectedHash: built.draftHash, patch: {
+    target: { kind: 'command', command: 'python3', args: [fileURLToPath(new URL('../examples/stateful-agent.py', import.meta.url))], promptFile: prompt },
+    scenarios: [move, guard],
+  } });
+  const baseline = await call('agent_lab_run', { id: prepared.id, expectedHash: prepared.draftHash });
+  assert.equal(baseline.phase, 'results_review'); assert.equal(baseline.trialCount, 2);
+  const before = await call('agent_lab_inspect', { id: prepared.id });
+  assert.deepEqual(before.trials.map((trial: { outcome: string }) => trial.outcome), ['fail', 'pass']);
+  const trialId = before.trials[0].id;
+  const proposalInput = { action: 'propose', id: before.id, candidate: 'Allow updates after lookup.', hypothesis: 'Enable the requested update; preserve read-only access.', trialIds: [trialId] };
+  await assert.rejects(call('agent_lab_prompt', proposalInput), /подтверждённые/);
+  await assert.rejects(call('agent_lab_review', { id: before.id, trialId, verdict: 'fail' }), /verdict/);
+  await assert.rejects(tools.get('agent_lab_review')!.execute('headless', { id: before.id, trialId }, undefined, undefined, { ...ctx, hasUI: false } as ExtensionContext), /интерактивного/);
+  assert.equal((await call('agent_lab_review', { id: before.id, trialId })).cancelled, true);
+  assert.deepEqual((await call('agent_lab_inspect', { id: before.id })).humanReviews, []);
+  const abort = new AbortController();
+  const abortedCtx = { ...ctx, ui: { ...ctx.ui, editor: async (_title: string, initial: string) => { if (initial) return initial; abort.abort(new Error('Review interrupted')); return 'Not a saved verdict'; } } } as ExtensionContext;
+  await assert.rejects(tools.get('agent_lab_review')!.execute('abort', { id: before.id, trialId }, abort.signal, undefined, abortedCtx), /Review interrupted/);
+  assert.deepEqual((await call('agent_lab_inspect', { id: before.id })).humanReviews, []);
+  note = 'Test fixture, not a real owner verdict: #1 retained 09:00 instead of the requested 14:00.';
+  const reviewed = await call('agent_lab_review', { id: before.id, trialId });
+  assert.equal(reviewed.humanReviews.length, 1); assert.equal(reviewed.humanReviews[0].verdict, 'fail');
+  assert.equal(reviewed.humanReviews[0].note, note);
+  assert.ok(screens.some(body => body.includes('Move A to 14:00') && body.includes('#0') && body.includes('09:00')));
+  const proposal = await call('agent_lab_prompt', proposalInput);
+  const diff = await call('agent_lab_prompt', { action: 'inspect', file: proposal.file });
+  assert.match(diff.diff, /-Updates disabled/); assert.match(diff.diff, /\+Allow updates after lookup/);
+  const candidate = await call('agent_lab_prompt', { action: 'apply', file: proposal.file });
+  const candidateDraft = await call('agent_lab_inspect', { id: candidate.id });
+  assert.deepEqual(candidateDraft.scenarios, before.scenarios); assert.deepEqual(candidateDraft.humanReviews, []);
+  const after = await call('agent_lab_run', { id: candidate.id, expectedHash: candidate.draftHash });
+  assert.equal(after.comparison.fixed.length, 1); assert.equal(after.comparison.regressed.length, 0);
+  assert.equal(after.comparison.coverage.validPairs, 2);
+  assert.equal(await readFile(prompt, 'utf8'), 'Updates disabled.');
+  assert.ok(screens.some(body => body.includes('-Updates disabled.') && body.includes('+Allow updates after lookup.')));
+  const evidence = JSON.parse(await readFile(after.artifacts.evidence, 'utf8'));
+  assert.equal(evidence.parentRunId, before.id);
 });

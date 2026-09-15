@@ -331,7 +331,7 @@ test('the board leads with a plain verdict once dialogues exist and keeps the re
   board.dispose();
   const results = new LabBoard({ record }, theme, () => {}, () => {}, () => 40);
   assert.match(results.render(120).join('\n'), /ЧТО ТРЕБУЕТ ВНИМАНИЯ/);
-  assert.match(stripTerminalSequences(results.render(120).join('\n')), /Итог: Справился с 0 из 1 карточки \(0%\)/);
+  assert.match(stripTerminalSequences(results.render(120).join('\n')), /Итог: Справился с 0 из 0 карточек \(—\), 2 без решения/);
   results.dispose();
 });
 
