@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, draftPatchSchema, emptyUsage, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, verbatimSpan, worldSchema,
+  createInputSchema, draftPatchSchema, emptyUsage, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, verbatimSpan, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 
@@ -64,6 +64,20 @@ test('old experiment files load with defaults for workflow, human reviews, targe
   assert.deepEqual([parsed.goldenCases, parsed.dialogues, parsed.profiles], [[], [], []]);
   assert.deepEqual(parsed.settings.userModes, ['reactive']);
   assert.equal(parsed.trials[0]!.userMode, 'reactive');
+});
+
+test('only a whole-dialogue verdict can mark an explicit complete review', () => {
+  const legacy = { trialId: 't1', verdict: 'unknown' as const, note: '#1: legacy review' };
+  const complete = { ...legacy, reviewedDialogue: true as const };
+  assert.ok(humanReviewInputSchema.safeParse(legacy).success);
+  assert.ok(humanReviewInputSchema.safeParse(complete).success);
+  assert.equal(humanReviewInputSchema.safeParse({ ...complete, metricId: 'goal' }).success, false);
+  assert.equal(humanReviewInputSchema.safeParse({ ...complete, checkId: 'state' }).success, false);
+
+  const persisted = { ...complete, id: 'h1', createdAt: '2026-09-15T10:00:00Z' };
+  assert.ok(experimentSchema.safeParse({ ...legacyRecord(), humanReviews: [persisted] }).success);
+  assert.equal(experimentSchema.safeParse({ ...legacyRecord(), humanReviews: [{ ...persisted, metricId: 'goal' }] }).success, false);
+  assert.equal(experimentSchema.safeParse({ ...legacyRecord(), humanReviews: [{ ...persisted, checkId: 'state' }] }).success, false);
 });
 
 test('synthetic cards need grounded requirements; curated and production cards do not', () => {

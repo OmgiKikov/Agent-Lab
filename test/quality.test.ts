@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { rm } from 'node:fs/promises';
 import { qualityLines, qualitySummary, plural, shorten } from '../src/quality.js';
 import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
+import { demoEvaluateRecord } from './helpers/demo-record.js';
 
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
 const goal = { id: 'goal', name: 'Цель выполнена', subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' };
@@ -31,8 +33,8 @@ test('the first screen counts cards, criteria and causes from the shared outcome
   const r = record({ trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'fail', 'fail', 'fail'), trial('t3', 'c', 'pass', 'unknown')],
     failureModes: [{ id: 'm1', name: 'Переспрашивает терминал вместо пути', description: 'Агент задаёт уточнение там, где нужен путь.', stage: 'сборка ответа', trialIds: ['t2'], promptQuotes: ['Отвечай сразу, если данных достаточно'] }] });
   const q = qualitySummary(r);
-  assert.deepEqual(q.cards, { passed: 1, failed: 1, unknown: 1, total: 3, accuracy: 0.5 });
-  assert.equal(q.headline, 'Справился с 1 из 2 карточек (50%), 1 без решения.');
+  assert.deepEqual(q.cards, { passed: 1, failed: 1, unknown: 1, notReached: 0, total: 3, accuracy: 0.5 });
+  assert.equal(q.headline, 'Справился с 1 из 2 карточек (50%), 1 без решения, 0 не дошли; разобрано человеком 0 из 3 диалогов.');
   assert.deepEqual(q.metrics.map(m => [m.id, m.passed, m.failed, m.unknown]), [['code', 2, 1, 0], ['goal', 1, 1, 1], ['format', 2, 1, 0]]);
   assert.equal(q.metrics[0]!.kind, 'code');
   assert.equal(q.causes.length, 1);
@@ -46,7 +48,7 @@ test('the first screen counts cards, criteria and causes from the shared outcome
   assert.match(text.metrics[0]!, /^███████░░░  67%  Точные проверки · код · 2\/3$/);
   assert.match(text.causes[0]!, /^1\. Переспрашивает терминал вместо пути — 1 диалог\. Карточка b: «осталось 0» · правило промпта: «Отвечай сразу/);
   assert.match(text.scope, /3 карточки · 3 диалога · одна реплика · golden 3 · версия песочница · \$0\.27 · 3 мин/);
-  assert.match(text.queue, /Разметить человеку: 2 \(неясных 1/);
+  assert.match(text.queue, /Откройте диалоги причин и поставьте каждому отдельный вердикт/);
 });
 
 test('an unresolved simulator flag makes the card undecided on the first screen instead of counting as a failure, and clusters fall back to weak spots', () => {
@@ -58,7 +60,7 @@ test('an unresolved simulator flag makes the card undecided on the first screen 
   assert.deepEqual([flagged.cards.passed, flagged.cards.failed, flagged.cards.unknown], [0, 0, 1]);
   assert.equal(flagged.metrics.find(m => m.id === 'goal')!.unknown, 1);
   assert.equal(flagged.humanQueue.simulatorFlags, 1);
-  assert.match(qualityLines(flagged).queue, /пометок симулятора 1/);
+  assert.match(qualityLines(flagged).queue, /Откройте диалоги причин и поставьте каждому отдельный вердикт/);
   // A human clears the suspicion: the same dialogue becomes a decided failure with its judge rationale as the quoted cause.
   r.humanReviews = [{ id: 'h', trialId: 't1', verdict: 'pass', note: 'ложная тревога', createdAt: '2026-09-14T00:00:00Z', checkId: 'simulator_fabrication' }];
   const cleared = qualitySummary(r);
@@ -80,7 +82,7 @@ test('plural forms and sentence-bounded shortening', () => {
 test('a card with a missing planned repeat is undecided on the first screen, not a pass', () => {
   const r = record({ settings: settingsSchema.parse({ userModes: ['static'], repeats: 2 }), scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] });
   const q = qualitySummary(r);
-  assert.deepEqual(q.cards, { passed: 0, failed: 0, unknown: 1, total: 1, accuracy: null });
+  assert.deepEqual(q.cards, { passed: 0, failed: 0, unknown: 1, notReached: 0, total: 1, accuracy: null });
   assert.match(q.headline, /без решения/);
   assert.match(q.limits, /неполный/);
 });
@@ -92,7 +94,7 @@ test('the queue line never says no labelling is needed while a failure still awa
   assert.equal(q.humanQueue.pendingFailures, 1);
   const lines = qualityLines(q);
   assert.doesNotMatch(lines.queue, /не требуется/);
-  assert.match(lines.queue, /1 провал/);
+  assert.match(lines.queue, /Откройте диалоги причин и поставьте каждому отдельный вердикт/);
   const clean = qualityLines(qualitySummary(record({ scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] })));
   assert.match(clean.queue, /не требуется/);
 });
@@ -138,4 +140,33 @@ test('metric rows use the same human criterion verdict as card outcomes', () => 
   assert.deepEqual(row([review('t1', 'goal', 'invalid')]), { id: 'goal', name: 'Цель выполнена', kind: 'rubric', passed: 1, failed: 0, unknown: 0, total: 1, accuracy: 1 });
   assert.deepEqual(row([review('other-trial', 'goal', 'pass'), review('t1', 'format', 'pass')]), row([]));
   assert.equal(JSON.stringify(trials), original, 'row aggregation never mutates saved assessments');
+});
+
+test('the first screen separates reached undecided cards, not-reached cards, and all current dialogues', () => {
+  const invalid = { ...trial('cancelled', 'c', 'fail', 'fail'), outcome: 'cancelled' as const };
+  const q = qualitySummary(record({ scenarios: [scenario('a'), scenario('b'), scenario('c')],
+    trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'pass', 'unknown'), invalid] }));
+  assert.deepEqual(q.cards, { passed: 1, failed: 0, unknown: 1, notReached: 1, total: 3, accuracy: 1 });
+  assert.deepEqual(q.human, { reviewed: 0, total: 3 });
+  assert.match(q.headline, /1 без решения, 1 не дошли; разобрано человеком 0 из 3 диалогов\.$/);
+});
+
+test('only the latest marked whole-dialogue review certifies a complete persisted review', async () => {
+  const { lab, directory, record: initial } = await demoEvaluateRecord();
+  try {
+    assert.deepEqual(qualitySummary(initial).human, { reviewed: 0, total: initial.trials.length });
+    const trial = initial.trials[0]!;
+    const metric = initial.scenarios.find(s => s.id === trial.scenarioId)!.metrics!.find(m => m.subject === 'agent')!;
+    await lab.addHumanReview(initial.id, { trialId: trial.id, metricId: metric.id, verdict: 'unknown', note: `#${trial.events[0]!.seq}: partial review` });
+    assert.equal(qualitySummary(await lab.get(initial.id)).human.reviewed, 0);
+    await lab.addHumanReview(initial.id, { trialId: trial.id, verdict: 'unknown', note: `#${trial.events[0]!.seq}: legacy whole-dialogue review` });
+    assert.equal(qualitySummary(await lab.get(initial.id)).human.reviewed, 0);
+    await lab.addHumanReview(initial.id, { trialId: trial.id, verdict: 'unknown', note: `#${trial.events[0]!.seq}: complete review`, reviewedDialogue: true });
+    assert.equal(qualitySummary(await lab.get(initial.id)).human.reviewed, 1);
+    await lab.addHumanReview(initial.id, { trialId: trial.id, verdict: 'unknown', note: `#${trial.events[0]!.seq}: newer legacy review` });
+    assert.equal(qualitySummary(await lab.get(initial.id)).human.reviewed, 0, 'the latest whole-dialogue review wins');
+  } finally {
+    await lab.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
