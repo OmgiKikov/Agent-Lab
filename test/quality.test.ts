@@ -157,6 +157,24 @@ test('score brief falls back to a decisive unknown and otherwise returns the str
     assert.match(mixed.unknowns.join('\n'), /результат действия.*goal_attainment — НЕЯСНО/s);
   }
 
+  const promptFailure = scoreBrief({ ...grounded,
+    sources: [{ ...grounded.sources[0]!, kind: 'prompt' }],
+    scenarios: [{ ...linkedScenario, metrics: [{ ...goal, id: 'goal_attainment' }, { ...format, id: 'reply_quality' }, { ...format, id: 'prompt_compliance' }] }],
+    trials: [{ ...linkedTrial, assessments: [linkedTrial.assessments![0]!,
+      { metricId: 'reply_quality', result: 'pass', rationale: 'Ответ по существу.', evidence: [1] },
+      { metricId: 'prompt_compliance', result: 'fail', rationale: 'Ответ нарушает прямой запрет промпта.', evidence: [1] }] }],
+  });
+  assert.equal(promptFailure.status, 'ready');
+  if (promptFailure.status === 'ready') assert.match(promptFailure.hypothesis, /Ответ нарушает прямой запрет промпта/);
+
+  const nonPromptFailure = scoreBrief({ ...grounded,
+    scenarios: [{ ...linkedScenario, metrics: [{ ...goal, id: 'goal_attainment' }, { ...format, id: 'prompt_compliance' }] }],
+    trials: [{ ...linkedTrial, assessments: [linkedTrial.assessments![0]!,
+      { metricId: 'prompt_compliance', result: 'fail', rationale: 'Документ ошибочно назван промптом.', evidence: [1] }] }],
+  });
+  assert.equal(nonPromptFailure.status, 'ready');
+  if (nonPromptFailure.status === 'ready') assert.doesNotMatch(nonPromptFailure.hypothesis, /Документ ошибочно назван промптом/);
+
   const insufficient = {
     status: 'insufficient',
     heading: 'Недостаточно данных для гипотезы',

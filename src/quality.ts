@@ -64,20 +64,21 @@ function groundedScore(record: Experiment): GroundedScore | undefined {
   const resolve = (trial: Trial, result: 'fail' | 'unknown'): GroundedScore | undefined => {
     const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
     if (!scenario || scenario.requirementIds.length !== 1) return;
+    const requirement = record.requirements.find(item => item.id === scenario.requirementIds[0]);
+    const source = requirement && record.sources.find(item => item.id === requirement.sourceId);
+    const quote = source && requirement ? verbatimSpan(source.content, requirement.quote) : undefined;
+    if (!requirement || !source || !quote) return;
     for (const assessment of trial.assessments ?? []) {
-      if (!['goal_attainment', 'reply_quality'].includes(assessment.metricId) || assessment.result !== result || !assessment.rationale.trim()
+      const supportedMetric = ['goal_attainment', 'reply_quality'].includes(assessment.metricId)
+        || assessment.metricId === 'prompt_compliance' && source.kind === 'prompt';
+      if (!supportedMetric || assessment.result !== result || !assessment.rationale.trim()
         || !scenario.metrics?.some(metric => metric.id === assessment.metricId && metric.subject === 'agent')) continue;
       // ponytail: lexical missing-evidence gate; replace it with a reason code if assessments gain one.
       if (result === 'unknown' && !missingEvidence(assessment.rationale)) continue;
       const event = assessment.evidence.map(seq => trial.events.find(item => item.seq === seq))
         .find((item): item is TraceEvent => !!item && item.type !== 'user' && item.type !== 'simulator' && !!assessmentEventContent(item).trim());
       if (!event) continue;
-      for (const requirementId of scenario.requirementIds) {
-        const requirement = record.requirements.find(item => item.id === requirementId);
-        const source = requirement && record.sources.find(item => item.id === requirement.sourceId);
-        const quote = source && requirement ? verbatimSpan(source.content, requirement.quote) : undefined;
-        if (requirement && source && quote) return { requirement, source, quote, trial, assessment, event };
-      }
+      return { requirement, source, quote, trial, assessment, event };
     }
   };
   for (const result of ['fail', 'unknown'] as const) for (const trial of record.trials) {
