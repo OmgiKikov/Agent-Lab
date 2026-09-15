@@ -68,7 +68,7 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
     if (row.evidence.some(seq => !events.has(seq))) throw new Error(`Assessment ${row.metricId} cites a nonexistent trace event`);
     if (result !== 'unknown' && !row.evidence.length) throw new Error(`Assessment ${row.metricId} needs trace evidence for pass/fail`);
     const expectedTools = new Set(input.scenario.checks.flatMap(check =>
-      (check.kind === 'tool_called' || check.kind === 'tool_count') ? [check.tool] : []));
+      check.kind === 'tool_called' || check.kind === 'tool_count' && check.min > 0 ? [check.tool] : []));
     const toolConfirms = row.evidence.some(seq => input.trial.events.some(event => {
       if (event.seq !== seq || event.type !== 'tool_result') return false;
       const value = event.result && typeof event.result === 'object' ? event.result as Record<string, unknown> : undefined;

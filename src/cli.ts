@@ -23,6 +23,8 @@ import { stripTerminalSequences } from '@earendil-works/pi-tui';
 const percent = (value: number | null) => value === null ? 'нет данных' : `${Math.round(value * 100)}%`;
 const safeText = (value: unknown) => stripTerminalSequences(String(value ?? '')).replace(/\r\n?/g, '\n').replace(/\t/g, '  ')
   .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '');
+const safeLine = (value: unknown) => safeText(value).replace(/\n+/g, ' ');
+const scoreInputError = (error: unknown) => new Error(`Не удалось прочитать записи: ${safeLine(error instanceof Error ? error.message : String(error))}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`);
 const renderScoreBrief = (brief: ScoreBrief): string => brief.status === 'insufficient'
   ? `${brief.heading}\n${brief.body}`
   : [
@@ -142,7 +144,7 @@ async function main() {
   if (command === 'evaluate' && (!values.input || !values.yes)) throw new Error('Для запуска сохранённых тестов укажите --input suite.json --yes. Лимиты и подключение берутся из файла.');
   const lab = new ExperimentLab(directory);
   await lab.init();
-  const cancel = () => { void lab.close().catch(error => { process.stderr.write(`${safeText(error.message)}\n`); process.exitCode = 1; }); };
+  const cancel = () => { void lab.close().catch(error => { process.stderr.write(`${safeLine(error.message)}\n`); process.exitCode = 1; }); };
   process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
   try {
     let id = values.id;
@@ -168,16 +170,16 @@ async function main() {
       if (!values.input || !values.task || (!values.yes && !values['code-only'])) {
         throw new Error('Укажите --input dialogues.jsonl --task task.json и --yes (модель) или --code-only. Агент не запускается.');
       }
-      let raw: Record<string, unknown>, dialogues;
+      let input;
       try {
-        raw = JSON.parse(await readFile(values.task, 'utf8'));
-        dialogues = await readData(values.input, 'dialogues');
+        const raw: Record<string, unknown> = JSON.parse(await readFile(values.task, 'utf8'));
+        const dialogues = await readData(values.input, 'dialogues');
+        const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
+        input = createInputSchema.parse({ ...raw, mode: raw.mode ?? 'live', ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
+          dialogues, scenarioCount: 0 });
       } catch (error) {
-        throw new Error(`Не удалось прочитать записи: ${safeText(error instanceof Error ? error.message : String(error))}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`);
+        throw scoreInputError(error);
       }
-      const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
-      const input = createInputSchema.parse({ ...raw, mode: raw.mode ?? 'live', ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
-        dialogues, scenarioCount: 0 });
       const seed = await lab.score(input, { codeOnly: values['code-only'] });
       await lab.waitForIdle();
       const imported = await lab.get(seed.id);
@@ -262,4 +264,4 @@ async function main() {
     await lab.close();
   }
 }
-void main().catch(error => { process.stderr.write(`Agent Lab: ${safeText(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = ['evaluate', 'audit-judge', 'score'].includes(process.argv[2] ?? '') ? 2 : 1; });
+void main().catch(error => { process.stderr.write(`Agent Lab: ${safeLine(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = ['evaluate', 'audit-judge', 'score'].includes(process.argv[2] ?? '') ? 2 : 1; });

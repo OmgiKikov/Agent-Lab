@@ -160,6 +160,16 @@ test('missing action evidence cannot be replaced by agent self-attestation while
     assert.equal(linked[0]!.result, tool === 'create_ticket' ? 'pass' : 'unknown', 'only a scenario-linked tool result can confirm the action');
   }
 
+  const forbiddenToolScenario: Scenario = { ...actionScenario,
+    checks: [{ id: 'never_create', kind: 'tool_count', tool: 'create_ticket', min: 0, max: 0, description: 'Не создавать заявку' }], metrics: [{ ...goalAttainment }],
+  };
+  const forbiddenTool = await assessRepeated({ ...input, scenario: forbiddenToolScenario, trial: { ...actionTrial,
+    events: [...actionTrial.events, { seq: 2, type: 'tool_result', tool: 'create_ticket', text: 'ok', result: { ok: true } }],
+  } }, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => JSON.stringify({ assessments: [{
+    metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Инструмент успешно вызван.', evidence: [2], citations: [{ seq: 2, quote: 'ok' }],
+  }] }));
+  assert.equal(forbiddenTool[0]!.result, 'unknown', 'a tool forbidden by a zero-count check cannot prove goal success');
+
   for (const state of ['reported', 'sandbox'] as const) {
     const observedTrial = { ...trial,
       observation: { state, tools: state === 'sandbox' ? 'sandbox' : 'complete' },
