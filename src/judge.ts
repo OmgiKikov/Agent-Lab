@@ -16,7 +16,7 @@ export const JUDGE_PROMPT = `${ASSESS_ROLE}\n${DATA_BOUNDARY}
 Evaluate passCriteria and failCriteria INDEPENDENTLY against the same evidence. Report met, not_met or unclear for EACH condition. Do not choose which condition takes precedence. If both apply, preserve both as met. An unspecified scope or priority is unclear; never invent one. Explain both conditions in rationale. A condition that is not exercised is unclear, not automatically met or not_met.
 Return exactly one compact JSON object, without markdown fences, matching this schema:
 ${JSON.stringify(z.toJSONSchema(responseSchema))}`;
-export const JUDGE_PROTOCOL = fingerprint({ version: 7, promptSources: 'observable-rules', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
+export const JUDGE_PROTOCOL = fingerprint({ version: 8, promptSources: 'observable-rules', unobservedActions: 'unclear', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
 
 /**
@@ -37,15 +37,21 @@ export function observableSources(sources: Source[], requirements: Requirement[]
 
 /** This is the complete, frozen judge input. Prior verdicts, usage and run identity are deliberately absent. */
 export function judgeInput(input: Input) {
+  const observationMissing = !input.trial.observation || input.trial.observation.state === 'missing';
+  const scope = input.trial.userMode === 'static'
+    ? 'Opening and first answer ONLY. Planned follow-ups were not delivered. Never penalize the agent for their absence.'
+    : 'Evaluate only delivered requests, within the rubric stage.';
   return {
     scenario: { metrics: input.scenario.metrics, successCriteria: input.scenario.successCriteria, checks: input.scenario.checks,
       user: input.trial.userMode === 'static' ? { ...input.scenario.user, script: [], maxFollowUps: 0 } : input.scenario.user },
-    evaluationScope: input.trial.userMode === 'static' ? 'Opening and first answer ONLY. Planned follow-ups were not delivered. Never penalize the agent for their absence.' : 'Evaluate only delivered requests, within the rubric stage.',
+    evaluationScope: observationMissing
+      ? `${scope} Agent prose proves only what was said. Without observed state, action-dependent pass conditions remain unclear; assess reply quality independently.`
+      : scope,
     sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })),
     trial: { userMode: input.trial.userMode,
       events: input.trial.events.map(event => ({ seq: event.seq, type: event.type, content: assessmentEventContent(event) })),
       observation: input.trial.observation ?? { state: 'missing', tools: 'partial' }, initialState: input.trial.initialState,
-      finalState: input.trial.observation && input.trial.observation.state !== 'missing' ? input.trial.finalState : null },
+      finalState: observationMissing ? null : input.trial.finalState },
   };
 }
 

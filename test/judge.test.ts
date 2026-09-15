@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources, JUDGE_PROTOCOL } from '../src/judge.js';
 import { auditJudge, repeatability } from '../src/judge-audit.js';
-import { emptyUsage, settingsSchema, simulatorFidelity, type JudgeAudit, type Runtime, type Scenario, type Trial } from '../src/contracts.js';
+import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type JudgeAudit, type Runtime, type Scenario, type Trial } from '../src/contracts.js';
 import { ExperimentStore } from '../src/store.js';
 
 const scenario: Scenario = { id: 'card', familyId: 'family', title: 'A fixed input', split: 'dev', provenance: 'synthetic', requirementIds: [],
@@ -70,12 +70,35 @@ test('judge input withholds case labels, prior grades, unobserved state and unde
     trial: { ...trial, outcome: 'fail', finalState: { ...trial.finalState, records: { SECRET_STATE: { time: '11:00' } } } } });
   assert.doesNotMatch(JSON.stringify(data), /EXPECTED_FAIL|PRIOR_VERDICT_SECRET|UNDELIVERED|SECRET_STATE/);
   assert.equal(data.trial.finalState, null);
+  assert.match(data.evaluationScope, /action-dependent.*unclear/i);
   assert.deepEqual(data.scenario.user.script, []);
   const observed = judgeInput({ ...input, trial: { ...trial, events: [{ seq: 2, type: 'tool_result', text: 'Update succeeded',
     tool: 'update_record', result: { ok: false, error: 'Write rejected' } }] } });
   assert.deepEqual(JSON.parse(observed.trial.events[0]!.content), {
     text: 'Update succeeded', tool: 'update_record', result: { ok: false, error: 'Write rejected' },
   }, 'a textual tool summary must not hide the structured result');
+});
+
+test('missing action evidence cannot be replaced by agent self-attestation while reply quality stays assessable', () => {
+  const actionScenario = { ...scenario, metrics: [{ ...goalAttainment }, { ...replyQuality }] };
+  const missing = judgeInput({ ...input, scenario: actionScenario, trial: { ...trial,
+    events: [{ seq: 0, type: 'user', text: 'Создай заявку' }, { seq: 1, type: 'assistant', text: 'Готово ✅, заявка создана' }],
+    observation: { state: 'missing', tools: 'partial' },
+  } });
+  assert.equal(missing.trial.finalState, null);
+  assert.match(missing.evaluationScope, /agent prose proves only what was said/i);
+  assert.match(missing.evaluationScope, /action-dependent.*unclear/i);
+  assert.deepEqual(missing.scenario.metrics?.map(metric => metric.id), ['goal_attainment', 'reply_quality']);
+  assert.match(JSON.stringify(missing.trial.events), /Готово ✅, заявка создана/);
+
+  for (const state of ['reported', 'sandbox'] as const) {
+    const observed = judgeInput({ ...input, scenario: actionScenario, trial: { ...trial,
+      observation: { state, tools: state === 'sandbox' ? 'sandbox' : 'complete' },
+      finalState: { records: { request: { status: 'created' } }, writableFields: [], transientFailures: 0 },
+    } });
+    assert.notEqual(observed.trial.finalState, null);
+    assert.doesNotMatch(observed.evaluationScope, /action-dependent.*unclear/i);
+  }
 });
 
 test('journal failure stops judgment before another request and original replies survive store reopening', async t => {
