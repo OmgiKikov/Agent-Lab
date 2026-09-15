@@ -436,6 +436,7 @@ test('Pi score imports recorded evidence code-only and gates every model call wi
   assert.equal(codeOnly.phase, 'results_review', codeOnly.error ?? '');
   assert.equal(codeOnly.usage.calls, 0);
   assert.match(codeOnly.scoreState, /без вызовов модели/);
+  assert.equal(codeOnly.brief, 'Недостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.');
   assert.ok(codeOnly.artifacts.evidence && codeOnly.artifacts.report && codeOnly.artifacts.traceJournal);
   assert.equal(updates[0], 'Читаю требования и записи…');
   assert.ok(updates.some(line => /Оценено 1 из 1 диалогов/.test(line)));

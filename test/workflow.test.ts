@@ -297,6 +297,8 @@ test('CLI score imports ordered JSONL evidence and exports it without calling an
   const output = JSON.parse(result.stdout);
   assert.equal(output.phase, 'results_review');
   assert.equal(output.imported, 1);
+  assert.equal(output.scoreState, 'Оценено по коду без вызовов модели; кластеры провалов не строились.');
+  assert.equal(output.brief, 'Недостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.');
   assert.match(output.quality.scope, /\$0\.00/);
   assert.ok(output.artifacts.report && output.artifacts.snapshot && output.artifacts.traceJournal);
   const record = JSON.parse(await readFile(output.artifacts.evidence, 'utf8'));

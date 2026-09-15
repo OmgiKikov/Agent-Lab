@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { ExperimentLab, draftHash, resultHash } from '../dist/experiment.js';
 import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, goldenCaseSchema, clarificationSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput } from '../dist/contracts.js';
 import { awaitingVerdict, evidenceSummary, plannedTrials } from '../dist/comparison.js';
-import { qualityLines, qualitySummary } from '../dist/quality.js';
+import { qualityLines, qualitySummary, scoreBrief, type ScoreBrief } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
 import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
@@ -81,6 +81,15 @@ function summary(record: Experiment, directory: string) {
       ...(record.trials.length ? { traceJournal: resolve(directory, `${record.id}.trace.jsonl`) } : {}) },
   };
 }
+
+const renderScoreBrief = (brief: ScoreBrief): string => brief.status === 'insufficient'
+  ? `${brief.heading}\n${brief.body}`
+  : [
+    'ТРЕБОВАНИЯ', ...brief.requirements.map(item => `• ${safeText(item)}`), '',
+    'НАБЛЮДАЕМОЕ', ...brief.observations.map(item => `• ${safeText(item)}`), '',
+    'НЕИЗВЕСТНО', ...brief.unknowns.map(item => `• ${safeText(item)}`), '',
+    'ГИПОТЕЗА', safeText(brief.hypothesis), '', brief.question,
+  ].join('\n');
 
 async function humanAnnotation(ctx: ExtensionContext, record: Experiment, selected: number, readingMs = 0, reviewTimes?: Map<string, number>): Promise<HumanReviewInput[] | undefined> {
   const started = performance.now();
@@ -219,7 +228,8 @@ export default function agentLab(pi: ExtensionAPI) {
           if (!codeOnly) {
             const confirmed = await ctx.ui.confirm('Оценить записанные диалоги?', safeText(`Агент и симулятор не запускаются. До ${input.settings.maxCalls} вызовов судьи.`));
             if (!confirmed) {
-              const output = { ...summary(record, lab.store.directory), cancelled: true, artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory) };
+              const output = { ...summary(record, lab.store.directory), cancelled: true, brief: renderScoreBrief(scoreBrief(record)),
+                artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory) };
               return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
             }
             signal.throwIfAborted(); id = (await lab.score(input)).id; await lab.waitForIdle(); await progress();
@@ -229,6 +239,7 @@ export default function agentLab(pi: ExtensionAPI) {
             }
           }
           const output = { ...summary(record, lab.store.directory), ...(codeOnly ? { scoreState: 'Оценено по коду без вызовов модели; кластеры провалов не строились.' } : {}),
+            brief: renderScoreBrief(scoreBrief(record)),
             artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory), ...(signal.aborted ? { cancelled: true } : {}) };
           returnToBoard(ctx, id);
           return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };

@@ -15,11 +15,22 @@ import { previewCriteria } from './preview.js';
 import { getPiStatus } from './pi.js';
 import { auditJudge } from './judge-audit.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
-import { qualityLines, qualitySummary } from './quality.js';
+import { qualityLines, qualitySummary, scoreBrief, type ScoreBrief } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { evidenceBundle, exportArtifacts } from './artifacts.js';
+import { stripTerminalSequences } from '@earendil-works/pi-tui';
 
 const percent = (value: number | null) => value === null ? 'нет данных' : `${Math.round(value * 100)}%`;
+const safeText = (value: unknown) => stripTerminalSequences(String(value ?? '')).replace(/\r\n?/g, '\n').replace(/\t/g, '  ')
+  .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '');
+const renderScoreBrief = (brief: ScoreBrief): string => brief.status === 'insufficient'
+  ? `${brief.heading}\n${brief.body}`
+  : [
+    'ТРЕБОВАНИЯ', ...brief.requirements.map(item => `• ${safeText(item)}`), '',
+    'НАБЛЮДАЕМОЕ', ...brief.observations.map(item => `• ${safeText(item)}`), '',
+    'НЕИЗВЕСТНО', ...brief.unknowns.map(item => `• ${safeText(item)}`), '',
+    'ГИПОТЕЗА', safeText(brief.hypothesis), '', brief.question,
+  ].join('\n');
 
 async function main() {
   const args = process.argv.slice(2);
@@ -181,7 +192,9 @@ async function main() {
       const artifacts = await exportArtifacts(bundle, directory);
       const quality = qualityLines(qualitySummary(record));
       process.stdout.write(JSON.stringify({ id: record.id, phase: record.phase, imported: imported.trials.length,
-        ...(record.assessmentOf ? { assessmentOf: record.assessmentOf } : {}), quality, artifacts, evidence: bundle.evidence }, null, 2) + '\n');
+        ...(record.assessmentOf ? { assessmentOf: record.assessmentOf } : {}),
+        ...(values['code-only'] ? { scoreState: 'Оценено по коду без вызовов модели; кластеры провалов не строились.' } : {}),
+        brief: renderScoreBrief(scoreBrief(record)), quality, artifacts, evidence: bundle.evidence }, null, 2) + '\n');
       process.exitCode = record.phase === 'results_review' && !record.trials.some(trial => trial.assessmentError || ['invalid', 'cancelled'].includes(trial.outcome)) ? 0 : 2;
       return;
     }

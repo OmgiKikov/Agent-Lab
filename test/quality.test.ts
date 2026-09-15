@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { rm } from 'node:fs/promises';
-import { qualityLines, qualitySummary, plural, shorten } from '../src/quality.js';
+import { qualityLines, qualitySummary, plural, scoreBrief, shorten } from '../src/quality.js';
 import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 import { verdictSummary } from '../src/comparison.js';
@@ -78,6 +78,71 @@ test('plural forms and sentence-bounded shortening', () => {
   assert.equal(shorten(long, 120), 'Первое предложение довольно длинное и содержит подробности. Второе предложение тоже.…');
   assert.equal(shorten('коротко'), 'коротко');
   assert.match(shorten('слово '.repeat(60), 50), /^(слово ){1,8}слово…$/);
+});
+
+test('score brief publishes one bounded hypothesis only from a complete owner requirement and cited dialogue chain', () => {
+  const quote = 'Агент не должен подтверждать действие без наблюдаемого результата.';
+  const goalMetric = { ...goal, id: 'goal_attainment', name: 'Достижение цели' };
+  const replyMetric = { ...format, id: 'reply_quality', name: 'Качество ответа' };
+  const scoredScenario = { ...scenario('recorded_1', false), requirementIds: ['owner_rule'], provenance: 'production' as const,
+    metrics: [goalMetric, replyMetric] };
+  const scoredTrial = { ...trial('recorded_1', 'recorded_1', 'pass', 'fail'), observation: { state: 'missing' as const, tools: 'partial' as const },
+    events: [{ seq: 0, type: 'user' as const, text: 'Создай заявку' }, { seq: 1, type: 'assistant' as const, text: `Готово. ${'заявка создана '.repeat(30)}` }],
+    assessments: [
+      { metricId: 'goal_attainment', result: 'fail' as const, rationale: 'Наблюдаемого результата создания заявки нет.', evidence: [1] },
+      { metricId: 'reply_quality', result: 'pass' as const, rationale: 'Ответ краткий, но сам по себе не доказывает действие.', evidence: [1] },
+    ] };
+  const input = record({
+    sources: [{ id: 'policy', name: 'policy.md', content: quote, hash: 'h' }],
+    requirements: [{ id: 'owner_rule', text: 'Не подтверждать действие без результата', sourceId: 'policy', quote, critical: true }],
+    scenarios: [scoredScenario], trials: [scoredTrial],
+    failureModes: [
+      { id: 'later', name: 'Второй кандидат', description: 'Не должен вытеснить первый.', trialIds: ['recorded_1'] },
+      { id: 'unsupported_action', name: 'Заявляет успех без результата', description: 'Агент подтверждает создание без наблюдаемого эффекта.', trialIds: ['recorded_1'] },
+    ],
+  });
+
+  const brief = scoreBrief(input);
+  assert.equal(brief.status, 'ready');
+  if (brief.status !== 'ready') return;
+  assert.deepEqual(Object.keys(brief), ['status', 'requirements', 'observations', 'unknowns', 'hypothesis', 'question']);
+  assert.ok(brief.requirements.length <= 3 && brief.observations.length <= 3 && brief.unknowns.length <= 3);
+  assert.match(brief.requirements[0]!, /owner_rule.*policy.*policy\.md.*Агент не должен подтверждать/);
+  assert.match(brief.observations[0]!, /Ответ агента.*recorded_1.*#1/);
+  assert.match(brief.observations[0]!, /…/);
+  assert.match(brief.observations.join('\n'), /goal_attainment — НЕ ПРОЙДЕНО/);
+  assert.match(brief.observations.join('\n'), /reply_quality — ПРОЙДЕНО/);
+  assert.match(brief.unknowns.join('\n'), /НЕЯСНО.*состояние.*события инструментов/i);
+  assert.match(brief.hypothesis, /Второй кандидат.*owner_rule.*policy.*recorded_1.*#1/);
+  assert.doesNotMatch(brief.hypothesis, /unsupported_action|Заявляет успех без результата/);
+  assert.equal(brief.question, 'Проверим?');
+});
+
+test('score brief falls back to a decisive unknown and otherwise returns the strict insufficient-data state', () => {
+  const quote = 'Действие считается выполненным только после наблюдаемого эффекта.';
+  const linkedScenario = { ...scenario('recorded_1', false), requirementIds: ['owner_rule'], provenance: 'production' as const,
+    metrics: [{ ...goal, id: 'goal_attainment' }] };
+  const linkedTrial = { ...trial('recorded_1', 'recorded_1', 'ungraded', 'unknown'),
+    events: [{ seq: 0, type: 'user' as const, text: 'Создай заявку' }, { seq: 1, type: 'assistant' as const, text: 'Готово' }],
+    observation: { state: 'missing' as const, tools: 'partial' as const },
+    assessments: [{ metricId: 'goal_attainment', result: 'unknown' as const, rationale: 'Нет наблюдаемого результата действия.', evidence: [1] }] };
+  const grounded = record({ sources: [{ id: 'policy', name: 'policy.md', content: quote, hash: 'h' }],
+    requirements: [{ id: 'owner_rule', text: 'Нужен наблюдаемый эффект', sourceId: 'policy', quote, critical: true }],
+    scenarios: [linkedScenario], trials: [linkedTrial] });
+  const brief = scoreBrief(grounded);
+  assert.equal(brief.status, 'ready');
+  if (brief.status === 'ready') assert.match(brief.hypothesis, /НЕЯСНО.*owner_rule.*recorded_1.*#1/);
+
+  const insufficient = {
+    status: 'insufficient',
+    heading: 'Недостаточно данных для гипотезы',
+    body: 'Добавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.',
+  };
+  assert.deepEqual(scoreBrief(record()), insufficient);
+  assert.deepEqual(scoreBrief({ ...grounded, requirements: [{ ...grounded.requirements[0]!, sourceId: 'missing' }] }), insufficient);
+  assert.deepEqual(scoreBrief({ ...grounded, scenarios: [{ ...linkedScenario, requirementIds: [] }] }), insufficient);
+  assert.deepEqual(scoreBrief({ ...grounded, trials: [{ ...linkedTrial, assessments: [{ ...linkedTrial.assessments![0]!, evidence: [99] }] }] }), insufficient);
+  assert.deepEqual(scoreBrief({ ...grounded, trials: [{ ...linkedTrial, assessments: [{ ...linkedTrial.assessments![0]!, rationale: 'Судья разошёлся.' }] }] }), insufficient);
 });
 
 test('a card with a missing planned repeat is undecided on the first screen, not a pass', () => {

@@ -1,5 +1,5 @@
-import type { Experiment, Scenario, Trial, UserMode } from './contracts.js';
-import { fingerprint } from './contracts.js';
+import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, UserMode } from './contracts.js';
+import { assessmentEventContent, fingerprint, verbatimSpan } from './contracts.js';
 import { agentMetricResult, agentRubricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
 import { awaitingVerdict, cardOutcome, humanFindings, isAgentFailure, verdictSummary, type VerdictSummary } from './comparison.js';
 
@@ -40,6 +40,91 @@ export interface QualitySummary {
   /** One sentence of limits; the detailed reasons stay in the verdict. */
   limits: string;
   headline: string;
+}
+
+export type ScoreBrief =
+  | { status: 'insufficient'; heading: 'Недостаточно данных для гипотезы'; body: 'Добавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.' }
+  | { status: 'ready'; requirements: string[]; observations: string[]; unknowns: string[]; hypothesis: string; question: 'Проверим?' };
+
+const insufficientScoreBrief = (): ScoreBrief => ({
+  status: 'insufficient',
+  heading: 'Недостаточно данных для гипотезы',
+  body: 'Добавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.',
+});
+
+type GroundedScore = {
+  requirement: Requirement; source: Source; quote: string; scenario: Scenario; trial: Trial;
+  assessment: NonNullable<Trial['assessments']>[number]; event: TraceEvent;
+  mode?: NonNullable<Experiment['failureModes']>[number];
+};
+
+function groundedScore(record: Experiment): GroundedScore | undefined {
+  const resolve = (trial: Trial, mode?: GroundedScore['mode']): GroundedScore | undefined => {
+    const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
+    if (!scenario) return;
+    // ponytail: lexical missing-evidence gate; replace it with a reason code if assessments gain one.
+    const assessment = trial.assessments?.find(item => item.result === 'fail' && scenario.metrics?.some(metric => metric.id === item.metricId && metric.subject === 'agent'))
+      ?? trial.assessments?.find(item => item.result === 'unknown' && scenario.metrics?.some(metric => metric.id === item.metricId && metric.subject === 'agent')
+        && (mode || /наблюд|неяс|неизвест|отсутств|нет (?:данных|подтверждения|результата)|missing|unclear|insufficient evidence/i.test(item.rationale)));
+    if (!assessment) return;
+    const event = assessment.evidence.map(seq => trial.events.find(item => item.seq === seq)).find((item): item is TraceEvent => !!item && !!assessmentEventContent(item).trim());
+    if (!event) return;
+    for (const requirementId of scenario.requirementIds) {
+      const requirement = record.requirements.find(item => item.id === requirementId);
+      const source = requirement && record.sources.find(item => item.id === requirement.sourceId);
+      const quote = source && requirement ? verbatimSpan(source.content, requirement.quote) : undefined;
+      if (requirement && source && quote) return { requirement, source, quote, scenario, trial, assessment, event, ...(mode ? { mode } : {}) };
+    }
+  };
+  for (const mode of record.failureModes ?? []) for (const trialId of mode.trialIds) {
+    const trial = record.trials.find(item => item.id === trialId);
+    const grounded = trial && resolve(trial, mode);
+    if (grounded) return grounded;
+  }
+  for (const trial of record.trials) {
+    const grounded = resolve(trial);
+    if (grounded?.assessment.result === 'unknown') return grounded;
+  }
+}
+
+/** Compact evidence proposal; renderers escape external text at their terminal boundary. */
+export function scoreBrief(input: Experiment): ScoreBrief {
+  const record = observedRecord(input);
+  const grounded = groundedScore(record);
+  if (!grounded) return insufficientScoreBrief();
+  const { requirement, source, quote, scenario, trial, assessment, event, mode } = grounded;
+  const reference = `диалог ${trial.id}, событие #${event.seq}`;
+  const labels: Record<TraceEvent['type'], string> = {
+    user: 'Реплика пользователя', assistant: 'Ответ агента', simulator: 'Реплика симулятора', tool_call: 'Вызов инструмента',
+    tool_result: 'Результат инструмента', error: 'Ошибка',
+  };
+  const status = { pass: 'ПРОЙДЕНО', fail: 'НЕ ПРОЙДЕНО', unknown: 'НЕЯСНО' } as const;
+  const observations = [
+    `${labels[event.type]} · ${reference}: «${shorten(assessmentEventContent(event), 240)}»`,
+    ...['goal_attainment', 'reply_quality'].flatMap(metricId => {
+      const item = trial.assessments?.find(candidate => candidate.metricId === metricId && candidate.result !== 'unknown');
+      const seq = item?.evidence.find(candidate => trial.events.some(trace => trace.seq === candidate));
+      return item && seq !== undefined ? [`${metricId} — ${status[item.result]}: ${shorten(item.rationale, 240)} · диалог ${trial.id}, событие #${seq}`] : [];
+    }),
+  ].slice(0, 3);
+  const unknowns = [
+    ...(trial.observation?.state === 'missing' || trial.observation?.tools === 'partial'
+      ? [`НЕЯСНО · результат действия: ${trial.observation?.state === 'missing' ? 'состояние не наблюдалось' : 'состояние наблюдалось'}; ${trial.observation?.tools === 'partial' ? 'события инструментов наблюдались частично' : 'события инструментов наблюдались полностью'} · диалог ${trial.id}`]
+      : []),
+    ...(trial.assessments ?? []).filter(item => item.result === 'unknown').map(item => {
+      const seq = item.evidence.find(candidate => trial.events.some(trace => trace.seq === candidate));
+      return `${item.metricId} — НЕЯСНО: ${shorten(item.rationale, 240)} · диалог ${trial.id}${seq === undefined ? '' : `, событие #${seq}`}`;
+    }),
+  ].slice(0, 3);
+  const mechanism = mode ? shorten(`${mode.name}: ${mode.description}`, 240) : `НЕЯСНО, подтверждён ли результат: ${shorten(assessment.rationale, 240)}`;
+  return {
+    status: 'ready',
+    requirements: [`${requirement.id} · источник ${source.id} (${source.name}): ${shorten(requirement.text, 240)} · точная цитата «${shorten(quote, 240)}»`],
+    observations,
+    unknowns,
+    hypothesis: `Похоже, ${mechanism} Это может нарушать требование ${requirement.id} (источник ${source.id}); наблюдение — ${reference}.`,
+    question: 'Проверим?',
+  };
 }
 
 const modeNames: Record<UserMode, string> = { static: 'одна реплика', scripted: 'по сценарию', reactive: 'живой пользователь' };
