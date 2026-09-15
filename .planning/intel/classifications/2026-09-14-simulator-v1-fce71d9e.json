@@ -1,0 +1,33 @@
+{
+  "source_path": "/Users/kikov/conductor/workspaces/conductor-playground/lyon/docs/superpowers/plans/2026-09-14-simulator-v1.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Simulator v1 and Prompt MVP Hooks — Implementation Plan",
+  "summary": "Implementation plan for simulator checks, scorecards, mode statistics, external state, release hooks, prompt hooks, interfaces, tests, and documentation.",
+  "scope": [
+    "user simulator",
+    "simulator checks",
+    "scorecard",
+    "mode statistics",
+    "external world state",
+    "release hooks",
+    "prompt hooks",
+    "Agent Lab"
+  ],
+  "cross_refs": [
+    "docs/superpowers/specs/2026-09-14-simulator-v1-design.md",
+    "docs/IMPLEMENTATION.md",
+    "docs/REFERENCE.md",
+    "docs/WORKFLOWS.md",
+    "docs/EVALS-METHOD.md",
+    "CONTEXT.md",
+    "README.md",
+    "skills/agent-builder/SKILL.md",
+    "LOCAL.md",
+    "IMPLEMENTATION.md"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

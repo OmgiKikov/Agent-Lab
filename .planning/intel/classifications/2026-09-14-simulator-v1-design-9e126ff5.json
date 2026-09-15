@@ -1,0 +1,35 @@
+{
+  "source_path": "/Users/kikov/conductor/workspaces/conductor-playground/lyon/docs/superpowers/specs/2026-09-14-simulator-v1-design.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Симулятор пользователя v1 и промпт как MVP улучшения",
+  "summary": "Технический проект симулятора пользователя, проверок качества, оценки режимов, внешнего состояния и выпуска версий промпта для Agent Lab и AIGW.",
+  "scope": [
+    "симулятор пользователя",
+    "Agent Lab",
+    "AIGW",
+    "карточки сценариев",
+    "проверки симулятора",
+    "внешнее состояние",
+    "парная дельта",
+    "хук выпуска",
+    "промпт"
+  ],
+  "cross_refs": [
+    "REFERENCE.md",
+    "WORKFLOWS.md",
+    "CONTEXT.md",
+    "EVALS-METHOD.md",
+    "SKILL.md",
+    "skills/agent-builder/SKILL.md",
+    "docs/REFERENCE.md",
+    "docs/WORKFLOWS.md",
+    "docs/EVALS-METHOD.md",
+    "README.md",
+    "LOCAL.md"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}
