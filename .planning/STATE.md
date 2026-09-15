@@ -2,17 +2,17 @@
 gsd_state_version: "1.0"
 current_phase: 01
 current_phase_name: Честный человеческий разбор
-status: executing
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-09-15T11:28:58.913Z"
+status: verifying
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-09-15T11:47:04.670Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 01 execution started
-state_head: f48cee06da79a324f888cddbc1772187fcf67991
+state_head: bd5a15c176a45056a21176f652bc79a9ac953e54
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 2
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 Phase: 01 (Честный человеческий разбор) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-15 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 01 P01 | 5 min | 2 tasks | 6 files |
+| Phase 01 P02 | 13 min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,8 @@ Recent decisions affecting current work:
 - [Evidence]: Ненаблюдавшееся действие остаётся `unknown`; человеческий вердикт не распространяется между диалогами.
 - [Phase 01]: The latest metric review is authoritative: invalid removes the occurrence, pass/fail replace the judge, and unknown remains unknown.
 - [Phase 01]: Existing callers without an Experiment keep the optional reviews default; record-owning callers pass persisted humanReviews explicitly.
+- [Phase 01]: Complete review requires reviewedDialogue true on the latest whole-dialogue verdict; legacy and partial reviews never count.
+- [Phase 01]: A native full-dialogue review must cite a current event and can write only one review for the shown dialogue.
 
 ### Pending Todos
 
@@ -91,6 +94,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-15T11:28:58.900Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-09-15T11:47:04.655Z
+Stopped at: Completed 01-02-PLAN.md
 Resume file: None
