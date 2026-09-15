@@ -46,6 +46,7 @@ test('injected Pi instructions stop at one grounded hypothesis until the owner a
     assert.ok(headings.every((heading, index) => prompt.indexOf(heading) >= 0
       && (index === 0 || prompt.indexOf(heading) > prompt.indexOf(headings[index - 1]!))));
     assert.match(prompt, /owner source ID and exact quote/i);
+    assert.match(prompt, /use score and inspect to gather evidence.*Before any non-score call/is);
     assert.match(prompt, /repository path\/line or dialogue\/event/i);
     assert.match(prompt, /code, assistant replies and saved outcomes.*observations/i);
     assert.match(prompt, /observable action effect.*НЕЯСНО/i);
@@ -429,17 +430,31 @@ test('Pi score imports recorded evidence code-only and gates every model call wi
   const missing = output(await build.execute('missing', { mode: 'score', task: 'Score', materials: params.materials }, undefined, undefined, headless));
   assert.equal(missing.status, 'needs_input');
   assert.match(missing.message, /Есть реальные диалоги с агентом/);
+  const empty = output(await build.execute('empty', { mode: 'score', task: 'Score', materials: params.materials, withoutDialogues: true }, undefined, undefined, headless));
+  assert.equal(empty.status, 'insufficient');
+  assert.match(empty.brief, /^Недостаточно данных для гипотезы/);
 
   const updates: string[] = [];
-  const codeOnly = output(await build.execute('code-only', { ...params, codeOnly: true }, undefined,
-    value => { updates.push(value.content.filter(item => item.type === 'text').map(item => item.text).join('\n')); }, headless));
+  const scoreResult = await build.execute('code-only', { ...params, codeOnly: true }, undefined,
+    value => { updates.push(value.content.filter(item => item.type === 'text').map(item => item.text).join('\n')); }, headless);
+  const codeOnly = output(scoreResult);
   assert.equal(codeOnly.phase, 'results_review', codeOnly.error ?? '');
   assert.equal(codeOnly.usage.calls, 0);
   assert.match(codeOnly.scoreState, /без вызовов модели/);
   assert.equal(codeOnly.brief, 'Недостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.');
   assert.ok(codeOnly.artifacts.evidence && codeOnly.artifacts.report && codeOnly.artifacts.traceJournal);
   assert.equal(updates[0], 'Читаю требования и записи…');
-  assert.ok(updates.some(line => /Оценено 1 из 1 диалогов/.test(line)));
+  assert.ok(updates.some(line => /Импортировано 1 из 1 диалогов/.test(line)));
+  assert.ok(updates.every(line => !/Оценено/.test(line)), 'code-only never reports judge progress');
+  assert.ok(build.renderResult);
+  const rendered = build.renderResult(scoreResult, { expanded: false, isPartial: false }, { fg: (_color: string, text: string) => text } as never);
+  assert.match(rendered.render(80).join('\n'), /Недостаточно данных для гипотезы/);
+
+  const connectionFile = join(directory, 'score-connection.json');
+  await writeFile(connectionFile, JSON.stringify({ format: 'agent-lab-connection-1', target: { kind: 'command', command: 'never-run', args: [] }, targetVersion: 'recorded-v1' }));
+  const connected = output(await build.execute('connected', { ...params, codeOnly: true, connectionFile }, undefined, undefined, headless));
+  assert.equal(connected.target.kind, 'command');
+  assert.equal(connected.targetVersion, 'recorded-v1');
 
   await assert.rejects(build.execute('headless-model', params, undefined, undefined, headless), /native Pi confirmation/);
   const confirmations: string[] = [];

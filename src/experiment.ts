@@ -345,13 +345,14 @@ export class ExperimentLab {
     });
   }
   /** A separate result over the same facts. No target session or simulator is opened. */
-  async reassess(id: string, raw: ReassessmentInput = {}): Promise<Experiment> {
+  async reassess(id: string, raw: ReassessmentInput = {}, options: { carryUsage?: boolean } = {}): Promise<Experiment> {
     return this.change(async () => {
       const input = reassessmentSchema.parse(raw);
       const previous = await this.store.get(id);
       if (previous.workflow !== 'evaluate' || runningPhases.has(previous.phase) || !previous.trials.length) throw new Error('Нужен завершённый прогон с сохранёнными трассами.');
       if (input.trialIds?.some(id => !previous.trials.some(t => t.id === id))) throw new Error('Неизвестный исходный диалог.');
       const record = freshDraft(previous);
+      if (options.carryUsage) record.usage = structuredClone(previous.usage);
       for (const criteria of input.criteria) {
         const scenario = record.scenarios.find(s => s.id === criteria.scenarioId);
         if (!scenario) throw new Error(`Нет карточки ${criteria.scenarioId}`);

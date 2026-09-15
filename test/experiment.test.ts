@@ -639,13 +639,15 @@ test('model-backed recorded scoring grounds criteria, regrades copied traces and
   const prompts: (string | undefined)[] = [];
   let clusterError = false;
   const runtime: Runtime = {
-    async prepare({ sources }) {
+    async prepare({ sources }, ctx) {
       calls.prepare++;
+      ctx.beforeCall(); ctx.addUsage({ inputTokens: 1, outputTokens: 1, costUsd: null });
       return { requirements: [{ id: 'owner_rule', text: 'Do not claim completion without evidence.', sourceId: sources[0]!.id,
         quote: sources[0]!.content, critical: true }], questions: [], agent: { name: 'Recorded agent', instructions: 'Recorded only', tools: [] }, scenarios: [] };
     },
-    async goals({ dialogues, requirements }) {
+    async goals({ dialogues, requirements }, ctx) {
       calls.goals++;
+      ctx.beforeCall(); ctx.addUsage({ inputTokens: 1, outputTokens: 1, costUsd: null });
       assert.deepEqual(requirements?.map(requirement => requirement.id), ['owner_rule']);
       const dialogue = dialogues[0]!;
       return [{ id: `goal_${dialogue.id}`, goal: 'Create the request', opening: dialogue.messages[0]!.content,
@@ -659,8 +661,9 @@ test('model-backed recorded scoring grounds criteria, regrades copied traces and
       return scenario.metrics!.map(metric => ({ metricId: metric.id, result: metric.id === 'goal_attainment' ? 'fail' as const : 'pass' as const,
         rationale: metric.id === 'goal_attainment' ? 'Нет наблюдаемого результата действия.' : 'Ответ можно оценить независимо.', evidence: [1] }));
     },
-    async failureModes(input) {
+    async failureModes(input, ctx) {
       calls.clusters++; prompts.push(input.prompt);
+      ctx.beforeCall(); ctx.addUsage({ inputTokens: 1, outputTokens: 1, costUsd: null });
       if (clusterError) throw new Error('cluster unavailable');
       return [{ id: `unsupported_action_${calls.clusters}`, name: `Заявил о создании без результата ${calls.clusters}`,
         description: 'Ассистент подтвердил действие, которого нет в наблюдаемом состоянии.', trialIds: input.failures.map(failure => failure.trialId), promptQuotes: [] }];
@@ -677,16 +680,18 @@ test('model-backed recorded scoring grounds criteria, regrades copied traces and
     materials: [{ name: 'prompt.md', content: savedPrompt, kind: 'prompt' }], scenarioCount: 0,
     target: { kind: 'command', command: 'never-run', args: [], promptFile },
     dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'Создай заявку' }, { role: 'assistant', content: 'Готово ✅, заявка создана' }] }],
+    settings: { maxCalls: 5 },
   });
   const seed = await lab.score(input); await lab.waitForIdle();
   const imported = await lab.get(seed.id);
   assert.equal(imported.phase, 'results_review', imported.error ?? '');
+  assert.equal(imported.usage.calls, 2);
   assert.equal(imported.trials[0]!.assessments, undefined);
   assert.equal(imported.failureModes, undefined);
   assert.deepEqual(imported.scenarios[0]!.metrics!.map(metric => metric.id), ['prompt_compliance', 'goal_attainment', 'reply_quality']);
   await writeFile(promptFile, 'A NEWER PROMPT THAT MUST NOT BE READ');
 
-  const first = await lab.reassess(imported.id); await lab.waitForIdle();
+  const first = await lab.reassess(imported.id, {}, { carryUsage: true }); await lab.waitForIdle();
   const assessed = await lab.get(first.id);
   assert.equal(assessed.phase, 'results_review', assessed.error ?? '');
   assert.deepEqual(assessed.trials[0]!.assessments!.map(item => item.metricId), ['prompt_compliance', 'goal_attainment', 'reply_quality']);
@@ -694,6 +699,7 @@ test('model-backed recorded scoring grounds criteria, regrades copied traces and
   assert.match(assessed.failureModes![0]!.id, /_1$/);
   assert.deepEqual([calls.target, calls.simulator], [0, 0]);
   assert.equal(assessed.usage.costUsd, null);
+  assert.equal(assessed.usage.calls, 4, 'score and reassessment share the confirmed call ceiling');
   assert.match(qualityLines(qualitySummary(assessed)).scope, /стоимость неизвестна/);
 
   const second = await lab.reassess(assessed.id); await lab.waitForIdle();

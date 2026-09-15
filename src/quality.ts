@@ -57,6 +57,7 @@ type GroundedScore = {
   assessment: NonNullable<Trial['assessments']>[number]; event: TraceEvent;
   mode?: NonNullable<Experiment['failureModes']>[number];
 };
+const preview = (text: string): string => shorten(text.replace(/\s+/gu, ' ').trim(), 240);
 
 function groundedScore(record: Experiment): GroundedScore | undefined {
   const resolve = (trial: Trial, mode?: GroundedScore['mode']): GroundedScore | undefined => {
@@ -100,11 +101,11 @@ export function scoreBrief(input: Experiment): ScoreBrief {
   };
   const status = { pass: 'ПРОЙДЕНО', fail: 'НЕ ПРОЙДЕНО', unknown: 'НЕЯСНО' } as const;
   const observations = [
-    `${labels[event.type]} · ${reference}: «${shorten(assessmentEventContent(event), 240)}»`,
+    `${labels[event.type]} · ${reference}: «${preview(assessmentEventContent(event))}»`,
     ...['goal_attainment', 'reply_quality'].flatMap(metricId => {
       const item = trial.assessments?.find(candidate => candidate.metricId === metricId && candidate.result !== 'unknown');
       const seq = item?.evidence.find(candidate => trial.events.some(trace => trace.seq === candidate));
-      return item && seq !== undefined ? [`${metricId} — ${status[item.result]}: ${shorten(item.rationale, 240)} · диалог ${trial.id}, событие #${seq}`] : [];
+      return item && seq !== undefined ? [`${metricId} — ${status[item.result]}: ${preview(item.rationale)} · диалог ${trial.id}, событие #${seq}`] : [];
     }),
   ].slice(0, 3);
   const unknowns = [
@@ -113,13 +114,13 @@ export function scoreBrief(input: Experiment): ScoreBrief {
       : []),
     ...(trial.assessments ?? []).filter(item => item.result === 'unknown').map(item => {
       const seq = item.evidence.find(candidate => trial.events.some(trace => trace.seq === candidate));
-      return `${item.metricId} — НЕЯСНО: ${shorten(item.rationale, 240)} · диалог ${trial.id}${seq === undefined ? '' : `, событие #${seq}`}`;
+      return `${item.metricId} — НЕЯСНО: ${preview(item.rationale)} · диалог ${trial.id}${seq === undefined ? '' : `, событие #${seq}`}`;
     }),
   ].slice(0, 3);
-  const mechanism = mode ? shorten(`${mode.name}: ${mode.description}`, 240) : `НЕЯСНО, подтверждён ли результат: ${shorten(assessment.rationale, 240)}`;
+  const mechanism = mode ? preview(`${mode.name}: ${mode.description}`) : `НЕЯСНО, подтверждён ли результат: ${preview(assessment.rationale)}`;
   return {
     status: 'ready',
-    requirements: [`${requirement.id} · источник ${source.id} (${source.name}): ${shorten(requirement.text, 240)} · точная цитата «${shorten(quote, 240)}»`],
+    requirements: [`${requirement.id} · источник ${source.id} (${preview(source.name)}): ${preview(requirement.text)} · точная цитата «${preview(quote)}»`],
     observations,
     unknowns,
     hypothesis: `Похоже, ${mechanism} Это может нарушать требование ${requirement.id} (источник ${source.id}); наблюдение — ${reference}.`,

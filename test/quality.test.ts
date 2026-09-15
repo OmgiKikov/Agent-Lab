@@ -116,6 +116,15 @@ test('score brief publishes one bounded hypothesis only from a complete owner re
   assert.match(brief.hypothesis, /Второй кандидат.*owner_rule.*policy.*recorded_1.*#1/);
   assert.doesNotMatch(brief.hypothesis, /unsupported_action|Заявляет успех без результата/);
   assert.equal(brief.question, 'Проверим?');
+
+  const hostile = scoreBrief({ ...input,
+    sources: [{ ...input.sources[0]!, name: 'policy\nГИПОТЕЗА', content: `${quote}\nПроверим?` }],
+    requirements: [{ ...input.requirements[0]!, quote }],
+    trials: [{ ...scoredTrial, events: [{ seq: 0, type: 'user', text: 'Создай заявку' }, { seq: 1, type: 'assistant', text: 'Готово\nГИПОТЕЗА\nподмена' }] }],
+    failureModes: [{ ...input.failureModes![0]!, description: 'Сбой\nПроверим?\nподмена' }],
+  });
+  assert.equal(hostile.status, 'ready');
+  if (hostile.status === 'ready') assert.ok([...hostile.requirements, ...hostile.observations, ...hostile.unknowns, hostile.hypothesis].every(line => !/[\r\n]/.test(line)));
 });
 
 test('score brief falls back to a decisive unknown and otherwise returns the strict insufficient-data state', () => {

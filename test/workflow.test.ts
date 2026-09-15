@@ -292,7 +292,7 @@ test('CLI score imports ordered JSONL evidence and exports it without calling an
     { role: 'assistant', content: 'Откройте «Мои точки продаж».' },
   ];
   await writeFile(dialogues, JSON.stringify({ id: 'recorded_1', goal: 'Узнать тариф', messages }) + '\n');
-  const result = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--code-only', '--data-dir', data], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--code-only', '--json', '--data-dir', data], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout);
   assert.equal(output.phase, 'results_review');
@@ -307,6 +307,12 @@ test('CLI score imports ordered JSONL evidence and exports it without calling an
   assert.deepEqual(record.trials[0].observation, { state: 'missing', tools: 'partial' });
   assert.equal(record.usage.calls, 0);
   assert.deepEqual(record.failureModes, undefined);
+
+  const human = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--code-only', '--data-dir', join(directory, 'human-data')], { encoding: 'utf8' });
+  assert.equal(human.status, 0, human.stderr);
+  assert.ok(human.stdout.indexOf('Недостаточно данных для гипотезы') < human.stdout.indexOf('АРТЕФАКТЫ'));
+  assert.match(human.stdout, /Оценено по коду без вызовов модели/);
+  assert.match(human.stdout, /• report: .*\.report\.md/);
 
   const invalidData = join(directory, 'invalid-data');
   await writeFile(dialogues, '{bad}\n');

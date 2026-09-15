@@ -25,6 +25,7 @@ const toolDisplay: Pick<ToolDefinition, 'renderCall' | 'renderResult'> = {
     if (options.expanded) return new Text(safeText(raw), 0, 0);
     try {
       const data = JSON.parse(raw);
+      if (data.brief) return new Text(theme.fg('text', safeText([data.scoreState, data.brief].filter(Boolean).join('\n\n'))), 0, 0);
       const title = data.error ?? (data.phase === 'review' ? data.message ?? `Готово ${data.scenarioCount} сценариев. Посмотрите их перед запуском.`
         : data.quality?.headline ?? data.evidence?.verdict?.headline ?? data.message ?? 'Доказательства прочитаны.');
       const lines = [title, ...(data.quality?.causes?.slice(0, 3).map((c: { name: string; dialogues: number }, i: number) => `${i + 1}. ${c.name} — ${c.dialogues}`) ?? []), ...(data.quality?.queue ? [data.quality.queue] : [])];
@@ -142,7 +143,7 @@ export default function agentLab(pi: ExtensionAPI) {
   pi.on('before_agent_start', async (event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1') return;
     ctx.ui?.setWidget?.('agent-lab-start', undefined);
-    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for checking changes to the user's real agent. Work in their project. Follow the agent-builder skill. At the start ask once whether the user has de-identified real dialogues (JSON/JSONL). Accept their supplied path or an explicit choice to start without logs; honor an earlier answer, treat an empty answer as unresolved and never silently infer a skip. agent_lab_build returns needs_input until dialogues or withoutDialogues=true is supplied. Before any call that builds, edits or runs a test, require an owner source ID and exact quote plus a concrete repository path/line or dialogue/event observation. Code, assistant replies and saved outcomes are observations only; an unobserved observable action effect stays НЕЯСНО. Narrow to one candidate, use at most three bullets in each evidence section and show exactly this order: ТРЕБОВАНИЯ, НАБЛЮДАЕМОЕ, НЕИЗВЕСТНО, ГИПОТЕЗА, then literal Проверим?. Without both kinds of evidence, show no hypothesis and call no test-building tool; show exactly:\nНедостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.\nRequire an explicit answer. Yes carries the hypothesis only in Phase 3 conversation context; no or a correction leaves the conversation open for more evidence. Neither answer persists a hypothesis, builds a test, runs an agent or saves a regression by itself. Use the user's language. Keep normal work in this conversation: build, inspect, edit, agent_lab_run, inspect the actual evidence, explain one finding and the next action. agent_lab_run asks the human to authorize the exact plan; execution consent is not a human review of expectations. Never bypass its confirmation through shell or internal APIs. Do not send users to a board just to proceed; /agent-lab is an optional evidence view. Preserve budgets and model. Save useful cases with agent_lab_suite; repeat existing cases after a change instead of regenerating them. Separate a broken test from an agent failure. Use agent_lab_review to collect an actual human verdict on a cited dialogue in this conversation. For a requested prompt fix, use agent_lab_prompt propose, inspect the diff, apply with native confirmation, then agent_lab_run on the unchanged suite and explain its returned comparison. Do not modify an external agent unless the user asked to fix it. Avoid lectures about personas, rubrics, calibration or tiers unless they explain a finding. Read traces and cite actual event IDs; never invent human verdicts or claim improved quality after changing the tests.` };
+    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for checking changes to the user's real agent. Work in their project. Follow the agent-builder skill. At the start ask once whether the user has de-identified real dialogues (JSON/JSONL). Accept their supplied path or an explicit choice to start without logs; honor an earlier answer, treat an empty answer as unresolved and never silently infer a skip. agent_lab_build returns needs_input until dialogues or withoutDialogues=true is supplied. You may use score and inspect to gather evidence. Before any non-score call that builds, edits or runs a test, require an owner source ID and exact quote plus a concrete repository path/line or dialogue/event observation. Code, assistant replies and saved outcomes are observations only; an unobserved observable action effect stays НЕЯСНО. Narrow to one candidate, use at most three bullets in each evidence section and show exactly this order: ТРЕБОВАНИЯ, НАБЛЮДАЕМОЕ, НЕИЗВЕСТНО, ГИПОТЕЗА, then literal Проверим?. Without both kinds of evidence, show no hypothesis and call no test-building tool; show exactly:\nНедостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.\nRequire an explicit answer. Yes carries the hypothesis only in Phase 3 conversation context; no or a correction leaves the conversation open for more evidence. Neither answer persists a hypothesis, builds a test, runs an agent or saves a regression by itself. Use the user's language. Keep normal work in this conversation: build, inspect, edit, agent_lab_run, inspect the actual evidence, explain one finding and the next action. agent_lab_run asks the human to authorize the exact plan; execution consent is not a human review of expectations. Never bypass its confirmation through shell or internal APIs. Do not send users to a board just to proceed; /agent-lab is an optional evidence view. Preserve budgets and model. Save useful cases with agent_lab_suite; repeat existing cases after a change instead of regenerating them. Separate a broken test from an agent failure. Use agent_lab_review to collect an actual human verdict on a cited dialogue in this conversation. For a requested prompt fix, use agent_lab_prompt propose, inspect the diff, apply with native confirmation, then agent_lab_run on the unchanged suite and explain its returned comparison. Do not modify an external agent unless the user asked to fix it. Avoid lectures about personas, rubrics, calibration or tiers unless they explain a finding. Read traces and cite actual event IDs; never invent human verdicts or claim improved quality after changing the tests.` };
   });
   pi.registerTool({
     ...toolDisplay,
@@ -188,10 +189,15 @@ export default function agentLab(pi: ExtensionAPI) {
           nextStep: 'Ask the user in ordinary language. Import their supplied dialoguesFile/dialogues, or set withoutDialogues=true after their explicit choice to skip. Do not silently skip or search unrelated logs.' };
         return { content: [{ type: 'text', text: JSON.stringify(output) }], details: output };
       }
+      if (operation === 'score' && !parsedDialogues.length) {
+        const output = { status: 'insufficient', dialogueCount: 0,
+          brief: 'Недостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.' };
+        return { content: [{ type: 'text', text: JSON.stringify(output) }], details: output };
+      }
       if (operation === 'score' && !codeOnly && (!ctx.hasUI || ctx.mode !== 'tui')) throw new Error('Для модельной оценки нужен native Pi confirmation в интерактивном терминале.');
       const mode = operation === 'demo' ? 'demo' : 'live';
       const supplied = (rest.settings ?? {}) as Partial<z.infer<typeof settingsSchema>>;
-      const connection = operation !== 'live' ? undefined : connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
+      const connection = mode === 'demo' ? undefined : connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
       const input = createInputSchema.parse({
         ...(mode === 'demo' ? demoEvaluationInput() : {}), ...rest, scenarioCount: operation === 'score' ? 0 : rest.scenarioCount ?? (mode === 'demo' ? 3 : 1), mode, workflow: 'evaluate',
         ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
@@ -209,14 +215,16 @@ export default function agentLab(pi: ExtensionAPI) {
       let polling: Promise<void> = Promise.resolve();
       let timer: ReturnType<typeof setInterval> | undefined;
       let lastProgress = '';
+      let scoreStage: 'import' | 'judge' = 'import';
       const progress = async () => {
         if (!id || !onUpdate) return;
         const record = await lab.get(id);
-        const text = operation === 'score' ? safeText(`Оценено ${record.trials.length} из ${parsedDialogues.length} диалогов · вызовов ${record.usage.calls}`)
+        if (operation === 'score' && !record.trials.length) return;
+        const text = operation === 'score' ? safeText(`${scoreStage === 'import' ? 'Импортировано' : 'Оценено'} ${record.trials.length} из ${parsedDialogues.length} диалогов · вызовов ${record.usage.calls}`)
           : safeText(`${record.phase === 'preparing' ? 'Готовлю требования и тест' : 'Тест готов'}: ${record.message} · вызовов ${record.usage.calls}`);
         if (text !== lastProgress) { lastProgress = text; onUpdate({ content: [{ type: 'text', text }], details: { id, phase: record.phase } }); }
       };
-      const cancel = () => { void (id ? lab.cancel(id) : close()).catch(() => {}); };
+      const cancel = () => { if (id) void lab.cancel(id).catch(() => {}); };
       try {
         await lab.init(); signal.addEventListener('abort', cancel, { once: true }); signal.throwIfAborted();
         if (operation === 'score') {
@@ -226,16 +234,21 @@ export default function agentLab(pi: ExtensionAPI) {
           await lab.waitForIdle(); await progress();
           let record = await lab.get(id);
           if (!codeOnly) {
+            signal.throwIfAborted();
             const confirmed = await ctx.ui.confirm('Оценить записанные диалоги?', safeText(`Агент и симулятор не запускаются. До ${input.settings.maxCalls} вызовов судьи.`));
             if (!confirmed) {
               const output = { ...summary(record, lab.store.directory), cancelled: true, brief: renderScoreBrief(scoreBrief(record)),
                 artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory) };
               return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
             }
-            signal.throwIfAborted(); id = (await lab.score(input)).id; await lab.waitForIdle(); await progress();
+            signal.throwIfAborted(); scoreStage = 'judge'; lastProgress = ''; id = undefined;
+            id = (await lab.score(input)).id; if (signal.aborted) cancel();
+            await lab.waitForIdle(); await progress();
             record = await lab.get(id);
             if (record.phase === 'results_review' && !record.error) {
-              id = (await lab.reassess(record.id)).id; await lab.waitForIdle(); await progress(); record = await lab.get(id);
+              signal.throwIfAborted(); const scoredId = record.id; id = undefined;
+              id = (await lab.reassess(scoredId, {}, { carryUsage: true })).id; if (signal.aborted) cancel();
+              await lab.waitForIdle(); await progress(); record = await lab.get(id);
             }
           }
           const output = { ...summary(record, lab.store.directory), ...(codeOnly ? { scoreState: 'Оценено по коду без вызовов модели; кластеры провалов не строились.' } : {}),
