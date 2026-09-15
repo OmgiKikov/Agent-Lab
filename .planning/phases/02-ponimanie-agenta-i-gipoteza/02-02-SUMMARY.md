@@ -15,7 +15,7 @@ affects: [02-03, phase-3]
 actuals:
   tokens: 15000
   tasks: 3
-  commits: 5
+  commits: 12
 tech-stack:
   added: []
   patterns: [one-dialogue model boundary, saved-source reassessment, existing immutable writer guard]
@@ -92,6 +92,13 @@ status: complete
 
 - `01a1bd3` — reserve the confirmed call budget and keep cost/output claims truthful.
 - `5f1a4b3` — deterministically reject self-attested action success unless a passed state predicate or an explicitly successful linked tool result supports it; stale unsafe receipts no longer count as complete.
+- `18480f8` — keep every unsupported action verdict unknown and bind published hypotheses only to the requirement-backed goal rubric.
+- `088c654` — preserve exact message whitespace while rejecting blank dialogue content.
+- `5a4873e` — retain every event from long production dialogues without fabricating an impossible runnable script.
+- `05b1cec` — require all declared state effects for action success and invalidate stale judge prompt/config receipts.
+- `02f35e2` — allow prompt-rule failures to drive a hypothesis only when the authoritative source is the agent prompt.
+- `70dcb63` — reject forbidden zero-count tool calls as success evidence and make all score-input errors recoverable and line-safe.
+- `87a1056` — add the versioned 12-case evaluation corpus and its zero-model end-to-end evidence gate.
 
 ## Decisions Made
 
@@ -120,7 +127,7 @@ Ready for 02-03: align the conversational hypothesis surface across the skill, P
 
 - All ten listed implementation/test files exist.
 - Task and review commits exist in history.
-- Final phase gate: `302/302` tests and strict typecheck passed on 2026-09-15.
+- Final phase gate: `304/304` tests and strict typecheck passed on 2026-09-15.
 
 ---
 *Phase: 02-ponimanie-agenta-i-gipoteza*

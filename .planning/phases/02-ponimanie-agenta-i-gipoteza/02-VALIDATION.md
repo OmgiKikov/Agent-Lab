@@ -1,7 +1,7 @@
 ---
 phase: "02"
 slug: "ponimanie-agenta-i-gipoteza"
-status: complete
+status: validated
 nyquist_compliant: true
 wave_0_complete: true
 created: "2026-09-15"
@@ -76,4 +76,18 @@ Existing test infrastructure and every referenced test file already exist. Each 
 
 **Approval:** approved 2026-09-15
 
-**Automated sign-off:** `git diff --check && npm test && npm run typecheck` — 302/302 green on 2026-09-15. Real-terminal readability remains the explicit UAT item above.
+**Automated sign-off:** `git diff --check && npm test && npm run typecheck` — 304/304 green on 2026-09-15. Real-terminal readability remains the explicit UAT item above.
+
+## Validation Audit 2026-09-15
+
+| Metric | Count |
+|--------|-------|
+| Requirements audited | 11 |
+| Covered | 11 |
+| Partial | 0 |
+| Missing | 0 |
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+Immutable Nyquist baseline: `70dcb63`. Focused behavioral recheck: 15/15 green across `test/contracts.test.ts`, `test/experiment.test.ts`, `test/workflow.test.ts`, `test/judge.test.ts`, `test/extension.test.ts`, and `test/quality.test.ts`. Orchestrator phase gate after the versioned reference corpus landed at `87a1056`: `npm test` 304/304 green and strict typecheck passed on 2026-09-15.

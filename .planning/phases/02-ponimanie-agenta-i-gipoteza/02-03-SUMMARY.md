@@ -14,7 +14,7 @@ affects: [phase-3, phase-4]
 actuals:
   tokens: 14000
   tasks: 3
-  commits: 5
+  commits: 12
 tech-stack:
   added: []
   patterns: [native spending consent, pure evidence projection, conversation-only hypothesis gate]
@@ -97,6 +97,13 @@ status: complete
 
 - `01a1bd3` — align confirmed model-call limits, zero-cost wording and saved partial evidence.
 - `5f1a4b3` — block open owner questions, require one resolvable requirement/evidence chain, preserve action unknowns beside other failures, sanitize hostile line breaks and keep CLI/Pi progress truthful.
+- `18480f8` — prevent unrelated service-rubric failures from being attributed to the scenario's owner requirement.
+- `088c654` — keep imported answer evidence byte-for-byte readable while rejecting blank content.
+- `5a4873e` — preserve long recorded conversations as complete evidence instead of truncating them into runnable scripts.
+- `05b1cec` — prefer grounded RAG/reply failures over generic action unknowns and make CLI retry/error output safe and actionable.
+- `02f35e2` — surface grounded prompt-compliance failures without letting ordinary documents masquerade as prompt policy.
+- `70dcb63` — close forbidden-tool and schema/newline error edges at the shared judge and CLI boundaries.
+- `87a1056` — add the versioned 12-case evaluation corpus and its zero-model end-to-end evidence gate.
 
 ## Decisions Made
 
@@ -125,7 +132,7 @@ Ready for Phase 3: turn the accepted hypothesis into one editable test definitio
 
 - All eight listed implementation/test files exist.
 - Task and review commits exist in history.
-- Final phase gate: `302/302` tests and strict typecheck passed on 2026-09-15.
+- Final phase gate: `304/304` tests and strict typecheck passed on 2026-09-15.
 
 ---
 *Phase: 02-ponimanie-agenta-i-gipoteza*
