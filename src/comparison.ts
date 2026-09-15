@@ -149,10 +149,11 @@ export function compareUserModes(record: Experiment): ModeComparison[] {
   const usable = (t: Trial) => measured(t) && reviews.get(`${t.id}|dialogue`)?.verdict !== 'invalid'
     && measurementUsable(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews)
     && (record.mode !== 'live' || !record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length || (hasCompleteJudgment({ scenario: record.scenarios.find(s => s.id === t.scenarioId)!, sources: record.sources, trial: t }) && protocols.size === 1));
+  const result = (t: Trial) => automaticTrialResult(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews);
   const criteria = (t: Trial) => new Map<string, 'pass' | 'fail' | 'unknown'>([
     ...t.checks.map(c => [`${t.scenarioId}/check:${c.id}`, c.passed ? 'pass' : 'fail'] as const),
     ...(record.scenarios.find(s => s.id === t.scenarioId)?.metrics ?? []).filter(m => m.subject === 'agent')
-      .map(m => [`${t.scenarioId}/metric:${m.id}`, t.assessments?.find(a => a.metricId === m.id)?.result ?? 'unknown'] as const),
+      .flatMap(m => { const effective = agentMetricResult(t, m.id, record.humanReviews); return effective ? [[`${t.scenarioId}/metric:${m.id}`, effective] as const] : []; }),
   ]);
   const key = (t: Trial, mode = t.userMode) => `${t.revisionId}|${t.scenarioId}|${t.repeat}|${mode}`;
   const paired = new Map<string, Trial[]>();
@@ -164,8 +165,8 @@ export function compareUserModes(record: Experiment): ModeComparison[] {
   }
   return record.settings.userModes.map(userMode => {
     const trials = record.trials.filter(t => t.userMode === userMode);
-    const valid = trials.filter(t => graded(t) && usable(t));
-    const passed = valid.filter(t => t.outcome === 'pass').length;
+    const valid = trials.filter(t => usable(t) && result(t) !== 'unknown');
+    const passed = valid.filter(t => result(t) === 'pass').length;
     const failedChecks = [...failedBy.get(userMode)!].sort();
     const others = record.settings.userModes.filter(m => m !== userMode);
     const uniqueFailedChecks = failedChecks.filter(id => others.length > 0 && others.every(mode =>

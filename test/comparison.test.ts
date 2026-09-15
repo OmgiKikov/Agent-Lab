@@ -112,6 +112,19 @@ test('user-mode comparison reports pass rates, turns, cost and the failures only
   assert.deepEqual(compareUserModes(record()).map(m => [m.userMode, m.trials, m.passRate]), [['static', 0, null], ['scripted', 0, null], ['reactive', 0, null]]);
 });
 
+test('user-mode comparison counts rubric-only outcomes and applies human rubric corrections', () => {
+  const card = { ...scenario('s1'), checks: [], metrics: [metrics[0]!] };
+  const staticTrial = { ...trial('static', 's1', 'static', 'ungraded', { assessments: [{ metricId: 'goal', result: 'pass', rationale: 'ok', evidence: [1] }] }), checks: [] };
+  const reactiveTrial = { ...trial('reactive', 's1', 'reactive', 'ungraded', { assessments: [{ metricId: 'goal', result: 'fail', rationale: 'false alarm', evidence: [1] }] }), checks: [] };
+  const r = record({ scenarios: [card], settings: settingsSchema.parse({ userModes: ['static', 'reactive'] }), trials: [staticTrial, reactiveTrial],
+    humanReviews: [review('human', 'reactive', 'pass', { metricId: 'goal' })] });
+
+  assert.deepEqual(compareUserModes(r).map(mode => [mode.userMode, mode.valid, mode.passed, mode.passRate, mode.failedChecks]), [
+    ['static', 1, 1, 1, []],
+    ['reactive', 1, 1, 1, []],
+  ]);
+});
+
 test('judge calibration compares the latest human verdict with model estimates using fail as the positive class', () => {
   const assess = (goal: 'pass' | 'fail' | 'unknown'): MetricAssessment[] => [{ metricId: 'goal', result: goal, rationale: 'r', evidence: goal === 'unknown' ? [] : [1] }, { metricId: 'fidelity', result: 'pass', rationale: 'r', evidence: [1] }];
   const r = record({
