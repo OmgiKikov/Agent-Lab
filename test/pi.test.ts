@@ -1028,3 +1028,15 @@ test('a machine output-format instruction in the agent prompt is an internal int
     assert.match(f.requests[0]?.systemPrompt ?? '', /machine output format/i);
   } finally { await f.close(); }
 });
+
+test('a stage the model puts on the card itself is dropped: stages belong to criteria, and the habit must not cost an attempt', async () => {
+  const quote = 'Support is available by email.';
+  const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!], stage: 'сборка ответа' };
+  const outputs = [{ requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] }, { scenarios: [card] }];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check support answers', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'source_1', name: 'policy.md', content: quote, hash: 'h' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.equal((prepared.scenarios[0] as { stage?: string }).stage, undefined);
+  } finally { await f.close(); }
+});

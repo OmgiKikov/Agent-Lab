@@ -31,7 +31,8 @@ const RUBRIC_LIMIT = 8;
 const MACHINE_FORMAT = /\bjson\b|response_format|\{\s*"[a-z_]+"\s*:/i;
 /** external cards get harness rubrics after generation (fidelity, and prompt compliance when a prompt source exists); the model may use only what is left. */
 const generatedScenarioSchema = (external: boolean, harnessRubrics = 0) => scenarioSchema.required({ successCriteria: true, assumptions: true, metrics: true })
-  .extend({ user: scenarioSchema.shape.user.required({ maxFollowUps: true }) })
+  // Models like to label the whole card with a stage; stages belong to criteria, so the label is accepted here and dropped in the review.
+  .extend({ user: scenarioSchema.shape.user.required({ maxFollowUps: true }), stage: z.string().max(80).optional() })
   .refine(s => external ? s.checks.length > 0 || s.metrics.some(m => m.subject === 'agent')
     : s.metrics.some(m => m.subject === 'agent') && s.metrics.some(m => m.subject === 'simulator'),
     'Provide an agent-goal rubric, or literal answer checks for an external goal; sandbox cards also need simulator fidelity')
@@ -461,6 +462,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
             for (const scenario of value.scenarios) {
               // A profile invented where none were supplied carries nothing; the card keeps its own persona.
               if (scenario.profileId !== undefined && !profiles.length) delete scenario.profileId;
+              delete (scenario as { stage?: string }).stage;
               const family = requestedFamilies?.find(f => f.familyId === scenario.familyId);
               if (requestedFamilies && !family) return `Card ${scenario.id} claims family "${scenario.familyId}", which was not requested in this batch.`;
               if (requestedFamilies && seen.has(scenario.familyId)) return `Family "${scenario.familyId}" is used by two cards in this batch; each requested family needs exactly one card.`;
@@ -476,10 +478,11 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
               if (external) {
                 // A literal check on an external agent may only pin wording the source itself mandates or the user literally asked for; everything else is a rubric's job.
                 const literal = scenario.checks.filter(c => c.kind === 'answer_equals' || c.kind === 'answer_contains' || c.kind === 'answer_omits');
-                const grounds = [...grounding.requirements.filter(r => scenario.requirementIds.includes(r.id)).map(r => r.quote), scenario.user.opening];
+                // Wording a source mandates or forbids appears in that source; the user's own opening may also be echoed.
+                const grounds = [...input.sources.map(s => s.content), scenario.user.opening];
                 for (const check of literal) {
                   if (!grounds.some(ground => verbatimSpan(ground, check.value))) {
-                    return `Card ${scenario.id}: check ${check.id} requires the wording "${check.value.slice(0, 80)}", which is not a verbatim fragment of the card's requirement quotes or the user's opening. Literal checks only pin wording the source mandates; assess everything else with an agent rubric and drop this check.`;
+                    return `Card ${scenario.id}: check ${check.id} requires the wording "${check.value.slice(0, 80)}", which is not a verbatim fragment of any supplied source or the user's opening. Literal checks only pin wording a source mandates or forbids; assess everything else with an agent rubric and drop this check.`;
                   }
                 }
                 if (literal.length > 2) return `Card ${scenario.id} has ${literal.length} literal checks; keep at most two literal checks per card and express the rest as agent rubrics.`;
