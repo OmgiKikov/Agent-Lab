@@ -7,6 +7,7 @@ export const TOOL_NAMES = ['search_materials', 'lookup_record', 'update_record']
 export type ToolName = typeof TOOL_NAMES[number];
 const identifier = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).refine(v => !['__proto__', 'prototype', 'constructor'].includes(v), 'Reserved identifier');
 const text = z.string().trim().min(1);
+const dialogueContent = z.string().min(1).max(8000).refine(v => !!v.trim(), 'Empty dialogue content');
 const unique = <T>(values: T[]) => new Set(values).size === values.length;
 /**
  * Value-like tokens: runs of letters/digits/`:./-` that contain a digit and are at least three
@@ -270,7 +271,7 @@ export function scriptIssue(user: Scenario['user'], maxTurns: number): string | 
  */
 export const dialogueSchema = z.strictObject({
   id: identifier, goal: text.max(3000).optional(),
-  messages: z.array(z.strictObject({ role: z.enum(['user', 'assistant']), content: text.max(8000) })).min(1).max(60),
+  messages: z.array(z.strictObject({ role: z.enum(['user', 'assistant']), content: dialogueContent })).min(1).max(60),
   outcome: z.enum(['success', 'failure', 'abandoned', 'unknown']).default('unknown'),
 });
 export type Dialogue = z.infer<typeof dialogueSchema>;

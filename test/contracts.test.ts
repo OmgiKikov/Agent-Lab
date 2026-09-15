@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, dialogueToScenario, dialogueToTrial, draftPatchSchema, emptyUsage, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, replyQuality, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
+  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, draftPatchSchema, emptyUsage, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, replyQuality, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 
@@ -215,6 +215,13 @@ test('recorded dialogues map one-to-one to grounded production cards and immutab
   assert.throws(() => dialogueToScenario({ ...dialogue, messages: [{ role: 'assistant', content: 'Готово.' }] }, {
     goal: 'g', successCriteria: 'c',
   }), /нет реплики пользователя/i);
+
+  const spaced = dialogueSchema.parse({ id: 'exact_reply', messages: [
+    { role: 'user', content: '  reply exactly READY\n' }, { role: 'assistant', content: ' READY ' },
+  ] });
+  assert.deepEqual(dialogueToTrial(spaced, { ...scenario, id: 'exact_reply', split: 'dev' }, 'revision_1').events.map(event => event.text),
+    ['  reply exactly READY\n', ' READY '], 'score preserves original message whitespace as evidence');
+  assert.throws(() => dialogueSchema.parse({ id: 'blank', messages: [{ role: 'user', content: ' \n ' }] }), /Empty dialogue content/);
 });
 
 test('observed goal requirement ids are optional, unique and preserved by production cards', () => {
