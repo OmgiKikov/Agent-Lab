@@ -60,7 +60,7 @@ test('an unresolved simulator flag makes the card undecided on the first screen 
   assert.deepEqual([flagged.cards.passed, flagged.cards.failed, flagged.cards.unknown], [0, 0, 1]);
   assert.equal(flagged.metrics.find(m => m.id === 'goal')!.unknown, 1);
   assert.equal(flagged.humanQueue.simulatorFlags, 1);
-  assert.match(qualityLines(flagged).queue, /Откройте диалоги причин и поставьте каждому отдельный вердикт/);
+  assert.match(qualityLines(flagged).queue, /пометок симулятора 1/);
   // A human clears the suspicion: the same dialogue becomes a decided failure with its judge rationale as the quoted cause.
   r.humanReviews = [{ id: 'h', trialId: 't1', verdict: 'pass', note: 'ложная тревога', createdAt: '2026-09-14T00:00:00Z', checkId: 'simulator_fabrication' }];
   const cleared = qualitySummary(r);
@@ -104,6 +104,17 @@ test('the queue line never says no labelling is needed while a failure still awa
   assert.ok(completed.causes.length, 'the reviewed cause stays in the aggregate');
   assert.match(qualityLines(completed).queue, /неразобранных диалогов нет/);
   assert.doesNotMatch(qualityLines(completed).queue, /Откройте диалоги причин/);
+});
+
+test('a separate unknown is not routed into causes of an already reviewed failure', () => {
+  const r = record({ scenarios: [scenario('a'), scenario('b')], trials: [trial('failed', 'a', 'fail', 'fail'), trial('unknown', 'b', 'pass', 'unknown')],
+    humanReviews: [{ id: 'h', trialId: 'failed', verdict: 'fail', note: '#1: подтверждено', reviewedDialogue: true, createdAt: '2026-09-15T10:00:00Z' }] });
+  const q = qualitySummary(r);
+  assert.ok(q.causes.length);
+  assert.equal(q.humanQueue.pendingFailures, 0);
+  assert.equal(q.humanQueue.unknownJudgments, 1);
+  assert.match(qualityLines(q).queue, /Разметить человеку: 1 \(неясных 1/);
+  assert.doesNotMatch(qualityLines(q).queue, /Откройте диалоги причин/);
 });
 
 test('criteria that share an id but not a name stay separate rows, and a rubric named code never merges with the exact checks', () => {
