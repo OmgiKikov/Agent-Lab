@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 01
-current_phase_name: Честный человеческий разбор
-status: verifying
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-09-15T11:47:04.670Z"
+current_phase: 02
+current_phase_name: Понимание агента и гипотеза
+status: planning
+stopped_at: Phase 1 complete, ready to plan Phase 02
+last_updated: "2026-09-15T13:20:17.120Z"
 last_activity: 2026-09-15
-last_activity_desc: Phase 01 execution started
-state_head: bd5a15c176a45056a21176f652bc79a9ac953e54
+last_activity_desc: Phase 1 complete, transitioned to Phase 02
+state_head: c235439e74f4077fd7826ecb9dca7e6367380022
 progress:
   total_phases: 5
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
   completed_plans: 2
-  percent: 0
+  percent: 20
 ---
 
 # Project State
@@ -22,23 +22,23 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-09-15)
 
-**Core value:** Подключить агента, проверить его на карточках и записанных диалогах, увидеть заземлённые провалы и повтором понять, что починилось, сломалось или несравнимо.
-**Current focus:** Phase 01 — Честный человеческий разбор
+**Core value:** Прочитать агента и его требования, предложить полезный тест, запустить его на настоящем агенте, показать доказательства и сохранить принятый тест как регрессию.
+**Current focus:** Phase 02 — Понимание агента и гипотеза
 
 ## Current Position
 
-Phase: 01 (Честный человеческий разбор) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
-Last activity: 2026-09-15 — Phase 01 execution started
+Phase: 02 — Понимание агента и гипотеза
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-15 — Phase 1 complete, transitioned to Phase 02
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 2
 - Average duration: —
 - Total execution time: 0.0 hours
 
@@ -46,7 +46,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 1 | 2 | - | - |
 
 **Recent Trend:**
 
@@ -84,6 +84,13 @@ None yet.
 
 - [Phase 5]: Для измерения P1 нужен доступ к ранее не подключавшемуся второму агенту, а для P2/P3 — согласованный набор из 15 реальных диалогов и каталог артефактов.
 
+### Roadmap Evolution
+
+- Phase 2 edited: core flow: repo/log evidence -> grounded hypothesis
+- Phase 3 edited: core flow: hypothesis -> test acceptance
+- Phase 4 edited: core flow: real agent run -> evidence
+- Phase 5 edited: core flow: accepted test -> saved regression
+
 ## Deferred Items
 
 Items acknowledged and deferred at milestone close, most recent first:
@@ -94,6 +101,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-15T11:47:04.655Z
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-09-15T13:20:17.120Z
+Stopped at: Phase 1 complete, ready to plan Phase 02
 Resume file: None
