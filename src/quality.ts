@@ -56,6 +56,7 @@ const cardsOf = (n: number) => plural(n, ['карточки', 'карточек'
 function metricRows(record: Experiment): QualityMetric[] {
   // Only identical rubric definitions share a row; labels alone do not define a criterion.
   const rows = new Map<string, QualityMetric>();
+  const reviews = latestHumanReviews(record);
   const bump = (row: QualityMetric, result: 'pass' | 'fail' | 'unknown') => { row.total++; if (result === 'pass') row.passed++; else if (result === 'fail') row.failed++; else row.unknown++; };
   const usable = (scenario: Scenario | undefined, trial: Trial) => measurementUsable(scenario, trial, record.humanReviews);
   for (const trial of record.trials) {
@@ -70,7 +71,9 @@ function metricRows(record: Experiment): QualityMetric[] {
       const key = `rubric:${fingerprint(metric)}`;
       const row = rows.get(key) ?? { id: metric.id, name: metric.name, kind: 'rubric', passed: 0, failed: 0, unknown: 0, total: 0, accuracy: null };
       rows.set(key, row);
-      const result = trial.assessments?.find(a => a.metricId === metric.id)?.result;
+      const human = reviews.get(`${trial.id}|metric:${metric.id}`)?.verdict;
+      if (human === 'invalid') continue;
+      const result = human ?? trial.assessments?.find(a => a.metricId === metric.id)?.result;
       bump(row, !usable(scenario, trial) || !result ? 'unknown' : result);
     }
   }
