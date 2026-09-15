@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { ModelRuntime, type ProviderConfig } from '@earendil-works/pi-coding-agent';
 import { createPiRuntime, getPiStatus, REPAIR_ATTEMPTS } from '../src/pi.js';
 import { judgeInput } from '../src/judge.js';
-import { DEFAULT_JUDGE, emptyUsage, REQUIREMENT_LIMIT, settingsSchema, type CallContext, type Scenario, type Tool, type Trial } from '../src/contracts.js';
+import { DEFAULT_JUDGE, emptyUsage, goalAttainment, REQUIREMENT_LIMIT, settingsSchema, type CallContext, type Scenario, type Tool, type Trial } from '../src/contracts.js';
 
 type Request = Parameters<NonNullable<ProviderConfig['streamSimple']>>[1];
 type Options = Parameters<NonNullable<ProviderConfig['streamSimple']>>[2];
@@ -25,6 +25,15 @@ function plainCard(index: number): Omit<Scenario, 'split'> {
     ...reviewFields, id: `card_${index}`, familyId: 'support', title: `Support question ${index}`, requirementIds: ['req_1'], provenance: 'synthetic',
     user: { goal: 'Learn how to contact support', facts: 'I need help', persona: 'Customer seeking support', characteristics: ['Concise'], behavior: 'Ask once', opening: 'How do I contact support?', maxFollowUps: 0 },
     initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [],
+  };
+}
+
+function confirmedCard(index: number): Omit<Scenario, 'split'> {
+  const successCriteria = 'The final reply contains the owner-approved support address.';
+  return {
+    ...plainCard(index), successCriteria,
+    checks: [{ id: 'reply', kind: 'answer_contains', description: 'The reply names the support address.', value: 'support@example.com' }],
+    metrics: [{ ...goalAttainment, passCriteria: successCriteria }],
   };
 }
 
@@ -359,6 +368,62 @@ test('default evaluation prepares exactly five cards and also supports one plain
       }
     } finally { await f.close(); }
   }
+});
+
+test('confirmed hypothesis repairs zero, duplicate and blank candidates before publishing exactly one complete test', async () => {
+  const quote = 'The support address is support@example.com.';
+  const requirements = { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] };
+  const duplicate = confirmedCard(1);
+  const blank = { ...confirmedCard(2), successCriteria: ' ' };
+  const accepted = confirmedCard(3);
+  const outputs = [requirements, { scenarios: [] }, { scenarios: [duplicate, structuredClone(duplicate)] }, { scenarios: [blank] }, { scenarios: [accepted] }];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({
+      task: 'Check the accepted support hypothesis', confirmedHypothesis: 'The agent may omit the owner-approved support address.',
+      targetKind: 'command', workflow: 'evaluate', scenarioCount: 1, userModes: ['static'],
+      dialogues: [{ id: 'd1', outcome: 'failure', messages: [
+        { role: 'user', content: 'Where can I get help?' },
+        { role: 'assistant', content: 'The untrusted observed answer.' },
+      ] }],
+      sources: [{ id: 'source_1', name: 'Policy', content: quote, hash: 'hash' }],
+    }, callContext().ctx);
+    assert.equal(prepared.scenarios.length, 1);
+    assert.equal(prepared.scenarios[0]!.id, accepted.id, 'invalid envelopes must be repaired, never trimmed or selected');
+    assert.equal(prepared.scenarios[0]!.successCriteria, accepted.successCriteria);
+    assert.deepEqual(prepared.scenarios[0]!.metrics?.map(metric => metric.id), ['goal_attainment']);
+    assert.equal(prepared.scenarios[0]!.metrics?.[0]?.passCriteria, accepted.successCriteria);
+    assert.match(JSON.stringify(f.requests), /confirmedHypothesis/);
+    assert.match(JSON.stringify(f.requests), /Where can I get help\?/);
+    assert.doesNotMatch(JSON.stringify(f.requests), /untrusted observed answer/);
+  } finally { await f.close(); }
+});
+
+test('confirmed hypothesis repairs seeded state until an exact state check resolves in it', async () => {
+  const quote = 'An account can be frozen only when its final state is observable.';
+  const requirements = { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] };
+  const seeded = {
+    ...confirmedCard(1), successCriteria: 'The account is frozen.',
+    initialState: { records: { account_1: { status: 'active' } }, writableFields: ['status'], transientFailures: 0 },
+  };
+  const mismatched = { ...seeded, checks: [{ id: 'state', kind: 'state_equals' as const, description: 'Wrong record path.', recordId: 'account_2', field: 'status', value: 'active' }] };
+  const accepted = { ...seeded, checks: [{ id: 'state', kind: 'state_equals' as const, description: 'The seeded account is observable.', recordId: 'account_1', field: 'status', value: 'active' }] };
+  const outputs = [requirements, { scenarios: [mismatched] }, { scenarios: [accepted] }];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    let prepared: Awaited<ReturnType<typeof f.adapter.prepare>> | undefined;
+    let failure: unknown;
+    try {
+      prepared = await f.adapter.prepare({
+        task: 'Check the accepted state hypothesis', confirmedHypothesis: 'The agent may not produce an observable account state.',
+        targetKind: 'command', workflow: 'evaluate', scenarioCount: 1, userModes: ['static'],
+        sources: [{ id: 'source_1', name: 'Policy', content: quote, hash: 'hash' }],
+      }, callContext().ctx);
+    } catch (error) { failure = error; }
+    assert.equal(failure, undefined, `a resolving exact state check should publish: ${String(failure)}`);
+    assert.equal(prepared?.scenarios[0]?.checks[0]?.kind, 'state_equals');
+    assert.match(JSON.stringify(f.requests), /does not resolve|seeded state/i);
+  } finally { await f.close(); }
 });
 
 test('card generation distinguishes the answer being sought from legitimate prior user knowledge', async () => {
