@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, draftPatchSchema, emptyUsage, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, replyQuality, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
+  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, draftPatchSchema, emptyUsage, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 
@@ -222,6 +222,14 @@ test('recorded dialogues map one-to-one to grounded production cards and immutab
   assert.deepEqual(dialogueToTrial(spaced, { ...scenario, id: 'exact_reply', split: 'dev' }, 'revision_1').events.map(event => event.text),
     ['  reply exactly READY\n', ' READY '], 'score preserves original message whitespace as evidence');
   assert.throws(() => dialogueSchema.parse({ id: 'blank', messages: [{ role: 'user', content: ' \n ' }] }), /Empty dialogue content/);
+
+  const long = dialogueSchema.parse({ id: 'long', messages: Array.from({ length: 33 }, (_, index) => ({
+    role: index % 2 ? 'assistant' as const : 'user' as const, content: `message ${index}`,
+  })) });
+  const longScenario = dialogueToScenario(long, { goal: 'Разобрать длинный диалог', successCriteria: 'Ответ соответствует требованиям.' });
+  assert.doesNotThrow(() => scenarioSchema.parse(longScenario));
+  assert.equal(longScenario.user.script, undefined, 'long evidence is not truncated into a runnable script');
+  assert.equal(dialogueToTrial(long, { ...longScenario, split: 'dev' }, 'revision_1').events.length, 33, 'the full evidence remains one-to-one');
 });
 
 test('observed goal requirement ids are optional, unique and preserved by production cards', () => {

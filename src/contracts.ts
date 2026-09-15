@@ -365,13 +365,16 @@ export function dialogueToScenario(dialogue: Dialogue, criteria: { goal: string;
   const opening = userMessages[0]?.content;
   if (!opening) throw new Error(`В записанном диалоге ${dialogue.id} нет реплики пользователя.`);
   const script = userMessages.slice(1).map(message => message.content);
+  // ponytail: long production evidence is not a runnable script; Phase 3 builds a separate accepted test from it.
+  const replayable = script.length <= 15;
   return {
     id: dialogue.id, familyId: dialogue.id, title: criteria.goal.slice(0, 200), requirementIds: [...(criteria.requirementIds ?? [])],
     provenance: 'production', tier: 'regression',
     user: {
       goal: criteria.goal, facts: 'Только факты, сообщённые пользователем в записанном диалоге.',
-      behavior: 'Воспроизводить реплики пользователя из записи в исходном порядке.', opening,
-      maxFollowUps: script.length, ...(script.length ? { script } : {}),
+      behavior: replayable ? 'Воспроизводить реплики пользователя из записи в исходном порядке.'
+        : 'Полный длинный диалог хранится как неизменяемое доказательство; отдельный тест строится после принятия гипотезы.',
+      opening, maxFollowUps: replayable ? script.length : 0, ...(replayable && script.length ? { script } : {}),
     },
     initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [],
     ...(criteria.successCriteria ? { successCriteria: criteria.successCriteria } : {}),
