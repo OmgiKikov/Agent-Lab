@@ -8,11 +8,11 @@ import { Type } from 'typebox';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.js';
 import { z } from 'zod';
 import {
-  agentSchema, failureModeSchema, observedGoalSchema, observedProfileSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema,
+  agentSchema, discoveryGroupSchema, discoveryObservationSchema, failureModeSchema, observedGoalSchema, observedProfileSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema,
   MACHINE_FORMAT, REQUIREMENT_LIMIT, SCENARIO_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens, verbatimSpan,
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
-import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, PROFILES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
+import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, DISCOVERY_COARSE_ROLE, DISCOVERY_GROUP_ROLE, DISCOVERY_HYPOTHESIS_ROLE, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, PROFILES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
 
 type Model = NonNullable<ReturnType<ModelRuntime['getModel']>>;
 const groundingSchema = z.strictObject({
@@ -24,6 +24,28 @@ const familyPlanSchema = z.strictObject({ families: z.array(z.strictObject({
   mechanism: z.string().trim().min(1).max(300),
   requirementIds: scenarioSchema.shape.requirementIds,
 })).min(4).max(16) });
+function groundingProblem(value: z.infer<typeof groundingSchema>, sources: { id: string; name: string; content: string; kind?: 'knowledge' | 'prompt' }[]): string | undefined {
+  const missing: string[] = [];
+  for (const requirement of value.requirements) {
+    const source = sources.find(candidate => candidate.id === requirement.sourceId);
+    if (!source) return `Requirement ${requirement.id} cites source ${requirement.sourceId}, which was not supplied.`;
+    const exact = verbatimSpan(source.content, requirement.quote);
+    if (exact && source.kind === 'prompt' && MACHINE_FORMAT.test(exact)) {
+      return `Requirement ${requirement.id} quotes a machine output format ("${exact.slice(0, 60)}"): a JSON envelope or a named field is an internal interface between the agent's components, not a rule a user can observe. Drop this requirement.`;
+    }
+    if (exact) { requirement.quote = exact; continue; }
+    const elsewhere = sources.filter(candidate => candidate.id !== source.id && verbatimSpan(candidate.content, requirement.quote));
+    if (elsewhere.length === 1) {
+      requirement.sourceId = elsewhere[0]!.id;
+      requirement.quote = verbatimSpan(elsewhere[0]!.content, requirement.quote)!;
+      continue;
+    }
+    missing.push(`${requirement.id} (not in "${source.name}")`);
+  }
+  return missing.length
+    ? `These quotes are not verbatim substrings of their sources: ${missing.join('; ')}. Copy the exact characters from the source instead of paraphrasing; a shorter contiguous fragment is safer than a long one. Keep every other requirement as it is.`
+    : undefined;
+}
 // New generated cards require an explicit interaction budget; older saved cards keep their original semantics.
 // With observed profiles the model may only choose a profileId; persona text is copied from the profile later.
 const RUBRIC_LIMIT = 8;
@@ -387,31 +409,13 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   };
   return {
     async prepare(input, ctx) {
-      const grounding = await ask(
-        'Требования',
-        REQUIREMENTS_ROLE,
+      const grounding = input.requirements ? groundingSchema.parse({ requirements: structuredClone(input.requirements), questions: [] }) : await ask(
+        'Требования', REQUIREMENTS_ROLE,
         { task: input.task, sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, ...(kind ? { kind } : {}) })) },
-        groundingSchema, ctx,
-        value => {
-          // Name every bad quote at once: a model fixes what it is told about, and attempts are few.
-          const missing: string[] = [];
-          for (const requirement of value.requirements) {
-            const source = input.sources.find(s => s.id === requirement.sourceId);
-            if (!source) return `Requirement ${requirement.id} cites source ${requirement.sourceId}, which was not supplied.`;
-            const exact = verbatimSpan(source.content, requirement.quote);
-            if (exact && source.kind === 'prompt' && MACHINE_FORMAT.test(exact)) {
-              return `Requirement ${requirement.id} quotes a machine output format ("${exact.slice(0, 60)}"): a JSON envelope or a named field is an internal interface between the agent's components, not a rule a user can observe. Drop this requirement.`;
-            }
-            if (exact) { requirement.quote = exact; continue; }
-            // The words are real but the attribution is wrong: a quote found in exactly one other source belongs to it.
-            const elsewhere = input.sources.filter(s => s.id !== source.id && verbatimSpan(s.content, requirement.quote));
-            if (elsewhere.length === 1) { requirement.sourceId = elsewhere[0]!.id; requirement.quote = verbatimSpan(elsewhere[0]!.content, requirement.quote)!; continue; }
-            missing.push(`${requirement.id} (not in "${source.name}")`);
-          }
-          if (missing.length) return `These quotes are not verbatim substrings of their sources: ${missing.join('; ')}. Copy the exact characters from the source instead of paraphrasing; a shorter contiguous fragment is safer than a long one. Keep every other requirement as it is.`;
-          return undefined;
-        },
+        groundingSchema, ctx, value => groundingProblem(value, input.sources),
       );
+      const suppliedProblem = groundingProblem(grounding, input.sources);
+      if (suppliedProblem) throw new Error(`Требования: ${suppliedProblem}`);
       const evidence = { task: input.task, requirements: grounding.requirements, questions: grounding.questions };
       const requirementIds = new Set(grounding.requirements.map(r => r.id));
       if (requirementIds.size !== grounding.requirements.length) throw new Error('Requirements: duplicate requirement IDs');
@@ -523,6 +527,9 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
                   || scenario.initialState.writableFields.length > 0
                   || scenario.initialState.transientFailures > 0
                   || Object.keys(scenario.initialState.external ?? {}).length > 0;
+                if (input.goalObservation === 'reply' && (seeded || scenario.checks.some(check => !['answer_equals', 'answer_contains', 'answer_omits'].includes(check.kind)))) {
+                  return `Card ${scenario.id}: reply-observed prompt/RAG tests cannot seed backend state or require tool/state checks. Keep initialState empty and use only source-grounded answer checks or the goal rubric.`;
+                }
                 if (seeded && !stateChecks.length) return `Card ${scenario.id}: non-empty seeded state needs at least one exact state_equals check.`;
                 const unresolved = stateChecks.filter(check => !Object.hasOwn(scenario.initialState.records, check.recordId)
                   || !Object.hasOwn(scenario.initialState.records[check.recordId]!, check.field));
@@ -560,6 +567,38 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           ? { name: 'External agent', instructions: 'The agent under evaluation runs outside Agent Lab and keeps its own instructions and tools.', tools: [] }
           : await ask('Сборка агента', AGENT_ROLE, evidence, agentSchema, ctx));
       return preparationSchema.parse({ ...grounding, scenarios, agent });
+    },
+    async discover(input, ctx) {
+      if (input.kind === 'requirements') {
+        const grounded = await ask(
+          'Требования для поиска теста', REQUIREMENTS_ROLE,
+          { task: input.task, sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, ...(kind ? { kind } : {}) })) },
+          groundingSchema, ctx, value => groundingProblem(value, input.sources),
+        );
+        return { kind: 'requirements', ...grounded };
+      }
+      if (input.kind === 'coarse') {
+        const result = await ask(
+          'Первичный разбор записанных диалогов', DISCOVERY_COARSE_ROLE,
+          { ownerRequirements: input.requirements, dialogues: input.dialogues },
+          z.strictObject({ observations: z.array(discoveryObservationSchema).max(300) }), ctx,
+        );
+        return { kind: 'coarse', observations: result.observations };
+      }
+      if (input.kind === 'group') {
+        const result = await ask(
+          'Повторяющиеся проблемы в диалогах', DISCOVERY_GROUP_ROLE,
+          { ownerRequirements: input.requirements.map(({ id, text }) => ({ id, text })), observations: input.observations },
+          z.strictObject({ groups: z.array(discoveryGroupSchema).max(80) }), ctx,
+        );
+        return { kind: 'group', groups: result.groups };
+      }
+      const result = await ask(
+        'Гипотеза для нового теста', DISCOVERY_HYPOTHESIS_ROLE,
+        { ownerRequirement: input.requirement, observations: input.observations, deepChecks: input.deep },
+        z.strictObject({ hypothesis: z.string().trim().min(1).max(3000) }), ctx,
+      );
+      return { kind: 'hypothesis', hypothesis: result.hypothesis };
     },
     async goals(input, ctx) {
       if (!input.sources.length) throw new Error('Observed goals: без материалов владельца ожидаемое поведение остаётся неизвестным.');

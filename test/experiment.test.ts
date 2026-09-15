@@ -5,13 +5,106 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
-import { ExperimentLab, draftHash, measurementHash, resultHash } from '../src/experiment.js';
+import { ExperimentLab, draftHash, measurementHash, planDiscovery, resultHash } from '../src/experiment.js';
 import { ExperimentStore } from '../src/store.js';
 import { createDemoRuntime, demoEvaluationInput, demoInput } from '../src/demo.js';
-import { createInputSchema, fingerprint, validatePreparation, type Runtime } from '../src/contracts.js';
+import { createInputSchema, fingerprint, goalAttainment, validatePreparation, type Runtime } from '../src/contracts.js';
 import { awaitingVerdict } from '../src/comparison.js';
 import { simulatorUsable } from '../src/outcomes.js';
 import { qualityLines, qualitySummary } from '../src/quality.js';
+
+test('staged discovery batches whole logs, selects one grounded focus, and persists one exact handoff', async t => {
+  const quote = 'Answer support questions only from the approved policy.';
+  const dialogues = Array.from({ length: 26 }, (_, index) => ({ id: `log_${index}`, outcome: index ? 'success' as const : 'failure' as const,
+    messages: [{ role: 'user' as const, content: `Question ${index}` }, { role: 'assistant' as const, content: index === 0 || index === 25 ? 'Invented answer' : 'Approved answer' }] }));
+  const seen: unknown[] = [];
+  const runtime: Runtime = {
+    async discover(input) {
+      seen.push(structuredClone(input));
+      if (input.kind === 'requirements') return { kind: 'requirements', requirements: [{ id: 'owner_rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [] };
+      if (input.kind === 'coarse') return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({
+        dialogueId: dialogue.id, classification: dialogue.id === 'log_0' || dialogue.id === 'log_25' ? 'candidate' as const : 'clean' as const,
+        ...(dialogue.id === 'log_0' || dialogue.id === 'log_25' ? { requirementId: 'owner_rule' } : {}),
+        summary: 'Observed reply', citations: [{ seq: 1, quote: dialogue.messages[1]!.content }],
+      })) };
+      if (input.kind === 'group') return { kind: 'group', groups: [{ requirementId: 'owner_rule', dialogueIds: ['log_0', 'log_25'], summary: 'Same owner rule' }] };
+      return { kind: 'hypothesis', hypothesis: 'The agent may answer outside the approved support policy.' };
+    },
+    async goals({ dialogues }) {
+      const dialogue = dialogues[0]!;
+      return [{ id: `goal_${dialogue.id}`, goal: 'Get an approved support answer', opening: dialogue.messages[0]!.content,
+        requirementIds: ['owner_rule'], evidenceDialogueIds: [dialogue.id], successCriteria: quote, facts: 'Only the recorded user request.', outcome: 'unknown' }];
+    },
+    async assess({ scenario, trial }) {
+      return scenario.metrics!.map(metric => ({ metricId: metric.id, result: 'fail' as const, rationale: 'The recorded reply is evidence.', evidence: [1], citations: [{ seq: 1, quote: trial.events[1]!.text! }] }));
+    },
+    async prepare(input) {
+      if (!input.confirmedHypothesis) throw new Error('discovery must not prepare cards');
+      return { requirements: [{ id: 'owner_rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [],
+        agent: { name: 'Recorded agent', instructions: quote, tools: [] }, scenarios: [{
+          id: 'accepted_test', familyId: 'accepted_test', title: 'Approved support answer', requirementIds: ['owner_rule'], provenance: 'synthetic', tier: 'regression',
+          user: { goal: 'Get an approved support answer', facts: 'No additional facts.', behavior: 'Ask once.', opening: 'How can I get support?', maxFollowUps: 0 },
+          initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], successCriteria: quote, assumptions: ['Built from confirmed discovery evidence.'],
+          metrics: [{ ...goalAttainment, passCriteria: quote }],
+        }] };
+    }, async improve() { throw new Error('discovery must not improve'); },
+    async openTarget() { throw new Error('discovery must not open target'); }, async userTurn() { throw new Error('discovery must not simulate users'); },
+  };
+  const { lab } = await setup(t, runtime);
+  const input = { task: 'Find a useful support test', mode: 'live' as const, materials: [{ name: 'policy', content: quote }], dialogues };
+  const plan = planDiscovery(input);
+  assert.equal(plan.batchCount, 2); assert.ok(plan.batches.every(batch => batch.length <= 25 && JSON.stringify({ dialogues: batch }).length <= 60_000));
+  const started = await lab.discover(input); await lab.waitForIdle();
+  const result = await lab.get(started.id);
+  assert.equal(result.discovery?.callPlan.nominalCalls, plan.nominalCalls); assert.equal(result.settings.maxCalls, plan.maxCalls); assert.ok(result.settings.maxCalls > 20);
+  assert.equal(result.discovery?.phase, 'ready', result.discovery?.error ?? result.error ?? '');
+  assert.equal(result.discovery?.observations.length, dialogues.length);
+  assert.equal(result.discovery?.focusRequirementId, 'owner_rule');
+  assert.deepEqual(new Set(result.discovery?.representativeIds), new Set(['log_0', 'log_25']));
+  assert.equal(result.discovery?.selectedIds.length, result.discovery!.representativeIds.length + result.discovery!.controlIds.length);
+  assert.ok(result.discovery?.controlIds.every(id => !result.discovery!.representativeIds.includes(id)));
+  assert.equal(result.discovery?.deep.filter(item => item.role === 'control').length, result.discovery?.controlIds.length);
+  assert.match(result.discovery!.hypothesis!.text, /НАБЛЮДЕНИЕ: ответ агента \(reply\)$/);
+  assert.equal(result.discovery?.hypothesis?.requirementId, 'owner_rule');
+  assert.equal(JSON.stringify(seen).includes('"outcome"'), false, 'stored outcome must never enter discovery Runtime payloads');
+  const built = await lab.buildFromDiscovery(result.id, result.discovery!.hypothesis!.text); await lab.waitForIdle();
+  const draft = await lab.get(built.id);
+  assert.equal(draft.phase, 'review', draft.error ?? ''); assert.equal(draft.scenarios.length, 1); assert.equal(draft.scenarios[0]!.goalObservation, 'reply');
+});
+
+test('ExperimentLab rejects backend checks from a custom Runtime for confirmed external reply-only RAG tests', async t => {
+  const quote = 'Support is available at support@example.com.';
+  let invalid = true, targetCalls = 0;
+  const runtime: Runtime = {
+    async prepare() {
+      const successCriteria = 'The reply contains support@example.com.';
+      return { requirements: [{ id: 'support_rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [],
+        agent: { name: 'External agent', instructions: quote, tools: [] }, scenarios: [{
+          id: 'support_test', familyId: 'support_test', title: 'Support reply', requirementIds: ['support_rule'], provenance: 'synthetic', tier: 'regression',
+          user: { goal: 'Get support', facts: 'No additional facts.', behavior: 'Ask once.', opening: 'How do I get support?', maxFollowUps: 0 },
+          initialState: invalid ? { records: { account: { status: 'active' } }, writableFields: ['status'], transientFailures: 0 }
+            : { records: {}, writableFields: [], transientFailures: 0 },
+          checks: invalid ? [{ id: 'lookup', kind: 'tool_called' as const, description: 'Invented backend lookup.', tool: 'lookup_record' }]
+            : [{ id: 'reply', kind: 'answer_contains' as const, description: 'Reply contains the approved address.', value: 'support@example.com' }],
+          successCriteria, assumptions: ['Confirmed reply-only RAG hypothesis.'], metrics: [{ ...goalAttainment, passCriteria: successCriteria }],
+        }] };
+    },
+    async improve() { throw new Error('unused'); },
+    async openTarget() { targetCalls++; throw new Error('target must not open while building a draft'); },
+    async userTurn() { throw new Error('unused'); },
+  };
+  const { lab } = await setup(t, runtime);
+  const input = { task: 'Check support reply', confirmedHypothesis: 'The agent may omit the support address.', goalObservation: 'reply' as const,
+    mode: 'live' as const, workflow: 'evaluate' as const, scenarioCount: 1, materials: [{ name: 'Policy', content: quote }],
+    target: { kind: 'command' as const, command: process.execPath, args: [] } };
+  const rejected = await lab.create(input); await lab.waitForIdle();
+  const failed = await lab.get(rejected.id);
+  assert.equal(failed.phase, 'error'); assert.match(failed.error ?? '', /reply-only RAG.*backend state.*tool\/state/); assert.equal(targetCalls, 0);
+  invalid = false;
+  const accepted = await lab.create(input); await lab.waitForIdle();
+  const draft = await lab.get(accepted.id);
+  assert.equal(draft.phase, 'review', draft.error ?? ''); assert.equal(draft.scenarios.length, 1); assert.equal(targetCalls, 0);
+});
 
 async function setup(t: TestContext, runtime?: Runtime) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-experiment-'));

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
+  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 
@@ -10,6 +10,16 @@ const requirement = { id: 'req_1', text: 'Read before update', sourceId: 'source
 const agent = { name: 'A', instructions: 'Do the thing.', tools: ['lookup_record' as const] };
 const metric = { id: 'm', name: 'M', subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' };
 const user = { goal: 'g', facts: 'f', behavior: 'b', opening: 'o', maxFollowUps: 0, persona: 'P', characteristics: ['c'] };
+
+test('discovery accepts 1..300 dialogues without weakening the ordinary 200-dialogue input', () => {
+  const base = { task: 'Find a test', materials: [{ name: 'policy', content: 'Rule.' }], mode: 'live' as const };
+  const dialogues = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `d${index}`, messages: [{ role: 'user' as const, content: 'Question' }] }));
+  assert.equal(discoverInputSchema.safeParse({ ...base, dialogues: [] }).success, false);
+  assert.equal(discoverInputSchema.safeParse({ ...base, dialogues: dialogues(1) }).success, true);
+  assert.equal(discoverInputSchema.safeParse({ ...base, dialogues: dialogues(300) }).success, true);
+  assert.equal(discoverInputSchema.safeParse({ ...base, dialogues: dialogues(301) }).success, false);
+  assert.equal(createInputSchema.safeParse({ ...base, dialogues: dialogues(201), scenarioCount: 0 }).success, false);
+});
 function card(overrides: Record<string, unknown> = {}) {
   return {
     id: 'c1', familyId: 'f1', title: 'Card', requirementIds: ['req_1'], provenance: 'synthetic' as const, successCriteria: 'ok',

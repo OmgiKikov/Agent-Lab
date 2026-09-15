@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
-  VERSION, profileUser, clarificationSchema, agentSchema, createInputSchema, dialogueToScenario, dialogueToTrial, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, observedProfileSchema, promptCompliance, proposalSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation,
-  reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type DraftPatch, type Experiment, type HumanReviewInput, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
+  DISCOVERY_PROTOCOL, VERSION, profileUser, clarificationSchema, agentSchema, createInputSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, discoveryGroupSchema, discoveryObservationSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, observedProfileSchema, promptCompliance, proposalSchema, requirementSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation, verbatimSpan,
+  reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type DiscoverInput, type DiscoveryDialogue, type DiscoveryObservation, type DiscoveryPlan, type DiscoveryRecord, type DraftPatch, type Experiment, type HumanReviewInput, type Requirement, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
 import { ExperimentStore } from './store.js';
 import { assessTrial, evaluateTrial, grade } from './evaluation.js';
 import { automaticTrialResult, trialAssessmentComplete, awaitingVerdict, compareTrials, isAgentFailure, plannedTrials } from './comparison.js';
@@ -62,6 +62,92 @@ function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
   record.limitations = previous.limitations.filter(note => !note.startsWith('Scripted mode skipped') && !note.startsWith('Не удалось назвать типы провалов:')
     && !note.startsWith('Внешнее состояние карточек не подтверждено'));
   return record;
+}
+
+export const DISCOVERY_BATCH_ITEMS = 25;
+export const DISCOVERY_BATCH_CHARS = 60_000;
+
+const discoveryDialogue = (dialogue: DiscoverInput['dialogues'][number]): DiscoveryDialogue => ({
+  id: dialogue.id,
+  messages: dialogue.messages.map((message, seq) => ({ seq, role: message.role, content: message.content })),
+});
+const discoveryPayloadSize = (dialogues: DiscoveryDialogue[]) => JSON.stringify({ dialogues }).length;
+
+/** Pure call/batch plan shown before any model work. */
+export function planDiscovery(input: Pick<DiscoverInput, 'dialogues' | 'materials'>): DiscoveryPlan {
+  const batches: DiscoveryDialogue[][] = [];
+  const oversizedIds: string[] = [];
+  let batch: DiscoveryDialogue[] = [];
+  for (const raw of input.dialogues) {
+    const dialogue = discoveryDialogue(raw);
+    if (discoveryPayloadSize([dialogue]) > DISCOVERY_BATCH_CHARS) { oversizedIds.push(dialogue.id); continue; }
+    if (batch.length === DISCOVERY_BATCH_ITEMS || discoveryPayloadSize([...batch, dialogue]) > DISCOVERY_BATCH_CHARS) {
+      if (batch.length) batches.push(batch);
+      batch = [];
+    }
+    batch.push(dialogue);
+  }
+  if (batch.length) batches.push(batch);
+  const eligible = input.dialogues.filter(dialogue => !oversizedIds.includes(dialogue.id)
+    && dialogue.messages.some(message => message.role === 'user')).length;
+  const selectedCap = Math.min(5, eligible);
+  const metrics = 2 + Number(input.materials.some(material => material.kind === 'prompt'));
+  const batchCount = batches.length;
+  const nominalCalls = batchCount + (2 * metrics + 1) * selectedCap + 3;
+  return {
+    batches, batchCount, oversizedIds, selectedCap, metrics, nominalCalls,
+    maxCalls: nominalCalls + Math.max(10, Math.ceil(batchCount / 4)),
+    seed: fingerprint({ protocol: DISCOVERY_PROTOCOL, dialogues: input.dialogues.map(discoveryDialogue) }),
+  };
+}
+
+const localUnknown = (dialogueId: string, summary: string): DiscoveryObservation => ({
+  dialogueId, classification: 'unknown', summary, citations: [],
+});
+
+function reconcileDiscoveryBatch(batch: DiscoveryDialogue[], raw: DiscoveryObservation[], requirements: Requirement[]): DiscoveryObservation[] {
+  const requirementIds = new Set(requirements.map(requirement => requirement.id));
+  return batch.map(dialogue => {
+    const matches = raw.filter(observation => observation.dialogueId === dialogue.id);
+    if (matches.length !== 1) return localUnknown(dialogue.id, matches.length ? 'Модель вернула несколько классификаций.' : 'Модель не вернула классификацию.');
+    const parsed = discoveryObservationSchema.safeParse(matches[0]);
+    if (!parsed.success) return localUnknown(dialogue.id, 'Классификация модели не прошла проверку.');
+    const observation = parsed.data;
+    if (!dialogue.messages.some(message => message.role === 'user')) return localUnknown(dialogue.id, 'В диалоге нет реплики пользователя.');
+    if (observation.requirementId && !requirementIds.has(observation.requirementId)) return localUnknown(dialogue.id, 'Ссылка на неизвестное требование владельца.');
+    for (const citation of observation.citations) {
+      const event = dialogue.messages.find(message => message.seq === citation.seq);
+      const exact = event && verbatimSpan(event.content, citation.quote);
+      if (!event || !exact) return localUnknown(dialogue.id, 'Ссылка на событие диалога не подтверждена.');
+      citation.quote = exact;
+    }
+    return observation;
+  });
+}
+
+function selectDiscoveryFocus(record: Experiment): void {
+  const discovery = record.discovery!;
+  const eligible = discovery.observations.filter(observation => observation.classification === 'candidate' && observation.requirementId
+    && record.dialogues.some(dialogue => dialogue.id === observation.dialogueId && dialogue.messages.some(message => message.role === 'user')));
+  const groups = new Map<string, Set<string>>();
+  for (const observation of eligible) {
+    const members = groups.get(observation.requirementId!) ?? new Set<string>();
+    members.add(observation.dialogueId); groups.set(observation.requirementId!, members);
+  }
+  const recurring = [...groups].filter(([, ids]) => ids.size >= 2).sort(([left, leftIds], [right, rightIds]) =>
+    rightIds.size - leftIds.size || fingerprint({ seed: discovery.seed, requirementId: left }).localeCompare(fingerprint({ seed: discovery.seed, requirementId: right })) || left.localeCompare(right));
+  const focus = recurring[0];
+  if (!focus) return;
+  const [requirementId, memberSet] = focus;
+  const rank = (role: 'representative' | 'control', dialogueId: string) => fingerprint({ seed: discovery.seed, role, requirementId, dialogueId });
+  const members = [...memberSet].sort((left, right) => rank('representative', left).localeCompare(rank('representative', right)) || left.localeCompare(right));
+  const controls = record.dialogues.map(dialogue => dialogue.id).filter(id => !memberSet.has(id) && !discovery.oversizedIds.includes(id)
+    && record.dialogues.find(dialogue => dialogue.id === id)!.messages.some(message => message.role === 'user'))
+    .sort((left, right) => rank('control', left).localeCompare(rank('control', right)) || left.localeCompare(right));
+  discovery.focusRequirementId = requirementId;
+  discovery.representativeIds = members.slice(0, 3);
+  discovery.controlIds = controls.slice(0, 2);
+  discovery.selectedIds = [...discovery.representativeIds, ...discovery.controlIds];
 }
 
 export class ExperimentLab {
@@ -129,7 +215,8 @@ export class ExperimentLab {
       ],
     };
   }
-  async create(raw: CreateInput): Promise<Experiment> {
+  async create(raw: CreateInput): Promise<Experiment> { return this.createPrepared(raw); }
+  private async createPrepared(raw: CreateInput, preparedRequirements?: Requirement[]): Promise<Experiment> {
     this.ensureIdle();
     const input = createInputSchema.parse(raw);
     if (input.workflow === 'compare' && input.settings.userModes.length !== 1) throw new Error('Сравнительный эксперимент идёт в одном режиме пользователя: выберите static, scripted или reactive.');
@@ -157,8 +244,15 @@ export class ExperimentLab {
         task: record.task, sources: record.sources, existingAgent: input.existingAgent, workflow: input.workflow, scenarioCount: input.scenarioCount,
         profiles: structuredClone(record.profiles), goldenCases: structuredClone(record.goldenCases), notes: record.notes, observedGoals: structuredClone(observedGoals),
         targetKind: record.target.kind, confirmedHypothesis: input.confirmedHypothesis, goalObservation: input.goalObservation,
-        dialogues: structuredClone(record.dialogues), userModes: structuredClone(record.settings.userModes),
+        dialogues: structuredClone(record.dialogues), userModes: structuredClone(record.settings.userModes), requirements: preparedRequirements,
       }, ctx);
+      if (confirmed && input.goalObservation === 'reply' && record.target.kind !== 'sandbox') for (const scenario of generated.scenarios) {
+        const seeded = Object.keys(scenario.initialState.records).length > 0 || scenario.initialState.writableFields.length > 0
+          || scenario.initialState.transientFailures > 0 || Object.keys(scenario.initialState.external ?? {}).length > 0;
+        if (seeded || scenario.checks.some(check => !['answer_equals', 'answer_contains', 'answer_omits'].includes(check.kind))) {
+          throw new Error(`Карточка ${scenario.id}: reply-only RAG тест не может задавать backend state или tool/state проверки.`);
+        }
+      }
       const production = observedGoals.map(goal => goalToScenario(goal, record.profiles.find(p => p.id === goal.profileId)));
       const golden = record.goldenCases.map(goldenToScenario);
       const synthetic = generated.scenarios.map(s => ({ ...s, ...(confirmed ? { goalObservation: input.goalObservation! } : {}), provenance: 'synthetic' as const }));
@@ -236,6 +330,172 @@ export class ExperimentLab {
         : `Импортировано ${record.trials.length} записанных диалогов. Агент и симулятор не запускались.`);
     });
     return structuredClone(record);
+  }
+  async discover(raw: DiscoverInput): Promise<Experiment> {
+    this.ensureIdle();
+    const input = discoverInputSchema.parse(raw);
+    const plan = planDiscovery(input);
+    const settings = settingsSchema.parse({ ...input.settings, maxCalls: plan.maxCalls });
+    const base: CreateInput = {
+      task: input.task, materials: input.materials, mode: input.mode, settings,
+      workflow: 'evaluate', scenarioCount: 0, target: input.target, goldenCases: [], dialogues: input.dialogues,
+      notes: input.notes, profiles: [], ...(input.existingAgent ? { existingAgent: input.existingAgent } : {}),
+      ...(input.targetVersion ? { targetVersion: input.targetVersion } : {}),
+    };
+    const record = this.newRecord(base);
+    record.message = 'Ищу повторяющуюся проверяемую проблему в записанных диалогах.';
+    const agent = input.existingAgent ?? { name: 'External agent', instructions: 'The recorded agent is not executed during discovery.', tools: [] };
+    record.revisions = [revision(agent, null, 'Agent configuration associated with exploratory log discovery.')];
+    record.selectedRevisionId = record.revisions[0]!.id;
+    record.limitations.push('Exploratory discovery selects suspicious examples; it is not production accuracy or an unbiased quality estimate.');
+    record.discovery = {
+      protocol: DISCOVERY_PROTOCOL, phase: 'running', error: null, requirements: [], observations: plan.oversizedIds.map(id => localUnknown(id, 'Диалог целиком превышает лимит 60 000 символов и не отправлялся модели.')),
+      seed: plan.seed, representativeIds: [], controlIds: [], selectedIds: [], completedBatchCount: 0, groupingComplete: false,
+      completedDeepIds: [], deep: [], callPlan: { batches: plan.batchCount, selectedCap: plan.selectedCap, metrics: plan.metrics,
+        nominalCalls: plan.nominalCalls, maxCalls: plan.maxCalls }, callsUsed: 0, totalDialogues: input.dialogues.length, oversizedIds: plan.oversizedIds,
+    };
+    await this.launch(record, ctx => this.executeDiscovery(record, plan, ctx));
+    return structuredClone(record);
+  }
+  async resumeDiscovery(id: string): Promise<Experiment> {
+    this.ensureIdle();
+    const record = await this.store.get(id);
+    if (!record.discovery || record.discovery.phase === 'ready' || record.discovery.phase === 'insufficient') throw new Error('Этот discovery run не требует возобновления.');
+    if (record.usage.calls >= record.settings.maxCalls) throw new Error('Бюджет discovery исчерпан; найденные доказательства сохранены.');
+    const plan = planDiscovery({ dialogues: record.dialogues, materials: record.sources.map(source => ({ name: source.name, content: source.content, kind: source.kind })) });
+    record.phase = 'preparing'; record.error = null; record.discovery.phase = 'running'; record.discovery.error = null;
+    await this.launch(record, ctx => this.executeDiscovery(record, plan, ctx));
+    return structuredClone(record);
+  }
+  async buildFromDiscovery(fromRunId: string, confirmedHypothesis: string): Promise<Experiment> {
+    this.ensureIdle();
+    const source = await this.store.get(fromRunId);
+    const discovery = source.discovery;
+    if (!discovery || discovery.phase !== 'ready' || !discovery.hypothesis) throw new Error('Нужен готовый сохранённый discovery run.');
+    if (confirmedHypothesis !== discovery.hypothesis.text) throw new Error('Гипотеза изменилась. Откройте свежий discovery результат перед подтверждением.');
+    if (discovery.hypothesis.proposedGoalObservation !== 'reply' || discovery.hypothesis.requirementId !== discovery.focusRequirementId) {
+      throw new Error('Сохранённая гипотеза потеряла подтверждённый канал наблюдения или provenance.');
+    }
+    const requirement = discovery.requirements.find(item => item.id === discovery.hypothesis!.requirementId);
+    if (!requirement) throw new Error('Требование сохранённой гипотезы отсутствует.');
+    const evidenceIds = new Set(discovery.hypothesis.eventIds.map(event => event.dialogueId));
+    const dialogues = source.dialogues.filter(dialogue => evidenceIds.has(dialogue.id));
+    if (!dialogues.length || discovery.hypothesis.eventIds.some(citation => !dialogues.some(dialogue => dialogue.id === citation.dialogueId
+      && dialogue.messages[citation.seq]))) throw new Error('Исходные события сохранённой гипотезы отсутствуют.');
+    return this.createPrepared({
+      task: source.task, confirmedHypothesis, goalObservation: 'reply', mode: source.mode, workflow: 'evaluate', scenarioCount: 1,
+      materials: source.sources.map(item => ({ name: item.name, content: item.content, ...(item.kind ? { kind: item.kind } : {}) })),
+      settings: source.settings, target: source.target, targetVersion: source.targetVersion, existingAgent: source.revisions[0]?.spec,
+      goldenCases: [], dialogues, notes: source.notes, profiles: [],
+    }, [requirement]);
+  }
+  private async executeDiscovery(record: Experiment, plan: DiscoveryPlan, ctx: CallContext): Promise<void> {
+    const discovery = record.discovery!;
+    const updateCalls = () => { discovery.callsUsed = record.usage.calls; };
+    try {
+      const runtime = await this.runtime(record);
+      if (!runtime.discover || !runtime.goals || !runtime.assess) throw new Error('Выбранный Runtime не поддерживает staged log discovery.');
+      if (!discovery.requirements.length) {
+        const output = await runtime.discover({ kind: 'requirements', task: record.task, sources: structuredClone(record.sources) }, ctx);
+        if (output.kind !== 'requirements') throw new Error('Runtime вернул ответ другого этапа discovery.');
+        const requirements = requirementSchema.array().min(1).parse(output.requirements);
+        if (new Set(requirements.map(item => item.id)).size !== requirements.length) throw new Error('Требования discovery содержат повторяющиеся ID.');
+        for (const requirement of requirements) {
+          const source = record.sources.find(item => item.id === requirement.sourceId);
+          const exact = source && verbatimSpan(source.content, requirement.quote);
+          if (!source || !exact) throw new Error(`Требование ${requirement.id} не подтверждено материалом владельца.`);
+          requirement.quote = exact;
+        }
+        discovery.requirements = requirements; record.requirements = structuredClone(requirements); record.questions = output.questions;
+        updateCalls(); await this.checkpoint(record, 'preparing', 'Требования владельца сохранены для первичного разбора логов.');
+        if (record.questions.length) {
+          discovery.phase = 'insufficient';
+          await this.checkpoint(record, 'complete', 'Нужны ответы владельца на вопросы к требованиям; диалоги не классифицировались.');
+          return;
+        }
+      }
+      for (let index = discovery.completedBatchCount; index < plan.batches.length; index++) {
+        const batch = plan.batches[index]!;
+        const output = await runtime.discover({ kind: 'coarse', requirements: structuredClone(discovery.requirements), dialogues: structuredClone(batch) }, ctx);
+        if (output.kind !== 'coarse') throw new Error('Runtime вернул ответ другого этапа discovery.');
+        discovery.observations.push(...reconcileDiscoveryBatch(batch, output.observations, discovery.requirements));
+        discovery.completedBatchCount = index + 1; updateCalls();
+        await this.checkpoint(record, 'preparing', `Первично разобрано партий: ${discovery.completedBatchCount}/${plan.batchCount}.`);
+      }
+      const order = new Map(record.dialogues.map((dialogue, index) => [dialogue.id, index]));
+      discovery.observations.sort((left, right) => order.get(left.dialogueId)! - order.get(right.dialogueId)!);
+      if (!discovery.groupingComplete) {
+        const output = await runtime.discover({ kind: 'group', requirements: structuredClone(discovery.requirements), observations: structuredClone(discovery.observations) }, ctx);
+        if (output.kind !== 'group') throw new Error('Runtime вернул ответ другого этапа discovery.');
+        for (const rawGroup of output.groups) {
+          const parsed = discoveryGroupSchema.safeParse(rawGroup);
+          if (!parsed.success) continue;
+          const group = parsed.data;
+          for (const id of group.dialogueIds) {
+            const observation = discovery.observations.find(item => item.dialogueId === id);
+            if (observation?.classification === 'candidate' && observation.requirementId !== group.requirementId) {
+              Object.assign(observation, localUnknown(id, 'Cross-batch группа сослалась на другое требование владельца.'));
+              delete observation.requirementId;
+            }
+          }
+        }
+        discovery.groupingComplete = true; updateCalls();
+        await this.checkpoint(record, 'preparing', 'Cross-batch разбор сохранён; выбираю один повторяющийся фокус.');
+      }
+      if (!discovery.focusRequirementId) selectDiscoveryFocus(record);
+      if (!discovery.focusRequirementId) {
+        discovery.phase = 'insufficient'; discovery.error = null; updateCalls();
+        await this.checkpoint(record, 'complete', 'Повторяющаяся проблема минимум в двух диалогах не подтверждена.');
+        return;
+      }
+      const focus = discovery.requirements.find(requirement => requirement.id === discovery.focusRequirementId)!;
+      for (const dialogueId of discovery.selectedIds) {
+        if (discovery.completedDeepIds.includes(dialogueId)) continue;
+        discovery.deep = discovery.deep.filter(result => result.dialogueId !== dialogueId);
+        const dialogue = record.dialogues.find(item => item.id === dialogueId)!;
+        try {
+          const { outcome: _storedOutcome, ...dialogueEvidence } = dialogue;
+          const goals = await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: [structuredClone(dialogueEvidence) as typeof dialogue], profiles: [], requirements: [structuredClone(focus)] }, ctx);
+          if (goals.length !== 1) throw new Error(`Подробный разбор ${dialogueId} должен вернуть ровно одну цель.`);
+          const goal = goals[0]!;
+          validateObservedGoals([goal], [dialogue], []);
+          if (goal.requirementIds?.length !== 1 || goal.requirementIds[0] !== focus.id) throw new Error(`Цель ${dialogueId} потеряла единый discovery focus.`);
+          const base = dialogueToScenario(dialogue, { goal: goal.goal, successCriteria: goal.successCriteria, requirementIds: [focus.id] });
+          const scenario: Scenario = { ...base, goalObservation: 'reply', split: 'dev' };
+          if (record.sources.some(source => source.kind === 'prompt')) scenario.metrics!.unshift({ ...promptCompliance });
+          const trial = dialogueToTrial(dialogue, scenario, record.revisions[0]!.id);
+          trial.assessments = await assessTrial(runtime, scenario, record.sources, trial, ctx, [focus]);
+          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', goal, assessments: trial.assessments });
+          discovery.completedDeepIds.push(dialogueId); updateCalls();
+          await this.checkpoint(record, 'preparing', `Подробно проверено ${discovery.completedDeepIds.length}/${discovery.selectedIds.length}; controls — false-negative probe.`);
+        } catch (error) {
+          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', error: error instanceof Error ? error.message : String(error) });
+          throw error;
+        }
+      }
+      if (!discovery.hypothesis) {
+        const evidence = discovery.observations.filter(observation => discovery.representativeIds.includes(observation.dialogueId)
+          && observation.classification === 'candidate' && observation.requirementId === focus.id);
+        const deepEvidence = discovery.deep.map(result => result.goal
+          ? { ...result, goal: Object.fromEntries(Object.entries(result.goal).filter(([key]) => key !== 'outcome')) as typeof result.goal }
+          : result);
+        const output = await runtime.discover({ kind: 'hypothesis', requirement: structuredClone(focus), observations: structuredClone(evidence), deep: structuredClone(deepEvidence) }, ctx);
+        if (output.kind !== 'hypothesis') throw new Error('Runtime вернул ответ другого этапа discovery.');
+        const eventIds = evidence.flatMap(observation => observation.citations.map(citation => ({ dialogueId: observation.dialogueId, seq: citation.seq })));
+        discovery.hypothesis = {
+          text: `${output.hypothesis.trim()}\nНАБЛЮДЕНИЕ: ответ агента (reply)`, proposedGoalObservation: 'reply', requirementId: focus.id, eventIds,
+        };
+      }
+      discovery.phase = 'ready'; discovery.error = null; updateCalls();
+      await this.checkpoint(record, 'complete', 'Одна exploratory-гипотеза готова. Это отбор кандидата на тест, не accuracy. Проверим?');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      discovery.error = message; updateCalls();
+      discovery.phase = /budget exhausted/i.test(message) ? 'budget_exhausted'
+        : discovery.completedBatchCount || discovery.completedDeepIds.length ? 'partial' : 'error';
+      await this.checkpoint(record, 'preparing', message);
+      throw error;
+    }
   }
   async clarify(id: string, answers: { question: string; answer: string }[]): Promise<Experiment> {
     this.ensureIdle();

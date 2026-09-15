@@ -1268,3 +1268,27 @@ test('a generated external card drops checks and rubrics that pin a machine outp
     assert.deepEqual(prepared.scenarios[0]!.metrics!.filter(m => m.subject === 'agent').map(m => m.id), ['prompt_compliance', 'goal']);
   } finally { await f.close(); }
 });
+
+test('a confirmed reply-only RAG test repairs invented backend and tool checks', async () => {
+  const quote = 'Support is available at support@example.com.';
+  const base = confirmedCard(1);
+  const invented = {
+    ...base,
+    initialState: { records: { account_1: { status: 'active' } }, writableFields: ['status'], transientFailures: 0 },
+    checks: [{ id: 'lookup', kind: 'tool_called' as const, description: 'Invented backend lookup.', tool: 'lookup_record' }],
+  };
+  const accepted = { ...confirmedCard(2), initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [] };
+  const f = await fixture((_request, index) => JSON.stringify(index === 0 ? { scenarios: [invented] } : { scenarios: [accepted] }));
+  try {
+    const prepared = await f.adapter.prepare({
+      task: 'Check a discovered RAG hypothesis', confirmedHypothesis: 'The agent may omit the support address.', goalObservation: 'reply',
+      requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }],
+      targetKind: 'command', workflow: 'evaluate', scenarioCount: 1, userModes: ['static'],
+      sources: [{ id: 'source_1', name: 'Policy', content: quote, hash: 'hash' }],
+    }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.match(JSON.stringify(f.requests[1]?.messages), /reply-observed prompt\/RAG tests cannot seed backend state or require tool\/state checks/);
+    assert.deepEqual(prepared.scenarios[0]!.checks, []);
+    assert.deepEqual(prepared.scenarios[0]!.initialState, { records: {}, writableFields: [], transientFailures: 0 });
+  } finally { await f.close(); }
+});
