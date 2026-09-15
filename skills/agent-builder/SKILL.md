@@ -17,9 +17,36 @@ Work directly in this Pi conversation. For the current PoC, start from the owner
 
 ## Real dialogues at the start
 
-Ask once, in the user's language: «Есть реальные диалоги с агентом? Можно указать файл JSON/JSONL или начать без них». Honor a path or a decision already given in the conversation. Do not search unrelated logs. Use dialoguesFile for the user's local export or dialogues for supplied contents; preserve message order and original text. agent_lab_build returns needs_input without spending or creating a run until it receives dialogues or withoutDialogues=true. Set that flag only after the user's explicit choice to skip. A skipped import stays synthetic; do not invent production examples. Invalid supplied files need correction, not a silent fallback. Demo and repeat do not ask again.
+Ask once, in the user's language: «Есть реальные диалоги с агентом? Можно указать файл JSON/JSONL или начать без них». Honor a path or a decision already given in the conversation. Do not search unrelated logs. Use dialoguesFile for the user's local export or dialogues for supplied contents; preserve message order and original text. agent_lab_build returns needs_input without spending or creating a run until it receives dialogues or withoutDialogues=true. Set that flag only after the user's explicit choice to skip. Пустой ответ не означает согласие продолжить без диалогов; оставь вопрос открытым до явного пути или решения начать без них. A skipped import stays synthetic; do not invent production examples. Invalid supplied files need correction, not a silent fallback. Demo and repeat do not ask again.
 
-After import, report the actual dialogueCount and the proposed production/synthetic cards before execution. These are offline exports; no logging platform is connected automatically.
+After score/import, report the actual dialogueCount and evidence mix. Do not propose production/synthetic cards during Phase 2; test construction starts only from an accepted hypothesis in Phase 3. These are offline exports; no logging platform is connected automatically.
+
+Before any test-building call (including non-score `agent_lab_build`, `agent_lab_edit` or `agent_lab_run`), complete this mandatory Phase 2 gate. First collect at least one expected behavior backed by the owner's source ID and exact quote, and at least one concrete observation from an authorized repository or recorded dialogue. Repository observations cite a file path and line when available; log observations cite a dialogue ID and event number. Treat existing code, every assistant reply and saved outcome only as observations, never as expectations. If an action's observable effect is absent, keep it under unknowns as literal `НЕЯСНО`. Narrow multiple candidate failures to exactly one and render no more than three bullets in each of the first three sections, in this exact order:
+
+```text
+ТРЕБОВАНИЯ
+• <ожидаемое поведение, источник владельца и точная цитата>
+
+НАБЛЮДАЕМОЕ
+• <наблюдение и путь/строка или диалог/событие>
+
+НЕИЗВЕСТНО
+• <то, чего доказательства не показывают; НЕЯСНО для ненаблюдаемого эффекта действия>
+
+ГИПОТЕЗА
+<ровно одна гипотеза, связывающая указанное требование с указанным наблюдением>
+
+Проверим?
+```
+
+Without both kinds of evidence, do not show a hypothesis or call a test-building tool. Show exactly:
+
+```text
+Недостаточно данных для гипотезы
+Добавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.
+```
+
+Require an explicit answer to `Проверим?`. Ответ «да» передаёт принятую гипотезу только в контекст Фазы 3. Ответ «нет» или поправка оставляет разговор открытым для новых доказательств и следующей одной гипотезы. Фаза 2 не сохраняет гипотезу, не строит тест, не запускает агента и не сохраняет регрессию; ни один из ответов сам по себе не вызывает эти действия.
 
 ## Start from the local project
 

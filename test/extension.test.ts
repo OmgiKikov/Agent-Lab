@@ -16,19 +16,47 @@ function registered(onUserMessage?: (message: unknown) => void) {
   const userMessages: unknown[] = [];
   let shutdown!: () => Promise<void>;
   let command!: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+  let beforeAgentStart!: (event: { systemPrompt: string }, ctx: ExtensionContext) => Promise<{ systemPrompt: string } | undefined>;
   agentLab({
     registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
     registerCommand: (name: string, options: { handler: typeof command }) => { assert.equal(name, 'agent-lab'); command = options.handler; },
-    on: (name: string, handler: () => Promise<void>) => { if (name === 'session_shutdown') shutdown = handler; else assert.ok(['session_start', 'before_agent_start'].includes(name)); },
+    on: (name: string, handler: () => Promise<void>) => {
+      if (name === 'session_shutdown') shutdown = handler;
+      else if (name === 'before_agent_start') beforeAgentStart = handler as typeof beforeAgentStart;
+      else assert.equal(name, 'session_start');
+    },
     sendMessage: (message: { content: string; display: boolean }, options: { deliverAs: string }) => { assert.equal(options.deliverAs, 'followUp'); contexts.push(message); },
     sendUserMessage: (message: unknown, options: { deliverAs: string; expandPromptTemplates: boolean }) => { assert.equal(options.deliverAs, 'followUp'); assert.equal(options.expandPromptTemplates, false); userMessages.push(message); onUserMessage?.(message); },
   } as unknown as ExtensionAPI);
-  assert.ok(shutdown); assert.ok(command);
-  return { tools, shutdown, command, contexts, userMessages };
+  assert.ok(shutdown); assert.ok(command); assert.ok(beforeAgentStart);
+  return { tools, shutdown, command, beforeAgentStart, contexts, userMessages };
 }
 function output(result: Awaited<ReturnType<ToolDefinition['execute']>>) {
   return JSON.parse(result.content.filter(c => c.type === 'text').map(c => c.text).join('\n'));
 }
+
+test('injected Pi instructions stop at one grounded hypothesis until the owner answers', async () => {
+  const previous = process.env.AGENT_LAB_SESSION;
+  process.env.AGENT_LAB_SESSION = '1';
+  const { beforeAgentStart, shutdown } = registered();
+  try {
+    const result = await beforeAgentStart({ systemPrompt: 'base' }, { cwd: '.', hasUI: false, mode: 'print' } as ExtensionContext);
+    const prompt = result?.systemPrompt ?? '';
+    const headings = ['ТРЕБОВАНИЯ', 'НАБЛЮДАЕМОЕ', 'НЕИЗВЕСТНО', 'ГИПОТЕЗА', 'Проверим?'];
+    assert.ok(headings.every((heading, index) => prompt.indexOf(heading) >= 0
+      && (index === 0 || prompt.indexOf(heading) > prompt.indexOf(headings[index - 1]!))));
+    assert.match(prompt, /owner source ID and exact quote/i);
+    assert.match(prompt, /repository path\/line or dialogue\/event/i);
+    assert.match(prompt, /code, assistant replies and saved outcomes.*observations/i);
+    assert.match(prompt, /observable action effect.*НЕЯСНО/i);
+    assert.match(prompt, /Недостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога\./);
+    assert.match(prompt, /yes.*Phase 3 conversation context.*no.*more evidence/is);
+    assert.match(prompt, /Neither answer persists.*builds.*runs.*saves/is);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_LAB_SESSION; else process.env.AGENT_LAB_SESSION = previous;
+    await shutdown();
+  }
+});
 
 test('conversation runs only the confirmed plan, then saves and loads the same case without claiming human review', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-conversation-'));
