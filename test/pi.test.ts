@@ -432,7 +432,7 @@ test('confirmed answer values use owner and user evidence, inspect every token, 
   const requirements = { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] };
   const known = (count: number) => Array.from({ length: count }, (_, index) => `Known K-${100 + index}`);
   const withAnswer = (index: number, knows: string[], reply: string) => ({ scenarios: [{
-    ...confirmedCard(index),
+    ...confirmedCard(index), checks: [],
     user: { ...confirmedCard(index).user, knows, answers: [{ ifAsked: 'Which references?', reply }] },
   }] });
   const outputs = [

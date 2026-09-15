@@ -416,6 +416,10 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       if (requirementIds.size !== grounding.requirements.length) throw new Error('Requirements: duplicate requirement IDs');
       const compare = input.workflow === 'compare';
       const confirmed = !!input.confirmedHypothesis;
+      const groundedValues = confirmed ? valueTokens([
+        ...input.sources.map(source => source.content),
+        ...(input.dialogues ?? []).flatMap(dialogue => dialogue.messages.filter(message => message.role === 'user').map(message => message.content)),
+      ].join('\n')) : undefined;
       const external = !!input.targetKind && input.targetKind !== 'sandbox';
       const hasPrompt = input.sources.some(s => s.kind === 'prompt');
       const simulatorCapable = (input.userModes ?? ['reactive']).includes('reactive');
@@ -522,7 +526,15 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
                 if (unresolved.length) return `Card ${scenario.id}: state_equals paths do not resolve in the seeded state: ${unresolved.map(check => `${check.recordId}.${check.field}`).join(', ')}.`;
               }
               const known = valueTokens([scenario.user.opening, scenario.user.facts, ...(scenario.user.knows ?? [])].join('\n'));
-              for (const answer of scenario.user.answers ?? []) {
+              if (groundedValues) {
+                const answerValues = new Set((scenario.user.answers ?? []).flatMap(answer => [...valueTokens(answer.reply)]));
+                const unsupported = [...answerValues].filter(token => !groundedValues.has(token)).sort();
+                if (unsupported.length) return `Card ${scenario.id}: answer values are not grounded in owner sources or user-authored dialogue evidence: ${unsupported.join(', ')}.`;
+                const additions = [...answerValues].filter(token => !known.has(token)).sort();
+                const next = [...(scenario.user.knows ?? []), ...additions];
+                if (next.length > 20) return `Card ${scenario.id}: answer enrichment produces ${next.length} known values; maximum is 20. Nothing was truncated.`;
+                if (additions.length) scenario.user.knows = next;
+              } else for (const answer of scenario.user.answers ?? []) {
                 const unknown = [...valueTokens(answer.reply)].find(token => !known.has(token));
                 if (unknown) return `Card ${scenario.id}: the reply to "${answer.ifAsked}" contains "${unknown}", which is not in knows, facts or opening. Either add that value to user.knows when the user really knows it, or answer with a value already in knows, facts or opening; a reply must never contradict the card's facts.`;
               }
