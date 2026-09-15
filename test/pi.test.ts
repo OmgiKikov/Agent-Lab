@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { ModelRuntime, type ProviderConfig } from '@earendil-works/pi-coding-agent';
 import { createPiRuntime, getPiStatus, REPAIR_ATTEMPTS } from '../src/pi.js';
 import { judgeInput } from '../src/judge.js';
+import { ExperimentLab } from '../src/experiment.js';
 import { DEFAULT_JUDGE, emptyUsage, goalAttainment, REQUIREMENT_LIMIT, settingsSchema, type CallContext, type Scenario, type Tool, type Trial } from '../src/contracts.js';
 
 type Request = Parameters<NonNullable<ProviderConfig['streamSimple']>>[1];
@@ -486,6 +487,37 @@ test('confirmed generation reserves goal attainment for the model and decorates 
     assert.match(JSON.stringify(f.requests[2]?.messages), /exactly one generated agent rubric/);
     assert.deepEqual(prepared.scenarios[0]!.metrics?.map(metric => metric.id), ['prompt_compliance', 'goal_attainment', 'user_fidelity']);
   } finally { await f.close(); }
+});
+
+test('ExperimentLab treats confirmed dialogues as evidence without importing hidden production cards', async () => {
+  const quote = 'The support address is support@example.com.';
+  const outputs = [
+    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [] },
+    { scenarios: [confirmedCard(1)] },
+  ];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  let profileCalls = 0, goalCalls = 0;
+  f.adapter.profiles = async () => { profileCalls++; return []; };
+  f.adapter.goals = async () => { goalCalls++; return []; };
+  const lab = new ExperimentLab(join(f.directory, 'lab'), f.adapter);
+  try {
+    await lab.init();
+    const created = await lab.create({
+      task: 'Check the accepted support hypothesis', confirmedHypothesis: 'The agent may omit the support address.',
+      mode: 'live', workflow: 'evaluate', scenarioCount: 1, settings,
+      target: { kind: 'command', command: process.execPath, args: [] },
+      materials: [{ name: 'Policy', content: quote }],
+      dialogues: [{ id: 'd1', outcome: 'failure', messages: [
+        { role: 'user', content: 'Where can I get help?' },
+        { role: 'assistant', content: 'Observed answer without the address.' },
+      ] }],
+    });
+    await lab.waitForIdle();
+    const ready = await lab.get(created.id);
+    assert.equal(ready.error, null); assert.equal(ready.phase, 'review');
+    assert.deepEqual([profileCalls, goalCalls], [0, 0]);
+    assert.deepEqual(ready.scenarios.map(scenario => [scenario.id, scenario.provenance]), [['card_1', 'synthetic']]);
+  } finally { await lab.close(); await f.close(); }
 });
 
 test('card generation distinguishes the answer being sought from legitimate prior user knowledge', async () => {
