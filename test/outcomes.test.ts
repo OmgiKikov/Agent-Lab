@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { emptyUsage, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
-import { agentRubricResult, automaticTrialResult } from '../src/outcomes.js';
+import { agentRubricResult, automaticTrialResult, trialAssessmentComplete } from '../src/outcomes.js';
 
 const rubric = (id: string) => ({
   id, name: id, subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f',
@@ -45,4 +45,13 @@ test('the latest human criterion verdict is authoritative without rewriting auto
     review('pass', 'another-metric'),
   ]), 'fail', 'reviews for another trial or metric do not apply');
   assert.equal(JSON.stringify(trial), evidence, 'human reviews never mutate saved automatic evidence');
+});
+
+test('human criterion verdicts determine whether rubric assessment is complete', () => {
+  const incomplete = { ...trial, assessments: trial.assessments!.map(assessment => assessment.metricId === 'prompt_compliance' ? { ...assessment, result: 'unknown' as const } : assessment) };
+  assert.equal(trialAssessmentComplete(scenario, incomplete), false);
+  for (const verdict of ['pass', 'fail', 'invalid'] as const) assert.equal(trialAssessmentComplete(scenario, incomplete, [review(verdict, 'prompt_compliance')]), true);
+  assert.equal(trialAssessmentComplete(scenario, incomplete, [review('unknown', 'prompt_compliance')]), false);
+  assert.equal(trialAssessmentComplete(scenario, incomplete, [review('unknown', 'prompt_compliance'), review('pass', 'prompt_compliance', '2026-09-15T11:00:00Z')]), true);
+  assert.equal(trialAssessmentComplete(scenario, incomplete, [review('pass', 'prompt_compliance'), review('unknown', 'prompt_compliance', '2026-09-15T11:00:00Z')]), false);
 });

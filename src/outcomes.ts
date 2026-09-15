@@ -50,8 +50,11 @@ export function isAgentFailure(record: Experiment, trial: Trial): boolean {
 }
 /** A candidate cannot be accepted on a partially scored agent rubric. */
 export function trialAssessmentComplete(scenario: Scenario, trial: Trial, reviews: HumanReview[] = []): boolean {
+  const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
   return measurementUsable(scenario, trial, reviews) && (scenario.metrics ?? []).filter(m => m.subject === 'agent')
-    .every(m => { const result = trial.assessments?.find(a => a.metricId === m.id)?.result;
+    .every(m => { const human = latest.get(`${trial.id}|metric:${m.id}`)?.verdict;
+      if (human) return human !== 'unknown';
+      const result = trial.assessments?.find(a => a.metricId === m.id)?.result;
       return result === 'pass' || result === 'fail'; });
 }
 /** Human decisions override interpretation, never the recorded check or judge response. */
