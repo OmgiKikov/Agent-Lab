@@ -39,6 +39,8 @@ test('judgment retains raw independent votes, rejects conflicting criteria, and 
     assert.deepEqual(audit!.notApplicable, ['user_fidelity']); assert.deepEqual(input, original);
     const recorded = { ...input, trial: { ...trial, assessments: result, judgeAudit: audit } };
     assert.equal(hasCompleteJudgment(recorded), true);
+    assert.equal(hasCompleteJudgment({ ...recorded, scenario: { ...scenario, goalObservation: 'reply' } }), false,
+      'changing the owner-selected evidence channel invalidates the prior input fingerprint');
     recorded.trial.judgeAudit = structuredClone(audit);
     recorded.trial.judgeAudit!.attempts[0]!.raw = 'not the saved model response';
     assert.equal(hasCompleteJudgment(recorded), false, 'cached verdicts cannot replace the original model output');
@@ -120,14 +122,14 @@ test('missing action evidence cannot be replaced by agent self-attestation while
   assert.equal(hasCompleteJudgment({ scenario: actionScenario, sources: [], trial: { ...actionTrial, assessments, judgeAudit: staleProtocol } }), false,
     'an otherwise consistent receipt from an old judge prompt is incomplete');
 
-  const informationalScenario: Scenario = { ...actionScenario, successCriteria: 'Пользователь получает корректный адрес поддержки.' };
+  const informationalScenario: Scenario = { ...actionScenario, goalObservation: 'reply', successCriteria: 'Пользователь получает корректный адрес поддержки.' };
   const informational = await assessRepeated({ ...input, scenario: informationalScenario, trial: actionTrial }, model,
     { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async (_prompt, data) => {
       const metricId = JSON.parse(data).scenario.metrics[0].id;
       return JSON.stringify({ assessments: [{ metricId, passCondition: 'met', failCondition: 'not_met',
         rationale: 'Ответ содержит запрошенный адрес.', evidence: [1], citations: [{ seq: 1, quote: 'Готово' }] }] });
     });
-  assert.equal(informational.find(value => value.metricId === 'goal_attainment')!.result, 'unknown', 'semantic goal attainment stays undecided without an objective check');
+  assert.equal(informational.find(value => value.metricId === 'goal_attainment')!.result, 'pass', 'an owner-selected reply goal can be proven by the cited assistant answer');
   assert.equal(informational.find(value => value.metricId === 'reply_quality')!.result, 'pass', 'reply quality remains independently assessable');
 
   const unsupportedFailure = await assessRepeated({ ...input, scenario: { ...actionScenario, metrics: [{ ...goalAttainment }] }, trial: actionTrial }, model,
@@ -136,7 +138,7 @@ test('missing action evidence cannot be replaced by agent self-attestation while
     }] }));
   assert.equal(unsupportedFailure[0]!.result, 'unknown', 'assistant prose cannot prove action failure either');
 
-  const toolScenario: Scenario = { ...actionScenario, checks: [{ id: 'created', kind: 'tool_called', tool: 'create_ticket', description: 'Создание заявки вызвано' }], metrics: [{ ...goalAttainment }] };
+  const toolScenario: Scenario = { ...actionScenario, goalObservation: 'tool', checks: [{ id: 'created', kind: 'tool_called', tool: 'create_ticket', description: 'Создание заявки вызвано' }], metrics: [{ ...goalAttainment }] };
   const failedTool = await assessRepeated({ ...input, scenario: toolScenario, trial: { ...actionTrial,
     events: [...actionTrial.events, { seq: 2, type: 'tool_result', tool: 'create_ticket', text: 'Write rejected', result: { ok: false, error: 'Write rejected' } }],
   } }, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => JSON.stringify({ assessments: [{
@@ -153,14 +155,28 @@ test('missing action evidence cannot be replaced by agent self-attestation while
 
   for (const tool of ['weather', 'create_ticket']) {
     const linked = await assessRepeated({ ...input, scenario: toolScenario, trial: { ...actionTrial,
-      events: [...actionTrial.events, { seq: 2, type: 'tool_result', tool, text: 'ok', result: { ok: true } }],
+      events: [...actionTrial.events, { seq: 2, type: 'tool_call', tool, args: {} }, { seq: 3, type: 'tool_result', tool, text: 'ok', result: { ok: true } }],
+      checks: [{ id: 'created', description: 'Создание заявки вызвано', passed: tool === 'create_ticket', evidence: `${tool} was attempted` }],
     } }, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => JSON.stringify({ assessments: [{
-      metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Инструмент подтвердил результат.', evidence: [2], citations: [{ seq: 2, quote: 'ok' }],
+      metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Инструмент подтвердил результат.', evidence: [3], citations: [{ seq: 3, quote: 'ok' }],
     }] }));
     assert.equal(linked[0]!.result, tool === 'create_ticket' ? 'pass' : 'unknown', 'only a scenario-linked tool result can confirm the action');
   }
 
+  const multiCheckTool = await assessRepeated({ ...input, scenario: { ...toolScenario, checks: [...toolScenario.checks,
+    { id: 'bounded', kind: 'tool_count', tool: 'create_ticket', min: 1, max: 1, description: 'Один вызов' }] }, trial: { ...actionTrial,
+    events: [...actionTrial.events, { seq: 2, type: 'tool_call', tool: 'create_ticket', args: {} }, { seq: 3, type: 'tool_result', tool: 'create_ticket', result: { ok: true } }],
+    checks: [
+      { id: 'created', description: 'Создание заявки вызвано', passed: true, evidence: 'create_ticket was attempted' },
+      { id: 'bounded', description: 'Один вызов', passed: false, evidence: 'separate failed constraint' },
+    ],
+  } }, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => JSON.stringify({ assessments: [{
+    metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Инструмент подтвердил результат.', evidence: [3], citations: [{ seq: 3, quote: 'true' }],
+  }] }));
+  assert.equal(multiCheckTool[0]!.result, 'pass', 'one matching passed positive check is enough when the same tool has several checks');
+
   const forbiddenToolScenario: Scenario = { ...actionScenario,
+    goalObservation: 'tool',
     checks: [{ id: 'never_create', kind: 'tool_count', tool: 'create_ticket', min: 0, max: 0, description: 'Не создавать заявку' }], metrics: [{ ...goalAttainment }],
   };
   const forbiddenTool = await assessRepeated({ ...input, scenario: forbiddenToolScenario, trial: { ...actionTrial,
@@ -185,17 +201,18 @@ test('missing action evidence cannot be replaced by agent self-attestation while
     assert.equal(unsupported[0]!.result, 'unknown', 'observed state still needs a matching deterministic effect, not assistant prose');
   }
 
-  const stateScenario: Scenario = { ...actionScenario,
+  const stateScenario: Scenario = { ...actionScenario, goalObservation: 'state',
     checks: [{ id: 'created', kind: 'state_equals', recordId: 'request', field: 'status', value: 'created', description: 'Заявка существует' }],
     metrics: [{ ...goalAttainment }],
   };
   const stateTrial: Trial = { ...actionTrial, observation: { state: 'sandbox', tools: 'sandbox' },
     finalState: { records: { request: { status: 'created' } }, writableFields: [], transientFailures: 0 },
+    events: [...actionTrial.events, { seq: 2, type: 'tool_result', tool: 'create_ticket', result: { ok: true }, state: { records: { request: { status: 'created' } }, writableFields: [], transientFailures: 0 } }],
     checks: [{ id: 'created', description: 'Заявка существует', passed: true, evidence: 'request.status = created' }],
   };
   const stateBacked = await assessRepeated({ ...input, scenario: stateScenario, trial: stateTrial }, model,
     { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => JSON.stringify({ assessments: [{
-      metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Состояние подтверждено.', evidence: [1], citations: [{ seq: 1, quote: 'заявка создана' }],
+      metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Состояние подтверждено.', evidence: [2], citations: [{ seq: 2, quote: 'created' }],
     }] }));
   assert.equal(stateBacked[0]!.result, 'pass', 'a passed state predicate can prove action completion');
 
@@ -210,6 +227,28 @@ test('missing action evidence cannot be replaced by agent self-attestation while
       metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Часть состояния подтверждена.', evidence: [1], citations: [{ seq: 1, quote: 'заявка создана' }],
     }] }));
   assert.equal(conflictingState[0]!.result, 'unknown', 'one passed state predicate cannot hide another required predicate failure');
+
+  const wrongReplyEvidence = await assessRepeated({ ...input, scenario: { ...informationalScenario, metrics: [{ ...goalAttainment }] }, trial: { ...actionTrial,
+    events: [...actionTrial.events, { seq: 2, type: 'tool_call', tool: 'create_ticket', args: {} }, { seq: 3, type: 'tool_result', tool: 'create_ticket', result: { ok: true } }],
+    checks: [{ id: 'created', description: 'Создание заявки вызвано', passed: true, evidence: 'create_ticket was attempted' }],
+  } }, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => JSON.stringify({ assessments: [{
+    metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Цель подтверждена инструментом.', evidence: [3], citations: [{ seq: 3, quote: 'true' }],
+  }] }));
+  assert.equal(wrongReplyEvidence.find(value => value.metricId === 'goal_attainment')!.result, 'unknown', 'reply goals require a cited assistant reply');
+
+  const wrongStateEvidence = await assessRepeated({ ...input, scenario: stateScenario, trial: stateTrial }, model,
+    { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => JSON.stringify({ assessments: [{
+      metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Агент заявил об успехе.', evidence: [1], citations: [{ seq: 1, quote: 'заявка создана' }],
+    }] }));
+  assert.equal(wrongStateEvidence[0]!.result, 'unknown', 'state goals require cited observed state, not assistant prose');
+
+  const legacyTool = await assessRepeated({ ...input, scenario: { ...toolScenario, goalObservation: undefined }, trial: { ...actionTrial,
+    events: [...actionTrial.events, { seq: 2, type: 'tool_call', tool: 'create_ticket', args: {} }, { seq: 3, type: 'tool_result', tool: 'create_ticket', result: { ok: true } }],
+    checks: [{ id: 'created', description: 'Создание заявки вызвано', passed: true, evidence: 'create_ticket was attempted' }],
+  } }, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => JSON.stringify({ assessments: [{
+    metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Инструмент подтвердил результат.', evidence: [3], citations: [{ seq: 3, quote: 'true' }],
+  }] }));
+  assert.equal(legacyTool[0]!.result, 'unknown', 'legacy scenarios never guess a goal observation channel');
 });
 
 test('journal failure stops judgment before another request and original replies survive store reopening', async t => {

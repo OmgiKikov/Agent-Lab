@@ -27,13 +27,13 @@ const familyPlanSchema = z.strictObject({ families: z.array(z.strictObject({
 // New generated cards require an explicit interaction budget; older saved cards keep their original semantics.
 // With observed profiles the model may only choose a profileId; persona text is copied from the profile later.
 const RUBRIC_LIMIT = 8;
-const CONFIRMED_TEST_CLAUSE = `CONFIRMED HYPOTHESIS: return exactly one generated agent rubric with id "goal_attainment" and subject "agent". Its passCriteria must equal successCriteria verbatim. Generate no other rubric: the harness adds prompt_compliance when a prompt source exists and user_fidelity only for a reactive simulator mode. This overrides the general and external-target rubric instructions above.`;
+const CONFIRMED_TEST_CLAUSE = `CONFIRMED HYPOTHESIS: return exactly one generated agent rubric with id "goal_attainment" and subject "agent". Its passCriteria must equal successCriteria verbatim. Generate no other rubric: the harness adds prompt_compliance when a prompt source exists and user_fidelity only for a reactive simulator mode. goalObservation is owner-owned metadata: you must not return, infer, or replace it. This overrides the general and external-target rubric instructions above.`;
 // ponytail: conservative serialized-input cap; derive it from model token metadata if legitimate score inputs regularly hit it.
 const GOALS_INPUT_LIMIT = 120_000;
 const scoredGoalSchema = observedGoalSchema.extend({ requirementIds: observedGoalSchema.shape.requirementIds.unwrap().min(1) });
 /** Instructions about the shape of a machine reply: an envelope the user never sees. */
 /** external cards get harness rubrics after generation (fidelity, and prompt compliance when a prompt source exists); the model may use only what is left. */
-const generatedScenarioSchema = (external: boolean, harnessRubrics = 0, confirmed = false) => scenarioSchema.required({ successCriteria: true, assumptions: true, metrics: true })
+const generatedScenarioSchema = (external: boolean, harnessRubrics = 0, confirmed = false) => scenarioSchema.omit({ goalObservation: true }).required({ successCriteria: true, assumptions: true, metrics: true })
   // Models like to label the whole card with a stage; stages belong to criteria, so the label is accepted here and dropped in the review.
   .extend({ user: scenarioSchema.shape.user.required({ maxFollowUps: true }), stage: z.string().max(80).optional() })
   .refine(s => confirmed || (external ? s.checks.length > 0 || s.metrics.some(m => m.subject === 'agent')

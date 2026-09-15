@@ -133,6 +133,18 @@ test('user modes default to reactive and reject duplicates; imports reject dupli
   assert.equal(createInputSchema.safeParse({ ...base, dialogues: huge }).success, false);
 });
 
+test('confirmed hypotheses require an owner-selected goal observation while legacy scenarios remain readable', () => {
+  const base = {
+    task: 'Check the accepted hypothesis', materials: [{ name: 'Policy', content: 'Known rule.' }], mode: 'live' as const,
+    workflow: 'evaluate' as const, scenarioCount: 1, confirmedHypothesis: 'The agent may omit the answer.',
+  };
+  assert.equal(createInputSchema.safeParse(base).success, false);
+  for (const goalObservation of ['reply', 'tool', 'state'] as const) {
+    assert.equal(createInputSchema.parse({ ...base, goalObservation }).goalObservation, goalObservation);
+  }
+  assert.ok(scenarioSchema.safeParse(card()).success, 'legacy scenarios without goalObservation stay readable');
+});
+
 test('owner-supplied profiles need no evidence, observed ones do, and owner notes travel with the input', () => {
   assert.equal(profileSchema.safeParse({ id: 'p', persona: 'Busy parent', characteristics: ['Terse'] }).success, false);
   const owner = profileSchema.parse({ id: 'p', persona: 'Busy parent', characteristics: ['Terse'], source: 'owner' });

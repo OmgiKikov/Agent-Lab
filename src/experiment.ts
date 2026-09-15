@@ -155,12 +155,12 @@ export class ExperimentLab {
       const generated = await runtime.prepare({
         task: record.task, sources: record.sources, existingAgent: input.existingAgent, workflow: input.workflow, scenarioCount: input.scenarioCount,
         profiles: structuredClone(record.profiles), goldenCases: structuredClone(record.goldenCases), notes: record.notes, observedGoals: structuredClone(observedGoals),
-        targetKind: record.target.kind, confirmedHypothesis: input.confirmedHypothesis,
+        targetKind: record.target.kind, confirmedHypothesis: input.confirmedHypothesis, goalObservation: input.goalObservation,
         dialogues: structuredClone(record.dialogues), userModes: structuredClone(record.settings.userModes),
       }, ctx);
       const production = observedGoals.map(goal => goalToScenario(goal, record.profiles.find(p => p.id === goal.profileId)));
       const golden = record.goldenCases.map(goldenToScenario);
-      const synthetic = generated.scenarios.map(s => ({ ...s, provenance: 'synthetic' as const }));
+      const synthetic = generated.scenarios.map(s => ({ ...s, ...(confirmed ? { goalObservation: input.goalObservation! } : {}), provenance: 'synthetic' as const }));
       const prepared = validatePreparation({ ...generated, scenarios: [...synthetic, ...production, ...golden] }, record.sources, input.workflow, record.profiles);
       Object.assign(record, { requirements: prepared.requirements, questions: prepared.questions, scenarios: prepared.scenarios });
       const baseline = revision(input.existingAgent ?? prepared.agent, null, input.workflow === 'evaluate' ? 'Agent configuration selected for dialogue evaluation.' : 'Original agent before measured improvements.');

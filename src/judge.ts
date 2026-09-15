@@ -16,7 +16,7 @@ export const JUDGE_PROMPT = `${ASSESS_ROLE}\n${DATA_BOUNDARY}
 Evaluate passCriteria and failCriteria INDEPENDENTLY against the same evidence. Report met, not_met or unclear for EACH condition. Do not choose which condition takes precedence. If both apply, preserve both as met. An unspecified scope or priority is unclear; never invent one. Explain both conditions in rationale. A condition that is not exercised is unclear, not automatically met or not_met.
 Return exactly one compact JSON object, without markdown fences, matching this schema:
 ${JSON.stringify(z.toJSONSchema(responseSchema))}`;
-export const JUDGE_PROTOCOL = fingerprint({ version: 8, promptSources: 'observable-rules', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
+export const JUDGE_PROTOCOL = fingerprint({ version: 9, promptSources: 'observable-rules', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
 
 /**
@@ -42,7 +42,7 @@ export function judgeInput(input: Input) {
     ? 'Opening and first answer ONLY. Planned follow-ups were not delivered. Never penalize the agent for their absence.'
     : 'Evaluate only delivered requests, within the rubric stage.';
   return {
-    scenario: { metrics: input.scenario.metrics, successCriteria: input.scenario.successCriteria, checks: input.scenario.checks,
+    scenario: { metrics: input.scenario.metrics, successCriteria: input.scenario.successCriteria, checks: input.scenario.checks, goalObservation: input.scenario.goalObservation,
       user: input.trial.userMode === 'static' ? { ...input.scenario.user, script: [], maxFollowUps: 0 } : input.scenario.user },
     evaluationScope: observationMissing
       ? `${scope} Agent prose proves only what was said. Without observed state, action-dependent pass conditions remain unclear; assess reply quality independently.`
@@ -67,20 +67,30 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
       : failCondition === 'met' && passCondition === 'not_met' ? 'fail' : 'unknown';
     if (row.evidence.some(seq => !events.has(seq))) throw new Error(`Assessment ${row.metricId} cites a nonexistent trace event`);
     if (result !== 'unknown' && !row.evidence.length) throw new Error(`Assessment ${row.metricId} needs trace evidence for pass/fail`);
-    const expectedTools = new Set(input.scenario.checks.flatMap(check =>
-      check.kind === 'tool_called' || check.kind === 'tool_count' && check.min > 0 ? [check.tool] : []));
-    const toolConfirms = row.evidence.some(seq => input.trial.events.some(event => {
-      if (event.seq !== seq || event.type !== 'tool_result') return false;
+    const citedEvents = row.evidence.map(seq => input.trial.events.find(event => event.seq === seq)!);
+    const replyConfirms = citedEvents.some(event => event.type === 'assistant');
+    const expectedTools = input.scenario.checks.flatMap(check =>
+      check.kind === 'tool_called' || check.kind === 'tool_count' && check.min > 0 ? [{ tool: check.tool, id: check.id }] : []);
+    const toolConfirms = citedEvents.some(event => {
+      if (event.type !== 'tool_result' || !event.tool) return false;
+      const checkIds = expectedTools.filter(check => check.tool === event.tool).map(check => check.id);
       const value = event.result && typeof event.result === 'object' ? event.result as Record<string, unknown> : undefined;
-      return !!event.tool && expectedTools.has(event.tool) && (value?.ok === true || value?.success === true);
-    }));
+      const index = input.trial.events.indexOf(event);
+      const call = input.trial.events[index - 1];
+      return checkIds.length > 0 && input.trial.checks.some(check => checkIds.includes(check.id) && check.passed)
+        && call?.type === 'tool_call' && call.tool === event.tool && (value?.ok === true || value?.success === true);
+    });
     const stateChecks = input.scenario.checks.filter(check => check.kind === 'state_equals');
     const stateConfirms = input.trial.observation?.state !== undefined && input.trial.observation.state !== 'missing'
-      && stateChecks.length > 0 && stateChecks.every(check => input.trial.checks.some(result => result.id === check.id && result.passed));
-    const unsupportedGoal = row.metricId === 'goal_attainment' && result !== 'unknown' && !stateConfirms && !toolConfirms;
+      && stateChecks.length > 0 && stateChecks.every(check => input.trial.checks.some(result => result.id === check.id && result.passed))
+      && citedEvents.some(event => event.state && stateChecks.every(check => Object.is(event.state!.records[check.recordId]?.[check.field], check.value)));
+    const goalConfirmed = input.scenario.goalObservation === 'reply' ? replyConfirms
+      : input.scenario.goalObservation === 'tool' ? toolConfirms
+      : input.scenario.goalObservation === 'state' ? stateConfirms : false;
+    const unsupportedGoal = row.metricId === 'goal_attainment' && result !== 'unknown' && !goalConfirmed;
     if (unsupportedGoal) result = 'unknown';
     return validateAssessments(metrics.filter(m => m.id === row.metricId), input.trial.events, [{ ...row, result,
-      ...(unsupportedGoal ? { rationale: 'Достижение цели не подтверждено наблюдаемым эффектом или точной проверкой; слова агента оцениваются отдельно.' } : {}),
+      ...(unsupportedGoal ? { rationale: 'Достижение цели не подтверждено цитированным доказательством выбранного владельцем типа; слова агента оцениваются отдельно.' } : {}),
     }])[0]!;
   });
 }

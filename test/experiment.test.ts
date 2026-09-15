@@ -298,6 +298,22 @@ test('unresolved business questions block approval until new materials produce a
   assert.equal((await lab.get(record.id)).phase, 'review');
 });
 
+test('goal observation is part of the existing full draft hash while legacy drafts stay stable', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const input = demoInput(); input.workflow = 'evaluate'; input.scenarioCount = 1;
+  const created = await lab.create(input); await lab.waitForIdle();
+  const legacy = await lab.get(created.id);
+  const legacyHash = draftHash(legacy);
+  assert.equal(draftHash(structuredClone(legacy)), legacyHash);
+
+  const card = { ...legacy.scenarios[0]!, goalObservation: 'reply' as const };
+  const edited = await lab.updateDraft(legacy.id, legacyHash, { scenarios: [card] });
+  assert.notEqual(draftHash(edited), legacyHash);
+  const toolDraft = structuredClone(edited);
+  toolDraft.scenarios[0]!.goalObservation = 'tool';
+  assert.notEqual(draftHash(toolDraft), draftHash(edited));
+});
+
 test('one user card requires exact human approval, runs one unchanged agent, then preserves separate human result review', async t => {
   const runtime = createDemoRuntime();
   let targets = 0; let improvements = 0;

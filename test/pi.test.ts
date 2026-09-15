@@ -381,7 +381,7 @@ test('confirmed hypothesis repairs zero, duplicate and blank candidates before p
   const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
   try {
     const prepared = await f.adapter.prepare({
-      task: 'Check the accepted support hypothesis', confirmedHypothesis: 'The agent may omit the owner-approved support address.',
+      task: 'Check the accepted support hypothesis', goalObservation: 'reply', confirmedHypothesis: 'The agent may omit the owner-approved support address.',
       targetKind: 'command', workflow: 'evaluate', scenarioCount: 1, userModes: ['static'],
       dialogues: [{ id: 'd1', outcome: 'failure', messages: [
         { role: 'user', content: 'Where can I get help?' },
@@ -394,6 +394,8 @@ test('confirmed hypothesis repairs zero, duplicate and blank candidates before p
     assert.equal(prepared.scenarios[0]!.successCriteria, accepted.successCriteria);
     assert.deepEqual(prepared.scenarios[0]!.metrics?.map(metric => metric.id), ['goal_attainment']);
     assert.equal(prepared.scenarios[0]!.metrics?.[0]?.passCriteria, accepted.successCriteria);
+    assert.match(f.requests[1]?.systemPrompt ?? '', /goalObservation.*owner.*must not/i);
+    assert.doesNotMatch(JSON.stringify(f.requests), /"goalObservation"/);
     assert.match(JSON.stringify(f.requests), /confirmedHypothesis/);
     assert.match(JSON.stringify(f.requests), /Where can I get help\?/);
     assert.doesNotMatch(JSON.stringify(f.requests), /untrusted observed answer/);
@@ -417,7 +419,7 @@ test('confirmed hypothesis repairs seeded state until an exact state check resol
     let failure: unknown;
     try {
       prepared = await f.adapter.prepare({
-        task: 'Check the accepted state hypothesis', confirmedHypothesis: 'The agent may not produce an observable account state.',
+        task: 'Check the accepted state hypothesis', goalObservation: 'state', confirmedHypothesis: 'The agent may not produce an observable account state.',
         targetKind: 'command', workflow: 'evaluate', scenarioCount: 1, userModes: ['static'],
         sources: [{ id: 'source_1', name: 'Policy', content: quote, hash: 'hash' }],
       }, callContext().ctx);
@@ -449,7 +451,7 @@ test('confirmed answer values use owner and user evidence, inspect every token, 
     let failure: unknown;
     try {
       prepared = await f.adapter.prepare({
-        task: 'Check grounded references', confirmedHypothesis: 'The agent may ask for unsupported reference values.',
+        task: 'Check grounded references', goalObservation: 'reply', confirmedHypothesis: 'The agent may ask for unsupported reference values.',
         targetKind: 'command', workflow: 'evaluate', scenarioCount: 1, userModes: ['static'],
         dialogues: [{ id: 'd1', outcome: 'success', messages: [
           { role: 'user', content: 'Мой СЧЁТ-77 указан в заявке.' },
@@ -479,7 +481,7 @@ test('confirmed generation reserves goal attainment for the model and decorates 
   const f = await fixture((_request, index) => JSON.stringify(index === 0 ? requirements : index === 1 ? { scenarios: [extra] } : { scenarios: [valid] }));
   try {
     const prepared = await f.adapter.prepare({
-      task: 'Check the confirmed prompt hypothesis', confirmedHypothesis: 'The agent may ignore the formal-answer rule.',
+      task: 'Check the confirmed prompt hypothesis', goalObservation: 'reply', confirmedHypothesis: 'The agent may ignore the formal-answer rule.',
       targetKind: 'command', workflow: 'evaluate', scenarioCount: 1, userModes: ['reactive'],
       sources: [{ id: 'prompt_1', name: 'Agent prompt', content: quote, hash: 'hash', kind: 'prompt' }],
     }, callContext().ctx);
@@ -503,7 +505,7 @@ test('ExperimentLab treats confirmed dialogues as evidence without importing hid
   try {
     await lab.init();
     const created = await lab.create({
-      task: 'Check the accepted support hypothesis', confirmedHypothesis: 'The agent may omit the support address.',
+      task: 'Check the accepted support hypothesis', goalObservation: 'reply', confirmedHypothesis: 'The agent may omit the support address.',
       mode: 'live', workflow: 'evaluate', scenarioCount: 1, settings,
       target: { kind: 'command', command: process.execPath, args: [] },
       materials: [{ name: 'Policy', content: quote }],
@@ -517,6 +519,7 @@ test('ExperimentLab treats confirmed dialogues as evidence without importing hid
     assert.equal(ready.error, null); assert.equal(ready.phase, 'review');
     assert.deepEqual([profileCalls, goalCalls], [0, 0]);
     assert.deepEqual(ready.scenarios.map(scenario => [scenario.id, scenario.provenance]), [['card_1', 'synthetic']]);
+    assert.equal(ready.scenarios[0]!.goalObservation, 'reply');
   } finally { await lab.close(); await f.close(); }
 });
 
