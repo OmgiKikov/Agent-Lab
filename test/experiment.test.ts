@@ -71,6 +71,34 @@ test('complete experiment freezes measurement, restricts builder feedback, persi
   await assert.rejects(lab.start(result.id, { approved: true }), /только эксперимент, ожидающий проверки/);
 });
 
+test('compare improvement accepts a decisive human review for an unknown agent metric', async t => {
+  const runtime = createDemoRuntime(); let improvements = 0;
+  const improve = runtime.improve;
+  runtime.improve = async (...args) => { improvements++; return improve(...args); };
+  const { lab } = await setup(t, runtime);
+  const created = await lab.create({ ...demoInput(), settings: { ...demoInput().settings, repeats: 1 } }); await lab.waitForIdle();
+  let draft = await lab.get(created.id);
+  const scenario = draft.scenarios.find(card => card.split === 'dev')!;
+  draft = await lab.updateDraft(draft.id, draftHash(draft), { scenarios: [{ ...scenario, metrics: [{
+    id: 'human_only', name: 'Human-only criterion', subject: 'agent', description: 'Requires human judgment.',
+    passCriteria: 'A human accepts the dialogue.', failCriteria: 'A human rejects the dialogue.',
+  }] }] });
+  const save = lab.store.save.bind(lab.store); let reviews = 0;
+  lab.store.save = async record => {
+    for (const trial of record.trials) for (const assessment of trial.assessments?.filter(item => item.result === 'unknown') ?? []) {
+      if (record.humanReviews.some(review => review.trialId === trial.id && review.metricId === assessment.metricId)) continue;
+      record.humanReviews.push({ id: `review_${trial.id}`, trialId: trial.id, metricId: assessment.metricId,
+        verdict: 'pass', note: 'Accepted from the recorded dialogue.', createdAt: record.updatedAt });
+      reviews++;
+    }
+    await save(record);
+  };
+  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
+  const result = await lab.get(draft.id);
+  assert.equal(result.phase, 'complete', result.error ?? '');
+  assert.equal(improvements, 1); assert.ok(reviews > 0);
+});
+
 test('candidate infrastructure failures retain the baseline and remain visible rather than becoming improvement', async t => {
   const runtime = createDemoRuntime();
   const openTarget = runtime.openTarget;
