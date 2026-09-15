@@ -300,6 +300,9 @@ test('one user card requires exact human approval, runs one unchanged agent, the
   const priorResultHash = resultHash(result);
   await assert.rejects(lab.addHumanReview(result.id, { trialId: 'missing', verdict: 'invalid', note: 'Wrong user.' }), /Такого диалога/);
   await assert.rejects(lab.addHumanReview(result.id, { trialId: originalTrial.id, metricId: 'missing', verdict: 'fail', note: 'Wrong metric.' }), /Такой рубрики/);
+  await assert.rejects(lab.addHumanReview(result.id, { trialId: originalTrial.id, verdict: 'fail', note: 'No event reference.', reviewedDialogue: true }), /ссылаться на событие/);
+  const foreignSeq = Math.max(...originalTrial.events.map(event => event.seq)) + 1;
+  await assert.rejects(lab.addHumanReview(result.id, { trialId: originalTrial.id, verdict: 'fail', note: `Reviewed #${foreignSeq}.`, reviewedDialogue: true }), /ссылаться на событие/);
   const annotated = await lab.addHumanReview(result.id, {
     trialId: originalTrial.id, metricId: result.scenarios[0]!.metrics![0]!.id, verdict: 'unknown', note: 'Need the real pilot before accepting this estimate.',
   });
