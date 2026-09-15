@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, rm, readFile, readdir, writeFile, mkdir, cp } from 'node:fs/promises';
+import { access, mkdtemp, rm, readFile, readdir, writeFile, mkdir, cp } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -379,6 +379,38 @@ test('CLI score imports ordered JSONL evidence and exports it without calling an
   const unconfirmed = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--data-dir', join(directory, 'unconfirmed')], { encoding: 'utf8' });
   assert.equal(unconfirmed.status, 2);
   assert.match(unconfirmed.stderr, /--yes/);
+});
+
+test('CLI discovery shows the computed ceiling before consent, accepts 300 logs and rejects 301 without mutation', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-discover-cli-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const task = join(directory, 'task.json');
+  const dialogues = join(directory, 'dialogues.json');
+  const tooMany = join(directory, 'dialogues-301.json');
+  const data = join(directory, 'no-consent-data');
+  const rejectedData = join(directory, 'rejected-data');
+  await writeFile(task, JSON.stringify({ task: 'Найти полезный тест', mode: 'live',
+    materials: [{ name: 'policy.md', content: 'Агент обязан назвать адрес support@example.com.' }] }));
+  const logs = Array.from({ length: 300 }, (_, index) => ({ id: `dialogue_${index}`,
+    messages: [{ role: 'user', content: `Где поддержка ${index}?` }, { role: 'assistant', content: 'Позвоните позже.' }] }));
+  await writeFile(dialogues, JSON.stringify(logs));
+  await writeFile(tooMany, JSON.stringify([...logs, { ...logs[0], id: 'dialogue_300' }]));
+
+  const preview = spawnSync(process.execPath, [resolve('dist/cli.js'), 'discover', '--input', dialogues, '--task', task, '--json', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(preview.status, 0, preview.stderr);
+  const events = preview.stdout.trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(events[0].type, 'discovery_plan');
+  assert.equal(events[0].dialogueCount, 300);
+  assert.ok(events[0].batches > 1);
+  assert.ok(events[0].maxCalls > 20, 'discovery receives its computed ceiling instead of the normal 20-call default');
+  assert.equal(events[1].type, 'next_step');
+  await assert.rejects(access(data), /ENOENT/, 'preview does not initialize or mutate the lab');
+
+  const rejected = spawnSync(process.execPath, [resolve('dist/cli.js'), 'discover', '--input', tooMany, '--task', task, '--json', '--data-dir', rejectedData], { encoding: 'utf8' });
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /Too big|300|слишком|maximum/i);
+  assert.match(rejected.stderr, /агент не запускался/i);
+  await assert.rejects(access(rejectedData), /ENOENT/, 'invalid input does not initialize or mutate the lab');
 });
 
 test('draft edits cannot launder provenance; clarification keeps the old questions and records owner answers as a source', async t => {

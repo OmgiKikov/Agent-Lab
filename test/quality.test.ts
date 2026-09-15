@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { rm } from 'node:fs/promises';
-import { qualityLines, qualitySummary, plural, scoreBrief, shorten, testPlanLines, trialProofLines } from '../src/quality.js';
+import { discoveryBrief, qualityLines, qualitySummary, plural, scoreBrief, shorten, testPlanLines, trialProofLines } from '../src/quality.js';
 import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
 import { draftHash } from '../src/experiment.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
@@ -112,6 +112,46 @@ test('trial proof preserves passing and failing dialogue evidence with exact cit
   assert.match(failText, /FAIL \[time\] Время изменено\n  Доказательство: осталось 0/);
   assert.match(failText, /FAIL \[goal\] Цель выполнена · события: #1/);
   assert.throws(() => trialProofLines(passedRecord, 'missing'), /не найден/);
+});
+
+test('discovery brief reports bounded selection with citations and prioritizes failure states', () => {
+  const dialogues = [
+    { id: 'd1', messages: [{ role: 'user' as const, content: 'Где поддержка?' }, { role: 'assistant' as const, content: 'Не знаю.' }], outcome: 'unknown' as const },
+    { id: 'd2', messages: [{ role: 'user' as const, content: 'Дайте адрес.' }, { role: 'assistant' as const, content: 'Позвоните позже.' }], outcome: 'unknown' as const },
+    { id: 'c1', messages: [{ role: 'user' as const, content: 'Спасибо.' }, { role: 'assistant' as const, content: 'Пожалуйста.' }], outcome: 'unknown' as const },
+  ];
+  const ready = record({ dialogues, discovery: {
+    protocol: 'discovery-1', phase: 'ready', error: null,
+    requirements: [{ id: 'support', text: 'Назвать адрес', sourceId: 'policy', quote: 'support@example.com', critical: true }],
+    observations: [
+      { dialogueId: 'd1', classification: 'candidate', requirementId: 'support', summary: 'Адрес пропущен.', citations: [{ seq: 1, quote: 'Не знаю.' }] },
+      { dialogueId: 'd2', classification: 'candidate', requirementId: 'support', summary: 'Адрес пропущен.', citations: [{ seq: 1, quote: 'Позвоните позже.' }] },
+      { dialogueId: 'c1', classification: 'clean', summary: 'Другой случай.', citations: [] },
+    ],
+    seed: 'seed', focusRequirementId: 'support', representativeIds: ['d1', 'd2'], controlIds: ['c1'], selectedIds: ['d1', 'd2', 'c1'],
+    completedBatchCount: 2, groupingComplete: true, completedDeepIds: ['d1', 'd2', 'c1'], deep: [],
+    hypothesis: { text: 'Агент может не назвать адрес поддержки.\nНАБЛЮДЕНИЕ: ответ агента (reply)', proposedGoalObservation: 'reply', requirementId: 'support',
+      eventIds: [{ dialogueId: 'd1', seq: 1 }, { dialogueId: 'd2', seq: 1 }] },
+    callPlan: { batches: 2, selectedCap: 3, metrics: 2, nominalCalls: 20, maxCalls: 30 }, callsUsed: 12, totalDialogues: 3, oversizedIds: [],
+  } });
+  const brief = discoveryBrief(ready);
+  assert.deepEqual({ status: brief.status, total: brief.total, coarse: brief.coarse, selected: brief.selected,
+    representatives: brief.representatives, controls: brief.controls },
+  { status: 'ready', total: 3, coarse: 3, selected: 3, representatives: 2, controls: 1 });
+  const text = brief.lines.join('\n');
+  assert.match(text, /2 из 3 — это отбор, не accuracy/);
+  assert.match(text, /Первичный разбор: 3 из 3; партии 2 из 2/);
+  assert.match(text, /Контроли: 1 — false-negative probe/);
+  assert.match(text, /диалог d1, событие #1: «Не знаю\.»/);
+  assert.match(text, /диалог d2, событие #1: «Позвоните позже\.»/);
+  assert.match(text, /НАБЛЮДЕНИЕ: ответ агента \(reply\)\n\nПроверим\?$/);
+  assert.equal(brief.fromRunId, ready.id); assert.equal(brief.hypothesis, ready.discovery!.hypothesis!.text);
+
+  assert.equal(discoveryBrief({ ...ready, discovery: { ...ready.discovery!, phase: 'error', error: 'bad' } }).status, 'error');
+  assert.equal(discoveryBrief({ ...ready, discovery: { ...ready.discovery!, phase: 'budget_exhausted', error: 'budget' } }).status, 'budget_exhausted');
+  assert.equal(discoveryBrief({ ...ready, discovery: { ...ready.discovery!, phase: 'partial', error: 'partial' } }).status, 'partial');
+  assert.equal(discoveryBrief({ ...ready, discovery: { ...ready.discovery!, phase: 'insufficient', hypothesis: undefined } }).status, 'insufficient');
+  assert.equal(discoveryBrief({ ...ready, discovery: undefined }).status, 'insufficient');
 });
 
 test('the first screen counts cards, criteria and causes from the shared outcome rules and names what a person still has to look at', () => {

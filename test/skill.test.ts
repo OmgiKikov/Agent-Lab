@@ -3,22 +3,21 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-test('agent-builder stops at one grounded hypothesis until the owner answers', async () => {
+test('agent-builder discovers one saved hypothesis and hands it to one test after the owner answers', async () => {
   const skill = await readFile(fileURLToPath(new URL('../skills/agent-builder/SKILL.md', import.meta.url)), 'utf8');
-  const gate = skill.slice(skill.indexOf('Before any test-building call'), skill.indexOf('## Start from the local project'));
+  const discovery = skill.slice(skill.indexOf('## Real dialogues at the start'), skill.indexOf('## Start from the local project'));
 
-  const headings = ['ТРЕБОВАНИЯ', 'НАБЛЮДАЕМОЕ', 'НЕИЗВЕСТНО', 'ГИПОТЕЗА', 'Проверим?'];
-  assert.ok(headings.every((heading, index) => gate.indexOf(heading) >= 0
-    && (index === 0 || gate.indexOf(heading) > gate.indexOf(headings[index - 1]!))));
-  assert.match(gate, /ровно одн[ау] гипотез/);
-  assert.match(gate, /источник владельца.*точн.*цитат/);
-  assert.match(gate, /путь.*строк|диалог.*событи/);
-  assert.match(gate, /existing code.*assistant reply.*saved outcome.*observations/i);
-  assert.match(gate, /observable effect.*НЕЯСНО/i);
-  assert.match(gate, /Недостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога\./);
-  assert.match(gate, /«да».*контекст.*[Фф]аз[ыа] 3/);
-  assert.match(gate, /«нет».*нов.*доказательств/);
-  assert.match(gate, /не сохраня.*гипотез.*не (?:созда|стро).*тест.*не запуска.*агент.*не сохраня.*регресси/);
-  assert.match(skill, /Do not propose production\/synthetic cards during Phase 2/);
+  assert.match(discovery, /mode:"discover"/);
+  assert.match(discovery, /up to 300 dialogues/);
+  assert.match(discovery, /call plan.*native confirmation.*before the first provider call/is);
+  assert.match(discovery, /selection evidence, not production accuracy/i);
+  assert.match(discovery, /exact dialogue\/event observations/i);
+  assert.match(discovery, /НАБЛЮДЕНИЕ: ответ агента \(reply\).*Проверим\?/s);
+  assert.match(discovery, /On «да».*exact returned `fromRunId`.*exact returned `hypothesis`/s);
+  assert.match(discovery, /re-reads the saved run and builds exactly that one test/i);
+  assert.match(discovery, /do not ask.*another technical confirmation round/i);
+  assert.match(discovery, /On refusal or correction, build nothing/i);
+  assert.match(discovery, /agent_lab_accept.*separate decision/is);
+  assert.match(discovery, /Acceptance does not run the agent/i);
   assert.match(skill, /Пустой ответ не означает.*без (?:диалогов|них)/);
 });

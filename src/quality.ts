@@ -66,6 +66,19 @@ export interface TrialProofLines {
   lines: string[];
 }
 
+export interface DiscoveryBrief {
+  status: 'error' | 'budget_exhausted' | 'partial' | 'ready' | 'insufficient';
+  runId: string;
+  total: number;
+  coarse: number;
+  selected: number;
+  representatives: number;
+  controls: number;
+  lines: string[];
+  fromRunId?: string;
+  hypothesis?: string;
+}
+
 const planText = (value: string): string => value.replace(/\r\n?/g, '\n').replace(/\t/g, '  ')
   .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '');
 const field = (label: string, value: string): string[] => [label, ...planText(value).split('\n').map(line => `  ${line}`)];
@@ -150,6 +163,74 @@ export function trialProofLines(record: Experiment, trialId: string): TrialProof
       ...(rubrics.length ? rubrics : ['—']),
     ],
   };
+}
+
+/** Persisted exploratory selection summary. It never turns selection counts into quality metrics. */
+export function discoveryBrief(record: Experiment): DiscoveryBrief {
+  const discovery = record.discovery;
+  const counts = {
+    runId: record.id,
+    total: discovery?.totalDialogues ?? record.dialogues.length,
+    coarse: discovery?.observations.length ?? 0,
+    selected: discovery?.selectedIds.length ?? 0,
+    representatives: discovery?.representativeIds.length ?? 0,
+    controls: discovery?.controlIds.length ?? 0,
+  };
+  const countLines = discovery ? [
+    `Всего диалогов: ${counts.total}.`,
+    `Первичный разбор: ${counts.coarse} из ${counts.total}; партии ${discovery.completedBatchCount} из ${discovery.callPlan.batches}.`,
+    `Выбрано для подробной проверки: ${counts.selected}.`,
+    `Примеры сигнала: ${counts.representatives}.`,
+    `Контроли: ${counts.controls} — false-negative probe, а не оценка production accuracy.`,
+    'Это отбор, не accuracy.',
+  ] : [
+    `Всего диалогов: ${counts.total}.`,
+    'Первичный разбор: 0.',
+    'Выбрано для подробной проверки: 0.',
+    'Примеры сигнала: 0.',
+    'Контроли: 0 — false-negative probe.',
+    'Это отбор, не accuracy.',
+  ];
+  const citationIds = discovery?.hypothesis?.eventIds ?? discovery?.observations.flatMap(observation =>
+    observation.citations.map(citation => ({ dialogueId: observation.dialogueId, seq: citation.seq }))
+  ) ?? [];
+  const seen = new Set<string>();
+  const citations = citationIds.flatMap(citation => {
+    const key = `${citation.dialogueId}:${citation.seq}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    const message = record.dialogues.find(dialogue => dialogue.id === citation.dialogueId)?.messages[citation.seq];
+    return message ? [`• диалог ${planText(citation.dialogueId)}, событие #${citation.seq}: «${planText(message.content)}»`] : [];
+  });
+  const evidenceLines = citations.length ? ['', 'ДОКАЗАТЕЛЬСТВА', ...citations] : [];
+  if (!discovery) return { status: 'insufficient', ...counts,
+    lines: ['НЕДОСТАТОЧНО ДАННЫХ', ...countLines, 'Сохранённого discovery-разбора нет.'] };
+  if (discovery.phase === 'error') return { status: 'error', ...counts,
+    lines: ['ОШИБКА DISCOVERY', planText(discovery.error ?? record.error ?? 'Discovery не завершён.'), ...countLines, ...evidenceLines] };
+  if (discovery.phase === 'budget_exhausted') return { status: 'budget_exhausted', ...counts,
+    lines: ['БЮДЖЕТ DISCOVERY ИСЧЕРПАН', planText(discovery.error ?? 'Лимит модельных вызовов исчерпан.'), ...countLines, ...evidenceLines] };
+  if (discovery.phase === 'partial' || discovery.phase === 'running') return { status: 'partial', ...counts,
+    lines: ['ЧАСТИЧНЫЙ РЕЗУЛЬТАТ DISCOVERY', planText(discovery.error ?? 'Discovery ещё не завершён.'), ...countLines, ...evidenceLines] };
+  if (discovery.phase === 'ready' && discovery.hypothesis) {
+    const focusSupport = new Set(discovery.observations.filter(observation => observation.classification === 'candidate'
+      && observation.requirementId === discovery.focusRequirementId).map(observation => observation.dialogueId)).size;
+    const hypothesis = discovery.hypothesis.text.replace(/\nНАБЛЮДЕНИЕ: ответ агента \(reply\)\s*$/u, '').trim();
+    return { status: 'ready', ...counts, fromRunId: record.id, hypothesis: discovery.hypothesis.text,
+      lines: [
+        `ПОВТОРЯЮЩИЙСЯ СИГНАЛ: ${focusSupport} из ${counts.total} — это отбор, не accuracy.`,
+        ...countLines.slice(0, -1),
+        ...evidenceLines,
+        '',
+        'ГИПОТЕЗА',
+        ...planText(hypothesis).split('\n'),
+        '',
+        'НАБЛЮДЕНИЕ: ответ агента (reply)',
+        '',
+        'Проверим?',
+      ] };
+  }
+  return { status: 'insufficient', ...counts,
+    lines: ['НЕДОСТАТОЧНО ДАННЫХ', ...countLines, ...evidenceLines, 'Повторяющийся сигнал минимум в двух диалогах не подтверждён.'] };
 }
 
 type GroundedScore = {

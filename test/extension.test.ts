@@ -9,7 +9,7 @@ import { DefaultResourceLoader, SettingsManager, type ExtensionAPI, type Extensi
 import type { Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
-import { ExperimentLab } from '../dist/experiment.js';
+import { ExperimentLab, planDiscovery } from '../dist/experiment.js';
 
 function registered(onUserMessage?: (message: unknown) => void) {
   const tools = new Map<string, ToolDefinition>();
@@ -36,28 +36,128 @@ function output(result: Awaited<ReturnType<ToolDefinition['execute']>>) {
   return JSON.parse(result.content.filter(c => c.type === 'text').map(c => c.text).join('\n'));
 }
 
-test('injected Pi instructions stop at one grounded hypothesis until the owner answers', async () => {
+test('injected Pi instructions hand saved discovery directly to one test after the owner answers', async () => {
   const previous = process.env.AGENT_LAB_SESSION;
   process.env.AGENT_LAB_SESSION = '1';
   const { beforeAgentStart, shutdown } = registered();
   try {
     const result = await beforeAgentStart({ systemPrompt: 'base' }, { cwd: '.', hasUI: false, mode: 'print' } as ExtensionContext);
     const prompt = result?.systemPrompt ?? '';
-    const headings = ['ТРЕБОВАНИЯ', 'НАБЛЮДАЕМОЕ', 'НЕИЗВЕСТНО', 'ГИПОТЕЗА', 'Проверим?'];
-    assert.ok(headings.every((heading, index) => prompt.indexOf(heading) >= 0
-      && (index === 0 || prompt.indexOf(heading) > prompt.indexOf(headings[index - 1]!))));
-    assert.match(prompt, /owner source ID and exact quote/i);
-    assert.match(prompt, /use score and inspect to gather evidence.*Before any non-score call/is);
-    assert.match(prompt, /repository path\/line or dialogue\/event/i);
-    assert.match(prompt, /code, assistant replies and saved outcomes.*observations/i);
-    assert.match(prompt, /observable action effect.*НЕЯСНО/i);
-    assert.match(prompt, /Недостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога\./);
-    assert.match(prompt, /yes.*Phase 3 conversation context.*no.*more evidence/is);
-    assert.match(prompt, /Neither answer persists.*builds.*runs.*saves/is);
+    assert.match(prompt, /agent_lab_build mode=discover/i);
+    assert.match(prompt, /selection, not an accuracy estimate/i);
+    assert.match(prompt, /Show that saved brief exactly; do not reconstruct or paraphrase it/i);
+    assert.match(prompt, /answers yes.*exact fromRunId and hypothesis/is);
+    assert.match(prompt, /re-reads the saved evidence and builds exactly one editable test/is);
+    assert.match(prompt, /refusal or correction builds nothing/i);
+    assert.match(prompt, /agent_lab_accept.*decision about the test definition/is);
+    assert.match(prompt, /agent_lab_run only when the owner explicitly asks/is);
   } finally {
     if (previous === undefined) delete process.env.AGENT_LAB_SESSION; else process.env.AGENT_LAB_SESSION = previous;
     await shutdown();
   }
+});
+
+test('Pi discovery confirms a computed budget, accepts 300 logs and hands the exact saved hypothesis to one visible test', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-discovery-surface-'));
+  const fixtureLab = new ExperimentLab(join(directory, 'fixture'), createDemoRuntime());
+  await fixtureLab.init();
+  const seeded = await fixtureLab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 });
+  await fixtureLab.waitForIdle();
+  const prepared = await fixtureLab.get(seeded.id);
+  await fixtureLab.close();
+  prepared.id = 'draft-from-discovery';
+  prepared.scenarios = [prepared.scenarios[0]!];
+  prepared.scenarios[0]!.goalObservation = 'reply';
+  prepared.phase = 'review';
+  prepared.message = 'Тест готов.';
+  prepared.error = null;
+
+  const originalDiscover = ExperimentLab.prototype.discover;
+  const originalBuild = ExperimentLab.prototype.buildFromDiscovery;
+  const originalGet = ExperimentLab.prototype.get;
+  const originalWait = ExperimentLab.prototype.waitForIdle;
+  let ready: typeof prepared | undefined;
+  let discoverCalls = 0;
+  let handoff: { fromRunId: string; hypothesis: string } | undefined;
+  ExperimentLab.prototype.discover = async function(raw) {
+    discoverCalls++;
+    const plan = planDiscovery(raw);
+    const requirement = { id: 'support', text: 'Назвать адрес поддержки', sourceId: prepared.sources[0]!.id,
+      quote: prepared.sources[0]!.content.slice(0, 20), critical: true };
+    const hypothesis = 'Агент может не назвать адрес поддержки.\nНАБЛЮДЕНИЕ: ответ агента (reply)';
+    ready = { ...structuredClone(prepared), id: 'discovery-run', phase: 'complete', dialogues: structuredClone(raw.dialogues), scenarios: [], trials: [],
+      discovery: { protocol: 'discovery-1', phase: 'ready', error: null, requirements: [requirement],
+        observations: [
+          { dialogueId: raw.dialogues[0]!.id, classification: 'candidate', requirementId: requirement.id, summary: 'Адрес не назван.', citations: [{ seq: 1, quote: raw.dialogues[0]!.messages[1]!.content }] },
+          { dialogueId: raw.dialogues[1]!.id, classification: 'candidate', requirementId: requirement.id, summary: 'Адрес не назван.', citations: [{ seq: 1, quote: raw.dialogues[1]!.messages[1]!.content }] },
+          { dialogueId: raw.dialogues[2]!.id, classification: 'clean', summary: 'Контроль.', citations: [] },
+        ], seed: plan.seed, focusRequirementId: requirement.id, representativeIds: [raw.dialogues[0]!.id, raw.dialogues[1]!.id],
+        controlIds: [raw.dialogues[2]!.id], selectedIds: [raw.dialogues[0]!.id, raw.dialogues[1]!.id, raw.dialogues[2]!.id],
+        completedBatchCount: plan.batchCount, groupingComplete: true,
+        completedDeepIds: [raw.dialogues[0]!.id, raw.dialogues[1]!.id, raw.dialogues[2]!.id], deep: [],
+        hypothesis: { text: hypothesis, proposedGoalObservation: 'reply', requirementId: requirement.id,
+          eventIds: [{ dialogueId: raw.dialogues[0]!.id, seq: 1 }, { dialogueId: raw.dialogues[1]!.id, seq: 1 }] },
+        callPlan: { batches: plan.batchCount, selectedCap: plan.selectedCap, metrics: plan.metrics, nominalCalls: plan.nominalCalls, maxCalls: plan.maxCalls },
+        callsUsed: plan.nominalCalls, totalDialogues: raw.dialogues.length, oversizedIds: plan.oversizedIds } };
+    return structuredClone(ready);
+  };
+  ExperimentLab.prototype.buildFromDiscovery = async function(fromRunId, hypothesis) {
+    handoff = { fromRunId, hypothesis };
+    return structuredClone(prepared);
+  };
+  ExperimentLab.prototype.get = async function(id) {
+    if (id === ready?.id) return structuredClone(ready);
+    if (id === prepared.id) return structuredClone(prepared);
+    return originalGet.call(this, id);
+  };
+  ExperimentLab.prototype.waitForIdle = async function() {};
+  t.after(async () => {
+    ExperimentLab.prototype.discover = originalDiscover;
+    ExperimentLab.prototype.buildFromDiscovery = originalBuild;
+    ExperimentLab.prototype.get = originalGet;
+    ExperimentLab.prototype.waitForIdle = originalWait;
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const { tools, shutdown } = registered();
+  t.after(shutdown);
+  const confirmations: { title: string; body: string }[] = [];
+  let consent = false;
+  const ctx = { cwd: directory, mode: 'tui', hasUI: true, model: { provider: 'fixture', id: 'fixture' }, ui: {
+    confirm: async (title: string, body: string) => { confirmations.push({ title, body }); return consent; },
+  } } as unknown as ExtensionContext;
+  const call = async (params: unknown) => output(await tools.get('agent_lab_build')!.execute('fixture', params, undefined, undefined, ctx));
+  const logs = Array.from({ length: 300 }, (_, index) => ({ id: `dialogue_${index}`,
+    messages: [{ role: 'user', content: `Где поддержка ${index}?` }, { role: 'assistant', content: 'Позвоните позже.' }] }));
+  const base = { mode: 'discover', task: 'Найти один полезный тест', materials: [{ name: 'policy.md', content: 'Называйте support@example.com.' }] };
+
+  const cancelled = await call({ ...base, dialogues: logs });
+  assert.equal(cancelled.status, 'cancelled'); assert.equal(cancelled.calls, 0); assert.equal(cancelled.mutated, false);
+  assert.equal(discoverCalls, 0);
+  assert.match(confirmations[0]!.body, /потолок: (\d+)/);
+  assert.ok(Number(confirmations[0]!.body.match(/потолок: (\d+)/)![1]) > 20);
+  await assert.rejects(access(join(directory, '.agent-lab')), /ENOENT/);
+  await assert.rejects(call({ ...base, dialogues: [...logs, { ...logs[0], id: 'dialogue_300' }] }), /300|Too big|слишком/i);
+  assert.equal(discoverCalls, 0);
+
+  consent = true;
+  const found = await call({ ...base, dialogues: logs.slice(0, 50) });
+  assert.equal(discoverCalls, 1);
+  assert.ok(found.plan.maxCalls > 20);
+  assert.equal(found.fromRunId, 'discovery-run');
+  assert.match(found.brief, /отбор, не accuracy/);
+  assert.match(found.brief, /диалог dialogue_0, событие #1/);
+  assert.match(found.brief, /НАБЛЮДЕНИЕ: ответ агента \(reply\)\n\nПроверим\?$/);
+
+  const built = await call({ mode: 'discover', fromRunId: found.fromRunId, hypothesis: found.hypothesis });
+  assert.deepEqual(handoff, { fromRunId: found.fromRunId, hypothesis: found.hypothesis });
+  assert.equal(built.builtTests, 1); assert.equal(built.accepted, false); assert.equal(built.agentRun, false);
+  assert.deepEqual(built.testPlan.lines.join('\n'), built.brief);
+  assert.match(built.brief, /^ТЕСТ\nСИТУАЦИЯ/m);
+  assert.match(built.brief, /ВХОД\n/);
+  assert.match(built.brief, /УСПЕХ\n/);
+  assert.match(built.brief, /НАБЛЮДЕНИЕ\n  ответ агента \(reply\)/);
+  assert.match(built.brief, /Этот тест действительно проверяет нужное поведение\?$/);
 });
 
 test('conversation runs only the confirmed plan, then saves and loads the same case without claiming human review', async t => {

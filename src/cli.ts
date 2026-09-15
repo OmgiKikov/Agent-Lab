@@ -4,9 +4,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
-import { ExperimentLab, draftHash } from './experiment.js';
+import { ExperimentLab, draftHash, planDiscovery } from './experiment.js';
 import { demoInput } from './demo.js';
-import { createInputSchema, DEFAULT_JUDGE } from './contracts.js';
+import { createInputSchema, discoverInputSchema, DEFAULT_JUDGE } from './contracts.js';
 import { compareRuns, evidenceSummary, evaluationExitCode, familyDeltaText } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from './prompt-edit.js';
@@ -15,7 +15,7 @@ import { previewCriteria } from './preview.js';
 import { getPiStatus } from './pi.js';
 import { auditJudge } from './judge-audit.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
-import { qualityLines, qualitySummary, scoreBrief, testPlanLines, type ScoreBrief } from './quality.js';
+import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, type ScoreBrief } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { evidenceBundle, exportArtifacts } from './artifacts.js';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
@@ -72,7 +72,7 @@ async function main() {
     process.stdout.write('  agent-lab summary --id RUN [--json]     Качество агента: карточки, критерии, причины, что разметить\n  agent-lab audit-judge --id RUN --output NEW_DIRECTORY --repeats 10 --yes\n');
     process.stdout.write('  agent-lab preview --id RUN --scenario CASE --input examples.json --yes\n  agent-lab accept --id RUN [--yes]\n');
     process.stdout.write('Agent Lab — проверьте, что сломала правка вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
-    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  agent-lab pilot --id RUN\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
+    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  agent-lab pilot --id RUN\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
     process.stdout.write('Дополнительно: clarify --id RUN --input answers.json · run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\nКонтракты подключения: docs/REFERENCE.md.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
@@ -149,6 +149,51 @@ async function main() {
         ...(diff.notes.length ? ['Оговорки:', ...diff.notes.map(n => `  · ${n}`), ''] : []),
       ].join('\n') + '\n');
       if (!diff.comparable) process.exitCode = 2;
+    }
+    return;
+  }
+  if (command === 'discover') {
+    if (!values.input || !values.task) throw new Error('Укажите --input dialogues.jsonl --task task.json. Без --yes будет показан только план и бюджет.');
+    let input;
+    try {
+      const raw: Record<string, unknown> = JSON.parse(await readFile(values.task, 'utf8'));
+      const dialogues = await readData(values.input, 'dialogues', { maxItems: 300 });
+      const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
+      input = discoverInputSchema.parse({ ...raw, mode: raw.mode ?? 'live',
+        ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}), dialogues });
+    } catch (error) {
+      throw scoreInputError(error);
+    }
+    const plan = planDiscovery(input);
+    const shownPlan = { type: 'discovery_plan', dialogueCount: input.dialogues.length, batches: plan.batchCount,
+      selectedCap: plan.selectedCap, nominalCalls: plan.nominalCalls, maxCalls: plan.maxCalls, oversizedDialogueIds: plan.oversizedIds };
+    await writeStdout(values.json
+      ? `${JSON.stringify(shownPlan)}\n`
+      : ['ПЛАН DISCOVERY', `Диалогов: ${shownPlan.dialogueCount}.`, `Партий первичного разбора: ${shownPlan.batches}.`,
+        `Подробно проверить: до ${shownPlan.selectedCap}.`, `План: ${shownPlan.nominalCalls} модельных вызовов; потолок: ${shownPlan.maxCalls}.`,
+        ...(shownPlan.oversizedDialogueIds.length ? [`Не войдут целиком: ${shownPlan.oversizedDialogueIds.join(', ')}.`] : []), ''].join('\n'));
+    if (!values.yes) {
+      await writeStdout(values.json
+        ? `${JSON.stringify({ type: 'next_step', command: `agent-lab discover --input ${values.input} --task ${values.task} --yes${values.json ? ' --json' : ''}` })}\n`
+        : 'Для запуска discovery повторите команду с --yes. До подтверждения модель не вызывается.\n');
+      return;
+    }
+    const discoveryLab = new ExperimentLab(directory);
+    const closeDiscovery = () => { void discoveryLab.close().catch(error => { process.stderr.write(`${safeLine(error.message)}\n`); process.exitCode = 2; }); };
+    process.once('SIGINT', closeDiscovery); process.once('SIGTERM', closeDiscovery);
+    try {
+      await discoveryLab.init();
+      const started = await discoveryLab.discover(input);
+      await discoveryLab.waitForIdle();
+      const record = await discoveryLab.get(started.id);
+      const brief = discoveryBrief(record);
+      await writeStdout(values.json
+        ? `${JSON.stringify({ type: 'discovery_result', id: record.id, phase: brief.status, plan: shownPlan, brief, text: brief.lines.join('\n') })}\n`
+        : `${brief.lines.join('\n')}\n`);
+      process.exitCode = brief.status === 'ready' ? 0 : 2;
+    } finally {
+      process.removeListener('SIGINT', closeDiscovery); process.removeListener('SIGTERM', closeDiscovery);
+      await discoveryLab.close();
     }
     return;
   }
@@ -295,4 +340,4 @@ async function main() {
     await lab.close();
   }
 }
-void main().catch(error => { process.stderr.write(`Agent Lab: ${safeLine(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = ['evaluate', 'audit-judge', 'score'].includes(process.argv[2] ?? '') ? 2 : 1; });
+void main().catch(error => { process.stderr.write(`Agent Lab: ${safeLine(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = ['evaluate', 'audit-judge', 'score', 'discover'].includes(process.argv[2] ?? '') ? 2 : 1; });

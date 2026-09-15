@@ -9,7 +9,7 @@ Work directly in this Pi conversation. For the current PoC, start from the owner
 
 ## Product experience
 
-- Default to one test, one repeat and the supplied/current model. Do not increase call or duration budgets unless requested. New quick runs default to at most 20 calls and 180 seconds per operation. For more coverage propose additional cases only after the first useful result.
+- Default to one test, one repeat and the supplied/current model. New quick runs default to at most 20 calls and 180 seconds per operation. Discovery is the sole exception: it computes and shows a bounded call ceiling from the supplied log count before native consent, then uses that ceiling only for the discovery run. For more coverage propose additional cases only after the first useful result.
 - Lead with one finding, the concrete input/expected/actual values and a cited trace event. Separate agent defects, test defects and unknowns. Offer the next useful action in ordinary language; leave internal vocabulary in the detailed view.
 - Correct successCriteria and its executable checks/metrics together. A description-only change is rejected to prevent a stale test. Show the full test and its current draft hash, then ask the owner to accept that exact definition or edit it through `agent_lab_edit`. After any edit, show the full test again with its new hash. Acceptance neither runs the agent nor approves a result.
 - user.script contains only messages AFTER opening, never opening itself. [] means opening only. Every follow-up must fit maxFollowUps and maxTurns. Keep exact whitespace where prescribed.
@@ -19,34 +19,11 @@ Work directly in this Pi conversation. For the current PoC, start from the owner
 
 Ask once, in the user's language: «Есть реальные диалоги с агентом? Можно указать файл JSON/JSONL или начать без них». Honor a path or a decision already given in the conversation. Do not search unrelated logs. Use dialoguesFile for the user's local export or dialogues for supplied contents; preserve message order and original text. agent_lab_build returns needs_input without spending or creating a run until it receives dialogues or withoutDialogues=true. Set that flag only after the user's explicit choice to skip. Пустой ответ не означает согласие продолжить без диалогов; оставь вопрос открытым до явного пути или решения начать без них. A skipped import stays synthetic; do not invent production examples. Invalid supplied files need correction, not a silent fallback. Demo and repeat do not ask again.
 
-After score/import, report the actual dialogueCount and evidence mix. Do not propose production/synthetic cards during Phase 2; test construction starts only from an accepted hypothesis in Phase 3. These are offline exports; no logging platform is connected automatically.
+These are offline exports; no logging platform is connected automatically. With supplied logs, call `agent_lab_build` with `mode:"discover"`. It accepts up to 300 dialogues, displays its batch/selection/call plan through native confirmation before the first provider call, and saves a bounded exploratory selection. Discovery derives owner requirements from the supplied materials, cites exact dialogue/event observations, samples controls as a false-negative probe, and proposes one hypothesis. Its counts are selection evidence, not production accuracy; repeat that limitation exactly.
 
-Before any test-building call (including non-score `agent_lab_build`, `agent_lab_edit` or `agent_lab_run`), complete this mandatory Phase 2 gate. First collect at least one expected behavior backed by the owner's source ID and exact quote, and at least one concrete observation from an authorized repository or recorded dialogue. Repository observations cite a file path and line when available; log observations cite a dialogue ID and event number. Treat existing code, every assistant reply and saved outcome only as observations, never as expectations. If an action's observable effect is absent, keep it under unknowns as literal `НЕЯСНО`. Narrow multiple candidate failures to exactly one and render no more than three bullets in each of the first three sections, in this exact order:
+Show the returned discovery brief exactly as saved. A ready brief includes `НАБЛЮДЕНИЕ: ответ агента (reply)` and ends with literal `Проверим?`. Require an explicit owner answer. On «да», immediately call `agent_lab_build` again with `mode:"discover"`, the exact returned `fromRunId`, and the exact returned `hypothesis`. The core re-reads the saved run and builds exactly that one test; do not ask the owner for source IDs, quotes, or another technical confirmation round. On refusal or correction, build nothing and continue from the owner's feedback. Insufficient, partial, budget-exhausted, and error briefs remain evidence, not permission to improvise a hypothesis.
 
-```text
-ТРЕБОВАНИЯ
-• <ожидаемое поведение, источник владельца и точная цитата>
-
-НАБЛЮДАЕМОЕ
-• <наблюдение и путь/строка или диалог/событие>
-
-НЕИЗВЕСТНО
-• <то, чего доказательства не показывают; НЕЯСНО для ненаблюдаемого эффекта действия>
-
-ГИПОТЕЗА
-<ровно одна гипотеза, связывающая указанное требование с указанным наблюдением>
-
-Проверим?
-```
-
-Without both kinds of evidence, do not show a hypothesis or call a test-building tool. Show exactly:
-
-```text
-Недостаточно данных для гипотезы
-Добавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.
-```
-
-Require an explicit answer to `Проверим?`. Ответ «да» передаёт принятую гипотезу только в контекст Фазы 3. Ответ «нет» или поправка оставляет разговор открытым для новых доказательств и следующей одной гипотезы. Фаза 2 не сохраняет гипотезу, не строит тест, не запускает агента и не сохраняет регрессию; ни один из ответов сам по себе не вызывает эти действия.
+The resulting test is still only a draft. Show its full situation, input, success condition, observation channel, and hash. Use `agent_lab_accept` for the owner's separate decision that the test checks the intended behavior. Acceptance does not run the agent; use `agent_lab_run` only after an explicit request to execute the accepted test.
 
 ## Start from the local project
 
