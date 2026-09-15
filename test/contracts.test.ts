@@ -292,6 +292,7 @@ test('synthetic answers may only reveal values the user already knows', () => {
   const curated = card({ provenance: 'curated', requirementIds: [], user: { ...user, answers: [{ ifAsked: 'ID', reply: 'It is A999.' }] } });
   assert.doesNotThrow(() => validatePreparation(preparation([curated]), [source], 'evaluate'));
   assert.deepEqual([...valueTokens('Card 4321, time 14:00. Code 202-7 and A103.')].sort(), ['14:00', '202-7', '4321', 'a103']);
+  assert.deepEqual([...valueTokens('E-2047 e-2047 E-20470 A103 103 СЧЁТ-77 счёт-77')].sort(), ['103', 'a103', 'e-2047', 'e-20470', 'счёт-77']);
   assert.deepEqual([...valueTokens('two cards, no digits here')], []);
 });
 

@@ -427,6 +427,47 @@ test('confirmed hypothesis repairs seeded state until an exact state check resol
   } finally { await f.close(); }
 });
 
+test('confirmed answer values use owner and user evidence, inspect every token, and enforce the 20-value limit', async () => {
+  const quote = 'Use reference E-2047; appointment A103 is a distinct identifier.';
+  const requirements = { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] };
+  const known = (count: number) => Array.from({ length: count }, (_, index) => `Known K-${100 + index}`);
+  const withAnswer = (index: number, knows: string[], reply: string) => ({ scenarios: [{
+    ...confirmedCard(index),
+    user: { ...confirmedCard(index).user, knows, answers: [{ ifAsked: 'Which references?', reply }] },
+  }] });
+  const outputs = [
+    requirements,
+    withAnswer(1, known(20), 'E-2047'),
+    withAnswer(2, known(18), '103 and E-20470'),
+    withAnswer(3, known(18), 'E-20470 and 103'),
+    withAnswer(4, known(18), 'e-2047 and счёт-77'),
+  ];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    let prepared: Awaited<ReturnType<typeof f.adapter.prepare>> | undefined;
+    let failure: unknown;
+    try {
+      prepared = await f.adapter.prepare({
+        task: 'Check grounded references', confirmedHypothesis: 'The agent may ask for unsupported reference values.',
+        targetKind: 'command', workflow: 'evaluate', scenarioCount: 1, userModes: ['static'],
+        dialogues: [{ id: 'd1', outcome: 'success', messages: [
+          { role: 'user', content: 'Мой СЧЁТ-77 указан в заявке.' },
+          { role: 'assistant', content: 'Observed values E-20470 and SECRET-99 are not owner evidence.' },
+        ] }],
+        sources: [{ id: 'source_1', name: 'Policy', content: quote, hash: 'hash' }],
+      }, callContext().ctx);
+    } catch (error) { failure = error; }
+    assert.equal(failure, undefined, `grounded values should publish after bounded repair: ${String(failure)}`);
+    assert.equal(prepared?.scenarios[0]?.user.knows?.length, 20);
+    assert.deepEqual(prepared?.scenarios[0]?.user.knows?.slice(-2), ['e-2047', 'счёт-77']);
+    const repairs = f.requests.slice(2).map(request => JSON.stringify(request.messages));
+    assert.match(repairs[0] ?? '', /21|maximum is 20/);
+    assert.match(repairs[1] ?? '', /103/); assert.match(repairs[1] ?? '', /e-20470/);
+    assert.match(repairs[2] ?? '', /103/); assert.match(repairs[2] ?? '', /e-20470/);
+    assert.doesNotMatch(JSON.stringify(prepared), /secret-99/i);
+  } finally { await f.close(); }
+});
+
 test('card generation distinguishes the answer being sought from legitimate prior user knowledge', async () => {
   const quote = 'Weekday opening hours are 08:00–20:00. Ask the visit day if it is missing.';
   const card = plainCard(0);
