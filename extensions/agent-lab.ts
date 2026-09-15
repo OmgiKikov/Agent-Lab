@@ -6,7 +6,7 @@ import { Text } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { z } from 'zod';
 import { ExperimentLab, draftHash, resultHash } from '../dist/experiment.js';
-import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, fingerprint, goldenCaseSchema, clarificationSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput, type Trial } from '../dist/contracts.js';
+import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, goldenCaseSchema, clarificationSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput } from '../dist/contracts.js';
 import { awaitingVerdict, evidenceSummary, plannedTrials } from '../dist/comparison.js';
 import { qualityLines, qualitySummary } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
@@ -16,7 +16,7 @@ import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit
 import { readData } from '../dist/imports.js';
 import { editDraft, inputError } from './editor.ts';
 import { previewCriteria } from '../dist/preview.js';
-import { activePhases, reviewOrder, safeText, showBoard, trialLines, verdicts, type BoardAction, type BoardOptions, type Section } from './cards.ts';
+import { activePhases, reviewOrder, safeText, showBoard, trialLines, type BoardAction, type BoardOptions, type Section } from './cards.ts';
 
 const toolDisplay: Pick<ToolDefinition, 'renderCall' | 'renderResult'> = {
   renderCall: (_args, theme) => new Text(theme.fg('accent', 'Проверка агента'), 0, 0),
@@ -59,7 +59,7 @@ function summary(record: Experiment, directory: string) {
   const quality = record.trials.length ? qualitySummary(record) : undefined;
   return {
     // Lead with the answer a person asked for; the detailed evidence follows in the same object.
-    ...(quality ? { quality: { ...qualityLines(quality), cards: quality.cards, metrics: quality.metrics, causes: quality.causes.slice(0, 5), humanQueue: quality.humanQueue } } : {}),
+    ...(quality ? { quality: { ...qualityLines(quality), cards: quality.cards, metrics: quality.metrics, causes: quality.causes.slice(0, 5), humanQueue: quality.humanQueue, human: quality.human } } : {}),
     id: record.id, phase: record.phase, mode: record.mode, workflow: record.workflow,
     reviewMode: record.reviewMode, resultsReviewedAt: record.resultsReviewedAt,
     draftHash: draftHash(record), resultHash: record.trials.length ? resultHash(record) : undefined,
@@ -87,18 +87,11 @@ async function humanAnnotation(ctx: ExtensionContext, record: Experiment, select
   const trial = reviewOrder(record)[selected];
   if (!trial) return;
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-  const failedCriteria = (t: Trial) => [
-    ...t.checks.filter(c => !c.passed).map(c => `check:${c.id}`),
-    ...(record.scenarios.find(s => s.id === t.scenarioId)?.metrics ?? []).filter(m => m.subject === 'agent'
-      && t.assessments?.some(a => a.metricId === m.id && a.result === 'fail')).map(m => `metric:${m.id}`),
-  ].sort();
-  const similar = failedCriteria(trial).length ? record.trials.filter(t => fingerprint(failedCriteria(t)) === fingerprint(failedCriteria(trial))) : [];
-  const targets: { label: string; ids: { metricId?: string; checkId?: string }; trialIds: string[] }[] = [
-    { label: 'Весь диалог', ids: {}, trialIds: [trial.id] },
-    ...(similar.length > 1 ? [{ label: `Такие же сработавшие проверки · ${similar.length} диалогов`, ids: {}, trialIds: similar.map(t => t.id) }] : []),
-    ...(scenario?.metrics ?? []).map(m => ({ label: `Метрика · ${safeText(m.name)} [${m.id}]`, ids: { metricId: m.id }, trialIds: [trial.id] })),
-    ...(trial.simulatorChecks ?? []).map(c => ({ label: `Симулятор · ${safeText(c.description)} [${c.id}]`, ids: { checkId: c.id }, trialIds: [trial.id] })),
-    ...trial.checks.map(c => ({ label: `Проверка · ${safeText(c.description)} [${c.id}]`, ids: { checkId: c.id }, trialIds: [trial.id] })),
+  const targets: { label: string; ids: { metricId?: string; checkId?: string } }[] = [
+    { label: 'Весь диалог', ids: {} },
+    ...(scenario?.metrics ?? []).map(m => ({ label: `Критерий · ${safeText(m.name)} [${m.id}]`, ids: { metricId: m.id } })),
+    ...(trial.simulatorChecks ?? []).map(c => ({ label: `Симулятор · ${safeText(c.description)} [${c.id}]`, ids: { checkId: c.id } })),
+    ...trial.checks.map(c => ({ label: `Проверка · ${safeText(c.description)} [${c.id}]`, ids: { checkId: c.id } })),
   ];
   const choice = await ctx.ui.select('Область вашей оценки', targets.map(t => t.label));
   const target = targets.find(t => t.label === choice);
@@ -110,11 +103,13 @@ async function humanAnnotation(ctx: ExtensionContext, record: Experiment, select
   if (!verdict) return;
   const note = await ctx.ui.editor('Пояснение · укажите реплики # и причину согласия или ошибки', '');
   if (note === undefined) return;
-  if (target.trialIds.length > 1 && !await ctx.ui.confirm(`Применить вердикт к ${target.trialIds.length} диалогам?`,
-    similar.map(t => `${safeText(record.scenarios.find(s => s.id === t.scenarioId)?.title)}\n${t.checks.filter(c => !c.passed).map(c => safeText(c.evidence)).join('\n')}`).join('\n\n')
-    + `\n\nВаш вердикт: ${verdicts[verdict]}\nОснование: ${safeText(note)}\nКаждый диалог сохранит отдельную заметку.`)) return;
-  return target.trialIds.map(trialId => ({ trialId, ...target.ids, verdict, note,
-    durationMs: Math.min(3600000, Math.round((performance.now() - started) / target.trialIds.length + (reviewTimes?.get(`${record.id}|${trialId}`) ?? (trialId === trial.id ? readingMs : 0)))) }));
+  const wholeDialogue = !target.ids.metricId && !target.ids.checkId;
+  if (wholeDialogue && ![...note.matchAll(/#(\d+)\b/g)].some(match => trial.events.some(event => event.seq === Number(match[1])))) {
+    ctx.ui.notify?.('Полный разбор отменён: в пояснении укажите номер события из этого диалога, например #1.', 'warning');
+    return;
+  }
+  return [{ trialId: trial.id, ...target.ids, verdict, note, ...(wholeDialogue ? { reviewedDialogue: true as const } : {}),
+    durationMs: Math.min(3600000, Math.round(performance.now() - started + (reviewTimes?.get(`${record.id}|${trial.id}`) ?? readingMs))) }];
 }
 
 /** Conversational execution asks the human to authorize a concrete plan; it never invents human reviews. */
