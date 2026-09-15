@@ -133,7 +133,7 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const undecidedByHuman = (t: Trial) => !['pass', 'fail', 'invalid'].includes(reviews.get(`${t.id}|dialogue`)?.verdict ?? '');
   const scenarioOf = (t: Trial) => record.scenarios.find(s => s.id === t.scenarioId);
   const pending = awaitingVerdict(record);
-  const unknownIds = record.trials.filter(t => measured(t) && agentRubricResult(scenarioOf(t), t) === 'unknown' && undecidedByHuman(t)).map(t => t.id);
+  const unknownIds = record.trials.filter(t => measured(t) && agentRubricResult(scenarioOf(t), t, record.humanReviews) === 'unknown' && undecidedByHuman(t)).map(t => t.id);
   // A human overruling a simulator suspicion is the intended resolution, not a disagreement to revisit.
   const disagreementIds = humanFindings(record).filter(f => f.disagreement && f.subject !== 'simulator').map(f => f.trialId);
   const simulatorIds = record.trials.filter(t => pending.has(t.id) && measured(t) && !simulatorUsable(scenarioOf(t), t, record.humanReviews)).map(t => t.id);

@@ -625,7 +625,7 @@ export class ExperimentLab {
       guard();
       const currentTrials = record.trials.filter(t => t.revisionId === best.id && t.split === 'dev');
       if (currentTrials.some(t => t.outcome === 'invalid' || t.outcome === 'cancelled')) throw new Error('Development trials are invalid; inspect the evidence before improving.');
-      const outcomes = currentTrials.map(t => automaticTrialResult(record.scenarios.find(s => s.id === t.scenarioId), t));
+      const outcomes = currentTrials.map(t => automaticTrialResult(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews));
       if (outcomes.includes('unknown') || currentTrials.some(t => !trialAssessmentComplete(record.scenarios.find(s => s.id === t.scenarioId)!, t))) throw new Error('Development assessment is incomplete; inspect the evaluator before improving.');
       if (outcomes.every(outcome => outcome === 'pass')) break;
       await this.checkpoint(record, 'improving', `Building candidate ${iteration + 1}/${record.settings.maxIterations} from development evidence only.`);

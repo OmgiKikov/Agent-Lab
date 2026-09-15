@@ -31,17 +31,22 @@ export function latestHumanReviews(record: Pick<Experiment, 'trials' | 'humanRev
   return latest;
 }
 
-/** Rubric outcomes stay separate from objective checks everywhere they are presented. */
-export function agentRubricResult(scenario: Scenario | undefined, trial: Trial): 'pass' | 'fail' | 'unknown' | undefined {
+/** Rubric outcomes stay separate from objective checks everywhere they are presented. A human verdict on a criterion is authoritative. */
+export function agentRubricResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
   const metrics = scenario?.metrics?.filter(m => m.subject === 'agent') ?? [];
   if (!metrics.length) return undefined;
-  const results = metrics.map(m => trial.assessments?.find(a => a.metricId === m.id)?.result);
+  const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
+  const results = metrics.flatMap(m => {
+    const human = latest.get(`${trial.id}|metric:${m.id}`)?.verdict;
+    return human === 'invalid' ? [] : [human ?? trial.assessments?.find(a => a.metricId === m.id)?.result];
+  });
+  if (!results.length) return undefined;
   return results.includes('fail') ? 'fail' : results.every(r => r === 'pass') ? 'pass' : 'unknown';
 }
 export function isAgentFailure(record: Experiment, trial: Trial): boolean {
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   return measurementUsable(scenario, trial, record.humanReviews) && (trial.outcome === 'fail'
-    || agentRubricResult(scenario, trial) === 'fail');
+    || agentRubricResult(scenario, trial, record.humanReviews) === 'fail');
 }
 /** A candidate cannot be accepted on a partially scored agent rubric. */
 export function trialAssessmentComplete(scenario: Scenario, trial: Trial, reviews: HumanReview[] = []): boolean {
@@ -71,7 +76,7 @@ export function measurementUsable(scenario: Scenario | undefined, trial: Trial, 
 /** Combined automatic result for triage, never a replacement for the separate code and rubric scores. */
 export function automaticTrialResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' {
   if (!scenario || !measurementUsable(scenario, trial, reviews)) return 'unknown';
-  const rubric = agentRubricResult(scenario, trial);
+  const rubric = agentRubricResult(scenario, trial, reviews);
   if (trial.outcome === 'fail' || rubric === 'fail') return 'fail';
   return (!scenario.checks.length || trial.outcome === 'pass')
     && (rubric === 'pass' || (rubric === undefined && scenario.checks.length > 0)) ? 'pass' : 'unknown';

@@ -339,7 +339,7 @@ export function humanFindings(record: Experiment): HumanFinding[] {
     const simulatorCheck = trial.simulatorChecks?.find(c => c.id === review.checkId);
     const check = simulatorCheck ?? trial.checks.find(c => c.id === review.checkId);
     const automatic = !measured(trial) ? 'unknown' : review.metricId ? trial.assessments?.find(a => a.metricId === review.metricId)?.result ?? 'unknown'
-      : review.checkId ? check ? check.passed ? 'pass' : 'fail' : 'unknown' : automaticTrialResult(scenario, trial);
+      : review.checkId ? check ? check.passed ? 'pass' : 'fail' : 'unknown' : automaticTrialResult(scenario, trial, record.humanReviews);
     const disagreement = automatic !== 'unknown' && review.verdict !== automatic;
     if (review.verdict !== 'fail' && review.verdict !== 'invalid' && !disagreement) return [];
     return [{ trialId: trial.id, reviewId: review.id, target: metric?.name ?? check?.description ?? review.metricId ?? review.checkId ?? 'Весь диалог',
@@ -468,8 +468,8 @@ export function verdictSummary(record: Experiment): VerdictSummary {
     const agentResults = (trial.assessments ?? []).filter(a => subjectOf(a.metricId) === 'agent');
     if (scenario?.metrics?.some(m => m.subject === 'agent')) {
       rubric.assessed += 1;
-      if (agentRubricResult(scenario, trial) === 'fail') rubric.failed += 1;
-      else if (agentRubricResult(scenario, trial) !== 'pass') rubric.unknown += 1;
+      if (agentRubricResult(scenario, trial, record.humanReviews) === 'fail') rubric.failed += 1;
+      else if (agentRubricResult(scenario, trial, record.humanReviews) !== 'pass') rubric.unknown += 1;
       else rubric.passed += 1;
     }
     if (!simulatorUsable(scenario, trial, record.humanReviews)) simulatorFlagged += 1;
