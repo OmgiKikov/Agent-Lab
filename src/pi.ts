@@ -27,6 +27,8 @@ const familyPlanSchema = z.strictObject({ families: z.array(z.strictObject({
 // New generated cards require an explicit interaction budget; older saved cards keep their original semantics.
 // With observed profiles the model may only choose a profileId; persona text is copied from the profile later.
 const RUBRIC_LIMIT = 8;
+/** Instructions about the shape of a machine reply: an envelope the user never sees. */
+const MACHINE_FORMAT = /\bjson\b|response_format|\{\s*"[a-z_]+"\s*:/i;
 /** external cards get harness rubrics after generation (fidelity, and prompt compliance when a prompt source exists); the model may use only what is left. */
 const generatedScenarioSchema = (external: boolean, harnessRubrics = 0) => scenarioSchema.required({ successCriteria: true, assumptions: true, metrics: true })
   .extend({ user: scenarioSchema.shape.user.required({ maxFollowUps: true }) })
@@ -390,6 +392,9 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
             const source = input.sources.find(s => s.id === requirement.sourceId);
             if (!source) return `Requirement ${requirement.id} cites source ${requirement.sourceId}, which was not supplied.`;
             const exact = verbatimSpan(source.content, requirement.quote);
+            if (exact && source.kind === 'prompt' && MACHINE_FORMAT.test(exact)) {
+              return `Requirement ${requirement.id} quotes a machine output format ("${exact.slice(0, 60)}"): a JSON envelope or a named field is an internal interface between the agent's components, not a rule a user can observe. Drop this requirement.`;
+            }
             if (exact) { requirement.quote = exact; continue; }
             // The words are real but the attribution is wrong: a quote found in exactly one other source belongs to it.
             const elsewhere = input.sources.filter(s => s.id !== source.id && verbatimSpan(s.content, requirement.quote));

@@ -1010,3 +1010,21 @@ test('literal checks on an external card must quote source-mandated wording, at 
     assert.deepEqual(prepared.scenarios[0]!.checks.map(c => c.id), ['c1', 'c2']);
   } finally { await f.close(); }
 });
+
+test('a machine output-format instruction in the agent prompt is an internal interface, not a requirement a user can observe', async () => {
+  const prompt = 'Отвечай на «вы». ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}. Никогда не направляй в поддержку.';
+  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'prompt_1', quote, critical: true });
+  const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!] };
+  const outputs = [
+    { requirements: [req('formal', 'Отвечай на «вы»'), req('json', 'ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}')], questions: [] },
+    { requirements: [req('formal', 'Отвечай на «вы»'), req('no_support', 'Никогда не направляй в поддержку')], questions: [] },
+    { scenarios: [{ ...card, requirementIds: ['formal'] }] },
+  ];
+  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  try {
+    const prepared = await f.adapter.prepare({ task: 'Check the agent against its prompt', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'prompt_1', name: 'prompt.md', content: prompt, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
+    assert.deepEqual(prepared.requirements.map(r => r.id), ['formal', 'no_support']);
+    assert.match(JSON.stringify(f.requests[1]?.messages), /machine output format/i);
+    assert.match(f.requests[0]?.systemPrompt ?? '', /machine output format/i);
+  } finally { await f.close(); }
+});
