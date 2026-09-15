@@ -424,7 +424,7 @@ export const preparationSchema = z.strictObject({
   requirements: z.array(requirementSchema).min(1).max(REQUIREMENT_LIMIT),
   questions: z.array(text.max(2000)).max(12),
   agent: agentSchema,
-  scenarios: z.array(scenarioSchema).max(40),
+  scenarios: z.array(scenarioSchema).max(200),
 });
 export interface Preparation {
   requirements: Requirement[]; questions: string[]; agent: AgentSpec; scenarios: Scenario[];
@@ -527,7 +527,7 @@ export const draftPatchSchema = z.strictObject({
 export const reassessmentSchema = z.strictObject({
   criteria: z.array(z.strictObject({ scenarioId: identifier, successCriteria: text.max(3000).optional(),
     checks: z.array(checkSchema).max(12).optional(), metrics: z.array(rubricSchema).max(8).optional(),
-  })).max(40).refine(v => unique(v.map(c => c.scenarioId)), 'Duplicate scenario criteria').default([]),
+  })).max(200).refine(v => unique(v.map(c => c.scenarioId)), 'Duplicate scenario criteria').default([]),
   trialIds: z.array(identifier).min(1).max(3000).refine(unique, 'Duplicate trial IDs').optional(),
   judge: settingsSchema.shape.judge, codeOnly: z.boolean().default(false),
 });
@@ -640,11 +640,11 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   humanReviews: z.array(humanReviewSchema).default([]), resultsReviewedAt: text.optional(), resultsReviewHash: text.optional(),
   failureModes: z.array(failureModeSchema).max(30).optional(),
   releaseLog: releaseLogSchema.optional(),
-  parentRunId: identifier.optional(), selectedScenarioIds: z.array(identifier).min(1).max(40).optional(), targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),
+  parentRunId: identifier.optional(), selectedScenarioIds: z.array(identifier).min(1).max(200).optional(), targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),
   clarifications: z.array(clarificationSchema).max(100).optional(),
   assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
   evaluatorVersion: text.optional(), targetRelease: text.max(200).optional(),
-  sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(40), humanReviews: z.array(humanReviewSchema).max(1000) }).optional(),
+  sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(200), humanReviews: z.array(humanReviewSchema).max(1000) }).optional(),
 }).superRefine((record, ctx) => {
   record.scenarios.forEach((scenario, index) => {
     if (scenario.checks.some(check => (SIMULATOR_CHECK_IDS as readonly string[]).includes(check.id))) {

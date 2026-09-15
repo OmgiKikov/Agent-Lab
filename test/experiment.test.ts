@@ -584,6 +584,81 @@ test('real dialogues also yield production cards: observed goals with verbatim o
   assert.equal(result.trials.filter(tr => production.some(s => s.id === tr.scenarioId)).length, 2);
 });
 
+test('recorded scoring preserves 40, 41 and 200 dialogues through reassessment without truncation', async t => {
+  const runtime: Runtime = {
+    async prepare({ sources }) {
+      return { requirements: [{ id: 'owner_rule', text: 'Answer from the owner material', sourceId: sources[0]!.id,
+        quote: sources[0]!.content, critical: false }], questions: [],
+        agent: { name: 'Recorded agent', instructions: 'Recorded only', tools: [] }, scenarios: [] };
+    },
+    async goals({ dialogues }) {
+      const dialogue = dialogues[0]!;
+      return [{ id: `goal_${dialogue.id}`, goal: `Answer ${dialogue.id}`, opening: dialogue.messages.find(message => message.role === 'user')!.content,
+        evidenceDialogueIds: [dialogue.id], requirementIds: ['owner_rule'], successCriteria: 'Answer from the owner material', facts: 'User message only', outcome: 'unknown' }];
+    },
+    async improve() { throw new Error('score must not improve'); },
+    async openTarget() { throw new Error('score must not open the target'); },
+    async userTurn() { throw new Error('score must not run the simulator'); },
+  };
+  const { lab } = await setup(t, runtime);
+  const makeInput = (count: number) => createInputSchema.parse({ task: 'Score recorded dialogues', mode: 'live',
+    materials: [{ name: 'policy', content: 'Answer from the owner material' }], scenarioCount: 0,
+    settings: { maxDurationMs: 14_400_000 },
+    dialogues: Array.from({ length: count }, (_, index) => ({ id: `d${index}`, goal: `Goal ${index}`,
+      messages: [{ role: 'user' as const, content: `Question ${index}` }, { role: 'assistant' as const, content: `Answer ${index}` }] })),
+  });
+  let largest;
+  for (const count of [40, 41, 200]) {
+    const seed = await lab.score(makeInput(count)); await lab.waitForIdle();
+    const record = await lab.get(seed.id);
+    assert.equal(record.phase, 'results_review', record.error ?? '');
+    assert.equal(record.scenarios.length, count);
+    assert.equal(record.trials.length, count);
+    assert.deepEqual(record.scenarios.map(scenario => scenario.id), record.dialogues.map(dialogue => dialogue.id));
+    assert.deepEqual(record.trials.map(trial => trial.id), record.dialogues.map(dialogue => dialogue.id));
+    if (count === 200) largest = record;
+  }
+  assert.ok(largest);
+  const reassessed = await lab.reassess(largest.id, { codeOnly: true }); await lab.waitForIdle();
+  const copied = await lab.get(reassessed.id);
+  assert.equal(copied.phase, 'results_review', copied.error ?? '');
+  assert.equal(copied.sourceEvidence!.trials.length, 200);
+  assert.deepEqual(copied.trials.map(trial => trial.events), largest.trials.map(trial => trial.events));
+  assert.deepEqual(await lab.get(largest.id), largest, 'reassessment must not mutate the imported seed');
+  assert.throws(() => makeInput(201));
+  assert.throws(() => createInputSchema.parse({ ...makeInput(1), settings: { maxDurationMs: 14_400_001 } }));
+
+  const repeated = await lab.score(makeInput(41)); await lab.waitForIdle();
+  const again = await lab.get(repeated.id);
+  assert.notEqual(again.id, largest.id);
+  assert.deepEqual(again.trials.map(trial => trial.events), largest.trials.slice(0, 41).map(trial => trial.events));
+});
+
+test('recorded scoring keeps the existing one-writer rejection instead of interleaving mutations', async t => {
+  const entered = deferred(); const release = deferred();
+  const runtime: Runtime = {
+    async prepare({ sources }) {
+      entered.resolve(); await release.promise;
+      return { requirements: [{ id: 'owner_rule', text: 'Owner rule', sourceId: sources[0]!.id, quote: 'Owner rule', critical: false }],
+        questions: [], agent: { name: 'Recorded agent', instructions: 'Recorded only', tools: [] }, scenarios: [] };
+    },
+    async goals({ dialogues }) { const dialogue = dialogues[0]!; return [{ id: `goal_${dialogue.id}`, goal: 'Answer', opening: dialogue.messages[0]!.content,
+      evidenceDialogueIds: [dialogue.id], requirementIds: ['owner_rule'], successCriteria: 'Owner rule' }]; },
+    async improve() { throw new Error('unused'); }, async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
+  };
+  const { lab } = await setup(t, runtime);
+  const input = createInputSchema.parse({ task: 'Score', mode: 'live', materials: [{ name: 'policy', content: 'Owner rule' }], scenarioCount: 0,
+    dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'Question' }, { role: 'assistant', content: 'Answer' }] }] });
+  const first = lab.score(input);
+  await entered.promise;
+  try { await assert.rejects(lab.score(input), /другая операция/); }
+  finally { release.resolve(); }
+  const seed = await first; await lab.waitForIdle();
+  const record = await lab.get(seed.id);
+  assert.equal(record.phase, 'results_review', record.error ?? '');
+  assert.equal(record.trials.length, 1);
+});
+
 test('an observed goal whose opening is not a real user message fails preparation', async t => {
   const runtime = createDemoRuntime();
   runtime.goals = async () => [{ id: 'g', goal: 'x', opening: 'never said this', profileId: 'observed_1', evidenceDialogueIds: ['d1'], successCriteria: 'y', facts: 'f', outcome: 'unknown' }];
