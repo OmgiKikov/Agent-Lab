@@ -468,6 +468,26 @@ test('confirmed answer values use owner and user evidence, inspect every token, 
   } finally { await f.close(); }
 });
 
+test('confirmed generation reserves goal attainment for the model and decorates only applicable harness rubrics', async () => {
+  const quote = 'Reply formally when the user asks for support.';
+  const requirements = { requirements: [{ id: 'req_1', text: quote, sourceId: 'prompt_1', quote, critical: true }], questions: [] };
+  const valid = { ...confirmedCard(1), checks: [] };
+  const extra = { ...valid, metrics: [...valid.metrics!, {
+    id: 'tone', name: 'Tone', subject: 'agent' as const, description: 'Judge tone.', passCriteria: 'Sounds formal.', failCriteria: 'Sounds informal.',
+  }] };
+  const f = await fixture((_request, index) => JSON.stringify(index === 0 ? requirements : index === 1 ? { scenarios: [extra] } : { scenarios: [valid] }));
+  try {
+    const prepared = await f.adapter.prepare({
+      task: 'Check the confirmed prompt hypothesis', confirmedHypothesis: 'The agent may ignore the formal-answer rule.',
+      targetKind: 'command', workflow: 'evaluate', scenarioCount: 1, userModes: ['reactive'],
+      sources: [{ id: 'prompt_1', name: 'Agent prompt', content: quote, hash: 'hash', kind: 'prompt' }],
+    }, callContext().ctx);
+    assert.match(f.requests[1]?.systemPrompt ?? '', /exactly one generated agent rubric.*goal_attainment.*passCriteria.*successCriteria/is);
+    assert.match(JSON.stringify(f.requests[2]?.messages), /exactly one generated agent rubric/);
+    assert.deepEqual(prepared.scenarios[0]!.metrics?.map(metric => metric.id), ['prompt_compliance', 'goal_attainment', 'user_fidelity']);
+  } finally { await f.close(); }
+});
+
 test('card generation distinguishes the answer being sought from legitimate prior user knowledge', async () => {
   const quote = 'Weekday opening hours are 08:00–20:00. Ask the visit day if it is missing.';
   const card = plainCard(0);
