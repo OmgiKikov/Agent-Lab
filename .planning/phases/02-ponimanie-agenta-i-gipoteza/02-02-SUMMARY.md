@@ -15,7 +15,7 @@ affects: [02-03, phase-3]
 actuals:
   tokens: 15000
   tasks: 3
-  commits: 3
+  commits: 5
 tech-stack:
   added: []
   patterns: [one-dialogue model boundary, saved-source reassessment, existing immutable writer guard]
@@ -88,6 +88,11 @@ status: complete
 2. **Task 2: Make unobserved action completion explicitly unclear under judge protocol 8** — `405ccaa`
 3. **Task 3: Reassess and cluster saved score evidence, then expose the confirmed CLI path** — `a7fa3e4`
 
+## Review Follow-ups
+
+- `01a1bd3` — reserve the confirmed call budget and keep cost/output claims truthful.
+- `5f1a4b3` — deterministically reject self-attested action success unless a passed state predicate or an explicitly successful linked tool result supports it; stale unsafe receipts no longer count as complete.
+
 ## Decisions Made
 
 - Extended the existing Runtime goal input with optional extracted requirements; this is the smallest way to validate model-returned requirement IDs.
@@ -110,6 +115,12 @@ None.
 ## Next Phase Readiness
 
 Ready for 02-03: align the conversational hypothesis surface across the skill, Pi extension and compact result projections.
+
+## Self-Check
+
+- All ten listed implementation/test files exist.
+- Task and review commits exist in history.
+- Final phase gate: `302/302` tests and strict typecheck passed on 2026-09-15.
 
 ---
 *Phase: 02-ponimanie-agenta-i-gipoteza*

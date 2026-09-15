@@ -14,7 +14,7 @@ affects: [phase-3, phase-4]
 actuals:
   tokens: 14000
   tasks: 3
-  commits: 3
+  commits: 5
 tech-stack:
   added: []
   patterns: [native spending consent, pure evidence projection, conversation-only hypothesis gate]
@@ -93,6 +93,11 @@ status: complete
 2. **Task 2: Share one evidence-grounded score brief between CLI and Pi** — `db04f27`
 3. **Task 3: Gate test construction behind one conversational hypothesis** — `3f348f3`
 
+## Review Follow-ups
+
+- `01a1bd3` — align confirmed model-call limits, zero-cost wording and saved partial evidence.
+- `5f1a4b3` — block open owner questions, require one resolvable requirement/evidence chain, preserve action unknowns beside other failures, sanitize hostile line breaks and keep CLI/Pi progress truthful.
+
 ## Decisions Made
 
 - Reused `ExperimentLab.score`, immutable reassessment and the existing artifact exporters; no score service, screen or storage format was added.
@@ -115,6 +120,12 @@ None.
 ## Next Phase Readiness
 
 Ready for Phase 3: turn the accepted hypothesis into one editable test definition and save only an explicitly accepted test.
+
+## Self-Check
+
+- All eight listed implementation/test files exist.
+- Task and review commits exist in history.
+- Final phase gate: `302/302` tests and strict typecheck passed on 2026-09-15.
 
 ---
 *Phase: 02-ponimanie-agenta-i-gipoteza*

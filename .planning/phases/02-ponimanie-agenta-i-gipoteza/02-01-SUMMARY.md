@@ -116,6 +116,12 @@ None - no external service configuration required.
 
 Ready for 02-02: ground model criteria in owner materials, enforce missing-observation judgment, and compose reassessment without duplicating the evidence path.
 
+## Self-Check
+
+- All six listed implementation/test files exist.
+- Task commits `a6f3fab` and `82baccd` exist in history.
+- Final phase gate: `302/302` tests and strict typecheck passed on 2026-09-15.
+
 ---
 *Phase: 02-ponimanie-agenta-i-gipoteza*
 *Completed: 2026-09-15*

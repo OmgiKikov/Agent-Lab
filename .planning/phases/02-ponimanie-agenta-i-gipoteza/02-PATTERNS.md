@@ -118,7 +118,7 @@ if (!input.codeOnly) {
   if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Оценка моделью требует native Pi confirmation.');
   if (!await ctx.ui.confirm(
     'Оценить записанные диалоги?',
-    safeText(`Агент и симулятор не запускаются. До ${count} вызовов судьи.`),
+    safeText(`Агент и симулятор не запускаются. До ${count} модельных вызовов.`),
   )) return cancelledResult;
 }
 ```
