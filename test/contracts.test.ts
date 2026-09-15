@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, draftPatchSchema, emptyUsage, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, verbatimSpan, worldSchema,
+  createInputSchema, dialogueToScenario, dialogueToTrial, draftPatchSchema, emptyUsage, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, replyQuality, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 
@@ -179,6 +179,52 @@ test('observed goals become production cards with a verbatim real opening and th
   assert.ok(scenario.metrics!.some(m => m.subject === 'agent') && scenario.metrics!.some(m => m.subject === 'simulator'));
   assert.ok(scenario.assumptions!.some(a => /real dialogue/i.test(a)));
   assert.equal(goal.outcome, 'unknown');
+});
+
+test('recorded dialogues map one-to-one to grounded production cards and immutable scripted evidence', () => {
+  const dialogue = {
+    id: 'dialogue_1', goal: 'Получить точную инструкцию', outcome: 'failure' as const,
+    messages: [
+      { role: 'user' as const, content: 'Где посмотреть тариф «Бизнес»?' },
+      { role: 'assistant' as const, content: 'Уточните терминал.' },
+      { role: 'user' as const, content: 'Терминал 4321.' },
+      { role: 'user' as const, content: 'И без звонка в поддержку.' },
+      { role: 'assistant' as const, content: 'Откройте Эквайринг → Мои точки продаж.' },
+    ],
+  };
+  const scenario = dialogueToScenario(dialogue, {
+    goal: 'Найти тариф терминала', successCriteria: 'Путь к тарифу указан по материалам владельца.', requirementIds: ['tariff_rule'],
+  });
+  assert.equal(scenario.provenance, 'production');
+  assert.equal(scenario.user.opening, dialogue.messages[0]!.content);
+  assert.deepEqual(scenario.user.script, ['Терминал 4321.', 'И без звонка в поддержку.']);
+  assert.equal(scenario.user.maxFollowUps, 2);
+  assert.deepEqual(scenario.requirementIds, ['tariff_rule']);
+  assert.deepEqual(scenario.metrics, [goalAttainment, replyQuality]);
+
+  const trial = dialogueToTrial(dialogue, { ...scenario, split: 'dev' }, 'revision_1');
+  assert.deepEqual(trial.events, dialogue.messages.map((message, seq) => ({ seq, type: message.role, text: message.content })));
+  assert.equal(trial.id, dialogue.id);
+  assert.equal(trial.userMode, 'scripted');
+  assert.equal(trial.outcome, 'ungraded');
+  assert.deepEqual(trial.observation, { state: 'missing', tools: 'partial' });
+  assert.deepEqual(trial.initialState, { records: {}, writableFields: [], transientFailures: 0 });
+  assert.deepEqual(trial.finalState, trial.initialState);
+  assert.deepEqual(trial.usage, emptyUsage());
+  assert.equal(trial.simulatorChecks, undefined);
+  assert.throws(() => dialogueToScenario({ ...dialogue, messages: [{ role: 'assistant', content: 'Готово.' }] }, {
+    goal: 'g', successCriteria: 'c',
+  }), /нет реплики пользователя/i);
+});
+
+test('observed goal requirement ids are optional, unique and preserved by production cards', () => {
+  const dialogue = { id: 'd_req', messages: [{ role: 'user' as const, content: 'Покажите тариф' }] };
+  const goal = observedGoalSchema.parse({ id: 'g_req', goal: 'Показать тариф', opening: 'Покажите тариф', evidenceDialogueIds: ['d_req'],
+    successCriteria: 'Путь указан', requirementIds: ['tariff_rule'] });
+  validateObservedGoals([goal], [dialogue], []);
+  assert.deepEqual(goalToScenario(goal).requirementIds, ['tariff_rule']);
+  assert.equal(observedGoalSchema.safeParse({ ...goal, requirementIds: ['tariff_rule', 'tariff_rule'] }).success, false);
+  assert.equal(observedGoalSchema.parse({ ...goal, requirementIds: undefined }).requirementIds, undefined);
 });
 
 test('кластер провалов обязан ссылаться на диалоги, которые действительно провалились', () => {

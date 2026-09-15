@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
-  VERSION, profileUser, clarificationSchema, agentSchema, createInputSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, observedProfileSchema, proposalSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation,
+  VERSION, profileUser, clarificationSchema, agentSchema, createInputSchema, dialogueToScenario, dialogueToTrial, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, observedProfileSchema, promptCompliance, proposalSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation,
   reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type DraftPatch, type Experiment, type HumanReviewInput, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
 import { ExperimentStore } from './store.js';
 import { assessTrial, evaluateTrial, grade } from './evaluation.js';
@@ -106,13 +106,9 @@ export class ExperimentLab {
     this.mutation = pending;
     try { return await pending; } finally { if (this.mutation === pending) this.mutation = undefined; }
   }
-  async create(raw: CreateInput): Promise<Experiment> {
-    this.ensureIdle();
-    const input = createInputSchema.parse(raw);
-    if (input.workflow === 'compare' && input.settings.userModes.length !== 1) throw new Error('Сравнительный эксперимент идёт в одном режиме пользователя: выберите static, scripted или reactive.');
-    if (input.workflow === 'compare' && input.target.kind !== 'sandbox') throw new Error('Для внешнего агента используйте evaluate и повтор набора; автоматический ремонт поддерживает только песочницу.');
+  private newRecord(input: CreateInput): Experiment {
     const now = new Date().toISOString();
-    const record: Experiment = {
+    return {
       schemaVersion: '1', id: randomUUID(), task: input.task, mode: input.mode, createdAt: now, updatedAt: now,
       phase: 'preparing', message: 'Подключаю агента и готовлю требования и первый тест.',
       sources: input.materials.map((m, i) => ({ id: `source-${i + 1}`, name: m.name, content: m.content, hash: fingerprint(m.content), ...(m.kind ? { kind: m.kind } : {}) })),
@@ -131,6 +127,13 @@ export class ExperimentLab {
         ...(input.mode === 'demo' ? ['Scripted demonstration: user/target behavior and the missing-tool repair are deterministic fixtures, not a measured LLM improvement.'] : []),
       ],
     };
+  }
+  async create(raw: CreateInput): Promise<Experiment> {
+    this.ensureIdle();
+    const input = createInputSchema.parse(raw);
+    if (input.workflow === 'compare' && input.settings.userModes.length !== 1) throw new Error('Сравнительный эксперимент идёт в одном режиме пользователя: выберите static, scripted или reactive.');
+    if (input.workflow === 'compare' && input.target.kind !== 'sandbox') throw new Error('Для внешнего агента используйте evaluate и повтор набора; автоматический ремонт поддерживает только песочницу.');
+    const record = this.newRecord(input);
     await this.launch(record, async ctx => {
       await preflightTarget(record.target);
       record.targetFingerprint = await targetFingerprint(record.target);
@@ -161,6 +164,61 @@ export class ExperimentLab {
       const baseline = revision(input.existingAgent ?? prepared.agent, null, input.workflow === 'evaluate' ? 'Agent configuration selected for dialogue evaluation.' : 'Original agent before measured improvements.');
       record.revisions.push(baseline); record.selectedRevisionId = baseline.id;
       await this.checkpoint(record, 'review', 'Тест готов. Проверьте запрос, ожидаемый результат и план запуска.');
+    });
+    return structuredClone(record);
+  }
+  /** Preserve recorded dialogues as offline evidence. The target and simulator are never opened. */
+  async score(raw: CreateInput, options: { codeOnly?: boolean } = {}): Promise<Experiment> {
+    this.ensureIdle();
+    const input = createInputSchema.parse({ ...raw, workflow: 'evaluate', scenarioCount: 0, goldenCases: [] });
+    if (!input.dialogues.length) throw new Error('Для оценки записанных диалогов нужен хотя бы один диалог.');
+    for (const dialogue of input.dialogues) if (!dialogue.messages.some(message => message.role === 'user')) {
+      throw new Error(`В записанном диалоге ${dialogue.id} нет реплики пользователя.`);
+    }
+    const record = this.newRecord(input);
+    record.message = 'Читаю записанные диалоги и сохраняю исходные события.';
+    record.limitations.push('Записанные диалоги: агент и симулятор не запускались; результаты внешних действий не наблюдались.');
+    if (options.codeOnly) record.limitations.push('Режим code-only сохранил факты без модельной оценки и кластеров; семантические рубрики остаются без решения.');
+    await this.launch(record, async ctx => {
+      const runtime = options.codeOnly ? undefined : await this.runtime(record);
+      const grounding = runtime ? await runtime.prepare({
+        task: record.task, sources: structuredClone(record.sources), existingAgent: input.existingAgent,
+        workflow: 'evaluate', scenarioCount: 0, profiles: [], goldenCases: [], notes: record.notes, targetKind: record.target.kind,
+      }, ctx) : undefined;
+      const hasPrompt = record.sources.some(source => source.kind === 'prompt');
+      const scenarios: Omit<Scenario, 'split'>[] = [];
+      for (const dialogue of record.dialogues) {
+        ctx.signal.throwIfAborted();
+        const goal = runtime?.goals ? (await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: [structuredClone(dialogue)], profiles: [] }, ctx))[0] : undefined;
+        if (goal) validateObservedGoals([goal], [dialogue], []);
+        const opening = dialogue.messages.find(message => message.role === 'user')!.content;
+        const scenario = dialogueToScenario(dialogue, goal ? {
+          goal: goal.goal, successCriteria: goal.successCriteria, requirementIds: goal.requirementIds,
+        } : {
+          goal: dialogue.goal ?? opening,
+          ...(dialogue.goal ? { successCriteria: dialogue.goal } : {}),
+        });
+        if (hasPrompt) scenario.metrics!.unshift({ ...promptCompliance });
+        scenarios.push(scenario);
+      }
+      const agent = input.existingAgent ?? grounding?.agent ?? { name: 'Записанный агент', instructions: 'Агент не запускался; сохранены только записанные диалоги.', tools: [] };
+      if (grounding) {
+        const prepared = validatePreparation({ ...grounding, scenarios }, record.sources, 'evaluate');
+        Object.assign(record, { requirements: prepared.requirements, questions: prepared.questions, scenarios: prepared.scenarios });
+      } else {
+        record.scenarios = scenarios.map(scenario => ({ ...scenario, split: 'dev' }));
+      }
+      const baseline = revision(agent, null, 'Agent configuration associated with imported recorded dialogues.');
+      record.revisions.push(baseline); record.selectedRevisionId = baseline.id;
+      record.reviewedAt = new Date().toISOString(); record.reviewMode = 'automated';
+      record.manifestHash = measurementHash(record);
+      for (const dialogue of record.dialogues) {
+        const trial = dialogueToTrial(dialogue, record.scenarios.find(scenario => scenario.id === dialogue.id)!, baseline.id);
+        trial.manifestHash = record.manifestHash;
+        for (const event of trial.events) this.store.appendTrace(record.id, trial.id, event);
+        record.trials.push(trial);
+      }
+      await this.checkpoint(record, 'results_review', `Импортировано ${record.trials.length} записанных диалогов. Агент и симулятор не запускались.`);
     });
     return structuredClone(record);
   }

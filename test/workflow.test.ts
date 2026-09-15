@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, rm, readFile, writeFile, mkdir, cp } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, readdir, writeFile, mkdir, cp } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -275,6 +275,43 @@ test('good/bad previews and local JSONL imports validate actual criteria without
   await writeFile(file, JSON.stringify({ id: 'real', messages: [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' }] }) + '\n');
   const imported = await readData(file, 'dialogues'); assert.equal(imported[0].id, 'real');
   await writeFile(file, '{bad}\n'); await assert.rejects(readData(file, 'dialogues'), /строке 1/);
+});
+
+test('CLI score imports ordered JSONL evidence and exports it without calling an agent or model', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-score-cli-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const task = join(directory, 'task.json');
+  const dialogues = join(directory, 'dialogues.jsonl');
+  const data = join(directory, 'data');
+  await writeFile(task, JSON.stringify({ task: 'Проверить ответ по тарифу', mode: 'live',
+    materials: [{ name: 'policy.md', content: 'Тариф показывается в разделе «Мои точки продаж».' }] }));
+  const messages = [
+    { role: 'user', content: 'Где тариф?' },
+    { role: 'assistant', content: 'Уточните терминал.' },
+    { role: 'user', content: 'Терминал 4321.' },
+    { role: 'assistant', content: 'Откройте «Мои точки продаж».' },
+  ];
+  await writeFile(dialogues, JSON.stringify({ id: 'recorded_1', goal: 'Узнать тариф', messages }) + '\n');
+  const result = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--code-only', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.phase, 'results_review');
+  assert.equal(output.imported, 1);
+  assert.ok(output.artifacts.report && output.artifacts.snapshot && output.artifacts.traceJournal);
+  const record = JSON.parse(await readFile(output.artifacts.evidence, 'utf8'));
+  assert.deepEqual(record.trials[0].events, messages.map((message, seq) => ({ seq, type: message.role, text: message.content })));
+  assert.equal(record.trials[0].outcome, 'ungraded');
+  assert.deepEqual(record.trials[0].observation, { state: 'missing', tools: 'partial' });
+  assert.equal(record.usage.calls, 0);
+  assert.deepEqual(record.failureModes, undefined);
+
+  const invalidData = join(directory, 'invalid-data');
+  await writeFile(dialogues, '{bad}\n');
+  const invalid = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--code-only', '--data-dir', invalidData], { encoding: 'utf8' });
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /строке 1/);
+  assert.match(invalid.stderr, /агент не запускался/i);
+  assert.deepEqual((await readdir(invalidData)).filter(name => name.endsWith('.json')), []);
 });
 
 test('draft edits cannot launder provenance; clarification keeps the old questions and records owner answers as a source', async t => {

@@ -180,6 +180,18 @@ export const promptCompliance: Rubric = {
   passCriteria: 'Каждое явное правило промпта, применимое к этому диалогу, соблюдено: формат, обязательные элементы и запреты выполнены. Если ни одно правило не применимо к доставленным репликам, условие выполнено.',
   failCriteria: 'Хотя бы одно явное правило промпта нарушено: неверный формат или структура, пропущен обязательный элемент, сказано запрещённое, дан ответ вне разрешённого периметра. В rationale процитируйте нарушенное правило дословно из источника-промпта и реплику, которая его нарушает.',
 };
+export const goalAttainment: Rubric = {
+  id: 'goal_attainment', name: 'Достижение цели', subject: 'agent',
+  description: 'Достиг ли пользователь заявленной цели по наблюдаемым фактам диалога.',
+  passCriteria: 'Цель достигнута; если требовалось действие, его результат подтверждён наблюдаемым состоянием или событием инструмента.',
+  failCriteria: 'Наблюдаемые факты показывают, что цель не достигнута или достигнута неверно. Одно заявление агента о ненаблюдавшемся действии не доказывает ни успех, ни провал.',
+};
+export const replyQuality: Rubric = {
+  id: 'reply_quality', name: 'Качество ответа', subject: 'agent',
+  description: 'Насколько ответ корректен, уместен, заземлён и исполним для пользователя независимо от результата внешнего действия.',
+  passCriteria: 'Ответ корректен по материалам владельца, отвечает на запрос и даёт пользователю исполнимый следующий шаг без выдуманных фактов.',
+  failCriteria: 'Ответ неверен, не по существу, неисполняем, противоречит материалам владельца или выдаёт неподтверждённое за факт.',
+};
 export const assessmentFindingSchema = z.strictObject({
   criterion: text.max(2000), result: z.enum(['pass', 'fail', 'unknown']), rationale: text.max(1000),
   citations: z.array(z.strictObject({ seq: z.number().int().nonnegative(), quote: z.string().min(1).max(2000) })).max(6),
@@ -311,6 +323,7 @@ export function goldenToScenario(c: GoldenCase): Omit<Scenario, 'split'> {
  */
 export const observedGoalSchema = z.strictObject({
   id: identifier, goal: text.max(3000), opening: text.max(3000), profileId: identifier.optional(),
+  requirementIds: z.array(identifier).max(20).refine(unique, 'Duplicate requirement IDs').optional(),
   evidenceDialogueIds: z.array(identifier).min(1).max(50), successCriteria: text.max(3000),
   facts: text.max(5000).default('Only what the real user revealed in the evidence dialogues.'),
   outcome: z.enum(['success', 'failure', 'abandoned', 'unknown']).default('unknown'),
@@ -330,19 +343,51 @@ export function validateObservedGoals(goals: ObservedGoal[], dialogues: Dialogue
 }
 export function goalToScenario(goal: ObservedGoal, profile?: Profile): Omit<Scenario, 'split'> {
   return {
-    id: goal.id, familyId: goal.id, title: goal.goal.slice(0, 200), requirementIds: [], provenance: 'production', tier: 'regression', profileId: goal.profileId,
+    id: goal.id, familyId: goal.id, title: goal.goal.slice(0, 200), requirementIds: goal.requirementIds ?? [], provenance: 'production', tier: 'regression', profileId: goal.profileId,
     user: {
       goal: goal.goal, facts: goal.facts, opening: goal.opening, maxFollowUps: 2,
       behavior: 'Behave like the real user in the evidence dialogues: answer clarifications from the known facts, stop when the goal is reached or clearly blocked.',
       ...(profile ? profileUser(profile) : {}),
     },
     initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], successCriteria: goal.successCriteria,
-    assumptions: [`Derived from a real dialogue (${goal.evidenceDialogueIds.join(', ')}); the opening is the real user's first message and the success criteria were inferred from the logged outcome (${goal.outcome}).`],
+    assumptions: [`Derived from a real dialogue (${goal.evidenceDialogueIds.join(', ')}); the opening is the real user's own message and the success criteria require owner review.`],
     metrics: [
       { id: 'goal_attainment', name: 'Goal attainment', subject: 'agent', description: 'Did the user get what they came for, as the real user would judge it.', passCriteria: 'The stated goal is reached or the user is told clearly and correctly why it cannot be.', failCriteria: 'The goal is not reached and no correct explanation is given, or the answer contradicts the success criteria.' },
       { id: 'perimeter', name: 'Stays within the agent perimeter', subject: 'agent', description: 'The agent answers only what it is meant to answer and grounds answers in its materials.', passCriteria: 'Answers stay within the described perimeter and materials; out-of-scope requests are declined or redirected.', failCriteria: 'The agent answers outside its perimeter, invents facts, or fails to decline an out-of-scope request.' },
       { ...simulatorFidelity },
     ],
+  };
+}
+
+export function dialogueToScenario(dialogue: Dialogue, criteria: { goal: string; successCriteria?: string; requirementIds?: string[] }): Omit<Scenario, 'split'> {
+  const userMessages = dialogue.messages.filter(message => message.role === 'user');
+  const opening = userMessages[0]?.content;
+  if (!opening) throw new Error(`В записанном диалоге ${dialogue.id} нет реплики пользователя.`);
+  const script = userMessages.slice(1).map(message => message.content);
+  return {
+    id: dialogue.id, familyId: dialogue.id, title: criteria.goal.slice(0, 200), requirementIds: [...(criteria.requirementIds ?? [])],
+    provenance: 'production', tier: 'regression',
+    user: {
+      goal: criteria.goal, facts: 'Только факты, сообщённые пользователем в записанном диалоге.',
+      behavior: 'Воспроизводить реплики пользователя из записи в исходном порядке.', opening,
+      maxFollowUps: script.length, ...(script.length ? { script } : {}),
+    },
+    initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [],
+    ...(criteria.successCriteria ? { successCriteria: criteria.successCriteria } : {}),
+    assumptions: [`Recorded dialogue ${dialogue.id}; no target or simulator execution and no observed external state.`],
+    metrics: [{ ...goalAttainment }, { ...replyQuality }],
+  };
+}
+
+export function dialogueToTrial(dialogue: Dialogue, scenario: Scenario, revisionId: string): Trial {
+  const initialState: World = { records: {}, writableFields: [], transientFailures: 0 };
+  return {
+    id: dialogue.id, revisionId, scenarioId: scenario.id, familyId: scenario.familyId, repeat: 0, userMode: 'scripted',
+    split: scenario.split, manifestHash: 'unreviewed', outcome: 'ungraded',
+    reason: 'Записанный диалог импортирован без повторного запуска агента; семантическая оценка ещё не выполнялась.',
+    checks: [], events: dialogue.messages.map((message, seq) => ({ seq, type: message.role, text: message.content })),
+    initialState, finalState: structuredClone(initialState), usage: emptyUsage(), elapsedMs: 0,
+    observation: { state: 'missing', tools: 'partial' },
   };
 }
 

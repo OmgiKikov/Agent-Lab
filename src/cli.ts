@@ -34,6 +34,7 @@ async function main() {
   }
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     'data-dir': { type: 'string' }, input: { type: 'string' }, id: { type: 'string' }, output: { type: 'string' },
+    task: { type: 'string' },
     before: { type: 'string' }, after: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     format: { type: 'string', default: 'json' }, json: { type: 'boolean' },
     connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
@@ -46,7 +47,7 @@ async function main() {
     process.stdout.write('  agent-lab summary --id RUN [--json]     Качество агента: карточки, критерии, причины, что разметить\n  agent-lab audit-judge --id RUN --output NEW_DIRECTORY --repeats 10 --yes\n');
     process.stdout.write('  agent-lab preview --id RUN --scenario CASE --input examples.json --yes\n');
     process.stdout.write('Agent Lab — проверьте, что сломала правка вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
-    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  agent-lab pilot --id RUN\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
+    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab score --input dialogues.jsonl --task task.json --yes\n  agent-lab score --input dialogues.jsonl --task task.json --code-only\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  agent-lab pilot --id RUN\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
     process.stdout.write('Дополнительно: clarify --id RUN --input answers.json · run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\nКонтракты подключения: docs/REFERENCE.md.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
@@ -126,7 +127,7 @@ async function main() {
     }
     return;
   }
-  if (!['demo', 'prepare', 'build', 'repeat', 'run', 'save-suite', 'evaluate', 'reassess', 'clarify', 'prompt-propose', 'prompt-apply'].includes(command)) throw new Error(`Unknown command: ${command}`);
+  if (!['demo', 'prepare', 'build', 'score', 'repeat', 'run', 'save-suite', 'evaluate', 'reassess', 'clarify', 'prompt-propose', 'prompt-apply'].includes(command)) throw new Error(`Unknown command: ${command}`);
   if (command === 'evaluate' && (!values.input || !values.yes)) throw new Error('Для запуска сохранённых тестов укажите --input suite.json --yes. Лимиты и подключение берутся из файла.');
   const lab = new ExperimentLab(directory);
   await lab.init();
@@ -151,6 +152,37 @@ async function main() {
       const draft = await promptVersion(lab, values.input, proposal.reviewHash);
       process.stdout.write(JSON.stringify({ id: draft.id, phase: draft.phase, target: draft.target,
         nextStep: `agent-lab run --id ${draft.id} --yes` }, null, 2) + '\n'); return;
+    }
+    if (command === 'score') {
+      if (!values.input || !values.task || (!values.yes && !values['code-only'])) {
+        throw new Error('Укажите --input dialogues.jsonl --task task.json и --yes (модель) или --code-only. Агент не запускается.');
+      }
+      let raw: Record<string, unknown>, dialogues;
+      try {
+        raw = JSON.parse(await readFile(values.task, 'utf8'));
+        dialogues = await readData(values.input, 'dialogues');
+      } catch (error) {
+        throw new Error(`${error instanceof Error ? error.message : String(error)} Агент не запускался.`);
+      }
+      const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
+      const input = createInputSchema.parse({ ...raw, mode: raw.mode ?? 'live', ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
+        dialogues, scenarioCount: 0 });
+      const seed = await lab.score(input, { codeOnly: values['code-only'] });
+      await lab.waitForIdle();
+      const imported = await lab.get(seed.id);
+      if (imported.phase !== 'results_review') throw new Error(imported.error ?? 'Импорт диалогов не удался; агент не запускался.');
+      let record = imported;
+      if (!values['code-only']) {
+        const pending = await lab.reassess(seed.id);
+        await lab.waitForIdle();
+        record = await lab.get(pending.id);
+      }
+      const bundle = await evidenceBundle(record, lab.store);
+      const artifacts = await exportArtifacts(bundle, directory);
+      process.stdout.write(JSON.stringify({ id: record.id, phase: record.phase, imported: imported.trials.length,
+        ...(record.assessmentOf ? { assessmentOf: record.assessmentOf } : {}), artifacts, evidence: bundle.evidence }, null, 2) + '\n');
+      process.exitCode = record.phase === 'results_review' && !record.trials.some(trial => trial.assessmentError || ['invalid', 'cancelled'].includes(trial.outcome)) ? 0 : 2;
+      return;
     }
     if (command === 'reassess') {
       if (!id || (!values.yes && !values['code-only'])) throw new Error('Укажите --id RUN и --yes (модель) или --code-only (без модели).');
