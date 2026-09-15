@@ -404,6 +404,7 @@ test('confirmed hypothesis repairs seeded state until an exact state check resol
   const requirements = { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] };
   const seeded = {
     ...confirmedCard(1), successCriteria: 'The account is frozen.',
+    metrics: [{ ...goalAttainment, passCriteria: 'The account is frozen.' }],
     initialState: { records: { account_1: { status: 'active' } }, writableFields: ['status'], transientFailures: 0 },
   };
   const mismatched = { ...seeded, checks: [{ id: 'state', kind: 'state_equals' as const, description: 'Wrong record path.', recordId: 'account_2', field: 'status', value: 'active' }] };

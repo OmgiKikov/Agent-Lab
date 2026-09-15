@@ -399,6 +399,8 @@ export function dialogueToTrial(dialogue: Dialogue, scenario: Scenario, revision
 export const clarificationSchema = z.strictObject({ question: text.max(3000), answer: text.max(5000) });
 export const createInputSchema = z.strictObject({
   task: text.max(8000),
+  /** Owner-confirmed hypothesis that requests the strict one-test preparation path. */
+  confirmedHypothesis: text.max(3000).optional(),
   materials: z.array(materialSchema).min(1).max(12),
   mode: z.enum(['demo', 'live']),
   settings: settingsSchema.default(() => settingsSchema.parse({})),
@@ -422,6 +424,9 @@ export const createInputSchema = z.strictObject({
     ctx.addIssue({ code: 'custom', message: 'scenarioCount 0 needs golden cases or production dialogues to have anything to run', path: ['scenarioCount'] });
   }
   if (!unique(v.profiles.map(p => p.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate profile IDs', path: ['profiles'] });
+  if (v.confirmedHypothesis && (v.workflow !== 'evaluate' || v.scenarioCount !== 1 || v.goldenCases.length)) {
+    ctx.addIssue({ code: 'custom', message: 'A confirmed hypothesis builds exactly one generated evaluate test without golden cases', path: ['confirmedHypothesis'] });
+  }
 });
 export type CreateInput = z.infer<typeof createInputSchema>;
 
@@ -678,6 +683,7 @@ export type UserTurn = z.infer<typeof userTurnSchema>;
 export interface PrepareInput {
   task: string; sources: Source[]; existingAgent?: AgentSpec; workflow?: 'evaluate' | 'compare'; scenarioCount?: number;
   profiles?: Profile[]; goldenCases?: GoldenCase[]; notes?: string; observedGoals?: ObservedGoal[];
+  confirmedHypothesis?: string; dialogues?: Dialogue[]; userModes?: UserMode[];
   /** The sandbox agent is only built when the sandbox answers; an external target has its own. */
   targetKind?: Target['kind'];
 }

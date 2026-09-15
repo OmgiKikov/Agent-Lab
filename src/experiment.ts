@@ -138,7 +138,8 @@ export class ExperimentLab {
       await preflightTarget(record.target);
       record.targetFingerprint = await targetFingerprint(record.target);
       const runtime = await this.runtime(record);
-      if (record.dialogues.length && runtime.profiles) {
+      const confirmed = !!input.confirmedHypothesis;
+      if (!confirmed && record.dialogues.length && runtime.profiles) {
         // Observed persona text may only come from supplied dialogues; owner-written profiles stay first and keep their source label.
         const observed = (await runtime.profiles({ task: record.task, sources: structuredClone(record.sources), dialogues: structuredClone(record.dialogues) }, ctx)).map(p => observedProfileSchema.parse(p));
         const supplied = new Set(record.dialogues.map(d => d.id));
@@ -147,14 +148,15 @@ export class ExperimentLab {
       }
       if (new Set(record.profiles.map(p => p.id)).size !== record.profiles.length) throw new Error('У профилей повторяются идентификаторы.');
       // Real dialogues become production cards: the goal a real user pursued, opened with their own words.
-      const observedGoals = record.dialogues.length && runtime.goals
+      const observedGoals = !confirmed && record.dialogues.length && runtime.goals
         ? await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: structuredClone(record.dialogues), profiles: structuredClone(record.profiles) }, ctx)
         : [];
       validateObservedGoals(observedGoals, record.dialogues, record.profiles);
       const generated = await runtime.prepare({
         task: record.task, sources: record.sources, existingAgent: input.existingAgent, workflow: input.workflow, scenarioCount: input.scenarioCount,
         profiles: structuredClone(record.profiles), goldenCases: structuredClone(record.goldenCases), notes: record.notes, observedGoals: structuredClone(observedGoals),
-        targetKind: record.target.kind,
+        targetKind: record.target.kind, confirmedHypothesis: input.confirmedHypothesis,
+        dialogues: structuredClone(record.dialogues), userModes: structuredClone(record.settings.userModes),
       }, ctx);
       const production = observedGoals.map(goal => goalToScenario(goal, record.profiles.find(p => p.id === goal.profileId)));
       const golden = record.goldenCases.map(goldenToScenario);

@@ -32,17 +32,20 @@ const GOALS_INPUT_LIMIT = 120_000;
 const scoredGoalSchema = observedGoalSchema.extend({ requirementIds: observedGoalSchema.shape.requirementIds.unwrap().min(1) });
 /** Instructions about the shape of a machine reply: an envelope the user never sees. */
 /** external cards get harness rubrics after generation (fidelity, and prompt compliance when a prompt source exists); the model may use only what is left. */
-const generatedScenarioSchema = (external: boolean, harnessRubrics = 0) => scenarioSchema.required({ successCriteria: true, assumptions: true, metrics: true })
+const generatedScenarioSchema = (external: boolean, harnessRubrics = 0, confirmed = false) => scenarioSchema.required({ successCriteria: true, assumptions: true, metrics: true })
   // Models like to label the whole card with a stage; stages belong to criteria, so the label is accepted here and dropped in the review.
   .extend({ user: scenarioSchema.shape.user.required({ maxFollowUps: true }), stage: z.string().max(80).optional() })
-  .refine(s => external ? s.checks.length > 0 || s.metrics.some(m => m.subject === 'agent')
-    : s.metrics.some(m => m.subject === 'agent') && s.metrics.some(m => m.subject === 'simulator'),
+  .refine(s => confirmed || (external ? s.checks.length > 0 || s.metrics.some(m => m.subject === 'agent')
+    : s.metrics.some(m => m.subject === 'agent') && s.metrics.some(m => m.subject === 'simulator')),
     'Provide an agent-goal rubric, or literal answer checks for an external goal; sandbox cards also need simulator fidelity')
-  .refine(s => !external || s.checks.every(c => ['answer_equals', 'answer_contains', 'answer_omits'].includes(c.kind))
+  .refine(s => !external || confirmed || s.checks.every(c => ['answer_equals', 'answer_contains', 'answer_omits'].includes(c.kind))
     && !Object.keys(s.initialState.records).length && !s.initialState.writableFields.length && !s.initialState.transientFailures,
     'Without an external state/tool contract use only source-grounded answer checks and an empty initialState; assess semantic answers with agent rubrics')
   .refine(s => !external || s.metrics.length <= RUBRIC_LIMIT - harnessRubrics && s.metrics.every(m => m.subject === 'agent' && m.id !== simulatorFidelity.id && m.id !== promptCompliance.id),
-    `External generation uses at most ${RUBRIC_LIMIT - harnessRubrics} agent rubrics only; the harness adds user_fidelity for the simulator${harnessRubrics > 1 ? ' and prompt_compliance for the supplied prompt source' : ' and prompt_compliance when a prompt source is supplied'}`);
+    `External generation uses at most ${RUBRIC_LIMIT - harnessRubrics} agent rubrics only; the harness adds user_fidelity for the simulator${harnessRubrics > 1 ? ' and prompt_compliance for the supplied prompt source' : ' and prompt_compliance when a prompt source is supplied'}`)
+  .refine(s => !confirmed || s.metrics.length === 1 && s.metrics[0]?.id === 'goal_attainment' && s.metrics[0].subject === 'agent'
+    && s.metrics[0].passCriteria === s.successCriteria,
+    'A confirmed test must contain exactly one generated agent rubric: goal_attainment, with passCriteria equal to successCriteria verbatim');
 const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, message: userTurnSchema.shape.message.optional() })
   .refine(v => v.done || !!v.message?.trim(), 'A continuing user turn needs a message')
   .describe('To stop immediately, return done:true and omit message. A nonempty message is always delivered to the target. done:true with a nonempty message means deliver this final user message, receive the target response, then end. done:true with an empty message means stop now without another target response.');
@@ -412,8 +415,12 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       const requirementIds = new Set(grounding.requirements.map(r => r.id));
       if (requirementIds.size !== grounding.requirements.length) throw new Error('Requirements: duplicate requirement IDs');
       const compare = input.workflow === 'compare';
+      const confirmed = !!input.confirmedHypothesis;
       const external = !!input.targetKind && input.targetKind !== 'sandbox';
-      const harnessRubrics = external ? 1 + (input.sources.some(s => s.kind === 'prompt') ? 1 : 0) : 0;
+      const hasPrompt = input.sources.some(s => s.kind === 'prompt');
+      const simulatorCapable = (input.userModes ?? ['reactive']).includes('reactive');
+      const harnessRubrics = confirmed ? Number(hasPrompt) + Number(simulatorCapable)
+        : external ? 1 + Number(hasPrompt) : 0;
       const plan = compare ? await ask(
         'План семейств сценариев',
         FAMILY_PLAN_ROLE,
@@ -446,6 +453,13 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           cardsRole(compare, profiles.length > 0, observedGoals.length > 0) + (external ? `\n${EXTERNAL_CARDS_CLAUSE}` : ''),
           {
             ...evidence,
+            ...(confirmed ? {
+              confirmedHypothesis: input.confirmedHypothesis,
+              dialogueEvidence: (input.dialogues ?? []).map(dialogue => ({
+                id: dialogue.id,
+                userMessages: dialogue.messages.filter(message => message.role === 'user').map(message => message.content),
+              })),
+            } : {}),
             ...(input.notes ? { ownerNotes: input.notes } : {}),
             ...(profiles.length ? { observedProfiles: profiles } : {}),
             ...(observedGoals.length ? { observedGoals: observedGoals.map(g => ({ id: g.id, goal: g.goal, profileId: g.profileId })) } : {}),
@@ -454,12 +468,14 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
               earlierGoals: scenarios.map(s => ({ id: s.id, familyId: s.familyId, goal: s.user.goal })),
             }),
           },
-          z.strictObject({ scenarios: z.array(generatedScenarioSchema(external, harnessRubrics)).min(batchSize).max(SCENARIO_LIMIT) }), ctx,
+          z.strictObject({ scenarios: confirmed
+            ? z.tuple([generatedScenarioSchema(external, harnessRubrics, true)])
+            : z.array(generatedScenarioSchema(external, harnessRubrics)).min(batchSize).max(SCENARIO_LIMIT) }), ctx,
           // Pure review: attribution problems are a reason for the model to rewrite the
           // batch, not a reason to lose the whole run. Nothing is recorded until it passes.
           value => {
             // Surplus cards are the model overshooting a count, not a defect worth an attempt.
-            if (value.scenarios.length > keep) value.scenarios.splice(keep);
+            if (!confirmed && value.scenarios.length > keep) value.scenarios.splice(keep);
             const seen = new Set<string>();
             for (const scenario of value.scenarios) {
               // A profile invented where none were supplied carries nothing; the card keeps its own persona.
@@ -494,6 +510,17 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
                 }
                 if (literal.length > 2) return `Card ${scenario.id} has ${literal.length} literal checks; keep at most two literal checks per card and express the rest as agent rubrics.`;
               }
+              if (confirmed) {
+                const stateChecks = scenario.checks.filter(check => check.kind === 'state_equals');
+                const seeded = Object.keys(scenario.initialState.records).length > 0
+                  || scenario.initialState.writableFields.length > 0
+                  || scenario.initialState.transientFailures > 0
+                  || Object.keys(scenario.initialState.external ?? {}).length > 0;
+                if (seeded && !stateChecks.length) return `Card ${scenario.id}: non-empty seeded state needs at least one exact state_equals check.`;
+                const unresolved = stateChecks.filter(check => !Object.hasOwn(scenario.initialState.records, check.recordId)
+                  || !Object.hasOwn(scenario.initialState.records[check.recordId]!, check.field));
+                if (unresolved.length) return `Card ${scenario.id}: state_equals paths do not resolve in the seeded state: ${unresolved.map(check => `${check.recordId}.${check.field}`).join(', ')}.`;
+              }
               const known = valueTokens([scenario.user.opening, scenario.user.facts, ...(scenario.user.knows ?? [])].join('\n'));
               for (const answer of scenario.user.answers ?? []) {
                 const unknown = [...valueTokens(answer.reply)].find(token => !known.has(token));
@@ -505,8 +532,8 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           },
         );
         for (const scenario of cards.scenarios) {
-          if (external) scenario.metrics.push({ ...simulatorFidelity });
-          if (external && input.sources.some(s => s.kind === 'prompt')) scenario.metrics.unshift({ ...promptCompliance });
+          if (confirmed ? simulatorCapable : external) scenario.metrics.push({ ...simulatorFidelity });
+          if ((confirmed || external) && hasPrompt) scenario.metrics.unshift({ ...promptCompliance });
           scenarioIds.add(scenario.id); scenarios.push(scenario);
         }
         offset += cards.scenarios.length;
