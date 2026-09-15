@@ -136,9 +136,10 @@ export function plural(n: number, forms: [string, string, string]): string {
 export const dialogues = (n: number) => plural(n, ['диалог', 'диалога', 'диалогов']);
 export const cardsWord = (n: number) => plural(n, ['карточка', 'карточки', 'карточек']);
 const cardsOf = (n: number) => plural(n, ['карточки', 'карточек', 'карточек']);
+const stableMetricIds = new Set(['goal_attainment', 'prompt_compliance', 'reply_quality']);
 
 function metricRows(record: Experiment): QualityMetric[] {
-  // Only identical rubric definitions share a row; labels alone do not define a criterion.
+  // Service rubrics have run-wide identity; owner rubrics share a row only when their full definitions match.
   const rows = new Map<string, QualityMetric>();
   const reviews = latestHumanReviews(record);
   const bump = (row: QualityMetric, result: 'pass' | 'fail' | 'unknown') => { row.total++; if (result === 'pass') row.passed++; else if (result === 'fail') row.failed++; else row.unknown++; };
@@ -152,7 +153,7 @@ function metricRows(record: Experiment): QualityMetric[] {
       bump(row, !usable(scenario, trial) ? 'unknown' : trial.outcome === 'pass' ? 'pass' : trial.outcome === 'fail' ? 'fail' : 'unknown');
     }
     for (const metric of (scenario.metrics ?? []).filter(m => m.subject === 'agent')) {
-      const key = `rubric:${fingerprint(metric)}`;
+      const key = `rubric:${stableMetricIds.has(metric.id) ? metric.id : fingerprint(metric)}`;
       const row = rows.get(key) ?? { id: metric.id, name: metric.name, kind: 'rubric', passed: 0, failed: 0, unknown: 0, total: 0, accuracy: null };
       rows.set(key, row);
       const human = reviews.get(`${trial.id}|metric:${metric.id}`)?.verdict;
