@@ -783,3 +783,18 @@ test('human verdicts may target simulator checks, reassessment recomputes them, 
   const repeated = await lab.repeat(unconfirmed.id);
   assert.ok(!repeated.limitations.some(l => l.startsWith('Внешнее состояние карточек')));
 });
+
+test('a run may drive several dialogues at once: their trace events interleave, while the default keeps them one after another', async t => {
+  const { lab } = await setup(t);
+  const order = async (parallel: number | undefined) => {
+    const record = await lab.create(demoEvaluationInput()); await lab.waitForIdle();
+    await lab.start(record.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(record.id)), ...(parallel ? { parallel } : {}) }); await lab.waitForIdle();
+    const result = await lab.get(record.id);
+    assert.equal(result.phase, 'results_review', result.error ?? result.message); assert.equal(result.trials.length, 3);
+    const journal = (await lab.store.traceJournal(record.id)).trim().split('\n').map(line => JSON.parse(line).trialId as string);
+    // How many times the journal switches from one dialogue to another: 2 when dialogues run one after another, more when they overlap.
+    return journal.filter((id, i) => i > 0 && journal[i - 1] !== id).length;
+  };
+  assert.equal(await order(undefined), 2);
+  assert.ok(await order(3) > 2, 'three parallel dialogues must interleave their traces');
+});

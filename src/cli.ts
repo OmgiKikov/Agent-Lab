@@ -39,15 +39,15 @@ async function main() {
     connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
     'golden-file': { type: 'string' }, 'dialogues-file': { type: 'string' }, candidate: { type: 'string' },
     hypothesis: { type: 'string' }, trial: { type: 'string', multiple: true }, scenario: { type: 'string' },
-    yes: { type: 'boolean' }, repeats: { type: 'string' }, case: { type: 'string', multiple: true },
+    yes: { type: 'boolean' }, repeats: { type: 'string' }, case: { type: 'string', multiple: true }, parallel: { type: 'string' },
   } });
   const command = positionals[0];
   if (values.help || !command) {
     process.stdout.write('  agent-lab summary --id RUN [--json]     Качество агента: карточки, критерии, причины, что разметить\n  agent-lab audit-judge --id RUN --output NEW_DIRECTORY --repeats 10 --yes\n');
     process.stdout.write('  agent-lab preview --id RUN --scenario CASE --input examples.json --yes\n');
-    process.stdout.write('Agent Lab — проверьте, что сломала правка вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
+    process.stdout.write('Agent Lab — проверьте, что сломала правка вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
     process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  agent-lab pilot --id RUN\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
-    process.stdout.write('Дополнительно: clarify --id RUN --input answers.json · run --id RUN --yes · build --input task.json · repeat --id RUN · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\nКонтракты подключения: docs/REFERENCE.md.\n'); return;
+    process.stdout.write('Дополнительно: clarify --id RUN --input answers.json · run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\nКонтракты подключения: docs/REFERENCE.md.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
   const directory = values['data-dir'] ?? resolve('.agent-lab');
@@ -169,7 +169,7 @@ async function main() {
     }
     if (command === 'evaluate') {
       const draft = await lab.loadSuite(values.input!, values.case, values.connection ? await readConnection(values.connection) : undefined);
-      await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) });
+      await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft), ...(values.parallel ? { parallel: Number(values.parallel) } : {}) });
       await lab.waitForIdle();
       const record = await lab.get(draft.id);
       const bundle = await evidenceBundle(record, lab.store, values.before);
@@ -198,7 +198,7 @@ async function main() {
     } else if (command === 'run' || command === 'demo') {
       const draft = await lab.get(id);
       if (command === 'run' && !values.yes) throw new Error('Для запуска согласованных тестов укажите --yes.');
-      await lab.start(id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
+      await lab.start(id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft), ...(values.parallel ? { parallel: Number(values.parallel) } : {}) }); await lab.waitForIdle();
       const result = await lab.get(id);
       process.stdout.write(`${JSON.stringify({ id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode, ...(result.workflow === 'evaluate' ? { verdict: evidenceSummary(result).verdict, exitCode: evaluationExitCode(result) } : {}), comparison: result.comparisons.at(-1), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
       if (result.workflow === 'evaluate') process.exitCode = evaluationExitCode(result);

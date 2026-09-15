@@ -3,8 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
   VERSION, profileUser, clarificationSchema, agentSchema, createInputSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, observedProfileSchema, proposalSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation,
-  reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type DraftPatch, type Experiment, type HumanReviewInput, type Revision, type Runtime,
-} from './contracts.js';
+  reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type DraftPatch, type Experiment, type HumanReviewInput, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
 import { ExperimentStore } from './store.js';
 import { assessTrial, evaluateTrial, grade } from './evaluation.js';
 import { automaticTrialResult, trialAssessmentComplete, awaitingVerdict, compareTrials, isAgentFailure, plannedTrials } from './comparison.js';
@@ -375,7 +374,10 @@ export class ExperimentLab {
       return structuredClone(record);
     });
   }
-  async start(id: string, options: { approved: boolean; reviewer?: 'human' | 'automated'; expectedHash?: string }): Promise<Experiment> {
+  /** `parallel` is an execution knob, not a measurement setting: dialogues are independent, so several may run at once without changing what is measured. */
+  async start(id: string, options: { approved: boolean; reviewer?: 'human' | 'automated'; expectedHash?: string; parallel?: number }): Promise<Experiment> {
+    const parallel = options.parallel ?? 1;
+    if (!Number.isInteger(parallel) || parallel < 1 || parallel > 8) throw new Error('Параллельных диалогов может быть от 1 до 8.');
     return this.change(async () => {
       const record = await this.store.get(id);
       if (record.phase !== 'review') throw new Error('Запустить можно только эксперимент, ожидающий проверки. Чтобы поменять набор карточек, создайте новый.');
@@ -400,7 +402,7 @@ export class ExperimentLab {
       record.manifestHash = measurementHash(record);
       record.phase = record.workflow === 'evaluate' ? 'evaluating' : 'baseline';
       record.message = record.workflow === 'evaluate' ? 'Выполняю согласованный план проверки.' : 'Starting the frozen development comparison.';
-      await this.launch(record, ctx => record.workflow === 'evaluate' ? this.evaluateReviewed(record, ctx) : this.execute(record, ctx), true);
+      await this.launch(record, ctx => record.workflow === 'evaluate' ? this.evaluateReviewed(record, ctx, parallel) : this.execute(record, ctx), true);
       return structuredClone(record);
     });
   }
@@ -486,52 +488,68 @@ export class ExperimentLab {
     };
   }
   /** The single trial loop: every user mode, every scenario of the split, every repeat, one checkpoint per trial. */
-  private async runSuite(record: Experiment, runtime: Runtime, revision: Revision, split: 'dev' | 'control', label: string, ctx: CallContext): Promise<void> {
+  private async runSuite(record: Experiment, runtime: Runtime, revision: Revision, split: 'dev' | 'control', label: string, ctx: CallContext, parallel = 1): Promise<void> {
     const hash = record.manifestHash;
     if (!hash) throw new Error('Missing measurement manifest.');
     const guard = this.frozenGuard(record, hash, ctx);
     const scenarios = record.scenarios.filter(s => s.split === split);
     const planned = plannedTrials({ ...record, scenarios });
-    let completed = 0;
+    // Every attempt in the order it would run one at a time; a pool of `parallel` workers takes them from the front,
+    // so a finished dialogue is recorded as soon as it ends and the trial order is the completion order.
+    const attempts: Array<{ userMode: UserMode; scenario: Scenario; repeat: number }> = [];
     for (const userMode of record.settings.userModes) {
       const skipped: string[] = [];
-      const prefix = record.settings.userModes.length > 1 ? `[${userMode}] ` : '';
       for (const scenario of scenarios) {
         if (userMode === 'scripted' && scenario.user.script === undefined) { skipped.push(scenario.id); continue; }
-        for (let repeat = 0; repeat < record.settings.repeats; repeat++) {
-          guard();
-          if (record.targetFingerprint && record.targetFingerprint !== await targetFingerprint(record.target)) throw new Error('Код внешнего агента изменился во время прогона. Создайте повтор с новой версией.');
-          const progress = `${label}${prefix}${scenario.title} · диалог ${completed + 1}/${planned}`;
-          record.message = `${progress} · открываем сессию`;
-          const trial = await evaluateTrial({ runtime, revision, scenario, repeat, manifestHash: hash, sources: record.sources, settings: record.settings,
-            onStage: stage => { record.message = `${progress} · ${{ target: 'ответ агента', user: 'реплика пользователя', assessment: 'оценка критериев' }[stage]}`; },
-            ctx: { ...ctx, onTrace: (trialId, event) => {
-              ctx.onTrace?.(trialId, event);
-              const stage = event.type === 'user' ? 'ждём ответ агента' : event.type === 'assistant' ? 'ответ получен · готовим следующий шаг'
-                : event.type === 'simulator' ? 'реплика симулятора готова' : event.type === 'tool_call' ? `инструмент ${event.tool ?? ''}`
-                : event.type === 'tool_result' ? 'инструмент завершён' : 'сбой диалога';
-              record.message = `${progress} · ${stage}`;
-            } }, userMode, target: record.target });
-          record.trials.push(trial);
-          if (record.target.kind !== 'sandbox' && scenario.initialState.external && trial.observation?.resetConfirmed !== true) {
-            const note = 'Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.';
-            if (!record.limitations.includes(note)) record.limitations.push(note);
-          }
-          if (trial.observation?.version) {
-            if (record.targetRelease && record.targetRelease !== trial.observation.version) throw new Error('Внешний агент сообщил разные версии в одном прогоне. Сравнение недоступно.');
-            record.targetRelease = trial.observation.version;
-          }
-          completed++;
-          await this.checkpoint(record, record.phase, `${label}${prefix}${scenario.title} · ${repeat + 1}/${record.settings.repeats}`);
-          if (record.targetFingerprint && record.targetFingerprint !== await targetFingerprint(record.target)) throw new Error('Код внешнего агента изменился во время диалога. Результат сохранён, но сравнение недоступно.');
-          guard();
-        }
+        for (let repeat = 0; repeat < record.settings.repeats; repeat++) attempts.push({ userMode, scenario, repeat });
       }
       if (skipped.length) {
         const note = `Scripted mode skipped ${skipped.length} card(s) without a script: ${skipped.join(', ')}.`;
         if (!record.limitations.includes(note)) record.limitations.push(note);
       }
     }
+    const fingerprintCheck = async (message: string) => {
+      if (record.targetFingerprint && record.targetFingerprint !== await targetFingerprint(record.target)) throw new Error(message);
+    };
+    let completed = 0, next = 0;
+    let failed = false;
+    const worker = async () => {
+      while (next < attempts.length && !failed) {
+        const { userMode, scenario, repeat } = attempts[next++]!;
+        const prefix = record.settings.userModes.length > 1 ? `[${userMode}] ` : '';
+        const running = () => parallel > 1 ? ` · параллельно ${Math.min(parallel, attempts.length - completed)}` : '';
+        guard();
+        await fingerprintCheck('Код внешнего агента изменился во время прогона. Создайте повтор с новой версией.');
+        const progress = () => `${label}${prefix}${scenario.title} · диалог ${completed + 1}/${planned}${running()}`;
+        record.message = `${progress()} · открываем сессию`;
+        const trial = await evaluateTrial({ runtime, revision, scenario, repeat, manifestHash: hash, sources: record.sources, settings: record.settings,
+          onStage: stage => { record.message = `${progress()} · ${{ target: 'ответ агента', user: 'реплика пользователя', assessment: 'оценка критериев' }[stage]}`; },
+          ctx: { ...ctx, onTrace: (trialId, event) => {
+            ctx.onTrace?.(trialId, event);
+            const stage = event.type === 'user' ? 'ждём ответ агента' : event.type === 'assistant' ? 'ответ получен · готовим следующий шаг'
+              : event.type === 'simulator' ? 'реплика симулятора готова' : event.type === 'tool_call' ? `инструмент ${event.tool ?? ''}`
+              : event.type === 'tool_result' ? 'инструмент завершён' : 'сбой диалога';
+            record.message = `${progress()} · ${stage}`;
+          } }, userMode, target: record.target });
+        record.trials.push(trial);
+        if (record.target.kind !== 'sandbox' && scenario.initialState.external && trial.observation?.resetConfirmed !== true) {
+          const note = 'Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.';
+          if (!record.limitations.includes(note)) record.limitations.push(note);
+        }
+        if (trial.observation?.version) {
+          if (record.targetRelease && record.targetRelease !== trial.observation.version) throw new Error('Внешний агент сообщил разные версии в одном прогоне. Сравнение недоступно.');
+          record.targetRelease = trial.observation.version;
+        }
+        completed++;
+        await this.checkpoint(record, record.phase, `${label}${prefix}${scenario.title} · ${repeat + 1}/${record.settings.repeats}`);
+        await fingerprintCheck('Код внешнего агента изменился во время диалога. Результат сохранён, но сравнение недоступно.');
+        guard();
+      }
+    };
+    // One failure stops the pool: the other workers finish the dialogue they are in and take no more; the first error is the run's error.
+    const results = await Promise.allSettled(Array.from({ length: Math.max(1, Math.min(parallel, attempts.length)) }, () => worker().catch(error => { failed = true; throw error; })));
+    const rejected = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (rejected) throw rejected.reason;
   }
   /** The rollout of the version under test. The adapter's reported `version` remains the identity; this only performs the deployment. */
   private async release(record: Experiment, ctx: CallContext): Promise<void> {
@@ -545,12 +563,12 @@ export class ExperimentLab {
     ctx.signal.throwIfAborted();
     if (record.releaseLog.exitCode !== 0) throw new Error(`Хук выпуска завершился с кодом ${record.releaseLog.exitCode ?? record.releaseLog.signal ?? 'unknown'}: ${record.releaseLog.stderr.trim().slice(-500) || 'без вывода'}`);
   }
-  private async evaluateReviewed(record: Experiment, ctx: CallContext): Promise<void> {
+  private async evaluateReviewed(record: Experiment, ctx: CallContext, parallel = 1): Promise<void> {
     const runtime = await this.runtime(record);
     const agent = record.revisions[0];
     if (!agent || !record.manifestHash) throw new Error('Missing reviewed agent or measurement manifest.');
     await this.release(record, ctx);
-    await this.runSuite(record, runtime, agent, 'dev', '', ctx);
+    await this.runSuite(record, runtime, agent, 'dev', '', ctx, parallel);
     this.frozenGuard(record, record.manifestHash, ctx)();
     await this.nameFailureModes(record, runtime, ctx);
     if (record.target.kind !== 'sandbox' && record.trials.some(t => !['invalid', 'cancelled'].includes(t.outcome))) {
