@@ -45,7 +45,7 @@ Agent Lab helps an agent owner distinguish expected behavior from observed behav
 **Dimension: Observable completion**  
 **Good (domain expert would accept):** `goal_attainment` passes only when the required effect is observable; if state or tool results are missing, an agent's statement that it completed the action remains `unknown`. `reply_quality` is assessed separately from completion.  
 **Bad (domain expert would flag):** A fluent confirmation is counted as proof that a ticket, record, payment, or request changed, or a missing action result is converted to pass/fail instead of `unknown`.  
-**Implementation guard:** The harness permits `goal_attainment: pass` only after a passed `state_equals` predicate or a cited scenario-linked tool result with explicit `ok: true`/`success: true`; assistant prose and literal answer checks never unlock action completion. Imported dialogues have no owner-accepted executable predicate yet, so their semantic answer remains assessable through `reply_quality` while unsupported goal success stays `unknown`. A visible refusal may still establish `goal_attainment: fail`.
+**Implementation guard:** The harness permits a decided `goal_attainment` only after every declared `state_equals` predicate passes or a cited scenario-linked tool result has explicit `ok: true`/`success: true`; assistant prose and literal answer checks never resolve action completion. Imported dialogues have no owner-accepted executable predicate yet, so their semantic answer remains assessable through `reply_quality`; a grounded `reply_quality: fail` may drive the hypothesis while unsupported goal verdicts stay visible as `unknown`. A `prompt_compliance: fail` may drive it only when the sole authoritative requirement resolves to a source explicitly typed as the agent prompt. Saved judge receipts are reusable only when their exact prompt and configuration-bound protocol still match the current evaluator.
 **Stakes:** Critical  
 **Source:** Agent Lab LOOP-07 and SCORE-04/06; NIST's grounding rubric separates evidentiary faithfulness, completeness, and sufficiency.
 
@@ -347,7 +347,7 @@ npm test
 
 # Model-backed release smoke check after `score` is implemented; inspect the saved artifact.
 npm run build
-node dist/cli.js score --input test/fixtures/score/reference.jsonl --task test/fixtures/score/task.md --yes
+node dist/cli.js score --input test/fixtures/score/reference.jsonl --task test/fixtures/score/task.json --yes
 ```
 
 CI must not require credentials or a live model: the first two commands are the mandatory gate. The model-backed command is an explicit, budgeted release check whose `judgeAudit` output is retained, not a reliability or statistical-significance claim.
