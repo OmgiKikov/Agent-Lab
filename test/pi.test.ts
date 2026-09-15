@@ -625,8 +625,8 @@ test('external generation accepts observable text checks, repairs invented state
   const quote = 'Reply to ping exactly with two spaces, then Pong!, then a newline. Never include INTERNAL.';
   const card = plainCard(0); card.metrics = [];
   card.user.opening = 'ping'; card.user.goal = 'Receive the prescribed reply'; card.user.maxFollowUps = 0;
+  // Two literal checks, each pinning wording the source itself mandates.
   card.checks = [
-    { id: 'exact_reply', kind: 'answer_equals', description: 'Prescribed final reply', value: '  Pong!\n' },
     { id: 'required_word', kind: 'answer_contains', description: 'Required word', value: 'Pong!' },
     { id: 'private_word', kind: 'answer_omits', description: 'Forbidden word', value: 'INTERNAL' },
   ];

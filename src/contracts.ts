@@ -54,8 +54,10 @@ export const settingsSchema = z.strictObject({
   maxIterations: z.number().int().min(1).max(5).default(2),
   maxTurns: z.number().int().min(2).max(16).default(6),
   maxCalls: z.number().int().min(5).max(3000).default(300),
-  timeoutMs: z.number().int().min(1000).max(120000).default(120000),
-  maxDurationMs: z.number().int().min(5000).max(3600000).default(600000),
+  /** One model call. A reasoning judge on a long trace can take minutes. */
+  timeoutMs: z.number().int().min(1000).max(600000).default(120000),
+  /** The whole run. Thirty reactive dialogues with a slow agent take about an hour; the owner may allow up to four. */
+  maxDurationMs: z.number().int().min(5000).max(14400000).default(600000),
   userModes: z.array(userModeSchema).min(1).max(3).refine(unique, 'Duplicate user modes').default(['reactive']),
   roles: z.strictObject({ builder: modelChoiceSchema.optional(), simulator: modelChoiceSchema.optional(), judge: modelChoiceSchema.optional() }).default({}),
 });

@@ -256,3 +256,10 @@ test('a quote that skips the list markers of its source is still that source', (
   assert.equal(verbatimSpan(content, 'сообщай: - номер заявки, статус заявки, срок исполнения заявки - дату визита'), 'сообщай:\n- номер заявки, статус заявки, срок исполнения заявки\n- дату визита');
   assert.equal(verbatimSpan(content, 'номер заявки - статус заявки'), undefined);
 });
+
+test('a run may be given hours, and a single model call minutes: thirty slow dialogues do not fit in one hour', () => {
+  const settings = settingsSchema.parse({ maxDurationMs: 7200000, timeoutMs: 240000 });
+  assert.equal(settings.maxDurationMs, 7200000);
+  assert.equal(settings.timeoutMs, 240000);
+  assert.throws(() => settingsSchema.parse({ maxDurationMs: 14400001 }));
+});
