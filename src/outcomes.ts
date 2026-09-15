@@ -32,14 +32,15 @@ export function latestHumanReviews(record: Pick<Experiment, 'trials' | 'humanRev
 }
 
 /** Rubric outcomes stay separate from objective checks everywhere they are presented. A human verdict on a criterion is authoritative. */
+export function agentMetricResult(trial: Trial, metricId: string, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
+  const human = latestHumanReviews({ trials: [trial], humanReviews: reviews }).get(`${trial.id}|metric:${metricId}`)?.verdict;
+  return human === 'invalid' ? undefined : human ?? trial.assessments?.find(a => a.metricId === metricId)?.result;
+}
+
 export function agentRubricResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
   const metrics = scenario?.metrics?.filter(m => m.subject === 'agent') ?? [];
   if (!metrics.length) return undefined;
-  const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
-  const results = metrics.flatMap(m => {
-    const human = latest.get(`${trial.id}|metric:${m.id}`)?.verdict;
-    return human === 'invalid' ? [] : [human ?? trial.assessments?.find(a => a.metricId === m.id)?.result];
-  });
+  const results = metrics.flatMap(m => agentMetricResult(trial, m.id, reviews) ?? []);
   if (!results.length) return undefined;
   return results.includes('fail') ? 'fail' : results.every(r => r === 'pass') ? 'pass' : 'unknown';
 }

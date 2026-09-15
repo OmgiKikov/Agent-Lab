@@ -1,6 +1,6 @@
 import type { Experiment, Scenario, Trial, UserMode } from './contracts.js';
 import { fingerprint } from './contracts.js';
-import { agentRubricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
 import { awaitingVerdict, cardOutcome, humanFindings, isAgentFailure, verdictSummary, type VerdictSummary } from './comparison.js';
 
 /*
@@ -95,24 +95,25 @@ function firstReason(record: Experiment, trial: Trial): { quote: string; seq?: n
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   const check = trial.checks.find(c => !c.passed);
   if (check) return { quote: check.evidence || check.description };
-  const assessment = trial.assessments?.find(a => a.result === 'fail' && scenario?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent'));
+  const assessment = trial.assessments?.find(a => scenario?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent')
+    && agentMetricResult(trial, a.metricId, record.humanReviews) === 'fail');
   if (assessment) return { quote: shorten(assessment.rationale.replace(/^Совпало \d\/\d оценок этой рубрики в свежих сессиях; это не проверка правильности\.\s*/, '').replace(/^Pass condition is not met:\s*/i, '')), seq: assessment.evidence[0] };
   return { quote: trial.reason };
 }
 
 function causes(record: Experiment, v: VerdictSummary): QualityCause[] {
   const title = (trial: Trial) => record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId;
-  const clusters = (record.failureModes ?? []).map(mode => {
-    const trials = mode.trialIds.map(id => record.trials.find(t => t.id === id)).filter((t): t is Trial => !!t);
+  const clusters = (record.failureModes ?? []).flatMap(mode => {
+    const trials = mode.trialIds.map(id => record.trials.find(t => t.id === id)).filter((t): t is Trial => !!t && isAgentFailure(record, t));
     const first = trials[0];
-    return { name: mode.name, description: mode.description, stage: mode.stage, dialogues: trials.length, promptQuotes: mode.promptQuotes ?? [],
-      ...(first ? { example: { trialId: first.id, card: title(first), ...firstReason(record, first) } } : {}) };
+    return first ? [{ name: mode.name, description: mode.description, stage: mode.stage, dialogues: trials.length, promptQuotes: mode.promptQuotes ?? [],
+      example: { trialId: first.id, card: title(first), ...firstReason(record, first) } }] : [];
   }).sort((a, b) => b.dialogues - a.dialogues);
   if (clusters.length) return clusters;
   // Before clustering ran (or when it found nothing), the weakest criteria are the causes we can name.
   return v.weakSpots.map(spot => {
     const failing = record.trials.find(t => spot.kind === 'check' ? t.checks.some(c => !c.passed && c.description === spot.description)
-      : t.assessments?.some(a => a.result === 'fail' && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.some(m => m.id === a.metricId && m.name === spot.description)));
+      : record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.some(m => m.name === spot.description && agentMetricResult(t, m.id, record.humanReviews) === 'fail'));
     return { name: spot.description, description: spot.kind === 'check' ? 'Точная проверка не пройдена.' : 'Рубрика агента не выполнена по оценке судьи.', stage: spot.stage, dialogues: spot.failures, promptQuotes: [],
       ...(failing ? { example: { trialId: failing.id, card: title(failing), ...firstReason(record, failing) } } : {}) };
   });

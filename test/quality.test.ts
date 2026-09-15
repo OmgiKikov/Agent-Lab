@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises';
 import { qualityLines, qualitySummary, plural, shorten } from '../src/quality.js';
 import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
+import { verdictSummary } from '../src/comparison.js';
 
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
 const goal = { id: 'goal', name: 'Цель выполнена', subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' };
@@ -158,6 +159,20 @@ test('metric rows use the same human criterion verdict as card outcomes', () => 
   assert.deepEqual(row([review('t1', 'goal', 'invalid')]), { id: 'goal', name: 'Цель выполнена', kind: 'rubric', passed: 1, failed: 0, unknown: 0, total: 1, accuracy: 1 });
   assert.deepEqual(row([review('other-trial', 'goal', 'pass'), review('t1', 'format', 'pass')]), row([]));
   assert.equal(JSON.stringify(trials), original, 'row aggregation never mutates saved assessments');
+});
+
+test('weak spots, stages and saved failure clusters use authoritative human rubric verdicts', () => {
+  const staged = { ...scenario('a'), metrics: [{ ...goal, stage: 'цель' }, { ...format, stage: 'формат' }] };
+  const corrected = trial('t1', 'a', 'pass', 'fail');
+  const failed = trial('t2', 'a', 'pass', 'fail', 'fail');
+  const r = record({ scenarios: [staged], trials: [corrected, failed], humanReviews: [review('t1', 'goal', 'pass'), review('t2', 'goal', 'pass')],
+    failureModes: [{ id: 'saved', name: 'Сохранённый кластер', description: 'd', trialIds: ['t1', 't2'] }] });
+
+  const verdict = verdictSummary(r);
+  assert.deepEqual(verdict.weakSpots.filter(spot => spot.kind === 'metric').map(spot => [spot.description, spot.failures]), [['Формат ответа', 1]]);
+  assert.deepEqual(verdict.stages.map(stage => [stage.stage, stage.passed, stage.evaluated]), [['формат', 1, 2], ['цель', 2, 2]]);
+  const summary = qualitySummary(r);
+  assert.deepEqual([summary.causes[0]?.dialogues, summary.causes[0]?.example?.trialId, summary.causes[0]?.example?.quote], [1, 't2', 'r']);
 });
 
 test('multiple disputed criteria count as one disputed dialogue', () => {

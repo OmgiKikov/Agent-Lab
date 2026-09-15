@@ -1,6 +1,6 @@
 import { hasCompleteJudgment } from './judge.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type Tier, type Trial, type UserMode } from './contracts.js';
-import { agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, mean, measured, measurementUsable, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, mean, measured, measurementUsable, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
 import { modeValue, simulatorSummary, type ModeValue, type SimulatorSummary } from './simulator.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
@@ -442,9 +442,9 @@ export function verdictSummary(record: Experiment): VerdictSummary {
     const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
     if (!scenario) continue;
     for (const result of trial.checks) countStage(scenario.checks.find(c => c.id === result.id)?.stage, result.passed);
-    for (const assessment of trial.assessments ?? []) {
-      const metric = scenario.metrics?.find(m => m.id === assessment.metricId);
-      if (metric?.subject === 'agent' && assessment.result !== 'unknown') countStage(metric.stage, assessment.result === 'pass');
+    for (const metric of (scenario.metrics ?? []).filter(m => m.subject === 'agent')) {
+      const result = agentMetricResult(trial, metric.id, record.humanReviews);
+      if (result === 'pass' || result === 'fail') countStage(metric.stage, result === 'pass');
     }
   }
   const stages = [...stageTally.entries()].map(([stage, row]) => ({ stage, ...row }))
@@ -464,8 +464,6 @@ export function verdictSummary(record: Experiment): VerdictSummary {
       const at = scenario?.checks.find(c => c.id === check.id)?.stage;
       if (at) failureStage.set(check.description, at);
     }
-    const subjectOf = (metricId: string) => scenario?.metrics?.find(m => m.id === metricId)?.subject ?? 'agent';
-    const agentResults = (trial.assessments ?? []).filter(a => subjectOf(a.metricId) === 'agent');
     if (scenario?.metrics?.some(m => m.subject === 'agent')) {
       rubric.assessed += 1;
       if (agentRubricResult(scenario, trial, record.humanReviews) === 'fail') rubric.failed += 1;
@@ -473,11 +471,10 @@ export function verdictSummary(record: Experiment): VerdictSummary {
       else rubric.passed += 1;
     }
     if (!simulatorUsable(scenario, trial, record.humanReviews)) simulatorFlagged += 1;
-    for (const assessment of agentResults) if (assessment.result === 'fail') {
-      const metric = scenario?.metrics?.find(m => m.id === assessment.metricId);
-      const name = metric?.name ?? assessment.metricId;
+    for (const metric of (scenario?.metrics ?? []).filter(m => m.subject === 'agent')) if (agentMetricResult(trial, metric.id, record.humanReviews) === 'fail') {
+      const name = metric.name;
       metricFailures.set(name, (metricFailures.get(name) ?? 0) + 1);
-      if (metric?.stage) failureStage.set(name, metric.stage);
+      if (metric.stage) failureStage.set(name, metric.stage);
     }
   }
   const weakSpots = [
