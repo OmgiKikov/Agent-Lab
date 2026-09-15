@@ -570,6 +570,16 @@ export function validateFailureModes(modes: FailureMode[], trials: Trial[], prom
   }
 }
 
+function validateReviewReferences(reviews: HumanReview[], trials: Trial[], path: (string | number)[], ctx: z.RefinementCtx): void {
+  reviews.forEach((review, index) => {
+    if (!review.reviewedDialogue) return;
+    const trial = trials.find(candidate => candidate.id === review.trialId);
+    if (!trial || ![...review.note.matchAll(/#(\d+)\b/g)].some(match => trial.events.some(event => event.seq === Number(match[1])))) {
+      ctx.addIssue({ code: 'custom', path: [...path, index, 'note'], message: 'Полный разбор должен ссылаться на событие текущего диалога.' });
+    }
+  });
+}
+
 export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
@@ -596,13 +606,8 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
       ctx.addIssue({ code: 'custom', path: ['scenarios', index, 'checks'], message: 'ID объективной проверки зарезервирован для проверки симулятора.' });
     }
   });
-  record.humanReviews.forEach((review, index) => {
-    if (!review.reviewedDialogue) return;
-    const trial = record.trials.find(candidate => candidate.id === review.trialId);
-    if (!trial || ![...review.note.matchAll(/#(\d+)\b/g)].some(match => trial.events.some(event => event.seq === Number(match[1])))) {
-      ctx.addIssue({ code: 'custom', path: ['humanReviews', index, 'note'], message: 'Полный разбор должен ссылаться на событие текущего диалога.' });
-    }
-  });
+  validateReviewReferences(record.humanReviews, record.trials, ['humanReviews'], ctx);
+  if (record.sourceEvidence) validateReviewReferences(record.sourceEvidence.humanReviews, record.sourceEvidence.trials, ['sourceEvidence', 'humanReviews'], ctx);
 });
 export interface CallContext {
   signal: AbortSignal; timeoutMs: number;

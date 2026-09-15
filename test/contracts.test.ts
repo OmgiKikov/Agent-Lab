@@ -84,6 +84,12 @@ test('only a whole-dialogue verdict can mark an explicit complete review', () =>
   assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, trialId: 'missing' }] }).success, false);
   assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, metricId: 'goal' }] }).success, false);
   assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, checkId: 'state' }] }).success, false);
+
+  const sourceEvidence = { runId: 'source', trials: [trial], humanReviews: [persisted] };
+  assert.ok(experimentSchema.safeParse({ ...record, sourceEvidence }).success);
+  assert.equal(experimentSchema.safeParse({ ...record, sourceEvidence: { ...sourceEvidence, humanReviews: [{ ...persisted, note: 'без ссылки' }] } }).success, false);
+  assert.equal(experimentSchema.safeParse({ ...record, sourceEvidence: { ...sourceEvidence, humanReviews: [{ ...persisted, note: '#999: чужое событие' }] } }).success, false);
+  assert.equal(experimentSchema.safeParse({ ...record, sourceEvidence: { ...sourceEvidence, humanReviews: [{ ...persisted, trialId: 'missing' }] } }).success, false);
 });
 
 test('input and persisted human review schemas both reject two targets', () => {
