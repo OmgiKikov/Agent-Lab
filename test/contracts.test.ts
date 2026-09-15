@@ -80,6 +80,12 @@ test('only a whole-dialogue verdict can mark an explicit complete review', () =>
   assert.equal(experimentSchema.safeParse({ ...legacyRecord(), humanReviews: [{ ...persisted, checkId: 'state' }] }).success, false);
 });
 
+test('input and persisted human review schemas both reject two targets', () => {
+  const review = { trialId: 't1', metricId: 'goal', checkId: 'state', verdict: 'fail' as const, note: 'ambiguous target' };
+  assert.equal(humanReviewInputSchema.safeParse(review).success, false);
+  assert.equal(experimentSchema.safeParse({ ...legacyRecord(), humanReviews: [{ ...review, id: 'h1', createdAt: '2026-09-15T10:00:00Z' }] }).success, false);
+});
+
 test('synthetic cards need grounded requirements; curated and production cards do not', () => {
   assert.throws(() => validatePreparation(preparation([card({ requirementIds: [] })]), [source], 'evaluate'), /requirement/i);
   const curated = validatePreparation(preparation([card({ requirementIds: [], provenance: 'curated', user: { ...user, persona: undefined, characteristics: undefined } })]), [source], 'evaluate');
