@@ -142,7 +142,7 @@ async function main() {
   if (command === 'evaluate' && (!values.input || !values.yes)) throw new Error('Для запуска сохранённых тестов укажите --input suite.json --yes. Лимиты и подключение берутся из файла.');
   const lab = new ExperimentLab(directory);
   await lab.init();
-  const cancel = () => { void lab.close().catch(error => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }); };
+  const cancel = () => { void lab.close().catch(error => { process.stderr.write(`${safeText(error.message)}\n`); process.exitCode = 1; }); };
   process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
   try {
     let id = values.id;
@@ -173,7 +173,7 @@ async function main() {
         raw = JSON.parse(await readFile(values.task, 'utf8'));
         dialogues = await readData(values.input, 'dialogues');
       } catch (error) {
-        throw new Error(`${error instanceof Error ? error.message : String(error)} Агент не запускался.`);
+        throw new Error(`Не удалось прочитать записи: ${safeText(error instanceof Error ? error.message : String(error))}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`);
       }
       const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
       const input = createInputSchema.parse({ ...raw, mode: raw.mode ?? 'live', ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
@@ -262,4 +262,4 @@ async function main() {
     await lab.close();
   }
 }
-void main().catch(error => { process.stderr.write(`Agent Lab: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = ['evaluate', 'audit-judge', 'score'].includes(process.argv[2] ?? '') ? 2 : 1; });
+void main().catch(error => { process.stderr.write(`Agent Lab: ${safeText(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = ['evaluate', 'audit-judge', 'score'].includes(process.argv[2] ?? '') ? 2 : 1; });

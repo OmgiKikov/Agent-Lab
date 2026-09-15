@@ -65,7 +65,7 @@ function groundedScore(record: Experiment): GroundedScore | undefined {
     const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
     if (!scenario || scenario.requirementIds.length !== 1) return;
     for (const assessment of trial.assessments ?? []) {
-      if (assessment.metricId !== 'goal_attainment' || assessment.result !== result || !assessment.rationale.trim()
+      if (!['goal_attainment', 'reply_quality'].includes(assessment.metricId) || assessment.result !== result || !assessment.rationale.trim()
         || !scenario.metrics?.some(metric => metric.id === assessment.metricId && metric.subject === 'agent')) continue;
       // ponytail: lexical missing-evidence gate; replace it with a reason code if assessments gain one.
       if (result === 'unknown' && !missingEvidence(assessment.rationale)) continue;

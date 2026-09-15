@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { awaitingVerdict, compareRuns, compareUserModes, evidenceSummary, humanFindings, isAgentFailure, judgeCalibration, repeatResults, simulatorFidelity, verdictSummary } from '../src/comparison.js';
-import { assessRepeated, judgeInput } from '../src/judge.js';
+import { assessRepeated, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL } from '../src/judge.js';
 import { emptyUsage, fingerprint, settingsSchema, type Experiment, type HumanReview, type MetricAssessment, type Outcome, type Scenario, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
 
 /** Sample size at which the verdict is allowed to call itself trusted. */
@@ -664,13 +664,13 @@ test('live rubric comparisons require recorded compatible judge protocols and a 
   for (const run of [before, after]) {
     for (const a of run.trials[0]!.assessments!) a.citations = a.evidence.map(seq => ({ seq, quote: run.trials[0]!.events.find(e => e.seq === seq)!.text! }));
     const data = judgeInput({ scenario: card, sources: run.sources, trial: run.trials[0]! });
-    run.trials[0]!.judgeAudit = { protocolHash: 'protocol-v1', inputHash: fingerprint(data), provider: 'offline', model: 'judge', prompt: 'prompt', input: JSON.stringify(data),
+    run.trials[0]!.judgeAudit = { protocolHash: JUDGE_PROTOCOL, inputHash: fingerprint(data), provider: 'offline', model: 'judge', prompt: JUDGE_PROMPT, input: JSON.stringify(data),
       attempts: [0, 1].map(() => ({ startedAt: 'now', raw: JSON.stringify({ assessments: run.trials[0]!.assessments!.map(({ result, ...v }) => ({ ...v, passCondition: result === 'pass' ? 'met' : 'not_met', failCondition: result === 'fail' ? 'met' : 'not_met' })) }), assessments: structuredClone(run.trials[0]!.assessments!) })), notApplicable: [] };
   }
   assert.equal(compareRuns(before, after).fixed.length, 1);
   after.trials[0]!.judgeAudit!.protocolHash = 'protocol-v2';
   assert.equal(compareRuns(before, after).comparable, false);
-  after.trials[0]!.judgeAudit!.protocolHash = 'protocol-v1';
+  after.trials[0]!.judgeAudit!.protocolHash = JUDGE_PROTOCOL;
   after.trials[0]!.assessments = after.trials[0]!.assessments!.filter(a => a.metricId !== 'fidelity');
   const unknown = compareRuns(before, after);
   assert.equal(unknown.fixed.length, 0); assert.equal(unknown.comparable, false);

@@ -319,8 +319,16 @@ test('CLI score imports ordered JSONL evidence and exports it without calling an
   const invalid = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--code-only', '--data-dir', invalidData], { encoding: 'utf8' });
   assert.equal(invalid.status, 2);
   assert.match(invalid.stderr, /строке 1/);
+  assert.match(invalid.stderr, /Исправьте JSON\/JSONL и повторите команду/);
   assert.match(invalid.stderr, /агент не запускался/i);
   assert.deepEqual((await readdir(invalidData)).filter(name => name.endsWith('.json')), []);
+
+  const unsafePath = join(directory, '\u001b[31mmissing\u202e.jsonl');
+  const unsafe = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', unsafePath, '--task', task, '--code-only', '--data-dir', join(directory, 'unsafe-data')], { encoding: 'utf8' });
+  assert.equal(unsafe.status, 2);
+  assert.match(unsafe.stderr, /Исправьте JSON\/JSONL и повторите команду/);
+  assert.match(unsafe.stderr, /агент не запускался/i);
+  assert.doesNotMatch(unsafe.stderr, /\u001b|\u202e/);
 
   const unconfirmed = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--data-dir', join(directory, 'unconfirmed')], { encoding: 'utf8' });
   assert.equal(unconfirmed.status, 2);

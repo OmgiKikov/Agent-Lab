@@ -115,6 +115,10 @@ test('missing action evidence cannot be replaced by agent self-attestation while
   assert.equal(hasCompleteJudgment({ scenario: actionScenario, sources: [], trial: { ...actionTrial,
     assessments: assessments.map(value => value.metricId === 'goal_attainment' ? { ...value, result: 'pass' as const } : value), judgeAudit: stale,
   } }), false, 'a legacy self-attested pass is stale under the current protocol');
+  const staleProtocol = structuredClone(audit!);
+  staleProtocol.prompt += ' old';
+  assert.equal(hasCompleteJudgment({ scenario: actionScenario, sources: [], trial: { ...actionTrial, assessments, judgeAudit: staleProtocol } }), false,
+    'an otherwise consistent receipt from an old judge prompt is incomplete');
 
   const informationalScenario: Scenario = { ...actionScenario, successCriteria: 'Пользователь получает корректный адрес поддержки.' };
   const informational = await assessRepeated({ ...input, scenario: informationalScenario, trial: actionTrial }, model,
@@ -184,6 +188,18 @@ test('missing action evidence cannot be replaced by agent self-attestation while
       metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Состояние подтверждено.', evidence: [1], citations: [{ seq: 1, quote: 'заявка создана' }],
     }] }));
   assert.equal(stateBacked[0]!.result, 'pass', 'a passed state predicate can prove action completion');
+
+  const conflictingStateScenario: Scenario = { ...stateScenario, checks: [...stateScenario.checks,
+    { id: 'owner', kind: 'state_equals', recordId: 'request', field: 'owner', value: 'user', description: 'Заявка принадлежит пользователю' }],
+  };
+  const conflictingStateTrial: Trial = { ...stateTrial, checks: [...stateTrial.checks,
+    { id: 'owner', description: 'Заявка принадлежит пользователю', passed: false, evidence: 'request.owner = other' }],
+  };
+  const conflictingState = await assessRepeated({ ...input, scenario: conflictingStateScenario, trial: conflictingStateTrial }, model,
+    { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => JSON.stringify({ assessments: [{
+      metricId: 'goal_attainment', passCondition: 'met', failCondition: 'not_met', rationale: 'Часть состояния подтверждена.', evidence: [1], citations: [{ seq: 1, quote: 'заявка создана' }],
+    }] }));
+  assert.equal(conflictingState[0]!.result, 'unknown', 'one passed state predicate cannot hide another required predicate failure');
 });
 
 test('journal failure stops judgment before another request and original replies survive store reopening', async t => {

@@ -74,9 +74,9 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
       const value = event.result && typeof event.result === 'object' ? event.result as Record<string, unknown> : undefined;
       return !!event.tool && expectedTools.has(event.tool) && (value?.ok === true || value?.success === true);
     }));
+    const stateChecks = input.scenario.checks.filter(check => check.kind === 'state_equals');
     const stateConfirms = input.trial.observation?.state !== undefined && input.trial.observation.state !== 'missing'
-      && input.scenario.checks.some(check => check.kind === 'state_equals'
-        && input.trial.checks.some(result => result.id === check.id && result.passed));
+      && stateChecks.length > 0 && stateChecks.every(check => input.trial.checks.some(result => result.id === check.id && result.passed));
     const unsupportedGoal = row.metricId === 'goal_attainment' && result !== 'unknown' && !stateConfirms && !toolConfirms;
     if (unsupportedGoal) result = 'unknown';
     return validateAssessments(metrics.filter(m => m.id === row.metricId), input.trial.events, [{ ...row, result,
@@ -91,7 +91,10 @@ export function hasCompleteJudgment(input: Input): boolean {
   const metrics = input.scenario.metrics ?? [];
   if (!metrics.length) return true;
   const audit = input.trial.judgeAudit;
-  if (!audit || input.trial.assessmentError) return false;
+  if (!audit || input.trial.assessmentError || audit.prompt !== JUDGE_PROMPT) return false;
+  const expectedProtocol = audit.configurationHash
+    ? fingerprint({ protocol: JUDGE_PROTOCOL, configuration: audit.configurationHash }) : JUDGE_PROTOCOL;
+  if (audit.protocolHash !== expectedProtocol) return false;
   const applicable = metrics.filter(m => metricApplies(m, input.trial));
   const data = judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } });
   if (audit.inputHash !== fingerprint(data)) return false;
@@ -126,6 +129,7 @@ export async function assessRepeated(input: Input, model: { provider: string; id
   const audit: JudgeAudit = {
     protocolHash: model.configurationHash ? fingerprint({ protocol: JUDGE_PROTOCOL, configuration: model.configurationHash }) : JUDGE_PROTOCOL,
     inputHash: fingerprint(data), provider: model.provider, model: model.id,
+    ...(model.configurationHash ? { configurationHash: model.configurationHash } : {}),
     ...(model.transport ? { transport: model.transport } : {}),
     prompt: JUDGE_PROMPT, input: JSON.stringify(data), attempts: [], notApplicable,
   };

@@ -211,6 +211,7 @@ export function metricApplies(metric: Rubric, trial: Pick<Trial, 'userMode' | 'e
 }
 export const judgeAuditSchema = z.strictObject({
   protocolHash: text, inputHash: text, provider: text, model: text,
+  configurationHash: text.optional(),
   transport: z.strictObject({ api: text, upstream: text.optional(), structured: z.boolean() }).optional(),
   prompt: text, input: text,
   attempts: z.array(z.strictObject({
