@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, draftPatchSchema, emptyUsage, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
+  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 
@@ -64,6 +64,9 @@ test('old experiment files load with defaults for workflow, human reviews, targe
   assert.deepEqual([parsed.goldenCases, parsed.dialogues, parsed.profiles], [[], [], []]);
   assert.deepEqual(parsed.settings.userModes, ['reactive']);
   assert.equal(parsed.trials[0]!.userMode, 'reactive');
+  assert.equal(parsed.acceptedDraftHash, undefined);
+  assert.equal(experimentSchema.parse({ ...legacy, acceptedDraftHash: fingerprint('draft') }).acceptedDraftHash, fingerprint('draft'));
+  assert.equal(experimentSchema.safeParse({ ...legacy, acceptedDraftHash: 'not-a-draft-hash' }).success, false);
 });
 
 test('only a whole-dialogue verdict can mark an explicit complete review', () => {

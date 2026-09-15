@@ -56,6 +56,7 @@ function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
     trials: [], comparisons: [], iterations: [], humanReviews: [], usage: emptyUsage(),
     reviewedAt: null, reviewMode: null, manifestHash: null, controlConsumedAt: null, error: null });
   delete record.resultsReviewedAt; delete record.resultsReviewHash; delete record.failureModes;
+  delete record.acceptedDraftHash;
   delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash; delete record.releaseLog;
   record.evaluatorVersion = evaluatorVersion(record.settings);
   record.limitations = previous.limitations.filter(note => !note.startsWith('Scripted mode skipped') && !note.startsWith('Не удалось назвать типы провалов:')
@@ -304,6 +305,20 @@ export class ExperimentLab {
       const added = record.scenarios.filter(s => !beforeCards.has(s.id)).length;
       const changed = record.scenarios.filter(s => beforeCards.has(s.id) && fingerprint(s) !== fingerprint(beforeCards.get(s.id))).length;
       await this.checkpoint(record, 'review', `${patch.agent ? 'Агент обновлён. ' : ''}${patch.settings || patch.target || patch.targetVersion ? 'Настройки прогона обновлены. ' : ''}Карточки: изменено ${changed}, добавлено ${added}, удалено ${removed.size}. Проверьте черновик перед запуском.`);
+      return structuredClone(record);
+    });
+  }
+  async acceptDraft(id: string, expectedHash: string): Promise<Experiment> {
+    return this.change(async () => {
+      const record = await this.store.get(id);
+      if (record.workflow !== 'evaluate') throw new Error('Принять тест можно только в workflow evaluate.');
+      if (record.phase !== 'review') throw new Error('Принять можно только незапущенный черновик.');
+      if (record.scenarios.length !== 1) throw new Error('Принять можно ровно один тест.');
+      const currentHash = draftHash(record);
+      if (expectedHash !== currentHash) throw new Error('Черновик изменился. Откройте тест заново, прежде чем принимать.');
+      if (record.acceptedDraftHash === currentHash) return structuredClone(record);
+      record.acceptedDraftHash = currentHash;
+      await this.store.save(record);
       return structuredClone(record);
     });
   }

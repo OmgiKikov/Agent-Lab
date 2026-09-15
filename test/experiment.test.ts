@@ -314,6 +314,95 @@ test('goal observation is part of the existing full draft hash while legacy draf
   assert.notEqual(draftHash(toolDraft), draftHash(edited));
 });
 
+test('accepting a draft records exact one-test review metadata without granting execution authority', async t => {
+  const runtime = createDemoRuntime();
+  let runtimeCalls = 0;
+  const prepare = runtime.prepare;
+  runtime.prepare = async (...args) => { runtimeCalls++; return prepare(...args); };
+  const { lab } = await setup(t, runtime);
+  const created = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 });
+  await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  const currentHash = draftHash(draft);
+  runtimeCalls = 0;
+
+  await assert.rejects(lab.acceptDraft(draft.id, '0'.repeat(64)), /изменился/i);
+  assert.deepEqual(await lab.get(draft.id), draft);
+  const accepted = await lab.acceptDraft(draft.id, currentHash);
+  assert.deepEqual(accepted, { ...draft, acceptedDraftHash: currentHash });
+  assert.equal(draftHash(accepted), currentHash);
+  assert.equal(accepted.reviewedAt, draft.reviewedAt);
+  assert.equal(accepted.reviewMode, draft.reviewMode);
+  assert.equal(runtimeCalls, 0);
+  assert.deepEqual(await lab.acceptDraft(draft.id, currentHash), accepted, 'accepting the current hash twice is idempotent');
+
+  const changedCard = { ...accepted.scenarios[0]!, title: 'Уточнённый тест' };
+  const edited = await lab.updateDraft(draft.id, currentHash, { scenarios: [changedCard] });
+  assert.equal(edited.acceptedDraftHash, currentHash);
+  assert.notEqual(draftHash(edited), edited.acceptedDraftHash, 'a semantic edit exposes stale acceptance');
+
+  await lab.start(edited.id, { approved: true, reviewer: 'human', expectedHash: draftHash(edited) });
+  await lab.waitForIdle();
+  const result = await lab.get(edited.id);
+  assert.equal(result.acceptedDraftHash, currentHash, 'running does not rewrite or clear acceptance metadata');
+  const repeated = await lab.repeat(result.id);
+  assert.equal(repeated.acceptedDraftHash, undefined, 'a fresh draft starts without review metadata');
+});
+
+test('accepting rejects zero, multiple, compare and non-review drafts without mutation', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const one = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 }); await lab.waitForIdle();
+  const emptyRecord = await lab.get(one.id); emptyRecord.scenarios = []; await lab.store.save(emptyRecord);
+  await assert.rejects(lab.acceptDraft(emptyRecord.id, draftHash(emptyRecord)), /ровно один/i);
+  assert.deepEqual(await lab.get(emptyRecord.id), emptyRecord);
+
+  const many = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2 }); await lab.waitForIdle();
+  const manyRecord = await lab.get(many.id);
+  await assert.rejects(lab.acceptDraft(manyRecord.id, draftHash(manyRecord)), /ровно один/i);
+  assert.deepEqual(await lab.get(manyRecord.id), manyRecord);
+
+  const compare = await lab.create(demoInput()); await lab.waitForIdle();
+  const compareRecord = await lab.get(compare.id);
+  await assert.rejects(lab.acceptDraft(compareRecord.id, draftHash(compareRecord)), /evaluate/i);
+  assert.deepEqual(await lab.get(compareRecord.id), compareRecord);
+
+  await lab.start(manyRecord.id, { approved: true, reviewer: 'human', expectedHash: draftHash(manyRecord) }); await lab.waitForIdle();
+  const completed = await lab.get(manyRecord.id);
+  await assert.rejects(lab.acceptDraft(completed.id, draftHash(completed)), /черновик/i);
+  assert.deepEqual(await lab.get(completed.id), completed);
+});
+
+test('fifteen unaccepted cards still run, report accuracy, save, load and rerun intact', async t => {
+  const { lab, directory } = await setup(t, createDemoRuntime());
+  const input = demoEvaluationInput(); input.scenarioCount = 10;
+  const created = await lab.create(input); await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  const additions = Array.from({ length: 5 }, (_, index) => ({
+    ...structuredClone(draft.scenarios[0]!), id: `batch_extra_${index + 1}`, title: `Batch sentinel ${index + 1}`,
+  }));
+  const batch = await lab.updateDraft(draft.id, draftHash(draft), { scenarios: additions });
+  assert.equal(batch.scenarios.length, 15);
+  assert.equal(batch.acceptedDraftHash, undefined);
+
+  await lab.start(batch.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(batch) }); await lab.waitForIdle();
+  const first = await lab.get(batch.id);
+  assert.equal(first.phase, 'results_review', first.error ?? '');
+  assert.equal(first.trials.length, 15);
+  assert.deepEqual(qualitySummary(first).cards, { passed: 2, failed: 13, unknown: 0, notReached: 0, total: 15, accuracy: 2 / 15 });
+  assert.equal(first.acceptedDraftHash, undefined);
+
+  const suitePath = await lab.saveSuite(first.id, join(directory, 'fifteen-card-suite.json'));
+  const loaded = await lab.loadSuite(suitePath);
+  assert.equal(loaded.scenarios.length, 15);
+  assert.equal(loaded.acceptedDraftHash, undefined);
+  await lab.start(loaded.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(loaded) }); await lab.waitForIdle();
+  const rerun = await lab.get(loaded.id);
+  assert.equal(rerun.trials.length, 15);
+  assert.deepEqual(rerun.scenarios.map(scenario => scenario.id), first.scenarios.map(scenario => scenario.id));
+  assert.deepEqual(qualitySummary(rerun).cards, qualitySummary(first).cards);
+  assert.equal(rerun.acceptedDraftHash, undefined);
+});
+
 test('one user card requires exact human approval, runs one unchanged agent, then preserves separate human result review', async t => {
   const runtime = createDemoRuntime();
   let targets = 0; let improvements = 0;
