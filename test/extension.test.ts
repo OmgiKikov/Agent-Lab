@@ -395,9 +395,19 @@ test('conversation completes human finding → prompt diff → unchanged SQLite 
   t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
   const screens: string[] = [];
   let note: string | undefined;
+  let targetLabel = 'Проверка ·';
+  let cancelTarget = false;
+  const targetChoices: string[][] = [];
   const ctx = { cwd: directory, hasUI: true, mode: 'tui', ui: {
     confirm: async (_title: string, body: string) => { screens.push(body); return true; },
-    select: async (_title: string, choices: string[]) => choices[0],
+    select: async (title: string, choices: string[]) => {
+      if (title === 'Область вашей оценки') {
+        targetChoices.push(choices);
+        if (cancelTarget) return undefined;
+        return choices.find(choice => choice.startsWith(targetLabel));
+      }
+      return choices.find(choice => choice === 'Ошибся агент');
+    },
     editor: async (_title: string, initial: string) => { if (initial) { screens.push(initial); return initial; } return note; },
   } } as ExtensionContext;
   const call = async (name: string, params: unknown) => output(await tools.get(name)!.execute('journey', params, undefined, undefined, ctx));
@@ -405,11 +415,11 @@ test('conversation completes human finding → prompt diff → unchanged SQLite 
   const built = await call('agent_lab_build', { mode: 'demo', scenarioCount: 1, settings: { userModes: ['static'] } });
   const inspection = await call('agent_lab_inspect', { id: built.id });
   const initialState = { records: { A: { time: '09:00' } }, writableFields: ['time'], transientFailures: 0 };
-  const move = { ...inspection.scenarios[0], initialState, metrics: [], successCriteria: 'Move A to 14:00',
+  const move = { ...inspection.scenarios[0], initialState, successCriteria: 'Move A to 14:00',
     user: { ...inspection.scenarios[0].user, opening: 'Move A to 14:00' },
     checks: [{ id: 'time', kind: 'state_equals', recordId: 'A', field: 'time', value: '14:00', description: 'Move the record' }] };
-  const guard = { ...move, id: 'read_only', familyId: 'read_only', title: 'Read without changes', successCriteria: 'Keep A at 09:00',
-    user: { ...move.user, opening: 'What time is A?' }, checks: [{ ...move.checks[0], value: '09:00', description: 'Preserve the record' }] };
+  const guard = { ...move, id: 'read_only', familyId: 'read_only', title: 'Read without changes', successCriteria: 'Report that A is still at 09:00',
+    user: { ...move.user, opening: 'What time is A?' }, checks: [{ ...move.checks[0], description: 'Shared failing fixture check' }] };
   const prepared = await call('agent_lab_edit', { id: built.id, expectedHash: built.draftHash, patch: {
     target: { kind: 'command', command: 'python3', args: [fileURLToPath(new URL('../examples/stateful-agent.py', import.meta.url))], promptFile: prompt },
     scenarios: [move, guard],
@@ -417,7 +427,7 @@ test('conversation completes human finding → prompt diff → unchanged SQLite 
   const baseline = await call('agent_lab_run', { id: prepared.id, expectedHash: prepared.draftHash });
   assert.equal(baseline.phase, 'results_review'); assert.equal(baseline.trialCount, 2);
   const before = await call('agent_lab_inspect', { id: prepared.id });
-  assert.deepEqual(before.trials.map((trial: { outcome: string }) => trial.outcome), ['fail', 'pass']);
+  assert.deepEqual(before.trials.map((trial: { outcome: string }) => trial.outcome), ['fail', 'fail']);
   const trialId = before.trials[0].id;
   const proposalInput = { action: 'propose', id: before.id, candidate: 'Allow updates after lookup.', hypothesis: 'Enable the requested update; preserve read-only access.', trialIds: [trialId] };
   await assert.rejects(call('agent_lab_prompt', proposalInput), /подтверждённые/);
@@ -425,6 +435,9 @@ test('conversation completes human finding → prompt diff → unchanged SQLite 
   await assert.rejects(tools.get('agent_lab_review')!.execute('headless', { id: before.id, trialId }, undefined, undefined, { ...ctx, hasUI: false } as ExtensionContext), /интерактивного/);
   assert.equal((await call('agent_lab_review', { id: before.id, trialId })).cancelled, true);
   assert.deepEqual((await call('agent_lab_inspect', { id: before.id })).humanReviews, []);
+  assert.ok(targetChoices.at(-1)!.some(choice => choice.startsWith('Критерий ·')));
+  assert.ok(targetChoices.at(-1)!.some(choice => choice.startsWith('Проверка ·')));
+  assert.ok(targetChoices.at(-1)!.every(choice => !/Такие же|Причина/.test(choice)), targetChoices.at(-1)!.join('\n'));
   const abort = new AbortController();
   const abortedCtx = { ...ctx, ui: { ...ctx.ui, editor: async (_title: string, initial: string) => { if (initial) return initial; abort.abort(new Error('Review interrupted')); return 'Not a saved verdict'; } } } as ExtensionContext;
   await assert.rejects(tools.get('agent_lab_review')!.execute('abort', { id: before.id, trialId }, abort.signal, undefined, abortedCtx), /Review interrupted/);
@@ -433,6 +446,27 @@ test('conversation completes human finding → prompt diff → unchanged SQLite 
   const reviewed = await call('agent_lab_review', { id: before.id, trialId });
   assert.equal(reviewed.humanReviews.length, 1); assert.equal(reviewed.humanReviews[0].verdict, 'fail');
   assert.equal(reviewed.humanReviews[0].note, note);
+  assert.equal(reviewed.humanReviews[0].trialId, trialId);
+  assert.equal(reviewed.humanReviews[0].reviewedDialogue, undefined);
+  assert.match(reviewed.quality.headline, /разобрано человеком 0 из 2 диалогов/);
+  assert.equal(reviewed.humanReviews.some((review: { trialId: string }) => review.trialId === before.trials[1].id), false);
+
+  targetLabel = 'Весь диалог';
+  note = 'Test fixture full review: #1 shows the retained time.';
+  const complete = await call('agent_lab_review', { id: before.id, trialId });
+  assert.equal(complete.humanReviews.length, 2);
+  assert.equal(complete.humanReviews.at(-1).trialId, trialId);
+  assert.equal(complete.humanReviews.at(-1).reviewedDialogue, true);
+  assert.match(complete.quality.headline, /разобрано человеком 1 из 2 диалогов/);
+
+  note = 'Invalid event reference: #999.';
+  const invalidReference = await call('agent_lab_review', { id: before.id, trialId });
+  assert.equal(invalidReference.cancelled, true);
+  assert.equal((await call('agent_lab_inspect', { id: before.id })).humanReviews.length, 2);
+  cancelTarget = true;
+  assert.equal((await call('agent_lab_review', { id: before.id, trialId })).cancelled, true);
+  cancelTarget = false;
+  assert.equal((await call('agent_lab_inspect', { id: before.id })).humanReviews.length, 2);
   assert.ok(screens.some(body => body.includes('Move A to 14:00') && body.includes('#0') && body.includes('09:00')));
   const proposal = await call('agent_lab_prompt', proposalInput);
   const diff = await call('agent_lab_prompt', { action: 'inspect', file: proposal.file });
