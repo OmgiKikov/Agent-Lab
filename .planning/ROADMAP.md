@@ -82,7 +82,7 @@ Plans:
   7. Discovery показывает охват и доказательства как exploratory-отбор, никогда не выдаёт выбранную подозрительную подвыборку за accuracy и не скрывает исчерпание бюджета за «недостаточно данных».
   8. Информационная цель может получить решённый `goal_attainment` по принятому каналу `reply`; действие по-прежнему требует успешного tool result или наблюдаемого state effect.
 
-**Plans:** 2/4 plans executed
+**Plans:** 2/7 plans executed
 
 Plans:
 **Wave 1**
@@ -92,11 +92,23 @@ Plans:
 
 **Wave 2** *(blocked on 03-01)*
 
-- [ ] 03-03-PLAN.md — Принятие точного draftHash, сброс после правки/копии и запрет сохранения непринятого теста.
+- [ ] 03-05-PLAN.md — Owner-confirmed `goalObservation`, типоспецифичный judge и stale-receipt/full-hash защита.
 
-**Wave 3** *(blocked on 03-02 and 03-03)*
+**Wave 3** *(blocked on 03-01 and 03-05)*
 
-- [ ] 03-04-PLAN.md — Общий компактный Pi/CLI-блок и accept-or-edit без запуска агента.
+- [ ] 03-03-PLAN.md — Exact-draft acceptance как one-test review metadata и 15-card non-interference для run/save/accuracy.
+
+**Wave 4** *(blocked on 03-03 and 03-05)*
+
+- [ ] 03-06-PLAN.md — Bounded coarse/deep discovery, детерминированные representatives/controls, budget/recovery и `fromRunId` handoff.
+
+**Wave 5** *(blocked on 03-02 and 03-06)*
+
+- [ ] 03-07-PLAN.md — Отдельные CLI/Pi discovery surfaces, честный selection brief и явный переход к одному тесту.
+
+**Wave 6** *(blocked on 03-02, 03-03, 03-05, 03-06 and 03-07)*
+
+- [ ] 03-04-PLAN.md — Шестистрочная карточка и отдельные `agent_lab_accept` / `accept --id --yes`; `run` остаётся execution.
 
 **UI hint**: yes
 
@@ -142,6 +154,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5. Полный дем�
 |-------|----------------|--------|-----------|
 | 1. Честный человеческий разбор | 2/2 | Complete    | 2026-09-15 |
 | 2. Понимание агента и гипотеза | 0/TBD | Not started | - |
-| 3. Полезный тест и его принятие | 2/4 | In Progress|  |
+| 3. Полезный тест и его принятие | 2/7 | In Progress|  |
 | 4. Настоящий запуск и доказательства | 0/TBD | Not started | - |
 | 5. Сохранённая регрессия и повтор | 0/TBD | Not started | - |

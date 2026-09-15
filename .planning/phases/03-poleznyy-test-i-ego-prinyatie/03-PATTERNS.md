@@ -116,7 +116,7 @@ async updateDraft(id: string, expectedHash: string, raw: DraftPatch): Promise<Ex
 }
 ```
 
-Implement `acceptDraft(id, expectedHash)` through `change()`: load, require the review/evaluate one-test boundary, compare inside the mutation, set `acceptedDraftHash` to the current full hash, checkpoint, return a clone. Acceptance performs no target/model/judge/simulator call.
+Implement `acceptDraft(id, expectedHash)` through `change()`: load, require the review/evaluate one-test boundary, compare inside the mutation, set only `acceptedDraftHash` to the current full hash, checkpoint, return a clone. Do not mutate `reviewedAt`/`reviewMode`; acceptance performs no target/model/judge/simulator call and is not an execution permission.
 
 **Invalidation by construction** (lines 46-63, 231-234):
 
@@ -131,7 +131,7 @@ record.reviewedAt = null; record.reviewMode = null; record.manifestHash = null;
 await this.checkpoint(record, 'review', /* edit summary */);
 ```
 
-Clear `acceptedDraftHash` in `freshDraft()` and after every successful semantic `updateDraft()`. Because `repeat()`, `loadSuite()` and `reassess()` already route through `freshDraft()`, one reset point covers them.
+Preserve the previous `acceptedDraftHash` after a successful semantic `updateDraft()` so its mismatch with the new `draftHash()` is an explicit stale review fact. Clear it in `freshDraft()`; repeat/load paths that create a new definition inherit that single reset point.
 
 **File boundary guard** (lines 251-260):
 
@@ -148,7 +148,7 @@ async saveSuite(id: string, file: string, scenarioIds?: string[]): Promise<strin
 }
 ```
 
-Add the equality gate against `previous` before `freshDraft()` and before writing. Preserve `flag: 'wx'` and `mode: 0o600`. The exported fresh definition is intentionally unaccepted.
+Do not add an acceptance equality gate here. Preserve the existing multi-scenario `saveSuite()` behavior, `flag: 'wx'`, and `mode: 0o600`; `freshDraft()` clears the review metadata in the portable definition.
 
 ---
 
@@ -252,7 +252,7 @@ if (command === 'run' && !values.yes) throw new Error('Для запуска с�
 await lab.start(id, { approved: true, expectedHash: draftHash(draft) });
 ```
 
-Before any Phase 4 execution, print the same full compact test block and its hash. `--yes` accepts exactly that displayed hash through `acceptDraft`; absence of `--yes` stops after display with a concrete review/retry instruction. Do not add an interactive prompt. The `save-suite` branch relies on the aggregate gate rather than duplicating authorization.
+Add a separate CLI `accept` command. Both `accept --id` and `accept --id --yes` print the same full current compact test block/hash; the `--yes` path waits until stdout is fully written before passing that projection hash to `acceptDraft()`. Do not add an interactive prompt. Keep CLI `run` and `save-suite` semantics unchanged and independent of acceptance metadata.
 
 ---
 
@@ -285,7 +285,7 @@ const output = summary(record, lab.store.directory);
 return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
 ```
 
-Keep `agent_lab_edit` as the only correction path. Its result must show the new version and say acceptance was invalidated.
+Keep `agent_lab_edit` as the only correction path. Its result must show the new version and mark the retained acceptance hash stale rather than implying execution is blocked.
 
 **Native acceptance seam** (lines 273-308):
 
@@ -298,7 +298,7 @@ if (!await ctx.ui.confirm('Запустить проверку?', runPlan(draft)
 await lab.start(draft.id, { approved: true, expectedHash: params.expectedHash });
 ```
 
-For Phase 3, the confirm accepts the shown exact test through `acceptDraft()` and returns immediately with “agent not run.” Decline leaves the draft editable. Do not call `start()`, create polling, export artifacts, or save a suite in the acceptance path. Phase 4 can later consume the stored acceptance without a second ceremony.
+Add a separate `agent_lab_accept` handler: its confirm accepts the shown exact one-test proposal through `acceptDraft()` and returns immediately with “agent not run.” Decline leaves the draft editable. Do not call `start()`, create polling, export artifacts, or save a suite in the acceptance path. Keep `agent_lab_run` byte/semantics unchanged; it neither consumes nor requires the review metadata.
 
 ---
 
@@ -341,7 +341,7 @@ assert.notEqual(draftHash(edited), originalHash);
 await assert.rejects(lab.updateDraft(draft.id, originalHash, { scenarios: cards }), /Черновик изменился/);
 ```
 
-Add one focused lifecycle test: accept exact hash, zero target/model calls, save allowed; stale/missing acceptance rejects; edit clears; `freshDraft` paths clear; loaded legacy JSON is unaccepted. Reuse the existing runtime counters and temporary directories.
+Add focused lifecycle tests: accept exact one-test hash with zero target/model calls; stale/missing acceptance rejects only the acceptance mutation; semantic edit preserves the old hash as stale; `freshDraft` clears it; loaded legacy JSON has no acceptance. Add a 15-card evaluate sentinel proving unaccepted start/save/load/rerun and aggregate accuracy remain unchanged. Reuse the existing runtime counters and temporary directories.
 
 ### `test/pi.test.ts`
 
@@ -399,7 +399,7 @@ Add the narrow CLI contract: without `--yes`, the exact test/hash is printed and
 ### Aggregate owns lifecycle state
 
 **Source:** `src/experiment.ts:98-108`, `src/experiment.ts:189-260`  
-**Apply to:** acceptance, edit invalidation, fresh-copy invalidation, suite gate.
+**Apply to:** acceptance metadata, stale-after-edit status, and fresh-copy clearing only; execution/storage remain unchanged.
 
 All lifecycle mutations go through `ExperimentLab.change()`. Adapters pass an expected hash and display results; they do not own durable approval state.
 
@@ -432,7 +432,7 @@ None. Every planned change extends an existing tracked module and test harness. 
 
 - Phase 3 ends after exact-draft acceptance or an editable decline; no `TargetSession`, simulator, judge, trial, artifact export, or regression write occurs from accept/edit.
 - One visible acceptance candidate means exactly one scenario. Reject ambiguity; do not silently select or trim.
-- `acceptedDraftHash === draftHash(record)` is the only authorization invariant. Truthiness, `reviewedAt`, `reviewMode`, and timestamps are insufficient.
+- `acceptedDraftHash === draftHash(record)` means only “the currently displayed one-test proposal was accepted.” It is not execution/storage authorization; `reviewedAt`/`reviewMode` keep their existing meaning.
 - Preserve `writeFile(..., { flag: 'wx', mode: 0o600 })` and optimistic stale-hash rejection.
 - Do not touch `docs/superpowers/plans/2026-09-15-mvp-cut.md`; it contains user changes and is source-plan history.
 - No new dependency and no new source module unless the post-Phase-2 code makes reuse impossible; `src/quality.ts` is the existing neutral projection seam.

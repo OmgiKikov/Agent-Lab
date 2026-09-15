@@ -12,8 +12,8 @@
 ### Test acceptance
 - Acceptance applies to the test definition, not to an automatic or human verdict about a run result.
 - Bind acceptance to the exact draft hash/version so any later edit invalidates it.
-- The existing pre-run native confirmation may serve as explicit acceptance when it shows the exact plan being accepted; do not add a second ceremony.
-- `saveSuite()` and every regression-storage path reject a draft that has not been explicitly accepted.
+- Add a separate exact-draft acceptance action; do not reuse or change the existing run confirmation.
+- Acceptance is review metadata for one proposed test. `start()` and `saveSuite()` retain existing multi-scenario semantics and never read it.
 - Declining acceptance leaves an editable draft and performs no target run or regression save.
 
 ### Minimal test contract
@@ -48,7 +48,7 @@
 | ID | Description | Research Support |
 |----|-------------|------------------|
 | LOOP-04 | Для принятой гипотезы Agent Lab собирает минимальный тест с ситуацией, входными данными, критерием успеха и доступным способом наблюдения результата. | Compact test projection and observation-channel derivation. |
-| LOOP-05 | Пользователь принимает или правит сам тест; только явно принятый тест попадает в сохранённый регрессионный набор. | Exact-draft acceptance marker, mutation guard, invalidation matrix and suite gate. |
+| LOOP-05 | Пользователь принимает или правит сам предложенный тест; acceptance хранится как review metadata независимо от multi-test suite execution/storage. | Exact-draft acceptance marker, stale-status matrix and 15-card non-interference sentinel. |
 | CARD-01 | Генерируемая карточка хранит `goal`, `facts`, `knows`, `opening`, `answers`, непустой `successCriteria` и только при необходимости `initialState` с точными проверками. | Existing `Scenario` schema plus stricter generated-card validation. |
 | CARD-02 | Генерируемая внешняя карточка несёт ровно одну агентскую рубрику `goal_attainment`, построенную из её `successCriteria`, без подмены цели рубрикой тона или формата. | Deterministic reserved-rubric normalization for every generated card. |
 | CARD-03 | Harness добавляет `prompt_compliance` только при наличии промпта и `user_fidelity` для симуляции; дополнительные рубрики создаёт только владелец через `agent_lab_edit`. | Separate generator-owned rubric from harness decoration and owner edits. |
@@ -61,7 +61,7 @@
 
 Phase 3 does not need a new approval subsystem. The current aggregate already has a complete semantic version function, `draftHash(record)`, whose input is the test-defining task, sources, requirements, scenarios, agent, target and evaluator configuration. The existing edit path checks that full hash before mutation and already clears review metadata. [VERIFIED: src/experiment.ts:27-32] [VERIFIED: src/experiment.ts:189-234] The smallest compatible representation is therefore one optional experiment field containing the accepted full draft hash; it must not itself participate in `draftHash`, and its absence in old JSON means “not accepted.” The existing schema already demonstrates backward-compatible optional fields such as `resultsReviewedAt?: string`, `targetVersion?: string` and `evaluatorVersion?: string`. [VERIFIED: src/contracts.ts:501-515] [VERIFIED: src/contracts.ts:595-602]
 
-Acceptance should be one serialized `ExperimentLab` mutation, using the existing `change()` seam and optimistic expected hash. [VERIFIED: src/experiment.ts:98-108] It validates the one visible test, records the exact current hash, and performs no execution. `updateDraft`, `freshDraft`, load/repeat/reassess and any other path that creates or changes a draft must clear the marker; `saveSuite` must compare it to the current `draftHash` before exporting. Current `saveSuite()` checks only workflow, non-empty scenarios and non-running state, so an unaccepted draft can presently be exported. [VERIFIED: src/experiment.ts:251-260]
+Acceptance should be one serialized `ExperimentLab` mutation, using the existing `change()` seam and optimistic expected hash. [VERIFIED: src/experiment.ts:98-108] It validates the one visible test, records only the exact current hash, and performs no execution. `updateDraft` preserves the old marker so hash mismatch exposes stale review metadata; `freshDraft` clears it for a new definition. `start()` and `saveSuite()` keep their existing whole-draft/concurrency, execution and storage contracts and never read acceptance. A 15-card unaccepted run/save/load/rerun locks this non-interference in CI. [VERIFIED: src/experiment.ts:251-260]
 
 The generation work is also normalization, not a new pipeline: reuse `Scenario`, `valueTokens`, the bounded repair callback, the existing harness rubrics, `metricRows`, `agent_lab_edit`, native Pi confirmation and CLI `--yes`. The source plan’s Tasks 8–10 contain useful fragments, but they do not cover acceptance at all; Task 8 scopes normalization too narrowly, Task 9 omits dialogue evidence, and Task 10’s blanket terminology replacement conflicts with the locked rule that the main conversation says `тест`. [VERIFIED: docs/superpowers/plans/2026-09-15-mvp-cut.md:755-872] [VERIFIED: docs/superpowers/plans/2026-09-15-mvp-cut.md:876-949] [VERIFIED: docs/superpowers/plans/2026-09-15-mvp-cut.md:953-983]
 
@@ -74,7 +74,7 @@ The generation work is also normalization, not a new pipeline: reuse `Scenario`,
 | Generated-card normalization | API / Backend (`src/pi.ts`, `src/contracts.ts`) | — | Model output is validated and repaired before it becomes stored state. [VERIFIED: src/pi.ts:32-42] [VERIFIED: src/pi.ts:305-339] |
 | Exact-draft acceptance | API / Backend (`ExperimentLab`) | Pi/CLI adapters | The aggregate owns mutation and persistence; adapters only show and confirm the projected draft. [VERIFIED: src/experiment.ts:98-108] [VERIFIED: extensions/agent-lab.ts:40-53] |
 | Compact test presentation | Pi/CLI adapter | Existing terminal safety helper | Both surfaces must render the same semantic projection; Pi already sanitizes external text with `safeText`. [VERIFIED: extensions/agent-lab.ts:40-53] |
-| Regression export gate | API / Backend (`saveSuite`) | Filesystem storage | Authorization must be checked immediately before the existing exclusive file write. [VERIFIED: src/experiment.ts:251-260] |
+| Multi-card regression non-interference | API / Backend (`start`, `saveSuite`) | Filesystem storage | Acceptance metadata must not alter the existing 15-card execution, accuracy or exclusive file-write path. [VERIFIED: src/experiment.ts:251-260] |
 | Quality-row merge | Reporting (`src/quality.ts`) | Stored rubric contract | Current grouping uses the full rubric fingerprint, which is correct only for owner-defined rubrics. [VERIFIED: src/quality.ts:58-83] |
 
 ## Standard Stack
@@ -137,13 +137,11 @@ owner materials + confirmed hypothesis + user dialogue evidence
                            edit + expectedHash       accept + expectedHash
                                   |                         |
                            updateDraft()              accepted hash stored
-                           clears acceptance          no target execution
+                           keeps old hash stale       no target execution
                                   |                         |
                                   +------ re-render --------+
                                              |
-                                  saveSuite checks exact match
-                                             |
-                                      regression JSON
+                                  start/save stay independent
 ```
 
 The execution boundary remains downstream: the UI contract says Phase 3 confirmation neither opens `TargetSession`, runs a simulator nor saves a suite. [VERIFIED: .planning/phases/03-poleznyy-test-i-ego-prinyatie/03-UI-SPEC.md:131-140]
@@ -152,7 +150,7 @@ The execution boundary remains downstream: the UI contract says Phase 3 confirma
 
 ```text
 src/contracts.ts             # optional compatibility field; Scenario/rubric invariants
-src/experiment.ts            # accept mutation, invalidation and save guard
+src/experiment.ts            # accept review mutation and stale/fresh metadata handling
 src/pi.ts                    # generated-card semantic normalization and repair
 src/quality.ts               # reserved-rubric aggregation rule
 src/cli.ts                   # same compact block and --yes acceptance
@@ -171,35 +169,35 @@ This mapping stays inside existing modules and test suites; the repository’s s
 
 **What:** Record a single optional full hash of the accepted draft. Do not add the marker to `draftHash`; equality is the invariant. Accept only inside `ExperimentLab.change()`, after checking phase, one-card presentability and `expectedHash === draftHash(record)`. The existing phase vocabulary is quoted verbatim as `'preparing' | 'review' | 'evaluating' | 'results_review' | 'baseline' | 'improving' | 'control' | 'complete' | 'cancelled' | 'error' | 'interrupted'`. [VERIFIED: src/contracts.ts:490-491]
 
-**When to use:** before regression export and, in the later execution phase, immediately after the existing confirmation has shown the exact same hash.
+**When to use:** after the product has shown one exact proposed test and the owner accepts that proposal. It is review metadata, not permission to run or export a suite.
 
 **Why separate from review metadata:** `reviewedAt` / `reviewMode` already cover both `'human' | 'automated' | null`, and reassessment/start assign them for other meanings; overloading them cannot prove that this exact test definition was explicitly accepted. [VERIFIED: src/contracts.ts:498-500] [VERIFIED: src/experiment.ts:384-410]
 
 ### Pattern 2: Invalidation by Construction
 
-Clear the marker whenever a draft is semantically changed or freshly derived:
+Keep stale review identity observable across edits and clear it only for a fresh definition:
 
 | Path | Required action | Evidence |
 |------|-----------------|----------|
-| `updateDraft` | Clear after successful validation and before checkpoint/save | Its patch can change scenarios, removals, profiles, agent, settings, target and target version; it recomputes evaluator/target fingerprints. [VERIFIED: src/contracts.ts:470-481] [VERIFIED: src/experiment.ts:189-234] |
+| `updateDraft` | Preserve the old hash so mismatch marks the review stale | Its patch can change scenarios, removals, profiles, agent, settings, target and target version; it recomputes semantic identity. [VERIFIED: src/contracts.ts:470-481] [VERIFIED: src/experiment.ts:189-234] |
 | `freshDraft` | Clear unconditionally | It creates a new id and already clears trials, reviews, `reviewedAt`, `reviewMode` and `manifestHash`. [VERIFIED: src/experiment.ts:46-63] |
 | `repeat`, `loadSuite`, `reassess` | Inherit the `freshDraft` reset; do not restore approval | All three create a new draft through that helper. [VERIFIED: src/experiment.ts:238-249] [VERIFIED: src/experiment.ts:262-288] |
 | old stored JSON | Missing optional marker means unaccepted | The experiment schema already accepts optional compatibility fields. [VERIFIED: src/contracts.ts:595-602] |
 | stale edit/accept request | Reject without mutation | Existing edit checks current hash before parsing/applying the patch. [VERIFIED: src/experiment.ts:189-194] |
 
-Gate `saveSuite` against the source record before calling `freshDraft`, so the exported definition remains a portable unapproved draft when loaded later while only an accepted source version can enter regression storage.
+Do not gate `saveSuite` on acceptance. Preserve its existing multi-scenario behavior; the exported `freshDraft` naturally omits review metadata for the new definition.
 
 ### Pattern 3: One Semantic Projection, Two Terminal Adapters
 
 Build one pure compact projection from the single selected `Scenario` and `draftHash`; Pi and CLI render that projection with their native formatting. The exact visible labels are quoted verbatim: `ТЕСТ`, `СИТУАЦИЯ`, `ВХОД`, `УСПЕХ`, `НАБЛЮДЕНИЕ`, and `Версия: <первые 12 символов draftHash>`. [VERIFIED: .planning/phases/03-poleznyy-test-i-ego-prinyatie/03-UI-SPEC.md:104-123]
 
-Derive the observation label from existing executable checks rather than inventing a new `Scenario` field:
+Read the observation label from the explicit owner-confirmed `Scenario.goalObservation` field; never infer it from wording or checks:
 
 - assistant transcript for answer checks or semantic rubrics;
 - tool call/result trace for `tool_called`, `tool_not_called`, `tool_count` and `fresh_read_before_update`;
 - final state snapshot for `state_equals` or necessary non-empty state.
 
-Those exact check branches already grade assistant text, tool events and final state, so the projection can truthfully name the channel before execution. [VERIFIED: src/evaluation.ts:69-115] A generic judge-only statement is not acceptable under the UI contract. [VERIFIED: .planning/phases/03-poleznyy-test-i-ego-prinyatie/03-UI-SPEC.md:125-129]
+Those exact check branches already grade assistant text, tool events and final state, so the field can be validated against an observable channel. [VERIFIED: src/evaluation.ts:69-115] For the current prompt/RAG-only discovery flow the harness proposes the fixed channel `reply`, renders `НАБЛЮДЕНИЕ: ответ агента` before `Проверим?`, and the owner's “да” confirms that visible choice. A generic judge-only statement is not acceptable under the UI contract. [VERIFIED: .planning/phases/03-poleznyy-test-i-ego-prinyatie/03-UI-SPEC.md:125-129]
 
 ### Pattern 4: Normalize Generated Cards Before Storage
 
@@ -242,9 +240,9 @@ Use metric id as the row key only for the exact reserved ids `'goal_attainment'`
 
 **What goes wrong:** `acceptedDraftHash` remains present after an edit and callers test truthiness rather than equality.
 
-**How to avoid:** both clear on every draft-producing path and always authorize with `acceptedDraftHash === draftHash(record)` immediately before the protected action.
+**How to avoid:** derive only the displayed current/stale review status from `acceptedDraftHash === draftHash(record)`; never use truthiness and never treat it as run/save authorization.
 
-**Warning signs:** tests pass when only timestamps/settings/target/scenario criteria change, or a loaded suite starts already accepted.
+**Warning signs:** a semantic edit still displays current acceptance, a fresh definition starts accepted, or adding metadata changes a 15-card run/save/accuracy result.
 
 ### Pitfall 2: Acceptance Accidentally Starts the Agent
 
@@ -278,11 +276,11 @@ Use metric id as the row key only for the exact reserved ids `'goal_attainment'`
 
 **Warning signs:** a reply with two values behaves differently based on their order, `E-2047` matches `E-20470`, or the array is truncated.
 
-### Pitfall 6: Save Gate Races or Guards the Derived Draft
+### Pitfall 6: Acceptance Leaks Into Suite Execution
 
-**What goes wrong:** code fetches an approved record, another mutation changes it, or approval is checked only after `freshDraft` has intentionally cleared it.
+**What goes wrong:** one-test review metadata is reused as a permission gate and existing multi-card accuracy suites can no longer run or be exported.
 
-**How to avoid:** perform the equality check and snapshot/export as one aggregate mutation or otherwise ensure the checked source is immutable through the exclusive write; gate before deriving the portable draft. `writeFile` currently uses exact flags `'wx'` and mode `0o600`. [VERIFIED: src/experiment.ts:251-260]
+**How to avoid:** keep `acceptedDraftHash` out of `start()` and `saveSuite()`. Preserve the current whole-draft `expectedHash` concurrency check and existing portable export behavior; cover a 15-card run/save/load/rerun path without acceptance. `writeFile` keeps its exact flags `'wx'` and mode `0o600`. [VERIFIED: src/experiment.ts:251-260]
 
 ## Code Examples
 
@@ -434,7 +432,7 @@ OWASP ASVS 5.0 groups defenses for validating data against expected formats/stru
 |---------|--------|---------------------|
 | Terminal escape/control injection from materials or model output | Spoofing / Tampering | Route all interpolated text through existing `safeText`; test ANSI, control and bidi samples. |
 | TOCTOU between displayed and accepted draft | Tampering | Native confirmation passes the exact full displayed hash into serialized aggregate mutation; stale mismatch leaves state unchanged. |
-| Persisting an unaccepted or since-edited test | Tampering | Recompute exact hash inside `saveSuite` boundary and require equality. |
+| Acceptance metadata alters suite execution/storage | Tampering | Keep start/saveSuite unchanged and run the 15-card unaccepted save/load/rerun accuracy sentinel. |
 | Prompt/model smuggles unsupported expected values | Tampering | Deterministic full-token owner-evidence match; bounded repair; never use assistant/outcome as oracle. |
 | Hidden additional scenario accepted under a one-test display | Spoofing | Validate exactly one acceptance candidate before showing/accepting; no silent trimming. |
 | Overwriting an existing suite file | Tampering | Preserve the existing exclusive `'wx'` and restrictive `0o600` file-write settings. [VERIFIED: src/experiment.ts:251-260] |

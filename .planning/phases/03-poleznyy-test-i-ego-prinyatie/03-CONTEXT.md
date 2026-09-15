@@ -17,20 +17,21 @@ Find one useful, evidence-grounded test from a large recorded-dialogue batch, tu
 ### Test acceptance
 - Acceptance applies to the test definition, not to an automatic or human verdict about a run result.
 - Bind acceptance to the exact draft hash/version so any later edit invalidates it.
-- Acceptance and execution are different actions. Add one explicit `agent_lab_accept` / CLI `accept --id --yes` surface; keep `agent_lab_run` / CLI `run` for the later execution of an already accepted hash.
-- `saveSuite()` and every regression-storage path reject a draft that has not been explicitly accepted.
+- Acceptance and execution are different actions. Add one explicit `agent_lab_accept` / CLI `accept --id --yes` surface; keep `agent_lab_run` / CLI `run` and `saveSuite()` semantics unchanged for regression/validation suites.
+- Acceptance is a review fact for the one-test proposal, not a permission gate. Existing multi-scenario sets may run and be stored without acceptance metadata.
 - Declining acceptance leaves an editable draft and performs no target run or regression save.
 
 ### Large-log discovery
 - Keep detailed `score` as the honest evaluator of a preselected validation set; never report discovery's suspicious subset as production accuracy.
 - Accept at most 300 JSON/JSONL dialogues under the existing 4 MB file and 2,000,000-character corpus limits. Agent Lab does not fetch external logs in this MVP.
 - Coarse-triage complete dialogues in batches of at most 25 and 60,000 serialized characters. Keep short validated observations plus dialogue/event citations; never pass stored outcomes as labels.
-- Choose one recurring signal backed by at least two dialogues, then deterministically select at most three representatives and two controls outside the signal. Persist the seed and exact IDs.
-- Deep goal extraction and two-vote judging run only on those five or fewer full dialogues. Controls probe false negatives but do not make the sample representative.
-- The first screen states `отбор, не accuracy`, total coverage, selected examples/controls, one grounded hypothesis and `Проверим?`; budget exhaustion and partial results remain explicit errors/states.
+- Normalize coarse observations across batches by validated owner requirement IDs plus cited event IDs; never group by a free model-authored signal label. Choose one recurring requirement-backed focus supported by at least two dialogues, then deterministically select at most three representatives and two controls outside the focus. Persist the seed and exact IDs.
+- Deep goal extraction and two-vote judging check that same focus only on those five or fewer full dialogues. Controls probe false negatives but do not make the sample representative. Persist one final hypothesis with its owner-requirement/event provenance.
+- Before any discovery call compute `nominalCalls = B + (2*M + 1)*K + 3` and `maxCalls = nominalCalls + max(10, ceil(B/4))`; show both before consent and replace the Pi default-20 ceiling for discovery only.
+- The first screen states `отбор, не accuracy`, total coverage, selected examples/controls, one grounded hypothesis, the visible current-MVP observation `ответ агента (reply)`, and `Проверим?`; budget exhaustion and partial results remain explicit errors/states.
 
 ### Observation semantics
-- Add one typed owner-confirmed `goalObservation: reply | tool | state` to the test definition and therefore its draft hash. Do not infer it from keywords or let the model choose it.
+- Add one typed owner-confirmed `goalObservation: reply | tool | state` to the test definition and therefore its draft hash. Do not infer it from keywords or let the model choose it. In the current prompt/RAG-only discovery path the harness proposes the fixed value `reply`; showing it before `Проверим?` lets the owner's ordinary “да” confirm both hypothesis and observation without another round.
 - `reply` permits semantic `goal_attainment` from cited assistant replies for informational/RAG goals. `tool` requires a cited successful tool result; `state` requires the observed state predicate. Missing/legacy channel remains conservative `unknown`.
 - After the owner confirms the discovery hypothesis, reuse the existing `confirmedHypothesis` generation path to build exactly one test; do not add a hypothesis database or another generator.
 
@@ -74,9 +75,8 @@ Find one useful, evidence-grounded test from a large recorded-dialogue batch, tu
 
 ### Integration Points
 - Store acceptance against the current draft hash in the existing experiment aggregate.
-- Invalidate acceptance in `updateDraft()` and any path that changes scenario semantics.
-- Add a separate accept-only surface; `ExperimentLab.start()` later rejects every `evaluate` record whose accepted hash is absent or stale, before preflight or spending.
-- Gate `saveSuite()` on the same acceptance check.
+- Preserve the old accepted hash through semantic `updateDraft()` so current/hash mismatch exposes stale review status; clear it only when `freshDraft()` creates a new definition.
+- Add a separate accept-only surface. `ExperimentLab.start()` and `saveSuite()` do not read acceptance metadata and retain their existing whole-draft/concurrency, execution and storage contracts.
 - Tighten generation/post-processing around reserved rubrics and deterministic `answers[].reply` enrichment.
 - Update current user-facing strings and docs from `user card` terminology to `business-scenario card` where the live contract is meant.
 
@@ -85,7 +85,7 @@ Find one useful, evidence-grounded test from a large recorded-dialogue batch, tu
 <specifics>
 ## Specific Ideas
 
-The user decision is the last step before execution: `Да, этот тест действительно проверяет нужное поведение` or a concrete edit such as `Здесь уточнение допустимо, исправь критерий`. Only the resulting accepted version can later run and enter regression storage.
+The user decision records whether this one proposed test checks the intended behavior: `Да, этот тест действительно проверяет нужное поведение` or a concrete edit such as `Здесь уточнение допустимо, исправь критерий`. It does not authorize or block execution/storage of existing regression and validation suites.
 
 </specifics>
 

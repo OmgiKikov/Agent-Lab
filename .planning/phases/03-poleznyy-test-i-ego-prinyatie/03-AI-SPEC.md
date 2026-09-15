@@ -8,7 +8,7 @@
 
 **System Type:** Hybrid — grounded structured test generation with human acceptance
 
-**Description:** Agent Lab first discovers a recurring, evidence-grounded signal in a large recorded-dialogue batch, deeply checks a few representatives and controls, then turns one owner-confirmed hypothesis into one minimal business-scenario test and binds acceptance to its exact draft before any later run or regression save.
+**Description:** Agent Lab first discovers a recurring, evidence-grounded signal in a large recorded-dialogue batch, deeply checks a few representatives and controls, then turns one owner-confirmed hypothesis into one minimal business-scenario test and records acceptance of its exact draft as review metadata independent of suite execution/storage.
 
 **Critical Failure Modes:**
 1. Generating a test whose criterion is not grounded in owner requirements.
@@ -21,11 +21,11 @@
 ### 1a. Discovery Delta
 
 - `discover` and `score` are separate products: discovery selects a useful test candidate; score measures a preselected validation set.
-- Discovery batches complete dialogues at 25 items / 60,000 serialized characters, validates every requirement/event citation against canonical evidence, and never sends stored outcomes to the model.
-- One recurring cluster must span at least two dialogues. Deterministic SHA-256 ranking selects at most three representatives and two controls; only those five or fewer receive deep goal extraction and existing two-vote rubric assessment.
-- The persisted discovery record contains protocol, seed, coverage counts, validated observations/clusters and exact representative/control IDs. No vector store, embedding index, external eval framework, semantic cache, queue or new storage service is introduced.
-- The test definition carries an owner-confirmed `goalObservation: reply | tool | state`. Reply evidence can decide an informational goal; action goals still require the declared successful tool or state evidence. Legacy records with no channel remain `unknown`.
-- Pi computes and displays a nominal call budget before consent. Partial/budget/error states lead the result and cannot be replaced by the insufficient-data hypothesis copy.
+- Discovery batches complete dialogues at 25 items / 60,000 serialized characters, persists exactly one classification for every input dialogue (missing/duplicate/foreign output becomes local `unknown` for the affected input), validates every owner-requirement/event citation against canonical evidence, and never sends stored outcomes to the model.
+- Cross-batch groups use validated owner requirement IDs, never free model-authored signal labels. One recurring focus must span at least two dialogues. Deterministic SHA-256 ranking selects at most three representatives and two controls; only those five or fewer receive deep goal extraction and existing two-vote rubric assessment for the same focus. Controls are a false-negative probe.
+- The persisted discovery record contains protocol, seed, coverage counts, requirement/event provenance, exact representative/control IDs and exactly one final hypothesis tied to that provenance. No vector store, embedding index, external eval framework, semantic cache, queue or new storage service is introduced.
+- The test definition carries an owner-confirmed `goalObservation: reply | tool | state`. For the current prompt/RAG-only discovery path the harness proposes and displays the constant `reply` before confirmation, so a plain owner “да” confirms it without model inference or an extra question. Reply evidence can decide an informational goal; action goals still require the declared successful tool or state evidence. Legacy records with no channel remain `unknown`.
+- Before any discovery call compute and display `nominalCalls = B + (2*M + 1)*K + 3` and `maxCalls = nominalCalls + max(10, ceil(B/4))`. Persist/apply calculated max to the existing controlled session before the first call, replacing Pi's default 20 for discovery only. Partial/budget/error states lead the result and cannot be replaced by the insufficient-data hypothesis copy.
 
 ---
 
@@ -66,7 +66,7 @@
 **Source:** Agent Lab CARD-04; NIST's production agent-evaluation analysis identifies solution contamination and grader gaming as threats to evaluation validity and recommends closing task-design loopholes and specifying affordances and restrictions.
 
 **Dimension: Exact-draft owner acceptance**  
-**Good (domain expert would accept):** The owner sees the complete compact test and accepts that exact content; the recorded identity matches the displayed draft, any semantic edit clears acceptance, and declining leaves an editable draft without a run or regression save.  
+**Good (domain expert would accept):** The owner sees the complete compact test and accepts that exact content; the recorded identity matches the displayed draft, a semantic edit makes the retained acceptance visibly stale, and declining leaves an editable draft without triggering a run or regression save.
 **Bad (domain expert would flag):** A timestamp, prior confirmation, or approval of a different version authorizes the current draft, or acceptance also implies approval of later execution results.  
 **Stakes:** Critical  
 **Source:** Agent Lab LOOP-05 and Phase 3 acceptance decision; NIST AI RMF calls for documented human-oversight processes and test methods tied to the deployment context.
@@ -76,7 +76,7 @@
 1. **Scenario drift:** a confirmed narrow hypothesis becomes a broad or adjacent test, so a later pass/fail does not answer the owner's question.
 2. **Oracle/channel mismatch:** the criterion requires an external business effect, but the card can observe only the agent's words; the test therefore cannot distinguish completion from self-report.
 3. **Contaminated or gameable setup:** unsupported values enter `answers`/`knows`, the expected answer leaks from generated content, or a weak exact check can be satisfied without the intended behavior.
-4. **Stale approval:** the owner accepts draft A, an edit produces draft B, and the workflow still treats B as accepted or silently saves it for regression.
+4. **Stale approval:** the owner accepts draft A, an edit produces draft B, and the review surface still presents B as accepted instead of marking the old receipt stale.
 
 ### Regulatory / Compliance Context
 
@@ -180,14 +180,14 @@ try {
 1. **Letting the candidate card ground itself.** A token appearing in `answers[].reply` is not evidence. Match it with `valueTokens()` against a prefiltered corpus of owner materials and owner/user dialogue turns; never use generated text, target/assistant replies, code behavior, or logged outcomes as the oracle.
 2. **Using substring matches or silent truncation.** `103` must not be justified by `A103`, and `.slice(0, 20)` would hide a malformed card. Use the same normalized full-token set on both sides; unsupported values or more than 20 final `knows` entries return the whole card to bounded repair.
 3. **Mixing generator, harness, and owner rubrics.** Before harness enrichment, generated output has exactly one agent rubric: `goal_attainment`, whose `passCriteria` equals `successCriteria` verbatim. The harness adds `prompt_compliance`/`user_fidelity` only when applicable; later owner rubrics arrive only through `agent_lab_edit`.
-4. **Equating `reviewedAt` with exact acceptance.** A timestamp does not identify content. Store the accepted full hash, exclude that field from `draftHash()`, and require equality at every run/export gate. Older records with no hash are unaccepted.
+4. **Equating `reviewedAt` with exact acceptance.** A timestamp does not identify content. Store the accepted full hash as one-test review metadata and exclude that field from `draftHash()`. Compare it only when presenting current/stale acceptance; do not turn it into a run/export gate for multi-card suites.
 5. **Keeping acceptance coupled to execution.** Preserve `agent_lab_run` as an explicit execution action and add `agent_lab_accept` (plus CLI `accept`) as the zero-cost definition-acceptance action. Never make repeated `run` calls alternate between accept and execute.
 
 ### Recommended Project Structure
 ```text
 src/contracts.ts        # optional acceptedDraftHash + strict generated-card schema pieces
 src/pi.ts               # one-card semantic review and deterministic token enrichment
-src/experiment.ts       # acceptDraft(), invalidation, start/save gates
+src/experiment.ts       # acceptDraft() review metadata; unchanged start/save semantics
 extensions/agent-lab.ts # compact render + native accept/edit interaction
 test/                   # one generation-contract check and one acceptance/hash check
 ```
@@ -235,8 +235,6 @@ async acceptDraft(id: string, expectedHash: string): Promise<Experiment> {
     const currentHash = draftHash(record);
     if (currentHash !== expectedHash) throw new Error('Тест изменился. Откройте актуальную версию.');
     record.acceptedDraftHash = currentHash;
-    record.reviewedAt = new Date().toISOString();
-    record.reviewMode = 'human';
     await this.checkpoint(record, 'review', 'Тест принят. Запуск ещё не выполнялся.');
     return structuredClone(record);
   });
@@ -247,7 +245,7 @@ Pass only authoritative owner material and owner/user dialogue evidence into `ow
 
 **Tool Use:** Scenario generation remains `controlledSession(..., tools: [])`; repository text and dialogues are serialized untrusted input, not model tools. `acceptDraft()` also has no tools and must not call `openTarget()`, `userTurn()`, the judge, the simulator, or `saveSuite()`. The native Pi confirm only selects accept versus leave-editable; edits continue through `agent_lab_edit(expectedHash)`.
 
-**State Management:** Add only `acceptedDraftHash?: string` to `Experiment` and its Zod schema; reuse `reviewedAt` and `reviewMode`. `updateDraft()` and every `freshDraft()`/load/repeat path clear all three acceptance fields after a successful semantic change. Stale edits fail before mutation. `start()` and `saveSuite()` require `acceptedDraftHash === draftHash(record)`; an old record with only `reviewedAt` must be accepted again. Export may clear acceptance in the fresh portable definition after the source gate passes. The acceptance field must not participate in `draftHash()` or it would change the identity it records.
+**State Management:** Add only `acceptedDraftHash?: string` to `Experiment` and its Zod schema. `acceptDraft()` changes only that field; it must not reuse or mutate `reviewedAt`/`reviewMode`, whose existing meaning belongs to execution consent/results. A semantic `updateDraft()` preserves the old value so `acceptedDraftHash !== draftHash(record)` exposes a stale review fact; `freshDraft()` clears it on a new portable definition. `start()` and `saveSuite()` never read the field and retain their existing whole-draft concurrency, execution and storage semantics. The acceptance field must not participate in `draftHash()` or it would change the identity it records.
 
 **Context Window Strategy:** Send only the confirmed hypothesis, its cited requirements/exact source spans, relevant owner notes, and complete owner/user turns needed to construct one test. Do not resend the repository, prior agent answers, or unrelated dialogues. Keep Pi compaction disabled. If the evidence required for grounding cannot fit, fail with the omitted-source reason; do not summarize, truncate, or infer an expected value.
 
@@ -307,7 +305,7 @@ An exact generation cache is optional only if later measurements justify it; key
 
 ## 5. Evaluation Strategy
 
-Phase 3 passes only when the deterministic gates reject every malformed, ungrounded, unobservable, or stale-approved draft and the owner can accept or edit the exact test shown. The generated card is never used to judge its own quality. There is no Phase 3 LLM judge: semantic acceptance belongs to the owner, while Zod and lifecycle checks own machine-verifiable invariants.
+Phase 3 passes only when deterministic generation gates reject malformed, ungrounded or unobservable proposals and the owner can accept or edit the exact one-test definition shown. A stale acceptance is shown as stale review metadata, not used to block an existing multi-card regression run. The generated card is never used to judge its own quality. There is no Phase 3 LLM judge: semantic acceptance belongs to the owner, while Zod and lifecycle checks own machine-verifiable invariants.
 
 ### Dimensions
 
@@ -317,7 +315,7 @@ Phase 3 passes only when the deterministic gates reject every malformed, ungroun
 | Scenario integrity and deterministic knowledge enrichment | **PASS:** every value added from `answers[].reply` to `knows` has a case-insensitive full-token match in authoritative evidence, deduplication preserves supported values, and the final count is at most 20. **FAIL:** generated text grounds itself, a substring such as `103` matches `A103`, a value is invented, or overflow is silently truncated. | Code — `valueTokens()` fixtures and Zod/semantic validation; Human only when the authoritative source itself is disputed. | Critical |
 | Decision-complete one-test contract | **PASS:** the envelope has exactly one concrete card with situation/goal, facts/knows, opening/input, answers, non-empty `successCriteria`, and only necessary `initialState`; the pre-harness metrics contain exactly one agent rubric, `goal_attainment`, whose `passCriteria` equals `successCriteria` verbatim. **FAIL:** the card is broad, incomplete, multi-behavior, contains extra generated rubrics, or lets tone/format substitute for the business goal. | Code — strict Zod schema plus exact count, required-field, reserved-ID, and string-equality assertions. | High |
 | Observable business outcome | **PASS:** the declared check can prove the criterion through the available reply, tool result, exact check, or state snapshot; an action outcome requires tool/state evidence. **FAIL:** the test can pass solely because the assistant says an action succeeded or requires state the harness cannot inspect. | Code for channel/check compatibility; Human for disputed domain observability during acceptance. | Critical |
-| Exact-draft acceptance safety | **PASS:** the complete compact test is shown, `acceptedDraftHash` records that current `draftHash`, every semantic edit/repeat/load clears acceptance, and `start()`/`saveSuite()` reject missing or stale acceptance. **FAIL:** a timestamp, previous version, stale hash, or approval of a run result authorizes the current test. | Code — lifecycle/state-transition tests, stale-hash races, persistence reloads, and run/save rejection assertions. | Critical |
+| Exact-draft acceptance safety | **PASS:** the complete compact one-test proposal is shown and `acceptedDraftHash` records that current `draftHash`; semantic edit preserves the old hash so mismatch is visibly stale, while `freshDraft()` clears it. `start()`/`saveSuite()` remain independent. **FAIL:** a timestamp, previous version, stale hash, or run approval is presented as current owner acceptance. | Code — lifecycle/state-transition tests, stale-hash races, persistence reloads, plus a 15-card unaccepted run/save/load/rerun non-interference sentinel. | Critical |
 | Phase task completion and boundary | **PASS:** the workflow ends with one accepted exact draft or an editable declined draft; accept/edit makes zero model, judge, simulator, target, run, or save calls. **FAIL:** it auto-runs, auto-saves, loses the editable draft, accepts more than one generated test, or consumes model/tool budget during acceptance. | Code — Runtime/TargetSession spies, stored-state assertions, and call/usage counters; Human confirms that accept/edit copy describes the intended action. | High |
 | Human-control clarity | **PASS:** Russian UI copy says that the `тест`/`карточка бизнес-сценария` definition was accepted and that no execution or result verdict occurred; declining preserves control. **FAIL:** copy implies that the agent passed, the result was approved, or the test was saved/run. | Code for required/forbidden wording in rendered output; Human review for ambiguous copy changes. | Medium |
 
@@ -335,13 +333,13 @@ npm ci
 npm run typecheck && npm test
 ```
 
-The Phase 3 regression slice belongs in the existing `test/contracts.test.ts`, `test/pi.test.ts`, `test/experiment.test.ts`, and `test/extension.test.ts` flows. It must cover generated-card validation and repair, deterministic enrichment, acceptance/edit invalidation, persistence reload, and rejection by both run and save gates. No network or live model is required in CI.
+The Phase 3 regression slice belongs in the existing `test/contracts.test.ts`, `test/pi.test.ts`, `test/experiment.test.ts`, and `test/extension.test.ts` flows. It must cover generated-card validation and repair, deterministic enrichment, acceptance/edit stale status, persistence reload, and a 15-card evaluate run/save/load/rerun whose accuracy and scenario count are unchanged without acceptance. No network or live model is required in CI.
 
 ### Reference Dataset
 
 **Size:** Start with 10 labeled fixtures while implementing the first gates; expand to 20 before Phase 3 is considered complete. Keep the set small and add cases only from reproduced failures or owner disputes.
 
-**Composition:** 20 fixtures: 4 grounded minimal happy paths; 4 enrichment/grounding cases (case-insensitive exact match, substring false positive, generated self-grounding, and more than 20 values); 3 one-card/reserved-rubric cases; 3 observation-channel cases (observable reply, valid tool/state evidence, and prose-only action claim); 4 acceptance lifecycle cases (exact accept, stale accept, edit invalidation, and repeat/load invalidation with run/save rejection); and 2 bounded-repair cases (successful repair and visible exhaustion after attempt five). Include Russian and English owner material, an adversarial instruction inside source text, and both text-only and action-taking hypotheses.
+**Composition:** 20 fixtures: 4 grounded minimal happy paths; 4 enrichment/grounding cases (case-insensitive exact match, substring false positive, generated self-grounding, and more than 20 values); 3 one-card/reserved-rubric cases; 3 observation-channel cases (observable reply, valid tool/state evidence, and prose-only action claim); 3 acceptance lifecycle cases (exact accept, stale accept, and fresh-copy clearing); one 15-card unaccepted run/save/load/rerun accuracy sentinel; and 2 bounded-repair cases (successful repair and visible exhaustion after attempt five). Include Russian and English owner material, an adversarial instruction inside source text, and both text-only and action-taking hypotheses.
 
 **Labeling:** Each fixture stores authoritative evidence, the confirmed hypothesis, candidate/repair responses where relevant, and the expected validated card or exact rejection/state transition. Code labels every structural, token, rubric, hash, call-count, and repair result. The agent owner supplies the accept/edit label for hypothesis faithfulness and disputed observation semantics; senior QA reviews all disputes/exhaustions and a small accepted sample. Manual attention is not used to relabel ordinary run results, and no LLM-generated label is treated as ground truth.
 
@@ -358,7 +356,7 @@ The Phase 3 regression slice belongs in the existing `test/contracts.test.ts`, `
 | One-card and rubric contract | The generated envelope has zero/multiple cards, a missing decision field, a reserved-rubric collision, anything other than one pre-harness `goal_attainment`, or `passCriteria !== successCriteria`. | Reject the whole output into the existing bounded repair loop; after attempt five, stop with the specific final reason. Never coerce or publish a partial card. |
 | Grounded answer enrichment | An `answers[].reply` token lacks a case-insensitive full-token match in owner evidence, the candidate uses its own text as evidence, or the deduplicated `knows` set exceeds 20. | Reject to repair. Never use substring matching, silently drop a value, or truncate the set. Ask the owner only when the source evidence is genuinely disputed. |
 | Observable-outcome gate | An action criterion has no tool result/state snapshot/exact check capable of proving the effect, or its only evidence is assistant prose. | Block publication and return the observation mismatch to repair; a text-response criterion may use reply evidence when that is the actual business outcome. |
-| Exact-draft acceptance gate | The displayed/expected hash differs from the current draft, acceptance is absent, or a semantic edit/repeat/load occurred after acceptance. | Reject acceptance, run, and save; show the current test again. A successful edit clears all acceptance fields atomically. |
+| Exact-draft acceptance check | The hash supplied to `acceptDraft()` differs from the current one-test proposal, or the record is not an evaluate/review singleton. | Reject only the acceptance mutation and show the current test again. Preserve old metadata through edit as stale status; clear it in `freshDraft()`. Never block run/save. |
 | Acceptance-only phase boundary | The accept/edit path attempts a model/judge/simulator/target call, run, or regression save. | Block the operation and preserve the editable review draft; Phase 4 owns execution. |
 
 ### Offline (Flywheel)
@@ -368,7 +366,7 @@ The Phase 3 regression slice belongs in the existing `test/contracts.test.ts`, `
 | Grounding/contract rejection reasons and repair-attempt count | Record code validation outcomes for 100% of generation attempts; inspect all exhaustions and a rolling group of 20 completed generations. | Add the smallest reproduced case to the reference fixtures; tighten the existing prompt or shared validator at the common failure point. |
 | Owner edit/decline rate by dimension | Record the owner's normal accept/edit decision for every shown draft; classify only semantic edits to hypothesis, criterion, or observation channel. | If more than 30% of the last 20 drafts need semantic edits, review the generation instruction and the affected labeled fixtures; do not automate acceptance. |
 | Accepted-card semantic defects | Senior QA samples 10% of accepted cards (minimum 2 per 20) and reviews 100% of owner disputes, repair exhaustions, and cards repaired more than once. | Turn each confirmed defect into a fixture and fix the generator/validator; re-show and re-accept affected drafts rather than mutating stored approval. |
-| Stale-acceptance and unaccepted run/save rejections | Count 100% of gate rejections from persisted experiment events; CI exercises every transition. | Expected rejections inform UX copy. Any successful stale/unaccepted run or save is an incident: block release and add its transition as a regression case. |
+| Acceptance status and multi-card non-interference | Count current/stale one-test acceptance states; CI runs an unaccepted 15-card save/load/rerun sentinel and checks full accuracy aggregation. | Any false current-acceptance display or any acceptance-induced change to multi-card run/save/accuracy blocks release. |
 | Phase-boundary cost and calls | Record usage and call counts for 100% of accept/edit operations. | Any model, judge, simulator, or target call during accept/edit blocks release; keep the existing zero-call implementation. |
 
 ---
@@ -377,14 +375,14 @@ The Phase 3 regression slice belongs in the existing `test/contracts.test.ts`, `
 
 **Tracing Tool:** Existing persisted `Experiment` checkpoints, source/provenance fields, stable draft hashes, usage counters, and evidence/artifact exports. The optional `AGENT_LAB_DEBUG_DIR` retains rejected raw generation output locally with mode `0600` only during diagnosis. No tracing service, dashboard, or new dependency is introduced.
 
-**Key Metrics to Track:** final card-contract validity; grounding and observation rejection reason; attempts per accepted draft and repair exhaustion; owner accept/edit/decline outcome; current versus accepted hash; invalidated acceptances; blocked run/save attempts; model/tool calls during accept/edit; generation latency, tokens, and provider-reported cost when available.
+**Key Metrics to Track:** final card-contract validity; grounding and observation rejection reason; attempts per accepted draft and repair exhaustion; owner accept/edit/decline outcome; current versus accepted hash; stale review facts; 15-card run/save/load/rerun accuracy non-interference; model/tool calls during accept/edit; generation latency, tokens, and provider-reported cost when available.
 
 **Alert Thresholds:**
 
 | Signal | Threshold | Response |
 |--------|-----------|----------|
 | Critical invariant escaped into an accepted or saved card | Any occurrence | Block release/use, preserve the evidence record, invalidate acceptance, and add the case to CI. |
-| Run/save passed without `acceptedDraftHash === draftHash(record)` | Any occurrence | Treat as a lifecycle incident and disable that path until its regression test passes. |
+| Acceptance metadata changes multi-card run/save/load/rerun or accuracy | Any occurrence | Block release and restore the existing execution/storage contract; keep acceptance as a presentation-only review fact. |
 | Calls during accept/edit | Any model, judge, simulator, or target call | Block release; acceptance must remain local and zero-cost. |
 | Repair exhaustion | More than 2 of the last 20 generations, or 3 consecutive exhaustions | Inspect recorded rejection reasons and update the smallest shared prompt/validator plus fixtures. |
 | Repair pressure | Median attempts greater than 2 over the last 20 generations | Review the dominant deterministic rejection reason before changing models. |
