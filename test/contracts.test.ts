@@ -237,6 +237,9 @@ test('external world state is opaque, size-bounded and never part of the sandbox
 
 test('simulator checks, release hooks, release logs and prompt quotes have schemas', () => {
   assert.deepEqual([...SIMULATOR_CHECK_IDS], ['simulator_leak', 'simulator_fabrication', 'simulator_loop']);
+  const reserved = { id: 'simulator_leak', kind: 'answer_contains', description: 'collision', value: 'ok' };
+  assert.throws(() => validatePreparation(preparation([card({ checks: [reserved] })]), [source], 'evaluate'), /reserved for simulator checks/);
+  assert.equal(experimentSchema.safeParse({ ...legacyRecord(), scenarios: [{ ...card({ checks: [reserved] }), split: 'dev' }] }).success, false);
   const trial = trialSchema.parse({ id: 't', revisionId: 'r', scenarioId: 's', familyId: 'f', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], events: [],
     initialState: { records: {}, writableFields: [], transientFailures: 0 }, finalState: { records: {}, writableFields: [], transientFailures: 0 }, usage: emptyUsage(), elapsedMs: 1,
     simulatorChecks: [{ id: 'simulator_leak', description: 'd', passed: false, evidence: 'e', seq: 3, heuristic: false }] });

@@ -356,7 +356,10 @@ export class ExperimentLab {
       if (input.reviewedDialogue && ![...input.note.matchAll(/#(\d+)\b/g)].some(match => trial.events.some(event => event.seq === Number(match[1])))) {
         throw new Error('Полный разбор должен ссылаться на событие текущего диалога.');
       }
-      if (input.checkId && !trial.checks.some(c => c.id === input.checkId) && !trial.simulatorChecks?.some(c => c.id === input.checkId)) throw new Error('Такой объективной проверки или проверки симулятора в этом диалоге нет.');
+      const objectiveCheck = input.checkId && trial.checks.some(c => c.id === input.checkId);
+      const simulatorCheck = input.checkId && trial.simulatorChecks?.some(c => c.id === input.checkId);
+      if (objectiveCheck && simulatorCheck) throw new Error('ID проверки неоднозначен: он занят объективной проверкой и проверкой симулятора.');
+      if (input.checkId && !objectiveCheck && !simulatorCheck) throw new Error('Такой объективной проверки или проверки симулятора в этом диалоге нет.');
       const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
       if (input.metricId && !scenario?.metrics?.some(m => m.id === input.metricId)) throw new Error('Такой рубрики в этой карточке нет.');
       (record.humanReviews ??= []).push({ ...input, id: randomUUID(), createdAt: new Date().toISOString() });

@@ -591,6 +591,11 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   evaluatorVersion: text.optional(), targetRelease: text.max(200).optional(),
   sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(40), humanReviews: z.array(humanReviewSchema).max(1000) }).optional(),
 }).superRefine((record, ctx) => {
+  record.scenarios.forEach((scenario, index) => {
+    if (scenario.checks.some(check => (SIMULATOR_CHECK_IDS as readonly string[]).includes(check.id))) {
+      ctx.addIssue({ code: 'custom', path: ['scenarios', index, 'checks'], message: 'ID объективной проверки зарезервирован для проверки симулятора.' });
+    }
+  });
   record.humanReviews.forEach((review, index) => {
     if (!review.reviewedDialogue) return;
     const trial = record.trials.find(candidate => candidate.id === review.trialId);
@@ -720,6 +725,7 @@ export function validatePreparation(raw: unknown, sources: Source[], workflow: '
       throw new Error(`Scenario ${s.id} needs success criteria and an explicit follow-up limit`);
     }
     requireUnique(s.checks.map(c => c.id), 'check IDs');
+    if (s.checks.some(check => (SIMULATOR_CHECK_IDS as readonly string[]).includes(check.id))) throw new Error(`Scenario ${s.id}: check ID is reserved for simulator checks`);
     requireUnique((s.metrics ?? []).map(m => m.id), 'metric IDs');
     if (!s.checks.length && !s.metrics?.length) throw new Error(`Scenario ${s.id} has no evaluation criteria`);
     if (s.requirementIds.some(id => !p.requirements.some(r => r.id === id))) throw new Error(`Unknown requirement in ${s.id}`);

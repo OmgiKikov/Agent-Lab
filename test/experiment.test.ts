@@ -770,6 +770,14 @@ test('human verdicts may target simulator checks, reassessment recomputes them, 
   assert.ok(clarified.simulatorChecks!.length >= 2);
   await lab.addHumanReview(record.id, { trialId: clarified.id, checkId: 'simulator_loop', verdict: 'fail', note: 'looked like a loop to me' });
   await assert.rejects(lab.addHumanReview(record.id, { trialId: clarified.id, checkId: 'simulator_missing', verdict: 'fail', note: 'x' }), /проверки симулятора/);
+  const get = lab.store.get.bind(lab.store);
+  lab.store.get = async id => {
+    const loaded = await get(id);
+    if (id === record.id) loaded.trials.find(t => t.id === clarified.id)!.checks.push({ id: 'simulator_loop', description: 'legacy collision', passed: false, evidence: '' });
+    return loaded;
+  };
+  await assert.rejects(lab.addHumanReview(record.id, { trialId: clarified.id, checkId: 'simulator_loop', verdict: 'pass', note: 'ambiguous legacy target' }), /неоднозначен/);
+  lab.store.get = get;
   const reassessed = await lab.reassess(record.id, { codeOnly: true }); await lab.waitForIdle();
   const again = (await lab.get(reassessed.id)).trials.find(t => t.id === clarified.id)!;
   assert.deepEqual(again.simulatorChecks, clarified.simulatorChecks);
