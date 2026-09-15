@@ -77,7 +77,7 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
     const stateConfirms = input.trial.observation?.state !== undefined && input.trial.observation.state !== 'missing'
       && input.scenario.checks.some(check => check.kind === 'state_equals'
         && input.trial.checks.some(result => result.id === check.id && result.passed));
-    const unsupportedGoal = row.metricId === 'goal_attainment' && result === 'pass' && !stateConfirms && !toolConfirms;
+    const unsupportedGoal = row.metricId === 'goal_attainment' && result !== 'unknown' && !stateConfirms && !toolConfirms;
     if (unsupportedGoal) result = 'unknown';
     return validateAssessments(metrics.filter(m => m.id === row.metricId), input.trial.events, [{ ...row, result,
       ...(unsupportedGoal ? { rationale: 'Достижение цели не подтверждено наблюдаемым эффектом или точной проверкой; слова агента оцениваются отдельно.' } : {}),

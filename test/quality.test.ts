@@ -151,7 +151,8 @@ test('score brief falls back to a decisive unknown and otherwise returns the str
   });
   assert.equal(mixed.status, 'ready');
   if (mixed.status === 'ready') {
-    assert.match(mixed.hypothesis, /Ответ не объясняет следующий шаг/);
+    assert.match(mixed.hypothesis, /НЕЯСНО.*Нет наблюдаемого результата действия/);
+    assert.doesNotMatch(mixed.hypothesis, /Ответ не объясняет следующий шаг/);
     assert.match(mixed.unknowns.join('\n'), /результат действия.*goal_attainment — НЕЯСНО/s);
   }
 

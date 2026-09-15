@@ -126,11 +126,11 @@ test('missing action evidence cannot be replaced by agent self-attestation while
   assert.equal(informational.find(value => value.metricId === 'goal_attainment')!.result, 'unknown', 'semantic goal attainment stays undecided without an objective check');
   assert.equal(informational.find(value => value.metricId === 'reply_quality')!.result, 'pass', 'reply quality remains independently assessable');
 
-  const refused = await assessRepeated({ ...input, scenario: { ...actionScenario, metrics: [{ ...goalAttainment }] }, trial: actionTrial }, model,
+  const unsupportedFailure = await assessRepeated({ ...input, scenario: { ...actionScenario, metrics: [{ ...goalAttainment }] }, trial: actionTrial }, model,
     { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => JSON.stringify({ assessments: [{
       metricId: 'goal_attainment', passCondition: 'not_met', failCondition: 'met', rationale: 'Агент отказался выполнять запрос.', evidence: [1], citations: [{ seq: 1, quote: 'Готово' }],
     }] }));
-  assert.equal(refused[0]!.result, 'fail', 'an observed refusal can still prove goal failure');
+  assert.equal(unsupportedFailure[0]!.result, 'unknown', 'assistant prose cannot prove action failure either');
 
   const toolScenario: Scenario = { ...actionScenario, checks: [{ id: 'created', kind: 'tool_called', tool: 'create_ticket', description: 'Создание заявки вызвано' }], metrics: [{ ...goalAttainment }] };
   const failedTool = await assessRepeated({ ...input, scenario: toolScenario, trial: { ...actionTrial,
