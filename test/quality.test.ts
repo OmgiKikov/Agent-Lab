@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { rm } from 'node:fs/promises';
-import { qualityLines, qualitySummary, plural, scoreBrief, shorten, testPlanLines } from '../src/quality.js';
+import { qualityLines, qualitySummary, plural, scoreBrief, shorten, testPlanLines, trialProofLines } from '../src/quality.js';
 import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
 import { draftHash } from '../src/experiment.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
@@ -82,6 +82,36 @@ test('acceptance projection rejects ambiguous drafts and names tool/state observ
   const state = testPlanLines(stateRecord);
   assert.match(state.lines.join('\n'), /Исходное состояние: \{"A":\{"status":"new"\}\}/);
   assert.match(state.lines.join('\n'), /НАБЛЮДЕНИЕ\n  итоговое состояние \(state\)/);
+});
+
+test('trial proof preserves passing and failing dialogue evidence with exact citation ids', () => {
+  const fullReply = `Полный ответ\n${'важная деталь '.repeat(120)}`;
+  const passedTrial = { ...trial('pass_trial', 'a', 'pass', 'pass'), reason: 'Цель достигнута.',
+    events: [{ seq: 2, type: 'assistant' as const, text: fullReply }, { seq: 0, type: 'user' as const, text: 'Исходный вопрос' }],
+    checks: [{ id: 'time', description: 'Время изменено точно', passed: true, evidence: 'A.time = 1' }],
+    assessments: [{ metricId: 'goal', result: 'pass' as const, rationale: 'Ответ и состояние подтверждают успех.', evidence: [2] }],
+  };
+  const passedRecord = record({ scenarios: [scenario('a')], trials: [passedTrial] });
+  const before = JSON.stringify(passedRecord);
+  const passed = trialProofLines(passedRecord, passedTrial.id);
+  const passText = passed.lines.join('\n');
+  assert.deepEqual({ trialId: passed.trialId, scenarioId: passed.scenarioId, outcome: passed.outcome, reason: passed.reason },
+    { trialId: 'pass_trial', scenarioId: 'a', outcome: 'pass', reason: 'Цель достигнута.' });
+  assert.ok(passText.indexOf('#0 ПОЛЬЗОВАТЕЛЬ') < passText.indexOf('#2 АГЕНТ'), 'dialogue is ordered by persisted seq');
+  assert.ok(passText.includes(fullReply.replace('\n', '\n  ')), 'assistant meaning is not truncated');
+  assert.match(passText, /PASS \[time\] Время изменено точно\n  Доказательство: A\.time = 1/);
+  assert.match(passText, /PASS \[goal\] Цель выполнена · события: #2\n  Обоснование: Ответ и состояние подтверждают успех\./);
+  assert.equal(JSON.stringify(passedRecord), before, 'projection is pure');
+
+  const failedTrial = { ...trial('fail_trial', 'a', 'fail', 'fail'), reason: 'Осталось старое время.',
+    assessments: [{ metricId: 'goal', result: 'fail' as const, rationale: 'Ответ #1 не достиг цели.', evidence: [1] }] };
+  const failed = trialProofLines(record({ scenarios: [scenario('a')], trials: [failedTrial] }), failedTrial.id);
+  const failText = failed.lines.join('\n');
+  assert.equal(failed.outcome, 'fail');
+  assert.match(failText, /Исход: fail\nПричина: Осталось старое время\./);
+  assert.match(failText, /FAIL \[time\] Время изменено\n  Доказательство: осталось 0/);
+  assert.match(failText, /FAIL \[goal\] Цель выполнена · события: #1/);
+  assert.throws(() => trialProofLines(passedRecord, 'missing'), /не найден/);
 });
 
 test('the first screen counts cards, criteria and causes from the shared outcome rules and names what a person still has to look at', () => {

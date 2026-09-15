@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { ExperimentLab, draftHash, resultHash } from '../dist/experiment.js';
 import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, goldenCaseSchema, clarificationSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput } from '../dist/contracts.js';
 import { awaitingVerdict, evidenceSummary, plannedTrials } from '../dist/comparison.js';
-import { qualityLines, qualitySummary, scoreBrief, testPlanLines, type ScoreBrief } from '../dist/quality.js';
+import { qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
 import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
@@ -26,6 +26,10 @@ const toolDisplay: Pick<ToolDefinition, 'renderCall' | 'renderResult'> = {
     try {
       const data = JSON.parse(raw);
       if (data.brief) return new Text(theme.fg('text', safeText([data.scoreState, data.brief].filter(Boolean).join('\n\n'))), 0, 0);
+      if (data.proofs?.length) return new Text(theme.fg('text', safeText([
+        data.error ?? data.quality?.headline ?? data.evidence?.verdict?.headline,
+        ...data.proofs.map((proof: { lines: string[] }) => proof.lines.join('\n')),
+      ].filter(Boolean).join('\n\n'))), 0, 0);
       const title = data.error ?? (data.phase === 'review' ? data.message ?? `Готово ${data.scenarioCount} сценариев. Посмотрите их перед запуском.`
         : data.quality?.headline ?? data.evidence?.verdict?.headline ?? data.message ?? 'Доказательства прочитаны.');
       const lines = [title, ...(data.quality?.causes?.slice(0, 3).map((c: { name: string; dialogues: number }, i: number) => `${i + 1}. ${c.name} — ${c.dialogues}`) ?? []), ...(data.quality?.queue ? [data.quality.queue] : [])];
@@ -394,7 +398,8 @@ export default function agentLab(pi: ExtensionAPI) {
         await lab.waitForIdle(); await progress();
         const record = await lab.get(draft.id);
         const bundle = await evidenceBundle(record, lab.store);
-        const output = { ...summary(record, lab.store.directory), comparison: bundle.comparison, artifacts: await exportArtifacts(bundle, lab.store.directory) };
+        const output = { ...summary(record, lab.store.directory), proofs: record.trials.map(trial => trialProofLines(record, trial.id)),
+          comparison: bundle.comparison, artifacts: await exportArtifacts(bundle, lab.store.directory) };
         returnToBoard(ctx, record.id);
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
       } finally { clearInterval(timer); signal.removeEventListener('abort', cancel); await polling; await close(); }

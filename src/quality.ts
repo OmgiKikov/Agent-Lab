@@ -58,9 +58,21 @@ export interface TestPlanLines {
   draftHash: string;
 }
 
+export interface TrialProofLines {
+  trialId: string;
+  scenarioId: string;
+  outcome: Trial['outcome'];
+  reason: string;
+  lines: string[];
+}
+
 const planText = (value: string): string => value.replace(/\r\n?/g, '\n').replace(/\t/g, '  ')
   .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '');
 const field = (label: string, value: string): string[] => [label, ...planText(value).split('\n').map(line => `  ${line}`)];
+const labelled = (label: string, value: string): string[] => {
+  const [first = '', ...rest] = planText(value).split('\n');
+  return [`${label}${first}`, ...rest.map(line => `  ${line}`)];
+};
 
 /** The exact one-test proposal shown before the owner accepts its definition. */
 export function testPlanLines(record: Experiment): TestPlanLines {
@@ -92,6 +104,50 @@ export function testPlanLines(record: Experiment): TestPlanLines {
       `Версия: ${hash.slice(0, 12)}`,
       '',
       'Этот тест действительно проверяет нужное поведение?',
+    ],
+  };
+}
+
+/** Compact proof copied only from one persisted dialogue and its saved test definition. */
+export function trialProofLines(record: Experiment, trialId: string): TrialProofLines {
+  const trial = record.trials.find(item => item.id === trialId);
+  if (!trial) throw new Error(`Диалог ${trialId} не найден.`);
+  const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
+  if (!scenario) throw new Error(`Тест ${trial.scenarioId} для диалога ${trial.id} не найден.`);
+  const turns = trial.events.filter(event => event.type === 'user' || event.type === 'assistant').sort((a, b) => a.seq - b.seq)
+    .flatMap(event => labelled(`#${event.seq} ${event.type === 'user' ? 'ПОЛЬЗОВАТЕЛЬ' : 'АГЕНТ'}: `, assessmentEventContent(event)));
+  const checks = trial.checks.flatMap(check => [
+    ...labelled(`${check.passed ? 'PASS' : 'FAIL'} [${check.id}] `, check.description),
+    ...labelled('  Доказательство: ', check.evidence || '—'),
+  ]);
+  const rubrics = (trial.assessments ?? []).flatMap(assessment => {
+    const name = scenario.metrics?.find(metric => metric.id === assessment.metricId)?.name ?? assessment.metricId;
+    const citations = assessment.evidence.length ? assessment.evidence.map(seq => `#${seq}`).join(', ') : '—';
+    return [
+      ...labelled(`${assessment.result.toUpperCase()} [${assessment.metricId}] `, `${name} · события: ${citations}`),
+      ...labelled('  Обоснование: ', assessment.rationale),
+    ];
+  });
+  return {
+    trialId: trial.id,
+    scenarioId: scenario.id,
+    outcome: trial.outcome,
+    reason: trial.reason,
+    lines: [
+      'ДОКАЗАТЕЛЬСТВО',
+      `Тест: ${planText(scenario.id)} · ${planText(scenario.title)}`,
+      `Диалог: ${planText(trial.id)}`,
+      `Исход: ${trial.outcome}`,
+      ...labelled('Причина: ', trial.reason),
+      '',
+      'РЕПЛИКИ',
+      ...(turns.length ? turns : ['—']),
+      '',
+      'ПРОВЕРКИ',
+      ...(checks.length ? checks : ['—']),
+      '',
+      'ОЦЕНКИ',
+      ...(rubrics.length ? rubrics : ['—']),
     ],
   };
 }

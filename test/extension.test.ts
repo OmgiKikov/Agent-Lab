@@ -80,6 +80,15 @@ test('conversation runs only the confirmed plan, then saves and loads the same c
   const result = await call('agent_lab_run', { id: draft.id, expectedHash: draft.draftHash });
   assert.equal(result.phase, 'results_review'); assert.equal(result.trialCount, 1);
   assert.equal(result.reviewMode, 'automated'); assert.deepEqual(result.humanReviews, []);
+  assert.equal(result.proofs.length, 1);
+  const proof = result.proofs[0];
+  const proofText = proof.lines.join('\n');
+  assert.equal(proof.trialId, (await call('agent_lab_inspect', { id: draft.id })).trials[0].id);
+  assert.match(proofText, /^ДОКАЗАТЕЛЬСТВО\nТест:/);
+  assert.match(proofText, /Диалог: .*\nИсход: (pass|fail|unknown|invalid|ungraded|cancelled)/);
+  assert.match(proofText, /РЕПЛИКИ\n#0 ПОЛЬЗОВАТЕЛЬ: [^\n]+\n#\d+ АГЕНТ:/);
+  assert.match(proofText, /ПРОВЕРКИ\n(?:PASS|FAIL) \[/);
+  assert.match(proofText, /ОЦЕНКИ\n(?:PASS|FAIL|UNKNOWN) \[[^\]]+\].*события: #\d+/);
   assert.match(plans[1]!, /Запуск не означает/); assert.match(plans[1]!, /20 вызовов/);
   const inspection = await call('agent_lab_inspect', { id: draft.id });
   const ids = [inspection.scenarios[0].id];
