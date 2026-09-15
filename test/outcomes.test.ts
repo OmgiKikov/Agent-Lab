@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { emptyUsage, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
-import { agentRubricResult, automaticTrialResult, trialAssessmentComplete } from '../src/outcomes.js';
+import { agentRubricResult, automaticTrialResult, latestHumanReviews, trialAssessmentComplete } from '../src/outcomes.js';
 
 const rubric = (id: string) => ({
   id, name: id, subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f',
@@ -54,4 +54,21 @@ test('human criterion verdicts determine whether rubric assessment is complete',
   assert.equal(trialAssessmentComplete(scenario, incomplete, [review('unknown', 'prompt_compliance')]), false);
   assert.equal(trialAssessmentComplete(scenario, incomplete, [review('unknown', 'prompt_compliance'), review('pass', 'prompt_compliance', '2026-09-15T11:00:00Z')]), true);
   assert.equal(trialAssessmentComplete(scenario, incomplete, [review('pass', 'prompt_compliance'), review('unknown', 'prompt_compliance', '2026-09-15T11:00:00Z')]), false);
+});
+
+test('persisted append order determines the latest review even when timestamps move backwards', () => {
+  assert.equal(agentRubricResult(scenario, trial, [
+    review('fail', 'prompt_compliance', '2026-09-15T12:00:00+03:00'),
+    review('pass', 'prompt_compliance', '2026-09-15T10:00:00Z'),
+  ]), 'pass', 'ISO offsets do not define persisted review order');
+  assert.equal(agentRubricResult(scenario, trial, [
+    review('fail', 'prompt_compliance', '2026-09-15T11:00:00Z'),
+    review('pass', 'prompt_compliance', '2026-09-15T09:00:00Z'),
+  ]), 'pass', 'a system-clock rollback does not restore an older verdict');
+
+  const whole = latestHumanReviews({ trials: [trial], humanReviews: [
+    { id: 'whole-marked', trialId: trial.id, verdict: 'unknown', note: '#1: complete', reviewedDialogue: true, createdAt: '2026-09-15T12:00:00Z' },
+    { id: 'whole-newer', trialId: trial.id, verdict: 'unknown', note: '#1: revised', createdAt: '2026-09-15T09:00:00Z' },
+  ] }).get(`${trial.id}|dialogue`);
+  assert.equal(whole?.reviewedDialogue, undefined, 'a newer unmarked whole-dialogue review revokes the marker');
 });

@@ -24,7 +24,7 @@ export function observedRecord(record: Experiment): Experiment {
 export function latestHumanReviews(record: Pick<Experiment, 'trials' | 'humanReviews'>): Map<string, HumanReview> {
   const latest = new Map<string, HumanReview>();
   const trials = new Set(record.trials.map(t => t.id));
-  for (const review of [...record.humanReviews].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+  for (const review of record.humanReviews) {
     if (!trials.has(review.trialId)) continue;
     latest.set(`${review.trialId}|${review.metricId ? `metric:${review.metricId}` : review.checkId ? `check:${review.checkId}` : 'dialogue'}`, review);
   }
