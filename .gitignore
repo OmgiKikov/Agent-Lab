@@ -2,6 +2,11 @@ node_modules/
 dist/
 .agent-lab/
 .context/
+.walk/
+.gsd/
+.planning/milestone.lock
+.planning/state.json
+.planning/research/.cache/
 *.tgz
 .env
 .DS_Store
