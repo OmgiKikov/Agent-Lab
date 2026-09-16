@@ -114,6 +114,7 @@ test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-ca
   assert.deepEqual(captured?.settings.userModes, ['reactive']);
   assert.equal(captured?.settings.maxTurns, 6);
   assert.equal(captured?.settings.maxCalls, 385);
+  assert.equal(captured?.settings.timeoutMs, 600000, 'grounding ten materials with a small model takes longer than the two-minute default');
   assert.equal(result.validation.sourceDialogues, 300);
   assert.equal(result.validation.candidateDialogues, 40);
   assert.equal(result.validation.sampledDialogues, 15);

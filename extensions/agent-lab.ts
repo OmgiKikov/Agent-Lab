@@ -355,6 +355,8 @@ export default function agentLab(pi: ExtensionAPI) {
           maxCalls: operation === 'score' ? scoreMaxCalls : operation === 'validate' ? Math.max(140, 2 * parsedDialogues.length + 19 * validationCount + 20) : 20,
           maxDurationMs: operation === 'score' ? scoreMaxDurationMs : operation === 'validate' ? Math.max(180_000, 180_000 * parsedDialogues.length) : 180_000,
           ...(mode === 'live' ? { judge: DEFAULT_JUDGE } : {}),
+          // Grounding many materials and judging real dialogues with a small model routinely exceeds the two-minute default per call.
+          ...(operation === 'validate' || operation === 'score' ? { timeoutMs: 600_000 } : {}),
           ...supplied,
           ...(operation === 'validate' ? { maxTurns: 6, userModes: ['reactive'] } : {}),
           provider: supplied.provider || ctx.model?.provider || '', model: supplied.model || ctx.model?.id || '' },
