@@ -586,6 +586,6 @@ test('the headline names only non-zero leftovers, exclusions sit next to the num
       { dialogueId: 'b', kind: 'customer_data', reason: 'нужна заявка клиента' },
       { dialogueId: 'c', kind: 'length', reason: 'нужны 1–16 реплик клиента' },
     ] }));
-    assert.equal(excluded.coverage, 'Не вошли в набор 3 диалога: нужны данные клиента — 2, прочее — 1. В accuracy они не считаются.');
+    assert.equal(excluded.coverage, 'Не вошли в набор 3 диалога: нужны данные клиента — 2, слишком длинный диалог или нет реплик клиента — 1. В accuracy они не считаются.');
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });

@@ -713,7 +713,7 @@ test('validation grounds expectations and user facts, uses reactive turns, exclu
     { dialogueId: 'masked', kind: 'masked', reason: 'реплика клиента целиком скрыта обезличиванием' },
     { dialogueId: 'customer', kind: 'customer_data', reason: 'Нужна персональная ставка клиента.' },
   ]);
-  assert.equal(qualityLines(qualitySummary(draft)).coverage, 'Не вошли в набор 2 диалога: нужны данные клиента — 1, скрыты обезличиванием — 1. В accuracy они не считаются.');
+  assert.equal(qualityLines(qualitySummary(draft)).coverage, 'Не вошли в набор 2 диалога: нужны данные клиента — 1, реплика клиента скрыта — 1. В accuracy они не считаются.');
   assert.equal(attempts.has('masked'), false, 'masked-only turns never reach the model');
   assert.equal(attempts.get('real_1'), 2, 'one transient transport failure is retried once');
   assert.ok(maxActiveGoals >= 4, `recorded dialogues are read in wide parallel batches, saw ${maxActiveGoals}`);

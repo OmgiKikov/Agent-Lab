@@ -5,9 +5,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type MetricAssessment, type Scenario, type Trial, type ValidationExclusion } from '../src/contracts.js';
-import { buildResultView, resultViewLines, wilson } from '../src/result-view.js';
-import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
+import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type MetricAssessment, type Trial, type ValidationExclusion } from '../src/contracts.js';
+import { buildResultView, NOT_MEASURED_TEXT, resultViewLines, wilson } from '../src/result-view.js';
+import { NOT_MEASURED_CODES, type NotMeasuredCode } from '../src/comparison.js';
+import { AGREED_RATIONALE_PREFIX, GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { ExperimentStore } from '../src/store.js';
 
 const world = { records: {}, writableFields: [], transientFailures: 0 };
@@ -174,4 +175,135 @@ test('CLI summary prints the ResultView block first, from the built dist', { tim
     assert.ok(lines.includes('Подробности:'));
     assert.ok(!stdout.includes('Бизнес-цель достигнута'), 'the old headline with another denominator is gone');
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+// ---- One test per not-measured reason: a minimal card that yields exactly that code. ----
+const SPLIT = `${SPLIT_RATIONALE_PREFIX} pass / fail. Основания каждой оценки сохранены в judgeAudit.`;
+const review = (trialId: string, verdict: HumanReview['verdict'], target: { metricId?: string; checkId?: string } = {}): HumanReview =>
+  ({ id: `h-${trialId}-${verdict}-${target.metricId ?? target.checkId ?? 'dialogue'}`, trialId, verdict, note: 'n', createdAt: '2026-09-17T00:00:00Z', ...target });
+const leak = { id: 'simulator_leak' as const, description: 'утечка', passed: false, evidence: '#2', heuristic: true };
+
+/** One card `c` next to one decided card; returns the view and asserts `c` got exactly `code`. */
+function expectReason(code: NotMeasuredCode, subject: Card, trials: Trial[], overrides: Partial<Experiment> = {}) {
+  const record = run([subject, card('decided')], [...trials, attempt('decided', { goal: 'fail' })], overrides);
+  const view = buildResultView(record);
+  const row = view.cards.find(item => item.scenarioId === subject.id);
+  assert.equal(row?.outcome, 'unknown');
+  assert.equal(row?.reason, code);
+  assert.equal(view.headline.decided, 1, 'the unmeasured card never enters the denominator');
+  if (code !== 'in_progress') {
+    assert.deepEqual(view.notMeasured.reasons, [{ code, label: NOT_MEASURED_TEXT[code], count: 1, scenarioIds: [subject.id] }]);
+    assert.ok(resultViewLines(view).includes(`Не измерено: 1 — ${NOT_MEASURED_TEXT[code]}.`));
+  }
+  return view;
+}
+
+test('every reason code has a Russian label and the list keeps its fixed order', () => {
+  assert.equal(NOT_MEASURED_CODES.length, 18);
+  assert.deepEqual(Object.keys(NOT_MEASURED_TEXT), [...NOT_MEASURED_CODES]);
+  assert.ok(Object.values(NOT_MEASURED_TEXT).every(label => /^[а-яё]/u.test(label)));
+});
+
+test('reason in_progress: a running phase without an attempt is pending, not unmeasured', () => {
+  const view = expectReason('in_progress', card('c'), [], { phase: 'evaluating' });
+  assert.equal(view.pending, 1);
+  assert.equal(view.notMeasured.total, 0);
+  assert.ok(resultViewLines(view).includes('Ещё проверяется: 1.'));
+});
+
+test('reason not_reached: a finished run without an attempt for the card', () => {
+  expectReason('not_reached', card('c'), []);
+});
+
+test('reason stopped: a cancelled dialogue', () => {
+  expectReason('stopped', card('c'), [attempt('c', { outcome: 'cancelled', reason: 'Диалог остановлен.', assessments: undefined })]);
+});
+
+test('reason turn_limit: the dialogue ran out of turns', () => {
+  expectReason('turn_limit', card('c'), [attempt('c', { outcome: 'invalid', reason: 'Разговор не завершился в отведённое число реплик. Состояние внешний агент не сообщил.', assessments: undefined })]);
+});
+
+test('reason simulator_error: the simulated user failed', () => {
+  expectReason('simulator_error', card('c'), [attempt('c', { outcome: 'invalid', reason: 'реплика симулированного пользователя: timeout', assessments: undefined })]);
+});
+
+test('reason agent_error: the agent or the connection failed', () => {
+  expectReason('agent_error', card('c'), [attempt('c', { outcome: 'invalid', reason: 'ответ испытуемого: HTTP 500', assessments: undefined })]);
+});
+
+test('reason attempts_mismatch: the attempt belongs to another plan', () => {
+  expectReason('attempts_mismatch', card('c'), [attempt('c', { manifestHash: 'other' })]);
+});
+
+test('reason judge_error: the judge answer was rejected', () => {
+  expectReason('judge_error', card('c'), [attempt('c', { assessmentError: 'Judge response rejected; original responses and errors are preserved in judgeAudit' })]);
+});
+
+test('reason judge_stopped: assessment cancelled or out of budget', () => {
+  expectReason('judge_stopped', card('c'), [attempt('c', { assessmentError: 'Metric assessment cancelled' })]);
+  expectReason('judge_stopped', card('c'), [attempt('c', { assessmentError: 'Model call budget exhausted.' })]);
+});
+
+test('reason human_invalid: a person marked the dialogue or the goal verdict invalid', () => {
+  expectReason('human_invalid', card('c'), [attempt('c')], { humanReviews: [review('t-c', 'invalid')] });
+  expectReason('human_invalid', card('c'), [attempt('c', { goal: 'unknown' })], { humanReviews: [review('t-c', 'invalid', { metricId: 'goal_attainment' })] });
+});
+
+test('reason reset_unconfirmed: the agent did not confirm the external reset', () => {
+  expectReason('reset_unconfirmed', card('c', { initialState: { ...world, external: { account: 'a1' } } }), [attempt('c')]);
+});
+
+test('reason simulator_deviated: a failed simulator check or a failed fidelity vote', () => {
+  expectReason('simulator_deviated', card('c'), [attempt('c', { simulatorChecks: [leak] })]);
+  expectReason('simulator_deviated', card('c'), [attempt('c', { fidelity: 'fail' })]);
+  const overruled = buildResultView(run([card('c')], [attempt('c', { simulatorChecks: [leak] })], { humanReviews: [review('t-c', 'pass', { checkId: 'simulator_leak' })] }));
+  assert.equal(overruled.cards[0]?.outcome, 'pass', 'a human overruling the check restores the verdict');
+});
+
+test('reason simulator_unclear: the fidelity vote is unknown or missing', () => {
+  expectReason('simulator_unclear', card('c'), [attempt('c', { fidelity: 'unknown' })]);
+  const missing = attempt('c');
+  missing.assessments = missing.assessments!.filter(item => item.metricId !== 'user_fidelity');
+  expectReason('simulator_unclear', card('c'), [missing]);
+});
+
+test('reason human_unknown: a person could not decide the goal', () => {
+  expectReason('human_unknown', card('c'), [attempt('c', { goal: 'unknown' })], { humanReviews: [review('t-c', 'unknown', { metricId: 'goal_attainment' })] });
+});
+
+test('reason not_judged: no goal assessment, or a code-only reassessment', () => {
+  const unjudged = attempt('c');
+  unjudged.assessments = unjudged.assessments!.filter(item => item.metricId !== 'goal_attainment');
+  expectReason('not_judged', card('c'), [unjudged]);
+  expectReason('not_judged', card('c'), [attempt('c', { assessmentError: 'Только точные проверки; рубрики не переоценивались.' })]);
+});
+
+test('reason judge_split: the two goal votes disagreed', () => {
+  expectReason('judge_split', card('c'), [attempt('c', { goal: 'unknown', goalRationale: SPLIT })]);
+});
+
+test('reason no_evidence: an agreed unsupported goal is not an unclear rule', () => {
+  expectReason('no_evidence', card('c'), [attempt('c', { goal: 'unknown', goalRationale: `${AGREED_RATIONALE_PREFIX} ${GOAL_UNSUPPORTED_RATIONALE}` })]);
+  expectReason('no_evidence', card('c'), [attempt('c', { goal: 'unknown', goalRationale: GOAL_UNSUPPORTED_RATIONALE })]);
+});
+
+test('reason judge_unclear: the goal stayed unknown for any other reason', () => {
+  expectReason('judge_unclear', card('c'), [attempt('c', { goal: 'unknown', goalRationale: `${AGREED_RATIONALE_PREFIX} Условие не проверялось.` })]);
+});
+
+test('reason agent_error also names a legacy card without the goal rubric', () => {
+  expectReason('agent_error', card('c', { metrics: [{ ...replyQuality }] }), [attempt('c', { outcome: 'invalid', reason: 'открытие сессии с испытуемым: ECONNREFUSED', assessments: undefined })]);
+});
+
+test('reason simulator_deviated wins over judge_split on the same card', () => {
+  expectReason('simulator_deviated', card('c'), [attempt('c', { fidelity: 'fail', goal: 'unknown', goalRationale: SPLIT })]);
+});
+
+test('reasons with equal counts keep the fixed order and the line names the earlier one', () => {
+  const record = run([card('split'), card('unclear'), card('decided')], [
+    attempt('split', { goal: 'unknown', goalRationale: SPLIT }), attempt('unclear', { fidelity: 'unknown' }), attempt('decided', { goal: 'pass' }),
+  ]);
+  const view = buildResultView(record);
+  assert.deepEqual(view.notMeasured.reasons.map(reason => reason.code), ['simulator_unclear', 'judge_split']);
+  assert.ok(resultViewLines(view).includes('Не измерено: 2 — чаще всего судья не уверен, что симулятор держался диалога (1).'));
 });
