@@ -120,46 +120,46 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TRUST-01 | — | Pending |
-| TRUST-02 | — | Pending |
-| TRUST-03 | — | Pending |
-| TRUST-04 | — | Pending |
-| TRUST-05 | — | Pending |
-| TRUST-06 | — | Pending |
-| TRUST-07 | — | Pending |
-| TRUST-08 | — | Pending |
-| TRUST-09 | — | Pending |
-| TRUST-10 | — | Pending |
-| TRUST-11 | — | Pending |
-| JUDGE-01 | — | Pending |
-| JUDGE-02 | — | Pending |
-| JUDGE-03 | — | Pending |
-| JUDGE-04 | — | Pending |
-| JUDGE-05 | — | Pending |
-| JUDGE-06 | — | Pending |
-| SCREEN-01 | — | Pending |
-| SCREEN-02 | — | Pending |
-| SCREEN-03 | — | Pending |
-| SCREEN-04 | — | Pending |
-| SCREEN-05 | — | Pending |
-| SCREEN-06 | — | Pending |
-| SCREEN-07 | — | Pending |
-| SHARE-01 | — | Pending |
-| SHARE-02 | — | Pending |
-| SHARE-03 | — | Pending |
-| SHARE-04 | — | Pending |
-| START-01 | — | Pending |
-| START-02 | — | Pending |
-| START-03 | — | Pending |
-| DEMO-01 | — | Pending |
-| DEMO-02 | — | Pending |
-| DEMO-03 | — | Pending |
+| TRUST-01 | Phase 1 | Pending |
+| TRUST-02 | Phase 1 | Pending |
+| TRUST-03 | Phase 1 | Pending |
+| TRUST-04 | Phase 1 | Pending |
+| TRUST-05 | Phase 1 | Pending |
+| TRUST-06 | Phase 1 | Pending |
+| TRUST-07 | Phase 1 | Pending |
+| TRUST-08 | Phase 1 | Pending |
+| TRUST-09 | Phase 1 | Pending |
+| TRUST-10 | Phase 2 | Pending |
+| TRUST-11 | Phase 2 | Pending |
+| JUDGE-01 | Phase 2 | Pending |
+| JUDGE-02 | Phase 2 | Pending |
+| JUDGE-03 | Phase 2 | Pending |
+| JUDGE-04 | Phase 3 | Pending |
+| JUDGE-05 | Phase 3 | Pending |
+| JUDGE-06 | Phase 3 | Pending |
+| SCREEN-01 | Phase 4 | Pending |
+| SCREEN-02 | Phase 4 | Pending |
+| SCREEN-03 | Phase 4 | Pending |
+| SCREEN-04 | Phase 4 | Pending |
+| SCREEN-05 | Phase 4 | Pending |
+| SCREEN-06 | Phase 4 | Pending |
+| SCREEN-07 | Phase 4 | Pending |
+| SHARE-01 | Phase 5 | Pending |
+| SHARE-02 | Phase 5 | Pending |
+| SHARE-03 | Phase 5 | Pending |
+| SHARE-04 | Phase 5 | Pending |
+| START-01 | Phase 6 | Pending |
+| START-02 | Phase 6 | Pending |
+| START-03 | Phase 6 | Pending |
+| DEMO-01 | Phase 7 | Pending |
+| DEMO-02 | Phase 7 | Pending |
+| DEMO-03 | Phase 7 | Pending |
 
 **Coverage:**
 - v1 requirements: 34 total
-- Mapped to phases: 0 (roadmap not created yet)
-- Unmapped: 34 ⚠️
+- Mapped to phases: 34
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-16*
-*Last updated: 2026-09-16 after initial definition*
+*Last updated: 2026-09-16 after roadmap creation*
