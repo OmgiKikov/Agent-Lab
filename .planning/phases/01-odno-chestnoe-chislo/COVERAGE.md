@@ -1,0 +1,1 @@
+No external API integration: Phase 1 changes Agent Lab's own counting rules, view-model, local file storage and CLI/Pi surfaces; it adds no new external API, SDK or service (the existing Pi SDK 0.85.1, OpenRouter judge and the local aigw-local command target are used unchanged, and the detector's hits are a test stub named "fake Pi API" and a note about the unchanged Pi SDK).
