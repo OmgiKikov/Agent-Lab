@@ -749,6 +749,8 @@ export interface Experiment {
   validationExclusions?: ValidationExclusion[];
   parentRunId?: string;
   selectedScenarioIds?: string[];
+  /** Real situations the agent is known to handle. Shown apart from the headline number and never counted in it. */
+  positiveControlScenarioIds?: string[];
   targetVersion?: string;
   targetFingerprint?: string;
   evaluatorVersion?: string;
@@ -849,7 +851,9 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   failureModes: z.array(failureModeSchema).max(30).optional(),
   releaseLog: releaseLogSchema.optional(),
   validationExclusions: z.array(validationExclusionSchema).max(300).optional(),
-  parentRunId: identifier.optional(), selectedScenarioIds: z.array(identifier).min(1).max(200).optional(), targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),
+  parentRunId: identifier.optional(), selectedScenarioIds: z.array(identifier).min(1).max(200).optional(),
+  positiveControlScenarioIds: z.array(identifier).min(1).max(5).refine(unique, 'Duplicate control IDs').optional(),
+  targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),
   clarifications: z.array(z.strictObject({ question: text.max(3000), answer: text.max(5000) })).max(100).optional(),
   assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
   evaluatorVersion: text.optional(), targetRelease: text.max(200).optional(),
@@ -860,6 +864,10 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
     if (scenario.checks.some(check => (SIMULATOR_CHECK_IDS as readonly string[]).includes(check.id))) {
       ctx.addIssue({ code: 'custom', path: ['scenarios', index, 'checks'], message: 'ID объективной проверки зарезервирован для проверки симулятора.' });
     }
+  });
+  const scenarioIds = new Set(record.scenarios.map(scenario => scenario.id));
+  record.positiveControlScenarioIds?.forEach((id, index) => {
+    if (!scenarioIds.has(id)) ctx.addIssue({ code: 'custom', path: ['positiveControlScenarioIds', index], message: 'Контрольная ситуация должна быть из этого набора.' });
   });
   validateReviewReferences(record.humanReviews, record.trials, ['humanReviews'], ctx);
   if (record.sourceEvidence) validateReviewReferences(record.sourceEvidence.humanReviews, record.sourceEvidence.trials, ['sourceEvidence', 'humanReviews'], ctx);

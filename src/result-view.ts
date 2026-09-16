@@ -77,11 +77,11 @@ export interface ResultView {
   /** Cards still waiting in a running phase; never part of notMeasured. */
   pending: number;
   notMeasured: { total: number; reasons: { code: NotMeasuredCode; label: string; count: number; scenarioIds: string[] }[] };
-  control: { cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; synthetic: boolean }[]; warning: string | null };
+  control: { cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; synthetic: boolean; unstable: boolean }[]; warning: string | null };
   coverage: { examined: number; included: number; excluded: { kind: ExclusionKind; label: string; count: number }[]; text: string | null };
   cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; control: boolean; unstable: boolean; provenance: Scenario['provenance'] }[];
   scope: { cards: number; synthetic: number; dialogues: number; judgeModel?: string; costUsd: number | null; target: string };
-  /** Found flips against the source run; absent when there is nothing to compare with. Never changes the headline. */
+  /** Found flips against the source run, control situations left out; absent when there is nothing to compare with. Never changes the headline. */
   stability?: Stability;
 }
 
@@ -94,22 +94,30 @@ function stabilityOf(input: Experiment, before: Experiment | undefined): Stabili
 
 export function buildResultView(input: Experiment, options: { before?: Experiment } = {}): ResultView {
   const record = observedRecord(input);
-  const stability = stabilityOf(input, options.before);
-  const unstableIds = new Set(stability?.unstable.map(row => row.scenarioId) ?? []);
+  // Positive controls are real situations the agent is known to handle; they never enter the number.
+  const controlIds = new Set((record.positiveControlScenarioIds ?? []).filter(id => record.scenarios.some(scenario => scenario.id === id)));
+  const found = stabilityOf(input, options.before);
+  const unstableIds = new Set(found?.unstable.map(row => row.scenarioId) ?? []);
+  const stability = found && { ...found, unstable: found.unstable.filter(row => !controlIds.has(row.scenarioId)) };
   const cards: ResultView['cards'] = record.scenarios.map(scenario => {
     const verdict = cardVerdict(record, scenario);
     return { scenarioId: scenario.id, title: scenario.title, outcome: verdict.outcome, ...(verdict.reason ? { reason: verdict.reason } : {}),
-      control: false, unstable: unstableIds.has(scenario.id), provenance: scenario.provenance };
+      control: controlIds.has(scenario.id), unstable: unstableIds.has(scenario.id), provenance: scenario.provenance };
   });
-  const passed = cards.filter(card => card.outcome === 'pass').length;
-  const decided = passed + cards.filter(card => card.outcome === 'fail').length;
+  const counted = cards.filter(card => !card.control);
+  const controlCards = cards.filter(card => card.control).map(card => ({ scenarioId: card.scenarioId, title: card.title, outcome: card.outcome,
+    ...(card.reason ? { reason: card.reason } : {}), synthetic: card.provenance === 'synthetic', unstable: card.unstable }));
+  const controlWarning = controlCards.some(card => card.outcome !== 'pass' && card.reason !== 'in_progress')
+    ? 'Контроль не пройден — числу пока не верить: проверьте судью и связь с агентом.' : null;
+  const passed = counted.filter(card => card.outcome === 'pass').length;
+  const decided = passed + counted.filter(card => card.outcome === 'fail').length;
   const accuracy = decided ? passed / decided : null;
   const range = wilson(passed, decided);
   // A draft that never ran has nothing pending and nothing unmeasured yet; its cards keep their reason.
   const notStarted = !record.trials.length && (record.phase === 'preparing' || record.phase === 'review');
-  const pending = notStarted ? 0 : cards.filter(card => card.reason === 'in_progress').length;
+  const pending = notStarted ? 0 : counted.filter(card => card.reason === 'in_progress').length;
   const reasons = notStarted ? [] : NOT_MEASURED_CODES.filter(code => code !== 'in_progress').map(code => {
-    const scenarioIds = cards.filter(card => card.outcome === 'unknown' && card.reason === code).map(card => card.scenarioId);
+    const scenarioIds = counted.filter(card => card.outcome === 'unknown' && card.reason === code).map(card => card.scenarioId);
     return { code, label: NOT_MEASURED_TEXT[code], count: scenarioIds.length, scenarioIds };
   }).filter(reason => reason.count > 0)
     // Array.prototype.sort is stable, so equal counts keep NOT_MEASURED_CODES order.
@@ -134,7 +142,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     headline: { passed, decided, accuracy, range, text, smallSample },
     pending,
     notMeasured: { total: reasons.reduce((n, reason) => n + reason.count, 0), reasons },
-    control: { cards: [], warning: null },
+    // A draft that never ran has no control verdict to warn about yet.
+    control: { cards: controlCards, warning: notStarted ? null : controlWarning },
     coverage: { examined, included, excluded, text: coverageText },
     cards,
     scope: {
@@ -157,11 +166,29 @@ function stabilityLine(stability: Stability): string {
   return `Нестабильных: ${stability.unstable.length} (${stability.basis === 'repeat' ? 'повтор' : 'переоценка'} прогона ${stability.comparedWith.slice(0, 8)}).`;
 }
 
+/** One line for the positive controls; never merged into the headline. */
+function controlLine(view: ResultView): string {
+  const { cards } = view.control;
+  const [only] = cards;
+  if (!only) return 'Контроль: не задан.';
+  const n = cards.length;
+  const passed = cards.filter(card => card.outcome === 'pass').length;
+  const notStarted = !view.scope.dialogues && (view.phase === 'preparing' || view.phase === 'review');
+  const base = passed === n ? (n === 1 ? 'Контроль: пройден ✓' : `Контроль: пройдено ${n} из ${n} ✓`)
+    : n > 1 ? `Контроль: пройдено ${passed} из ${n}.`
+    : only.outcome === 'fail' ? 'Контроль: не пройден ✗'
+    : notStarted || only.reason === 'in_progress' || !only.reason ? 'Контроль: ещё не проверен.'
+    : `Контроль: не измерен — ${NOT_MEASURED_TEXT[only.reason]}.`;
+  const synthetic = cards.some(card => card.synthetic) ? ' · синтетическая ситуация' : '';
+  const unstable = cards.some(card => card.unstable) ? ' · нестабильно' : '';
+  return base + synthetic + unstable;
+}
+
 /** The first block of every result surface, as plain text lines. */
 export function resultViewLines(view: ResultView, options: { details?: boolean } = {}): string[] {
   const { headline, notMeasured, control, coverage } = view;
   const [main] = notMeasured.reasons;
-  const lines = [headline.text];
+  const lines = control.warning ? [control.warning, headline.text] : [headline.text];
   if (headline.smallSample) lines.push(headline.smallSample);
   if (view.stability) lines.push(stabilityLine(view.stability));
   if (view.pending > 0) lines.push(`Ещё проверяется: ${view.pending}.`);
@@ -170,7 +197,7 @@ export function resultViewLines(view: ResultView, options: { details?: boolean }
       ? `Не измерено: ${notMeasured.total} — ${main.label}.`
       : `Не измерено: ${notMeasured.total} — чаще всего ${main.label} (${main.count}).`);
   }
-  if (!control.cards.length) lines.push('Контроль: не задан.');
+  lines.push(controlLine(view));
   if (coverage.text) lines.push(coverage.text);
   if (options.details && notMeasured.reasons.length > 1) {
     lines.push('Не измерено по причинам:', ...notMeasured.reasons.map(reason => `  ${reason.label} — ${reason.count}`));

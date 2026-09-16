@@ -65,7 +65,7 @@ async function main() {
     connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
     'golden-file': { type: 'string' }, 'dialogues-file': { type: 'string' }, candidate: { type: 'string' },
     hypothesis: { type: 'string' }, trial: { type: 'string', multiple: true },
-    yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, parallel: { type: 'string' },
+    yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
   } });
   const command = positionals[0];
   if (values.help || !command) {
@@ -73,7 +73,7 @@ async function main() {
     process.stdout.write('  agent-lab accept --id RUN [--yes]\n');
     process.stdout.write('Agent Lab — validation set, accuracy и причины провалов вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
     process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab discover-resume --id RUN [--yes] [--json]\n  agent-lab discover-build --id RUN [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
-    process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
+    process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID] · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
   const directory = values['data-dir'] ?? resolve('.agent-lab');
@@ -376,8 +376,9 @@ async function main() {
     }
     if (!id) throw new Error('Укажите прогон: --id EXPERIMENT_ID');
     if (command === 'repeat') {
-      const record = await lab.repeat(id, values.case);
-      process.stdout.write(`${JSON.stringify({ id: record.id, phase: record.phase, parentRunId: record.parentRunId, targetVersion: record.targetVersion, nextStep: 'Откройте /agent-lab в Pi, проверьте версию агента и подтвердите запуск.' }, null, 2)}\n`);
+      const record = await lab.repeat(id, values.case, values.control);
+      process.stdout.write(`${JSON.stringify({ id: record.id, phase: record.phase, parentRunId: record.parentRunId, targetVersion: record.targetVersion,
+        positiveControlScenarioIds: record.positiveControlScenarioIds, nextStep: 'Откройте /agent-lab в Pi, проверьте версию агента и подтвердите запуск.' }, null, 2)}\n`);
     } else if (command === 'run' || command === 'demo') {
       const draft = await lab.get(id);
       if (command === 'run' && !values.yes) throw new Error('Для запуска согласованных тестов укажите --yes.');

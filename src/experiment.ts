@@ -36,7 +36,7 @@ export function draftHash(record: Experiment): string {
   return fingerprint({ task: record.task, workflow: record.workflow, mode: record.mode, sources: record.sources,
     settings: record.settings, target: record.target, requirements: record.requirements, questions: record.questions,
     goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
-    scenarios: record.scenarios, agent: record.revisions[0]?.spec,
+    scenarios: record.scenarios, agent: record.revisions[0]?.spec, positiveControlScenarioIds: record.positiveControlScenarioIds,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
 }
 export function resultHash(record: Experiment): string {
@@ -67,6 +67,9 @@ function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
     record.scenarios = record.scenarios.filter(s => scenarioIds.includes(s.id));
     record.selectedScenarioIds = [...scenarioIds];
   }
+  const keptControls = (record.positiveControlScenarioIds ?? []).filter(id => record.scenarios.some(s => s.id === id));
+  if (keptControls.length) record.positiveControlScenarioIds = keptControls;
+  else delete record.positiveControlScenarioIds;
   record.scenarios = record.scenarios.map(scenario => withDefaultGoalObservation(scenario, record.target.kind));
   Object.assign(record, { id: randomUUID(), parentRunId: previous.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     phase: 'review', message: 'Тесты готовы. Проверьте подключение и запустите проверку.',
@@ -726,13 +729,21 @@ export class ExperimentLab {
     });
   }
   /** Reuse the exact reviewed materials and cards; only evidence and approvals start afresh. */
-  async repeat(id: string, scenarioIds?: string[]): Promise<Experiment> {
+  async repeat(id: string, scenarioIds?: string[], controlScenarioIds?: string[]): Promise<Experiment> {
     return this.change(async () => {
       const previous = await this.store.get(id);
       if (previous.workflow !== 'evaluate' || !previous.reviewedAt || runningPhases.has(previous.phase)) {
         throw new Error('Повторить можно остановленный или завершённый прогон с утверждёнными карточками.');
       }
       const record = freshDraft(previous, scenarioIds);
+      if (controlScenarioIds) {
+        if (!controlScenarioIds.length || controlScenarioIds.length > 5 || new Set(controlScenarioIds).size !== controlScenarioIds.length) {
+          throw new Error('Контрольных ситуаций может быть от 1 до 5, без повторов.');
+        }
+        const missing = controlScenarioIds.find(controlId => !record.scenarios.some(s => s.id === controlId));
+        if (missing !== undefined) throw new Error(`Контрольная ситуация должна быть из этого набора: ${missing}.`);
+        record.positiveControlScenarioIds = [...controlScenarioIds];
+      }
       record.targetFingerprint = await targetFingerprint(record.target);
       await this.store.save(record);
       return structuredClone(record);

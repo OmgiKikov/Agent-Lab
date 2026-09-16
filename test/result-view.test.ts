@@ -413,3 +413,82 @@ test('a reassessment by another judge, or without evidence, prints no instabilit
   assert.equal(plain.stability, undefined);
   assert.ok(resultViewLines(plain).every(line => !/Нестабильных|Стабильность/.test(line)));
 });
+
+const CONTROL_WARNING = 'Контроль не пройден — числу пока не верить: проверьте судью и связь с агентом.';
+/** 13 cards: `ctl` is the positive control, the other 12 are 3 passed and 9 failed. */
+function withControl(control: Parameters<typeof attempt>[1], cardOverrides: Partial<Card> = {}, ids = ['ctl']): Experiment {
+  const record = scored(3, 9);
+  record.scenarios.push(card('ctl', cardOverrides));
+  record.trials.push(attempt('ctl', control));
+  record.positiveControlScenarioIds = ids;
+  return record;
+}
+
+test('a passing control stays out of the headline and gets its own line', () => {
+  const view = buildResultView(withControl({ goal: 'pass' }));
+  assert.equal(view.headline.text, 'Справился в 3 из 12 проверенных ситуаций — 25%.');
+  assert.equal(view.control.warning, null);
+  assert.equal(view.cards.find(item => item.scenarioId === 'ctl')?.control, true);
+  assert.deepEqual(resultViewLines(view), [
+    'Справился в 3 из 12 проверенных ситуаций — 25%.',
+    'Мало данных: реальная доля где-то от 9% до 53%.',
+    'Контроль: пройден ✓',
+  ]);
+});
+
+test('a failed control puts the warning on the first line', () => {
+  const view = buildResultView(withControl({ goal: 'fail' }));
+  const lines = resultViewLines(view);
+  assert.equal(lines[0], CONTROL_WARNING);
+  assert.equal(lines[1], 'Справился в 3 из 12 проверенных ситуаций — 25%.');
+  assert.ok(lines.includes('Контроль: не пройден ✗'));
+});
+
+test('an unmeasured control is named with its reason, warned about and not counted as unmeasured', () => {
+  const view = buildResultView(withControl({ goal: 'unknown', goalRationale: `${SPLIT_RATIONALE_PREFIX} pass / fail. Основания каждой оценки сохранены в judgeAudit.` }));
+  const lines = resultViewLines(view);
+  assert.equal(lines[0], CONTROL_WARNING);
+  assert.ok(lines.includes('Контроль: не измерен — судья не уверен: голоса разошлись.'));
+  assert.equal(view.notMeasured.total, 0);
+  assert.equal(view.headline.decided, 12);
+});
+
+test('a control still running is not a failure and is not pending in the headline', () => {
+  const record = withControl({ goal: 'pass' });
+  record.phase = 'evaluating';
+  record.trials = record.trials.filter(item => item.scenarioId !== 'ctl');
+  const view = buildResultView(record);
+  assert.equal(view.control.warning, null);
+  assert.equal(view.pending, 0);
+  assert.ok(resultViewLines(view).includes('Контроль: ещё не проверен.'));
+});
+
+test('a synthetic control is labelled, and several controls are counted on their own line', () => {
+  const synthetic = buildResultView(withControl({ goal: 'pass' }, { provenance: 'synthetic' }));
+  assert.ok(resultViewLines(synthetic).includes('Контроль: пройден ✓ · синтетическая ситуация'));
+  const record = withControl({ goal: 'fail' });
+  record.positiveControlScenarioIds = ['ctl', 'p0'];
+  const mixed = buildResultView(record);
+  assert.equal(mixed.headline.text, 'Справился в 2 из 11 проверенных ситуаций — 18%.');
+  assert.ok(resultViewLines(mixed).includes('Контроль: пройдено 1 из 2.'));
+  record.positiveControlScenarioIds = ['p0', 'p1'];
+  assert.ok(resultViewLines(buildResultView(record)).includes('Контроль: пройдено 2 из 2 ✓'));
+});
+
+test('a control id that is not in the set is ignored by the view', () => {
+  const record = scored(3, 9);
+  record.positiveControlScenarioIds = ['missing'];
+  const view = buildResultView(record);
+  assert.equal(view.control.cards.length, 0);
+  assert.equal(view.headline.decided, 12);
+  assert.ok(resultViewLines(view).includes('Контроль: не задан.'));
+});
+
+test('a control that flipped in a repeat is marked on its line and left out of the instability count', () => {
+  const { source, repeat } = repeatPair({ A: 'fail', B: 'pass' }, { A: 'pass', B: 'fail' });
+  repeat.positiveControlScenarioIds = ['A'];
+  const view = buildResultView(repeat, { before: source });
+  const lines = resultViewLines(view);
+  assert.ok(lines.includes('Нестабильных: 1 (повтор прогона a1b2c3d4).'));
+  assert.ok(lines.includes('Контроль: пройден ✓ · нестабильно'));
+});
