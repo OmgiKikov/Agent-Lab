@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab, draftHash, planDiscovery } from './experiment.js';
 import { demoInput } from './demo.js';
-import { createInputSchema, discoverInputSchema } from './contracts.js';
+import { createInputSchema, discoverInputSchema, type Experiment } from './contracts.js';
 import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from './prompt-edit.js';
@@ -16,7 +16,7 @@ import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { buildResultView, resultViewLines } from './result-view.js';
-import { evidenceBundle, exportArtifacts } from './artifacts.js';
+import { embeddedBefore, evidenceBundle, exportArtifacts } from './artifacts.js';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
 
 const percent = (value: number | null) => value === null ? 'нет данных' : `${Math.round(value * 100)}%`;
@@ -88,9 +88,17 @@ async function main() {
   }
   if (command === 'summary') {
     if (!values.id) throw new Error('Укажите --id RUN');
-    const record = await new ExperimentStore(directory).get(values.id);
+    const store = new ExperimentStore(directory);
+    const record = await store.get(values.id);
     const q = qualitySummary(record);
-    const view = buildResultView(record);
+    // The source run is read-only context for stability; the whole evidence bundle (trace journal) is not needed here.
+    const baseId = record.assessmentOf ?? record.parentRunId;
+    let before: Experiment | undefined;
+    if (baseId) {
+      try { before = await store.get(baseId); }
+      catch { before = embeddedBefore(record, baseId); }
+    }
+    const view = buildResultView(record, { before });
     if (values.json) { process.stdout.write(`${JSON.stringify({ ...q, view }, null, 2)}\n`); return; }
     const text = qualityLines(q);
     // One denominator in the first block; the other scores stay below «Подробности».

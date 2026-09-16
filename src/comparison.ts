@@ -590,6 +590,38 @@ export function judgeModel(record: Experiment): string | undefined {
   return record.trials.find(t => t.judgeAudit)?.judgeAudit?.model ?? record.settings.roles?.judge?.model ?? record.settings.judge?.model;
 }
 
+/** One situation whose headline verdict flipped between two decided verdicts. */
+export interface StabilityRow { scenarioId: string; title: string; before: 'pass' | 'fail'; after: 'pass' | 'fail' }
+/**
+ * Found instability only: `checked` situations had a decided verdict on both sides, `unstable`
+ * lists the flips. `skipped` names why nothing was compared; it never means «stable».
+ */
+export interface Stability { basis: 'repeat' | 'reassess'; comparedWith: string; checked: number; unstable: StabilityRow[]; skipped: string | null }
+
+type Decided = 'pass' | 'fail';
+const isDecided = (outcome: 'pass' | 'fail' | 'unknown'): outcome is Decided => outcome !== 'unknown';
+
+/**
+ * A repeat of the same set against its source run. Gated on comparability and on the same agent,
+ * so a change of the agent, the judge or the criteria is never called instability. Uses the goal
+ * verdict (the headline criterion), not the strict all-rubric change of compareRuns.
+ */
+export function stabilityBetweenRuns(before: Experiment, after: Experiment): Stability {
+  const result: Stability = { basis: 'repeat', comparedWith: before.id, checked: 0, unstable: [], skipped: null };
+  if (!compareRuns(before, after).comparable) return { ...result, skipped: 'прогоны несравнимы' };
+  if (before.targetFingerprint !== after.targetFingerprint || before.targetVersion !== after.targetVersion) return { ...result, skipped: 'агент изменился между прогонами' };
+  const source = observedRecord(before), repeat = observedRecord(after);
+  for (const card of repeat.scenarios) {
+    const sourceCard = source.scenarios.find(item => item.id === card.id);
+    if (!sourceCard) continue;
+    const was = goalCardOutcome(source, sourceCard), now = goalCardOutcome(repeat, card);
+    if (!isDecided(was) || !isDecided(now)) continue;
+    result.checked++;
+    if (was !== now) result.unstable.push({ scenarioId: card.id, title: card.title, before: was, after: now });
+  }
+  return result;
+}
+
 const JUDGE_INCOMPLETE = 'Судья не завершил оценку этой попытки.';
 
 export function compareRuns(before: Experiment, after: Experiment): RunComparison {

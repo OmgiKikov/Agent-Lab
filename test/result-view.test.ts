@@ -307,3 +307,76 @@ test('reasons with equal counts keep the fixed order and the line names the earl
   assert.deepEqual(view.notMeasured.reasons.map(reason => reason.code), ['simulator_unclear', 'judge_split']);
   assert.ok(resultViewLines(view).includes('Не измерено: 2 — чаще всего судья не уверен, что симулятор держался диалога (1).'));
 });
+
+// ---- Stability: found flips against the source run, never a promise of the same result. ----
+const SOURCE_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+/** The source run and its repeat of the same cards; `after` lists each card's goal on the repeat. */
+function repeatPair(before: Record<string, Result>, after: Record<string, Result>, overrides: { before?: Partial<Experiment>; after?: Partial<Experiment> } = {}) {
+  const make = (goals: Record<string, Result>, extra: Partial<Experiment>) => run(Object.keys(goals).map(id => card(id)),
+    Object.entries(goals).map(([id, goal]) => attempt(id, goal === 'unknown' ? { goal, goalRationale: SPLIT } : { goal })),
+    { mode: 'demo', targetFingerprint: 'fp-agent', ...extra });
+  return {
+    source: make(before, { id: SOURCE_ID, ...overrides.before }),
+    repeat: make(after, { id: 'b1b2c3d4-0000-4000-8000-000000000002', parentRunId: SOURCE_ID, ...overrides.after }),
+  };
+}
+
+test('a repeat counts situations whose goal verdict flipped, and they stay in the headline', () => {
+  const { source, repeat } = repeatPair({ A: 'pass', B: 'fail' }, { A: 'fail', B: 'fail' });
+  const view = buildResultView(repeat, { before: source });
+  assert.equal(view.stability?.basis, 'repeat');
+  assert.equal(view.stability?.checked, 2);
+  assert.deepEqual(view.stability?.unstable, [{ scenarioId: 'A', title: 'Ситуация A', before: 'pass', after: 'fail' }]);
+  assert.equal(view.cards.find(item => item.scenarioId === 'A')?.unstable, true);
+  assert.equal(view.cards.find(item => item.scenarioId === 'B')?.unstable, false);
+  assert.equal(view.headline.text, 'Справился в 0 из 2 проверенных ситуаций — 0%.');
+  const lines = resultViewLines(view);
+  assert.deepEqual(lines.slice(0, 3), [view.headline.text, view.headline.smallSample, 'Нестабильных: 1 (повтор прогона a1b2c3d4).']);
+  assert.ok(resultViewLines(view, { details: true }).includes('  нестабильно: Ситуация A — было «справился», стало «не справился»'));
+  assert.ok(lines.every(line => !line.startsWith('  нестабильно')), 'the per-card lines are details only');
+  assert.equal(buildResultView(repeat).stability, undefined, 'no source run, no stability line');
+  assert.ok(resultViewLines(buildResultView(repeat)).every(line => !/Нестабильных|Стабильность/.test(line)));
+});
+
+test('a flip between a decided verdict and unknown is not instability', () => {
+  const { source, repeat } = repeatPair({ A: 'pass', B: 'fail', C: 'unknown' }, { A: 'unknown', B: 'fail', C: 'pass' });
+  const view = buildResultView(repeat, { before: source });
+  assert.equal(view.stability?.checked, 1);
+  assert.deepEqual(view.stability?.unstable, []);
+  assert.ok(resultViewLines(view).includes('Нестабильных: 0 (повтор прогона a1b2c3d4).'));
+  assert.ok(view.cards.every(item => !item.unstable));
+});
+
+test('a changed agent or an incomparable pair is said in words, not counted as instability', () => {
+  const agent = repeatPair({ A: 'pass' }, { A: 'fail' }, { after: { targetFingerprint: 'fp-other' } });
+  const changed = buildResultView(agent.repeat, { before: agent.source });
+  assert.deepEqual(changed.stability, { basis: 'repeat', comparedWith: SOURCE_ID, checked: 0, unstable: [], skipped: 'агент изменился между прогонами' });
+  assert.ok(resultViewLines(changed).includes('Стабильность не проверена: агент изменился между прогонами.'));
+  assert.ok(changed.cards.every(item => !item.unstable));
+  const version = repeatPair({ A: 'pass' }, { A: 'fail' }, { before: { targetVersion: 'v1' }, after: { targetVersion: 'v2' } });
+  assert.equal(buildResultView(version.repeat, { before: version.source }).stability?.skipped, 'агент изменился между прогонами');
+  const judge = repeatPair({ A: 'pass' }, { A: 'fail' }, { after: { evaluatorVersion: 'judge-2' } });
+  const incomparable = buildResultView(judge.repeat, { before: judge.source });
+  assert.equal(incomparable.stability?.skipped, 'прогоны несравнимы');
+  assert.ok(resultViewLines(incomparable).includes('Стабильность не проверена: прогоны несравнимы.'));
+});
+
+test('CLI summary of a repeat names the flips against the stored source run, from the built dist', { timeout: 20000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-stability-'));
+  try {
+    const { source, repeat } = repeatPair({ A: 'pass', B: 'fail' }, { A: 'fail', B: 'fail' });
+    const store = new ExperimentStore(directory);
+    await store.init();
+    try { await store.save(source); await store.save(repeat); } finally { await store.close(); }
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    const child = spawn(process.execPath, [cli, 'summary', '--id', repeat.id, '--data-dir', directory]);
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+    const code = await new Promise<number | null>(resolve => child.on('close', resolve));
+    assert.equal(code, 0, stderr);
+    const lines = stdout.split('\n');
+    assert.deepEqual(lines.slice(0, lines.indexOf('')), resultViewLines(buildResultView(repeat, { before: source }), { details: true }));
+    assert.ok(lines.includes('Нестабильных: 1 (повтор прогона a1b2c3d4).'));
+    assert.ok(lines.includes('  нестабильно: Ситуация A — было «справился», стало «не справился»'));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

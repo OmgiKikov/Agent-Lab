@@ -23,7 +23,8 @@ export interface EvidenceBundle {
 }
 const failureText = (error: unknown) => (error instanceof Error ? error.name === 'ZodError' ? 'Запись не соответствует формату Agent Lab.' : error.message : String(error)).replace(/\s+/g, ' ').slice(0, 300);
 
-function embeddedBefore(record: Experiment, parentId: string): Experiment | undefined {
+/** The source run rebuilt from the evidence a derived record carries; undefined when it carries none for this id. */
+export function embeddedBefore(record: Experiment, parentId: string): Experiment | undefined {
   const source = record.sourceEvidence;
   if (!source?.trials.length || source.runId !== parentId) return;
   const before = structuredClone(record);
@@ -44,7 +45,7 @@ function embeddedBefore(record: Experiment, parentId: string): Experiment | unde
 /** Resolve the persisted relationship once, independently of navigation and export format. */
 export async function evidenceBundle(record: Experiment, store: Pick<ExperimentStore, 'get' | 'traceJournal'>, beforeId?: string): Promise<EvidenceBundle> {
   const snapshot = structuredClone(record);
-  const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), quality: qualitySummary(snapshot), view: buildResultView(snapshot), warnings: [], traceJournal: '' };
+  const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), quality: qualitySummary(snapshot), warnings: [], traceJournal: '' };
   const parent = beforeId ?? snapshot.parentRunId;
   if (parent) {
     bundle.comparisonSource = { kind: beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };
@@ -60,6 +61,8 @@ export async function evidenceBundle(record: Experiment, store: Pick<ExperimentS
       } else bundle.warnings.push(`Базовый прогон ${parent} недоступен. Сравнение не выполнено; текущие доказательства сохранены. ${failureText(error)}`);
     }
   }
+  // Stability is checked against the resolved source run; the headline itself never depends on it.
+  bundle.view = buildResultView(snapshot, { before: bundle.before });
   try { bundle.traceJournal = await store.traceJournal(snapshot.id); }
   catch (error) { bundle.warnings.push(`Журнал трасс недоступен; реплики из записи включены в отчёт. ${failureText(error)}`); }
   if (['preparing', 'evaluating', 'baseline', 'improving', 'control'].includes(snapshot.phase)) {

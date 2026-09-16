@@ -1,6 +1,6 @@
 import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
 import { observedRecord } from './outcomes.js';
-import { cardVerdict, judgeModel, NOT_MEASURED_CODES, type NotMeasuredCode } from './comparison.js';
+import { cardVerdict, judgeModel, NOT_MEASURED_CODES, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
 
 /*
  * The one result every surface shows first: how many situations the agent handled, over one
@@ -81,14 +81,25 @@ export interface ResultView {
   coverage: { examined: number; included: number; excluded: { kind: ExclusionKind; label: string; count: number }[]; text: string | null };
   cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; control: boolean; unstable: boolean; provenance: Scenario['provenance'] }[];
   scope: { cards: number; synthetic: number; dialogues: number; judgeModel?: string; costUsd: number | null; target: string };
+  /** Found flips against the source run; absent when there is nothing to compare with. Never changes the headline. */
+  stability?: Stability;
 }
 
-export function buildResultView(input: Experiment): ResultView {
+/** The source run to check stability against; the record's own parent or the run it reassessed. */
+function stabilityOf(input: Experiment, before: Experiment | undefined): Stability | undefined {
+  if (!before) return undefined;
+  if (input.assessmentOf === before.id) return undefined;
+  return stabilityBetweenRuns(before, input);
+}
+
+export function buildResultView(input: Experiment, options: { before?: Experiment } = {}): ResultView {
   const record = observedRecord(input);
+  const stability = stabilityOf(input, options.before);
+  const unstableIds = new Set(stability?.unstable.map(row => row.scenarioId) ?? []);
   const cards: ResultView['cards'] = record.scenarios.map(scenario => {
     const verdict = cardVerdict(record, scenario);
     return { scenarioId: scenario.id, title: scenario.title, outcome: verdict.outcome, ...(verdict.reason ? { reason: verdict.reason } : {}),
-      control: false, unstable: false, provenance: scenario.provenance };
+      control: false, unstable: unstableIds.has(scenario.id), provenance: scenario.provenance };
   });
   const passed = cards.filter(card => card.outcome === 'pass').length;
   const decided = passed + cards.filter(card => card.outcome === 'fail').length;
@@ -134,7 +145,16 @@ export function buildResultView(input: Experiment): ResultView {
       costUsd: record.usage.costUsd,
       target: record.targetVersion ?? record.targetRelease ?? (record.target.kind === 'sandbox' ? 'песочница' : record.targetFingerprint?.slice(0, 12) ?? 'версия не названа'),
     },
+    ...(stability ? { stability } : {}),
   };
+}
+
+const VERDICT_WORD: Record<StabilityRow['before'], string> = { pass: 'справился', fail: 'не справился' };
+
+/** Only found instability is stated; a skipped check is said in words, never as a silent 0. */
+function stabilityLine(stability: Stability): string {
+  if (stability.skipped) return `Стабильность не проверена: ${stability.skipped}.`;
+  return `Нестабильных: ${stability.unstable.length} (${stability.basis === 'repeat' ? 'повтор' : 'переоценка'} прогона ${stability.comparedWith.slice(0, 8)}).`;
 }
 
 /** The first block of every result surface, as plain text lines. */
@@ -143,6 +163,7 @@ export function resultViewLines(view: ResultView, options: { details?: boolean }
   const [main] = notMeasured.reasons;
   const lines = [headline.text];
   if (headline.smallSample) lines.push(headline.smallSample);
+  if (view.stability) lines.push(stabilityLine(view.stability));
   if (view.pending > 0) lines.push(`Ещё проверяется: ${view.pending}.`);
   if (notMeasured.total > 0 && main) {
     lines.push(notMeasured.reasons.length === 1
@@ -153,6 +174,9 @@ export function resultViewLines(view: ResultView, options: { details?: boolean }
   if (coverage.text) lines.push(coverage.text);
   if (options.details && notMeasured.reasons.length > 1) {
     lines.push('Не измерено по причинам:', ...notMeasured.reasons.map(reason => `  ${reason.label} — ${reason.count}`));
+  }
+  if (options.details && view.stability) {
+    lines.push(...view.stability.unstable.map(row => `  нестабильно: ${row.title} — было «${VERDICT_WORD[row.before]}», стало «${VERDICT_WORD[row.after]}»`));
   }
   return lines;
 }
