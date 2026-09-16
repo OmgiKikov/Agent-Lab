@@ -1,7 +1,8 @@
-import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, UserMode } from './contracts.js';
+import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, UserMode, ValidationExclusion } from './contracts.js';
 import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, metricApplies, ragEvidenceComplete, RAG_METRIC_IDS, verbatimSpan } from './contracts.js';
 import { agentMetricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
-import { cardOutcome, humanFindings, isAgentFailure, verdictSummary, type VerdictSummary } from './comparison.js';
+import { cardOutcome, goalCardOutcome, humanFindings, isAgentFailure, judgeModel as runJudgeModel, verdictSummary, type VerdictSummary } from './comparison.js';
+import { exclusionCounts, pluralForm } from './result-view.js';
 import { draftHash } from './experiment.js';
 
 /*
@@ -37,7 +38,7 @@ export interface QualitySummary {
   metrics: QualityMetric[];
   rag: { complete: number; partial: number; missing: number; signals: { trialId: string; explanation: string }[] };
   /** Recorded dialogues left out of the validation set; never part of the denominator. */
-  excluded: { total: number; customerData: number; masked: number; other: number };
+  excluded: { total: number; kinds: { kind: ValidationExclusion['kind']; label: string; count: number }[] };
   causes: QualityCause[];
   /** How sure the automatic verdict is: decided dialogues vs those the judge left unknown or a human disputes. */
   judge: { decided: number; unknown: number; disputed: number; label: string };
@@ -368,9 +369,7 @@ const rate = (passed: number, failed: number): number | null => passed + failed 
 export const percent = (value: number | null): string => value === null ? '—' : `${Math.round(value * 100)}%`;
 /** Russian plural: plural(2, ['диалог', 'диалога', 'диалогов']) → «2 диалога». */
 export function plural(n: number, forms: [string, string, string]): string {
-  const mod10 = n % 10, mod100 = n % 100;
-  const form = mod10 === 1 && mod100 !== 11 ? forms[0] : mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20) ? forms[1] : forms[2];
-  return `${n} ${form}`;
+  return `${n} ${pluralForm(n, forms)}`;
 }
 export const dialogues = (n: number) => plural(n, ['диалог', 'диалога', 'диалогов']);
 export const cardsWord = (n: number) => plural(n, ['карточка', 'карточки', 'карточек']);
@@ -403,21 +402,6 @@ function metricRows(record: Experiment): QualityMetric[] {
   }
   return [...rows.values()].map(row => ({ ...row, accuracy: rate(row.passed, row.failed) }))
     .sort((a, b) => Number(b.kind === 'code') - Number(a.kind === 'code'));
-}
-
-function goalCardOutcome(record: Experiment, scenario: Scenario): 'pass' | 'fail' | 'unknown' {
-  const metric = scenario.metrics?.find(item => item.subject === 'agent' && item.id === 'goal_attainment');
-  if (!metric) return cardOutcome(record, scenario);
-  const modes = record.settings.userModes.filter(mode => mode !== 'scripted' || scenario.user.script !== undefined);
-  const expected = new Set(modes.flatMap(mode => Array.from({ length: record.settings.repeats }, (_, repeat) => `${mode}:${repeat}`)));
-  const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
-  const seen = new Set(trials.map(trial => `${trial.userMode}:${trial.repeat}`));
-  if (!expected.size || trials.length !== expected.size || seen.size !== expected.size || [...expected].some(key => !seen.has(key))
-    || trials.some(trial => trial.familyId !== scenario.familyId || trial.split !== scenario.split
-      || record.manifestHash && trial.manifestHash !== record.manifestHash
-      || !measurementUsable(scenario, trial, record.humanReviews))) return 'unknown';
-  const results = trials.map(trial => agentMetricResult(trial, metric.id, record.humanReviews) ?? 'unknown');
-  return results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
 }
 
 function cardScore(record: Experiment, outcomes: Array<{ scenario: Scenario; outcome: 'pass' | 'fail' | 'unknown' }>): QualityCardScore {
@@ -532,7 +516,7 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const p = v.provenance;
   const provenance = [p.curated.cards ? `golden ${p.curated.cards}` : '', p.production.cards ? `из логов ${p.production.cards}` : '', p.synthetic.cards ? `синтетика ${p.synthetic.cards}` : ''].filter(Boolean).join(' · ') || 'карточек нет';
   const target = record.targetVersion ?? record.targetRelease ?? (record.target.kind === 'sandbox' ? 'песочница' : record.targetFingerprint?.slice(0, 12) ?? 'версия не названа');
-  const judgeModel = record.trials.find(t => t.judgeAudit)?.judgeAudit?.model ?? record.settings.roles?.judge?.model ?? record.settings.judge?.model;
+  const judgeModel = runJudgeModel(record);
   const limitCodes = v.confidenceReasons.map(r => r.code).filter(code => code in limitTexts);
   const limits = limitCodes.length ? `Границы: ${[...new Set(limitCodes.map(c => limitTexts[c]!))].slice(0, 4).join(' · ')}.` : 'Границы: см. статистику.';
   const reviewText = `разобрано человеком ${human.reviewed} из ${plural(human.total, ['диалога', 'диалогов', 'диалогов'])}`;
@@ -543,8 +527,7 @@ export function qualitySummary(input: Experiment): QualitySummary {
     ? `Бизнес-цель достигнута в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${plural(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} цель достигнута, но провален другой критерий.` : ''} ${sentence([...leftovers([[cards.unknown, `без решения по цели: ${cards.unknown}`], [cards.invalid, `невалидно: ${cards.invalid}`], [cards.notReached, `не дошли: ${cards.notReached}`]]), reviewText])}.`
     : `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)})${leftovers([[cards.unknown, `${cards.unknown} без решения`], [cards.invalid, `${cards.invalid} невалидны`], [cards.notReached, `${cards.notReached} не дошли`]]).map(part => `, ${part}`).join('')}; ${reviewText}.`;
   const exclusions = record.validationExclusions ?? [];
-  const excluded = { total: exclusions.length, customerData: exclusions.filter(item => item.kind === 'customer_data').length,
-    masked: exclusions.filter(item => item.kind === 'masked').length, other: exclusions.filter(item => item.kind === 'length' || item.kind === 'unconfirmed').length };
+  const excluded = { total: exclusions.length, kinds: exclusionCounts(exclusions) };
   return { cards, strict, primary, metrics, rag, excluded, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
     human,
     scope: { cards: record.scenarios.length, dialogues: record.trials.length, modes: record.settings.userModes, provenance, target, ...(judgeModel ? { judgeModel } : {}) },
@@ -556,9 +539,8 @@ export function qualityLines(q: QualitySummary): { headline: string; coverage: s
   const bar = (value: number | null, width = 10) => value === null ? '·'.repeat(width) : `${'█'.repeat(Math.round(value * width))}${'░'.repeat(width - Math.round(value * width))}`;
   return {
     headline: q.headline,
-    coverage: !q.excluded.total ? '' : `${q.excluded.total === 1 ? 'Не вошёл' : 'Не вошли'} в набор ${plural(q.excluded.total, ['диалог', 'диалога', 'диалогов'])}: ${[
-      q.excluded.customerData ? `нужны данные клиента — ${q.excluded.customerData}` : '', q.excluded.masked ? `скрыты обезличиванием — ${q.excluded.masked}` : '',
-      q.excluded.other ? `прочее — ${q.excluded.other}` : ''].filter(Boolean).join(', ')}. В accuracy они не считаются.`,
+    coverage: !q.excluded.total ? '' : `${q.excluded.total === 1 ? 'Не вошёл' : 'Не вошли'} в набор ${plural(q.excluded.total, ['диалог', 'диалога', 'диалогов'])}: ${
+      q.excluded.kinds.map(item => `${item.label} — ${item.count}`).join(', ')}. В accuracy они не считаются.`,
     metrics: q.metrics.map(m => `${bar(m.accuracy)} ${percent(m.accuracy).padStart(4)}  ${m.name} · ${m.passed}/${m.passed + m.failed}${m.unknown ? ` · неясно ${m.unknown}` : ''}`),
     rag: !(q.rag.complete || q.rag.partial) ? [] : [
       `RAG-контекст: полный в ${q.rag.complete} из ${q.scope.dialogues} диалогов; частичный ${q.rag.partial}; отсутствует ${q.rag.missing}. Диагностика отдельно от accuracy; это указания для разбора, не доказанные первопричины.`,
