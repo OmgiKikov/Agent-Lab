@@ -4,6 +4,7 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { checkSchema, emptyUsage, experimentSchema, fingerprint, settingsSchema, targetSchema, worldSchema, type Experiment, type Runtime, type Scenario, type Target } from './contracts.js';
 import { evaluateTrial } from './evaluation.js';
+import { hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
 import { preflightTarget } from './targets.js';
 
 const step = z.strictObject({ message: z.string().trim().min(1).max(3000), reply: z.string().min(1).max(8000) });
@@ -125,9 +126,23 @@ export async function doctor(connection: Connection, signal = new AbortControlle
   } finally { clearTimeout(timer); }
 }
 
+/**
+ * The source attempts a saved suite or a reassessment carries. A legacy full judge audit is
+ * replaced by a receipt sealed with the full verifier now, so the copy never duplicates the audit.
+ */
 export function suiteEvidence(record: Experiment, scenarioIds: string[]) {
   const selected = new Set(scenarioIds);
-  const trials = record.trials.filter(trial => selected.has(trial.scenarioId)).map(trial => structuredClone(trial));
+  const sources = observableSources(record.sources, record.requirements);
+  const trials = record.trials.filter(trial => selected.has(trial.scenarioId)).map(trial => {
+    const copy = structuredClone(trial);
+    if (copy.judgeAudit) {
+      const scenario = record.scenarios.find(s => s.id === copy.scenarioId);
+      const complete = !!scenario && hasCompleteJudgment({ scenario, sources, trial: copy });
+      copy.judgeReceipt ??= sealJudgeReceipt(copy.judgeAudit, complete);
+      delete copy.judgeAudit;
+    }
+    return copy;
+  });
   const trialIds = new Set(trials.map(trial => trial.id));
   return { runId: record.id, ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}), trials,
     humanReviews: record.humanReviews.filter(review => trialIds.has(review.trialId)).map(review => structuredClone(review)) };
