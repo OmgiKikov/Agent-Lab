@@ -8,7 +8,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { ExperimentLab, draftHash, measurementHash, planDiscovery, resultHash } from '../src/experiment.js';
 import { ExperimentStore } from '../src/store.js';
 import { createDemoRuntime, demoEvaluationInput, demoInput } from '../src/demo.js';
-import { createInputSchema, fingerprint, goalAttainment, validatePreparation, type Runtime } from '../src/contracts.js';
+import { createInputSchema, fingerprint, goalAttainment, validatePreparation, type Experiment, type Runtime } from '../src/contracts.js';
+import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
 import { awaitingVerdict } from '../src/comparison.js';
 import { simulatorUsable } from '../src/outcomes.js';
 import { qualityLines, qualitySummary } from '../src/quality.js';
@@ -1584,4 +1585,68 @@ test('a run may drive several dialogues at once: their trace events interleave, 
   };
   assert.equal(await order(undefined), 2);
   assert.ok(await order(3) > 2, 'three parallel dialogues must interleave their traces');
+});
+
+/** A judge that answers every requested rubric as met, citing the assistant reply (seq 1). */
+function agreeingJudgeRuntime(): Runtime {
+  return {
+    async prepare({ sources }) {
+      return { requirements: [{ id: 'owner_rule', text: 'Answer from the owner material', sourceId: sources[0]!.id,
+        quote: sources[0]!.content, critical: false }], questions: [],
+        agent: { name: 'Recorded agent', instructions: 'Recorded only', tools: [] }, scenarios: [] };
+    },
+    async goals({ dialogues }) {
+      const dialogue = dialogues[0]!;
+      return [{ id: `goal_${dialogue.id}`, goal: `Answer ${dialogue.id}`, opening: dialogue.messages[0]!.content,
+        evidenceDialogueIds: [dialogue.id], requirementIds: ['owner_rule'], successCriteria: 'Answer from the owner material' }];
+    },
+    async assess(input, ctx) {
+      return assessRepeated(input, { provider: 'offline', id: 'judge' }, ctx, async (_prompt, data) => {
+        ctx.beforeCall();
+        const parsed = JSON.parse(data) as { scenario: { metrics: { id: string }[] }; trial: { events: { seq: number; content: string }[] } };
+        const quote = parsed.trial.events.find(event => event.seq === 1)!.content;
+        return JSON.stringify({ assessments: parsed.scenario.metrics.map(metric => ({ metricId: metric.id, passCondition: 'met', failCondition: 'not_met',
+          rationale: 'The reply is present in the trace.', evidence: [1], citations: [{ seq: 1, quote }] })) });
+      });
+    },
+    async improve() { throw new Error('score must not improve'); },
+    async openTarget() { throw new Error('score must not open the target'); },
+    async userTurn() { throw new Error('score must not run the simulator'); },
+  };
+}
+
+async function scoredAndReassessed(lab: ExperimentLab) {
+  const input = createInputSchema.parse({ task: 'Score recorded dialogues', mode: 'live',
+    materials: [{ name: 'policy', content: 'Answer from the owner material' }], scenarioCount: 0,
+    dialogues: ['d0', 'd1'].map(id => ({ id, messages: [{ role: 'user' as const, content: `Question ${id}` }, { role: 'assistant' as const, content: `Answer ${id}` }] })),
+  });
+  const seed = await lab.score(input); await lab.waitForIdle();
+  const scored = await lab.get(seed.id);
+  assert.equal(scored.phase, 'results_review', scored.error ?? '');
+  const pending = await lab.reassess(scored.id); await lab.waitForIdle();
+  const record = await lab.get(pending.id);
+  assert.equal(record.phase, 'results_review', record.error ?? '');
+  return record;
+}
+
+async function assertReceiptOnly(lab: ExperimentLab, directory: string, record: Experiment) {
+  assert.equal(record.trials.length, 2);
+  assert.ok(!JSON.stringify(record.trials).includes('judgeAudit'), 'a new record never carries the full judge audit');
+  const journal = (await lab.store.traceJournal(record.id)).split('\n').filter(Boolean).map(line => JSON.parse(line) as { trialId: string; judgeAudit?: unknown });
+  for (const trial of record.trials) {
+    const scenario = record.scenarios.find(s => s.id === trial.scenarioId)!;
+    assert.ok(trial.judgeReceipt, `${trial.id} carries a receipt`);
+    assert.equal(trial.judgeAudit, undefined);
+    assert.ok(trial.assessments?.length);
+    assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(record.sources, record.requirements), trial }), true);
+    assert.ok(existsSync(join(directory, `${record.id}.judge`, `${trial.id}.json`)));
+    assert.equal(fingerprint(await lab.store.readJudgeAudit(record.id, trial.id)), trial.judgeReceipt.auditHash);
+    assert.equal(journal.filter(line => line.trialId === trial.id && 'judgeAudit' in line).length, 1, 'one journal copy per finished judgment');
+  }
+}
+
+test('reassessing a scored record writes sidecar audits, receipt-only trials and one journal line per judgment', async t => {
+  const { lab, directory } = await setup(t, agreeingJudgeRuntime());
+  const record = await scoredAndReassessed(lab);
+  await assertReceiptOnly(lab, directory, record);
 });

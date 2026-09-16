@@ -808,7 +808,7 @@ export class ExperimentLab {
           ctx.signal.throwIfAborted();
           const trial = structuredClone(original);
           const scenario = record.scenarios.find(s => s.id === trial.scenarioId)!;
-          trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.judgeAudit;
+          trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.judgeAudit; delete trial.judgeReceipt;
           trial.manifestHash = record.manifestHash!;
           if (record.target.kind !== 'sandbox' && !trial.observation) trial.observation = { state: 'missing', tools: 'partial' };
           const started = performance.now();
@@ -953,7 +953,11 @@ export class ExperimentLab {
         record.usage.costUsd = usage.costUsd === null || record.usage.costUsd === null ? null : record.usage.costUsd + usage.costUsd;
       },
       onTrace: (trialId, event) => this.store.appendTrace(record.id, trialId, event),
-      onJudgment: (trialId, audit) => this.store.appendJudgment(record.id, trialId, audit),
+      // Every judgment report replaces the sidecar; only the finished one goes to the journal.
+      onJudgment: (trialId, audit, final) => {
+        this.store.writeJudgeAudit(record.id, trialId, audit);
+        if (final) this.store.appendJudgment(record.id, trialId, audit);
+      },
     };
     active.done = (async () => {
       try {
