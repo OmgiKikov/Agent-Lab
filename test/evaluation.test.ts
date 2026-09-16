@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { assessTrial, evaluateTrial } from '../src/evaluation.js';
 import { compareTrials } from '../src/comparison.js';
+import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
-import { checkSchema, fingerprint, observedGoalSchema, validationScenario, validatePreparation, type CallContext, type MetricAssessment, type Revision, type Rubric, type Runtime, type Scenario, type Source, type Tool, type Trial } from '../src/contracts.js';
+import { checkSchema, fingerprint, observedGoalSchema, validationScenario, validatePreparation, type CallContext, type JudgeAudit, type MetricAssessment, type Revision, type Rubric, type Runtime, type Scenario, type Source, type Tool, type Trial } from '../src/contracts.js';
 
 function context(signal = new AbortController().signal): CallContext {
   return { signal, timeoutMs: 1000, beforeCall() { signal.throwIfAborted(); }, addUsage() {} };
@@ -653,4 +654,46 @@ test('assessment hands the judge observable prompt rules in place of the raw pro
   assert.deepEqual(seen!.slice(0, f.sources.length), f.sources, 'policy sources reach the judge unchanged');
   assert.match(seen!.at(-1)!.content, /1\. «Отвечай на «вы»»/);
   assert.doesNotMatch(JSON.stringify(seen), /JSON|output/);
+});
+
+test('live evaluation seals a receipt, reports the final judgment once, and a rejected judgment keeps its raw replies without a receipt', async () => {
+  const f = await fixture();
+  const scenario = structuredClone(f.preparation.scenarios[0]!);
+  scenario.checks = [];
+  scenario.metrics = [structuredClone(testMetrics[0]!)];
+  for (const mode of ['agreeing', 'malformed'] as const) {
+    const reports: { audit: JudgeAudit; final: boolean }[] = [];
+    const actor: Runtime = { ...f.runtime,
+      async openTarget() { return { async respond() { return 'I cannot make that change.'; }, async close() {} }; },
+      async assess(input, ctx) {
+        return assessRepeated(input, { provider: 'offline', id: 'judge' }, ctx, async (_prompt, data) => {
+          if (mode === 'malformed') return `not json ${reports.length}`;
+          const parsed = JSON.parse(data) as { scenario: { metrics: { id: string }[] }; trial: { events: { seq: number; type: string; content: string }[] } };
+          const reply = parsed.trial.events.find(event => event.type === 'assistant')!;
+          return JSON.stringify({ assessments: parsed.scenario.metrics.map(metric => ({ metricId: metric.id, passCondition: 'not_met', failCondition: 'met',
+            rationale: 'The agent refused.', evidence: [reply.seq], citations: [{ seq: reply.seq, quote: reply.content }] })) });
+        });
+      },
+    };
+    const ctx: CallContext = { ...context(), onJudgment(_id, audit, final) { reports.push({ audit: structuredClone(audit), final: final === true }); } };
+    const trial = await f.evaluate(scenario, { ...f.candidate, spec: { ...f.candidate.spec, tools: [] } }, actor, ctx);
+    const finals = reports.filter(report => report.final);
+    assert.equal(finals.length, 1, `${mode}: the final judgment is reported exactly once`);
+    assert.ok(reports.length > 1, `${mode}: partial reports are still forwarded`);
+    assert.equal(trial.judgeAudit, undefined, `${mode}: the trial never carries the full audit`);
+    if (mode === 'agreeing') {
+      assert.equal(trial.assessmentError, undefined);
+      assert.equal(trial.assessments?.[0]!.result, 'fail');
+      assert.ok(trial.judgeReceipt);
+      assert.equal(trial.judgeReceipt.auditHash, fingerprint(finals[0]!.audit));
+      assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(f.sources, []), trial }), true);
+    } else {
+      assert.match(trial.assessmentError ?? '', /Judge response rejected/);
+      assert.equal(trial.judgeReceipt, undefined);
+      assert.equal(trial.assessments, undefined);
+      const raws = finals[0]!.audit.attempts.map(attempt => attempt.raw);
+      assert.equal(raws.length, 2);
+      assert.ok(raws.every(raw => raw?.startsWith('not json')), 'both raw replies survive in the final audit');
+    }
+  }
 });

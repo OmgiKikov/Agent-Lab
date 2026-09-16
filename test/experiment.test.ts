@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1649,4 +1650,29 @@ test('reassessing a scored record writes sidecar audits, receipt-only trials and
   const { lab, directory } = await setup(t, agreeingJudgeRuntime());
   const record = await scoredAndReassessed(lab);
   await assertReceiptOnly(lab, directory, record);
+});
+
+test('a record whose trials carry the legacy full audit reassesses without migration into receipt-only trials', async t => {
+  const { lab, directory } = await setup(t, agreeingJudgeRuntime());
+  const current = await scoredAndReassessed(lab);
+  const legacy = structuredClone(current);
+  legacy.id = randomUUID();
+  for (const trial of legacy.trials) {
+    const audit = await lab.store.readJudgeAudit(current.id, trial.id);
+    assert.ok(audit);
+    trial.judgeAudit = audit;
+    delete trial.judgeReceipt;
+  }
+  await lab.store.save(legacy);
+  const saved = await lab.get(legacy.id);
+  assert.ok(saved.trials.every(trial => trial.judgeAudit && !trial.judgeReceipt));
+  const scenario = (id: string) => saved.scenarios.find(s => s.id === id)!;
+  assert.ok(saved.trials.every(trial => hasCompleteJudgment({ scenario: scenario(trial.scenarioId), sources: observableSources(saved.sources, saved.requirements), trial })),
+    'the legacy full audit is still judged complete');
+
+  const pending = await lab.reassess(legacy.id); await lab.waitForIdle();
+  const reassessed = await lab.get(pending.id);
+  assert.equal(reassessed.phase, 'results_review', reassessed.error ?? '');
+  await assertReceiptOnly(lab, directory, reassessed);
+  assert.deepEqual(await lab.get(legacy.id), saved, 'the legacy source record stays unchanged on disk');
 });
