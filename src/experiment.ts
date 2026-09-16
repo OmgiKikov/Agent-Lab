@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
-  DISCOVERY_PROTOCOL, VERSION, agentSchema, createInputSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, discoveryGroupSchema, discoveryObservationSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, promptCompliance, proposalSchema, requirementSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation, verbatimSpan,
+  DEFAULT_GOAL_OBSERVATION, DISCOVERY_PROTOCOL, VERSION, agentSchema, createInputSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, discoveryGroupSchema, discoveryObservationSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, promptCompliance, proposalSchema, requirementSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation, verbatimSpan,
   reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type Dialogue, type ValidationExclusion, type DiscoverInput, type DiscoveryDialogue, type DiscoveryGroup, type DiscoveryObservation, type DiscoveryPlan, type DiscoveryRecord, type DraftPatch, type Experiment, type HumanReviewInput, type ObservedGoal, type Requirement, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
 import { ExperimentStore } from './store.js';
 import { assessTrial, evaluateTrial, grade } from './evaluation.js';
@@ -16,6 +16,7 @@ const GOAL_BATCH = 8;
 /** Dialogues a run may hold open against the target at once. */
 export const MAX_PARALLEL = 16;
 import { simulatorChecks } from './simulator.js';
+import { goalObservationDefault, withDefaultGoalObservation } from './normalize.js';
 import { validationDialogueIssue } from './imports.js';
 import { assessmentRubrics, validationScenario } from './contracts.js';
 import { createDemoRuntime } from './demo.js';
@@ -66,8 +67,7 @@ function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
     record.scenarios = record.scenarios.filter(s => scenarioIds.includes(s.id));
     record.selectedScenarioIds = [...scenarioIds];
   }
-  if (record.target.kind !== 'sandbox') record.scenarios = record.scenarios.map(scenario =>
-    scenario.goalObservation ? scenario : { ...scenario, goalObservation: 'reply' });
+  record.scenarios = record.scenarios.map(scenario => withDefaultGoalObservation(scenario, record.target.kind));
   Object.assign(record, { id: randomUUID(), parentRunId: previous.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     phase: 'review', message: 'Тесты готовы. Проверьте подключение и запустите проверку.',
     trials: [], comparisons: [], iterations: [], humanReviews: [], usage: emptyUsage(),
@@ -355,7 +355,7 @@ export class ExperimentLab {
         const dialogue = record.dialogues.find(item => item.id === goal.evidenceDialogueIds[0]);
         if (!dialogue || goal.evidenceDialogueIds.length !== 1) throw new Error(`Validation goal ${goal.id} must cite exactly one sampled dialogue.`);
         const scenario = input.validationCount ? validationScenario(dialogue, goal) : dialogueToScenario(dialogue, { goal: goal.goal, successCriteria: goal.successCriteria,
-          requirementIds: goal.requirementIds, goalObservation: input.goalObservation ?? 'reply' });
+          requirementIds: goal.requirementIds, goalObservation: input.goalObservation ?? DEFAULT_GOAL_OBSERVATION });
         if (record.sources.some(source => source.kind === 'prompt')) scenario.metrics!.unshift({ ...promptCompliance });
         return scenario;
       });
@@ -366,7 +366,7 @@ export class ExperimentLab {
         record.dialogues = record.dialogues.filter(dialogue => selected.has(dialogue.id));
       }
       const scenarios = [...synthetic, ...production, ...golden].map(scenario => {
-        const goalObservation = input.goalObservation ?? scenario.goalObservation ?? (record.target.kind === 'sandbox' ? undefined : 'reply');
+        const goalObservation = input.goalObservation ?? scenario.goalObservation ?? goalObservationDefault(record.target.kind);
         return goalObservation ? { ...scenario, goalObservation } : scenario;
       });
       const prepared = validatePreparation({ ...generated, scenarios }, record.sources, input.workflow, record.profiles);
@@ -523,7 +523,7 @@ export class ExperimentLab {
     if (!dialogues.length || discovery.hypothesis.eventIds.some(citation => !dialogues.some(dialogue => dialogue.id === citation.dialogueId
       && dialogue.messages[citation.seq]))) throw new Error('Исходные события сохранённой гипотезы отсутствуют.');
     return this.createPrepared({
-      task: source.task, confirmedHypothesis, goalObservation: 'reply', mode: source.mode, workflow: 'evaluate', scenarioCount: 1,
+      task: source.task, confirmedHypothesis, goalObservation: DEFAULT_GOAL_OBSERVATION, mode: source.mode, workflow: 'evaluate', scenarioCount: 1,
       materials: source.sources.map(item => ({ name: item.name, content: item.content, ...(item.kind ? { kind: item.kind } : {}) })),
       settings: settingsSchema.parse({ ...source.settings, maxCalls: discovery.callPlan.baseMaxCalls,
         maxDurationMs: discovery.callPlan.baseMaxDurationMs }),
@@ -602,7 +602,7 @@ export class ExperimentLab {
             validateObservedGoals([goal], [dialogue], []);
             if (goal.requirementIds?.length !== 1 || goal.requirementIds[0] !== focus.id) throw new Error(`Цель ${dialogueId} потеряла единый discovery focus.`);
             const base = dialogueToScenario(dialogue, { goal: goal.goal, successCriteria: goal.successCriteria, requirementIds: [focus.id] });
-            const scenario: Scenario = { ...base, goalObservation: 'reply', split: 'dev' };
+            const scenario: Scenario = { ...base, goalObservation: DEFAULT_GOAL_OBSERVATION, split: 'dev' };
             if (record.sources.some(source => source.kind === 'prompt')) scenario.metrics!.unshift({ ...promptCompliance });
             const trial = dialogueToTrial(dialogue, scenario, record.revisions[0]!.id);
             return { goal, assessments: await assessTrial(runtime, scenario, record.sources, trial, ctx, [focus]) };

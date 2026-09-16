@@ -430,7 +430,7 @@ export function dialogueToScenario(dialogue: Dialogue, criteria: { goal: string;
         : 'Полный длинный диалог хранится как неизменяемое доказательство; отдельный тест строится после принятия гипотезы.',
       opening, maxFollowUps: replayable ? script.length : 0, ...(replayable ? { script } : {}),
     },
-    initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], goalObservation: criteria.goalObservation ?? 'reply',
+    initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], goalObservation: criteria.goalObservation ?? DEFAULT_GOAL_OBSERVATION,
     ...(criteria.successCriteria ? { successCriteria: criteria.successCriteria } : {}),
     assumptions: [`Recorded dialogue ${dialogue.id}; no target or simulator execution and no observed external state.`],
     metrics: [{ ...goalAttainment }, { ...replyQuality }],
