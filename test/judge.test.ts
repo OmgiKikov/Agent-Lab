@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources, JUDGE_PROTOCOL } from '../src/judge.js';
-import { emptyUsage, goalAttainment, replyQuality, simulatorFidelity, type JudgeAudit, type Scenario, type Trial } from '../src/contracts.js';
+import { emptyUsage, goalAttainment, RAG_METRIC_IDS, ragEvidenceComplete, replyQuality, simulatorFidelity, type JudgeAudit, type Scenario, type Trial } from '../src/contracts.js';
 import { ExperimentStore } from '../src/store.js';
 
 const scenario: Scenario = { id: 'card', familyId: 'family', title: 'A fixed input', split: 'dev', provenance: 'synthetic', requirementIds: [],
@@ -17,6 +17,39 @@ const trial: Trial = { id: 'trial', revisionId: 'revision', scenarioId: 'card', 
 const input = { scenario, sources: [], trial };
 const model = { provider: 'offline', id: 'test' };
 const row = (passCondition: string, failCondition: string, evidence = [1]) => JSON.stringify({ assessments: [{ metricId: 'goal', passCondition, failCondition, rationale: 'Explicit evidence for both conditions.', evidence, citations: evidence.map(seq => ({ seq, quote: 'Do this.' })) }] });
+
+test('RAG judgment uses per-reply evidence, leaves missing context unknown and preserves business results on diagnostic errors', async () => {
+  for (const mode of ['complete', 'empty', 'partial', 'no_owner_knowledge', 'no_retrieval_quote', 'diagnostic_error'] as const) {
+    const targetTrial = structuredClone(trial);
+    targetTrial.events.splice(1, 0, { seq: 2, type: 'retrieval', result: {
+      chunks: mode === 'empty' ? [] : [{ source: 'kb#instruction', content: 'Do this.' }], complete: mode !== 'partial',
+    } });
+    const judged = { ...input, trial: targetTrial, sources: mode === 'no_owner_knowledge' ? [] : [{ id: 'kb', name: 'Knowledge', content: 'Do this.', hash: 'h' }] };
+    let calls = 0, audit: JudgeAudit | undefined;
+    const assessments = await assessRepeated(judged, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, value) { audit = value; } },
+      async (_prompt, data) => {
+        calls++;
+        const metricId = JSON.parse(data).scenario.metrics[0].id as string;
+        if (!RAG_METRIC_IDS.has(metricId)) return row('met', 'not_met');
+        if (mode === 'diagnostic_error') throw new Error('Diagnostic budget exhausted');
+        const citations = [{ seq: 1, quote: 'Do this.' }, ...(mode === 'no_retrieval_quote' ? [] : [{ seq: 2, quote: '"chunks":' }])];
+        return JSON.stringify({ assessments: [{ metricId, passCondition: mode === 'empty' ? 'not_met' : 'met', failCondition: mode === 'empty' ? 'met' : 'not_met', rationale: 'Cited evidence.', evidence: citations.map(c => c.seq), citations }] });
+      });
+    assert.equal(assessments.find(a => a.metricId === 'goal')!.result, 'pass');
+    const diagnostics = assessments.filter(a => RAG_METRIC_IDS.has(a.metricId));
+    assert.equal(diagnostics.length, 3);
+    assert.equal(calls, mode === 'partial' ? 2 : 8);
+    if (['partial', 'diagnostic_error', 'no_retrieval_quote'].includes(mode)) assert.ok(diagnostics.every(a => a.result === 'unknown'));
+    if (mode === 'no_owner_knowledge') assert.equal(diagnostics.find(a => a.metricId === 'rag_context_recall')!.result, 'unknown');
+    if (mode === 'complete' || mode === 'empty') {
+      assert.ok(diagnostics.every(a => a.result === (mode === 'empty' ? 'fail' : 'pass')), 'this fake judge tests evidence plumbing, not model quality');
+      assert.equal(hasCompleteJudgment({ ...judged, trial: { ...targetTrial, assessments, judgeAudit: audit } }), true);
+    }
+    assert.equal(ragEvidenceComplete(targetTrial), mode !== 'partial');
+    targetTrial.events.push({ seq: 3, type: 'user', text: 'Another question' }, { seq: 4, type: 'assistant', text: 'Another answer' });
+    assert.equal(ragEvidenceComplete(targetTrial), false, 'an earlier retrieval cannot justify a later answer');
+  }
+});
 
 test('judgment retains raw independent votes, rejects conflicting criteria, and never treats nonreactive fidelity as a pass', async () => {
   for (const [outputs, expected] of [

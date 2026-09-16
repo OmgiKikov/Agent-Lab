@@ -158,7 +158,7 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean):
     verdictSummary(record).review.status === 'complete' ? 'Разбор набора завершён; у этого диалога отдельного вердикта нет: p — пройдено, n — не пройдено, v — подробно.'
       : 'Вердикта человека нет. p — пройдено, n — не пройдено, v — подробно с пояснением.', 'muted'));
   const transcript: Line[] = [line('ДИАЛОГ', 'accent', true)];
-  const roles = { user: 'ПОЛЬЗОВАТЕЛЬ', assistant: 'АГЕНТ', simulator: 'СИМУЛЯТОР', tool_call: 'ВЫЗОВ', tool_result: 'РЕЗУЛЬТАТ', error: 'ОШИБКА' };
+  const roles = { user: 'ПОЛЬЗОВАТЕЛЬ', assistant: 'АГЕНТ', simulator: 'СИМУЛЯТОР', retrieval: 'RAG-КОНТЕКСТ', tool_call: 'ВЫЗОВ', tool_result: 'РЕЗУЛЬТАТ', error: 'ОШИБКА' };
   for (const event of trial.events) {
     if (!expanded && !['user', 'assistant', 'error'].includes(event.type)) continue;
     transcript.push(line(`#${event.seq}  ${roles[event.type]}${event.tool ? ` · ${event.tool}` : ''}`, event.type === 'user' ? 'accent' : event.type === 'error' ? 'error' : 'text', true));
@@ -194,6 +194,7 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
     return [line('ИТОГ', 'accent', true),
       ...(measuredAny ? [line(q.headline, 'text', true), line(v.headline, 'muted')] : [line(v.headline, 'text', true)]),
       ...(measuredAny && q.metrics.length ? text.metrics.map(m => line(m)) : []),
+      ...(measuredAny ? text.rag.map(item => line(item, 'muted')) : []),
       line(''),
       ...(finding ? [line(humanFindingText(finding), 'warning')] : []),
       ...(broken ? [line('НЕ ИЗМЕРЕНО', 'error'), line(`${record.scenarios.find(s => s.id === broken.scenarioId)?.title ?? broken.scenarioId}: ${broken.reason}`, 'warning')] : []),

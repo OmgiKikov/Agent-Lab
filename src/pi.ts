@@ -631,7 +631,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           `Цель из реального диалога ${dialogue.id}`,
           GOALS_ROLE,
           payload,
-          z.strictObject({ goals: input.requireApplicable ? z.array(scoredGoalSchema).max(1) : z.array(scoredGoalSchema).length(1) }), ctx,
+          z.strictObject({ goals: input.requireApplicable ? z.array(scoredGoalSchema.extend({ facts: observedGoalSchema.shape.facts.removeDefault() }).required({ testability: true, testabilityReason: true })).max(1) : z.array(scoredGoalSchema).length(1) }), ctx,
           value => {
             const goal = value.goals[0];
             if (!goal) return undefined;

@@ -5,7 +5,7 @@ import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { openExternalTarget, preflightTarget, runRelease } from '../src/targets.js';
+import { externalReplySchema, openExternalTarget, preflightTarget, runRelease } from '../src/targets.js';
 import { type CallContext, type TraceEvent, type World } from '../src/contracts.js';
 
 function context(signal = new AbortController().signal) {
@@ -14,6 +14,30 @@ function context(signal = new AbortController().signal) {
   return { ctx, events };
 }
 const world = (): World => ({ records: { A101: { time: '09:00', owner: 'Sample' } }, writableFields: ['time'], transientFailures: 0 });
+
+test('adapter preserves exact retrieval evidence and distinguishes empty, partial and missing context', async t => {
+  const chunks = [{ source: 'knowledge.md#refund', content: '  Refund instructions.\n', score: 0.9 }];
+  let response: unknown = { reply: 'Answer', retrievals: chunks, retrievalsComplete: true };
+  const api = await server(() => response); t.after(api.close);
+  const { ctx, events } = context();
+  const session = await openExternalTarget({ target: { kind: 'http', url: api.url, timeoutMs: 1000, headersEnv: {} },
+    sessionId: 'rag', scenarioId: 'rag', state: world(), history: () => [], ctx });
+  t.after(() => session.close());
+  await session.respond('Question');
+  assert.deepEqual(events.pop(), { type: 'retrieval', result: { chunks, complete: true } });
+  response = { reply: 'No results', retrievals: [], retrievalsComplete: true };
+  await session.respond('Question');
+  assert.deepEqual(events.pop(), { type: 'retrieval', result: { chunks: [], complete: true } });
+  response = { reply: 'Partial', retrievals: chunks };
+  await session.respond('Question');
+  assert.deepEqual(events.pop(), { type: 'retrieval', result: { chunks, complete: false } });
+  response = 'Plain legacy answer';
+  await session.respond('Question'); assert.equal(events.length, 0);
+  for (const retrievals of [[{ source: 'x', content: '   ' }], [{ source: 'x', content: 'x'.repeat(12001) }],
+    Array.from({ length: 6 }, () => ({ source: 'x', content: 'x'.repeat(11000) }))]) {
+    assert.equal(externalReplySchema.safeParse({ reply: 'x', retrievals }).success, false);
+  }
+});
 type Handler = (body: Record<string, unknown>, req: IncomingMessage, res: ServerResponse) => unknown;
 
 async function server(handler: Handler) {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
-  emptyUsage, userTurnSchema, scriptIssue, metricApplies, validateAssessments,
+  assessmentRubrics, emptyUsage, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
   type CallContext, type CheckResult, type DialogueMessage, type Requirement, type Revision,
   type Runtime, type Scenario, type Settings, type Source, type Target, type TargetSession, type TraceEvent, type Trial, type UserMode,
 } from './contracts.js';
@@ -269,7 +269,7 @@ export async function evaluateTrial(input: {
     trial.elapsedMs = Math.round(performance.now() - started);
     if (persistenceFailed) throw persistenceError;
   }
-  if (stopped && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && scenario.metrics?.length) {
+  if (stopped && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && assessmentRubrics(scenario, trial).length) {
     try {
       if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');
       ctx.signal.throwIfAborted();
@@ -290,15 +290,16 @@ export async function evaluateTrial(input: {
 /** Shared by live evaluation and reassessment of immutable recorded evidence. The judge sees the agent prompt only as its observable rules. */
 export async function assessTrial(runtime: Runtime, scenario: Scenario, sources: Source[], trial: Trial, ctx: CallContext, requirements: Requirement[]) {
   if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');
-  const metrics = scenario.metrics ?? [];
+  const metrics = assessmentRubrics(scenario, trial);
   const assessments = validateAssessments(metrics, trial.events, await runtime.assess({
-    scenario: structuredClone(scenario), sources: structuredClone(observableSources(sources, requirements)), trial: structuredClone(trial),
+    scenario: structuredClone({ ...scenario, metrics }), sources: structuredClone(observableSources(sources, requirements)), trial: structuredClone(trial),
   }, { ...ctx, onTargetEvent: undefined, onTrace: undefined, onJudgment: (id, audit) => {
     trial.judgeAudit = structuredClone(audit);
     ctx.onJudgment?.(id, audit);
   } }));
   ctx.signal.throwIfAborted();
   return assessments.map(assessment => !metricApplies(metrics.find(m => m.id === assessment.metricId)!, trial)
-    ? { metricId: assessment.metricId, result: 'unknown' as const, evidence: [], rationale: 'Реактивный симулятор не участвовал в этом диалоге; его качество не измерено.' }
+    ? { metricId: assessment.metricId, result: 'unknown' as const, evidence: [], rationale: RAG_METRIC_IDS.has(assessment.metricId)
+      ? 'Полный RAG-контекст каждого ответа не подтверждён адаптером; причина не установлена.' : 'Реактивный симулятор не участвовал в этом диалоге; его качество не измерено.' }
     : assessment);
 }

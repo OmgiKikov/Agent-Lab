@@ -49,7 +49,8 @@ function runPlan(record: Experiment): string {
   const scope = validation ? [
     `Validation set: ${record.scenarios.length} реальных диалогов.`,
     `Темы: ${record.scenarios.slice(0, 5).map(scenario => safeText(scenario.title)).join('; ')}${record.scenarios.length > 5 ? `; ещё ${record.scenarios.length - 5}` : ''}.`,
-    'Карточки и критерии зафиксированы внутри набора для воспроизводимого повтора; полный список доступен в деталях.',
+    'Клиент отвечает на уточнения симулятором, используя только факты из лога. Ожидания взяты из материалов владельца:',
+    ...record.scenarios.map((scenario, i) => `${i + 1}. ${safeText(scenario.title)}\n  Ожидается: ${safeText(scenario.successCriteria)}\n  Основание: ${scenario.requirementIds.map(id => safeText(record.requirements.find(r => r.id === id)?.quote ?? id)).join('; ')}`),
   ] : record.scenarios.map(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
     ...(record.settings.userModes.includes('scripted') ? (s.user.script ?? []).map((message, i) => `  Продолжение ${i + 1}: ${safeText(message)}`) : []),
     `  Ожидается: ${safeText(s.successCriteria)}`, ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)].join('\n'));
@@ -59,6 +60,7 @@ function runPlan(record: Experiment): string {
     `До ${record.settings.maxCalls} вызовов, ${Math.round(record.settings.maxDurationMs / 1000)} секунд, ${record.settings.maxTurns} ходов.`,
     record.mode === 'demo' ? 'Учебный пример: без модели и оплаты.' : `Модель: ${safeText(record.settings.provider)}/${safeText(record.settings.model)}. Стоимость зависит от фактических вызовов.`,
     ...(record.mode === 'live' ? [`Судья: ${safeText(record.settings.judge?.provider ?? record.settings.provider)}/${safeText(record.settings.judge?.model ?? record.settings.model)}; по 2 вызова в свежих сессиях на каждую применимую рубрику.`] : []),
+    'Если адаптер передаёт полный RAG-контекст: ещё до 6 вызовов судьи на диалог в пределах указанного бюджета; диагностика отдельно от accuracy.',
     `Агент: ${safeText(target)}`, `Версия тестов: ${draftHash(record).slice(0, 12)}`,
     'Запуск не означает, что вы вручную проверили все ожидания или оценки.',
   ].join('\n');
@@ -153,12 +155,12 @@ export default function agentLab(pi: ExtensionAPI) {
   pi.on('before_agent_start', async (event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1') return;
     ctx.ui?.setWidget?.('agent-lab-start', undefined);
-    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for measuring the user's real agent. Work in their project and follow the agent-builder skill. The primary flow with de-identified real dialogues is agent_lab_build mode=validate: take a stable sample of 15, internally freeze one replayable scenario per dialogue from owner requirements, summarize the set without making the user manage cards, run the unchanged real agent after native confirmation, then lead with one estimated card accuracy number, grounded failure causes, separate metrics and limits; save the suite when useful. This is accuracy on the validation set, never a calibrated production guarantee. To mine one new regression test, call agent_lab_build mode=discover. Discovery selects evidence, proposes one saved hypothesis and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If the owner answers yes, call mode=discover again with the exact fromRunId and hypothesis; it re-reads the saved evidence and builds exactly one editable test. A refusal or correction builds nothing. Use agent_lab_accept for the owner's decision about the test definition. In the one-test flow use agent_lab_run only after acceptance; multi-test validation/regression suites use their run-plan confirmation, not one-test acceptance metadata. Execution consent remains separate from accepting a test and from reviewing results. Preserve budgets and model, cite actual event IDs, never invent a human verdict, and do not modify an external agent unless the user asked to fix it.` };
+    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for measuring the user's real agent. Work in their project and follow the agent-builder skill. The primary flow with de-identified real dialogues is agent_lab_build mode=validate: select up to 15 measurable prompt/RAG cases, ground expectations in owner requirements, use recorded user facts with a reactive simulator instead of scripted follow-ups, exclude masked-only turns and unavailable customer-data cases with explicit reasons, show the actual expectations and sources in the existing run confirmation, run the unchanged real agent after native confirmation, then lead with one estimated card accuracy number, grounded failure causes, separate metrics and limits; save the suite when useful. This is accuracy on the validation set, never a calibrated production guarantee. To mine one new regression test, call agent_lab_build mode=discover. Discovery selects evidence, proposes one saved hypothesis and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If the owner answers yes, call mode=discover again with the exact fromRunId and hypothesis; it re-reads the saved evidence and builds exactly one editable test. A refusal or correction builds nothing. Use agent_lab_accept for the owner's decision about the test definition. In the one-test flow use agent_lab_run only after acceptance; multi-test validation/regression suites use their run-plan confirmation, not one-test acceptance metadata. Execution consent remains separate from accepting a test and from reviewing results. Preserve budgets and model, cite actual event IDs, never invent a human verdict, and do not modify an external agent unless the user asked to fix it.` };
   });
   pi.registerTool({
     ...toolDisplay,
     name: 'agent_lab_build', label: 'Prepare agent and business-scenario tests',
-    description: 'Prepare agent checks. mode=validate takes a stable outcome-blind sample (15 by default) from up to 300 de-identified dialogues and builds one deterministic replay card per sampled dialogue; it does not run the agent. mode=discover mines one regression hypothesis. mode=score evaluates recorded replies without running the agent. mode=demo is the built-in example.',
+    description: 'Prepare agent checks. mode=validate selects up to 15 measurable prompt/RAG cases from up to 300 de-identified dialogues, grounds expectations in owner requirements and gives user facts to a reactive simulator; unavailable customer data and masked-only utterances are excluded. It does not run the agent. mode=discover mines one regression hypothesis. mode=score evaluates recorded replies without running the agent. mode=demo is the built-in example.',
     parameters: Type.Object({
       task: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
       materials: Type.Optional(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 180 }), content: Type.String({ minLength: 1, maxLength: 120000 }), kind: Type.Optional(Type.Union([Type.Literal('knowledge'), Type.Literal('prompt')], { description: "'prompt' marks the agent's own system prompt: observable rules are extracted from it and every generated card gets the prompt_compliance rubric" })) }, { additionalProperties: false }), { minItems: 1, maxItems: 12 })),
@@ -288,13 +290,13 @@ export default function agentLab(pi: ExtensionAPI) {
       const validationCount = operation === 'validate' ? rest.validationCount ?? 15 : 0;
       if (operation === 'validate') {
         parsedDialogues = selectValidationDialogues(parsedDialogues, Math.min(40, validationCount * 3));
-        if (!parsedDialogues.length) throw new Error('В логах нет диалогов с 1–16 репликами пользователя, пригодных для детерминированного replay.');
+        if (!parsedDialogues.length) throw new Error('В логах нет пригодных диалогов с 1–16 репликами пользователя без полностью замаскированных реплик.');
         if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для сборки validation set нужен native Pi confirmation в интерактивном терминале.');
-        const maxCalls = supplied.maxCalls ?? Math.max(140, 8 * parsedDialogues.length + 20);
+        const maxCalls = supplied.maxCalls ?? Math.max(140, 2 * parsedDialogues.length + 19 * validationCount + 20);
         const maxDurationMs = supplied.maxDurationMs ?? Math.max(180_000, 180_000 * parsedDialogues.length);
         if (!await ctx.ui.confirm('Собрать validation set?', safeText([
           `Исходных диалогов: ${sourceDialogueCount}; outcome-blind пул: ${parsedDialogues.length}; карточек: ${validationCount}.`,
-          'Один применимый реальный диалог → одна карточка; неподкреплённые материалами темы и сохранённые outcome не используются.',
+          'Один применимый реальный диалог → одна карточка с живым симулятором. Случаи без правил владельца или с недоступными данными клиента исключаются до запуска; старые оценки не используются.',
           `Сборка и будущий прогон разделены. Потолок набора: ${maxCalls} модельных вызовов, до ${Math.ceil(maxDurationMs / 60_000)} минут.`,
         ].join('\n')))) return { content: [{ type: 'text', text: JSON.stringify({ status: 'cancelled', calls: 0, mutated: false }) }], details: { status: 'cancelled' } };
       }
@@ -350,11 +352,11 @@ export default function agentLab(pi: ExtensionAPI) {
         ...(goldenFile ? { goldenCases: await readData(resolve(ctx.cwd, goldenFile), 'golden') } : {}),
         ...(dialogues !== undefined ? { dialogues: parsedDialogues } : {}),
         settings: { ...(mode === 'demo' ? demoInput().settings : {}), repeats: 1,
-          maxCalls: operation === 'score' ? scoreMaxCalls : operation === 'validate' ? Math.max(140, 8 * parsedDialogues.length + 20) : 20,
+          maxCalls: operation === 'score' ? scoreMaxCalls : operation === 'validate' ? Math.max(140, 2 * parsedDialogues.length + 19 * validationCount + 20) : 20,
           maxDurationMs: operation === 'score' ? scoreMaxDurationMs : operation === 'validate' ? Math.max(180_000, 180_000 * parsedDialogues.length) : 180_000,
           ...(mode === 'live' ? { judge: DEFAULT_JUDGE } : {}),
           ...supplied,
-          ...(operation === 'validate' ? { maxTurns: 16, userModes: ['scripted'] } : {}),
+          ...(operation === 'validate' ? { maxTurns: 6, userModes: ['reactive'] } : {}),
           provider: supplied.provider || ctx.model?.provider || '', model: supplied.model || ctx.model?.id || '' },
       });
       const { lab, close } = open(ctx.cwd);

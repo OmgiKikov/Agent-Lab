@@ -2,7 +2,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { createHash } from 'node:crypto';
 import { agentRubricResult, awaitingVerdict, evidenceSummary, isAgentFailure, observedRecord, humanFindings, humanFindingText, repeatResultText, type HumanFinding, type RunComparison } from './comparison.js';
 import type { Experiment, TraceEvent, Trial } from './contracts.js';
-import { describeCheck, fingerprint } from './contracts.js';
+import { assessmentRubrics, describeCheck, fingerprint } from './contracts.js';
 import type { EvidenceBundle } from './artifacts.js';
 import { qualityLines, qualitySummary, percent as pct, dialogues as dlg, type QualitySummary } from './quality.js';
 
@@ -55,7 +55,7 @@ function visibleTrials(record: Experiment) {
   return record.trials.filter(t => ids.has(t.scenarioId));
 }
 function eventLabel(event: TraceEvent): string {
-  return ({ user: 'Пользователь', assistant: 'Агент', error: 'Ошибка', simulator: 'Симулятор', tool_call: 'Вызов инструмента', tool_result: 'Результат инструмента', state: 'Состояние' } as Record<string, string>)[event.type] ?? event.type;
+  return ({ user: 'Пользователь', assistant: 'Агент', error: 'Ошибка', simulator: 'Симулятор', retrieval: 'RAG-контекст', tool_call: 'Вызов инструмента', tool_result: 'Результат инструмента', state: 'Состояние' } as Record<string, string>)[event.type] ?? event.type;
 }
 function eventText(event: TraceEvent): string {
   return event.text ?? JSON.stringify(event.result !== undefined ? event.result : event.args !== undefined ? event.args : event.state ?? '', null, 2);
@@ -65,7 +65,7 @@ function originalChecks(record: Experiment, trial: Trial): string[] {
   return [
     ...(trial.simulatorChecks ?? []).map(c => `Симулятор · эвристика · ${c.id}: ${c.passed ? 'без пометки' : 'подозрение'}. ${c.evidence}`),
     ...trial.checks.map(c => `Код · ${outcomes[c.passed ? 'pass' : 'fail']}: ${c.description}. ${c.evidence}`),
-    ...(trial.assessments ?? []).map(a => `${modelLabel(record)} · ${outcomes[a.result]}: ${scenario?.metrics?.find(m => m.id === a.metricId)?.name ?? a.metricId}. ${a.rationale}`),
+    ...(trial.assessments ?? []).map(a => `${modelLabel(record)} · ${outcomes[a.result]}: ${assessmentRubrics(scenario ?? {}, trial).find(m => m.id === a.metricId)?.name ?? a.metricId}. ${a.rationale}`),
   ];
 }
 function trialHTML(record: Experiment, trial: Trial, findings: HumanFinding[]): string {
@@ -140,7 +140,8 @@ ${q.metrics.map(metricCard).join('\n')}${placeholders.join('\n')}
   const why = q.causes.length ? `<section id="why"><h2>Почему не справился</h2><ol class="causes">${q.causes.slice(0, 5).map(c => `<li><b>${escape(c.name)}</b> · ${dlg(c.dialogues)}${c.stage ? ` · <span class="tag">${escape(c.stage)}</span>` : ''}<p>${escape(c.description)}</p>${c.example ? `<p class="muted">${record.trials.some(t => t.id === c.example!.trialId) ? `<a href="#${escape(trialId(record, { id: c.example.trialId }))}">${escape(c.example.card)}</a>` : escape(c.example.card)}: «${escape(c.example.quote)}»${c.example.seq === undefined ? '' : ` · реплика #${c.example.seq}`}</p>` : ''}${c.promptQuotes.map(quote => `<p class="muted">Правило промпта: «${escape(quote)}»</p>`).join('')}</li>`).join('')}</ol>${q.causes.length > 5 ? `<p class="muted">Ещё ${q.causes.length - 5} причин ниже, в диалогах.</p>` : ''}</section>` : '';
   const basis = measured ? `<p class="basis">${escape(text.judge)} ${escape(text.queue)}<br>${escape(text.scope)}<br>${escape(text.limits)} Подробности — в разделе «Границы результата».</p>` : '';
   const lead = measured ? `<p class="lead">${escape(q.headline)}</p><p class="muted">${escape(v.headline)}</p>` : `<p class="lead">${escape(v.headline)}</p>`;
-  return { grid, why, basis, lead };
+  const rag = measured ? `<section id="rag"><h2>RAG: что видно по контексту</h2><p>${escape(text.rag[0])}</p>${q.rag.signals.map(signal => `<p><a href="#${escape(trialId(record, { id: signal.trialId }))}">${escape(signal.trialId)}</a>: ${escape(signal.explanation)}</p>`).join('')}</section>` : '';
+  return { grid, why: why + rag, basis, lead };
 }
 
 /** A portable, script-free report. Every supplied or generated string is escaped. */
@@ -175,7 +176,7 @@ export function htmlReport(input: Experiment | EvidenceBundle, comparison?: RunC
 ${bundle.warnings.map(w => `<div class="notice" role="note">${escape(w)}</div>`).join('')}
 ${quality.grid}
 ${quality.basis}
-<p class="muted">${escape(sourceLine)}</p><nav aria-label="Разделы отчёта">${quality.why ? '<a href="#why">Почему</a>' : ''}<a href="#attention">Замечания · ${attention.length}</a><a href="#repeats">Повторы</a>${bundle.comparison ? '<a href="#comparison">До и после</a>' : ''}<a href="#dialogues">Диалоги · ${trials.length}</a><a href="#cards">Карточки и критерии</a><a href="#limits">Границы результата</a></nav>
+<p class="muted">${escape(sourceLine)}</p><nav aria-label="Разделы отчёта">${bundle.quality.causes.length ? '<a href="#why">Почему</a>' : ''}<a href="#attention">Замечания · ${attention.length}</a><a href="#repeats">Повторы</a>${bundle.comparison ? '<a href="#comparison">До и после</a>' : ''}<a href="#dialogues">Диалоги · ${trials.length}</a><a href="#cards">Карточки и критерии</a><a href="#limits">Границы результата</a></nav>
 ${quality.why}
 <section id="attention"><h2>Что требует внимания</h2>${v.review.findings.length ? `<p class="notice">Замечания человека: ${v.review.flagged} диалогов · расхождения оценок: ${v.review.disagreements}. Исходные оценки сохранены; основания расхождений нужно проверить по трассе.</p>` : ''}${record.error ? `<p class="warning">${escape(record.error)}</p>` : ''}${attention.length ? `<ul class="attention">${attention.slice(0, 8).map(t => `<li><span class="tag ${isAgentFailure(observed, t) || t.outcome === 'invalid' ? 'warning' : ''}">${escape(['invalid', 'cancelled'].includes(t.outcome) ? outcomes[t.outcome] : pending.has(t.id) ? 'Нужен вердикт' : flagged.has(t.id) ? 'Замечание человека' : t.assessmentError ? 'Ошибка оценщика' : 'Провал разобран')}</span><a href="#${escape(trialId(record, t))}">${escape(record.scenarios.find(s => s.id === t.scenarioId)?.title ?? t.scenarioId)} →</a><p>${escape(v.review.findings.filter(f => f.trialId === t.id).map(humanFindingText).join(' ') || (t.checks.find(c => !c.passed)?.description ?? t.assessments?.find(a => a.result === 'fail' && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent'))?.rationale ?? t.assessmentError ?? t.reason))}</p></li>`).join('')}</ul>${attention.length > 8 ? `<p><a href="#dialogues">Все замечания: ${attention.length} →</a></p>` : ''}` : `<p class="empty">${v.execution.completed ? 'В сохранённых диалогах нет зарегистрированных провалов. Это не гарантия качества в реальном трафике.' : 'Измерений пока нет. Следующий шаг указан ниже.'}</p>`}
 ${record.failureModes?.length ? `<details><summary>Типы провалов</summary>${list(record.failureModes.flatMap(m => [`${m.name}: ${m.description}`, ...(m.promptQuotes ?? []).map(q => `Цитата промпта · гипотеза: «${q}»`)]))}</details>` : ''}
@@ -206,7 +207,7 @@ export function markdownReport(bundle: EvidenceBundle): string {
     `# Agent Lab · ${md(title(record))}`, '',
     '## Итог', '', ...(bundle.quality.scope.dialogues ? [md(bundle.quality.headline), '', md(v.headline), '', ...qualityLines(bundle.quality).metrics.map(m => `- ${md(m)}`), ''] : [md(v.headline), '']),
     ...(bundle.quality.causes.length ? ['### Почему не справился', '', ...bundle.quality.causes.slice(0, 5).map((c, i) => `${i + 1}. **${md(c.name)}** · ${dlg(c.dialogues)}${c.stage ? ` · ${md(c.stage)}` : ''}. ${md(c.description)}${c.example ? ` Пример — ${md(c.example.card)}: «${md(c.example.quote)}»` : ''}${c.promptQuotes.map(q => ` Правило промпта: «${md(q)}»`).join('')}`), ''] : []),
-    ...(bundle.quality.scope.dialogues ? [md(qualityLines(bundle.quality).judge), md(qualityLines(bundle.quality).queue), '', md(qualityLines(bundle.quality).scope), md(qualityLines(bundle.quality).limits), ''] : []),
+    ...(bundle.quality.scope.dialogues ? ['### RAG-контекст', '', ...qualityLines(bundle.quality).rag.map(md), '', md(qualityLines(bundle.quality).judge), md(qualityLines(bundle.quality).queue), '', md(qualityLines(bundle.quality).scope), md(qualityLines(bundle.quality).limits), ''] : []),
     `Выполнено: ${v.execution.completed}/${v.execution.planned}. Не измерено: ${v.execution.invalid}. Остановлено: ${v.execution.cancelled}. Не выполнено: ${v.execution.missing}.`,
     `Кодовые проверки: ${v.graded ? `${v.passed}/${v.graded} диалогов` : observedRecord(record).scenarios.some(s => s.checks.length) ? 'заданы, измерений нет' : 'не заданы'}. ${modelLabel(record)} по рубрикам: ${v.rubric.passed}/${v.rubric.assessed}; неясно ${v.rubric.unknown}.`,
     `Вердикт на весь диалог: ${v.review.reviewed}/${v.review.total}. Пройдено ${v.review.passed}, не пройдено ${v.review.failed}. Автоматических провалов без решения: ${v.review.pending}. ${reviewWord(bundle)}.`,

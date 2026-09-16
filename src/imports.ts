@@ -2,14 +2,19 @@ import { readFile, stat } from 'node:fs/promises';
 import { z } from 'zod';
 import { dialogueSchema, fingerprint, goldenCaseSchema, type Dialogue } from './contracts.js';
 
-/** Stable outcome-blind sample of real conversations that can be replayed without a simulator. */
+/** Drop the whole dialogue: removing one masked turn would silently change its meaning. */
+export function validationDialogueIssue(dialogue: Dialogue): string | undefined {
+  const users = dialogue.messages.filter(message => message.role === 'user');
+  if (!users.length || users.length > 16) return 'нужны 1–16 реплик клиента';
+  if (users.some(message => /[*#]/u.test(message.content) && !/[\p{L}\p{N}]/u.test(message.content))) return 'реплика клиента целиком скрыта обезличиванием';
+  return undefined;
+}
+
+/** Stable outcome-blind sample; the live simulator later answers from the recorded user facts. */
 export function selectValidationDialogues(dialogues: Dialogue[], count = 15): Dialogue[] {
   if (!Number.isInteger(count) || count < 1 || count > 40) throw new Error('В validation set может быть от 1 до 40 карточек.');
   return [...dialogues]
-    .filter(dialogue => {
-      const users = dialogue.messages.filter(message => message.role === 'user').length;
-      return users > 0 && users <= 16;
-    })
+    .filter(dialogue => !validationDialogueIssue(dialogue))
     .sort((a, b) => fingerprint({ id: a.id, messages: a.messages }).localeCompare(fingerprint({ id: b.id, messages: b.messages })) || a.id.localeCompare(b.id))
     .slice(0, count);
 }

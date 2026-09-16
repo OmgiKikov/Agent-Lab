@@ -7,7 +7,7 @@ description: Inspect a local agent, build a repeatable validation set from owner
 
 Keep the whole Agent Lab flow in the current Pi conversation:
 
-`repository + owner requirements + real logs → 15 replayable cards → review run plan → real TargetSession → estimated accuracy + separate metrics + grounded failure causes → optional human review → save/repeat/version diff`.
+`repository + owner requirements + real logs → up to 15 measurable cards → review expectations and run plan → real TargetSession + reactive user → estimated accuracy + separate metrics + grounded failure causes → optional human review → save/repeat/version diff`.
 
 Discovery is a supplemental loop for adding one new regression: `logs → one hypothesis → Проверим? → one editable test → explicit acceptance → run/save`.
 
@@ -18,7 +18,7 @@ Use the current project unless the owner named another one. Preserve the selecte
 - Read before asking: inspect the repository, its run configuration, entry point, prompts, tools and relevant tests. Ask only for information that cannot be found locally.
 - Treat owner materials as the source of expected behavior. Existing code, old agent answers and imported outcome labels may be wrong. Every requirement needs its source quote; unresolved policy stays unresolved.
 - Lead with one validation-set accuracy number, then repeated failure causes, cited dialogues and separate metrics. Separate an agent defect, a broken test and missing evidence.
-- Treat cards as an internal reproducibility contract. For a multi-test validation run, summarize count and topic coverage; do not make the owner inspect or accept every card.
+- Treat cards as an internal reproducibility contract. Show count, coverage and all expected results with their owner requirement in the existing run confirmation; no separate per-card acceptance ritual.
 - In one-test discovery, show the complete proposed test before acceptance: goal, user knowledge and behavior, opening, initial state, checks, rubrics with pass/fail criteria, source quote, observation channel and draft hash.
 - One-test acceptance approves only that definition. Multi-test validation uses its run-plan confirmation; execution and any human result verdict remain separate decisions.
 - After a change to the agent, repeat the exact accepted test. A changed test cannot prove an agent improvement.
@@ -27,9 +27,9 @@ Use the current project unless the owner named another one. Preserve the selecte
 
 Ask once, in the user's language: «Есть реальные диалоги с агентом? Можно указать файл JSON/JSONL или начать без них». Honor a path or decision already present in the conversation. Do not search unrelated files. `agent_lab_build` must return `needs_input` until it receives dialogues or the owner explicitly chooses `withoutDialogues=true`. Пустой ответ не означает согласие продолжить без них; оставь вопрос открытым до явного пути или решения начать без них. Invalid input needs correction, not a silent synthetic fallback.
 
-Logs are offline, de-identified exports; no external logging service is connected. With logs, call `agent_lab_build` with `mode:"validate"`. It accepts up to 300 dialogues, chooses a stable outcome-blind sample of 15 by default and builds one card per sampled conversation. Stored outcome labels and old assistant replies never define the expected result. Real user turns become a deterministic `scripted` replay; the LLM user simulator does not participate. The owner requirements define `successCriteria`, and prompt/RAG tests use `goalObservation:"reply"` unless the owner explicitly chose another observable channel.
+Logs are offline, de-identified exports; no external logging service is connected. With logs, call `agent_lab_build` with `mode:"validate"`. It accepts up to 300 dialogues, chooses a stable outcome-blind candidate pool and builds up to 15 measurable cards. Stored outcome labels and old assistant replies never define the expected result. Extract the user's goal and facts; the reactive simulator answers the new agent's actual questions from those facts, without inventing unknown data or replaying old follow-ups in order. Owner requirements define `successCriteria`, and prompt/RAG tests use `goalObservation:"reply"` unless the owner chose another observable channel. Exclude masked-only utterances and cases requiring unavailable customer records before execution. Never replace a request for a personal rate or application status with a different, easier knowledge question. Record exclusion reasons; a smaller valid set is preferable to invented expectations.
 
-Summarize the 15-dialogue set and run plan; keep full card definitions in the optional detail view. Building the internal scenarios does not run the target. Use `agent_lab_run` for one native confirmation that names the real target, planned dialogues and budget. After the run, report in this order:
+Summarize the actual set, excluded cases and run plan. Building scenarios does not run the target. Use `agent_lab_run` for one native confirmation with expected results, their sources, the real target, planned dialogues and budget. After the run, report in this order:
 
 1. estimated accuracy on this validation set: passed / (passed + failed);
 2. unknown, invalid and not-reached cards outside that denominator;
@@ -38,7 +38,9 @@ Summarize the 15-dialogue set and run plan; keep full card definitions in the op
 5. judge and human-review limits;
 6. the saved suite path and repeat command when the set is useful.
 
-Never call this production accuracy or a calibrated guarantee. The sample excludes conversations too long for lossless replay and that limitation stays visible.
+Never call this production accuracy or a calibrated guarantee. Selection and environment limitations stay visible. Legacy scripted suites do not become reactive automatically: rebuild them from logs before interpreting their multi-turn results as a new validation measurement.
+
+When the adapter exposes actual RAG fragments, preserve them as `retrievals` with `source`, verbatim `content` and optional `score`. Set `retrievalsComplete:true` only if the full context supplied for that reply is included; an explicit empty array means no chunks were supplied. With complete evidence Lab adds independent context coverage, relevance and faithfulness diagnostics (up to six judge calls per dialogue within the approved budget). They do not change the frozen card or accuracy. Without this evidence, say the search-versus-answer cause is unknown. The entire owner knowledge base is not retrieval evidence, and a statement unsupported by retrieved chunks is not automatically false.
 
 Use `mode:"discover"` only when the owner asks to find or add one particularly useful regression test. It accepts up to 300 dialogues. Its call plan is displayed through native confirmation before the first provider call and bounds calls and total duration for discovery only.
 

@@ -658,7 +658,7 @@ test('accepting rejects zero, multiple, compare and non-review drafts without mu
   assert.deepEqual(await lab.get(completed.id), completed);
 });
 
-test('validation replay grounds requirements first and builds one deterministic card per real dialogue', async t => {
+test('validation grounds expectations and user facts, uses reactive turns, excludes missing customer data and masked dialogues', async t => {
   const policy = 'Отвечайте по базе знаний и не отправляйте клиента в поддержку.';
   const dialogues = Array.from({ length: 3 }, (_, index) => ({ id: `real_${index}`, outcome: index === 0 ? 'failure' as const : 'success' as const,
     messages: [
@@ -683,20 +683,29 @@ test('validation replay grounds requirements first and builds one deterministic 
       attempts.set(dialogue.id, (attempts.get(dialogue.id) ?? 0) + 1);
       if (dialogue.id === 'real_1' && attempts.get(dialogue.id) === 1) throw new Error('Pi provider response incomplete: connection failure');
       return [{ id: `goal_${dialogue.id}`, goal: `Ответить на ${dialogue.id}`, opening: dialogue.messages[0]!.content,
+        facts: `Пользователь сообщил: ${dialogue.messages.filter(m => m.role === 'user').map(m => m.content).join('; ')}`,
+        testability: dialogue.id === 'customer' ? 'customer_data' : 'knowledge', testabilityReason: dialogue.id === 'customer' ? 'Нужна персональная ставка клиента.' : 'Достаточно базы знаний.',
         requirementIds: ['reply_rule'], evidenceDialogueIds: [dialogue.id], successCriteria: policy }];
     },
     async improve() { throw new Error('unused'); }, async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
   };
   const { lab } = await setup(t, runtime);
-  const created = await lab.create(createInputSchema.parse({ task: 'Проверить ответы', mode: 'live', scenarioCount: 0, validationCount: 3, dialogues,
+  const created = await lab.create(createInputSchema.parse({ task: 'Проверить ответы', mode: 'live', scenarioCount: 0, validationCount: 4, dialogues: [...dialogues,
+    { id: 'customer', messages: [{ role: 'user', content: 'Какая у меня ставка?' }] },
+    { id: 'masked', messages: [{ role: 'user', content: '*** ###' }] }],
     materials: [{ name: 'prompt', kind: 'prompt', content: policy }], settings: { userModes: ['scripted'], maxTurns: 16 } }));
   await lab.waitForIdle();
   const draft = await lab.get(created.id);
   assert.equal(draft.phase, 'review', draft.error ?? '');
   assert.deepEqual(draft.scenarios.map(card => card.id), dialogues.map(dialogue => dialogue.id));
   assert.ok(draft.scenarios.every(card => card.goalObservation === 'reply'));
-  assert.deepEqual(draft.scenarios.map(card => card.user.script), [['Деталь 0'], ['Деталь 1'], ['Деталь 2']]);
-  assert.ok(draft.scenarios.every(card => card.metrics?.map(metric => metric.id).join(',') === 'prompt_compliance,goal_attainment,reply_quality'));
+  assert.deepEqual(draft.settings.userModes, ['reactive']);
+  assert.ok(draft.scenarios.every(card => card.user.script === undefined && card.user.facts.includes('Деталь')));
+  assert.ok(draft.scenarios.every(card => card.metrics?.map(metric => metric.id).join(',') === 'prompt_compliance,goal_attainment,reply_quality,user_fidelity'));
+  assert.match(draft.limitations.join('\n'), /Исключён customer: Нужна персональная ставка/);
+  assert.match(draft.limitations.join('\n'), /Исключён masked:/);
+  assert.match(draft.limitations.join('\n'), /Измеримы 3 из запрошенных 4/);
+  assert.equal(attempts.has('masked'), false, 'masked-only turns never reach the model');
   assert.equal(attempts.get('real_1'), 2, 'one transient transport failure is retried once');
 });
 

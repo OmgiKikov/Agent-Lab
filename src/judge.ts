@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { assessmentEventContent, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, validateAssessments, type CallContext, type JudgeAudit, type MetricAssessment, type Requirement, type Runtime, type Source } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, type CallContext, type JudgeAudit, type MetricAssessment, type Requirement, type Runtime, type Source } from './contracts.js';
 import { ASSESS_ROLE, DATA_BOUNDARY } from './prompts.js';
 
 const condition = z.enum(['met', 'not_met', 'unclear']);
@@ -14,9 +14,10 @@ export const JUDGE_RESPONSE_FORMAT = { type: 'json_schema', json_schema: { name:
 } };
 export const JUDGE_PROMPT = `${ASSESS_ROLE}\n${DATA_BOUNDARY}
 Evaluate passCriteria and failCriteria INDEPENDENTLY against the same evidence. Report met, not_met or unclear for EACH condition. Do not choose which condition takes precedence. If both apply, preserve both as met. An unspecified scope or priority is unclear; never invent one. Explain both conditions in rationale. A condition that is not exercised is unclear, not automatically met or not_met.
+Events of type retrieval are the exact RAG fragments the target adapter says were supplied for that reply. For rag_context_* rubrics, compare those events with the delivered user request and the applicable owner requirements. Never treat the full owner sources as retrieved context. Cite retrieval events and assistant events that support the decision; if the trace cannot establish the condition, return unclear.
 Return exactly one compact JSON object, without markdown fences, matching this schema:
 ${JSON.stringify(z.toJSONSchema(responseSchema))}`;
-export const JUDGE_PROTOCOL = fingerprint({ version: 9, promptSources: 'observable-rules', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
+export const JUDGE_PROTOCOL = fingerprint({ version: 10, promptSources: 'observable-rules', ragEvidence: 'adapter-reported-retrieval-events', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
 
 /**
@@ -69,6 +70,14 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
     if (result !== 'unknown' && !row.evidence.length) throw new Error(`Assessment ${row.metricId} needs trace evidence for pass/fail`);
     const citedEvents = row.evidence.map(seq => input.trial.events.find(event => event.seq === seq)!);
     const replyConfirms = citedEvents.some(event => event.type === 'assistant');
+    if (RAG_METRIC_IDS.has(row.metricId) && result !== 'unknown') {
+      if (!citedEvents.some(event => event.type === 'retrieval') || !metricApplies(metrics.find(metric => metric.id === row.metricId)!, input.trial)
+        || row.metricId === 'rag_context_faithfulness' && !replyConfirms
+        || row.metricId === 'rag_context_recall' && !input.sources.some(source => source.kind !== 'prompt')) {
+        result = 'unknown';
+        row.rationale = 'Для RAG-вывода нужны полный контекст каждого ответа, цитаты найденного и, для полноты знания, требования из базы знаний владельца.';
+      }
+    }
     const expectedTools = input.scenario.checks.flatMap(check =>
       check.kind === 'tool_called' || check.kind === 'tool_count' && check.min > 0 ? [{ tool: check.tool, id: check.id }] : []);
     const toolConfirms = citedEvents.some(event => {
@@ -98,7 +107,7 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
 /** Historical verdicts remain readable, but incomplete or stale receipts cannot support a comparison. */
 export function hasCompleteJudgment(input: Input): boolean {
   if (!input.scenario) return false;
-  const metrics = input.scenario.metrics ?? [];
+  const metrics = assessmentRubrics(input.scenario, input.trial);
   if (!metrics.length) return true;
   const audit = input.trial.judgeAudit;
   if (!audit || input.trial.assessmentError || audit.prompt !== JUDGE_PROMPT) return false;
@@ -130,7 +139,7 @@ export function hasCompleteJudgment(input: Input): boolean {
 
 export async function assessRepeated(input: Input, model: { provider: string; id: string; configurationHash?: string; transport?: JudgeAudit['transport'] }, ctx: CallContext,
   respond: (prompt: string, input: string, recordPartial: (raw: string) => void) => Promise<string>): Promise<MetricAssessment[]> {
-  const metrics = input.scenario.metrics ?? [];
+  const metrics = assessmentRubrics(input.scenario, input.trial);
   if (!metrics.length) return [];
   // Only the harness-owned reactive fidelity rubric has this applicability rule.
   const notApplicable = metrics.filter(m => !metricApplies(m, input.trial)).map(m => m.id);
@@ -157,7 +166,8 @@ export async function assessRepeated(input: Input, model: { provider: string; id
     } catch (error) {
       attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Judge request failed';
       save();
-      throw error;
+      if (!RAG_METRIC_IDS.has(metric.id)) throw error;
+      continue;
     }
     save(); // Persist the original response before parsing; never repair a judgment in-place.
     try {
@@ -167,10 +177,13 @@ export async function assessRepeated(input: Input, model: { provider: string; id
     }
     save();
   }
-  if (audit.attempts.some(a => a.error)) throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
+  if (audit.attempts.some(a => a.error && !RAG_METRIC_IDS.has(a.metricId ?? ''))) throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
   return metrics.map(metric => {
-    if (notApplicable.includes(metric.id)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: 'Не применяется: реактивный симулятор не вызывался.' };
-    const votes = audit.attempts.filter(a => a.metricId === metric.id).map(a => a.assessments![0]!);
+    if (notApplicable.includes(metric.id)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: RAG_METRIC_IDS.has(metric.id)
+      ? 'Полный RAG-контекст каждого ответа не подтверждён адаптером; причина не установлена.' : 'Не применяется: реактивный симулятор не вызывался.' };
+    const attempts = audit.attempts.filter(a => a.metricId === metric.id);
+    if (attempts.some(a => a.error)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: 'RAG-диагностика не завершена: ошибка судьи сохранена в judgeAudit. Основная оценка не изменена.' };
+    const votes = attempts.map(a => a.assessments![0]!);
     if (votes.every(v => v.result === votes[0]!.result)) return { ...votes[0]!, rationale: `Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. ${votes[0]!.rationale}`.slice(0, 4000) };
     return { metricId: metric.id, result: 'unknown', evidence: [...new Set(votes.flatMap(v => v.evidence))].slice(0, 30),
       rationale: `Судья разошёлся на неизменном входе: ${votes.map(v => v.result).join(' / ')}. Основания каждой оценки сохранены в judgeAudit.` };

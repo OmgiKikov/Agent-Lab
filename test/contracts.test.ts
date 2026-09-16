@@ -34,7 +34,10 @@ test('validation sampling is stable, outcome-blind and keeps only replayable dia
   assert.deepEqual(selectValidationDialogues([tooLong]), []);
   const base = { task: 'validate', materials: [{ name: 'policy', content: 'Rule.' }], mode: 'live' as const, dialogues: dialogues.slice(0, 15), scenarioCount: 0 };
   assert.equal(createInputSchema.safeParse({ ...base, validationCount: 15, settings: { userModes: ['scripted'] } }).success, true);
-  assert.equal(createInputSchema.safeParse({ ...base, validationCount: 15, settings: { userModes: ['reactive'] } }).success, false);
+  assert.equal(createInputSchema.safeParse({ ...base, validationCount: 15, settings: { userModes: ['reactive'] } }).success, true);
+  const masked = (content: string) => dialogueSchema.parse({ id: 'masked', messages: [{ role: 'user', content }] });
+  assert.deepEqual(selectValidationDialogues([masked('*** # # ...')]), []);
+  assert.equal(selectValidationDialogues([masked('Терминал **** не работает')]).length, 1);
 });
 function card(overrides: Record<string, unknown> = {}) {
   return {

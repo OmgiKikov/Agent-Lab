@@ -125,6 +125,13 @@ export const externalReplySchema = z.union([
   z.strictObject({
     reply: z.string().max(20000),
     measurementError: z.string().trim().min(1).max(2000).optional(),
+    /** Exact chunks supplied to the model for this reply; Agent Lab persists them as cited trace evidence. */
+    retrievals: z.array(z.strictObject({
+      source: z.string().trim().min(1).max(500),
+      content: z.string().min(1).max(12000).refine(value => !!value.trim(), 'Empty retrieval chunk'),
+      score: z.number().finite().optional(),
+    })).max(20).refine(chunks => chunks.reduce((n, chunk) => n + chunk.content.length, 0) <= 60000, 'Retrieval context exceeds 60000 characters').optional(),
+    retrievalsComplete: z.boolean().optional(),
     events: z.array(z.strictObject({ tool: z.string().min(1).max(200), args: z.unknown().optional(), result: z.unknown().optional() })).max(50).default([]),
     records: z.record(identifier, z.record(identifier, scalarSchema)).refine(v => Object.keys(v).length <= 30, 'Too many records').optional(),
     promptHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -151,8 +158,9 @@ function applyReply(raw: unknown, state: World, ctx: CallContext, onRecords?: ()
   if (!parsed.success) throw new Error(`External agent reply does not match the contract: ${parsed.error.issues.map(i => i.path.join('.') || 'reply').join(', ')}`);
   onReply?.(parsed.data);
   if (typeof parsed.data === 'string') return parsed.data;
-  const { reply, events, records, measurementError } = parsed.data;
+  const { reply, retrievals, events, records, measurementError } = parsed.data;
   if (records) { state.records = structuredClone(records); onRecords?.(); }
+  if (retrievals !== undefined) ctx.onTargetEvent?.({ type: 'retrieval', result: { chunks: retrievals, complete: parsed.data.retrievalsComplete === true } });
   for (const event of events) {
     ctx.onTargetEvent?.({ type: 'tool_call', tool: event.tool, args: event.args });
     ctx.onTargetEvent?.({ type: 'tool_result', tool: event.tool, result: event.result, state });

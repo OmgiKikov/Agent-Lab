@@ -11,6 +11,8 @@ import { targetFingerprint } from './target-version.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from './connection.js';
 import { preflightTarget, readPrompt, runRelease } from './targets.js';
 import { simulatorChecks } from './simulator.js';
+import { validationDialogueIssue } from './imports.js';
+import { assessmentRubrics, validationScenario } from './contracts.js';
 import { createDemoRuntime } from './demo.js';
 import { createPiRuntime, evaluatorVersion } from './pi.js';
 
@@ -268,6 +270,7 @@ export class ExperimentLab {
   private async createPrepared(raw: CreateInput, preparedRequirements?: Requirement[]): Promise<Experiment> {
     this.ensureIdle();
     const input = createInputSchema.parse(raw);
+    if (input.validationCount) input.settings.userModes = ['reactive'];
     if (input.workflow === 'compare' && input.settings.userModes.length !== 1) throw new Error('Сравнительный эксперимент идёт в одном режиме пользователя: выберите static, scripted или reactive.');
     if (input.workflow === 'compare' && input.target.kind !== 'sandbox') throw new Error('Для внешнего агента используйте evaluate и повтор набора; автоматический ремонт поддерживает только песочницу.');
     const record = this.newRecord(input);
@@ -277,7 +280,12 @@ export class ExperimentLab {
       const runtime = await this.runtime(record);
       const confirmed = !!input.confirmedHypothesis;
       const replay = !confirmed && record.dialogues.length > 0 && input.scenarioCount === 0
-        && input.settings.userModes.length === 1 && input.settings.userModes[0] === 'scripted';
+        && (!!input.validationCount || input.settings.userModes.length === 1 && input.settings.userModes[0] === 'scripted');
+      if (input.validationCount) record.dialogues = record.dialogues.filter(dialogue => {
+        const issue = validationDialogueIssue(dialogue);
+        if (issue) record.limitations.push(`Исключён ${dialogue.id}: ${issue}.`);
+        return !issue;
+      });
       if (new Set(record.profiles.map(p => p.id)).size !== record.profiles.length) throw new Error('У профилей повторяются идентификаторы.');
       const preparationInput = (observedGoals: ObservedGoal[] = []) => ({
         task: record.task, sources: record.sources, existingAgent: input.existingAgent, workflow: input.workflow, scenarioCount: input.scenarioCount,
@@ -301,12 +309,18 @@ export class ExperimentLab {
           };
           for (let index = 0; index < record.dialogues.length && observedGoals.length < (input.validationCount ?? Infinity); index += 2) {
             const batch = record.dialogues.slice(index, index + 2);
-            observedGoals.push(...(await Promise.all(batch.map(extract))).flat());
+            const extracted = (await Promise.all(batch.map(extract))).flat();
+            if (input.validationCount) for (const dialogue of batch) {
+              const goal = extracted.find(goal => goal.evidenceDialogueIds.includes(dialogue.id));
+              if (goal?.testability !== 'knowledge') record.limitations.push(`Исключён ${dialogue.id}: ${goal?.testabilityReason ?? 'ожидание или достаточность среды для prompt/RAG не подтверждены'}.`);
+            }
+            observedGoals.push(...extracted.filter(goal => !input.validationCount || goal.testability === 'knowledge'));
           }
           if (input.validationCount) observedGoals = observedGoals.slice(0, input.validationCount);
         } else observedGoals = await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: structuredClone(record.dialogues), profiles: structuredClone(record.profiles) }, ctx);
       }
-      if (input.validationCount && observedGoals.length !== input.validationCount) throw new Error(`Материалы владельца задают ожидаемый ответ только для ${observedGoals.length} из ${input.validationCount} нужных validation-карточек. Добавьте знания или расширьте пул логов.`);
+      if (input.validationCount && !observedGoals.length) throw new Error('Нет измеримых prompt/RAG-сценариев: нужны требования владельца и случаи без отсутствующих данных клиента. Причины исключений сохранены.');
+      if (input.validationCount && observedGoals.length < input.validationCount) record.limitations.push(`Измеримы ${observedGoals.length} из запрошенных ${input.validationCount} карточек. Исключённые случаи не входят в accuracy.`);
       validateObservedGoals(observedGoals, record.dialogues, record.profiles);
       const generated = grounding ?? await runtime.prepare(preparationInput(observedGoals), ctx);
       if (confirmed && input.goalObservation === 'reply') for (const scenario of generated.scenarios) {
@@ -320,7 +334,7 @@ export class ExperimentLab {
         if (!replay) return goalToScenario(goal, record.profiles.find(p => p.id === goal.profileId));
         const dialogue = record.dialogues.find(item => item.id === goal.evidenceDialogueIds[0]);
         if (!dialogue || goal.evidenceDialogueIds.length !== 1) throw new Error(`Validation goal ${goal.id} must cite exactly one sampled dialogue.`);
-        const scenario = dialogueToScenario(dialogue, { goal: goal.goal, successCriteria: goal.successCriteria,
+        const scenario = input.validationCount ? validationScenario(dialogue, goal) : dialogueToScenario(dialogue, { goal: goal.goal, successCriteria: goal.successCriteria,
           requirementIds: goal.requirementIds, goalObservation: input.goalObservation ?? 'reply' });
         if (record.sources.some(source => source.kind === 'prompt')) scenario.metrics!.unshift({ ...promptCompliance });
         return scenario;
@@ -781,7 +795,7 @@ export class ExperimentLab {
               const executionFailed = original.outcome === 'fail' && original.checks.every(c => c.passed);
               trial.outcome = executionFailed || trial.checks.some(c => !c.passed) ? 'fail' : trial.checks.length ? 'pass' : 'ungraded';
               trial.reason = executionFailed ? original.reason : 'Точные проверки пересчитаны по сохранённым фактам.';
-              if (scenario.metrics?.length && runtime) trial.assessments = await assessTrial(runtime, scenario, record.sources, trial, { ...ctx,
+              if (assessmentRubrics(scenario, trial).length && runtime) trial.assessments = await assessTrial(runtime, scenario, record.sources, trial, { ...ctx,
                 beforeCall() { ctx.beforeCall(); trial.usage.calls++; },
                 addUsage(usage) { ctx.addUsage(usage); trial.usage.inputTokens += usage.inputTokens; trial.usage.outputTokens += usage.outputTokens;
                   trial.usage.costUsd = usage.costUsd === null || trial.usage.costUsd === null ? null : trial.usage.costUsd + usage.costUsd; } }, record.requirements);
@@ -816,7 +830,7 @@ export class ExperimentLab {
       if (objectiveCheck && simulatorCheck) throw new Error('ID проверки неоднозначен: он занят объективной проверкой и проверкой симулятора.');
       if (input.checkId && !objectiveCheck && !simulatorCheck) throw new Error('Такой объективной проверки или проверки симулятора в этом диалоге нет.');
       const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-      if (input.metricId && !scenario?.metrics?.some(m => m.id === input.metricId)) throw new Error('Такой рубрики в этой карточке нет.');
+      if (input.metricId && (!scenario || !assessmentRubrics(scenario, trial).some(m => m.id === input.metricId))) throw new Error('Такой рубрики в этой карточке нет.');
       (record.humanReviews ??= []).push({ ...input, id: randomUUID(), createdAt: new Date().toISOString() });
       delete record.resultsReviewedAt; delete record.resultsReviewHash;
       await this.checkpoint(record, 'results_review', 'Human annotation saved separately from the original assessment.');
@@ -999,7 +1013,7 @@ export class ExperimentLab {
             ctx.onTrace?.(trialId, event);
             const stage = event.type === 'user' ? 'ждём ответ агента' : event.type === 'assistant' ? 'ответ получен · готовим следующий шаг'
               : event.type === 'simulator' ? 'реплика симулятора готова' : event.type === 'tool_call' ? `инструмент ${event.tool ?? ''}`
-              : event.type === 'tool_result' ? 'инструмент завершён' : 'сбой диалога';
+              : event.type === 'tool_result' ? 'инструмент завершён' : event.type === 'retrieval' ? 'RAG-контекст получен' : 'сбой диалога';
             record.message = `${progress()} · ${stage}`;
           } }, userMode, target: record.target });
         record.trials.push(trial);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { rm } from 'node:fs/promises';
 import { discoveryBrief, qualityLines, qualitySummary, plural, scoreBrief, shorten, testPlanLines, trialProofLines } from '../src/quality.js';
-import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
+import { emptyUsage, RAG_RUBRICS, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
 import { draftHash } from '../src/experiment.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 import { verdictSummary } from '../src/comparison.js';
@@ -29,6 +29,23 @@ function record(overrides: Partial<Experiment> = {}): Experiment {
 }
 const review = (trialId: string, metricId: string, verdict: HumanReview['verdict']): HumanReview => ({
   id: `h-${trialId}-${metricId}-${verdict}`, trialId, metricId, verdict, note: 'n', createdAt: '2026-09-15T10:00:00Z',
+});
+
+test('RAG diagnostics remain independent of accuracy and require complete usable evidence', () => {
+  const t = trial('rag_trial', 'a', 'pass', 'pass');
+  t.events.splice(1, 0, { seq: 2, type: 'retrieval', result: { chunks: [], complete: true } });
+  t.assessments!.push(...RAG_RUBRICS.map(metric => ({ metricId: metric.id, result: 'fail' as const, evidence: [2], rationale: 'Missing context' })));
+  const r = record({ scenarios: [scenario('a')], trials: [t] });
+  const q = qualitySummary(r);
+  assert.equal(q.cards.accuracy, 1); assert.equal(q.strict.accuracy, 1);
+  assert.equal(q.rag.complete, 1); assert.equal(q.rag.signals.length, 1);
+  assert.equal(q.metrics.filter(m => m.id.startsWith('rag_')).length, 3);
+  assert.match(qualityLines(q).rag.join(' '), /не хватает знания/);
+  (t.events[1]!.result as { complete: boolean }).complete = false;
+  assert.equal(qualitySummary(r).rag.signals.length, 0);
+  assert.equal(qualitySummary(r).rag.partial, 1);
+  t.events.splice(1, 1);
+  assert.match(qualityLines(qualitySummary(r)).rag.join(' '), /нельзя отделить ошибку поиска/);
 });
 
 test('one-test acceptance projection shows the complete current definition and observation channel', () => {

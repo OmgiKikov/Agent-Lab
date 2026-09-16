@@ -193,6 +193,27 @@ export const replyQuality: Rubric = {
   passCriteria: 'Ответ корректен по материалам владельца, отвечает на запрос и, если следующий шаг нужен, даёт его без выдуманных фактов.',
   failCriteria: 'Ответ неверен, не по существу, неисполняем, противоречит материалам владельца или выдаёт неподтверждённое за факт.',
 };
+/** Diagnostic-only RAG rubrics. They are added to a judge run only when the adapter reports retrieval events. */
+export const ragContextRecall: Rubric = {
+  id: 'rag_context_recall', name: 'RAG · нужное знание найдено', subject: 'agent',
+  description: 'Содержат ли найденные RAG-фрагменты достаточно информации для ответа по применимым требованиям владельца.',
+  passCriteria: 'Найденные RAG-фрагменты содержат все существенные факты и правила, необходимые для корректного ответа на доставленный запрос пользователя.',
+  failCriteria: 'В найденных RAG-фрагментах отсутствует хотя бы один существенный факт или правило, без которого нельзя корректно выполнить доставленный запрос пользователя.',
+};
+export const ragContextRelevance: Rubric = {
+  id: 'rag_context_relevance', name: 'RAG · найденное по делу', subject: 'agent',
+  description: 'Насколько найденные RAG-фрагменты относятся к доставленному запросу пользователя.',
+  passCriteria: 'Найденные RAG-фрагменты относятся к доставленному запросу и не состоят преимущественно из посторонней информации.',
+  failCriteria: 'Найденные RAG-фрагменты не относятся к доставленному запросу или преимущественно состоят из посторонней информации, мешающей использовать нужное знание.',
+};
+export const ragContextFaithfulness: Rubric = {
+  id: 'rag_context_faithfulness', name: 'RAG · ответ подтверждён найденным', subject: 'agent',
+  description: 'Подтверждаются ли фактические и бизнес-утверждения ответа именно найденными RAG-фрагментами.',
+  passCriteria: 'Каждое проверяемое фактическое и бизнес-утверждение ответа подтверждается найденными RAG-фрагментами и не противоречит им.',
+  failCriteria: 'Ответ содержит хотя бы одно проверяемое фактическое или бизнес-утверждение, которое не подтверждается найденными RAG-фрагментами или противоречит им.',
+};
+export const RAG_RUBRICS = [ragContextRecall, ragContextRelevance, ragContextFaithfulness] as const;
+export const RAG_METRIC_IDS = new Set<string>(RAG_RUBRICS.map(metric => metric.id));
 export const assessmentFindingSchema = z.strictObject({
   criterion: text.max(2000), result: z.enum(['pass', 'fail', 'unknown']), rationale: text.max(1000),
   citations: z.array(z.strictObject({ seq: z.number().int().nonnegative(), quote: z.string().min(1).max(2000) })).max(6),
@@ -206,6 +227,7 @@ export const metricAssessmentSchema = z.strictObject({
 export type MetricAssessment = z.infer<typeof metricAssessmentSchema>;
 /** The fixed opening belongs to the card, not to the reactive actor. */
 export function metricApplies(metric: Rubric, trial: Pick<Trial, 'userMode' | 'events'>): boolean {
+  if (RAG_METRIC_IDS.has(metric.id)) return ragEvidenceComplete(trial);
   return metric.id !== 'user_fidelity' || metric.subject !== 'simulator'
     || trial.userMode === 'reactive' && trial.events.some(event => event.type === 'simulator');
 }
@@ -218,7 +240,7 @@ export const judgeAuditSchema = z.strictObject({
     metricId: identifier.optional(), input: text.optional(),
     startedAt: text, raw: z.string().optional(), error: text.optional(),
     assessments: z.array(metricAssessmentSchema).optional(),
-  })).max(16),
+  })).max(24),
   notApplicable: z.array(identifier),
 });
 export type JudgeAudit = z.infer<typeof judgeAuditSchema>;
@@ -351,6 +373,8 @@ export const observedGoalSchema = z.strictObject({
   requirementIds: z.array(identifier).max(20).refine(unique, 'Duplicate requirement IDs').optional(),
   evidenceDialogueIds: z.array(identifier).min(1).max(50), successCriteria: text.max(3000),
   facts: text.max(5000).default('Only what the real user revealed in the evidence dialogues.'),
+  testability: z.enum(['knowledge', 'customer_data', 'unknown']).optional(),
+  testabilityReason: text.max(1000).optional(),
   outcome: z.enum(['success', 'failure', 'abandoned', 'unknown']).default('unknown'),
 });
 export type ObservedGoal = z.infer<typeof observedGoalSchema>;
@@ -419,6 +443,21 @@ export function dialogueToTrial(dialogue: Dialogue, scenario: Scenario, revision
   };
 }
 
+/** Recorded turns provide facts, never an unconditional script for a new agent conversation. */
+export function validationScenario(dialogue: Dialogue, goal: ObservedGoal): Omit<Scenario, 'split'> {
+  const scenario = dialogueToScenario(dialogue, goal);
+  const quotes = dialogue.messages.filter(message => message.role === 'user').map(message => message.content);
+  delete scenario.user.script;
+  scenario.user.facts = goal.facts;
+  scenario.user.knows = [...new Map(quotes.filter(quote => quote.length <= 300).map(quote => [quote.toLocaleLowerCase(), quote])).values()].slice(0, 20);
+  scenario.user.cannotKnow = ['Правильный бизнес-ответ, скрытые данные клиента и состояние банковских систем.'];
+  scenario.user.maxFollowUps = 5;
+  scenario.user.behavior = 'Ответь на текущий вопрос агента, используя только известные факты. Старые реплики — факты, а не порядок разговора. Если агент назвал другую организацию или объект, поправь его. Если нужного факта нет, скажи, что не знаешь; не выдумывай. Заверши после достаточного ответа или явного отказа; не выполняй реальные действия и не расширяй цель.';
+  scenario.assumptions = [`Источник фактов клиента: ${dialogue.id}. Продолжения генерирует симулятор по текущим вопросам; ответы старого агента не являются эталоном.`];
+  scenario.metrics!.push({ ...simulatorFidelity });
+  return scenario;
+}
+
 export const createInputSchema = z.strictObject({
   task: text.max(8000),
   /** Owner-confirmed hypothesis that requests the strict one-test preparation path. */
@@ -431,7 +470,7 @@ export const createInputSchema = z.strictObject({
   workflow: z.enum(['evaluate', 'compare']).default('evaluate'),
   /** 0 means: run only the owner's own cards and generate nothing. */
   scenarioCount: z.number().int().min(0).max(SCENARIO_LIMIT).default(5),
-  /** Build this many replay cards only where owner requirements substantively define the expected answer. */
+  /** Build reactive prompt/RAG cards where owner requirements define the answer without unavailable customer data. */
   validationCount: z.number().int().min(1).max(SCENARIO_LIMIT).optional(),
   target: targetSchema.default({ kind: 'sandbox' }),
   targetVersion: text.max(200).optional(),
@@ -452,8 +491,8 @@ export const createInputSchema = z.strictObject({
   if (v.confirmedHypothesis && (v.workflow !== 'evaluate' || v.scenarioCount !== 1 || v.goldenCases.length)) {
     ctx.addIssue({ code: 'custom', message: 'A confirmed hypothesis builds exactly one generated evaluate test without golden cases', path: ['confirmedHypothesis'] });
   }
-  if (v.validationCount && (v.workflow !== 'evaluate' || v.scenarioCount !== 0 || !v.dialogues.length || v.settings.userModes.length !== 1 || v.settings.userModes[0] !== 'scripted')) {
-    ctx.addIssue({ code: 'custom', message: 'validationCount needs evaluate, scenarioCount 0, real dialogues and scripted mode', path: ['validationCount'] });
+  if (v.validationCount && (v.workflow !== 'evaluate' || v.scenarioCount !== 0 || !v.dialogues.length)) {
+    ctx.addIssue({ code: 'custom', message: 'validationCount needs evaluate, scenarioCount 0 and real dialogues', path: ['validationCount'] });
   }
   if (v.confirmedHypothesis && !v.goalObservation) {
     ctx.addIssue({ code: 'custom', message: 'A confirmed hypothesis needs an owner-selected goal observation', path: ['goalObservation'] });
@@ -491,7 +530,7 @@ export type Outcome = 'pass' | 'fail' | 'ungraded' | 'invalid' | 'cancelled';
 export interface Usage { calls: number; inputTokens: number; outputTokens: number; costUsd: number | null }
 export const emptyUsage = (): Usage => ({ calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 });
 export interface TraceEvent {
-  seq: number; type: 'user' | 'assistant' | 'simulator' | 'tool_call' | 'tool_result' | 'error';
+  seq: number; type: 'user' | 'assistant' | 'simulator' | 'retrieval' | 'tool_call' | 'tool_result' | 'error';
   text?: string; tool?: string; args?: unknown; result?: unknown; state?: World;
 }
 export const assessmentEventContent = (event: TraceEvent): string =>
@@ -511,6 +550,26 @@ export interface Trial {
   assessments?: MetricAssessment[]; assessmentError?: string; judgeAudit?: JudgeAudit;
   observation?: { state: 'sandbox' | 'reported' | 'missing'; tools: 'sandbox' | 'complete' | 'partial'; resetConfirmed?: boolean; version?: string; toolScope?: string[] };
   externalUsage?: Usage;
+}
+/** Keep RAG diagnosis outside the frozen card: it appears only when the target exposes retrieval evidence. */
+export function assessmentRubrics(scenario: Pick<Scenario, 'metrics'>, trial: Pick<Trial, 'events'>): Rubric[] {
+  const metrics = [...(scenario.metrics ?? [])];
+  if (!trial.events.some(event => event.type === 'retrieval')) return metrics;
+  for (const rubric of RAG_RUBRICS) if (!metrics.some(metric => metric.id === rubric.id)) metrics.push(rubric);
+  return metrics;
+}
+/** Absence of a chunk is evidence only when the adapter confirms the full context for every delivered reply. */
+export function ragEvidenceComplete(trial: Pick<Trial, 'events'>): boolean {
+  let complete = false, replies = 0;
+  for (const event of trial.events) {
+    if (event.type === 'user') complete = false;
+    if (event.type === 'retrieval') {
+      const value = event.result as { complete?: unknown; chunks?: unknown } | undefined;
+      complete = value?.complete === true && Array.isArray(value.chunks);
+    }
+    if (event.type === 'assistant') { if (!complete) return false; replies++; }
+  }
+  return replies > 0;
 }
 export const simulatorWasUsed = (trial: Trial) => trial.userMode === 'reactive' && trial.events.some(e => e.type === 'simulator');
 export function validateAssessments(metrics: Rubric[], events: TraceEvent[], raw: unknown): MetricAssessment[] {
@@ -686,9 +745,9 @@ export const trialSchema = z.strictObject({
   split: z.enum(['dev', 'control']), manifestHash: text, outcome: z.enum(['pass', 'fail', 'ungraded', 'invalid', 'cancelled']), reason: z.string(),
   checks: z.array(z.strictObject({ id: identifier, description: z.string(), passed: z.boolean(), evidence: z.string() })),
   simulatorChecks: z.array(z.strictObject({ id: z.enum(SIMULATOR_CHECK_IDS), description: z.string(), passed: z.boolean(), evidence: z.string(), seq: z.number().int().nonnegative().optional(), heuristic: z.boolean() })).max(12).optional(),
-  events: z.array(z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() })),
+  events: z.array(z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'retrieval', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() })),
   initialState: worldSchema, finalState: worldSchema, usage: usageSchema, elapsedMs: z.number().finite().nonnegative(),
-  assessments: z.array(metricAssessmentSchema).max(8).optional(), assessmentError: z.string().max(4000).optional(),
+  assessments: z.array(metricAssessmentSchema).max(12).optional(), assessmentError: z.string().max(4000).optional(),
   observation: z.strictObject({ state: z.enum(['sandbox', 'reported', 'missing']), tools: z.enum(['sandbox', 'complete', 'partial']), resetConfirmed: z.boolean().optional(), version: text.max(200).optional(), toolScope: z.array(z.string().max(200)).max(50).optional() }).optional(),
   externalUsage: usageSchema.optional(),
   judgeAudit: judgeAuditSchema.optional(),

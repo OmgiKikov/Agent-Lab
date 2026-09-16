@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { assessTrial, evaluateTrial } from '../src/evaluation.js';
 import { compareTrials } from '../src/comparison.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
-import { checkSchema, fingerprint, validatePreparation, type CallContext, type MetricAssessment, type Revision, type Rubric, type Runtime, type Scenario, type Source, type Tool, type Trial } from '../src/contracts.js';
+import { checkSchema, fingerprint, observedGoalSchema, validationScenario, validatePreparation, type CallContext, type MetricAssessment, type Revision, type Rubric, type Runtime, type Scenario, type Source, type Tool, type Trial } from '../src/contracts.js';
 
 function context(signal = new AbortController().signal): CallContext {
   return { signal, timeoutMs: 1000, beforeCall() { signal.throwIfAborted(); }, addUsage() {} };
@@ -87,6 +87,27 @@ test('evaluation demo prepares the requested diverse cards for a working agent a
 function targetRuntime(base: Runtime, respond: (tools: Tool[], message: string) => Promise<string>): Runtime {
   return { ...base, async openTarget(_agent, _sources, tools) { return { respond: message => respond(tools, message), async close() {} }; }, async userTurn() { return { message: '', done: true }; } };
 }
+
+test('validation simulator answers the current clarification, never blindly replays old user turns', async () => {
+  const f = await fixture();
+  const card = { ...validationScenario({ id: 'real', messages: [
+    { role: 'user', content: 'Как оформить возврат?' }, { role: 'assistant', content: 'Как называется магазин?' },
+    { role: 'user', content: 'Все для дома' }, { role: 'assistant', content: 'OLD_AGENT_SECRET' },
+  ] }, observedGoalSchema.parse({ id: 'refund', goal: 'Узнать как оформить возврат', opening: 'Как оформить возврат?', facts: 'Магазин: Все для дома. Модель терминала неизвестна.',
+    evidenceDialogueIds: ['real'], successCriteria: 'Инструкция возврата по базе знаний.' })), split: 'dev' as const };
+  const messages: string[] = [];
+  const runtime = targetRuntime(f.runtime, async (_tools, message) => { messages.push(message); return messages.length === 1 ? 'Какая модель терминала?' : 'Используйте меню возврата.'; });
+  runtime.userTurn = async ({ user, messages: history }) => {
+    assert.match(user.facts, /Все для дома/); assert.equal(user.script, undefined);
+    assert.doesNotMatch(JSON.stringify({ user, history }), /OLD_AGENT_SECRET/);
+    return history.at(-1)?.content === 'Какая модель терминала?' ? { message: 'Модель не знаю.', done: false } : { message: '', done: true };
+  };
+  runtime.assess = async ({ scenario, trial }) => scenario.metrics!.map(m => ({ metricId: m.id, result: 'pass', rationale: 'Fixture', evidence: [trial.events.find(e => e.type === 'assistant')!.seq] }));
+  const result = await f.evaluate(card, f.candidate, runtime);
+  assert.equal(result.outcome, 'ungraded');
+  assert.deepEqual(messages, ['Как оформить возврат?', 'Модель не знаю.']);
+  assert.ok(result.assessments?.every(a => a.result === 'pass'));
+});
 
 test('answer_equals checks the last answer with exact case, whitespace and newlines, never an earlier matching answer', async () => {
   const f = await fixture();

@@ -44,7 +44,7 @@ test('injected Pi instructions hand saved discovery directly to one test after t
     const result = await beforeAgentStart({ systemPrompt: 'base' }, { cwd: '.', hasUI: false, mode: 'print' } as ExtensionContext);
     const prompt = result?.systemPrompt ?? '';
     assert.match(prompt, /primary flow.*mode=validate/is);
-    assert.match(prompt, /stable sample of 15/is);
+    assert.match(prompt, /up to 15 measurable prompt\/RAG cases.*reactive simulator/is);
     assert.match(prompt, /estimated card accuracy/is);
     assert.match(prompt, /agent_lab_build mode=discover/i);
     assert.match(prompt, /selection, not an accuracy estimate/i);
@@ -111,17 +111,18 @@ test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-ca
 
   assert.equal(captured?.validationCount, 15);
   assert.equal(captured?.dialogues?.length, 40);
-  assert.deepEqual(captured?.settings.userModes, ['scripted']);
-  assert.equal(captured?.settings.maxTurns, 16);
-  assert.equal(captured?.settings.maxCalls, 340);
+  assert.deepEqual(captured?.settings.userModes, ['reactive']);
+  assert.equal(captured?.settings.maxTurns, 6);
+  assert.equal(captured?.settings.maxCalls, 385);
   assert.equal(result.validation.sourceDialogues, 300);
   assert.equal(result.validation.candidateDialogues, 40);
   assert.equal(result.validation.sampledDialogues, 15);
   assert.match(confirmations[0]!.body, /Исходных диалогов: 300; outcome-blind пул: 40; карточек: 15/);
   await tools.get('agent_lab_run')!.execute('run-validation', { id: result.id, expectedHash: result.draftHash }, undefined, undefined, ctx);
   assert.match(confirmations[1]!.body, /Validation set: 15 реальных диалогов/);
-  assert.match(confirmations[1]!.body, /Карточки и критерии зафиксированы внутри набора/);
-  assert.doesNotMatch(confirmations[1]!.body, /Ожидается:/);
+  assert.match(confirmations[1]!.body, /Клиент отвечает на уточнения симулятором/);
+  assert.equal(confirmations[1]!.body.match(/Ожидается:/g)?.length, 15);
+  assert.equal(confirmations[1]!.body.match(/Основание:/g)?.length, 15);
 });
 
 test('Pi discovery confirms a computed budget, accepts 300 logs and hands the exact saved hypothesis to one visible test', async t => {
