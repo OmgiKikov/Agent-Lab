@@ -48,7 +48,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. Новый прогон `aigw-local` хранит полный аудит судьи отдельно от записи прогона. Запись и отчёт заметно меньше 50 МБ. Старые записи из `.agent-lab`, включая `fae4ee59`, открываются и переоцениваются без миграции.
   5. В результате прогона эквайринга есть контрольная ситуация, с которой агент справляется, поэтому итог не выглядит как «0 из N» от сломанного судьи.
 
-**Plans**: 1/10 plans executed (6 waves)
+**Plans**: 2/10 plans executed (6 waves)
 
 Plans:
 **Wave 1**
@@ -57,7 +57,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-02-PLAN.md — блок в чате Pi и доска /agent-lab берут ту же строку из ResultView (wave 2)
+- [x] 01-02-PLAN.md — блок в чате Pi и доска /agent-lab берут ту же строку из ResultView (wave 2)
 - [ ] 01-03-PLAN.md — повтор сравним: аудит судьи по наблюдаемым источникам, дефолт goalObservation при сравнении, id цели = id диалога (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
@@ -188,7 +188,7 @@ Phases execute in numeric order: 1 → 2 → 3 → (4 ∥ 5) → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Одно честное число | 1/10 | In Progress|  |
+| 1. Одно честное число | 2/10 | In Progress|  |
 | 2. Судья объясняет провалы | 0/TBD | Not started | - |
 | 3. Согласие человека с судьёй | 0/TBD | Not started | - |
 | 4. Экран результата в Pi | 0/TBD | Not started | - |

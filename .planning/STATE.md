@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 1
 current_phase_name: Одно честное число
 status: executing
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-09-16T21:19:07.508Z"
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-09-16T21:26:21.803Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 1 execution started
-state_head: 7a7c24083479ebf36231ca0c6f5eb2d6d3eb92ef
+state_head: c9fc9b9ef9ec8b1f6ca44948689ed50d0f206017
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 10
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 1 (Одно честное число) — EXECUTING
-Plan: 2 of 10
+Plan: 3 of 10
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 1 execution started
 
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 01 P01 | 7 min | 2 tasks | 10 files |
+| Phase 01 P02 | 5min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,7 @@ Recent decisions affecting current work:
 - [Scope]: карточки остаются внутренним форматом, на экранах называются «ситуации». Побочные ветки (discovery-гипотеза, одиночный тест, правка промпта, эталоны, профили, старая песочница) скрываются в Phase 6 (START-04), код удаляется после демо (v2 CLEAN-01).
 - [Phase 01]: 01-01: незапущенный черновик показывает только «Прогон ещё не запускался.», без строк «Ещё проверяется» и «Не измерено»
 - [Phase 01]: 01-01: причины «не измерено» проверяются в фиксированном порядке NOT_MEASURED_CODES, он же порядок при равных счётах
+- [Phase 1]: 01-02: Pi board and tool result print resultViewLines verbatim; a supplied view is used only when view.runId equals the shown record id
 
 ### Pending Todos
 
@@ -100,6 +102,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-16T21:19:07.489Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-09-16T21:26:21.783Z
+Stopped at: Completed 01-02-PLAN.md
 Resume file: None
