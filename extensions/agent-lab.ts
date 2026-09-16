@@ -70,7 +70,7 @@ function summary(record: Experiment, directory: string) {
   const quality = record.trials.length ? qualitySummary(record) : undefined;
   return {
     // Lead with the answer a person asked for; the detailed evidence follows in the same object.
-    ...(quality ? { quality: { ...qualityLines(quality), cards: quality.cards, metrics: quality.metrics, causes: quality.causes.slice(0, 5), humanQueue: quality.humanQueue, human: quality.human } } : {}),
+    ...(quality ? { quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes.slice(0, 5), humanQueue: quality.humanQueue, human: quality.human } } : {}),
     id: record.id, phase: record.phase, mode: record.mode, workflow: record.workflow,
     reviewMode: record.reviewMode, resultsReviewedAt: record.resultsReviewedAt,
     draftHash: draftHash(record), acceptedDraftHash: record.acceptedDraftHash, resultHash: record.trials.length ? resultHash(record) : undefined,

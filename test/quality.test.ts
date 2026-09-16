@@ -181,6 +181,28 @@ test('the first screen counts cards, criteria and causes from the shared outcome
   assert.match(text.queue, /Разметить человеку: 1/);
 });
 
+test('business accuracy follows goal attainment while strict success and other rubric failures stay separate', () => {
+  const goalAttainment = { ...goal, id: 'goal_attainment', name: 'Достижение цели' };
+  const promptCompliance = { ...format, id: 'prompt_compliance', name: 'Соблюдение промпта' };
+  const scenarios = ['solved', 'failed', 'broken'].map(id => ({ ...scenario(id, false), metrics: [goalAttainment, promptCompliance] }));
+  const assessed = (id: string, scenarioId: string, goalResult: 'pass' | 'fail', promptResult: 'pass' | 'fail'): Trial => ({
+    ...trial(id, scenarioId, 'ungraded', goalResult, promptResult), checks: [], assessments: [
+      { metricId: 'goal_attainment', result: goalResult, rationale: 'goal', evidence: [1] },
+      { metricId: 'prompt_compliance', result: promptResult, rationale: 'prompt', evidence: [1] },
+    ],
+  });
+  const invalid = { ...assessed('t3', 'broken', 'fail', 'fail'), outcome: 'invalid' as const, assessments: undefined };
+  const q = qualitySummary(record({ scenarios, trials: [assessed('t1', 'solved', 'pass', 'fail'), assessed('t2', 'failed', 'fail', 'fail'), invalid],
+    failureModes: [{ id: 'business', name: 'Бизнес-причина', description: 'd', trialIds: ['t2'] }] }));
+  assert.equal(q.primary, 'goal_attainment');
+  assert.deepEqual(q.cards, { passed: 1, failed: 1, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0.5 });
+  assert.deepEqual(q.strict, { passed: 0, failed: 2, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0, goalMetWithOtherFailures: 1 });
+  assert.match(q.headline, /Бизнес-цель достигнута в 1 из 2 карточек \(50%\)/);
+  assert.match(q.headline, /Полностью прошли все критерии: 0 из 2 \(0%\)/);
+  assert.match(q.headline, /В 1 карточке цель достигнута, но провален другой критерий/);
+  assert.equal(q.causes[0]?.example?.quote, 'goal', 'a business failure explains the headline before secondary prompt/style failures');
+});
+
 test('an unresolved simulator flag makes the card undecided on the first screen instead of counting as a failure, and clusters fall back to weak spots', () => {
   const t = trial('t1', 'a', 'pass', 'fail', 'pass', 'reactive');
   t.events.push({ seq: 2, type: 'simulator', result: { message: '4321', done: false } }, { seq: 3, type: 'user', text: '4321' }, { seq: 4, type: 'assistant', text: 'ok' });

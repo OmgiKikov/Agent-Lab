@@ -343,7 +343,7 @@ async function main() {
       const quality = qualitySummary(record);
       process.exitCode = evaluationExitCode(record);
       process.stdout.write(JSON.stringify({ id: record.id, exitCode: process.exitCode,
-        quality: { ...qualityLines(quality), cards: quality.cards, metrics: quality.metrics, causes: quality.causes },
+        quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes },
         verdict: v, comparison: bundle.comparison, artifacts }, null, 2) + '\n');
       return;
     }
@@ -370,7 +370,7 @@ async function main() {
       const result = await lab.get(id);
       const quality = qualitySummary(result);
       process.stdout.write(`${JSON.stringify({ id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode,
-        ...(result.workflow === 'evaluate' ? { quality: { ...qualityLines(quality), cards: quality.cards, metrics: quality.metrics, causes: quality.causes },
+        ...(result.workflow === 'evaluate' ? { quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes },
           verdict: evidenceSummary(result).verdict, exitCode: evaluationExitCode(result),
           proofs: result.trials.map(trial => trialProofLines(result, trial.id)) } : {}),
         comparison: result.comparisons.at(-1), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);

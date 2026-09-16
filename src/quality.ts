@@ -25,9 +25,15 @@ export interface QualityCause {
   example?: { trialId: string; card: string; quote: string; seq?: number };
   promptQuotes: string[];
 }
+export interface QualityCardScore {
+  passed: number; failed: number; unknown: number; invalid: number; notReached: number; total: number; accuracy: number | null;
+}
 export interface QualitySummary {
-  /** Cards decided across all measured modes: pass only when every usable dialogue passed. */
-  cards: { passed: number; failed: number; unknown: number; invalid: number; notReached: number; total: number; accuracy: number | null };
+  /** Primary business result. Generated prompt/RAG runs use goal_attainment; legacy runs fall back to all criteria. */
+  cards: QualityCardScore;
+  /** Strict card result: every applicable code check and agent rubric must pass. */
+  strict: QualityCardScore & { goalMetWithOtherFailures: number };
+  primary: 'goal_attainment' | 'all_criteria';
   metrics: QualityMetric[];
   causes: QualityCause[];
   /** How sure the automatic verdict is: decided dialogues vs those the judge left unknown or a human disputes. */
@@ -396,6 +402,37 @@ function metricRows(record: Experiment): QualityMetric[] {
     .sort((a, b) => Number(b.kind === 'code') - Number(a.kind === 'code'));
 }
 
+function goalCardOutcome(record: Experiment, scenario: Scenario): 'pass' | 'fail' | 'unknown' {
+  const metric = scenario.metrics?.find(item => item.subject === 'agent' && item.id === 'goal_attainment');
+  if (!metric) return cardOutcome(record, scenario);
+  const modes = record.settings.userModes.filter(mode => mode !== 'scripted' || scenario.user.script !== undefined);
+  const expected = new Set(modes.flatMap(mode => Array.from({ length: record.settings.repeats }, (_, repeat) => `${mode}:${repeat}`)));
+  const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
+  const seen = new Set(trials.map(trial => `${trial.userMode}:${trial.repeat}`));
+  if (!expected.size || trials.length !== expected.size || seen.size !== expected.size || [...expected].some(key => !seen.has(key))
+    || trials.some(trial => trial.familyId !== scenario.familyId || trial.split !== scenario.split
+      || record.manifestHash && trial.manifestHash !== record.manifestHash
+      || !measurementUsable(scenario, trial, record.humanReviews))) return 'unknown';
+  const results = trials.map(trial => agentMetricResult(trial, metric.id, record.humanReviews) ?? 'unknown');
+  return results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
+}
+
+function cardScore(record: Experiment, outcomes: Array<{ scenario: Scenario; outcome: 'pass' | 'fail' | 'unknown' }>): QualityCardScore {
+  const reached = new Set(record.trials.filter(measured).map(trial => trial.scenarioId));
+  const attempted = new Set(record.trials.map(trial => trial.scenarioId));
+  const score = {
+    passed: outcomes.filter(item => item.outcome === 'pass').length,
+    failed: outcomes.filter(item => item.outcome === 'fail').length,
+    unknown: outcomes.filter(item => reached.has(item.scenario.id) && item.outcome === 'unknown').length,
+    invalid: outcomes.filter(item => attempted.has(item.scenario.id) && !reached.has(item.scenario.id)).length,
+    notReached: outcomes.filter(item => !attempted.has(item.scenario.id)).length,
+    total: record.scenarios.length,
+    accuracy: null as number | null,
+  };
+  score.accuracy = rate(score.passed, score.failed);
+  return score;
+}
+
 /** Cut at a sentence boundary so a quoted reason never ends mid-word on the first screen. */
 export function shorten(text: string, limit = 220): string {
   if (text.length <= limit) return text;
@@ -408,8 +445,10 @@ function firstReason(record: Experiment, trial: Trial): { quote: string; seq?: n
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   const check = trial.checks.find(c => !c.passed);
   if (check) return { quote: check.evidence || check.description };
-  const assessment = trial.assessments?.find(a => scenario?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent')
+  const failed = (trial.assessments ?? []).filter(a => scenario?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent')
     && agentMetricResult(trial, a.metricId, record.humanReviews) === 'fail');
+  const assessment = ['goal_attainment', 'reply_quality', 'prompt_compliance']
+    .flatMap(id => failed.find(item => item.metricId === id) ?? []).at(0) ?? failed[0];
   if (assessment) return { quote: shorten(assessment.rationale.replace(/^Совпало \d\/\d оценок этой рубрики в свежих сессиях; это не проверка правильности\.\s*/, '').replace(/^Pass condition is not met:\s*/i, '')), seq: assessment.evidence[0] };
   return { quote: trial.reason };
 }
@@ -441,14 +480,15 @@ const limitTexts: Record<string, string> = {
 export function qualitySummary(input: Experiment): QualitySummary {
   const record = observedRecord(input);
   const v = verdictSummary(record);
-  const reached = new Set(record.trials.filter(measured).map(t => t.scenarioId));
-  const attempted = new Set(record.trials.map(t => t.scenarioId));
-  const cardOutcomes = record.scenarios.map(s => ({ scenario: s, outcome: cardOutcome(record, s) }));
-  const cards = { passed: cardOutcomes.filter(o => o.outcome === 'pass').length, failed: cardOutcomes.filter(o => o.outcome === 'fail').length,
-    unknown: cardOutcomes.filter(o => reached.has(o.scenario.id) && o.outcome === 'unknown').length,
-    invalid: cardOutcomes.filter(o => attempted.has(o.scenario.id) && !reached.has(o.scenario.id)).length,
-    notReached: cardOutcomes.filter(o => !attempted.has(o.scenario.id)).length, total: record.scenarios.length, accuracy: null as number | null };
-  cards.accuracy = rate(cards.passed, cards.failed);
+  const primary = record.scenarios.length > 0 && record.scenarios.every(scenario => scenario.metrics?.some(metric => metric.subject === 'agent' && metric.id === 'goal_attainment'))
+    ? 'goal_attainment' as const : 'all_criteria' as const;
+  const strictOutcomes = record.scenarios.map(scenario => ({ scenario, outcome: cardOutcome(record, scenario) }));
+  const cardOutcomes = primary === 'goal_attainment'
+    ? record.scenarios.map(scenario => ({ scenario, outcome: goalCardOutcome(record, scenario) })) : strictOutcomes;
+  const cards = cardScore(record, cardOutcomes);
+  const strictBase = cardScore(record, strictOutcomes);
+  const strict = { ...strictBase, goalMetWithOtherFailures: primary === 'goal_attainment'
+    ? cardOutcomes.filter((item, index) => item.outcome === 'pass' && strictOutcomes[index]?.outcome !== 'pass').length : 0 };
   const metrics = metricRows(record);
   const rubricUnknown = metrics.filter(m => m.kind === 'rubric').reduce((n, m) => n + m.unknown, 0);
   const decided = record.trials.filter(t => automaticTrialResult(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews) !== 'unknown').length;
@@ -475,8 +515,11 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const judgeModel = record.trials.find(t => t.judgeAudit)?.judgeAudit?.model ?? record.settings.roles?.judge?.model ?? record.settings.judge?.model;
   const limitCodes = v.confidenceReasons.map(r => r.code).filter(code => code in limitTexts);
   const limits = limitCodes.length ? `Границы: ${[...new Set(limitCodes.map(c => limitTexts[c]!))].slice(0, 4).join(' · ')}.` : 'Границы: см. статистику.';
-  const headline = `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}), ${cards.unknown} без решения, ${cards.invalid} невалидны, ${cards.notReached} не дошли; разобрано человеком ${human.reviewed} из ${plural(human.total, ['диалога', 'диалогов', 'диалогов'])}.`;
-  return { cards, metrics, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
+  const reviewText = `разобрано человеком ${human.reviewed} из ${plural(human.total, ['диалога', 'диалогов', 'диалогов'])}`;
+  const headline = primary === 'goal_attainment'
+    ? `Бизнес-цель достигнута в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${plural(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} цель достигнута, но провален другой критерий.` : ''} Без решения по цели: ${cards.unknown}; невалидно: ${cards.invalid}; не дошли: ${cards.notReached}; ${reviewText}.`
+    : `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}), ${cards.unknown} без решения, ${cards.invalid} невалидны, ${cards.notReached} не дошли; ${reviewText}.`;
+  return { cards, strict, primary, metrics, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
     human,
     scope: { cards: record.scenarios.length, dialogues: record.trials.length, modes: record.settings.userModes, provenance, target, ...(judgeModel ? { judgeModel } : {}) },
     cost: { usd: record.usage.costUsd, calls: record.usage.calls, elapsedMs: record.trials.reduce((n, t) => n + t.elapsedMs, 0) }, limits, headline };
