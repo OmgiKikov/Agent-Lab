@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 1
 current_phase_name: Одно честное число
 status: executing
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-09-16T21:26:21.803Z"
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-09-16T21:32:26.455Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 1 execution started
-state_head: c9fc9b9ef9ec8b1f6ca44948689ed50d0f206017
+state_head: 6e0d53ea80cafdfde615f8a462fdb9edc3a0d271
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 10
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 1 (Одно честное число) — EXECUTING
-Plan: 3 of 10
+Plan: 4 of 10
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 1 execution started
 
@@ -60,6 +60,7 @@ Progress: [░░░░░░░░░░] 0%
 |------|----------|-------|-------|
 | Phase 01 P01 | 7 min | 2 tasks | 10 files |
 | Phase 01 P02 | 5min | 2 tasks | 6 files |
+| Phase 01 P03 | 4min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -77,6 +78,9 @@ Recent decisions affecting current work:
 - [Phase 01]: 01-01: незапущенный черновик показывает только «Прогон ещё не запускался.», без строк «Ещё проверяется» и «Не измерено»
 - [Phase 01]: 01-01: причины «не измерено» проверяются в фиксированном порядке NOT_MEASURED_CODES, он же порядок при равных счётах
 - [Phase 1]: 01-02: Pi board and tool result print resultViewLines verbatim; a supplied view is used only when view.runId equals the shown record id
+- [Phase 1]: 01-03: DEFAULT_GOAL_OBSERVATION lives in contracts.ts; normalizeScenarioIdentity applies only to comparison identity
+- [Phase 1]: 01-03: an incomplete judge record makes only its pair incomparable; mixed protocol or another judge model still blocks the whole diff
+- [Phase 1]: 01-03: validate replay sets goal.id = dialogue.id; colliding model ids are recorded as a limitation
 
 ### Pending Todos
 
@@ -102,6 +106,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-16T21:26:21.783Z
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-09-16T21:32:26.436Z
+Stopped at: Completed 01-03-PLAN.md
 Resume file: None
