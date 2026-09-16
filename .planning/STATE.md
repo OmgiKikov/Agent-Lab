@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 1
 current_phase_name: Одно честное число
 status: executing
-stopped_at: Roadmap created, awaiting approval
-last_updated: "2026-09-16T21:09:02.928Z"
-last_activity: 2026-09-16
-last_activity_desc: Roadmap created (7 phases, 34/34 v1 requirements mapped)
-state_head: 59635dbcb033bcaf0f7f80a1a757f6b543d870a4
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-09-16T21:19:07.508Z"
+last_activity: 2026-09-17
+last_activity_desc: Phase 1 execution started
+state_head: 7a7c24083479ebf36231ca0c6f5eb2d6d3eb92ef
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 10
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 
 ## Current Position
 
-Phase: 1 (Одно честное число) — READY TO EXECUTE
-Plan: 0 of TBD in current phase
+Phase: 1 (Одно честное число) — EXECUTING
+Plan: 2 of 10
 Status: Ready to execute
-Last activity: 2026-09-16 — Roadmap created (7 phases, 34/34 v1 requirements mapped)
+Last activity: 2026-09-17 — Phase 1 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -54,6 +54,11 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: -
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01 P01 | 7 min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -68,6 +73,8 @@ Recent decisions affecting current work:
 - [Roadmap]: согласие человека (Phase 3) идёт после объяснений (Phase 2) и до экрана (Phase 4). Phase 4 и Phase 5 можно вести параллельно.
 - [Roadmap]: Phase 6 (старт) — хвост, который можно отрезать. Phase 7 (демо) не отрезается, у неё фиксированная дата.
 - [Scope]: карточки остаются внутренним форматом, на экранах называются «ситуации». Побочные ветки (discovery-гипотеза, одиночный тест, правка промпта, эталоны, профили, старая песочница) скрываются в Phase 6 (START-04), код удаляется после демо (v2 CLEAN-01).
+- [Phase 01]: 01-01: незапущенный черновик показывает только «Прогон ещё не запускался.», без строк «Ещё проверяется» и «Не измерено»
+- [Phase 01]: 01-01: причины «не измерено» проверяются в фиксированном порядке NOT_MEASURED_CODES, он же порядок при равных счётах
 
 ### Pending Todos
 
@@ -93,6 +100,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-16
-Stopped at: Roadmap created, awaiting approval
+Last session: 2026-09-16T21:19:07.489Z
+Stopped at: Completed 01-01-PLAN.md
 Resume file: None
