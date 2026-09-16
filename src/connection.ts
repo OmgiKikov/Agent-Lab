@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { checkSchema, emptyUsage, experimentSchema, fingerprint, settingsSchema, targetSchema, worldSchema, type Experiment, type Runtime, type Scenario, type Target } from './contracts.js';
 import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
+import { sourceIdentity } from './normalize.js';
 import { preflightTarget } from './targets.js';
 
 const step = z.strictObject({ message: z.string().trim().min(1).max(3000), reply: z.string().min(1).max(8000) });
@@ -145,5 +146,6 @@ export function suiteEvidence(record: Experiment, scenarioIds: string[]) {
   });
   const trialIds = new Set(trials.map(trial => trial.id));
   return { runId: record.id, ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}), trials,
-    humanReviews: record.humanReviews.filter(review => trialIds.has(review.trialId)).map(review => structuredClone(review)) };
+    humanReviews: record.humanReviews.filter(review => trialIds.has(review.trialId)).map(review => structuredClone(review)),
+    identity: sourceIdentity(record, scenarioIds) };
 }

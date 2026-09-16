@@ -100,6 +100,7 @@ test('missing parents and journals remain explicit without losing current eviden
   } };
   const recovered = await evidenceBundle(legacy, lab.store);
   assert.equal(recovered.comparisonSource?.kind, 'embedded');
+  assert.equal(recovered.view?.stability?.skipped, 'исходный прогон недоступен', 'a legacy suite has no source identity for stability');
   assert.equal(recovered.comparison?.fixed.length, 1, 'legacy one-trial suite evidence remains readable');
 });
 
@@ -128,6 +129,8 @@ test('a saved suite carries every attempt and compares from embedded evidence in
   assert.equal(bundle.comparisonSource?.kind, 'embedded');
   assert.equal(bundle.before?.id, before.id);
   assert.equal(bundle.comparison?.fixed.length, 1);
+  assert.ok(loaded.sourceEvidence?.identity, 'a new suite embeds the source run identity');
+  assert.equal(bundle.view?.stability?.skipped, 'агент изменился между прогонами', 'a fix of the agent is not called instability');
   assert.equal(bundle.comparison?.regressed.length, 0);
   assert.equal(bundle.comparison?.pairs.length, 2);
   assert.match(bundle.warnings.join('\n'), /парный diff, не статистическая оценка/);

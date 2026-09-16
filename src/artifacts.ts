@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { Experiment } from './contracts.js';
 import type { ExperimentStore } from './store.js';
-import { compareRuns, evidenceSummary, type EvidenceSummary, type RunComparison } from './comparison.js';
+import { compareRuns, evidenceSummary, markReconstructedSource, type EvidenceSummary, type RunComparison } from './comparison.js';
 import { qualitySummary, type QualitySummary } from './quality.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { buildResultView, type ResultView } from './result-view.js';
@@ -29,6 +29,13 @@ export function embeddedBefore(record: Experiment, parentId: string): Experiment
   if (!source?.trials.length || source.runId !== parentId) return;
   const before = structuredClone(record);
   before.id = source.runId;
+  // Only the embedded identity describes the source run; without it these fields stay the current ones
+  // and stability refuses to compare (see markReconstructedSource).
+  if (source.identity) {
+    for (const key of ['targetFingerprint', 'targetVersion', 'evaluatorVersion'] as const) {
+      if (source.identity[key] === undefined) delete before[key]; else before[key] = source.identity[key];
+    }
+  }
   before.parentRunId = source.parentRunId;
   before.phase = 'results_review'; before.message = 'Portable baseline reconstructed from the saved suite evidence.';
   before.trials = structuredClone(source.trials); before.humanReviews = structuredClone(source.humanReviews);
@@ -39,7 +46,7 @@ export function embeddedBefore(record: Experiment, parentId: string): Experiment
   before.limitations = [...before.limitations, 'Portable baseline contains the saved attempts and current frozen definition, not the unavailable original run metadata.'];
   delete before.sourceEvidence; delete before.failureModes; delete before.releaseLog;
   delete before.assessmentOf; delete before.assessmentTrialIds; delete before.evidenceHash;
-  return before;
+  return markReconstructedSource(before);
 }
 
 /** Resolve the persisted relationship once, independently of navigation and export format. */

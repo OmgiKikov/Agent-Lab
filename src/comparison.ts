@@ -1,6 +1,6 @@
 import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
-import { normalizeScenarioIdentity } from './normalize.js';
-import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type Tier, type Trial, type UserMode } from './contracts.js';
+import { agentIdentity, normalizeScenarioIdentity } from './normalize.js';
+import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
 import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, measured, measurementUsable, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
@@ -600,6 +600,26 @@ export interface StabilityRow { scenarioId: string; title: string; before: 'pass
 export interface Stability { basis: 'repeat' | 'reassess'; comparedWith: string; checked: number; unstable: StabilityRow[]; skipped: string | null }
 
 type Decided = 'pass' | 'fail';
+
+/*
+ * A source run rebuilt from embedded evidence (artifacts.ts embeddedBefore) is a copy of the
+ * current record with the source attempts swapped in: its agent, evaluator and card fields are
+ * the current ones. Stability must never compare the current record with itself, so a rebuilt
+ * source is registered here and checked against the identity the derived record embedded.
+ */
+const reconstructedSources = new WeakSet<Experiment>();
+const SOURCE_UNAVAILABLE = 'исходный прогон недоступен';
+/** Marks a run rebuilt from embedded evidence; stability then trusts only `sourceEvidence.identity`. */
+export function markReconstructedSource(run: Experiment): Experiment {
+  reconstructedSources.add(run);
+  return run;
+}
+/** undefined: `source` is a real run. null: rebuilt without a recorded identity, so nothing can be compared. */
+function reconstructedIdentity(source: Experiment, derived: Experiment): SourceIdentity | null | undefined {
+  if (!reconstructedSources.has(source)) return undefined;
+  const evidence = derived.sourceEvidence;
+  return evidence?.runId === source.id && evidence.identity ? evidence.identity : null;
+}
 const isDecided = (outcome: 'pass' | 'fail' | 'unknown'): outcome is Decided => outcome !== 'unknown';
 
 /**
@@ -609,8 +629,12 @@ const isDecided = (outcome: 'pass' | 'fail' | 'unknown'): outcome is Decided => 
  */
 export function stabilityBetweenRuns(before: Experiment, after: Experiment): Stability {
   const result: Stability = { basis: 'repeat', comparedWith: before.id, checked: 0, unstable: [], skipped: null };
+  const identity = reconstructedIdentity(before, after);
+  if (identity === null) return { ...result, skipped: SOURCE_UNAVAILABLE };
   if (!compareRuns(before, after).comparable) return { ...result, skipped: 'прогоны несравнимы' };
-  if (before.targetFingerprint !== after.targetFingerprint || before.targetVersion !== after.targetVersion) return { ...result, skipped: 'агент изменился между прогонами' };
+  const agent = identity ?? { ...before, agent: agentIdentity(before) };
+  if (agent.targetFingerprint !== after.targetFingerprint || agent.targetVersion !== after.targetVersion
+    || agent.agent !== agentIdentity(after)) return { ...result, skipped: 'агент изменился между прогонами' };
   const source = observedRecord(before), repeat = observedRecord(after);
   for (const card of repeat.scenarios) {
     const sourceCard = source.scenarios.find(item => item.id === card.id);
@@ -631,12 +655,16 @@ export function stabilityBetweenRuns(before: Experiment, after: Experiment): Sta
 export function stabilityAfterReassess(record: Experiment, source: Experiment): Stability | null {
   if (record.assessmentOf !== source.id || !record.evidenceHash) return null;
   const result: Stability = { basis: 'reassess', comparedWith: source.id, checked: 0, unstable: [], skipped: null };
-  if (record.evaluatorVersion !== source.evaluatorVersion) return { ...result, skipped: 'судья или его настройки изменились' };
+  const identity = reconstructedIdentity(source, record);
+  if (identity === null) return { ...result, skipped: SOURCE_UNAVAILABLE };
+  if (record.evaluatorVersion !== (identity ?? source).evaluatorVersion) return { ...result, skipped: 'судья или его настройки изменились' };
   const sourceTrialIds = new Set(source.trials.map(trial => trial.id));
   for (const card of record.scenarios) {
     const sourceCard = source.scenarios.find(item => item.id === card.id);
     if (!sourceCard) continue;
-    if (fingerprint(normalizeScenarioIdentity(card, record.target.kind)) !== fingerprint(normalizeScenarioIdentity(sourceCard, source.target.kind))) continue;
+    // A rebuilt source holds the current cards, so the source card identity comes from the embedded record of it.
+    const sourceCardIdentity = identity ? identity.scenarios[card.id] : fingerprint(normalizeScenarioIdentity(sourceCard, source.target.kind));
+    if (fingerprint(normalizeScenarioIdentity(card, record.target.kind)) !== sourceCardIdentity) continue;
     const trialIds = new Set(record.trials.filter(trial => trial.scenarioId === card.id).map(trial => trial.id));
     // Only a card whose every source attempt was reassessed, and nothing else, compares the same answers.
     if ([...trialIds].some(id => !sourceTrialIds.has(id))

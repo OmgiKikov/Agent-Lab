@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { sourceIdentity } from '../src/normalize.js';
 import { awaitingVerdict, compareRuns, evidenceSummary, humanFindings, isAgentFailure, judgeModel, repeatResults, stabilityAfterReassess, verdictSummary } from '../src/comparison.js';
 import { embeddedBefore } from '../src/artifacts.js';
 import { suiteEvidence } from '../src/connection.js';
@@ -578,7 +579,26 @@ test('stabilityAfterReassess counts a goal flip on the same answers and the same
     unstable: [{ scenarioId: 's1', title: 's1', before: 'pass', after: 'fail' }] });
   const rebuilt = embeddedBefore(next, REASSESSED_SOURCE);
   assert.ok(rebuilt);
-  assert.deepEqual(stabilityAfterReassess(next, rebuilt), stability, 'the embedded source gives the same answer as the stored one');
+  assert.deepEqual(stabilityAfterReassess(next, rebuilt), { ...stability, checked: 0, unstable: [], skipped: 'исходный прогон недоступен' },
+    'a legacy embedded source has no identity to compare with');
+  next.sourceEvidence!.identity = sourceIdentity(source, ['s1', 's2']);
+  assert.deepEqual(stabilityAfterReassess(next, embeddedBefore(next, REASSESSED_SOURCE)!), stability, 'the embedded identity gives the same answer as the stored one');
+});
+
+test('stabilityAfterReassess against a rebuilt source never compares the reassessment with itself', () => {
+  const source = goalRun(REASSESSED_SOURCE, { s1: 'pass', s2: 'pass' }, 'h', { evaluatorVersion: 'judge-1' });
+  const identity = sourceIdentity(source, ['s1', 's2']);
+  // Changed criteria on s1: the rebuilt source holds the new card, the identity holds the old one.
+  const criteria = reassessed(source, { s1: 'fail', s2: 'fail' }, { evaluatorVersion: 'judge-1' });
+  criteria.scenarios[0]!.metrics = [{ ...goalAttainment, passCriteria: 'Другое условие.' }];
+  criteria.sourceEvidence!.identity = identity;
+  const stability = stabilityAfterReassess(criteria, embeddedBefore(criteria, REASSESSED_SOURCE)!);
+  assert.equal(stability?.checked, 1);
+  assert.deepEqual(stability?.unstable.map(row => row.scenarioId), ['s2']);
+  // Another evaluator: the rebuilt source carries the current one, the identity the original.
+  const judge = reassessed(source, { s1: 'fail', s2: 'fail' }, { evaluatorVersion: 'judge-2' });
+  judge.sourceEvidence!.identity = identity;
+  assert.equal(stabilityAfterReassess(judge, embeddedBefore(judge, REASSESSED_SOURCE)!)?.skipped, 'судья или его настройки изменились');
 });
 
 test('stabilityAfterReassess skips changed criteria, partial coverage and unknown verdicts', () => {

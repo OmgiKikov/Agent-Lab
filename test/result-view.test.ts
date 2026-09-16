@@ -10,6 +10,8 @@ import { buildResultView, NOT_MEASURED_TEXT, resultViewLines, wilson } from '../
 import { NOT_MEASURED_CODES, type NotMeasuredCode } from '../src/comparison.js';
 import { AGREED_RATIONALE_PREFIX, GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { ExperimentStore } from '../src/store.js';
+import { embeddedBefore } from '../src/artifacts.js';
+import { sourceIdentity } from '../src/normalize.js';
 
 const world = { records: {}, writableFields: [], transientFailures: 0 };
 type Card = Experiment['scenarios'][number];
@@ -365,6 +367,28 @@ test('a changed agent or an incomparable pair is said in words, not counted as i
   const incomparable = buildResultView(judge.repeat, { before: judge.source });
   assert.equal(incomparable.stability?.skipped, 'прогоны несравнимы');
   assert.ok(resultViewLines(incomparable).includes('Стабильность не проверена: прогоны несравнимы.'));
+});
+
+test('a source rebuilt from embedded evidence is compared through its embedded identity, never with the current run', () => {
+  // A saved suite loaded against a new agent version while the original run is missing.
+  const version = repeatPair({ A: 'pass' }, { A: 'fail' }, { before: { targetVersion: 'v1' }, after: { targetVersion: 'v2' } });
+  const legacy: Experiment = { ...version.repeat, sourceEvidence: { runId: SOURCE_ID, trials: structuredClone(version.source.trials), humanReviews: [] } };
+  const unavailable = buildResultView(legacy, { before: embeddedBefore(legacy, SOURCE_ID) });
+  assert.deepEqual(unavailable.stability, { basis: 'repeat', comparedWith: SOURCE_ID, checked: 0, unstable: [], skipped: 'исходный прогон недоступен' });
+  assert.ok(resultViewLines(unavailable).includes('Стабильность не проверена: исходный прогон недоступен.'));
+  assert.ok(unavailable.cards.every(item => !item.unstable));
+  const known: Experiment = { ...legacy, sourceEvidence: { ...legacy.sourceEvidence!, identity: sourceIdentity(version.source, ['A']) } };
+  assert.equal(buildResultView(known, { before: embeddedBefore(known, SOURCE_ID) }).stability?.skipped, 'агент изменился между прогонами');
+  // Another agent definition is another agent too.
+  const agent = { instructions: 'Отвечай кратко.', tools: [] } as unknown as Experiment['revisions'][number]['spec'];
+  const revised: Experiment = { ...known, targetVersion: 'v1', revisions: [{ id: 'r2', parentId: null, spec: { ...agent, instructions: 'Иначе.' }, hypothesis: '', createdAt: 'now' }],
+    sourceEvidence: { ...known.sourceEvidence!, identity: sourceIdentity({ ...version.source, revisions: [{ id: 'r1', parentId: null, spec: agent, hypothesis: '', createdAt: 'now' }] }, ['A']) } };
+  assert.equal(buildResultView(revised, { before: embeddedBefore(revised, SOURCE_ID) }).stability?.skipped, 'агент изменился между прогонами');
+  // The same agent: the flip is found against the embedded attempts.
+  const same = repeatPair({ A: 'pass', B: 'fail' }, { A: 'fail', B: 'fail' });
+  const portable: Experiment = { ...same.repeat, sourceEvidence: { runId: SOURCE_ID, trials: structuredClone(same.source.trials), humanReviews: [], identity: sourceIdentity(same.source, ['A', 'B']) } };
+  const found = buildResultView(portable, { before: embeddedBefore(portable, SOURCE_ID) });
+  assert.deepEqual(found.stability, buildResultView(same.repeat, { before: same.source }).stability);
 });
 
 test('CLI summary of a repeat names the flips against the stored source run, from the built dist', { timeout: 20000 }, async () => {

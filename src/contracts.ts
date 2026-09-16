@@ -729,6 +729,20 @@ export type Phase = 'preparing' | 'review' | 'evaluating' | 'results_review' | '
 export interface AcceptedTest {
   testId: string; scenarioId: string; definitionHash: string; acceptedAt: string;
 }
+/**
+ * What the source run was when its evidence was embedded: the agent, the evaluator, the judge and
+ * each card's comparison identity. A run rebuilt from embedded evidence has no other trustworthy
+ * copy of these fields. Absent in records written before it existed.
+ */
+export interface SourceIdentity {
+  targetFingerprint?: string; targetVersion?: string; evaluatorVersion?: string; manifestHash: string | null;
+  /** Fingerprint of the baseline agent definition (the sandbox agent or the reviewed external spec). */
+  agent: string;
+  /** Fingerprint of the configured judge (provider, model, upstream). */
+  judge: string;
+  /** Scenario id → fingerprint of its normalized comparison identity. */
+  scenarios: Record<string, string>;
+}
 export interface Experiment {
   schemaVersion: '1'; id: string; task: string; mode: 'demo' | 'live'; workflow: 'evaluate' | 'compare';
   createdAt: string; updatedAt: string; phase: Phase; message: string;
@@ -755,7 +769,7 @@ export interface Experiment {
   targetFingerprint?: string;
   evaluatorVersion?: string;
   targetRelease?: string;
-  sourceEvidence?: { runId: string; parentRunId?: string; trials: Trial[]; humanReviews: HumanReview[] };
+  sourceEvidence?: { runId: string; parentRunId?: string; trials: Trial[]; humanReviews: HumanReview[]; identity?: SourceIdentity };
   clarifications?: { question: string; answer: string }[];
   assessmentOf?: string;
   assessmentTrialIds?: string[];
@@ -857,7 +871,9 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   clarifications: z.array(z.strictObject({ question: text.max(3000), answer: text.max(5000) })).max(100).optional(),
   assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
   evaluatorVersion: text.optional(), targetRelease: text.max(200).optional(),
-  sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(600), humanReviews: z.array(humanReviewSchema).max(1000) }).optional(),
+  sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(600), humanReviews: z.array(humanReviewSchema).max(1000),
+    identity: z.strictObject({ targetFingerprint: text.optional(), targetVersion: text.max(200).optional(), evaluatorVersion: text.optional(), manifestHash: text.nullable(),
+      agent: text, judge: text, scenarios: z.record(identifier, text).refine(value => Object.keys(value).length <= 200, 'Too many scenario identities') }).optional() }).optional(),
   discovery: discoveryRecordSchema.optional(),
 }).superRefine((record, ctx) => {
   record.scenarios.forEach((scenario, index) => {
