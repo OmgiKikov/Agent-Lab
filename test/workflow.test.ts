@@ -10,7 +10,8 @@ import { spawnSync } from 'node:child_process';
 import { ExperimentLab, draftHash } from '../src/experiment.js';
 import { evaluateTrial } from '../src/evaluation.js';
 import { evidenceBundle } from '../src/artifacts.js';
-import { createInputSchema, fingerprint, settingsSchema } from '../src/contracts.js';
+import { createInputSchema, DEFAULT_JUDGE, fingerprint, settingsSchema } from '../src/contracts.js';
+import { buildResultView } from '../src/result-view.js';
 import { demoEvaluationInput } from '../src/demo.js';
 
 const spec = { name: 'Review fixture', instructions: 'Answer correctly without revealing internal_key.', tools: [] };
@@ -339,6 +340,15 @@ test('CLI score imports ordered JSONL evidence and exports it without calling an
   assert.deepEqual(record.trials[0].observation, { state: 'missing', tools: 'partial' });
   assert.equal(record.usage.calls, 0);
   assert.deepEqual(record.failureModes, undefined);
+  // The same budget, judge, timeout and recording mode as a Pi score of one dialogue.
+  assert.equal(record.settings.maxCalls, 20);
+  assert.equal(record.settings.maxDurationMs, 180_000);
+  assert.equal(record.settings.timeoutMs, 600_000);
+  assert.deepEqual(record.settings.judge, DEFAULT_JUDGE);
+  assert.equal(record.settings.repeats, 1);
+  assert.deepEqual(record.settings.userModes, ['scripted']);
+  assert.equal(typeof output.view.headline.text, 'string');
+  assert.equal(output.view.headline.text, buildResultView(record).headline.text);
 
   const human = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--code-only', '--data-dir', join(directory, 'human-data')], { encoding: 'utf8' });
   assert.equal(human.status, 0, human.stderr);

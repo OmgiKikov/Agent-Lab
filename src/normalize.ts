@@ -1,4 +1,4 @@
-import { DEFAULT_GOAL_OBSERVATION, type GoalObservation, type Scenario, type Target } from './contracts.js';
+import { DEFAULT_GOAL_OBSERVATION, DEFAULT_JUDGE, type GoalObservation, type Scenario, type Settings, type Target } from './contracts.js';
 
 /*
  * Defaults that decide whether two records describe the same thing. Nothing here performs I/O
@@ -21,4 +21,22 @@ export function withDefaultGoalObservation<T extends { goalObservation?: GoalObs
 /** Card identity for comparison only; never persisted. */
 export function normalizeScenarioIdentity(scenario: Scenario, targetKind: Target['kind']): Scenario {
   return withDefaultGoalObservation(scenario, targetKind);
+}
+
+/**
+ * Settings of a score run, shared by the CLI and Pi so the same dialogues get the same budget, judge and timeout.
+ * The budget grows with the number of recorded dialogues; the owner's explicit values win.
+ * `repeats: 1` and `userModes: ['scripted']` are forced last: they describe how imported recordings were made
+ * (one scripted attempt each), not an owner choice, and `goalCardOutcome` needs them to count a judged card.
+ */
+export function scoreSettings(dialogueCount: number, supplied: Partial<Settings>, mode: 'live' | 'demo'): Partial<Settings> {
+  return {
+    maxCalls: Math.min(3000, Math.max(20, 8 * dialogueCount)),
+    maxDurationMs: Math.min(14_400_000, Math.max(180_000, 120_000 * dialogueCount)),
+    timeoutMs: 600_000,
+    ...(mode === 'live' ? { judge: { ...DEFAULT_JUDGE } } : {}),
+    ...supplied,
+    repeats: 1,
+    userModes: ['scripted'],
+  };
 }

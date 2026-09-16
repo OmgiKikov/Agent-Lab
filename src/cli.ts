@@ -6,7 +6,8 @@ import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab, draftHash, planDiscovery } from './experiment.js';
 import { demoInput } from './demo.js';
-import { createInputSchema, discoverInputSchema, type Experiment } from './contracts.js';
+import { createInputSchema, discoverInputSchema, type Experiment, type Settings } from './contracts.js';
+import { scoreSettings } from './normalize.js';
 import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from './prompt-edit.js';
@@ -297,7 +298,9 @@ async function main() {
         const raw: Record<string, unknown> = JSON.parse(await readFile(values.task, 'utf8'));
         const dialogues = await readData(values.input, 'dialogues');
         const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
-        input = createInputSchema.parse({ ...raw, mode: raw.mode ?? 'live', ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
+        const mode = raw.mode ?? 'live';
+        input = createInputSchema.parse({ ...raw, mode, settings: scoreSettings(dialogues.length, (raw.settings ?? {}) as Partial<Settings>, mode === 'demo' ? 'demo' : 'live'),
+          ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
           dialogues, scenarioCount: 0 });
       } catch (error) {
         throw scoreInputError(error);
@@ -318,7 +321,7 @@ async function main() {
       const output = { id: record.id, phase: record.phase, imported: imported.trials.length, questions: record.questions,
         ...(record.assessmentOf ? { assessmentOf: record.assessmentOf } : {}),
         ...(values['code-only'] ? { scoreState: 'Оценено по коду без вызовов модели; кластеры провалов не строились.' } : {}),
-        brief: renderScoreBrief(scoreBrief(record)), quality, artifacts, evidence: bundle.evidence };
+        brief: renderScoreBrief(scoreBrief(record)), quality, view: bundle.view, artifacts, evidence: bundle.evidence };
       if (values.json) process.stdout.write(JSON.stringify(output, null, 2) + '\n');
       else process.stdout.write([
         ...('scoreState' in output ? [output.scoreState, ''] : []), output.brief,
@@ -356,7 +359,7 @@ async function main() {
       process.exitCode = evaluationExitCode(record);
       process.stdout.write(JSON.stringify({ id: record.id, exitCode: process.exitCode,
         quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes },
-        verdict: v, comparison: bundle.comparison, artifacts }, null, 2) + '\n');
+        verdict: v, comparison: bundle.comparison, view: bundle.view, artifacts }, null, 2) + '\n');
       return;
     }
     if (command === 'demo' || command === 'prepare' || command === 'build') {
@@ -381,11 +384,18 @@ async function main() {
       await lab.start(id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft), ...(values.parallel ? { parallel: Number(values.parallel) } : {}) }); await lab.waitForIdle();
       const result = await lab.get(id);
       const quality = qualitySummary(result);
+      // The source run is read-only context for stability, as in `summary`.
+      let before: Experiment | undefined;
+      if (result.parentRunId) {
+        try { before = await lab.store.get(result.parentRunId); }
+        catch { before = embeddedBefore(result, result.parentRunId); }
+      }
+      const view = buildResultView(result, { before });
       process.stdout.write(`${JSON.stringify({ id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode,
         ...(result.workflow === 'evaluate' ? { quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes },
           verdict: evidenceSummary(result).verdict, exitCode: evaluationExitCode(result),
           proofs: result.trials.map(trial => trialProofLines(result, trial.id)) } : {}),
-        comparison: result.comparisons.at(-1), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
+        comparison: result.comparisons.at(-1), view, artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
       if (result.workflow === 'evaluate') process.exitCode = evaluationExitCode(result);
       if (!['complete', 'results_review'].includes(result.phase)) throw new Error(result.error ?? 'Experiment did not complete');
     } else throw new Error(`Unknown command: ${command}`);
