@@ -620,7 +620,7 @@ test('Pi score imports recorded evidence code-only and gates every model call wi
   assert.equal(cancelled.cancelled, true);
   assert.equal(cancelled.phase, 'results_review');
   assert.equal(cancelled.usage.calls, 0);
-  assert.match(confirmations[0]!, /Агент и симулятор не запускаются.*До \d+ модельных вызовов/s);
+  assert.match(confirmations[0]!, /Агент и симулятор не запускаются.*1 диалог.*План: 7–9 модельных вызовов; потолок: 20.*Время: до 3 минут/s);
 
   const invalid = join(directory, 'invalid.jsonl');
   await writeFile(invalid, '{bad}\n');
@@ -640,6 +640,61 @@ test('Pi code-only score preserves the public 200-dialogue and configured budget
   const saved = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
   assert.equal(saved.settings.maxCalls, 7);
   assert.equal(saved.settings.maxDurationMs, 14_400_000);
+});
+
+test('Pi score scales its default batch budget and preserves explicit owner limits', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-score-budget-'));
+  const { tools, shutdown } = registered();
+  const score = ExperimentLab.prototype.score;
+  const reassess = ExperimentLab.prototype.reassess;
+  const inputs: { maxCalls: number; maxDurationMs: number; codeOnly: boolean }[] = [];
+  let providerRuns = 0;
+  ExperimentLab.prototype.score = function(raw, options) {
+    inputs.push({ maxCalls: raw.settings.maxCalls, maxDurationMs: raw.settings.maxDurationMs, codeOnly: options?.codeOnly === true });
+    if (!options?.codeOnly) providerRuns++;
+    return score.call(this, raw, { ...options, codeOnly: true });
+  };
+  ExperimentLab.prototype.reassess = function(id) { return this.get(id); };
+  t.after(async () => {
+    ExperimentLab.prototype.score = score;
+    ExperimentLab.prototype.reassess = reassess;
+    await shutdown();
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const confirmations: string[] = [];
+  let consent = true;
+  const ctx = { cwd: directory, hasUI: true, mode: 'tui', ui: { confirm: async (_title: string, body: string) => {
+    confirmations.push(body); return consent;
+  } } } as ExtensionContext;
+  const dialogues = Array.from({ length: 15 }, (_, index) => ({ id: `d${index}`,
+    messages: [{ role: 'user' as const, content: `Question ${index}` }, { role: 'assistant' as const, content: `Answer ${index}` }] }));
+  const params = { mode: 'score', task: 'Score recorded dialogues', materials: [{ name: 'policy.md', content: 'Answer from the owner policy.' }], dialogues };
+
+  const report = output(await tools.get('agent_lab_build')!.execute('scaled-score', params, undefined, undefined, ctx));
+  assert.equal(report.phase, 'results_review', report.error ?? JSON.stringify(report));
+  assert.match(confirmations[0]!, /15 диалогов/);
+  assert.match(confirmations[0]!, /План: 77–107 модельных вызовов; потолок: 120/);
+  assert.match(confirmations[0]!, /Время: до 30 минут/);
+  assert.deepEqual(inputs.slice(0, 2), [
+    { maxCalls: 120, maxDurationMs: 1_800_000, codeOnly: true },
+    { maxCalls: 120, maxDurationMs: 1_800_000, codeOnly: false },
+  ]);
+  assert.equal(providerRuns, 1);
+  const saved = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
+  assert.equal(saved.settings.maxCalls, 120);
+  assert.equal(saved.settings.maxDurationMs, 1_800_000);
+
+  consent = false;
+  const cancelled = output(await tools.get('agent_lab_build')!.execute('explicit-score', {
+    ...params, settings: { maxCalls: 23, maxDurationMs: 300_000 },
+  }, undefined, undefined, ctx));
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(cancelled.usage.calls, 0);
+  assert.equal(providerRuns, 1, 'cancellation performs no provider call');
+  assert.match(confirmations[1]!, /потолок: 23/);
+  assert.match(confirmations[1]!, /Время: до 5 минут/);
+  assert.deepEqual(inputs.at(-1), { maxCalls: 23, maxDurationMs: 300_000, codeOnly: true });
 });
 
 test('Pi score reports judge progress only after reassessment starts', async t => {
@@ -712,7 +767,7 @@ test('conversation completes human finding → prompt diff → unchanged SQLite 
   const built = await call('agent_lab_build', { mode: 'demo', scenarioCount: 1, settings: { userModes: ['static'] } });
   const inspection = await call('agent_lab_inspect', { id: built.id });
   const initialState = { records: { A: { time: '09:00' } }, writableFields: ['time'], transientFailures: 0 };
-  const move = { ...inspection.scenarios[0], initialState, successCriteria: 'Move A to 14:00',
+  const move = { ...inspection.scenarios[0], initialState, goalObservation: 'state' as const, successCriteria: 'Move A to 14:00',
     user: { ...inspection.scenarios[0].user, opening: 'Move A to 14:00' },
     checks: [{ id: 'time', kind: 'state_equals', recordId: 'A', field: 'time', value: '14:00', description: 'Move the record' }] };
   const guard = { ...move, id: 'read_only', familyId: 'read_only', title: 'Read without changes', successCriteria: 'Report that A is still at 09:00',
@@ -770,7 +825,9 @@ test('conversation completes human finding → prompt diff → unchanged SQLite 
   assert.match(diff.diff, /-Updates disabled/); assert.match(diff.diff, /\+Allow updates after lookup/);
   const candidate = await call('agent_lab_prompt', { action: 'apply', file: proposal.file });
   const candidateDraft = await call('agent_lab_inspect', { id: candidate.id });
-  assert.deepEqual(candidateDraft.scenarios, before.scenarios); assert.deepEqual(candidateDraft.humanReviews, []);
+  assert.deepEqual(candidateDraft.scenarios, before.scenarios);
+  assert.ok(candidateDraft.scenarios.every((scenario: { goalObservation?: string }) => scenario.goalObservation === 'state'), 'owner-selected state observation survives the fresh draft');
+  assert.deepEqual(candidateDraft.humanReviews, []);
   const after = await call('agent_lab_run', { id: candidate.id, expectedHash: candidate.draftHash });
   assert.equal(after.comparison.fixed.length, 1); assert.equal(after.comparison.regressed.length, 0);
   assert.equal(after.comparison.coverage.validPairs, 2);

@@ -152,7 +152,7 @@ export default function agentLab(pi: ExtensionAPI) {
   pi.registerTool({
     ...toolDisplay,
     name: 'agent_lab_build', label: 'Prepare agent and business-scenario tests',
-    description: 'Prepare an agent test or discover one useful test from recorded dialogues. mode=discover accepts up to 300 de-identified dialogues, shows computed call and time ceilings, and requires native confirmation before any provider call; it selects evidence and proposes one saved hypothesis, not an accuracy estimate. To resume a safely interrupted discovery, pass its resumeRunId alone; the saved used/max calls and total time ceiling are confirmed before continuation. After the owner says yes, call mode=discover again with the exact returned fromRunId and hypothesis to build exactly one editable test. The handoff does not accept, run, or save it. Other modes retain the normal 20-call default. mode=demo prepares the built-in scripted example without model calls; mode=score imports recorded dialogues without running the agent or simulator.',
+    description: 'Prepare an agent test or discover one useful test from recorded dialogues. mode=discover accepts up to 300 de-identified dialogues, shows computed call and time ceilings, and requires native confirmation before any provider call; it selects evidence and proposes one saved hypothesis, not an accuracy estimate. To resume a safely interrupted discovery, pass its resumeRunId alone; the saved used/max calls and total time ceiling are confirmed before continuation. After the owner says yes, call mode=discover again with the exact returned fromRunId and hypothesis to build exactly one editable test. The handoff does not accept, run, or save it. Live and demo modes retain the normal 20-call default; score scales its default budget to the imported batch. mode=demo prepares the built-in scripted example without model calls; mode=score imports recorded dialogues without running the agent or simulator.',
     parameters: Type.Object({
       task: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
       materials: Type.Optional(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 180 }), content: Type.String({ minLength: 1, maxLength: 120000 }), kind: Type.Optional(Type.Union([Type.Literal('knowledge'), Type.Literal('prompt')], { description: "'prompt' marks the agent's own system prompt: observable rules are extracted from it and every generated card gets the prompt_compliance rubric" })) }, { additionalProperties: false }), { minItems: 1, maxItems: 12 })),
@@ -274,6 +274,8 @@ export default function agentLab(pi: ExtensionAPI) {
       }
       if (operation === 'score' && !codeOnly && (!ctx.hasUI || ctx.mode !== 'tui')) throw new Error('Для модельной оценки нужен native Pi confirmation в интерактивном терминале.');
       const supplied = (rest.settings ?? {}) as Partial<z.infer<typeof settingsSchema>>;
+      const scoreMaxCalls = Math.min(3000, Math.max(20, 8 * parsedDialogues.length));
+      const scoreMaxDurationMs = Math.min(14_400_000, Math.max(180_000, 120_000 * parsedDialogues.length));
       if (operation === 'discover') {
         if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для discovery нужен native Pi confirmation в интерактивном терминале.');
         const connection = connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
@@ -324,7 +326,9 @@ export default function agentLab(pi: ExtensionAPI) {
         ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
         ...(goldenFile ? { goldenCases: await readData(resolve(ctx.cwd, goldenFile), 'golden') } : {}),
         ...(dialogues !== undefined ? { dialogues: parsedDialogues } : {}),
-        settings: { ...(mode === 'demo' ? demoInput().settings : {}), repeats: 1, maxCalls: 20, maxDurationMs: 180000,
+        settings: { ...(mode === 'demo' ? demoInput().settings : {}), repeats: 1,
+          maxCalls: operation === 'score' ? scoreMaxCalls : 20,
+          maxDurationMs: operation === 'score' ? scoreMaxDurationMs : 180_000,
           ...(mode === 'live' ? { judge: DEFAULT_JUDGE } : {}),
           ...supplied,
           provider: supplied.provider || ctx.model?.provider || '', model: supplied.model || ctx.model?.id || '' },
@@ -354,7 +358,13 @@ export default function agentLab(pi: ExtensionAPI) {
           let record = await lab.get(id);
           if (!codeOnly) {
             signal.throwIfAborted();
-            const confirmed = await ctx.ui.confirm('Оценить записанные диалоги?', safeText(`Агент и симулятор не запускаются. До ${input.settings.maxCalls} модельных вызовов.`));
+            const nominalMinCalls = parsedDialogues.length * 5 + 2;
+            const nominalMaxCalls = parsedDialogues.length * 7 + 2;
+            const confirmed = await ctx.ui.confirm('Оценить записанные диалоги?', safeText([
+              `Агент и симулятор не запускаются. ${parsedDialogues.length} ${parsedDialogues.length === 1 ? 'диалог' : 'диалогов'}.`,
+              `План: ${nominalMinCalls}–${nominalMaxCalls} модельных вызовов; потолок: ${input.settings.maxCalls}.`,
+              `Время: до ${Math.ceil(input.settings.maxDurationMs / 60_000)} минут.`,
+            ].join('\n')));
             if (!confirmed) {
               const output = { ...summary(record, lab.store.directory), cancelled: true, brief: renderScoreBrief(scoreBrief(record)),
                 artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory) };
