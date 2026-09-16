@@ -134,6 +134,11 @@ async function humanAnnotation(ctx: ExtensionContext, record: Experiment, select
     durationMs: Math.min(3600000, Math.round(performance.now() - started + (reviewTimes?.get(`${record.id}|${trial.id}`) ?? readingMs))) }];
 }
 
+/** A real agent is independent per dialogue, so several run at once; the scripted sandbox keeps its deterministic order. */
+function runParallel(record: Experiment): number {
+  return record.target.kind === 'sandbox' ? 1 : Math.max(1, Math.min(8, record.scenarios.length * record.settings.userModes.length * record.settings.repeats));
+}
+
 /** Conversational execution asks the human to authorize a concrete plan; it never invents human reviews. */
 export default function agentLab(pi: ExtensionAPI) {
   let activeClose: (() => Promise<void>) | undefined;
@@ -541,7 +546,7 @@ export default function agentLab(pi: ExtensionAPI) {
           return { content: [{ type: 'text', text: JSON.stringify({ id: draft.id, cancelled: true, message: 'Запуск отменён. Тесты сохранены; не повторяйте запрос запуска без новой просьбы пользователя.' }) }], details: { cancelled: true } };
         }
         signal.throwIfAborted();
-        await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: params.expectedHash });
+        await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: params.expectedHash, parallel: runParallel(draft) });
         signal.addEventListener('abort', cancel, { once: true });
         if (signal.aborted) cancel();
         const progress = async () => {
@@ -777,7 +782,7 @@ export default function agentLab(pi: ExtensionAPI) {
               if (r.workflow !== 'evaluate') throw new Error('Legacy comparison records cannot run from the evaluation board.');
               const hash = draftHash(r);
               if (await ctx.ui.confirm('Запустить проверку?', runPlan(r))) {
-                await lab.start(r.id, { approved: true, reviewer: 'automated', expectedHash: hash }); section = 'results'; selected = 0;
+                await lab.start(r.id, { approved: true, reviewer: 'automated', expectedHash: hash, parallel: runParallel(r) }); section = 'results'; selected = 0;
                 reportPath = undefined;
               }
             } else if (action.type === 'cancel') {

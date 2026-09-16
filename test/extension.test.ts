@@ -88,7 +88,8 @@ test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-ca
   };
   ExperimentLab.prototype.get = async function(id) { return id === record.id ? structuredClone(record) : originalGet.call(this, id); };
   ExperimentLab.prototype.waitForIdle = async function() {};
-  ExperimentLab.prototype.start = async function() { return structuredClone(record); };
+  let startOptions: Parameters<ExperimentLab['start']>[1] | undefined;
+  ExperimentLab.prototype.start = async function(_id, options) { startOptions = options; return structuredClone(record); };
   t.after(async () => {
     ExperimentLab.prototype.create = originalCreate;
     ExperimentLab.prototype.get = originalGet;
@@ -121,6 +122,7 @@ test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-ca
   assert.match(confirmations[0]!.body, /Исходных диалогов: 300; outcome-blind пул: 40; карточек: 15/);
   await tools.get('agent_lab_run')!.execute('run-validation', { id: result.id, expectedHash: result.draftHash }, undefined, undefined, ctx);
   assert.match(confirmations[1]!.body, /Validation set: 15 реальных диалогов/);
+  assert.equal(startOptions?.parallel, 8, 'an external agent is checked on several dialogues at once');
   assert.match(confirmations[1]!.body, /Клиент отвечает на уточнения симулятором/);
   assert.equal(confirmations[1]!.body.match(/Ожидается:/g)?.length, 15);
   assert.equal(confirmations[1]!.body.match(/Основание:/g)?.length, 15);

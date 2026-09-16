@@ -293,7 +293,7 @@ test('journal failure stops judgment before another request and original replies
       store.appendJudgment('run', id, a);
       if (a.attempts.some(v => v.raw)) throw new Error('disk failed');
     } }, async () => { calls++; return row('met', 'not_met'); }), /disk failed/);
-    assert.equal(calls, 1);
+    assert.equal(calls, 2, 'both votes were already in flight; nothing new starts after the failure');
   } finally { await store.close(); }
   const journal = await new ExperimentStore(directory).traceJournal('run');
   assert.equal(JSON.parse(journal.trim().split('\n').at(-1)!).judgeAudit.attempts[0].raw, row('met', 'not_met'));
@@ -335,4 +335,21 @@ test('the judge sees the agent prompt as its observable rules only, never as raw
   assert.match(observableSources([prompt], [])[0]!.content, /не извлечено/);
   assert.doesNotMatch(observableSources([prompt], [])[0]!.content, /JSON/);
   assert.match(JSON.stringify(judgeInput({ ...input, sources: seen })), /промпт агента/);
+});
+
+test('all votes of one dialogue are requested at once and the audit keeps a stable order', async () => {
+  const second = { ...scenario.metrics![0]!, id: 'tone', name: 'Tone' };
+  const both = { ...input, scenario: { ...scenario, metrics: [scenario.metrics![0]!, second] } };
+  let active = 0, peak = 0;
+  let audit: JudgeAudit | undefined;
+  const result = await assessRepeated(both, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, a) { audit = a; } },
+    async (_prompt, data) => {
+      active++; peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 20)); active--;
+      const metricId = JSON.parse(data).scenario.metrics[0].id;
+      return JSON.stringify({ assessments: [{ metricId, passCondition: 'met', failCondition: 'not_met', rationale: 'Explicit evidence for both conditions.', evidence: [1], citations: [{ seq: 1, quote: 'Do this.' }] }] });
+    });
+  assert.equal(peak, 4, 'two rubrics times two votes run concurrently');
+  assert.deepEqual(result.map(r => [r.metricId, r.result]), [['goal', 'pass'], ['tone', 'pass']]);
+  assert.deepEqual(audit!.attempts.map(a => a.metricId), ['goal', 'goal', 'tone', 'tone']);
 });

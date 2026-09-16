@@ -666,11 +666,12 @@ test('validation grounds expectations and user facts, uses reactive turns, exclu
       { role: 'user' as const, content: `Деталь ${index}` }, { role: 'assistant' as const, content: 'Ответ из базы.' },
     ] }));
   let grounded = false;
+  let prepareCalls = 0, activeGoals = 0, maxActiveGoals = 0;
   const attempts = new Map<string, number>();
   const runtime: Runtime = {
     async prepare(input) {
       assert.equal(input.scenarioCount, 0);
-      grounded = true;
+      grounded = true; prepareCalls++;
       return { requirements: [{ id: 'reply_rule', text: policy, sourceId: 'source-1', quote: policy, critical: true }], questions: [],
         agent: { name: 'Real agent', instructions: policy, tools: [] }, scenarios: [] };
     },
@@ -681,6 +682,8 @@ test('validation grounds expectations and user facts, uses reactive turns, exclu
       assert.equal(input.dialogues.length, 1);
       const dialogue = input.dialogues[0]!;
       attempts.set(dialogue.id, (attempts.get(dialogue.id) ?? 0) + 1);
+      activeGoals++; maxActiveGoals = Math.max(maxActiveGoals, activeGoals);
+      await new Promise(resolve => setTimeout(resolve, 5)); activeGoals--;
       if (dialogue.id === 'real_1' && attempts.get(dialogue.id) === 1) throw new Error('Pi provider response incomplete: connection failure');
       return [{ id: `goal_${dialogue.id}`, goal: `Ответить на ${dialogue.id}`, opening: dialogue.messages[0]!.content,
         facts: `Пользователь сообщил: ${dialogue.messages.filter(m => m.role === 'user').map(m => m.content).join('; ')}`,
@@ -712,6 +715,15 @@ test('validation grounds expectations and user facts, uses reactive turns, exclu
   assert.equal(qualityLines(qualitySummary(draft)).coverage, 'Не вошли в набор 2 диалога: нужны данные клиента — 1, скрыты обезличиванием — 1. В accuracy они не считаются.');
   assert.equal(attempts.has('masked'), false, 'masked-only turns never reach the model');
   assert.equal(attempts.get('real_1'), 2, 'one transient transport failure is retried once');
+  assert.ok(maxActiveGoals >= 4, `recorded dialogues are read in wide parallel batches, saw ${maxActiveGoals}`);
+  const again = await lab.create(createInputSchema.parse({ task: 'Проверить ответы', mode: 'live', scenarioCount: 0, validationCount: 4, dialogues,
+    materials: [{ name: 'prompt', kind: 'prompt', content: policy }], settings: { userModes: ['scripted'], maxTurns: 16 } }));
+  await lab.waitForIdle();
+  const repeated = await lab.get(again.id);
+  assert.equal(repeated.phase, 'review', repeated.error ?? '');
+  assert.equal(prepareCalls, 1, 'identical materials, task and model reuse the grounded requirements');
+  assert.deepEqual(repeated.requirements, draft.requirements);
+  assert.match(repeated.limitations.join('\n'), /Требования взяты из кэша подготовки/);
 });
 
 test('fifteen unaccepted cards still run, report accuracy, save, load and rerun intact', async t => {

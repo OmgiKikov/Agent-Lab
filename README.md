@@ -54,7 +54,7 @@ Agent Lab принимает до 300 обезличенных диалогов 
 
 ```sh
 agent-lab save-suite --id RUN --output .evals/validation.json
-agent-lab evaluate --input .evals/validation.json --yes --parallel 2
+agent-lab evaluate --input .evals/validation.json --yes --parallel 8
 agent-lab diff --before BEFORE_RUN --after AFTER_RUN
 ```
 

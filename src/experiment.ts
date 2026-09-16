@@ -10,6 +10,11 @@ import { automaticTrialResult, trialAssessmentComplete, awaitingVerdict, compare
 import { targetFingerprint } from './target-version.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from './connection.js';
 import { preflightTarget, readPrompt, runRelease } from './targets.js';
+
+/** Recorded dialogues read by the goals role at once. */
+const GOAL_BATCH = 8;
+/** Dialogues a run may hold open against the target at once. */
+export const MAX_PARALLEL = 16;
 import { simulatorChecks } from './simulator.js';
 import { validationDialogueIssue } from './imports.js';
 import { assessmentRubrics, validationScenario } from './contracts.js';
@@ -298,7 +303,17 @@ export class ExperimentLab {
         dialogues: structuredClone(record.dialogues), userModes: structuredClone(record.settings.userModes), requirements: preparedRequirements,
       });
       // A validation replay first grounds owner requirements, then derives exactly one card per sampled dialogue.
-      const grounding = replay ? await runtime.prepare(preparationInput(), ctx) : undefined;
+      // Grounding is one long model call; identical task, materials and model settings give the same requirements, so it is reused.
+      const groundingKey = fingerprint({ task: record.task, sources: record.sources.map(({ id, name, content, kind }) => ({ id, name, content, kind })),
+        provider: record.settings.provider, model: record.settings.model, roles: record.settings.roles, targetKind: record.target.kind, version: VERSION });
+      const groundingFile = resolve(this.store.directory, 'grounding', `${groundingKey}.json`);
+      const cachedGrounding = replay ? await readFile(groundingFile, 'utf8').then(text => JSON.parse(text) as Awaited<ReturnType<Runtime['prepare']>>, () => undefined) : undefined;
+      if (cachedGrounding) record.limitations.push(`Требования взяты из кэша подготовки ${groundingKey.slice(0, 12)}: те же материалы, задача и модель.`);
+      const grounding = replay ? cachedGrounding ?? await runtime.prepare(preparationInput(), ctx) : undefined;
+      if (replay && grounding && !cachedGrounding) {
+        await mkdir(dirname(groundingFile), { recursive: true });
+        await writeFile(groundingFile, JSON.stringify({ ...grounding, scenarios: [] }), { mode: 0o600 });
+      }
       let observedGoals: ObservedGoal[] = [];
       if (!confirmed && record.dialogues.length) {
         if (!runtime.goals) throw new Error('Модель не умеет извлекать цели из записанных диалогов.');
@@ -311,8 +326,8 @@ export class ExperimentLab {
               return request();
             }
           };
-          for (let index = 0; index < record.dialogues.length && observedGoals.length < (input.validationCount ?? Infinity); index += 2) {
-            const batch = record.dialogues.slice(index, index + 2);
+          for (let index = 0; index < record.dialogues.length && observedGoals.length < (input.validationCount ?? Infinity); index += GOAL_BATCH) {
+            const batch = record.dialogues.slice(index, index + GOAL_BATCH);
             const extracted = (await Promise.all(batch.map(extract))).flat();
             if (input.validationCount) for (const dialogue of batch) {
               const goal = extracted.find(goal => goal.evidenceDialogueIds.includes(dialogue.id));
@@ -857,7 +872,7 @@ export class ExperimentLab {
   /** `parallel` is an execution knob, not a measurement setting: dialogues are independent, so several may run at once without changing what is measured. */
   async start(id: string, options: { approved: boolean; reviewer?: 'human' | 'automated'; expectedHash?: string; parallel?: number }): Promise<Experiment> {
     const parallel = options.parallel ?? 1;
-    if (!Number.isInteger(parallel) || parallel < 1 || parallel > 8) throw new Error('Параллельных диалогов может быть от 1 до 8.');
+    if (!Number.isInteger(parallel) || parallel < 1 || parallel > MAX_PARALLEL) throw new Error(`Параллельных диалогов может быть от 1 до ${MAX_PARALLEL}.`);
     return this.change(async () => {
       const record = await this.store.get(id);
       if (record.phase !== 'review') throw new Error('Запустить можно только эксперимент, ожидающий проверки. Чтобы поменять набор карточек, создайте новый.');
@@ -986,6 +1001,7 @@ export class ExperimentLab {
     const planned = plannedTrials({ ...record, scenarios });
     // Every attempt in the order it would run one at a time; a pool of `parallel` workers takes them from the front,
     // so a finished dialogue is recorded as soon as it ends and the trial order is the completion order.
+    const firstTrial = record.trials.length;
     const attempts: Array<{ userMode: UserMode; scenario: Scenario; repeat: number }> = [];
     for (const userMode of record.settings.userModes) {
       const skipped: string[] = [];
@@ -1038,6 +1054,10 @@ export class ExperimentLab {
     };
     // One failure stops the pool: the other workers finish the dialogue they are in and take no more; the first error is the run's error.
     const results = await Promise.allSettled(Array.from({ length: Math.max(1, Math.min(parallel, attempts.length)) }, () => worker().catch(error => { failed = true; throw error; })));
+    // Dialogues finish in any order when run together; the record keeps them in card order so reports and reviews read the same every time.
+    const cardOrder = new Map(attempts.map((attempt, index) => [`${attempt.scenario.id}|${attempt.userMode}|${attempt.repeat}`, index]));
+    const position = (trial: Experiment['trials'][number]) => cardOrder.get(`${trial.scenarioId}|${trial.userMode}|${trial.repeat}`) ?? attempts.length;
+    record.trials.push(...record.trials.splice(firstTrial).sort((a, b) => position(a) - position(b)));
     const rejected = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (rejected) throw rejected.reason;
   }

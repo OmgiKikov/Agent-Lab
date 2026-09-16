@@ -19,6 +19,8 @@ Return exactly one compact JSON object, without markdown fences, matching this s
 ${JSON.stringify(z.toJSONSchema(responseSchema))}`;
 export const JUDGE_PROTOCOL = fingerprint({ version: 10, promptSources: 'observable-rules', ragEvidence: 'adapter-reported-retrieval-events', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
+/** Votes of one dialogue sent at once; a full card set stays well under typical provider rate limits. */
+const JUDGE_CONCURRENCY = 8;
 
 /**
  * The judge never reads the agent's prompt as text. A prompt source reaches it as the numbered
@@ -154,29 +156,42 @@ export async function assessRepeated(input: Input, model: { provider: string; id
   };
   const save = () => ctx.onJudgment?.(input.trial.id, structuredClone(audit));
   save();
-  for (const metric of applicable) for (let repeat = 0; repeat < 2; repeat++) {
-    ctx.signal.throwIfAborted();
-    const attempt: JudgeAudit['attempts'][number] = { metricId: metric.id, startedAt: new Date().toISOString(),
-      input: JSON.stringify(judgeInput({ ...input, scenario: { ...input.scenario, metrics: [metric] } })),
-    };
-    audit.attempts.push(attempt);
-    save(); // A crash leaves a visible pending request, not a missing favorable/unfavorable vote.
-    try {
-      attempt.raw = await respond(JUDGE_PROMPT, attempt.input!, raw => { attempt.raw = raw; save(); });
-    } catch (error) {
-      attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Judge request failed';
+  // Every vote is an independent fresh request, so one dialogue's votes run together. They are
+  // launched in rubric order, which keeps the audit order stable; after any failure nothing new starts.
+  const jobs = applicable.flatMap(metric => [metric, metric]);
+  let next = 0;
+  let failure: unknown;
+  const worker = async (): Promise<void> => {
+    while (next < jobs.length && failure === undefined) {
+      const metric = jobs[next++]!;
+      ctx.signal.throwIfAborted();
+      const attempt: JudgeAudit['attempts'][number] = { metricId: metric.id, startedAt: new Date().toISOString(),
+        input: JSON.stringify(judgeInput({ ...input, scenario: { ...input.scenario, metrics: [metric] } })),
+      };
+      audit.attempts.push(attempt);
+      save(); // A crash leaves a visible pending request, not a missing favorable/unfavorable vote.
+      try {
+        attempt.raw = await respond(JUDGE_PROMPT, attempt.input!, raw => { attempt.raw = raw; save(); });
+      } catch (error) {
+        attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Judge request failed';
+        save();
+        if (!RAG_METRIC_IDS.has(metric.id)) failure ??= error;
+        continue;
+      }
+      save(); // Persist the original response before parsing; never repair a judgment in-place.
+      try {
+        attempt.assessments = parseJudgment(attempt.raw, input, [metric]);
+      } catch (error) {
+        attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Invalid judgment';
+      }
       save();
-      if (!RAG_METRIC_IDS.has(metric.id)) throw error;
-      continue;
     }
-    save(); // Persist the original response before parsing; never repair a judgment in-place.
-    try {
-      attempt.assessments = parseJudgment(attempt.raw, input, [metric]);
-    } catch (error) {
-      attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Invalid judgment';
-    }
-    save();
-  }
+  };
+  const settled = await Promise.allSettled(Array.from({ length: Math.min(JUDGE_CONCURRENCY, jobs.length) },
+    () => worker().catch(error => { failure ??= error; throw error; })));
+  const rejected = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+  if (rejected) throw rejected.reason;
+  if (failure !== undefined) throw failure;
   if (audit.attempts.some(a => a.error && !RAG_METRIC_IDS.has(a.metricId ?? ''))) throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
   return metrics.map(metric => {
     if (notApplicable.includes(metric.id)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: RAG_METRIC_IDS.has(metric.id)
