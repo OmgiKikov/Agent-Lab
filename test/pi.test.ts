@@ -1258,3 +1258,8 @@ test('a confirmed reply-only RAG test repairs invented backend and tool checks',
     assert.deepEqual(prepared.scenarios[0]!.initialState, { records: {}, writableFields: [], transientFailures: 0 });
   } finally { await f.close(); }
 });
+
+test('goal extraction for a prompt/RAG validation treats a recorded lookup of the user account as customer data', async () => {
+  const { GOALS_ROLE } = await import('../src/prompts.js');
+  assert.match(GOALS_ROLE, /recorded agent asked for the user's merchant, point, terminal, contract, request number[^.]*testability=customer_data/);
+});

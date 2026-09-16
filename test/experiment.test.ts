@@ -704,6 +704,7 @@ test('validation grounds expectations and user facts, uses reactive turns, exclu
   assert.ok(draft.scenarios.every(card => card.goalObservation === 'reply'));
   assert.deepEqual(draft.settings.userModes, ['reactive']);
   assert.ok(draft.scenarios.every(card => card.user.script === undefined && card.user.facts.includes('Деталь')));
+  assert.ok(draft.scenarios.every(card => /передал вопрос оператору/.test(card.user.behavior) && /Каждый раз, когда агент называет другую организацию/.test(card.user.behavior)), 'the simulator stops after a handoff and corrects every wrong object');
   assert.ok(draft.scenarios.every(card => card.metrics?.map(metric => metric.id).join(',') === 'prompt_compliance,goal_attainment,reply_quality,user_fidelity'));
   assert.match(draft.limitations.join('\n'), /Исключён customer: Нужна персональная ставка/);
   assert.match(draft.limitations.join('\n'), /Исключён masked:/);
