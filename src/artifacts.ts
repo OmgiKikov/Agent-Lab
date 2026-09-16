@@ -6,12 +6,15 @@ import type { ExperimentStore } from './store.js';
 import { compareRuns, evidenceSummary, type EvidenceSummary, type RunComparison } from './comparison.js';
 import { qualitySummary, type QualitySummary } from './quality.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
+import { buildResultView, type ResultView } from './result-view.js';
 
 export interface EvidenceBundle {
   record: Experiment;
   evidence: EvidenceSummary;
   /** The first-screen answer, derived from the same helpers as `evidence`; never a separate count. */
   quality: QualitySummary;
+  /** The headline block every surface shows; never a separate count. Readers fall back to `buildResultView(record)`. */
+  view?: ResultView;
   before?: Experiment;
   comparison?: RunComparison;
   comparisonSource?: { kind: 'parent' | 'selected' | 'embedded'; beforeId: string; afterId: string };
@@ -41,7 +44,7 @@ function embeddedBefore(record: Experiment, parentId: string): Experiment | unde
 /** Resolve the persisted relationship once, independently of navigation and export format. */
 export async function evidenceBundle(record: Experiment, store: Pick<ExperimentStore, 'get' | 'traceJournal'>, beforeId?: string): Promise<EvidenceBundle> {
   const snapshot = structuredClone(record);
-  const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), quality: qualitySummary(snapshot), warnings: [], traceJournal: '' };
+  const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), quality: qualitySummary(snapshot), view: buildResultView(snapshot), warnings: [], traceJournal: '' };
   const parent = beforeId ?? snapshot.parentRunId;
   if (parent) {
     bundle.comparisonSource = { kind: beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };

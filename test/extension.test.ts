@@ -10,6 +10,10 @@ import type { Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { ExperimentLab, planDiscovery } from '../dist/experiment.js';
+import { spawn } from 'node:child_process';
+import { ExperimentStore } from '../src/store.js';
+import { buildResultView, resultViewLines } from '../src/result-view.js';
+import { demoEvaluateRecord } from './helpers/demo-record.js';
 
 function registered(onUserMessage?: (message: unknown) => void) {
   const tools = new Map<string, ToolDefinition>();
@@ -905,4 +909,41 @@ test('conversation completes human finding → prompt diff → unchanged SQLite 
   assert.ok(screens.some(body => body.includes('-Updates disabled.') && body.includes('+Allow updates after lookup.')));
   const evidence = JSON.parse(await readFile(after.artifacts.evidence, 'utf8'));
   assert.equal(evidence.parentRunId, before.id);
+});
+
+test('Pi inspect payload, its collapsed result and CLI summary open with the same ResultView block', { timeout: 60000 }, async () => {
+  const demo = await demoEvaluateRecord('agent-lab-pi-view-');
+  const cwd = await mkdtemp(join(tmpdir(), 'agent-lab-pi-view-cwd-'));
+  const { tools, shutdown } = registered();
+  try {
+    await demo.lab.close();
+    const record = demo.record;
+    assert.ok(record.trials.length > 0);
+    const store = new ExperimentStore(join(cwd, '.agent-lab'));
+    await store.init();
+    try { await store.save(record); } finally { await store.close(); }
+    const inspect = tools.get('agent_lab_inspect')!;
+    const result = await inspect.execute('inspect-view', { id: record.id }, undefined, undefined, { cwd, hasUI: false, mode: 'print' } as ExtensionContext);
+    const payload = output(result);
+    const expected = resultViewLines(buildResultView(record));
+    assert.deepEqual(payload.viewLines, expected);
+    assert.equal(payload.view.headline.text, expected[0]);
+    const rendered = inspect.renderResult!(result as never, { expanded: false, isPartial: false }, { fg: (_color: string, text: string) => text } as never) as unknown as Component;
+    const text = rendered.render(400).map(line => line.trimEnd()).join('\n').trim();
+    assert.ok(text.startsWith(payload.viewLines.join('\n')), 'the collapsed tool result opens with the ResultView block');
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    const child = spawn(process.execPath, [cli, 'summary', '--id', record.id, '--data-dir', join(cwd, '.agent-lab')]);
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+    const code = await new Promise<number | null>(resolve => child.on('close', resolve));
+    assert.equal(code, 0, stderr);
+    const lines = stdout.split('\n');
+    const block = lines.slice(0, lines.indexOf(''));
+    const details = block.indexOf('Не измерено по причинам:');
+    assert.deepEqual(details < 0 ? block : block.slice(0, details), payload.viewLines);
+  } finally {
+    await shutdown();
+    await rm(cwd, { recursive: true, force: true });
+    await rm(demo.directory, { recursive: true, force: true });
+  }
 });

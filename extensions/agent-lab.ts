@@ -11,6 +11,7 @@ import { awaitingVerdict, evidenceSummary, plannedTrials } from '../dist/compari
 import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
 import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
+import { buildResultView, resultViewLines } from '../dist/result-view.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit.js';
 import { readData, selectValidationDialogues } from '../dist/imports.js';
@@ -24,13 +25,15 @@ const toolDisplay: Pick<ToolDefinition, 'renderCall' | 'renderResult'> = {
     if (options.expanded) return new Text(safeText(raw), 0, 0);
     try {
       const data = JSON.parse(raw);
-      if (data.brief) return new Text(theme.fg('text', safeText([data.scoreState, data.brief].filter(Boolean).join('\n\n'))), 0, 0);
+      // The ResultView block is the first thing shown; no surface computes its own headline count.
+      const block: string | undefined = Array.isArray(data.viewLines) && data.viewLines.length ? data.viewLines.join('\n') : undefined;
+      if (data.brief) return new Text(theme.fg('text', safeText([data.scoreState, block, data.brief].filter(Boolean).join('\n\n'))), 0, 0);
       if (data.proofs?.length) return new Text(theme.fg('text', safeText([
-        data.error ?? data.quality?.headline ?? data.evidence?.verdict?.headline,
+        data.error ?? block ?? data.quality?.headline ?? data.evidence?.verdict?.headline,
         ...data.proofs.map((proof: { lines: string[] }) => proof.lines.join('\n')),
       ].filter(Boolean).join('\n\n'))), 0, 0);
       const title = data.error ?? (data.phase === 'review' ? data.message ?? `Готово ${data.scenarioCount} сценариев. Посмотрите их перед запуском.`
-        : data.quality?.headline ?? data.evidence?.verdict?.headline ?? data.message ?? 'Доказательства прочитаны.');
+        : block ?? data.quality?.headline ?? data.evidence?.verdict?.headline ?? data.message ?? 'Доказательства прочитаны.');
       const lines = [title, ...(data.quality?.causes?.slice(0, 3).map((c: { name: string; dialogues: number }, i: number) => `${i + 1}. ${c.name} — ${c.dialogues}`) ?? []), ...(data.quality?.queue ? [data.quality.queue] : [])];
       return new Text(theme.fg(data.error ? 'error' : 'text', safeText(lines.join('\n'))), 0, 0);
     } catch { return new Text(safeText(raw), 0, 0); }
@@ -70,9 +73,12 @@ function summary(record: Experiment, directory: string) {
   const comparison = record.comparisons.findLast(c => c.split === 'control');
   const evidence = evidenceSummary(record);
   const quality = record.trials.length ? qualitySummary(record) : undefined;
+  const view = record.trials.length ? buildResultView(record) : undefined;
   return {
     // Lead with the answer a person asked for; the detailed evidence follows in the same object.
     ...(quality ? { quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes.slice(0, 5), humanQueue: quality.humanQueue, human: quality.human } } : {}),
+    // The same block lines the CLI summary prints first (block only, no details).
+    ...(view ? { view, viewLines: resultViewLines(view) } : {}),
     id: record.id, phase: record.phase, mode: record.mode, workflow: record.workflow,
     reviewMode: record.reviewMode, resultsReviewedAt: record.resultsReviewedAt,
     draftHash: draftHash(record), acceptedDraftHash: record.acceptedDraftHash, resultHash: record.trials.length ? resultHash(record) : undefined,
