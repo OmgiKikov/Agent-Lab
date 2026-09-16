@@ -531,15 +531,18 @@ Apply `observedRecord(record)` first, as `qualitySummary` does (`quality.ts:484`
 | A6 | `ae812a24` will pass again under the current agent | TRUST-04 | Fallback: a labelled synthetic control, or another passing dialogue |
 | A7 | The current `aigw-local-baseline` code equals the `fae4ee59` fingerprint (`4b69f131a2`). Not checked: computing it runs `git` inside aigw-local | Stability gate | If it changed, the stability gate says "agent changed" and TRUST-09a needs two fresh repeats instead of repeat-vs-`fae4ee59` (+~$2) |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Per-pair vs global audit-completeness note in `compareRuns`.**
    - What we know: one judge rejection anywhere makes the whole diff incomparable today.
    - Recommendation: move it per pair (Pattern 3). It is small and makes the live TRUST-05 check robust.
+   - RESOLVED: followed in 01-03 Task 1 (per-pair «Судья не завершил оценку этой попытки.»; mixed-protocol and judge-model notes stay global).
 2. **Should a goal-vote split count as «нестабильно» too?**
    - Recommendation: no, not in this phase. It stays a not-measured reason (CONTEXT counts unstable cards inside the headline; split cards are outside it).
+   - RESOLVED: followed in 01-01 (`judge_split` is a not-measured reason) and 01-05 (stability counts only pass↔fail goal flips).
 3. **Validate-build parity in the CLI (`validateSettings`).**
    - Not required by TRUST-07's text, but it removes a hidden CLI/Pi budget difference. Recommendation: include it only if cheap.
+   - RESOLVED: 01-08 applies the recommendation's condition and leaves `validateSettings` out (TRUST-07 covers score only); recorded in its flagged assumptions.
 
 ## Environment Availability
 
