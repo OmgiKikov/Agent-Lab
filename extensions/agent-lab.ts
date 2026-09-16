@@ -88,6 +88,7 @@ function summary(record: Experiment, directory: string, view?: ResultView) {
     scenarioCount: record.scenarios.length, revisionCount: record.revisions.length,
     target: record.target, dialogueCount: record.dialogues.length, profileCount: record.profiles.length, evidence,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, parentRunId: record.parentRunId,
+    positiveControlScenarioIds: record.positiveControlScenarioIds,
     trialCount: record.trials.length, humanReviews: record.humanReviews ?? [], usage: record.usage, failureModes: record.failureModes ?? [],
     comparison: comparison && {
       baselineId: comparison.baselineId, candidateId: comparison.candidateId,
@@ -526,12 +527,13 @@ export default function agentLab(pi: ExtensionAPI) {
     ...toolDisplay,
     name: 'agent_lab_repeat', label: 'Prepare another run of the same cards',
     description: 'Copy a previously approved evaluation into a fresh draft without model generation. Preserves cards, materials and settings, captures current local code identity, clears results and approvals. Inspect it and use agent_lab_run; /agent-lab is an optional detailed view.',
-    parameters: Type.Object({ id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), scenarioIds: Type.Optional(Type.Array(Type.String(), { minItems: 1, maxItems: 40, description: 'Repeat only these existing tests; omit for the whole regression set.' })) }, { additionalProperties: false }),
+    parameters: Type.Object({ id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), scenarioIds: Type.Optional(Type.Array(Type.String(), { minItems: 1, maxItems: 40, description: 'Repeat only these existing tests; omit for the whole regression set.' })),
+      controlScenarioIds: Type.Optional(Type.Array(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), { minItems: 1, maxItems: 5, description: 'Mark existing situations as positive controls: real dialogues the agent is known to handle. They are shown apart and never enter the headline number.' })) }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(_callId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const { lab, close } = open(ctx.cwd);
-      try { await lab.init(); const record = await lab.repeat(params.id, params.scenarioIds); const output = summary(record, lab.store.directory);
+      try { await lab.init(); const record = await lab.repeat(params.id, params.scenarioIds, params.controlScenarioIds); const output = summary(record, lab.store.directory);
         returnToBoard(ctx, record.id);
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
       } finally { await close(); }

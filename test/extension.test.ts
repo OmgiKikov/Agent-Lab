@@ -429,7 +429,11 @@ test('Pi connects a new request, conversational correction, reviewed run, eviden
     const reviewed = await call('agent_lab_inspect', { id: built.id, export: true });
     assert.equal(reviewed.phase, 'complete'); assert.equal(reviewed.humanReviews.length, 1);
     const original = await call('agent_lab_inspect', { id: built.id, trialId: discussion.trialId }); assert.deepEqual(original, evidence);
+    const controlId = draft.scenarios[0].id;
+    const controlled = await call('agent_lab_repeat', { id: built.id, controlScenarioIds: [controlId] });
+    assert.deepEqual(controlled.positiveControlScenarioIds, [controlId]);
     const repeated = await call('agent_lab_repeat', { id: built.id });
+    assert.equal(repeated.positiveControlScenarioIds, undefined);
     assert.equal(repeated.parentRunId, built.id); assert.equal(repeated.phase, 'review'); assert.equal(repeated.trialCount, 0); assert.equal(repeated.reviewMode, null);
     assert.equal(editorCommands.length, 0);
     await call('agent_lab_edit', { id: repeated.id, expectedHash: repeated.draftHash, patch: {

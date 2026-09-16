@@ -9,9 +9,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { ExperimentLab, draftHash, measurementHash, planDiscovery, resultHash } from '../src/experiment.js';
 import { ExperimentStore } from '../src/store.js';
 import { createDemoRuntime, demoEvaluationInput, demoInput } from '../src/demo.js';
-import { createInputSchema, fingerprint, goalAttainment, validatePreparation, type Experiment, type Runtime } from '../src/contracts.js';
+import { createInputSchema, experimentSchema, fingerprint, goalAttainment, validatePreparation, type Experiment, type Runtime } from '../src/contracts.js';
 import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
-import { awaitingVerdict } from '../src/comparison.js';
+import { awaitingVerdict, compareRuns } from '../src/comparison.js';
 import { simulatorUsable } from '../src/outcomes.js';
 import { qualityLines, qualitySummary } from '../src/quality.js';
 
@@ -1676,3 +1676,57 @@ test('a record whose trials carry the legacy full audit reassesses without migra
   await assertReceiptOnly(lab, directory, reassessed);
   assert.deepEqual(await lab.get(legacy.id), saved, 'the legacy source record stays unchanged on disk');
 });
+
+test('a positive control rides on the record: hashes and card identity unchanged, inherited, and bad ids rejected before saving', async t => {
+  const { lab, directory } = await setup(t, createDemoRuntime());
+  const created = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2 }); await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
+  const source = await lab.get(draft.id);
+  assert.equal(source.phase, 'results_review', source.error ?? '');
+  const [a, b] = source.scenarios.map(scenario => scenario.id) as [string, string];
+
+  // A record without the field keeps the exact hash it had before the field existed.
+  assert.equal(source.positiveControlScenarioIds, undefined);
+  assert.equal(draftHash(source), draftHash({ ...source, positiveControlScenarioIds: undefined }));
+  const stored = JSON.parse(await readFile(join(directory, `${source.id}.json`), 'utf8'));
+  assert.equal('positiveControlScenarioIds' in stored, false);
+  const legacy = experimentSchema.parse(stored);
+  assert.equal(draftHash(legacy), draftHash(source), 'an old record without the field parses and keeps its hash');
+  const unknownControl = experimentSchema.safeParse({ ...stored, positiveControlScenarioIds: ['missing'] });
+  assert.equal(unknownControl.success, false);
+  assert.ok(unknownControl.error?.issues.some(issue => issue.message === 'Контрольная ситуация должна быть из этого набора.'));
+  assert.equal(experimentSchema.safeParse({ ...stored, positiveControlScenarioIds: [a, a] }).success, false);
+
+  const saved = (await lab.store.list()).length;
+  await assert.rejects(lab.repeat(source.id, undefined, ['missing']), /Контрольная ситуация должна быть из этого набора: missing\./);
+  await assert.rejects(lab.repeat(source.id, undefined, [a, a]), /Контрольных ситуаций может быть от 1 до 5, без повторов\./);
+  await assert.rejects(lab.repeat(source.id, undefined, []), /от 1 до 5/);
+  await assert.rejects(lab.repeat(source.id, [a], [b]), /из этого набора: /, 'a control that the case filter drops is not silently lost');
+  assert.equal((await lab.store.list()).length, saved, 'nothing is saved on a rejected control');
+
+  const controlled = await lab.repeat(source.id, undefined, [a]);
+  assert.deepEqual(controlled.positiveControlScenarioIds, [a]);
+  assert.deepEqual(controlled.scenarios, (await lab.repeat(source.id)).scenarios, 'the marker never enters the cards');
+  assert.equal(measurementHash(controlled), measurementHash({ ...controlled, positiveControlScenarioIds: undefined }));
+  assert.notEqual(draftHash(controlled), draftHash({ ...controlled, positiveControlScenarioIds: undefined }), 'the draft hash sees the marker');
+
+  await lab.start(controlled.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(controlled) }); await lab.waitForIdle();
+  const ran = await lab.get(controlled.id);
+  assert.deepEqual(ran.positiveControlScenarioIds, [a]);
+  const diff = compareRuns(source, ran);
+  assert.equal(diff.comparable, true, diff.notes.join(' '));
+  assert.ok(diff.notes.every(note => !note.startsWith('Содержимое карточек изменилось')));
+
+  // Inheritance: repeat, reassess, save and load keep the marker; a case filter that drops it removes the field.
+  assert.deepEqual((await lab.repeat(ran.id)).positiveControlScenarioIds, [a]);
+  const reassessed = await lab.reassess(ran.id, { codeOnly: true }); await lab.waitForIdle();
+  assert.deepEqual((await lab.get(reassessed.id)).positiveControlScenarioIds, [a]);
+  const suite = await lab.saveSuite(reassessed.id, join(directory, 'control-suite.json'));
+  const loaded = await lab.loadSuite(suite);
+  assert.deepEqual(loaded.positiveControlScenarioIds, [a]);
+  const narrowed = await lab.repeat(ran.id, [b]);
+  assert.equal('positiveControlScenarioIds' in narrowed, false);
+  assert.deepEqual((await lab.repeat(ran.id, [a])).positiveControlScenarioIds, [a]);
+});
+
