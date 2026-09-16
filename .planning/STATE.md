@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 1
 current_phase_name: Одно честное число
 status: executing
-stopped_at: Completed 01-04-PLAN.md
-last_updated: "2026-09-16T21:37:45.202Z"
+stopped_at: Completed 01-05-PLAN.md
+last_updated: "2026-09-16T21:44:03.701Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 1 execution started
-state_head: 15099a521744a1f3dbb93e0c11a37641dbb1c544
+state_head: 5e4b88d6bb1d2314fd1fa4d6ec5e0e3ace404db7
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 10
-  completed_plans: 4
+  completed_plans: 5
   percent: 0
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 1 (Одно честное число) — EXECUTING
-Plan: 5 of 10
+Plan: 6 of 10
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 1 execution started
 
@@ -62,6 +62,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P02 | 5min | 2 tasks | 6 files |
 | Phase 01 P03 | 4min | 3 tasks | 8 files |
 | Phase 01 P04 | 4min | 2 tasks | 5 files |
+| Phase 01 P05 | 5min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,8 @@ Recent decisions affecting current work:
 - [Phase 1]: 01-03: validate replay sets goal.id = dialogue.id; colliding model ids are recorded as a limitation
 - [Phase 1]: 01-04: a judge receipt alone never proves a judgment; the verifier re-derives the input hash and re-aggregates votes; a trial with full judgeAudit is always checked by it
 - [Phase 1]: 01-04: judge audit sidecar {id}.judge/{trialId}.json is written synchronously (tmp+rename, 0700/0600); assessRepeated reports exactly one final judgment
+- [Phase 1]: 01-05: a reassessment counts a card only when its record attempts are exactly the source attempts of that card
+- [Phase 1]: 01-05: stability never changes the headline; a skipped check is printed in words, never as a silent 0
 
 ### Pending Todos
 
@@ -109,6 +112,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-16T21:37:45.182Z
-Stopped at: Completed 01-04-PLAN.md
+Last session: 2026-09-16T21:44:03.681Z
+Stopped at: Completed 01-05-PLAN.md
 Resume file: None
