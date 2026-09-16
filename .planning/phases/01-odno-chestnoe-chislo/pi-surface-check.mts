@@ -25,6 +25,7 @@ const dataDir = resolve(cwd, '.agent-lab');
 const agentLab = (await import(pathToFileURL(resolve(root, 'extensions/agent-lab.ts')).href)).default;
 const { LabBoard } = await import(pathToFileURL(resolve(root, 'extensions/cards.ts')).href);
 const { ExperimentStore } = await import(pathToFileURL(resolve(root, 'dist/store.js')).href);
+const { evidenceBundle } = await import(pathToFileURL(resolve(root, 'dist/artifacts.js')).href);
 const { stripTerminalSequences } = await import('@earendil-works/pi-tui');
 // A reader: ExperimentStore.get never takes the writer lock.
 const store = new ExperimentStore(dataDir);
@@ -71,7 +72,11 @@ for (const id of values.id) {
   const renderBlock = rendered.slice(start, start + cliBlock.length).map(entry => entry.trim());
 
   // (d) The collapsed /agent-lab board for the same record: each block line must be a whole cell.
-  const board = new LabBoard({ record: await store.get(id) }, theme, () => {}, () => {}, () => 400);
+  // As `/agent-lab` does: the board gets the bundle view, so a repeat shows its stability against the parent run.
+  const record = await store.get(id);
+  const bundle = await evidenceBundle(record, store);
+  const board = new LabBoard({ record, view: bundle.view, comparison: bundle.comparison, before: bundle.before, warnings: bundle.warnings },
+    theme, () => {}, () => {}, () => 400);
   const cells = new Set<string>(stripTerminalSequences(board.render(200).join('\n')).split('\n')
     .flatMap((row: string) => row.split('│')).map((cell: string) => cell.trim()).filter(Boolean));
   board.dispose();
