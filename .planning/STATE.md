@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 1
 current_phase_name: Одно честное число
 status: executing
-stopped_at: Completed 01-08-PLAN.md
-last_updated: "2026-09-16T21:59:43.748Z"
+stopped_at: Completed 01-09-PLAN.md
+last_updated: "2026-09-16T22:05:00.842Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 1 execution started
-state_head: 99a947feb75e2674bed09b68d8f2d18c7c2fd3c4
+state_head: b62aa3ee69b648a68f5d447efef53bb89ddd48bb
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
   percent: 0
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 1 (Одно честное число) — EXECUTING
-Plan: 9 of 10
+Plan: 10 of 10
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 1 execution started
 
@@ -66,6 +66,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P06 | 5min | 2 tasks | 4 files |
 | Phase 01 P07 | 12min | 2 tasks | 5 files |
 | Phase 01 P08 | 7min | 2 tasks | 6 files |
+| Phase 01 P09 | 12min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,8 @@ Recent decisions affecting current work:
 - [Phase 1]: 01-07: suiteEvidence seals legacy judge audits into receipts at copy time; reports name the journal and judge sidecar files instead of embedding them
 - [Phase 1]: 01-08: scoreSettings is the one score settings helper for CLI and Pi; score records force repeats 1 and userModes ['scripted']
 - [Phase 1]: 01-08: Pi payload view comes from evidenceBundle(...).view at every bundle site
+- [Phase 1]: 01-09: Контрольная ситуация хранится в записи прогона (positiveControlScenarioIds), не в карточке; draftHash старых записей не меняется
+- [Phase 1]: 01-09: Явный --control вне оставленных --case отклоняется ошибкой; унаследованный контроль, выпавший из --case, убирается
 
 ### Pending Todos
 
@@ -119,6 +122,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-16T21:59:43.727Z
-Stopped at: Completed 01-08-PLAN.md
+Last session: 2026-09-16T22:05:00.819Z
+Stopped at: Completed 01-09-PLAN.md
 Resume file: None
