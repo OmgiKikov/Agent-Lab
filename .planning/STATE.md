@@ -1,117 +1,63 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 03
-current_phase_name: poleznyy-test-i-ego-prinyatie
-status: executing
-stopped_at: Completed 03-05-PLAN.md
-last_updated: "2026-09-15T21:42:37.461Z"
-last_activity: 2026-09-15
-last_activity_desc: Phase 03 execution started
-state_head: 2f0d14bfc3804fda44eb810970b4ed042bcc97c0
+current_phase: 05
+current_phase_name: sohranennaya-regressiya-i-povtor
+status: complete
+stopped_at: MVP implementation verified; live promises P1-P3 recorded unfulfilled
+last_updated: "2026-09-16"
+last_activity: 2026-09-16
+last_activity_desc: Completed and verified phases 2-5 against the MVP cut
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 5
   total_plans: 12
-  completed_plans: 8
-  percent: 20
+  completed_plans: 12
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-15)
+See `.planning/PROJECT.md` and `.planning/ROADMAP.md`.
 
 **Core value:** Прочитать агента и его требования, предложить полезный тест, запустить его на настоящем агенте, показать доказательства и сохранить принятый тест как регрессию.
-**Current focus:** Phase 03 — Полезный тест и его принятие
+
+**Current focus:** MVP-код завершён. Следующая продуктовая работа — провести живые приёмочные измерения P1–P3, которые сейчас честно отмечены невыполненными.
 
 ## Current Position
 
-Phase: 03 (poleznyy-test-i-ego-prinyatie) — READY TO EXECUTE
-Plan: 3 of 7
-Status: Ready to execute
-Last activity: 2026-09-15 — Phase 03 execution started
+Phase: 05 — complete
 
-Progress: [██░░░░░░░░] 20%
+Plans: 12/12
 
-## Performance Metrics
+Progress: [██████████] 100%
 
-**Velocity:**
+## Verified Decisions
 
-- Total plans completed: 2
-- Average duration: —
-- Total execution time: 0.0 hours
+- Авторитетный scope — MVP cut от 2026-09-15; simulator research от 2026-09-14 исторический.
+- Требования владельца задают ожидание; код и ответы агента — только наблюдение.
+- Discovery ищет повторяющийся сигнал в большой пачке логов, затем подробно проверяет представителей и контроли; selection не называется accuracy.
+- `goal_attainment` для информационной цели допускает `reply`; действие требует tool result или state effect.
+- Acceptance — стабильная метаинформация точного одиночного теста, не execution gate для regression/validation suites.
+- Результат разделяет техническое завершение, автоматический verdict и человеческий verdict.
+- Before/after diff перечисляет `fixed`, `regressed`, `incomparable`; статистические claims вне MVP.
+- Legacy JSON читается, но удалённые research/editor поверхности не возвращаются в текущий продукт.
 
-**By Phase:**
+## Open Product Validation
 
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 1 | 2 | - | - |
+Кодовых блокеров нет. В [`docs/IMPLEMENTATION.md`](../docs/IMPLEMENTATION.md) записано:
 
-**Recent Trend:**
+- P1: невыполнено — 0 подходящих прогонов на новом реальном агенте.
+- P2: невыполнено — 0/15 реальных диалогов в текущей приёмочной сессии.
+- P3: невыполнено — 0 реальных сопоставленных пар после изменения агента.
 
-- Last 5 plans: —
-- Trend: —
+Это будущие живые измерения, а не незавершённые функции MVP.
 
-*Updated after each plan completion*
-**Per-Plan Metrics:**
+## Verification Index
 
-| Plan | Duration | Tasks | Files |
-|------|----------|-------|-------|
-| Phase 01 P01 | 5 min | 2 tasks | 6 files |
-| Phase 01 P02 | 13 min | 2 tasks | 8 files |
-| Phase 03 P01 | 20m | 3 tasks | 5 files |
-| Phase 03 P02 | 14 min | 2 tasks | 4 files |
-| Phase 03 P05 | 11m | 3 tasks | 8 files |
-
-## Accumulated Context
-
-### Decisions
-
-Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
-
-- [Scope]: SPEC и plan от 2026-09-15 авторитетны; Simulator v1 от 2026-09-14 — superseded historical context.
-- [Cutoff]: Tasks 1–10 дают pre-demo capability; 11–17 сокращают продукт; 18 измеряет P1–P3.
-- [Evidence]: Ненаблюдавшееся действие остаётся `unknown`; человеческий вердикт не распространяется между диалогами.
-- [Phase 01]: The latest metric review is authoritative: invalid removes the occurrence, pass/fail replace the judge, and unknown remains unknown.
-- [Phase 01]: Existing callers without an Experiment keep the optional reviews default; record-owning callers pass persisted humanReviews explicitly.
-- [Phase 01]: Complete review requires reviewedDialogue true on the latest whole-dialogue verdict; legacy and partial reviews never count.
-- [Phase 01]: A native full-dialogue review must cite a current event and can write only one review for the shown dialogue.
-- [Phase 03]: Строгий режим одной карточки включается только explicit-полем confirmedHypothesis; scenarioCount=1 сохраняет прежнюю семантику.
-- [Phase 03]: Канал наблюдения определяется структурой executable checks, а не ключевыми словами successCriteria; assistant prose не доказывает действие.
-- [Phase 03]: В confirmed-режиме только owner sources и user-authored dialogue turns служат grounding evidence; скрытые production-кандидаты не создаются.
-- [Phase 03]: Only goal_attainment, prompt_compliance and reply_quality use stable ID row identity; owner rubrics retain full fingerprints.
-- [Phase 03]: Owner interaction says test, while stored and technical contracts say business-scenario card; acceptance never implies execution or a result verdict.
-- [Phase 03]: goalObservation is explicit owner input attached after Runtime.prepare; the model cannot author or infer it.
-- [Phase 03]: reply, tool and state goal verdicts require cited evidence from that exact channel; legacy missing stays unknown.
-- [Phase 03]: The existing full Scenario draftHash remains the sole draft identity; judge protocol 9 invalidates old receipts.
-
-### Pending Todos
-
-None yet.
-
-### Blockers/Concerns
-
-- [Phase 5]: Для измерения P1 нужен доступ к ранее не подключавшемуся второму агенту, а для P2/P3 — согласованный набор из 15 реальных диалогов и каталог артефактов.
-
-### Roadmap Evolution
-
-- Phase 2 edited: core flow: repo/log evidence -> grounded hypothesis
-- Phase 3 edited: core flow: hypothesis -> test acceptance
-- Phase 4 edited: core flow: real agent run -> evidence
-- Phase 5 edited: core flow: accepted test -> saved regression
-
-## Deferred Items
-
-Items acknowledged and deferred at milestone close, most recent first:
-
-| Category | Item | Status | Deferred At | Milestone |
-|----------|------|--------|-------------|-----------|
-| *(none)* | | | | |
-
-## Session Continuity
-
-Last session: 2026-09-15T21:42:37.436Z
-Stopped at: Completed 03-05-PLAN.md
-Resume file: None
+- Phase 1: `.planning/phases/01-chestnyy-chelovecheskiy-razbor/01-VERIFICATION.md`
+- Phase 2: `.planning/phases/02-ponimanie-agenta-i-gipoteza/02-VERIFICATION.md`
+- Phase 3: `.planning/phases/03-poleznyy-test-i-ego-prinyatie/03-VERIFICATION.md`
+- Phase 4: `.planning/phases/04-nastoyashchiy-zapusk-i-dokazatelstva/04-VERIFICATION.md`
+- Phase 5: `.planning/phases/05-sohranennaya-regressiya-i-povtor/05-VERIFICATION.md`
