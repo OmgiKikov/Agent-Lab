@@ -595,8 +595,9 @@ test('stabilityAfterReassess against a rebuilt source never compares the reasses
   const stability = stabilityAfterReassess(criteria, embeddedBefore(criteria, REASSESSED_SOURCE)!);
   assert.equal(stability?.checked, 1);
   assert.deepEqual(stability?.unstable.map(row => row.scenarioId), ['s2']);
-  // Another evaluator: the rebuilt source carries the current one, the identity the original.
-  const judge = reassessed(source, { s1: 'fail', s2: 'fail' }, { evaluatorVersion: 'judge-2' });
+  // Another judge: the rebuilt source carries the current settings, the identity the original.
+  const judge = reassessed(source, { s1: 'fail', s2: 'fail' }, { evaluatorVersion: 'judge-1',
+    settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1, judge: { provider: 'openrouter', model: 'another-judge' } }) });
   judge.sourceEvidence!.identity = identity;
   assert.equal(stabilityAfterReassess(judge, embeddedBefore(judge, REASSESSED_SOURCE)!)?.skipped, 'судья или его настройки изменились');
 });
@@ -621,8 +622,20 @@ test('stabilityAfterReassess skips changed criteria, partial coverage and unknow
 
 test('stabilityAfterReassess refuses another judge and records that are not a reassessment of this source', () => {
   const source = goalRun(REASSESSED_SOURCE, { s1: 'pass' }, 'h', { evaluatorVersion: 'judge-1' });
-  const judge = reassessed(source, { s1: 'fail' }, { evaluatorVersion: 'judge-2' });
+  const judge = reassessed(source, { s1: 'fail' }, { evaluatorVersion: 'judge-2',
+    settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1, judge: { provider: 'openrouter', model: 'another-judge' } }) });
   assert.deepEqual(stabilityAfterReassess(judge, source), { basis: 'reassess', comparedWith: REASSESSED_SOURCE, checked: 0, unstable: [], skipped: 'судья или его настройки изменились' });
+  // An Agent Lab upgrade changes evaluatorVersion but not the judge: the flip is still found.
+  const upgraded = reassessed(source, { s1: 'fail' }, { evaluatorVersion: 'judge-2' });
+  assert.equal(stabilityAfterReassess(upgraded, source)?.skipped, null);
+  assert.equal(stabilityAfterReassess(upgraded, source)?.unstable.length, 1);
+  // Another judge protocol or configuration on the recorded votes is another judge.
+  const receipt = (protocolHash: string) => ({ protocolHash, inputHash: 'i', provider: 'openrouter', model: 'judge', auditHash: 'a', votes: [], notApplicable: [], complete: true });
+  const oldProtocol = structuredClone(source); oldProtocol.trials[0]!.judgeReceipt = receipt('protocol-1');
+  const newProtocol = reassessed(oldProtocol, { s1: 'fail' }); newProtocol.trials[0]!.judgeReceipt = receipt('protocol-2');
+  assert.equal(stabilityAfterReassess(newProtocol, oldProtocol)?.skipped, 'судья или его настройки изменились');
+  newProtocol.trials[0]!.judgeReceipt = receipt('protocol-1');
+  assert.equal(stabilityAfterReassess(newProtocol, oldProtocol)?.skipped, null);
   const noHash = reassessed(source, { s1: 'fail' }, { evaluatorVersion: 'judge-1' });
   delete noHash.evidenceHash;
   assert.equal(stabilityAfterReassess(noHash, source), null);

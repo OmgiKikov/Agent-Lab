@@ -1,5 +1,5 @@
 import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
-import { agentIdentity, normalizeScenarioIdentity } from './normalize.js';
+import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
 import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, measured, measurementUsable, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
@@ -649,7 +649,7 @@ export function stabilityBetweenRuns(before: Experiment, after: Experiment): Sta
 
 /**
  * A reassessment of saved answers against its source run: pass↔fail flips of the goal verdict on
- * the same attempts and the same criteria. Null when the record is not a reassessment of `source`.
+ * the same attempts, the same criteria and the same judge (model, routing and protocol). Null when the record is not a reassessment of `source`.
  * compareRuns is not used here: it always marks a reassessment as incomparable.
  */
 export function stabilityAfterReassess(record: Experiment, source: Experiment): Stability | null {
@@ -657,7 +657,16 @@ export function stabilityAfterReassess(record: Experiment, source: Experiment): 
   const result: Stability = { basis: 'reassess', comparedWith: source.id, checked: 0, unstable: [], skipped: null };
   const identity = reconstructedIdentity(source, record);
   if (identity === null) return { ...result, skipped: SOURCE_UNAVAILABLE };
-  if (record.evaluatorVersion !== (identity ?? source).evaluatorVersion) return { ...result, skipped: 'судья или его настройки изменились' };
+  // The judge, not the whole evaluator: an Agent Lab upgrade with the same judge still compares.
+  const protocols = (run: Experiment) => [...new Set(run.trials.flatMap(trial => {
+    const judge = trial.judgeAudit ?? trial.judgeReceipt;
+    return judge ? [judge.protocolHash] : [];
+  }))].sort();
+  const sourceProtocols = protocols(source), recordProtocols = protocols(record);
+  if (judgeSettingsIdentity(record.settings) !== (identity?.judge ?? judgeSettingsIdentity(source.settings))
+    || sourceProtocols.length && recordProtocols.length && fingerprint(sourceProtocols) !== fingerprint(recordProtocols)) {
+    return { ...result, skipped: 'судья или его настройки изменились' };
+  }
   const sourceTrialIds = new Set(source.trials.map(trial => trial.id));
   for (const card of record.scenarios) {
     const sourceCard = source.scenarios.find(item => item.id === card.id);

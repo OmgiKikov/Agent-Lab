@@ -462,7 +462,7 @@ test('a reassessment names the situations whose judge verdict flipped on the sam
 });
 
 test('a reassessment by another judge, or without evidence, prints no instability count', () => {
-  const judge = reassessPair({ A: 'fail' }, { A: 'pass' }, { evaluatorVersion: 'judge-2' });
+  const judge = reassessPair({ A: 'fail' }, { A: 'pass' }, { settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1, judge: { provider: 'openrouter', model: 'another-judge' } }) });
   const view = buildResultView(judge.record, { before: judge.source });
   assert.ok(resultViewLines(view).includes('Стабильность не проверена: судья или его настройки изменились.'));
   assert.ok(view.cards.every(item => !item.unstable));
