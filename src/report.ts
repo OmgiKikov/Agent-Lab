@@ -224,8 +224,9 @@ function runWithoutAudits(run: Experiment): Experiment {
  */
 export function jsonReport(bundle: EvidenceBundle): string {
   const { record, traceJournal, before, ...evidence } = bundle;
-  const legacyAudits = [record, ...(before ? [before] : [])].reduce((n, run) => n + run.trials.filter(trial => trial.judgeAudit).length, 0)
-    + (record.sourceEvidence?.trials.filter(trial => trial.judgeAudit).length ?? 0);
+  // Counted over exactly what runWithoutAudits strips: each run's trials and its embedded source trials.
+  const legacyAudits = [record, ...(before ? [before] : [])].reduce((n, run) => n
+    + [...run.trials, ...run.sourceEvidence?.trials ?? []].filter(trial => trial.judgeAudit).length, 0);
   return JSON.stringify({ experiment: runWithoutAudits(record), ...(before ? { before: runWithoutAudits(before) } : {}), ...evidence,
     traceJournal: { file: `${record.id}.trace.jsonl`, bytes: Buffer.byteLength(traceJournal) },
     judgeAudits: { included: false, omittedLegacyAudits: legacyAudits,

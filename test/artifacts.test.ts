@@ -267,6 +267,10 @@ test('a receipt-only trial names its judge and sidecar file without embedding an
   const oldJson = jsonReport(oldBundle);
   assert.doesNotMatch(oldJson, /RAW_JUDGE_REPLY|"judgeAudit"/);
   assert.equal(JSON.parse(oldJson).judgeAudits.omittedLegacyAudits, 2);
+  // Audits inside the source run's own embedded evidence are counted too.
+  const nested = { ...oldBundle, before: { ...oldBundle.before!, sourceEvidence: { runId: 'older-source', trials: [structuredClone(legacy)], humanReviews: [] } } };
+  assert.equal(JSON.parse(jsonReport(nested)).judgeAudits.omittedLegacyAudits, 3);
+  assert.doesNotMatch(jsonReport(nested), /RAW_JUDGE_REPLY/);
   assert.match(JSON.parse(oldJson).judgeAudits.location, /\.judge\//);
 });
 
