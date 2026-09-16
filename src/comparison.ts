@@ -553,7 +553,8 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, goal
     return review?.verdict === 'invalid' ? [] : [review?.verdict ?? trial.assessments?.find(a => a.metricId === m.id)?.result];
   });
   if (checksDeviate || fidelity.includes('fail')) codes.push('simulator_deviated');
-  if (fidelity.some(result => result !== 'pass' && result !== 'fail')) codes.push('simulator_unclear');
+  // Without any judgment the vote is missing because the judge never ran: that is `not_judged`, not an unsure judge.
+  if (trial.assessments && fidelity.some(result => result !== 'pass' && result !== 'fail')) codes.push('simulator_unclear');
   if (!goalId) return codes;
   const result = agentMetricResult(trial, goalId, record.humanReviews);
   if (result === 'pass' || result === 'fail') return codes;

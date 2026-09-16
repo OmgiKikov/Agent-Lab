@@ -278,6 +278,12 @@ test('reason not_judged: no goal assessment, or a code-only reassessment', () =>
   expectReason('not_judged', card('c'), [attempt('c', { assessmentError: 'Только точные проверки; рубрики не переоценивались.' })]);
 });
 
+test('reason not_judged: without any judgment the missing fidelity vote is not «judge unsure»', () => {
+  // A live code-only reassessment keeps no assessments at all; the judge never ran.
+  expectReason('not_judged', card('c'), [attempt('c', { assessmentError: 'Только точные проверки; рубрики не переоценивались.', assessments: undefined })]);
+  expectReason('not_judged', card('c'), [attempt('c', { assessments: undefined })]);
+});
+
 test('reason judge_split: the two goal votes disagreed', () => {
   expectReason('judge_split', card('c'), [attempt('c', { goal: 'unknown', goalRationale: SPLIT })]);
 });
