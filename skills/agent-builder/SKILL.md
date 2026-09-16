@@ -61,7 +61,7 @@ The built test is still a draft. Show it in full, then use `agent_lab_accept` fo
 
 ## Start from the local project
 
-- Reuse the agent's real callable entry point. Prefer a local `command` or compatible `module`; use `http` only when that is the actual available target. If a wrapper is required, write the smallest adapter around the real agent.
+- Reuse the agent's real callable entry point. Prefer a local `command` or compatible `module`; use `http` only when that is the actual available target. If a wrapper is required, write the smallest adapter around the real agent. The command adapter contract (JSON lines on stdin/stdout, `reply`, `events`, `records`, `retrievals`, `resetConfirmed`) is documented in the packaged `examples/echo-agent.py`; read it before writing a wrapper.
 - Preserve session state between turns and reset it between test dialogues. For a command target, keep protocol JSON on stdout and diagnostics on stderr.
 - Do not replace the owner's agent with a scripted echo. A deterministic built-in example may demonstrate mechanics only and must remain labelled as such.
 - Collect relevant policies and knowledge as materials with original names and exact contents. Pass the agent prompt as `kind:"prompt"` only so observable user-facing rules can become requirements. Never promote implementation behavior to business truth.

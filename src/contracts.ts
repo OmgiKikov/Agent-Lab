@@ -212,6 +212,10 @@ export const ragContextFaithfulness: Rubric = {
   passCriteria: 'Каждое проверяемое фактическое и бизнес-утверждение ответа подтверждается найденными RAG-фрагментами и не противоречит им.',
   failCriteria: 'Ответ содержит хотя бы одно проверяемое фактическое или бизнес-утверждение, которое не подтверждается найденными RAG-фрагментами или противоречит им.',
 };
+export const validationExclusionSchema = z.strictObject({
+  dialogueId: identifier, kind: z.enum(['customer_data', 'masked', 'length', 'unconfirmed']), reason: text.max(1000),
+});
+export type ValidationExclusion = z.infer<typeof validationExclusionSchema>;
 export const RAG_RUBRICS = [ragContextRecall, ragContextRelevance, ragContextFaithfulness] as const;
 export const RAG_METRIC_IDS = new Set<string>(RAG_RUBRICS.map(metric => metric.id));
 export const assessmentFindingSchema = z.strictObject({
@@ -724,6 +728,8 @@ export interface Experiment {
   /** Named clusters over the failed dialogues of this run; the bridge from evaluation to fixing. */
   failureModes?: FailureMode[];
   releaseLog?: ReleaseLog;
+  /** Recorded dialogues left out of a validation set, with the reason; they never enter the accuracy denominator. */
+  validationExclusions?: ValidationExclusion[];
   parentRunId?: string;
   selectedScenarioIds?: string[];
   targetVersion?: string;
@@ -824,6 +830,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   humanReviews: z.array(humanReviewSchema).default([]), resultsReviewedAt: text.optional(), resultsReviewHash: text.optional(),
   failureModes: z.array(failureModeSchema).max(30).optional(),
   releaseLog: releaseLogSchema.optional(),
+  validationExclusions: z.array(validationExclusionSchema).max(300).optional(),
   parentRunId: identifier.optional(), selectedScenarioIds: z.array(identifier).min(1).max(200).optional(), targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),
   clarifications: z.array(z.strictObject({ question: text.max(3000), answer: text.max(5000) })).max(100).optional(),
   assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),

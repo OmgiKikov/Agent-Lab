@@ -305,7 +305,7 @@ test('the board leads with a plain verdict once dialogues exist and has only thr
   board.dispose();
   const results = new LabBoard({ record }, theme, () => {}, () => {}, () => 40);
   assert.match(results.render(120).join('\n'), /ЧТО ТРЕБУЕТ ВНИМАНИЯ/);
-  assert.match(stripTerminalSequences(results.render(120).join('\n')), /Итог: Справился с 0 из 0 карточек \(—\), 1 без решения, 0 невалидны, 1 не дошли; разобрано человеком 0 из 3 диалогов/);
+  assert.match(stripTerminalSequences(results.render(120).join('\n')), /Итог: Справился с 0 из 0 карточек \(—\), 1 без решения, 1 не дошли; разобрано человеком 0 из 3 диалогов/);
   results.dispose();
 });
 

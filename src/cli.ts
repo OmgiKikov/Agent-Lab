@@ -91,7 +91,7 @@ async function main() {
     const q = qualitySummary(record);
     if (values.json) { process.stdout.write(`${JSON.stringify(q, null, 2)}\n`); return; }
     const text = qualityLines(q);
-    process.stdout.write([text.headline, ...text.metrics, '', ...(text.causes.length ? ['Почему:', ...text.causes, ''] : []), ...text.rag, '', text.judge, text.queue, '', text.scope, text.limits, ''].join('\n'));
+    process.stdout.write([text.headline, ...(text.coverage ? [text.coverage] : []), ...text.metrics, '', ...(text.causes.length ? ['Почему:', ...text.causes, ''] : []), ...(text.rag.length ? [...text.rag, ''] : []), text.judge, text.queue, '', text.scope, text.limits, ''].join('\n'));
     return;
   }
   // Reading an atomic snapshot must not take the writer lock or mark another process interrupted.

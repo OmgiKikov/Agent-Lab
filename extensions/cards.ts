@@ -192,7 +192,7 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
     const broken = record.trials.find(t => t.outcome === 'invalid');
     const measuredAny = q.scope.dialogues > 0;
     return [line('ИТОГ', 'accent', true),
-      ...(measuredAny ? [line(q.headline, 'text', true), line(v.headline, 'muted')] : [line(v.headline, 'text', true)]),
+      ...(measuredAny ? [line(q.headline, 'text', true), ...(text.coverage ? [line(text.coverage, 'warning')] : []), line(v.headline, 'muted')] : [line(v.headline, 'text', true)]),
       ...(measuredAny && q.metrics.length ? text.metrics.map(m => line(m)) : []),
       ...(measuredAny ? text.rag.map(item => line(item, 'muted')) : []),
       line(''),

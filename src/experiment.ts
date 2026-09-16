@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
   DISCOVERY_PROTOCOL, VERSION, agentSchema, createInputSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, discoveryGroupSchema, discoveryObservationSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, promptCompliance, proposalSchema, requirementSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation, verbatimSpan,
-  reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type Dialogue, type DiscoverInput, type DiscoveryDialogue, type DiscoveryGroup, type DiscoveryObservation, type DiscoveryPlan, type DiscoveryRecord, type DraftPatch, type Experiment, type HumanReviewInput, type ObservedGoal, type Requirement, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
+  reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type Dialogue, type ValidationExclusion, type DiscoverInput, type DiscoveryDialogue, type DiscoveryGroup, type DiscoveryObservation, type DiscoveryPlan, type DiscoveryRecord, type DraftPatch, type Experiment, type HumanReviewInput, type ObservedGoal, type Requirement, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
 import { ExperimentStore } from './store.js';
 import { assessTrial, evaluateTrial, grade } from './evaluation.js';
 import { automaticTrialResult, trialAssessmentComplete, awaitingVerdict, compareTrials, isAgentFailure, plannedTrials } from './comparison.js';
@@ -281,9 +281,13 @@ export class ExperimentLab {
       const confirmed = !!input.confirmedHypothesis;
       const replay = !confirmed && record.dialogues.length > 0 && input.scenarioCount === 0
         && (!!input.validationCount || input.settings.userModes.length === 1 && input.settings.userModes[0] === 'scripted');
+      const exclude = (item: ValidationExclusion) => {
+        record.validationExclusions = [...(record.validationExclusions ?? []), item];
+        record.limitations.push(`Исключён ${item.dialogueId}: ${item.reason.replace(/\.$/, '')}.`);
+      };
       if (input.validationCount) record.dialogues = record.dialogues.filter(dialogue => {
         const issue = validationDialogueIssue(dialogue);
-        if (issue) record.limitations.push(`Исключён ${dialogue.id}: ${issue}.`);
+        if (issue) exclude({ dialogueId: dialogue.id, ...issue });
         return !issue;
       });
       if (new Set(record.profiles.map(p => p.id)).size !== record.profiles.length) throw new Error('У профилей повторяются идентификаторы.');
@@ -312,7 +316,8 @@ export class ExperimentLab {
             const extracted = (await Promise.all(batch.map(extract))).flat();
             if (input.validationCount) for (const dialogue of batch) {
               const goal = extracted.find(goal => goal.evidenceDialogueIds.includes(dialogue.id));
-              if (goal?.testability !== 'knowledge') record.limitations.push(`Исключён ${dialogue.id}: ${goal?.testabilityReason ?? 'ожидание или достаточность среды для prompt/RAG не подтверждены'}.`);
+              if (goal?.testability !== 'knowledge') exclude({ dialogueId: dialogue.id, kind: goal?.testability === 'customer_data' ? 'customer_data' : 'unconfirmed',
+                reason: goal?.testabilityReason ?? 'ожидание или достаточность среды для prompt/RAG не подтверждены' });
             }
             observedGoals.push(...extracted.filter(goal => !input.validationCount || goal.testability === 'knowledge'));
           }

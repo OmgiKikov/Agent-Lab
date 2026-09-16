@@ -36,6 +36,8 @@ export interface QualitySummary {
   primary: 'goal_attainment' | 'all_criteria';
   metrics: QualityMetric[];
   rag: { complete: number; partial: number; missing: number; signals: { trialId: string; explanation: string }[] };
+  /** Recorded dialogues left out of the validation set; never part of the denominator. */
+  excluded: { total: number; customerData: number; masked: number; other: number };
   causes: QualityCause[];
   /** How sure the automatic verdict is: decided dialogues vs those the judge left unknown or a human disputes. */
   judge: { decided: number; unknown: number; disputed: number; label: string };
@@ -534,24 +536,32 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const limitCodes = v.confidenceReasons.map(r => r.code).filter(code => code in limitTexts);
   const limits = limitCodes.length ? `Границы: ${[...new Set(limitCodes.map(c => limitTexts[c]!))].slice(0, 4).join(' · ')}.` : 'Границы: см. статистику.';
   const reviewText = `разобрано человеком ${human.reviewed} из ${plural(human.total, ['диалога', 'диалогов', 'диалогов'])}`;
+  // Only non-zero leftovers are named; the human-review count is always shown next to the automatic number.
+  const leftovers = (items: [number, string][]) => items.filter(([n]) => n > 0).map(([, label]) => label);
+  const sentence = (parts: string[]) => { const text = parts.join('; '); return text.charAt(0).toLocaleUpperCase() + text.slice(1); };
   const headline = primary === 'goal_attainment'
-    ? `Бизнес-цель достигнута в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${plural(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} цель достигнута, но провален другой критерий.` : ''} Без решения по цели: ${cards.unknown}; невалидно: ${cards.invalid}; не дошли: ${cards.notReached}; ${reviewText}.`
-    : `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}), ${cards.unknown} без решения, ${cards.invalid} невалидны, ${cards.notReached} не дошли; ${reviewText}.`;
-  return { cards, strict, primary, metrics, rag, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
+    ? `Бизнес-цель достигнута в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${plural(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} цель достигнута, но провален другой критерий.` : ''} ${sentence([...leftovers([[cards.unknown, `без решения по цели: ${cards.unknown}`], [cards.invalid, `невалидно: ${cards.invalid}`], [cards.notReached, `не дошли: ${cards.notReached}`]]), reviewText])}.`
+    : `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)})${leftovers([[cards.unknown, `${cards.unknown} без решения`], [cards.invalid, `${cards.invalid} невалидны`], [cards.notReached, `${cards.notReached} не дошли`]]).map(part => `, ${part}`).join('')}; ${reviewText}.`;
+  const exclusions = record.validationExclusions ?? [];
+  const excluded = { total: exclusions.length, customerData: exclusions.filter(item => item.kind === 'customer_data').length,
+    masked: exclusions.filter(item => item.kind === 'masked').length, other: exclusions.filter(item => item.kind === 'length' || item.kind === 'unconfirmed').length };
+  return { cards, strict, primary, metrics, rag, excluded, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
     human,
     scope: { cards: record.scenarios.length, dialogues: record.trials.length, modes: record.settings.userModes, provenance, target, ...(judgeModel ? { judgeModel } : {}) },
     cost: { usd: record.usage.costUsd, calls: record.usage.calls, elapsedMs: record.trials.reduce((n, t) => n + t.elapsedMs, 0) }, limits, headline };
 }
 
 /** Plain text, one block per surface concern; each surface escapes at its own boundary. */
-export function qualityLines(q: QualitySummary): { headline: string; metrics: string[]; rag: string[]; causes: string[]; judge: string; queue: string; scope: string; limits: string } {
+export function qualityLines(q: QualitySummary): { headline: string; coverage: string; metrics: string[]; rag: string[]; causes: string[]; judge: string; queue: string; scope: string; limits: string } {
   const bar = (value: number | null, width = 10) => value === null ? '·'.repeat(width) : `${'█'.repeat(Math.round(value * width))}${'░'.repeat(width - Math.round(value * width))}`;
   return {
     headline: q.headline,
+    coverage: !q.excluded.total ? '' : `${q.excluded.total === 1 ? 'Не вошёл' : 'Не вошли'} в набор ${plural(q.excluded.total, ['диалог', 'диалога', 'диалогов'])}: ${[
+      q.excluded.customerData ? `нужны данные клиента — ${q.excluded.customerData}` : '', q.excluded.masked ? `скрыты обезличиванием — ${q.excluded.masked}` : '',
+      q.excluded.other ? `прочее — ${q.excluded.other}` : ''].filter(Boolean).join(', ')}. В accuracy они не считаются.`,
     metrics: q.metrics.map(m => `${bar(m.accuracy)} ${percent(m.accuracy).padStart(4)}  ${m.name} · ${m.passed}/${m.passed + m.failed}${m.unknown ? ` · неясно ${m.unknown}` : ''}`),
-    rag: [q.rag.complete || q.rag.partial
-      ? `RAG-контекст: полный в ${q.rag.complete} из ${q.scope.dialogues} диалогов; частичный ${q.rag.partial}; отсутствует ${q.rag.missing}. Диагностика отдельно от accuracy; это указания для разбора, не доказанные первопричины.`
-      : 'RAG-контекст не передан: нельзя отделить ошибку поиска от ошибки ответа.',
+    rag: !(q.rag.complete || q.rag.partial) ? [] : [
+      `RAG-контекст: полный в ${q.rag.complete} из ${q.scope.dialogues} диалогов; частичный ${q.rag.partial}; отсутствует ${q.rag.missing}. Диагностика отдельно от accuracy; это указания для разбора, не доказанные первопричины.`,
       ...q.rag.signals.slice(0, 3).map(signal => `${signal.trialId}: ${signal.explanation}`)],
     causes: q.causes.slice(0, 3).map((c, i) => `${i + 1}. ${c.name} — ${dialogues(c.dialogues)}${c.example ? `. ${c.example.card}: «${c.example.quote}»` : ''}${c.promptQuotes[0] ? ` · правило промпта: «${c.promptQuotes[0]}»` : ''}`),
     judge: `Судья: ${q.judge.label}.`,

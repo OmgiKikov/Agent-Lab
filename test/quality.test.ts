@@ -45,7 +45,7 @@ test('RAG diagnostics remain independent of accuracy and require complete usable
   assert.equal(qualitySummary(r).rag.signals.length, 0);
   assert.equal(qualitySummary(r).rag.partial, 1);
   t.events.splice(1, 1);
-  assert.match(qualityLines(qualitySummary(r)).rag.join(' '), /нельзя отделить ошибку поиска/);
+  assert.deepEqual(qualityLines(qualitySummary(r)).rag, [], 'without retrieval evidence the first screen says nothing about RAG');
 });
 
 test('one-test acceptance projection shows the complete current definition and observation channel', () => {
@@ -181,7 +181,7 @@ test('the first screen counts cards, criteria and causes from the shared outcome
     failureModes: [{ id: 'm1', name: 'Переспрашивает терминал вместо пути', description: 'Агент задаёт уточнение там, где нужен путь.', stage: 'сборка ответа', trialIds: ['t2'], promptQuotes: ['Отвечай сразу, если данных достаточно'] }] });
   const q = qualitySummary(r);
   assert.deepEqual(q.cards, { passed: 1, failed: 1, unknown: 1, invalid: 0, notReached: 0, total: 3, accuracy: 0.5 });
-  assert.equal(q.headline, 'Справился с 1 из 2 карточек (50%), 1 без решения, 0 невалидны, 0 не дошли; разобрано человеком 0 из 3 диалогов.');
+  assert.equal(q.headline, 'Справился с 1 из 2 карточек (50%), 1 без решения; разобрано человеком 0 из 3 диалогов.');
   assert.deepEqual(q.metrics.map(m => [m.id, m.passed, m.failed, m.unknown]), [['code', 2, 1, 0], ['goal', 1, 1, 1], ['format', 2, 1, 0]]);
   assert.equal(q.metrics[0]!.kind, 'code');
   assert.equal(q.causes.length, 1);
@@ -549,7 +549,7 @@ test('the first screen separates reached undecided cards, not-reached cards, and
     trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'pass', 'unknown'), invalid] }));
   assert.deepEqual(q.cards, { passed: 1, failed: 0, unknown: 1, invalid: 1, notReached: 0, total: 3, accuracy: 1 });
   assert.deepEqual(q.human, { reviewed: 0, total: 3 });
-  assert.match(q.headline, /1 без решения, 1 невалидны, 0 не дошли; разобрано человеком 0 из 3 диалогов\.$/);
+  assert.match(q.headline, /1 без решения, 1 невалидны; разобрано человеком 0 из 3 диалогов\.$/);
 });
 
 test('only the latest marked whole-dialogue review certifies a complete persisted review', async () => {
@@ -570,4 +570,22 @@ test('only the latest marked whole-dialogue review certifies a complete persiste
     await lab.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('the headline names only non-zero leftovers, exclusions sit next to the number, and missing retrieval evidence stays off the first screen', async () => {
+  const { lab, directory, record } = await demoEvaluateRecord();
+  try {
+    const q = qualitySummary(record);
+    assert.doesNotMatch(q.headline, /: 0[;.]|, 0 /, 'zero counters are not printed');
+    assert.match(q.headline, /разобрано человеком 0 из \d+ диалог/);
+    const lines = qualityLines(q);
+    assert.equal(lines.coverage, '', 'no exclusions, no coverage line');
+    assert.deepEqual(lines.rag, [], 'without retrieval events there is nothing to say about RAG on the first screen');
+    const excluded = qualityLines(qualitySummary({ ...record, validationExclusions: [
+      { dialogueId: 'a', kind: 'customer_data', reason: 'нужна ставка клиента' },
+      { dialogueId: 'b', kind: 'customer_data', reason: 'нужна заявка клиента' },
+      { dialogueId: 'c', kind: 'length', reason: 'нужны 1–16 реплик клиента' },
+    ] }));
+    assert.equal(excluded.coverage, 'Не вошли в набор 3 диалога: нужны данные клиента — 2, прочее — 1. В accuracy они не считаются.');
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });

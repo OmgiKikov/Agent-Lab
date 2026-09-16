@@ -3,10 +3,14 @@
 
 Agent Lab starts this script once per dialogue and speaks JSON lines:
   stdin  -> {"type": "respond", "sessionId": ..., "scenarioId": ..., "initialState": {...}, "messages": [...], "message": "..."}
-  stdout <- "plain reply"  or  {"reply": "...", "events": [{"tool": ..., "args": ..., "result": ...}], "records": {...}}
+  stdout <- "plain reply"  or  {"reply": "...", "events": [{"tool": ..., "args": ..., "result": ...}], "records": {...},
+             "retrievals": [{"source": "...", "content": "exact chunk", "score": 0.8}], "retrievalsComplete": true}
   stdin  -> {"type": "close", "sessionId": ...}   (then stdin ends)
 
 Replace `handle` with a call into your RAG agent. Keep one reply per request and flush stdout.
+"retrievals" are the exact knowledge-base chunks given to the model for this reply; set
+retrievalsComplete=true only when the list is the whole context. Without them Agent Lab cannot tell
+a search miss from a bad answer, and the RAG diagnosis stays silent.
 
 initialState may carry "external": opaque data for your test environment (cards, contracts, tool fixtures).
 Apply it before the first reply and keep resetConfirmed=True only if you did; Agent Lab treats an

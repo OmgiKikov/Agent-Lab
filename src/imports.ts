@@ -1,12 +1,12 @@
 import { readFile, stat } from 'node:fs/promises';
 import { z } from 'zod';
-import { dialogueSchema, fingerprint, goldenCaseSchema, type Dialogue } from './contracts.js';
+import { dialogueSchema, fingerprint, goldenCaseSchema, type Dialogue, type ValidationExclusion } from './contracts.js';
 
 /** Drop the whole dialogue: removing one masked turn would silently change its meaning. */
-export function validationDialogueIssue(dialogue: Dialogue): string | undefined {
+export function validationDialogueIssue(dialogue: Dialogue): Omit<ValidationExclusion, 'dialogueId'> | undefined {
   const users = dialogue.messages.filter(message => message.role === 'user');
-  if (!users.length || users.length > 16) return 'нужны 1–16 реплик клиента';
-  if (users.some(message => /[*#]/u.test(message.content) && !/[\p{L}\p{N}]/u.test(message.content))) return 'реплика клиента целиком скрыта обезличиванием';
+  if (!users.length || users.length > 16) return { kind: 'length', reason: 'нужны 1–16 реплик клиента' };
+  if (users.some(message => /[*#]/u.test(message.content) && !/[\p{L}\p{N}]/u.test(message.content))) return { kind: 'masked', reason: 'реплика клиента целиком скрыта обезличиванием' };
   return undefined;
 }
 

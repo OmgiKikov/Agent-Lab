@@ -705,6 +705,11 @@ test('validation grounds expectations and user facts, uses reactive turns, exclu
   assert.match(draft.limitations.join('\n'), /Исключён customer: Нужна персональная ставка/);
   assert.match(draft.limitations.join('\n'), /Исключён masked:/);
   assert.match(draft.limitations.join('\n'), /Измеримы 3 из запрошенных 4/);
+  assert.deepEqual(draft.validationExclusions, [
+    { dialogueId: 'masked', kind: 'masked', reason: 'реплика клиента целиком скрыта обезличиванием' },
+    { dialogueId: 'customer', kind: 'customer_data', reason: 'Нужна персональная ставка клиента.' },
+  ]);
+  assert.equal(qualityLines(qualitySummary(draft)).coverage, 'Не вошли в набор 2 диалога: нужны данные клиента — 1, скрыты обезличиванием — 1. В accuracy они не считаются.');
   assert.equal(attempts.has('masked'), false, 'masked-only turns never reach the model');
   assert.equal(attempts.get('real_1'), 2, 'one transient transport failure is retried once');
 });
