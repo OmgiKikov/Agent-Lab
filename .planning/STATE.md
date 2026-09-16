@@ -2,17 +2,17 @@
 gsd_state_version: "1.0"
 current_phase: 1
 current_phase_name: Одно честное число
-status: executing
-stopped_at: Completed 01-09-PLAN.md
-last_updated: "2026-09-16T22:05:00.842Z"
+status: verifying
+stopped_at: Completed 01-10-PLAN.md
+last_updated: "2026-09-16T22:34:46.623Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 1 execution started
-state_head: b62aa3ee69b648a68f5d447efef53bb89ddd48bb
+state_head: 64f0259925f558c531c9860bbc4592de49a7b5a8
 progress:
   total_phases: 7
   completed_phases: 0
-  total_plans: 10
-  completed_plans: 9
+  total_plans: 19
+  completed_plans: 10
   percent: 0
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 
 Phase: 1 (Одно честное число) — EXECUTING
 Plan: 10 of 10
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-17 — Phase 1 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -67,6 +67,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P07 | 12min | 2 tasks | 5 files |
 | Phase 01 P08 | 7min | 2 tasks | 6 files |
 | Phase 01 P09 | 12min | 2 tasks | 8 files |
+| Phase 01 P10 | 28min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -97,6 +98,8 @@ Recent decisions affecting current work:
 - [Phase 1]: 01-08: Pi payload view comes from evidenceBundle(...).view at every bundle site
 - [Phase 1]: 01-09: Контрольная ситуация хранится в записи прогона (positiveControlScenarioIds), не в карточке; draftHash старых записей не меняется
 - [Phase 1]: 01-09: Явный --control вне оставленных --case отклоняется ошибкой; унаследованный контроль, выпавший из --case, убирается
+- [Phase 1]: [01-10]: ae812a24 не годится как положительный контроль — за 3 живые попытки цель не засчитана; нужен другой контрольный кейс (кандидат — единственная засчитанная карточка a92fd6ae)
+- [Phase 1]: [01-10]: «судья не оценивал» важнее «судья не уверен в симуляторе», когда оценок нет вовсе (ca55767)
 
 ### Pending Todos
 
@@ -111,6 +114,7 @@ None yet.
 - Рабочая среда: `npm test` удаляет `dist/`, который импортирует живое расширение Pi; тесты гонять из снимка `git archive HEAD`. Новые записи со строгой схемой не читаются старым `dist/`, поэтому пересборку и перезапуск Pi нужно согласовать с другими сессиями.
 - Доказательства из `.agent-lab` копировать за пределы workspace до его удаления.
 - Цель «согласие ≥90%» статистически не показать при n≈10: показывать как «N из M» с оговоркой.
+- Phase 1 SC5 (TRUST-04) not met on live evidence: control ae812a24 unknown in 3 live runs (simulator_unclear, simulator_deviated x2); choose another positive control
 
 ## Deferred Items
 
@@ -122,6 +126,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-16T22:05:00.819Z
-Stopped at: Completed 01-09-PLAN.md
+Last session: 2026-09-16T22:34:46.597Z
+Stopped at: Completed 01-10-PLAN.md
 Resume file: None
