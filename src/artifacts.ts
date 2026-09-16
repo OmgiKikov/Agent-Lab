@@ -1,7 +1,7 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import type { Experiment } from './contracts.js';
+import { fingerprint, type Experiment } from './contracts.js';
 import type { ExperimentStore } from './store.js';
 import { compareRuns, evidenceSummary, markReconstructedSource, type EvidenceSummary, type RunComparison } from './comparison.js';
 import { qualitySummary, type QualitySummary } from './quality.js';
@@ -70,16 +70,50 @@ export async function resolveSource(record: Experiment, store: Pick<ExperimentSt
   }
 }
 
+type BundleStore = Pick<ExperimentStore, 'get' | 'traceJournal'> & Partial<Pick<ExperimentStore, 'readJudgeAudit'>>;
+
+/**
+ * A receipt is sealed with the hash of the full audit in `{runId}.judge/{trialId}.json`. When that
+ * file can be read it must match; otherwise the receipt is marked incomplete in this in-memory copy,
+ * so no comparison trusts it. A missing file keeps the record-only check and is said in words.
+ */
+async function verifyReceipts(run: Experiment, store: BundleStore, label: string): Promise<string[]> {
+  if (!store.readJudgeAudit) return [];
+  const mismatched: string[] = [], unreadable: string[] = [], missing: string[] = [];
+  for (const trial of run.trials) {
+    const receipt = trial.judgeReceipt;
+    if (!receipt || trial.judgeAudit) continue;
+    try {
+      const audit = await store.readJudgeAudit(run.id, trial.id);
+      if (!audit) { missing.push(trial.id); continue; }
+      if (fingerprint(audit) === receipt.auditHash) continue;
+      mismatched.push(trial.id);
+    } catch { unreadable.push(trial.id); }
+    receipt.complete = false;
+  }
+  const ids = (list: string[]) => `${list.slice(0, 5).join(', ')}${list.length > 5 ? ` и ещё ${list.length - 5}` : ''}`;
+  return [
+    ...(mismatched.length ? [`${label}: квитанция судьи не совпала с файлом полной оценки у ${mismatched.length} попыток (${ids(mismatched)}). Эти оценки не считаются завершёнными и не входят в сравнение.`] : []),
+    ...(unreadable.length ? [`${label}: файл полной оценки судьи не удалось прочитать у ${unreadable.length} попыток (${ids(unreadable)}). Эти оценки не считаются завершёнными и не входят в сравнение.`] : []),
+    ...(missing.length ? [`${label}: файл полной оценки судьи не найден у ${missing.length} попыток (${ids(missing)}). Квитанции проверены только по самой записи.`] : []),
+  ];
+}
+
 /** Resolve the persisted relationship once, independently of navigation and export format. */
-export async function evidenceBundle(record: Experiment, store: Pick<ExperimentStore, 'get' | 'traceJournal'>, beforeId?: string): Promise<EvidenceBundle> {
+export async function evidenceBundle(record: Experiment, store: BundleStore, beforeId?: string): Promise<EvidenceBundle> {
   const snapshot = structuredClone(record);
-  const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), quality: qualitySummary(snapshot), warnings: [], traceJournal: '' };
+  const receiptWarnings = await verifyReceipts(snapshot, store, `Прогон ${snapshot.id}`);
+  const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), quality: qualitySummary(snapshot), warnings: [...receiptWarnings], traceJournal: '' };
   const parent = beforeId ?? snapshot.parentRunId;
   if (parent) {
     const source = await resolveSource(snapshot, store, parent);
     bundle.comparisonSource = { kind: source.embedded ? 'embedded' : beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };
-    if (source.before) { bundle.before = source.before; bundle.comparison = compareRuns(source.before, snapshot); }
     if (source.warning) bundle.warnings.push(source.warning);
+    if (source.before) {
+      // The embedded copy has no sidecar of its own; its receipts were checked when they were embedded.
+      if (!source.embedded) bundle.warnings.push(...await verifyReceipts(source.before, store, `Базовый прогон ${parent}`));
+      bundle.before = source.before; bundle.comparison = compareRuns(source.before, snapshot);
+    }
   }
   // Stability is checked against the resolved source run; the headline itself never depends on it.
   bundle.view = buildResultView(snapshot, { before: bundle.before });

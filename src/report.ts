@@ -79,7 +79,7 @@ const judgeFile = (record: Experiment, trial: Pick<Trial, 'id'>) => `${record.id
 function judgeHTML(record: Experiment, trial: Trial): string {
   const judge = judgeSummary(trial);
   if (!judge) return '';
-  const raw = judge.legacy ? '<p>Исходные ответы судьи сохранены без исправлений в JSON-снимке прогона.</p>'
+  const raw = judge.legacy ? `<p>Исходные ответы судьи сохранены без исправлений в записи прогона <code>${escape(record.id)}.json</code> в локальной папке Agent Lab; в экспорт они не входят.</p>`
     : `<p>Полный ответ судьи: <code>${escape(judgeFile(record, trial))}</code> рядом с записью прогона.</p>`;
   return `<details><summary>Проверка судьи · ${escape(judge.provider)}/${escape(judge.model)} · ${judge.calls} вызовов в свежих сессиях</summary><p>Совпадение повторов не доказывает правильность. Протокол: <code>${escape(judge.protocolHash)}</code>.</p>${raw}</details>`;
 }
@@ -209,22 +209,33 @@ ${before && comparedBefore.length ? `<section id="before-dialogues"><h2>Диал
 ${record.profiles.length ? `<h3>Исходные профили и правки</h3>${record.profiles.map(p => `<details><summary>${escape(p.id)} · ${p.source === 'owner' ? 'Задан владельцем' : 'Выведен из логов'}${p.draftOverride ? ' · Правка черновика' : ''}</summary><p>${escape(p.persona ?? 'Без персоны')}</p>${list(p.characteristics)}${p.observedStyle ? `<p>${escape(p.observedStyle)}</p>` : ''}<p class="muted">Диалоги: ${escape(p.evidenceDialogueIds.join(', ') || 'не использовались')}</p>${p.draftOverride ? `<h3>Используется после правки</h3>${list([...(p.draftOverride.persona !== undefined ? [`Персона: ${p.draftOverride.persona ?? 'убрана'}`] : []), ...(p.draftOverride.characteristics !== undefined ? [`Характеристики: ${p.draftOverride.characteristics.join('; ') || 'убраны'}`] : [])])}` : ''}</details>`).join('')}` : ''}</section>
 <section id="limits"><details class="limits"><summary>Условия и границы результата · ${limits.length}</summary>${list(limits)}</details></section>
 <section><h2>Идентичность и источник доказательств</h2>${list(metadata(record))}${record.releaseLog ? `<details><summary>Выпуск версии</summary><pre>${escape(JSON.stringify(record.releaseLog, null, 2))}</pre></details>` : ''}${record.sourceEvidence ? `<details><summary>Исходные диалоги и вердикты · ${escape(record.sourceEvidence.runId)}</summary><pre>${escape(JSON.stringify(sourceEvidenceWithoutAudits(record.sourceEvidence), null, 2))}</pre></details>` : ''}</section>
-<footer><p>Локальный автономный отчёт · полные данные и сравнение доступны в JSON-снимке. ${escape(record.id)}</p></footer></main><script>${navigationScript}</script></body></html>`;
+<footer><p>Локальный автономный отчёт · JSON-снимок содержит запись прогона и сравнение без полных ответов судьи; полные ответы судьи и журнал трасс остаются только в локальной папке Agent Lab рядом с записью прогона. ${escape(record.id)}</p></footer></main><script>${navigationScript}</script></body></html>`;
+}
+
+/** A run for export: legacy full judge audits are left out, receipts and verdicts stay. */
+function runWithoutAudits(run: Experiment): Experiment {
+  return { ...run, trials: run.trials.map(({ judgeAudit: _audit, ...trial }) => trial),
+    ...(run.sourceEvidence ? { sourceEvidence: sourceEvidenceWithoutAudits(run.sourceEvidence) } : {}) };
 }
 
 /**
  * Preserve the CLI's `experiment` field while exporting the shared snapshot.
- * The trace journal stays next to the record; the export only names it.
+ * The trace journal and full judge audits stay next to the record; the export only names them.
  */
 export function jsonReport(bundle: EvidenceBundle): string {
-  const { record, traceJournal, ...evidence } = bundle;
-  return JSON.stringify({ experiment: record, ...evidence, traceJournal: { file: `${record.id}.trace.jsonl`, bytes: Buffer.byteLength(traceJournal) } }, null, 2);
+  const { record, traceJournal, before, ...evidence } = bundle;
+  const legacyAudits = [record, ...(before ? [before] : [])].reduce((n, run) => n + run.trials.filter(trial => trial.judgeAudit).length, 0)
+    + (record.sourceEvidence?.trials.filter(trial => trial.judgeAudit).length ?? 0);
+  return JSON.stringify({ experiment: runWithoutAudits(record), ...(before ? { before: runWithoutAudits(before) } : {}), ...evidence,
+    traceJournal: { file: `${record.id}.trace.jsonl`, bytes: Buffer.byteLength(traceJournal) },
+    judgeAudits: { included: false, omittedLegacyAudits: legacyAudits,
+      location: `Полные ответы судьи остаются в локальной папке Agent Lab: ${record.id}.judge/<trialId>.json или, для старых записей, в ${record.id}.json.` } }, null, 2);
 }
 
 function judgeLines(record: Experiment, trial: Trial): string[] {
   const judge = judgeSummary(trial);
   if (!judge) return [];
-  const raw = judge.legacy ? 'Исходные ответы — в JSON-снимке прогона.' : `Полный ответ судьи — в файле ${md(judgeFile(record, trial))} рядом с записью прогона.`;
+  const raw = judge.legacy ? `Исходные ответы — в записи прогона ${md(`${record.id}.json`)} в локальной папке Agent Lab; в экспорт они не входят.` : `Полный ответ судьи — в файле ${md(judgeFile(record, trial))} рядом с записью прогона.`;
   return [`- Судья: ${md(judge.provider)}/${md(judge.model)}, ${judge.calls} вызовов в свежих сессиях. Протокол: ${md(judge.protocolHash)}. ${raw}`];
 }
 
