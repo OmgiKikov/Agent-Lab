@@ -474,6 +474,7 @@ test('a reassessment by another judge, or without evidence, prints no instabilit
 });
 
 const CONTROL_WARNING = 'Контроль не пройден — числу пока не верить: проверьте судью и связь с агентом.';
+const CONTROL_UNMEASURED_WARNING = 'Контроль не измерен — числу пока не верить: проверьте судью и связь с агентом.';
 /** 13 cards: `ctl` is the positive control, the other 12 are 3 passed and 9 failed. */
 function withControl(control: Parameters<typeof attempt>[1], cardOverrides: Partial<Card> = {}, ids = ['ctl']): Experiment {
   const record = scored(3, 9);
@@ -506,7 +507,7 @@ test('a failed control puts the warning on the first line', () => {
 test('an unmeasured control is named with its reason, warned about and not counted as unmeasured', () => {
   const view = buildResultView(withControl({ goal: 'unknown', goalRationale: `${SPLIT_RATIONALE_PREFIX} pass / fail. Основания каждой оценки сохранены в judgeAudit.` }));
   const lines = resultViewLines(view);
-  assert.equal(lines[0], CONTROL_WARNING);
+  assert.equal(lines[0], CONTROL_UNMEASURED_WARNING, 'the warning and the control line use the same word');
   assert.ok(lines.includes('Контроль: не измерен — судья не уверен: голоса разошлись.'));
   assert.equal(view.notMeasured.total, 0);
   assert.equal(view.headline.decided, 12);
@@ -532,6 +533,11 @@ test('a synthetic control is labelled, and several controls are counted on their
   assert.ok(resultViewLines(mixed).includes('Контроль: пройдено 1 из 2.'));
   record.positiveControlScenarioIds = ['p0', 'p1'];
   assert.ok(resultViewLines(buildResultView(record)).includes('Контроль: пройдено 2 из 2 ✓'));
+  // One failed and one unmeasured control: the warning names both.
+  record.positiveControlScenarioIds = ['ctl', 'p0'];
+  const p0 = record.trials.find(item => item.scenarioId === 'p0')!;
+  p0.assessments = p0.assessments!.map(item => item.metricId === 'goal_attainment' ? { ...item, result: 'unknown' as const, evidence: [], rationale: SPLIT } : item);
+  assert.equal(resultViewLines(buildResultView(record))[0], 'Контроль не пройден или не измерен — числу пока не верить: проверьте судью и связь с агентом.');
 });
 
 test('a control id that is not in the set is ignored by the view', () => {

@@ -107,8 +107,11 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const counted = cards.filter(card => !card.control);
   const controlCards = cards.filter(card => card.control).map(card => ({ scenarioId: card.scenarioId, title: card.title, outcome: card.outcome,
     ...(card.reason ? { reason: card.reason } : {}), synthetic: card.provenance === 'synthetic', unstable: card.unstable }));
-  const controlWarning = controlCards.some(card => card.outcome !== 'pass' && card.reason !== 'in_progress')
-    ? 'Контроль не пройден — числу пока не верить: проверьте судью и связь с агентом.' : null;
+  // Worded like the control line: a failed control is «не пройден», an unmeasured one «не измерен».
+  const controlFailed = controlCards.some(card => card.outcome === 'fail');
+  const controlUnmeasured = controlCards.some(card => card.outcome === 'unknown' && card.reason !== 'in_progress');
+  const controlWarning = controlFailed || controlUnmeasured
+    ? `Контроль ${controlFailed && controlUnmeasured ? 'не пройден или не измерен' : controlFailed ? 'не пройден' : 'не измерен'} — числу пока не верить: проверьте судью и связь с агентом.` : null;
   const passed = counted.filter(card => card.outcome === 'pass').length;
   const decided = passed + counted.filter(card => card.outcome === 'fail').length;
   const accuracy = decided ? passed / decided : null;
