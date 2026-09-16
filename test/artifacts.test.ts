@@ -7,6 +7,8 @@ import { ExperimentLab, draftHash } from '../src/experiment.js';
 import { demoEvaluationInput, demoInput } from '../src/demo.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
 import { htmlReport, jsonReport, markdownReport } from '../src/report.js';
+import { sealJudgeReceipt } from '../src/judge.js';
+import type { JudgeAudit } from '../src/contracts.js';
 
 async function setup(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-artifacts-'));
@@ -50,7 +52,14 @@ test('navigation-independent snapshots export matching comparisons and paired ev
   assert.deepEqual(snapshot.comparison, reopened.comparison);
   assert.deepEqual(snapshot.before, before);
   assert.equal(JSON.parse(await readFile(a.evidence, 'utf8')).id, after.id, 'canonical evidence remains a raw Experiment');
-  assert.ok(snapshot.traceJournal.includes(after.trials[0]!.id));
+  // The journal stays next to the record; the export only names it.
+  assert.deepEqual(Object.keys(snapshot.traceJournal).sort(), ['bytes', 'file']);
+  assert.equal(snapshot.traceJournal.file, `${after.id}.trace.jsonl`);
+  assert.equal(typeof snapshot.traceJournal.bytes, 'number');
+  assert.equal(snapshot.traceJournal.bytes, Buffer.byteLength(reopened.traceJournal));
+  const firstJournalLine = reopened.traceJournal.split('\n').find(Boolean);
+  assert.ok(firstJournalLine, 'the fixture run wrote a journal');
+  assert.equal((await readFile(a.snapshot, 'utf8')).includes(firstJournalLine), false);
   const html = await readFile(a.htmlReport, 'utf8');
   const markdown = await readFile(a.report, 'utf8');
   for (const text of [html, markdown]) {
@@ -210,4 +219,39 @@ test('every export preserves simulator-check evidence without research scorecard
   assert.equal(json.experiment.trials[0].simulatorChecks[0].id, 'simulator_loop');
   assert.equal(json.evidence.simulator, undefined);
   assert.equal(json.evidence.modeValue, undefined);
+});
+
+test('a receipt-only trial names its judge and sidecar file without embedding any audit', async t => {
+  const { lab, after } = await twoRuns(t);
+  const audit: JudgeAudit = { protocolHash: 'protocol-<v1>', inputHash: 'input', provider: 'openrouter', model: 'judge-<model>', prompt: 'p', input: '{}',
+    attempts: [0, 1, 2].map(() => ({ startedAt: 'now', raw: 'RAW_JUDGE_REPLY', assessments: [{ metricId: 'demo_task_state', result: 'pass' as const, rationale: 'r', evidence: [0] }] })), notApplicable: [] };
+  const trial = after.trials[0]!;
+  delete trial.judgeAudit;
+  trial.judgeReceipt = sealJudgeReceipt(audit, true);
+  const legacy = structuredClone(trial);
+  delete legacy.judgeReceipt;
+  legacy.judgeAudit = audit;
+  after.sourceEvidence = { runId: 'legacy-source', trials: [legacy], humanReviews: [] };
+  const bundle = await evidenceBundle(after, lab.store);
+  const html = htmlReport(bundle);
+  assert.match(html, new RegExp(`${after.id}\\.judge/${trial.id}\\.json`));
+  assert.match(html, /openrouter\/judge-&lt;model&gt;/);
+  assert.match(html, /protocol-&lt;v1&gt;/);
+  assert.match(html, /3 вызовов в свежих сессиях/);
+  assert.doesNotMatch(html, /&quot;attempts&quot;|"attempts"/);
+  assert.doesNotMatch(html, /RAW_JUDGE_REPLY/, 'the embedded source run carries no serialized audit');
+  assert.doesNotMatch(html, /judge-<model>/);
+  const markdown = markdownReport(bundle);
+  assert.match(markdown, /Судья: openrouter\/judge-&lt;model&gt;, 3 вызовов в свежих сессиях/);
+  assert.match(markdown, /\.judge\/.*\.json/);
+  assert.doesNotMatch(markdown, /RAW_JUDGE_REPLY/);
+
+  // A legacy trial keeps its audit in the record, but the reports still only name it.
+  const old = structuredClone(after);
+  old.trials[0] = structuredClone(legacy);
+  const oldBundle = await evidenceBundle(old, lab.store);
+  const oldHtml = htmlReport(oldBundle);
+  assert.match(oldHtml, /3 вызовов в свежих сессиях/);
+  assert.doesNotMatch(oldHtml, /RAW_JUDGE_REPLY/);
+  assert.match(markdownReport(oldBundle), /Судья: openrouter\/judge-&lt;model&gt;, 3 вызовов.*JSON-снимке/);
 });

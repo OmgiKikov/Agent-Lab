@@ -587,7 +587,7 @@ export function cardVerdict(record: Experiment, scenario: Scenario): { outcome: 
 
 /** The judge model named on result screens: the recorded audit first, then the configured role. */
 export function judgeModel(record: Experiment): string | undefined {
-  return record.trials.find(t => t.judgeAudit)?.judgeAudit?.model ?? record.settings.roles?.judge?.model ?? record.settings.judge?.model;
+  return record.trials.map(t => (t.judgeAudit ?? t.judgeReceipt)?.model).find(Boolean) ?? record.settings.roles?.judge?.model ?? record.settings.judge?.model;
 }
 
 /** One situation whose headline verdict flipped between two decided verdicts. */
@@ -709,8 +709,11 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   for (const [name, record] of [['До', before], ['После', after]] as const) notes.push(...runCompleteness(record, true).map(n => `${name}: ${n}`));
   // A rejected judgment is a problem of its own pair, not a second protocol inside the run.
   const judgeIdentities = (record: Experiment) => [...new Set(record.trials.filter(t => measured(t) && !t.assessmentError
-    && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length).map(t => t.judgeAudit
-      ? fingerprint({ protocol: t.judgeAudit.protocolHash, provider: t.judgeAudit.provider, model: t.judgeAudit.model }) : 'unrecorded'))].sort();
+    && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length).map(t => {
+    // A legacy full audit and a receipt from the same judge are one identity.
+    const judge = t.judgeAudit ?? t.judgeReceipt;
+    return judge ? fingerprint({ protocol: judge.protocolHash, provider: judge.provider, model: judge.model }) : 'unrecorded';
+  }))].sort();
   const beforeJudges = judgeIdentities(before), afterJudges = judgeIdentities(after);
   if (beforeJudges.length > 1 || afterJudges.length > 1) notes.push('Внутри прогона смешаны разные протоколы судьи.');
   if (beforeJudges.length && afterJudges.length && fingerprint(beforeJudges) !== fingerprint(afterJudges)) notes.push('Протокол или модель судьи отличаются; оценки нельзя приписать изменению агента.');

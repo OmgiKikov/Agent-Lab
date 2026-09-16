@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { awaitingVerdict, compareRuns, evidenceSummary, humanFindings, isAgentFailure, repeatResults, stabilityAfterReassess, verdictSummary } from '../src/comparison.js';
+import { awaitingVerdict, compareRuns, evidenceSummary, humanFindings, isAgentFailure, judgeModel, repeatResults, stabilityAfterReassess, verdictSummary } from '../src/comparison.js';
 import { embeddedBefore } from '../src/artifacts.js';
-import { assessRepeated, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources } from '../src/judge.js';
+import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources, sealJudgeReceipt } from '../src/judge.js';
 import { emptyUsage, fingerprint, goalAttainment, settingsSchema, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
 
 const TRUSTED = 30;
@@ -515,6 +515,42 @@ test('live comparison checks judge receipts against the sources the judge saw, o
   const otherJudge = structuredClone(after);
   for (const t of otherJudge.trials) t.judgeAudit!.model = 'another-judge';
   assert.equal(compareRuns(before, otherJudge).comparable, false, 'a different judge model still blocks the whole diff');
+});
+
+/** The same run as a new executor would store it: a sealed receipt per trial, no full audit. */
+function withReceipts(run: Experiment): Experiment {
+  const copy = structuredClone(run);
+  for (const t of copy.trials) {
+    const scenario = copy.scenarios.find(s => s.id === t.scenarioId)!;
+    const complete = hasCompleteJudgment({ scenario, sources: observableSources(copy.sources, copy.requirements), trial: t });
+    t.judgeReceipt = sealJudgeReceipt(t.judgeAudit!, complete);
+    delete t.judgeAudit;
+  }
+  return copy;
+}
+
+test('a legacy full-audit run and a receipt run of the same judge compare as one judge', async () => {
+  const sources: Source[] = [{ id: 'p', name: 'Prompt', content: 'Always cite the tariff page.', hash: 'h', kind: 'prompt' }];
+  const requirements = [{ id: 'cite', text: 'Cite the tariff page', sourceId: 'p', quote: 'Always cite the tariff page.', critical: false }];
+  const before = await judgedRun('before', sources, requirements, { s1: 'fail', s2: 'fail' });
+  const after = withReceipts({ ...await judgedRun('after', sources, requirements, { s1: 'pass', s2: 'fail' }, 'better'), parentRunId: 'before' });
+  assert.ok(after.trials.every(t => !t.judgeAudit && t.judgeReceipt?.complete));
+  const diff = compareRuns(before, after);
+  assert.equal(diff.notes.some(n => n.startsWith('Протокол или модель судьи отличаются')), false, JSON.stringify(diff.notes));
+  assert.equal(diff.notes.some(n => n.includes('смешаны разные протоколы судьи')), false);
+  assert.equal(diff.comparable, true);
+  assert.equal(diff.fixed.length, 1);
+  // Mixed storage inside one run is still one judge.
+  const mixed = structuredClone(before);
+  mixed.trials[1] = withReceipts(before).trials[1]!;
+  assert.equal(compareRuns(mixed, after).comparable, true);
+  // A receipt from another model is still another judge.
+  const other = structuredClone(after);
+  for (const t of other.trials) t.judgeReceipt!.model = 'another-judge';
+  assert.equal(compareRuns(before, other).comparable, false);
+
+  assert.equal(judgeModel(after), 'judge', 'the model is read from receipts');
+  assert.equal(judgeModel(before), 'judge');
 });
 
 // ---- Stability after a reassessment of saved answers. ----
