@@ -1,6 +1,6 @@
-import { hasCompleteJudgment } from './judge.js';
+import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type Tier, type Trial, type UserMode } from './contracts.js';
-import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, measured, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, measured, measurementUsable, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
 /*
@@ -497,6 +497,96 @@ export function cardOutcome(record: Experiment, scenario: Scenario, allowPartial
   if (!trials.length || runCompleteness({ ...record, scenarios: [scenario], trials }, allowPartial).length) return 'unknown';
   const outcomes = trials.map(t => automaticTrialResult(scenario, t, record.humanReviews));
   return outcomes.includes('fail') ? 'fail' : outcomes.every(o => o === 'pass') ? 'pass' : 'unknown';
+}
+
+/** The headline card result: goal attainment per card; legacy cards without the goal rubric use the strict card outcome. */
+export function goalCardOutcome(record: Experiment, scenario: Scenario): 'pass' | 'fail' | 'unknown' {
+  const metric = scenario.metrics?.find(item => item.subject === 'agent' && item.id === 'goal_attainment');
+  if (!metric) return cardOutcome(record, scenario);
+  const modes = record.settings.userModes.filter(mode => mode !== 'scripted' || scenario.user.script !== undefined);
+  const expected = new Set(modes.flatMap(mode => Array.from({ length: record.settings.repeats }, (_, repeat) => `${mode}:${repeat}`)));
+  const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
+  const seen = new Set(trials.map(trial => `${trial.userMode}:${trial.repeat}`));
+  if (!expected.size || trials.length !== expected.size || seen.size !== expected.size || [...expected].some(key => !seen.has(key))
+    || trials.some(trial => trial.familyId !== scenario.familyId || trial.split !== scenario.split
+      || record.manifestHash && trial.manifestHash !== record.manifestHash
+      || !measurementUsable(scenario, trial, record.humanReviews))) return 'unknown';
+  const results = trials.map(trial => agentMetricResult(trial, metric.id, record.humanReviews) ?? 'unknown');
+  return results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
+}
+
+/**
+ * Why a card has no verdict. The order is both the evaluation order of the code paths that
+ * leave a card `unknown` and the tie-break when two reasons are equally frequent.
+ */
+export const NOT_MEASURED_CODES = [
+  'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'attempts_mismatch',
+  'judge_error', 'judge_stopped', 'human_invalid', 'reset_unconfirmed', 'simulator_deviated', 'simulator_unclear',
+  'human_unknown', 'not_judged', 'judge_split', 'no_evidence', 'judge_unclear',
+] as const;
+export type NotMeasuredCode = typeof NOT_MEASURED_CODES[number];
+
+// Prefixes of reasons written by evaluation.ts and experiment.ts.
+const TURN_LIMIT_REASON = 'Разговор не завершился в отведённое число реплик.';
+const SIMULATOR_STAGE_REASON = 'реплика симулированного пользователя:';
+const CODE_ONLY_ASSESSMENT = 'Только точные проверки';
+
+function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, goalId: string | undefined): NotMeasuredCode[] {
+  const codes: NotMeasuredCode[] = [];
+  const latest = latestHumanReviews({ trials: [trial], humanReviews: record.humanReviews });
+  if (trial.outcome === 'cancelled') codes.push('stopped');
+  else if (trial.outcome === 'invalid') codes.push(trial.reason.startsWith(TURN_LIMIT_REASON) ? 'turn_limit'
+    : trial.reason.startsWith(SIMULATOR_STAGE_REASON) ? 'simulator_error' : 'agent_error');
+  if (trial.assessmentError) codes.push(trial.assessmentError.startsWith(CODE_ONLY_ASSESSMENT) ? 'not_judged'
+    : /cancel|budget exhausted|time limit|closing/i.test(trial.assessmentError) ? 'judge_stopped' : 'judge_error');
+  if (latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid'
+    || goalId && latest.get(`${trial.id}|metric:${goalId}`)?.verdict === 'invalid') codes.push('human_invalid');
+  if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) codes.push('reset_unconfirmed');
+  // Mirrors simulatorUsable: a human verdict overrides the check or the fidelity vote.
+  const checksDeviate = (simulatorWasUsed(trial) ? trial.simulatorChecks ?? [] : []).some(c => {
+    const review = latest.get(`${trial.id}|check:${c.id}`);
+    return !(review?.verdict === 'invalid' || (review ? review.verdict === 'pass' : c.passed));
+  });
+  const fidelity = (scenario.metrics ?? []).filter(m => m.subject === 'simulator' && metricApplies(m, trial)).flatMap(m => {
+    const review = latest.get(`${trial.id}|metric:${m.id}`);
+    return review?.verdict === 'invalid' ? [] : [review?.verdict ?? trial.assessments?.find(a => a.metricId === m.id)?.result];
+  });
+  if (checksDeviate || fidelity.includes('fail')) codes.push('simulator_deviated');
+  if (fidelity.some(result => result !== 'pass' && result !== 'fail')) codes.push('simulator_unclear');
+  if (!goalId) return codes;
+  const result = agentMetricResult(trial, goalId, record.humanReviews);
+  if (result === 'pass' || result === 'fail') return codes;
+  const assessment = trial.assessments?.find(a => a.metricId === goalId);
+  if (latest.get(`${trial.id}|metric:${goalId}`)?.verdict === 'unknown') codes.push('human_unknown');
+  else if (!assessment) codes.push('not_judged');
+  else if (assessment.rationale.startsWith(SPLIT_RATIONALE_PREFIX)) codes.push('judge_split');
+  // Agreed votes carry a prefix, so the unsupported-goal sentence is matched anywhere.
+  else if (assessment.rationale.includes(GOAL_UNSUPPORTED_RATIONALE)) codes.push('no_evidence');
+  else codes.push('judge_unclear');
+  return codes;
+}
+
+/** One card decided by the counting rules, with the single reason when it has no verdict. */
+export function cardVerdict(record: Experiment, scenario: Scenario): { outcome: 'pass' | 'fail' | 'unknown'; reason?: NotMeasuredCode } {
+  const outcome = goalCardOutcome(record, scenario);
+  if (outcome !== 'unknown') return { outcome };
+  const goalId = scenario.metrics?.find(item => item.subject === 'agent' && item.id === 'goal_attainment')?.id;
+  const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
+  const codes = new Set<NotMeasuredCode>();
+  if (!trials.length) codes.add(runningPhases.has(record.phase) ? 'in_progress' : 'not_reached');
+  const modes = record.settings.userModes.filter(mode => mode !== 'scripted' || scenario.user.script !== undefined);
+  const expected = new Set(modes.flatMap(mode => Array.from({ length: record.settings.repeats }, (_, repeat) => `${mode}:${repeat}`)));
+  const seen = new Set(trials.map(trial => `${trial.userMode}:${trial.repeat}`));
+  if (trials.length && (!expected.size || trials.length !== expected.size || seen.size !== expected.size || [...expected].some(key => !seen.has(key))
+    || trials.some(trial => trial.familyId !== scenario.familyId || trial.split !== scenario.split
+      || record.manifestHash && trial.manifestHash !== record.manifestHash))) codes.add('attempts_mismatch');
+  for (const trial of trials) for (const code of trialReasons(record, scenario, trial, goalId)) codes.add(code);
+  return { outcome, reason: NOT_MEASURED_CODES.find(code => codes.has(code)) ?? 'judge_unclear' };
+}
+
+/** The judge model named on result screens: the recorded audit first, then the configured role. */
+export function judgeModel(record: Experiment): string | undefined {
+  return record.trials.find(t => t.judgeAudit)?.judgeAudit?.model ?? record.settings.roles?.judge?.model ?? record.settings.judge?.model;
 }
 
 export function compareRuns(before: Experiment, after: Experiment): RunComparison {

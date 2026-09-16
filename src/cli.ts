@@ -15,6 +15,7 @@ import { getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
 import { ExperimentStore } from './store.js';
+import { buildResultView, resultViewLines } from './result-view.js';
 import { evidenceBundle, exportArtifacts } from './artifacts.js';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
 
@@ -67,7 +68,7 @@ async function main() {
   } });
   const command = positionals[0];
   if (values.help || !command) {
-    process.stdout.write('  agent-lab summary --id RUN [--json]     Accuracy, причины и спорные случаи\n');
+    process.stdout.write('  agent-lab summary --id RUN [--json]     Сколько ситуаций агент прошёл, что не измерено и почему\n');
     process.stdout.write('  agent-lab accept --id RUN [--yes]\n');
     process.stdout.write('Agent Lab — validation set, accuracy и причины провалов вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
     process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab discover-resume --id RUN [--yes] [--json]\n  agent-lab discover-build --id RUN [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
@@ -89,9 +90,12 @@ async function main() {
     if (!values.id) throw new Error('Укажите --id RUN');
     const record = await new ExperimentStore(directory).get(values.id);
     const q = qualitySummary(record);
-    if (values.json) { process.stdout.write(`${JSON.stringify(q, null, 2)}\n`); return; }
+    const view = buildResultView(record);
+    if (values.json) { process.stdout.write(`${JSON.stringify({ ...q, view }, null, 2)}\n`); return; }
     const text = qualityLines(q);
-    process.stdout.write([text.headline, ...(text.coverage ? [text.coverage] : []), ...text.metrics, '', ...(text.causes.length ? ['Почему:', ...text.causes, ''] : []), ...(text.rag.length ? [...text.rag, ''] : []), text.judge, text.queue, '', text.scope, text.limits, ''].join('\n'));
+    // One denominator in the first block; the other scores stay below «Подробности».
+    process.stdout.write([...resultViewLines(view, { details: true }).map(safeLine), '', 'Подробности:', ...text.metrics, '',
+      ...(text.causes.length ? ['Почему:', ...text.causes, ''] : []), ...(text.rag.length ? [...text.rag, ''] : []), text.queue, '', text.scope, text.limits, ''].join('\n'));
     return;
   }
   // Reading an atomic snapshot must not take the writer lock or mark another process interrupted.

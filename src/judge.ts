@@ -19,6 +19,10 @@ Return exactly one compact JSON object, without markdown fences, matching this s
 ${JSON.stringify(z.toJSONSchema(responseSchema))}`;
 export const JUDGE_PROTOCOL = fingerprint({ version: 10, promptSources: 'observable-rules', ragEvidence: 'adapter-reported-retrieval-events', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
+/** Rationale texts written into assessments. Reason detection matches these constants; their text is part of stored records. */
+export const GOAL_UNSUPPORTED_RATIONALE = 'Достижение цели не подтверждено цитированным доказательством выбранного владельцем типа; слова агента оцениваются отдельно.';
+export const AGREED_RATIONALE_PREFIX = 'Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности.';
+export const SPLIT_RATIONALE_PREFIX = 'Судья разошёлся на неизменном входе:';
 /** Votes of one dialogue sent at once; a full card set stays well under typical provider rate limits. */
 const JUDGE_CONCURRENCY = 8;
 
@@ -101,7 +105,7 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
     const unsupportedGoal = row.metricId === 'goal_attainment' && result !== 'unknown' && !goalConfirmed;
     if (unsupportedGoal) result = 'unknown';
     return validateAssessments(metrics.filter(m => m.id === row.metricId), input.trial.events, [{ ...row, result,
-      ...(unsupportedGoal ? { rationale: 'Достижение цели не подтверждено цитированным доказательством выбранного владельцем типа; слова агента оцениваются отдельно.' } : {}),
+      ...(unsupportedGoal ? { rationale: GOAL_UNSUPPORTED_RATIONALE } : {}),
     }])[0]!;
   });
 }
@@ -199,8 +203,8 @@ export async function assessRepeated(input: Input, model: { provider: string; id
     const attempts = audit.attempts.filter(a => a.metricId === metric.id);
     if (attempts.some(a => a.error)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: 'RAG-диагностика не завершена: ошибка судьи сохранена в judgeAudit. Основная оценка не изменена.' };
     const votes = attempts.map(a => a.assessments![0]!);
-    if (votes.every(v => v.result === votes[0]!.result)) return { ...votes[0]!, rationale: `Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. ${votes[0]!.rationale}`.slice(0, 4000) };
+    if (votes.every(v => v.result === votes[0]!.result)) return { ...votes[0]!, rationale: `${AGREED_RATIONALE_PREFIX} ${votes[0]!.rationale}`.slice(0, 4000) };
     return { metricId: metric.id, result: 'unknown', evidence: [...new Set(votes.flatMap(v => v.evidence))].slice(0, 30),
-      rationale: `Судья разошёлся на неизменном входе: ${votes.map(v => v.result).join(' / ')}. Основания каждой оценки сохранены в judgeAudit.` };
+      rationale: `${SPLIT_RATIONALE_PREFIX} ${votes.map(v => v.result).join(' / ')}. Основания каждой оценки сохранены в judgeAudit.` };
   });
 }
