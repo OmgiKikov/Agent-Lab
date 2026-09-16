@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -408,6 +408,35 @@ test('CLI summary of a repeat names the flips against the stored source run, fro
     assert.deepEqual(lines.slice(0, lines.indexOf('')), resultViewLines(buildResultView(repeat, { before: source }), { details: true }));
     assert.ok(lines.includes('Нестабильных: 1 (повтор прогона a1b2c3d4).'));
     assert.ok(lines.includes('  нестабильно: Ситуация A — было «справился», стало «не справился»'));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('CLI summary says why the source run was not read and never swaps a corrupt source for the embedded copy', { timeout: 20000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-stability-'));
+  try {
+    const { source, repeat } = repeatPair({ A: 'pass' }, { A: 'fail' });
+    const portable: Experiment = { ...repeat, sourceEvidence: { runId: SOURCE_ID, trials: structuredClone(source.trials), humanReviews: [], identity: sourceIdentity(source, ['A']) } };
+    const store = new ExperimentStore(directory);
+    await store.init();
+    try { await store.save(portable); } finally { await store.close(); }
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    const summary = async () => {
+      const child = spawn(process.execPath, [cli, 'summary', '--id', portable.id, '--data-dir', directory]);
+      let stdout = ''; let stderr = '';
+      child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+      const code = await new Promise<number | null>(resolve => child.on('close', resolve));
+      assert.equal(code, 0, stderr);
+      return stdout;
+    };
+    // Missing: the embedded copy is used and the reader is told so.
+    const missing = await summary();
+    assert.match(missing, /Нестабильных: 1/);
+    assert.match(missing, /Внимание: Базовый прогон a1b2c3d4-0000-4000-8000-000000000001 не найден/);
+    // Corrupt: no fallback, the reason is named.
+    await writeFile(join(directory, `${SOURCE_ID}.json`), '{ not json', { mode: 0o600 });
+    const corrupt = await summary();
+    assert.doesNotMatch(corrupt, /Нестабильных|Стабильность/);
+    assert.match(corrupt, /Внимание: Исходный прогон a1b2c3d4-0000-4000-8000-000000000001 не удалось прочитать/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

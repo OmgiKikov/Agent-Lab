@@ -101,6 +101,11 @@ test('missing parents and journals remain explicit without losing current eviden
   const recovered = await evidenceBundle(legacy, lab.store);
   assert.equal(recovered.comparisonSource?.kind, 'embedded');
   assert.equal(recovered.view?.stability?.skipped, 'исходный прогон недоступен', 'a legacy suite has no source identity for stability');
+  // A source that exists but cannot be read is reported, not replaced by the embedded copy.
+  const unreadable = await evidenceBundle(legacy, { get: async () => { throw new Error('Experiment record exceeds 50 MB'); }, traceJournal: async () => '' });
+  assert.equal(unreadable.before, undefined);
+  assert.equal(unreadable.comparisonSource?.kind, 'parent');
+  assert.match(unreadable.warnings[0] ?? '', /не удалось прочитать.*встроенная копия не подставлялась.*50 MB/);
   assert.equal(recovered.comparison?.fixed.length, 1, 'legacy one-trial suite evidence remains readable');
 });
 

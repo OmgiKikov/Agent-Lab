@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab, draftHash, planDiscovery } from './experiment.js';
 import { demoInput } from './demo.js';
-import { createInputSchema, discoverInputSchema, type Experiment, type Settings } from './contracts.js';
+import { createInputSchema, discoverInputSchema, type Settings } from './contracts.js';
 import { scoreSettings } from './normalize.js';
 import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
@@ -17,7 +17,7 @@ import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { buildResultView, resultViewLines } from './result-view.js';
-import { embeddedBefore, evidenceBundle, exportArtifacts } from './artifacts.js';
+import { evidenceBundle, exportArtifacts, resolveSource } from './artifacts.js';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
 
 const percent = (value: number | null) => value === null ? 'нет данных' : `${Math.round(value * 100)}%`;
@@ -94,16 +94,14 @@ async function main() {
     const q = qualitySummary(record);
     // The source run is read-only context for stability; the whole evidence bundle (trace journal) is not needed here.
     const baseId = record.assessmentOf ?? record.parentRunId;
-    let before: Experiment | undefined;
-    if (baseId) {
-      try { before = await store.get(baseId); }
-      catch { before = embeddedBefore(record, baseId); }
-    }
-    const view = buildResultView(record, { before });
-    if (values.json) { process.stdout.write(`${JSON.stringify({ ...q, view }, null, 2)}\n`); return; }
+    const source = baseId ? await resolveSource(record, store, baseId) : undefined;
+    const view = buildResultView(record, { before: source?.before });
+    const warnings = source?.warning ? [source.warning] : [];
+    if (values.json) { process.stdout.write(`${JSON.stringify({ ...q, view, warnings }, null, 2)}\n`); return; }
     const text = qualityLines(q);
     // One denominator in the first block; the other scores stay below «Подробности».
-    process.stdout.write([...resultViewLines(view, { details: true }).map(safeLine), '', 'Подробности:', ...text.metrics, '',
+    process.stdout.write([...resultViewLines(view, { details: true }).map(safeLine), ...warnings.map(warning => `Внимание: ${safeLine(warning)}`),
+      '', 'Подробности:', ...text.metrics, '',
       ...(text.causes.length ? ['Почему:', ...text.causes, ''] : []), ...(text.rag.length ? [...text.rag, ''] : []), text.queue, '', text.scope, text.limits, ''].join('\n'));
     return;
   }
@@ -386,17 +384,13 @@ async function main() {
       const result = await lab.get(id);
       const quality = qualitySummary(result);
       // The source run is read-only context for stability, as in `summary`.
-      let before: Experiment | undefined;
-      if (result.parentRunId) {
-        try { before = await lab.store.get(result.parentRunId); }
-        catch { before = embeddedBefore(result, result.parentRunId); }
-      }
-      const view = buildResultView(result, { before });
+      const source = result.parentRunId ? await resolveSource(result, lab.store, result.parentRunId) : undefined;
+      const view = buildResultView(result, { before: source?.before });
       process.stdout.write(`${JSON.stringify({ id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode,
         ...(result.workflow === 'evaluate' ? { quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes },
           verdict: evidenceSummary(result).verdict, exitCode: evaluationExitCode(result),
           proofs: result.trials.map(trial => trialProofLines(result, trial.id)) } : {}),
-        comparison: result.comparisons.at(-1), view, artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
+        comparison: result.comparisons.at(-1), view, ...(source?.warning ? { warnings: [source.warning] } : {}), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
       if (result.workflow === 'evaluate') process.exitCode = evaluationExitCode(result);
       if (!['complete', 'results_review'].includes(result.phase)) throw new Error(result.error ?? 'Experiment did not complete');
     } else throw new Error(`Unknown command: ${command}`);

@@ -49,24 +49,37 @@ export function embeddedBefore(record: Experiment, parentId: string): Experiment
   return markReconstructedSource(before);
 }
 
+/** The source run a derived record is read against, and what the reader must be told about it. */
+export interface ResolvedSource { before?: Experiment; embedded: boolean; warning?: string }
+
+/**
+ * Reads the source run once, the same way on every surface. Only a missing file falls back to the
+ * evidence the record embedded; a corrupt, oversized, unreadable or mismatched record is reported
+ * as it is and never replaced by the embedded copy.
+ */
+export async function resolveSource(record: Experiment, store: Pick<ExperimentStore, 'get'>, sourceId: string): Promise<ResolvedSource> {
+  try { return { before: await store.get(sourceId), embedded: false }; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { embedded: false, warning: `Исходный прогон ${sourceId} не удалось прочитать. Сравнение и стабильность не проверены; встроенная копия не подставлялась, чтобы не скрыть повреждение. ${failureText(error)}` };
+    }
+    const before = embeddedBefore(record, sourceId);
+    return before
+      ? { before, embedded: true, warning: `Базовый прогон ${sourceId} не найден. Сравнение восстановлено из frozen-определения и встроенных попыток набора; это парный diff, не статистическая оценка и не полная копия исходного прогона. ${failureText(error)}` }
+      : { embedded: false, warning: `Базовый прогон ${sourceId} не найден. Сравнение не выполнено; текущие доказательства сохранены. ${failureText(error)}` };
+  }
+}
+
 /** Resolve the persisted relationship once, independently of navigation and export format. */
 export async function evidenceBundle(record: Experiment, store: Pick<ExperimentStore, 'get' | 'traceJournal'>, beforeId?: string): Promise<EvidenceBundle> {
   const snapshot = structuredClone(record);
   const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), quality: qualitySummary(snapshot), warnings: [], traceJournal: '' };
   const parent = beforeId ?? snapshot.parentRunId;
   if (parent) {
-    bundle.comparisonSource = { kind: beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };
-    try {
-      bundle.before = await store.get(parent); bundle.comparison = compareRuns(bundle.before, snapshot);
-    }
-    catch (error) {
-      const before = embeddedBefore(snapshot, parent);
-      if (before) {
-        bundle.before = before; bundle.comparison = compareRuns(before, snapshot);
-        bundle.comparisonSource = { kind: 'embedded', beforeId: parent, afterId: snapshot.id };
-        bundle.warnings.push(`Базовый прогон ${parent} недоступен. Сравнение восстановлено из frozen-определения и встроенных попыток набора; это парный diff, не статистическая оценка и не полная копия исходного прогона. ${failureText(error)}`);
-      } else bundle.warnings.push(`Базовый прогон ${parent} недоступен. Сравнение не выполнено; текущие доказательства сохранены. ${failureText(error)}`);
-    }
+    const source = await resolveSource(snapshot, store, parent);
+    bundle.comparisonSource = { kind: source.embedded ? 'embedded' : beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };
+    if (source.before) { bundle.before = source.before; bundle.comparison = compareRuns(source.before, snapshot); }
+    if (source.warning) bundle.warnings.push(source.warning);
   }
   // Stability is checked against the resolved source run; the headline itself never depends on it.
   bundle.view = buildResultView(snapshot, { before: bundle.before });
