@@ -353,3 +353,16 @@ test('all votes of one dialogue are requested at once and the audit keeps a stab
   assert.deepEqual(result.map(r => [r.metricId, r.result]), [['goal', 'pass'], ['tone', 'pass']]);
   assert.deepEqual(audit!.attempts.map(a => a.metricId), ['goal', 'goal', 'tone', 'tone']);
 });
+
+test('a judgment made on observable prompt rules is complete against the same sources, not the raw prompt', async () => {
+  const sources = [{ id: 'p', name: 'Prompt', content: 'Always cite the tariff page.', hash: 'h', kind: 'prompt' as const }];
+  const requirements = [{ id: 'cite', text: 'Cite the tariff page', sourceId: 'p', quote: 'Always cite the tariff page.', critical: false }];
+  const seen = observableSources(sources, requirements);
+  let audit: JudgeAudit | undefined;
+  const assessments = await assessRepeated({ ...input, sources: seen }, model,
+    { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, value) { audit = value; } },
+    async () => row('met', 'not_met'));
+  const recorded = { ...trial, assessments, judgeAudit: audit };
+  assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(sources, requirements), trial: recorded }), true);
+  assert.equal(hasCompleteJudgment({ scenario, sources, trial: recorded }), false, 'the raw prompt is not what the judge saw');
+});

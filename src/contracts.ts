@@ -271,6 +271,8 @@ export const tierSchema = z.enum(['smoke', 'regression', 'frontier']);
 export type Tier = z.infer<typeof tierSchema>;
 export const goalObservationSchema = z.enum(['reply', 'tool', 'state']);
 export type GoalObservation = z.infer<typeof goalObservationSchema>;
+/** The evidence channel an external agent is judged on when the owner did not pick one. */
+export const DEFAULT_GOAL_OBSERVATION: GoalObservation = 'reply';
 export const scenarioSchema = z.strictObject({
   id: identifier, familyId: identifier, title: text.max(200),
   requirementIds: z.array(identifier).max(20),

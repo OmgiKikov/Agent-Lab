@@ -1,4 +1,5 @@
-import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, SPLIT_RATIONALE_PREFIX } from './judge.js';
+import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
+import { normalizeScenarioIdentity } from './normalize.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type Tier, type Trial, type UserMode } from './contracts.js';
 import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, measured, measurementUsable, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
@@ -348,7 +349,7 @@ export function verdictSummary(record: Experiment): VerdictSummary {
   const unreviewed = failedTrials.filter(t => reviewsFor(t.id).length === 0).length;
   const undecided = failedTrials.filter(t => reviewsFor(t.id).length > 0 && pending.has(t.id)).length;
   const reasons: VerdictNote[] = [];
-  const unaudited = completed.filter(t => record.mode === 'live' && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length && !hasCompleteJudgment({ scenario: record.scenarios.find(s => s.id === t.scenarioId)!, sources: record.sources, trial: t })).length;
+  const unaudited = completed.filter(t => record.mode === 'live' && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length && !hasCompleteJudgment({ scenario: record.scenarios.find(s => s.id === t.scenarioId)!, sources: observableSources(record.sources, record.requirements), trial: t })).length;
   if (unaudited) reasons.push({ code: 'judge_unaudited', text: `${unaudited} диалог(ов) без сохранённых независимых оценок судьи. Воспроизводимость этих оценок неизвестна.`, count: unaudited });
   if (rubric.unknown) reasons.push({ code: 'judge_unknown', text: `${rubric.unknown} диалог(ов) с отсутствующей, противоречивой или неопределённой оценкой агента.`, count: rubric.unknown });
   if (review.disagreements) reasons.push({ code: 'human_disagreement', text: `Расхождений автоматической и ручной оценки: ${review.disagreements}. Проверьте основания каждого; это ещё не оценка точности судьи.`, count: review.disagreements });
@@ -589,6 +590,8 @@ export function judgeModel(record: Experiment): string | undefined {
   return record.trials.find(t => t.judgeAudit)?.judgeAudit?.model ?? record.settings.roles?.judge?.model ?? record.settings.judge?.model;
 }
 
+const JUDGE_INCOMPLETE = 'Судья не завершил оценку этой попытки.';
+
 export function compareRuns(before: Experiment, after: Experiment): RunComparison {
   if (after.parentRunId === before.id && after.selectedScenarioIds?.length
     && after.scenarios.length < before.scenarios.length
@@ -638,16 +641,21 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   if (before.evaluatorVersion !== after.evaluatorVersion) notes.push('Версия оценщика или его инструкций отличается. Сначала переоцените сохранённые трассы в одинаковых условиях.');
   if (fingerprint(before.sources) !== fingerprint(after.sources) || fingerprint(before.requirements) !== fingerprint(after.requirements)) notes.push('Материалы или требования изменились.');
   if (result.cards.onlyBefore.length || result.cards.onlyAfter.length) notes.push('Набор карточек изменился.');
-  const changed = shared.filter(s => fingerprint(s) !== fingerprint(before.scenarios.find(b => b.id === s.id)));
+  // External agents: a legacy card without a channel is judged on the reply, so it equals the same card with `reply`.
+  const changed = shared.filter(s => {
+    const b = before.scenarios.find(item => item.id === s.id)!;
+    const now = fingerprint(normalizeScenarioIdentity(s, after.target.kind));
+    return now !== fingerprint(normalizeScenarioIdentity(b, before.target.kind));
+  });
   if (changed.length) notes.push(`Содержимое карточек изменилось: ${changed.map(s => s.title).join(', ')}.`);
   for (const [name, record] of [['До', before], ['После', after]] as const) notes.push(...runCompleteness(record, true).map(n => `${name}: ${n}`));
-  const judgeIdentities = (record: Experiment) => [...new Set(record.trials.filter(t => measured(t)
+  // A rejected judgment is a problem of its own pair, not a second protocol inside the run.
+  const judgeIdentities = (record: Experiment) => [...new Set(record.trials.filter(t => measured(t) && !t.assessmentError
     && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length).map(t => t.judgeAudit
       ? fingerprint({ protocol: t.judgeAudit.protocolHash, provider: t.judgeAudit.provider, model: t.judgeAudit.model }) : 'unrecorded'))].sort();
   const beforeJudges = judgeIdentities(before), afterJudges = judgeIdentities(after);
   if (beforeJudges.length > 1 || afterJudges.length > 1) notes.push('Внутри прогона смешаны разные протоколы судьи.');
   if (beforeJudges.length && afterJudges.length && fingerprint(beforeJudges) !== fingerprint(afterJudges)) notes.push('Протокол или модель судьи отличаются; оценки нельзя приписать изменению агента.');
-  if (before.mode === 'live' && result.includesRubrics && [before, after].some(run => run.trials.some(trial => measured(trial) && !hasCompleteJudgment({ scenario: run.scenarios.find(s => s.id === trial.scenarioId)!, sources: run.sources, trial })))) notes.push('Для сравнения оценок модели нужны сохранённые ответы из свежих сессий и версия протокола судьи.');
   if (notes.length) {
     for (const row of expectedRows) addIncomparable(row, notes.join(' '),
       before.trials.find(t => attemptKey(t) === `${row.scenarioId}|${row.userMode}|${row.repeat}`)?.id,
@@ -655,6 +663,12 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
     result.headline = `Прогоны несравнимы: ${result.incomparable.length} пар. Исправления и регрессии не подсчитываются.`;
     return result;
   }
+  // The judge saw observable sources (evaluation.ts), so its receipt is checked against the same input, one pair at a time.
+  const auditRequired = before.mode === 'live' && result.includesRubrics;
+  const judged = (run: Experiment, trial: Trial) => {
+    const scenario = run.scenarios.find(s => s.id === trial.scenarioId);
+    return !!scenario && hasCompleteJudgment({ scenario, sources: observableSources(run.sources, run.requirements), trial });
+  };
   const beforeAttempts = new Map<string, Trial[]>(), afterAttemptGroups = new Map<string, Trial[]>();
   for (const trial of before.trials) beforeAttempts.set(attemptKey(trial), [...beforeAttempts.get(attemptKey(trial)) ?? [], trial]);
   for (const trial of after.trials) afterAttemptGroups.set(attemptKey(trial), [...afterAttemptGroups.get(attemptKey(trial)) ?? [], trial]);
@@ -665,9 +679,13 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
     else if (!validBefore(a[0]!)) addIncomparable(row, 'Попытка «до» невалидна или не измерена.', a[0]!.id, b[0]?.id);
     else if (b.length !== 1) addIncomparable(row, b.length ? 'Несколько попыток «после» с одним ключом.' : 'Нет попытки «после».', a[0]!.id, b[0]?.id);
     else if (!validAfter(b[0]!)) addIncomparable(row, 'Попытка «после» невалидна или не измерена.', a[0]!.id, b[0]!.id);
+    else if (auditRequired && (!judged(before, a[0]!) || !judged(after, b[0]!))) addIncomparable(row, JUDGE_INCOMPLETE, a[0]!.id, b[0]!.id);
   }
   const afterAttempts = new Map([...afterAttemptGroups].flatMap(([key, trials]) => trials.length === 1 ? [[key, trials[0]!] as const] : []));
-  const pairs = before.trials.filter(t => validBefore(t) && afterAttempts.has(attemptKey(t)) && validAfter(afterAttempts.get(attemptKey(t))!));
+  const pairs = before.trials.filter(t => {
+    const following = afterAttempts.get(attemptKey(t));
+    return validBefore(t) && !!following && validAfter(following) && (!auditRequired || (judged(before, t) && judged(after, following)));
+  });
   result.coverage.validPairs = pairs.length;
   result.coverage.excludedPairs -= pairs.length;
   if (result.coverage.excludedPairs) notes.push(`Сопоставлено ${pairs.length} из ${result.coverage.plannedPairs} пар попыток. Исключено ${result.coverage.excludedPairs}: до — ${result.coverage.invalidBefore} невалидных и ${result.coverage.missingBefore} пропущенных; после — ${result.coverage.invalidAfter} невалидных и ${result.coverage.missingAfter} пропущенных. Сбои могут скрывать регрессии; вывод относится только к сопоставленной части.`);

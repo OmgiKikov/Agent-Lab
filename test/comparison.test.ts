@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { awaitingVerdict, compareRuns, evidenceSummary, humanFindings, isAgentFailure, repeatResults, verdictSummary } from '../src/comparison.js';
-import { judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL } from '../src/judge.js';
-import { emptyUsage, fingerprint, settingsSchema, type Experiment, type HumanReview, type MetricAssessment, type Outcome, type Scenario, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
+import { assessRepeated, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources } from '../src/judge.js';
+import { emptyUsage, fingerprint, settingsSchema, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
 
 const TRUSTED = 30;
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
@@ -452,4 +452,66 @@ test('simulator review controls eligibility without rewriting evidence or becomi
   assert.equal(verdictSummary(r).simulatorFlagged, 0);
   assert.equal(evaluationExitCode(r), 0);
   assert.equal(t.simulatorChecks[0]!.passed, false, 'raw evidence stays immutable');
+});
+
+const commandTarget: Target = { kind: 'command', command: 'python3', args: ['agent.py'], timeoutMs: 60000 };
+const cardChanged = (notes: string[]) => notes.some(n => n.startsWith('Содержимое карточек изменилось'));
+
+test('an external legacy card without an evidence channel equals the same card judged on the reply', () => {
+  const legacy = { ...scenario('s1'), metrics: [] };
+  const current = { ...legacy, goalObservation: 'reply' as const };
+  const settings = settingsSchema.parse({ repeats: 1, userModes: ['static'] });
+  const trials = [trial('t1', 's1', 'static', 'pass')];
+  const pair = (target: Target, before: Scenario, after: Scenario) => compareRuns(
+    record({ id: 'before', target, settings, scenarios: [before], trials }),
+    record({ id: 'after', target, settings, scenarios: [after], trials: trials.map(t => ({ ...t, id: `new-${t.id}` })), parentRunId: 'before' }));
+  const external = pair(commandTarget, legacy, current);
+  assert.equal(cardChanged(external.notes), false);
+  assert.equal(external.comparable, true);
+  assert.equal(legacy.goalObservation, undefined, 'the stored card is not rewritten');
+  assert.equal(cardChanged(pair({ kind: 'sandbox' }, legacy, current).notes), true, 'a sandbox card has no default channel');
+  assert.equal(cardChanged(pair(commandTarget, legacy, { ...current, title: 'Другая цель' }).notes), true, 'a real change stays visible');
+});
+
+async function judgedRun(id: string, sources: Source[], requirements: Experiment['requirements'], verdicts: Record<string, 'pass' | 'fail'>, reply = 'ok'): Promise<Experiment> {
+  const cards = ['s1', 's2'].map(cardId => ({ ...scenario(cardId), checks: [], metrics: [metrics[0]!] }));
+  const trials: Trial[] = [];
+  for (const card of cards) {
+    const events: TraceEvent[] = [{ seq: 0, type: 'user', text: 'hello' }, { seq: 1, type: 'assistant', text: reply }];
+    const attempt: Trial = { ...trial(`${id}-${card.id}`, card.id, 'static', 'ungraded', { assessments: [], events }), checks: [] };
+    delete attempt.assessments;
+    let audit: JudgeAudit | undefined;
+    const pass = verdicts[card.id] === 'pass';
+    const assessments = await assessRepeated({ scenario: card, sources: observableSources(sources, requirements), trial: attempt }, { provider: 'offline', id: 'judge' },
+      { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, value) { audit = value; } },
+      async () => JSON.stringify({ assessments: [{ metricId: 'goal', passCondition: pass ? 'met' : 'not_met', failCondition: pass ? 'not_met' : 'met',
+        rationale: 'Fixture evidence.', evidence: [1], citations: [{ seq: 1, quote: reply }] }] }));
+    trials.push({ ...attempt, assessments, judgeAudit: audit });
+  }
+  return record({ id, mode: 'live', target: commandTarget, sources, requirements, scenarios: cards, trials,
+    settings: settingsSchema.parse({ repeats: 1, userModes: ['static'] }) });
+}
+
+test('live comparison checks judge receipts against the sources the judge saw, one pair at a time', async () => {
+  const sources: Source[] = [{ id: 'p', name: 'Prompt', content: 'Always cite the tariff page.', hash: 'h', kind: 'prompt' }];
+  const requirements = [{ id: 'cite', text: 'Cite the tariff page', sourceId: 'p', quote: 'Always cite the tariff page.', critical: false }];
+  const before = await judgedRun('before', sources, requirements, { s1: 'fail', s2: 'fail' });
+  const after = { ...await judgedRun('after', sources, requirements, { s1: 'pass', s2: 'fail' }, 'better'), parentRunId: 'before' };
+  assert.equal(verdictSummary(before).confidenceReasons.some(r => r.code === 'judge_unaudited'), false);
+  const diff = compareRuns(before, after);
+  assert.equal(diff.notes.some(n => /судь|Судь/.test(n)), false, JSON.stringify(diff.notes));
+  assert.equal(diff.comparable, true);
+  assert.equal(diff.fixed.length, 1);
+
+  const rejected = structuredClone(after);
+  rejected.trials[1]!.assessmentError = 'Judge response rejected';
+  const partial = compareRuns(before, rejected);
+  assert.equal(partial.comparable, true, 'one rejected judgment does not hide the rest of the diff');
+  assert.deepEqual(partial.incomparable.map(i => [i.scenarioId, i.reason]), [['s2', 'Судья не завершил оценку этой попытки.']]);
+  assert.equal(partial.fixed.length, 1);
+  assert.equal(partial.coverage.validPairs, 1);
+
+  const otherJudge = structuredClone(after);
+  for (const t of otherJudge.trials) t.judgeAudit!.model = 'another-judge';
+  assert.equal(compareRuns(before, otherJudge).comparable, false, 'a different judge model still blocks the whole diff');
 });
