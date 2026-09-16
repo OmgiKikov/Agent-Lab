@@ -380,3 +380,36 @@ test('CLI summary of a repeat names the flips against the stored source run, fro
     assert.ok(lines.includes('  нестабильно: Ситуация A — было «справился», стало «не справился»'));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+/** A reassessment of the source run's saved answers: same trial ids, a new manifest, the source embedded. */
+function reassessPair(before: Record<string, Result>, after: Record<string, Result>, overrides: Partial<Experiment> = {}) {
+  const { source } = repeatPair(before, before);
+  const { repeat } = repeatPair(after, after);
+  const record: Experiment = { ...repeat, manifestHash: 'h2', trials: repeat.trials.map(item => ({ ...item, manifestHash: 'h2' })),
+    assessmentOf: SOURCE_ID, assessmentTrialIds: source.trials.map(item => item.id), evidenceHash: 'evidence',
+    sourceEvidence: { runId: SOURCE_ID, trials: structuredClone(source.trials), humanReviews: [] }, ...overrides };
+  return { source, record };
+}
+
+test('a reassessment names the situations whose judge verdict flipped on the same answers', () => {
+  const { source, record } = reassessPair({ A: 'fail', B: 'pass' }, { A: 'pass', B: 'pass' });
+  const view = buildResultView(record, { before: source });
+  assert.equal(view.stability?.basis, 'reassess');
+  assert.equal(view.cards.find(item => item.scenarioId === 'A')?.unstable, true);
+  assert.equal(view.headline.text, 'Справился в 2 из 2 проверенных ситуаций — 100%.');
+  const lines = resultViewLines(view, { details: true });
+  assert.ok(lines.includes('Нестабильных: 1 (переоценка прогона a1b2c3d4).'));
+  assert.ok(lines.includes('  нестабильно: Ситуация A — было «не справился», стало «справился»'));
+});
+
+test('a reassessment by another judge, or without evidence, prints no instability count', () => {
+  const judge = reassessPair({ A: 'fail' }, { A: 'pass' }, { evaluatorVersion: 'judge-2' });
+  const view = buildResultView(judge.record, { before: judge.source });
+  assert.ok(resultViewLines(view).includes('Стабильность не проверена: судья или его настройки изменились.'));
+  assert.ok(view.cards.every(item => !item.unstable));
+  const bare = reassessPair({ A: 'fail' }, { A: 'pass' });
+  delete bare.record.evidenceHash;
+  const plain = buildResultView(bare.record, { before: bare.source });
+  assert.equal(plain.stability, undefined);
+  assert.ok(resultViewLines(plain).every(line => !/Нестабильных|Стабильность/.test(line)));
+});

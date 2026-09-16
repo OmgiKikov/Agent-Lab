@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { awaitingVerdict, compareRuns, evidenceSummary, humanFindings, isAgentFailure, repeatResults, verdictSummary } from '../src/comparison.js';
+import { awaitingVerdict, compareRuns, evidenceSummary, humanFindings, isAgentFailure, repeatResults, stabilityAfterReassess, verdictSummary } from '../src/comparison.js';
+import { embeddedBefore } from '../src/artifacts.js';
 import { assessRepeated, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources } from '../src/judge.js';
-import { emptyUsage, fingerprint, settingsSchema, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
+import { emptyUsage, fingerprint, goalAttainment, settingsSchema, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
 
 const TRUSTED = 30;
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
@@ -514,4 +515,60 @@ test('live comparison checks judge receipts against the sources the judge saw, o
   const otherJudge = structuredClone(after);
   for (const t of otherJudge.trials) t.judgeAudit!.model = 'another-judge';
   assert.equal(compareRuns(before, otherJudge).comparable, false, 'a different judge model still blocks the whole diff');
+});
+
+// ---- Stability after a reassessment of saved answers. ----
+const REASSESSED_SOURCE = 'c0ffee00-0000-4000-8000-000000000001';
+/** One reactive attempt per card judged on the goal rubric; the reassessment keeps the source trial ids. */
+function goalRun(id: string, goals: Record<string, 'pass' | 'fail' | 'unknown'>, manifestHash: string, overrides: Partial<Experiment> = {}): Experiment {
+  const cards = Object.keys(goals).map(key => ({ ...scenario(key), checks: [], metrics: [{ ...goalAttainment }] }));
+  const trials = Object.entries(goals).map(([key, goal]) => ({ ...trial(`t-${key}`, key, 'reactive', 'ungraded', {
+    assessments: [{ metricId: 'goal_attainment', result: goal, rationale: 'r', evidence: goal === 'unknown' ? [] : [1] }] }), checks: [], manifestHash }));
+  return record({ id, settings: settingsSchema.parse({ userModes: ['reactive'] }), scenarios: cards, trials, manifestHash, ...overrides });
+}
+function reassessed(source: Experiment, goals: Record<string, 'pass' | 'fail' | 'unknown'>, overrides: Partial<Experiment> = {}): Experiment {
+  const next = goalRun('c0ffee00-0000-4000-8000-000000000002', goals, 'h-reassess', { parentRunId: source.id, assessmentOf: source.id,
+    assessmentTrialIds: Object.keys(goals).map(key => `t-${key}`), evidenceHash: 'evidence',
+    sourceEvidence: { runId: source.id, trials: structuredClone(source.trials), humanReviews: [] }, ...overrides });
+  return next;
+}
+
+test('stabilityAfterReassess counts a goal flip on the same answers and the same criteria', () => {
+  const source = goalRun(REASSESSED_SOURCE, { s1: 'pass', s2: 'fail' }, 'h');
+  const next = reassessed(source, { s1: 'fail', s2: 'fail' });
+  const stability = stabilityAfterReassess(next, source);
+  assert.deepEqual(stability, { basis: 'reassess', comparedWith: REASSESSED_SOURCE, checked: 2, skipped: null,
+    unstable: [{ scenarioId: 's1', title: 's1', before: 'pass', after: 'fail' }] });
+  const rebuilt = embeddedBefore(next, REASSESSED_SOURCE);
+  assert.ok(rebuilt);
+  assert.deepEqual(stabilityAfterReassess(next, rebuilt), stability, 'the embedded source gives the same answer as the stored one');
+});
+
+test('stabilityAfterReassess skips changed criteria, partial coverage and unknown verdicts', () => {
+  const source = goalRun(REASSESSED_SOURCE, { s1: 'pass', s2: 'pass', s3: 'pass' }, 'h');
+  const next = reassessed(source, { s1: 'fail', s2: 'fail', s3: 'unknown' });
+  next.scenarios[0]!.metrics = [{ ...goalAttainment, passCriteria: 'Другое условие.' }];
+  // s2 was reassessed from an attempt the source never had.
+  next.trials[1]!.id = 't-foreign';
+  const stability = stabilityAfterReassess(next, source);
+  assert.equal(stability?.checked, 0);
+  assert.deepEqual(stability?.unstable, []);
+  // A card with two source attempts, only one of them reassessed, is not counted.
+  const two = goalRun(REASSESSED_SOURCE, { s1: 'pass' }, 'h');
+  two.settings = settingsSchema.parse({ userModes: ['reactive'], repeats: 2 });
+  two.trials.push({ ...structuredClone(two.trials[0]!), id: 't-s1-b', repeat: 1 });
+  const partial = reassessed(two, { s1: 'fail' }, { settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1 }) });
+  assert.deepEqual(stabilityAfterReassess(partial, two)?.unstable, []);
+  assert.equal(stabilityAfterReassess(partial, two)?.checked, 0);
+});
+
+test('stabilityAfterReassess refuses another judge and records that are not a reassessment of this source', () => {
+  const source = goalRun(REASSESSED_SOURCE, { s1: 'pass' }, 'h', { evaluatorVersion: 'judge-1' });
+  const judge = reassessed(source, { s1: 'fail' }, { evaluatorVersion: 'judge-2' });
+  assert.deepEqual(stabilityAfterReassess(judge, source), { basis: 'reassess', comparedWith: REASSESSED_SOURCE, checked: 0, unstable: [], skipped: 'судья или его настройки изменились' });
+  const noHash = reassessed(source, { s1: 'fail' }, { evaluatorVersion: 'judge-1' });
+  delete noHash.evidenceHash;
+  assert.equal(stabilityAfterReassess(noHash, source), null);
+  const other = reassessed(source, { s1: 'fail' }, { evaluatorVersion: 'judge-1', assessmentOf: 'c0ffee00-0000-4000-8000-00000000ffff' });
+  assert.equal(stabilityAfterReassess(other, source), null);
 });
