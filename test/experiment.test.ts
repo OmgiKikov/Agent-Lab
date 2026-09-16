@@ -727,6 +727,56 @@ test('validation grounds expectations and user facts, uses reactive turns, exclu
   assert.match(repeated.limitations.join('\n'), /Требования взяты из кэша подготовки/);
 });
 
+/** A validation build whose model goal ids are chosen by `goalId`; `null` means the model found no goal. */
+async function validationBuild(t: TestContext, goalId: (dialogueId: string) => string | null) {
+  const policy = 'Отвечайте по базе знаний.';
+  const dialogues = ['real_a', 'real_b', 'real_c'].map(id => ({ id, messages: [
+    { role: 'user' as const, content: `Вопрос ${id}` }, { role: 'assistant' as const, content: 'Ответ из базы.' },
+  ] }));
+  const runtime: Runtime = {
+    async prepare() {
+      return { requirements: [{ id: 'reply_rule', text: policy, sourceId: 'source-1', quote: policy, critical: true }], questions: [],
+        agent: { name: 'Real agent', instructions: policy, tools: [] }, scenarios: [] };
+    },
+    async goals(input) {
+      const dialogue = input.dialogues[0]!;
+      const id = goalId(dialogue.id);
+      if (id === null) return [];
+      return [{ id, goal: `Ответить на ${dialogue.id}`, opening: dialogue.messages[0]!.content, facts: 'Только вопрос.',
+        testability: 'knowledge', testabilityReason: 'Достаточно базы знаний.', requirementIds: ['reply_rule'],
+        evidenceDialogueIds: [dialogue.id], successCriteria: policy }];
+    },
+    async improve() { throw new Error('unused'); }, async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
+  };
+  const { lab } = await setup(t, runtime);
+  const created = await lab.create(createInputSchema.parse({ task: 'Проверить ответы', mode: 'live', scenarioCount: 0, validationCount: 3, dialogues,
+    materials: [{ name: 'prompt', kind: 'prompt', content: policy }], settings: { userModes: ['scripted'], maxTurns: 16 } }));
+  await lab.waitForIdle();
+  return { draft: await lab.get(created.id), dialogues };
+}
+const GOAL_ID_COLLISION = 'Модель выдала совпадающие id целей; каждой цели присвоен id её диалога.';
+
+test('a validation build with colliding model goal ids keeps one card per dialogue and names the collision', async t => {
+  const { draft, dialogues } = await validationBuild(t, () => 'same');
+  assert.equal(draft.phase, 'review', draft.error ?? '');
+  assert.deepEqual(draft.scenarios.map(card => card.id), dialogues.map(dialogue => dialogue.id));
+  assert.ok(draft.limitations.includes(GOAL_ID_COLLISION));
+});
+
+test('distinct model goal ids leave no collision note and cards still carry dialogue ids', async t => {
+  const { draft, dialogues } = await validationBuild(t, id => `goal_${id}`);
+  assert.equal(draft.phase, 'review', draft.error ?? '');
+  assert.deepEqual(draft.scenarios.map(card => card.id), dialogues.map(dialogue => dialogue.id));
+  assert.equal(draft.limitations.includes(GOAL_ID_COLLISION), false);
+});
+
+test('a dialogue without a model goal is an unconfirmed exclusion, not a duplicate-id failure', async t => {
+  const { draft } = await validationBuild(t, id => id === 'real_b' ? null : 'same');
+  assert.equal(draft.phase, 'review', draft.error ?? '');
+  assert.deepEqual(draft.scenarios.map(card => card.id), ['real_a', 'real_c']);
+  assert.deepEqual(draft.validationExclusions?.map(item => [item.dialogueId, item.kind]), [['real_b', 'unconfirmed']]);
+});
+
 test('fifteen unaccepted cards still run, report accuracy, save, load and rerun intact', async t => {
   const { lab, directory } = await setup(t, createDemoRuntime());
   const input = demoEvaluationInput(); input.scenarioCount = 10;
