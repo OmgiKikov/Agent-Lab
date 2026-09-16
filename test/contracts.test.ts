@@ -231,7 +231,11 @@ test('recorded dialogues map one-to-one to grounded production cards and immutab
   assert.deepEqual(scenario.user.script, ['Терминал 4321.', 'И без звонка в поддержку.']);
   assert.equal(scenario.user.maxFollowUps, 2);
   assert.deepEqual(scenario.requirementIds, ['tariff_rule']);
+  assert.equal(scenario.goalObservation, 'reply');
   assert.deepEqual(scenario.metrics, [goalAttainment, replyQuality]);
+
+  const stateScenario = dialogueToScenario(dialogue, { goal: 'Найти тариф терминала', goalObservation: 'state' });
+  assert.equal(stateScenario.goalObservation, 'state', 'an explicit owner channel is preserved');
 
   const trial = dialogueToTrial(dialogue, { ...scenario, split: 'dev' }, 'revision_1');
   assert.deepEqual(trial.events, dialogue.messages.map((message, seq) => ({ seq, type: message.role, text: message.content })));

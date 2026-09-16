@@ -1034,12 +1034,21 @@ test('model-backed recorded scoring grounds criteria, regrades copied traces and
   assert.equal(imported.usage.calls, 2);
   assert.equal(imported.trials[0]!.assessments, undefined);
   assert.equal(imported.failureModes, undefined);
+  assert.equal(imported.scenarios[0]!.goalObservation, 'reply');
   assert.deepEqual(imported.scenarios[0]!.metrics!.map(metric => metric.id), ['prompt_compliance', 'goal_attainment', 'reply_quality']);
+  const legacy = structuredClone(imported);
+  delete legacy.scenarios[0]!.goalObservation;
+  await lab.store.save(legacy);
+  const repeatedLegacy = await lab.repeat(imported.id);
+  assert.equal(repeatedLegacy.scenarios[0]!.goalObservation, 'reply', 'repeating an external legacy run upgrades only its fresh draft');
+  assert.equal((await lab.get(imported.id)).scenarios[0]!.goalObservation, undefined, 'the legacy source remains immutable');
   await writeFile(promptFile, 'A NEWER PROMPT THAT MUST NOT BE READ');
 
   const first = await lab.reassess(imported.id, {}, { carryUsage: true }); await lab.waitForIdle();
   const assessed = await lab.get(first.id);
   assert.equal(assessed.phase, 'results_review', assessed.error ?? '');
+  assert.equal(assessed.scenarios[0]!.goalObservation, 'reply', 'reassessment upgrades an external legacy copy');
+  assert.equal((await lab.get(imported.id)).scenarios[0]!.goalObservation, undefined, 'reassessment also leaves the legacy source immutable');
   assert.deepEqual(assessed.trials[0]!.assessments!.map(item => item.metricId), ['prompt_compliance', 'goal_attainment', 'reply_quality']);
   assert.deepEqual(prompts, [savedPrompt]);
   assert.match(assessed.failureModes![0]!.id, /_1$/);
@@ -1157,6 +1166,7 @@ test('repeat keeps the approved suite, discards results and requires fresh appro
     target: { kind: 'module', path }, targetVersion: 'v1', settings: { ...demoInput().settings, repeats: 1, userModes: ['static'] } });
   const created = await lab.create(input); await lab.waitForIdle();
   let draft = await lab.get(created.id);
+  assert.equal(draft.scenarios[0]!.goalObservation, 'reply', 'external cards default to reply evidence');
   await assert.rejects(lab.repeat(draft.id), /утверждёнными/);
   await writeFile(path, 'export function createSession() { return { respond: () => "new answer" }; }');
   await assert.rejects(lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }), /изменил/);
@@ -1171,6 +1181,9 @@ test('repeat keeps the approved suite, discards results and requires fresh appro
   assert.equal(after.targetVersion, 'v2'); assert.equal(after.phase, 'review');
   assert.deepEqual((await lab.get(before.id)).trials, before.trials);
   await assert.rejects(lab.start(after.id, { approved: false, reviewer: 'automated', expectedHash: draftHash(after) }), /подтверждения/);
+
+  const explicit = await lab.create({ ...input, goalObservation: 'state' }); await lab.waitForIdle();
+  assert.equal((await lab.get(explicit.id)).scenarios[0]!.goalObservation, 'state', 'the owner-selected channel wins over the external default');
 });
 
 test('rubric-only agent failures reach clustering', async t => {

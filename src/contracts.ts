@@ -384,7 +384,7 @@ export function goalToScenario(goal: ObservedGoal, profile?: Profile): Omit<Scen
   };
 }
 
-export function dialogueToScenario(dialogue: Dialogue, criteria: { goal: string; successCriteria?: string; requirementIds?: string[] }): Omit<Scenario, 'split'> {
+export function dialogueToScenario(dialogue: Dialogue, criteria: { goal: string; successCriteria?: string; requirementIds?: string[]; goalObservation?: GoalObservation }): Omit<Scenario, 'split'> {
   const userMessages = dialogue.messages.filter(message => message.role === 'user');
   const opening = userMessages[0]?.content;
   if (!opening) throw new Error(`В записанном диалоге ${dialogue.id} нет реплики пользователя.`);
@@ -400,7 +400,7 @@ export function dialogueToScenario(dialogue: Dialogue, criteria: { goal: string;
         : 'Полный длинный диалог хранится как неизменяемое доказательство; отдельный тест строится после принятия гипотезы.',
       opening, maxFollowUps: replayable ? script.length : 0, ...(replayable && script.length ? { script } : {}),
     },
-    initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [],
+    initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], goalObservation: criteria.goalObservation ?? 'reply',
     ...(criteria.successCriteria ? { successCriteria: criteria.successCriteria } : {}),
     assumptions: [`Recorded dialogue ${dialogue.id}; no target or simulator execution and no observed external state.`],
     metrics: [{ ...goalAttainment }, { ...replyQuality }],

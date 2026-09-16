@@ -59,6 +59,8 @@ function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
     record.scenarios = record.scenarios.filter(s => scenarioIds.includes(s.id));
     record.selectedScenarioIds = [...scenarioIds];
   }
+  if (record.target.kind !== 'sandbox') record.scenarios = record.scenarios.map(scenario =>
+    scenario.goalObservation ? scenario : { ...scenario, goalObservation: 'reply' });
   Object.assign(record, { id: randomUUID(), parentRunId: previous.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     phase: 'review', message: 'Тесты готовы. Проверьте подключение и запустите проверку.',
     trials: [], comparisons: [], iterations: [], humanReviews: [], usage: emptyUsage(),
@@ -295,8 +297,12 @@ export class ExperimentLab {
       }
       const production = observedGoals.map(goal => goalToScenario(goal, record.profiles.find(p => p.id === goal.profileId)));
       const golden = record.goldenCases.map(goldenToScenario);
-      const synthetic = generated.scenarios.map(s => ({ ...s, ...(confirmed ? { goalObservation: input.goalObservation! } : {}), provenance: 'synthetic' as const }));
-      const prepared = validatePreparation({ ...generated, scenarios: [...synthetic, ...production, ...golden] }, record.sources, input.workflow, record.profiles);
+      const synthetic = generated.scenarios.map(s => ({ ...s, provenance: 'synthetic' as const }));
+      const scenarios = [...synthetic, ...production, ...golden].map(scenario => {
+        const goalObservation = input.goalObservation ?? scenario.goalObservation ?? (record.target.kind === 'sandbox' ? undefined : 'reply');
+        return goalObservation ? { ...scenario, goalObservation } : scenario;
+      });
+      const prepared = validatePreparation({ ...generated, scenarios }, record.sources, input.workflow, record.profiles);
       Object.assign(record, { requirements: prepared.requirements, questions: prepared.questions, scenarios: prepared.scenarios });
       const baseline = revision(input.existingAgent ?? prepared.agent, null, input.workflow === 'evaluate' ? 'Agent configuration selected for dialogue evaluation.' : 'Original agent before measured improvements.');
       record.revisions.push(baseline); record.selectedRevisionId = baseline.id;
@@ -340,10 +346,11 @@ export class ExperimentLab {
         }
         const opening = dialogue.messages.find(message => message.role === 'user')!.content;
         const scenario = dialogueToScenario(dialogue, goal ? {
-          goal: goal.goal, successCriteria: goal.successCriteria, requirementIds: goal.requirementIds,
+          goal: goal.goal, successCriteria: goal.successCriteria, requirementIds: goal.requirementIds, goalObservation: input.goalObservation,
         } : {
           goal: dialogue.goal ?? opening,
           ...(dialogue.goal ? { successCriteria: dialogue.goal } : {}),
+          goalObservation: input.goalObservation,
         });
         if (hasPrompt) scenario.metrics!.unshift({ ...promptCompliance });
         scenarios.push(scenario);

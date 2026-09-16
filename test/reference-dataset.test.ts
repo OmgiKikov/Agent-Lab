@@ -97,7 +97,9 @@ test('the Phase 2 reference corpus is versioned, exact, grounded and label-free'
     assert.deepEqual(trial.observation, { state: 'missing', tools: 'partial' }, entry.id);
     assert.equal(trial.outcome, 'ungraded', `${entry.id}: stored outcome is evidence metadata, not a score label`);
     assert.equal(trial.assessments, undefined, `${entry.id}: semantic judgments need an owner/model run`);
-    assert.match(String(judgeInput({ scenario, sources: [], trial }).evaluationScope), /action-dependent pass conditions remain unclear/);
+    const input = judgeInput({ scenario, sources: [], trial });
+    assert.equal(input.scenario.goalObservation, 'reply', `${entry.id}: recorded replies have a harness-owned evidence channel`);
+    assert.match(String(input.evaluationScope), /action-dependent pass conditions remain unclear/);
 
     const followUps = dialogue.messages.filter(message => message.role === 'user').length - 1;
     assert.equal(scenario.user.script !== undefined || followUps === 0, entry.assertions.runnableScript, entry.id);
@@ -148,6 +150,7 @@ test('CLI score imports all reference evidence in code-only mode without running
   assert.ok(record.trials.every((trial: Record<string, unknown>) => trial.assessments === undefined
     && trial.judgeAudit === undefined && trial.externalUsage === undefined));
   assert.ok(record.trials.every((trial: { events: { type: string }[] }) => trial.events.every(event => event.type === 'user' || event.type === 'assistant')));
+  assert.ok(record.scenarios.every((scenario: { goalObservation?: string }) => scenario.goalObservation === 'reply'));
   assert.deepEqual(record.scenarios.map((scenario: { metrics: { id: string }[] }) => scenario.metrics.map(metric => metric.id)),
     Array(12).fill(['prompt_compliance', 'goal_attainment', 'reply_quality']));
   assert.deepEqual(record.trials.map((trial: { events: unknown[] }) => trial.events), source.map(dialogue =>
