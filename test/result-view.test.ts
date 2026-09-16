@@ -5,12 +5,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type MetricAssessment, type Trial, type ValidationExclusion } from '../src/contracts.js';
+import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Trial, type ValidationExclusion } from '../src/contracts.js';
 import { buildResultView, NOT_MEASURED_TEXT, resultViewLines, wilson } from '../src/result-view.js';
 import { compareRuns, NOT_MEASURED_CODES, stabilityBetweenRuns, type NotMeasuredCode } from '../src/comparison.js';
 import { AGREED_RATIONALE_PREFIX, GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { ExperimentStore } from '../src/store.js';
-import { embeddedBefore } from '../src/artifacts.js';
+import { embeddedBefore, evidenceBundle } from '../src/artifacts.js';
+import { sealJudgeReceipt } from '../src/judge.js';
 import { sourceIdentity } from '../src/normalize.js';
 
 const world = { records: {}, writableFields: [], transientFailures: 0 };
@@ -453,6 +454,33 @@ test('CLI summary says why the source run was not read and never swaps a corrupt
     const corrupt = await summary();
     assert.doesNotMatch(corrupt, /Нестабильных|Стабильность/);
     assert.match(corrupt, /Внимание: Исходный прогон a1b2c3d4-0000-4000-8000-000000000001 не удалось прочитать/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('CLI summary checks receipts against sidecars like the Pi bundle does', { timeout: 20000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-stability-'));
+  try {
+    const { source, repeat } = repeatPair({ A: 'pass', B: 'fail' }, { A: 'fail', B: 'fail' }, { before: { mode: 'live' }, after: { mode: 'live' } });
+    const audit = (raw: string): JudgeAudit => ({ protocolHash: 'p', inputHash: 'i', provider: 'offline', model: 'judge', prompt: 'p', input: '{}',
+      attempts: [{ startedAt: 'now', raw }], notApplicable: [] });
+    for (const item of repeat.trials) item.judgeReceipt = sealJudgeReceipt(audit(`sealed ${item.id}`), true);
+    const store = new ExperimentStore(directory);
+    await store.init();
+    try {
+      await store.save(source); await store.save(repeat);
+      for (const item of repeat.trials) store.writeJudgeAudit(repeat.id, item.id, audit(`edited ${item.id}`));
+    } finally { await store.close(); }
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    const child = spawn(process.execPath, [cli, 'summary', '--id', repeat.id, '--data-dir', directory]);
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+    const code = await new Promise<number | null>(resolve => child.on('close', resolve));
+    assert.equal(code, 0, stderr);
+    assert.match(stdout, /Внимание: Прогон b1b2c3d4-0000-4000-8000-000000000002: квитанция судьи не совпала с файлом полной оценки у 2 попыток/);
+    const bundle = await evidenceBundle(repeat, new ExperimentStore(directory));
+    const lines = stdout.split('\n');
+    assert.deepEqual(lines.slice(0, resultViewLines(bundle.view!, { details: true }).length), resultViewLines(bundle.view!, { details: true }));
+    assert.ok(bundle.warnings.some(warning => lines.includes(`Внимание: ${warning}`)), 'the same warning on both surfaces');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

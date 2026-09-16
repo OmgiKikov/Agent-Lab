@@ -77,7 +77,7 @@ type BundleStore = Pick<ExperimentStore, 'get' | 'traceJournal'> & Partial<Pick<
  * file can be read it must match; otherwise the receipt is marked incomplete in this in-memory copy,
  * so no comparison trusts it. A missing file keeps the record-only check and is said in words.
  */
-async function verifyReceipts(run: Experiment, store: BundleStore, label: string): Promise<string[]> {
+async function verifyReceipts(run: Experiment, store: Partial<Pick<ExperimentStore, 'readJudgeAudit'>>, label: string): Promise<string[]> {
   if (!store.readJudgeAudit) return [];
   const mismatched: string[] = [], unreadable: string[] = [], missing: string[] = [];
   for (const trial of run.trials) {
@@ -99,21 +99,38 @@ async function verifyReceipts(run: Experiment, store: BundleStore, label: string
   ];
 }
 
+/** A record and its source run as every surface must read them: receipts checked against sidecars, warnings in words. */
+export interface VerifiedRuns { record: Experiment; before?: Experiment; embedded: boolean; warnings: string[] }
+
+/**
+ * The one path from stored files to a comparison: a copy of `record` with its receipts checked,
+ * the source run resolved by `resolveSource` and, when it is a stored run, its receipts checked too.
+ * Used by `evidenceBundle` (Pi, exports) and by the CLI, so they never disagree.
+ */
+export async function resolveVerified(record: Experiment, store: Pick<ExperimentStore, 'get'> & Partial<Pick<ExperimentStore, 'readJudgeAudit'>>, sourceId?: string): Promise<VerifiedRuns> {
+  const copy = structuredClone(record);
+  const result: VerifiedRuns = { record: copy, embedded: false, warnings: await verifyReceipts(copy, store, `Прогон ${copy.id}`) };
+  if (!sourceId) return result;
+  const source = await resolveSource(copy, store, sourceId);
+  result.embedded = source.embedded;
+  if (source.warning) result.warnings.push(source.warning);
+  if (source.before) {
+    // The embedded copy has no sidecar of its own; its receipts were checked when they were embedded.
+    if (!source.embedded) result.warnings.push(...await verifyReceipts(source.before, store, `Базовый прогон ${sourceId}`));
+    result.before = source.before;
+  }
+  return result;
+}
+
 /** Resolve the persisted relationship once, independently of navigation and export format. */
 export async function evidenceBundle(record: Experiment, store: BundleStore, beforeId?: string): Promise<EvidenceBundle> {
-  const snapshot = structuredClone(record);
-  const receiptWarnings = await verifyReceipts(snapshot, store, `Прогон ${snapshot.id}`);
-  const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), quality: qualitySummary(snapshot), warnings: [...receiptWarnings], traceJournal: '' };
-  const parent = beforeId ?? snapshot.parentRunId;
+  const parent = beforeId ?? record.parentRunId;
+  const verified = await resolveVerified(record, store, parent);
+  const snapshot = verified.record;
+  const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), quality: qualitySummary(snapshot), warnings: [...verified.warnings], traceJournal: '' };
   if (parent) {
-    const source = await resolveSource(snapshot, store, parent);
-    bundle.comparisonSource = { kind: source.embedded ? 'embedded' : beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };
-    if (source.warning) bundle.warnings.push(source.warning);
-    if (source.before) {
-      // The embedded copy has no sidecar of its own; its receipts were checked when they were embedded.
-      if (!source.embedded) bundle.warnings.push(...await verifyReceipts(source.before, store, `Базовый прогон ${parent}`));
-      bundle.before = source.before; bundle.comparison = compareRuns(source.before, snapshot);
-    }
+    bundle.comparisonSource = { kind: verified.embedded ? 'embedded' : beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };
+    if (verified.before) { bundle.before = verified.before; bundle.comparison = compareRuns(verified.before, snapshot); }
   }
   // Stability is checked against the resolved source run; the headline itself never depends on it.
   bundle.view = buildResultView(snapshot, { before: bundle.before });

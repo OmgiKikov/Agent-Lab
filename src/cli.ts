@@ -17,7 +17,7 @@ import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { buildResultView, resultViewLines } from './result-view.js';
-import { evidenceBundle, exportArtifacts, resolveSource } from './artifacts.js';
+import { evidenceBundle, exportArtifacts, resolveVerified } from './artifacts.js';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
 
 const percent = (value: number | null) => value === null ? 'нет данных' : `${Math.round(value * 100)}%`;
@@ -94,9 +94,10 @@ async function main() {
     const q = qualitySummary(record);
     // The source run is read-only context for stability; the whole evidence bundle (trace journal) is not needed here.
     const baseId = record.assessmentOf ?? record.parentRunId;
-    const source = baseId ? await resolveSource(record, store, baseId) : undefined;
-    const view = buildResultView(record, { before: source?.before });
-    const warnings = source?.warning ? [source.warning] : [];
+    // The same verified path as Pi and the exports: receipts checked against sidecars, source resolved once.
+    const verified = await resolveVerified(record, store, baseId);
+    const view = buildResultView(verified.record, { before: verified.before });
+    const { warnings } = verified;
     if (values.json) { process.stdout.write(`${JSON.stringify({ ...q, view, warnings }, null, 2)}\n`); return; }
     const text = qualityLines(q);
     // One denominator in the first block; the other scores stay below «Подробности».
@@ -384,13 +385,13 @@ async function main() {
       const result = await lab.get(id);
       const quality = qualitySummary(result);
       // The source run is read-only context for stability, as in `summary`.
-      const source = result.parentRunId ? await resolveSource(result, lab.store, result.parentRunId) : undefined;
-      const view = buildResultView(result, { before: source?.before });
+      const verified = await resolveVerified(result, lab.store, result.parentRunId);
+      const view = buildResultView(verified.record, { before: verified.before });
       process.stdout.write(`${JSON.stringify({ id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode,
         ...(result.workflow === 'evaluate' ? { quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes },
           verdict: evidenceSummary(result).verdict, exitCode: evaluationExitCode(result),
           proofs: result.trials.map(trial => trialProofLines(result, trial.id)) } : {}),
-        comparison: result.comparisons.at(-1), view, ...(source?.warning ? { warnings: [source.warning] } : {}), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
+        comparison: result.comparisons.at(-1), view, ...(verified.warnings.length ? { warnings: verified.warnings } : {}), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
       if (result.workflow === 'evaluate') process.exitCode = evaluationExitCode(result);
       if (!['complete', 'results_review'].includes(result.phase)) throw new Error(result.error ?? 'Experiment did not complete');
     } else throw new Error(`Unknown command: ${command}`);
