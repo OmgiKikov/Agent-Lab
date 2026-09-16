@@ -624,6 +624,10 @@ function reconstructedIdentity(source: Experiment, derived: Experiment): SourceI
   const evidence = derived.sourceEvidence;
   return evidence?.runId === source.id && evidence.identity ? evidence.identity : null;
 }
+/** The card the source attempts were judged against: from the embedded identity when the source was rebuilt. */
+function sourceCardIdentity(source: Experiment, card: Scenario, identity: SourceIdentity | undefined): string | undefined {
+  return identity ? identity.scenarios[card.id] : fingerprint(normalizeScenarioIdentity(card, source.target.kind));
+}
 const isDecided = (outcome: 'pass' | 'fail' | 'unknown'): outcome is Decided => outcome !== 'unknown';
 
 /**
@@ -643,6 +647,8 @@ export function stabilityBetweenRuns(before: Experiment, after: Experiment): Sta
   for (const card of repeat.scenarios) {
     const sourceCard = source.scenarios.find(item => item.id === card.id);
     if (!sourceCard) continue;
+    // A card edited since the source attempts were judged is another question, not a repeat of it.
+    if (fingerprint(normalizeScenarioIdentity(card, after.target.kind)) !== sourceCardIdentity(before, sourceCard, identity)) continue;
     const was = goalCardOutcome(source, sourceCard), now = goalCardOutcome(repeat, card);
     if (!isDecided(was) || !isDecided(now)) continue;
     result.checked++;
@@ -676,8 +682,7 @@ export function stabilityAfterReassess(record: Experiment, source: Experiment): 
     const sourceCard = source.scenarios.find(item => item.id === card.id);
     if (!sourceCard) continue;
     // A rebuilt source holds the current cards, so the source card identity comes from the embedded record of it.
-    const sourceCardIdentity = identity ? identity.scenarios[card.id] : fingerprint(normalizeScenarioIdentity(sourceCard, source.target.kind));
-    if (fingerprint(normalizeScenarioIdentity(card, record.target.kind)) !== sourceCardIdentity) continue;
+    if (fingerprint(normalizeScenarioIdentity(card, record.target.kind)) !== sourceCardIdentity(source, sourceCard, identity)) continue;
     const trialIds = new Set(record.trials.filter(trial => trial.scenarioId === card.id).map(trial => trial.id));
     // Only a card whose every source attempt was reassessed, and nothing else, compares the same answers.
     if ([...trialIds].some(id => !sourceTrialIds.has(id))
@@ -693,12 +698,17 @@ export function stabilityAfterReassess(record: Experiment, source: Experiment): 
 const JUDGE_INCOMPLETE = 'Судья не завершил оценку этой попытки.';
 
 export function compareRuns(before: Experiment, after: Experiment): RunComparison {
+  // A rebuilt source carries the current cards; its embedded identity says what the source cards were.
+  return compareRunsAgainst(before, after, reconstructedIdentity(before, after) ?? undefined);
+}
+
+function compareRunsAgainst(before: Experiment, after: Experiment, identity: SourceIdentity | undefined): RunComparison {
   if (after.parentRunId === before.id && after.selectedScenarioIds?.length
     && after.scenarios.length < before.scenarios.length
     && after.scenarios.length === after.selectedScenarioIds.length
     && after.scenarios.every(s => after.selectedScenarioIds!.includes(s.id) && before.scenarios.some(b => b.id === s.id))) {
     const selected = new Set(after.selectedScenarioIds);
-    const result = compareRuns({ ...before, scenarios: before.scenarios.filter(s => selected.has(s.id)), trials: before.trials.filter(t => selected.has(t.scenarioId)) }, after);
+    const result = compareRunsAgainst({ ...before, scenarios: before.scenarios.filter(s => selected.has(s.id)), trials: before.trials.filter(t => selected.has(t.scenarioId)) }, after, identity);
     result.cards.onlyBefore = before.scenarios.filter(s => !selected.has(s.id)).map(s => s.id);
     result.headline = `Выбранные тесты (${selected.size}/${before.scenarios.length}). ${result.headline}`;
     result.notes.push('Сравнение относится только к явно выбранным тестам. Остальной регрессионный набор не проверен.');
@@ -745,7 +755,7 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   const changed = shared.filter(s => {
     const b = before.scenarios.find(item => item.id === s.id)!;
     const now = fingerprint(normalizeScenarioIdentity(s, after.target.kind));
-    return now !== fingerprint(normalizeScenarioIdentity(b, before.target.kind));
+    return now !== sourceCardIdentity(before, b, identity);
   });
   if (changed.length) notes.push(`Содержимое карточек изменилось: ${changed.map(s => s.title).join(', ')}.`);
   for (const [name, record] of [['До', before], ['После', after]] as const) notes.push(...runCompleteness(record, true).map(n => `${name}: ${n}`));

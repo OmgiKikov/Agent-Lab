@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type MetricAssessment, type Trial, type ValidationExclusion } from '../src/contracts.js';
 import { buildResultView, NOT_MEASURED_TEXT, resultViewLines, wilson } from '../src/result-view.js';
-import { NOT_MEASURED_CODES, type NotMeasuredCode } from '../src/comparison.js';
+import { compareRuns, NOT_MEASURED_CODES, stabilityBetweenRuns, type NotMeasuredCode } from '../src/comparison.js';
 import { AGREED_RATIONALE_PREFIX, GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { ExperimentStore } from '../src/store.js';
 import { embeddedBefore } from '../src/artifacts.js';
@@ -389,6 +389,22 @@ test('a source rebuilt from embedded evidence is compared through its embedded i
   const portable: Experiment = { ...same.repeat, sourceEvidence: { runId: SOURCE_ID, trials: structuredClone(same.source.trials), humanReviews: [], identity: sourceIdentity(same.source, ['A', 'B']) } };
   const found = buildResultView(portable, { before: embeddedBefore(portable, SOURCE_ID) });
   assert.deepEqual(found.stability, buildResultView(same.repeat, { before: same.source }).stability);
+});
+
+test('a card edited after load-suite is neither unstable nor fixed/regressed against a rebuilt source', () => {
+  const same = repeatPair({ A: 'pass', B: 'fail' }, { A: 'fail', B: 'fail' });
+  const edited: Experiment = { ...structuredClone(same.repeat), sourceEvidence: { runId: SOURCE_ID, trials: structuredClone(same.source.trials), humanReviews: [],
+    identity: sourceIdentity(same.source, ['A', 'B']) } };
+  edited.scenarios[0]!.metrics = edited.scenarios[0]!.metrics!.map(metric => metric.id === 'goal_attainment' ? { ...metric, passCriteria: 'Другое условие.' } : metric);
+  const rebuilt = embeddedBefore(edited, SOURCE_ID)!;
+  const view = buildResultView(edited, { before: rebuilt });
+  assert.ok(view.cards.every(item => !item.unstable), JSON.stringify(view.stability));
+  assert.deepEqual(view.stability, buildResultView(edited, { before: same.source }).stability, 'the same answer as with the stored source');
+  const diff = compareRuns(rebuilt, edited);
+  assert.ok(diff.notes.some(note => note.startsWith('Содержимое карточек изменилось')), JSON.stringify(diff.notes));
+  assert.deepEqual([diff.fixed, diff.regressed], [[], []]);
+  // Against the stored source the edited card is not counted either.
+  assert.equal(stabilityBetweenRuns({ ...same.source }, edited).unstable.length, 0);
 });
 
 test('CLI summary of a repeat names the flips against the stored source run, from the built dist', { timeout: 20000 }, async () => {
