@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { awaitingVerdict, compareRuns, evidenceSummary, humanFindings, isAgentFailure, judgeModel, repeatResults, stabilityAfterReassess, verdictSummary } from '../src/comparison.js';
 import { embeddedBefore } from '../src/artifacts.js';
+import { suiteEvidence } from '../src/connection.js';
 import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources, sealJudgeReceipt } from '../src/judge.js';
 import { emptyUsage, fingerprint, goalAttainment, settingsSchema, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
 
@@ -607,4 +608,51 @@ test('stabilityAfterReassess refuses another judge and records that are not a re
   assert.equal(stabilityAfterReassess(noHash, source), null);
   const other = reassessed(source, { s1: 'fail' }, { evaluatorVersion: 'judge-1', assessmentOf: 'c0ffee00-0000-4000-8000-00000000ffff' });
   assert.equal(stabilityAfterReassess(other, source), null);
+});
+
+// ---- Saved suites and reassessments carry receipts, not legacy audits. ----
+test('suiteEvidence seals legacy audits into receipts and copies receipts unchanged', async () => {
+  const sources: Source[] = [{ id: 'p', name: 'Prompt', content: 'Always cite the tariff page.', hash: 'h', kind: 'prompt' }];
+  const requirements = [{ id: 'cite', text: 'Cite the tariff page', sourceId: 'p', quote: 'Always cite the tariff page.', critical: false }];
+  const legacy = await judgedRun('legacy', sources, requirements, { s1: 'pass', s2: 'fail' });
+  const audits = legacy.trials.map(t => structuredClone(t.judgeAudit!));
+  // The second trial's audit no longer matches its input: its receipt must say so.
+  legacy.trials[1]!.judgeAudit!.inputHash = 'stale';
+  const staleAudit = structuredClone(legacy.trials[1]!.judgeAudit!);
+  const before = JSON.stringify(legacy);
+  const evidence = suiteEvidence(legacy, ['s1', 's2']);
+  assert.equal(JSON.stringify(legacy), before, 'the source record is not changed');
+  assert.equal(JSON.stringify(evidence).includes('"judgeAudit"'), false);
+  const [first, second] = evidence.trials;
+  assert.equal(first!.judgeReceipt?.complete, true);
+  assert.equal(first!.judgeReceipt?.auditHash, fingerprint(audits[0]));
+  assert.equal(second!.judgeReceipt?.complete, false);
+  assert.equal(second!.judgeReceipt?.auditHash, fingerprint(staleAudit));
+
+  const sealed = withReceipts(await judgedRun('sealed', sources, requirements, { s1: 'pass', s2: 'fail' }));
+  const copied = suiteEvidence(sealed, ['s1', 's2']);
+  assert.deepEqual(copied.trials, sealed.trials, 'a trial that already has a receipt is copied unchanged');
+
+  // A card that is missing from the record cannot be verified.
+  const orphan = structuredClone(await judgedRun('orphan', sources, requirements, { s1: 'pass', s2: 'pass' }));
+  orphan.trials[0]!.scenarioId = 'gone';
+  const lost = suiteEvidence(orphan, ['gone']);
+  assert.equal(lost.trials[0]!.judgeReceipt?.complete, false);
+  assert.equal(lost.trials[0]!.judgeAudit, undefined);
+});
+
+test('a reassessment rebuilt from receipt-carrying source evidence keeps the same stability', () => {
+  const source = goalRun(REASSESSED_SOURCE, { s1: 'pass', s2: 'fail' }, 'h');
+  for (const t of source.trials) {
+    t.judgeAudit = { protocolHash: JUDGE_PROTOCOL, inputHash: 'legacy', provider: 'offline', model: 'judge', prompt: JUDGE_PROMPT, input: '{}',
+      attempts: [0, 1].map(() => ({ startedAt: 'now', raw: 'LEGACY_RAW', assessments: structuredClone(t.assessments!) })), notApplicable: [] };
+  }
+  const next = reassessed(source, { s1: 'fail', s2: 'fail' }, { sourceEvidence: suiteEvidence(source, ['s1', 's2']) });
+  assert.equal(JSON.stringify(next).includes('"judgeAudit"'), false);
+  assert.equal(JSON.stringify(next).includes('LEGACY_RAW'), false);
+  const stored = stabilityAfterReassess(next, source);
+  assert.equal(stored?.checked, 2);
+  const rebuilt = embeddedBefore(next, REASSESSED_SOURCE);
+  assert.ok(rebuilt);
+  assert.deepEqual(stabilityAfterReassess(next, rebuilt), stored);
 });
