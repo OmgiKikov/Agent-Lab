@@ -248,6 +248,21 @@ export const judgeAuditSchema = z.strictObject({
   notApplicable: z.array(identifier),
 });
 export type JudgeAudit = z.infer<typeof judgeAuditSchema>;
+/**
+ * The small trace a judgment leaves on the trial when the full audit lives in the sidecar
+ * `{runId}.judge/{trialId}.json`. It alone never proves a judgment: the verifier re-derives the
+ * input hash from the record and re-aggregates these votes against the recorded assessments.
+ */
+export const judgeReceiptSchema = z.strictObject({
+  protocolHash: text, inputHash: text, provider: text, model: text,
+  configurationHash: text.optional(),
+  transport: z.strictObject({ api: text, upstream: text.optional(), structured: z.boolean() }).optional(),
+  auditHash: text,
+  votes: z.array(z.strictObject({ metricId: identifier, result: z.enum(['pass', 'fail', 'unknown']).optional(), error: z.boolean().optional() })).max(48),
+  notApplicable: z.array(identifier),
+  complete: z.boolean(),
+});
+export type JudgeReceipt = z.infer<typeof judgeReceiptSchema>;
 export const userSchema = z.strictObject({
   goal: text.max(3000), facts: text.max(5000), behavior: text.max(2000), opening: text.max(3000),
   maxFollowUps: z.number().int().min(0).max(15).optional(),
@@ -553,7 +568,7 @@ export interface Trial {
   split: 'dev' | 'control'; manifestHash: string; outcome: Outcome; reason: string;
   checks: CheckResult[]; simulatorChecks?: SimulatorCheck[]; events: TraceEvent[]; initialState: World; finalState: World;
   usage: Usage; elapsedMs: number;
-  assessments?: MetricAssessment[]; assessmentError?: string; judgeAudit?: JudgeAudit;
+  assessments?: MetricAssessment[]; assessmentError?: string; judgeAudit?: JudgeAudit; judgeReceipt?: JudgeReceipt;
   observation?: { state: 'sandbox' | 'reported' | 'missing'; tools: 'sandbox' | 'complete' | 'partial'; resetConfirmed?: boolean; version?: string; toolScope?: string[] };
   externalUsage?: Usage;
 }
@@ -759,6 +774,7 @@ export const trialSchema = z.strictObject({
   observation: z.strictObject({ state: z.enum(['sandbox', 'reported', 'missing']), tools: z.enum(['sandbox', 'complete', 'partial']), resetConfirmed: z.boolean().optional(), version: text.max(200).optional(), toolScope: z.array(z.string().max(200)).max(50).optional() }).optional(),
   externalUsage: usageSchema.optional(),
   judgeAudit: judgeAuditSchema.optional(),
+  judgeReceipt: judgeReceiptSchema.optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),
@@ -854,7 +870,8 @@ export interface CallContext {
   addUsage(usage: Omit<Usage, 'calls'>): void;
   onTrace?(trialId: string, event: TraceEvent): void;
   onTargetEvent?(event: Omit<TraceEvent, 'seq'>): void;
-  onJudgment?(trialId: string, audit: JudgeAudit): void;
+  /** Called on every audit change; final is true exactly once, after the last vote of this judgment settled. */
+  onJudgment?(trialId: string, audit: JudgeAudit, final?: boolean): void;
 }
 export interface Tool {
   name: ToolName; description: string; parameters: Record<string, unknown>;

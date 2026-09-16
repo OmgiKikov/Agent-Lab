@@ -1,5 +1,5 @@
 import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { experimentSchema, judgeAuditSchema, type Experiment, type TraceEvent, type JudgeAudit } from './contracts.js';
@@ -135,5 +135,36 @@ export class ExperimentStore {
     if (!idPattern.test(trialId)) throw new Error('Invalid trial ID');
     // The existing evidence journal also survives interruption during assessment.
     appendFileSync(join(this.directory, `${id}.trace.jsonl`), `${JSON.stringify({ trialId, judgeAudit: judgeAuditSchema.parse(audit) })}\n`, { mode: 0o600, flush: true });
+  }
+  /** Full audit of one trial's judgment in `{id}.judge/{trialId}.json`, replaced atomically on every call. */
+  private judgeAuditPath(id: string, trialId: string): string {
+    this.path(id);
+    if (!idPattern.test(trialId)) throw new Error('Invalid trial ID');
+    return join(this.directory, `${id}.judge`, `${trialId}.json`);
+  }
+  // Synchronous on purpose: onJudgment is synchronous, and a crash must leave the last complete audit on disk.
+  writeJudgeAudit(id: string, trialId: string, audit: JudgeAudit): void {
+    if (!this.lockToken) throw new Error('Для записи оценки откройте лабораторию как писатель.');
+    const target = this.judgeAuditPath(id, trialId);
+    const content = JSON.stringify(judgeAuditSchema.parse(audit));
+    mkdirSync(join(this.directory, `${id}.judge`), { recursive: true, mode: 0o700 });
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, content, { mode: 0o600, flag: 'wx', flush: true });
+      renameSync(temporary, target);
+    } catch (error) {
+      try { unlinkSync(temporary); } catch { /* the temporary file was never created or already renamed */ }
+      throw error;
+    }
+  }
+  async readJudgeAudit(id: string, trialId: string): Promise<JudgeAudit | null> {
+    const target = this.judgeAuditPath(id, trialId);
+    let file;
+    try { file = await open(target, 'r'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
+    try {
+      if ((await file.stat()).size > 20_000_000) throw new Error('Judge audit exceeds 20 MB');
+      return judgeAuditSchema.parse(JSON.parse(await file.readFile('utf8')));
+    } finally { await file.close(); }
   }
 }

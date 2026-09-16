@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { assessmentEventContent, assessmentRubrics, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, type CallContext, type JudgeAudit, type MetricAssessment, type Requirement, type Runtime, type Source } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Source } from './contracts.js';
 import { ASSESS_ROLE, DATA_BOUNDARY } from './prompts.js';
 
 const condition = z.enum(['met', 'not_met', 'unclear']);
@@ -110,16 +110,64 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
   });
 }
 
+const expectedProtocol = (configurationHash: string | undefined) => configurationHash
+  ? fingerprint({ protocol: JUDGE_PROTOCOL, configuration: configurationHash }) : JUDGE_PROTOCOL;
+
+/** Unanimous votes keep their result; any disagreement is unknown. Missing votes never aggregate. */
+function recordedAggregate(input: Input, metricId: string, votes: (string | undefined)[]): boolean {
+  if (votes.length !== 2 || votes.some(v => !v)) return false;
+  const result = votes.every(v => v === votes[0]) ? votes[0] : 'unknown';
+  return input.trial.assessments?.find(v => v.metricId === metricId)?.result === result;
+}
+
+/**
+ * The receipt a trial keeps when its full audit lives in the sidecar file. `complete` is the
+ * full-audit verdict at write time; a legacy attempt that failed can never seal as complete.
+ */
+export function sealJudgeReceipt(audit: JudgeAudit, complete: boolean): JudgeReceipt {
+  const votes: JudgeReceipt['votes'] = [];
+  for (const attempt of audit.attempts) {
+    if (attempt.metricId !== undefined) {
+      const result = attempt.assessments?.[0]?.result;
+      votes.push({ metricId: attempt.metricId, ...(result ? { result } : {}), ...(attempt.error ? { error: true } : {}) });
+      continue;
+    }
+    if (attempt.error) complete = false;
+    for (const assessment of attempt.assessments ?? []) votes.push({ metricId: assessment.metricId, result: assessment.result });
+  }
+  return judgeReceiptSchema.parse({
+    protocolHash: audit.protocolHash, inputHash: audit.inputHash, provider: audit.provider, model: audit.model,
+    ...(audit.configurationHash ? { configurationHash: audit.configurationHash } : {}),
+    ...(audit.transport ? { transport: audit.transport } : {}),
+    auditHash: fingerprint(audit), votes, notApplicable: audit.notApplicable, complete,
+  });
+}
+
+/**
+ * A receipt is trusted only as far as the record backs it: the input hash is re-derived from the
+ * current record and the votes must re-aggregate to the recorded assessments.
+ */
+function hasCompleteReceipt(input: Input, receipt: JudgeReceipt, metrics: NonNullable<Input['scenario']['metrics']>): boolean {
+  if (!receipt.complete || input.trial.assessmentError) return false;
+  if (receipt.protocolHash !== expectedProtocol(receipt.configurationHash)) return false;
+  const applicable = metrics.filter(m => metricApplies(m, input.trial));
+  const notApplicable = metrics.filter(m => !metricApplies(m, input.trial)).map(m => m.id);
+  if (fingerprint(receipt.notApplicable) !== fingerprint(notApplicable)) return false;
+  if (receipt.inputHash !== fingerprint(judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } }))) return false;
+  if (receipt.votes.some(v => v.error) || receipt.votes.length !== applicable.length * 2) return false;
+  return applicable.every(m => recordedAggregate(input, m.id, receipt.votes.filter(v => v.metricId === m.id).map(v => v.result)));
+}
+
 /** Historical verdicts remain readable, but incomplete or stale receipts cannot support a comparison. */
 export function hasCompleteJudgment(input: Input): boolean {
   if (!input.scenario) return false;
   const metrics = assessmentRubrics(input.scenario, input.trial);
   if (!metrics.length) return true;
   const audit = input.trial.judgeAudit;
+  // A record with the full audit is always judged by it; the receipt serves records without one.
+  if (!audit && input.trial.judgeReceipt) return hasCompleteReceipt(input, input.trial.judgeReceipt, metrics);
   if (!audit || input.trial.assessmentError || audit.prompt !== JUDGE_PROMPT) return false;
-  const expectedProtocol = audit.configurationHash
-    ? fingerprint({ protocol: JUDGE_PROTOCOL, configuration: audit.configurationHash }) : JUDGE_PROTOCOL;
-  if (audit.protocolHash !== expectedProtocol) return false;
+  if (audit.protocolHash !== expectedProtocol(audit.configurationHash)) return false;
   const applicable = metrics.filter(m => metricApplies(m, input.trial));
   const data = judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } });
   if (audit.inputHash !== fingerprint(data)) return false;
@@ -135,12 +183,8 @@ export function hasCompleteJudgment(input: Input): boolean {
       if (fingerprint(parseJudgment(attempt.raw, input, requested)) !== fingerprint(attempt.assessments)) return false;
     }
   } catch { return false; }
-  return applicable.every(m => {
-    const votes = audit.attempts.filter(a => !isolated || a.metricId === m.id).map(a => a.assessments?.find(v => v.metricId === m.id)?.result);
-    if (votes.length !== 2 || votes.some(v => !v)) return false;
-    const result = votes.every(v => v === votes[0]) ? votes[0] : 'unknown';
-    return input.trial.assessments?.find(v => v.metricId === m.id)?.result === result;
-  });
+  return applicable.every(m => recordedAggregate(input, m.id,
+    audit.attempts.filter(a => !isolated || a.metricId === m.id).map(a => a.assessments?.find(v => v.metricId === m.id)?.result)));
 }
 
 export async function assessRepeated(input: Input, model: { provider: string; id: string; configurationHash?: string; transport?: JudgeAudit['transport'] }, ctx: CallContext,
@@ -158,7 +202,7 @@ export async function assessRepeated(input: Input, model: { provider: string; id
     ...(model.transport ? { transport: model.transport } : {}),
     prompt: JUDGE_PROMPT, input: JSON.stringify(data), attempts: [], notApplicable,
   };
-  const save = () => ctx.onJudgment?.(input.trial.id, structuredClone(audit));
+  const save = (final = false) => ctx.onJudgment?.(input.trial.id, structuredClone(audit), final);
   save();
   // Every vote is an independent fresh request, so one dialogue's votes run together. They are
   // launched in rubric order, which keeps the audit order stable; after any failure nothing new starts.
@@ -194,8 +238,13 @@ export async function assessRepeated(input: Input, model: { provider: string; id
   const settled = await Promise.allSettled(Array.from({ length: Math.min(JUDGE_CONCURRENCY, jobs.length) },
     () => worker().catch(error => { failure ??= error; throw error; })));
   const rejected = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+  // Exactly one final report per judgment, whatever happened; it never masks the original error.
+  let saveFailure: unknown;
+  let saveFailed = false;
+  try { save(true); } catch (error) { saveFailed = true; saveFailure = error; }
   if (rejected) throw rejected.reason;
   if (failure !== undefined) throw failure;
+  if (saveFailed) throw saveFailure;
   if (audit.attempts.some(a => a.error && !RAG_METRIC_IDS.has(a.metricId ?? ''))) throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
   return metrics.map(metric => {
     if (notApplicable.includes(metric.id)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: RAG_METRIC_IDS.has(metric.id)

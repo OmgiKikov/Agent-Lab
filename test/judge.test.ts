@@ -3,8 +3,8 @@ import { test } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources, JUDGE_PROTOCOL } from '../src/judge.js';
-import { emptyUsage, goalAttainment, RAG_METRIC_IDS, ragEvidenceComplete, replyQuality, simulatorFidelity, type JudgeAudit, type Scenario, type Trial } from '../src/contracts.js';
+import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources, sealJudgeReceipt, JUDGE_PROTOCOL } from '../src/judge.js';
+import { emptyUsage, fingerprint, goalAttainment, RAG_METRIC_IDS, ragEvidenceComplete, replyQuality, simulatorFidelity, type JudgeAudit, type Scenario, type Trial } from '../src/contracts.js';
 import { ExperimentStore } from '../src/store.js';
 
 const scenario: Scenario = { id: 'card', familyId: 'family', title: 'A fixed input', split: 'dev', provenance: 'synthetic', requirementIds: [],
@@ -297,6 +297,28 @@ test('journal failure stops judgment before another request and original replies
   } finally { await store.close(); }
   const journal = await new ExperimentStore(directory).traceJournal('run');
   assert.equal(JSON.parse(journal.trim().split('\n').at(-1)!).judgeAudit.attempts[0].raw, row('met', 'not_met'));
+});
+
+test('a judgment lives in the private sidecar, the trial keeps a verifiable receipt and the journal gets it once', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'judge-sidecar-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ExperimentStore(directory); await store.init();
+  try {
+    let lastAudit: JudgeAudit | undefined;
+    const result = await assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(id, a, final) {
+      lastAudit = a;
+      store.writeJudgeAudit('run', id, a);
+      if (final) store.appendJudgment('run', id, a);
+    } }, async () => row('met', 'not_met'));
+    const complete = hasCompleteJudgment({ ...input, trial: { ...input.trial, assessments: result, judgeAudit: lastAudit } });
+    assert.equal(complete, true);
+    const judged: Trial = { ...input.trial, assessments: result, judgeReceipt: sealJudgeReceipt(lastAudit!, complete) };
+    assert.equal(judged.judgeAudit, undefined);
+    assert.equal(hasCompleteJudgment({ ...input, trial: judged }), true);
+    assert.equal(fingerprint(await store.readJudgeAudit('run', 'trial')), judged.judgeReceipt!.auditHash);
+    const lines = (await store.traceJournal('run')).trim().split('\n').filter(line => 'judgeAudit' in JSON.parse(line));
+    assert.equal(lines.length, 1, 'the journal gets the audit once per finished judgment');
+  } finally { await store.close(); }
 });
 
 test('reactive fidelity applies to actual simulator decisions, including a decision to stop, not to the fixed opening', async () => {
