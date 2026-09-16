@@ -603,6 +603,9 @@ export class ExperimentLab {
         if (discovery.completedDeepIds.includes(dialogueId)) continue;
         discovery.deep = discovery.deep.filter(result => result.dialogueId !== dialogueId);
         const dialogue = record.dialogues.find(item => item.id === dialogueId)!;
+        // The deep judgment is not a trial of this record: its sidecar and journal entry get their own key,
+        // unique per attempt, so a retry or resume never overwrites an earlier audit, and the record names it.
+        const judgeTrialId = `deep-${randomUUID()}`;
         try {
           const deep = await modelCall(`deep ${dialogueId}`, async () => {
             const { outcome: _storedOutcome, ...dialogueEvidence } = dialogue;
@@ -614,15 +617,15 @@ export class ExperimentLab {
             const base = dialogueToScenario(dialogue, { goal: goal.goal, successCriteria: goal.successCriteria, requirementIds: [focus.id] });
             const scenario: Scenario = { ...base, goalObservation: DEFAULT_GOAL_OBSERVATION, split: 'dev' };
             if (record.sources.some(source => source.kind === 'prompt')) scenario.metrics!.unshift({ ...promptCompliance });
-            const trial = dialogueToTrial(dialogue, scenario, record.revisions[0]!.id);
+            const trial = { ...dialogueToTrial(dialogue, scenario, record.revisions[0]!.id), id: judgeTrialId };
             return { goal, assessments: await assessTrial(runtime, scenario, record.sources, trial, ctx, [focus]) };
           });
-          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', ...deep });
+          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', judgeTrialId, ...deep });
           discovery.completedDeepIds.push(dialogueId); updateCalls();
           await this.checkpoint(record, 'preparing', `Подробно проверено ${discovery.completedDeepIds.length}/${discovery.selectedIds.length}; controls — false-negative probe.`);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', error: message });
+          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', judgeTrialId, error: message });
           if (message !== 'Judge response rejected; original responses and errors are preserved in judgeAudit') throw error;
           delete discovery.activeCall;
           discovery.completedDeepIds.push(dialogueId); updateCalls();
@@ -638,7 +641,8 @@ export class ExperimentLab {
       if (!discovery.hypothesis) {
         const evidence = discovery.observations.filter(observation => confirmedRepresentatives.has(observation.dialogueId)
           && observation.classification === 'candidate' && observation.requirementId === focus.id);
-        const deepEvidence = discovery.deep.filter(result => confirmedRepresentatives.has(result.dialogueId)).map(result => result.goal
+        // The sidecar key is bookkeeping, not evidence: the hypothesis model never sees it.
+        const deepEvidence = discovery.deep.filter(result => confirmedRepresentatives.has(result.dialogueId)).map(({ judgeTrialId: _key, ...result }) => result.goal
           ? { ...result, goal: Object.fromEntries(Object.entries(result.goal).filter(([key]) => key !== 'outcome')) as typeof result.goal }
           : result);
         const output = await modelCall('hypothesis', () => runtime.discover!({ kind: 'hypothesis', requirement: structuredClone(focus), observations: structuredClone(evidence), deep: structuredClone(deepEvidence) }, ctx));

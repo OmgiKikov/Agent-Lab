@@ -694,6 +694,8 @@ export interface DiscoveryPlan extends Omit<DiscoveryCallPlan, 'batches' | 'lega
 }
 export const discoveryDeepResultSchema = z.strictObject({
   dialogueId: identifier, role: z.enum(['representative', 'control']),
+  /** Key of this judgment's sidecar `{runId}.judge/{judgeTrialId}.json` and journal entries; absent in older records. */
+  judgeTrialId: identifier.optional(),
   goal: observedGoalSchema.optional(), assessments: z.array(metricAssessmentSchema).max(8).optional(), error: text.max(4000).optional(),
 });
 export const discoveryHypothesisSchema = z.strictObject({
