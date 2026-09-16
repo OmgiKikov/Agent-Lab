@@ -39,7 +39,7 @@ export function embeddedBefore(record: Experiment, parentId: string): Experiment
   before.parentRunId = source.parentRunId;
   before.phase = 'results_review'; before.message = 'Portable baseline reconstructed from the saved suite evidence.';
   before.trials = structuredClone(source.trials); before.humanReviews = structuredClone(source.humanReviews);
-  before.manifestHash = before.trials[0]?.manifestHash ?? null;
+  before.manifestHash = source.identity?.manifestHash ?? before.trials[0]?.manifestHash ?? null;
   before.reviewedAt ??= before.createdAt; before.reviewMode ??= 'automated';
   before.usage = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: null };
   before.error = null;

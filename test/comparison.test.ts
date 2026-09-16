@@ -585,6 +585,8 @@ test('stabilityAfterReassess counts a goal flip on the same answers and the same
   assert.deepEqual(stabilityAfterReassess(next, rebuilt), { ...stability, checked: 0, unstable: [], skipped: 'исходный прогон недоступен' },
     'a legacy embedded source has no identity to compare with');
   next.sourceEvidence!.identity = sourceIdentity(source, ['s1', 's2']);
+  const labelled = { ...next, sourceEvidence: { ...next.sourceEvidence!, identity: { ...next.sourceEvidence!.identity!, manifestHash: 'h-identity' } } };
+  assert.equal(embeddedBefore(labelled, REASSESSED_SOURCE)!.manifestHash, 'h-identity', 'the source manifest comes from its identity');
   assert.deepEqual(stabilityAfterReassess(next, embeddedBefore(next, REASSESSED_SOURCE)!), stability, 'the embedded identity gives the same answer as the stored one');
 });
 
