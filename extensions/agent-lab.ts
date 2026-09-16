@@ -11,7 +11,8 @@ import { awaitingVerdict, evidenceSummary, plannedTrials } from '../dist/compari
 import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
 import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
-import { buildResultView, resultViewLines } from '../dist/result-view.js';
+import { buildResultView, resultViewLines, type ResultView } from '../dist/result-view.js';
+import { scoreSettings } from '../dist/normalize.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit.js';
 import { readData, selectValidationDialogues } from '../dist/imports.js';
@@ -69,16 +70,17 @@ function runPlan(record: Experiment): string {
   ].join('\n');
 }
 
-function summary(record: Experiment, directory: string) {
+/** `view` is the evidence bundle's view when the caller has one, so stability matches the CLI summary. */
+function summary(record: Experiment, directory: string, view?: ResultView) {
   const comparison = record.comparisons.findLast(c => c.split === 'control');
   const evidence = evidenceSummary(record);
   const quality = record.trials.length ? qualitySummary(record) : undefined;
-  const view = record.trials.length ? buildResultView(record) : undefined;
+  const block = record.trials.length ? view ?? buildResultView(record) : undefined;
   return {
     // Lead with the answer a person asked for; the detailed evidence follows in the same object.
     ...(quality ? { quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes.slice(0, 5), humanQueue: quality.humanQueue, human: quality.human } } : {}),
     // The same block lines the CLI summary prints first (block only, no details).
-    ...(view ? { view, viewLines: resultViewLines(view) } : {}),
+    ...(block ? { view: block, viewLines: resultViewLines(block) } : {}),
     id: record.id, phase: record.phase, mode: record.mode, workflow: record.workflow,
     reviewMode: record.reviewMode, resultsReviewedAt: record.resultsReviewedAt,
     draftHash: draftHash(record), acceptedDraftHash: record.acceptedDraftHash, resultHash: record.trials.length ? resultHash(record) : undefined,
@@ -295,8 +297,6 @@ export default function agentLab(pi: ExtensionAPI) {
       }
       if (operation === 'score' && !codeOnly && (!ctx.hasUI || ctx.mode !== 'tui')) throw new Error('Для модельной оценки нужен native Pi confirmation в интерактивном терминале.');
       const supplied = (rest.settings ?? {}) as Partial<z.infer<typeof settingsSchema>>;
-      const scoreMaxCalls = Math.min(3000, Math.max(20, 8 * parsedDialogues.length));
-      const scoreMaxDurationMs = Math.min(14_400_000, Math.max(180_000, 120_000 * parsedDialogues.length));
       const sourceDialogueCount = parsedDialogues.length;
       const validationCount = operation === 'validate' ? rest.validationCount ?? 15 : 0;
       if (operation === 'validate') {
@@ -362,12 +362,15 @@ export default function agentLab(pi: ExtensionAPI) {
         ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
         ...(goldenFile ? { goldenCases: await readData(resolve(ctx.cwd, goldenFile), 'golden') } : {}),
         ...(dialogues !== undefined ? { dialogues: parsedDialogues } : {}),
-        settings: { ...(mode === 'demo' ? demoInput().settings : {}), repeats: 1,
-          maxCalls: operation === 'score' ? scoreMaxCalls : operation === 'validate' ? Math.max(140, 2 * parsedDialogues.length + 19 * validationCount + 20) : 20,
-          maxDurationMs: operation === 'score' ? scoreMaxDurationMs : operation === 'validate' ? Math.max(180_000, 180_000 * parsedDialogues.length) : 180_000,
+        // Score settings come from the helper the CLI uses, so both paths save the same budget, judge and timeout.
+        settings: operation === 'score' ? { ...scoreSettings(parsedDialogues.length, supplied, mode),
+          provider: supplied.provider || ctx.model?.provider || '', model: supplied.model || ctx.model?.id || '' }
+          : { ...(mode === 'demo' ? demoInput().settings : {}), repeats: 1,
+          maxCalls: operation === 'validate' ? Math.max(140, 2 * parsedDialogues.length + 19 * validationCount + 20) : 20,
+          maxDurationMs: operation === 'validate' ? Math.max(180_000, 180_000 * parsedDialogues.length) : 180_000,
           ...(mode === 'live' ? { judge: DEFAULT_JUDGE } : {}),
-          // Grounding many materials and judging real dialogues with a small model routinely exceeds the two-minute default per call.
-          ...(operation === 'validate' || operation === 'score' ? { timeoutMs: 600_000 } : {}),
+          // Grounding many materials with a small model routinely exceeds the two-minute default per call.
+          ...(operation === 'validate' ? { timeoutMs: 600_000 } : {}),
           ...supplied,
           ...(operation === 'validate' ? { maxTurns: 6, userModes: ['reactive'] } : {}),
           provider: supplied.provider || ctx.model?.provider || '', model: supplied.model || ctx.model?.id || '' },
@@ -405,8 +408,9 @@ export default function agentLab(pi: ExtensionAPI) {
               `Время: до ${Math.ceil(input.settings.maxDurationMs / 60_000)} минут.`,
             ].join('\n')));
             if (!confirmed) {
-              const output = { ...summary(record, lab.store.directory), cancelled: true, brief: renderScoreBrief(scoreBrief(record)),
-                artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory) };
+              const bundle = await evidenceBundle(record, lab.store);
+              const output = { ...summary(record, lab.store.directory, bundle.view), cancelled: true, brief: renderScoreBrief(scoreBrief(record)),
+                artifacts: await exportArtifacts(bundle, lab.store.directory) };
               return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
             }
             signal.throwIfAborted(); lastProgress = ''; id = undefined;
@@ -419,9 +423,10 @@ export default function agentLab(pi: ExtensionAPI) {
               await lab.waitForIdle(); await progress(); record = await lab.get(id);
             }
           }
-          const output = { ...summary(record, lab.store.directory), ...(codeOnly ? { scoreState: 'Оценено по коду без вызовов модели; кластеры провалов не строились.' } : {}),
+          const bundle = await evidenceBundle(record, lab.store);
+          const output = { ...summary(record, lab.store.directory, bundle.view), ...(codeOnly ? { scoreState: 'Оценено по коду без вызовов модели; кластеры провалов не строились.' } : {}),
             brief: renderScoreBrief(scoreBrief(record)),
-            artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory), ...(signal.aborted ? { cancelled: true } : {}) };
+            artifacts: await exportArtifacts(bundle, lab.store.directory), ...(signal.aborted ? { cancelled: true } : {}) };
           returnToBoard(ctx, id);
           return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
         }
@@ -431,9 +436,10 @@ export default function agentLab(pi: ExtensionAPI) {
         timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);
         await lab.waitForIdle(); await progress();
         const record = await lab.get(id);
-        const output = { ...summary(record, lab.store.directory),
+        const bundle = await evidenceBundle(record, lab.store);
+        const output = { ...summary(record, lab.store.directory, bundle.view),
           ...(operation === 'validate' ? { validation: { sourceDialogues: sourceDialogueCount, candidateDialogues: parsedDialogues.length, sampledDialogues: record.scenarios.length, estimatedAccuracyAfterRun: true } } : {}),
-          artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory), ...(signal.aborted ? { cancelled: true } : {}) };
+          artifacts: await exportArtifacts(bundle, lab.store.directory), ...(signal.aborted ? { cancelled: true } : {}) };
         returnToBoard(ctx, id);
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
       } finally { clearInterval(timer); signal.removeEventListener('abort', cancel); await polling; await close(); }
@@ -456,7 +462,7 @@ export default function agentLab(pi: ExtensionAPI) {
         if (params.trialId && !trial) throw new Error('Trial not found in this experiment.');
         if (trial?.split === 'control' && !controlVisible) throw new Error('Control evidence stays hidden until the final control phase stops.');
         const output = trial ?? {
-          ...summary(record, lab.store.directory), agent: record.revisions.find(r => r.id === record.selectedRevisionId)?.spec,
+          ...summary(record, lab.store.directory, bundle.view), agent: record.revisions.find(r => r.id === record.selectedRevisionId)?.spec,
           settings: record.settings, requirements: record.requirements, profiles: record.profiles,
           scenarios: record.scenarios.filter(s => s.split === 'dev' || controlVisible), revisions: record.revisions, iterations: record.iterations,
           trials: record.trials.filter(t => t.split === 'dev' || controlVisible).map(t => ({ id: t.id, revisionId: t.revisionId, scenarioId: t.scenarioId, split: t.split, outcome: t.outcome, reason: t.reason })),
@@ -564,7 +570,7 @@ export default function agentLab(pi: ExtensionAPI) {
         await lab.waitForIdle(); await progress();
         const record = await lab.get(draft.id);
         const bundle = await evidenceBundle(record, lab.store);
-        const output = { ...summary(record, lab.store.directory), proofs: record.trials.map(trial => trialProofLines(record, trial.id)),
+        const output = { ...summary(record, lab.store.directory, bundle.view), proofs: record.trials.map(trial => trialProofLines(record, trial.id)),
           comparison: bundle.comparison, artifacts: await exportArtifacts(bundle, lab.store.directory) };
         returnToBoard(ctx, record.id);
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
@@ -634,8 +640,9 @@ export default function agentLab(pi: ExtensionAPI) {
         const draft = await lab.reassess(params.id, input);
         await lab.waitForIdle();
         const record = await lab.get(draft.id);
-        const output = { ...summary(record, lab.store.directory), assessmentOf: record.assessmentOf,
-          artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory) };
+        const bundle = await evidenceBundle(record, lab.store);
+        const output = { ...summary(record, lab.store.directory, bundle.view), assessmentOf: record.assessmentOf,
+          artifacts: await exportArtifacts(bundle, lab.store.directory) };
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: {} };
       } finally { signal?.removeEventListener('abort', cancel); await close(); }
     },
@@ -667,7 +674,8 @@ export default function agentLab(pi: ExtensionAPI) {
         signal.throwIfAborted();
         if (!reviews) return { content: [{ type: 'text', text: JSON.stringify({ id, cancelled: true, message: 'Оценка отменена. Не запрашивайте её снова без просьбы пользователя.' }) }], details: { cancelled: true } };
         for (const review of reviews) record = await lab.addHumanReview(id, review);
-        const output = { ...summary(record, lab.store.directory), artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory) };
+        const bundle = await evidenceBundle(record, lab.store);
+        const output = { ...summary(record, lab.store.directory, bundle.view), artifacts: await exportArtifacts(bundle, lab.store.directory) };
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
       } finally { await close(); }
     },

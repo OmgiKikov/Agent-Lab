@@ -9,8 +9,10 @@ import { DefaultResourceLoader, SettingsManager, type ExtensionAPI, type Extensi
 import type { Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
-import { ExperimentLab, planDiscovery } from '../dist/experiment.js';
-import { spawn } from 'node:child_process';
+import { ExperimentLab, draftHash, planDiscovery } from '../dist/experiment.js';
+import { spawn, spawnSync } from 'node:child_process';
+import { createInputSchema } from '../src/contracts.js';
+import { demoEvaluationInput } from '../src/demo.js';
 import { ExperimentStore } from '../src/store.js';
 import { buildResultView, resultViewLines } from '../src/result-view.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
@@ -769,6 +771,64 @@ test('Pi score scales its default batch budget and preserves explicit owner limi
   assert.match(confirmations[1]!, /потолок: 23/);
   assert.match(confirmations[1]!, /Время: до 5 минут/);
   assert.deepEqual(inputs.at(-1), { maxCalls: 23, maxDurationMs: 300_000, codeOnly: true });
+});
+
+test('CLI and Pi code-only score of the same dialogue and task save the same settings', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-score-parity-'));
+  const { tools, shutdown } = registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const task = { task: 'Проверить ответ по тарифу', materials: [{ name: 'policy.md', content: 'Тариф показывается в разделе «Мои точки продаж».' }] };
+  const dialogue = { id: 'recorded_1', messages: [{ role: 'user' as const, content: 'Где тариф?' }, { role: 'assistant' as const, content: 'Откройте «Мои точки продаж».' }] };
+  const taskFile = join(directory, 'task.json');
+  const dialoguesFile = join(directory, 'dialogues.jsonl');
+  await writeFile(taskFile, JSON.stringify(task));
+  await writeFile(dialoguesFile, JSON.stringify(dialogue) + '\n');
+
+  const pi = output(await tools.get('agent_lab_build')!.execute('parity', { mode: 'score', codeOnly: true, ...task, dialoguesFile },
+    undefined, undefined, { cwd: directory, hasUI: false, mode: 'print' } as ExtensionContext));
+  assert.equal(pi.phase, 'results_review', pi.error ?? '');
+  const cli = spawnSync(process.execPath, [fileURLToPath(new URL('../dist/cli.js', import.meta.url)), 'score', '--input', dialoguesFile, '--task', taskFile,
+    '--code-only', '--json', '--data-dir', join(directory, 'cli-data')], { encoding: 'utf8' });
+  assert.equal(cli.status, 0, cli.stderr);
+  const piRecord = JSON.parse(await readFile(pi.artifacts.evidence, 'utf8'));
+  const cliRecord = JSON.parse(await readFile(JSON.parse(cli.stdout).artifacts.evidence, 'utf8'));
+  const pick = (settings: Record<string, unknown>) => ({ maxCalls: settings.maxCalls, maxDurationMs: settings.maxDurationMs, timeoutMs: settings.timeoutMs,
+    judge: settings.judge, repeats: settings.repeats, userModes: settings.userModes });
+  assert.deepEqual(pick(piRecord.settings), pick(cliRecord.settings));
+  assert.deepEqual(pick(piRecord.settings), { maxCalls: 20, maxDurationMs: 180_000, timeoutMs: 600_000,
+    judge: { provider: 'openrouter', model: 'openai/gpt-5.6-sol', upstream: 'openai' }, repeats: 1, userModes: ['scripted'] });
+});
+
+test('Pi inspect of a repeat shows the same first block as the CLI summary, stability line included', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-repeat-view-'));
+  const { tools, shutdown } = registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const data = join(directory, '.agent-lab');
+  const lab = new ExperimentLab(data, createDemoRuntime());
+  let repeatId: string;
+  try {
+    await lab.init();
+    const base = demoEvaluationInput();
+    const input = createInputSchema.parse({ ...base, scenarioCount: 2, settings: { ...base.settings, maxCalls: 20, maxDurationMs: 180000 } });
+    const draft = await lab.create(input); await lab.waitForIdle();
+    await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(draft.id)) }); await lab.waitForIdle();
+    const repeat = await lab.repeat(draft.id);
+    repeatId = repeat.id;
+    await lab.start(repeatId, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(repeatId)) }); await lab.waitForIdle();
+    assert.equal((await lab.get(repeatId)).phase, 'results_review');
+  } finally { await lab.close(); }
+
+  const inspected = output(await tools.get('agent_lab_inspect')!.execute('repeat-view', { id: repeatId }, undefined, undefined,
+    { cwd: directory, hasUI: false, mode: 'print' } as ExtensionContext));
+  const viewLines: string[] = inspected.viewLines;
+  assert.ok(viewLines.some(line => line.startsWith('Нестабильных:') || line.startsWith('Стабильность не проверена:')), viewLines.join('\n'));
+  const cli = spawnSync(process.execPath, [fileURLToPath(new URL('../dist/cli.js', import.meta.url)), 'summary', '--id', repeatId, '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(cli.status, 0, cli.stderr);
+  const block = cli.stdout.split('\n');
+  const first = block.slice(0, block.indexOf(''));
+  const detailsAt = first.indexOf('Не измерено по причинам:');
+  const cliBlock = (detailsAt < 0 ? first : first.slice(0, detailsAt)).filter(line => !line.startsWith('  нестабильно:'));
+  assert.deepEqual(viewLines, cliBlock);
 });
 
 test('Pi score reports judge progress only after reassessment starts', async t => {
