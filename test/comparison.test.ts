@@ -263,7 +263,8 @@ test('partial run comparisons pair the same valid attempts and disclose missing 
   assert.deepEqual(result.incomparable.map(pair => pair.reason).sort(), [
     'Нет попытки «до».', 'Нет попытки «после».', 'Попытка «до» невалидна или не измерена.', 'Попытка «после» невалидна или не измерена.',
   ]);
-  assert.deepEqual(result.coverage, { plannedPairs: 6, validPairs: 2, excludedPairs: 4, invalidBefore: 1, invalidAfter: 1, missingBefore: 1, missingAfter: 1 });
+  assert.deepEqual(result.coverage, { plannedPairs: 6, validPairs: 2, excludedPairs: 4, invalidBefore: 1, invalidAfter: 1, missingBefore: 1, missingAfter: 1,
+    excludedBy: { invalidBefore: 1, invalidAfter: 1, missingBefore: 1, missingAfter: 1, judgeIncomplete: 0, other: 0 } });
   assert.ok(result.notes.some(n => /Сбои могут скрывать регрессии/.test(n)));
   const tier = result.tiers.find(t => t.tier === 'regression')!;
   assert.equal(tier.before.graded, 2); assert.equal(tier.after.graded, 2, 'stage/tier rates must use the paired sample too');
@@ -513,6 +514,8 @@ test('live comparison checks judge receipts against the sources the judge saw, o
   assert.deepEqual(partial.incomparable.map(i => [i.scenarioId, i.reason]), [['s2', 'Судья не завершил оценку этой попытки.']]);
   assert.equal(partial.fixed.length, 1);
   assert.equal(partial.coverage.validPairs, 1);
+  assert.deepEqual(partial.coverage.excludedBy, { invalidBefore: 0, invalidAfter: 0, missingBefore: 0, missingAfter: 0, judgeIncomplete: 1, other: 0 });
+  assert.ok(partial.notes.includes('Сопоставлено 1 из 2 пар попыток. Исключено 1: до — 0 невалидных и 0 пропущенных; после — 0 невалидных и 0 пропущенных; без завершённой оценки судьи — 1. Сбои могут скрывать регрессии; вывод относится только к сопоставленной части.'), JSON.stringify(partial.notes));
 
   const otherJudge = structuredClone(after);
   for (const t of otherJudge.trials) t.judgeAudit!.model = 'another-judge';

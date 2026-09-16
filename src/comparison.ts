@@ -441,7 +441,9 @@ export interface RunComparison {
   headline: string; comparable: boolean;
   pairs: { scenarioId: string; userMode: UserMode; repeat: number; beforeTrialId: string; afterTrialId: string;
     change: 'fixed' | 'regressed' | 'unchanged' | 'unknown'; reviewNote?: string }[];
-  coverage: { plannedPairs: number; validPairs: number; excludedPairs: number; missingBefore: number; missingAfter: number; invalidBefore: number; invalidAfter: number };
+  coverage: { plannedPairs: number; validPairs: number; excludedPairs: number; missingBefore: number; missingAfter: number; invalidBefore: number; invalidAfter: number;
+    /** Each excluded pair once, by its first reason; the parts add up to `excludedPairs`. Absent when nothing was paired. */
+    excludedBy?: ExcludedBy };
   cards: { shared: number; onlyBefore: string[]; onlyAfter: string[] };
   fixed: { scenarioId: string; title: string; tier: Tier }[];
   regressed: { scenarioId: string; title: string; tier: Tier }[];
@@ -455,6 +457,8 @@ export interface RunComparison {
 }
 
 /** Expected attempts, including all repeats. Missing/invalid attempts never disappear from a comparison. */
+export interface ExcludedBy { invalidBefore: number; missingBefore: number; invalidAfter: number; missingAfter: number; judgeIncomplete: number; other: number }
+
 export function plannedTrials(record: Experiment): number {
   if (record.assessmentTrialIds) return record.assessmentTrialIds.length;
   return record.scenarios.reduce((sum, s) => sum + record.settings.userModes.filter(m => m !== 'scripted' || s.user.script !== undefined).length * record.settings.repeats, 0);
@@ -771,14 +775,15 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   const beforeAttempts = new Map<string, Trial[]>(), afterAttemptGroups = new Map<string, Trial[]>();
   for (const trial of before.trials) beforeAttempts.set(attemptKey(trial), [...beforeAttempts.get(attemptKey(trial)) ?? [], trial]);
   for (const trial of after.trials) afterAttemptGroups.set(attemptKey(trial), [...afterAttemptGroups.get(attemptKey(trial)) ?? [], trial]);
+  const excludedBy: ExcludedBy = { invalidBefore: 0, missingBefore: 0, invalidAfter: 0, missingAfter: 0, judgeIncomplete: 0, other: 0 };
   for (const row of expectedRows) {
     const key = `${row.scenarioId}|${row.userMode}|${row.repeat}`;
     const a = beforeAttempts.get(key) ?? [], b = afterAttemptGroups.get(key) ?? [];
-    if (a.length !== 1) addIncomparable(row, a.length ? 'Несколько попыток «до» с одним ключом.' : 'Нет попытки «до».', a[0]?.id, b[0]?.id);
-    else if (!validBefore(a[0]!)) addIncomparable(row, 'Попытка «до» невалидна или не измерена.', a[0]!.id, b[0]?.id);
-    else if (b.length !== 1) addIncomparable(row, b.length ? 'Несколько попыток «после» с одним ключом.' : 'Нет попытки «после».', a[0]!.id, b[0]?.id);
-    else if (!validAfter(b[0]!)) addIncomparable(row, 'Попытка «после» невалидна или не измерена.', a[0]!.id, b[0]!.id);
-    else if (auditRequired && (!judged(before, a[0]!) || !judged(after, b[0]!))) addIncomparable(row, JUDGE_INCOMPLETE, a[0]!.id, b[0]!.id);
+    if (a.length !== 1) { if (!a.length) excludedBy.missingBefore++; addIncomparable(row, a.length ? 'Несколько попыток «до» с одним ключом.' : 'Нет попытки «до».', a[0]?.id, b[0]?.id); }
+    else if (!validBefore(a[0]!)) { excludedBy.invalidBefore++; addIncomparable(row, 'Попытка «до» невалидна или не измерена.', a[0]!.id, b[0]?.id); }
+    else if (b.length !== 1) { if (!b.length) excludedBy.missingAfter++; addIncomparable(row, b.length ? 'Несколько попыток «после» с одним ключом.' : 'Нет попытки «после».', a[0]!.id, b[0]?.id); }
+    else if (!validAfter(b[0]!)) { excludedBy.invalidAfter++; addIncomparable(row, 'Попытка «после» невалидна или не измерена.', a[0]!.id, b[0]!.id); }
+    else if (auditRequired && (!judged(before, a[0]!) || !judged(after, b[0]!))) { excludedBy.judgeIncomplete++; addIncomparable(row, JUDGE_INCOMPLETE, a[0]!.id, b[0]!.id); }
   }
   const afterAttempts = new Map([...afterAttemptGroups].flatMap(([key, trials]) => trials.length === 1 ? [[key, trials[0]!] as const] : []));
   const pairs = before.trials.filter(t => {
@@ -787,7 +792,12 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   });
   result.coverage.validPairs = pairs.length;
   result.coverage.excludedPairs -= pairs.length;
-  if (result.coverage.excludedPairs) notes.push(`Сопоставлено ${pairs.length} из ${result.coverage.plannedPairs} пар попыток. Исключено ${result.coverage.excludedPairs}: до — ${result.coverage.invalidBefore} невалидных и ${result.coverage.missingBefore} пропущенных; после — ${result.coverage.invalidAfter} невалидных и ${result.coverage.missingAfter} пропущенных. Сбои могут скрывать регрессии; вывод относится только к сопоставленной части.`);
+  // Duplicated keys and attempts outside the plan are the remainder, so the parts always add up.
+  const named = excludedBy.invalidBefore + excludedBy.missingBefore + excludedBy.invalidAfter + excludedBy.missingAfter + excludedBy.judgeIncomplete;
+  excludedBy.other = Math.max(0, result.coverage.excludedPairs - named);
+  result.coverage.excludedBy = excludedBy;
+  if (result.coverage.excludedPairs) notes.push(`Сопоставлено ${pairs.length} из ${result.coverage.plannedPairs} пар попыток. Исключено ${result.coverage.excludedPairs}: до — ${excludedBy.invalidBefore} невалидных и ${excludedBy.missingBefore} пропущенных; после — ${excludedBy.invalidAfter} невалидных и ${excludedBy.missingAfter} пропущенных`
+    + `${excludedBy.judgeIncomplete ? `; без завершённой оценки судьи — ${excludedBy.judgeIncomplete}` : ''}${excludedBy.other ? `; повторённые или лишние попытки — ${excludedBy.other}` : ''}. Сбои могут скрывать регрессии; вывод относится только к сопоставленной части.`);
   if (!pairs.length) { result.headline = 'Нет совпадающих валидных попыток. Повторите неудавшиеся диалоги, чтобы получить сравнение.'; return result; }
   result.pairs = pairs.map(trial => {
     const scenario = shared.find(s => s.id === trial.scenarioId);
