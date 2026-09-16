@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   assessmentRubrics, emptyUsage, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
-  type CallContext, type CheckResult, type DialogueMessage, type JudgeAudit, type Requirement, type Revision,
+  type CallContext, type CheckResult, type DialogueMessage, type JudgeAudit, type MetricAssessment, type Requirement, type Revision,
   type Runtime, type Scenario, type Settings, type Source, type Target, type TargetSession, type TraceEvent, type Trial, type UserMode,
 } from './contracts.js';
 import { hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
@@ -292,21 +292,26 @@ export async function assessTrial(runtime: Runtime, scenario: Scenario, sources:
   if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');
   const metrics = assessmentRubrics(scenario, trial);
   let latest: JudgeAudit | undefined;
-  const assessments = validateAssessments(metrics, trial.events, await runtime.assess({
-    scenario: structuredClone({ ...scenario, metrics }), sources: structuredClone(observableSources(sources, requirements)), trial: structuredClone(trial),
-  }, { ...ctx, onTargetEvent: undefined, onTrace: undefined, onJudgment: (id, audit, final) => {
-    // The full audit lives in the store's sidecar; the trial keeps only a sealed receipt.
-    latest = structuredClone(audit);
-    ctx.onJudgment?.(id, audit, final);
-  } }));
-  ctx.signal.throwIfAborted();
-  const mapped = assessments.map(assessment => !metricApplies(metrics.find(m => m.id === assessment.metricId)!, trial)
-    ? { metricId: assessment.metricId, result: 'unknown' as const, evidence: [], rationale: RAG_METRIC_IDS.has(assessment.metricId)
-      ? 'Полный RAG-контекст каждого ответа не подтверждён адаптером; причина не установлена.' : 'Реактивный симулятор не участвовал в этом диалоге; его качество не измерено.' }
-    : assessment);
-  if (latest) {
-    const complete = hasCompleteJudgment({ scenario, sources: observableSources(sources, requirements), trial: { ...trial, judgeAudit: latest, assessments: mapped } });
-    trial.judgeReceipt = sealJudgeReceipt(latest, complete);
+  let mapped: MetricAssessment[] | undefined;
+  try {
+    const assessments = validateAssessments(metrics, trial.events, await runtime.assess({
+      scenario: structuredClone({ ...scenario, metrics }), sources: structuredClone(observableSources(sources, requirements)), trial: structuredClone(trial),
+    }, { ...ctx, onTargetEvent: undefined, onTrace: undefined, onJudgment: (id, audit, final) => {
+      // The full audit lives in the store's sidecar; the trial keeps only a sealed receipt.
+      latest = structuredClone(audit);
+      ctx.onJudgment?.(id, audit, final);
+    } }));
+    ctx.signal.throwIfAborted();
+    mapped = assessments.map(assessment => !metricApplies(metrics.find(m => m.id === assessment.metricId)!, trial)
+      ? { metricId: assessment.metricId, result: 'unknown' as const, evidence: [], rationale: RAG_METRIC_IDS.has(assessment.metricId)
+        ? 'Полный RAG-контекст каждого ответа не подтверждён адаптером; причина не установлена.' : 'Реактивный симулятор не участвовал в этом диалоге; его качество не измерено.' }
+      : assessment);
+    return mapped;
+  } finally {
+    // A failed judgment keeps its receipt too, sealed incomplete, so reports still point to its sidecar.
+    if (latest) {
+      const complete = !!mapped && hasCompleteJudgment({ scenario, sources: observableSources(sources, requirements), trial: { ...trial, judgeAudit: latest, assessments: mapped } });
+      trial.judgeReceipt = sealJudgeReceipt(latest, complete);
+    }
   }
-  return mapped;
 }

@@ -656,7 +656,7 @@ test('assessment hands the judge observable prompt rules in place of the raw pro
   assert.doesNotMatch(JSON.stringify(seen), /JSON|output/);
 });
 
-test('live evaluation seals a receipt, reports the final judgment once, and a rejected judgment keeps its raw replies without a receipt', async () => {
+test('live evaluation seals a receipt, reports the final judgment once, and a rejected judgment keeps its raw replies and an incomplete receipt', async () => {
   const f = await fixture();
   const scenario = structuredClone(f.preparation.scenarios[0]!);
   scenario.checks = [];
@@ -689,7 +689,12 @@ test('live evaluation seals a receipt, reports the final judgment once, and a re
       assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(f.sources, []), trial }), true);
     } else {
       assert.match(trial.assessmentError ?? '', /Judge response rejected/);
-      assert.equal(trial.judgeReceipt, undefined);
+      assert.ok(trial.judgeReceipt, 'a failed judgment still points to its sidecar');
+      assert.equal(trial.judgeReceipt.complete, false);
+      assert.equal(trial.judgeReceipt.auditHash, fingerprint(finals[0]!.audit));
+      assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(f.sources, []), trial }), false);
+      assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(f.sources, []), trial: { ...trial, assessmentError: undefined } }), false,
+        'the sealed receipt is incomplete even without the error flag');
       assert.equal(trial.assessments, undefined);
       const raws = finals[0]!.audit.attempts.map(attempt => attempt.raw);
       assert.equal(raws.length, 2);
