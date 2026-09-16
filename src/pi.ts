@@ -8,11 +8,11 @@ import { Type } from 'typebox';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.js';
 import { z } from 'zod';
 import {
-  agentSchema, discoveryGroupSchema, discoveryObservationSchema, failureModeSchema, observedGoalSchema, observedProfileSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema,
+  agentSchema, discoveryGroupSchema, discoveryObservationSchema, failureModeSchema, observedGoalSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema,
   MACHINE_FORMAT, REQUIREMENT_LIMIT, SCENARIO_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens, verbatimSpan,
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
-import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, DISCOVERY_COARSE_ROLE, DISCOVERY_GROUP_ROLE, DISCOVERY_HYPOTHESIS_ROLE, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, PROFILES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
+import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, DISCOVERY_COARSE_ROLE, DISCOVERY_GROUP_ROLE, DISCOVERY_HYPOTHESIS_ROLE, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
 
 type Model = NonNullable<ReturnType<ModelRuntime['getModel']>>;
 const groundingSchema = z.strictObject({
@@ -47,7 +47,7 @@ function groundingProblem(value: z.infer<typeof groundingSchema>, sources: { id:
     : undefined;
 }
 // New generated cards require an explicit interaction budget; older saved cards keep their original semantics.
-// With observed profiles the model may only choose a profileId; persona text is copied from the profile later.
+// With owner profiles the model may only choose a profileId; persona text is copied from the profile later.
 const RUBRIC_LIMIT = 8;
 const CONFIRMED_TEST_CLAUSE = `CONFIRMED HYPOTHESIS: return exactly one generated agent rubric with id "goal_attainment" and subject "agent". Its passCriteria must equal successCriteria verbatim. Generate no other rubric: the harness adds prompt_compliance when a prompt source exists and user_fidelity only for a reactive simulator mode. goalObservation is owner-owned metadata: you must not return, infer, or replace it. This overrides the general and external-target rubric instructions above.`;
 // ponytail: conservative serialized-input cap; derive it from model token metadata if legitimate score inputs regularly hit it.
@@ -472,7 +472,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
               })),
             } : {}),
             ...(input.notes ? { ownerNotes: input.notes } : {}),
-            ...(profiles.length ? { observedProfiles: profiles } : {}),
+            ...(profiles.length ? { ownerProfiles: profiles } : {}),
             ...(observedGoals.length ? { observedGoals: observedGoals.map(g => ({ id: g.id, goal: g.goal, profileId: g.profileId })) } : {}),
             ...(plan ? { familyPlan: plan.families, requestedFamilies } : {
               requestedCount: batchSize, plannedTotal: total,
@@ -672,18 +672,6 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
         },
       );
       return result.modes;
-    },
-    async profiles(input, ctx) {
-      const supplied = new Set(input.dialogues.map(d => d.id));
-      const result = await ask(
-        'Профили пользователей',
-        PROFILES_ROLE,
-        // Assistant turns stay out: a profile describes how the user writes, not what the business answered.
-        { task: input.task, dialogues: input.dialogues.map(d => ({ id: d.id, outcome: d.outcome, userMessages: d.messages.filter(m => m.role === 'user').map(m => m.content) })) },
-        z.strictObject({ profiles: z.array(observedProfileSchema).max(6) }), ctx,
-      );
-      for (const profile of result.profiles) for (const id of profile.evidenceDialogueIds) if (!supplied.has(id)) throw new Error(`User profiles: profile ${profile.id} cites evidence dialogue ${id} that was not supplied`);
-      return result.profiles;
     },
     async improve(input, ctx) {
       if (input.feedback.some(f => f.scenario.split !== 'dev' || f.trials.some(t => t.split !== 'dev'))) {

@@ -498,8 +498,7 @@ test('ExperimentLab treats confirmed dialogues as evidence without importing hid
     { scenarios: [confirmedCard(1)] },
   ];
   const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
-  let profileCalls = 0, goalCalls = 0;
-  f.adapter.profiles = async () => { profileCalls++; return []; };
+  let goalCalls = 0;
   f.adapter.goals = async () => { goalCalls++; return []; };
   const lab = new ExperimentLab(join(f.directory, 'lab'), f.adapter);
   try {
@@ -517,7 +516,7 @@ test('ExperimentLab treats confirmed dialogues as evidence without importing hid
     await lab.waitForIdle();
     const ready = await lab.get(created.id);
     assert.equal(ready.error, null); assert.equal(ready.phase, 'review');
-    assert.deepEqual([profileCalls, goalCalls], [0, 0]);
+    assert.equal(goalCalls, 0);
     assert.deepEqual(ready.scenarios.map(scenario => [scenario.id, scenario.provenance]), [['card_1', 'synthetic']]);
     assert.equal(ready.scenarios[0]!.goalObservation, 'reply');
   } finally { await lab.close(); await f.close(); }
@@ -621,27 +620,6 @@ test('scenario batches reject invalid attribution and incomplete human-review ca
   }
 });
 
-test('profile extraction cites only supplied dialogues, sees user turns only, and the simulator may disengage without exaggerating', async () => {
-  const profile = { id: 'observed_1', persona: 'Observed appointment holder', characteristics: ['Writes short messages'], observedStyle: '12 chars on average', evidenceDialogueIds: ['d1'] };
-  const replies = [{ profiles: [profile] }, { profiles: [{ ...profile, evidenceDialogueIds: ['nope'] }] }, { message: 'ok, not now', done: true }];
-  const f = await fixture((_request, index) => JSON.stringify(replies[index]));
-  try {
-    const dialogues = [{ id: 'd1', messages: [{ role: 'user' as const, content: 'hello from user' }, { role: 'assistant' as const, content: 'ASSISTANT_PRIVATE reply' }], outcome: 'success' as const }];
-    const profiles = await f.adapter.profiles!({ task: 'Manage appointments', sources: [], dialogues }, callContext().ctx);
-    assert.deepEqual(profiles, [{ ...profile, source: 'observed' }]);
-    assert.match(f.requests[0]?.systemPrompt ?? '', /Do not infer demographic traits/);
-    assert.match(f.requests[0]?.systemPrompt ?? '', /evidenceDialogueIds only from the supplied dialogues/);
-    const payload = JSON.stringify(f.requests[0]?.messages);
-    assert.match(payload, /hello from user/);
-    assert.doesNotMatch(payload, /ASSISTANT_PRIVATE/);
-    await assert.rejects(f.adapter.profiles!({ task: 'Manage appointments', sources: [], dialogues }, callContext().ctx), /evidence/i);
-    const turn = await f.adapter.userTurn({ user: { goal: 'g', facts: 'f', behavior: 'b', opening: 'o', maxFollowUps: 1, persona: profile.persona, characteristics: profile.characteristics }, messages: [{ role: 'assistant', content: 'I cannot help with that.' }], turn: 1 }, callContext().ctx);
-    assert.deepEqual(turn, { message: 'ok, not now', done: true });
-    assert.match(f.requests[2]?.systemPrompt ?? '', /Real users leave/);
-    assert.match(f.requests[2]?.systemPrompt ?? '', /Do not exaggerate traits/);
-  } finally { await f.close(); }
-});
-
 test('расплывчатое имя типа провала отклоняется и переписывается, ссылки проверяются', async () => {
   const failures = [
     { trialId: 't1', card: 'Тариф', reason: 'Часть проверок провалена.', failed: ['Клиент получил ответ'], trace: 'Агент: оператору необходимо осуществить ручной поиск' },
@@ -692,14 +670,14 @@ test('a rejected answer is repaired from the stated reason instead of losing the
   } finally { await f.close(); }
 });
 
-test('card generation can omit persona and profileId even when observed profiles are supplied', async () => {
+test('card generation can omit persona and profileId even when owner profiles are supplied', async () => {
   const quote = 'Support is available by email.';
-  const profile = { id: 'observed_1', persona: 'Observed customer', characteristics: ['Writes short messages'], observedStyle: 'short', evidenceDialogueIds: ['d1'] };
+  const profile = { id: 'owner_1', persona: 'Customer in a hurry', characteristics: ['Writes short messages'] };
   const requirements = [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }];
   const plain = plainCard(0);
   delete (plain.user as { persona?: string }).persona;
   delete (plain.user as { characteristics?: string[] }).characteristics;
-  const outputs = [{ requirements, questions: [] }, { scenarios: [plain] }, { requirements, questions: [] }, { scenarios: [{ ...plainCard(1), profileId: 'observed_1' }] }];
+  const outputs = [{ requirements, questions: [] }, { scenarios: [plain] }, { requirements, questions: [] }, { scenarios: [{ ...plainCard(1), profileId: 'owner_1' }] }];
   const f = await fixture(scripted(outputs));
   try {
     const input = { task: 'Evaluate support answers', sources: [{ id: 'source_1', name: 'Policy', content: quote, hash: 'hash' }], existingAgent: { name: 'A', instructions: 'Help.', tools: [] }, scenarioCount: 1, profiles: [profile] };
@@ -708,22 +686,10 @@ test('card generation can omit persona and profileId even when observed profiles
     assert.equal(unlinked.scenarios[0]?.user.persona, undefined);
     assert.equal(unlinked.scenarios[0]?.user.characteristics, undefined);
     const prepared = await f.adapter.prepare(input, callContext().ctx);
-    assert.equal(prepared.scenarios[0]?.profileId, 'observed_1');
+    assert.equal(prepared.scenarios[0]?.profileId, 'owner_1');
     assert.match(f.requests[3]?.systemPrompt ?? '', /Use profileId only when/);
-    assert.match(JSON.stringify(f.requests[3]?.messages), /observedProfiles/);
-    assert.match(JSON.stringify(f.requests[3]?.messages), /Observed customer/);
-  } finally { await f.close(); }
-});
-
-test('profile extraction may return no profiles and goals still retain their real openings', async () => {
-  const opening = 'Can I contact support?';
-  const f = await fixture(scripted([{ profiles: [] }, { goals: [{ id: 'g', goal: 'Contact support', opening, requirementIds: ['req_support'], evidenceDialogueIds: ['d1'], successCriteria: 'Find the support contact' }] }]));
-  try {
-    const dialogues = [{ id: 'd1', outcome: 'unknown' as const, messages: [{ role: 'user' as const, content: opening }] }];
-    const profiles = await f.adapter.profiles!({ task: 'Support', sources: [], dialogues }, callContext().ctx);
-    assert.deepEqual(profiles, []);
-    const goals = await f.adapter.goals!({ task: 'Support', sources: [{ id: 'policy', name: 'Policy', content: 'Support contact details are owner-defined.', hash: 'h' }], dialogues, profiles }, callContext().ctx);
-    assert.equal(goals[0]!.opening, opening); assert.equal(goals[0]!.profileId, undefined);
+    assert.match(JSON.stringify(f.requests[3]?.messages), /ownerProfiles/);
+    assert.match(JSON.stringify(f.requests[3]?.messages), /Customer in a hurry/);
   } finally { await f.close(); }
 });
 
@@ -743,10 +709,10 @@ test('owner notes reach the card generator as owner-supplied hints, not as busin
   } finally { await f.close(); }
 });
 
-test('observed goals are extracted from user turns, must quote a real opening and a known profile', async () => {
+test('observed goals are extracted from user turns, must quote a real opening and a known owner profile', async () => {
   const dialogues = [{ id: 'd1', messages: [{ role: 'user' as const, content: 'move A101 to 14:00 pls' }, { role: 'assistant' as const, content: 'ASSISTANT_PRIVATE' }], outcome: 'success' as const }];
-  const profile = { id: 'observed_1', persona: 'Observed', characteristics: ['Short'], observedStyle: 's', evidenceDialogueIds: ['d1'], source: 'observed' as const };
-  const good = { id: 'goal_move', goal: 'Move appointment A101 to 14:00', opening: 'move A101 to 14:00 pls', profileId: 'observed_1', requirementIds: ['req_move'], evidenceDialogueIds: ['d1'], successCriteria: 'Moved or told why not' };
+  const profile = { id: 'owner_1', persona: 'Customer in a hurry', characteristics: ['Short'], observedStyle: undefined, evidenceDialogueIds: [], source: 'owner' as const };
+  const good = { id: 'goal_move', goal: 'Move appointment A101 to 14:00', opening: 'move A101 to 14:00 pls', profileId: 'owner_1', requirementIds: ['req_move'], evidenceDialogueIds: ['d1'], successCriteria: 'Moved or told why not' };
   const f = await fixture(() => JSON.stringify({ goals: [good] }));
   try {
     const sources = [{ id: 'policy', name: 'Owner policy', content: 'Appointments may be moved after verification.', hash: 'h' }];

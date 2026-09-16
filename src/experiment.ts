@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
-  DISCOVERY_PROTOCOL, VERSION, profileUser, clarificationSchema, agentSchema, createInputSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, discoveryObservationSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, observedProfileSchema, promptCompliance, proposalSchema, requirementSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation, verbatimSpan,
-  reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type DiscoverInput, type DiscoveryDialogue, type DiscoveryObservation, type DiscoveryPlan, type DiscoveryRecord, type DraftPatch, type Experiment, type HumanReviewInput, type Requirement, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
+  DISCOVERY_PROTOCOL, VERSION, agentSchema, createInputSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, discoveryGroupSchema, discoveryObservationSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, promptCompliance, proposalSchema, requirementSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation, verbatimSpan,
+  reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type DiscoverInput, type DiscoveryDialogue, type DiscoveryGroup, type DiscoveryObservation, type DiscoveryPlan, type DiscoveryRecord, type DraftPatch, type Experiment, type HumanReviewInput, type Requirement, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
 import { ExperimentStore } from './store.js';
 import { assessTrial, evaluateTrial, grade } from './evaluation.js';
 import { automaticTrialResult, trialAssessmentComplete, awaitingVerdict, compareTrials, isAgentFailure, plannedTrials } from './comparison.js';
@@ -43,6 +43,14 @@ function revision(spec: Revision['spec'], parentId: string | null, hypothesis: s
   return { id: fingerprint(spec), parentId, spec: structuredClone(spec), hypothesis, createdAt: new Date().toISOString() };
 }
 
+function retainAcceptedTests(record: Experiment): void {
+  const scenarios = new Map(record.scenarios.map(scenario => [scenario.id, scenario]));
+  record.acceptedTests = (record.acceptedTests ?? []).filter(test => {
+    const scenario = scenarios.get(test.scenarioId);
+    return scenario !== undefined && fingerprint(scenario) === test.definitionHash;
+  });
+}
+
 function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
   const record = structuredClone(previous);
   if (scenarioIds) {
@@ -58,6 +66,7 @@ function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
   delete record.resultsReviewedAt; delete record.resultsReviewHash; delete record.failureModes;
   delete record.acceptedDraftHash;
   delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash; delete record.releaseLog;
+  retainAcceptedTests(record);
   record.evaluatorVersion = evaluatorVersion(record.settings);
   record.limitations = previous.limitations.filter(note => !note.startsWith('Scripted mode skipped') && !note.startsWith('Не удалось назвать типы провалов:')
     && !note.startsWith('Внешнее состояние карточек не подтверждено'));
@@ -93,7 +102,7 @@ export function planDiscovery(input: Pick<DiscoverInput, 'dialogues' | 'material
   const selectedCap = Math.min(5, eligible);
   const metrics = 2 + Number(input.materials.some(material => material.kind === 'prompt'));
   const batchCount = batches.length;
-  const nominalCalls = batchCount + (2 * metrics + 1) * selectedCap + 2;
+  const nominalCalls = batchCount + (2 * metrics + 1) * selectedCap + 3;
   const base = settingsSchema.parse(input.settings ?? {});
   const maxCalls = nominalCalls + Math.max(10, Math.ceil(batchCount / 4));
   const maxDurationMs = Math.min(14_400_000, Math.max(base.maxDurationMs, Math.ceil(base.maxDurationMs * maxCalls / base.maxCalls)));
@@ -132,17 +141,37 @@ function reconcileDiscoveryBatch(batch: DiscoveryDialogue[], raw: DiscoveryObser
   });
 }
 
+function reconcileDiscoveryGroups(raw: unknown, observations: DiscoveryObservation[], requirements: Requirement[]): DiscoveryGroup[] {
+  if (!Array.isArray(raw)) return [];
+  const requirementIds = new Set(requirements.map(requirement => requirement.id));
+  const candidates = new Set(observations.filter(observation => observation.classification === 'candidate' && observation.requirementId)
+    .map(observation => `${observation.requirementId}:${observation.dialogueId}`));
+  const unique = new Map<string, DiscoveryGroup>();
+  for (const value of raw) {
+    const parsed = discoveryGroupSchema.safeParse(value);
+    if (!parsed.success || !requirementIds.has(parsed.data.requirementId)
+      || parsed.data.dialogueIds.some(id => !candidates.has(`${parsed.data.requirementId}:${id}`))) continue;
+    const group = { ...parsed.data, dialogueIds: [...parsed.data.dialogueIds].sort() };
+    unique.set(fingerprint({ requirementId: group.requirementId, dialogueIds: group.dialogueIds }), group);
+  }
+  const groups = [...unique.values()];
+  const memberships = new Map<string, number>();
+  for (const group of groups) for (const id of group.dialogueIds) {
+    const key = `${group.requirementId}:${id}`;
+    memberships.set(key, (memberships.get(key) ?? 0) + 1);
+  }
+  return groups.filter(group => group.dialogueIds.every(id => memberships.get(`${group.requirementId}:${id}`) === 1))
+    .sort((left, right) => fingerprint({ requirementId: left.requirementId, dialogueIds: left.dialogueIds })
+      .localeCompare(fingerprint({ requirementId: right.requirementId, dialogueIds: right.dialogueIds })));
+}
+
 function selectDiscoveryFocus(record: Experiment): void {
   const discovery = record.discovery!;
-  const eligible = discovery.observations.filter(observation => observation.classification === 'candidate' && observation.requirementId
-    && record.dialogues.some(dialogue => dialogue.id === observation.dialogueId && dialogue.messages.some(message => message.role === 'user')));
-  const groups = new Map<string, Set<string>>();
-  for (const observation of eligible) {
-    const members = groups.get(observation.requirementId!) ?? new Set<string>();
-    members.add(observation.dialogueId); groups.set(observation.requirementId!, members);
-  }
-  const recurring = [...groups].filter(([, ids]) => ids.size >= 2).sort(([left, leftIds], [right, rightIds]) =>
-    rightIds.size - leftIds.size || fingerprint({ seed: discovery.seed, requirementId: left }).localeCompare(fingerprint({ seed: discovery.seed, requirementId: right })) || left.localeCompare(right));
+  const recurring = (discovery.groups ?? []).filter(group => group.dialogueIds.length >= 2)
+    .map(group => [group.requirementId, new Set(group.dialogueIds)] as const)
+    .sort(([left, leftIds], [right, rightIds]) => rightIds.size - leftIds.size
+      || fingerprint({ seed: discovery.seed, requirementId: left, dialogueIds: [...leftIds].sort() })
+        .localeCompare(fingerprint({ seed: discovery.seed, requirementId: right, dialogueIds: [...rightIds].sort() })));
   const focus = recurring[0];
   if (!focus) return;
   const [requirementId, memberSet] = focus;
@@ -170,7 +199,7 @@ function confirmedDiscoveryRepresentativeIds(discovery: DiscoveryRecord, require
 
 export class ExperimentLab {
   readonly store: ExperimentStore;
-  private active: { record: Experiment; controller: AbortController; done: Promise<void> } | null = null;
+  private active: { record: Experiment; controller: AbortController; done: Promise<void>; startedAtMs: number; discoveryElapsedBeforeMs: number } | null = null;
   private lastTask: Promise<void> = Promise.resolve();
   private closed = true;
   private closing = false;
@@ -218,7 +247,7 @@ export class ExperimentLab {
       phase: 'preparing', message: 'Подключаю агента и готовлю требования и первый тест.',
       sources: input.materials.map((m, i) => ({ id: `source-${i + 1}`, name: m.name, content: m.content, hash: fingerprint(m.content), ...(m.kind ? { kind: m.kind } : {}) })),
       settings: input.settings, requirements: [], questions: [], scenarios: [], revisions: [], selectedRevisionId: null,
-      manifestHash: null, reviewedAt: null, reviewMode: null, controlConsumedAt: null, trials: [], comparisons: [], iterations: [],
+      manifestHash: null, reviewedAt: null, reviewMode: null, controlConsumedAt: null, acceptedTests: [], trials: [], comparisons: [], iterations: [],
       usage: emptyUsage(), error: null,
       workflow: input.workflow, humanReviews: [],
       target: input.target, goldenCases: input.goldenCases, dialogues: input.dialogues, profiles: input.profiles, notes: input.notes,
@@ -245,13 +274,6 @@ export class ExperimentLab {
       record.targetFingerprint = await targetFingerprint(record.target);
       const runtime = await this.runtime(record);
       const confirmed = !!input.confirmedHypothesis;
-      if (!confirmed && record.dialogues.length && runtime.profiles) {
-        // Observed persona text may only come from supplied dialogues; owner-written profiles stay first and keep their source label.
-        const observed = (await runtime.profiles({ task: record.task, sources: structuredClone(record.sources), dialogues: structuredClone(record.dialogues) }, ctx)).map(p => observedProfileSchema.parse(p));
-        const supplied = new Set(record.dialogues.map(d => d.id));
-        for (const profile of observed) for (const id of profile.evidenceDialogueIds) if (!supplied.has(id)) throw new Error(`Profile ${profile.id} cites evidence dialogue ${id} that was not supplied`);
-        record.profiles = [...record.profiles, ...observed];
-      }
       if (new Set(record.profiles.map(p => p.id)).size !== record.profiles.length) throw new Error('У профилей повторяются идентификаторы.');
       // Real dialogues become production cards: the goal a real user pursued, opened with their own words.
       const observedGoals = !confirmed && record.dialogues.length && runtime.goals
@@ -369,9 +391,9 @@ export class ExperimentLab {
     record.discovery = {
       protocol: DISCOVERY_PROTOCOL, phase: 'running', error: null, requirements: [], observations: plan.oversizedIds.map(id => localUnknown(id, 'Диалог целиком превышает лимит 60 000 символов и не отправлялся модели.')),
       seed: plan.seed, representativeIds: [], controlIds: [], selectedIds: [], completedBatchCount: 0, groupingComplete: false,
-      completedDeepIds: [], deep: [], callPlan: { batches: plan.batchCount, selectedCap: plan.selectedCap, metrics: plan.metrics,
+      completedDeepIds: [], deep: [], groups: [], callPlan: { batches: plan.batchCount, selectedCap: plan.selectedCap, metrics: plan.metrics,
         nominalCalls: plan.nominalCalls, maxCalls: plan.maxCalls, baseMaxCalls: plan.baseMaxCalls,
-        baseMaxDurationMs: plan.baseMaxDurationMs, maxDurationMs: plan.maxDurationMs }, callsUsed: 0,
+        baseMaxDurationMs: plan.baseMaxDurationMs, maxDurationMs: plan.maxDurationMs }, callsUsed: 0, elapsedMs: 0,
       totalDialogues: input.dialogues.length, oversizedIds: plan.oversizedIds,
     };
     await this.launch(record, ctx => this.executeDiscovery(record, plan, ctx));
@@ -385,6 +407,9 @@ export class ExperimentLab {
     if (record.usage.calls >= record.settings.maxCalls) throw new Error('Бюджет discovery исчерпан; найденные доказательства сохранены.');
     if (record.discovery.callPlan.legacyBudgetMissing) {
       throw new Error('Старая discovery-запись не содержит исходный бюджет. Начните новый discovery run; лимиты не будут увеличены автоматически.');
+    }
+    if ((record.discovery.elapsedMs ?? 0) >= record.discovery.callPlan.maxDurationMs) {
+      throw new Error('Лимит времени discovery исчерпан; найденные доказательства сохранены.');
     }
     const plan = planDiscovery({ dialogues: record.dialogues, materials: record.sources.map(source => ({ name: source.name, content: source.content, kind: source.kind })),
       settings: { ...record.settings, maxCalls: record.discovery.callPlan.baseMaxCalls, maxDurationMs: record.discovery.callPlan.baseMaxDurationMs } });
@@ -474,9 +499,14 @@ export class ExperimentLab {
       }
       const order = new Map(record.dialogues.map((dialogue, index) => [dialogue.id, index]));
       discovery.observations.sort((left, right) => order.get(left.dialogueId)! - order.get(right.dialogueId)!);
-      if (!discovery.groupingComplete) {
+      if (!discovery.groupingComplete || (!discovery.groups && !discovery.focusRequirementId)) {
+        const candidates = discovery.observations.filter(observation => observation.classification === 'candidate');
+        const output = await modelCall('grouping', () => runtime.discover!({ kind: 'group', requirements: structuredClone(discovery.requirements),
+          observations: structuredClone(candidates) }, ctx));
+        if (output.kind !== 'group') throw new Error('Runtime вернул ответ другого этапа discovery.');
+        discovery.groups = reconcileDiscoveryGroups(output.groups, candidates, discovery.requirements);
         discovery.groupingComplete = true; updateCalls();
-        await this.checkpoint(record, 'preparing', 'Первичный разбор сохранён; выбираю повторяющийся фокус по подтверждённым требованиям.');
+        await this.checkpoint(record, 'preparing', 'Первичный разбор и поведенческие группы сохранены; выбираю повторяющийся фокус.');
       }
       if (!discovery.focusRequirementId) selectDiscoveryFocus(record);
       if (!discovery.focusRequirementId) {
@@ -542,28 +572,6 @@ export class ExperimentLab {
       throw error;
     }
   }
-  async clarify(id: string, answers: { question: string; answer: string }[]): Promise<Experiment> {
-    this.ensureIdle();
-    const previous = await this.get(id);
-    if (previous.phase !== 'review' || !previous.questions.length) throw new Error('Нет вопросов в незапущенном черновике.');
-    const parsed = answers.map(answer => clarificationSchema.parse(answer));
-    if (new Set(parsed.map(a => a.question)).size !== previous.questions.length || parsed.length !== previous.questions.length
-      || parsed.some(a => !previous.questions.includes(a.question))) throw new Error('Ответьте на каждый вопрос черновика ровно один раз.');
-    const created = await this.create(createInputSchema.parse({ task: previous.task, mode: previous.mode, workflow: previous.workflow,
-      materials: [...previous.sources.map(s => ({ name: s.name, content: s.content, ...(s.kind ? { kind: s.kind } : {}) })), { name: 'Ответы владельца на вопросы черновика',
-        content: parsed.map(a => `Вопрос: ${a.question}\nОтвет владельца: ${a.answer}`).join('\n\n') }],
-      settings: previous.settings, target: previous.target, targetVersion: previous.targetVersion, existingAgent: previous.revisions[0]?.spec,
-      goldenCases: previous.goldenCases, dialogues: previous.dialogues, profiles: previous.profiles.filter(p => p.source === 'owner').map(p => { const { draftOverride: _, persona: __, ...base } = p; return { ...base, ...profileUser(p) }; }),
-      notes: previous.notes, scenarioCount: previous.scenarios.filter(s => s.provenance === 'synthetic').length,
-    }));
-    await this.waitForIdle();
-    return this.change(async () => {
-      const record = await this.store.get(created.id);
-      record.parentRunId = previous.id;
-      record.clarifications = [...previous.clarifications ?? [], ...parsed];
-      await this.store.save(record); return structuredClone(record);
-    });
-  }
   async updateDraft(id: string, expectedHash: string, raw: DraftPatch): Promise<Experiment> {
     return this.change(async () => {
       const record = await this.store.get(id);
@@ -597,6 +605,7 @@ export class ExperimentLab {
       const scenarios = [...cards.values()];
       const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions, agent, scenarios }, record.sources, record.workflow ?? 'compare', record.profiles);
       record.scenarios = prepared.scenarios;
+      retainAcceptedTests(record);
       if (patch.agent) record.revisions = [revision(patch.agent, null, 'Agent configuration reviewed in the draft.')];
       record.settings = settingsSchema.parse({ ...record.settings, ...patch.settings,
         roles: Object.fromEntries(Object.entries({ ...record.settings.roles, ...patch.settings?.roles }).filter(([, value]) => value !== null)) });
@@ -621,7 +630,11 @@ export class ExperimentLab {
       if (record.scenarios.length !== 1) throw new Error('Принять можно ровно один тест.');
       const currentHash = draftHash(record);
       if (expectedHash !== currentHash) throw new Error('Черновик изменился. Откройте тест заново, прежде чем принимать.');
-      if (record.acceptedDraftHash === currentHash) return structuredClone(record);
+      const scenario = record.scenarios[0]!;
+      const definitionHash = fingerprint(scenario);
+      const existing = (record.acceptedTests ?? []).find(test => test.scenarioId === scenario.id && test.definitionHash === definitionHash);
+      if (record.acceptedDraftHash === currentHash && existing) return structuredClone(record);
+      record.acceptedTests = [existing ?? { testId: randomUUID(), scenarioId: scenario.id, definitionHash, acceptedAt: new Date().toISOString() }];
       record.acceptedDraftHash = currentHash;
       await this.store.save(record);
       return structuredClone(record);
@@ -664,6 +677,7 @@ export class ExperimentLab {
       const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions,
         agent: record.revisions[0]?.spec, scenarios: record.scenarios.map(({ split: _split, ...s }) => s) }, record.sources, 'evaluate', record.profiles);
       record.scenarios = prepared.scenarios;
+      retainAcceptedTests(record);
       await preflightTarget(record.target);
       record.targetFingerprint = await targetFingerprint(record.target);
       await this.store.save(record);
@@ -689,6 +703,7 @@ export class ExperimentLab {
       const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions, agent: record.revisions[0]?.spec,
         scenarios: record.scenarios.map(({ split: _, ...s }) => s) }, record.sources, 'evaluate', record.profiles);
       record.scenarios = prepared.scenarios;
+      retainAcceptedTests(record);
       if (input.judge) { record.settings.judge = input.judge; delete record.settings.roles.judge; }
       record.evaluatorVersion = evaluatorVersion(record.settings);
       record.assessmentOf = previous.id;
@@ -827,13 +842,17 @@ export class ExperimentLab {
   private async launch(record: Experiment, work: (ctx: CallContext) => Promise<void>, ownsMutation = false): Promise<void> {
     this.ensureIdle(ownsMutation);
     const controller = new AbortController();
-    const active = { record, controller, done: Promise.resolve() };
+    const discoveryElapsedBeforeMs = record.discovery?.elapsedMs ?? 0;
+    const active = { record, controller, done: Promise.resolve(), startedAtMs: performance.now(), discoveryElapsedBeforeMs };
     this.active = active; // Reserve before the first await, including the initial checkpoint.
     let saved = false;
     let ready!: () => void;
     let failed!: (error: unknown) => void;
     const initialCheckpoint = new Promise<void>((resolve, reject) => { ready = resolve; failed = reject; });
-    const timer = setTimeout(() => controller.abort(new Error('Experiment time limit reached.')), record.settings.maxDurationMs);
+    const remainingDurationMs = record.discovery
+      ? Math.max(0, record.discovery.callPlan.maxDurationMs - discoveryElapsedBeforeMs)
+      : record.settings.maxDurationMs;
+    const timer = setTimeout(() => controller.abort(new Error('Experiment time limit reached.')), remainingDurationMs);
     const ctx: CallContext = {
       signal: controller.signal, timeoutMs: record.settings.timeoutMs,
       beforeCall: () => {
@@ -864,7 +883,7 @@ export class ExperimentLab {
         record.phase = controller.signal.aborted && /user|closing/i.test(record.error) ? 'cancelled' : 'error';
         record.message = record.error;
       } finally {
-        clearTimeout(timer); record.updatedAt = new Date().toISOString();
+        clearTimeout(timer); this.updateDiscoveryElapsed(record); record.updatedAt = new Date().toISOString();
         try { if (saved) await this.store.save(record); }
         finally { if (this.active === active) this.active = null; }
       }
@@ -875,9 +894,15 @@ export class ExperimentLab {
     await initialCheckpoint;
   }
   private async checkpoint(record: Experiment, phase: Experiment['phase'], message: string): Promise<void> {
+    this.updateDiscoveryElapsed(record);
     record.phase = phase; record.message = message; record.updatedAt = new Date().toISOString();
     // ponytail: full JSON checkpoints keep one canonical record; split trial storage when runs exceed local-scale sizes.
     await this.store.save(record);
+  }
+  private updateDiscoveryElapsed(record: Experiment): void {
+    if (!record.discovery || this.active?.record !== record) return;
+    record.discovery.elapsedMs = Math.min(record.discovery.callPlan.maxDurationMs,
+      this.active.discoveryElapsedBeforeMs + Math.max(0, Math.round(performance.now() - this.active.startedAtMs)));
   }
   /** Re-checks the frozen manifest before and after every trial; a drifted suite stops the run instead of grading it. */
   private frozenGuard(record: Experiment, hash: string, ctx: CallContext): () => void {

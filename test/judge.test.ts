@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources, JUDGE_PROTOCOL } from '../src/judge.js';
-import { auditJudge, repeatability } from '../src/judge-audit.js';
-import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type JudgeAudit, type Runtime, type Scenario, type Trial } from '../src/contracts.js';
+import { emptyUsage, goalAttainment, replyQuality, simulatorFidelity, type JudgeAudit, type Scenario, type Trial } from '../src/contracts.js';
 import { ExperimentStore } from '../src/store.js';
 
 const scenario: Scenario = { id: 'card', familyId: 'family', title: 'A fixed input', split: 'dev', provenance: 'synthetic', requirementIds: [],
@@ -267,29 +266,6 @@ test('journal failure stops judgment before another request and original replies
   assert.equal(JSON.parse(journal.trim().split('\n').at(-1)!).judgeAudit.attempts[0].raw, row('met', 'not_met'));
 });
 
-test('repeatability counts unknown flips, separates disjoint pairs, and keeps errors out of the success denominator', async t => {
-  const parent = await mkdtemp(join(tmpdir(), 'judge-audit-'));
-  t.after(() => rm(parent, { recursive: true, force: true }));
-  const audits: JudgeAudit[] = [];
-  let calls = 0;
-  const runtime = { async assess(value, ctx) { return assessRepeated(value, model, ctx, async () => {
-    ctx.beforeCall(); calls++;
-    if (calls === 3) throw new Error('Provider unavailable');
-    return calls === 2 ? row('not_met', 'met') : row('met', 'not_met');
-  }); } } as Runtime;
-  await auditJudge([input], settingsSchema.parse({ maxCalls: 5, maxDurationMs: 5000 }), join(parent, 'audit'), 3, runtime);
-  const result = JSON.parse(await readFile(join(parent, 'audit/statistics.json'), 'utf8'));
-  assert.equal(result.usage.calls, 5); assert.equal(result.failures.length, 1); assert.equal(result.complete, false);
-  const journal = (await readFile(join(parent, 'audit/responses.jsonl'), 'utf8')).trim().split('\n').map(l => JSON.parse(l));
-  const latest = new Map(journal.map(r => [r.repeat, r.audit]));
-  audits.push(...latest.values() as Iterable<JudgeAudit>);
-  const stats = repeatability(audits);
-  assert.equal(stats.errors, 1);
-  assert.equal(stats.groups[0]!.n, 4); assert.equal(stats.groups[0]!.disagreed, 3);
-  assert.equal(stats.groups[0]!.disagreement, 0.5); assert.equal(stats.groups[0]!.disjointPairs, 2); assert.equal(stats.groups[0]!.disjointFlips, 1);
-  await assert.rejects(auditJudge([input], settingsSchema.parse({}), join(parent, 'audit'), 1, runtime), /EEXIST/);
-});
-
 test('reactive fidelity applies to actual simulator decisions, including a decision to stop, not to the fixed opening', async () => {
   for (const invoked of [false, true]) {
     let audit: JudgeAudit | undefined;
@@ -308,20 +284,6 @@ test('reactive fidelity applies to actual simulator decisions, including a decis
     assert.deepEqual(audit!.notApplicable, invoked ? [] : ['user_fidelity']);
     assert.equal(hasCompleteJudgment({ ...value, trial: { ...value.trial, judgeAudit: audit, assessments: result } }), true);
   }
-});
-
-test('a broken judge stops after three failed batches and leaves a complete account of unfinished work', async t => {
-  const parent = await mkdtemp(join(tmpdir(), 'judge-unavailable-'));
-  t.after(() => rm(parent, { recursive: true, force: true }));
-  const runtime = { async assess(value, ctx) { return assessRepeated(value, model, ctx, async () => {
-    ctx.beforeCall(); throw new Error('Provider unavailable');
-  }); } } as Runtime;
-  await auditJudge([input], settingsSchema.parse({ maxCalls: 20, maxDurationMs: 5000 }), join(parent, 'audit'), 10, runtime);
-  const result = JSON.parse(await readFile(join(parent, 'audit/statistics.json'), 'utf8'));
-  assert.equal(result.usage.calls, 3); assert.equal(result.failures.length, 3);
-  assert.equal(result.completedBatches, 3); assert.equal(result.plannedBatches, 10);
-  assert.equal(result.complete, false); assert.equal(result.ready, false);
-  assert.match(result.stoppedBecause, /Three consecutive/);
 });
 
 test('the judge sees the agent prompt as its observable rules only, never as raw text with machine formats', () => {

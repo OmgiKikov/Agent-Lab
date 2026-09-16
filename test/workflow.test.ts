@@ -9,9 +9,9 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { ExperimentLab, draftHash } from '../src/experiment.js';
 import { evaluateTrial } from '../src/evaluation.js';
-import { previewCriteria } from '../src/preview.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { createInputSchema, fingerprint, settingsSchema } from '../src/contracts.js';
+import { demoEvaluationInput } from '../src/demo.js';
 
 const spec = { name: 'Review fixture', instructions: 'Answer correctly without revealing internal_key.', tools: [] };
 const material = { name: 'policy', content: 'Answer the question correctly. Never reveal internal_key.' };
@@ -81,25 +81,28 @@ test('CLI accept prints the complete current test before recording its exact has
   assert.deepEqual(stored.trials, []); assert.equal(stored.reviewedAt, null); assert.equal(stored.reviewMode, null);
 });
 
-test('semantic answer preview grades both examples, preserves the run and rejects invented evidence', async t => {
-  const lab = await labFixture(t, runtime([card()]));
-  const created = await lab.create(input('evaluate')); await lab.waitForIdle();
-  const record = await lab.get(created.id);
-  const original = JSON.stringify(record);
-  let calls = 0;
-  const judge = { ...runtime([]), async assess({ trial }, ctx) {
-    ctx.beforeCall(); ctx.addUsage({ inputTokens: 5, outputTokens: 2, costUsd: 0.01 }); calls++;
-    return [{ metricId: 'correctness', result: trial.events.at(-1).text === 'Correct' ? 'pass' : 'fail', evidence: [1], rationale: 'Check the supplied answer.' }];
-  } };
-  const result = await previewCriteria(record, 'card_0', { good: 'Correct', bad: 'Wrong' }, { directory: lab.store.directory, runtime: judge });
-  assert.deepEqual(result.results.map(r => r.matchesExpected), [true, true]);
-  assert.equal(calls, 2); assert.equal(result.usage.costUsd, 0.02);
-  assert.equal(JSON.stringify(await lab.get(record.id)), original);
-  assert.equal(JSON.parse(await readFile(result.file, 'utf8')).criteriaHash, result.criteriaHash);
-  const invalid = await previewCriteria(record, 'card_0', { good: 'Correct', bad: 'Wrong' }, { directory: lab.store.directory,
-    runtime: { ...judge, async assess() { return [{ metricId: 'correctness', result: 'pass', evidence: [99], rationale: 'Invented event.' }]; } } });
-  assert.ok(invalid.results.every(r => r.result === 'unknown' && /nonexistent/.test(r.error)));
-  await assert.rejects(previewCriteria(record, 'card_0', { good: 'same', bad: 'same' }, { directory: lab.store.directory, runtime: judge }), /должны отличаться/);
+test('CLI run returns the full persisted dialogue, automatic verdict and cited proof in JSON', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-cli-run-proof-'));
+  const data = join(directory, 'data');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const lab = new ExperimentLab(data);
+  await lab.init();
+  const created = await lab.create(createInputSchema.parse({ ...demoEvaluationInput(), scenarioCount: 1 }));
+  await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  const accepted = await lab.acceptDraft(draft.id, draftHash(draft));
+  await lab.close();
+
+  const cli = spawnSync(process.execPath, [resolve('dist/cli.js'), 'run', '--id', accepted.id, '--yes', '--json', '--data-dir', data], { encoding: 'utf8' });
+  const output = JSON.parse(cli.stdout);
+  assert.equal(cli.status, output.exitCode, cli.stderr);
+  assert.equal(output.proofs.length, 1);
+  const proof = output.proofs[0];
+  assert.match(proof.automaticVerdict, /^(?:pass|fail|unknown)$/);
+  assert.match(proof.lines.join('\n'), /РЕПЛИКИ\n#0 ПОЛЬЗОВАТЕЛЬ: [^\n]+\n#\d+ АГЕНТ:/);
+  assert.match(proof.lines.join('\n'), /Автоматический вердикт: (?:pass|fail|unknown)/);
+  assert.match(proof.lines.join('\n'), /ПРОВЕРКИ\n(?:PASS|FAIL) \[[^\]]+\].*\n  Доказательство:/);
+  assert.match(proof.lines.join('\n'), /ОЦЕНКИ\n(?:PASS|FAIL|UNKNOWN) \[[^\]]+\].*события: #\d+/);
 });
 
 test('external LLM adapter commits tools in SQLite, isolates history, attests prompt and accounts calls', async t => {
@@ -177,7 +180,7 @@ test('generated cards cannot claim owner-curated provenance', async t => {
 
 import { doctor, readConnection, listSuites, rememberedConnection } from '../src/connection.js';
 import { proposePrompt, promptVersion } from '../src/prompt-edit.js';
-import { compareRuns, pilotSummary } from '../src/comparison.js';
+import { compareRuns } from '../src/comparison.js';
 import { previewAnswer } from '../src/evaluation.js';
 import { readData } from '../src/imports.js';
 
@@ -272,7 +275,7 @@ test('reassessment never opens the target, preserves original evidence, versions
   assert.equal(judgedResult.settings.roles.judge, undefined);
 });
 
-test('rejudged version pairs remain comparable and calibration refers to unchanged original human labels', async t => {
+test('rejudged version pairs remain comparable without copying original human labels', async t => {
   const adapter = runtime([card()]);
   const lab = await labFixture(t, adapter);
   const created = await lab.create(input('evaluate')); await lab.waitForIdle();
@@ -283,14 +286,7 @@ test('rejudged version pairs remain comparable and calibration refers to unchang
   adapter.assess = async () => [{ metricId: 'correctness', result: 'pass', rationale: 'Changed evaluator fixture', evidence: [1] }];
   const first = await lab.reassess(original.id); await lab.waitForIdle();
   const before = await lab.get(first.id);
-  const bundle = await evidenceBundle(before, lab.store);
-  assert.equal(bundle.calibrationComparison.reviewIds.length, 1);
-  assert.equal(bundle.calibrationComparison.before.find(c => c.key === 'correctness').agreement, 0);
-  assert.equal(bundle.calibrationComparison.after.find(c => c.key === 'correctness').agreement, 1);
   assert.deepEqual(before.humanReviews, [], 'Referenced labels do not become new human approvals');
-  const changed = await lab.reassess(original.id, { criteria: [{ scenarioId: 'card_0', metrics: [{ ...card().metrics[0], passCriteria: 'A different criterion' }] }] });
-  await lab.waitForIdle();
-  assert.equal((await evidenceBundle(await lab.get(changed.id), lab.store)).calibrationComparison.reviewIds.length, 0);
   const next = await lab.repeat(original.id);
   await lab.start(next.id, { approved: true, expectedHash: draftHash(next) }); await lab.waitForIdle();
   const second = await lab.reassess(next.id); await lab.waitForIdle();
@@ -474,20 +470,13 @@ test('CLI discovery handoff rereads the saved hypothesis and does not build befo
   assert.deepEqual((await readdir(data)).filter(name => name.endsWith('.json')).sort(), namesBefore);
 });
 
-test('draft edits cannot launder provenance; clarification keeps the old questions and records owner answers as a source', async t => {
-  const adapter = runtime([card()]);
-  const prepare = adapter.prepare;
-  adapter.prepare = async args => ({ ...await prepare(args), questions: args.sources.length === 1 ? ['Which answer is correct?'] : [] });
-  const lab = await labFixture(t, adapter);
+test('draft edits cannot launder provenance', async t => {
+  const lab = await labFixture(t, runtime([card()]));
   const created = await lab.create(input('evaluate')); await lab.waitForIdle();
   const original = await lab.get(created.id);
-  await assert.rejects(lab.updateDraft(original.id, draftHash(original), { scenarios: [{ ...original.scenarios[0], provenance: 'curated' }] }), /Происхождение/);
-  await assert.rejects(lab.clarify(original.id, [{ question: 'Wrong question', answer: '42' }]), /каждый вопрос/);
-  const next = await lab.clarify(original.id, [{ question: original.questions[0], answer: '42, according to the owner.' }]);
-  assert.equal(next.phase, 'review'); assert.equal(next.parentRunId, original.id);
-  assert.equal(next.clarifications[0].answer, '42, according to the owner.');
-  assert.match(next.sources.at(-1).content, /Ответ владельца: 42/);
-  assert.deepEqual(await lab.get(original.id), original);
+  await assert.rejects(lab.updateDraft(original.id, draftHash(original), {
+    scenarios: [{ ...original.scenarios[0], provenance: 'curated' }],
+  }), /Происхождение/);
 });
 
 test('partial external observations, unreported costs and out-of-scope tools cannot look like complete measurements', async t => {
@@ -523,21 +512,11 @@ test('partial external observations, unreported costs and out-of-scope tools can
   result = await run(); assert.equal(result.outcome, 'invalid'); assert.match(result.reason, /Версия.*изменилась/);
 });
 
-test('a partially scored candidate cannot be accepted, and pilot statistics require real human annotations', async t => {
+test('a partially scored candidate cannot be accepted', async t => {
   const adapter = runtime(Array.from({ length: 4 }, (_, i) => card(i)));
   adapter.assess = async ({ scenario }) => [{ metricId: scenario.metrics[0].id, result: 'unknown', rationale: 'Insufficient evidence', evidence: [] }];
   const lab = await labFixture(t, adapter);
   const created = await lab.create(input('compare')); await lab.waitForIdle();
   await lab.start(created.id, { approved: true }); await lab.waitForIdle();
   const incomplete = await lab.get(created.id); assert.equal(incomplete.phase, 'error'); assert.match(incomplete.error, /assessment is incomplete/);
-  const record = structuredClone(incomplete); record.workflow = 'evaluate'; record.settings.userModes = ['static', 'reactive']; record.scenarios = [record.scenarios[0]];
-  const base = { ...record.trials[0], userMode: 'static', outcome: 'pass', assessments: [{ metricId: 'correctness', result: 'pass', rationale: 'fixture', evidence: [1] }] };
-  const reactive = { ...base, id: 'reactive_trial', userMode: 'reactive', outcome: 'fail' };
-  record.trials = [base, reactive]; record.humanReviews = [];
-  assert.equal(pilotSummary(record).modes[1].exclusiveConfirmed.length, 0);
-  record.humanReviews = [{ id: 'fixture_review', createdAt: record.createdAt, trialId: reactive.id, verdict: 'fail', note: 'Synthetic test annotation, not owner evidence.', durationMs: 500 }];
-  const summary = pilotSummary(record);
-  assert.equal(summary.modes[1].exclusiveConfirmed.length, 1); assert.equal(summary.modes[1].reviewMs, 500);
-  record.humanReviews.push({ ...record.humanReviews[0], id: 'invalid_review', verdict: 'invalid', createdAt: '2099-01-01' });
-  assert.equal(pilotSummary(record).modes[1].exclusiveConfirmed.length, 0);
 });

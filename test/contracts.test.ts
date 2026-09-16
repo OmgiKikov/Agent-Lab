@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, observedProfileSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
+  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 
@@ -75,8 +75,13 @@ test('old experiment files load with defaults for workflow, human reviews, targe
   assert.deepEqual(parsed.settings.userModes, ['reactive']);
   assert.equal(parsed.trials[0]!.userMode, 'reactive');
   assert.equal(parsed.acceptedDraftHash, undefined);
+  assert.deepEqual(parsed.acceptedTests, []);
   assert.equal(experimentSchema.parse({ ...legacy, acceptedDraftHash: fingerprint('draft') }).acceptedDraftHash, fingerprint('draft'));
   assert.equal(experimentSchema.safeParse({ ...legacy, acceptedDraftHash: 'not-a-draft-hash' }).success, false);
+  const accepted = { testId: 'test_1', scenarioId: 'scenario_1', definitionHash: fingerprint('scenario'), acceptedAt: '2026-09-16T10:00:00.000Z' };
+  assert.deepEqual(experimentSchema.parse({ ...legacy, acceptedTests: [accepted] }).acceptedTests, [accepted]);
+  assert.equal(experimentSchema.safeParse({ ...legacy, acceptedTests: [{ ...accepted, definitionHash: 'not-a-hash' }] }).success, false);
+  assert.equal(experimentSchema.safeParse({ ...legacy, acceptedTests: [accepted, { ...accepted, scenarioId: 'scenario_2' }] }).success, false);
 });
 
 test('only a whole-dialogue verdict can mark an explicit complete review', () => {
@@ -103,6 +108,9 @@ test('only a whole-dialogue verdict can mark an explicit complete review', () =>
   assert.equal(experimentSchema.safeParse({ ...record, sourceEvidence: { ...sourceEvidence, humanReviews: [{ ...persisted, note: 'без ссылки' }] } }).success, false);
   assert.equal(experimentSchema.safeParse({ ...record, sourceEvidence: { ...sourceEvidence, humanReviews: [{ ...persisted, note: '#999: чужое событие' }] } }).success, false);
   assert.equal(experimentSchema.safeParse({ ...record, sourceEvidence: { ...sourceEvidence, humanReviews: [{ ...persisted, trialId: 'missing' }] } }).success, false);
+  const attempts = Array.from({ length: 600 }, (_, index) => ({ ...trial, id: `source-${index}`, repeat: index % 5 }));
+  assert.ok(experimentSchema.safeParse({ ...record, sourceEvidence: { runId: 'source', trials: attempts, humanReviews: [] } }).success);
+  assert.equal(experimentSchema.safeParse({ ...record, sourceEvidence: { runId: 'source', trials: [...attempts, { ...trial, id: 'source-600' }], humanReviews: [] } }).success, false);
 });
 
 test('input and persisted human review schemas both reject two targets', () => {
@@ -158,13 +166,11 @@ test('confirmed hypotheses require an owner-selected goal observation while lega
   assert.ok(scenarioSchema.safeParse(card()).success, 'legacy scenarios without goalObservation stay readable');
 });
 
-test('owner-supplied profiles need no evidence, observed ones do, and owner notes travel with the input', () => {
+test('owner-supplied profiles need no evidence, legacy observed ones do, and owner notes travel with the input', () => {
   assert.equal(profileSchema.safeParse({ id: 'p', persona: 'Busy parent', characteristics: ['Terse'] }).success, false);
   const owner = profileSchema.parse({ id: 'p', persona: 'Busy parent', characteristics: ['Terse'], source: 'owner' });
   assert.deepEqual([owner.source, owner.evidenceDialogueIds, owner.observedStyle], ['owner', [], undefined]);
   const observed = profileSchema.parse({ id: 'o', persona: 'Observed', characteristics: ['Short'], evidenceDialogueIds: ['d1'] });
-  assert.equal(observedProfileSchema.safeParse({ ...observed, source: 'owner' }).success, false);
-  assert.equal(observedProfileSchema.safeParse({ ...observed, draftOverride: { persona: 'Model pretending this was edited' } }).success, false);
   assert.equal(observed.source, 'observed');
   const base = { task: 'task', materials: [{ name: 'm', content: 'c' }], mode: 'demo' as const };
   const parsed = createInputSchema.parse({ ...base, notes: 'Users are often angry and rarely know their appointment ID.', profiles: [{ id: 'p', persona: 'Busy parent', characteristics: ['Terse'] }] });

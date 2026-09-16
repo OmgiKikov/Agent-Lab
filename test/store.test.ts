@@ -115,6 +115,8 @@ test('CLI export and diff read snapshots without interrupting a live writer', { 
   assert.equal(JSON.parse(exported.stdout).experiment.id, before.id);
   const diff = await call(['diff', '--before', before.id, '--after', before.id, '--json']);
   assert.equal(diff.code, 2, diff.stderr); assert.equal(JSON.parse(diff.stdout).comparable, false);
+  const textDiff = await call(['diff', '--before', before.id, '--after', before.id]);
+  assert.equal(textDiff.code, 2, textDiff.stderr); assert.match(textDiff.stdout, /Несравнимо:/);
   assert.equal(await readFile(join(dir, '.lock'), 'utf8'), lock);
   assert.deepEqual(await lab.get(before.id), before);
 });

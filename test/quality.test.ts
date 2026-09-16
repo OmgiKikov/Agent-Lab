@@ -93,8 +93,8 @@ test('trial proof preserves passing and failing dialogue evidence with exact cit
   const before = JSON.stringify(passedRecord);
   const passed = trialProofLines(passedRecord, passedTrial.id);
   const passText = passed.lines.join('\n');
-  assert.deepEqual({ trialId: passed.trialId, scenarioId: passed.scenarioId, outcome: passed.outcome, reason: passed.reason },
-    { trialId: 'pass_trial', scenarioId: 'a', outcome: 'pass', reason: 'Цель достигнута.' });
+  assert.deepEqual({ trialId: passed.trialId, scenarioId: passed.scenarioId, outcome: passed.outcome, automaticVerdict: passed.automaticVerdict, reason: passed.reason },
+    { trialId: 'pass_trial', scenarioId: 'a', outcome: 'pass', automaticVerdict: 'pass', reason: 'Цель достигнута.' });
   assert.ok(passText.indexOf('#0 ПОЛЬЗОВАТЕЛЬ') < passText.indexOf('#2 АГЕНТ'), 'dialogue is ordered by persisted seq');
   assert.ok(passText.includes(fullReply.replace('\n', '\n  ')), 'assistant meaning is not truncated');
   assert.match(passText, /PASS \[time\] Время изменено точно\n  Доказательство: A\.time = 1/);
@@ -106,9 +106,16 @@ test('trial proof preserves passing and failing dialogue evidence with exact cit
   const failed = trialProofLines(record({ scenarios: [scenario('a')], trials: [failedTrial] }), failedTrial.id);
   const failText = failed.lines.join('\n');
   assert.equal(failed.outcome, 'fail');
-  assert.match(failText, /Исход: fail\nПричина: Осталось старое время\./);
+  assert.match(failText, /Исход: fail\nАвтоматический вердикт: fail\nПричина: Осталось старое время\./);
   assert.match(failText, /FAIL \[time\] Время изменено\n  Доказательство: осталось 0/);
   assert.match(failText, /FAIL \[goal\] Цель выполнена · события: #1/);
+
+  const rubricScenario = scenario('rubric_only', false);
+  const rubricTrial = { ...trial('rubric_trial', rubricScenario.id, 'ungraded', 'fail'), checks: [] };
+  const rubricProof = trialProofLines(record({ scenarios: [rubricScenario], trials: [rubricTrial] }), rubricTrial.id);
+  assert.equal(rubricProof.outcome, 'ungraded');
+  assert.equal(rubricProof.automaticVerdict, 'fail');
+  assert.match(rubricProof.lines.join('\n'), /Исход: ungraded\nАвтоматический вердикт: fail/);
   assert.throws(() => trialProofLines(passedRecord, 'missing'), /не найден/);
 });
 

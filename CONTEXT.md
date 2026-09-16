@@ -1,99 +1,49 @@
-# Agent Lab
+# Agent Lab: словарь MVP
 
-A native Pi package that turns a task, materials and real data into simulated dialogues with the agent you actually run, and inspectable evidence of what those dialogues show.
+**Материал владельца (owner material)** — документ, промпт или правило, которое владелец агента передал как источник ожидаемого поведения.
 
-## Language
+**Требование (requirement)** — проверяемое ожидание с точной цитатой материала владельца. Код агента и его прежние ответы не являются требованиями.
 
-**Experiment**: One task, its materials, validated scenarios and a bounded sequence of agent revisions evaluated under fixed conditions. Review provenance records whether expectations were checked automatically or by the human owner.
+**Лог / записанный диалог (recorded dialogue)** — деидентифицированная последовательность реплик пользователя и агента. Она служит доказательством наблюдаемого поведения, но её старый итог не считается правильной меткой.
 
-**Source**: An original material supplied by the user from which requirements can be grounded.
+**Discovery** — ограниченный разбор до 300 логов: порционный поиск кандидатов, выбор полных характерных и контрольных примеров, сверка с требованиями и предложение одной гипотезы.
 
-**Requirement**: Expected business behavior supported by a source excerpt. Missing or contradictory expectations remain unresolved questions.
+**Наблюдение (observation)** — конкретное поведение в логе со ссылкой на `dialogueId`, номер события и дословную цитату.
 
-**Agent revision**: An immutable definition of an agent's instructions and permitted tools. A candidate is a proposed revision; the baseline is the original revision.
+**Гипотеза (hypothesis)** — предположение о повторяющейся проблеме, подтверждённое наблюдениями и связанное с требованием. Она становится тестом только после вопроса «Проверим?» и согласия владельца.
 
-**Target**: Who answers the simulated user. The sandbox target is a nested Pi session with trusted record tools. An http, module or command target is the owner's own agent behind a documented JSON contract; a command target is a local process, typically a Python agent, speaking one JSON request and reply per line.
+**Тест / сценарий (test / scenario)** — цель пользователя, его известные факты и допустимые ответы, исходный мир и критерии результата. После discovery строится ровно один редактируемый тест.
 
-**Observed goal**: What a real user tried to do, extracted from production dialogues. Its opening is the user's own message, verbatim; it becomes a production card with the observed profile and goal, perimeter and fidelity rubrics.
+**Профиль владельца (owner profile)** — необязательное описание типа пользователя, явно написанное владельцем. Логи не используются для автоматического извлечения профилей.
 
-**Reported state**: Records an external target's harness returns after a reply. The runner grades them like sandbox state but labels them as reported, not observed by trusted code.
+**Черновик (draft)** — ещё не принятое определение теста. Любая правка меняет его hash.
 
-**Scenario**: A user's goal and knowledge, an initial test-world state, and checks of the expected outcome. A scenario describes an interaction rather than a prerecorded dialogue.
+**Принятие теста (acceptance)** — явное решение владельца, что показанная версия теста проверяет нужное поведение. Оно не запускает агента и не является вердиктом по результату.
 
-**Stage**: The job of the agent a check or rubric is about — understanding the request, looking data up, acting, composing the answer, validating it. A dialogue is a chain of jobs, so an end-to-end verdict cannot say which link broke; results are grouped by stage. Optional: a one-step agent has one job.
+**Target** — настоящий агент под проверкой: HTTP-сервис, модуль, локальная команда или встроенный sandbox.
 
-**Tier**: The rung a card occupies: smoke covers basics that must never break, regression covers established behaviour, frontier explores new capabilities. A smoke failure makes fixing basic behaviour urgent; it does not by itself make the measurement less trustworthy.
+**TargetSession** — отдельная сессия Target для одного тестового диалога. Она получает исходное состояние и историю, а возвращает ответ и доступные наблюдения.
 
-**Failure mode**: A named cluster of dialogues that broke the same way, drawn from the failed traces of one run. "Bad answer" is not a failure mode; "found the article and still handed the client to the hotline" is. Every cluster cites the dialogues it came from and may name the stage where the chain broke. Naming the failure precisely is what turns an evaluation into an improvement loop. Clusters describe the run they came from, not production traffic.
+**Режим пользователя (user mode)** — способ получения пользовательских реплик: `reactive`, `scripted` или `static`. Один прогон использует один режим.
 
-**Run comparison**: Two runs of the same cards, before and after a change, reported per card, per stage and per rung — never as one average, which hides a regression on the card that matters. A card passes a run only when all of its graded dialogues passed. Runs with a different target, different user modes or a changed card set are reported as not comparable.
+**Трасса (trace)** — неизменяемая последовательность реплик, событий инструментов, ошибок и доступных снимков состояния.
 
-**Provenance**: Where a scenario came from. Synthetic: generated by a model from requirements. Curated: supplied by the owner as a golden case. Production: derived from real dialogues.
+**Наблюдаемый результат (observable result)** — текст, подтверждённое состояние или полное событие инструмента. Заявление агента о действии без такого результата не доказывает действие.
 
-**Golden case**: A human-reviewed test case supplied by the owner. It becomes a curated scenario without model generation and keeps its own checks and metrics.
+**Точная проверка (check)** — кодовый предикат над наблюдаемым результатом.
 
-**Production dialogue**: A de-identified real conversation with the agent. It grounds user profiles and gives simulator fidelity something real to compare against.
+**Рубрика (rubric)** — один смысловой критерий с явными условиями `pass` и `fail`, который модельный судья применяет к полному диалогу.
 
-**Profile**: A user type a card may adopt. Observed profiles are extracted from production dialogues with evidence dialogue IDs; owner profiles are written by the owner by hand. When any profiles exist, synthetic cards may only choose one; the harness copies the persona text so a model cannot embellish it.
+**Автоматический вердикт (automatic verdict)** — `pass`, `fail` или `unknown`, полученный точной проверкой либо консервативным объединением двух независимых ответов судьи.
 
-**Owner notes**: The owner's own hints about users, goals and situations, in their words. First-class input for synthetic cards, recorded as owner-supplied assumptions, never promoted to business rules.
+**Simulator check** — кодовое подозрение к конкретной реплике симулированного пользователя: утечка, выдумка или цикл. Оно видно в диалоге и не является оценкой агента.
 
-**Verdict**: The bounded interpretation of a run, separating execution completeness, deterministic checks, provisional rubric assessments, human review and provenance. Audit completeness is a heuristic about the recorded evidence, not a score of the agent's quality or validation of the judge.
+**Ручной разбор (human review)** — необязательная интерпретация конкретного спорного критерия человеком. Она хранится рядом с исходными фактами, не переписывая их.
 
-**Draft**: An unapproved set of cards and evaluation conditions that the owner can still change. Updating a named card preserves other cards; deleting a card is a separate, explicit intention.
+**Набор регрессий (saved suite)** — versionable определение тестов без старых разрешений на запуск и без переноса результатов как новых фактов. Если одиночный тест был принят, его acceptance identity сохраняется; для существующего multi-test validation/regression набора acceptance не является gate.
 
-**Review**: The owner's interpretation of recorded evidence, kept separate from original checks and model assessments. A review can be finalized when every flagged agent failure has a decisive verdict on the dialogue or all failed criteria; it does not imply an individual human verdict on every passing dialogue.
+**Повтор (repeat)** — новый запуск того же теста с новой трассой и новым вердиктом.
 
-**Evidence snapshot**: A run's recorded facts, their interpretation and, when available, a comparison with its parent or an explicitly selected earlier run. Missing comparison evidence remains an explicit limitation of the snapshot.
+**Сравнение версий (version diff)** — сопоставление одинаковых тестов в одинаковых условиях. Результат отдельного теста: `fixed`, `regressed`, без изменения или `incomparable`.
 
-**User mode**: How the user side of a dialogue is produced. Reactive: a model plays the card and answers the target's actual replies. Scripted: the card's script lines are sent in order. Static: only the opening message. Running the same cards in several modes shows what the reactive simulator adds.
-
-**User state**: The structured part of a card's user: `knows` (facts the user can state, with exact values), `cannotKnow` (what the user cannot know) and `answers` (complete replies to expected clarifications). Complements `facts` and `behavior`; a generated reply may only contain values already present in `knows`, `facts` or `opening`.
-
-**External state**: `initialState.external`, opaque JSON for the agent's own test environment. The simulator never sees it; the adapter must apply it and confirm with `resetConfirmed`, otherwise the trial is invalid.
-
-**Hidden literal**: A scalar value of the initial world the card did not disclose to the user. A simulated user who says it before the agent did is suspected of leaking it.
-
-**Simulator check**: A heuristic code predicate over the simulated user's own replies: leak, fabrication or loop. Stored per trial as a suspicion with the event it cites; never an agent grade, never shown to the judge, never a change to `trial.outcome`.
-
-**Measurement usability**: Whether a dialogue measures the agent at all: it was measured, the assessment did not fail, no human marked the test invalid, any external state was confirmed by the adapter, and no simulator flag remains unresolved. One rule shared by comparisons, CI exit codes, prompt proposals and the verdict. An unusable dialogue is `unknown`, not a pass or a fail.
-
-**Quality summary**: The first screen. Cards passed / decided with a percentage, one row per criterion (exact checks, each agent rubric), the top causes from failure clusters with one cited reason each, how many dialogues the judge decided, the human queue and one sentence of limits. Derived from the same outcome helpers as the verdict, comparisons and CI; a dialogue whose measurement is unusable shows as undecided, never as a failure.
-
-**Human queue**: The dialogues a machine could not settle: unknown judge results, disagreements with a human on agent criteria, unresolved simulator suspicions. Confirming a unanimous automatic failure is for audit completeness, not for reading the result.
-
-**Prompt source**: A material with `kind: 'prompt'` — the agent's own instructions. Only rules a user can observe in a reply are extracted from it; every generated external card gets the `prompt_compliance` rubric, whose failure quotes the violated rule verbatim.
-
-**Simulator scorecard**: Per run: reactive dialogues planned, started, completed and invalid; checks flagged with examples; judge fidelity results; human verdicts on the simulator; continuations and stops without confirmed success.
-
-**Continuation**: A reactive dialogue in which the simulator sent at least one reply after the agent's first answer. It does not prove that the agent's question was answered.
-
-**Mode value**: Per card, the outcome under each user mode; the cards only the reactive user completed or only it failed, with human confirmations. A missing or duplicated repeat makes the mode `unknown` for that card.
-
-**Paired family delta**: For two comparable runs, each card's before/after outcome is paired first and dropped from both sides when either is unknown; the share of passing cards per family after minus before is averaged over families with a bootstrap interval. Descriptive; the card lists decide the verdict.
-
-**Release hook**: A command in the connection that Agent Lab runs once before the first dialogue to deploy the version under test. A non-zero exit stops the run; the adapter's `version` remains the identity.
-
-**Prompt quote**: A verbatim fragment of the agent's prompt that a failure cluster names as governing the broken behaviour. Non-verbatim quotes are rejected.
-
-**Family**: Scenarios sharing the same underlying situation; variations and repeated trials do not create new independent families.
-
-**Development suite**: Scenarios whose results may guide changes to the agent.
-
-**Control suite**: Scenarios reserved for a final comparison after selecting the candidate. Its results do not guide the automatic improvement loop.
-
-**Trial**: One attempt by one revision to handle one scenario in one user mode. A trace records what happened; the outcome records the resulting test-world state.
-
-**Invalid trial**: An attempt that cannot measure the agent because simulation or infrastructure failed. An agent making a wrong decision is a valid failed trial.
-
-**Judge repeatability**: How often repeated assessments of an unchanged input and rubric agree. Consistency does not establish correctness.
-
-**Human agreement**: Descriptive agreement with the latest human verdict, kept separate for each criterion and judge version. Fail is the positive class: TPR is the share of human failures also flagged, TNR the share of human successes also passed; abstentions and missing judgments remain visible.
-
-**Judge validation**: Evidence that a fixed judge detects a specific failure mode on human-labeled examples held out from its development. Reviewing existing scores, approving a rubric or reaching a sample count does not establish validation.
-
-**Fidelity**: Descriptive gaps between reactive simulated dialogues and production dialogues: turns per dialogue, message length, question rate, disengagement rate, plus human fidelity verdicts. Small gaps do not prove realism; large gaps disprove it.
-
-**Observed vs confirmed**: An observed number is what the recorded trials show. A confirmed improvement additionally needs a live control comparison with enough independent families, a positive interval and human-validated expectations. Everything else stays observed.
-
-**Evidence verdict**: The bounded conclusion supported by the recorded comparison, including missing data and uncertainty. Simulation evidence does not establish real-user performance.
+**Reliability судьи** — устойчивость и корректность модельной оценки на заранее определённом наборе. В MVP не измеряется; два совпавших вызова одной рубрики её не устанавливают.

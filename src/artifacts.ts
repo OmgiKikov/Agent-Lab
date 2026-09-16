@@ -1,9 +1,9 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { fingerprint, type Experiment } from './contracts.js';
+import type { Experiment } from './contracts.js';
 import type { ExperimentStore } from './store.js';
-import { compareRuns, evidenceSummary, judgeCalibration, type CalibrationRow, type EvidenceSummary, type RunComparison } from './comparison.js';
+import { compareRuns, evidenceSummary, type EvidenceSummary, type RunComparison } from './comparison.js';
 import { qualitySummary, type QualitySummary } from './quality.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 
@@ -14,12 +14,29 @@ export interface EvidenceBundle {
   quality: QualitySummary;
   before?: Experiment;
   comparison?: RunComparison;
-  comparisonSource?: { kind: 'parent' | 'selected'; beforeId: string; afterId: string };
-  calibrationComparison?: { sourceRunId: string; reviewIds: string[]; beforeVersion?: string; afterVersion?: string; before: CalibrationRow[]; after: CalibrationRow[] };
+  comparisonSource?: { kind: 'parent' | 'selected' | 'embedded'; beforeId: string; afterId: string };
   warnings: string[];
   traceJournal: string;
 }
 const failureText = (error: unknown) => (error instanceof Error ? error.name === 'ZodError' ? 'Запись не соответствует формату Agent Lab.' : error.message : String(error)).replace(/\s+/g, ' ').slice(0, 300);
+
+function embeddedBefore(record: Experiment, parentId: string): Experiment | undefined {
+  const source = record.sourceEvidence;
+  if (!source?.trials.length || source.runId !== parentId) return;
+  const before = structuredClone(record);
+  before.id = source.runId;
+  before.parentRunId = source.parentRunId;
+  before.phase = 'results_review'; before.message = 'Portable baseline reconstructed from the saved suite evidence.';
+  before.trials = structuredClone(source.trials); before.humanReviews = structuredClone(source.humanReviews);
+  before.manifestHash = before.trials[0]?.manifestHash ?? null;
+  before.reviewedAt ??= before.createdAt; before.reviewMode ??= 'automated';
+  before.usage = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: null };
+  before.error = null;
+  before.limitations = [...before.limitations, 'Portable baseline contains the saved attempts and current frozen definition, not the unavailable original run metadata.'];
+  delete before.sourceEvidence; delete before.failureModes; delete before.releaseLog;
+  delete before.assessmentOf; delete before.assessmentTrialIds; delete before.evidenceHash;
+  return before;
+}
 
 /** Resolve the persisted relationship once, independently of navigation and export format. */
 export async function evidenceBundle(record: Experiment, store: Pick<ExperimentStore, 'get' | 'traceJournal'>, beforeId?: string): Promise<EvidenceBundle> {
@@ -30,22 +47,15 @@ export async function evidenceBundle(record: Experiment, store: Pick<ExperimentS
     bundle.comparisonSource = { kind: beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };
     try {
       bundle.before = await store.get(parent); bundle.comparison = compareRuns(bundle.before, snapshot);
-      if (snapshot.assessmentOf === bundle.before.id) {
-        const before = bundle.before;
-        const reviews = before.humanReviews.filter(review => {
-          const original = before.trials.find(t => t.id === review.trialId), current = snapshot.trials.find(t => t.id === review.trialId);
-          if (!original || !current || fingerprint([original.events, original.initialState, original.finalState]) !== fingerprint([current.events, current.initialState, current.finalState])) return false;
-          const a = before.scenarios.find(s => s.id === original.scenarioId), b = snapshot.scenarios.find(s => s.id === current.scenarioId);
-          // A label for a changed criterion is not ground truth for the new criterion.
-          const oldCriterion = review.metricId ? a?.metrics?.find(m => m.id === review.metricId) : a?.checks.find(c => c.id === review.checkId);
-          const newCriterion = review.metricId ? b?.metrics?.find(m => m.id === review.metricId) : b?.checks.find(c => c.id === review.checkId);
-          return oldCriterion && newCriterion && fingerprint(oldCriterion) === fingerprint(newCriterion);
-        });
-        bundle.calibrationComparison = { sourceRunId: before.id, reviewIds: reviews.map(r => r.id), beforeVersion: before.evaluatorVersion,
-          afterVersion: snapshot.evaluatorVersion, before: judgeCalibration({ ...before, humanReviews: reviews }), after: judgeCalibration({ ...snapshot, humanReviews: reviews }) };
-      }
     }
-    catch (error) { bundle.warnings.push(`Базовый прогон ${parent} недоступен. Сравнение не выполнено; текущие доказательства сохранены. ${failureText(error)}`); }
+    catch (error) {
+      const before = embeddedBefore(snapshot, parent);
+      if (before) {
+        bundle.before = before; bundle.comparison = compareRuns(before, snapshot);
+        bundle.comparisonSource = { kind: 'embedded', beforeId: parent, afterId: snapshot.id };
+        bundle.warnings.push(`Базовый прогон ${parent} недоступен. Сравнение восстановлено из frozen-определения и встроенных попыток набора; это парный diff, не статистическая оценка и не полная копия исходного прогона. ${failureText(error)}`);
+      } else bundle.warnings.push(`Базовый прогон ${parent} недоступен. Сравнение не выполнено; текущие доказательства сохранены. ${failureText(error)}`);
+    }
   }
   try { bundle.traceJournal = await store.traceJournal(snapshot.id); }
   catch (error) { bundle.warnings.push(`Журнал трасс недоступен; реплики из записи включены в отчёт. ${failureText(error)}`); }

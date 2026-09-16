@@ -306,8 +306,7 @@ const profileFields = {
 };
 const profileOverrideSchema = z.strictObject({ persona: text.max(2000).nullable().optional(), characteristics: z.array(text.max(300)).max(12).optional() })
   .refine(v => Object.keys(v).length > 0, 'Supply a profile change');
-/** Extractors cannot impersonate an owner or supply draft edits. */
-export const observedProfileSchema = z.strictObject({ ...profileFields, source: z.literal('observed').default('observed'), evidenceDialogueIds: z.array(identifier).min(1).max(50) });
+/** Persisted observed profiles remain readable for legacy experiment files. */
 export const profileSchema = z.strictObject({ ...profileFields, source: z.enum(['observed', 'owner']).default('observed'), draftOverride: profileOverrideSchema.optional() })
   .refine(p => p.source === 'owner' || p.evidenceDialogueIds.length > 0, { message: 'Observed profiles need evidence dialogue IDs', path: ['evidenceDialogueIds'] });
 export type Profile = z.infer<typeof profileSchema>;
@@ -420,7 +419,6 @@ export function dialogueToTrial(dialogue: Dialogue, scenario: Scenario, revision
   };
 }
 
-export const clarificationSchema = z.strictObject({ question: text.max(3000), answer: text.max(5000) });
 export const createInputSchema = z.strictObject({
   task: text.max(8000),
   /** Owner-confirmed hypothesis that requests the strict one-test preparation path. */
@@ -625,9 +623,11 @@ export const discoveryRecordSchema = z.strictObject({
   observations: z.array(discoveryObservationSchema).max(300), seed: text,
   focusRequirementId: identifier.optional(), representativeIds: z.array(identifier).max(3), controlIds: z.array(identifier).max(2), selectedIds: z.array(identifier).max(5),
   completedBatchCount: z.number().int().nonnegative(), groupingComplete: z.boolean(), completedDeepIds: z.array(identifier).max(5),
+  groups: z.array(discoveryGroupSchema).max(80).optional(),
   activeCall: text.max(200).optional(),
   deep: z.array(discoveryDeepResultSchema).max(5), hypothesis: discoveryHypothesisSchema.optional(),
-  callPlan: discoveryCallPlanSchema, callsUsed: z.number().int().nonnegative(), totalDialogues: z.number().int().min(1).max(300), oversizedIds: z.array(identifier).max(300),
+  callPlan: discoveryCallPlanSchema, callsUsed: z.number().int().nonnegative(), elapsedMs: z.number().int().nonnegative().optional(),
+  totalDialogues: z.number().int().min(1).max(300), oversizedIds: z.array(identifier).max(300),
 });
 export type DiscoveryRecord = z.infer<typeof discoveryRecordSchema>;
 export type DiscoveryRuntimeInput =
@@ -641,6 +641,9 @@ export type DiscoveryRuntimeOutput =
   | { kind: 'group'; groups: DiscoveryGroup[] }
   | { kind: 'hypothesis'; hypothesis: string };
 export type Phase = 'preparing' | 'review' | 'evaluating' | 'results_review' | 'baseline' | 'improving' | 'control' | 'complete' | 'cancelled' | 'error' | 'interrupted';
+export interface AcceptedTest {
+  testId: string; scenarioId: string; definitionHash: string; acceptedAt: string;
+}
 export interface Experiment {
   schemaVersion: '1'; id: string; task: string; mode: 'demo' | 'live'; workflow: 'evaluate' | 'compare';
   createdAt: string; updatedAt: string; phase: Phase; message: string;
@@ -649,6 +652,8 @@ export interface Experiment {
   scenarios: Scenario[]; revisions: Revision[]; selectedRevisionId: string | null;
   manifestHash: string | null; reviewedAt: string | null; reviewMode: 'human' | 'automated' | null; controlConsumedAt: string | null;
   acceptedDraftHash?: string;
+  /** Portable identity of explicitly accepted scenario definitions. Optional only for legacy in-memory fixtures. */
+  acceptedTests?: AcceptedTest[];
   trials: Trial[]; comparisons: Comparison[]; iterations: { revisionId: string; accepted: boolean; reason: string }[];
   usage: Usage; error: string | null; limitations: string[];
   humanReviews: HumanReview[]; resultsReviewedAt?: string; resultsReviewHash?: string;
@@ -690,6 +695,9 @@ const comparisonSchema = z.strictObject({
   delta: z.number().finite().nullable(), interval: z.tuple([z.number().finite(), z.number().finite()]).nullable(),
   verdict: z.enum(['improved', 'regressed', 'no_change', 'insufficient', 'incomparable']), reasons: z.array(z.string()),
   cases: z.array(z.strictObject({ scenarioId: identifier, baselinePasses: z.number().int().nonnegative(), candidatePasses: z.number().int().nonnegative(), repeats: z.number().int().nonnegative() })),
+});
+const acceptedTestSchema = z.strictObject({
+  testId: identifier, scenarioId: identifier, definitionHash: z.string().regex(/^[a-f0-9]{64}$/), acceptedAt: text,
 });
 /** Files written by older versions load with defaults; the in-memory type is always complete. */
 /*
@@ -745,16 +753,18 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   notes: z.string().max(8000).default(''),
   revisions: z.array(revisionSchema), selectedRevisionId: text.nullable(), manifestHash: text.nullable(), reviewedAt: text.nullable(), reviewMode: z.enum(['human', 'automated']).nullable().default(null), controlConsumedAt: text.nullable(),
   acceptedDraftHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  acceptedTests: z.array(acceptedTestSchema).max(200)
+    .refine(tests => unique(tests.map(test => test.testId)) && unique(tests.map(test => test.scenarioId)), 'Accepted test identities must be unique').default([]),
   trials: z.array(trialSchema), comparisons: z.array(comparisonSchema), iterations: z.array(z.strictObject({ revisionId: text, accepted: z.boolean(), reason: z.string() })),
   usage: usageSchema, error: z.string().nullable(), limitations: z.array(z.string()),
   humanReviews: z.array(humanReviewSchema).default([]), resultsReviewedAt: text.optional(), resultsReviewHash: text.optional(),
   failureModes: z.array(failureModeSchema).max(30).optional(),
   releaseLog: releaseLogSchema.optional(),
   parentRunId: identifier.optional(), selectedScenarioIds: z.array(identifier).min(1).max(200).optional(), targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),
-  clarifications: z.array(clarificationSchema).max(100).optional(),
+  clarifications: z.array(z.strictObject({ question: text.max(3000), answer: text.max(5000) })).max(100).optional(),
   assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
   evaluatorVersion: text.optional(), targetRelease: text.max(200).optional(),
-  sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(200), humanReviews: z.array(humanReviewSchema).max(1000) }).optional(),
+  sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(600), humanReviews: z.array(humanReviewSchema).max(1000) }).optional(),
   discovery: discoveryRecordSchema.optional(),
 }).superRefine((record, ctx) => {
   record.scenarios.forEach((scenario, index) => {
@@ -800,7 +810,6 @@ export interface Runtime {
   openTarget(agent: AgentSpec, sources: Source[], tools: Tool[], ctx: CallContext): Promise<TargetSession>;
   userTurn(input: { user: Scenario['user']; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserTurn>;
   assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial }, ctx: CallContext): Promise<MetricAssessment[]>;
-  profiles?(input: { task: string; sources: Source[]; dialogues: Dialogue[] }, ctx: CallContext): Promise<Profile[]>;
   goals?(input: { task: string; sources: Source[]; dialogues: Dialogue[]; profiles: Profile[]; requirements?: Requirement[] }, ctx: CallContext): Promise<ObservedGoal[]>;
   failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
   discover?(input: DiscoveryRuntimeInput, ctx: CallContext): Promise<DiscoveryRuntimeOutput>;

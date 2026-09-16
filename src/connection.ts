@@ -74,7 +74,12 @@ export async function listSuites(directory: string) {
       const raw = JSON.parse(await readFile(path, 'utf8'));
       if (raw.format !== 'agent-lab-suite-1') return { file: path, error: 'Не является набором Agent Lab.' };
       const record = experimentSchema.parse({ ...raw.definition, target: resolveTarget(raw.definition.target, dirname(path)) });
+      const accepted = (record.acceptedTests ?? []).filter(test => {
+        const scenario = record.scenarios.find(candidate => candidate.id === test.scenarioId);
+        return scenario !== undefined && fingerprint(scenario) === test.definitionHash;
+      });
       return { file: path, task: record.task, cases: record.scenarios.map(s => ({ id: s.id, title: s.title, tier: s.tier })),
+        acceptedCount: accepted.length, acceptedTestIds: accepted.map(test => test.testId),
         sourceRunId: record.sourceEvidence?.runId ?? record.parentRunId, sourceTrials: record.sourceEvidence?.trials.length ?? 0 };
     } catch (error) { return { file: path, error: error instanceof Error ? error.message : String(error) }; }
   }));
@@ -121,11 +126,9 @@ export async function doctor(connection: Connection, signal = new AbortControlle
 }
 
 export function suiteEvidence(record: Experiment, scenarioIds: string[]) {
-  const trials = scenarioIds.flatMap(id => {
-    const candidates = record.trials.filter(t => t.scenarioId === id);
-    const reviewed = candidates.find(t => record.humanReviews.some(r => r.trialId === t.id && r.verdict === 'fail'));
-    const trial = reviewed ?? candidates.find(t => t.outcome === 'fail' || t.assessments?.some(a => a.result === 'fail')) ?? candidates[0];
-    return trial ? [structuredClone(trial)] : [];
-  });
-  return { runId: record.id, ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}), trials, humanReviews: record.humanReviews.filter(r => trials.some(t => t.id === r.trialId)) };
+  const selected = new Set(scenarioIds);
+  const trials = record.trials.filter(trial => selected.has(trial.scenarioId)).map(trial => structuredClone(trial));
+  const trialIds = new Set(trials.map(trial => trial.id));
+  return { runId: record.id, ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}), trials,
+    humanReviews: record.humanReviews.filter(review => trialIds.has(review.trialId)).map(review => structuredClone(review)) };
 }

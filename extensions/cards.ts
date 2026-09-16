@@ -2,10 +2,8 @@ import type { ExtensionContext, Theme, ThemeColor } from '@earendil-works/pi-cod
 import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 import type { Experiment, Scenario, Trial } from '../dist/contracts.js';
 import { describeCheck } from '../dist/contracts.js';
-import { awaitingVerdict, evidenceSummary, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
-import { simulatorSummaryLines, modeValueLines } from '../dist/simulator.js';
+import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
 import { qualitySummary, qualityLines, dialogues as dlg } from '../dist/quality.js';
-import { familyDeltaText } from '../dist/comparison.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
 
 /** All material, model and persisted text crosses this boundary before terminal rendering. */
@@ -36,14 +34,14 @@ export function reviewOrder(record: Experiment): Trial[] {
   return record.trials.map((trial, index) => ({ trial, index })).sort((a, b) => rank(a.trial) - rank(b.trial) || a.index - b.index).map(v => v.trial);
 }
 
-export type Section = 'agent' | 'cards' | 'results' | 'stats' | 'comparison';
+export type Section = 'agent' | 'cards' | 'results';
 export type BoardAction =
   | { type: 'close' }
   | { type: 'back' }
   | { type: 'new' }
   | { type: 'demo' }
   | { type: 'open'; id: string }
-  | { type: 'edit' | 'discuss' | 'settings' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat' | 'compare'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number }
+  | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number }
   | { type: 'verdict'; verdict: 'pass' | 'fail'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number };
 export interface BoardOptions {
   records?: Experiment[];
@@ -85,7 +83,7 @@ function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean
     line(`${scenario.id} · ${tierLabels[scenario.tier] ?? scenario.tier} · ${scenario.provenance === 'synthetic' ? 'Синтетическая карточка' : scenario.provenance === 'production' ? 'Из реального диалога' : 'Golden-карточка'}${record.workflow !== 'evaluate' ? ` · ${scenario.split === 'control' ? 'Контроль: скрыт от билдера' : 'Разработка'}` : ''}`, 'muted'),
     line(''), line('ПОЛЬЗОВАТЕЛЬ', 'accent'),
     line(scenario.user.persona || 'Без персоны · по цели, фактам и поведению'),
-    ...(profile ? [line(`Профиль ${profile.id} · ${profile.source === 'owner' ? 'задан владельцем' : 'выведен из логов'}${profile.draftOverride ? ' · правка черновика' : ''}`, 'muted')] : []),
+    ...(profile ? [line(`Профиль ${profile.id} · ${profile.source === 'owner' ? 'задан владельцем' : 'legacy-данные'}${profile.draftOverride ? ' · правка черновика' : ''}`, 'muted')] : []),
     ...(scenario.user.characteristics ?? []).map(v => line(`• ${v}`)),
     line(`Цель: ${scenario.user.goal}`), line(`Поведение: ${scenario.user.behavior}`),
     ...(scenario.user.knows ?? []).map(v => line(`Известно: ${v}`)),
@@ -180,13 +178,12 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean):
   return rows;
 }
 
-const confidenceLabels: Record<string, string> = { low: 'низкая', medium: 'средняя', high: 'высокая' };
 const tierLabels: Record<string, string> = { smoke: 'дымовые', regression: 'регрессия', frontier: 'фронтир' };
 /** Verdict wording comes from the record itself, so the board, the report and the CLI never disagree. */
 const noteText = (note: VerdictNote): string => note.text;
 
-/** The simple layer: how good the agent is on these cards, why it failed, what the judge could not settle, what to do next. Research statistics live in section 4. */
-function verdictLines(record: Experiment, expanded = false): Line[] {
+/** The simple layer: how good the agent is on these cards, why it failed, what the judge could not settle, what to do next. */
+function verdictLines(record: Experiment, expanded = false, comparison?: RunComparison): Line[] {
   const v = verdictSummary(record);
   if (!expanded) {
     const q = qualitySummary(record);
@@ -211,7 +208,8 @@ function verdictLines(record: Experiment, expanded = false): Line[] {
       ...(measuredAny ? [line(text.judge), line(text.queue, q.humanQueue.total ? 'warning' : 'muted')] : []),
       line(`Дальше: ${v.nextSteps[0]?.text ?? 'Повторите тест после изменения агента.'}`),
       line('a — обсудить результат · r — повторить набор · Enter — все детали', 'accent'),
-      ...(measuredAny ? [line(text.scope, 'muted'), line(`${text.limits} 4 — подробнее.`, 'muted')] : []),
+      ...(comparison ? [line(`После исправления: ${comparison.headline}`, 'accent')] : []),
+      ...(measuredAny ? [line(text.scope, 'muted'), line(text.limits, 'muted')] : []),
       line(`Выполнено ${v.execution.completed}/${v.execution.planned} · ожидают разбора ${v.review.pending} · сбоев ${v.invalid} · тестов отклонено ${v.review.invalid}`, 'muted'),
     ];
   }
@@ -226,7 +224,7 @@ function verdictLines(record: Experiment, expanded = false): Line[] {
       line('3 — открыть диалоги и полные пояснения · a — обсудить исправление', 'muted')] : []),
     ...(v.repeats.some(r => r.passed && r.failed) ? [line(''), line('РАЗБРОС ПОПЫТОК', 'warning', true),
       ...v.repeats.filter(r => r.passed && r.failed).slice(0, 3).map(r => line(repeatResultText(r), 'warning')),
-      line('4 — все повторы · это наблюдения, а не вероятность будущего успеха', 'muted')] : []),
+      line('Это наблюдения, а не вероятность будущего успеха.', 'muted')] : []),
     ...(examples.length ? [line(''), line('ЧТО ТРЕБУЕТ ВНИМАНИЯ', 'accent'), ...examples.flatMap(t => {
       const scenario = record.scenarios.find(s => s.id === t.scenarioId);
       const check = t.checks.find(c => !c.passed);
@@ -243,7 +241,7 @@ function verdictLines(record: Experiment, expanded = false): Line[] {
     line(`Кодовые проверки: ${v.graded ? `${v.passed}/${v.graded} пройдено` : 'нет'} · рубрики: ${v.rubric.assessed ? `${v.rubric.passed}/${v.rubric.assessed} без замечаний` : 'нет оценок'}`),
     line(`Вердикт на весь диалог: ${v.review.reviewed}/${v.review.total} · пройдено ${v.review.passed}, не пройдено ${v.review.failed}`),
     line(`Провалов без решения: ${v.review.pending} · расхождений с ручной оценкой: ${v.review.disagreements}`, 'muted'),
-    line(`Разбор: ${v.review.status === 'complete' ? 'завершён' : 'не завершён'} · 4 — ограничения и достоверность измерения`, 'muted'),
+    line(`Разбор: ${v.review.status === 'complete' ? 'завершён' : 'не завершён'}`, 'muted'),
     ...(v.tiers.some(t => t.graded) ? [line(`Кодовые проверки по ступеням: ${v.tiers.filter(t => t.graded).map(t => `${tierLabels[t.tier]} ${t.passed}/${t.graded}`).join(' · ')}.`, 'muted')] : []),
     ...(record.failureModes?.length ? [line('Типы провалов:', 'accent'),
       ...record.failureModes.flatMap(mode => [
@@ -257,85 +255,6 @@ function verdictLines(record: Experiment, expanded = false): Line[] {
 function verdictHeadline(record: Experiment): string {
   const q = qualitySummary(record);
   return `Итог: ${q.headline} · 1 подробнее`;
-}
-
-/** Everything here is an observation over the record; the wording says so before any number. */
-function statsLines(record: Experiment): Line[] {
-  const e = evidenceSummary(record);
-  const pct = (v: number | null) => v === null ? 'нет данных' : `${Math.round(v * 100)}%`;
-  const num = (v: number | null, digits = 2) => v === null ? 'нет данных' : v.toFixed(digits);
-  const rows: Line[] = [line('СТАТИСТИКА · наблюдения, не доказательства', 'accent', true), line(''),
-    line(`Полнота аудита: ${confidenceLabels[e.verdict.confidence]} · эвристика, не проверка правильности судьи`, 'accent'),
-    ...e.verdict.confidenceReasons.map(r => line(`• ${r.text}`, 'muted')), line('')];
-  if (e.comparison) rows.push(line('Наблюдаемый результат сравнения', 'accent'), line(e.comparison.observed), line(e.comparison.status, 'muted'), line(''));
-  rows.push(line('Повторы одинаковых карточек', 'accent'),
-    line('Код и рубрики вместе для разбора; ручные вердикты отдельно. Это наблюдения, не вероятность успеха.', 'muted'),
-    ...(record.settings.repeats > 1 ? e.verdict.repeats.map(r => line(repeatResultText(r), r.passed && r.failed ? 'warning' : 'text'))
-      : [line('По одной попытке на карточку и режим: повторяемость не проверена.', 'muted')]), line(''));
-  rows.push(line('Режимы пользователя', 'accent'));
-  for (const m of e.modes) {
-    rows.push(line(`${m.userMode}: ${m.passed}/${m.valid} пройдено (${pct(m.passRate)}) · диалогов ${m.trials} · реплик пользователя ${num(m.avgUserTurns, 1)} · вызовов ${m.calls} · стоимость ${m.costUsd === null ? 'неизвестна' : `$${m.costUsd.toFixed(4)}`}`));
-    if (m.uniqueFailedChecks.length) rows.push(line(`  провалы, найденные только в этом режиме: ${m.uniqueFailedChecks.join(', ')}`, 'warning'));
-  }
-  rows.push(line(''), line('Симулятор', 'accent'), ...simulatorSummaryLines(e.simulator).map(s => line(s)),
-    line(''), line('Ценность режимов', 'accent'), ...modeValueLines(e.modeValue).map(s => line(s)));
-  if (record.trials.length) {
-  rows.push(line(''), line('Подтверждённые находки и расходы', 'accent'), line(e.pilot.conclusion));
-  for (const m of e.pilot.modes) rows.push(line(`${m.userMode}: групп ${m.confirmedFailureKeys.length} · только здесь ${m.exclusiveConfirmed.length} · сбои симулятора ${m.simulatorFailures} · внешний агент ${m.externalCostUsd === null ? 'цена неизвестна' : '$' + m.externalCostUsd.toFixed(4)} · форма разбора ${m.reviewMs === null ? 'время неизвестно' : (m.reviewMs / 1000).toFixed(1) + ' с'}`));
-  }
-  rows.push(line(''), line('Сверка с ручными вердиктами · положительный класс = ошибка', 'accent'),
-    line('Валидация на отдельной выборке не подтверждена. Unknown и пропуски остаются в знаменателях TPR/TNR.', 'muted'));
-  if (!e.calibration.length) rows.push(line('Метрик и проверок нет.', 'muted'));
-  for (const c of e.calibration) {
-    rows.push(line(`${c.key} [${c.subject}]: ручных pass/fail ${c.humanPass}/${c.humanFail} · решено ${c.n}/${c.reviewed} · unknown ${c.abstained} · нет оценки ${c.missing} · TPR ${pct(c.tpr)} · TNR ${pct(c.tnr)}${c.reviewed && !c.sampleSufficient ? ' · мало примеров одного или обоих классов' : ''}`, c.reviewed ? 'text' : 'muted'));
-  }
-  rows.push(line(''), line('Верность симулятора · реактивные диалоги против реальных', 'accent'));
-  if (!e.fidelity) rows.push(line('Реальные диалоги не загружены; верность оценить нельзя.', 'muted'));
-  else {
-    rows.push(line(`Реальные диалоги: ${e.fidelity.realDialogues} · реактивные симуляции: ${e.fidelity.simulatedDialogues}`, 'muted'));
-    const names: Record<string, string> = { userTurns: 'реплик пользователя на диалог', userMessageLength: 'длина реплики, символов', questionRate: 'доля реплик с вопросом', disengagementRate: 'доля ушедших пользователей' };
-    for (const m of e.fidelity.metrics) rows.push(line(`${names[m.metric] ?? m.metric}: реальные ${num(m.real)} · симуляция ${num(m.simulated)} · разрыв ${m.gap === null ? 'нет данных' : `${m.gap >= 0 ? '+' : ''}${m.gap.toFixed(2)}`}`));
-    rows.push(line(`Человеческие вердикты о верности симулятора: ${e.fidelity.humanFidelity.passed} из ${e.fidelity.humanFidelity.reviewed} пройдено`));
-  }
-  rows.push(line(''), line('Ограничения доказательств', 'accent'), ...(e.notes.length ? e.notes.map(n => line(`• ${n}`, 'warning')) : [line('Нет.', 'muted')]));
-  return rows;
-}
-
-function comparisonLines(comparison?: RunComparison, before?: Experiment, after?: Experiment, pair?: RunComparison['pairs'][number], expanded = false): Line[] {
-  if (!comparison) return [line('СРАВНЕНИЕ ВЕРСИЙ', 'accent', true), line('Нажмите d и выберите предыдущий прогон.'), line('Сравниваются одинаковые карточки, материалы и настройки.', 'muted')];
-  const rows = [line('ЧТО ИЗМЕНИЛОСЬ', 'accent', true), line(comparison.headline, comparison.comparable ? 'text' : 'warning', true), line(''),
-    ...comparison.regressed.map(c => line(`−  ${c.title} · ${tierLabels[c.tier]}`, 'error')),
-    ...comparison.fixed.map(c => line(`+  ${c.title} · ${tierLabels[c.tier]}`, 'success')),
-    ...(comparison.stages.length ? [line(''), line('ПО ЭТАПАМ', 'accent'), ...comparison.stages.map(s => line(`${s.stage}: ${s.before === null ? '—' : Math.round(s.before * 100) + '%'} → ${s.after === null ? '—' : Math.round(s.after * 100) + '%'}`))] : []),
-    line(familyDeltaText(comparison.delta), 'muted'),
-    line(''), ...comparison.notes.map(n => line(n, 'muted'))];
-  if (!pair || !before || !after) return rows;
-  const original = before.trials.find(t => t.id === pair.beforeTrialId);
-  const current = after.trials.find(t => t.id === pair.afterTrialId);
-  if (!original || !current) return rows;
-  const scenario = after.scenarios.find(s => s.id === pair.scenarioId);
-  const version = (r: Experiment) => r.targetVersion ?? r.targetRelease ?? r.targetFingerprint?.slice(0, 12) ?? r.id.slice(0, 8);
-  const pairRows = [
-    line(scenario?.title ?? pair.scenarioId, 'accent', true),
-    line(`${pair.userMode} · повтор ${pair.repeat + 1} · ${version(before)} → ${version(after)}`, 'muted'),
-    ...(pair.reviewNote ? [line(pair.reviewNote, 'warning', true)] : []),
-    line(`ДО · ${verdicts[original.outcome]}`, outcomeColor(original.outcome), true),
-    line(original.events.findLast(e => e.type === 'assistant')?.text ?? original.reason),
-    line(`ПОСЛЕ · ${verdicts[current.outcome]}`, outcomeColor(current.outcome), true),
-    line(current.events.findLast(e => e.type === 'assistant')?.text ?? current.reason),
-    line(''), line('ОДИНАКОВЫЕ КРИТЕРИИ', 'accent'),
-    ...(scenario?.checks ?? []).map(c => {
-      const was = original.checks.find(check => check.id === c.id);
-      const now = current.checks.find(check => check.id === c.id);
-      return line(`${was?.passed ? '✓' : '×'} → ${now?.passed ? '✓' : '×'} ${c.description}`);
-    }),
-    ...(scenario?.metrics ?? []).filter(m => m.subject === 'agent').map(m => line(`${verdicts[original.assessments?.find(a => a.metricId === m.id)?.result ?? 'unknown']} → ${verdicts[current.assessments?.find(a => a.metricId === m.id)?.result ?? 'unknown']} · ${m.name} (рубрика)`)),
-    line(''), line(`До: ${original.id} · после: ${current.id}`, 'muted'),
-    line('↑↓ — другая пара · Enter — обе полные трассы', 'muted'),
-  ];
-  if (expanded) pairRows.push(line(''), line(`ДО · ${version(before)}`, 'accent', true), ...trialLines(original, before, true),
-    line(''), line(`ПОСЛЕ · ${version(after)}`, 'accent', true), ...trialLines(current, after, true));
-  return [...pairRows, line(''), ...rows];
 }
 
 /** A single native Pi component: immutable snapshots in, explicit human intentions out. */
@@ -402,9 +321,6 @@ export class LabBoard implements Component {
     if ((action.type === 'verdict' || action.type === 'annotate') && action.trialId) action.reviewMs = Math.round(this.options.reviewTimes?.get(`${action.record.id}|${action.trialId}`) ?? 0);
     this.dispose(); this.done(action);
   }
-  private comparisonPairs(): RunComparison['pairs'] {
-    return this.options.comparison?.pairs ?? [];
-  }
   private entries(): { text: string; index: number; id: string }[] {
     const record = this.record;
     let entries: { text: string; index: number; id: string }[];
@@ -416,9 +332,6 @@ export class LabBoard implements Component {
         text: `${pending.has(t.id) ? '● ' : ''}${flagged.has(t.id) ? 'ЗАМЕЧАНИЕ ЧЕЛОВЕКА' : isAgentFailure(record, t) ? 'НЕ ПРОЙДЕНО' : verdicts[t.outcome]} · ${record.scenarios.find(s => s.id === t.scenarioId)?.title ?? t.scenarioId} · ${t.userMode ?? 'reactive'} #${t.repeat + 1}`,
       })).filter(e => !this.pendingOnly || pending.has(e.id));
     } else if (this.section === 'cards') entries = record.scenarios.map((s, index) => ({ text: `${s.tier === 'smoke' ? '◆ ' : ''}${s.title}`, index, id: s.id }));
-    else if (this.section === 'comparison') entries = this.comparisonPairs().map((pair, index) => ({ index, id: pair.afterTrialId,
-      text: `${pair.change === 'regressed' ? '− ' : pair.change === 'fixed' ? '+ ' : pair.change === 'unknown' ? '? ' : '= '}${record.scenarios.find(s => s.id === pair.scenarioId)?.title ?? pair.scenarioId} · ${pair.userMode} #${pair.repeat + 1}`,
-    }));
     else entries = [];
     return entries.filter(e => safeText(e.text).toLocaleLowerCase().includes(this.query.toLocaleLowerCase()));
   }
@@ -440,11 +353,11 @@ export class LabBoard implements Component {
     }
     if (data === '?') { this.help = !this.help; this.scroll = 0; this.redraw(); return; }
     if (this.help && !['pageDown', 'right', 'pageUp', 'left', 'home', 'end'].some(k => key(k as Parameters<typeof matchesKey>[1]))) return;
-    if (data === '/' && (!this.record || ['cards', 'results', 'comparison'].includes(this.section))) { this.searching = true; this.redraw(); return; }
+    if (data === '/' && (!this.record || ['cards', 'results'].includes(this.section))) { this.searching = true; this.redraw(); return; }
     if (!this.record && key('n')) return this.finish({ type: 'new' });
     if (!this.record && key('d')) return this.finish({ type: 'demo' });
     if (this.record) {
-      const section = key('1') ? 'agent' : key('2') ? 'cards' : key('3') ? 'results' : key('4') ? 'stats' : key('5') ? 'comparison' : undefined;
+      const section = key('1') ? 'agent' : key('2') ? 'cards' : key('3') ? 'results' : undefined;
       if (section) { this.section = section; this.selected = 0; this.scroll = 0; this.query = ''; this.help = false; }
       if (key('u') && this.section === 'results') { this.pendingOnly = !this.pendingOnly; this.selected = 0; this.scroll = 0; }
       const editable = this.record.workflow === 'evaluate' && this.record.phase === 'review';
@@ -452,22 +365,19 @@ export class LabBoard implements Component {
         && ['results_review', 'complete'].includes(this.record.phase) && this.entries().length > 0;
       const entry = this.entries()[this.selected];
       const state = { record: this.record, section: this.section, selected: this.selected, query: this.query, pendingOnly: this.pendingOnly,
-        ...(['results', 'comparison'].includes(this.section) && entry ? { trialId: entry.id } : {}) };
+        ...(this.section === 'results' && entry ? { trialId: entry.id } : {}) };
       if (key('a') && !activePhases.has(this.record.phase)) return this.finish({ type: 'discuss', ...state,
         selected: this.section === 'cards' && entry ? entry.index : this.selected });
       if (reviewable && (key('p') || key('n'))) return this.finish({ type: 'verdict', verdict: key('p') ? 'pass' : 'fail', ...state });
       const finished = this.record.workflow === 'evaluate' && !!this.record.reviewedAt && !activePhases.has(this.record.phase);
-      const type = key('e') && editable ? 'edit'
-        : key('s') && editable ? 'settings'
-        : key('r') && editable && !this.record.questions.length ? 'run'
+      const type = key('r') && editable && !this.record.questions.length ? 'run'
         : key('r') && finished ? 'repeat'
-        : (key('d') || key('5') && !this.options.comparison) && this.record.trials.length && !activePhases.has(this.record.phase) ? 'compare'
         : key('v') && reviewable ? 'annotate'
         : key('f') && this.record.phase === 'results_review' ? 'finalize'
         : key('x') ? 'export'
         : key('o') && this.options.reportPath ? 'openReport'
         : key('c') && activePhases.has(this.record.phase) ? 'cancel' : undefined;
-      if (type) return this.finish({ type, ...state, ...(type === 'edit' && entry ? { selected: entry.index } : {}) });
+      if (type) return this.finish({ type, ...state });
     }
     const entries = this.entries();
     if (key('down') || key('j')) { this.selected = Math.min(entries.length - 1, this.selected + 1); this.scroll = 0; }
@@ -502,7 +412,7 @@ export class LabBoard implements Component {
     if (record) {
       const unresolved = record.phase === 'complete' && awaitingVerdict(record).size > 0;
       header.push(line(`${unresolved ? 'НЕРАЗОБРАННЫЕ ПРОВАЛЫ' : phases[record.phase] ?? record.phase} · ${record.mode === 'demo' ? 'ДЕМО · без модели' : 'ЖИВОЙ ПРОГОН'}`, activePhases.has(record.phase) ? 'accent' : record.phase === 'complete' && !unresolved ? 'success' : 'warning'));
-      header.push(line([['agent', '1 Обзор'], ['cards', `2 Карточки ${record.scenarios.length}`], ['results', `3 Диалоги ${record.trials.length}`], ['stats', width < 100 ? '4 Данные' : '4 Статистика'], ...(record.trials.length ? [['comparison', width < 100 ? '5 До/после' : '5 Сравнение']] : [])]
+      header.push(line([['agent', '1 Обзор'], ['cards', `2 Карточки ${record.scenarios.length}`], ['results', `3 Диалоги ${record.trials.length}`]]
         .map(([id, label]) => this.section === id ? `[${label}]` : label).join('   '), 'muted'));
       if (this.section === 'results' && record.trials.length) {
         const review = verdictSummary(record).review;
@@ -513,7 +423,7 @@ export class LabBoard implements Component {
           : review.findings.length ? `Замечания человека: ${review.flagged} диалогов · расхождения оценок: ${review.disagreements}.`
           : failures ? `Разбор: все ${failures} провал(ов) разобраны.` : 'Автоматические проверки не отметили провалов.', pending || review.findings.length ? 'warning' : 'muted'));
       }
-      header.push(line(`${this.section === 'comparison' && this.options.comparison ? this.options.comparison.headline : record.trials.length && !activePhases.has(record.phase) ? verdictHeadline(record) : record.phase === 'review' ? 'Проверьте цель, первую реплику и критерии. r — запуск.' : record.message}${this.loadError ? ` · ${this.loadError}` : ''}`));
+      header.push(line(`${record.trials.length && !activePhases.has(record.phase) ? verdictHeadline(record) : record.phase === 'review' ? 'Проверьте цель, первую реплику и критерии. r — запуск.' : record.message}${this.loadError ? ` · ${this.loadError}` : ''}`));
     } else header.push(line('n — свой агент · d — учебный пример без провайдера', 'muted'));
     if (this.options.notice) header.push(line(this.options.notice.message, this.options.notice.kind === 'error' ? 'error' : 'success'));
     if (this.options.warnings?.length) header.push(line(`Внимание: ${this.options.warnings[0]}${this.options.warnings.length > 1 ? ` (+${this.options.warnings.length - 1})` : ''}`, 'warning'));
@@ -550,11 +460,6 @@ export class LabBoard implements Component {
       detail = trial ? trialLines(trial, record, this.expanded) : this.query || this.pendingOnly ? [line('Ничего не найдено. Esc — сбросить фильтр.', 'muted')]
         : activePhases.has(record.phase) ? [line('ДИАЛОГ ВЫПОЛНЯЕТСЯ', 'accent', true), line(record.message), line('Первый результат появится после ответа и проверки критериев.', 'muted'), line('c — остановить с сохранением уже полученных реплик', 'muted')]
         : [line('Диалогов ещё нет.', 'text', true), line(record.phase === 'review' ? 'Проверьте карточки и нажмите r для запуска.' : record.error ?? 'Прогон остановлен до завершения первой попытки.')];
-    } else if (this.section === 'comparison') {
-      const pair = this.comparisonPairs().find(p => p.afterTrialId === entries[this.selected]?.id);
-      detail = comparisonLines(this.options.comparison, this.options.before, record, pair, this.expanded);
-    } else if (this.section === 'stats') {
-      detail = statsLines(record);
     } else {
       const agent = record.revisions.find(r => r.id === record.selectedRevisionId)?.spec;
       detail = [...(record.trials.length ? [...verdictLines(record, this.expanded), line('')] : []), line(record.task, 'text', true),
@@ -580,17 +485,17 @@ export class LabBoard implements Component {
         line(''), ...record.limitations.map(v => line(`• ${v}`, 'muted')),
         ...(record.error ? [line(record.error, 'error')] : []),
       ];
-      if (record.trials.length && !this.expanded) detail = verdictLines(record);
+      if (record.trials.length && !this.expanded) detail = verdictLines(record, false, this.options.comparison);
     }
     if (this.options.warnings?.length) detail.push(line(''), line('ДИАГНОСТИКА', 'warning'), ...this.options.warnings.map(w => line(w, 'warning')));
-    if (this.help) detail = [line('КЛАВИШИ', 'accent', true), line('1 Обзор — качество агента · 2 Карточки · 3 Диалоги · 4 Статистика · 5 Сравнение'), line('a — правка или разбор словами с Pi · n в списке — новая проверка'), line('↑ ↓ или j k — выбрать карточку или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), line('Enter — раскрыть источники, инструменты и состояния'), line('p / n — вердикт на выбранный диалог · v — оценить критерий'), line('r — запустить черновик или создать повтор готового прогона'), line('d — сравнить с предыдущим прогоном · x — экспортировать'), line('c — остановить запуск · Esc — назад · q — закрыть'), line(''), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')];
+    if (this.help) detail = [line('КЛАВИШИ', 'accent', true), line('1 Обзор — качество агента · 2 Карточки · 3 Диалоги'), line('a — правка или разбор словами с Pi · n в списке — новая проверка'), line('↑ ↓ или j k — выбрать карточку или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), line('Enter — раскрыть источники, инструменты и состояния'), line('p / n — вердикт на выбранный диалог · v — оценить критерий'), line('r — запустить черновик или создать повтор готового прогона'), line('x — экспортировать · c — остановить запуск · Esc — назад · q — закрыть'), line(''), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')];
     const content = detail.flatMap(row => wrapTextWithAnsi(row.text, inner).map(text => paint({ ...row, text })));
     const footer = record ? [
       record.workflow !== 'evaluate' ? 'Сравнительный эксперимент · только просмотр и экспорт'
-        : record.phase === 'review' ? `a Правка словами · e Поля · ${record.questions.length ? 'Ответьте на вопросы' : 'r Запустить'} · s Настройки`
+        : record.phase === 'review' ? `a Правка словами · ${record.questions.length ? 'Ответьте на вопросы' : 'r Запустить'}`
         : activePhases.has(record.phase) ? 'c Остановить · обновляется автоматически'
         : record.phase === 'results_review' ? this.section === 'results' ? 'a Обсудить · p Пройдено · n Провал · v Оценка · f Завершить' : 'a Обсудить · 3 Диалоги · f Завершить · r Повторить · x Экспорт'
-        : record.reviewedAt ? 'a Обсудить результат · r Повторить · d Сравнить · x Экспорт' : 'a Обсудить исправление · результат сохранён',
+        : record.reviewedAt ? 'a Обсудить результат · r Повторить · x Экспорт' : 'a Обсудить исправление · результат сохранён',
       inner < 80 ? '↑↓ Выбор · ←→ Текст · Enter Детали · / Поиск · ? Помощь'
         : `↑↓ Выбор · PgUp/PgDn Текст · Enter ${this.expanded ? 'Свернуть' : 'Подробнее'} · / Поиск · u Неразобранные · ? Помощь`,
     ] : ['n Свой агент · d Демо · ↑↓ Выбор · Enter Открыть · ? Помощь'];

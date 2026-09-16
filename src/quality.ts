@@ -62,6 +62,7 @@ export interface TrialProofLines {
   trialId: string;
   scenarioId: string;
   outcome: Trial['outcome'];
+  automaticVerdict: 'pass' | 'fail' | 'unknown';
   reason: string;
   lines: string[];
 }
@@ -173,6 +174,7 @@ export function trialProofLines(record: Experiment, trialId: string): TrialProof
   if (!trial) throw new Error(`Диалог ${trialId} не найден.`);
   const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
   if (!scenario) throw new Error(`Тест ${trial.scenarioId} для диалога ${trial.id} не найден.`);
+  const automaticVerdict = automaticTrialResult(scenario, trial);
   const turns = trial.events.filter(event => event.type === 'user' || event.type === 'assistant').sort((a, b) => a.seq - b.seq)
     .flatMap(event => labelled(`#${event.seq} ${event.type === 'user' ? 'ПОЛЬЗОВАТЕЛЬ' : 'АГЕНТ'}: `, assessmentEventContent(event)));
   const checks = trial.checks.flatMap(check => [
@@ -191,12 +193,14 @@ export function trialProofLines(record: Experiment, trialId: string): TrialProof
     trialId: trial.id,
     scenarioId: scenario.id,
     outcome: trial.outcome,
+    automaticVerdict,
     reason: trial.reason,
     lines: [
       'ДОКАЗАТЕЛЬСТВО',
       `Тест: ${planText(scenario.id)} · ${planText(scenario.title)}`,
       `Диалог: ${planText(trial.id)}`,
       `Исход: ${trial.outcome}`,
+      `Автоматический вердикт: ${automaticVerdict}`,
       ...labelled('Причина: ', trial.reason),
       '',
       'РЕПЛИКИ',

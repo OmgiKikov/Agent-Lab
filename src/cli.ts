@@ -6,16 +6,14 @@ import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab, draftHash, planDiscovery } from './experiment.js';
 import { demoInput } from './demo.js';
-import { createInputSchema, discoverInputSchema, DEFAULT_JUDGE } from './contracts.js';
-import { compareRuns, evidenceSummary, evaluationExitCode, familyDeltaText } from './comparison.js';
+import { createInputSchema, discoverInputSchema } from './contracts.js';
+import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from './prompt-edit.js';
 import { readData } from './imports.js';
-import { previewCriteria } from './preview.js';
 import { getPiStatus } from './pi.js';
-import { auditJudge } from './judge-audit.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
-import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, type ScoreBrief } from './quality.js';
+import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { evidenceBundle, exportArtifacts } from './artifacts.js';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
@@ -64,27 +62,19 @@ async function main() {
     format: { type: 'string', default: 'json' }, json: { type: 'boolean' },
     connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
     'golden-file': { type: 'string' }, 'dialogues-file': { type: 'string' }, candidate: { type: 'string' },
-    hypothesis: { type: 'string' }, trial: { type: 'string', multiple: true }, scenario: { type: 'string' },
-    yes: { type: 'boolean' }, repeats: { type: 'string' }, case: { type: 'string', multiple: true }, parallel: { type: 'string' },
+    hypothesis: { type: 'string' }, trial: { type: 'string', multiple: true },
+    yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, parallel: { type: 'string' },
   } });
   const command = positionals[0];
   if (values.help || !command) {
-    process.stdout.write('  agent-lab summary --id RUN [--json]     Качество агента: карточки, критерии, причины, что разметить\n  agent-lab audit-judge --id RUN --output NEW_DIRECTORY --repeats 10 --yes\n');
-    process.stdout.write('  agent-lab preview --id RUN --scenario CASE --input examples.json --yes\n  agent-lab accept --id RUN [--yes]\n');
+    process.stdout.write('  agent-lab summary --id RUN [--json]     Качество агента: карточки, критерии, причины, что разметить\n');
+    process.stdout.write('  agent-lab accept --id RUN [--yes]\n');
     process.stdout.write('Agent Lab — проверьте, что сломала правка вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
-    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab discover-resume --id RUN [--yes] [--json]\n  agent-lab discover-build --id RUN [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  agent-lab pilot --id RUN\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
-    process.stdout.write('Дополнительно: clarify --id RUN --input answers.json · run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\nКонтракты подключения: docs/REFERENCE.md.\n'); return;
+    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab discover-resume --id RUN [--yes] [--json]\n  agent-lab discover-build --id RUN [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
+    process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\nКонтракты подключения: docs/REFERENCE.md.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
   const directory = values['data-dir'] ?? resolve('.agent-lab');
-  if (command === 'preview') {
-    if (!values.id || !values.scenario || !values.input || !values.yes && !values['code-only']) throw new Error('Укажите --id RUN --scenario CASE --input examples.json и --yes (судья) или --code-only. Формат: {good, bad}.');
-    const record = await new ExperimentStore(directory).get(values.id);
-    const output = await previewCriteria(record, values.scenario, JSON.parse(await readFile(values.input, 'utf8')), { directory, codeOnly: values['code-only'] });
-    process.stdout.write(JSON.stringify(output, null, 2) + '\n');
-    process.exitCode = output.results.some(r => r.result === 'unknown') ? 2 : output.results.every(r => r.matchesExpected) ? 0 : 1;
-    return;
-  }
   if (command === 'suites') { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); return; }
   if (command === 'doctor') {
     const connection = values.connection ? await readConnection(values.connection) : await rememberedConnection(directory);
@@ -102,27 +92,6 @@ async function main() {
     if (values.json) { process.stdout.write(`${JSON.stringify(q, null, 2)}\n`); return; }
     const text = qualityLines(q);
     process.stdout.write([text.headline, ...text.metrics, '', ...(text.causes.length ? ['Почему:', ...text.causes, ''] : []), text.judge, text.queue, '', text.scope, text.limits, ''].join('\n'));
-    return;
-  }
-  if (command === 'pilot') {
-    if (!values.id) throw new Error('Укажите --id RUN');
-    const record = await new ExperimentStore(directory).get(values.id);
-    const evidence = evidenceSummary(record);
-    process.stdout.write(JSON.stringify({ pilot: evidence.pilot, modeValue: evidence.modeValue, simulator: evidence.simulator }, null, 2) + '\n'); return;
-  }
-  if (command === 'audit-judge') {
-    if (!values.id || !values.output || !values.yes) throw new Error('audit-judge --id RUN --output NEW_DIRECTORY --yes [--repeats 10]. Используются сохранённые лимиты; агент не вызывается.');
-    const record = await new ExperimentStore(directory).get(values.id);
-    if (record.mode !== 'live') throw new Error('Для измерения модели нужен сохранённый живой прогон.');
-    const trials = record.trials.filter(t => ['pass', 'fail', 'ungraded'].includes(t.outcome) && (!values.case || values.case.includes(t.scenarioId)));
-    const inputs = trials.flatMap(trial => {
-      const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-      return scenario?.metrics?.length ? [{ scenario, sources: record.sources, trial }] : [];
-    });
-    await auditJudge(inputs, { ...record.settings, judge: record.settings.judge ?? DEFAULT_JUDGE }, resolve(values.output), Number(values.repeats ?? '10'));
-    const result = JSON.parse(await readFile(resolve(values.output, 'statistics.json'), 'utf8'));
-    process.stdout.write(JSON.stringify({ output: resolve(values.output), ...result }, null, 2) + '\n');
-    process.exitCode = !result.complete || result.statistics.pending ? 2 : result.ready ? 0 : 1;
     return;
   }
   // Reading an atomic snapshot must not take the writer lock or mark another process interrupted.
@@ -143,9 +112,9 @@ async function main() {
         diff.headline, '',
         ...(diff.regressed.length ? ['Сломалось:', ...diff.regressed.map(r => `  - [${r.tier}] ${r.title} (${r.scenarioId})`), ''] : []),
         ...(diff.fixed.length ? ['Исправлено:', ...diff.fixed.map(r => `  + [${r.tier}] ${r.title} (${r.scenarioId})`), ''] : []),
+        ...(diff.incomparable.length ? ['Несравнимо:', ...diff.incomparable.map(r => `  ? [${r.tier}] ${r.title} (${r.scenarioId}, ${r.userMode} #${r.repeat + 1}): ${r.reason}`), ''] : []),
         ...(diff.stages.length ? ['По этапам работы агента:', ...diff.stages.map(st => `  ${st.stage}: ${percent(st.before)} → ${percent(st.after)}`), ''] : []),
         'По ступеням:', ...diff.tiers.filter(t => t.before.graded || t.after.graded).map(t => `  ${t.tier}: ${t.before.passed}/${t.before.graded} → ${t.after.passed}/${t.after.graded}`), '',
-        familyDeltaText(diff.delta), '',
         ...(diff.notes.length ? ['Оговорки:', ...diff.notes.map(n => `  · ${n}`), ''] : []),
       ].join('\n') + '\n');
       if (!diff.comparable) process.exitCode = 2;
@@ -205,17 +174,20 @@ async function main() {
     const callsUsed = Math.max(source.usage.calls, source.discovery.callsUsed);
     const maxCalls = source.discovery.callPlan.maxCalls;
     const maxDurationMs = source.discovery.callPlan.maxDurationMs;
+    const elapsedMs = source.discovery.elapsedMs ?? 0;
     if (source.discovery.callPlan.legacyBudgetMissing) throw new Error('Старая discovery-запись не содержит исходный бюджет; начните новый discovery run.');
     if (source.discovery.activeCall) throw new Error(`Discovery остановился во время модельного вызова «${source.discovery.activeCall}»; безопасное возобновление невозможно.`);
     if (['ready', 'insufficient'].includes(source.discovery.phase)) throw new Error('Этот discovery run не требует возобновления.');
     if (callsUsed >= maxCalls) throw new Error('Бюджет discovery исчерпан; найденные доказательства сохранены.');
+    if (elapsedMs >= maxDurationMs) throw new Error('Лимит времени discovery исчерпан; найденные доказательства сохранены.');
     const commandLine = `agent-lab discover-resume --id ${source.id} --yes --data-dir ${JSON.stringify(directory)}${values.json ? ' --json' : ''}`;
     const status = { type: 'discovery_resume', id: source.id, status: source.discovery.phase,
-      callsUsed, maxCalls, remainingCalls: Math.max(0, maxCalls - callsUsed), maxDurationMs, command: commandLine };
+      callsUsed, maxCalls, remainingCalls: Math.max(0, maxCalls - callsUsed), elapsedMs,
+      maxDurationMs, remainingDurationMs: Math.max(0, maxDurationMs - elapsedMs), command: commandLine };
     if (!values.yes) {
       await writeStdout(values.json ? `${JSON.stringify(status)}\n` : [
         'DISCOVERY RESUME', `Статус: ${status.status}.`, `Вызовы: ${callsUsed}/${maxCalls} (осталось не более ${status.remainingCalls}).`,
-        `Сохранённый общий лимит времени: до ${Math.ceil(maxDurationMs / 1000)} секунд.`, `Для возобновления: ${commandLine}`, '',
+        `Время: ${Math.ceil(elapsedMs / 1000)}/${Math.ceil(maxDurationMs / 1000)} секунд (осталось до ${Math.ceil(status.remainingDurationMs / 1000)}).`, `Для возобновления: ${commandLine}`, '',
       ].join('\n'));
       return;
     }
@@ -263,7 +235,7 @@ async function main() {
     }
     return;
   }
-  if (!['demo', 'prepare', 'build', 'score', 'repeat', 'run', 'accept', 'save-suite', 'evaluate', 'reassess', 'clarify', 'prompt-propose', 'prompt-apply'].includes(command)) throw new Error(`Unknown command: ${command}`);
+  if (!['demo', 'prepare', 'build', 'score', 'repeat', 'run', 'accept', 'save-suite', 'evaluate', 'reassess', 'prompt-propose', 'prompt-apply'].includes(command)) throw new Error(`Unknown command: ${command}`);
   if (command === 'evaluate' && (!values.input || !values.yes)) throw new Error('Для запуска сохранённых тестов укажите --input suite.json --yes. Лимиты и подключение берутся из файла.');
   const lab = new ExperimentLab(directory);
   await lab.init();
@@ -271,10 +243,6 @@ async function main() {
   process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
   try {
     let id = values.id;
-    if (command === 'clarify') {
-      if (!id || !values.input) throw new Error('Укажите --id RUN --input answers.json с массивом question/answer.');
-      process.stdout.write(JSON.stringify(await lab.clarify(id, JSON.parse(await readFile(values.input, 'utf8'))), null, 2) + '\n'); return;
-    }
     if (command === 'prompt-propose') {
       if (!id || !values.candidate || !values.hypothesis || !values.trial?.length) throw new Error('Укажите --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL.');
       const result = await proposePrompt(directory, await lab.get(id), { candidate: await readFile(values.candidate, 'utf8'), hypothesis: values.hypothesis, trialIds: values.trial });
@@ -397,7 +365,10 @@ async function main() {
       if (command === 'run' && !values.yes) throw new Error('Для запуска согласованных тестов укажите --yes.');
       await lab.start(id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft), ...(values.parallel ? { parallel: Number(values.parallel) } : {}) }); await lab.waitForIdle();
       const result = await lab.get(id);
-      process.stdout.write(`${JSON.stringify({ id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode, ...(result.workflow === 'evaluate' ? { verdict: evidenceSummary(result).verdict, exitCode: evaluationExitCode(result) } : {}), comparison: result.comparisons.at(-1), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify({ id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode,
+        ...(result.workflow === 'evaluate' ? { verdict: evidenceSummary(result).verdict, exitCode: evaluationExitCode(result),
+          proofs: result.trials.map(trial => trialProofLines(result, trial.id)) } : {}),
+        comparison: result.comparisons.at(-1), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
       if (result.workflow === 'evaluate') process.exitCode = evaluationExitCode(result);
       if (!['complete', 'results_review'].includes(result.phase)) throw new Error(result.error ?? 'Experiment did not complete');
     } else throw new Error(`Unknown command: ${command}`);
@@ -406,4 +377,4 @@ async function main() {
     await lab.close();
   }
 }
-void main().catch(error => { process.stderr.write(`Agent Lab: ${safeLine(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = ['evaluate', 'audit-judge', 'score', 'discover', 'discover-resume', 'discover-build'].includes(process.argv[2] ?? '') ? 2 : 1; });
+void main().catch(error => { process.stderr.write(`Agent Lab: ${safeLine(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = ['evaluate', 'score', 'discover', 'discover-resume', 'discover-build'].includes(process.argv[2] ?? '') ? 2 : 1; });

@@ -1,7 +1,6 @@
 import { hasCompleteJudgment } from './judge.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type Tier, type Trial, type UserMode } from './contracts.js';
-import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, mean, measured, measurementUsable, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
-import { modeValue, simulatorSummary, type ModeValue, type SimulatorSummary } from './simulator.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, measured, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
 /*
@@ -9,10 +8,7 @@ export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentCompl
  * so every number shown in Pi, the CLI or an export comes from one place.
  *
  *   compareTrials      trials ──pair by (scenario, repeat)──► family deltas ──► delta · bootstrap interval · sign test
- *   compareUserModes   trials ──group by userMode──► pass rate · turns · cost · failures only one mode found
- *   judgeCalibration   assessments × latest human verdicts ──► TP/TN/FP/FN per metric and check (fail = positive class)
- *   simulatorFidelity  reactive dialogues vs real dialogues ──► turn count · message length · question rate · disengagement
- *   evidenceSummary    everything above in one object, with the caveats spelled out
+ *   evidenceSummary    the product verdict and any persisted candidate comparison
  */
 function clusterInterval(values: number[], seed: string): [number, number] | null {
   if (values.length < 2) return null;
@@ -129,10 +125,6 @@ export function compareTrials(input: {
   return result;
 }
 
-export interface ModeComparison {
-  userMode: UserMode; trials: number; valid: number; passed: number; passRate: number | null;
-  failedChecks: string[]; uniqueFailedChecks: string[]; avgUserTurns: number | null; calls: number; costUsd: number | null;
-}
 function rubricReviewNote(scenario: Scenario | undefined, before: Trial, after: Trial): string | undefined {
   const replies = before.events.filter(e => e.type === 'assistant').map(e => e.text);
   const flipped = scenario?.metrics?.some(m => m.subject === 'agent'
@@ -141,158 +133,6 @@ function rubricReviewNote(scenario: Scenario | undefined, before: Trial, after: 
   return flipped && replies.length && fingerprint(replies) === fingerprint(after.events.filter(e => e.type === 'assistant').map(e => e.text))
     ? 'Ответы агента совпали, оценки по рубрикам различаются. Проверьте запросы пользователя, действия и критерии: рост оценки сам по себе не доказывает улучшение агента.' : undefined;
 }
-/** Descriptive differences only, restricted to measured counterparts of the same trial. */
-export function compareUserModes(record: Experiment): ModeComparison[] {
-  record = observedRecord(record);
-  const reviews = latestHumanReviews(record);
-  const protocols = new Set(record.trials.filter(t => t.judgeAudit).map(t => fingerprint({ protocol: t.judgeAudit!.protocolHash, provider: t.judgeAudit!.provider, model: t.judgeAudit!.model })));
-  const usable = (t: Trial) => measured(t) && reviews.get(`${t.id}|dialogue`)?.verdict !== 'invalid'
-    && measurementUsable(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews)
-    && (record.mode !== 'live' || !record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length || (hasCompleteJudgment({ scenario: record.scenarios.find(s => s.id === t.scenarioId)!, sources: record.sources, trial: t }) && protocols.size === 1));
-  const result = (t: Trial) => automaticTrialResult(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews);
-  const criteria = (t: Trial) => new Map<string, 'pass' | 'fail' | 'unknown'>([
-    ...t.checks.map(c => [`${t.scenarioId}/check:${c.id}`, c.passed ? 'pass' : 'fail'] as const),
-    ...(record.scenarios.find(s => s.id === t.scenarioId)?.metrics ?? []).filter(m => m.subject === 'agent')
-      .flatMap(m => { const effective = agentMetricResult(t, m.id, record.humanReviews); return effective ? [[`${t.scenarioId}/metric:${m.id}`, effective] as const] : []; }),
-  ]);
-  const key = (t: Trial, mode = t.userMode) => `${t.revisionId}|${t.scenarioId}|${t.repeat}|${mode}`;
-  const paired = new Map<string, Trial[]>();
-  for (const t of record.trials) paired.set(key(t), [...paired.get(key(t)) ?? [], t]);
-  const failedBy = new Map<UserMode, Set<string>>();
-  for (const mode of record.settings.userModes) {
-    failedBy.set(mode, new Set(record.trials.filter(t => t.userMode === mode && usable(t))
-      .flatMap(t => [...criteria(t)].filter(([, result]) => result === 'fail').map(([id]) => id))));
-  }
-  return record.settings.userModes.map(userMode => {
-    const trials = record.trials.filter(t => t.userMode === userMode);
-    const valid = trials.filter(t => usable(t) && result(t) !== 'unknown');
-    const passed = valid.filter(t => result(t) === 'pass').length;
-    const failedChecks = [...failedBy.get(userMode)!].sort();
-    const others = record.settings.userModes.filter(m => m !== userMode);
-    const uniqueFailedChecks = failedChecks.filter(id => others.length > 0 && others.every(mode =>
-      !failedBy.get(mode)!.has(id) && trials.filter(t => criteria(t).has(id)).every(t => {
-        const matches = paired.get(key(t, mode)) ?? [];
-        return usable(t) && paired.get(key(t))?.length === 1 && matches.length === 1
-          && usable(matches[0]!) && criteria(matches[0]!).get(id) === 'pass'
-          && !(id.includes('/metric:') && rubricReviewNote(record.scenarios.find(s => s.id === t.scenarioId), t, matches[0]!));
-      })));
-    return {
-      userMode, trials: trials.length, valid: valid.length, passed, passRate: valid.length ? passed / valid.length : null,
-      failedChecks, uniqueFailedChecks,
-      avgUserTurns: mean(trials.filter(measured).map(t => t.events.filter(e => e.type === 'user').length)),
-      calls: trials.reduce((sum, t) => sum + t.usage.calls, 0),
-      costUsd: trials.some(t => t.usage.costUsd === null) ? null : trials.reduce((sum, t) => sum + (t.usage.costUsd ?? 0), 0),
-    };
-  });
-}
-
-export interface CalibrationRow {
-  key: string; subject: 'agent' | 'simulator' | 'check'; n: number; tp: number; tn: number; fp: number; fn: number;
-  criterionHash: string; judgeHash: string; reviewed: number; humanPass: number; humanFail: number;
-  abstained: number; missing: number; coverage: number | null;
-  tpr: number | null; tnr: number | null; agreement: number | null; sampleSufficient: boolean;
-  validationStatus: 'not_established';
-}
-/** Descriptive human agreement, grouped by exact criterion and judge protocol. Fail is the positive class.
- * Review labels are not a held-out judge-validation set, regardless of sample size. */
-export function judgeCalibration(record: Experiment): CalibrationRow[] {
-  record = observedRecord(record);
-  const latest = latestHumanReviews(record);
-  const rows = new Map<string, CalibrationRow>();
-  const row = (key: string, subject: CalibrationRow['subject'], criterion: unknown, judgeHash: string): CalibrationRow => {
-    const criterionHash = fingerprint(criterion), group = `${criterionHash}/${judgeHash}`;
-    const existing = rows.get(group);
-    if (existing) return existing;
-    const created: CalibrationRow = { key, subject, criterionHash, judgeHash, n: 0, reviewed: 0, humanPass: 0, humanFail: 0,
-      abstained: 0, missing: 0, coverage: null, tp: 0, tn: 0, fp: 0, fn: 0, tpr: null, tnr: null, agreement: null,
-      sampleSufficient: false, validationStatus: 'not_established' };
-    rows.set(group, created);
-    return created;
-  };
-  const count = (target: CalibrationRow, human: 'pass' | 'fail', model: 'pass' | 'fail' | 'unknown' | undefined) => {
-    target.reviewed++;
-    if (human === 'pass') target.humanPass++; else target.humanFail++;
-    if (model === undefined) { target.missing++; return; }
-    if (model === 'unknown') { target.abstained++; return; }
-    target.n++;
-    if (human === 'fail') { if (model === 'fail') target.tp++; else target.fn++; }
-    else if (model === 'fail') target.fp++;
-    else target.tn++;
-  };
-  const decided = (review: HumanReview | undefined): review is HumanReview & { verdict: 'pass' | 'fail' } => !!review && (review.verdict === 'pass' || review.verdict === 'fail');
-  for (const trial of record.trials) {
-    const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-    if (!scenario || !measured(trial)) continue;
-    const audit = trial.judgeAudit;
-    const judgeHash = audit ? fingerprint({ protocol: audit.protocolHash, provider: audit.provider, model: audit.model }) : 'unrecorded';
-    const usable = !trial.assessmentError && (!audit || hasCompleteJudgment({ scenario, sources: record.sources, trial }));
-    for (const metric of scenario.metrics ?? []) {
-      if (!metricApplies(metric, trial)) continue;
-      const target = row(metric.id, metric.subject, metric, judgeHash);
-      const human = latest.get(`${trial.id}|metric:${metric.id}`);
-      if (!decided(human)) continue;
-      count(target, human.verdict, usable ? trial.assessments?.find(a => a.metricId === metric.id)?.result : undefined);
-    }
-    for (const check of scenario.checks) {
-      const target = row(`check:${check.id}`, 'check', check, 'code');
-      const human = latest.get(`${trial.id}|check:${check.id}`);
-      if (!decided(human)) continue;
-      const result = trial.checks.find(c => c.id === check.id);
-      count(target, human.verdict, result ? result.passed ? 'pass' : 'fail' : undefined);
-    }
-  }
-  // Keep criteria with no measurements visible, without inventing a second unrecorded judge group.
-  for (const scenario of record.scenarios) for (const criterion of [...scenario.metrics ?? [], ...scenario.checks]) {
-    if ([...rows.values()].some(r => r.criterionHash === fingerprint(criterion))) continue;
-    const isMetric = 'subject' in criterion;
-    row(isMetric ? criterion.id : `check:${criterion.id}`, isMetric ? criterion.subject : 'check', criterion, isMetric ? 'unrecorded' : 'code');
-  }
-  const result = [...rows.values()];
-  for (const entry of result) {
-    entry.tpr = entry.humanFail ? entry.tp / entry.humanFail : null;
-    entry.tnr = entry.humanPass ? entry.tn / entry.humanPass : null;
-    entry.agreement = entry.reviewed ? (entry.tp + entry.tn) / entry.reviewed : null;
-    entry.coverage = entry.reviewed ? entry.n / entry.reviewed : null;
-    // Sampling guide only. Repeated labels, dev/test leakage and domain transfer require a validation design.
-    entry.sampleSufficient = entry.humanPass >= 30 && entry.humanFail >= 30;
-  }
-  const counts = new Map<string, number>();
-  for (const entry of result) counts.set(entry.key, (counts.get(entry.key) ?? 0) + 1);
-  for (const entry of result) if (counts.get(entry.key)! > 1) entry.key += ` [${entry.criterionHash.slice(0, 8)}/${entry.judgeHash.slice(0, 8)}]`;
-  return result;
-}
-
-export type FidelityMetric = 'userTurns' | 'userMessageLength' | 'questionRate' | 'disengagementRate';
-export interface FidelityReport {
-  metrics: { metric: FidelityMetric; real: number | null; simulated: number | null; gap: number | null }[];
-  realDialogues: number; simulatedDialogues: number; humanFidelity: { reviewed: number; passed: number };
-}
-/** Descriptive gaps between reactive simulated dialogues and the supplied real ones. Small gaps do not prove fidelity; large gaps disprove it. */
-export function simulatorFidelity(record: Experiment): FidelityReport | null {
-  record = observedRecord(record);
-  if (!record.dialogues.length) return null;
-  const simulated = record.trials.filter(t => t.userMode === 'reactive' && (graded(t) || t.outcome === 'ungraded'));
-  const style = (turns: string[][], disengaged: boolean[]) => turns.length ? {
-    userTurns: mean(turns.map(t => t.length)),
-    userMessageLength: mean(turns.flat().map(m => m.length)),
-    questionRate: mean(turns.flat().map(m => m.includes('?') ? 1 : 0)),
-    disengagementRate: mean(disengaged.map(d => d ? 1 : 0)),
-  } : null;
-  const real = style(record.dialogues.map(d => d.messages.filter(m => m.role === 'user').map(m => m.content)), record.dialogues.map(d => d.outcome === 'abandoned'));
-  const sim = style(simulated.map(t => t.events.filter(e => e.type === 'user').map(e => e.text ?? '')), simulated.map(t => {
-    const last = t.events.filter(e => e.type === 'simulator').at(-1)?.result as { done?: boolean } | undefined;
-    return !!last?.done && t.outcome !== 'pass';
-  }));
-  const metrics = (['userTurns', 'userMessageLength', 'questionRate', 'disengagementRate'] as const).map(metric => {
-    const r = real?.[metric] ?? null;
-    const s = sim?.[metric] ?? null;
-    return { metric, real: r, simulated: s, gap: r === null || s === null ? null : s - r };
-  });
-  const simulatorMetrics = new Set(record.scenarios.flatMap(s => (s.metrics ?? []).filter(m => m.subject === 'simulator').map(m => m.id)));
-  const verdicts = [...latestHumanReviews(record).values()].filter(r => r.metricId && simulatorMetrics.has(r.metricId) && (r.verdict === 'pass' || r.verdict === 'fail'));
-  return { metrics, realDialogues: record.dialogues.length, simulatedDialogues: simulated.length, humanFidelity: { reviewed: verdicts.length, passed: verdicts.filter(r => r.verdict === 'pass').length } };
-}
-
 export interface VerdictNote { code: string; text: string; count?: number; detail?: string }
 export interface HumanFinding {
   trialId: string; reviewId: string; target: string; subject: 'agent' | 'simulator' | 'check' | 'test';
@@ -327,7 +167,7 @@ export interface VerdictSummary {
   /** Per rung: smoke must never fail, regression must not get worse, frontier is where failures teach. */
   tiers: { tier: Tier; cards: number; passed: number; graded: number }[];
   weakSpots: { kind: 'check' | 'metric'; description: string; failures: number; stage?: string }[];
-  confidence: 'low' | 'medium' | 'high'; confidenceReasons: VerdictNote[]; nextSteps: VerdictNote[];
+  confidenceReasons: VerdictNote[]; nextSteps: VerdictNote[];
 }
 /** Human reports and disagreements remain visible even when every automatic score is green. */
 export function humanFindings(record: Experiment): HumanFinding[] {
@@ -390,21 +230,8 @@ export function awaitingVerdict(record: Experiment): Set<string> {
   }).map(t => t.id));
 }
 
-/**
- * Enough labeled pairs to notice a badly worded rubric, long before there are enough to
- * trust a rate. A judge that disagrees with the owner more than a quarter of the time is
- * usually measuring something other than what the rubric meant to say.
- */
-const DISAGREEMENT_SIGNAL = { perClass: 20, rate: 0.75 };
-function disagreeing(calibration: CalibrationRow[]): CalibrationRow[] {
-  return calibration.filter(row => row.humanFail >= DISAGREEMENT_SIGNAL.perClass && row.tpr !== null && row.tpr < DISAGREEMENT_SIGNAL.rate
-    || row.humanPass >= DISAGREEMENT_SIGNAL.perClass && row.tnr !== null && row.tnr < DISAGREEMENT_SIGNAL.rate);
-}
-
-// ponytail: audit heuristics, not statistical confidence; use a calibrated estimator for population claims.
 const MIN_GRADED = 5;
 const TRUSTED_SAMPLE = 30;
-/** High confidence requires a complete, diverse sample and individual human review; repeats add no coverage. */
 export function verdictSummary(record: Experiment): VerdictSummary {
   record = observedRecord(record);
   const gradedTrials = record.trials.filter(graded);
@@ -538,19 +365,15 @@ export function verdictSummary(record: Experiment): VerdictSummary {
     if (unreviewed) reasons.push({ code: 'unreviewed_failures', text: `${unreviewed} провалившихся диалог(ов) без вердикта человека.`, count: unreviewed });
     if (undecided) reasons.push({ code: 'undecided_failures', text: `${undecided} провалившихся диалог(ов) ещё без решающего вердикта на диалог или все проваленные критерии.`, count: undecided });
   }
-  const invalidShare = record.trials.length ? invalid / record.trials.length : 0;
   const uniqueCards = new Set(gradedTrials.map(t => t.scenarioId)).size;
   const families = new Set(gradedTrials.map(t => t.familyId)).size;
   const reviewedCards = new Set(record.trials.filter(t => current.some(r => r.trialId === t.id && !r.metricId && !r.checkId && decisive(r))).map(t => t.scenarioId)).size;
-  const reviewComplete = finalized && decisiveVerdicts && pending.size === 0 && invalid === 0 && review.disagreements === 0;
   if (gradedCount >= MIN_GRADED && uniqueCards < TRUSTED_SAMPLE) reasons.push({ code: 'small_sample', text: `Проверено ${uniqueCards} разных карточек. Для расширенного аудита ориентир — ${TRUSTED_SAMPLE}; повторы не расширяют покрытие.`, count: uniqueCards });
   if (families < 8 && gradedCount >= MIN_GRADED) reasons.push({ code: 'few_families', text: `Покрыто ${families} семейств ситуаций из ориентира 8.`, count: families });
   if (reviewedCards < TRUSTED_SAMPLE && gradedCount >= MIN_GRADED) reasons.push({ code: 'few_reviews', text: `Индивидуально разобрано ${reviewedCards} разных карточек из ${TRUSTED_SAMPLE}.`, count: reviewedCards });
   const incomplete = record.workflow === 'evaluate' ? runCompleteness(record) : [];
   if (incomplete.length && record.trials.length) reasons.push({ code: 'incomplete_run', text: 'Прогон неполный или содержит невалидные попытки: итог описывает только сохранённую часть.' });
   if (record.mode === 'demo') reasons.push({ code: 'demo', text: 'Сценарное демо проверяет механику, а не качество модели.' });
-  const confidence: VerdictSummary['confidence'] = unaudited > 0 || rubric.unknown > 0 || gradedCount < MIN_GRADED || allSynthetic || invalidShare > 0.25 || record.mode === 'demo' ? 'low'
-    : reviewComplete && uniqueCards >= TRUSTED_SAMPLE && families >= 8 && reviewedCards >= TRUSTED_SAMPLE && !incomplete.length && !simulatorFlagged ? 'high' : 'medium';
   const nextSteps: VerdictNote[] = [];
   if (record.phase === 'review') nextSteps.push(record.questions.length
     ? { code: 'clarify_requirements', text: 'Ответьте на вопросы по требованиям и подготовьте обновлённый черновик.' }
@@ -575,9 +398,6 @@ export function verdictSummary(record: Experiment): VerdictSummary {
   if (hasResults && weakSpots[0]) nextSteps.push({ code: 'fix_weakest', text: `Начните с самого слабого места${weakSpots[0].stage ? ` на этапе «${weakSpots[0].stage}»` : ''}: ${weakSpots[0].description} (${weakSpots[0].failures} провал(ов)).`, detail: weakSpots[0].description, count: weakSpots[0].failures });
   if (hasResults && allSynthetic) nextSteps.push({ code: 'add_real_data', text: 'Добавьте golden set или реальные диалоги, чтобы результат не держался на одной синтетике.' });
   if (hasResults && record.target.kind === 'sandbox') nextSteps.push({ code: 'connect_agent', text: 'Подключите своего агента вместо песочницы, чтобы проверять то, что реально работает.' });
-  for (const row of hasResults ? disagreeing(judgeCalibration(record)) : []) {
-    nextSteps.push({ code: 'rewrite_rubric', text: `Разберите расхождения по «${row.key}»: проверьте рубрику, основания судьи и ручные метки. Правки выбираются по причине ошибки; повторяемость и сверка с человеком — разные проверки.`, detail: row.key, count: row.n });
-  }
   if (hasResults && gradedCount > 0 && uniqueCards < TRUSTED_SAMPLE) nextSteps.push({ code: 'run_more', text: `Добавьте новые ситуации: проверено ${uniqueCards} разных карточек; ориентир для аудита — ${TRUSTED_SAMPLE}. Это не статистическая гарантия.`, count: uniqueCards });
   const passRate = gradedCount ? passed / gradedCount : null;
   const estimates = rubric.assessed ? ` ${record.mode === 'demo' ? 'Сценарная оценка демо' : 'Оценка модели'} (не проверена): ${rubric.passed} из ${rubric.assessed} диалогов без замечаний по рубрикам агента.` : '';
@@ -592,18 +412,13 @@ export function verdictSummary(record: Experiment): VerdictSummary {
   if (hasResults && review.invalid) headline = `Невалидных тестов: ${review.invalid}. Качество агента по ним не установлено. Исходные оценки: ${headline}`;
   else if (hasResults && review.flagged) headline = `Человек отметил проблемы: ${review.flagged} диалог(ов). ${headline}`;
   else if (hasResults && review.disagreements) headline = `Есть расхождения с ручной оценкой: ${review.disagreements}. ${headline}`;
-  return { headline, passed, graded: gradedCount, invalid, passRate, execution, review, repeats, rubric, simulatorFlagged, provenance, stages, tiers, weakSpots, confidence, confidenceReasons: reasons, nextSteps };
+  return { headline, passed, graded: gradedCount, invalid, passRate, execution, review, repeats, rubric, simulatorFlagged, provenance, stages, tiers, weakSpots, confidenceReasons: reasons, nextSteps };
 }
 
 export interface EvidenceSummary {
   verdict: VerdictSummary;
   comparison: { observed: string; status: string } | null;
-  pilot: ReturnType<typeof pilotSummary>;
-  modes: ModeComparison[]; calibration: CalibrationRow[]; fidelity: FidelityReport | null; notes: string[];
-  /** What the run recorded about the simulated user: code checks, judge fidelity, human verdicts, answered clarifications. */
-  simulator: SimulatorSummary;
-  /** Per card, what each user side achieved; the cards only the reactive user completed or failed. */
-  modeValue: ModeValue;
+  notes: string[];
 }
 /** The one object every surface renders: the plain verdict first, observed numbers next, then what they cannot yet support. */
 export function evidenceSummary(record: Experiment): EvidenceSummary {
@@ -613,29 +428,8 @@ export function evidenceSummary(record: Experiment): EvidenceSummary {
     observed: `Candidate fixed ${final.fixed} of ${final.validPairs} valid pairs (${final.plannedPairs} planned) with ${final.regressed} regression(s); family-weighted delta ${fmt(final.delta)}${final.interval ? ` (95% interval ${fmt(final.interval[0])} to ${fmt(final.interval[1])})` : ''} across ${final.families} declared families.`,
     status: `Verdict ${final.verdict}: ${final.reasons[0] ?? 'no reason recorded'}`,
   } : null;
-  const modes = compareUserModes(record);
-  const calibration = judgeCalibration(record);
-  const fidelity = simulatorFidelity(record);
-  const notes: string[] = [];
-  if (calibration.some(r => r.subject !== 'check')) notes.push('Судья не валидирован на отдельном наборе ручных меток. Сверка текущих разборов — описательная; согласие повторов и число меток не подтверждают правильность.');
-  for (const r of calibration.filter(r => r.abstained || r.missing)) notes.push(`«${r.key}»: unknown ${r.abstained}, отсутствующих оценок ${r.missing} из ${r.reviewed} ручных вердиктов; они сохранены в знаменателях TPR/TNR.`);
-  const thin = calibration.filter(r => r.reviewed > 0 && !r.sampleSufficient).map(r => r.key);
-  if (thin.length) notes.push(`Для сверки мало примеров одного или обоих классов: ${thin.join(', ')}. Ориентир — хотя бы 30 ручных pass и 30 fail на критерий и версию судьи; это не подтверждение валидации.`);
-  if (calibration.length && calibration.every(r => r.reviewed === 0)) notes.push('Вердиктов человека по метрикам и проверкам ещё нет: согласие судьи неизвестно.');
-  for (const row of disagreeing(calibration)) {
-    notes.push(`По «${row.key}» судья обнаружил ${row.tp} из ${row.humanFail} ручных провалов и подтвердил ${row.tn} из ${row.humanPass} ручных успехов; unknown ${row.abstained}, пропусков ${row.missing}. Проверьте рубрику, основания оценок и ручную разметку; причина ещё не установлена.`);
-  }
-  if (!fidelity) notes.push('Реальные диалоги не загружены: верность симулятора оценить нечем.');
-  else if (!fidelity.simulatedDialogues) notes.push('Завершённых реактивных диалогов ещё нет: разрывы верности недоступны.');
-  notes.push(...record.limitations.filter(l => l.startsWith('Scripted mode skipped')));
-  const reactive = modes.find(m => m.userMode === 'reactive');
-  if (record.settings.userModes.length > 1) notes.push('Совпавшие ответы агента с разными оценками по рубрикам не считаются уникальным провалом режима: сначала требуется разбор контекста и оценки.');
-  if (record.settings.userModes.length > 1 && reactive?.uniqueFailedChecks.length) notes.push(`Критерии с провалом только в реактивном режиме среди сопоставленных попыток (не доказательство дополнительной пользы): ${reactive.uniqueFailedChecks.join(', ')}.`);
-  const simulator = simulatorSummary(record);
-  const value = modeValue(record);
-  notes.push(...simulator.notes, ...value.notes);
-  if (value.reactiveOnlyCompleted.length) notes.push(`Только реактивный пользователь довёл до завершения: ${value.reactiveOnlyCompleted.join(', ')}. Это наблюдение на измеренных карточках, не доказательство пользы.`);
-  return { verdict: verdictSummary(record), comparison, modes, calibration, fidelity, notes, pilot: pilotSummary(record), simulator, modeValue: value };
+  const notes = record.limitations.filter(l => l.startsWith('Scripted mode skipped'));
+  return { verdict: verdictSummary(record), comparison, notes };
 }
 
 /**
@@ -652,12 +446,12 @@ export interface RunComparison {
   cards: { shared: number; onlyBefore: string[]; onlyAfter: string[] };
   fixed: { scenarioId: string; title: string; tier: Tier }[];
   regressed: { scenarioId: string; title: string; tier: Tier }[];
+  incomparable: { scenarioId: string; title: string; tier: Tier; userMode: UserMode; repeat: number;
+    beforeTrialId?: string; afterTrialId?: string; reason: string }[];
   unchanged: { passing: number; failing: number };
   ungraded: number; includesRubrics: boolean;
   stages: { stage: string; before: number | null; after: number | null }[];
   tiers: { tier: Tier; before: { passed: number; graded: number }; after: { passed: number; graded: number } }[];
-  /** Paired difference of the share of passing cards per family, averaged over families; descriptive, never the verdict. */
-  delta: { families: number; mean: number | null; interval: [number, number] | null; note: string } | null;
   notes: string[];
 }
 
@@ -667,10 +461,12 @@ export function plannedTrials(record: Experiment): number {
   return record.scenarios.reduce((sum, s) => sum + record.settings.userModes.filter(m => m !== 'scripted' || s.user.script !== undefined).length * record.settings.repeats, 0);
 }
 const attemptKey = (trial: Trial) => `${trial.scenarioId}|${trial.userMode}|${trial.repeat}`;
+const expectedAttemptRows = (record: Experiment): { scenarioId: string; userMode: UserMode; repeat: number }[] => record.assessmentTrialIds
+  ? record.trials.filter(t => record.assessmentTrialIds!.includes(t.id)).map(({ scenarioId, userMode, repeat }) => ({ scenarioId, userMode, repeat }))
+  : record.scenarios.flatMap(s => record.settings.userModes.filter(m => m !== 'scripted' || s.user.script !== undefined)
+    .flatMap(userMode => Array.from({ length: record.settings.repeats }, (_, repeat) => ({ scenarioId: s.id, userMode, repeat }))));
 function expectedAttempts(record: Experiment): Set<string> {
-  if (record.assessmentTrialIds) return new Set(record.trials.filter(t => record.assessmentTrialIds!.includes(t.id)).map(attemptKey));
-  return new Set(record.scenarios.flatMap(s => record.settings.userModes.filter(m => m !== 'scripted' || s.user.script !== undefined)
-    .flatMap(mode => Array.from({ length: record.settings.repeats }, (_, i) => `${s.id}|${mode}|${i}`))));
+  return new Set(expectedAttemptRows(record).map(row => `${row.scenarioId}|${row.userMode}|${row.repeat}`));
 }
 function runCompleteness(record: Experiment, allowPartial = false): string[] {
   const expected = expectedAttempts(record);
@@ -727,14 +523,22 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
     headline: '', comparable: false, pairs: [], cards: { shared: shared.length,
       onlyBefore: before.scenarios.filter(s => !afterIds.has(s.id)).map(s => s.id),
       onlyAfter: after.scenarios.filter(s => !beforeIds.has(s.id)).map(s => s.id) },
-    fixed: [], regressed: [], unchanged: { passing: 0, failing: 0 }, ungraded: 0,
+    fixed: [], regressed: [], incomparable: [], unchanged: { passing: 0, failing: 0 }, ungraded: 0,
     includesRubrics: shared.some(s => s.metrics?.some(m => m.subject === 'agent')),
-    stages: [], tiers: [], delta: null, notes: [],
+    stages: [], tiers: [], notes: [],
     coverage: { plannedPairs: plannedTrials(before), validPairs: 0, excludedPairs: plannedTrials(before),
       missingBefore: Math.max(0, plannedTrials(before) - before.trials.length), missingAfter: Math.max(0, plannedTrials(after) - after.trials.length),
       invalidBefore: before.trials.filter(t => !validBefore(t)).length, invalidAfter: after.trials.filter(t => !validAfter(t)).length },
   };
   const { notes } = result;
+  const addIncomparable = (row: { scenarioId: string; userMode: UserMode; repeat: number }, reason: string, beforeTrialId?: string, afterTrialId?: string) => {
+    const scenario = after.scenarios.find(s => s.id === row.scenarioId) ?? before.scenarios.find(s => s.id === row.scenarioId);
+    if (!scenario || result.incomparable.some(item => item.scenarioId === row.scenarioId && item.userMode === row.userMode && item.repeat === row.repeat)) return;
+    result.incomparable.push({ ...row, title: scenario.title, tier: scenario.tier ?? 'regression',
+      ...(beforeTrialId ? { beforeTrialId } : {}), ...(afterTrialId ? { afterTrialId } : {}), reason });
+  };
+  const expectedRows = [...expectedAttemptRows(before), ...expectedAttemptRows(after)]
+    .filter((row, index, rows) => rows.findIndex(value => value.scenarioId === row.scenarioId && value.userMode === row.userMode && value.repeat === row.repeat) === index);
   if (before.id === after.id) notes.push('Выбран один и тот же прогон.');
   if (before.workflow !== 'evaluate' || after.workflow !== 'evaluate') notes.push('Сравнение поддерживает отдельные оценочные прогоны.');
   if (before.mode !== after.mode) notes.push('Демо и живые прогоны несравнимы.');
@@ -752,11 +556,29 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   const judgeIdentities = (record: Experiment) => [...new Set(record.trials.filter(t => measured(t)
     && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length).map(t => t.judgeAudit
       ? fingerprint({ protocol: t.judgeAudit.protocolHash, provider: t.judgeAudit.provider, model: t.judgeAudit.model }) : 'unrecorded'))].sort();
-  if (judgeIdentities(before).length > 1 || judgeIdentities(after).length > 1) notes.push('Внутри прогона смешаны разные протоколы судьи.');
-  if (fingerprint(judgeIdentities(before)) !== fingerprint(judgeIdentities(after))) notes.push('Протокол или модель судьи отличаются; оценки нельзя приписать изменению агента.');
+  const beforeJudges = judgeIdentities(before), afterJudges = judgeIdentities(after);
+  if (beforeJudges.length > 1 || afterJudges.length > 1) notes.push('Внутри прогона смешаны разные протоколы судьи.');
+  if (beforeJudges.length && afterJudges.length && fingerprint(beforeJudges) !== fingerprint(afterJudges)) notes.push('Протокол или модель судьи отличаются; оценки нельзя приписать изменению агента.');
   if (before.mode === 'live' && result.includesRubrics && [before, after].some(run => run.trials.some(trial => measured(trial) && !hasCompleteJudgment({ scenario: run.scenarios.find(s => s.id === trial.scenarioId)!, sources: run.sources, trial })))) notes.push('Для сравнения оценок модели нужны сохранённые ответы из свежих сессий и версия протокола судьи.');
-  if (notes.length) { result.headline = 'Прогоны несравнимы. Исправления и регрессии не подсчитываются.'; return result; }
-  const afterAttempts = new Map(after.trials.map(t => [attemptKey(t), t]));
+  if (notes.length) {
+    for (const row of expectedRows) addIncomparable(row, notes.join(' '),
+      before.trials.find(t => attemptKey(t) === `${row.scenarioId}|${row.userMode}|${row.repeat}`)?.id,
+      after.trials.find(t => attemptKey(t) === `${row.scenarioId}|${row.userMode}|${row.repeat}`)?.id);
+    result.headline = `Прогоны несравнимы: ${result.incomparable.length} пар. Исправления и регрессии не подсчитываются.`;
+    return result;
+  }
+  const beforeAttempts = new Map<string, Trial[]>(), afterAttemptGroups = new Map<string, Trial[]>();
+  for (const trial of before.trials) beforeAttempts.set(attemptKey(trial), [...beforeAttempts.get(attemptKey(trial)) ?? [], trial]);
+  for (const trial of after.trials) afterAttemptGroups.set(attemptKey(trial), [...afterAttemptGroups.get(attemptKey(trial)) ?? [], trial]);
+  for (const row of expectedRows) {
+    const key = `${row.scenarioId}|${row.userMode}|${row.repeat}`;
+    const a = beforeAttempts.get(key) ?? [], b = afterAttemptGroups.get(key) ?? [];
+    if (a.length !== 1) addIncomparable(row, a.length ? 'Несколько попыток «до» с одним ключом.' : 'Нет попытки «до».', a[0]?.id, b[0]?.id);
+    else if (!validBefore(a[0]!)) addIncomparable(row, 'Попытка «до» невалидна или не измерена.', a[0]!.id, b[0]?.id);
+    else if (b.length !== 1) addIncomparable(row, b.length ? 'Несколько попыток «после» с одним ключом.' : 'Нет попытки «после».', a[0]!.id, b[0]?.id);
+    else if (!validAfter(b[0]!)) addIncomparable(row, 'Попытка «после» невалидна или не измерена.', a[0]!.id, b[0]!.id);
+  }
+  const afterAttempts = new Map([...afterAttemptGroups].flatMap(([key, trials]) => trials.length === 1 ? [[key, trials[0]!] as const] : []));
   const pairs = before.trials.filter(t => validBefore(t) && afterAttempts.has(attemptKey(t)) && validAfter(afterAttempts.get(attemptKey(t))!));
   result.coverage.validPairs = pairs.length;
   result.coverage.excludedPairs -= pairs.length;
@@ -772,6 +594,8 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
     const reviewNote = rubricReviewNote(scenario, trial, following);
     if (reviewNote) change = 'unknown';
     if (reviewNote) notes.push(`${scenario!.title} · ${trial.userMode} #${trial.repeat + 1}: ${reviewNote}`);
+    if (change === 'unknown') addIncomparable({ scenarioId: trial.scenarioId, userMode: trial.userMode, repeat: trial.repeat },
+      reviewNote ?? 'У пары нет решающей автоматической или человеческой оценки.', trial.id, following.id);
     return { scenarioId: trial.scenarioId, userMode: trial.userMode, repeat: trial.repeat,
       beforeTrialId: trial.id, afterTrialId: following.id, change, ...(reviewNote ? { reviewNote } : {}) };
   });
@@ -792,21 +616,6 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
     else if (now === 'pass') result.unchanged.passing++;
     else result.unchanged.failing++;
   }
-  // Pair decisive card outcomes first; never compare different cards within a family.
-  const families = new Map<string, number[]>();
-  for (const scenario of shared) {
-    if (result.pairs.some(p => p.scenarioId === scenario.id && p.reviewNote)) continue;
-    const was = cardOutcome(before, scenario, true), now = cardOutcome(after, scenario, true);
-    if (was === 'unknown' || now === 'unknown') continue;
-    const key = scenario.familyId || scenario.id;
-    families.set(key, [...families.get(key) ?? [], Number(now === 'pass') - Number(was === 'pass')]);
-  }
-  // Comparable runs always carry a delta object; `null` is reserved for incomparable runs so the surfaces can tell the two apart.
-  const familyDeltas = [...families.values()].map(values => mean(values)!);
-  result.delta = { families: familyDeltas.length, mean: mean(familyDeltas), interval: clusterInterval(familyDeltas, `${before.id}|${after.id}`),
-    note: familyDeltas.length
-      ? `Описательная парная дельта по семействам. Исключено карточек: ${result.ungraded}. Малое число семейств не позволяет надёжно оценить неопределённость; вердикт определяют карточки.`
-      : `Ни одна карточка не имеет решающего исхода в обоих прогонах; исключено карточек: ${result.ungraded}. Дельта не рассчитана.` };
   const bv = verdictSummary(before);
   const av = verdictSummary(after);
   const rate = (v: VerdictSummary, stage: string) => { const s = v.stages.find(s => s.stage === stage); return s ? s.passed / s.evaluated : null; };
@@ -827,45 +636,6 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   return result;
 }
 
-/** Human-confirmed findings and observed spending, grouped by the actual user mode. */
-export function pilotSummary(record: Experiment) {
-  const reviews = latestHumanReviews(record);
-  const findings = humanFindings(record);
-  const badSimulator = (t: Trial) => !simulatorUsable(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews);
-  const valid = (t: Trial) => measurementUsable(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews);
-  const modes = record.settings.userModes.map(userMode => {
-    const trials = record.trials.filter(t => t.userMode === userMode);
-    const failures = findings.filter(f => f.verdict === 'fail' && !['simulator', 'test'].includes(f.subject)
-      && trials.some(t => t.id === f.trialId && valid(t)));
-    const keys = [...new Set(failures.map(f => `${trials.find(t => t.id === f.trialId)!.familyId}: ${f.target}`))];
-    const exclusive = [...new Set(failures.filter(f => {
-      const trial = trials.find(t => t.id === f.trialId)!;
-      const scenario = record.scenarios.find(s => s.id === trial.scenarioId)!;
-      const otherModes = record.settings.userModes.filter(m => m !== userMode && (m !== 'scripted' || scenario.user.script !== undefined));
-      return otherModes.length > 0 && otherModes.every(mode => {
-        const peers = record.trials.filter(t => t.scenarioId === trial.scenarioId && t.userMode === mode);
-        return peers.length === record.settings.repeats && peers.every(t => valid(t) && automaticTrialResult(scenario, t, record.humanReviews) === 'pass'
-          && !findings.some(x => x.trialId === t.id && x.verdict === 'fail' && x.subject !== 'simulator'));
-      });
-    }).map(f => `${trials.find(t => t.id === f.trialId)!.familyId}: ${f.target}`))];
-    const external = trials.filter(t => t.externalUsage);
-    const timed = record.humanReviews.filter(r => trials.some(t => t.id === r.trialId) && r.durationMs !== undefined);
-    return { userMode, trials: trials.length, confirmedFailures: failures.length, confirmedFailureKeys: keys, exclusiveConfirmed: exclusive,
-      simulatorFailures: trials.filter(badSimulator).length, invalid: trials.filter(t => !measured(t)).length,
-      excluded: trials.filter(t => measured(t) && !valid(t)).length,
-      assessmentIncomplete: trials.filter(t => !trialAssessmentComplete(record.scenarios.find(s => s.id === t.scenarioId)!, t, record.humanReviews)).length,
-      elapsedMs: trials.reduce((n, t) => n + t.elapsedMs, 0), reviewMs: timed.length ? timed.reduce((n, r) => n + r.durationMs!, 0) : null,
-      labCostUsd: trials.some(t => t.usage.costUsd === null) ? null : trials.reduce((n, t) => n + t.usage.costUsd!, 0),
-      externalCostUsd: !trials.length || external.length !== trials.length || external.some(t => t.externalUsage!.costUsd === null)
-        ? null : external.reduce((n, t) => n + t.externalUsage!.costUsd!, 0),
-      externalReportedTrials: external.length, externalCalls: external.reduce((n, t) => n + t.externalUsage!.calls, 0) };
-  });
-  return { modes, conclusion: modes.some(m => m.userMode === 'reactive' && m.exclusiveConfirmed.length)
-    ? 'В этих карточках реактивный режим нашёл дополнительные подтверждённые человеком провалы; результат относится только к измеренной выборке.'
-    : 'Дополнительная польза реактивного режима пока не подтверждена человеком на сопоставимых попытках.',
-    limitation: 'Группы family + критерий не устанавливают независимые причины ошибок. Время разбора — время открытого диалога и формы вердикта, включая простой; старые записи могли учитывать только форму. Расходы внешнего Pi-разговора неизвестны.' };
-}
-
 /** Shared CLI exit status: infrastructure/incomplete measurement takes precedence over an agent failure. */
 export function evaluationExitCode(record: Experiment): 0 | 1 | 2 {
   const v = verdictSummary(record);
@@ -873,10 +643,4 @@ export function evaluationExitCode(record: Experiment): 0 | 1 | 2 {
     || v.execution.missing > 0 || v.rubric.unknown > 0 || v.simulatorFlagged > 0
     || record.trials.some(t => automaticTrialResult(record.scenarios.find(s => s.id === t.scenarioId), t, record.humanReviews) === 'unknown');
   return incomplete ? 2 : record.trials.some(t => isAgentFailure(record, t)) ? 1 : 0;
-}
-
-export function familyDeltaText(delta: RunComparison['delta']): string {
-  if (!delta) return 'Парная дельта не рассчитана: прогоны несравнимы или нет ни одной валидной пары попыток.';
-  const pp = (n: number) => `${n >= 0 ? '+' : ''}${(100 * n).toFixed(1)} п.п.`;
-  return `Парная дельта: ${delta.mean === null ? 'нет оценённых пар' : pp(delta.mean)}; семейств ${delta.families}; интервал ${delta.interval ? delta.interval.map(pp).join(' … ') : 'не рассчитан'}. ${delta.note}`;
 }

@@ -1,5 +1,7 @@
 # Agent Lab v2: implementation plan
 
+> Исторический документ. План завершён или заменён; актуальный продуктовый цикл описан в корневом README.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (inline) or superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn Agent Lab from "evaluates the sandbox agent it built" into "evaluates the agent you actually run, on your real data, and tells you how far the simulator and the judge are from humans".

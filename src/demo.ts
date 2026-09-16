@@ -119,21 +119,6 @@ export function createDemoRuntime(): Runtime {
         questions: [], agent: structuredClone(input.existingAgent ?? (input.workflow === 'evaluate' ? working : baseline)), scenarios,
       });
     },
-    async profiles({ dialogues }, ctx) {
-      call(ctx);
-      if (!dialogues.length) return [];
-      // Deterministic stand-in for the model role: characteristics come from counted style, never invented.
-      const userMessages = dialogues.flatMap(d => d.messages.filter(m => m.role === 'user').map(m => m.content));
-      const average = userMessages.reduce((sum, m) => sum + m.length, 0) / Math.max(1, userMessages.length);
-      const questions = userMessages.filter(m => m.includes('?')).length / Math.max(1, userMessages.length);
-      const abandoned = dialogues.filter(d => d.outcome === 'abandoned').length / dialogues.length;
-      return [{
-        id: 'observed_1', source: 'observed' as const, persona: 'Appointment holder observed in the supplied real dialogues.',
-        characteristics: [average < 60 ? 'Writes short messages' : 'Writes detailed messages', questions >= 0.3 ? 'Often asks questions' : 'Rarely asks questions', abandoned > 0 ? 'May stop when blocked' : 'Stays until answered'],
-        observedStyle: `${userMessages.length} user messages, ${Math.round(average)} characters on average, ${Math.round(questions * 100)}% questions, ${Math.round(abandoned * 100)}% abandoned dialogues.`,
-        evidenceDialogueIds: dialogues.slice(0, 50).map(d => d.id),
-      }];
-    },
     async goals({ dialogues, profiles }, ctx) {
       call(ctx);
       // Deterministic stand-in for the model role: a goal per dialogue that names an appointment, opening copied verbatim.

@@ -19,16 +19,23 @@ test('staged discovery batches whole logs, selects one grounded focus, and persi
   const dialogues = Array.from({ length: 26 }, (_, index) => ({ id: `log_${index}`, outcome: index ? 'success' as const : 'failure' as const,
     messages: [{ role: 'user' as const, content: `Question ${index}` }, { role: 'assistant' as const, content: candidateIds.has(`log_${index}`) ? 'Invented answer' : 'Approved answer' }] }));
   const seen: unknown[] = [];
+  let delayCoarse = false;
   const runtime: Runtime = {
     async discover(input) {
       seen.push(structuredClone(input));
       if (input.kind === 'requirements') return { kind: 'requirements', requirements: [{ id: 'owner_rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [] };
-      if (input.kind === 'coarse') return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({
+      if (input.kind === 'coarse') {
+        if (delayCoarse) await new Promise(resolve => setTimeout(resolve, 60));
+        return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({
         dialogueId: dialogue.id, classification: candidateIds.has(dialogue.id) ? 'candidate' as const : 'clean' as const,
         ...(candidateIds.has(dialogue.id) ? { requirementId: 'owner_rule' } : {}),
         summary: 'Observed reply', citations: [{ seq: 1, quote: dialogue.messages[1]!.content }],
-      })) };
-      if (input.kind === 'group') return { kind: 'group', groups: [{ requirementId: 'foreign_rule', dialogueIds: ['log_0', 'log_25'], summary: 'Invalid advisory group' }] };
+        })) };
+      }
+      if (input.kind === 'group') return { kind: 'group', groups: [
+        { requirementId: 'foreign_rule', dialogueIds: ['log_0', 'log_25'], summary: 'Invalid advisory group' },
+        { requirementId: 'owner_rule', dialogueIds: [...candidateIds], summary: 'The reply gives an unapproved answer.' },
+      ] };
       return { kind: 'hypothesis', hypothesis: 'The agent may answer outside the approved support policy.' };
     },
     async goals({ dialogues }) {
@@ -57,14 +64,18 @@ test('staged discovery batches whole logs, selects one grounded focus, and persi
     settings: { maxCalls: 20, maxDurationMs: 180_000 } };
   const plan = planDiscovery(input);
   assert.equal(plan.batchCount, 2); assert.ok(plan.batches.every(batch => batch.length <= 25 && JSON.stringify({ dialogues: batch }).length <= 60_000));
+  assert.equal(plan.nominalCalls, plan.batchCount + (2 * plan.metrics + 1) * plan.selectedCap + 3,
+    'requirements, grouping and hypothesis are three distinct fixed calls');
   assert.deepEqual([plan.baseMaxCalls, plan.baseMaxDurationMs], [20, 180_000]);
   assert.equal(plan.maxDurationMs, Math.ceil(180_000 * plan.maxCalls / 20));
   const started = await lab.discover(input); await lab.waitForIdle();
   const result = await lab.get(started.id);
   assert.equal(result.discovery?.callPlan.nominalCalls, plan.nominalCalls); assert.equal(result.settings.maxCalls, plan.maxCalls); assert.ok(result.settings.maxCalls > 20);
+  assert.ok(result.discovery!.elapsedMs! > 0, 'discovery checkpoints persist elapsed wall time');
   assert.equal(result.discovery?.phase, 'ready', result.discovery?.error ?? result.error ?? '');
   assert.equal(result.discovery?.observations.length, dialogues.length);
   assert.equal(result.discovery?.focusRequirementId, 'owner_rule');
+  assert.deepEqual(result.discovery?.groups, [{ requirementId: 'owner_rule', dialogueIds: [...candidateIds].sort(), summary: 'The reply gives an unapproved answer.' }]);
   assert.deepEqual(new Set(result.discovery?.representativeIds), candidateIds);
   assert.equal(result.discovery?.selectedIds.length, result.discovery!.representativeIds.length + result.discovery!.controlIds.length);
   assert.ok(result.discovery?.controlIds.every(id => !result.discovery!.representativeIds.includes(id)));
@@ -106,6 +117,20 @@ test('staged discovery batches whole logs, selects one grounded focus, and persi
   tampered.discovery!.phase = 'partial'; tampered.discovery!.activeCall = 'deep log_0';
   await lab.store.save(tampered);
   await assert.rejects(lab.resumeDiscovery(result.id), /стоимость неизвестна/);
+
+  delete tampered.discovery!.activeCall;
+  tampered.phase = 'interrupted'; tampered.discovery!.phase = 'partial'; tampered.discovery!.error = null;
+  tampered.discovery!.completedBatchCount = 0; tampered.discovery!.observations = []; tampered.discovery!.groupingComplete = false;
+  tampered.discovery!.groups = []; tampered.discovery!.elapsedMs = tampered.discovery!.callPlan.maxDurationMs - 20;
+  delayCoarse = true;
+  await lab.store.save(tampered);
+  await lab.resumeDiscovery(result.id); await lab.waitForIdle();
+  const timedOut = await lab.get(result.id);
+  assert.equal(timedOut.discovery!.elapsedMs, timedOut.discovery!.callPlan.maxDurationMs);
+  assert.match(timedOut.error!, /time limit/i, 'resume receives only the unspent discovery time budget');
+  timedOut.discovery!.phase = 'partial';
+  await lab.store.save(timedOut);
+  await assert.rejects(lab.resumeDiscovery(result.id), /Лимит времени discovery исчерпан/);
 });
 
 test('discovery requires assistant evidence and two repeated deep goal failures before proposing a test', async t => {
@@ -122,7 +147,7 @@ test('discovery requires assistant evidence and two repeated deep goal failures 
       if (input.kind === 'coarse') return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({ dialogueId: dialogue.id,
         classification: 'candidate' as const, requirementId: 'rule', summary: 'Possible failure',
         citations: [{ seq: citationSeq, quote: dialogue.messages[citationSeq]!.content }] })) };
-      if (input.kind === 'group') return { kind: 'group', groups: [] };
+      if (input.kind === 'group') return { kind: 'group', groups: [{ requirementId: 'rule', dialogueIds: ['a', 'b'], summary: 'Same unsupported answer.' }] };
       hypothesisCalls++; return { kind: 'hypothesis', hypothesis: 'Repeated unsupported answer.' };
     },
     async goals({ dialogues: [dialogue] }) { return [{ id: `goal_${dialogue!.id}`, goal: 'Get an approved answer', opening: dialogue!.messages[0]!.content,
@@ -148,6 +173,54 @@ test('discovery requires assistant evidence and two repeated deep goal failures 
   assert.equal(rejectedJudge.discovery?.deep.length, 2);
   assert.equal(rejectedJudge.discovery?.hypothesis, undefined);
   assert.equal(hypothesisCalls, 0);
+});
+
+test('discovery groups one repeated behavior before deep checks instead of merging a broad requirement', async t => {
+  const quote = 'Answers must follow the approved policy.';
+  const dialogues = ['invent_a', 'invent_b', 'omit_a', 'omit_b'].map(id => ({ id, messages: [
+    { role: 'user' as const, content: `Question ${id}` }, { role: 'assistant' as const, content: `Reply ${id}` },
+  ] }));
+  let groupedInput: unknown;
+  let hypothesisIds: string[] = [];
+  const runtime: Runtime = {
+    async discover(input) {
+      if (input.kind === 'requirements') return { kind: 'requirements', requirements: [{ id: 'policy', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [] };
+      if (input.kind === 'coarse') return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({
+        dialogueId: dialogue.id, classification: 'candidate' as const, requirementId: 'policy',
+        summary: dialogue.id.startsWith('invent') ? 'Invents a policy answer.' : 'Omits the required answer.',
+        citations: [{ seq: 1, quote: dialogue.messages[1]!.content }],
+      })) };
+      if (input.kind === 'group') {
+        groupedInput = structuredClone(input);
+        return { kind: 'group', groups: [
+          { requirementId: 'policy', dialogueIds: ['invent_a', 'invent_b'], summary: 'Invents a policy answer.' },
+          { requirementId: 'policy', dialogueIds: ['omit_a', 'omit_b'], summary: 'Omits the required answer.' },
+          { requirementId: 'foreign', dialogueIds: ['invent_a', 'invent_b'], summary: 'Invalid group.' },
+        ] };
+      }
+      hypothesisIds = input.observations.map(observation => observation.dialogueId);
+      return { kind: 'hypothesis', hypothesis: 'The selected behavior repeats.' };
+    },
+    async goals({ dialogues: [dialogue] }) { return [{ id: `goal_${dialogue!.id}`, goal: 'Get a policy answer', opening: dialogue!.messages[0]!.content,
+      requirementIds: ['policy'], evidenceDialogueIds: [dialogue!.id], successCriteria: quote }]; },
+    async assess({ scenario, trial }) { return scenario.metrics!.map(metric => ({ metricId: metric.id, result: 'fail' as const,
+      rationale: 'The selected reply fails the policy.', evidence: [1], citations: [{ seq: 1, quote: trial.events[1]!.text! }] })); },
+    async prepare() { throw new Error('unused'); }, async improve() { throw new Error('unused'); },
+    async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
+  };
+  const { lab } = await setup(t, runtime);
+  const started = await lab.discover({ task: 'Find one repeated behavior', mode: 'live', materials: [{ name: 'policy', content: quote }], dialogues });
+  await lab.waitForIdle();
+  const result = await lab.get(started.id);
+  assert.equal(result.discovery?.phase, 'ready', result.discovery?.error ?? result.error ?? '');
+  assert.equal(result.discovery?.groups?.length, 2, 'foreign model groups are ignored');
+  const representatives = new Set(result.discovery?.representativeIds);
+  const invent = ['invent_a', 'invent_b'].every(id => representatives.has(id));
+  const omit = ['omit_a', 'omit_b'].every(id => representatives.has(id));
+  assert.notEqual(invent, omit, 'representatives must come from exactly one behavioral group');
+  assert.deepEqual(new Set(hypothesisIds), representatives, 'only deeply confirmed representatives become hypothesis evidence');
+  assert.deepEqual(Object.keys(groupedInput as object).sort(), ['kind', 'observations', 'requirements']);
+  assert.equal(JSON.stringify(groupedInput).includes('Question '), false, 'grouping sees short observations, not full dialogues');
 });
 
 test('ExperimentLab rejects backend checks from a custom Runtime for confirmed reply-only RAG tests, including sandbox targets', async t => {
@@ -500,7 +573,10 @@ test('accepting a draft records exact one-test review metadata without granting 
   await assert.rejects(lab.acceptDraft(draft.id, '0'.repeat(64)), /изменился/i);
   assert.deepEqual(await lab.get(draft.id), draft);
   const accepted = await lab.acceptDraft(draft.id, currentHash);
-  assert.deepEqual(accepted, { ...draft, acceptedDraftHash: currentHash });
+  assert.equal(accepted.acceptedDraftHash, currentHash);
+  assert.equal(accepted.acceptedTests?.length, 1);
+  assert.deepEqual({ scenarioId: accepted.acceptedTests![0]!.scenarioId, definitionHash: accepted.acceptedTests![0]!.definitionHash },
+    { scenarioId: accepted.scenarios[0]!.id, definitionHash: fingerprint(accepted.scenarios[0]!) });
   assert.equal(draftHash(accepted), currentHash);
   assert.equal(accepted.reviewedAt, draft.reviewedAt);
   assert.equal(accepted.reviewMode, draft.reviewMode);
@@ -510,14 +586,17 @@ test('accepting a draft records exact one-test review metadata without granting 
   const changedCard = { ...accepted.scenarios[0]!, title: 'Уточнённый тест' };
   const edited = await lab.updateDraft(draft.id, currentHash, { scenarios: [changedCard] });
   assert.equal(edited.acceptedDraftHash, currentHash);
+  assert.deepEqual(edited.acceptedTests, [], 'an edited definition is not presented as the accepted test');
   assert.notEqual(draftHash(edited), edited.acceptedDraftHash, 'a semantic edit exposes stale acceptance');
 
   await lab.start(edited.id, { approved: true, reviewer: 'human', expectedHash: draftHash(edited) });
   await lab.waitForIdle();
   const result = await lab.get(edited.id);
   assert.equal(result.acceptedDraftHash, currentHash, 'running does not rewrite or clear acceptance metadata');
+  assert.deepEqual(result.acceptedTests, []);
   const repeated = await lab.repeat(result.id);
   assert.equal(repeated.acceptedDraftHash, undefined, 'a fresh draft starts without review metadata');
+  assert.deepEqual(repeated.acceptedTests, []);
 });
 
 test('accepting rejects zero, multiple, compare and non-review drafts without mutation', async t => {
@@ -554,6 +633,7 @@ test('fifteen unaccepted cards still run, report accuracy, save, load and rerun 
   const batch = await lab.updateDraft(draft.id, draftHash(draft), { scenarios: additions });
   assert.equal(batch.scenarios.length, 15);
   assert.equal(batch.acceptedDraftHash, undefined);
+  assert.deepEqual(batch.acceptedTests, []);
 
   await lab.start(batch.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(batch) }); await lab.waitForIdle();
   const first = await lab.get(batch.id);
@@ -566,6 +646,7 @@ test('fifteen unaccepted cards still run, report accuracy, save, load and rerun 
   const loaded = await lab.loadSuite(suitePath);
   assert.equal(loaded.scenarios.length, 15);
   assert.equal(loaded.acceptedDraftHash, undefined);
+  assert.deepEqual(loaded.acceptedTests, []);
   await lab.start(loaded.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(loaded) }); await lab.waitForIdle();
   const rerun = await lab.get(loaded.id);
   assert.equal(rerun.trials.length, 15);
@@ -701,7 +782,7 @@ test('evaluation runs every user mode, skips scripted cards without a script, an
   await assert.rejects(lab.create(createInputSchema.parse({ ...demoInput(), target: { kind: 'http', url: 'http://localhost:1' } })), /внешнего агента/);
 });
 
-test('golden cases and real dialogues enter the draft as curated cards and grounded profiles', async t => {
+test('golden cases and real dialogues enter the draft without inventing user profiles', async t => {
   const { lab } = await setup(t);
   const input = createInputSchema.parse({
     ...demoInput(), workflow: 'evaluate', scenarioCount: 2, settings: { ...demoInput().settings, repeats: 1 },
@@ -716,30 +797,18 @@ test('golden cases and real dialogues enter the draft as curated cards and groun
   const created = await lab.create(input); await lab.waitForIdle();
   const draft = await lab.get(created.id);
   assert.equal(draft.phase, 'review', draft.error ?? '');
-  assert.equal(draft.profiles.length, 1);
-  assert.deepEqual(draft.profiles[0]!.evidenceDialogueIds, ['d1', 'd2']);
+  assert.deepEqual(draft.profiles, []);
   const golden = draft.scenarios.find(s => s.id === 'gold_move')!;
   assert.equal(golden.provenance, 'curated'); assert.equal(golden.checks.length, 1); assert.deepEqual(golden.requirementIds, []);
   const synthetic = draft.scenarios.filter(s => s.provenance === 'synthetic');
   assert.equal(synthetic.length, 2);
-  assert.ok(synthetic.every(s => s.profileId === draft.profiles[0]!.id && s.user.persona === draft.profiles[0]!.persona));
+  assert.ok(synthetic.every(s => !s.profileId));
   assert.notEqual(measurementHash(draft), measurementHash({ ...draft, dialogues: [] }));
   await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
   const result = await lab.get(draft.id);
   assert.equal(result.phase, 'results_review', result.error ?? '');
   const goldenTrial = result.trials.find(tr => tr.scenarioId === 'gold_move')!;
   assert.equal(goldenTrial.outcome, 'pass', goldenTrial.reason);
-});
-
-test('profiles with evidence outside the supplied dialogues fail preparation instead of grounding cards', async t => {
-  const runtime = createDemoRuntime();
-  runtime.profiles = async () => [{ id: 'bad', persona: 'x', characteristics: ['y'], observedStyle: 'z', evidenceDialogueIds: ['nope'] }];
-  const { lab } = await setup(t, runtime);
-  const input = createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1, dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'hi' }] }] });
-  const created = await lab.create(input); await lab.waitForIdle();
-  const failed = await lab.get(created.id);
-  assert.equal(failed.phase, 'error');
-  assert.match(failed.error ?? '', /evidence/i);
 });
 
 test('a missing target yields a recoverable explanation and a rejected connection edit leaves the draft intact', async t => {
@@ -755,12 +824,13 @@ test('a missing target yields a recoverable explanation and a rejected connectio
   assert.equal(draftHash(await lab.get(draft.id)), draftHash(draft));
 });
 
-test('profile edits preserve evidence, update linked cards, invalidate approval and survive a run and repeat', async t => {
+test('owner profile edits update linked cards, invalidate approval and survive a run and repeat', async t => {
   const runtime = createDemoRuntime();
   const users: unknown[] = []; const userTurn = runtime.userTurn;
   runtime.userTurn = async (input, ctx) => { users.push(structuredClone(input.user)); return userTurn(input, ctx); };
   const { lab } = await setup(t, runtime);
   const created = await lab.create(createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2, settings: { repeats: 1 },
+    profiles: [{ id: 'hurried_owner', persona: 'A customer in a hurry', characteristics: ['Terse'] }],
     dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'move A101 to 14:00 pls' }] }],
   }));
   await lab.waitForIdle();
@@ -794,8 +864,8 @@ test('profile edits preserve evidence, update linked cards, invalidate approval 
   assert.equal(repeated.phase, 'review'); assert.equal(repeated.reviewMode, null); assert.equal(repeated.trials.length, 0);
 });
 
-test('logs yield production goals even when no meaningful profile can be extracted', async t => {
-  const runtime = createDemoRuntime(); runtime.profiles = async () => [];
+test('logs yield production goals without requiring a user profile', async t => {
+  const runtime = createDemoRuntime();
   const prepare = runtime.prepare;
   runtime.prepare = async (input, ctx) => {
     const result = await prepare(input, ctx);
@@ -827,9 +897,9 @@ test('owner notes and owner profiles are first-class inputs: cards may cite an o
   const draft = await lab.get(created.id);
   assert.equal(draft.phase, 'review', draft.error ?? '');
   assert.equal(seen.notes, input.notes);
-  assert.deepEqual(seen.profiles, [{ id: 'hurried_owner', source: 'owner' }, { id: 'observed_1', source: 'observed' }]);
+  assert.deepEqual(seen.profiles, [{ id: 'hurried_owner', source: 'owner' }]);
   assert.equal(draft.notes, input.notes);
-  assert.deepEqual(draft.profiles.map(p => p.source), ['owner', 'observed']);
+  assert.deepEqual(draft.profiles.map(p => p.source), ['owner']);
   assert.equal(draft.scenarios[0]!.profileId, 'hurried_owner');
   assert.equal(draft.scenarios[0]!.user.persona, 'A customer in a hurry');
   const edited = await lab.updateDraft(draft.id, draftHash(draft), { settings: { repeats: 2 } });
@@ -852,7 +922,7 @@ test('real dialogues also yield production cards: observed goals with verbatim o
   const production = draft.scenarios.filter(s => s.provenance === 'production');
   assert.equal(production.length, 2);
   assert.deepEqual(production.map(s => s.user.opening).sort(), ['hi, what time is my appointment A102?', 'move A101 to 14:00 pls']);
-  assert.ok(production.every(s => s.profileId === 'observed_1' && s.user.persona === draft.profiles[0]!.persona));
+  assert.ok(production.every(s => !s.profileId && !s.user.persona));
   assert.equal(draft.scenarios.filter(s => s.provenance === 'synthetic').length, 1);
   await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
   const result = await lab.get(draft.id);
@@ -1070,7 +1140,7 @@ test('recorded scoring keeps the existing one-writer rejection instead of interl
 
 test('an observed goal whose opening is not a real user message fails preparation', async t => {
   const runtime = createDemoRuntime();
-  runtime.goals = async () => [{ id: 'g', goal: 'x', opening: 'never said this', profileId: 'observed_1', evidenceDialogueIds: ['d1'], successCriteria: 'y', facts: 'f', outcome: 'unknown' }];
+  runtime.goals = async () => [{ id: 'g', goal: 'x', opening: 'never said this', evidenceDialogueIds: ['d1'], successCriteria: 'y', facts: 'f', outcome: 'unknown' }];
   const { lab } = await setup(t, runtime);
   const input = createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1, dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'hello' }] }] });
   const created = await lab.create(input); await lab.waitForIdle();

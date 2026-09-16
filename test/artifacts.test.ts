@@ -66,10 +66,14 @@ test('navigation-independent snapshots export matching comparisons and paired ev
   const explicit = await evidenceBundle(after, lab.store, different.id);
   assert.equal(explicit.comparisonSource?.kind, 'selected');
   assert.match(htmlReport(explicit), /База выбрана вручную/);
+  const incomplete = await evidenceBundle({ ...after, trials: [] }, lab.store);
+  for (const report of [htmlReport(incomplete), markdownReport(incomplete)]) {
+    assert.match(report, /Несравнимо/); assert.match(report, /Нет попытки.*после/);
+  }
 });
 
 test('missing parents and journals remain explicit without losing current evidence', async t => {
-  const { lab, after } = await twoRuns(t);
+  const { lab, before, after } = await twoRuns(t);
   const record = { ...after, parentRunId: 'missing-parent' };
   const bundle = await evidenceBundle(record, {
     get: id => lab.store.get(id),
@@ -82,6 +86,42 @@ test('missing parents and journals remain explicit without losing current eviden
     assert.match(content, /missing-parent/); assert.match(content, /fixture journal unavailable/);
     assert.match(content, /has been moved/);
   }
+  const legacy = { ...after, parentRunId: 'legacy-source', sourceEvidence: {
+    runId: 'legacy-source', trials: [structuredClone(before.trials[0]!)], humanReviews: [],
+  } };
+  const recovered = await evidenceBundle(legacy, lab.store);
+  assert.equal(recovered.comparisonSource?.kind, 'embedded');
+  assert.equal(recovered.comparison?.fixed.length, 1, 'legacy one-trial suite evidence remains readable');
+});
+
+test('a saved suite carries every attempt and compares from embedded evidence in a fresh data directory', async t => {
+  const { lab, directory } = await setup(t);
+  const input = demoEvaluationInput(); input.scenarioCount = 1;
+  input.settings = { ...input.settings, repeats: 2, userModes: ['static'] };
+  const created = await lab.create(input); await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
+  const before = await lab.get(draft.id);
+  assert.deepEqual(before.trials.map(trial => trial.outcome), ['fail', 'fail']);
+  const suite = await lab.saveSuite(before.id, join(directory, 'portable-suite.json'));
+
+  const portableDirectory = await mkdtemp(join(tmpdir(), 'agent-lab-portable-'));
+  const portable = new ExperimentLab(portableDirectory); await portable.init();
+  t.after(async () => { await portable.close(); await rm(portableDirectory, { recursive: true, force: true }); });
+  const loaded = await portable.loadSuite(suite);
+  assert.equal(loaded.sourceEvidence?.trials.length, 2);
+  const changed = await portable.updateDraft(loaded.id, draftHash(loaded), {
+    agent: { ...loaded.revisions[0]!.spec, tools: [...loaded.revisions[0]!.spec.tools, 'update_record'] },
+  });
+  await portable.start(changed.id, { approved: true, reviewer: 'human', expectedHash: draftHash(changed) }); await portable.waitForIdle();
+  const after = await portable.get(changed.id);
+  const bundle = await evidenceBundle(after, portable.store);
+  assert.equal(bundle.comparisonSource?.kind, 'embedded');
+  assert.equal(bundle.before?.id, before.id);
+  assert.equal(bundle.comparison?.fixed.length, 1);
+  assert.equal(bundle.comparison?.regressed.length, 0);
+  assert.equal(bundle.comparison?.pairs.length, 2);
+  assert.match(bundle.warnings.join('\n'), /парный diff, не статистическая оценка/);
 });
 
 test('HTML is self-contained, escapes evidence, exposes event anchors and labels whole-dialogue verdicts precisely', async t => {
@@ -148,7 +188,7 @@ test('a human failure on a green dialogue reaches every export and keeps origina
   assert.match(jsonReport(bundle), /inspect_human_findings/);
 });
 
-test('every export renders simulator checks, the scorecard and mode value from the shared snapshot', async t => {
+test('every export preserves simulator-check evidence without research scorecards', async t => {
   const { lab, after } = await twoRuns(t);
   const trial = after.trials[0]!;
   assert.equal(trial.userMode, 'reactive');
@@ -159,17 +199,15 @@ test('every export renders simulator checks, the scorecard and mode value from t
   const html = htmlReport(bundle);
   assert.match(html, /Проверки симулятора · эвристики/);
   assert.match(html, new RegExp(`Подозрение: реплика #${seq + 1} повторяет реплику #0 &lt;script&gt;`)); assert.doesNotMatch(html, /#0 <script>/);
-  assert.match(html, /<section id="simulator"><h2>Симулятор<\/h2>/); assert.match(html, /<h2>Ценность режимов<\/h2>/);
-  assert.match(html, /simulator_loop \(эвристика\): пометок 1\/1/);
+  assert.doesNotMatch(html, /<section id="simulator">|<h2>Ценность режимов<\/h2>/);
   // The suspicion parks the dialogue in "needs a verdict" instead of letting a green code result stand unchallenged.
   const attention = html.match(/<section id="attention">([\s\S]*?)<\/section>/)?.[1] ?? '';
   assert.match(attention, /Нужен вердикт/);
   const markdown = markdownReport(bundle);
-  assert.match(markdown, /## Симулятор/); assert.match(markdown, /simulator\\_loop .*пометок 1\/1/); assert.match(markdown, /## Ценность режимов/);
+  assert.match(markdown, /Симулятор · эвристика · simulator\\_loop/);
+  assert.doesNotMatch(markdown, /## Симулятор|## Ценность режимов/);
   const json = JSON.parse(jsonReport(bundle));
-  assert.equal(json.evidence.simulator.reactiveDialogues, 1);
-  assert.equal(json.evidence.simulator.checks.find((c: { id: string }) => c.id === 'simulator_loop').flagged, 1);
-  assert.equal(json.evidence.simulator.checks.find((c: { id: string }) => c.id === 'simulator_loop').heuristic, true);
-  assert.ok(Array.isArray(json.evidence.modeValue.cards));
-  assert.equal(json.evidence.modeValue.cards[0].outcomes.reactive, 'unknown', 'a flagged simulator leaves the card undecided until a human rules on the check');
+  assert.equal(json.experiment.trials[0].simulatorChecks[0].id, 'simulator_loop');
+  assert.equal(json.evidence.simulator, undefined);
+  assert.equal(json.evidence.modeValue, undefined);
 });

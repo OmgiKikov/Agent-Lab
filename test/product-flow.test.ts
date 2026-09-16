@@ -9,8 +9,9 @@ import { runInNewContext } from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { ExperimentLab, draftHash, resultHash } from '../src/experiment.js';
 import { createDemoRuntime, demoEvaluationInput } from '../src/demo.js';
-import { draftPatchSchema, goalAttainment, scriptIssue, type Runtime } from '../src/contracts.js';
-import { awaitingVerdict, compareRuns, compareUserModes, verdictSummary } from '../src/comparison.js';
+import { draftPatchSchema, fingerprint, goalAttainment, scriptIssue, type Runtime } from '../src/contracts.js';
+import { listSuites } from '../src/connection.js';
+import { awaitingVerdict, compareRuns, verdictSummary } from '../src/comparison.js';
 import { evaluateTrial } from '../src/evaluation.js';
 import { htmlReport } from '../src/report.js';
 import { trialProofLines } from '../src/quality.js';
@@ -74,7 +75,6 @@ test('a failed case becomes a reusable regression test without changing provenan
   assert.deepEqual(compareRuns(before, invalidAfter).fixed, []);
   assert.equal(verdictSummary({ ...reviewed, trials: reviewed.trials.filter(t => t.id !== failure.id) }).review.invalid, 0, 'a selected subset ignores reviews of other attempts');
   const missingBaseline = { ...after, settings: { ...after.settings, userModes: ['static', 'reactive'] as const as ['static', 'reactive'] }, trials: [{ ...failure, userMode: 'reactive' as const }] };
-  assert.deepEqual(compareUserModes(missingBaseline).find(m => m.userMode === 'reactive')!.uniqueFailedChecks, []);
 
   const failedCLI = spawnSync(process.execPath, [resolve('dist/cli.js'), 'evaluate', '--input', file, '--yes', '--case', scenario.id, '--data-dir', join(directory, 'ci-fail')], { encoding: 'utf8' });
   assert.equal(failedCLI.status, 1, failedCLI.stderr);
@@ -207,6 +207,10 @@ test('logs become one accepted, evidenced and reusable regression test against a
   const beforeAcceptance = { ...calls };
   const accepted = await lab.acceptDraft(draft.id, draftHash(draft));
   assert.equal(accepted.acceptedDraftHash, draftHash(accepted));
+  assert.equal(accepted.acceptedTests?.length, 1);
+  const acceptedTest = accepted.acceptedTests![0]!;
+  assert.equal(acceptedTest.scenarioId, accepted.scenarios[0]!.id);
+  assert.equal(acceptedTest.definitionHash, fingerprint(accepted.scenarios[0]!));
   assert.equal(accepted.phase, 'review'); assert.equal(accepted.reviewedAt, null); assert.equal(accepted.trials.length, 0);
   assert.deepEqual(calls, beforeAcceptance, 'acceptance records metadata without running the target or judge');
 
@@ -214,6 +218,7 @@ test('logs become one accepted, evidenced and reusable regression test against a
   const result = await lab.get(accepted.id);
   assert.equal(result.phase, 'results_review', result.error ?? '');
   assert.equal(result.acceptedDraftHash, draftHash(accepted));
+  assert.deepEqual(result.acceptedTests, [acceptedTest]);
   assert.equal(result.trials.length, 1);
   const trial = result.trials[0]!;
   const assistant = trial.events.find(event => event.type === 'assistant')!;
@@ -225,9 +230,16 @@ test('logs become one accepted, evidenced and reusable regression test against a
   assert.match(proof, new RegExp(`PASS \\[goal_attainment\\].*события: #${assistant.seq}`));
 
   const suite = await lab.saveSuite(result.id, join(directory, 'support-suite.json'));
+  const repeated = await lab.repeat(result.id);
+  assert.deepEqual(repeated.acceptedTests, [acceptedTest], 'repeat keeps the accepted identity while the scenario definition matches');
   const beforeReload = { ...calls };
   const loaded = await lab.loadSuite(suite);
   assert.equal(loaded.acceptedDraftHash, undefined, 'acceptance is metadata, not a suite execution gate');
+  assert.deepEqual(loaded.acceptedTests, [acceptedTest], 'suite round-trip keeps the same accepted test identity');
+  const listed = await listSuites(directory);
+  const listedSuite = listed.find(item => item.file === suite)!;
+  assert.equal('acceptedCount' in listedSuite ? listedSuite.acceptedCount : undefined, 1);
+  assert.deepEqual('acceptedTestIds' in listedSuite ? listedSuite.acceptedTestIds : undefined, [acceptedTest.testId]);
   assert.deepEqual(loaded.scenarios.map(item => item.id), ['support_reply']);
   assert.deepEqual(loaded.scenarios[0]!.checks.map(item => item.id), ['approved_address']);
   assert.deepEqual(loaded.scenarios[0]!.metrics!.map(item => item.id), ['goal_attainment']);

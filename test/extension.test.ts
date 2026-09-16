@@ -50,7 +50,8 @@ test('injected Pi instructions hand saved discovery directly to one test after t
     assert.match(prompt, /re-reads the saved evidence and builds exactly one editable test/is);
     assert.match(prompt, /refusal or correction builds nothing/i);
     assert.match(prompt, /agent_lab_accept.*decision about the test definition/is);
-    assert.match(prompt, /agent_lab_run only when the owner explicitly asks/is);
+    assert.match(prompt, /one-test flow.*agent_lab_run only after acceptance/is);
+    assert.match(prompt, /multi-test validation\/regression suites.*not one-test acceptance metadata/is);
   } finally {
     if (previous === undefined) delete process.env.AGENT_LAB_SESSION; else process.env.AGENT_LAB_SESSION = previous;
     await shutdown();
@@ -358,13 +359,13 @@ test('Pi connects a new request, conversational correction, reviewed run, eviden
     await call('agent_lab_edit', { id: repeated.id, expectedHash: repeated.draftHash, patch: {
       agent: { ...fixture.agent, tools: [...fixture.agent.tools, 'update_record'] }, targetVersion: 'fixture-fixed',
     } });
-    steps = [['r'], ['5', 'a']]; awaitResults = true; request = 'Покажи конкретное исправление до и после.';
+    steps = [['r'], ['3', 'a']]; awaitResults = true; request = 'Покажи конкретное исправление до и после.';
     await command(repeated.id, ctx);
     const pairDiscussion = JSON.parse(contexts.at(-1)!.content);
     assert.deepEqual(pairDiscussion.comparisonSource, { kind: 'parent', beforeId: built.id, afterId: repeated.id });
     assert.equal(pairDiscussion.comparedPair.beforeTrialId, discussion.trialId);
     assert.equal(pairDiscussion.comparedPair.afterTrialId, pairDiscussion.trialId);
-    steps = [['5', 'x'], ['q']];
+    steps = [['1', 'x'], ['q']];
     await command(repeated.id, ctx);
     const exportDir = join(directory, '.agent-lab', 'exports');
     const html = (await readdir(exportDir)).find(name => name.startsWith(repeated.id) && name.endsWith('.html'));
@@ -379,7 +380,7 @@ test('headless model tools prepare and edit only; approvals and human assessment
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
   const updates: string[] = [];
   try {
-    assert.deepEqual([...tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt', 'agent_lab_clarify']);
+    assert.deepEqual([...tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
     const report = output(await tools.get('agent_lab_build')!.execute('build-1', { mode: 'demo', scenarioCount: 2 }, undefined,
       value => { updates.push(JSON.stringify(value)); }, ctx));
     assert.equal(report.phase, 'review'); assert.equal(report.workflow, 'evaluate');
@@ -403,44 +404,6 @@ test('headless model tools prepare and edit only; approvals and human assessment
     const unchanged = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
     assert.equal(unchanged.reviewMode, null); assert.equal(unchanged.phase, 'review');
     await assert.rejects(access(join(directory, '.agent-lab', '.lock')));
-  } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
-});
-
-test('native profile editor changes linked cards, detaches one and restores original evidence', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-profile-ui-fixture-'));
-  const { tools, shutdown, command } = registered();
-  const ctx = { cwd: directory, model: undefined, mode: 'tui', hasUI: true } as ExtensionCommandContext;
-  try {
-    const report = output(await tools.get('agent_lab_build')!.execute('prepare', { mode: 'demo', scenarioCount: 2,
-      dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'move A101 to 14:00 pls' }] }],
-    }, undefined, undefined, ctx));
-    const steps = [['2', 'e'], ['e'], ['s'], ['q']];
-    const choices = ['Расширенные настройки', 'Персона', 'Расширенные настройки', 'Профиль пользователя · выбрать или убрать', 'Без профиля и персоны', 'Профили пользователей', 'observed_1', 'Восстановить исходный профиль'];
-    const errors: string[] = [];
-    ctx.ui = {
-      custom: (factory: (tui: unknown, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?(): void }) => new Promise(resolve => {
-        const component = factory({ terminal: { rows: 40 }, requestRender() {} }, { fg: (_: string, text: string) => text, bold: (text: string) => text }, {}, value => { component.dispose?.(); resolve(value); });
-        const step = steps.shift(); assert.ok(step);
-        if (steps.length === 2) assert.match(component.render(120).join('\n'), /правка черновика/);
-        for (const key of step) component.handleInput!(key);
-      }),
-      select: async (_title: string, labels: string[]) => {
-        const choice = choices.shift(); const value = labels.find(label => label.startsWith(choice!));
-        assert.ok(value, `missing choice ${choice} in ${labels.join(', ')}`); return value;
-      },
-      editor: async (title: string) => { assert.match(title, /3 карточек/); return 'Уточнённая роль'; },
-      notify: (message: string, type: string) => { if (type === 'error') errors.push(message); },
-    } as unknown as ExtensionContext['ui'];
-    await command(report.id, ctx);
-    assert.deepEqual(errors, []); assert.equal(choices.length, 0); assert.equal(steps.length, 0);
-    const inspected = output(await tools.get('agent_lab_inspect')!.execute('inspect', { id: report.id, export: true }, undefined, undefined, ctx));
-    assert.equal(inspected.profiles[0].draftOverride, undefined);
-    assert.equal(inspected.profiles[0].source, 'observed'); assert.deepEqual(inspected.profiles[0].evidenceDialogueIds, ['d1']);
-    assert.equal(inspected.scenarios[0].profileId, undefined); assert.equal(inspected.scenarios[0].user.persona, undefined);
-    assert.equal(inspected.scenarios[1].user.persona, inspected.profiles[0].persona);
-    assert.equal(inspected.trialCount, 0); assert.equal(inspected.reviewMode, null);
-    const html = await readFile(inspected.artifacts.htmlReport, 'utf8');
-    assert.match(html, /Без персоны/); assert.match(html, /Исходные профили и правки/); assert.match(html, /Выведен из логов/);
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -531,7 +494,7 @@ test('actual Pi SDK loader imports native cards, preparation-only tools and embe
     await loader.reload();
     const loaded = loader.getExtensions();
     assert.deepEqual(loaded.errors, []); assert.equal(loaded.extensions.length, 1);
-    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt', 'agent_lab_clarify']);
+    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
     assert.ok(loaded.extensions[0]!.commands.has('agent-lab'));
     assert.deepEqual(loader.getAgentsFiles().agentsFiles, []);
     const skills = loader.getSkills();
@@ -558,24 +521,21 @@ test('build accepts an external module target, real dialogues and golden cases; 
     assert.equal(report.phase, 'review', report.error ?? '');
     assert.deepEqual(report.target, target);
     assert.equal(report.scenarioCount, 3);
-    assert.equal(report.profileCount, 1);
+    assert.equal(report.profileCount, 0, 'logs supply test evidence, not inferred user profiles');
     assert.equal(report.evidence.verdict.provenance.production.cards, 1);
     assert.equal(report.evidence.comparison, null);
-    assert.deepEqual(report.evidence.modes.map((m: { userMode: string }) => m.userMode), ['static', 'reactive']);
-    assert.ok(report.evidence.notes.some((n: string) => /Вердиктов человека по метрикам и проверкам ещё нет/.test(n)));
     const inspect = output(await tools.get('agent_lab_inspect')!.execute('inspect-v2', { id: report.id, export: true }, undefined, undefined, ctx));
-    assert.equal(inspect.evidence.fidelity.realDialogues, 1);
     assert.equal(inspect.artifacts.agent, undefined, 'external agent is not exported as a sandbox AgentSpec');
     assert.match(await readFile(inspect.artifacts.htmlReport, 'utf8'), /<!doctype html>/);
     assert.equal(inspect.scenarios.filter((s: { provenance: string }) => s.provenance === 'curated').length, 1);
     const markdown = await readFile(inspect.artifacts.report, 'utf8');
-    assert.match(markdown, /Наблюдаемый результат/); assert.match(markdown, /Режимы пользователя/); assert.match(markdown, /Сверка с ручными вердиктами/); assert.match(markdown, /Верность симулятора/);
+    assert.match(markdown, /Наблюдаемый результат/); assert.match(markdown, /Диалоги и основания/); assert.match(markdown, /Карточки бизнес-сценария/); assert.match(markdown, /Границы доказательств/);
     assert.match(markdown, /Испытуемый: модуль/);
     await assert.rejects(access(join(directory, '.agent-lab', '.lock')));
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('the plain verdict leads every surface and the thorough preset widens the run without extra knobs', async () => {
+test('the plain verdict leads every surface without research presets', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-extension-verdict-'));
   const { tools, shutdown } = registered();
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
@@ -585,13 +545,9 @@ test('the plain verdict leads every surface and the thorough preset widens the r
     assert.deepEqual(quick.evidence.verdict.provenance.synthetic.cards, 1);
     assert.match(quick.evidence.verdict.headline, /Черновик готов.*после подтверждения/);
     assert.ok(quick.evidence.verdict.nextSteps.length >= 1);
-    const thorough = output(await tools.get('agent_lab_build')!.execute('build-thorough', { mode: 'demo', scenarioCount: 1, preset: 'thorough' }, undefined, undefined, ctx));
-    const evidence = JSON.parse(await readFile(thorough.artifacts.evidence, 'utf8'));
-    assert.deepEqual(evidence.settings.userModes, ['static', 'scripted', 'reactive']);
-    assert.equal(evidence.settings.repeats, 2);
-    const markdown = await readFile(thorough.artifacts.report, 'utf8');
+    await assert.rejects(tools.get('agent_lab_build')!.execute('build-thorough', { mode: 'demo', preset: 'thorough' }, undefined, undefined, ctx));
+    const markdown = await readFile(quick.artifacts.report, 'utf8');
     assert.ok(markdown.indexOf('## Итог') < markdown.indexOf('## Наблюдаемый результат'));
-    assert.match(markdown, /Полнота аудита: низкая/);
     assert.match(markdown, /Карточки: синтетических 1, golden 0, из продакшна 0/);
     await assert.rejects(access(join(directory, '.agent-lab', '.lock')));
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
