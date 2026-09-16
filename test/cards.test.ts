@@ -8,6 +8,7 @@ import { emptyUsage, fingerprint, type Experiment } from '../src/contracts.js';
 import { compareRuns } from '../src/comparison.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { markdownReport } from '../src/report.js';
+import { buildResultView, resultViewLines, type ResultView } from '../src/result-view.js';
 
 const theme = { fg: (_: string, value: string) => value, bold: (value: string) => value };
 
@@ -305,7 +306,7 @@ test('the board leads with a plain verdict once dialogues exist and has only thr
   board.dispose();
   const results = new LabBoard({ record }, theme, () => {}, () => {}, () => 40);
   assert.match(results.render(120).join('\n'), /ЧТО ТРЕБУЕТ ВНИМАНИЯ/);
-  assert.match(stripTerminalSequences(results.render(120).join('\n')), /Итог: Справился с 0 из 0 карточек \(—\), 1 без решения, 1 не дошли; разобрано человеком 0 из 3 диалогов/);
+  assert.ok(stripTerminalSequences(results.render(120).join('\n')).includes(`Итог: ${buildResultView(record).headline.text} · 1 подробнее`));
   results.dispose();
 });
 
@@ -389,4 +390,65 @@ test('the board keeps simulator checks in the dialogue and the repeat headline i
     assert.match(text, /После исправления: .*Оценка выросла/iu);
     assert.doesNotMatch(text, /Парная дельта|Ценность режимов/);
   } finally { comparison.dispose(); }
+});
+
+/** A finished record with three attempts on one card and one broken attempt on the other. */
+async function finishedWithInvalid(): Promise<Experiment> {
+  const record = await fixture();
+  record.phase = 'results_review';
+  const [first, second] = [record.scenarios[0]!, record.scenarios[1]!];
+  const attempt = (id: string, scenario: typeof first, repeat: number, outcome: 'pass' | 'fail' | 'invalid') => ({ id, revisionId: 'revision-1', scenarioId: scenario.id, familyId: scenario.familyId,
+    repeat, userMode: 'reactive' as const, split: 'dev' as const, manifestHash: 'hash', outcome, reason: outcome === 'invalid' ? 'ОДИНОЧНЫЙ СБОЙ' : '',
+    checks: outcome === 'invalid' ? [] : [{ id: 'time', description: 'Время изменено', passed: outcome === 'pass', evidence: '' }],
+    events: [{ seq: 0, type: 'user' as const, text: 'hi' }, { seq: 1, type: 'assistant' as const, text: 'ok' }], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1 });
+  record.trials = [attempt('t0', first, 0, 'fail'), attempt('t1', first, 1, 'pass'), attempt('t2', first, 2, 'pass'), attempt('t3', second, 0, 'invalid')];
+  return record;
+}
+/** Board text split into cells: frame and sidebar separators removed, each cell trimmed. */
+function boardCells(board: LabBoard, width = 200): string[] {
+  return stripTerminalSequences(board.render(width).join('\n')).split('\n')
+    .flatMap(row => row.split('│')).map(cell => cell.trim()).filter(Boolean);
+}
+
+test('the board overview shows the ResultView block verbatim and no private not-measured count', async () => {
+  const record = await finishedWithInvalid();
+  const view = buildResultView(record);
+  const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 80);
+  const cells = boardCells(board);
+  for (const expected of resultViewLines(view)) assert.ok(cells.includes(expected), `board misses block line: ${expected}`);
+  assert.ok(!cells.includes('НЕ ИЗМЕРЕНО'), 'the single-trial not-measured header is gone');
+  assert.ok(!cells.some(cell => cell.includes('ОДИНОЧНЫЙ СБОЙ')), 'the first invalid trial reason is not picked on its own');
+  assert.ok(cells.includes(`Итог: ${view.headline.text} · 1 подробнее`));
+  board.dispose();
+});
+
+test('the board uses a supplied view only for the same run', async () => {
+  const record = await finishedWithInvalid();
+  const view = buildResultView(record);
+  const marked = (runId: string, text: string): ResultView => ({ ...view, runId, headline: { ...view.headline, text } });
+  const own = new LabBoard({ record, view: marked(record.id, 'СВОЙ ИТОГ') }, theme, () => {}, () => {}, () => 80);
+  const ownCells = boardCells(own);
+  assert.ok(ownCells.includes('СВОЙ ИТОГ'));
+  assert.ok(ownCells.includes('Итог: СВОЙ ИТОГ · 1 подробнее'));
+  own.dispose();
+  const stale = new LabBoard({ record, view: marked('another-run', 'ЧУЖОЙ ИТОГ') }, theme, () => {}, () => {}, () => 80);
+  const staleCells = boardCells(stale);
+  assert.ok(!staleCells.some(cell => cell.includes('ЧУЖОЙ ИТОГ')), 'a view of another run is ignored');
+  assert.ok(staleCells.includes(view.headline.text));
+  stale.dispose();
+});
+
+test('after refresh the board shows the refreshed bundle view', async () => {
+  const finished = await finishedWithInvalid();
+  const running = { ...structuredClone(finished), phase: 'evaluating' as const };
+  const refreshedView: ResultView = { ...buildResultView(finished), headline: { ...buildResultView(finished).headline, text: 'ОБНОВЛЁННЫЙ ИТОГ' } };
+  let renders = 0;
+  const board = new LabBoard({ record: running, section: 'agent',
+    load: async () => ({ record: finished, warnings: [], view: refreshedView }) }, theme, () => {}, () => { renders++; }, () => 80);
+  await new Promise(resolve => setTimeout(resolve, 900));
+  assert.ok(renders > 0);
+  const cells = boardCells(board);
+  assert.ok(cells.includes('ОБНОВЛЁННЫЙ ИТОГ'));
+  assert.ok(cells.includes('Итог: ОБНОВЛЁННЫЙ ИТОГ · 1 подробнее'));
+  board.dispose();
 });
