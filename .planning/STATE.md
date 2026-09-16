@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 1
 current_phase_name: Одно честное число
 status: executing
-stopped_at: Completed 01-05-PLAN.md
-last_updated: "2026-09-16T21:44:03.701Z"
+stopped_at: Completed 01-06-PLAN.md
+last_updated: "2026-09-16T21:48:51.421Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 1 execution started
-state_head: 5e4b88d6bb1d2314fd1fa4d6ec5e0e3ace404db7
+state_head: 423e8416101d074e7a61b511392b0a99f52728e5
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 10
-  completed_plans: 5
+  completed_plans: 6
   percent: 0
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 1 (Одно честное число) — EXECUTING
-Plan: 6 of 10
+Plan: 7 of 10
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 1 execution started
 
@@ -63,6 +63,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P03 | 4min | 3 tasks | 8 files |
 | Phase 01 P04 | 4min | 2 tasks | 5 files |
 | Phase 01 P05 | 5min | 2 tasks | 6 files |
+| Phase 01 P06 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -87,6 +88,7 @@ Recent decisions affecting current work:
 - [Phase 1]: 01-04: judge audit sidecar {id}.judge/{trialId}.json is written synchronously (tmp+rename, 0700/0600); assessRepeated reports exactly one final judgment
 - [Phase 1]: 01-05: a reassessment counts a card only when its record attempts are exactly the source attempts of that card
 - [Phase 1]: 01-05: stability never changes the headline; a skipped check is printed in words, never as a silent 0
+- [Phase 1]: 01-06: judged trials keep only judgeReceipt; full audit in {runId}.judge sidecar, journal one line per finished judgment
 
 ### Pending Todos
 
@@ -112,6 +114,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-16T21:44:03.681Z
-Stopped at: Completed 01-05-PLAN.md
+Last session: 2026-09-16T21:48:51.400Z
+Stopped at: Completed 01-06-PLAN.md
 Resume file: None
