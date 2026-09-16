@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ import test, { type TestContext } from 'node:test';
 import { ExperimentStore } from '../src/store.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { demoEvaluationInput } from '../src/demo.js';
+import type { JudgeAudit } from '../src/contracts.js';
 
 async function directory(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'agent-lab-store-'));
@@ -119,4 +120,44 @@ test('CLI export and diff read snapshots without interrupting a live writer', { 
   assert.equal(textDiff.code, 2, textDiff.stderr); assert.match(textDiff.stdout, /Несравнимо:/);
   assert.equal(await readFile(join(dir, '.lock'), 'utf8'), lock);
   assert.deepEqual(await lab.get(before.id), before);
+});
+
+const audit = (raw: string): JudgeAudit => ({ protocolHash: 'protocol', inputHash: 'input', provider: 'offline', model: 'test', prompt: 'prompt', input: '{}',
+  attempts: [{ metricId: 'goal', startedAt: '2026-09-17T00:00:00.000Z', raw }], notApplicable: [] });
+
+test('judge audit sidecar is private, atomic, replaced in place and readable without the lock', async t => {
+  const dir = await directory(t);
+  const writer = new ExperimentStore(dir); await writer.init();
+  t.after(() => writer.close());
+  writer.writeJudgeAudit('run', 'trial', audit('first'));
+  writer.writeJudgeAudit('run', 'trial', audit('second'));
+  const sidecar = join(dir, 'run.judge');
+  assert.equal((await stat(sidecar)).mode & 0o777, 0o700);
+  assert.equal((await stat(join(sidecar, 'trial.json'))).mode & 0o777, 0o600);
+  assert.deepEqual(await readdir(sidecar), ['trial.json'], 'no temporary file remains');
+  assert.deepEqual(JSON.parse(await readFile(join(sidecar, 'trial.json'), 'utf8')), audit('second'));
+  const reader = new ExperimentStore(dir);
+  assert.deepEqual(await reader.readJudgeAudit('run', 'trial'), audit('second'));
+  assert.equal(await reader.readJudgeAudit('run', 'other'), null);
+  assert.throws(() => reader.writeJudgeAudit('run', 'trial', audit('third')), /как писатель/);
+  assert.deepEqual(await reader.readJudgeAudit('run', 'trial'), audit('second'));
+  assert.throws(() => writer.writeJudgeAudit('run', 'trial', { ...audit('bad'), attempts: 'none' } as unknown as JudgeAudit));
+  assert.deepEqual(await readdir(sidecar), ['trial.json']);
+});
+
+test('judge audit sidecar rejects unsafe ids before touching the disk and oversized files before parsing', async t => {
+  const dir = await directory(t);
+  const writer = new ExperimentStore(dir); await writer.init();
+  t.after(() => writer.close());
+  const before = await readdir(dir);
+  for (const [run, trial] of [['run', '../x'], ['a/b', 'trial'], ['..', 'trial']]) {
+    assert.throws(() => writer.writeJudgeAudit(run!, trial!, audit('x')), /Invalid (trial|experiment) ID/);
+    await assert.rejects(writer.readJudgeAudit(run!, trial!), /Invalid (trial|experiment) ID/);
+  }
+  assert.deepEqual(await readdir(dir), before);
+  await mkdir(join(dir, 'big.judge'), { mode: 0o700 });
+  await writeFile(join(dir, 'big.judge', 'trial.json'), Buffer.alloc(20_000_001, 32));
+  await assert.rejects(new ExperimentStore(dir).readJudgeAudit('big', 'trial'), /Judge audit exceeds 20 MB/);
+  await writeFile(join(dir, 'big.judge', 'trial.json'), JSON.stringify({ ...audit('x'), extra: true }));
+  await assert.rejects(new ExperimentStore(dir).readJudgeAudit('big', 'trial'));
 });
