@@ -622,6 +622,32 @@ export function stabilityBetweenRuns(before: Experiment, after: Experiment): Sta
   return result;
 }
 
+/**
+ * A reassessment of saved answers against its source run: pass↔fail flips of the goal verdict on
+ * the same attempts and the same criteria. Null when the record is not a reassessment of `source`.
+ * compareRuns is not used here: it always marks a reassessment as incomparable.
+ */
+export function stabilityAfterReassess(record: Experiment, source: Experiment): Stability | null {
+  if (record.assessmentOf !== source.id || !record.evidenceHash) return null;
+  const result: Stability = { basis: 'reassess', comparedWith: source.id, checked: 0, unstable: [], skipped: null };
+  if (record.evaluatorVersion !== source.evaluatorVersion) return { ...result, skipped: 'судья или его настройки изменились' };
+  const sourceTrialIds = new Set(source.trials.map(trial => trial.id));
+  for (const card of record.scenarios) {
+    const sourceCard = source.scenarios.find(item => item.id === card.id);
+    if (!sourceCard) continue;
+    if (fingerprint(normalizeScenarioIdentity(card, record.target.kind)) !== fingerprint(normalizeScenarioIdentity(sourceCard, source.target.kind))) continue;
+    const trialIds = new Set(record.trials.filter(trial => trial.scenarioId === card.id).map(trial => trial.id));
+    // Only a card whose every source attempt was reassessed, and nothing else, compares the same answers.
+    if ([...trialIds].some(id => !sourceTrialIds.has(id))
+      || source.trials.some(trial => trial.scenarioId === card.id && !trialIds.has(trial.id))) continue;
+    const was = goalCardOutcome(source, sourceCard), now = goalCardOutcome(record, card);
+    if (!isDecided(was) || !isDecided(now)) continue;
+    result.checked++;
+    if (was !== now) result.unstable.push({ scenarioId: card.id, title: card.title, before: was, after: now });
+  }
+  return result;
+}
+
 const JUDGE_INCOMPLETE = 'Судья не завершил оценку этой попытки.';
 
 export function compareRuns(before: Experiment, after: Experiment): RunComparison {

@@ -524,7 +524,7 @@ function goalRun(id: string, goals: Record<string, 'pass' | 'fail' | 'unknown'>,
   const cards = Object.keys(goals).map(key => ({ ...scenario(key), checks: [], metrics: [{ ...goalAttainment }] }));
   const trials = Object.entries(goals).map(([key, goal]) => ({ ...trial(`t-${key}`, key, 'reactive', 'ungraded', {
     assessments: [{ metricId: 'goal_attainment', result: goal, rationale: 'r', evidence: goal === 'unknown' ? [] : [1] }] }), checks: [], manifestHash }));
-  return record({ id, settings: settingsSchema.parse({ userModes: ['reactive'] }), scenarios: cards, trials, manifestHash, ...overrides });
+  return record({ id, settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1 }), scenarios: cards, trials, manifestHash, ...overrides });
 }
 function reassessed(source: Experiment, goals: Record<string, 'pass' | 'fail' | 'unknown'>, overrides: Partial<Experiment> = {}): Experiment {
   const next = goalRun('c0ffee00-0000-4000-8000-000000000002', goals, 'h-reassess', { parentRunId: source.id, assessmentOf: source.id,

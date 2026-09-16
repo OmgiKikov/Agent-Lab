@@ -1,6 +1,6 @@
 import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
 import { observedRecord } from './outcomes.js';
-import { cardVerdict, judgeModel, NOT_MEASURED_CODES, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
+import { cardVerdict, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
 
 /*
  * The one result every surface shows first: how many situations the agent handled, over one
@@ -88,7 +88,7 @@ export interface ResultView {
 /** The source run to check stability against; the record's own parent or the run it reassessed. */
 function stabilityOf(input: Experiment, before: Experiment | undefined): Stability | undefined {
   if (!before) return undefined;
-  if (input.assessmentOf === before.id) return undefined;
+  if (input.assessmentOf === before.id) return stabilityAfterReassess(input, before) ?? undefined;
   return stabilityBetweenRuns(before, input);
 }
 
