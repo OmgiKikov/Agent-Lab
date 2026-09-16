@@ -326,9 +326,15 @@ export class ExperimentLab {
               return request();
             }
           };
+          // The harness owns card identity: each goal takes its dialogue's schema-checked id, whatever id the model chose.
+          const rawGoalIds: string[] = [];
           for (let index = 0; index < record.dialogues.length && observedGoals.length < (input.validationCount ?? Infinity); index += GOAL_BATCH) {
             const batch = record.dialogues.slice(index, index + GOAL_BATCH);
-            const extracted = (await Promise.all(batch.map(extract))).flat();
+            const extracted = (await Promise.all(batch.map(async dialogue => {
+              const goals = await extract(dialogue);
+              rawGoalIds.push(...goals.map(goal => goal.id));
+              return goals.map(goal => ({ ...goal, id: dialogue.id }));
+            }))).flat();
             if (input.validationCount) for (const dialogue of batch) {
               const goal = extracted.find(goal => goal.evidenceDialogueIds.includes(dialogue.id));
               if (goal?.testability !== 'knowledge') exclude({ dialogueId: dialogue.id, kind: goal?.testability === 'customer_data' ? 'customer_data' : 'unconfirmed',
@@ -336,6 +342,7 @@ export class ExperimentLab {
             }
             observedGoals.push(...extracted.filter(goal => !input.validationCount || goal.testability === 'knowledge'));
           }
+          if (new Set(rawGoalIds).size !== rawGoalIds.length) record.limitations.push('Модель выдала совпадающие id целей; каждой цели присвоен id её диалога.');
           if (input.validationCount) observedGoals = observedGoals.slice(0, input.validationCount);
         } else observedGoals = await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: structuredClone(record.dialogues), profiles: structuredClone(record.profiles) }, ctx);
       }
