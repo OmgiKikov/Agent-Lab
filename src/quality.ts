@@ -1,7 +1,7 @@
 import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, UserMode } from './contracts.js';
 import { assessmentEventContent, describeCheck, fingerprint, verbatimSpan } from './contracts.js';
-import { agentMetricResult, agentRubricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
-import { awaitingVerdict, cardOutcome, humanFindings, isAgentFailure, verdictSummary, type VerdictSummary } from './comparison.js';
+import { agentMetricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
+import { cardOutcome, humanFindings, isAgentFailure, verdictSummary, type VerdictSummary } from './comparison.js';
 import { draftHash } from './experiment.js';
 
 /*
@@ -27,7 +27,7 @@ export interface QualityCause {
 }
 export interface QualitySummary {
   /** Cards decided across all measured modes: pass only when every usable dialogue passed. */
-  cards: { passed: number; failed: number; unknown: number; notReached: number; total: number; accuracy: number | null };
+  cards: { passed: number; failed: number; unknown: number; invalid: number; notReached: number; total: number; accuracy: number | null };
   metrics: QualityMetric[];
   causes: QualityCause[];
   /** How sure the automatic verdict is: decided dialogues vs those the judge left unknown or a human disputes. */
@@ -442,10 +442,12 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const record = observedRecord(input);
   const v = verdictSummary(record);
   const reached = new Set(record.trials.filter(measured).map(t => t.scenarioId));
+  const attempted = new Set(record.trials.map(t => t.scenarioId));
   const cardOutcomes = record.scenarios.map(s => ({ scenario: s, outcome: cardOutcome(record, s) }));
   const cards = { passed: cardOutcomes.filter(o => o.outcome === 'pass').length, failed: cardOutcomes.filter(o => o.outcome === 'fail').length,
     unknown: cardOutcomes.filter(o => reached.has(o.scenario.id) && o.outcome === 'unknown').length,
-    notReached: cardOutcomes.filter(o => !reached.has(o.scenario.id)).length, total: record.scenarios.length, accuracy: null as number | null };
+    invalid: cardOutcomes.filter(o => attempted.has(o.scenario.id) && !reached.has(o.scenario.id)).length,
+    notReached: cardOutcomes.filter(o => !attempted.has(o.scenario.id)).length, total: record.scenarios.length, accuracy: null as number | null };
   cards.accuracy = rate(cards.passed, cards.failed);
   const metrics = metricRows(record);
   const rubricUnknown = metrics.filter(m => m.kind === 'rubric').reduce((n, m) => n + m.unknown, 0);
@@ -454,15 +456,16 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const human = { reviewed: record.trials.filter(t => reviews.get(`${t.id}|dialogue`)?.reviewedDialogue === true).length, total: record.trials.length };
   const undecidedByHuman = (t: Trial) => !['pass', 'fail', 'invalid'].includes(reviews.get(`${t.id}|dialogue`)?.verdict ?? '');
   const scenarioOf = (t: Trial) => record.scenarios.find(s => s.id === t.scenarioId);
-  const pending = awaitingVerdict(record);
-  const unknownIds = record.trials.filter(t => measured(t) && agentRubricResult(scenarioOf(t), t, record.humanReviews) === 'unknown' && undecidedByHuman(t)).map(t => t.id);
+  const unknownIds = record.trials.filter(t => measured(t)
+    && automaticTrialResult(scenarioOf(t), t, record.humanReviews) === 'unknown' && undecidedByHuman(t)).map(t => t.id);
   // A human overruling a simulator suspicion is the intended resolution, not a disagreement to revisit.
   const disagreementIds = new Set(humanFindings(record).filter(f => f.disagreement && f.subject !== 'simulator').map(f => f.trialId));
-  const simulatorIds = record.trials.filter(t => pending.has(t.id) && measured(t) && !simulatorUsable(scenarioOf(t), t, record.humanReviews)).map(t => t.id);
+  const simulatorIds = record.trials.filter(t => measured(t) && !simulatorUsable(scenarioOf(t), t, record.humanReviews)).map(t => t.id);
   const disagreements = disagreementIds.size;
+  const reviewIds = new Set([...unknownIds, ...disagreementIds, ...simulatorIds]);
   const humanQueue = { unknownJudgments: unknownIds.length, disagreements, simulatorFlags: simulatorIds.length,
-    total: new Set([...pending, ...unknownIds, ...disagreementIds, ...simulatorIds]).size,
-    pendingFailures: record.trials.filter(t => pending.has(t.id) && isAgentFailure(record, t)).length };
+    total: reviewIds.size,
+    pendingFailures: record.trials.filter(t => reviewIds.has(t.id) && isAgentFailure(record, t)).length };
   const measuredTrials = record.trials.filter(measured).length;
   const judgeLabel = !measuredTrials ? 'оценок ещё нет'
     : `автоматически оценено ${decided} из ${measuredTrials}; без решения ${measuredTrials - decided}`;
@@ -472,10 +475,10 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const judgeModel = record.trials.find(t => t.judgeAudit)?.judgeAudit?.model ?? record.settings.roles?.judge?.model ?? record.settings.judge?.model;
   const limitCodes = v.confidenceReasons.map(r => r.code).filter(code => code in limitTexts);
   const limits = limitCodes.length ? `Границы: ${[...new Set(limitCodes.map(c => limitTexts[c]!))].slice(0, 4).join(' · ')}.` : 'Границы: см. статистику.';
-  const headline = `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}), ${cards.unknown} без решения, ${cards.notReached} не дошли; разобрано человеком ${human.reviewed} из ${plural(human.total, ['диалога', 'диалогов', 'диалогов'])}.`;
+  const headline = `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}), ${cards.unknown} без решения, ${cards.invalid} невалидны, ${cards.notReached} не дошли; разобрано человеком ${human.reviewed} из ${plural(human.total, ['диалога', 'диалогов', 'диалогов'])}.`;
   return { cards, metrics, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
     human,
-    scope: { cards: record.scenarios.length, dialogues: measuredTrials, modes: record.settings.userModes, provenance, target, ...(judgeModel ? { judgeModel } : {}) },
+    scope: { cards: record.scenarios.length, dialogues: record.trials.length, modes: record.settings.userModes, provenance, target, ...(judgeModel ? { judgeModel } : {}) },
     cost: { usd: record.usage.costUsd, calls: record.usage.calls, elapsedMs: record.trials.reduce((n, t) => n + t.elapsedMs, 0) }, limits, headline };
 }
 
@@ -487,9 +490,8 @@ export function qualityLines(q: QualitySummary): { headline: string; metrics: st
     metrics: q.metrics.map(m => `${bar(m.accuracy)} ${percent(m.accuracy).padStart(4)}  ${m.name} · ${m.passed}/${m.passed + m.failed}${m.unknown ? ` · неясно ${m.unknown}` : ''}`),
     causes: q.causes.slice(0, 3).map((c, i) => `${i + 1}. ${c.name} — ${dialogues(c.dialogues)}${c.example ? `. ${c.example.card}: «${c.example.quote}»` : ''}${c.promptQuotes[0] ? ` · правило промпта: «${c.promptQuotes[0]}»` : ''}`),
     judge: `Судья: ${q.judge.label}.`,
-    queue: !q.humanQueue.total ? 'Ручная разметка не требуется: неразобранных диалогов нет.'
-      : q.humanQueue.pendingFailures > 0 && q.causes.length ? `Разобрать: ${plural(q.causes.length, ['причину', 'причины', 'причин'])}. Откройте диалоги причин и поставьте каждому отдельный вердикт.`
-        : `Разметить человеку: ${q.humanQueue.total} (неясных ${q.humanQueue.unknownJudgments}, расхождений ${q.humanQueue.disagreements}, пометок симулятора ${q.humanQueue.simulatorFlags}; ${plural(q.humanQueue.pendingFailures, ['провал', 'провала', 'провалов'])} без вердикта). Попросите разобрать диалог в чате или откройте его на доске.`,
+    queue: !q.humanQueue.total ? 'Ручная разметка не требуется: спорных диалогов нет.'
+      : `Разметить человеку: ${q.humanQueue.total} (неясных ${q.humanQueue.unknownJudgments}, расхождений ${q.humanQueue.disagreements}, пометок симулятора ${q.humanQueue.simulatorFlags}). Попросите разобрать только спорный диалог в чате или откройте его на доске.`,
     scope: `${cardsWord(q.scope.cards)} · ${dialogues(q.scope.dialogues)} · ${q.scope.modes.map(m => modeNames[m]).join(', ')} · ${q.scope.provenance} · версия ${q.scope.target}${q.scope.judgeModel ? ` · судья ${q.scope.judgeModel}` : ''} · ${q.cost.usd === null ? 'стоимость неизвестна' : `$${q.cost.usd.toFixed(2)}`} · ${Math.round(q.cost.elapsedMs / 60000)} мин`,
     limits: q.limits,
   };

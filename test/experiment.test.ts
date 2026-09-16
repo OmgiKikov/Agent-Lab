@@ -175,6 +175,42 @@ test('discovery requires assistant evidence and two repeated deep goal failures 
   assert.equal(hypothesisCalls, 0);
 });
 
+test('discovery keeps going when one deep judge response is rejected', async t => {
+  const quote = 'Use only the approved answer.';
+  const candidateIds = new Set(['bad_a', 'bad_b', 'bad_c']);
+  const dialogues = [...candidateIds, 'clean'].map(id => ({ id, messages: [
+    { role: 'user' as const, content: `Question ${id}` }, { role: 'assistant' as const, content: candidateIds.has(id) ? `Unsupported ${id}` : 'Approved answer' },
+  ] }));
+  const runtime: Runtime = {
+    async discover(input) {
+      if (input.kind === 'requirements') return { kind: 'requirements', requirements: [{ id: 'rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [] };
+      if (input.kind === 'coarse') return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({ dialogueId: dialogue.id,
+        classification: candidateIds.has(dialogue.id) ? 'candidate' as const : 'clean' as const,
+        ...(candidateIds.has(dialogue.id) ? { requirementId: 'rule' } : {}), summary: 'Observed reply',
+        citations: [{ seq: 1, quote: dialogue.messages[1]!.content }] })) };
+      if (input.kind === 'group') return { kind: 'group', groups: [{ requirementId: 'rule', dialogueIds: [...candidateIds], summary: 'Same unsupported answer.' }] };
+      return { kind: 'hypothesis', hypothesis: 'The agent may return an unsupported answer.' };
+    },
+    async goals({ dialogues: [dialogue] }) { return [{ id: `goal_${dialogue!.id}`, goal: 'Get an approved answer', opening: dialogue!.messages[0]!.content,
+      requirementIds: ['rule'], evidenceDialogueIds: [dialogue!.id], successCriteria: quote }]; },
+    async assess({ scenario, trial }) {
+      if (scenario.id === 'clean') throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
+      return scenario.metrics!.map(metric => ({ metricId: metric.id, result: 'fail' as const, rationale: 'Deep check result.', evidence: [1],
+        citations: [{ seq: 1, quote: trial.events[1]!.text! }] }));
+    },
+    async prepare() { throw new Error('unused'); }, async improve() { throw new Error('unused'); },
+    async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
+  };
+  const { lab } = await setup(t, runtime);
+  const started = await lab.discover({ task: 'Find a test', mode: 'live', materials: [{ name: 'policy', content: quote }], dialogues });
+  await lab.waitForIdle();
+  const result = await lab.get(started.id);
+  assert.equal(result.discovery?.phase, 'ready', result.discovery?.error ?? result.error ?? '');
+  assert.equal(result.discovery?.completedDeepIds.length, result.discovery?.selectedIds.length);
+  assert.match(result.discovery?.deep.find(item => item.dialogueId === 'clean')?.error ?? '', /Judge response rejected/);
+  assert.ok(result.discovery?.hypothesis);
+});
+
 test('discovery groups one repeated behavior before deep checks instead of merging a broad requirement', async t => {
   const quote = 'Answers must follow the approved policy.';
   const dialogues = ['invent_a', 'invent_b', 'omit_a', 'omit_b'].map(id => ({ id, messages: [
@@ -622,6 +658,48 @@ test('accepting rejects zero, multiple, compare and non-review drafts without mu
   assert.deepEqual(await lab.get(completed.id), completed);
 });
 
+test('validation replay grounds requirements first and builds one deterministic card per real dialogue', async t => {
+  const policy = 'Отвечайте по базе знаний и не отправляйте клиента в поддержку.';
+  const dialogues = Array.from({ length: 3 }, (_, index) => ({ id: `real_${index}`, outcome: index === 0 ? 'failure' as const : 'success' as const,
+    messages: [
+      { role: 'user' as const, content: `Вопрос ${index}` }, { role: 'assistant' as const, content: 'Уточните деталь.' },
+      { role: 'user' as const, content: `Деталь ${index}` }, { role: 'assistant' as const, content: 'Ответ из базы.' },
+    ] }));
+  let grounded = false;
+  const attempts = new Map<string, number>();
+  const runtime: Runtime = {
+    async prepare(input) {
+      assert.equal(input.scenarioCount, 0);
+      grounded = true;
+      return { requirements: [{ id: 'reply_rule', text: policy, sourceId: 'source-1', quote: policy, critical: true }], questions: [],
+        agent: { name: 'Real agent', instructions: policy, tools: [] }, scenarios: [] };
+    },
+    async goals(input) {
+      assert.equal(grounded, true);
+      assert.equal(input.requireApplicable, true);
+      assert.deepEqual(input.requirements?.map(requirement => requirement.id), ['reply_rule']);
+      assert.equal(input.dialogues.length, 1);
+      const dialogue = input.dialogues[0]!;
+      attempts.set(dialogue.id, (attempts.get(dialogue.id) ?? 0) + 1);
+      if (dialogue.id === 'real_1' && attempts.get(dialogue.id) === 1) throw new Error('Pi provider response incomplete: connection failure');
+      return [{ id: `goal_${dialogue.id}`, goal: `Ответить на ${dialogue.id}`, opening: dialogue.messages[0]!.content,
+        requirementIds: ['reply_rule'], evidenceDialogueIds: [dialogue.id], successCriteria: policy }];
+    },
+    async improve() { throw new Error('unused'); }, async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
+  };
+  const { lab } = await setup(t, runtime);
+  const created = await lab.create(createInputSchema.parse({ task: 'Проверить ответы', mode: 'live', scenarioCount: 0, validationCount: 3, dialogues,
+    materials: [{ name: 'prompt', kind: 'prompt', content: policy }], settings: { userModes: ['scripted'], maxTurns: 16 } }));
+  await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  assert.equal(draft.phase, 'review', draft.error ?? '');
+  assert.deepEqual(draft.scenarios.map(card => card.id), dialogues.map(dialogue => dialogue.id));
+  assert.ok(draft.scenarios.every(card => card.goalObservation === 'reply'));
+  assert.deepEqual(draft.scenarios.map(card => card.user.script), [['Деталь 0'], ['Деталь 1'], ['Деталь 2']]);
+  assert.ok(draft.scenarios.every(card => card.metrics?.map(metric => metric.id).join(',') === 'prompt_compliance,goal_attainment,reply_quality'));
+  assert.equal(attempts.get('real_1'), 2, 'one transient transport failure is retried once');
+});
+
 test('fifteen unaccepted cards still run, report accuracy, save, load and rerun intact', async t => {
   const { lab, directory } = await setup(t, createDemoRuntime());
   const input = demoEvaluationInput(); input.scenarioCount = 10;
@@ -639,7 +717,7 @@ test('fifteen unaccepted cards still run, report accuracy, save, load and rerun 
   const first = await lab.get(batch.id);
   assert.equal(first.phase, 'results_review', first.error ?? '');
   assert.equal(first.trials.length, 15);
-  assert.deepEqual(qualitySummary(first).cards, { passed: 2, failed: 13, unknown: 0, notReached: 0, total: 15, accuracy: 2 / 15 });
+  assert.deepEqual(qualitySummary(first).cards, { passed: 2, failed: 13, unknown: 0, invalid: 0, notReached: 0, total: 15, accuracy: 2 / 15 });
   assert.equal(first.acceptedDraftHash, undefined);
 
   const suitePath = await lab.saveSuite(first.id, join(directory, 'fifteen-card-suite.json'));

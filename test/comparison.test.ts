@@ -214,7 +214,7 @@ test('rubric failures in dialogues without objective checks still count as weak 
   assert.equal(v.nextSteps.some(n => n.code === 'record_verdicts'), false);
   const simulatorCleared = verdictSummary({ ...r, humanReviews: [...r.humanReviews, review('h2', 'b', 'pass', { metricId: 'fidelity' })] });
   assert.equal(simulatorCleared.simulatorFlagged, 0);
-  assert.ok(simulatorCleared.nextSteps.some(n => n.code === 'record_verdicts' && n.count === 1), 'once the simulator is cleared, the agent failure needs its own verdict');
+  assert.equal(simulatorCleared.nextSteps.some(n => n.code === 'record_verdicts'), false, 'a decisive automatic failure needs no mandatory human verdict');
 });
 
 test('run differences reject changed cards, missing or duplicate attempts and invalid evidence; rubric-only failures participate', () => {

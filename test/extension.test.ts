@@ -43,6 +43,9 @@ test('injected Pi instructions hand saved discovery directly to one test after t
   try {
     const result = await beforeAgentStart({ systemPrompt: 'base' }, { cwd: '.', hasUI: false, mode: 'print' } as ExtensionContext);
     const prompt = result?.systemPrompt ?? '';
+    assert.match(prompt, /primary flow.*mode=validate/is);
+    assert.match(prompt, /stable sample of 15/is);
+    assert.match(prompt, /estimated card accuracy/is);
     assert.match(prompt, /agent_lab_build mode=discover/i);
     assert.match(prompt, /selection, not an accuracy estimate/i);
     assert.match(prompt, /Show that saved brief exactly; do not reconstruct or paraphrase it/i);
@@ -56,6 +59,69 @@ test('injected Pi instructions hand saved discovery directly to one test after t
     if (previous === undefined) delete process.env.AGENT_LAB_SESSION; else process.env.AGENT_LAB_SESSION = previous;
     await shutdown();
   }
+});
+
+test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-card set', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-validation-surface-'));
+  const fixtureLab = new ExperimentLab(join(directory, 'fixture'), createDemoRuntime());
+  await fixtureLab.init();
+  const seeded = await fixtureLab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 });
+  await fixtureLab.waitForIdle();
+  const prepared = await fixtureLab.get(seeded.id);
+  await fixtureLab.close();
+
+  const originalCreate = ExperimentLab.prototype.create;
+  const originalGet = ExperimentLab.prototype.get;
+  const originalWait = ExperimentLab.prototype.waitForIdle;
+  const originalStart = ExperimentLab.prototype.start;
+  let captured: Parameters<ExperimentLab['create']>[0] | undefined;
+  let record = structuredClone(prepared);
+  ExperimentLab.prototype.create = async function(raw) {
+    captured = raw;
+    const dialogues = raw.dialogues!.slice(0, 15);
+    record = { ...structuredClone(prepared), id: 'validation-run', task: raw.task, mode: 'live', phase: 'review',
+      settings: raw.settings, target: raw.target!, dialogues: structuredClone(dialogues),
+      scenarios: dialogues.map((dialogue, index) => ({ ...structuredClone(prepared.scenarios[0]!), id: dialogue.id, provenance: 'production' as const,
+        familyId: dialogue.id, title: `Карточка ${index + 1}`, user: { ...structuredClone(prepared.scenarios[0]!.user),
+          opening: dialogue.messages[0]!.content, script: [] } })) };
+    return structuredClone(record);
+  };
+  ExperimentLab.prototype.get = async function(id) { return id === record.id ? structuredClone(record) : originalGet.call(this, id); };
+  ExperimentLab.prototype.waitForIdle = async function() {};
+  ExperimentLab.prototype.start = async function() { return structuredClone(record); };
+  t.after(async () => {
+    ExperimentLab.prototype.create = originalCreate;
+    ExperimentLab.prototype.get = originalGet;
+    ExperimentLab.prototype.waitForIdle = originalWait;
+    ExperimentLab.prototype.start = originalStart;
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const { tools, shutdown } = registered();
+  t.after(shutdown);
+  const confirmations: { title: string; body: string }[] = [];
+  const ctx = { cwd: directory, mode: 'tui', hasUI: true, model: { provider: 'fixture', id: 'fixture' }, ui: {
+    confirm: async (title: string, body: string) => { confirmations.push({ title, body }); return true; },
+  } } as unknown as ExtensionContext;
+  const dialogues = Array.from({ length: 300 }, (_, index) => ({ id: `dialogue_${index}`, outcome: index % 2 ? 'success' : 'failure',
+    messages: [{ role: 'user', content: `Вопрос ${index}` }, { role: 'assistant', content: `Старый ответ ${index}` }] }));
+  const result = output(await tools.get('agent_lab_build')!.execute('validate', { mode: 'validate', task: 'Проверить агента',
+    materials: [{ name: 'policy.md', content: 'Отвечать по базе знаний.' }], dialogues,
+    target: { kind: 'command', command: process.execPath, args: [] } }, undefined, undefined, ctx));
+
+  assert.equal(captured?.validationCount, 15);
+  assert.equal(captured?.dialogues?.length, 40);
+  assert.deepEqual(captured?.settings.userModes, ['scripted']);
+  assert.equal(captured?.settings.maxTurns, 16);
+  assert.equal(captured?.settings.maxCalls, 340);
+  assert.equal(result.validation.sourceDialogues, 300);
+  assert.equal(result.validation.candidateDialogues, 40);
+  assert.equal(result.validation.sampledDialogues, 15);
+  assert.match(confirmations[0]!.body, /Исходных диалогов: 300; outcome-blind пул: 40; карточек: 15/);
+  await tools.get('agent_lab_run')!.execute('run-validation', { id: result.id, expectedHash: result.draftHash }, undefined, undefined, ctx);
+  assert.match(confirmations[1]!.body, /Validation set: 15 реальных диалогов/);
+  assert.match(confirmations[1]!.body, /Карточки и критерии зафиксированы внутри набора/);
+  assert.doesNotMatch(confirmations[1]!.body, /Ожидается:/);
 });
 
 test('Pi discovery confirms a computed budget, accepts 300 logs and hands the exact saved hypothesis to one visible test', async t => {
@@ -386,7 +452,7 @@ test('headless model tools prepare and edit only; approvals and human assessment
     assert.equal(report.phase, 'review'); assert.equal(report.workflow, 'evaluate');
     assert.equal(report.reviewMode, null); assert.equal(report.trialCount, 0);
     assert.equal(report.comparison, undefined); assert.equal(report.scenarioCount, 2);
-    assert.ok(updates.length >= 1); assert.match(report.nextStep, /Человеку/);
+    assert.ok(updates.length >= 1); assert.match(report.nextStep, /Дальше/);
     const evidence = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
     assert.equal(evidence.settings.repeats, 1); assert.equal(evidence.trials.length, 0);
     assert.equal(evidence.controlConsumedAt, null);

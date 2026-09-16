@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
   DISCOVERY_PROTOCOL, VERSION, agentSchema, createInputSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, discoveryGroupSchema, discoveryObservationSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, promptCompliance, proposalSchema, requirementSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation, verbatimSpan,
-  reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type DiscoverInput, type DiscoveryDialogue, type DiscoveryGroup, type DiscoveryObservation, type DiscoveryPlan, type DiscoveryRecord, type DraftPatch, type Experiment, type HumanReviewInput, type Requirement, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
+  reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type Dialogue, type DiscoverInput, type DiscoveryDialogue, type DiscoveryGroup, type DiscoveryObservation, type DiscoveryPlan, type DiscoveryRecord, type DraftPatch, type Experiment, type HumanReviewInput, type ObservedGoal, type Requirement, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
 import { ExperimentStore } from './store.js';
 import { assessTrial, evaluateTrial, grade } from './evaluation.js';
 import { automaticTrialResult, trialAssessmentComplete, awaitingVerdict, compareTrials, isAgentFailure, plannedTrials } from './comparison.js';
@@ -257,8 +257,8 @@ export class ExperimentLab {
       ...(input.targetVersion ? { targetVersion: input.targetVersion } : {}),
       limitations: [
         input.target.kind === 'sandbox' ? 'Tools operate on isolated test records, not production systems. Only instructions and registered tool permissions are edited.' : 'External agent state and tool events are reported by its adapter. Isolation and reset of external services are the responsibility of that adapter.',
-        'Scenario expectations require human review. Text matching checks measure literal content, not semantic correctness.',
-        'Synthetic simulations do not establish performance with real users. Model rubric assessments are provisional and require human review.',
+        'Scenario expectations are grounded automatically and should be spot-checked; text matching checks measure literal content, not semantic correctness.',
+        'Synthetic simulations do not establish performance with real users. Model rubric assessments are provisional; human review is reserved for disputes and calibration claims.',
         'Model costs are observed usage estimates; unknown costs remain unknown. Call limits are not hard provider billing caps.',
         ...(input.mode === 'demo' ? ['Scripted demonstration: user/target behavior and the missing-tool repair are deterministic fixtures, not a measured LLM improvement.'] : []),
       ],
@@ -276,18 +276,39 @@ export class ExperimentLab {
       record.targetFingerprint = await targetFingerprint(record.target);
       const runtime = await this.runtime(record);
       const confirmed = !!input.confirmedHypothesis;
+      const replay = !confirmed && record.dialogues.length > 0 && input.scenarioCount === 0
+        && input.settings.userModes.length === 1 && input.settings.userModes[0] === 'scripted';
       if (new Set(record.profiles.map(p => p.id)).size !== record.profiles.length) throw new Error('У профилей повторяются идентификаторы.');
-      // Real dialogues become production cards: the goal a real user pursued, opened with their own words.
-      const observedGoals = !confirmed && record.dialogues.length && runtime.goals
-        ? await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: structuredClone(record.dialogues), profiles: structuredClone(record.profiles) }, ctx)
-        : [];
-      validateObservedGoals(observedGoals, record.dialogues, record.profiles);
-      const generated = await runtime.prepare({
+      const preparationInput = (observedGoals: ObservedGoal[] = []) => ({
         task: record.task, sources: record.sources, existingAgent: input.existingAgent, workflow: input.workflow, scenarioCount: input.scenarioCount,
         profiles: structuredClone(record.profiles), goldenCases: structuredClone(record.goldenCases), notes: record.notes, observedGoals: structuredClone(observedGoals),
         targetKind: record.target.kind, confirmedHypothesis: input.confirmedHypothesis, goalObservation: input.goalObservation,
         dialogues: structuredClone(record.dialogues), userModes: structuredClone(record.settings.userModes), requirements: preparedRequirements,
-      }, ctx);
+      });
+      // A validation replay first grounds owner requirements, then derives exactly one card per sampled dialogue.
+      const grounding = replay ? await runtime.prepare(preparationInput(), ctx) : undefined;
+      let observedGoals: ObservedGoal[] = [];
+      if (!confirmed && record.dialogues.length) {
+        if (!runtime.goals) throw new Error('Модель не умеет извлекать цели из записанных диалогов.');
+        if (replay) {
+          const extract = async (dialogue: Dialogue) => {
+            const request = () => runtime.goals!({ task: record.task, sources: structuredClone(record.sources), dialogues: [structuredClone(dialogue)], profiles: structuredClone(record.profiles), requirements: structuredClone(grounding!.requirements), requireApplicable: !!input.validationCount }, ctx);
+            try { return await request(); }
+            catch (error) {
+              if (!/connection failure|fetch failed|ECONNRESET/i.test(error instanceof Error ? error.message : String(error))) throw error;
+              return request();
+            }
+          };
+          for (let index = 0; index < record.dialogues.length && observedGoals.length < (input.validationCount ?? Infinity); index += 2) {
+            const batch = record.dialogues.slice(index, index + 2);
+            observedGoals.push(...(await Promise.all(batch.map(extract))).flat());
+          }
+          if (input.validationCount) observedGoals = observedGoals.slice(0, input.validationCount);
+        } else observedGoals = await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: structuredClone(record.dialogues), profiles: structuredClone(record.profiles) }, ctx);
+      }
+      if (input.validationCount && observedGoals.length !== input.validationCount) throw new Error(`Материалы владельца задают ожидаемый ответ только для ${observedGoals.length} из ${input.validationCount} нужных validation-карточек. Добавьте знания или расширьте пул логов.`);
+      validateObservedGoals(observedGoals, record.dialogues, record.profiles);
+      const generated = grounding ?? await runtime.prepare(preparationInput(observedGoals), ctx);
       if (confirmed && input.goalObservation === 'reply') for (const scenario of generated.scenarios) {
         const seeded = Object.keys(scenario.initialState.records).length > 0 || scenario.initialState.writableFields.length > 0
           || scenario.initialState.transientFailures > 0 || Object.keys(scenario.initialState.external ?? {}).length > 0;
@@ -295,9 +316,21 @@ export class ExperimentLab {
           throw new Error(`Карточка ${scenario.id}: reply-only RAG тест не может задавать backend state или tool/state проверки.`);
         }
       }
-      const production = observedGoals.map(goal => goalToScenario(goal, record.profiles.find(p => p.id === goal.profileId)));
+      const production = observedGoals.map(goal => {
+        if (!replay) return goalToScenario(goal, record.profiles.find(p => p.id === goal.profileId));
+        const dialogue = record.dialogues.find(item => item.id === goal.evidenceDialogueIds[0]);
+        if (!dialogue || goal.evidenceDialogueIds.length !== 1) throw new Error(`Validation goal ${goal.id} must cite exactly one sampled dialogue.`);
+        const scenario = dialogueToScenario(dialogue, { goal: goal.goal, successCriteria: goal.successCriteria,
+          requirementIds: goal.requirementIds, goalObservation: input.goalObservation ?? 'reply' });
+        if (record.sources.some(source => source.kind === 'prompt')) scenario.metrics!.unshift({ ...promptCompliance });
+        return scenario;
+      });
       const golden = record.goldenCases.map(goldenToScenario);
       const synthetic = generated.scenarios.map(s => ({ ...s, provenance: 'synthetic' as const }));
+      if (replay && input.validationCount) {
+        const selected = new Set(observedGoals.flatMap(goal => goal.evidenceDialogueIds));
+        record.dialogues = record.dialogues.filter(dialogue => selected.has(dialogue.id));
+      }
       const scenarios = [...synthetic, ...production, ...golden].map(scenario => {
         const goalObservation = input.goalObservation ?? scenario.goalObservation ?? (record.target.kind === 'sandbox' ? undefined : 'reply');
         return goalObservation ? { ...scenario, goalObservation } : scenario;
@@ -544,8 +577,12 @@ export class ExperimentLab {
           discovery.completedDeepIds.push(dialogueId); updateCalls();
           await this.checkpoint(record, 'preparing', `Подробно проверено ${discovery.completedDeepIds.length}/${discovery.selectedIds.length}; controls — false-negative probe.`);
         } catch (error) {
-          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', error: error instanceof Error ? error.message : String(error) });
-          throw error;
+          const message = error instanceof Error ? error.message : String(error);
+          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', error: message });
+          if (message !== 'Judge response rejected; original responses and errors are preserved in judgeAudit') throw error;
+          delete discovery.activeCall;
+          discovery.completedDeepIds.push(dialogueId); updateCalls();
+          await this.checkpoint(record, 'preparing', `Подробная оценка ${dialogueId} отклонена; исходный ответ судьи сохранён, продолжаю с остальными примерами.`);
         }
       }
       const confirmedRepresentatives = confirmedDiscoveryRepresentativeIds(discovery, focus.id);
@@ -822,7 +859,7 @@ export class ExperimentLab {
       }
       record.reviewedAt = new Date().toISOString();
       record.reviewMode = options.reviewer ?? 'human';
-      if (record.reviewMode === 'automated') record.limitations.push('Generated scenario expectations were checked automatically, without human validation. Results are provisional synthetic evidence.');
+      if (record.reviewMode === 'automated') record.limitations.push('Generated scenario expectations were checked automatically, without human validation. Spot-check disputes; decisive automatic results remain usable as provisional evidence.');
       record.manifestHash = measurementHash(record);
       record.phase = record.workflow === 'evaluate' ? 'evaluating' : 'baseline';
       record.message = record.workflow === 'evaluate' ? 'Выполняю согласованный план проверки.' : 'Starting the frozen development comparison.';
@@ -1033,10 +1070,10 @@ export class ExperimentLab {
         .map(e => `#${e.seq} ${e.type}${e.tool ? ` ${e.tool}` : ''}: ${e.text ?? JSON.stringify(e.result ?? e.args ?? '')}`).join('\n').slice(0, 12000),
     }));
     try {
-      const prompt = record.assessmentOf || record.sourceEvidence
-        ? record.sources.find(source => source.kind === 'prompt')?.content
-        : record.target.kind !== 'sandbox' ? (record.target.promptFile ? await readPrompt(record.target.promptFile) : undefined)
-          : record.revisions.find(r => r.id === record.selectedRevisionId)?.spec.instructions;
+      const suppliedPrompt = record.sources.filter(source => source.kind === 'prompt').map(source => source.content).join('\n\n') || undefined;
+      const prompt = suppliedPrompt ?? (record.target.kind !== 'sandbox'
+        ? (record.target.promptFile ? await readPrompt(record.target.promptFile) : undefined)
+        : record.revisions.find(r => r.id === record.selectedRevisionId)?.spec.instructions);
       const modes = await runtime.failureModes({ task: record.task, failures, ...(prompt !== undefined ? { prompt } : {}) }, ctx);
       validateFailureModes(modes, failed, prompt);
       record.failureModes = modes;

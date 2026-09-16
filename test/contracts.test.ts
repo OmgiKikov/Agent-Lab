@@ -4,6 +4,7 @@ import {
   createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
   type Profile,
 } from '../src/contracts.js';
+import { selectValidationDialogues } from '../src/imports.js';
 
 const source = { id: 'source-1', name: 'policy', content: 'Rule one: read before update.', hash: 'h' };
 const requirement = { id: 'req_1', text: 'Read before update', sourceId: 'source-1', quote: 'read before update', critical: true };
@@ -19,6 +20,21 @@ test('discovery accepts 1..300 dialogues without weakening the ordinary 200-dial
   assert.equal(discoverInputSchema.safeParse({ ...base, dialogues: dialogues(300) }).success, true);
   assert.equal(discoverInputSchema.safeParse({ ...base, dialogues: dialogues(301) }).success, false);
   assert.equal(createInputSchema.safeParse({ ...base, dialogues: dialogues(201), scenarioCount: 0 }).success, false);
+});
+
+test('validation sampling is stable, outcome-blind and keeps only replayable dialogues', () => {
+  const dialogues = Array.from({ length: 30 }, (_, index) => dialogueSchema.parse({ id: `sample_${index}`, outcome: index % 2 ? 'success' : 'failure',
+    messages: [{ role: 'user', content: `Вопрос ${index}` }, { role: 'assistant', content: `Ответ ${index}` }] }));
+  const first = selectValidationDialogues(dialogues).map(dialogue => dialogue.id);
+  const relabelled = selectValidationDialogues(dialogues.map(dialogue => ({ ...dialogue, outcome: dialogue.outcome === 'success' ? 'failure' as const : 'success' as const }))).map(dialogue => dialogue.id);
+  assert.equal(first.length, 15);
+  assert.deepEqual(relabelled, first);
+  assert.deepEqual(selectValidationDialogues([...dialogues].reverse()).map(dialogue => dialogue.id), first);
+  const tooLong = dialogueSchema.parse({ id: 'too_long', messages: Array.from({ length: 17 }, (_, index) => ({ role: 'user' as const, content: `m${index}` })) });
+  assert.deepEqual(selectValidationDialogues([tooLong]), []);
+  const base = { task: 'validate', materials: [{ name: 'policy', content: 'Rule.' }], mode: 'live' as const, dialogues: dialogues.slice(0, 15), scenarioCount: 0 };
+  assert.equal(createInputSchema.safeParse({ ...base, validationCount: 15, settings: { userModes: ['scripted'] } }).success, true);
+  assert.equal(createInputSchema.safeParse({ ...base, validationCount: 15, settings: { userModes: ['reactive'] } }).success, false);
 });
 function card(overrides: Record<string, unknown> = {}) {
   return {
@@ -256,6 +272,9 @@ test('recorded dialogues map one-to-one to grounded production cards and immutab
   ] });
   assert.deepEqual(dialogueToTrial(spaced, { ...scenario, id: 'exact_reply', split: 'dev' }, 'revision_1').events.map(event => event.text),
     ['  reply exactly READY\n', ' READY '], 'score preserves original message whitespace as evidence');
+  assert.deepEqual(dialogueToScenario({ id: 'opening_only', messages: [{ role: 'user', content: 'Один вопрос' }] }, {
+    goal: 'Получить ответ', successCriteria: 'Ответ соответствует требованиям.',
+  }).user.script, [], 'opening-only production cards are runnable scripted conversations');
   assert.throws(() => dialogueSchema.parse({ id: 'blank', messages: [{ role: 'user', content: ' \n ' }] }), /Empty dialogue content/);
 
   const long = dialogueSchema.parse({ id: 'long', messages: Array.from({ length: 33 }, (_, index) => ({

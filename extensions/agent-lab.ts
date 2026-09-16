@@ -13,7 +13,7 @@ import { demoEvaluationInput, demoInput } from '../dist/demo.js';
 import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit.js';
-import { readData } from '../dist/imports.js';
+import { readData, selectValidationDialogues } from '../dist/imports.js';
 import { ExperimentStore } from '../dist/store.js';
 import { activePhases, reviewOrder, safeText, showBoard, trialLines, type BoardAction, type BoardOptions, type Section } from './cards.ts';
 
@@ -45,10 +45,16 @@ const inputError = (error: unknown): string => safeText(error instanceof Error ?
 function runPlan(record: Experiment): string {
   const target = record.target.kind === 'sandbox' ? 'Учебная песочница' : record.target.kind === 'http' ? record.target.url
     : record.target.kind === 'module' ? record.target.path : `${[record.target.command, ...record.target.args].join(' ')}${record.target.cwd ? ` · ${record.target.cwd}` : ''}`;
+  const validation = record.scenarios.length > 1 && record.scenarios.every(scenario => scenario.provenance === 'production');
+  const scope = validation ? [
+    `Validation set: ${record.scenarios.length} реальных диалогов.`,
+    `Темы: ${record.scenarios.slice(0, 5).map(scenario => safeText(scenario.title)).join('; ')}${record.scenarios.length > 5 ? `; ещё ${record.scenarios.length - 5}` : ''}.`,
+    'Карточки и критерии зафиксированы внутри набора для воспроизводимого повтора; полный список доступен в деталях.',
+  ] : record.scenarios.map(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
+    ...(record.settings.userModes.includes('scripted') ? (s.user.script ?? []).map((message, i) => `  Продолжение ${i + 1}: ${safeText(message)}`) : []),
+    `  Ожидается: ${safeText(s.successCriteria)}`, ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)].join('\n'));
   return [
-    ...record.scenarios.map(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
-      ...(record.settings.userModes.includes('scripted') ? (s.user.script ?? []).map((message, i) => `  Продолжение ${i + 1}: ${safeText(message)}`) : []),
-      `  Ожидается: ${safeText(s.successCriteria)}`, ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)].join('\n')),
+    ...scope,
     '', `Диалогов: ${plannedTrials(record)}. Режимы: ${record.settings.userModes.join(', ')}.`,
     `До ${record.settings.maxCalls} вызовов, ${Math.round(record.settings.maxDurationMs / 1000)} секунд, ${record.settings.maxTurns} ходов.`,
     record.mode === 'demo' ? 'Учебный пример: без модели и оплаты.' : `Модель: ${safeText(record.settings.provider)}/${safeText(record.settings.model)}. Стоимость зависит от фактических вызовов.`,
@@ -81,7 +87,7 @@ function summary(record: Experiment, directory: string) {
       scenarioFamilies: comparison.families, delta: comparison.delta, interval: comparison.interval, reasons: comparison.reasons,
     },
     limitations: record.limitations,
-    nextStep: evidence.verdict.nextSteps[0] ? `Человеку: ${evidence.verdict.nextSteps[0].text}` : undefined,
+    nextStep: evidence.verdict.nextSteps[0] ? `Дальше: ${evidence.verdict.nextSteps[0].text}` : undefined,
     artifacts: { evidence: resolve(directory, `${record.id}.json`),
       ...(record.trials.length ? { traceJournal: resolve(directory, `${record.id}.trace.jsonl`) } : {}) },
   };
@@ -147,18 +153,19 @@ export default function agentLab(pi: ExtensionAPI) {
   pi.on('before_agent_start', async (event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1') return;
     ctx.ui?.setWidget?.('agent-lab-start', undefined);
-    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for checking changes to the user's real agent. Work in their project and follow the agent-builder skill. At the start ask once for de-identified real dialogues (JSON/JSONL); honor an earlier answer and never silently skip them. With supplied logs, call agent_lab_build mode=discover. Discovery itself reads owner requirements, selects bounded observations, cites saved dialogue events, proposes one hypothesis, and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If a discovery stopped safely, call mode=discover with resumeRunId; its saved remaining call ceiling is confirmed natively before any provider call. If the owner answers yes, immediately call agent_lab_build again with mode=discover and the exact fromRunId and hypothesis returned by discovery. That call re-reads the saved evidence and builds exactly one editable test without accepting, running, or saving it. A refusal or correction builds nothing. After the exact one-test block is shown, use agent_lab_accept for the owner's decision about the test definition. For that one-test flow, use agent_lab_run only after acceptance and an explicit execution request. Existing multi-test validation/regression suites require the separate run-plan confirmation but not one-test acceptance metadata. Execution consent remains separate from accepting a test and from reviewing results. Keep normal work in this conversation, preserve budgets and model, cite actual event IDs, and never invent a human verdict. /agent-lab is only an optional evidence view. Save useful tests or existing suites with agent_lab_suite and repeat them after changes. Separate a broken test from an agent failure. Do not modify an external agent unless the user asked to fix it.` };
+    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for measuring the user's real agent. Work in their project and follow the agent-builder skill. The primary flow with de-identified real dialogues is agent_lab_build mode=validate: take a stable sample of 15, internally freeze one replayable scenario per dialogue from owner requirements, summarize the set without making the user manage cards, run the unchanged real agent after native confirmation, then lead with one estimated card accuracy number, grounded failure causes, separate metrics and limits; save the suite when useful. This is accuracy on the validation set, never a calibrated production guarantee. To mine one new regression test, call agent_lab_build mode=discover. Discovery selects evidence, proposes one saved hypothesis and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If the owner answers yes, call mode=discover again with the exact fromRunId and hypothesis; it re-reads the saved evidence and builds exactly one editable test. A refusal or correction builds nothing. Use agent_lab_accept for the owner's decision about the test definition. In the one-test flow use agent_lab_run only after acceptance; multi-test validation/regression suites use their run-plan confirmation, not one-test acceptance metadata. Execution consent remains separate from accepting a test and from reviewing results. Preserve budgets and model, cite actual event IDs, never invent a human verdict, and do not modify an external agent unless the user asked to fix it.` };
   });
   pi.registerTool({
     ...toolDisplay,
     name: 'agent_lab_build', label: 'Prepare agent and business-scenario tests',
-    description: 'Prepare an agent test or discover one useful test from recorded dialogues. mode=discover accepts up to 300 de-identified dialogues, shows computed call and time ceilings, and requires native confirmation before any provider call; it selects evidence and proposes one saved hypothesis, not an accuracy estimate. To resume a safely interrupted discovery, pass its resumeRunId alone; the saved used/max calls and total time ceiling are confirmed before continuation. After the owner says yes, call mode=discover again with the exact returned fromRunId and hypothesis to build exactly one editable test. The handoff does not accept, run, or save it. Live and demo modes retain the normal 20-call default; score scales its default budget to the imported batch. mode=demo prepares the built-in scripted example without model calls; mode=score imports recorded dialogues without running the agent or simulator.',
+    description: 'Prepare agent checks. mode=validate takes a stable outcome-blind sample (15 by default) from up to 300 de-identified dialogues and builds one deterministic replay card per sampled dialogue; it does not run the agent. mode=discover mines one regression hypothesis. mode=score evaluates recorded replies without running the agent. mode=demo is the built-in example.',
     parameters: Type.Object({
       task: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
       materials: Type.Optional(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 180 }), content: Type.String({ minLength: 1, maxLength: 120000 }), kind: Type.Optional(Type.Union([Type.Literal('knowledge'), Type.Literal('prompt')], { description: "'prompt' marks the agent's own system prompt: observable rules are extracted from it and every generated card gets the prompt_compliance rubric" })) }, { additionalProperties: false }), { minItems: 1, maxItems: 12 })),
       existingAgent: Type.Optional(Type.Unsafe(z.toJSONSchema(agentSchema))),
       settings: Type.Optional(Type.Unsafe(z.toJSONSchema(settingsSchema, { io: 'input' }))),
       scenarioCount: Type.Optional(Type.Integer({ minimum: 0, maximum: SCENARIO_LIMIT })),
+      validationCount: Type.Optional(Type.Integer({ minimum: 1, maximum: SCENARIO_LIMIT, description: 'Cards in mode=validate; defaults to 15.' })),
       connectionFile: Type.Optional(Type.String()), goldenFile: Type.Optional(Type.String()), dialoguesFile: Type.Optional(Type.String()),
       withoutDialogues: Type.Optional(Type.Boolean({ description: 'Set true only when the user explicitly chose to start without real dialogues. Otherwise ask for optional JSON/JSONL logs before building a live run.' })),
       codeOnly: Type.Optional(Type.Boolean({ description: 'With mode=score, preserve recorded facts without any model calls.' })),
@@ -171,7 +178,7 @@ export default function agentLab(pi: ExtensionAPI) {
       fromRunId: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$', description: 'Exact saved discovery run returned by the previous mode=discover call.' })),
       resumeRunId: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$', description: 'Safely interrupted discovery run to continue after native budget confirmation. Do not combine with fromRunId or hypothesis.' })),
       hypothesis: Type.Optional(Type.String({ minLength: 1, maxLength: 3000, description: 'Exact saved hypothesis returned by the previous mode=discover call.' })),
-      mode: Type.Optional(Type.Union([Type.Literal('live'), Type.Literal('demo'), Type.Literal('score'), Type.Literal('discover')])),
+      mode: Type.Optional(Type.Union([Type.Literal('live'), Type.Literal('demo'), Type.Literal('score'), Type.Literal('discover'), Type.Literal('validate')])),
     }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(_callId, params, toolSignal, onUpdate, ctx) {
@@ -246,15 +253,15 @@ export default function agentLab(pi: ExtensionAPI) {
       if (operation === 'discover' && hypothesis) throw new Error('Для точной сборки из discovery нужны и fromRunId, и hypothesis.');
       if (operation === 'score') onUpdate?.({ content: [{ type: 'text', text: 'Читаю требования и записи…' }], details: { phase: 'reading' } });
       let dialogues: unknown;
-      try { dialogues = dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues', { maxItems: operation === 'discover' ? 300 : 200 }) : rest.dialogues; }
+      try { dialogues = dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues', { maxItems: ['discover', 'validate'].includes(operation) ? 300 : 200 }) : rest.dialogues; }
       catch (error) {
-        if (operation !== 'score' && operation !== 'discover') throw error;
+        if (!['score', 'discover', 'validate'].includes(operation)) throw error;
         throw new Error(safeText(`Не удалось прочитать записи: ${error instanceof Error ? error.message : String(error)}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`));
       }
       let parsedDialogues: z.infer<typeof dialogueSchema>[];
-      try { parsedDialogues = z.array(dialogueSchema).max(operation === 'discover' ? 300 : 200).parse(dialogues ?? []); }
+      try { parsedDialogues = z.array(dialogueSchema).max(['discover', 'validate'].includes(operation) ? 300 : 200).parse(dialogues ?? []); }
       catch (error) {
-        if (operation !== 'score' && operation !== 'discover') throw error;
+        if (!['score', 'discover', 'validate'].includes(operation)) throw error;
         throw new Error(safeText(`Не удалось прочитать записи: ${error instanceof Error ? error.message : String(error)}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`));
       }
       if (operation === 'discover' && !parsedDialogues.length) {
@@ -262,6 +269,7 @@ export default function agentLab(pi: ExtensionAPI) {
           nextStep: 'Ask for dialoguesFile or dialogues, then call mode=discover again.' };
         return { content: [{ type: 'text', text: JSON.stringify(output) }], details: output };
       }
+      if (operation === 'validate' && !parsedDialogues.length) throw new Error('Для validation set укажите JSON/JSONL с обезличенными реальными диалогами.');
       if (operation !== 'demo' && !parsedDialogues.length && withoutDialogues !== true) {
         const output = { status: 'needs_input', message: 'Есть реальные диалоги с агентом? Укажите файл JSON/JSONL с обезличенными разговорами или скажите «начать без логов».',
           nextStep: 'Ask the user in ordinary language. Import their supplied dialoguesFile/dialogues, or set withoutDialogues=true after their explicit choice to skip. Do not silently skip or search unrelated logs.' };
@@ -276,6 +284,20 @@ export default function agentLab(pi: ExtensionAPI) {
       const supplied = (rest.settings ?? {}) as Partial<z.infer<typeof settingsSchema>>;
       const scoreMaxCalls = Math.min(3000, Math.max(20, 8 * parsedDialogues.length));
       const scoreMaxDurationMs = Math.min(14_400_000, Math.max(180_000, 120_000 * parsedDialogues.length));
+      const sourceDialogueCount = parsedDialogues.length;
+      const validationCount = operation === 'validate' ? rest.validationCount ?? 15 : 0;
+      if (operation === 'validate') {
+        parsedDialogues = selectValidationDialogues(parsedDialogues, Math.min(40, validationCount * 3));
+        if (!parsedDialogues.length) throw new Error('В логах нет диалогов с 1–16 репликами пользователя, пригодных для детерминированного replay.');
+        if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для сборки validation set нужен native Pi confirmation в интерактивном терминале.');
+        const maxCalls = supplied.maxCalls ?? Math.max(140, 8 * parsedDialogues.length + 20);
+        const maxDurationMs = supplied.maxDurationMs ?? Math.max(180_000, 180_000 * parsedDialogues.length);
+        if (!await ctx.ui.confirm('Собрать validation set?', safeText([
+          `Исходных диалогов: ${sourceDialogueCount}; outcome-blind пул: ${parsedDialogues.length}; карточек: ${validationCount}.`,
+          'Один применимый реальный диалог → одна карточка; неподкреплённые материалами темы и сохранённые outcome не используются.',
+          `Сборка и будущий прогон разделены. Потолок набора: ${maxCalls} модельных вызовов, до ${Math.ceil(maxDurationMs / 60_000)} минут.`,
+        ].join('\n')))) return { content: [{ type: 'text', text: JSON.stringify({ status: 'cancelled', calls: 0, mutated: false }) }], details: { status: 'cancelled' } };
+      }
       if (operation === 'discover') {
         if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для discovery нужен native Pi confirmation в интерактивном терминале.');
         const connection = connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
@@ -322,15 +344,17 @@ export default function agentLab(pi: ExtensionAPI) {
       const mode = operation === 'demo' ? 'demo' : 'live';
       const connection = mode === 'demo' ? undefined : connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
       const input = createInputSchema.parse({
-        ...(mode === 'demo' ? demoEvaluationInput() : {}), ...rest, scenarioCount: operation === 'score' ? 0 : rest.scenarioCount ?? (mode === 'demo' ? 3 : 1), mode, workflow: 'evaluate',
+        ...(mode === 'demo' ? demoEvaluationInput() : {}), ...rest, scenarioCount: ['score', 'validate'].includes(operation) ? 0 : rest.scenarioCount ?? (mode === 'demo' ? 3 : 1),
+        ...(operation === 'validate' ? { validationCount } : {}), mode, workflow: 'evaluate',
         ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
         ...(goldenFile ? { goldenCases: await readData(resolve(ctx.cwd, goldenFile), 'golden') } : {}),
         ...(dialogues !== undefined ? { dialogues: parsedDialogues } : {}),
         settings: { ...(mode === 'demo' ? demoInput().settings : {}), repeats: 1,
-          maxCalls: operation === 'score' ? scoreMaxCalls : 20,
-          maxDurationMs: operation === 'score' ? scoreMaxDurationMs : 180_000,
+          maxCalls: operation === 'score' ? scoreMaxCalls : operation === 'validate' ? Math.max(140, 8 * parsedDialogues.length + 20) : 20,
+          maxDurationMs: operation === 'score' ? scoreMaxDurationMs : operation === 'validate' ? Math.max(180_000, 180_000 * parsedDialogues.length) : 180_000,
           ...(mode === 'live' ? { judge: DEFAULT_JUDGE } : {}),
           ...supplied,
+          ...(operation === 'validate' ? { maxTurns: 16, userModes: ['scripted'] } : {}),
           provider: supplied.provider || ctx.model?.provider || '', model: supplied.model || ctx.model?.id || '' },
       });
       const { lab, close } = open(ctx.cwd);
@@ -392,7 +416,9 @@ export default function agentLab(pi: ExtensionAPI) {
         timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);
         await lab.waitForIdle(); await progress();
         const record = await lab.get(id);
-        const output = { ...summary(record, lab.store.directory), artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory), ...(signal.aborted ? { cancelled: true } : {}) };
+        const output = { ...summary(record, lab.store.directory),
+          ...(operation === 'validate' ? { validation: { sourceDialogues: sourceDialogueCount, candidateDialogues: parsedDialogues.length, sampledDialogues: record.scenarios.length, estimatedAccuracyAfterRun: true } } : {}),
+          artifacts: await exportArtifacts(await evidenceBundle(record, lab.store), lab.store.directory), ...(signal.aborted ? { cancelled: true } : {}) };
         returnToBoard(ctx, id);
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
       } finally { clearInterval(timer); signal.removeEventListener('abort', cancel); await polling; await close(); }

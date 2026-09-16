@@ -622,6 +622,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           task: input.task,
           sources, ownerRequirements: input.requirements.map(({ id, text, sourceId, quote, critical }) => ({ id, text, sourceId, quote, critical })), profiles,
           dialogues: [{ id: dialogue.id, userMessages: dialogue.messages.filter(message => message.role === 'user').map(message => message.content) }],
+          ...(input.requireApplicable ? { requireApplicable: true } : {}),
         };
         if (JSON.stringify(payload).length > GOALS_INPUT_LIMIT) {
           throw new Error(`Неизвестно: полный диалог ${dialogue.id} и материалы владельца не помещаются в контекст; критерий не опубликован.`);
@@ -630,9 +631,10 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           `Цель из реального диалога ${dialogue.id}`,
           GOALS_ROLE,
           payload,
-          z.strictObject({ goals: z.array(scoredGoalSchema).length(1) }), ctx,
+          z.strictObject({ goals: input.requireApplicable ? z.array(scoredGoalSchema).max(1) : z.array(scoredGoalSchema).length(1) }), ctx,
           value => {
-            const goal = value.goals[0]!;
+            const goal = value.goals[0];
+            if (!goal) return undefined;
             if (goal.evidenceDialogueIds.length !== 1 || goal.evidenceDialogueIds[0] !== dialogue.id) return `Goal ${goal.id} must cite only dialogue ${dialogue.id}.`;
             const unknown = goal.requirementIds.filter(id => !knownRequirements.has(id));
             if (unknown.length) return `Goal ${goal.id} cites unknown owner requirements: ${unknown.join(', ')}.`;
@@ -641,7 +643,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
             return undefined;
           },
         );
-        goals.push(result.goals[0]!);
+        if (result.goals[0]) goals.push(result.goals[0]);
       }
       try { validateObservedGoals(goals, input.dialogues, input.profiles); }
       catch (error) { throw new Error(`Observed goals: ${error instanceof Error ? error.message : String(error)}`); }

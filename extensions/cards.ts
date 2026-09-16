@@ -210,7 +210,7 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
       line('a — обсудить результат · r — повторить набор · Enter — все детали', 'accent'),
       ...(comparison ? [line(`После исправления: ${comparison.headline}`, 'accent')] : []),
       ...(measuredAny ? [line(text.scope, 'muted'), line(text.limits, 'muted')] : []),
-      line(`Выполнено ${v.execution.completed}/${v.execution.planned} · ожидают разбора ${v.review.pending} · сбоев ${v.invalid} · тестов отклонено ${v.review.invalid}`, 'muted'),
+      line(`Выполнено ${v.execution.completed}/${v.execution.planned} · спорных ${q.humanQueue.total} · сбоев ${v.invalid} · тестов отклонено ${v.review.invalid}`, 'muted'),
     ];
   }
   const p = v.provenance;

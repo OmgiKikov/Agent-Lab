@@ -387,13 +387,11 @@ export function verdictSummary(record: Experiment): VerdictSummary {
   if (hasResults && review.findings.length) nextSteps.push({ code: 'inspect_human_findings', text: `Разберите замечания человека (${review.flagged} диалогов) и расхождения с автоматикой (${review.disagreements} оценок). Откройте диалог в /agent-lab → 3; a — обсудить основания и исправление.`, count: review.findings.length });
   if (hasResults && mixed.length) nextSteps.push({ code: 'inspect_repeats', text: `На ${mixed.length} сочетаниях карточки и режима есть и успехи, и провалы. Сравните эти попытки; общий процент скрывает различия.`, count: mixed.length });
   if (hasResults && simulatorFlagged) nextSteps.push({ code: 'inspect_simulator', text: `Откройте ${simulatorFlagged} диалог(ов) с пометкой симулятора: утечка, выдуманное значение, повтор или нарушение роли. Оценки агента в них ненадёжны; опровергнуть пометку можно вердиктом по проверке.`, count: simulatorFlagged });
-  const awaiting = unreviewed + undecided;
-  // Prioritize disputed evidence; automatic failures still need a human verdict before prompt changes or final audit.
-  const disputed = rubric.unknown + review.disagreements + simulatorFlagged;
-  if (hasResults && awaiting) nextSteps.push({ code: 'record_verdicts', count: awaiting, text: disputed
-    ? `${awaiting} провал(ов) ждут вердикта человека (p — пройдено, n — не пройдено). Начните со спорных: ${disputed} с неясной оценкой, расхождением или пометкой симулятора; остальные имеют автоматическую оценку.`
-    : `Автоматически найдено ${awaiting} провал(ов); подтвердите их вердиктом в чате или p / n на доске перед исправлением промпта или завершением аудита. Для чтения результата это не требуется.` });
-  else if (hasResults && !finalized && record.workflow === 'evaluate' && record.phase === 'results_review') nextSteps.push({ code: 'finalize_review', text: 'Проверьте ответы и основания оценок, затем завершите разбор. Отсутствие замечаний модели ещё не означает проверку человеком.' });
+  // Automatic pass/fail is enough for the quality report. Existing human disagreements are already
+  // surfaced by inspect_human_findings; only unresolved judge output still needs a verdict.
+  const disputed = rubric.unknown;
+  if (hasResults && disputed) nextSteps.push({ code: 'record_verdicts', count: disputed,
+    text: `Разберите только спорные результаты: ${disputed} с неясной оценкой, расхождением или пометкой симулятора. Уверенные автоматические pass/fail уже входят в отчёт.` });
   if (hasResults && smokeFailures) nextSteps.push({ code: 'smoke_failed', text: `Провалено ${smokeFailures} попыток на дымовых карточках: сначала восстановите базовое поведение.`, count: smokeFailures });
   if (hasResults && weakSpots[0]) nextSteps.push({ code: 'fix_weakest', text: `Начните с самого слабого места${weakSpots[0].stage ? ` на этапе «${weakSpots[0].stage}»` : ''}: ${weakSpots[0].description} (${weakSpots[0].failures} провал(ов)).`, detail: weakSpots[0].description, count: weakSpots[0].failures });
   if (hasResults && allSynthetic) nextSteps.push({ code: 'add_real_data', text: 'Добавьте golden set или реальные диалоги, чтобы результат не держался на одной синтетике.' });

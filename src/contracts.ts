@@ -398,7 +398,7 @@ export function dialogueToScenario(dialogue: Dialogue, criteria: { goal: string;
       goal: criteria.goal, facts: 'Только факты, сообщённые пользователем в записанном диалоге.',
       behavior: replayable ? 'Воспроизводить реплики пользователя из записи в исходном порядке.'
         : 'Полный длинный диалог хранится как неизменяемое доказательство; отдельный тест строится после принятия гипотезы.',
-      opening, maxFollowUps: replayable ? script.length : 0, ...(replayable && script.length ? { script } : {}),
+      opening, maxFollowUps: replayable ? script.length : 0, ...(replayable ? { script } : {}),
     },
     initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], goalObservation: criteria.goalObservation ?? 'reply',
     ...(criteria.successCriteria ? { successCriteria: criteria.successCriteria } : {}),
@@ -431,6 +431,8 @@ export const createInputSchema = z.strictObject({
   workflow: z.enum(['evaluate', 'compare']).default('evaluate'),
   /** 0 means: run only the owner's own cards and generate nothing. */
   scenarioCount: z.number().int().min(0).max(SCENARIO_LIMIT).default(5),
+  /** Build this many replay cards only where owner requirements substantively define the expected answer. */
+  validationCount: z.number().int().min(1).max(SCENARIO_LIMIT).optional(),
   target: targetSchema.default({ kind: 'sandbox' }),
   targetVersion: text.max(200).optional(),
   goldenCases: z.array(goldenCaseSchema).max(40).default([]),
@@ -449,6 +451,9 @@ export const createInputSchema = z.strictObject({
   if (!unique(v.profiles.map(p => p.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate profile IDs', path: ['profiles'] });
   if (v.confirmedHypothesis && (v.workflow !== 'evaluate' || v.scenarioCount !== 1 || v.goldenCases.length)) {
     ctx.addIssue({ code: 'custom', message: 'A confirmed hypothesis builds exactly one generated evaluate test without golden cases', path: ['confirmedHypothesis'] });
+  }
+  if (v.validationCount && (v.workflow !== 'evaluate' || v.scenarioCount !== 0 || !v.dialogues.length || v.settings.userModes.length !== 1 || v.settings.userModes[0] !== 'scripted')) {
+    ctx.addIssue({ code: 'custom', message: 'validationCount needs evaluate, scenarioCount 0, real dialogues and scripted mode', path: ['validationCount'] });
   }
   if (v.confirmedHypothesis && !v.goalObservation) {
     ctx.addIssue({ code: 'custom', message: 'A confirmed hypothesis needs an owner-selected goal observation', path: ['goalObservation'] });
@@ -810,7 +815,7 @@ export interface Runtime {
   openTarget(agent: AgentSpec, sources: Source[], tools: Tool[], ctx: CallContext): Promise<TargetSession>;
   userTurn(input: { user: Scenario['user']; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserTurn>;
   assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial }, ctx: CallContext): Promise<MetricAssessment[]>;
-  goals?(input: { task: string; sources: Source[]; dialogues: Dialogue[]; profiles: Profile[]; requirements?: Requirement[] }, ctx: CallContext): Promise<ObservedGoal[]>;
+  goals?(input: { task: string; sources: Source[]; dialogues: Dialogue[]; profiles: Profile[]; requirements?: Requirement[]; requireApplicable?: boolean }, ctx: CallContext): Promise<ObservedGoal[]>;
   failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
   discover?(input: DiscoveryRuntimeInput, ctx: CallContext): Promise<DiscoveryRuntimeOutput>;
 }
