@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { ExperimentStore } from '../src/store.js';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { assessTrial, evaluateTrial } from '../src/evaluation.js';
@@ -635,6 +636,28 @@ test('demo cards carry knows and answers, and the demo simulator answers from th
   assert.ok(trial.simulatorChecks!.every(c => c.passed));
   const time = f.preparation.scenarios.find(s => s.id === 'd_clarify_control')!;
   assert.deepEqual(time.user.answers, [{ ifAsked: 'desired time', reply: 'My desired time is 17:00.' }]);
+});
+
+test('a receipt hashes the audit exactly as the sidecar stores it, even with a whitespace-padded judge error', async t => {
+  const f = await fixture();
+  const scenario: Scenario = { ...structuredClone(f.preparation.scenarios[0]!), checks: [],
+    metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'Original task', passCriteria: 'Instruction supplied', failCriteria: 'A refusal is supplied' }] };
+  const trial: Trial = { id: 'trial', revisionId: 'baseline', scenarioId: scenario.id, familyId: scenario.familyId, repeat: 0, split: 'dev', userMode: 'static', manifestHash: 'frozen',
+    outcome: 'ungraded', reason: 'rubric only', checks: [], events: [{ seq: 0, type: 'user', text: scenario.user.opening }, { seq: 1, type: 'assistant', text: 'Сделайте так.' }],
+    initialState: scenario.initialState, finalState: scenario.initialState, usage: { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: null }, elapsedMs: 1 };
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-receipt-'));
+  const store = new ExperimentStore(directory);
+  await store.init();
+  t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }); });
+  const runtime: Runtime = { ...f.runtime, async assess(input, ctx) {
+    return assessRepeated(input, { provider: 'offline', id: 'judge' }, ctx, async () => { throw new Error('429 Too Many Requests\n'); });
+  } };
+  const ctx: CallContext = { ...context(), onJudgment: (id, audit) => store.writeJudgeAudit('run-1', id, audit) };
+  await assert.rejects(assessTrial(runtime, scenario, f.sources, trial, ctx, []), /429/);
+  assert.ok(trial.judgeReceipt);
+  const stored = await store.readJudgeAudit('run-1', trial.id);
+  assert.ok(stored?.attempts.some(attempt => attempt.error === '429 Too Many Requests'));
+  assert.equal(fingerprint(stored), trial.judgeReceipt.auditHash, 'an honest receipt matches its sidecar');
 });
 
 test('assessment hands the judge observable prompt rules in place of the raw prompt, with every other source intact', async () => {

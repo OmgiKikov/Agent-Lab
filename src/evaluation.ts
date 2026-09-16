@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
-  assessmentRubrics, emptyUsage, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
+  assessmentRubrics, emptyUsage, judgeAuditSchema, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
   type CallContext, type CheckResult, type DialogueMessage, type JudgeAudit, type MetricAssessment, type Requirement, type Revision,
   type Runtime, type Scenario, type Settings, type Source, type Target, type TargetSession, type TraceEvent, type Trial, type UserMode,
 } from './contracts.js';
@@ -297,9 +297,13 @@ export async function assessTrial(runtime: Runtime, scenario: Scenario, sources:
     const assessments = validateAssessments(metrics, trial.events, await runtime.assess({
       scenario: structuredClone({ ...scenario, metrics }), sources: structuredClone(observableSources(sources, requirements)), trial: structuredClone(trial),
     }, { ...ctx, onTargetEvent: undefined, onTrace: undefined, onJudgment: (id, audit, final) => {
-      // The full audit lives in the store's sidecar; the trial keeps only a sealed receipt.
-      latest = structuredClone(audit);
-      ctx.onJudgment?.(id, audit, final);
+      // The full audit lives in the store's sidecar; the trial keeps only a sealed receipt. The receipt
+      // hashes exactly what the store keeps: the schema-normalized audit (trimmed texts). An audit the
+      // schema rejects is passed on unchanged, so the store still reports the persistence failure.
+      let persisted: JudgeAudit = audit;
+      try { persisted = judgeAuditSchema.parse(audit); } catch { /* the store rejects it with the original error */ }
+      latest = structuredClone(persisted);
+      ctx.onJudgment?.(id, persisted, final);
     } }));
     ctx.signal.throwIfAborted();
     mapped = assessments.map(assessment => !metricApplies(metrics.find(m => m.id === assessment.metricId)!, trial)
