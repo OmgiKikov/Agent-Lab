@@ -1,6 +1,7 @@
 /*
  * Read-only cross-surface check: for each stored run, the CLI summary block, the Pi tool payload
- * `viewLines` and the collapsed Pi tool result must open with the same lines.
+ * `viewLines` and the collapsed Pi tool result must open with the same lines, and the collapsed
+ * `/agent-lab` board must show every one of those lines as a whole line.
  *
  *   npx tsx pi-surface-check.mts --cwd <dir containing .agent-lab> --id RUN [--id RUN…]
  *
@@ -22,6 +23,11 @@ const cwd = resolve(values.cwd);
 const dataDir = resolve(cwd, '.agent-lab');
 
 const agentLab = (await import(pathToFileURL(resolve(root, 'extensions/agent-lab.ts')).href)).default;
+const { LabBoard } = await import(pathToFileURL(resolve(root, 'extensions/cards.ts')).href);
+const { ExperimentStore } = await import(pathToFileURL(resolve(root, 'dist/store.js')).href);
+const { stripTerminalSequences } = await import('@earendil-works/pi-tui');
+// A reader: ExperimentStore.get never takes the writer lock.
+const store = new ExperimentStore(dataDir);
 type Tool = { name: string; execute: (...args: unknown[]) => Promise<{ content: { type: string; text: string }[] }>;
   renderResult: (result: unknown, options: { expanded: boolean; isPartial: boolean }, theme: unknown) => { render(width: number): string[] } };
 const tools = new Map<string, Tool>();
@@ -64,7 +70,15 @@ for (const id of values.id) {
   const start = rendered.findIndex(entry => entry.trim() !== '');
   const renderBlock = rendered.slice(start, start + cliBlock.length).map(entry => entry.trim());
 
-  const surfaces: [string, string[]][] = [['payload', payloadBlock], ['render', renderBlock]];
+  // (d) The collapsed /agent-lab board for the same record: each block line must be a whole cell.
+  const board = new LabBoard({ record: await store.get(id) }, theme, () => {}, () => {}, () => 400);
+  const cells = new Set<string>(stripTerminalSequences(board.render(200).join('\n')).split('\n')
+    .flatMap((row: string) => row.split('│')).map((cell: string) => cell.trim()).filter(Boolean));
+  board.dispose();
+  // An equal list means every block line was found; a missing one is reported by its index.
+  const boardBlock = cliBlock.map(entry => cells.has(entry) ? entry : '\u0000missing');
+
+  const surfaces: [string, string[]][] = [['payload', payloadBlock], ['render', renderBlock], ['board', boardBlock]];
   let ok = cliBlock.length > 0;
   if (!ok) process.stdout.write(`DIFF id=${short} surface=cli line=0\n`);
   for (const [name, lines] of surfaces) {

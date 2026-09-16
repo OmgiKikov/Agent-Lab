@@ -5,6 +5,7 @@ import { describeCheck } from '../dist/contracts.js';
 import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
 import { qualitySummary, qualityLines, dialogues as dlg } from '../dist/quality.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
+import { buildResultView, resultViewLines, type ResultView } from '../dist/result-view.js';
 
 /** All material, model and persisted text crosses this boundary before terminal rendering. */
 export function safeText(value: unknown): string {
@@ -48,7 +49,9 @@ export interface BoardOptions {
   record?: Experiment;
   section?: Section;
   selected?: number;
-  load?: () => Promise<Pick<EvidenceBundle, 'record' | 'comparison' | 'before' | 'warnings'>>;
+  load?: () => Promise<Pick<EvidenceBundle, 'record' | 'comparison' | 'before' | 'warnings' | 'view'>>;
+  /** The headline block of `record`; ignored when it belongs to another run. */
+  view?: ResultView;
   comparison?: RunComparison;
   before?: Experiment;
   notice?: { message: string; kind: 'info' | 'error' };
@@ -183,21 +186,20 @@ const tierLabels: Record<string, string> = { smoke: 'дымовые', regression
 const noteText = (note: VerdictNote): string => note.text;
 
 /** The simple layer: how good the agent is on these cards, why it failed, what the judge could not settle, what to do next. */
-function verdictLines(record: Experiment, expanded = false, comparison?: RunComparison): Line[] {
+function verdictLines(record: Experiment, expanded = false, comparison?: RunComparison, view: ResultView = buildResultView(record)): Line[] {
   const v = verdictSummary(record);
   if (!expanded) {
     const q = qualitySummary(record);
     const text = qualityLines(q);
     const finding = v.review.findings[0];
-    const broken = record.trials.find(t => t.outcome === 'invalid');
     const measuredAny = q.scope.dialogues > 0;
+    // The first block is ResultView's, line for line: the board never counts or picks a not-measured card itself.
     return [line('ИТОГ', 'accent', true),
-      ...(measuredAny ? [line(q.headline, 'text', true), ...(text.coverage ? [line(text.coverage, 'warning')] : []), line(v.headline, 'muted')] : [line(v.headline, 'text', true)]),
+      ...(measuredAny ? resultViewLines(view).map((text, i) => line(text, i === 0 ? 'text' : 'muted', i === 0)) : [line(v.headline, 'text', true)]),
       ...(measuredAny && q.metrics.length ? text.metrics.map(m => line(m)) : []),
       ...(measuredAny ? text.rag.map(item => line(item, 'muted')) : []),
       line(''),
       ...(finding ? [line(humanFindingText(finding), 'warning')] : []),
-      ...(broken ? [line('НЕ ИЗМЕРЕНО', 'error'), line(`${record.scenarios.find(s => s.id === broken.scenarioId)?.title ?? broken.scenarioId}: ${broken.reason}`, 'warning')] : []),
       ...(q.causes.length ? [line('ЧТО ТРЕБУЕТ ВНИМАНИЯ', 'accent'),
         ...q.causes.slice(0, 3).flatMap((c, i) => [
           line(`${i + 1}. ${c.name} — ${dlg(c.dialogues)}${c.stage ? ` · ${c.stage}` : ''}`, 'warning'),
@@ -253,9 +255,8 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
     line('Что дальше:', 'accent'), ...v.nextSteps.map(step => line(`• ${noteText(step)}`)),
   ];
 }
-function verdictHeadline(record: Experiment): string {
-  const q = qualitySummary(record);
-  return `Итог: ${q.headline} · 1 подробнее`;
+function verdictHeadline(view: ResultView): string {
+  return `Итог: ${view.headline.text} · 1 подробнее`;
 }
 
 /** A single native Pi component: immutable snapshots in, explicit human intentions out. */
@@ -300,7 +301,7 @@ export class LabBoard implements Component {
         this.options.notice = undefined;
       }
       this.record = record;
-      Object.assign(this.options, { comparison: refreshed.comparison, before: refreshed.before, warnings: refreshed.warnings });
+      Object.assign(this.options, { comparison: refreshed.comparison, before: refreshed.before, warnings: refreshed.warnings, view: refreshed.view });
       this.loadError = '';
       if (!activePhases.has(record.phase)) { clearInterval(this.timer); this.timer = undefined; }
       this.redraw();
@@ -308,6 +309,10 @@ export class LabBoard implements Component {
       if (!this.disposed) { this.loadError = safeText(error instanceof Error ? error.message : error); this.redraw(); }
     }
     finally { this.loading = false; }
+  }
+  /** The supplied view when it describes the shown run; otherwise a fresh one, so a stale view is never shown. */
+  private viewFor(record: Experiment): ResultView {
+    return this.options.view?.runId === record.id ? this.options.view : buildResultView(record);
   }
   dispose() { this.disposed = true; clearInterval(this.timer); }
   invalidate() {}
@@ -424,7 +429,7 @@ export class LabBoard implements Component {
           : review.findings.length ? `Замечания человека: ${review.flagged} диалогов · расхождения оценок: ${review.disagreements}.`
           : failures ? `Разбор: все ${failures} провал(ов) разобраны.` : 'Автоматические проверки не отметили провалов.', pending || review.findings.length ? 'warning' : 'muted'));
       }
-      header.push(line(`${record.trials.length && !activePhases.has(record.phase) ? verdictHeadline(record) : record.phase === 'review' ? 'Проверьте цель, первую реплику и критерии. r — запуск.' : record.message}${this.loadError ? ` · ${this.loadError}` : ''}`));
+      header.push(line(`${record.trials.length && !activePhases.has(record.phase) ? verdictHeadline(this.viewFor(record)) : record.phase === 'review' ? 'Проверьте цель, первую реплику и критерии. r — запуск.' : record.message}${this.loadError ? ` · ${this.loadError}` : ''}`));
     } else header.push(line('n — свой агент · d — учебный пример без провайдера', 'muted'));
     if (this.options.notice) header.push(line(this.options.notice.message, this.options.notice.kind === 'error' ? 'error' : 'success'));
     if (this.options.warnings?.length) header.push(line(`Внимание: ${this.options.warnings[0]}${this.options.warnings.length > 1 ? ` (+${this.options.warnings.length - 1})` : ''}`, 'warning'));
@@ -463,7 +468,7 @@ export class LabBoard implements Component {
         : [line('Диалогов ещё нет.', 'text', true), line(record.phase === 'review' ? 'Проверьте карточки и нажмите r для запуска.' : record.error ?? 'Прогон остановлен до завершения первой попытки.')];
     } else {
       const agent = record.revisions.find(r => r.id === record.selectedRevisionId)?.spec;
-      detail = [...(record.trials.length ? [...verdictLines(record, this.expanded), line('')] : []), line(record.task, 'text', true),
+      detail = [...(record.trials.length ? [...verdictLines(record, this.expanded, undefined, this.viewFor(record)), line('')] : []), line(record.task, 'text', true),
         ...(record.error ? [line('НЕ УДАЛОСЬ ЗАВЕРШИТЬ', 'warning'), line(record.error), line('a Обсудить исправление с Pi · исходные данные сохранены'), line('')] : []),
         ...(record.questions.length ? [line('ТРЕБУЮТСЯ УТОЧНЕНИЯ', 'warning'), ...record.questions.map(q => line(`• ${q}`)), line('Нажмите a и ответьте своими словами. Pi подготовит уточнённый черновик.')] : []),
         line(''), line('ПОДКЛЮЧЕНИЕ', 'accent'), line(record.target.kind === 'sandbox' ? agent?.name ?? 'Песочница' : record.target.kind === 'module' ? record.target.path : record.target.kind === 'http' ? record.target.url : [record.target.command, ...record.target.args].join(' ')),
@@ -486,7 +491,7 @@ export class LabBoard implements Component {
         line(''), ...record.limitations.map(v => line(`• ${v}`, 'muted')),
         ...(record.error ? [line(record.error, 'error')] : []),
       ];
-      if (record.trials.length && !this.expanded) detail = verdictLines(record, false, this.options.comparison);
+      if (record.trials.length && !this.expanded) detail = verdictLines(record, false, this.options.comparison, this.viewFor(record));
     }
     if (this.options.warnings?.length) detail.push(line(''), line('ДИАГНОСТИКА', 'warning'), ...this.options.warnings.map(w => line(w, 'warning')));
     if (this.help) detail = [line('КЛАВИШИ', 'accent', true), line('1 Обзор — качество агента · 2 Карточки · 3 Диалоги'), line('a — правка или разбор словами с Pi · n в списке — новая проверка'), line('↑ ↓ или j k — выбрать карточку или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), line('Enter — раскрыть источники, инструменты и состояния'), line('p / n — вердикт на выбранный диалог · v — оценить критерий'), line('r — запустить черновик или создать повтор готового прогона'), line('x — экспортировать · c — остановить запуск · Esc — назад · q — закрыть'), line(''), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')];

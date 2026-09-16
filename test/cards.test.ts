@@ -295,7 +295,9 @@ test('the board leads with a plain verdict once dialogues exist and has only thr
   const board = new LabBoard({ record, section: 'agent' }, theme, () => {}, () => {}, () => 40);
   const text = stripTerminalSequences(board.render(120).join('\n'));
   assert.match(text, /ИТОГ/);
-  assert.match(text, /По кодовым проверкам пройдено 2 из 3/);
+  // Other scores leave the first block and stay below it as metric bars.
+  assert.match(text, /Точные проверки · код · 2\/3/);
+  assert.ok(text.includes(resultViewLines(buildResultView(record))[0]!));
   assert.match(text, /спорных 0/);
   assert.match(text, /Время изменено/);
   assert.match(text, /Дальше/);
@@ -417,7 +419,8 @@ test('the board overview shows the ResultView block verbatim and no private not-
   const cells = boardCells(board);
   for (const expected of resultViewLines(view)) assert.ok(cells.includes(expected), `board misses block line: ${expected}`);
   assert.ok(!cells.includes('НЕ ИЗМЕРЕНО'), 'the single-trial not-measured header is gone');
-  assert.ok(!cells.some(cell => cell.includes('ОДИНОЧНЫЙ СБОЙ')), 'the first invalid trial reason is not picked on its own');
+  const broken = record.scenarios.find(scenario => scenario.id === record.trials.find(trial => trial.outcome === 'invalid')?.scenarioId)!;
+  assert.ok(!cells.includes(`${broken.title}: ОДИНОЧНЫЙ СБОЙ`), 'the first invalid trial is not picked on its own');
   assert.ok(cells.includes(`Итог: ${view.headline.text} · 1 подробнее`));
   board.dispose();
 });

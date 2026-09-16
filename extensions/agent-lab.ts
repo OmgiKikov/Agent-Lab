@@ -732,7 +732,7 @@ export default function agentLab(pi: ExtensionAPI) {
           const bundle = record ? await evidenceBundle(record, lab.store, beforeId) : undefined;
           const action: BoardAction = demoRequested ? { type: 'demo' } : newRequested ? { type: 'new' } : await showBoard(ctx, record
             ? { record, section, selected, query, pendingOnly, comparison: bundle?.comparison, before: bundle?.before, notice, reportPath, reviewTimes,
-                warnings: bundle?.warnings, load: async () => evidenceBundle(await lab.get(record.id), lab.store, beforeId) }
+                warnings: bundle?.warnings, view: bundle?.view, load: async () => evidenceBundle(await lab.get(record.id), lab.store, beforeId) }
             : { records: await lab.list(), notice, warnings: lab.store.diagnostics.map(d => `${d.id}: ${d.message}`) });
           notice = undefined;
           if ('record' in action && (action.record.updatedAt !== record?.updatedAt || action.record.phase !== record?.phase)) reportPath = undefined;
