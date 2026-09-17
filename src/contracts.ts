@@ -647,12 +647,14 @@ export const humanReviewInputSchema = z.strictObject({
   trialId: identifier, metricId: identifier.optional(), checkId: identifier.optional(),
   verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000), reviewedDialogue: z.literal(true).optional(),
   durationMs: z.number().int().nonnegative().max(3600000).optional(),
-  /** A one-key agreement mark on the situation's primary metric. */
+  /** A one-key agreement mark on a metric that decided the situation (outcomes.ts markTargets). */
   source: z.literal('quick').optional(),
   /** The recorded judge result the person saw; filled and checked by the lab, never trusted from a caller. */
   judgeVerdict: z.enum(['pass', 'fail', 'unknown']).optional(),
   /** The judgment the person agreed or disagreed with; absent when the trial has neither receipt nor audit (demo). */
   judge: judgeSnapshotSchema.optional(),
+  /** The counting rule a quick mark was given under (COUNTING_RULES); filled by the lab, never trusted from a caller. */
+  countingRules: text.optional(),
 }).refine(v => !(v.metricId && v.checkId), 'Review either one metric, one check, or the whole trial')
   .refine(v => !v.reviewedDialogue || (!v.metricId && !v.checkId), 'Only a whole-dialogue verdict can mark a complete review')
   .refine(v => v.source !== 'quick' || (!!v.metricId && v.verdict !== 'invalid'), 'Быстрая отметка ставится на одну оценку судьи.');

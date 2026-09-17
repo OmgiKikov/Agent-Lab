@@ -12,7 +12,9 @@ import { createDemoRuntime, demoEvaluationInput, demoInput } from '../src/demo.j
 import { createInputSchema, emptyUsage, experimentSchema, fingerprint, goalAttainment, metricApplies, validatePreparation, type Experiment, type Runtime, type Trial } from '../src/contracts.js';
 import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources } from '../src/judge.js';
 import { awaitingVerdict, compareRuns } from '../src/comparison.js';
-import { simulatorUsable } from '../src/outcomes.js';
+import { COUNTING_RULES, simulatorUsable } from '../src/outcomes.js';
+import { judgeAgreement } from '../src/agreement.js';
+import { buildResultView, resultViewLines } from '../src/result-view.js';
 import { qualityLines, qualitySummary } from '../src/quality.js';
 
 test('staged discovery batches whole logs, selects one grounded focus, and persists one exact handoff', async t => {
@@ -1992,9 +1994,10 @@ test('a positive control rides on the record: hashes and card identity unchanged
 /**
  * A finished one-card run whose goal rubric the judge decided, with a sealed receipt on the trial.
  * `judge: 'audit'` keeps the legacy full audit instead; `judge: 'none'` leaves the trial unjudged
- * (the demo path), so the lab has no version to record.
+ * (the demo path), so the lab has no version to record. `rules` is the recorded prompt_compliance
+ * result: with `goal` it decides which metrics a quick mark may land on (03.1 markTargets).
  */
-async function agreementRecord(lab: ExperimentLab, goal: 'pass' | 'fail' | 'unknown' = 'fail', judge: 'receipt' | 'audit' | 'none' = 'receipt') {
+async function agreementRecord(lab: ExperimentLab, goal: 'pass' | 'fail' | 'unknown' = 'fail', judge: 'receipt' | 'audit' | 'none' = 'receipt', rules: 'pass' | 'fail' | 'unknown' = 'pass') {
   const base = demoEvaluationInput();
   const created = await lab.create(createInputSchema.parse({ ...base, scenarioCount: 1, settings: { ...base.settings, userModes: ['reactive'], repeats: 1 } }));
   await lab.waitForIdle();
@@ -2009,12 +2012,12 @@ async function agreementRecord(lab: ExperimentLab, goal: 'pass' | 'fail' | 'unkn
   const seq = trial.events[0]!.seq;
   trial.assessments = [
     { metricId: 'goal_attainment', result: goal, rationale: 'r', evidence: goal === 'unknown' ? [] : [seq] },
-    { metricId: 'prompt_compliance', result: 'pass', rationale: 'r', evidence: [seq] },
+    { metricId: 'prompt_compliance', result: rules, rationale: 'r', evidence: rules === 'unknown' ? [] : [seq] },
   ];
   delete trial.judgeReceipt; delete trial.judgeAudit;
   if (judge === 'receipt') {
     trial.judgeReceipt = { protocolHash: 'protocol-10', inputHash: 'input-1', provider: 'openrouter', model: 'judge',
-      auditHash: 'audit-1', votes: [{ metricId: 'goal_attainment', result: goal }], notApplicable: [], complete: true };
+      auditHash: 'audit-1', votes: [{ metricId: 'goal_attainment', result: goal }, { metricId: 'prompt_compliance', result: rules }], notApplicable: [], complete: true };
   }
   if (judge === 'audit') {
     trial.judgeAudit = { protocolHash: 'protocol-10', inputHash: 'input-1', provider: 'openrouter', model: 'judge',
@@ -2031,8 +2034,8 @@ test('the lab, not the caller, records which judgment a quick mark refers to', a
   const measured = measurementHash(before);
   const results = resultHash(before);
 
-  await assert.rejects(lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'fail', note: 'не главная оценка' }),
-    /^Error: Отметку согласия можно поставить только на главную оценку ситуации\.$/);
+  await assert.rejects(lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'fail', note: 'не та оценка' }),
+    /^Error: Отметку согласия можно поставить только на оценку, из-за которой ситуация решена\.$/);
   await assert.rejects(lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'pass', judgeVerdict: 'pass', note: 'судья менялся' }),
     /^Error: Оценка судьи изменилась, пока вы смотрели\. Проверьте ситуацию ещё раз\.$/);
 
@@ -2076,4 +2079,100 @@ test('a quick mark on a judgment the judge never made is refused', async t => {
   // The same undecided rubric still takes a full human verdict: only the one-key answer needs a judgment.
   const reviewed = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'goal_attainment', verdict: 'fail', note: 'разобрал сам' });
   assert.equal(reviewed.humanReviews.at(-1)!.judgeVerdict, 'unknown');
+});
+
+test('a double failure needs a stamped mark on both metrics before it counts once in «Согласие с судьёй»', async t => {
+  const { lab, directory } = await setup(t, createDemoRuntime());
+  const { record, trial } = await agreementRecord(lab, 'fail', 'receipt', 'fail');
+
+  // The lab stamps the counting rule; a caller value is overwritten, never trusted (CTX-20, CTX-23).
+  const first = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail', judgeVerdict: 'fail',
+    countingRules: 'goal-v1', note: 'Быстрая отметка: согласен с судьёй.' });
+  assert.equal(first.humanReviews.at(-1)!.countingRules, COUNTING_RULES, 'the lab fills the counting rule and overwrites the caller value');
+  const half = judgeAgreement(first);
+  assert.equal(half.checked, 0, 'one mark on a double failure is not a checked situation (CR-02)');
+  assert.deepEqual(half.unmarked, [trial.id], 'the situation stays in the queue until its second metric is answered');
+  assert.deepEqual(half.marks, [], 'a half-answered situation has no mark to show');
+  assert.equal(resultViewLines(buildResultView(first)).includes('Согласие с судьёй: ещё не проверено.'), true);
+
+  const second = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'fail', judgeVerdict: 'fail', note: 'Быстрая отметка: согласен с судьёй.' });
+  assert.equal(second.humanReviews.at(-1)!.countingRules, COUNTING_RULES);
+  const whole = judgeAgreement(second);
+  assert.deepEqual([whole.checked, whole.agreed, whole.unsure, whole.stale, whole.staleRule], [1, 1, 0, 0, 0]);
+  assert.deepEqual(whole.failures, { agreed: 1, checked: 1 });
+  assert.deepEqual(whole.unmarked, []);
+  assert.deepEqual(whole.marks.map(item => [item.trialId, item.answer, item.judge, item.targets]), [[trial.id, 'agree', 'fail',
+    [{ metricId: 'goal_attainment', answer: 'agree' }, { metricId: 'prompt_compliance', answer: 'agree' }]]]);
+  assert.ok(resultViewLines(buildResultView(second)).includes('Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы: 1 из 1 · успехов нет).'));
+
+  // The stamps survive a reload through the strict schema in a fresh lab on the same directory.
+  await lab.close();
+  const reopened = new ExperimentLab(directory, createDemoRuntime());
+  await reopened.init();
+  try {
+    const loaded = await reopened.get(record.id);
+    assert.deepEqual(loaded.humanReviews.map(item => [item.metricId, item.countingRules]), [['goal_attainment', COUNTING_RULES], ['prompt_compliance', COUNTING_RULES]]);
+    assert.equal(judgeAgreement(loaded).checked, 1);
+  } finally { await reopened.close(); }
+});
+
+test('a quick mark lands only on a metric that decided the situation: one failed metric is one target, a pass has two', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  // Goal fail + rules pass: the rules did not fail the situation, so they take no mark; the goal does.
+  const goalOnly = await agreementRecord(lab, 'fail', 'receipt', 'pass');
+  await assert.rejects(lab.addHumanReview(goalOnly.record.id, { trialId: goalOnly.trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'pass', note: 'не та оценка' }),
+    /^Error: Отметку согласия можно поставить только на оценку, из-за которой ситуация решена\.$/);
+  const marked = await lab.addHumanReview(goalOnly.record.id, { trialId: goalOnly.trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail', note: 'согласен' });
+  assert.equal(marked.humanReviews.at(-1)!.countingRules, COUNTING_RULES);
+  assert.equal(judgeAgreement(marked).checked, 1, 'a goal-only failure is checked by its one mark');
+
+  // Goal pass + rules pass: a two-metric pass has two targets (CTX-25).
+  const passed = await agreementRecord(lab, 'pass', 'receipt', 'pass');
+  const onGoal = await lab.addHumanReview(passed.record.id, { trialId: passed.trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'pass', note: 'согласен' });
+  assert.equal(judgeAgreement(onGoal).checked, 0, 'a pass with two targets is not checked by one mark');
+  const onBoth = await lab.addHumanReview(passed.record.id, { trialId: passed.trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'pass', note: 'согласен' });
+  assert.deepEqual([judgeAgreement(onBoth).checked, judgeAgreement(onBoth).passes], [1, { agreed: 1, checked: 1 }]);
+
+  // Goal unknown + rules unknown: nothing was decided, so there is nothing to agree with.
+  const undecided = await agreementRecord(lab, 'unknown', 'receipt', 'unknown');
+  await assert.rejects(lab.addHumanReview(undecided.record.id, { trialId: undecided.trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'fail', note: 'нечего' }),
+    /^Error: Судья не вынес решения по этой ситуации — соглашаться не с чем\.$/);
+});
+
+test('the lab refuses a quick mark where the number cannot move: an unmeasured situation or a control', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const unmeasured = /^Error: Эта ситуация не измерена — отметка согласия не нужна\.$/;
+  // A judge error leaves the situation «не измерено» whatever the recorded rubric says (CR-01).
+  const errored = await agreementRecord(lab, 'fail', 'receipt', 'fail');
+  const withError = await lab.get(errored.record.id);
+  withError.trials[0]!.assessmentError = 'судья не ответил';
+  await lab.store.save(withError);
+  await assert.rejects(lab.addHumanReview(errored.record.id, { trialId: errored.trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail', note: 'согласен' }), unmeasured);
+  assert.deepEqual(judgeAgreement(await lab.get(errored.record.id)).queueFailures, [], 'an unmeasured failure is not queued either');
+
+  // A dialogue the owner marked invalid is out of the measurement, so a quick mark on it is refused.
+  const invalid = await agreementRecord(lab, 'fail', 'receipt', 'fail');
+  await lab.addHumanReview(invalid.record.id, { trialId: invalid.trial.id, verdict: 'invalid', note: 'невалидный тест' });
+  await assert.rejects(lab.addHumanReview(invalid.record.id, { trialId: invalid.trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail', note: 'согласен' }), unmeasured);
+
+  // A positive control never enters the agreement, so the lab refuses the mark instead of storing an invisible one (WR-03).
+  const control = await agreementRecord(lab, 'fail', 'receipt', 'fail');
+  const withControl = await lab.get(control.record.id);
+  withControl.positiveControlScenarioIds = [control.scenario.id];
+  await lab.store.save(withControl);
+  await assert.rejects(lab.addHumanReview(control.record.id, { trialId: control.trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail', note: 'согласен' }),
+    /^Error: Контрольная ситуация — в согласие с судьёй не входит\.$/);
+});
+
+test('a changed judge verdict is still refused, and a full review never keeps a caller counting rule', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const { record, trial } = await agreementRecord(lab, 'fail', 'receipt', 'fail');
+  await assert.rejects(lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'pass', judgeVerdict: 'pass', note: 'судья менялся' }),
+    /^Error: Оценка судьи изменилась, пока вы смотрели\. Проверьте ситуацию ещё раз\.$/);
+  const full = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'prompt_compliance', verdict: 'pass', countingRules: COUNTING_RULES, note: 'разобрал сам' });
+  const review = full.humanReviews.at(-1)!;
+  assert.equal(review.source, undefined);
+  assert.equal('countingRules' in review, false, 'the counting rule is a property of quick marks only');
+  const dialogue = await lab.addHumanReview(record.id, { trialId: trial.id, verdict: 'pass', countingRules: 'goal-v1', note: 'весь диалог' });
+  assert.equal('countingRules' in dialogue.humanReviews.at(-1)!, false);
 });

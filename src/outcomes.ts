@@ -144,3 +144,42 @@ export function headlineTrialResult(scenario: Scenario | undefined, trial: Trial
   const results = ids.map(id => agentMetricResult(trial, id, reviews) ?? 'unknown');
   return results.includes('fail') ? 'fail' : results.every(r => r === 'pass') ? 'pass' : 'unknown';
 }
+
+/** The judge's own result for a metric. Never `agentMetricResult`: a human verdict must not move the baseline it is compared with. */
+export function recordedResult(trial: Trial, metricId: string | undefined): 'pass' | 'fail' | 'unknown' | undefined {
+  return metricId ? trial.assessments?.find(a => a.metricId === metricId)?.result : undefined;
+}
+
+/**
+ * The judge's recorded verdict of the situation by the headline rule, and the metrics a one-key
+ * agreement mark answers: the headline metrics whose recorded result equals that verdict, goal
+ * first. A goal card is failed when any headline metric is recorded `fail` — a double failure has
+ * two targets, a goal-only or rules-only failure one — and passed when every headline metric is
+ * `pass` (two targets on a card with prompt rules); anything else is no decision, so undefined.
+ * A legacy card keeps today's single primary metric. Reads recorded assessments only: a human
+ * verdict never moves what a mark is measured against.
+ */
+export function markTargets(scenario: Scenario | undefined, trial: Trial): { verdict: 'pass' | 'fail'; metricIds: string[] } | undefined {
+  const ids = headlineMetricIds(scenario);
+  if (!ids.length) {
+    const id = primaryMetricId(scenario, trial);
+    const result = recordedResult(trial, id);
+    return id && (result === 'pass' || result === 'fail') ? { verdict: result, metricIds: [id] } : undefined;
+  }
+  const results = ids.map(id => recordedResult(trial, id));
+  const verdict = results.includes('fail') ? 'fail' : results.every(r => r === 'pass') ? 'pass' : undefined;
+  if (!verdict) return undefined;
+  return { verdict, metricIds: ids.filter((_, i) => results[i] === verdict) };
+}
+
+/**
+ * Whether a quick mark answers the question the current counting rule asks. A mark stamped with
+ * COUNTING_RULES does. An unstamped mark was given under the previous goal-only rule and counts
+ * only where both rules ask the same thing: on a legacy strict card, or on a situation whose only
+ * mark target is the goal. Anywhere else it is a mark under the previous rule and stays out of the count.
+ */
+export function markUnderCurrentRule(scenario: Scenario | undefined, review: HumanReview, metricIds: string[]): boolean {
+  if (review.countingRules === COUNTING_RULES) return true;
+  if (review.countingRules !== undefined) return false;
+  return !headlineMetricIds(scenario).length || (metricIds.length === 1 && metricIds[0] === GOAL_METRIC_ID);
+}

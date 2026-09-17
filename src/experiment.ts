@@ -10,12 +10,12 @@ import { automaticTrialResult, trialAssessmentComplete, awaitingVerdict, compare
 import { targetFingerprint } from './target-version.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from './connection.js';
 import { preflightTarget, readPrompt, runRelease } from './targets.js';
+import { COUNTING_RULES, markTargets, measurementUsable } from './outcomes.js';
 
 /** Recorded dialogues read by the goals role at once. */
 const GOAL_BATCH = 8;
 /** Dialogues a run may hold open against the target at once. */
 export const MAX_PARALLEL = 16;
-import { primaryMetricId } from './outcomes.js';
 import { simulatorChecks } from './simulator.js';
 import { goalObservationDefault, withDefaultGoalObservation } from './normalize.js';
 import { validationDialogueIssue } from './imports.js';
@@ -961,15 +961,24 @@ export class ExperimentLab {
       if (input.checkId && !objectiveCheck && !simulatorCheck) throw new Error('Такой объективной проверки или проверки симулятора в этом диалоге нет.');
       const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
       if (input.metricId && (!scenario || !assessmentRubrics(scenario, trial).some(m => m.id === input.metricId))) throw new Error('Такой рубрики в этой карточке нет.');
+      // The counting rule is stamped by the lab on quick marks only; a caller value is never kept.
+      if (input.source !== 'quick') delete input.countingRules;
       if (input.metricId) {
         const recorded = trial.assessments?.find(a => a.metricId === input.metricId)?.result;
         const judged = trial.judgeReceipt ?? trial.judgeAudit;
-        // A one-key mark is an answer to one judgment, so it is refused when there is no single
-        // judgment to answer, and when the judgment moved while the person was looking at it.
+        // A one-key mark is an answer to one judgment, so it is refused where the number cannot
+        // move (a control, an unmeasured situation), when there is no recorded decision to answer,
+        // on a metric that did not decide the situation, and when the judgment moved while the
+        // person was looking at it.
         if (input.source === 'quick') {
-          if (input.metricId !== primaryMetricId(scenario, trial)) throw new Error('Отметку согласия можно поставить только на главную оценку ситуации.');
+          if (record.positiveControlScenarioIds?.includes(trial.scenarioId)) throw new Error('Контрольная ситуация — в согласие с судьёй не входит.');
+          if (!scenario || !measurementUsable(scenario, trial, record.humanReviews)) throw new Error('Эта ситуация не измерена — отметка согласия не нужна.');
+          const targets = markTargets(scenario, trial);
+          if (!targets) throw new Error('Судья не вынес решения по этой ситуации — соглашаться не с чем.');
+          if (!targets.metricIds.includes(input.metricId)) throw new Error('Отметку согласия можно поставить только на оценку, из-за которой ситуация решена.');
           if (recorded !== 'pass' && recorded !== 'fail') throw new Error('Судья не вынес решения по этой ситуации — соглашаться не с чем.');
           if (input.judgeVerdict !== undefined && input.judgeVerdict !== recorded) throw new Error('Оценка судьи изменилась, пока вы смотрели. Проверьте ситуацию ещё раз.');
+          input.countingRules = COUNTING_RULES;
         }
         // What the verdict argues with is read from the trial; a caller value is never kept.
         if (recorded) input.judgeVerdict = recorded; else delete input.judgeVerdict;
