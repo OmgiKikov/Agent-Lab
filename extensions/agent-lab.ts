@@ -50,20 +50,29 @@ const returnToBoard = (ctx: ExtensionContext, id: string) => {
 };
 const inputError = (error: unknown): string => safeText(error instanceof Error ? error.message : error);
 
+/**
+ * What is being checked, in the owner's words. A set of more than one situation shows the compact
+ * expectation sheet (UI-D-04): the same rows the board and the tool text show, at most two rules
+ * each. A single test keeps its full definition.
+ */
+function runScope(record: Experiment): string[] {
+  const sheet = record.workflow === 'evaluate' && record.phase === 'review' && record.scenarios.length > 1
+    ? expectationSheet(record) : undefined;
+  if (sheet) {
+    const fromLog = record.scenarios.every(scenario => scenario.provenance === 'production');
+    return [...(fromLog ? ['Клиент отвечает на уточнения симулятором, используя только факты из лога.', ''] : []),
+      ...sheet.compactLines(record.id).map(item => safeText(item))];
+  }
+  return record.scenarios.map(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
+    ...(record.settings.userModes.includes('scripted') ? (s.user.script ?? []).map((message, i) => `  Продолжение ${i + 1}: ${safeText(message)}`) : []),
+    `  Ожидается: ${safeText(s.successCriteria)}`, ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)].join('\n'));
+}
+
 function runPlan(record: Experiment): string {
   const target = record.target.kind === 'sandbox' ? 'Учебная песочница' : record.target.kind === 'http' ? record.target.url
     : record.target.kind === 'module' ? record.target.path : `${[record.target.command, ...record.target.args].join(' ')}${record.target.cwd ? ` · ${record.target.cwd}` : ''}`;
-  const validation = record.scenarios.length > 1 && record.scenarios.every(scenario => scenario.provenance === 'production');
-  const scope = validation ? [
-    `Validation set: ${record.scenarios.length} реальных диалогов.`,
-    `Темы: ${record.scenarios.slice(0, 5).map(scenario => safeText(scenario.title)).join('; ')}${record.scenarios.length > 5 ? `; ещё ${record.scenarios.length - 5}` : ''}.`,
-    'Клиент отвечает на уточнения симулятором, используя только факты из лога. Ожидания взяты из материалов владельца:',
-    ...record.scenarios.map((scenario, i) => `${i + 1}. ${safeText(scenario.title)}\n  Ожидается: ${safeText(scenario.successCriteria)}\n  Основание: ${scenario.requirementIds.map(id => safeText(record.requirements.find(r => r.id === id)?.quote ?? id)).join('; ')}`),
-  ] : record.scenarios.map(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
-    ...(record.settings.userModes.includes('scripted') ? (s.user.script ?? []).map((message, i) => `  Продолжение ${i + 1}: ${safeText(message)}`) : []),
-    `  Ожидается: ${safeText(s.successCriteria)}`, ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)].join('\n'));
   return [
-    ...scope,
+    ...runScope(record),
     '', `Диалогов: ${plannedTrials(record)}. Режимы: ${record.settings.userModes.join(', ')}.`,
     `До ${record.settings.maxCalls} вызовов, ${Math.round(record.settings.maxDurationMs / 1000)} секунд, ${record.settings.maxTurns} ходов.`,
     record.mode === 'demo' ? 'Учебный пример: без модели и оплаты.' : `Модель: ${safeText(record.settings.provider)}/${safeText(record.settings.model)}. Стоимость зависит от фактических вызовов.`,
@@ -566,11 +575,15 @@ export default function agentLab(pi: ExtensionAPI) {
         await lab.init();
         const draft = await lab.get(params.id);
         if (draft.workflow !== 'evaluate' || draftHash(draft) !== params.expectedHash) throw new Error('План изменился. Прочитайте актуальный черновик через agent_lab_inspect.');
-        if (!await ctx.ui.confirm('Запустить проверку?', runPlan(draft))) {
+        // UI-D-02 in chat: unconfirmed expectations are confirmed in the same native dialog that starts the run.
+        const confirmed = draft.acceptedDraftHash === params.expectedHash;
+        const plan = confirmed ? runPlan(draft) : `${runPlan(draft)}\nДа — подтвердить все ожидания и начать прогон.`;
+        if (!await ctx.ui.confirm(confirmed ? 'Запустить проверку?' : 'Подтвердить ожидания и запустить?', plan)) {
           return { content: [{ type: 'text', text: JSON.stringify({ id: draft.id, cancelled: true, message: 'Запуск отменён. Тесты сохранены; не повторяйте запрос запуска без новой просьбы пользователя.' }) }], details: { cancelled: true } };
         }
         signal.throwIfAborted();
-        await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: params.expectedHash, parallel: runParallel(draft) });
+        if (!confirmed) await lab.acceptDraft(draft.id, params.expectedHash);
+        await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: params.expectedHash, parallel: runParallel(draft), requireAccepted: true });
         signal.addEventListener('abort', cancel, { once: true });
         if (signal.aborted) cancel();
         const progress = async () => {
@@ -807,10 +820,28 @@ export default function agentLab(pi: ExtensionAPI) {
               const r = action.record;
               if (r.workflow !== 'evaluate') throw new Error('Legacy comparison records cannot run from the evaluation board.');
               const hash = draftHash(r);
-              if (await ctx.ui.confirm('Запустить проверку?', runPlan(r))) {
-                await lab.start(r.id, { approved: true, reviewer: 'automated', expectedHash: hash, parallel: runParallel(r) }); section = 'results'; selected = 0;
+              // UI-D-02: an unconfirmed draft confirms every expectation and starts in one dialog.
+              const confirmed = r.acceptedDraftHash === hash;
+              const plan = confirmed ? runPlan(r) : `${runPlan(r)}\nДа — подтвердить все ожидания и начать прогон.`;
+              if (await ctx.ui.confirm(confirmed ? 'Запустить проверку?' : 'Подтвердить ожидания и запустить?', plan)) {
+                if (!confirmed) await lab.acceptDraft(r.id, hash);
+                await lab.start(r.id, { approved: true, reviewer: 'human', expectedHash: hash, parallel: runParallel(r), requireAccepted: true });
+                section = 'results'; selected = 0;
                 reportPath = undefined;
               }
+            } else if (action.type === 'expect') {
+              // TRUST-11 (CTX-20): the expectation text exists only if the owner typed it into the native editor.
+              const r = await lab.get(action.record.id);
+              const scenario = r.scenarios.find(item => item.id === action.scenarioId);
+              if (!scenario) throw new Error('Такой ситуации в черновике уже нет. Проверьте ожидания ещё раз.');
+              section = 'cards';
+              const written = await ctx.ui.editor('Что агент должен сделать в этой ситуации? Своими словами.', scenario.successCriteria ?? '');
+              if (written === undefined) continue;
+              const text = written.trim();
+              if (!text || text === (scenario.successCriteria ?? '').trim()) { inform('Ожидание не изменено.', 'info'); continue; }
+              if (text.length > 3000) { inform('Ожидание длиннее 3000 знаков. Сократите и попробуйте снова.', 'error'); continue; }
+              await lab.setExpectation(r.id, draftHash(r), action.scenarioId, written);
+              inform(`Ожидание изменено: «${safeText(scenario.title)}». Подтвердите ожидания снова: y.`);
             } else if (action.type === 'accept') {
               // TRUST-10: one key confirms every expectation of the shown draft version, and only that version.
               const r = await lab.get(action.record.id);
@@ -867,7 +898,11 @@ export default function agentLab(pi: ExtensionAPI) {
               await promisify(execFile)(command, args, { timeout: 10000 });
               inform('Отчёт открыт в браузере.');
             }
-          } catch (error) { inform(inputError(error), 'error'); }
+          } catch (error) {
+            // A start refused for stale expectations names the key that fixes it (UI-SPEC Board flow 4).
+            const message = inputError(error);
+            inform(message.startsWith('Сначала подтвердите ожидания ситуаций') ? `${message} y — подтвердить.` : message, 'error');
+          }
         }
       } finally { await close(); }
       if (handoff) {

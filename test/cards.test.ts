@@ -682,3 +682,46 @@ test('заголовок черновика различает неподтве�
     noticed.dispose();
   }
 });
+
+test('лист из 13 ситуаций с 11 правилами прокручивается, держит выбранную наверху и ничего не режет', async () => {
+  const record = await fixture();
+  const base = record.scenarios[0]!;
+  const quote = 'Возврат выполняется через меню терминала «Отмена/Возврат» в течение тридцати календарных дней с даты покупки, если операция не отправлена в клиринг.';
+  record.requirements = Array.from({ length: 11 }, (_, i) => ({ id: `rule_${i + 1}`, text: `Правило владельца ${i + 1}`,
+    sourceId: record.sources[0]!.id, quote: `${quote} Пункт ${i + 1}.`, critical: true }));
+  record.sources[0]!.content = record.requirements.map(r => r.quote).join('\n');
+  record.scenarios = Array.from({ length: 13 }, (_, i) => ({ ...structuredClone(base), id: `case_${i + 1}`, familyId: `case_${i + 1}`,
+    title: `Ситуация возврата номер ${i + 1} с длинным названием на русском языке`,
+    requirementIds: i === 0 ? record.requirements.map(r => r.id) : ['rule_1'],
+    user: { ...structuredClone(base.user), goal: `Вернуть деньги по операции номер ${i + 1} на терминале в торговой точке` },
+    successCriteria: `Объяснить порядок возврата по операции ${i + 1} и назвать срок зачисления средств на карту клиента.` }));
+  const board = new LabBoard({ record, section: 'cards' }, theme, () => {}, () => {}, () => 30);
+  for (let step = 0; step < 4; step++) board.handleInput('j');
+  for (const width of [40, 60, 80, 110, 160]) {
+    const rendered = board.render(width);
+    for (const row of rendered) {
+      assert.ok(visibleWidth(row) <= width, `шире экрана при ${width}: ${row}`);
+      // Рамка режет только заголовок и боковой список; сами строки листа — никогда (UI-SPEC).
+      const cell = stripTerminalSequences(row).split('│').at(-2) ?? '';
+      if (/Ситуация:|Должен:|Правило|Версия ожиданий|ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ/.test(cell)) {
+        assert.doesNotMatch(cell, /…/, `обрезано при ${width}: ${row}`);
+      }
+    }
+    // Первая строка тела — первая строка выбранной ситуации (UI-SPEC F5, прокрутка за выбором).
+    const separator = rendered.findIndex(row => /^│ ─+ │$/.test(row));
+    assert.ok(separator > 0, `нет разделителя при ${width}`);
+    assert.match(rendered[separator + 1]!, /▸\s+5\. Ситуация: Вернуть/, `выбранная ситуация не наверху при ${width}`);
+  }
+  board.dispose();
+  // Все правила первой ситуации попадают на лист целиком: ни одно не свёрнуто в «и ещё K».
+  const sheet = expectationSheet(record);
+  const shown = sheet.cards[0]!.details.filter(detail => detail.role === 'rule').length;
+  assert.ok(shown >= 2, 'у первой ситуации есть правила владельца');
+  const tall = new LabBoard({ record, section: 'cards' }, theme, () => {}, () => {}, () => 3000);
+  const full = stripTerminalSequences(tall.render(80).join('\n'));
+  assert.equal(full.match(/Правило \d+ · /g)?.length, sheet.cards.reduce((sum, card) => sum + card.details.filter(d => d.role === 'rule').length, 0),
+    'все правила всех ситуаций на листе');
+  assert.doesNotMatch(full, /и ещё \d+ правил/, 'полный лист не сворачивает правила');
+  assert.match(full, /Версия ожиданий: /);
+  tall.dispose();
+});
