@@ -7,7 +7,7 @@ import { Type } from 'typebox';
 import { z } from 'zod';
 import { ExperimentLab, draftHash, planDiscovery, resultHash } from '../dist/experiment.js';
 import { agentSchema, createInputSchema, discoverInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, goldenCaseSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput } from '../dist/contracts.js';
-import { awaitingVerdict, evidenceSummary, plannedTrials } from '../dist/comparison.js';
+import { awaitingVerdict, cardVerdict, evidenceSummary, headlineCardOutcome, plannedTrials } from '../dist/comparison.js';
 import { judgeAgreement } from '../dist/agreement.js';
 import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
@@ -922,45 +922,82 @@ export default function agentLab(pi: ExtensionAPI) {
               // only because they typed a reason into the native editor. No tool writes one.
               const before = await lab.get(action.record.id);
               const current = judgeAgreement(before).marks.find(m => m.trialId === action.trialId && !m.stale);
-              const title = before.scenarios.find(s => s.id === before.trials.find(t => t.id === action.trialId)?.scenarioId)?.title ?? '';
+              const card = before.scenarios.find(s => s.id === before.trials.find(t => t.id === action.trialId)?.scenarioId);
+              const title = card?.title ?? '';
+              // CTX-15: one key answers every metric that decided the situation, goal first (markTargets).
+              const ids = action.metricIds;
+              const failed = action.judgeVerdict === 'fail';
               const started = performance.now();
+              let disagreeIds = ids;
               let note: string;
               if (action.answer === 'disagree') {
+                // CTX-16/CTX-25: only a disagreement moves the number, so only «не согласен» on two
+                // metrics asks which half the owner disputes; Esc saves nothing and says nothing.
+                if (ids.length > 1) {
+                  const options = failed
+                    ? ['Запрос выполнен — судья ошибся', 'Правила промпта соблюдены — судья ошибся', 'С обоими: запрос выполнен и правила соблюдены']
+                    : ['Запрос не выполнен — судья ошибся', 'Правила промпта нарушены — судья ошибся', 'С обоими: запрос не выполнен и правила нарушены'];
+                  const picked = await ctx.ui.select('С чем вы не согласны?', options);
+                  if (picked === undefined) continue;
+                  disagreeIds = picked === options[0] ? [ids[0]!] : picked === options[1] ? [ids[1]!] : ids;
+                }
                 // UI-D-28: `n` always opens the editor, prefilled with the reason already given, so
                 // the same key edits a reason; the duplicate check runs only after it closes.
-                const reason = await ctx.ui.editor(`Судья решил: ${action.judgeVerdict === 'fail' ? 'не справился' : 'справился'}. Почему вы не согласны? Коротко, своими словами.`,
+                const reason = await ctx.ui.editor(`Судья решил: ${failed ? 'не справился' : 'справился'}. Почему вы не согласны? Коротко, своими словами.`,
                   current?.answer === 'disagree' ? current.note : '');
                 if (reason === undefined) continue;
                 // Input validation, not display: the schema caps a stored reason at 3000 characters,
                 // so the owner is told to shorten it instead of losing the text to a write error.
                 if (!reason.trim()) { inform('Несогласие не сохранено: напишите причину.', 'error'); continue; }
                 if (reason.length > 3000) { inform('Причина длиннее 3000 знаков. Сократите и попробуйте снова.', 'error'); continue; }
-                if (current?.answer === 'disagree' && reason.trim() === current.note.trim()) { inform('Отметка уже стоит: не согласен.', 'info'); continue; }
+                // The same disputed half with the same reason is already the current mark: nothing is written.
+                const disputed = current?.answer === 'disagree' ? current.targets.filter(t => t.answer === 'disagree').map(t => t.metricId).join(' ') : undefined;
+                if (current && disputed === disagreeIds.join(' ') && reason.trim() === current.note.trim()) { inform('Отметка уже стоит: не согласен.', 'info'); continue; }
                 note = reason;
               } else {
-                // UI-D-19: the same answer again writes nothing, so the record keeps one mark per answer.
-                if (current?.answer === action.answer) { inform(`Отметка уже стоит: ${action.answer === 'agree' ? 'согласен' : 'не могу сказать'}.`, 'info'); continue; }
+                // UI-D-19: the same answer again on every target writes nothing, so the record keeps one mark per answer (CTX-17).
+                if (current && current.targets.every(t => t.answer === action.answer)) { inform(`Отметка уже стоит: ${action.answer === 'agree' ? 'согласен' : 'не могу сказать'}.`, 'info'); continue; }
                 note = action.answer === 'agree' ? 'Быстрая отметка: согласен с судьёй.' : 'Быстрая отметка: не могу сказать.';
               }
-              // CTX-04: согласен — вердикт судьи, не согласен — противоположный, не могу сказать — сомнение.
-              const verdict = action.answer === 'agree' ? action.judgeVerdict
-                : action.answer === 'disagree' ? (action.judgeVerdict === 'fail' ? 'pass' as const : 'fail' as const) : 'unknown' as const;
-              await lab.addHumanReview(action.record.id, {
-                trialId: action.trialId, metricId: action.metricId, source: 'quick', verdict,
-                judgeVerdict: action.judgeVerdict, note,
-                // CTX-05: reading time on the board plus the time the answer itself took.
-                durationMs: Math.min(3600000, Math.round((action.reviewMs ?? 0) + performance.now() - started)),
-              });
+              // CTX-05: reading time on the board plus the time the answer itself took, recorded once.
+              const durationMs = Math.min(3600000, Math.round((action.reviewMs ?? 0) + performance.now() - started));
+              for (const [i, metricId] of ids.entries()) {
+                // CTX-04: согласен — вердикт судьи, не согласен — противоположный, не могу сказать — сомнение.
+                // Disputing one half of a double failure means agreeing with the other half (RESEARCH A6).
+                const disputes = action.answer === 'disagree' && disagreeIds.includes(metricId);
+                const verdict = action.answer === 'unsure' ? 'unknown' as const : disputes ? (failed ? 'pass' as const : 'fail' as const) : action.judgeVerdict;
+                // The lab stamps the counting rule and the judge snapshot itself; the request never names them.
+                await lab.addHumanReview(action.record.id, {
+                  trialId: action.trialId, metricId, source: 'quick', verdict, judgeVerdict: action.judgeVerdict,
+                  note: action.answer === 'disagree' && !disputes ? 'Быстрая отметка: согласен с судьёй.' : note,
+                  ...(i === 0 ? { durationMs } : {}),
+                });
+              }
               reviewTimes.delete(`${action.record.id}|${action.trialId}`);
               reportPath = undefined;
-              const after = judgeAgreement(await lab.get(action.record.id));
+              const afterRecord = await lab.get(action.record.id);
+              const after = judgeAgreement(afterRecord);
               // C-98: a mark on a finished run reopens the review, and the notice says so.
               const reopened = before.phase === 'complete' ? ' Разбор снова открыт: f — завершить.' : '';
               const progress = after.queueFailures.length
                 ? `Проверено провалов: ${after.failures.checked} из ${after.queueFailures.length}.`
                 : `Проверено успехов: ${after.sampleChecked} из ${after.sampledPasses.length}.`;
+              // CR-02 notice: «Итог пересчитан» only when the situation's headline verdict moved;
+              // otherwise the notice names what still fails, so the number is never claimed to have changed.
+              const disagreed = () => {
+                const was = card ? cardVerdict(before, card).outcome : undefined;
+                const now = card ? cardVerdict(afterRecord, card).outcome : undefined;
+                if (card && now !== was) return `Отмечено: не согласен · «${title}». Итог пересчитан с учётом вашей отметки.`;
+                if (!card || now !== 'fail') return `Отмечено: не согласен · «${title}». Итог не изменился.`;
+                const parts = headlineCardOutcome(afterRecord, card);
+                const what = parts.goal === 'fail' && parts.rules === 'fail' ? 'запрос не выполнен, нарушены правила промпта'
+                  : parts.goal === 'fail' ? 'запрос не выполнен'
+                  : parts.rules === 'fail' ? 'нарушены правила промпта'
+                  : 'остальные провалы — через v';
+                return `Отмечено: не согласен · «${title}». Ситуация остаётся «не справился»: ${what}.`;
+              };
               inform(action.answer === 'agree' ? `Отмечено: согласен с судьёй · «${title}». ${progress}${reopened}`
-                : action.answer === 'disagree' ? `Отмечено: не согласен · «${title}». Итог пересчитан с учётом вашей отметки.${reopened}`
+                : action.answer === 'disagree' ? `${disagreed()}${reopened}`
                 : `Отмечено: не могу сказать · «${title}». В итоге остаётся оценка судьи; чтобы закрыть ситуацию, позже нажмите y или n.${reopened}`);
             } else if (action.type === 'annotate') {
               const index = action.trialId ? reviewOrder(action.record).findIndex(t => t.id === action.trialId) : action.selected;

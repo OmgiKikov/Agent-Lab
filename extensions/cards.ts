@@ -5,7 +5,7 @@ import { describeCheck, fingerprint } from '../dist/contracts.js';
 import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
 import { expectationSheet, qualitySummary, qualityLines, type ExpectationRole, type ExpectationSheet } from '../dist/quality.js';
 import { agreementSample, judgeAgreement, type JudgeAgreement } from '../dist/agreement.js';
-import { primaryMetricId } from '../dist/outcomes.js';
+import { markTargets, measurementUsable } from '../dist/outcomes.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
 import { situationEvidence } from '../dist/explain.js';
 import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
@@ -48,23 +48,28 @@ export function reviewOrder(record: Experiment): Trial[] {
 export type AgreementTarget =
   /** A positive control: it is not part of the agreement count. */
   | { kind: 'control' }
+  /** The measurement is not usable (the simulator deviated, the judge failed, the dialogue was marked invalid…), so the headline does not count it and there is nothing to agree with (CTX-03). */
+  | { kind: 'unmeasured' }
   /** The judge said nothing decisive about the main question, so there is nothing to agree with. */
   | { kind: 'undecided' }
-  | { kind: 'ready'; metricId: string; judgeVerdict: 'pass' | 'fail'; sampled: boolean };
+  /** `metricIds` are the metrics a one-key answer lands on, from `markTargets`: the headline metrics whose recorded result is the situation's verdict, goal first. */
+  | { kind: 'ready'; metricIds: string[]; judgeVerdict: 'pass' | 'fail'; sampled: boolean };
 
 /**
- * UI-D-21: the agreement keys are inert unless the situation shows a single recorded judge verdict
- * on its main question. The verdict is read from `trial.assessments` only — never from
- * `agentMetricResult`, or a mark would be compared with a verdict it had already changed.
+ * UI-D-21: the agreement keys are inert unless the situation is usable and shows a recorded judge
+ * verdict by the headline rule. The verdict and its targets come from `markTargets`, which reads
+ * `trial.assessments` only — never `agentMetricResult`, or a mark would be compared with a verdict
+ * it had already changed. An unusable situation is not in the agreement at all (CR-01), so its keys
+ * are inert too.
  */
 export function agreementTarget(record: Experiment, trial: Trial | undefined): AgreementTarget | undefined {
   if (!trial || record.workflow !== 'evaluate' || !['results_review', 'complete'].includes(record.phase)) return undefined;
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   if (scenario && (record.positiveControlScenarioIds ?? []).includes(scenario.id)) return { kind: 'control' };
-  const metricId = primaryMetricId(scenario, trial);
-  const recorded = metricId ? trial.assessments?.find(a => a.metricId === metricId)?.result : undefined;
-  if (!metricId || (recorded !== 'pass' && recorded !== 'fail')) return { kind: 'undecided' };
-  return { kind: 'ready', metricId, judgeVerdict: recorded, sampled: agreementSample(record).includes(trial.id) };
+  if (!scenario || !measurementUsable(scenario, trial, record.humanReviews)) return { kind: 'unmeasured' };
+  const targets = markTargets(scenario, trial);
+  if (!targets) return { kind: 'undecided' };
+  return { kind: 'ready', metricIds: targets.metricIds, judgeVerdict: targets.verdict, sampled: agreementSample(record).includes(trial.id) };
 }
 
 /**
@@ -76,6 +81,7 @@ export function agreementBlockLines(record: Experiment, trial: Trial): Line[] {
   const target = agreementTarget(record, trial);
   // UI-D-21: where there is nothing to agree with, one muted row says why, and the keys stay inert.
   if (target?.kind === 'control') return [line('Контрольная ситуация — в согласие с судьёй не входит.', 'muted')];
+  if (target?.kind === 'unmeasured') return [line('Ситуация не измерена — отметка согласия не нужна.', 'muted')];
   if (target?.kind === 'undecided') return [line('Судья не вынес решения — отметка согласия не нужна.', 'muted')];
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   if (target?.kind !== 'ready' || !scenario) return [];
@@ -96,7 +102,8 @@ export function agreementBlockLines(record: Experiment, trial: Trial): Line[] {
     line(failed ? 'Проверьте провал: сначала прочитайте доказательство.'
       : target.sampled ? 'Проверьте и успех: судья мог ошибочно похвалить.'
       : 'Судья счёл ситуацию успешной. Проверьте, если сомневаетесь.', 'muted'),
-    ...situationEvidence(record, scenario, trial, target.metricId).map(sectionRow),
+    // The first target is the goal on a double failure, and its explanation carries both halves («оба»).
+    ...situationEvidence(record, scenario, trial, target.metricIds[0]!).map(sectionRow),
     failed ? line('Судья: ✗ не справился', 'error') : line('Судья: ✓ справился', 'success'),
     ...answer,
     line(''),
@@ -202,8 +209,9 @@ export type BoardAction =
   /**
    * CTX-01/CTX-18: the owner answered the judge with one key. The answer carries the judgment it
    * refers to, so a verdict that moved while the situation was on screen is refused by the lab.
+   * `metricIds` are every metric that decided the situation (CTX-15): one key, one mark per metric.
    */
-  | { type: 'agree'; answer: 'agree' | 'disagree' | 'unsure'; trialId: string; metricId: string; judgeVerdict: 'pass' | 'fail';
+  | { type: 'agree'; answer: 'agree' | 'disagree' | 'unsure'; trialId: string; metricIds: string[]; judgeVerdict: 'pass' | 'fail';
       record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; reviewMs?: number };
 export interface BoardOptions {
   records?: Experiment[];
@@ -692,7 +700,7 @@ export class LabBoard implements Component {
       const target = reviewable && entry ? agreementTarget(this.record, this.record.trials.find(t => t.id === entry.id)) : undefined;
       if (target?.kind === 'ready' && entry) {
         const answer = key('y') ? 'agree' as const : key('n') ? 'disagree' as const : key('s') ? 'unsure' as const : undefined;
-        if (answer) return this.finish({ type: 'agree', answer, ...state, trialId: entry.id, metricId: target.metricId, judgeVerdict: target.judgeVerdict });
+        if (answer) return this.finish({ type: 'agree', answer, ...state, trialId: entry.id, metricIds: target.metricIds, judgeVerdict: target.judgeVerdict });
       }
       const finished = this.record.workflow === 'evaluate' && !!this.record.reviewedAt && !activePhases.has(this.record.phase);
       const type = key('r') && editable && !this.record.questions.length ? 'run'

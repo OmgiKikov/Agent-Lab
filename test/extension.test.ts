@@ -11,14 +11,14 @@ import agentLab from '../extensions/agent-lab.ts';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { ExperimentLab, draftHash, planDiscovery } from '../dist/experiment.js';
 import { spawn, spawnSync } from 'node:child_process';
-import { createInputSchema, goalAttainment, type Experiment } from '../src/contracts.js';
+import { createInputSchema, goalAttainment, promptCompliance, type Experiment } from '../src/contracts.js';
 import { resultHash } from '../src/experiment.js';
 import { judgeAgreement } from '../src/agreement.js';
 import { assertPlainCopy } from './helpers/copy-check.js';
 import { demoEvaluationInput } from '../src/demo.js';
 import { ExperimentStore } from '../src/store.js';
 import { buildResultView, resultViewLines } from '../src/result-view.js';
-import { primaryMetricId } from '../src/outcomes.js';
+import { COUNTING_RULES, markTargets, measurementUsable, primaryMetricId } from '../src/outcomes.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 
 function registered(onUserMessage?: (message: unknown) => void) {
@@ -1020,31 +1020,34 @@ async function boardFixture(prefix: string, mutate?: (record: Experiment) => voi
     cleanup: async () => { await rm(cwd, { recursive: true, force: true }); await rm(demo.directory, { recursive: true, force: true }); } };
 }
 
-/** Situations the judge decided: exactly what a one-key answer can land on (UI-SPEC F10). */
+/** Situations the judge decided: exactly what a one-key answer can land on (UI-SPEC F10, 03.1 markTargets). */
 function judgedSituations(record: Experiment) {
+  const controls = new Set(record.positiveControlScenarioIds ?? []);
   return record.trials.flatMap(trial => {
     const scenario = record.scenarios.find(card => card.id === trial.scenarioId);
-    const metricId = scenario && primaryMetricId(scenario, trial);
-    const judgeVerdict = metricId ? trial.assessments?.find(item => item.metricId === metricId)?.result : undefined;
-    if (!scenario || !metricId || (judgeVerdict !== 'pass' && judgeVerdict !== 'fail')) return [];
-    return [{ trial, scenario, metricId, judgeVerdict }];
+    if (!scenario || controls.has(scenario.id) || !measurementUsable(scenario, trial, record.humanReviews)) return [];
+    const targets = markTargets(scenario, trial);
+    if (!targets) return [];
+    return [{ trial, scenario, metricIds: targets.metricIds, judgeVerdict: targets.verdict }];
   });
 }
 
 /**
  * A scripted owner at the board: `steps` is one key list per board opening, `reason` is what the
- * native editor returns, and `screens` keeps what each board showed when it opened — that is where
- * the notice of the previous answer is read from.
+ * native editor returns, `choice` what the native select returns, and `screens` keeps what each
+ * board showed when it opened — that is where the notice of the previous answer is read from.
  */
 function boardSession(cwd: string) {
   const screens: string[] = [];
   const editorCalls: { title: string; initial: string }[] = [];
+  const selectCalls: { title: string; options: string[] }[] = [];
   const confirmBodies: string[] = [];
   // A step is either the keys the owner presses, or — for a board state that keys cannot reach
   // twice in a row — the exact action the board would have emitted.
-  const state = { steps: [] as (string[] | (() => unknown))[], reason: undefined as string | undefined };
+  const state = { steps: [] as (string[] | (() => unknown))[], reason: undefined as string | undefined, choice: undefined as string | undefined };
   const ctx = { cwd, hasUI: true, mode: 'tui', ui: {
     editor: async (title: string, initial: string) => { editorCalls.push({ title, initial }); return state.reason; },
+    select: async (title: string, options: string[]) => { selectCalls.push({ title, options }); return state.choice; },
     confirm: async (_title: string, body: string) => { confirmBodies.push(body); return true; },
     notify: () => {},
     custom: (factory: (tui: unknown, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?(): void }) => new Promise((resolve, reject) => {
@@ -1057,7 +1060,7 @@ function boardSession(cwd: string) {
       })().catch(error => { component.dispose?.(); reject(error); });
     }),
   } } as unknown as ExtensionCommandContext;
-  return { ctx, screens, editorCalls, confirmBodies, state };
+  return { ctx, screens, editorCalls, selectCalls, confirmBodies, state };
 }
 
 test('одна клавиша на доске сохраняет согласие, несогласие с причиной и сомнение', { timeout: 120000 }, async () => {
@@ -1083,7 +1086,11 @@ test('одна клавиша на доске сохраняет согласи�
     assert.equal(session.editorCalls.at(-1)!.title,
       `Судья решил: ${mark.judgeVerdict === 'fail' ? 'не справился' : 'справился'}. Почему вы не согласны? Коротко, своими словами.`);
     assert.equal(session.editorCalls.at(-1)!.initial, '');
-    assert.ok(session.screens.at(-1)!.includes(`Отмечено: не согласен · «${titleOf(disagreed, mark.trialId)}». Итог пересчитан с учётом вашей отметки.`),
+    // CTX-15: a legacy card has one target, so no «с чем именно» question; CR-02: the demo card's
+    // strict verdict also rests on failed checks, so the notice names what still fails instead of
+    // claiming the number moved.
+    assert.equal(session.selectCalls.length, 0, 'one failed metric is answered without a question');
+    assert.ok(session.screens.at(-1)!.includes(`Отмечено: не согласен · «${titleOf(disagreed, mark.trialId)}». Ситуация остаётся «не справился»: остальные провалы — через v.`),
       session.screens.at(-1));
 
     // «Не могу сказать» — сомнение: оценка судьи остаётся, ситуация ждёт решения.
@@ -1129,7 +1136,7 @@ test('повтор ответа, длинная причина и сменивш
   /** One board opening that answers the same situation, so a repeat can be pressed twice. */
   const answer = async (over: Record<string, unknown>) => {
     session.state.steps = [() => ({ type: 'agree', record: fixture.record, section: 'results', selected: 0,
-      trialId: target.trial.id, metricId: target.metricId, judgeVerdict: target.judgeVerdict, ...over }), ['q']];
+      trialId: target.trial.id, metricIds: target.metricIds, judgeVerdict: target.judgeVerdict, ...over }), ['q']];
     await command(fixture.record.id, session.ctx);
     const screen = session.screens.at(-1)!;
     const notice = screen.split('\n').map(row => row.replace(/^[^\p{L}\p{N}]*/u, '').replace(/[^\p{L}\p{N}.»]*$/u, ''))
@@ -1160,7 +1167,8 @@ test('повтор ответа, длинная причина и сменивш
     const disagreed = await answer({ answer: 'disagree' });
     assert.equal(disagreed.reviews.length, 3);
     assert.equal(disagreed.reviews.at(-1)!.note, 'Клиент назвал время сам, судья это пропустил.');
-    assert.equal(disagreed.notice, `Отмечено: не согласен · «${target.scenario.title}». Итог пересчитан с учётом вашей отметки.`);
+    // CR-02: the demo card is a legacy strict card whose checks also failed, so the number did not move and the notice says so.
+    assert.equal(disagreed.notice, `Отмечено: не согласен · «${target.scenario.title}». Ситуация остаётся «не справился»: остальные провалы — через v.`);
 
     session.state.reason = '  Клиент назвал время сам, судья это пропустил.  ';
     const same = await answer({ answer: 'disagree' });
@@ -1199,6 +1207,140 @@ test('повтор ответа, длинная причина и сменивш
   }
 });
 
+/**
+ * Every demo card becomes a goal card with prompt rules (CTX-01): the agent metrics are the goal and
+ * the rules, the card's simulator metrics stay, and the judge is recorded as failing both on every
+ * trial, citing an agent reply — a double failure on every situation.
+ */
+function goalAndRules(record: Experiment) {
+  for (const card of record.scenarios) {
+    card.metrics = [structuredClone(goalAttainment), structuredClone(promptCompliance), ...(card.metrics ?? []).filter(m => m.subject === 'simulator')];
+  }
+  for (const trial of record.trials) {
+    const said = trial.events.find(event => event.type === 'assistant')!;
+    trial.assessments = [
+      { metricId: 'goal_attainment', result: 'fail', rationale: 'Агент не перенёс запись и отправил клиента в поддержку.', evidence: [said.seq], citations: [{ seq: said.seq, quote: said.text ?? '' }] },
+      { metricId: 'prompt_compliance', result: 'fail', rationale: 'Агент направил клиента в поддержку.', evidence: [said.seq], citations: [{ seq: said.seq, quote: said.text ?? '' }] },
+      ...(trial.assessments ?? []).filter(a => card(record, trial)?.metrics?.some(m => m.id === a.metricId && m.subject === 'simulator')),
+    ];
+  }
+}
+const card = (record: Experiment, trial: Experiment['trials'][number]) => record.scenarios.find(item => item.id === trial.scenarioId);
+const GOAL_AND_RULES_OPTIONS = ['Запрос выполнен — судья ошибся', 'Правила промпта соблюдены — судья ошибся', 'С обоими: запрос выполнен и правила соблюдены'];
+
+test('на двойном провале n спрашивает, с чем именно, и пишет отметку на каждую оценку', { timeout: 180000 }, async () => {
+  const fixture = await boardFixture('agent-lab-board-both-', goalAndRules);
+  const unchanged = await boardFixture('agent-lab-board-both-still-', record => { goalAndRules(record); record.settings.repeats = 2; });
+  const { tools, shutdown, command } = registered();
+  const session = boardSession(fixture.cwd);
+  const notices: string[] = [];
+  type Review = { trialId: string; metricId: string; verdict: string; note: string; countingRules?: string; durationMs?: number };
+  const inspect = async (of = fixture) => output(await tools.get('agent_lab_inspect')!.execute('both', { id: of.record.id }, undefined, undefined,
+    { cwd: of.cwd, hasUI: false, mode: 'print' } as ExtensionContext)).humanReviews as Review[];
+  const noticeOf = (screen: string) => screen.split('\n').map(row => row.replace(/^[^\p{L}\p{N}]*/u, '').replace(/[^\p{L}\p{N}.»]*$/u, ''))
+    .find(row => /^(Отмечено:|Отметка уже стоит:|Несогласие не сохранено|Причина длиннее|Оценка судьи изменилась)/.test(row)) ?? '';
+  const titleOf = (trialId: string) => fixture.record.scenarios.find(item => item.id === fixture.record.trials.find(trial => trial.id === trialId)!.scenarioId)!.title;
+  const situations = judgedSituations(fixture.record);
+  assert.equal(situations.length, 2);
+  for (const item of situations) assert.deepEqual([item.judgeVerdict, item.metricIds], ['fail', ['goal_attainment', 'prompt_compliance']]);
+  const store = new ExperimentStore(join(fixture.cwd, '.agent-lab'));
+  try {
+    // CTX-16: «не согласен» on a double failure asks which half; the rules alone → a disagreement on
+    // the rules and an agreement on the goal, both stamped by the lab, one situation checked.
+    session.state.choice = GOAL_AND_RULES_OPTIONS[1];
+    session.state.reason = 'Проверка: агент не отправлял клиента в поддержку.';
+    session.state.steps = [['3', 'n'], ['q']];
+    await command(fixture.record.id, session.ctx);
+    assert.deepEqual(session.selectCalls, [{ title: 'С чем вы не согласны?', options: GOAL_AND_RULES_OPTIONS }]);
+    assertPlainCopy('С чем вы не согласны?', 'вопрос');
+    for (const option of GOAL_AND_RULES_OPTIONS) assertPlainCopy(option, 'вариант');
+    assert.equal(session.editorCalls.at(-1)!.title, 'Судья решил: не справился. Почему вы не согласны? Коротко, своими словами.');
+    const first = await inspect();
+    assert.equal(first.length, 2, JSON.stringify(first));
+    const [goalMark, rulesMark] = first;
+    assert.equal(goalMark!.trialId, rulesMark!.trialId);
+    assert.deepEqual([goalMark!.metricId, goalMark!.verdict, goalMark!.note], ['goal_attainment', 'fail', 'Быстрая отметка: согласен с судьёй.']);
+    assert.deepEqual([rulesMark!.metricId, rulesMark!.verdict, rulesMark!.note], ['prompt_compliance', 'pass', 'Проверка: агент не отправлял клиента в поддержку.']);
+    assert.deepEqual(first.map(mark => mark.countingRules), [COUNTING_RULES, COUNTING_RULES]);
+    assert.equal(typeof goalMark!.durationMs, 'number');
+    const firstTrial = goalMark!.trialId;
+    notices.push(noticeOf(session.screens.at(-1)!));
+    assert.equal(notices.at(-1), `Отмечено: не согласен · «${titleOf(firstTrial)}». Ситуация остаётся «не справился»: запрос не выполнен.`);
+    const checked = judgeAgreement(await store.get(fixture.record.id));
+    assert.equal(checked.checked, 1);
+    assert.deepEqual(checked.disagreements.map(item => [item.trialId, item.overturned]), [[firstTrial, ['prompt_compliance']]]);
+
+    // Esc in the question: nothing is written, the editor never opens, the board says nothing.
+    const editors = session.editorCalls.length;
+    session.state.choice = undefined;
+    session.state.steps = [['3', 'n'], ['q']];
+    await command(fixture.record.id, session.ctx);
+    assert.equal((await inspect()).length, 2);
+    assert.equal(session.editorCalls.length, editors, 'a cancelled question opens no editor');
+    assert.doesNotMatch(session.screens.at(-1)!, /Отмечено:|Несогласие не сохранено|Отметка уже стоит/);
+
+    // «С обоими» on the other double failure: two overturned halves, and the situation's verdict moved.
+    session.state.choice = GOAL_AND_RULES_OPTIONS[2];
+    session.state.reason = 'Клиент получил перенос, правила соблюдены.';
+    session.state.steps = [['3', 'n'], ['q']];
+    await command(fixture.record.id, session.ctx);
+    const both = (await inspect()).slice(2);
+    assert.equal(both.length, 2);
+    assert.notEqual(both[0]!.trialId, firstTrial, 'the second answer lands on the next queued double failure');
+    assert.deepEqual(both.map(mark => [mark.metricId, mark.verdict, mark.note, mark.countingRules]),
+      [['goal_attainment', 'pass', 'Клиент получил перенос, правила соблюдены.', COUNTING_RULES], ['prompt_compliance', 'pass', 'Клиент получил перенос, правила соблюдены.', COUNTING_RULES]]);
+    notices.push(noticeOf(session.screens.at(-1)!));
+    assert.equal(notices.at(-1), `Отмечено: не согласен · «${titleOf(both[0]!.trialId)}». Итог пересчитан с учётом вашей отметки.`);
+
+    // CTX-17: «согласен» writes the same answer on both metrics without a question.
+    session.state.steps = [['3', 'y'], ['q']];
+    await command(fixture.record.id, session.ctx);
+    const agreed = (await inspect()).slice(4);
+    assert.deepEqual(agreed.map(mark => [mark.trialId, mark.metricId, mark.verdict, mark.note]),
+      [[firstTrial, 'goal_attainment', 'fail', 'Быстрая отметка: согласен с судьёй.'], [firstTrial, 'prompt_compliance', 'fail', 'Быстрая отметка: согласен с судьёй.']]);
+    assert.equal(session.selectCalls.length, 3, '«согласен» asks nothing');
+    notices.push(noticeOf(session.screens.at(-1)!));
+    assert.equal(notices.at(-1), `Отмечено: согласен с судьёй · «${titleOf(firstTrial)}». Проверено провалов: 2 из 2.`);
+
+    // UI-D-19 over every target: the same answer again writes nothing.
+    const again = () => ({ type: 'agree', answer: 'agree', record: fixture.record, section: 'results', selected: 0,
+      trialId: firstTrial, metricIds: ['goal_attainment', 'prompt_compliance'], judgeVerdict: 'fail' });
+    session.state.steps = [again, ['q']];
+    await command(fixture.record.id, session.ctx);
+    assert.equal((await inspect()).length, 6);
+    notices.push(noticeOf(session.screens.at(-1)!));
+    assert.equal(notices.at(-1), 'Отметка уже стоит: согласен.');
+
+    // «Не могу сказать» — doubt on both metrics, the judge's verdict stays.
+    session.state.steps = [() => ({ ...again(), answer: 'unsure' }), ['q']];
+    await command(fixture.record.id, session.ctx);
+    const unsure = (await inspect()).slice(6);
+    assert.deepEqual(unsure.map(mark => [mark.metricId, mark.verdict, mark.note]),
+      [['goal_attainment', 'unknown', 'Быстрая отметка: не могу сказать.'], ['prompt_compliance', 'unknown', 'Быстрая отметка: не могу сказать.']]);
+    notices.push(noticeOf(session.screens.at(-1)!));
+    assert.equal(notices.at(-1), `Отмечено: не могу сказать · «${titleOf(firstTrial)}». В итоге остаётся оценка судьи; чтобы закрыть ситуацию, позже нажмите y или n.`);
+    assert.equal(session.selectCalls.length, 3, '«не могу сказать» asks nothing');
+
+    // A situation whose card verdict cannot move (a planned attempt is missing) hears that the number did not change.
+    const still = boardSession(unchanged.cwd);
+    still.state.choice = GOAL_AND_RULES_OPTIONS[2];
+    still.state.reason = 'Клиент получил перенос.';
+    still.state.steps = [['3', 'n'], ['q']];
+    await command(unchanged.record.id, still.ctx);
+    const stillMarks = await inspect(unchanged);
+    assert.equal(stillMarks.length, 2);
+    notices.push(noticeOf(still.screens.at(-1)!));
+    assert.equal(notices.at(-1), `Отмечено: не согласен · «${unchanged.record.scenarios.find(item => item.id === unchanged.record.trials.find(trial => trial.id === stillMarks[0]!.trialId)!.scenarioId)!.title}». Итог не изменился.`);
+
+    for (const notice of notices) assertPlainCopy(notice.replace(/«[^»]*»/gu, ''), 'уведомление');
+  } finally {
+    await store.close();
+    await shutdown();
+    await fixture.cleanup();
+    await unchanged.cleanup();
+  }
+});
+
 test('отметка на завершённом прогоне снова открывает разбор, а прогон без провалов считает успехи', { timeout: 120000 }, async () => {
   const finished = await boardFixture('agent-lab-board-complete-', record => {
     record.resultsReviewHash = resultHash(record);
@@ -1217,7 +1359,7 @@ test('отметка на завершённом прогоне снова от�
       const session = boardSession(fixture.cwd);
       const target = judgedSituations(fixture.record)[0]!;
       session.state.steps = [() => ({ type: 'agree', answer: 'agree', record: fixture.record, section: 'results', selected: 0,
-        trialId: target.trial.id, metricId: target.metricId, judgeVerdict: target.judgeVerdict }), ['q']];
+        trialId: target.trial.id, metricIds: target.metricIds, judgeVerdict: target.judgeVerdict }), ['q']];
       await command(fixture.record.id, session.ctx);
       assert.ok(session.screens.at(-1)!.includes(expected), session.screens.at(-1));
       const report = output(await tools.get('agent_lab_inspect')!.execute('reopen', { id: fixture.record.id }, undefined, undefined,
@@ -1239,7 +1381,7 @@ test('f называет, сколько ситуаций не разобран�
   const [doubted, ...rest] = judgedSituations(fixture.record);
   assert.ok(doubted, 'у демо-прогона есть решённая судьёй ситуация');
   const mark = (item: ReturnType<typeof judgedSituations>[number], answer: string) => () => ({ type: 'agree', answer,
-    record: fixture.record, section: 'results', selected: 0, trialId: item.trial.id, metricId: item.metricId, judgeVerdict: item.judgeVerdict });
+    record: fixture.record, section: 'results', selected: 0, trialId: item.trial.id, metricIds: item.metricIds, judgeVerdict: item.judgeVerdict });
   try {
     session.state.steps = [mark(doubted, 'unsure'), ...rest.map(item => mark(item, 'agree')), ['f'], ['q']];
     await command(fixture.record.id, session.ctx);
