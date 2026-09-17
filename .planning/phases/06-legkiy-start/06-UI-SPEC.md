@@ -23,9 +23,11 @@ extends: "02-UI-SPEC.md, 03-UI-SPEC.md, 04-UI-SPEC.md"
 > - the forbidden-words lists and their allowlist;
 > - `pluralForm`.
 >
-> Phase 6 changes no phase-2/3/4 string. It adds the preparation checklist, the connection check, the start wording and the rules for what Lab says while it looks for the agent. Where it replaces an existing string, that string is named.
+> Phase 6 changes no phase-2/3/4 string. It adds the preparation checklist, the connection check, the start wording, the rules for what Lab says while it looks for the agent, and one row in the first result block that names the synthetic share (S7, shown only when synthetic situations exist). Where it replaces an existing string, that string is named.
 >
 > **Autonomous run.** The user was asleep and asked for no questions. Every choice that CONTEXT and RESEARCH left open is recorded in `## Decisions Log` with its reason. That includes research assumptions A3, A8, A9 and A10.
+>
+> **Revised 2026-09-17 (START-04 rewritten by the owner).** Synthetic situations built from the owner's own description, including a client's character («клиент, который матерится»), are the second, equal input of the main path next to real logs. Starting without logs is allowed and offered. `notes`, `profiles` and `withoutDialogues` are main-path inputs, not side branches, and the synthetic share is always visible. Changed here: M0, N0, N3, the Логи step rule and value, the M1 description row, the M2 logs row and its never-offered list, the M4 table and its English sentence, S5, the new S7, C-647/C-648, the forbidden list, D-14, D-15 and D-16, and the new D-24 to D-26. Where RESEARCH «START-04» (inventory rows for `profiles`, `notes`, `withoutDialogues`, and its `SIDE` regex) differs, this contract wins.
 >
 > **Scope markers.**
 > - `[BASE+]` is an addition to the shared base: the glyph `○`, the accent item, the row roles and the allowlist words.
@@ -45,7 +47,9 @@ extends: "02-UI-SPEC.md, 03-UI-SPEC.md, 04-UI-SPEC.md"
 | D1 | Native dialog before the first check of a **new or changed** agent, TUI only | `ctx.ui.confirm(title, body)` | Title and body |
 | S5 | Session header | `ctx.ui.setHeader` (existing) | New tagline (replaces a «карточк…» string) |
 | S6 | `/agent-lab` command description | `pi.registerCommand` | New description without `demo` |
-| M | Chat text written by the Pi model | `skills/agent-builder/SKILL.md` + system prompt | Found-list, «не нашёл» questions, error retelling, main-path sentence, side-branch framing. The model writes these words; the skill holds them **verbatim in Russian** |
+| S7 | First result block (chat block and board) | `resultViewRows(view)` in `src/result-view.ts` (phase 1, painted by phase 4) | One row C-646 with the synthetic share, only when the set has synthetic situations |
+| S8 | The «no logs yet» tool answer of `agent_lab_build` | `needs_input` message (tool text the model repeats) | C-647 offers logs or the owner's description (replaces the «начать без логов» wording) |
+| M | Chat text written by the Pi model | `skills/agent-builder/SKILL.md` + system prompt | Found-list (with the description row), «не нашёл» questions, error retelling, main-path sentence, the description input, side-branch framing. The model writes these words; the skill holds them **verbatim in Russian** |
 | S1 | CLI | — | **No change in phase 6** |
 
 Non-TUI modes (`ctx.mode !== 'tui'`: print, json, RPC): no widget, no header. The checklist and connection rows exist only as tool result text. D1 is not shown there (Decision D-03).
@@ -210,7 +214,7 @@ Not accent: the «Что сделать» row, done rows, K-rows, D1 body.
 
 ### State → steps
 
-`preparationChecklist(state)` is pure. It reads the remembered connection, the in-session check result, the last preflight result (`found`) and the last draft (`store.get(lastDraftId)`). Nothing is stored separately (CONTEXT).
+`preparationChecklist(state)` is pure. It reads the remembered connection, the in-session check result, the last preflight result (`found`) and the last draft (`store.get(lastDraftId)`, including its `notes`, `profiles` and the `provenance` of its situations). Nothing is stored separately (CONTEXT).
 
 Steps and order are locked: **Агент → Требования → Логи → Связь → Бюджет → Запуск**.
 
@@ -218,7 +222,7 @@ Steps and order are locked: **Агент → Требования → Логи �
 |---|--------------|-----------|-----------------|
 | 1 | `Агент` | a connection is known (remembered or just used), or the draft target is not `sandbox` | `<name>`: for a command target, the basename of the first argument that is an existing file, else the command basename; for HTTP, `<host>:<port>`; for a module, the file basename. Escaped, wrapped, never cut. |
 | 2 | `Требования` | `draft.requirements.length > 0`, or `found.materials > 0` | `<N> <правило\|правила\|правил>` (from the draft), or `<N> <файл\|файла\|файлов>` (before a draft) |
-| 3 | `Логи` | `draft.dialogues.length > 0`, or `found.dialogues > 0`. `withoutDialogues` never marks it done. | `<N> <диалог\|диалога\|диалогов>`, plus ` · исключено <K>` when the draft has K > 0 exclusions |
+| 3 | `Логи` | Real logs: `draft.dialogues.length > 0`, or `found.dialogues > 0`. **Or the owner's description instead of logs** (START-04): a draft with no dialogues whose `notes` is not empty or whose `profiles` list is not empty. `withoutDialogues` alone, with no description, never marks it done. | Logs: `<N> <диалог\|диалога\|диалогов>`, plus ` · исключено <K>` when the draft has K > 0 exclusions. Description: `по вашему описанию`. In both cases, when the draft has T > 0 situations and M > 0 of them have `provenance: 'synthetic'`, append ` · синтетических <M> из <T>` (the synthetic share is always visible). The owner's own words are never shown here. |
 | 4 | `Связь` | `check.status === 'ok'` and `check.targetKey` equals the fingerprint of the current target | `агент ответил за <S> с` (S = ms / 1000, one decimal, **decimal comma**: `2,4`; `0,1` minimum) |
 | 5 | `Бюджет` | a draft exists and its phase is `review` or later (the owner approved the build and its limit in the native build dialog) | `до <N> <вызова\|вызовов\|вызовов> модели` from `draft.settings.maxCalls` |
 | 6 | `Запуск` | never shown as done: the widget hides once the run starts | — |
@@ -236,10 +240,10 @@ The first matching rule wins.
 
 | # | Current step and state | Text | Role |
 |---|------------------------|------|------|
-| N0 | Агент, Требования or Логи, and nothing found yet in this session (`found` undefined, no draft) | `Что сделать: напишите, например: «проверь агента в этой папке, логи в dialogs.jsonl».` (85) | `prep-next` |
+| N0 | Агент, Требования or Логи, and nothing found yet in this session (`found` undefined, no draft) | `Что сделать: напишите, например: «проверь агента в этой папке, логи в dialogs.jsonl» — или опишите ситуации своими словами.` (123) | `prep-next` |
 | N1 | Агент | `Что сделать: напишите, в какой папке агент и где логи.` (54) | `prep-next` |
 | N2 | Требования | `Что сделать: покажите, где промпт агента и ваши правила.` (56) | `prep-next` |
-| N3 | Логи | `Что сделать: укажите файл с диалогами — JSON или JSONL.` (55) | `prep-next` |
+| N3 | Логи | `Что сделать: укажите файл с диалогами (JSON или JSONL) или опишите ситуации и клиентов своими словами.` (102) | `prep-next` |
 | N4 | Связь, no check yet | `Что сделать: ничего, Lab сам проверит связь перед сборкой.` (58) | `prep-next` |
 | N5 | Связь, check failed | `Что сделать: <next>`, the K3 text of that error kind (table in «Connection Check») | `prep-next-failed` |
 | N6 | Бюджет, no draft | `Что сделать: подтвердите сборку ситуаций и её лимит в окне Pi.` (62) | `prep-next` |
@@ -268,7 +272,7 @@ Start of a session (nothing found yet), inner 76:
 ПОДГОТОВКА К ПРОВЕРКЕ · шаг 1 из 6
 ▸ Агент
   Что сделать: напишите, например: «проверь агента в этой папке, логи в
-    dialogs.jsonl».
+    dialogs.jsonl» — или опишите ситуации своими словами.
 ○ Требования
 ○ Логи
 ○ Связь
@@ -301,18 +305,30 @@ Ready to start, inner 76:
   Что сделать: подтвердите ожидания и запустите проверку.
 ```
 
+Ready to start from the owner's description (no logs), inner 76:
+```
+ПОДГОТОВКА К ПРОВЕРКЕ · шаг 6 из 6
+✓ Агент — agent_lab_target.py
+✓ Требования — 23 правила
+✓ Логи — по вашему описанию · синтетических 5 из 5
+✓ Связь — агент ответил за 2,4 с
+✓ Бюджет — до 20 вызовов модели
+▸ Запуск
+  Что сделать: подтвердите ожидания и запустите проверку.
+```
+
 ### Width tiers (inner = terminal width − 4)
 
 The layout is one vertical list at every width. There is no horizontal stepper (Decision D-06). Tiers only decide what wraps.
 
 | Tier | Terminal / inner | Behavior (measured) |
 |------|------------------|---------------------|
-| W | ≥ 76 / ≥ 72 | Every fixed row is on one line: heading 34; step rows ≤ 37 with worst-case counts (`✓ Логи — 300 диалогов · исключено 300` and `… 999 … 999` = 37); Fixed «Что сделать» rows N1–N4, N6, N7, N9, N10 are ≤ 66 + indent 2 = 68, so they fit on one line. N0 (85 + 2) and N8 (77 + 2) wrap once. The N5 rows (K3 texts, 63–132 + 2, measured) take one or two lines. Record names wrap only if longer than the row. |
-| M | 48–75 / 44–71 | The heading and step rows fit on one line. «Что сделать» rows wrap by words (continuation at column 4). |
-| N | 40–47 / 36–43 | The heading (34) fits. Every fixed step row fits except the worst-case Логи row (37): at inner 36 it wraps once, and its continuation starts at column 2 (`исключено <K>` on the second line). «Что сделать» rows take 2–4 lines (the longest N5 row, 134 with indent, takes 4 at inner 36). |
+| W | ≥ 76 / ≥ 72 | Every fixed row is on one line: heading 34; step rows ≤ 62 with worst-case counts and the synthetic share (`✓ Логи — 300 диалогов · исключено 300` = 37; `✓ Логи — по вашему описанию · синтетических 20 из 20` = 52; `✓ Логи — 300 диалогов · исключено 300 · синтетических 20 из 20` = 62); Fixed «Что сделать» rows N1, N2, N4, N6, N7, N9, N10 are ≤ 66 + indent 2 = 68, so they fit on one line. N0 (123 + 2), N3 (102 + 2) and N8 (77 + 2) wrap once. The N5 rows (K3 texts, 63–132 + 2, measured) take one or two lines. Record names wrap only if longer than the row. |
+| M | 48–75 / 44–71 | The heading and step rows fit on one line, except a Логи row with the synthetic share (52–62), which wraps once at column 2 when it is longer than inner. «Что сделать» rows wrap by words (continuation at column 4). |
+| N | 40–47 / 36–43 | The heading (34) fits. Every fixed step row fits except the Логи row with worst-case counts (37) or with the synthetic share (52–62): at inner 36 it wraps once (both parts measured ≤ 36 and ≤ 34), and its continuation starts at column 2. «Что сделать» rows take 2–4 lines (N0 and N3 take 4 at inner 36, measured; the longest N5 row, 134 with indent, takes 4 at inner 36). |
 
 - **No truncation anywhere.** No `…`, no `truncateToWidth` on these rows. Every word is kept at inner 36.
-- Height: 8 rows at W for the fixed texts (9 for N0, N8 and most N5 rows). At N: heading 1 + six step rows + at most one extra row for the worst-case Логи row + «Что сделать» up to 4 rows = at most 12 rows. The factory has no line cap.
+- Height: 8 rows at W for the fixed texts (9 for N0, N3, N8 and most N5 rows). At N: heading 1 + six step rows + at most one extra row for a wrapped Логи row (worst-case counts or the synthetic share) + «Что сделать» up to 4 rows = at most 12 rows. The factory has no line cap.
 - Below 40 columns: Pi's own layout is out of scope; `renderRows` still wraps and never cuts.
 
 ### Lifecycle (S4)
@@ -456,9 +472,21 @@ These texts are written by the Pi model. `skills/agent-builder/SKILL.md` holds t
 
 ### M0. Main path — one sentence
 
-`Как идёт проверка: ситуации из ваших логов → ваши ожидания → прогон → итог и причины → согласие с судьёй → повтор и отчёт.` (122; wraps)
+`Как идёт проверка: ситуации из ваших логов или по вашему описанию → ваши ожидания → прогон → итог и причины → согласие с судьёй → повтор и отчёт.` (145; wraps)
 
-Used when the user asks what Lab does or what the whole path is. The model never extends this list.
+Used when the user asks what Lab does or what the whole path is. The model never extends this list. It names both equal inputs: real logs and the owner's description.
+
+### M0d. The description input (no logs, or situations of the owner's own)
+
+The owner's description is the second, equal input of the main path (START-04 revised). The model:
+1. takes the owner's words about situations, clients and goals **verbatim** as `notes`;
+2. for each client character the owner names (for example «клиент, который матерится»), adds one owner profile to `profiles`: `persona` in the owner's words, `characteristics` as short traits the owner said, at most 6 profiles. It never invents a trait the owner did not name; log evidence never creates one;
+3. sets `withoutDialogues: true` when there are no logs, and `scenarioCount` to the number of situations the owner described, at most 15 (the same cap as a set from logs);
+4. passes the found prompt and rules as `materials`, and calls `agent_lab_build` with `mode: 'live'`;
+5. says plainly that these situations are synthetic and that their share is shown in the checklist and in the result;
+6. uses one input per set: when the owner gives both logs and a description, it asks which set to build first.
+
+An empty answer is not a description: the logs question stays open until the owner gives a path or their own description.
 
 ### M1. Found-list (after the search and the `preflight` call)
 
@@ -480,7 +508,7 @@ The model searches only in the named folders and the Pi cwd, then calls `agent_l
 | `Агент` | For a remembered connection: `Агент — <name> (сохранённое подключение)`. The Python part is added only for Python adapters; the version comes from `--version` only. |
 | `Промпт` | The best 1 file named, the rest counted. ` и ещё …` only when K > 0. |
 | `Правила` | Knowledge articles or policy files. For files that are not articles: `Правила — <N> <файл|файла|файлов> (<folder>)`. |
-| `Логи` | The count comes **only** from the preflight result, never from the model reading the file. |
+| `Логи` | The count comes **only** from the preflight result, never from the model reading the file. When the owner gave a description instead of logs (M0d), the row reads C-648: `Логи — нет; по вашему описанию соберу <N> <ситуацию\|ситуации\|ситуаций>, все синтетические.` plus ` Характеры клиентов: <K>.` when K = the number of `profiles` > 0 (91 at N 5, K 1). `<N>` is the planned `scenarioCount`. The owner's words are not repeated in this row. |
 | `Связь` | K0 wording without the leading words: `Связь — агент ответил за <S> с.` On a failure the row reads `Связь — не подтверждена.`, the M3 block follows, and the closing question is **replaced** by the M3 ending. |
 | closing question | The **confirm question** of START-01. It asks about correctness, not money: the build keeps its own native spend dialog. Asked once. |
 
@@ -496,7 +524,21 @@ Example (shape only; file names are record values, so SKILL.md and the scan use 
 Всё верно — собираю ситуации? Если что-то не так, напишите, что поправить.
 ```
 
-On «да», the model calls `agent_lab_build mode=validate`. The gate skips the ping (fresh `ok`), and the native dialog opens. Its title is renamed in this phase (R-10): `Собрать validation set?` → `Собрать ситуации для проверки?` (30). Only the title changes; the body and the `ctx.ui.confirm` call stay as they are (grep anchor `'Собрать validation set?'`, tests that assert the old title are updated).
+Description-path example (the same fixture rule; no logs were given):
+```
+Нашёл:
+Агент — местный/подключение.py (Python 3.12.9 из папка-агента/окружение)
+Промпт — исходники/агент/промпты.py и ещё 2 файла
+Правила — 8 статей базы знаний (местный/заглушки/статьи.json)
+Логи — нет; по вашему описанию соберу 5 ситуаций, все синтетические. Характеры клиентов: 1.
+Связь — агент ответил за 2,4 с.
+
+Всё верно — собираю ситуации? Если что-то не так, напишите, что поправить.
+```
+
+On «да» with logs, the model calls `agent_lab_build mode=validate`. The gate skips the ping (fresh `ok`), and the native dialog opens. Its title is renamed in this phase (R-10): `Собрать validation set?` → `Собрать ситуации для проверки?` (30). Only the title changes; the body and the `ctx.ui.confirm` call stay as they are (grep anchor `'Собрать validation set?'`, tests that assert the old title are updated).
+
+On «да» with a description, the model calls `agent_lab_build mode=live` with the M0d parameters. The gate skips the ping (fresh `ok`). This build has no native dialog of its own today (unchanged); its limit shows as the Бюджет value, and the run plan and price appear in the existing run confirmation.
 
 ### M2. «Не нашёл» variants
 
@@ -511,13 +553,15 @@ The found rows are still listed first. Then the model asks **one** question: the
 | No prompt, rules found | Row `Промпт — не нашёл.`, then `Где лежит системный промпт агента? Без него Lab возьмёт требования только из правил.` |
 | Prompt found, no rules | Row `Правила — отдельных не нашёл; требования возьму из промпта.` No question. |
 | Neither prompt nor rules | `Промпт и правила — не нашёл. Где лежат инструкции агента?` |
-| No logs path given, none found | `Логи — не нашёл. Где лежат реальные диалоги с агентом (файл JSON или JSONL)?` |
+| No logs path given, none found | `Логи — не нашёл. Дадите файл с реальными диалогами (JSON или JSONL) или опишете своими словами ситуации и клиентов — например, «клиент, который матерится»?` (155). One question, two equal answers; a description goes to M0d. |
 | Path is a service log (`*.log`, traces) | `Логи — <path> похож на журнал сервиса, а не на диалоги. Где лежат диалоги?` |
 | File has no dialogues in the right shape (preflight count 0 or its error) | `Логи — в <file> нет диалогов в нужном виде: нужен JSON или JSONL, где у каждого диалога есть реплики с ролью и текстом. Какой файл взять?` |
 | Several dialogue files | `Логи — нашёл несколько файлов с диалогами: <a> · <N> диалогов, <b> · <M> диалогов. Какой взять?` (counts from one preflight call per file) |
 | Preflight rejects the file with its own message (size, count limit) | `Логи — <Lab message verbatim>` + `Какой файл взять?` |
 
-**Never offered** in these questions: starting without logs, a demo, a single test, profiles, golden answers.
+**Never offered** in these questions: a demo, a single test, a prompt change, golden answers, a hypothesis search in the logs, scoring of recorded dialogues. Starting without logs **is** offered, as the owner's description (the «No logs» row above and M0d).
+
+The same logs question opens «Real dialogues at the start» in the skill, without the `Логи — не нашёл.` prefix (L0): `Дадите файл с реальными диалогами (JSON или JSONL) или опишете своими словами ситуации и клиентов — например, «клиент, который матерится»?` (138).
 
 ### M4. Side branches (only on explicit request)
 
@@ -529,27 +573,36 @@ The system prompt, the skill and the tool descriptions do not **suggest** a side
 | one-test flow | `одиночный тест по одной ошибке` | asks to reproduce one specific error |
 | `agent_lab_prompt` | `проверка изменённого промпта агента` | asks to change or try another prompt |
 | `goldenFile`/`goldenCases` | `эталонные ответы` | brings or names reference answers |
-| `profiles` | `профили пользователей` | names user profiles |
 | `demo` | `учебный пример без модели` | asks for a demo or example, or types `/agent-lab demo` |
-| `score` | `оценка записанных ответов без запуска агента` | asks to grade recorded replies without running the agent |
-| `withoutDialogues` | `подготовка без реальных диалогов` | refuses to give logs, in their own words |
+| `score` | `оценка записанных ответов без запуска агента` | asks to grade recorded replies without running the agent (the customer grades recorded production dialogues on their side) |
+
+**Not side branches** (main path, START-04 revised 2026-09-17): the owner's description of situations and clients — `notes`, `profiles` (client characters such as «клиент, который матерится»), `withoutDialogues` and `scenarioCount` in `agent_lab_build mode=live`, and `profileEdits` in `agent_lab_edit`. The model offers the description whenever there are no logs (M2, M0d) and never frames it as an additional mode.
 
 Wording (exact):
 - On an explicit request, the first row of the model's answer is: `Это дополнительный режим, не основной путь: <plain name>.` Then the branch's existing flow and native dialogs follow, unchanged.
 - When the user asks «что ещё умеешь?» or similar, the model answers with M0 plus: `Другие режимы включаются только по вашей прямой просьбе — назовите, что нужно.` (78). It does **not** list the branches.
-- The system prompt carries exactly one English sentence about them (the START-04 test depends on it): «Other tools and modes (discover, score, prompt changes, golden cases, profiles, demo) run only when the user explicitly asks for them by name; never suggest them.»
-- In SKILL.md all side-branch rules move, unchanged in substance, into a final section `## Only on explicit request`. It opens with «Never suggest these. Use them only when the user asks by name.»
+- The system prompt carries exactly one English sentence about them (the START-04 test depends on it): «Other tools and modes (discover, score, prompt changes, golden cases, demo) run only when the user explicitly asks for them by name; never suggest them.»
+- In SKILL.md all side-branch rules move, unchanged in substance, into a final section `## Only on explicit request`. It opens with «Never suggest these. Use them only when the user asks by name.» The rules about the owner's description (profiles come only from the owner's words; an empty answer is not consent) stay in the main part.
 
 ### S5, S6. Header and command description
 
 | Id | Old | New |
 |----|-----|-----|
-| S5 tagline | `Насколько хорош ваш агент — на карточках пользователей, с причинами провалов.` | `Насколько хорош ваш агент — на ситуациях из реальных диалогов, с причинами провалов.` (84; Pi wraps the header) |
+| S5 tagline | `Насколько хорош ваш агент — на карточках пользователей, с причинами провалов.` | `Насколько хорош ваш агент — на ситуациях из ваших логов или по вашему описанию, с причинами провалов.` (101; Pi wraps the header) |
 | S5 rows | `Agent Lab` (bold) / tagline / cwd | unchanged except the tagline |
 | R-10 build dialog title | `Собрать validation set?` | `Собрать ситуации для проверки?` (30); the main path shows no English title |
 | S6 | `Проверить агента: /agent-lab, /agent-lab demo или /agent-lab /путь/к/проекту` | `Проверить агента: /agent-lab или /agent-lab /путь/к/проекту` (the `demo` argument keeps working) |
 | old start widget (2 strings, incl. «Воспроизведи эту ошибку» and «/agent-lab demo — учебный пример без модели») | — | removed; replaced by S4 with N0 |
 | board empty-state hint «d — учебный пример без провайдера» / «d  Учебный пример за минуту» (`extensions/cards.ts`) | — | the hint text is removed if phase 4 kept it; key `d` still works (grep anchor, not line numbers) |
+| S8 `agent_lab_build` `needs_input` message | `Есть реальные диалоги с агентом? Укажите файл JSON/JSONL с обезличенными разговорами или скажите «начать без логов».` | C-647 `Есть реальные диалоги с агентом? Укажите файл JSON/JSONL с обезличенными разговорами или опишите своими словами ситуации и клиентов, например «клиент, который матерится».` (170). Its `nextStep` tells the model to take a description as M0d. |
+
+### S7. Synthetic share in the result (START-04)
+
+`resultViewRows(view)` adds one row with role `line`, directly after the control row, **only** when `view.scope.synthetic > 0`. M = `view.scope.synthetic`, T = `view.scope.cards` (both already computed in phase 1):
+- M < T: `Синтетических ситуаций: <M> из <T> — они придуманы по описанию, а не взяты из реальных диалогов.` (93 at 2 из 15)
+- M = T: the same row plus ` На реальных диалогах итог может быть другим.` (139 at 20 из 20)
+
+A set without synthetic situations (the acquiring set from logs) gets no row, and every other row stays unchanged. A draft in review shows the row too. If phases 2–5 already print the synthetic count in the first block, that row is kept and no second row is added. The phase-5 share text and HTML report pick rows by prefix, so this row does not reach them in this phase (named as a phase-5 follow-up).
 
 ---
 
@@ -557,7 +610,7 @@ Wording (exact):
 
 1. **Checklist render test** (`test/progress.test.ts`), with fake light and dark themes (`PaintTheme`):
    - widths 40, 48, 60, 80, 120, 160 (inner 36, 44, 56, 76, 116, 156);
-   - states: empty (N0); agent only; logs missing while the connection is ok; failed connection for each of the 9 kinds (including the server-error variant); build running (N7); build stopped (N8); draft in review, unconfirmed (N9) and confirmed (N10); started (hidden).
+   - states: empty (N0); agent only; logs missing while the connection is ok; failed connection for each of the 9 kinds (including the server-error variant); build running (N7); build stopped (N8); draft in review, unconfirmed (N9) and confirmed (N10); a draft from the owner's description (preparing, and in review with the synthetic share); the worst-case Логи row with the synthetic share; started (hidden).
 
    The test asserts:
    - every line has `visibleWidth(line) ≤ width`, with the 2-column frame included;
@@ -569,8 +622,9 @@ Wording (exact):
 2. **Connection block render test**: K0–K4 and G0–G2 for every kind, at the same widths, with a 300-character stderr detail that contains an ESC sequence and line breaks. The ESC sequence must be rendered escaped.
 3. **Dialog body test**: D1 with a command of 3 arguments, one of them containing spaces. The full command must appear unshortened.
 4. **Parity test**: the S4 lines after the heading equal the `checklist` text lines after the heading.
-5. **Text test** (`test/start-path.test.ts`, RESEARCH START-04): no side-branch suggestion in the system prompt, the skill before `## Only on explicit request`, the tool and parameter descriptions, S5, S6 or the S4 texts. All 11 tools stay registered.
+5. **Text test** (`test/start-path.test.ts`, START-04 as revised; the `SIDE` list is the one in plan 06-02, without `profile` and without the «no logs» words): no side-branch suggestion in the system prompt, the skill before `## Only on explicit request`, the tool and parameter descriptions, S5, S6, S8 or the S4 texts. M0, N0, N3, S5 and S8 name both inputs (logs and the owner's description). All 11 tools stay registered.
 6. **No new width code**: no `.slice`, `.substring`, `padStart`, `padEnd` or `.length` on displayed text in `src/progress.ts`, `src/connection.ts` or the widget. `GLYPH.todo` is the only place `○` is written.
+7. **Synthetic share test** (`test/result-view.test.ts`): S7 row for M = T, for M < T, and no row for M = 0.
 
 ---
 
@@ -578,12 +632,12 @@ Wording (exact):
 
 | Element | Copy |
 |---------|------|
-| Primary CTA | Start: `Что сделать: напишите, например: «проверь агента в этой папке, логи в dialogs.jsonl».` (N0) · after the search: `Всё верно — собираю ситуации? Если что-то не так, напишите, что поправить.` (M1) |
+| Primary CTA | Start: `Что сделать: напишите, например: «проверь агента в этой папке, логи в dialogs.jsonl» — или опишите ситуации своими словами.` (N0) · after the search: `Всё верно — собираю ситуации? Если что-то не так, напишите, что поправить.` (M1) |
 | Secondary CTA | `Да — проверить связь. Нет — ничего не запускать.` (D1) · `Когда исправите, напишите «проверь связь» — проверю снова, бесплатно для Lab.` (M3) · `Что сделать: напишите «запусти проверку» — Pi покажет план и цену.` (N10) |
 | Empty state heading | `ПОДГОТОВКА К ПРОВЕРКЕ · шаг 1 из 6` with `▸ Агент` |
 | Empty state body | N0 |
 | Error state (connection) | K1 + K2 + K3 per kind, e.g. `Связь не подтверждена — сборка не начата, Lab ничего не потратил.` / `Агент не отвечает: отказ соединения. Обычно это значит, что не запущен сервер агента или его заглушка (мок-сервер).` / `Что сделать: запустите их по инструкции запуска агента и повторите проверку.` |
-| Error state (nothing found) | M2 rows, e.g. `Логи — не нашёл. Где лежат реальные диалоги с агентом (файл JSON или JSONL)?` |
+| Error state (nothing found) | M2 rows, e.g. `Логи — не нашёл. Дадите файл с реальными диалогами (JSON или JSONL) или опишете своими словами ситуации и клиентов — например, «клиент, который матерится»?` |
 | Error state (build stopped) | N8 |
 | Destructive confirmation | None. Phase 6 deletes nothing. The only action with a side effect outside Lab is the one-turn check, and it is guarded by D1 for a new or changed agent, with the full command shown. Declining starts nothing (K5–K7). |
 
@@ -594,14 +648,14 @@ Wording (exact):
 | C-601 | `ПОДГОТОВКА К ПРОВЕРКЕ · шаг <k> из 6` / `Подготовка к проверке — шаг <k> из 6:` | S4, S2e / tool text |
 | C-602 | `Агент` · `Требования` · `Логи` · `Связь` · `Бюджет` · `Запуск` | step labels |
 | C-603 | `<N> <правило\|правила\|правил>` / `<N> <файл\|файла\|файлов>` | value, Требования |
-| C-604 | `<N> <диалог\|диалога\|диалогов>` / ` · исключено <K>` | value, Логи |
+| C-604 | `<N> <диалог\|диалога\|диалогов>` / ` · исключено <K>` / `по вашему описанию` / ` · синтетических <M> из <T>` | value, Логи |
 | C-605 | `агент ответил за <S> с` | value, Связь |
 | C-606 | `до <N> <вызова\|вызовов\|вызовов> модели` | value, Бюджет |
 | C-607 | `собираю ситуации` | current value, Бюджет |
-| C-608 | N0 `Что сделать: напишите, например: «проверь агента в этой папке, логи в dialogs.jsonl».` | S4 |
+| C-608 | N0 `Что сделать: напишите, например: «проверь агента в этой папке, логи в dialogs.jsonl» — или опишите ситуации своими словами.` | S4 |
 | C-609 | N1 `Что сделать: напишите, в какой папке агент и где логи.` | S4 |
 | C-610 | N2 `Что сделать: покажите, где промпт агента и ваши правила.` | S4 |
-| C-611 | N3 `Что сделать: укажите файл с диалогами — JSON или JSONL.` | S4 |
+| C-611 | N3 `Что сделать: укажите файл с диалогами (JSON или JSONL) или опишите ситуации и клиентов своими словами.` | S4 |
 | C-612 | N4 `Что сделать: ничего, Lab сам проверит связь перед сборкой.` | S4 |
 | C-613 | N6 `Что сделать: подтвердите сборку ситуаций и её лимит в окне Pi.` | S4 |
 | C-614 | N7 `Что сделать: дождитесь, пока Lab соберёт ситуации.` | S4 |
@@ -628,26 +682,32 @@ Wording (exact):
 | C-635 | K4 `Текст ошибки: «<detail>»` | S2e |
 | C-636 | short values: `отказ соединения` · `агент не запускается` · `агент сразу завершился` · `нет ответа за <N> с` · `ответ не в том виде` · `не хватает настройки` · `не подтверждена` | S4 |
 | C-637 | `Проверка связи с агентом` | tool call row of `agent_lab_connection` |
-| C-638 | M0 `Как идёт проверка: ситуации из ваших логов → ваши ожидания → прогон → итог и причины → согласие с судьёй → повтор и отчёт.` | M |
+| C-638 | M0 `Как идёт проверка: ситуации из ваших логов или по вашему описанию → ваши ожидания → прогон → итог и причины → согласие с судьёй → повтор и отчёт.` | M |
 | C-639 | M1 found-list rows and `Всё верно — собираю ситуации? Если что-то не так, напишите, что поправить.` | M |
-| C-640 | M2 «не нашёл» rows (table) | M |
+| C-640 | M2 «не нашёл» rows (table), including the logs row, and L0 `Дадите файл с реальными диалогами (JSON или JSONL) или опишете своими словами ситуации и клиентов — например, «клиент, который матерится»?` | M, skill «Real dialogues at the start» |
 | C-641 | M3 `В <file> для запуска: <commands verbatim>.` / `Инструкцию запуска в папке агента не нашёл — спросите разработчика агента, как его запустить.` / `Когда исправите, напишите «проверь связь» — проверю снова, бесплатно для Lab.` | M |
-| C-642 | M4 `Это дополнительный режим, не основной путь: <plain name>.` / `Другие режимы включаются только по вашей прямой просьбе — назовите, что нужно.` + the 8 plain names | M |
-| C-643 | `Насколько хорош ваш агент — на ситуациях из реальных диалогов, с причинами провалов.` | S5 |
+| C-642 | M4 `Это дополнительный режим, не основной путь: <plain name>.` / `Другие режимы включаются только по вашей прямой просьбе — назовите, что нужно.` + the 6 plain names | M |
+| C-643 | `Насколько хорош ваш агент — на ситуациях из ваших логов или по вашему описанию, с причинами провалов.` | S5 |
 | C-644 | `Проверить агента: /agent-lab или /agent-lab /путь/к/проекту` | S6 |
 | C-645 | `Собрать ситуации для проверки?` (R-10, replaces `Собрать validation set?`) | native build dialog title |
+| C-646 | `Синтетических ситуаций: <M> из <T> — они придуманы по описанию, а не взяты из реальных диалогов.` / ` На реальных диалогах итог может быть другим.` (only when M = T) | S7 |
+| C-647 | `Есть реальные диалоги с агентом? Укажите файл JSON/JSONL с обезличенными разговорами или опишите своими словами ситуации и клиентов, например «клиент, который матерится».` | S8 |
+| C-648 | `Логи — нет; по вашему описанию соберу <N> <ситуацию\|ситуации\|ситуаций>, все синтетические.` / ` Характеры клиентов: <K>.` | M1 description row |
 
 **Forbidden (the phase-2, phase-3 and phase-4 lists apply, plus):**
 - in every string above: `preflight`, `doctor`, `probe`, «пинг», «таргет», «адаптер», `validation`, `discover`, `fingerprint`, `kind`, `status`, `connection_failed`, `measurementError`, `ECONNREFUSED`, `Errno`;
 - «карточк…»;
-- «демо» and «без логов» / «без них» in anything outside M4.
+- «демо» in anything outside M4.
+
+Not forbidden (revised 2026-09-17): «без логов», «без них», «описание», «синтетическ…», «характер клиента». Starting without logs through the owner's description is a main-path offer.
 
 **Allowlist additions** (removed by the scan before the English-word check):
 - `Lab`, `Agent Lab`, `Pi`, `JSON`, `JSONL`, `Python`, `README`, `LOCAL.md`;
 - `/agent-lab`, `/путь/к/проекту`;
 - `examples/connection.json`, `examples/echo-agent.py`;
 - `dialogs.jsonl` (the example file name in N0);
-- `.venv` (only in M2).
+- `.venv` (only in M2);
+- `JSON/JSONL` (C-647).
 
 In the M1 example, everything after `—` up to `·` or `(` is a record value (paths, file names, versions) and is replaced by the Cyrillic fixture before the scan. SKILL.md carries only the fixture, never real acquiring paths.
 
@@ -657,13 +717,13 @@ Record values (`<name>`, `<path>`, `<command>`, `<detail>`) are filled with Cyri
 
 ## UI Considerations
 
-Applicable state considerations resolved: 15 covered, 3 backstop, 0 unresolved.
+Applicable state considerations resolved: 18 covered, 3 backstop, 0 unresolved.
 
 Elements:
 - E1: S4 checklist;
 - E2: connection check (D1, G, K);
-- E3: found-list and «не нашёл» (M1, M2);
-- E4: main-path wording (M0, M4, S5, S6).
+- E3: found-list and «не нашёл» (M1, M2, M0d);
+- E4: main-path wording (M0, M4, S5, S6, S8) and the synthetic share in the result (S7).
 
 Any element × category pair without its own row is resolved as `verification: backstop` through the render tests and the text test.
 
@@ -671,6 +731,9 @@ Any element × category pair without its own row is resolved as `verification: b
 |----------|------------|--------|---------------------|
 | empty | E1 at session start | ✅ covered | Step 1 current with N0; five `○` rows (Copywriting empty state) |
 | empty | E3 nothing found | ✅ covered | M2 «Агент — в папке <path> не нашёл…» + one question; no preflight is called |
+| empty | E3 no logs | ✅ covered | M2 logs row: one question that offers real logs or the owner's description of situations and clients; a description follows M0d and the M1 description row (C-648) |
+| populated | E1 draft from the owner's description | ✅ covered | `✓ Логи — по вашему описанию · синтетических <M> из <T>` (while preparing: `✓ Логи — по вашему описанию`) |
+| populated | E4 result with synthetic situations | ✅ covered | S7 row C-646 after the control row; no row when there are none |
 | loading | E2 while the turn is pending | ✅ covered | G0/G1 and G2 `Жду ответа агента: <s> с из <cap> с.`, updated each second |
 | loading | E1 while the build runs | ✅ covered | `▸ Бюджет — собираю ситуации` + N7 |
 | error | E2 each failure kind | ✅ covered | K1–K4 per kind (Error kinds table); the gate returns before any spend dialog |
@@ -680,7 +743,7 @@ Any element × category pair without its own row is resolved as `verification: b
 | populated | E1 ready to start on the acquiring agent | ✅ covered | Example «Ready to start» (5 `✓`, `▸ Запуск`, N9/N10) |
 | partial | E1 logs missing but connection ok | ✅ covered | `▸ Логи` current, `✓ Связь` kept, one `▸` only |
 | partial | E1 connection failed while an earlier step is current | ✅ covered | `○ Связь — <short>` in `error`, no second «Что сделать» row |
-| overflow | E1 at inner 36 | ✅ covered | Heading 34, fixed step rows ≤ 36 except the worst-case Логи row (37), which wraps at column 2; «Что сделать» wraps at column 4; at most 12 rows; no line cap (factory widget) |
+| overflow | E1 at inner 36 | ✅ covered | Heading 34, fixed step rows ≤ 36 except the Логи row with worst-case counts (37) or the synthetic share (52–62), which wraps once at column 2; «Что сделать» wraps at column 4; at most 12 rows; no line cap (factory widget) |
 | zero-one-many | E1/E3 counts | ✅ covered | `pluralForm` for правило/файл/диалог/вызов/статья; `1 диалог`, `2 диалога`, `15 диалогов` |
 | long-text | E2 command in D1, stderr detail, record names | ✅ covered | Command shown in full; detail ≤ 300 escaped; names wrap, never cut |
 | long-text | E4 side branches not suggested | ✅ covered | `test/start-path.test.ts` (Width rule 5); M4 wording only on explicit request |
@@ -715,9 +778,9 @@ Any element × category pair without its own row is resolved as `verification: b
 | D-11 | The start gate text is G0 without an ellipsis | `…` is whitelisted only in «оцениваю…» (phase 4); the brief's «Сначала проверим связь…» was read as a short form | 04-UI-SPEC glyph registry |
 | D-12 | M1 is written **after** `preflight`, so the log count and the connection result are facts. It ends with one correctness question; the build keeps its own spend dialog. | The orchestrator asked for a confirm question; the count must come from code, not from the model reading bank logs | Orchestrator brief; RESEARCH START-01 |
 | D-13 | The found-list shows Промпт and Правила as separate rows; both feed the step «Требования» | The owner recognizes files, not the word «требования» | Design choice |
-| D-14 | M2 asks one question at a time, in step order, and never offers «без логов» or a demo | START-04 main path only; one question is easier for a beginner | CONTEXT START-04 |
-| D-15 | **A9 accepted.** `withoutDialogues` works but is offered only when the user refuses logs in their own words; it never marks Логи done | Main path needs logs | RESEARCH A9 |
-| D-16 | **A10 accepted.** `score` is a side branch (M4) | It is not in the locked main path | RESEARCH A10 |
+| D-14 | **Revised 2026-09-17.** M2 asks one question at a time, in step order. When there are no logs, its logs row offers real logs or the owner's description in one question. It never offers a demo | START-04 (revised): two equal inputs; one question is easier for a beginner | CONTEXT START-04; owner, 2026-09-17 |
+| D-15 | **A9 revised 2026-09-17.** The owner's description (`notes`, `profiles`, with `withoutDialogues: true` and `scenarioCount`) is the second main-path input and is offered whenever there are no logs. A description marks Логи done with `по вашему описанию`; `withoutDialogues` alone, without a description, does not | Promised on the 2026-09-14 customer call («либо генерируешь синтетику, либо кидаешь production логи») | Owner, 2026-09-17; REQUIREMENTS START-04 |
+| D-16 | **A10, confirmed by the owner 2026-09-17.** `score` of recorded dialogues is a side branch (M4) | The customer grades recorded production dialogues on their side | Owner, 2026-09-17; RESEARCH A10 |
 | D-17 | «Что ещё умеешь?» → M0 + one row that does not name the branches | Naming them would be suggesting them | CONTEXT START-04 |
 | D-18 | The widget reappears for a new unstarted draft (after a repeat) | Its run needs the check and the start again; the checklist is the truth for that draft | Design choice |
 | D-19 | The tool call row of `agent_lab_connection` reads «Проверка связи с агентом» | The owner sees what is happening; all other tools keep «Проверка агента» | Design choice |
@@ -725,6 +788,9 @@ Any element × category pair without its own row is resolved as `verification: b
 | D-21 | Seconds are shown with one decimal and a decimal comma (`2,4 с`) | Russian number format; a ping is often under 10 s | Design choice |
 | D-23 | K1/K6/K7 say «Lab ничего не потратил», not «деньги не потрачены»; the build dialog title becomes «Собрать ситуации для проверки?»; the M1 example uses a Cyrillic fixture | The agent may spend on its own model during the check; the main path must show no English title; real paths must not enter the skill or the scan | Checker flags B, C |
 | D-22 | A failed step after the current one is drawn in `error` with its short word, but without a second «Что сделать» row | Exactly one «Что сделать» row (CONTEXT); the failure is still visible | CONTEXT START-02 |
+| D-24 | The Логи value names the synthetic share (` · синтетических <M> из <T>`) whenever the draft has synthetic situations, on both inputs; the owner's own words never appear in the checklist | Synthetic is first-class but never the only truth, so its share is always visible; the description may hold private text | Owner rule (PROJECT Key Decisions); CONTEXT START-02 |
+| D-25 | The first result block gets one S7 row with the synthetic share, only when the set has synthetic situations; it reuses `view.scope.synthetic` and `view.scope.cards` | START-04 «доля синтетических ситуаций всегда видна»; a logs-only set (the acquiring demo) is unchanged | REQUIREMENTS START-04 |
+| D-26 | M0, N0, N3, S5 and S8 name both inputs; the M2 logs row and L0 give the owner's own example «клиент, который матерится» | The owner asked that the main-path description name both inputs; a concrete example shows what «описание» means | Owner, 2026-09-17 |
 
 ---
 
