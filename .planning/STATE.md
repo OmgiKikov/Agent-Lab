@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 2
 current_phase_name: Судья объясняет провалы
 status: executing
-stopped_at: Completed 02-05-PLAN.md
-last_updated: "2026-09-17T09:34:15.239Z"
+stopped_at: Completed 02-06-PLAN.md
+last_updated: "2026-09-17T09:43:59.390Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 2 execution started
-state_head: 5797b65be95f4becc8dc88153b9f5e9bb39da117
+state_head: 7c0ffef6a820b0b8dee71221411876871a69b326
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 50
-  completed_plans: 17
+  completed_plans: 18
   percent: 14
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 2 (Судья объясняет провалы) — EXECUTING
-Plan: 6 of 9
+Plan: 7 of 9
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 2 execution started
 
@@ -75,6 +75,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 02 P03 | 7min | 2 tasks | 14 files |
 | Phase 02 P04 | 8min | 3 tasks | 7 files |
 | Phase 02 P05 | 55min | 3 tasks | 9 files |
+| Phase 02 P06 | 8min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -115,6 +116,9 @@ Recent decisions affecting current work:
 - [Phase 2]: 02-03: пилот v11 (17d77d54 — пилот, не результат) решил 0/3 ситуаций → NO-GO; протокол судьи остаётся v10, код 02-01/02-02 откатан (c8b9e27); запись пилота не читается под v10 и не проверяется; формулировка UI-D-11 (C-50) откатана вместе с кодом; потрачено $0.43 из $6
 - [Phase 2]: 02-04: failure explanations are built from stored data only; owner rule numbers = source order, quote offset, array index; no cut row (v10 kept)
 - [Phase 2]: 02-04: knowledge sources in fae4ee59/a92fd6ae have 5 lines, so every rule row shows «, строка L» (UI-SPEC one-line assumption is wrong; rule kept as written)
+- [Phase 2]: [Phase 2]: 02-06: live dist/ rebuilt from HEAD 83882d7 after a pgrep+lock check; previous build kept at .gsd/dist-before-02-06-20260917-123753
+- [Phase 2]: [Phase 2]: 02-06: explanations proved on the real acquiring runs — 9/9 and 7/7 failed situations explained, judge-cited 100%, 0 unverified rows, 0 jargon or «…» hits before «Подробности:»; board fits 40–160 columns with nothing truncated
+- [Phase 2]: [Phase 2]: 02-06: v11 steps (RE11/A11/NEW11, «Оценено до реплики #», goal-v2) skipped — 02-03 NO-GO, protocol frozen at v10; cut columns printed as -/0
 
 ### Pending Todos
 
@@ -141,6 +145,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T09:34:15.198Z
-Stopped at: Completed 02-05-PLAN.md
+Last session: 2026-09-17T09:43:59.347Z
+Stopped at: Completed 02-06-PLAN.md
 Resume file: None
