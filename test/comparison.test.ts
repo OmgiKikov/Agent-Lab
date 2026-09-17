@@ -760,3 +760,80 @@ test('a control in either run is left out of the diff: union, added control, sel
   const self = goalRun(SOURCE, { s1: 'pass', ctl: 'pass' }, 'h', { positiveControlScenarioIds: ['ctl'] });
   assert.deepEqual(compareRuns(self, self).notes, ['Выбран один и тот же прогон.', 'Контрольные ситуации не сравниваются: они не входят в главное число.']);
 });
+
+// ---- Quick agreement marks: one decided mark on the main verdict closes the situation. ----
+const agentRubric = (id: string, name: string) =>
+  ({ id, name, subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' });
+/** A one-key mark as the lab stores it: the judgment it answers is stamped on the review. */
+const quick = (id: string, trialId: string, verdict: HumanReview['verdict'], metricId: string,
+  judgeVerdict: 'pass' | 'fail', options: { note?: string; createdAt?: string } = {}): HumanReview =>
+  ({ ...review(id, trialId, verdict, { metricId }, options.createdAt), source: 'quick', judgeVerdict, ...(options.note ? { note: options.note } : {}) });
+
+/** One failed situation: the goal failed, a second agent criterion failed and an exact check failed too. */
+function quickFixture() {
+  const card = { ...scenario('s1'), metrics: [agentRubric('goal', 'Goal'), agentRubric('quality', 'Quality'), metrics[1]!] };
+  const failing = trial('t', 's1', 'reactive', 'fail', { failed: ['time'], assessments: [
+    { metricId: 'goal', result: 'fail', rationale: 'клиент остался без ответа', evidence: [1] },
+    { metricId: 'quality', result: 'fail', rationale: 'формулировка', evidence: [1] },
+    { metricId: 'fidelity', result: 'pass', rationale: 'симулятор держался карточки', evidence: [0] },
+  ] });
+  return record({ scenarios: [card], trials: [failing] });
+}
+
+test('a decided quick mark on the main verdict closes the situation, an unsure one keeps it waiting', () => {
+  const base = quickFixture();
+  const pending = (...reviews: HumanReview[]) => awaitingVerdict({ ...base, humanReviews: reviews }).size;
+
+  assert.equal(pending(), 1, 'a failure nobody marked waits for a verdict');
+  assert.equal(pending(quick('agree', 't', 'fail', 'goal', 'fail')), 0,
+    'agreeing closes it even though another criterion and an exact check also failed');
+  assert.equal(pending(quick('disagree', 't', 'pass', 'goal', 'fail')), 0, 'disagreeing closes it too');
+  assert.equal(pending(quick('unsure', 't', 'unknown', 'goal', 'fail')), 1, 'doubt is not a decision: the situation stays open');
+  assert.equal(pending(quick('agree', 't', 'fail', 'goal', 'fail'),
+    review('full', 't', 'unknown', { metricId: 'goal' }, '2026-09-09T00:00:00Z')), 1,
+    'a later full review that cannot decide supersedes the quick mark');
+
+  // A card without a goal rubric: the main verdict is the first agent criterion the judge failed.
+  const noGoal = { ...base, scenarios: [{ ...base.scenarios[0]!, metrics: [agentRubric('style', 'Style'), agentRubric('answer', 'Answer'), metrics[1]!] }],
+    trials: [{ ...base.trials[0]!, assessments: [
+      { metricId: 'style', result: 'pass' as const, rationale: 'r', evidence: [1] },
+      { metricId: 'answer', result: 'fail' as const, rationale: 'r', evidence: [1] },
+      { metricId: 'fidelity', result: 'pass' as const, rationale: 'r', evidence: [0] },
+    ] }] };
+  assert.equal(awaitingVerdict(noGoal).size, 1);
+  assert.equal(awaitingVerdict({ ...noGoal, humanReviews: [quick('agree', 't', 'fail', 'answer', 'fail')] }).size, 0);
+
+  // The simulator is judged separately: a mark on the agent's verdict does not answer for it.
+  const deviated = { ...base, trials: [{ ...base.trials[0]!,
+    simulatorChecks: [{ id: 'simulator_leak' as const, description: 'утечка', passed: false, evidence: '#1', heuristic: true }] }] };
+  assert.equal(awaitingVerdict({ ...deviated, humanReviews: [quick('agree', 't', 'fail', 'goal', 'fail')] }).size, 1,
+    'an undecided simulator check keeps the dialogue in the queue');
+});
+
+test('a quick agreement is not a human remark, a quick disagreement still is', () => {
+  const base = quickFixture();
+  const passing = { ...trial('t2', 's2', 'reactive', 'pass', { assessments: [
+    { metricId: 'goal', result: 'pass', rationale: 'ответ дан', evidence: [1] },
+    { metricId: 'fidelity', result: 'pass', rationale: 'r', evidence: [0] },
+  ] }) };
+  const both = { ...base, scenarios: [base.scenarios[0]!, { ...scenario('s2'), metrics: [agentRubric('goal', 'Goal'), metrics[1]!] }],
+    trials: [base.trials[0]!, passing] };
+
+  const agreed = { ...both, humanReviews: [quick('agree', 't', 'fail', 'goal', 'fail')] };
+  assert.deepEqual(humanFindings(agreed), [], 'agreeing with the judge is not a remark of the owner');
+  assert.equal(verdictSummary(agreed).review.flagged, 0);
+  assert.equal(verdictSummary(agreed).review.disagreements, 0);
+
+  const objected = quick('objection', 't2', 'fail', 'goal', 'pass', { note: 'Судья не заметил, что реквизиты не те.' });
+  const mixed = { ...both, humanReviews: [quick('agree', 't', 'fail', 'goal', 'fail'), objected] };
+  const findings = humanFindings(mixed);
+  assert.equal(findings.length, 1, 'only the disagreement is reported');
+  assert.equal(findings[0]?.trialId, 't2');
+  assert.equal(findings[0]?.disagreement, true);
+  assert.equal(findings[0]?.note, 'Судья не заметил, что реквизиты не те.');
+  assert.equal(verdictSummary(mixed).review.flagged, 1, 'the headline counts the objection alone');
+  assert.equal(verdictSummary(mixed).review.disagreements, 1);
+
+  const full = { ...both, humanReviews: [review('full', 't', 'fail', { metricId: 'goal' })] };
+  assert.equal(humanFindings(full).length, 1, 'a full review on the same rubric is reported as before');
+});
