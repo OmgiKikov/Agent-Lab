@@ -54,17 +54,25 @@ const returnToBoard = (ctx: ExtensionContext, id: string) => {
 const inputError = (error: unknown): string => safeText(error instanceof Error ? error.message : error);
 
 /**
- * What is being checked, in the owner's words. A set of more than one situation shows the compact
- * expectation sheet (UI-D-04): the same rows the board and the tool text show, at most two rules
- * each. A single test keeps its full definition.
+ * What is being checked, in the owner's words. A set of more than one situation leads with the
+ * compact expectation sheet (UI-D-04): the same rows the board and the tool text show, at most two
+ * rules each. A single test keeps its full definition.
+ *
+ * Confirming seals `fingerprint(scenario)` for every card — the checks, the initial state and the
+ * simulator facts too — so a set that is not built from production logs also lists the opening
+ * request and the exact checks under the sheet. In a validation set the opening and the checks come
+ * from the logged dialogue itself, which the log line above the sheet already says.
  */
 function runScope(record: Experiment): string[] {
   const sheet = record.workflow === 'evaluate' && record.phase === 'review' && record.scenarios.length > 1
     ? expectationSheet(record) : undefined;
   if (sheet) {
     const fromLog = record.scenarios.every(scenario => scenario.provenance === 'production');
+    const sealed = fromLog ? [] : record.scenarios.flatMap(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
+      ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)]);
     return [...(fromLog ? ['Клиент отвечает на уточнения симулятором, используя только факты из лога.', ''] : []),
-      ...sheet.compactLines(record.id).map(item => safeText(item))];
+      ...sheet.compactLines(record.id).map(item => safeText(item)),
+      ...(sealed.length ? ['', 'Что вы подтверждаете дословно:', ...sealed] : [])];
   }
   return record.scenarios.map(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
     ...(record.settings.userModes.includes('scripted') ? (s.user.script ?? []).map((message, i) => `  Продолжение ${i + 1}: ${safeText(message)}`) : []),

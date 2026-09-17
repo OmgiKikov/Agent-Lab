@@ -1164,6 +1164,15 @@ test('r подтверждает ожидания и запускает одни
   assert.match(confirms[0]!.body, /Все правила — \/agent-lab [a-z0-9_-]{1,8}, раздел 2\./);
   assert.match(confirms[0]!.body, /Версия тестов: [a-f0-9]{12}/);
   assert.ok(confirms[0]!.body.endsWith('Да — подтвердить все ожидания и начать прогон.'));
+  // Подтверждение запечатывает определение каждой карточки целиком, поэтому набор, собранный не
+  // из продакшн-логов, показывает и первую реплику, и точные проверки — их владелец замораживает.
+  const scope = output(await tools.get('agent_lab_inspect')!.execute('scope', { id: first.id }, undefined, undefined, ctx));
+  type ScopeCard = { user: { opening: string }; checks: unknown[]; provenance: string; title: string };
+  const cards = scope.scenarios as ScopeCard[];
+  assert.ok(cards.length > 1 && cards.every(s => s.provenance !== 'production'), 'демо-набор не из логов');
+  assert.match(confirms[0]!.body, /Что вы подтверждаете дословно:/);
+  for (const scenario of cards) assert.ok(confirms[0]!.body.includes(`Запрос: ${scenario.user.opening}`), scenario.title);
+  assert.equal(confirms[0]!.body.match(/ {2}Проверка: /g)?.length ?? 0, cards.reduce((n, s) => n + s.checks.length, 0));
   assert.equal(startCalls.length, 1, 'отказ ничего не запускает');
   assert.equal(startCalls[0]!.requireAccepted, true);
   assert.equal(startCalls[0]!.reviewer, 'human');
