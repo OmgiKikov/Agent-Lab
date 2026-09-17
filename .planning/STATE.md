@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 3
+current_phase: 03
 current_phase_name: Согласие человека с судьёй
 status: executing
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-09-17T11:52:02.238Z"
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-09-17T12:19:27.965Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 3 execution started
-state_head: 25cb62afb7718d665868ee28d211a5c100d5085f
+last_activity_desc: Phase 03 execution started
+state_head: 10af1946994adddaeba285560caa2c1e32a614d5
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 1
   total_plans: 50
-  completed_plans: 22
-  percent: 14
+  completed_plans: 23
+  percent: 13
 ---
 
 # Project State
@@ -23,16 +23,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-16)
 
 **Core value:** Владелец агента и заказчик за 10 секунд понимают, насколько хорош агент и почему он ошибается, и верят этому числу.
-**Current focus:** Phase 3 — Согласие человека с судьёй
+**Current focus:** Phase 03 — Согласие человека с судьёй
 
 ## Current Position
 
-Phase: 3 (Согласие человека с судьёй) — EXECUTING
+Phase: 03 (Согласие человека с судьёй) — EXECUTING
 Plan: 2 of 7
 Status: Ready to execute
-Last activity: 2026-09-17 — Phase 3 execution started
+Last activity: 2026-09-17 — Phase 03 execution started
 
-Progress: [█░░░░░░░░░] 14%
+Progress: [█░░░░░░░░░] 13%
 
 ## Performance Metrics
 
@@ -80,6 +80,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 02 P08 | 78min | 3 tasks | 4 files |
 | Phase 02 P09 | 12min | 2 tasks | 1 files |
 | Phase 03 P01 | 52min | 3 tasks | 11 files |
+| Phase 03 P02 | 30 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -149,6 +150,19 @@ None yet.
 - Цель «согласие ≥90%» статистически не показать при n≈10: показывать как «N из M» с оговоркой.
 - Phase 1 SC5 (TRUST-04) closed on live evidence: real control passed as one turn in c1b9f043 (repeat of a92fd6ae); demo note: the fae4ee59-based set has the fae card version of ae812a24 (goal votes 1 pass in 8), so a demo record with a passing control should be a repeat of a92fd6ae with --control ae812a24 (15 cards, about $2.1), decided in phase 7 prep
 
+### Roadmap Evolution
+
+- Phase 03.1 inserted after Phase 3: Справился = запрос выполнен и правила промпта соблюдены (созвон 2026-09-14); синтетика — второй вход основного пути (START-04 переписан) (URGENT)
+
+## Deferred Verification
+
+Отложено решением владельца 2026-09-17 в автономном прогоне `--to 6`.
+
+| Phase | State | Resume |
+|-------|-------|--------|
+| 1 | verification_stale_deferred | /gsd-verify-work 1 — после фазы 6, когда код перестанет меняться |
+| 2 | verification_deferred_human | /gsd-verify-work 2 — после фазы 6; живую проверку Pi (`/agent-lab 37f78e1a`: 2, e, y, r в светлой и тёмной теме) владелец проводит сам |
+
 ## Deferred Items
 
 Items acknowledged and deferred at milestone close, most recent first:
@@ -159,6 +173,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T11:51:54.206Z
-Stopped at: Completed 03-01-PLAN.md
+Last session: 2026-09-17T12:19:27.912Z
+Stopped at: Completed 03-02-PLAN.md
 Resume file: None
