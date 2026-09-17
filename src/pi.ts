@@ -497,9 +497,13 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       agentSchema.parse(agent);
       const allowed = tools.filter(t => agent.tools.includes(t.name));
       if (agent.tools.some(name => !allowed.some(t => t.name === name))) throw new Error('Target requested an unregistered tool');
+      // No maxTokens override: some models (behind the giga gateway, not only there) spend
+      // several thousand output tokens reasoning before a tool call and were hitting the old
+      // fixed 4096 cap mid-thought. controlledSession's own default (16384) already matches
+      // what the judge uses at the call above.
       return controlledSession(modelRuntime, model,
         `${agent.instructions}\n\n${DATA_BOUNDARY}\n${TOOL_GUIDE}\nAvailable material names: ${JSON.stringify(sources.map(s => s.name))}. Use search_materials when needed.`,
-        allowed, ctx, 4096,
+        allowed, ctx,
       );
     },
     async userTurn(input, ctx) {
