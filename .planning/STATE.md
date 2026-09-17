@@ -102,6 +102,7 @@ Recent decisions affecting current work:
 - [Phase 1]: [01-10]: ae812a24 не годится как положительный контроль — за 3 живые попытки цель не засчитана; нужен другой контрольный кейс (кандидат — единственная засчитанная карточка a92fd6ae)
 - [Phase 1]: [01-10]: «судья не оценивал» важнее «судья не уверен в симуляторе», когда оценок нет вовсе (ca55767)
 - [Phase 1]: 01-11: a positive control always runs as one turn (maxFollowUps 0) in repeat/loadSuite; compareRuns leaves controls of either run out of the diff, identity taken from the original records
+- [Phase 1]: [01-11]: a positive control runs as one turn (opening + first reply, no simulator) and is left out of the repeat diff and the instability check
 
 ### Pending Todos
 
@@ -116,7 +117,7 @@ None yet.
 - Рабочая среда: `npm test` удаляет `dist/`, который импортирует живое расширение Pi; тесты гонять из снимка `git archive HEAD`. Новые записи со строгой схемой не читаются старым `dist/`, поэтому пересборку и перезапуск Pi нужно согласовать с другими сессиями.
 - Доказательства из `.agent-lab` копировать за пределы workspace до его удаления.
 - Цель «согласие ≥90%» статистически не показать при n≈10: показывать как «N из M» с оговоркой.
-- Phase 1 SC5 (TRUST-04) not met on live evidence: control ae812a24 unknown in 3 live runs (simulator_unclear, simulator_deviated x2); choose another positive control
+- Phase 1 SC5 (TRUST-04) closed on live evidence: real control passed as one turn in c1b9f043 (repeat of a92fd6ae); demo note: the fae4ee59-based set has the fae card version of ae812a24 (goal votes 1 pass in 8), so a demo record with a passing control should be a repeat of a92fd6ae with --control ae812a24 (15 cards, about $2.1), decided in phase 7 prep
 
 ## Deferred Items
 
