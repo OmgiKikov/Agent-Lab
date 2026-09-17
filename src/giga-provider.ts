@@ -14,6 +14,25 @@ function reportCatalogFailure(category: string): void {
   process.stderr.write(`giga: каталог моделей недоступен (${category})\n`);
 }
 
+/*
+ * src/pi.ts намеренно заменяет ошибку провайдера общим текстом «Проверьте доступ, права на
+ * модель и доступность провайдера», потому что сырой текст может нести заголовки и секреты.
+ * Из-за этого таймаут и 500 выглядят как отозванный доступ. Категорию пишем сами: только
+ * статус или код ошибки, без тела ответа.
+ */
+function reportRequestFailure(modelId: string, category: string): void {
+  process.stderr.write(`giga: запрос к модели ${modelId} не прошёл (${category})\n`);
+}
+
+function failureCategory(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code) return `connection ${code}`;
+  const message = error instanceof Error ? error.message : '';
+  if (/timed out/i.test(message)) return 'timeout';
+  if (/aborted/i.test(message)) return 'aborted';
+  return 'request failed';
+}
+
 export async function createGigaProvider(
   env: Record<string, string | undefined> = process.env,
   injectedTransport?: GigaTransport,
@@ -66,12 +85,17 @@ export async function createGigaProvider(
         const base = buildChatRequest(model.id, context, options ?? {}) as unknown as Record<string, unknown>;
         const hooked = (await options?.onPayload?.(base, model)) ?? base;
         const payload = normalizeResponseFormat(hooked as Record<string, unknown>);
-        const response = await transport('/v2/chat/completions', payload, options?.signal);
+        let response: { status: number; text: string };
+        try { response = await transport('/v2/chat/completions', payload, options?.signal); }
+        catch (error) { reportRequestFailure(model.id, failureCategory(error)); throw error; }
         // Тело ответа в текст ошибки не попадает: там бывает эхо промпта или страница прокси.
-        if (response.status !== 200) throw new Error(`Giga gateway request failed with HTTP ${response.status}`);
+        if (response.status !== 200) {
+          reportRequestFailure(model.id, `HTTP ${response.status}`);
+          throw new Error(`Giga gateway request failed with HTTP ${response.status}`);
+        }
         let body: GigaResponse;
         try { body = JSON.parse(response.text) as GigaResponse; }
-        catch { throw new Error('Giga gateway returned a non-JSON response'); }
+        catch { reportRequestFailure(model.id, 'bad JSON'); throw new Error('Giga gateway returned a non-JSON response'); }
         return parseChatResponse(model, body, context.tools);
       })();
       // AssistantMessageEventStream — класс с приватными полями из pi-ai, который сюда нельзя

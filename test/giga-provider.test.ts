@@ -239,6 +239,23 @@ test('a gateway error message carries the status but never the response body', a
   );
 });
 
+test('a failed model request names its category on stderr, because pi.ts sanitizes the error itself', async () => {
+  const model = { id: 'GigaChat-3-Pro', api: 'giga-v2', provider: 'giga' } as GigaModel;
+  const statusLines = await capturedStderr(async () => {
+    const { provider } = await providerWith([{ status: 200, text: catalogBody }, { status: 500, text: 'echo of the secret prompt' }]);
+    await provider.streamSimple!(model, { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, {}).result().catch(() => {});
+  });
+  assert.deepEqual(statusLines, ['giga: запрос к модели GigaChat-3-Pro не прошёл (HTTP 500)\n']);
+
+  const timeoutLines = await capturedStderr(async () => {
+    const provider = await createGigaProvider({}, async path =>
+      path === '/v1/models' ? { status: 200, text: catalogBody } : Promise.reject(new Error('Giga request timed out')));
+    await provider!.streamSimple!(model, { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, {}).result().catch(() => {});
+  });
+  // A timeout reads as "access revoked" through pi.ts's generic message; the category says otherwise.
+  assert.deepEqual(timeoutLines, ['giga: запрос к модели GigaChat-3-Pro не прошёл (timeout)\n']);
+});
+
 test('a successful status with a non-JSON body fails cleanly without echoing the body', async () => {
   const { provider } = await providerWith([{ status: 200, text: catalogBody }, { status: 200, text: '<html>secret proxy page</html>' }]);
   const model = { id: 'GigaChat-3-Pro', api: 'giga-v2', provider: 'giga' } as GigaModel;
