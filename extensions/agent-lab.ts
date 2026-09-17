@@ -39,7 +39,10 @@ const toolDisplay: Pick<ToolDefinition, 'renderCall' | 'renderResult'> = {
       ].filter(Boolean).join('\n\n'))), 0, 0);
       const title = data.error ?? (data.phase === 'review' ? data.message ?? `Готово ${data.scenarioCount} сценариев. Посмотрите их перед запуском.`
         : block ?? data.quality?.headline ?? data.evidence?.verdict?.headline ?? data.message ?? 'Доказательства прочитаны.');
-      const lines = [title, ...(title === block && failures ? ['', failures] : []), ...(data.quality?.queue ? [data.quality.queue] : [])];
+      // A draft answer shows the whole sheet under its title: the owner reads it without opening the board.
+      const sheetLines: string[] | undefined = Array.isArray(data.sheetLines) && data.sheetLines.length ? data.sheetLines : undefined;
+      const lines = [title, ...(title === block && failures ? ['', failures] : []),
+        ...(sheetLines ? ['', ...sheetLines] : []), ...(data.quality?.queue ? [data.quality.queue] : [])];
       return new Text(theme.fg(data.error ? 'error' : 'text', safeText(lines.join('\n'))), 0, 0);
     } catch { return new Text(safeText(raw), 0, 0); }
   },
@@ -93,7 +96,10 @@ function summary(record: Experiment, directory: string, view?: ResultView) {
   const failureLines = block && section
     ? [SECTION_TEXT[section.kind].text, ...rowsToLines(section.rows), ...(block.failures.length ? [allFailuresPointer(record.id)] : [])]
     : undefined;
+  // A draft carries its whole expectation sheet, so what the agent must do stays in the chat history (UI-SPEC Chat step 5).
+  const sheet = record.workflow === 'evaluate' && record.phase === 'review' && record.scenarios.length ? expectationSheet(record) : undefined;
   return {
+    ...(sheet ? { sheetLines: sheet.lines } : {}),
     // Lead with the answer a person asked for; the detailed evidence follows in the same object.
     ...(quality ? { quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes.slice(0, 5), humanQueue: quality.humanQueue, human: quality.human } } : {}),
     // The same block lines the CLI summary prints first (block only, no details).
@@ -188,7 +194,7 @@ export default function agentLab(pi: ExtensionAPI) {
   pi.on('before_agent_start', async (event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1') return;
     ctx.ui?.setWidget?.('agent-lab-start', undefined);
-    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for measuring the user's real agent. Work in their project and follow the agent-builder skill. The primary flow with de-identified real dialogues is agent_lab_build mode=validate: select up to 15 measurable prompt/RAG cases, ground expectations in owner requirements, use recorded user facts with a reactive simulator instead of scripted follow-ups, exclude masked-only turns and unavailable customer-data cases with explicit reasons, show the actual expectations and sources in the existing run confirmation, run the unchanged real agent after native confirmation, then lead with one estimated card accuracy number, grounded failure causes, separate metrics and limits; save the suite when useful. This is accuracy on the validation set, never a calibrated production guarantee. To mine one new regression test, call agent_lab_build mode=discover. Discovery selects evidence, proposes one saved hypothesis and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If the owner answers yes, call mode=discover again with the exact fromRunId and hypothesis; it re-reads the saved evidence and builds exactly one editable test. A refusal or correction builds nothing. Use agent_lab_accept for the owner's decision about the test definition. In the one-test flow use agent_lab_run only after acceptance; multi-test validation/regression suites use their run-plan confirmation, not one-test acceptance metadata. Execution consent remains separate from accepting a test and from reviewing results. Preserve budgets and model, cite actual event IDs, never invent a human verdict, and do not modify an external agent unless the user asked to fix it.` };
+    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for measuring the user's real agent. Work in their project and follow the agent-builder skill. The primary flow with de-identified real dialogues is agent_lab_build mode=validate: select up to 15 measurable prompt/RAG cases, ground expectations in owner requirements, use recorded user facts with a reactive simulator instead of scripted follow-ups, exclude masked-only turns and unavailable customer-data cases with explicit reasons, show the actual expectations and sources in the existing run confirmation, run the unchanged real agent after native confirmation, then lead with one estimated card accuracy number, grounded failure causes, separate metrics and limits; save the suite when useful. This is accuracy on the validation set, never a calibrated production guarantee. To mine one new regression test, call agent_lab_build mode=discover. Discovery selects evidence, proposes one saved hypothesis and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If the owner answers yes, call mode=discover again with the exact fromRunId and hypothesis; it re-reads the saved evidence and builds exactly one editable test. A refusal or correction builds nothing. Use agent_lab_accept to show the owner what the agent must do in each situation; the owner confirms all expectations or corrects one in their own words there. agent_lab_run asks to confirm expectations first when they are not confirmed. Execution consent remains separate from accepting a test and from reviewing results. Preserve budgets and model, cite actual event IDs, never invent a human verdict, and do not modify an external agent unless the user asked to fix it.` };
   });
   pi.registerTool({
     ...toolDisplay,
@@ -498,7 +504,7 @@ export default function agentLab(pi: ExtensionAPI) {
   pi.registerTool({
     ...toolDisplay,
     name: 'agent_lab_edit', label: 'Edit an unapproved agent draft',
-    description: 'Edit a draft after inspecting its current draftHash. scenarios upserts full cards by id and preserves omitted cards. Delete only explicitly with removeScenarioIds. AgentSpec, settings, target and targetVersion may also change. Human approval stays pending. Cannot change started experiments, run dialogues, record human verdicts, or approve results.',
+    description: 'Edit a draft after inspecting its current draftHash. scenarios upserts full cards by id and preserves omitted cards. Delete only explicitly with removeScenarioIds. AgentSpec, settings, target and targetVersion may also change. Human approval stays pending. Cannot change started experiments, run dialogues, record human verdicts, or approve results. Expectations of situations are changed by the owner through agent_lab_accept, not by this tool.',
     parameters: Type.Object({ id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), expectedHash: Type.String({ pattern: '^[a-f0-9]{64}$' }), patch: Type.Unsafe({ ...z.toJSONSchema(draftPatchSchema, { io: 'input' }), description: 'profileEdits replaces draft overrides on existing profiles and updates all linked cards. Original profiles and evidence stay intact. override:null restores original; persona:null clears persona; characteristics:[] clears traits. Omitted override fields use the original. Use scenarios to link/unlink profileId.' }) }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(_callId, params, signal, _onUpdate, ctx) {
@@ -515,8 +521,8 @@ export default function agentLab(pi: ExtensionAPI) {
   });
   pi.registerTool({
     ...toolDisplay,
-    name: 'agent_lab_accept', label: 'Accept one proposed test',
-    description: 'Show the current complete one-test definition and ask its owner whether it checks the intended behavior. Acceptance records only the exact draft hash; it never runs the agent, calls a model, or saves a suite.',
+    name: 'agent_lab_accept', label: 'Confirm what the agent must do',
+    description: "Show the owner what the agent must do in each situation of the set (or the complete one-test definition) and record their confirmation, or their own-words correction of one expectation. The text and the consent come from native Pi dialogs only; the model supplies neither. It never runs the agent, calls a model, or saves a suite.",
     parameters: Type.Object({ id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }) }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(_callId, params, signal, _onUpdate, ctx) {
@@ -525,7 +531,44 @@ export default function agentLab(pi: ExtensionAPI) {
       const { lab, close } = open(ctx.cwd);
       try {
         await lab.init();
-        const record = await lab.get(params.id);
+        let record = await lab.get(params.id);
+        // A set of more than one situation is confirmed as one sheet (UI-D-03); one test keeps its own definition.
+        if (record.workflow === 'evaluate' && record.phase === 'review' && record.scenarios.length > 1) {
+          const answer = (output: Record<string, unknown>) => {
+            returnToBoard(ctx, record.id);
+            return { content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details: output };
+          };
+          while (true) {
+            signal?.throwIfAborted();
+            const sheet = expectationSheet(record);
+            const body = `${sheet.compactLines(record.id).map(item => safeText(item)).join('\n')}\n\nДа — подтвердить все. Нет — поправить одну ситуацию или отменить.`;
+            if (await ctx.ui.confirm(`Подтвердить ожидания: ${sheet.countText}?`, body)) {
+              signal?.throwIfAborted();
+              const accepted = await lab.acceptDraft(record.id, sheet.draftHash);
+              return answer({ id: accepted.id, accepted: true, draftHash: sheet.draftHash, acceptedDraftHash: accepted.acceptedDraftHash,
+                message: `Ожидания подтверждены: ${sheet.countText}. Можно запускать.`, sheetLines: expectationSheet(accepted).lines });
+            }
+            signal?.throwIfAborted();
+            if (await ctx.ui.select('Что сделать с ожиданиями?', ['Поправить ожидание одной ситуации', 'Не подтверждать сейчас'])
+              !== 'Поправить ожидание одной ситуации') {
+              return answer({ id: record.id, accepted: false, draftHash: sheet.draftHash,
+                message: 'Ожидания не подтверждены. Прогон не начнётся, пока они не подтверждены.', sheetLines: sheet.lines });
+            }
+            signal?.throwIfAborted();
+            const options = sheet.cards.map(card => safeText(`${card.label} ${card.title}`));
+            const card = sheet.cards[options.indexOf(await ctx.ui.select('Какую ситуацию поправить?', options) ?? '')];
+            if (!card) continue;
+            const scenario = record.scenarios.find(item => item.id === card.scenarioId);
+            const current = scenario?.successCriteria ?? '';
+            const written = await ctx.ui.editor('Что агент должен сделать в этой ситуации? Своими словами.', current);
+            if (written === undefined) continue;
+            const text = written.trim();
+            if (!text || text === current.trim()) { ctx.ui.notify?.('Ожидание не изменено.', 'info'); continue; }
+            if (text.length > 3000) { ctx.ui.notify?.('Ожидание длиннее 3000 знаков. Сократите и попробуйте снова.', 'error'); continue; }
+            try { record = await lab.setExpectation(record.id, sheet.draftHash, card.scenarioId, written); }
+            catch (error) { ctx.ui.notify?.(inputError(error), 'error'); record = await lab.get(record.id); }
+          }
+        }
         const projection = testPlanLines(record);
         const question = projection.lines.at(-1)!;
         const body = projection.lines.slice(0, -2).join('\n');

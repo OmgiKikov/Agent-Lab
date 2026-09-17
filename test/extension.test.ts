@@ -58,9 +58,9 @@ test('injected Pi instructions hand saved discovery directly to one test after t
     assert.match(prompt, /answers yes.*exact fromRunId and hypothesis/is);
     assert.match(prompt, /re-reads the saved evidence and builds exactly one editable test/is);
     assert.match(prompt, /refusal or correction builds nothing/i);
-    assert.match(prompt, /agent_lab_accept.*decision about the test definition/is);
-    assert.match(prompt, /one-test flow.*agent_lab_run only after acceptance/is);
-    assert.match(prompt, /multi-test validation\/regression suites.*not one-test acceptance metadata/is);
+    assert.match(prompt, /agent_lab_accept to show the owner what the agent must do in each situation/i);
+    assert.match(prompt, /confirms all expectations or corrects one in their own words/i);
+    assert.match(prompt, /agent_lab_run asks to confirm expectations first when they are not confirmed/i);
   } finally {
     if (previous === undefined) delete process.env.AGENT_LAB_SESSION; else process.env.AGENT_LAB_SESSION = previous;
     await shutdown();
@@ -1185,4 +1185,81 @@ test('r подтверждает ожидания и запускает одни
   assert.equal(laterConfirms[0]!.title, 'Запустить проверку?');
   assert.equal(startCalls.at(-1)!.requireAccepted, true);
   assert.match(laterScreens[2]!, /Сначала подтвердите ожидания ситуаций: они изменились или ещё не подтверждены\. y — подтвердить\./);
+});
+
+test('в чате agent_lab_accept показывает лист ожиданий и даёт подтвердить все или поправить одну ситуацию', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-chat-accept-'));
+  const { tools, shutdown } = registered();
+  const originalSet = ExperimentLab.prototype.setExpectation;
+  const setCalls: { scenarioId: string; text: string }[] = [];
+  ExperimentLab.prototype.setExpectation = async function(id, hash, scenarioId, text) {
+    setCalls.push({ scenarioId, text }); return originalSet.call(this, id, hash, scenarioId, text);
+  };
+  t.after(async () => { ExperimentLab.prototype.setExpectation = originalSet; await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const confirms: { title: string; body: string }[] = [];
+  const selects: { title: string; options: string[] }[] = [];
+  const editorCalls: { title: string; prefill: string }[] = [];
+  const notices: { message: string; type: string }[] = [];
+  let answers: boolean[] = [];
+  let choices: (string | undefined)[] = [];
+  let written: (string | undefined)[] = [];
+  const ctx = { cwd: directory, mode: 'tui', hasUI: true, ui: {
+    confirm: async (title: string, body: string) => { confirms.push({ title, body }); return answers[confirms.length - 1] ?? false; },
+    select: async (title: string, options: string[]) => { selects.push({ title, options }); return choices[selects.length - 1]; },
+    editor: async (title: string, prefill: string) => { editorCalls.push({ title, prefill }); return written[editorCalls.length - 1]; },
+    notify: (message: string, type: string) => { notices.push({ message, type }); },
+  } } as unknown as ExtensionContext;
+  const call = async (name: string, params: unknown) => output(await tools.get(name)!.execute('chat', params, undefined, undefined, ctx));
+  const built = await call('agent_lab_build', { mode: 'demo', scenarioCount: 2 });
+  const draft = await call('agent_lab_inspect', { id: built.id });
+  for (const scenario of draft.scenarios) scenario.metrics = [goalAttainment];
+  await call('agent_lab_edit', { id: built.id, expectedHash: built.draftHash, patch: { scenarios: draft.scenarios } });
+  const prepared = await call('agent_lab_inspect', { id: built.id });
+  assert.ok(Array.isArray(prepared.sheetLines) && prepared.sheetLines.length, 'inspect черновика несёт весь лист');
+  assert.match(prepared.sheetLines.join('\n'), /Что агент должен сделать: 2 ситуации\./);
+
+  // Отказ без правки: ничего не записано, и сказано, что прогон не начнётся.
+  answers = [false]; choices = ['Не подтверждать сейчас'];
+  const declined = await call('agent_lab_accept', { id: built.id });
+  assert.equal(declined.accepted, false);
+  assert.equal(declined.message, 'Ожидания не подтверждены. Прогон не начнётся, пока они не подтверждены.');
+  assert.equal(confirms[0]!.title, 'Подтвердить ожидания: 2 ситуации?');
+  assert.ok(confirms[0]!.body.endsWith('Да — подтвердить все. Нет — поправить одну ситуацию или отменить.'));
+  assert.match(confirms[0]!.body, /Что агент должен сделать: 2 ситуации\./);
+  assert.deepEqual(selects[0]!.options, ['Поправить ожидание одной ситуации', 'Не подтверждать сейчас']);
+  assert.equal(selects[0]!.title, 'Что сделать с ожиданиями?');
+  assert.equal((await call('agent_lab_inspect', { id: built.id })).acceptedDraftHash, undefined);
+  assert.deepEqual(setCalls, []);
+
+  // Правка одной ситуации словами владельца, затем подтверждение обновлённого листа.
+  const own = 'Назвать срок зачисления и подтвердить новое время словами клиента.';
+  confirms.length = 0; selects.length = 0;
+  answers = [false, true];
+  choices = ['Поправить ожидание одной ситуации', `2. ${prepared.scenarios[1].title}`];
+  written = [own];
+  const accepted = await call('agent_lab_accept', { id: built.id });
+  assert.equal(editorCalls[0]!.title, 'Что агент должен сделать в этой ситуации? Своими словами.');
+  assert.equal(editorCalls[0]!.prefill, prepared.scenarios[1].successCriteria);
+  assert.deepEqual(setCalls, [{ scenarioId: prepared.scenarios[1].id, text: own }]);
+  assert.equal(selects[1]!.title, 'Какую ситуацию поправить?');
+  assert.deepEqual(selects[1]!.options, prepared.scenarios.map((s: { title: string }, i: number) => `${i + 1}. ${s.title}`));
+  assert.equal(confirms.length, 2, 'после правки лист показан снова');
+  assert.match(confirms[1]!.body, /Ожидание изменено владельцем — с прошлыми прогонами не сравнивается\./);
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.message, 'Ожидания подтверждены: 2 ситуации. Можно запускать.');
+  const after = await call('agent_lab_inspect', { id: built.id });
+  assert.equal(after.acceptedDraftHash, after.draftHash);
+  assert.equal(after.trialCount, 0, 'подтверждение не запускает агента');
+  assert.deepEqual(accepted.sheetLines, after.sheetLines, 'ответ инструмента несёт весь лист');
+
+  // Схема инструмента по-прежнему принимает только id: текст и согласие приходят только из диалогов Pi.
+  const parameters = tools.get('agent_lab_accept')!.parameters as { properties: Record<string, unknown>; required?: string[] };
+  assert.deepEqual(Object.keys(parameters.properties), ['id']);
+  const rendered = tools.get('agent_lab_accept')!.renderResult!(
+    { content: [{ type: 'text', text: JSON.stringify(accepted) }] } as never,
+    { expanded: false, isPartial: false }, { fg: (_color: string, text: string) => text } as never) as unknown as Component;
+  const shown = rendered.render(100).join('\n');
+  assert.match(shown, /Ожидания подтверждены: 2 ситуации\. Можно запускать\./);
+  assert.match(shown, /Что агент должен сделать: 2 ситуации\./);
+  assert.deepEqual(notices, []);
 });
