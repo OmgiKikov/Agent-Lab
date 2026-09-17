@@ -1395,7 +1395,8 @@ test('f называет, сколько ситуаций не разобран�
     const body = session.confirmBodies.at(-1)!.split('\n');
     const notesAt = body.findIndex(row => row.startsWith('Отдельных заметок человека:'));
     assert.ok(notesAt >= 0, session.confirmBodies.at(-1));
-    assert.equal(body[notesAt + 1], 'Отметка согласия ставится на главную оценку ситуации; остальные критерии — через v.');
+    // CTX-21/CTX-28 (C-325 replaces C-65): the confirmation names the metrics a mark lands on under the new counting rule.
+    assert.equal(body[notesAt + 1], 'Отметка согласия ставится на оценки, из-за которых ситуация решена: запрос и правила промпта; остальные критерии — через v.');
     assertPlainCopy(body[notesAt + 1]!, 'подтверждение');
     const report = output(await tools.get('agent_lab_inspect')!.execute('finalized', { id: fixture.record.id }, undefined, undefined,
       { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext));

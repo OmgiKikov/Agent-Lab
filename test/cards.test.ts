@@ -5,7 +5,7 @@ import { LabBoard, resultEntries, reviewOrder, safeText, wrapRows, type BoardAct
 // Phase-3 chrome (F11, footer tiers) is read through the namespace, so a missing export fails an assertion, not the module link.
 import * as cards from '../extensions/cards.ts';
 import { agreementSample, judgeAgreement } from '../src/agreement.js';
-import { primaryMetricId } from '../src/outcomes.js';
+import { COUNTING_RULES, markTargets, measurementUsable } from '../src/outcomes.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 import { assertPlainCopy } from './helpers/copy-check.js';
 import { rm } from 'node:fs/promises';
@@ -32,7 +32,7 @@ test('a quick agreement mark includes time spent reading the selected dialogue',
   if (action?.type === 'agree') {
     assert.equal(action.answer, 'disagree');
     assert.equal(action.trialId, 'timed');
-    assert.equal(action.metricId, 'goal');
+    assert.deepEqual(action.metricIds, ['goal']);
     assert.equal(action.judgeVerdict, 'fail');
     assert.ok(action.reviewMs! >= 115);
   }
@@ -302,11 +302,14 @@ test('result cards keep model grades, missing grades, traces and human annotatio
   assert.doesNotMatch(html.match(/<section id="why">[\s\S]*?<\/section>/)?.[0] ?? '', /SIMULATOR_FAILURE_SENTINEL/);
   record.phase = 'complete'; record.resultsReviewedAt = record.updatedAt; record.humanReviews = [];
   const reviewed = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 120);
-  // UI-SPEC F10: the judge decided the main question, so the agreement block carries the keys and
-  // the «Вердикта человека нет» row is left out.
-  assert.match(reviewed.render(120).join('\n'), /y — согласен · n — не согласен · s — не могу сказать/);
-  assert.doesNotMatch(reviewed.render(120).join('\n'), /Вердикта человека нет/);
-  assert.doesNotMatch(reviewed.render(120).join('\n'), /Набор проверен человеком|Разбор набора завершён/);
+  // CTX-03 / CR-01 (03.1): the simulator rubric failed, so the headline does not measure this
+  // situation («Не измерено» above) and a mark could not move the number — the agreement block
+  // gives way to one muted row, the keys are inert, and the row that names `v` returns.
+  const reviewedText = reviewed.render(120).join('\n');
+  assert.match(reviewedText, /Ситуация не измерена — отметка согласия не нужна\./);
+  assert.doesNotMatch(reviewedText, /y — согласен · n — не согласен · s — не могу сказать|ПРОВЕРКА СУДЬИ/);
+  assert.match(reviewedText, /Вердикта человека нет/);
+  assert.doesNotMatch(reviewedText, /Набор проверен человеком|Разбор набора завершён/);
   reviewed.dispose();
 });
 
@@ -343,7 +346,7 @@ test('разбор начинается с провалов без вердик�
   assert.equal(agreed?.type, 'agree');
   assert.equal(agreed.type === 'agree' && agreed.answer, 'agree');
   assert.equal(agreed.type === 'agree' && agreed.judgeVerdict, 'fail');
-  assert.equal(agreed.type === 'agree' && agreed.metricId, 'demo_task_state');
+  assert.deepEqual(agreed.type === 'agree' && agreed.metricIds, ['demo_task_state']);
   assert.equal(agreed.type === 'agree' && agreed.trialId, 't_done');
   assert.equal(agreed.type === 'agree' && reviewOrder(record)[agreed.selected]?.id, 't_done');
   board.dispose();
@@ -422,6 +425,8 @@ test('the board leads with a plain verdict once dialogues exist and has only thr
 
 test('filtered review targets the visible trial ID and help cannot accidentally submit a mark', async () => {
   const record = await fixture(); record.phase = 'results_review';
+  // Agent rubrics only: with the demo's simulator rubric left unassessed the situation would be «не измерено» and the keys inert (CR-01).
+  for (const s of record.scenarios) s.metrics = s.metrics?.filter(m => m.subject === 'agent');
   record.trials = record.scenarios.map((s, i) => ({ id: `trial-${i}`, scenarioId: s.id, revisionId: 'r', familyId: s.familyId, repeat: 0, userMode: 'reactive', split: 'dev', manifestHash: 'h', outcome: 'fail', reason: '', checks: [{ id: 'c', passed: false, evidence: '', description: 'c' }], events: [{ seq: 0, type: 'assistant', text: 'Ответ агента' }], initialState: s.initialState, finalState: s.initialState, elapsedMs: 1, usage: emptyUsage(), assessments: [{ metricId: 'demo_task_state', result: 'fail', rationale: 'Обоснование судьи', evidence: [0] }] }));
   record.scenarios[0]!.title = 'Первый'; record.scenarios[1]!.title = 'Возврат';
   const actions: BoardAction[] = [];
@@ -456,7 +461,7 @@ test('y, n и s отвечают судье только там, где судь
     assert.equal(action?.type, 'agree', `клавиша ${key}`);
     assert.equal(action?.type === 'agree' && action.answer, answer);
     assert.equal(action?.type === 'agree' && action.judgeVerdict, 'fail');
-    assert.equal(action?.type === 'agree' && action.metricId, 'goal');
+    assert.deepEqual(action?.type === 'agree' && action.metricIds, ['goal']);
     assert.equal(action?.type === 'agree' && action.trialId, 'judged');
   }
 
@@ -597,11 +602,11 @@ test('после настоящей отметки заголовок разде
   const demo = await demoEvaluateRecord('agent-lab-review-header-');
   try {
     const source = demo.record;
+    // The situation a one-key mark can land on (03.1 markTargets): usable, decided, one target on the legacy demo card.
     const decided = source.trials.flatMap(trial => {
       const scenario = source.scenarios.find(item => item.id === trial.scenarioId);
-      const metricId = scenario && primaryMetricId(scenario, trial);
-      const result = metricId ? trial.assessments?.find(item => item.metricId === metricId)?.result : undefined;
-      return metricId && (result === 'pass' || result === 'fail') ? [{ trial, metricId, result }] : [];
+      const targets = scenario && measurementUsable(scenario, trial, source.humanReviews) ? markTargets(scenario, trial) : undefined;
+      return targets ? [{ trial, metricId: targets.metricIds[0]!, result: targets.verdict }] : [];
     })[0];
     assert.ok(decided, 'в демо-прогоне судья решил хотя бы одну ситуацию');
     await demo.lab.addHumanReview(source.id, { trialId: decided.trial.id, metricId: decided.metricId, source: 'quick',
@@ -860,12 +865,19 @@ test('the board keeps simulator checks in the dialogue and the repeat headline i
   const results = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 60);
   try {
     for (const width of [80, 132]) for (const row of results.render(width)) assert.ok(visibleWidth(row) <= width, `overflow at ${width}`);
-    const dialogue = stripTerminalSequences(results.render(132).join('\n'));
-    assert.match(dialogue, /ПРОВЕРКИ СИМУЛЯТОРА · эвристики/); assert.match(dialogue, /\? .*эвристика/); assert.match(dialogue, /Подозрение: реплика #3/);
+    // CR-01 (03.1): the reactive dialogue's simulator check failed, so the headline does not measure
+    // it and it is no failure to check — the queue (F12) leads with the passed dialogue drawn for a
+    // double-check; the unusable one follows, waiting for a verdict on its simulator.
+    assert.deepEqual(reviewOrder(record).map(trial => trial.id), ['static', 'reactive']);
     // The static dialogue never involved the simulator, so its checks block is absent rather than "not applied".
-    results.handleInput('\u001b[B');
     const staticView = stripTerminalSequences(results.render(132).join('\n'));
     assert.doesNotMatch(staticView.split('ДЕТЕРМИНИРОВАННЫЕ ПРОВЕРКИ').at(-1) ?? '', /Не применялись/);
+    assert.doesNotMatch(staticView, /ПРОВЕРКИ СИМУЛЯТОРА/);
+    results.handleInput('\u001b[B');
+    const dialogue = stripTerminalSequences(results.render(132).join('\n'));
+    assert.match(dialogue, /ПРОВЕРКИ СИМУЛЯТОРА · эвристики/); assert.match(dialogue, /\? .*эвристика/); assert.match(dialogue, /Подозрение: реплика #3/);
+    // The unusable situation shows why the agreement keys are inert there (C-323) instead of the block.
+    assert.match(dialogue, /Ситуация не измерена — отметка согласия не нужна\./);
   } finally { results.dispose(); }
   const before = structuredClone(record); before.id = 'before'; before.settings.userModes = ['static']; before.trials = [before.trials[1]!];
   before.trials[0]!.outcome = 'fail'; before.trials[0]!.checks = before.trials[0]!.checks.map(c => ({ ...c, passed: false })); before.trials[0]!.assessments = assessed('fail');
@@ -1514,6 +1526,171 @@ test('обзор с самой длинной строкой согласия и
   }
 });
 
+/** A stamped one-key mark on a metric that decided the situation, exactly as the lab writes it after 03.1-02. */
+const ruledMark = (trialId: string, metricId: string, verdict: 'pass' | 'fail' | 'unknown', judgeVerdict: 'pass' | 'fail', note: string) =>
+  ({ id: `h-${trialId}-${metricId}-${verdict}`, trialId, metricId, source: 'quick' as const, verdict, judgeVerdict, note, countingRules: COUNTING_RULES, createdAt: '2026-09-17T00:00:00.000Z' });
+
+/**
+ * failedCard() as a goal card with prompt rules (CTX-01): the judge's recorded goal and rules results
+ * are as given, so a double failure by default; the failed reply is cited for both.
+ */
+async function ruledCard(goal: 'pass' | 'fail' | 'unknown' = 'fail', rules: 'pass' | 'fail' | 'unknown' = 'fail'): Promise<Experiment> {
+  const record = await failedCard();
+  const scenario = record.scenarios[0]!;
+  scenario.metrics = [...scenario.metrics!, { id: 'prompt_compliance', name: 'Соблюдение правил промпта', subject: 'agent',
+    description: 'Агент соблюдает наблюдаемые правила своего промпта.', passCriteria: 'Правила соблюдены.', failCriteria: 'Правило нарушено.' }];
+  const trial = record.trials[0]!;
+  trial.assessments = [{ ...trial.assessments![0]!, result: goal },
+    { metricId: 'prompt_compliance', result: rules, rationale: 'Агент отправил клиента в отделение.', evidence: [1], citations: [{ seq: 1, quote: 'Ничего менять не буду.' }] }];
+  if (goal === 'pass' && rules === 'pass') { trial.outcome = 'pass'; trial.checks = trial.checks.map(check => ({ ...check, passed: true })); }
+  return record;
+}
+const JUDGE_FAILED = 'Судья: ✗ не справился';
+const OLD_RULE = 'Ваша отметка поставлена по прежнему правилу подсчёта. Отметьте заново: y · n · s';
+const UNMEASURED = 'Ситуация не измерена — отметка согласия не нужна.';
+
+test('строка судьи называет, что провалено: запрос, правила или оба; без правил промпта и на успехе она прежняя', async () => {
+  const judgeRow = (record: Experiment) => { const row = rowOf(blockOf(record), 'Судья:'); assert.ok(row, 'the block has a judge row'); return row; };
+  const cases: [string, Experiment, string][] = [
+    ['двойной провал', await ruledCard('fail', 'fail'), `${JUDGE_FAILED} — запрос не выполнен · правила промпта нарушены`],
+    ['только запрос', await ruledCard('fail', 'pass'), `${JUDGE_FAILED} — запрос не выполнен`],
+    ['только правила', await ruledCard('pass', 'fail'), `${JUDGE_FAILED} — правила промпта нарушены`],
+    ['правила при неясном запросе', await ruledCard('unknown', 'fail'), `${JUDGE_FAILED} — правила промпта нарушены`],
+    ['карточка без правил промпта', await failedCard(), JUDGE_FAILED],
+    ['карточка прежнего образца', await judgedFixture('legacy', 'fail'), JUDGE_FAILED],
+  ];
+  for (const [label, record, text] of cases) {
+    const row = judgeRow(record);
+    assert.deepEqual([row.text, row.color], [text, 'error'], label);
+    assertPlainCopy(row.text, label);
+  }
+  // A pass keeps C-70 byte for byte, whatever the card carries.
+  const passed = judgeRow(await ruledCard('pass', 'pass'));
+  assert.deepEqual([passed.text, passed.color], ['Судья: ✓ справился', 'success']);
+  // The suffix is a wrapped key-style row: it continues two columns in and breaks only at «·».
+  const both = judgeRow(cases[0]![1]);
+  const narrow = wrapRows([both], 56);
+  assert.deepEqual(narrow.map(row => row.text), [`${JUDGE_FAILED} — запрос не выполнен ·`, '  правила промпта нарушены']);
+  // The evidence of a double failure is the goal's explanation, which carries both halves (F1 «оба»).
+  const block = blockOf(cases[0]![1]);
+  assert.ok(block.some(row => row.text.startsWith('Должен был:')) && block.some(row => /Нарушен/.test(row.text)), block.map(row => row.text).join('\n'));
+});
+
+test('отметка по прежнему правилу подсчёта названа своей строкой, а сменившийся судья — прежней', async () => {
+  const record = await ruledCard();
+  // A phase-3 mark (no counting rule) on the goal of a double failure answered the previous rule.
+  const unstamped = structuredClone(record);
+  unstamped.humanReviews = [{ ...ruledMark('f0', 'goal_attainment', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.'), countingRules: undefined }];
+  const oldRule = blockOf(unstamped);
+  const row = rowOf(oldRule, 'Ваша отметка');
+  assert.deepEqual([row?.text, row?.color], [OLD_RULE, 'warning']);
+  assert.ok(!rowOf(oldRule, 'y — ') && !rowOf(oldRule, 'Изменить') && !rowOf(oldRule, 'Ваша отметка:') && !rowOf(oldRule, 'Причина'), 'the old-rule row replaces keys and mark');
+  assert.ok(oldRule.findIndex(item => item.text.startsWith('Судья:')) < oldRule.indexOf(row!));
+  assertPlainCopy(OLD_RULE, 'строка прежнего правила');
+  // A stamped mark whose judgment moved keeps the phase-3 row.
+  const moved = structuredClone(record);
+  moved.humanReviews = ['goal_attainment', 'prompt_compliance'].map(metricId =>
+    ({ ...ruledMark('f0', metricId, 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.'), judge: { protocolHash: 'old', inputHash: 'old' } }));
+  assert.equal(rowOf(blockOf(moved), 'Ваша отметка')?.text, STALE);
+  // Two stamped current marks are a current mark of the situation, so the keys change to «Изменить отметку».
+  const current = structuredClone(record);
+  current.humanReviews = ['goal_attainment', 'prompt_compliance'].map(metricId => ruledMark('f0', metricId, 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.'));
+  assert.equal(rowOf(blockOf(current), 'Ваша отметка')?.text, 'Ваша отметка: = согласен');
+  assert.ok(rowOf(blockOf(current), 'Изменить'));
+  // One stamped mark on a double failure is not yet an answer: the first-time keys stay (CR-02).
+  const half = structuredClone(record);
+  half.humanReviews = [ruledMark('f0', 'goal_attainment', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.')];
+  assert.equal(rowOf(blockOf(half), 'y — ')?.text, KEYS);
+});
+
+test('неизмеренная ситуация показывает одну приглушённую строку, и y, n, s там ничего не делают', async () => {
+  const judgeError = await ruledCard(); judgeError.trials[0]!.assessmentError = 'Судья не ответил.';
+  const deviated = await ruledCard(); deviated.trials[0]!.userMode = 'reactive'; deviated.settings.userModes = ['reactive'];
+  deviated.trials[0]!.events.push({ seq: 2, type: 'simulator', result: { done: false, message: 'ещё' } }, { seq: 3, type: 'user', text: 'ещё' });
+  deviated.trials[0]!.simulatorChecks = [{ id: 'simulator_fabrication', description: 'Пользователь не называет значения, которых нет в карточке (эвристика)', passed: false, evidence: 'Подозрение', seq: 3, heuristic: true }];
+  const pending = await queueFixture(1, 0, true);
+  for (const [label, subject, trialId] of [['ошибка судьи', judgeError, 'f0'], ['симулятор отклонился', deviated, 'f0'], ['ждёт решения по симулятору', pending, 'sim']] as const) {
+    assert.deepEqual(blockOf(subject, trialId).map(row => [row.text, row.color]), [[UNMEASURED, 'muted']], label);
+    assert.equal(cards.agreementTarget(subject, subject.trials.find(trial => trial.id === trialId))?.kind, 'unmeasured', label);
+    const actions: BoardAction[] = [];
+    const board = new LabBoard({ record: subject, section: 'results' }, theme, a => actions.push(a), () => {}, () => 3000);
+    const cells = bodyCells(board, 100);
+    const index = reviewOrder(subject).findIndex(trial => trial.id === trialId);
+    for (let i = 0; i < index; i++) board.handleInput('\u001b[B');
+    const shown = bodyCells(board, 100);
+    assert.ok(shown.some(cell => cell.startsWith(UNMEASURED)), `${label}: the row opens the detail pane\n${cells.join('\n')}`);
+    assert.ok(!shown.includes('ПРОВЕРКА СУДЬИ'), label);
+    for (const key of ['y', 'n', 's']) board.handleInput(key);
+    assert.deepEqual(actions, [], label);
+    board.dispose();
+  }
+  assertPlainCopy(UNMEASURED, 'строка неизмеренной ситуации');
+});
+
+const LONG_CYRILLIC_TITLE = 'Клиент банка просит перенести запись на другое время, ждёт подтверждения от агента и уточняет, что ему делать при отказе';
+
+test('строки 03.1 — разбор, контроль с правилами, частичное несогласие, судья с двумя оценками и неизмеренная ситуация — помещаются в 36–156 колонок без обрезки', async () => {
+  assert.equal(LONG_CYRILLIC_TITLE.length, 120);
+  const words = (value: string) => value.replace(/\x1b\[31m/g, '').split(/\s+/).filter(Boolean);
+  // Section 1: a double failure whose rules half the owner overturned with a long reason and an ESC sequence, next to a control with prompt rules.
+  const record = await ruledCard();
+  record.scenarios[0]!.title = LONG_CYRILLIC_TITLE;
+  const reason = `${'Судья не заметил, что агент ответил по существу и никого никуда не отправлял. '.repeat(4)}\n\n`
+    + `Второй абзац\x1b[31m: ${'клиент получил ответ, и это видно из реплики. '.repeat(3)}`;
+  assert.ok(reason.length > 400);
+  record.humanReviews = [ruledMark('f0', 'goal_attainment', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.'), ruledMark('f0', 'prompt_compliance', 'pass', 'fail', reason)];
+  const controlCard = record.scenarios[1]!;
+  controlCard.title = 'Контрольная ситуация: клиент узнаёт время записи';
+  controlCard.metrics = record.scenarios[0]!.metrics;
+  record.trials.push({ ...structuredClone(record.trials[0]!), id: 'c0', scenarioId: controlCard.id, familyId: controlCard.familyId, outcome: 'pass',
+    checks: [], assessments: [{ metricId: 'goal_attainment', result: 'pass', rationale: 'Клиент узнал время.', evidence: [1] }, { metricId: 'prompt_compliance', result: 'fail', rationale: 'Агент отправил клиента в отделение.', evidence: [1] }] });
+  record.positiveControlScenarioIds = [controlCard.id];
+  const base = buildResultView(record);
+  const disagreement = base.agreement.disagreements[0];
+  assert.deepEqual(disagreement?.overturned, ['prompt_compliance'], 'the fixture holds a partial overturn');
+  const controlRow = resultViewLines(base).find(row => row.startsWith('Контроль:'));
+  assert.ok(controlRow?.includes('запрос выполнен ✓ · правила промпта нарушены ✗'), controlRow);
+  // The breakdown names the most frequent rule with its count (C-301); the fixture's rule cannot be named, so the row is set as the CLI prints it.
+  const view: ResultView = { ...base, breakdown: { ...base.breakdown, text: 'Запрос выполнен: 0 из 9. Правила промпта нарушены: 10 из 10, из них правило 34 — 3.' } };
+  const overview = words(resultViewLines(view).join(' '));
+  const partial = words(disagreementRows(view).map(row => row.text).join(' '));
+  assert.ok(disagreementRows(view).some(row => row.text === 'Судья: не справился → владелец: правила промпта соблюдены; запрос не выполнен'), 'the F7 partial-overturn row');
+  for (const inner of [36, 56, 76, 106, 156]) {
+    const width = inner + 4;
+    const board = new LabBoard({ record, view }, theme, () => {}, () => {}, () => 3000);
+    const rows = board.render(width);
+    board.dispose();
+    const separator = rows.findIndex(row => /^│ ─+ │$/.test(stripTerminalSequences(row)));
+    const body = rows.slice(separator + 1, -3).map(row => stripTerminalSequences(row).slice(2, -2));
+    assert.ok(separator > 0 && body.length > 10, `inner ${inner}: the body is found`);
+    for (const row of rows) assert.ok(visibleWidth(row) <= width, `inner ${inner}: overflow`);
+    assert.ok(!body.some(row => row.includes('…')), `inner ${inner}: a body row was clipped`);
+    assert.ok(!rows.slice(separator + 1, -3).some(row => row.includes('\x1b')), `inner ${inner}: an escape byte reached the board`);
+    assert.ok(!rows.some(row => stripTerminalSequences(row).includes('[31m')), `inner ${inner}: an escape sequence leaked as text`);
+    const text = words(body.map(row => row.trim()).join(' ')).join(' ');
+    assert.ok(text.includes(overview.join(' ')), `inner ${inner}: the first block is whole (breakdown and control line)`);
+    assert.ok(text.includes(partial.join(' ')), `inner ${inner}: the partial-overturn rows are whole`);
+  }
+  // Section 3: the two-metric judge row under the long title, and the unmeasured row.
+  const block = blockOf(record);
+  assert.equal(rowOf(block, 'Судья:')?.text, `${JUDGE_FAILED} — запрос не выполнен · правила промпта нарушены`);
+  const unmeasured = structuredClone(record); unmeasured.trials[0]!.assessmentError = 'Судья не ответил.';
+  for (const source of [block, blockOf(unmeasured)]) {
+    for (const width of [36, 56, 76, 106, 156]) {
+      const wrapped = wrapRows(source, width);
+      for (const row of wrapped) assert.ok(visibleWidth(row.text) <= width, `width ${width}: ${visibleWidth(row.text)} > ${width}`);
+      assert.ok(!wrapped.some(row => row.text.includes('…')), `width ${width}: a row was clipped`);
+      assert.ok(!wrapped.some(row => row.text.includes('\x1b')), `width ${width}: an escape byte reached the board`);
+      assert.deepEqual(words(wrapped.map(row => row.text).join(' ')), words(source.map(row => row.text).join(' ')), `width ${width}: words changed`);
+    }
+  }
+  const judgeRow = rowOf(block, 'Судья:')!;
+  for (const width of [36, 56, 76, 106, 156]) {
+    const wrapped = wrapRows([judgeRow], width);
+    for (const row of wrapped.slice(1)) assert.match(row.text, /^ {2}\S/, `width ${width}: the judge row continues two columns in`);
+  }
+});
+
 test('все строки фазы 3 на доске — простой русский язык', async () => {
   const failures = await queueFixture(2, 2, false);
   // Record text is not our copy: the demo cards are English, so the scan fills them with Russian.
@@ -1528,6 +1705,16 @@ test('все строки фазы 3 на доске — простой русс
   const control = structuredClone(failures); control.positiveControlScenarioIds = ['F2'];
   const undecided = structuredClone(failures); undecided.trials.find(trial => trial.id === 'F2')!.assessments![0]!.result = 'unknown';
   variants.push(stale, control, undecided);
+  // 03.1 rows: the two-metric judge row (C-322), the old-rule mark (C-324), the unmeasured situation (C-323).
+  const ruled = await ruledCard(); ruled.scenarios[0]!.title = 'Перенос записи на другое время';
+  const ruledOld = structuredClone(ruled); ruledOld.humanReviews = [{ ...ruledMark('f0', 'goal_attainment', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.'), countingRules: undefined }];
+  const ruledHalf = structuredClone(ruled); ruledHalf.humanReviews = [ruledMark('f0', 'goal_attainment', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.'), ruledMark('f0', 'prompt_compliance', 'pass', 'fail', 'Агент никого в отделение не отправлял.')];
+  const ruledUnmeasured = structuredClone(ruled); ruledUnmeasured.trials[0]!.assessmentError = 'Судья не ответил.';
+  variants.push(ruled, ruledOld, ruledHalf, ruledUnmeasured);
+  assert.ok(cards.agreementBlockLines(ruled, ruled.trials[0]!).some(row => row.text.endsWith('правила промпта нарушены')), 'the scan sees the two-metric judge row');
+  assert.ok(cards.agreementBlockLines(ruledOld, ruledOld.trials[0]!).some(row => row.text === OLD_RULE), 'the scan sees the old-rule row');
+  assert.ok(cards.agreementBlockLines(ruledUnmeasured, ruledUnmeasured.trials[0]!).some(row => row.text === UNMEASURED), 'the scan sees the unmeasured row');
+  assert.ok(disagreementRows(buildResultView(ruledHalf)).some(row => row.text.includes('правила промпта соблюдены; запрос не выполнен')), 'the scan sees the partial-overturn row');
   for (const record of variants) {
     for (const trial of record.trials) for (const row of cards.agreementBlockLines(record, trial)) assertPlainCopy(row.text, `блок ${trial.id}`);
     for (const entry of resultEntries(record)) assertPlainCopy(entry.text.replace(/ · (reactive|scripted|static) #\d+/, ''), 'ярлык списка');
