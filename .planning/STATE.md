@@ -2,17 +2,17 @@
 gsd_state_version: "1.0"
 current_phase: "03.1"
 current_phase_name: Справился = запрос выполнен и правила промпта соблюдены
-status: executing
-stopped_at: Completed 03.1-03-PLAN.md
-last_updated: "2026-09-17T20:33:11.689Z"
+status: verifying
+stopped_at: Completed 03.1-04-PLAN.md
+last_updated: "2026-09-17T21:05:09.212Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 03.1 execution started
-state_head: 35cdcd35a20d4811669ffb06f7679626dde7f161
+state_head: 729e61a218bd6bb47d9e5e99e0a4ff2a158ac177
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 54
-  completed_plans: 31
+  completed_plans: 32
   percent: 13
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 
 Phase: 03.1 (Справился = запрос выполнен и правила промпта соблюдены) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-17 — Phase 03.1 execution started
 
 Progress: [█░░░░░░░░░] 13%
@@ -89,6 +89,7 @@ Progress: [█░░░░░░░░░] 13%
 | Phase 03.1 P01 | 48 min | 3 tasks | 11 files |
 | Phase 03.1 P02 | 45 min | 3 tasks | 12 files |
 | Phase 03.1 P03 | 40 min | 2 tasks | 4 files |
+| Phase 03.1 P04 | 29 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -163,6 +164,9 @@ Recent decisions affecting current work:
 - [Phase 03.1]: 03.1-03: the board's agreement target is unmeasured (C-323, keys inert) for any unusable situation or missing card, decided by measurementUsable on the recorded record — the same gate the lab and the agreement use (CR-01); reviewOrder is unchanged and the handed-over board test was fixed by its navigation
 - [Phase 03.1]: 03.1-03: n on two targets asks ctx.ui.select «С чем вы не согласны?» (C-317…C-319, no new key); disputing one half writes an agreement on the other (A6); «Отметка уже стоит» compares the disputed metric set + reason for n and every target's answer for y/s; durationMs is recorded on the first mark only
 - [Phase 03.1]: 03.1-03: the disagree notice is derived from cardVerdict before/after — C-96 only when the verdict moved, C-320 «Ситуация остаётся «не справился»: …» naming the failed halves (a legacy card: «остальные провалы — через v»), else C-321 «Итог не изменился.»; the F10 judge row names which half failed (C-322), old-rule marks get C-324, the finalize row is C-325
+- [Phase 03.1]: 03.1-04: dist/ built from 729e61a (03.1 complete, 558/558) and swapped by rename after a pgrep + lock check; the phase-3 build is kept at .gsd/dist-before-03.1-20260917-235837 — roll forward only after the first real mark
+- [Phase 03.1]: 03.1-04: the new rule proven on the real acquiring runs — 0/10/3, 0/9/6, 0/1/0 with breakdowns goal=0/9 rules=10/10 K=34:3, goal=1/8 rules=9/9 K=34:2, goal=0/1 rules=1/1 K=34:1 and control pass/fail; scripted y/n(select)/s on 0700 copies wrote 6/6/2 stamped marks, headline 0/10, 0/9, 1/1; originals byte-identical, 0 real stamps
+- [Phase 03.1]: 03.1-04: the phase-2 «0 unverified rows» claim is retired for the acquiring runs — kind «оба» prints «Нарушены правила промпта — объяснение не подтверждено цитатой» where the judge did not name the rule (fae4ee59 7 rows, a92fd6ae 4); pi-surface-check now cuts CLI-only detail rows at «Не измерено по причинам:» or «нестабильно: …»
 
 ### Pending Todos
 
@@ -203,6 +207,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T20:32:56.783Z
-Stopped at: Completed 03.1-03-PLAN.md
+Last session: 2026-09-17T21:05:09.149Z
+Stopped at: Completed 03.1-04-PLAN.md
 Resume file: None
