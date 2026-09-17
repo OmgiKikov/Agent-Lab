@@ -117,6 +117,39 @@ export function reviewHeader(record: Experiment, inner: number, agreement: Judge
   return { color: 'muted', text: wide ? 'Проверка окончена.' : 'Всё проверено.' };
 }
 
+/** The last tier of both phases names the answers only as keys; F10's key row carries their full names. */
+const KEYS_ONLY_TIER = 'y · n · s — согласие с судьёй';
+/** Key Map Registry: the first footer line of section 3, widest first; widths measured with `visibleWidth`. */
+const RESULTS_FOOTER: Record<'results_review' | 'complete', readonly string[]> = {
+  results_review: [
+    'a Обсудить · y Согласен с судьёй · n Не согласен · s Не могу сказать · v Оценить подробно · f Завершить разбор',
+    'y Согласен с судьёй · n Не согласен · s Не могу сказать · v Оценить подробно · f Завершить разбор',
+    'y Согласен · n Не согласен · s Не могу сказать · f Завершить разбор',
+    'y Согласен · n Не согласен · s Не могу сказать',
+    KEYS_ONLY_TIER,
+  ],
+  complete: [
+    'y Согласен с судьёй · n Не согласен · s Не могу сказать · r Повторить прогон · x Экспортировать',
+    'y Согласен · n Не согласен · s Не могу сказать · r Повторить прогон',
+    'y Согласен · n Не согласен · s Не могу сказать',
+    KEYS_ONLY_TIER,
+  ],
+};
+const REPORT_PREFIX = 'o Открыть отчёт · ';
+
+/**
+ * The first footer line of section 3 (UI-D-10, UI-D-27): the first tier that fits `inner`. With a
+ * report the tier must also fit the `o` prefix; when none does (inner < 47) the prefix is dropped
+ * and `o` keeps working unprinted. The last tier (29) is narrower than the minimum inner (36), so
+ * the row is never cut.
+ */
+export function resultsFooter(phase: 'results_review' | 'complete', inner: number, hasReport: boolean): string {
+  const tiers = RESULTS_FOOTER[phase];
+  const fit = (room: number) => tiers.find(tier => visibleWidth(tier) <= room);
+  const withReport = hasReport ? fit(inner - visibleWidth(REPORT_PREFIX)) : undefined;
+  return withReport !== undefined ? REPORT_PREFIX + withReport : fit(inner) ?? tiers.at(-1)!;
+}
+
 export type Section = 'agent' | 'cards' | 'results';
 export type BoardAction =
   | { type: 'close' }
@@ -286,9 +319,10 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean):
       line(`${verdicts[r.verdict]} · ${r.metricId ? `метрика ${r.metricId}` : r.checkId ? `проверка ${r.checkId}` : 'весь диалог'}`, outcomeColor(r.verdict)), line(r.note),
     ]) ?? []),
   ];
+  // C-77/C-78: `p` is retired and `n` now means «не согласен», so this row names only `v`.
   if (!record.humanReviews?.some(r => r.trialId === trial.id)) rows.push(line(
-    verdictSummary(record).review.status === 'complete' ? 'Разбор набора завершён; у этого диалога отдельного вердикта нет: p — пройдено, n — не пройдено, v — подробно.'
-      : 'Вердикта человека нет. p — пройдено, n — не пройдено, v — подробно с пояснением.', 'muted'));
+    verdictSummary(record).review.status === 'complete' ? 'Разбор набора завершён; у этого диалога отдельного вердикта нет. v — оценить подробно.'
+      : 'Вердикта человека нет. v — оценить критерий или весь диалог.', 'muted'));
   const transcript: Line[] = [line('ДИАЛОГ', 'accent', true)];
   const roles = { user: 'ПОЛЬЗОВАТЕЛЬ', assistant: 'АГЕНТ', simulator: 'СИМУЛЯТОР', retrieval: 'RAG-КОНТЕКСТ', tool_call: 'ВЫЗОВ', tool_result: 'РЕЗУЛЬТАТ', error: 'ОШИБКА' };
   for (const event of trial.events) {
@@ -707,20 +741,24 @@ export class LabBoard implements Component {
       if (record.trials.length && !this.expanded) detail = verdictLines(record, false, this.options.comparison, this.viewFor(record));
     }
     if (this.options.warnings?.length) detail.push(line(''), line('ДИАГНОСТИКА', 'warning'), ...this.options.warnings.map(w => line(w, 'warning')));
-    if (this.help) { detail = [line('КЛАВИШИ', 'accent', true), line('1 Обзор — качество агента · 2 Карточки · 3 Диалоги'), line('a — правка или разбор словами с Pi · n в списке — новая проверка'), line('↑ ↓ или j k — выбрать карточку или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), line('Enter — раскрыть источники, инструменты и состояния'), line('p / n — вердикт на выбранный диалог · v — оценить критерий'), line('r — запустить черновик или создать повтор готового прогона'), line('y — подтвердить все ожидания · e — поправить ожидание выбранной ситуации'), line('x — экспортировать · c — остановить запуск · Esc — назад · q — закрыть'), line(''), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')]; this.sheetAnchor = undefined; }
+    if (this.help) { detail = [line('КЛАВИШИ', 'accent', true), line('1 Обзор — качество агента · 2 Карточки · 3 Диалоги'), line('a — правка или разбор словами с Pi · n в списке — новая проверка'), line('↑ ↓ или j k — выбрать карточку или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), line('Enter — раскрыть источники, инструменты и состояния'), line('y / n / s — согласен с судьёй / не согласен / не могу сказать'), line('n — спросит причину · v — оценить критерий или весь диалог'), line('r — запустить черновик или создать повтор готового прогона'), line('y — подтвердить все ожидания · e — поправить ожидание выбранной ситуации'), line('x — экспортировать · c — остановить запуск · Esc — назад · q — закрыть'), line(''), line('Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.', 'muted'), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')]; this.sheetAnchor = undefined; }
     const content = wrapRows(detail, inner).map(paint);
     // The selected situation starts the body, so its expectation and rules are read without scrolling.
     if (this.followSelection && this.sheetAnchor !== undefined) this.scroll = wrapRows(detail.slice(0, this.sheetAnchor), inner).length;
+    // Section 3 of a finished evaluation picks its own tier and places the report link itself.
+    const answerPhase = record?.workflow === 'evaluate' && this.section === 'results'
+      && (record.phase === 'results_review' || record.phase === 'complete') ? record.phase : undefined;
     const footer = record ? [
-      record.workflow !== 'evaluate' ? 'Сравнительный эксперимент · только просмотр и экспорт'
+      answerPhase ? resultsFooter(answerPhase, inner, !!this.options.reportPath)
+        : record.workflow !== 'evaluate' ? 'Сравнительный эксперимент · только просмотр и экспорт'
         : record.phase === 'review' ? this.draftFooter(record, inner)
         : activePhases.has(record.phase) ? 'c Остановить · обновляется автоматически'
-        : record.phase === 'results_review' ? this.section === 'results' ? 'a Обсудить · p Пройдено · n Провал · v Оценка · f Завершить' : 'a Обсудить · 3 Диалоги · f Завершить · r Повторить · x Экспорт'
+        : record.phase === 'results_review' ? 'a Обсудить · 3 Диалоги · f Завершить · r Повторить · x Экспорт'
         : record.reviewedAt ? 'a Обсудить результат · r Повторить · x Экспорт' : 'a Обсудить исправление · результат сохранён',
       inner < 80 ? '↑↓ Выбор · ←→ Текст · Enter Детали · / Поиск · ? Помощь'
         : `↑↓ Выбор · PgUp/PgDn Текст · Enter ${this.expanded ? 'Свернуть' : 'Подробнее'} · / Поиск · u Неразобранные · ? Помощь`,
     ] : ['n Свой агент · d Демо · ↑↓ Выбор · Enter Открыть · ? Помощь'];
-    if (this.options.reportPath && record) footer[0] = `o Открыть отчёт · ${footer[0]}`;
+    if (this.options.reportPath && record && !answerPhase) footer[0] = `${REPORT_PREFIX}${footer[0]}`;
     const available = Math.max(1, height - header.length - footer.length - 4);
     this.maxScroll = Math.max(0, content.length - available);
     this.scroll = Math.min(this.scroll, this.maxScroll);

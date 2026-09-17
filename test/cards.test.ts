@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { visibleWidth, stripTerminalSequences } from '@earendil-works/pi-tui';
+import { visibleWidth, stripTerminalSequences, truncateToWidth } from '@earendil-works/pi-tui';
 import { LabBoard, resultEntries, reviewOrder, safeText, wrapRows, type BoardAction, type BoardOptions } from '../extensions/cards.ts';
 // Phase-3 chrome (F11, footer tiers) is read through the namespace, so a missing export fails an assertion, not the module link.
 import * as cards from '../extensions/cards.ts';
@@ -753,10 +753,10 @@ test('доска печатает в разделе 3 ту же ступень �
       const expected = footerOf(phase, width(w, w >= 110), report);
       assert.equal(footer, expected, `${phase} ${w}${report ? ' с отчётом' : ''}`);
       assert.ok(footer.indexOf(REPORT) === footer.lastIndexOf(REPORT), 'отчёт назван не больше одного раза');
-      // Вторая строка подвала прежняя.
-      assert.equal(stripTerminalSequences(rows.at(-2)!).split('│')[1]!.trim(), width(w, w >= 110) < 80
-        ? '↑↓ Выбор · ←→ Текст · Enter Детали · / Поиск · ? Помощь'
-        : '↑↓ Выбор · PgUp/PgDn Текст · Enter Подробнее · / Поиск · u Неразобранные · ? Помощь');
+      // Вторая строка подвала прежняя, вместе с прежним сокращением рамкой на узкой доске.
+      const second = width(w, w >= 110) < 80 ? '↑↓ Выбор · ←→ Текст · Enter Детали · / Поиск · ? Помощь'
+        : '↑↓ Выбор · PgUp/PgDn Текст · Enter Подробнее · / Поиск · u Неразобранные · ? Помощь';
+      assert.equal(stripTerminalSequences(rows.at(-2)!).split('│')[1]!.trim(), stripTerminalSequences(truncateToWidth(second, w - 4, '…')));
     }
     board.dispose();
   }
@@ -780,20 +780,25 @@ test('доска печатает в разделе 3 ту же ступень �
 
 test('справка и подробности диалога называют новые клавиши и не называют снятую p', async () => {
   const record = await judgedFixture('open', 'fail');
-  const recording = { fg: (color: string, value: string) => `<${color}>${value}</${color}>`, bold: (value: string) => value };
-  const board = new LabBoard({ record, section: 'results' }, recording, () => {}, () => {}, () => 3000);
+  const board = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 3000);
   board.handleInput('?');
-  const help = stripTerminalSequences(board.render(200).join('\n'));
+  const rows = boardCells(board, 200);
+  const help = rows.join('\n');
   board.dispose();
-  const rows = help.split('\n').flatMap(row => row.split('│')).map(cell => cell.trim()).filter(Boolean);
   const at = (text: string) => rows.findIndex(row => row.includes(text));
+  const recording = { fg: (color: string, value: string) => `<${color}>${value}</${color}>`, bold: (value: string) => value };
+  const painted = new LabBoard({ record, section: 'results' }, recording, () => {}, () => {}, () => 3000);
+  painted.handleInput('?');
+  const colored = painted.render(300).join('\n');
+  painted.dispose();
   assert.ok(rows.includes('y / n / s — согласен с судьёй / не согласен / не могу сказать'), 'строка C-87');
   assert.equal(at('n — спросит причину · v — оценить критерий или весь диалог') - at('y / n / s — согласен с судьёй'), 1, 'C-88 сразу за C-87');
   assert.ok(at('a — правка или разбор словами с Pi · n в списке — новая проверка') >= 0, 'строка про a не изменилась');
-  const latin = at('<muted>Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.</muted>');
-  const last = at('<muted>Все оценки и подтверждения относятся к показанной версии.</muted>');
-  assert.ok(latin >= 0, 'C-89 приглушённой строкой');
+  const latin = at('Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.');
+  const last = at('Все оценки и подтверждения относятся к показанной версии.');
+  assert.ok(latin >= 0, 'строка C-89');
   assert.equal(last - latin, 1, 'C-89 стоит прямо перед последней приглушённой строкой');
+  assert.ok(colored.includes('<muted>Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.</muted>'), 'C-89 приглушённая');
   assert.doesNotMatch(help, /p \/ n|\bp — |\bp Пройдено/);
   for (const text of ['y / n / s — согласен с судьёй / не согласен / не могу сказать', 'n — спросит причину · v — оценить критерий или весь диалог',
     'Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.']) assertPlainCopy(text, 'справка');
