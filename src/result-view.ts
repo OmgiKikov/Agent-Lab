@@ -227,7 +227,8 @@ function controlLine(view: ResultView): string {
   return base + synthetic + unstable;
 }
 
-export type ResultRowRole = 'lead' | 'line' | 'situation' | 'detail';
+/** `alarm` is the control warning above the number; `lead` is always the number itself. */
+export type ResultRowRole = 'lead' | 'line' | 'situation' | 'detail' | 'alarm';
 export interface ResultRow { role: ResultRowRole; indent: number; text: string }
 
 /**
@@ -238,9 +239,11 @@ export function resultViewRows(view: ResultView, options: { details?: boolean } 
   const { headline, notMeasured, control, coverage } = view;
   const [main] = notMeasured.reasons;
   const rows: ResultRow[] = [];
-  const add = (role: ResultRowRole, text: string, indent = 0) => { rows.push({ role: rows.length ? role : 'lead', indent, text }); };
-  if (control.warning) add('line', control.warning);
-  add('line', headline.text);
+  // The warning carries its own role, so it keeps its warning colour and the number keeps `lead`:
+  // exactly when the reader most needs both rows, neither is muted by the other's position.
+  if (control.warning) rows.push({ role: 'alarm', indent: 0, text: control.warning });
+  rows.push({ role: 'lead', indent: 0, text: headline.text });
+  const add = (role: ResultRowRole, text: string, indent = 0) => { rows.push({ role, indent, text }); };
   if (headline.smallSample) add('line', headline.smallSample);
   if (view.stability) add('line', stabilityLine(view.stability));
   if (view.pending > 0) add('line', `Ещё проверяется: ${view.pending}.`);

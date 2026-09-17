@@ -94,6 +94,7 @@ const outcomeColor = (value: string): ThemeColor => value === 'pass' ? 'success'
 const VIEW_ROLE: Record<ResultRow['role'], { color: ThemeColor; bold: boolean }> = {
   lead: { color: 'text', bold: true }, line: { color: 'muted', bold: false },
   detail: { color: 'muted', bold: false }, situation: { color: 'warning', bold: false },
+  alarm: { color: 'error', bold: true },
 };
 const SECTION_ROLE: Record<SectionRow['role'], { color?: ThemeColor; bold: boolean }> = {
   cause: { color: 'accent', bold: false }, example: { color: 'text', bold: true }, title: { color: 'error', bold: true },

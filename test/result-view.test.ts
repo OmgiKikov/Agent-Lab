@@ -552,6 +552,19 @@ test('a failed control puts the warning on the first line', () => {
   assert.equal(lines[0], CONTROL_WARNING);
   assert.equal(lines[1], 'Справился в 3 из 12 проверенных ситуаций — 25%.');
   assert.ok(lines.includes('Контроль: не пройден ✗'));
+  // The warning keeps its own role and the number keeps `lead`: the alarm is never rendered as
+  // plain text, and the one number the product exists to show is never muted under it.
+  const rows = resultViewRows(view);
+  assert.deepEqual(rows.slice(0, 2).map(row => row.role), ['alarm', 'lead']);
+  assert.equal(rows.find(row => row.role === 'lead')!.text, view.headline.text);
+  assert.equal(rows.filter(row => row.role === 'lead').length, 1);
+});
+
+test('without a control warning the number is still the only lead row', () => {
+  const rows = resultViewRows(buildResultView(scored(3, 9)));
+  assert.equal(rows[0]!.role, 'lead');
+  assert.equal(rows.filter(row => row.role === 'alarm').length, 0);
+  assert.equal(rows.filter(row => row.role === 'lead').length, 1);
 });
 
 test('an unmeasured control is named with its reason, warned about and not counted as unmeasured', () => {
