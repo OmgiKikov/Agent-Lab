@@ -4,7 +4,7 @@ import {
   type CallContext, type CheckResult, type DialogueMessage, type JudgeAudit, type MetricAssessment, type Requirement, type Revision,
   type Runtime, type Scenario, type Settings, type Source, type Target, type TargetSession, type TraceEvent, type Trial, type UserMode,
 } from './contracts.js';
-import { auditCut, hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
+import { hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
 import { sandbox } from './sandbox.js';
 import { openExternalTarget } from './targets.js';
 import { simulatorChecks } from './simulator.js';
@@ -314,11 +314,8 @@ export async function assessTrial(runtime: Runtime, scenario: Scenario, sources:
   } finally {
     // A failed judgment keeps its receipt too, sealed incomplete, so reports still point to its sidecar.
     if (latest) {
-      // The cut is set before the receipt is sealed, so the verifier sees the trial as it is stored.
-      const cut = auditCut(latest, trial.events);
-      if (cut === undefined) delete trial.judgedBeforeSeq; else trial.judgedBeforeSeq = cut;
       const complete = !!mapped && hasCompleteJudgment({ scenario, sources: observableSources(sources, requirements), trial: { ...trial, judgeAudit: latest, assessments: mapped } });
-      trial.judgeReceipt = sealJudgeReceipt(latest, complete, trial.judgedBeforeSeq);
+      trial.judgeReceipt = sealJudgeReceipt(latest, complete);
     }
   }
 }

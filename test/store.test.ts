@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import test, { type TestContext } from 'node:test';
 import { ExperimentStore } from '../src/store.js';
-import { ExperimentLab, draftHash } from '../src/experiment.js';
+import { ExperimentLab } from '../src/experiment.js';
 import { demoEvaluationInput } from '../src/demo.js';
 import type { JudgeAudit } from '../src/contracts.js';
 
@@ -161,39 +160,4 @@ test('judge audit sidecar rejects unsafe ids before touching the disk and oversi
   await assert.rejects(new ExperimentStore(dir).readJudgeAudit('big', 'trial'), /Judge audit exceeds 20 MB/);
   await writeFile(join(dir, 'big.judge', 'trial.json'), JSON.stringify({ ...audit('x'), extra: true }));
   await assert.rejects(new ExperimentStore(dir).readJudgeAudit('big', 'trial'));
-});
-
-test('a judged-before cut on the trial and in its receipt survives save and get, and records without it still parse', async t => {
-  const dir = await directory(t);
-  const lab = new ExperimentLab(dir);
-  await lab.init();
-  t.after(() => lab.close());
-  const created = await lab.create(demoEvaluationInput()); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-  const source = await lab.get(draft.id);
-  assert.ok(source.trials.length, source.error ?? '');
-  const cut = structuredClone(source);
-  cut.id = randomUUID();
-  cut.trials[0]!.judgedBeforeSeq = 1;
-  cut.trials[0]!.judgeReceipt = { protocolHash: 'protocol', inputHash: 'input', provider: 'offline', model: 'judge', auditHash: 'audit',
-    votes: [], notApplicable: [], complete: false, cutBefore: 1 };
-  await lab.store.save(cut);
-  const reader = new ExperimentStore(dir);
-  const read = await reader.get(cut.id);
-  assert.equal(read.trials[0]!.judgedBeforeSeq, 1);
-  assert.equal(read.trials[0]!.judgeReceipt?.cutBefore, 1);
-  assert.deepEqual(read, await lab.get(cut.id));
-  const legacy = structuredClone(cut);
-  legacy.id = randomUUID();
-  delete legacy.trials[0]!.judgedBeforeSeq;
-  delete legacy.trials[0]!.judgeReceipt!.cutBefore;
-  await lab.store.save(legacy);
-  const legacyRead = await reader.get(legacy.id);
-  assert.equal(legacyRead.trials[0]!.judgedBeforeSeq, undefined);
-  assert.equal(legacyRead.trials[0]!.judgeReceipt?.cutBefore, undefined);
-  const bad = structuredClone(cut);
-  bad.id = randomUUID();
-  bad.trials[0]!.judgedBeforeSeq = -1;
-  await assert.rejects(lab.store.save(bad));
 });

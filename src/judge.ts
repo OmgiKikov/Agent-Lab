@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { assessmentEventContent, assessmentRubrics, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Source, type TraceEvent, type Trial } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Source } from './contracts.js';
 import { ASSESS_ROLE, DATA_BOUNDARY } from './prompts.js';
 
 const condition = z.enum(['met', 'not_met', 'unclear']);
@@ -17,16 +17,7 @@ Evaluate passCriteria and failCriteria INDEPENDENTLY against the same evidence. 
 Events of type retrieval are the exact RAG fragments the target adapter says were supplied for that reply. For rag_context_* rubrics, compare those events with the delivered user request and the applicable owner requirements. Never treat the full owner sources as retrieved context. Cite retrieval events and assistant events that support the decision; if the trace cannot establish the condition, return unclear.
 Return exactly one compact JSON object, without markdown fences, matching this schema:
 ${JSON.stringify(z.toJSONSchema(responseSchema))}`;
-export const JUDGE_PROTOCOL_V10 = fingerprint({ version: 10, promptSources: 'observable-rules', ragEvidence: 'adapter-reported-retrieval-events', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
-/**
- * Protocol v11 («prefix judging»): fidelity votes come first, on the whole dialogue; when a failing
- * fidelity vote cites a user or simulator event after the first agent reply, the agent rubrics are
- * judged on the dialogue before the earliest such event. V10 stays byte-identical and verifiable.
- */
-export const JUDGE_PROTOCOL = fingerprint({ version: 11, promptSources: 'observable-rules', ragEvidence: 'adapter-reported-retrieval-events', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384,
-  agentScope: 'prefix-before-first-simulator-deviation-cited-by-a-failing-fidelity-vote', voteOrder: 'fidelity-first',
-  prefixEvidence: 'events up to the last agent reply before the cut; observed state and check results withheld' });
-const FIDELITY_ID = 'user_fidelity';
+export const JUDGE_PROTOCOL = fingerprint({ version: 10, promptSources: 'observable-rules', ragEvidence: 'adapter-reported-retrieval-events', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
 /** Rationale texts written into assessments. Reason detection matches these constants; their text is part of stored records. */
 export const GOAL_UNSUPPORTED_RATIONALE = 'Достижение цели не подтверждено цитированным доказательством выбранного владельцем типа; слова агента оцениваются отдельно.';
@@ -51,48 +42,12 @@ export function observableSources(sources: Source[], requirements: Requirement[]
   });
 }
 
-/**
- * The first deviation of the simulated user that a failing fidelity vote cites: the smallest cited
- * `user` or `simulator` event after the first agent reply, minimum over the failing votes. The
- * opening belongs to the card and never cuts. Shared by the writer and the verifier.
- */
-export function simulatorCut(votes: Pick<MetricAssessment, 'result' | 'evidence'>[], events: Pick<TraceEvent, 'seq' | 'type'>[]): number | undefined {
-  const first = events.find(event => event.type === 'assistant')?.seq;
-  if (first === undefined) return undefined;
-  const typeOf = (seq: number) => events.find(event => event.seq === seq)?.type;
-  const cuts = votes.filter(vote => vote.result === 'fail').flatMap(vote => {
-    const seqs = vote.evidence.filter(seq => seq > first && (typeOf(seq) === 'user' || typeOf(seq) === 'simulator'));
-    return seqs.length ? [Math.min(...seqs)] : [];
-  });
-  if (!cuts.length) return undefined;
-  const cut = Math.min(...cuts);
-  return events.some(event => event.type === 'assistant' && event.seq < cut) ? cut : undefined;
-}
-
-/**
- * The faithful prefix the agent is judged on: every event up to and including the last agent reply
- * before the cut, so retrieval and tool events of that reply stay. Observed state and check results
- * were observed after the cut, so they are withheld: the observation becomes missing, the checks empty.
- */
-export function prefixTrial<T extends Pick<Trial, 'events' | 'observation' | 'checks'>>(trial: T, cut: number): T {
-  const last = trial.events.filter(event => event.type === 'assistant' && event.seq < cut).at(-1)!.seq;
-  return { ...trial, events: trial.events.filter(event => event.seq <= last), observation: { state: 'missing', tools: 'partial' }, checks: [] };
-}
-
-/** The cut a v11 audit implies, from its recorded fidelity votes. A v10 audit never has one. */
-export function auditCut(audit: JudgeAudit, events: Pick<TraceEvent, 'seq' | 'type'>[]): number | undefined {
-  if (audit.protocolHash !== expectedProtocol(JUDGE_PROTOCOL, audit.configurationHash)) return undefined;
-  return simulatorCut(audit.attempts.filter(attempt => attempt.metricId === FIDELITY_ID).flatMap(attempt => attempt.assessments ?? []), events);
-}
-
 /** This is the complete, frozen judge input. Prior verdicts, usage and run identity are deliberately absent. */
-export function judgeInput(input: Input, cut?: number) {
+export function judgeInput(input: Input) {
   const observationMissing = !input.trial.observation || input.trial.observation.state === 'missing';
-  const stage = input.trial.userMode === 'static'
+  const scope = input.trial.userMode === 'static'
     ? 'Opening and first answer ONLY. Planned follow-ups were not delivered. Never penalize the agent for their absence.'
     : 'Evaluate only delivered requests, within the rubric stage.';
-  const scope = cut === undefined ? stage
-    : `${stage} The simulated user deviated from the card at event #${cut}; the dialogue is judged up to the agent reply before it. A clarifying question the agent asked there, left unanswered, leaves the goal unclear, not failed.`;
   return {
     scenario: { metrics: input.scenario.metrics, successCriteria: input.scenario.successCriteria, checks: input.scenario.checks, goalObservation: input.scenario.goalObservation,
       user: input.trial.userMode === 'static' ? { ...input.scenario.user, script: [], maxFollowUps: 0 } : input.scenario.user },
@@ -155,9 +110,8 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
   });
 }
 
-function expectedProtocol(protocol: string, configurationHash: string | undefined): string {
-  return configurationHash ? fingerprint({ protocol, configuration: configurationHash }) : protocol;
-}
+const expectedProtocol = (configurationHash: string | undefined) => configurationHash
+  ? fingerprint({ protocol: JUDGE_PROTOCOL, configuration: configurationHash }) : JUDGE_PROTOCOL;
 
 /** Unanimous votes keep their result; any disagreement is unknown. Missing votes never aggregate. */
 function recordedAggregate(input: Input, metricId: string, votes: (string | undefined)[]): boolean {
@@ -170,7 +124,7 @@ function recordedAggregate(input: Input, metricId: string, votes: (string | unde
  * The receipt a trial keeps when its full audit lives in the sidecar file. `complete` is the
  * full-audit verdict at write time; a legacy attempt that failed can never seal as complete.
  */
-export function sealJudgeReceipt(audit: JudgeAudit, complete: boolean, cutBefore?: number): JudgeReceipt {
+export function sealJudgeReceipt(audit: JudgeAudit, complete: boolean): JudgeReceipt {
   const votes: JudgeReceipt['votes'] = [];
   for (const attempt of audit.attempts) {
     if (attempt.metricId !== undefined) {
@@ -186,26 +140,16 @@ export function sealJudgeReceipt(audit: JudgeAudit, complete: boolean, cutBefore
     ...(audit.configurationHash ? { configurationHash: audit.configurationHash } : {}),
     ...(audit.transport ? { transport: audit.transport } : {}),
     auditHash: fingerprint(audit), votes, notApplicable: audit.notApplicable, complete,
-    ...(cutBefore !== undefined ? { cutBefore } : {}),
   });
 }
 
 /**
  * A receipt is trusted only as far as the record backs it: the input hash is re-derived from the
  * current record and the votes must re-aggregate to the recorded assessments.
- *
- * The receipt cannot re-derive a v11 cut, because its votes carry no evidence. It can only require
- * that the sealed `cutBefore` equals the trial's `judgedBeforeSeq` and that a failing fidelity vote
- * exists when there is a cut; the sidecar audit, bound by `auditHash`, remains the full check.
  */
 function hasCompleteReceipt(input: Input, receipt: JudgeReceipt, metrics: NonNullable<Input['scenario']['metrics']>): boolean {
   if (!receipt.complete || input.trial.assessmentError) return false;
-  if (receipt.protocolHash === expectedProtocol(JUDGE_PROTOCOL_V10, receipt.configurationHash)) {
-    if (receipt.cutBefore !== undefined || input.trial.judgedBeforeSeq !== undefined) return false;
-  } else if (receipt.protocolHash === expectedProtocol(JUDGE_PROTOCOL, receipt.configurationHash)) {
-    if (receipt.cutBefore !== input.trial.judgedBeforeSeq) return false;
-    if (receipt.cutBefore !== undefined && !receipt.votes.some(v => v.metricId === FIDELITY_ID && v.result === 'fail')) return false;
-  } else return false;
+  if (receipt.protocolHash !== expectedProtocol(receipt.configurationHash)) return false;
   const applicable = metrics.filter(m => metricApplies(m, input.trial));
   const notApplicable = metrics.filter(m => !metricApplies(m, input.trial)).map(m => m.id);
   if (fingerprint(receipt.notApplicable) !== fingerprint(notApplicable)) return false;
@@ -223,36 +167,20 @@ export function hasCompleteJudgment(input: Input): boolean {
   // A record with the full audit is always judged by it; the receipt serves records without one.
   if (!audit && input.trial.judgeReceipt) return hasCompleteReceipt(input, input.trial.judgeReceipt, metrics);
   if (!audit || input.trial.assessmentError || audit.prompt !== JUDGE_PROMPT) return false;
-  const v11 = audit.protocolHash === expectedProtocol(JUDGE_PROTOCOL, audit.configurationHash);
-  if (!v11 && audit.protocolHash !== expectedProtocol(JUDGE_PROTOCOL_V10, audit.configurationHash)) return false;
+  if (audit.protocolHash !== expectedProtocol(audit.configurationHash)) return false;
   const applicable = metrics.filter(m => metricApplies(m, input.trial));
   const data = judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } });
   if (audit.inputHash !== fingerprint(data)) return false;
   try { if (fingerprint(JSON.parse(audit.input)) !== audit.inputHash) return false; } catch { return false; }
   const isolated = audit.attempts.some(a => a.metricId !== undefined);
   if (audit.attempts.length !== (isolated ? applicable.length * 2 : applicable.length ? 2 : 0)) return false;
-  /** Re-parses one attempt against the input it must have been given; undefined when anything differs. */
-  const verified = (attempt: JudgeAudit['attempts'][number], cut: number | undefined): MetricAssessment[] | undefined => {
-    if (attempt.error || !attempt.raw?.trim()) return undefined;
-    const requested = isolated ? applicable.filter(m => m.id === attempt.metricId) : applicable;
-    const scoped = { ...input, trial: cut === undefined ? input.trial : prefixTrial(input.trial, cut), scenario: { ...input.scenario, metrics: requested } };
-    if (isolated && (requested.length !== 1 || !attempt.input
-      || fingerprint(JSON.parse(attempt.input)) !== fingerprint(judgeInput(scoped, cut)))) return undefined;
-    const parsed = parseJudgment(attempt.raw, scoped, requested);
-    return fingerprint(parsed) === fingerprint(attempt.assessments) ? parsed : undefined;
-  };
   try {
-    let cut: number | undefined;
-    if (v11) {
-      // Fidelity votes were judged on the whole dialogue; the cut is re-derived from them, never read from the record.
-      const fidelity = audit.attempts.filter(a => a.metricId === FIDELITY_ID).map(a => verified(a, undefined));
-      if (fidelity.some(votes => !votes)) return false;
-      cut = simulatorCut(fidelity.flatMap(votes => votes!), input.trial.events);
-    }
-    if (input.trial.judgedBeforeSeq !== cut) return false;
     for (const attempt of audit.attempts) {
-      if (v11 && attempt.metricId === FIDELITY_ID) continue;
-      if (!verified(attempt, cut)) return false;
+      if (attempt.error || !attempt.raw?.trim()) return false;
+      const requested = isolated ? applicable.filter(m => m.id === attempt.metricId) : applicable;
+      if (isolated && (requested.length !== 1 || !attempt.input
+        || fingerprint(JSON.parse(attempt.input)) !== fingerprint(judgeInput({ ...input, scenario: { ...input.scenario, metrics: requested } })))) return false;
+      if (fingerprint(parseJudgment(attempt.raw, input, requested)) !== fingerprint(attempt.assessments)) return false;
     }
   } catch { return false; }
   return applicable.every(m => recordedAggregate(input, m.id,
@@ -268,7 +196,7 @@ export async function assessRepeated(input: Input, model: { provider: string; id
   const applicable = metrics.filter(m => !notApplicable.includes(m.id));
   const data = judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } });
   const audit: JudgeAudit = {
-    protocolHash: expectedProtocol(JUDGE_PROTOCOL, model.configurationHash),
+    protocolHash: model.configurationHash ? fingerprint({ protocol: JUDGE_PROTOCOL, configuration: model.configurationHash }) : JUDGE_PROTOCOL,
     inputHash: fingerprint(data), provider: model.provider, model: model.id,
     ...(model.configurationHash ? { configurationHash: model.configurationHash } : {}),
     ...(model.transport ? { transport: model.transport } : {}),
@@ -276,51 +204,40 @@ export async function assessRepeated(input: Input, model: { provider: string; id
   };
   const save = (final = false) => ctx.onJudgment?.(input.trial.id, structuredClone(audit), final);
   save();
-  // Every vote is an independent fresh request, so the votes of one stage run together. They are
+  // Every vote is an independent fresh request, so one dialogue's votes run together. They are
   // launched in rubric order, which keeps the audit order stable; after any failure nothing new starts.
-  // Stage 1 is the fidelity votes on the whole dialogue; stage 2, every other rubric, on the prefix
-  // those votes imply (or the whole dialogue when they imply no cut).
+  const jobs = applicable.flatMap(metric => [metric, metric]);
+  let next = 0;
   let failure: unknown;
-  const stage = async (metricsOfStage: typeof applicable, cut: number | undefined) => {
-    const scoped: Input = cut === undefined ? input : { ...input, trial: prefixTrial(input.trial, cut) };
-    const jobs = metricsOfStage.flatMap(metric => [metric, metric]);
-    let next = 0;
-    const worker = async (): Promise<void> => {
-      while (next < jobs.length && failure === undefined) {
-        const metric = jobs[next++]!;
-        ctx.signal.throwIfAborted();
-        const attempt: JudgeAudit['attempts'][number] = { metricId: metric.id, startedAt: new Date().toISOString(),
-          input: JSON.stringify(judgeInput({ ...scoped, scenario: { ...input.scenario, metrics: [metric] } }, cut)),
-        };
-        audit.attempts.push(attempt);
-        save(); // A crash leaves a visible pending request, not a missing favorable/unfavorable vote.
-        try {
-          attempt.raw = await respond(JUDGE_PROMPT, attempt.input!, raw => { attempt.raw = raw; save(); });
-        } catch (error) {
-          attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Judge request failed';
-          save();
-          if (!RAG_METRIC_IDS.has(metric.id)) failure ??= error;
-          continue;
-        }
-        save(); // Persist the original response before parsing; never repair a judgment in-place.
-        try {
-          attempt.assessments = parseJudgment(attempt.raw, scoped, [metric]);
-        } catch (error) {
-          attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Invalid judgment';
-        }
+  const worker = async (): Promise<void> => {
+    while (next < jobs.length && failure === undefined) {
+      const metric = jobs[next++]!;
+      ctx.signal.throwIfAborted();
+      const attempt: JudgeAudit['attempts'][number] = { metricId: metric.id, startedAt: new Date().toISOString(),
+        input: JSON.stringify(judgeInput({ ...input, scenario: { ...input.scenario, metrics: [metric] } })),
+      };
+      audit.attempts.push(attempt);
+      save(); // A crash leaves a visible pending request, not a missing favorable/unfavorable vote.
+      try {
+        attempt.raw = await respond(JUDGE_PROMPT, attempt.input!, raw => { attempt.raw = raw; save(); });
+      } catch (error) {
+        attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Judge request failed';
         save();
+        if (!RAG_METRIC_IDS.has(metric.id)) failure ??= error;
+        continue;
       }
-    };
-    const settled = await Promise.allSettled(Array.from({ length: Math.min(JUDGE_CONCURRENCY, jobs.length) },
-      () => worker().catch(error => { failure ??= error; throw error; })));
-    return settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+      save(); // Persist the original response before parsing; never repair a judgment in-place.
+      try {
+        attempt.assessments = parseJudgment(attempt.raw, input, [metric]);
+      } catch (error) {
+        attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Invalid judgment';
+      }
+      save();
+    }
   };
-  let rejected = await stage(applicable.filter(m => m.id === FIDELITY_ID), undefined);
-  // An erred or rejected fidelity vote leaves the cut unknown, so no agent vote is requested.
-  if (!rejected && failure === undefined && !audit.attempts.some(a => a.error)) {
-    const cut = simulatorCut(audit.attempts.flatMap(a => a.assessments ?? []), input.trial.events);
-    rejected = await stage(applicable.filter(m => m.id !== FIDELITY_ID), cut);
-  }
+  const settled = await Promise.allSettled(Array.from({ length: Math.min(JUDGE_CONCURRENCY, jobs.length) },
+    () => worker().catch(error => { failure ??= error; throw error; })));
+  const rejected = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
   // Exactly one final report per judgment, whatever happened; it never masks the original error.
   let saveFailure: unknown;
   let saveFailed = false;

@@ -58,45 +58,24 @@ export function trialAssessmentComplete(scenario: Scenario, trial: Trial, review
       const result = trial.assessments?.find(a => a.metricId === m.id)?.result;
       return result === 'pass' || result === 'fail'; });
 }
-/**
- * The seq before which the judge decided the goal (judge protocol v11), or undefined.
- * The receipt is the second witness: a `judgedBeforeSeq` without the same `cutBefore` in the
- * receipt is ignored, so a one-field hand edit changes nothing. The full proof (audit, events,
- * protocol) lives in `hasCompleteJudgment`.
- */
-export function judgedCut(trial: Pick<Trial, 'judgedBeforeSeq' | 'judgeReceipt'>): number | undefined {
-  const cut = trial.judgedBeforeSeq;
-  return cut !== undefined && cut === trial.judgeReceipt?.cutBefore ? cut : undefined;
-}
-
-/** Options of the goal counting rule (goal-v2). */
-export interface UsableOptions { beforeSeq?: number }
-
-/**
- * Human decisions override interpretation, never the recorded check or judge response.
- * With `beforeSeq` (the goal was judged on the dialogue before that seq): a heuristic check at
- * or after the cut is ignored, and the fidelity rubric counts only through a human verdict.
- */
-export function simulatorUsable(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = [], options: UsableOptions = {}): boolean {
+/** Human decisions override interpretation, never the recorded check or judge response. */
+export function simulatorUsable(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): boolean {
   const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
-  const { beforeSeq } = options;
   return (simulatorWasUsed(trial) ? trial.simulatorChecks ?? [] : []).every(c => {
-    if (beforeSeq !== undefined && c.heuristic && c.seq !== undefined && c.seq >= beforeSeq) return true;
     const review = latest.get(`${trial.id}|check:${c.id}`);
     return review?.verdict === 'invalid' || (review ? review.verdict === 'pass' : c.passed);
   }) && (scenario?.metrics ?? []).filter(m => m.subject === 'simulator' && metricApplies(m, trial)).every(m => {
     const review = latest.get(`${trial.id}|metric:${m.id}`);
-    if (beforeSeq !== undefined && !review) return true;
     return review?.verdict === 'invalid' || (review?.verdict ?? trial.assessments?.find(a => a.metricId === m.id)?.result) === 'pass';
   });
 }
 /** Shared eligibility for comparisons, CI and prompt proposals. Raw outcomes remain inspectable. */
-export function measurementUsable(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = [], options: UsableOptions = {}): boolean {
+export function measurementUsable(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): boolean {
   const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
   return !!scenario && measured(trial) && !trial.assessmentError
     && latest.get(`${trial.id}|dialogue`)?.verdict !== 'invalid'
     && (!scenario.initialState.external || trial.observation?.resetConfirmed === true)
-    && simulatorUsable(scenario, trial, reviews, options);
+    && simulatorUsable(scenario, trial, reviews);
 }
 /** Combined automatic result for triage, never a replacement for the separate code and rubric scores. */
 export function automaticTrialResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' {

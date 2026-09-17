@@ -840,7 +840,7 @@ export class ExperimentLab {
           ctx.signal.throwIfAborted();
           const trial = structuredClone(original);
           const scenario = record.scenarios.find(s => s.id === trial.scenarioId)!;
-          trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.judgeAudit; delete trial.judgeReceipt; delete trial.judgedBeforeSeq;
+          trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.judgeAudit; delete trial.judgeReceipt;
           trial.manifestHash = record.manifestHash!;
           if (record.target.kind !== 'sandbox' && !trial.observation) trial.observation = { state: 'missing', tools: 'partial' };
           const started = performance.now();

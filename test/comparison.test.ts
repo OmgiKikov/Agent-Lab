@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { sourceIdentity } from '../src/normalize.js';
-import { awaitingVerdict, cardOutcome, compareRuns, goalCardOutcome, evidenceSummary, humanFindings, isAgentFailure, judgeModel, repeatResults, stabilityAfterReassess, verdictSummary } from '../src/comparison.js';
+import { awaitingVerdict, compareRuns, evidenceSummary, humanFindings, isAgentFailure, judgeModel, repeatResults, stabilityAfterReassess, verdictSummary } from '../src/comparison.js';
 import { embeddedBefore } from '../src/artifacts.js';
 import { suiteEvidence } from '../src/connection.js';
 import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources, sealJudgeReceipt } from '../src/judge.js';
-import { emptyUsage, fingerprint, goalAttainment, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
+import { emptyUsage, fingerprint, goalAttainment, settingsSchema, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
 
 const TRUSTED = 30;
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
@@ -574,19 +574,6 @@ function reassessed(source: Experiment, goals: Record<string, 'pass' | 'fail' | 
   return next;
 }
 
-test('goal-v2 cut decides the headline goal but the strict card outcome still requires simulator fidelity', () => {
-  const run = goalRun('cut', { c: 'fail' }, 'h');
-  run.scenarios[0]!.metrics = [{ ...goalAttainment }, { ...simulatorFidelity }];
-  const t = run.trials[0]!;
-  t.events = dialogue(['hello', 'again'], 'done');
-  t.assessments!.push({ metricId: 'user_fidelity', result: 'fail', rationale: 'r', evidence: [2] });
-  t.judgedBeforeSeq = 2;
-  t.judgeReceipt = { protocolHash: 'p', inputHash: 'i', provider: 'x', model: 'm', auditHash: 'a', votes: [], notApplicable: [], complete: true, cutBefore: 2 };
-  assert.equal(goalCardOutcome(run, run.scenarios[0]!), 'fail');
-  assert.equal(cardOutcome(run, run.scenarios[0]!), 'unknown');
-  assert.equal(isAgentFailure(run, t), false);
-});
-
 test('stabilityAfterReassess counts a goal flip on the same answers and the same criteria', () => {
   const source = goalRun(REASSESSED_SOURCE, { s1: 'pass', s2: 'fail' }, 'h');
   const next = reassessed(source, { s1: 'fail', s2: 'fail' });
@@ -617,7 +604,7 @@ test('stabilityAfterReassess against a rebuilt source never compares the reasses
   const judge = reassessed(source, { s1: 'fail', s2: 'fail' }, { evaluatorVersion: 'judge-1',
     settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1, judge: { provider: 'openrouter', model: 'another-judge' } }) });
   judge.sourceEvidence!.identity = identity;
-  assert.equal(stabilityAfterReassess(judge, embeddedBefore(judge, REASSESSED_SOURCE)!)?.skipped, 'не с чем сравнить: судья с тех пор изменился');
+  assert.equal(stabilityAfterReassess(judge, embeddedBefore(judge, REASSESSED_SOURCE)!)?.skipped, 'судья или его настройки изменились');
 });
 
 test('stabilityAfterReassess skips changed criteria, partial coverage and unknown verdicts', () => {
@@ -642,7 +629,7 @@ test('stabilityAfterReassess refuses another judge and records that are not a re
   const source = goalRun(REASSESSED_SOURCE, { s1: 'pass' }, 'h', { evaluatorVersion: 'judge-1' });
   const judge = reassessed(source, { s1: 'fail' }, { evaluatorVersion: 'judge-2',
     settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1, judge: { provider: 'openrouter', model: 'another-judge' } }) });
-  assert.deepEqual(stabilityAfterReassess(judge, source), { basis: 'reassess', comparedWith: REASSESSED_SOURCE, checked: 0, unstable: [], skipped: 'не с чем сравнить: судья с тех пор изменился' });
+  assert.deepEqual(stabilityAfterReassess(judge, source), { basis: 'reassess', comparedWith: REASSESSED_SOURCE, checked: 0, unstable: [], skipped: 'судья или его настройки изменились' });
   // An Agent Lab upgrade changes evaluatorVersion but not the judge: the flip is still found.
   const upgraded = reassessed(source, { s1: 'fail' }, { evaluatorVersion: 'judge-2' });
   assert.equal(stabilityAfterReassess(upgraded, source)?.skipped, null);
@@ -651,7 +638,7 @@ test('stabilityAfterReassess refuses another judge and records that are not a re
   const receipt = (protocolHash: string) => ({ protocolHash, inputHash: 'i', provider: 'openrouter', model: 'judge', auditHash: 'a', votes: [], notApplicable: [], complete: true });
   const oldProtocol = structuredClone(source); oldProtocol.trials[0]!.judgeReceipt = receipt('protocol-1');
   const newProtocol = reassessed(oldProtocol, { s1: 'fail' }); newProtocol.trials[0]!.judgeReceipt = receipt('protocol-2');
-  assert.equal(stabilityAfterReassess(newProtocol, oldProtocol)?.skipped, 'не с чем сравнить: судья с тех пор изменился');
+  assert.equal(stabilityAfterReassess(newProtocol, oldProtocol)?.skipped, 'судья или его настройки изменились');
   newProtocol.trials[0]!.judgeReceipt = receipt('protocol-1');
   assert.equal(stabilityAfterReassess(newProtocol, oldProtocol)?.skipped, null);
   const noHash = reassessed(source, { s1: 'fail' }, { evaluatorVersion: 'judge-1' });
