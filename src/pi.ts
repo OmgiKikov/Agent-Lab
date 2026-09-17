@@ -11,6 +11,7 @@ import {
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
 import { GIGA_PROVIDER_ID, registerGigaProvider } from './giga-provider.js';
+import { missingGigaVariables } from './giga-transport.js';
 import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, PROFILES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
 
 type Model = NonNullable<ReturnType<ModelRuntime['getModel']>>;
@@ -269,9 +270,21 @@ async function jsonResponse<S extends z.ZodType>(
   } finally { await session.close(); }
 }
 
+interface GigaStatus { configured: boolean; registered?: boolean; missingVariables: string[] }
+
+/*
+ * Провайдер внутреннего шлюза либо есть, либо его нет, и снаружи второе выглядит как отказ
+ * авторизации Pi. Статус отвечает на единственный вопрос оператора: чинить окружение или доступ.
+ */
+function gigaStatus(): GigaStatus {
+  const missingVariables = missingGigaVariables();
+  return { configured: missingVariables.length === 0, missingVariables };
+}
+
 export async function getPiStatus(injectedRuntime?: ModelRuntime): Promise<{
-  models: Array<{ provider: string; id: string; name: string }>; error?: string;
+  models: Array<{ provider: string; id: string; name: string }>; giga: GigaStatus; error?: string;
 }> {
+  const giga = gigaStatus();
   try {
     const signal = AbortSignal.timeout(10000);
     const runtime = injectedRuntime ?? await ModelRuntime.create({ allowModelNetwork: false, signal });
@@ -279,9 +292,10 @@ export async function getPiStatus(injectedRuntime?: ModelRuntime): Promise<{
     const available = await runtime.getAvailable(undefined, { signal });
     return {
       models: available.map(m => ({ provider: m.provider, id: m.id, name: m.name })),
+      giga: { ...giga, registered: available.some(m => m.provider === GIGA_PROVIDER_ID) },
       ...(available.length ? {} : { error: authHelp }),
     };
-  } catch { return { models: [], error: `Не удалось прочитать список доступных моделей. ${authHelp}` }; }
+  } catch { return { models: [], giga, error: `Не удалось прочитать список доступных моделей. ${authHelp}` }; }
 }
 
 /** The optional SDK runtime is the integration seam for custom providers and offline SDK checks. */
