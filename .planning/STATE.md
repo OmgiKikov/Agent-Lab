@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: "03.1"
 current_phase_name: Справился = запрос выполнен и правила промпта соблюдены
 status: executing
-stopped_at: Completed 03.1-01-PLAN.md
-last_updated: "2026-09-17T18:53:20.961Z"
+stopped_at: Completed 03.1-02-PLAN.md
+last_updated: "2026-09-17T19:44:53.688Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 03.1 execution started
-state_head: 3016dbffe73bddb91199054ecee11c9823997a5e
+state_head: e246ee039316f35adb999432d3aefeffb0f9444b
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 54
-  completed_plans: 29
+  completed_plans: 30
   percent: 13
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 03.1 (Справился = запрос выполнен и правила промпта соблюдены) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 03.1 execution started
 
@@ -87,6 +87,7 @@ Progress: [█░░░░░░░░░] 13%
 | Phase 03 P06 | 16min | 3 tasks | 7 files |
 | Phase 03 P07 | 8min | 2 tasks | 2 files |
 | Phase 03.1 P01 | 48 min | 3 tasks | 11 files |
+| Phase 03.1 P02 | 45 min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -155,6 +156,9 @@ Recent decisions affecting current work:
 - [Phase 03.1]: 03.1-01: the positive control is decided by cardVerdict(…, 'goal') and its line names both facts («Контроль: запрос выполнен ✓ · правила промпта нарушены ✗»); the alarm stays goal-only
 - [Phase 03.1]: 03.1-01: compareRuns cards and pairs, repeat and reassessment stability and qualitySummary count by headlineCardOutcome; controls are left out of the report cards/strict so the report number equals the CLI headline; RULE_NOTE named once when shared cards have prompt rules
 - [Phase 03.1]: 03.1-01: a started run whose counted cards have the goal rubric but no prompt rules prints «Правил промпта в наборе нет — считается только запрос.» as its second line; legacy strict sets and never-run drafts print nothing
+- [Phase 03.1]: 03.1-02: a quick mark lands only on a metric that decided the situation (markTargets); the lab refuses marks on controls, unmeasured, undecided and non-target metrics (C-312/C-311/C-100/C-313) and stamps countingRules = 'goal-and-rules-v2', never keeping a caller value
+- [Phase 03.1]: 03.1-02: a situation is checked only when every mark target carries a current mark (CR-02); unusable and undecided situations are not in the agreement at all (CR-01); an unstamped mark counts only where the sole target is the goal or the card is legacy — elsewhere staleRule, shown as «по прежнему правилу подсчёта»
+- [Phase 03.1]: 03.1-02: on a goal card a quick-closed situation is closed — reply quality, RAG and objective checks do not keep it open (recorded deviation from RESEARCH Pattern 6); a legacy card waits for its other failed rubric; a half-overturned double failure reads «Судья: не справился → владелец: правила промпта соблюдены; запрос не выполнен»
 
 ### Pending Todos
 
@@ -195,6 +199,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T18:52:58.606Z
-Stopped at: Completed 03.1-01-PLAN.md
+Last session: 2026-09-17T19:44:53.632Z
+Stopped at: Completed 03.1-02-PLAN.md
 Resume file: None
