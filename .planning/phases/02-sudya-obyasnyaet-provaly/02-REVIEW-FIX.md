@@ -6,6 +6,7 @@ iteration: 1
 findings_in_scope: 10
 fixed: 10
 skipped: 0
+follow_ups: 1
 status: all_fixed
 ---
 
@@ -87,8 +88,8 @@ status: all_fixed
 ### WR-07: `measurementHash` ignores `positiveControlScenarioIds` and `ownerExpectationScenarioIds`
 
 **Files modified:** `src/experiment.ts`, `test/experiment.test.ts`
-**Commit:** `346507c` (originally `f4dd94f`, amended to add the attribution trailer)
-**Applied fix:** Both fields are now part of the manifest. Because `JSON.stringify` drops `undefined`, a record written before either field existed keeps its exact hash — asserted in the new test and in the two existing tests. **Two existing assertions pinned the old behaviour and were updated deliberately:** `measurementHash(edited) === measurementHash(legacy)` ("the marker never changes what is measured") and the equivalent for the control set. Both now assert `notEqual`, with the reason in the test: the expectation sheet already tells the owner «с прошлыми прогонами не сравнивается», and a control card leaves the headline denominator, so two runs with different control sets did not measure the same thing. Each test also gained an explicit old-record stability assertion.
+**Commit:** `346507c` (originally `f4dd94f`, amended to add the attribution trailer), then narrowed by `d4d9aa0` — see "Follow-up" below, which is the final state.
+**Applied fix (superseded in part by `d4d9aa0`):** Both fields were initially added to the manifest. Because `JSON.stringify` drops `undefined`, a record written before either field existed keeps its exact hash — asserted in the new test and in the two existing tests. **Two existing assertions pinned the old behaviour and were updated deliberately:** `measurementHash(edited) === measurementHash(legacy)` ("the marker never changes what is measured") and the equivalent for the control set. Both now assert `notEqual`, with the reason in the test: the expectation sheet already tells the owner «с прошлыми прогонами не сравнивается», and a control card leaves the headline denominator, so two runs with different control sets did not measure the same thing. Each test also gained an explicit old-record stability assertion.
 
 ## Deviations from the review's literal fix text
 
@@ -102,6 +103,26 @@ Two places where I followed the intent but not the letter, both worth a glance:
 - `.planning/phases/0[3-6]-*` was never staged; every commit used explicit paths.
 - No new runtime dependencies. All new user-facing strings are Russian; identifiers and comments are English.
 - `02-REVIEW.md` and `02-VERIFICATION.md` remain untracked, as does this report — the orchestrator commits it.
+
+## Follow-up: WR-07 narrowed to the control set (orchestrator decision)
+
+**Files modified:** `src/experiment.ts`, `test/experiment.test.ts`
+**Commit:** `d4d9aa0` — `fix(02): WR-07 keep only the control set in the manifest hash`
+
+`measurementHash` now carries `positiveControlScenarioIds` only. `ownerExpectationScenarioIds` was
+removed, restoring the 02-07 truth: an owner edit already rewrites `successCriteria` and the goal
+rubric, so the card fingerprint — and with it `scenarios` — moves, and the measurement identity
+changes through that. The marker itself is only a label on a change the manifest has already seen.
+The rationale is now in the doc comment on `measurementHash`.
+
+Tests updated to match, each carrying its one-line reason:
+- `an exact-check situation keeps the old refusal…` is back to `assert.equal(measurementHash(edited), measurementHash(legacy), 'the marker never changes what is measured')`.
+- `a positive control rides on the record…` keeps `assert.notEqual(…, 'the manifest sees the control set')`.
+- The added test, renamed to `the manifest covers the control set but not the owner-expectation label, and old records keep their hash`, now asserts the control set changes the hash, the owner-expectation marker does not, and a record with neither field present hashes exactly as before.
+
+Old-record hash stability is still asserted in all three places.
+
+**Re-run after this change:** `snap-test.sh --full` → **452 tests, 452 pass, 0 fail, 0 cancelled, 0 skipped**, typecheck clean. Nothing failed, so there is no failing test to name; the earlier 451/452 was not reproduced here.
 
 ---
 

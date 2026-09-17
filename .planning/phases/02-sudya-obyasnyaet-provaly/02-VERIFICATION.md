@@ -1,8 +1,8 @@
 ---
 phase: 02-sudya-obyasnyaet-provaly
-verified: 2026-09-17T10:52:21Z
-status: gaps_found
-score: 19/21 must-haves verified (all 4 ROADMAP success criteria met; 2 blocker-class regressions found outside them)
+verified: 2026-09-17T12:05:00Z
+status: human_needed
+score: 19/21 must-haves verified (all 4 ROADMAP success criteria met; every blocker closed; 1 item deferred to Phase 4, 1 awaiting a person at a Pi terminal)
 covered_files:
   - ".planning/REQUIREMENTS.md"
   - ".planning/phases/02-sudya-obyasnyaet-provaly/02-01-PLAN.md"
@@ -23,6 +23,8 @@ covered_files:
   - ".planning/phases/02-sudya-obyasnyaet-provaly/02-08-SUMMARY.md"
   - ".planning/phases/02-sudya-obyasnyaet-provaly/02-09-PLAN.md"
   - ".planning/phases/02-sudya-obyasnyaet-provaly/02-09-SUMMARY.md"
+  - ".planning/phases/02-sudya-obyasnyaet-provaly/02-REVIEW-FIX.md"
+  - ".planning/phases/02-sudya-obyasnyaet-provaly/02-REVIEW.md"
   - ".planning/phases/02-sudya-obyasnyaet-provaly/board-width-check.mts"
   - ".planning/phases/02-sudya-obyasnyaet-provaly/expectation-check.mts"
   - ".planning/phases/02-sudya-obyasnyaet-provaly/measure-undecided.mjs"
@@ -34,41 +36,31 @@ covered_files:
   - "src/explain.ts"
   - "src/plural.ts"
   - "src/quality.ts"
+  - "src/report.ts"
   - "src/result-view.ts"
   - "test/cards.test.ts"
+  - "test/contracts.test.ts"
   - "test/experiment.test.ts"
   - "test/explain.test.ts"
   - "test/extension.test.ts"
   - "test/quality.test.ts"
   - "test/result-view.test.ts"
   - "test/workflow.test.ts"
-covered_digest: "v1:sha256:4dda5bf4e31d68a9ee66503b5fb14b7d1d1adf421e5d708bd5e592e1fe129136"
+covered_digest: "v1:sha256:529c57e8754918cf825fbe5ff09899df622d0242e277ddd1dc4254d490592e30"
 behavior_unverified: 0
 overrides_applied: 0
-gaps:
-  - truth: "A record must not claim an observation the UI disclaimed at the moment it was made (project Truth constraint; CR-01 of 02-REVIEW.md)"
-    status: failed
-    reason: "02-08 changed both Pi run paths from `reviewer: 'automated'` to `reviewer: 'human'` (commit ba18ada). That stamp sets `record.reviewMode = 'human'`, which suppresses the «checked automatically, without human validation» limitation, prints «Проверка карточек: человеком» in the exported report, prints «Карточки: подтверждены человеком» on the board, and removes the compare downgrade of an `improved` verdict to `insufficient`. The same confirmation dialog still ends with «Запуск не означает, что вы вручную проверили все ожидания или оценки.» No phase-2 must-have declares this change."
-    artifacts:
-      - path: "extensions/agent-lab.ts"
-        issue: "lines 628 and 871 pass reviewer: 'human'; line 85 (runPlan) still disclaims manual checking"
-      - path: "src/experiment.ts"
-        issue: "line 1006-1007 drops the automated-validation limitation; line 1283-1284 skips the comparison downgrade when reviewMode === 'human'"
-      - path: "test/extension.test.ts"
-        issue: "lines ~311 and ~323 pin both sides of the contradiction, so the suite cannot catch it"
-    missing:
-      - "Decide one story: either record what the owner actually confirmed (expectations, not card definitions) with its own narrower limitation and its own report/board wording, or drop the disclaimer line and reword report.ts:256 / cards.ts:600 to «ожидания подтверждены владельцем»"
-      - "Update the pinning tests so the chosen story is enforced instead of the contradiction"
-  - truth: "An unverifiable explanation part is marked as unverified on every surface, never presented as the agent's words (SC1; CR-03 of 02-REVIEW.md)"
-    status: failed
-    reason: "02-05 (commit 5797b65) made `causeExample` return `explanation.said?.quote ?? UNVERIFIED`. The terminal keeps the verification state as an `unverified` row role, but the HTML and Markdown exporters wrap `example.quote` in guillemets with no distinction, so the forwarded report reads «объяснение не подтверждено цитатой» as if the agent had uttered it. Latent on today's data (0 of 16 failures are unverified) but reachable whenever a judge citation fails its substring check or a trial has no agent reply."
-    artifacts:
-      - path: "src/quality.ts"
-        issue: "line 536 overloads `quote` with the UNVERIFIED sentinel and drops the role"
-      - path: "src/report.ts"
-        issue: "line 159 (HTML) and line 250 (Markdown) print «${example.quote}» unconditionally"
-    missing:
-      - "Carry the verification state across the boundary (e.g. `example.verified: boolean`) and have both exporters render the unverified case as a named gap instead of a quotation"
+re_verification:
+  iteration: 2
+  previous_status: gaps_found
+  previous_score: 18/21
+  gaps_closed:
+    - "CR-01 — the record no longer claims a human check the dialog disclaims (new reviewMode 'expectations', honest limitation, honest report/board wording, compare gate still requires 'human')"
+    - "CR-03 — an unverified reply is carried as `verified: false` and printed unquoted by the HTML report, the Markdown report and the terminal cause list"
+    - "WR-07 over-reach — commit d4d9aa0 removed `ownerExpectationScenarioIds` from `measurementHash` and restored the 02-07 assertion «the marker never changes what is measured»; re-measured: a record carrying the owner marker (37f78e1a) now hashes the same with or without it"
+  gaps_remaining: []
+  caveats:
+    - "`positiveControlScenarioIds` stays in `measurementHash` by design (the WR-07 fix the review asked for). Measured: the stored run 61521e0d still computes 62de5a39e086 under the shipped dist and c5713f51dab0 under the fixed code. No declared phase-2 must-have governs that field, every `draftHash` is unchanged, stored `manifestHash` strings are untouched, `compareRuns` pairs by scenario content, and no general run-resume path exists — so nothing observable changes. Recorded, not hidden."
+    - "Flaky suite: 1 of 7 full `snap-test.sh --full` runs across the fix rounds failed a single test (451/452); the other 6 were 452/452 with a clean typecheck. The failing test could not be identified — run 1's output was truncated. Worth chasing before the demo."
 deferred:
   - truth: "Light and dark Pi themes look right on the explanation rows (02-06 backstop; the plan itself defers the real screenshot)"
     addressed_in: "Phase 4"
@@ -82,9 +74,9 @@ human_verification:
 # Phase 2: Судья объясняет провалы — Verification Report
 
 **Phase Goal:** Владелец видит каждый провал агента эквайринга как «должен был X → сказал Y → правило N (цитата)» с проверенными цитатами и понимает, почему осталось «без решения». Протокол судьи заморожен к концу 2026-09-18. До запуска владелец подтверждает ожидания на одном экране.
-**Verified:** 2026-09-17T10:52:21Z
-**Status:** gaps_found
-**Re-verification:** No — initial verification
+**Verified:** 2026-09-17T12:05:00Z (second re-verification, after `d4d9aa0` closed the last gap)
+**Status:** human_needed — no gaps remain; one item awaits a person at a Pi terminal
+**Re-verification:** Yes, iteration 2 — after `346507c…39e0bc5` closed the review findings and `d4d9aa0` closed the manifest-hash gap this verification raised. Every check below was re-run against a `git archive HEAD` snapshot build, not the stale worktree `dist/`.
 **Mode:** mvp (goal is a phase goal, not a User Story; the MVP User Flow table is replaced by the four ROADMAP success criteria below)
 
 ## Goal Achievement
@@ -113,7 +105,7 @@ rule quotes are reproduced here.
 | 14 | 02-06: the board renders the real runs at 40/60/80/110/160 columns, collapsed and expanded, with no row wider than the screen and only Pi theme tokens | ✓ VERIFIED | `board-width-check.mts` (verifier run) exit 0: `over=0` at every width, collapsed and expanded, tokens `accent,borderMuted,dim,error,muted,text,warning` only |
 | 15 | 02-06 backstop: light and dark Pi themes look right on the explanation rows | ⏭ DEFERRED to Phase 4 | The plan itself defers the real screenshot to phase 4; Phase 4 SC5 covers «Кириллица корректна в светлой и тёмной темах на ширине от 40 до 160 колонок». Token list evidence recorded (T14) |
 | 16 | 02-07: `expectationSheet` content, head line, right-aligned labels, version line, the three «не записано / не подтверждено / нет правила» fallbacks, machine-format filter, and the 0 / 1–9 / 10–20 label widths | ✓ VERIFIED | `src/quality.ts:139-175`; `Версия ожиданий: <hash12>` at `src/quality.ts:143`; owner marker «Ожидание изменено владельцем — с прошлыми прогонами не сравнивается.» at `src/quality.ts:170`. Tests `test/quality.test.ts:115,153,171` pass. Live sheet on a 13-situation draft: `goalRows=13 ruleRows=55 unverifiedRows=0 versionOk=true` |
-| 17 | 02-07: `acceptDraft` confirms all at once / is idempotent / rejects an empty draft, a compare record and a started run; `setExpectation` writes the trimmed owner text verbatim into `successCriteria` and the goal pass criterion, keeps checks, clears review stamps and names every rejection; `start({requireAccepted})` refuses a stale confirmation; `draftHash`/`measurementHash` invariants hold | ✓ VERIFIED | `src/experiment.ts:759-806` reviewed line by line: guards for workflow/phase/hash/empty/3000-chars/unknown-situation/no-judge-rubric, all with the exact planned messages; `src/experiment.ts:985` `'Сначала подтвердите ожидания ситуаций: они изменились или ещё не подтверждены.'`; `src/experiment.ts:88-97` keeps/drops `ownerExpectationScenarioIds` on repeat and clears `acceptedDraftHash`. Behavioral tests pass: `test/experiment.test.ts:611,652,727`, plus `test/workflow.test.ts`. Record check on the real draft confirms verbatim storage (T4) |
+| 17 | 02-07: `acceptDraft` confirms all at once / is idempotent / rejects an empty draft, a compare record and a started run; `setExpectation` writes the trimmed owner text verbatim into `successCriteria` and the goal pass criterion, keeps checks, clears review stamps and names every rejection; `start({requireAccepted})` refuses a stale confirmation; `draftHash`/`measurementHash` invariants hold | ✓ VERIFIED | `src/experiment.ts:759-806` reviewed line by line; behavioural tests pass (`test/experiment.test.ts:611,652,727`, `test/workflow.test.ts`). The manifest clause was broken by the first fix round and restored by `d4d9aa0`: measured with both builds side by side, `37f78e1a` (which carries the owner marker) hashes identically with and without `ownerExpectationScenarioIds`, and the assertion «the marker never changes what is measured» is back in `test/experiment.test.ts`. Every `draftHash` in `.agent-lab` is byte-identical under both builds |
 | 18 | 02-08: board section 2 shows the sheet; `y`/`e` act only inside that scope; header states, notice kinds, tab label, help row, `r` confirm-and-start, the chat `agent_lab_accept` loop and `sheetLines` in tool results | ✓ VERIFIED | `extensions/cards.ts:47,361,397,491-492,527,613` (BoardAction `expect`/`accept`, sheet load, three header states, scoped `y`/`e`, tab label, help row); `extensions/agent-lab.ts:43,102,547-580,628-629,870-894` (sheetLines, chat accept loop, `lab.start(..., requireAccepted: true)`, refusal notice with `y — подтвердить.`). Owner text enters only through `ctx.ui.editor` (`extensions/agent-lab.ts:563,881`). Behavioral tests pass: `test/cards.test.ts:591,663,686` and `test/extension.test.ts:1036,1087,1137,1190` |
 | 19 | 02-08 backstop: the board sheet at widths 40/60/80/110/160 has no row wider than the screen, no `…`, and every word | ✓ VERIFIED | `expectation-check.mts` (verifier run) on the real draft: `board 37f78e1a width=40/60/80/110/160 over=0 head=true selected=true`; `board-width-check.mts` `ellipsis=0 words=equal` |
 | 20 | 02-09: on a real acquiring draft the sheet prints through `agent-lab accept`, the owner text becomes the verbatim criterion and reaches the judge input, `--yes` confirms all, `diff` refuses to compare the edited situation, and the final dist keeps the stored counts, surfaces and widths | ✓ VERIFIED | Draft `37f78e1a` (repeat of `61521e0d`) exists with `acceptedTests: 13`, `acceptedDraftHash` set, 1 owner-edited situation stored verbatim (T4). `trust-check-1.txt` records `applied … criteria=verbatim passCriteria=verbatim judgeInput=true`. Verifier re-ran `diff --before 61521e0d --after 37f78e1a`: «Прогоны несравнимы: 12 пар. Исправления и регрессии не подсчитываются.» with the changed-card reason named. Final dist built from `376562e`, and `git diff 376562e HEAD -- src extensions` is empty, so dist matches HEAD source. Stored counts re-measured: 0/9+4 and 1/8+7, audits 13/13 and 14/14 |
@@ -176,26 +168,32 @@ rule quotes are reproduced here.
 
 ### Behavioral Spot-Checks
 
+Every check below was re-run after the fixes, against `dist/` built inside a `git archive HEAD`
+snapshot (the worktree `dist/` is still the pre-fix build and was deliberately not touched).
+
 | Behavior | Command | Result | Status |
 | -------- | ------- | ------ | ------ |
-| Failure explanations on a real run | `node dist/cli.js summary --id fae4ee59…` | exit 0; 9 `✗`, 4 `?`, 22 numbered rules, 0 `…`, 0 jargon | ✓ PASS |
-| Failure explanations on the second run | `node dist/cli.js summary --id a92fd6ae…` | exit 0; 7 `✗`, 7 `?`, 0 `…` | ✓ PASS |
-| Phase-2 test files from a snapshot | `snap-test.sh test/explain|result-view|quality|cards|extension|experiment.test.ts` | `# pass 205 # fail 0` | ✓ PASS |
-| Full suite (executor evidence, not re-run) | `snap-test.sh --full` log of 2026-09-17 13:34 at HEAD `376562e` | `# pass 443 # fail 0` + typecheck | ✓ PASS (log; targeted 205 re-run independently) |
-| Undecided share, before == after | `measure-undecided.mjs --id fae4ee59 --id a92fd6ae` | `notMeasured=4 share=31%` / `notMeasured=7 share=47%`, `v11=- cuts=0` | ✓ PASS |
-| Explanation verification counts | `measure-undecided.mjs --explain` | `judgeCited=9/9` and `7/7`, `unverifiedRows=0` | ✓ PASS |
-| Pilot record integrity | node read of the archived `17d77d54` record | 3 judged trials, `judgedBeforeSeq == cutBefore == 4,12,12`, `costUsd=0.43039`, `assessmentOf=fae4ee59…` | ✓ PASS |
-| Owner expectation stored verbatim | node read of draft `37f78e1a` | `successCriteria === ownerText`, `goal.passCriteria === ownerText`, `checks: 0`, `acceptedTests: 13/13` | ✓ PASS |
-| Incomparable after an owner edit | `node dist/cli.js diff --before 61521e0d --after 37f78e1a` | «Прогоны несравнимы: 12 пар…» with the changed content named | ✓ PASS |
+| Full suite, committed state | `snap-test.sh --full` ×7 across both fix rounds (×3 on `d4d9aa0`) | six runs `# pass 452 # fail 0` + clean typecheck; one earlier run `# pass 451 # fail 1` (name lost to truncated output) | ⚠️ PASS with a flake |
+| Failure explanations, run 1 | `node $SNAP/dist/cli.js summary --id fae4ee59…` (re-run on `d4d9aa0`) | 9 `✗`, 4 `?`, 22 numbered rules, 0 unverified, 0 `…`, 0 jargon; output byte-identical to the previous fixed build | ✓ PASS |
+| Undecided shares unchanged | `measure-undecided.mjs --dist $SNAP/dist` | `fae4ee59 notMeasured=4 share=31%`, `a92fd6ae notMeasured=7 share=47%` — identical to `before.txt` | ✓ PASS |
+| Explanations still fully verified | `measure-undecided.mjs --explain --dist $SNAP/dist` | `failed=9 judgeCited=9 unverifiedRows=0` and `failed=7 judgeCited=7 unverifiedRows=0` | ✓ PASS |
+| WR-01 effect on rule attribution | same command, `violated=` field | fae4ee59 5 → 3, a92fd6ae 1 → 4. Both directions are correct: the ratio test drops weak unique matches, and dropping weak matches lets a previously ambiguous card resolve to exactly one rule. Rule register size is unchanged (44 = 44 on both runs), so no rule numbers moved | ✓ PASS |
+| CR-03 closed | read of `src/quality.ts:534-546`, `src/report.ts:159,250`, `src/quality.ts:656` | `causeExample` returns `verified: boolean` with the new `UNVERIFIED_REPLY` status line; all three renderers wrap in «…» only when `verified` | ✓ PASS |
+| CR-01 closed | read of `src/contracts.ts:760,868`, `src/experiment.ts:1006-1011,1283`, `extensions/agent-lab.ts:93,637,879`, `src/report.ts:256`, `extensions/cards.ts:612` | `reviewMode: 'expectations'` is a third enum value; the run paths stamp it; the honest limitation is pushed; the disclaimer is replaced by «Подтверждая, вы подтверждаете ожидания ситуаций выше. Оценки судьи вы не проверяли.»; both surfaces say «ожидания подтверждены владельцем»; the compare downgrade still tests `reviewMode !== 'human'` | ✓ PASS |
+| CR-02 closed | read of `extensions/agent-lab.ts:75` | non-production sets append «Что вы подтверждаете дословно:» with the opening and every exact check | ✓ PASS |
+| Owner marker does not move the manifest (02-07 must-have) | `measurementHash` of `37f78e1a` (carries the marker) with and without `ownerExpectationScenarioIds`, both builds | identical — restored by `d4d9aa0`; the pinning assertion «the marker never changes what is measured» is back | ✓ PASS |
+| `draftHash` of every stored record unchanged | `draftHash` under both builds, 4 records | byte-identical in all four (`0adb5866c445`, `013cb65f513d`, `30cee15da8c0`, `bca58a5b3d12`) | ✓ PASS |
+| Residual: control set in the manifest | `measurementHash(61521e0d)` under both builds | `62de5a39e086` → `c5713f51dab0` — by design, no declared must-have governs it, nothing observable changes | ℹ️ INFO |
+| Stored runs still open and compare | `cli.js summary` ×2, `cli.js diff --before 61521e0d --after 37f78e1a` | all exit 0; `compareRuns` pairs by scenario content, not by `manifestHash`, so the «до/после» path is not broken by the hash change | ✓ PASS |
 | Live Pi keypresses in two themes | — | requires a person at a terminal | ? SKIP → human |
 
 ### Probe Execution
 
 | Probe | Command | Result | Status |
 | ----- | ------- | ------ | ------ |
-| `.planning/phases/01-odno-chestnoe-chislo/pi-surface-check.mts` | `npx tsx … --id fae4ee59 --id a92fd6ae` | `OK surfaces=3 lines=9 sections=23` / `OK surfaces=3 lines=12 sections=19` | PASS |
-| `.planning/phases/02-…/board-width-check.mts` | `npx tsx … --id fae4ee59 --id a92fd6ae` | `over=0` at 40/60/80/110/160 collapsed+expanded; `wrap … over=0 ellipsis=0 words=equal` | PASS |
-| `.planning/phases/02-…/expectation-check.mts` | `npx tsx … --draft 37f78e1a` (read-only) | `situations=13 ruleRows=55 unverifiedRows=0 versionOk=true confirmed=true`, 5 widths `over=0`, `keys y=accept e=expect` | PASS |
+| `.planning/phases/01-odno-chestnoe-chislo/pi-surface-check.mts` | `npx tsx … --id fae4ee59 --id a92fd6ae` (re-run from the snapshot) | `OK surfaces=3 lines=9 sections=22` / `OK surfaces=3 lines=12 sections=21` (section counts follow the WR-01 attribution change) | PASS |
+| `.planning/phases/02-…/board-width-check.mts` | `npx tsx … --id fae4ee59 --id a92fd6ae` (re-run from the snapshot) | 30 of 30 result lines `over=0`, none over the width | PASS |
+| `.planning/phases/02-…/expectation-check.mts` | `npx tsx … --draft 37f78e1a` (read-only, re-run from the snapshot) | `situations=13 ruleRows=55 unverifiedRows=0 versionOk=true confirmed=true`, 5 widths `over=0`, `keys y=accept e=expect` — unchanged by the fixes | PASS |
 | `.planning/phases/02-…/measure-undecided.mjs` | `node … --id fae4ee59 --id a92fd6ae [--explain]` | counts as recorded in `before.txt` | PASS |
 
 ### Requirements Coverage
@@ -218,16 +216,17 @@ Scanned all 16 files changed between `fa79f2e` (phase-2 base) and HEAD.
 | ---- | ---- | ------- | -------- | ------ |
 | — | — | `TBD` / `FIXME` / `XXX` | — | None found |
 | — | — | `TODO` / `HACK` / `PLACEHOLDER` | — | None found |
-| `extensions/agent-lab.ts` | 628, 871 vs 85 | Record claims a human check the dialog disclaims (CR-01) | 🛑 Blocker | `reviewMode: 'human'` suppresses the automated-validation limitation, prints «проверено человеком» in the exported report and on the board, and removes the comparison downgrade — while the confirmation still says «Запуск не означает, что вы вручную проверили все ожидания или оценки.» Confirmed by reading the code and `git show ba18ada` (was `reviewer: 'automated'`) |
-| `src/quality.ts` 536, `src/report.ts` 159, 250 | — | The «не подтверждено» sentinel exported inside guillemets (CR-03) | 🛑 Blocker | The forwarded HTML/Markdown report states that the agent said «объяснение не подтверждено цитатой». Latent today (0/16 unverified) but reachable |
-| `extensions/agent-lab.ts` | 61-72 | Run confirmation lost `Запрос:` and `Проверка:` rows for every multi-situation evaluate draft (CR-02) | ⚠️ Warning | Declared by an 02-08 must-have («the run-plan body shows the compact sheet instead of the old per-situation validation block»), but the old compact branch fired only for all-production sets; saved regression, golden and mixed suites now also lose the exact checks that `acceptDraft` seals |
-| `src/explain.ts` | 129-144 | `violatedRule` accepts a 12-character substring coincidence (WR-01) | ⚠️ Warning | A single wrong match is named as «Нарушено правило N» with full confidence; the «не подтверждено» fallback fires only on 0 or ≥2 matches. 5 and 1 violated rows on the pilot runs rest on this rule |
-| `src/explain.ts` | 69-70, 79 | The line number is re-found with `indexOf`, not the matched offset (WR-02) | ⚠️ Warning | A quote repeated in a source names the wrong `строка L` and gives two requirements an arbitrary order; the row is presented as verified evidence |
+| `extensions/agent-lab.ts` | 637, 879, 93 | Record claims a human check the dialog disclaims (CR-01) | ✅ FIXED (was 🛑 Blocker) | `reviewMode: 'human'` suppresses the automated-validation limitation, prints «проверено человеком» in the exported report and on the board, and removes the comparison downgrade — while the confirmation still says «Запуск не означает, что вы вручную проверили все ожидания или оценки.» Confirmed by reading the code and `git show ba18ada` (was `reviewer: 'automated'`) |
+| `src/quality.ts` 534-546, `src/report.ts` 159, 250 | — | The «не подтверждено» sentinel exported inside guillemets (CR-03) | ✅ FIXED (was 🛑 Blocker) | The forwarded HTML/Markdown report states that the agent said «объяснение не подтверждено цитатой». Latent today (0/16 unverified) but reachable |
+| `extensions/agent-lab.ts` | 75 | Run confirmation lost `Запрос:` and `Проверка:` rows for every multi-situation evaluate draft (CR-02) | ✅ FIXED (was ⚠️ Warning) | Declared by an 02-08 must-have («the run-plan body shows the compact sheet instead of the old per-situation validation block»), but the old compact branch fired only for all-production sets; saved regression, golden and mixed suites now also lose the exact checks that `acceptDraft` seals |
+| `src/explain.ts` | 133-148 | `violatedRule` accepts a 12-character substring coincidence (WR-01) | ✅ FIXED (was ⚠️ Warning) | A single wrong match is named as «Нарушено правило N» with full confidence; the «не подтверждено» fallback fires only on 0 or ≥2 matches. 5 and 1 violated rows on the pilot runs rest on this rule |
+| `src/explain.ts` | 69-79 | The line number is re-found with `indexOf`, not the matched offset (WR-02) | ✅ FIXED (was ⚠️ Warning) | A quote repeated in a source names the wrong `строка L` and gives two requirements an arbitrary order; the row is presented as verified evidence |
+| `src/experiment.ts` | 53-62 | `measurementHash` hashes the control set (WR-07) | ℹ️ Info (was 🛑 Blocker) | The owner-expectation half was removed by `d4d9aa0`, restoring the declared must-have. The control set stays by design: `measurementHash(61521e0d)` is `62de5a39e086` under the shipped dist and `c5713f51dab0` under the fixed code. No declared must-have governs that field and nothing observable changes (draftHashes identical, stored hashes untouched, `compareRuns` pairs by content, no resume path) |
+| `test/*` (full suite) | — | One full run in seven failed a single test (451/452) | ⚠️ Warning | The other six runs — including three on the corrected commit — were 452/452 with a clean typecheck. The failing test's name was lost with the truncated output of that run. A flake in the suite that certifies the number is worth ten minutes before the demo |
 
-Full list, including WR-03…WR-07 and IN-01…IN-03, is in
-`.planning/phases/02-sudya-obyasnyaet-provaly/02-REVIEW.md` (3 critical, 7 warning, 3 info).
-This verification independently reproduced CR-01, CR-02 and CR-03 in the code and in
-`git show ba18ada` / `git log -S`, and reviewed WR-01 and WR-02 at the source.
+Full list is in `02-REVIEW.md` (3 critical, 7 warning, 3 info) and `02-REVIEW-FIX.md`
+(10 of 10 in-scope findings fixed; IN-01…IN-03 deliberately out of scope). This re-verification
+read every fix at the source and re-ran the decisive checks against a snapshot build.
 
 Informational observations (no action required):
 
@@ -245,27 +244,43 @@ Informational observations (no action required):
 
 ### Gaps Summary
 
-**The four ROADMAP success criteria are achieved. Two blocker-class regressions sit next to
-them, both introduced by this phase, both about honesty — which is the one thing this phase
-cannot be sloppy about.** They do not fail any declared must-have, which is exactly why they
-slipped through: nobody wrote them down.
+**No gaps remain.** All three blockers this verification raised are closed, and I checked each one
+in the code and with a measurement rather than in the fix reports.
 
-1. **CR-01 — the record claims a human check the dialog disclaims.** Starting a run from Pi now
-   stamps `reviewMode: 'human'`, which deletes the «checked automatically, without human
-   validation» limitation, makes the exported report say «Проверка карточек: человеком», and stops
-   the comparison from downgrading an `improved` verdict to `insufficient` — while the very
-   confirmation that produces the stamp still says «Запуск не означает, что вы вручную проверили
-   все ожидания или оценки.» One of the two must change.
-2. **CR-03 — the exported report quotes the phase's own «не подтверждено» sentinel.** In the
-   terminal an unverifiable reply is a warning-coloured `unverified` row; in the HTML and Markdown
-   the same string is wrapped in guillemets and reads as something the agent said. Zero occurrences
-   on today's data, so it is latent, not visible — but it is the exact failure mode the phase
-   exists to prevent.
+1. **CR-01 closed.** `reviewMode: 'expectations'` is a third enum value; both Pi run paths stamp it;
+   the confirmation now says «Подтверждая, вы подтверждаете ожидания ситуаций выше. Оценки судьи вы
+   не проверяли.»; the limitation «Владелец подтвердил ожидания ситуаций перед запуском. Определения
+   карточек и оценки судьи человеком не проверялись.» is pushed instead of silently dropped; both
+   display surfaces say «ожидания подтверждены владельцем»; and the comparison downgrade still
+   requires a real `'human'` review, so a confirmed draft cannot lift an `improved` verdict.
+2. **CR-03 closed.** The cause carries `verified: boolean`; the HTML report, the Markdown report and
+   the terminal cause list quote only when it is true, and print the status line plainly otherwise.
+3. **WR-07 over-reach closed** (`d4d9aa0`). `ownerExpectationScenarioIds` is out of the manifest and
+   the assertion «the marker never changes what is measured» is back, with a sound reason recorded
+   in the code: an owner edit already rewrites `successCriteria` and the goal rubric, so the card
+   fingerprint moves on its own and the marker is only a label on that change. Measured: `37f78e1a`,
+   which carries the marker, hashes identically with and without it, and every stored record's
+   `draftHash` is byte-identical under both builds.
 
-Everything else stands, and it stands on real evidence:
+Two things are recorded rather than hidden, neither blocking:
 
-Every ROADMAP success criterion is achieved and demonstrated on the real acquiring
-records, not only in unit tests:
+- **The control set stays in the manifest**, which is the WR-07 fix the review asked for. The stored
+  run `61521e0d` therefore computes `62de5a39e086` under the shipped dist and `c5713f51dab0` under
+  the fixed code. No declared phase-2 must-have governs that field; stored `manifestHash` strings are
+  untouched; `compareRuns` pairs by scenario content, not by hash; there is no general run-resume
+  path; and a record written before the field existed keeps its hash.
+- **The suite is flaky.** One of seven full runs across the fix rounds failed a single test
+  (451/452); the other six, including three on the corrected commit, were 452/452 with a clean
+  typecheck. The failing test could not be named. Worth ten minutes before the demo.
+
+**Why this is `human_needed` and not `passed`:** one verification item still needs a person — the
+live Pi walkthrough of the expectation sheet (`2`, `e`, `y`, `r`, cancel) in a light and a dark
+theme, which 02-09 itself declared impossible in an unattended run. `passed` is only valid when that
+section is empty. Everything automatable is green; do the walkthrough, record it in the phase's
+UAT, and the status becomes `passed` with no code change.
+
+Every ROADMAP success criterion is achieved and demonstrated on the real acquiring records, not
+only in unit tests:
 
 - **SC1/SC2** are proven on 16 failed and 11 unmeasured situations across `fae4ee59` and
   `a92fd6ae`, with every reply quote judge-cited and verified and every shown rule numbered from
@@ -273,22 +288,20 @@ records, not only in unit tests:
 - **SC3** is the honest case. The phase built the v11 prefix-judging protocol, paid $0.43 to test
   it on the three situations it was designed to rescue, decided 0 of 3, wrote `NO-GO`, reverted
   the code to a byte-identical `fa79f2e` state and froze the protocol at v10 a day before the
-  deadline. The «до» numbers (4/13 and 7/15) are recorded and were re-measured identically by this
-  verification; the «после» number is the same by construction, because nothing changed, and the
-  pilot's own after-number (`decided=0/3`) is recorded in `gate.txt` and reproducible from the
-  archived pilot record. Protocol changes: 0 of the allowed 1. Because the protocol did not
-  change, no reassessment of old runs was owed. This is a measured, recorded, reversible
-  decision — it satisfies the criterion.
+  deadline. The «до» numbers (4/13 and 7/15) are recorded and were re-measured identically at every
+  stage of this verification; the «после» number is the same by construction, because nothing
+  changed, and the pilot's own after-number (`decided=0/3`) is recorded in `gate.txt` and
+  reproducible from the archived pilot record. Protocol changes: 0 of the allowed 1. Because the
+  protocol did not change, no reassessment of old runs was owed.
 - **SC4** is proven on a real 13-situation acquiring draft: the sheet renders at every width, one
   key confirms all 13, and one owner sentence is stored byte-identically as both the situation's
   criterion and the judge's goal pass criterion with the checks untouched.
 
-Two items remain outside automated reach (they survive the `gaps_found` verdict and are listed in
-the frontmatter so they are not lost): the light/dark theme look of the explanation rows
-(deferred by plan to Phase 4, which owns that criterion) and one live Pi keyboard walkthrough of
-the expectation sheet (listed above for the owner).
+The light/dark theme look of the explanation rows stays deferred to Phase 4, which owns that
+criterion.
+
 
 ---
 
-_Verified: 2026-09-17T10:52:21Z_
+_Verified: 2026-09-17T12:05:00Z_
 _Verifier: Claude (gsd-verifier)_
