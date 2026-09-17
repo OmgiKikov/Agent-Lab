@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { visibleWidth, stripTerminalSequences } from '@earendil-works/pi-tui';
-import { LabBoard, reviewOrder, safeText, type BoardAction, type BoardOptions } from '../extensions/cards.ts';
+import { LabBoard, reviewOrder, safeText, wrapRows, type BoardAction, type BoardOptions } from '../extensions/cards.ts';
 import { htmlReport } from '../src/report.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { emptyUsage, fingerprint, type Experiment } from '../src/contracts.js';
 import { compareRuns } from '../src/comparison.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { markdownReport } from '../src/report.js';
-import { buildResultView, causeSection, resultViewLines, SECTION_TEXT, type ResultView } from '../src/result-view.js';
+import { buildResultView, causeSection, failureListRows, resultViewLines, SECTION_TEXT, type ResultView } from '../src/result-view.js';
 
 const theme = { fg: (_: string, value: string) => value, bold: (value: string) => value };
 
@@ -459,8 +459,8 @@ test('after refresh the board shows the refreshed bundle view', async () => {
   board.dispose();
 });
 
-/** One card decided as failed by its own exact check, so the overview has a failure to explain. */
-async function failedCard(): Promise<Experiment> {
+/** Decided failures with a recorded cluster, so every surface has failures to explain. */
+async function failedCard(cards = 1): Promise<Experiment> {
   const record = await fixture();
   record.phase = 'complete'; record.reviewedAt = record.createdAt; record.resultsReviewedAt = record.updatedAt;
   // One planned attempt per card, so the card with its single failed attempt is decided, not «запись неполная».
@@ -476,6 +476,17 @@ async function failedCard(): Promise<Experiment> {
     initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1,
     assessments: [{ metricId: 'goal_attainment', result: 'fail' as const, rationale: 'CLIPPED_JUDGE_RATIONALE',
       evidence: [1], citations: [{ seq: 1, quote: 'Ничего менять не буду.' }] }] }];
+  if (cards > 1) {
+    const second = record.scenarios[1]!;
+    second.successCriteria = 'Клиент получил условия тарифа.';
+    second.metrics = scenario.metrics;
+    record.trials.push({ ...record.trials[0]!, id: 'f1', scenarioId: second.id, familyId: second.familyId,
+      events: [{ seq: 0, type: 'user' as const, text: 'Какой тариф?' }, { seq: 1, type: 'assistant' as const, text: 'Не знаю, уточните в отделении.' }],
+      assessments: [{ metricId: 'goal_attainment', result: 'fail' as const, rationale: 'CLIPPED_JUDGE_RATIONALE',
+        evidence: [1], citations: [{ seq: 1, quote: 'Не знаю, уточните в отделении.' }] }] });
+  }
+  record.failureModes = [{ name: 'Агент отказывается решать задачу', description: 'Агент не выполняет просьбу и отправляет клиента в отделение.',
+    trialIds: record.trials.map(trial => trial.id), promptQuotes: [] }];
   return record;
 }
 
@@ -507,4 +518,68 @@ test('with nothing failed the overview says so and shows no failure heading', as
   assert.ok(!cells.includes(SECTION_TEXT.causes.board) && !cells.includes(SECTION_TEXT.failures.board));
   assert.ok(!cells.includes(SECTION_TEXT.all.hint));
   board.dispose();
+});
+
+const LONG_TITLE = 'Клиент просит перенести запись на другое время и ждёт подтверждения от агента банка';
+const LONG_QUOTE = 'Возврат выполняется через меню терминала в течение тридцати дней с момента покупки, '.repeat(7);
+const LONG_REPLY = 'Ничего менять не буду, обратитесь в отделение банка по месту обслуживания вашей организации. '.repeat(3);
+
+test('wrapRows keeps every word of a long explanation inside the board at any width', () => {
+  const rows = [
+    { text: `✗ ${LONG_TITLE}`, indent: 0 },
+    { text: `Должен был: ${LONG_TITLE}`, indent: 2 },
+    { text: `Сказал (реплика #1): «${LONG_REPLY}»`, indent: 2 },
+    { text: `Правило 3 · Возврат покупки: «${LONG_QUOTE}»`, indent: 5 },
+  ];
+  const words = (value: string) => value.split(/\s+/).filter(Boolean);
+  for (const width of [36, 56, 76, 106, 156]) {
+    const wrapped = wrapRows(rows, width);
+    for (const row of wrapped) assert.ok(visibleWidth(row.text) <= width, `width ${width}: ${visibleWidth(row.text)} > ${width}`);
+    assert.ok(!wrapped.some(row => row.text.includes('…')), `width ${width}: a row was clipped`);
+    for (const source of rows.filter(row => row.indent > 0)) {
+      const own = wrapRows([source], width);
+      assert.ok(own[0]!.text.startsWith(`${' '.repeat(source.indent)}${source.text.slice(0, 1)}`), `width ${width}: the first line lost its indent`);
+      for (const row of own.slice(1)) assert.ok(row.text.startsWith(' '.repeat(source.indent + 2)) && row.text[source.indent + 2] !== ' ',
+        `width ${width}: continuation lost its hanging indent`);
+    }
+    assert.deepEqual(words(wrapped.map(row => row.text).join(' ')), words(rows.map(row => row.text).join(' ')), `width ${width}: words changed`);
+  }
+});
+
+test('Enter on the overview lists every failure in full, before today details', async () => {
+  const record = await failedCard(2);
+  const view = buildResultView(record);
+  assert.equal(view.failures.length, 2);
+  const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 3000);
+  board.handleInput('\r');
+  const cells = boardCells(board, 400);
+  assert.equal(cells.filter(cell => cell === SECTION_TEXT.all.board).length, 1);
+  const titles = view.failures.map(item => `✗ ${item.title}`);
+  const shown = cells.filter(cell => titles.includes(cell));
+  assert.deepEqual(shown, titles, 'every failure title appears once, in record order');
+  for (const row of failureListRows(view)) if (row.text.trim()) assert.ok(cells.includes(row.text.trim()), `missing: ${row.text}`);
+  assert.ok(!cells.some(cell => cell.includes('CLIPPED_JUDGE_RATIONALE')), 'the raw rationale example block is gone');
+  assert.ok(cells.some(cell => cell.startsWith('Карточки: синтетических')), 'today provenance rows still follow');
+  assert.ok(cells.some(cell => cell.startsWith('Что дальше:')));
+  board.dispose();
+});
+
+test('every board row keeps one color by its role and fits widths 40 to 160', async () => {
+  const record = await failedCard();
+  const recording = { fg: (color: string, value: string) => `<${color}>${value}</${color}>`, bold: (value: string) => value };
+  const board = new LabBoard({ record }, recording, () => {}, () => {}, () => 3000);
+  const painted = board.render(300).join('\n');
+  assert.match(painted, /<text>\s*Пример: /, 'the cause example keeps the text token');
+  assert.match(painted, /<accent>\s*1\. /, 'the cause name is accent');
+  assert.match(painted, /<warning>\s*\? /, 'a not-measured situation is warning');
+  assert.match(painted, /<muted>\s*(Правило|и ещё)/, 'rule rows are muted');
+  board.handleInput('\r');
+  const expanded = board.render(300).join('\n');
+  assert.match(expanded, /<error>\s*✗ /, 'a failure title is error');
+  board.dispose();
+  const wide = new LabBoard({ record }, theme, () => {}, () => {}, () => 3000);
+  for (const width of [40, 60, 80, 110, 160]) {
+    for (const row of wide.render(width)) assert.ok(visibleWidth(row) <= width, `overflow at ${width}`);
+  }
+  wide.dispose();
 });

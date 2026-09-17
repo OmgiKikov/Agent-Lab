@@ -62,8 +62,24 @@ export interface BoardOptions {
   reviewTimes?: Map<string, number>;
 }
 type BoardTheme = Pick<Theme, 'fg' | 'bold'>;
-type Line = { text: string; color?: ThemeColor; bold?: boolean };
-const line = (text: unknown, color?: ThemeColor, bold = false): Line => ({ text: safeText(text), color, bold });
+type Line = { text: string; color?: ThemeColor; bold?: boolean; indent?: number };
+const line = (text: unknown, color?: ThemeColor, bold = false, indent?: number): Line => ({ text: safeText(text), color, bold, ...(indent ? { indent } : {}) });
+
+/**
+ * Board wrapping (UI-SPEC «Width, Wrap and Theme Rules»): an explanation row keeps its indent and
+ * continues two columns further in, so a long quote is read in full instead of being cut. Nothing
+ * is truncated: every word of every row stays on the board.
+ */
+export function wrapRows(rows: Line[], inner: number): Line[] {
+  const width = Math.max(1, Math.floor(inner));
+  return rows.flatMap(row => {
+    const indent = row.indent ?? 0;
+    // A terminal too narrow for the hanging indent falls back to plain wrapping, still never wider.
+    if (!indent || width <= indent + 3) return wrapTextWithAnsi(row.text, width).map(text => ({ ...row, text }));
+    const body = Math.max(1, width - indent - 2);
+    return wrapTextWithAnsi(row.text, body).map((text, i) => ({ ...row, text: ' '.repeat(indent + (i ? 2 : 0)) + text }));
+  });
+}
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 const outcomeColor = (value: string): ThemeColor => value === 'pass' ? 'success' : value === 'fail' || value === 'invalid' ? 'error' : 'warning';
 
@@ -82,8 +98,8 @@ const SECTION_ROLE: Record<SectionRow['role'], { color?: ThemeColor; bold: boole
   rule: { color: 'muted', bold: false }, more: { color: 'muted', bold: false }, violated: { color: 'muted', bold: false },
   unverified: { color: 'warning', bold: false }, blank: { bold: false },
 };
-const viewRow = (row: ResultRow): Line => line(' '.repeat(row.indent) + row.text, VIEW_ROLE[row.role].color, VIEW_ROLE[row.role].bold);
-const sectionRow = (row: SectionRow): Line => line(' '.repeat(row.indent) + row.text, SECTION_ROLE[row.role].color, SECTION_ROLE[row.role].bold);
+const viewRow = (row: ResultRow): Line => line(row.text, VIEW_ROLE[row.role].color, VIEW_ROLE[row.role].bold, row.indent);
+const sectionRow = (row: SectionRow): Line => line(row.text, SECTION_ROLE[row.role].color, SECTION_ROLE[row.role].bold, row.indent);
 
 function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean): Line[] {
   const profile = record.profiles.find(p => p.id === scenario.profileId);
@@ -233,10 +249,12 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
     ];
   }
   const p = v.provenance;
-  const examples = record.trials.filter(t => isAgentFailure(record, t)).slice(0, 3);
   return [
     line('ИТОГ', 'accent', true),
-    line(v.headline, 'text', true),
+    ...resultViewRows(view).map(viewRow),
+    line(''),
+    // Every failure, in record order, with the explanation the CLI and the collapsed result show.
+    ...(view.failures.length ? [line(SECTION_TEXT.all.board, 'accent', true), ...failureListRows(view).map(sectionRow), line('')] : []),
     ...(v.review.findings.length ? [line(''), line('ЗАМЕЧАНИЯ ЧЕЛОВЕКА', 'warning', true),
       ...v.review.findings.slice(0, 3).flatMap(f => [line(record.scenarios.find(s => s.id === record.trials.find(t => t.id === f.trialId)?.scenarioId)?.title ?? f.trialId, 'text', true),
         line(humanFindingText(f).slice(0, 300), 'warning')]),
@@ -244,14 +262,7 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
     ...(v.repeats.some(r => r.passed && r.failed) ? [line(''), line('РАЗБРОС ПОПЫТОК', 'warning', true),
       ...v.repeats.filter(r => r.passed && r.failed).slice(0, 3).map(r => line(repeatResultText(r), 'warning')),
       line('Это наблюдения, а не вероятность будущего успеха.', 'muted')] : []),
-    ...(examples.length ? [line(''), line('ЧТО ТРЕБУЕТ ВНИМАНИЯ', 'accent'), ...examples.flatMap(t => {
-      const scenario = record.scenarios.find(s => s.id === t.scenarioId);
-      const check = t.checks.find(c => !c.passed);
-      const assessment = t.assessments?.find(a => a.result === 'fail' && scenario?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent'));
-      return [line(scenario?.title ?? t.scenarioId, 'text', true),
-        line(check?.evidence || check?.description || assessment?.rationale || t.reason),
-        line(`Диалог ${t.id}${!check && assessment?.evidence.length ? ` · реплики #${assessment.evidence.join(', #')}` : ''}`, 'muted')];
-    }), line('3 — открыть диалоги · a — обсудить причины и следующие шаги с Pi'), line('')] : []),
+    ...(view.failures.length ? [line('3 — открыть диалоги · a — обсудить причины и следующие шаги с Pi', 'muted'), line('')] : []),
     line(`Карточки: синтетических ${p.synthetic.cards}, golden ${p.curated.cards}, из продакшна ${p.production.cards}.`, 'muted'),
     line(v.weakSpots.length ? `Автоматические замечания: ${v.weakSpots.map(w => `${w.stage ? `[${w.stage}] ` : ''}${w.description} (${w.failures} провал(ов))`).join('; ')}.` : 'Автоматические проверки не отметили провалов.'),
     ...(v.stages.length ? [line('По этапам работы агента:', 'accent'),
@@ -511,7 +522,7 @@ export class LabBoard implements Component {
     }
     if (this.options.warnings?.length) detail.push(line(''), line('ДИАГНОСТИКА', 'warning'), ...this.options.warnings.map(w => line(w, 'warning')));
     if (this.help) detail = [line('КЛАВИШИ', 'accent', true), line('1 Обзор — качество агента · 2 Карточки · 3 Диалоги'), line('a — правка или разбор словами с Pi · n в списке — новая проверка'), line('↑ ↓ или j k — выбрать карточку или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), line('Enter — раскрыть источники, инструменты и состояния'), line('p / n — вердикт на выбранный диалог · v — оценить критерий'), line('r — запустить черновик или создать повтор готового прогона'), line('x — экспортировать · c — остановить запуск · Esc — назад · q — закрыть'), line(''), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')];
-    const content = detail.flatMap(row => wrapTextWithAnsi(row.text, inner).map(text => paint({ ...row, text })));
+    const content = wrapRows(detail, inner).map(paint);
     const footer = record ? [
       record.workflow !== 'evaluate' ? 'Сравнительный эксперимент · только просмотр и экспорт'
         : record.phase === 'review' ? `a Правка словами · ${record.questions.length ? 'Ответьте на вопросы' : 'r Запустить'}`
