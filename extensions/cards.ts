@@ -4,7 +4,7 @@ import type { Experiment, Scenario, Trial } from '../dist/contracts.js';
 import { describeCheck, fingerprint } from '../dist/contracts.js';
 import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
 import { expectationSheet, qualitySummary, qualityLines, type ExpectationRole, type ExpectationSheet } from '../dist/quality.js';
-import { agreementSample, judgeAgreement } from '../dist/agreement.js';
+import { agreementSample, judgeAgreement, type JudgeAgreement } from '../dist/agreement.js';
 import { primaryMetricId } from '../dist/outcomes.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
 import { buildResultView, causeSection, failureListRows, resultViewRows, SECTION_TEXT, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
@@ -90,6 +90,31 @@ export function resultEntries(record: Experiment): { id: string; text: string; w
       // One `●` at most: doubt keeps the situation waiting, and today's rule would add a second.
       text: `${queue || answer === 'unsure' || (!answer && pending.has(trial.id)) ? '● ' : ''}${label} · ${record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId} · ${trial.userMode ?? 'reactive'} #${trial.repeat + 1}${suffix}` };
   });
+}
+
+/**
+ * The section-3 review header (UI-SPEC F11): how far the owner got through the judge's decisions.
+ * «Проверено» counts only current «согласен» and «не согласен» marks — the same count as the
+ * C-95 notice (`failures.checked`, `sampleChecked`); an unsure mark is named only once nothing
+ * unmarked is left. The frame truncates header rows, so each text has a measured narrow form:
+ * wide ≤ 48 columns from `inner` 48, narrow ≤ 34 below it (the board's minimum inner is 36).
+ */
+export function reviewHeader(record: Experiment, inner: number, agreement: JudgeAgreement = judgeAgreement(record)):
+  { text: string; color: 'warning' | 'success' | 'muted' } {
+  const wide = inner >= 48;
+  const Q = agreement.queueFailures.length;
+  const S = agreement.sampledPasses.length;
+  const x = agreement.failures.checked;
+  const y = agreement.sampleChecked;
+  const K = agreement.unsure;
+  if (!Q && !S) return { color: 'muted', text: wide ? 'Проверять нечего: судья не вынес решений.' : 'Судья не вынес решений.' };
+  if (agreement.unmarked.length) return { color: 'warning', text: !S
+    ? wide ? `Проверено провалов: ${x} из ${Q} · успехов нет` : `Провалы ${x} из ${Q} · успехов нет`
+    : !Q ? wide ? `Проверено успехов: ${y} из ${S} · провалов нет` : `Успехи ${y} из ${S} · провалов нет`
+    : wide ? `Проверено провалов: ${x} из ${Q} · успехов: ${y} из ${S}` : `Провалы ${x} из ${Q} · успехи ${y} из ${S}` };
+  if (K) return { color: 'warning', text: wide ? `Не решено: ${K}. y или n — чтобы завершить разбор.` : `Не решено: ${K}. Нажмите y или n.` };
+  if (record.phase === 'results_review') return { color: 'success', text: wide ? 'Проверка окончена. f — завершить разбор.' : 'Всё проверено. f — завершить.' };
+  return { color: 'muted', text: wide ? 'Проверка окончена.' : 'Всё проверено.' };
 }
 
 export type Section = 'agent' | 'cards' | 'results';
@@ -604,13 +629,8 @@ export class LabBoard implements Component {
       header.push(line([['agent', '1 Обзор'], ['cards', `2 Ситуации ${record.scenarios.length}`], ['results', `3 Диалоги ${record.trials.length}`]]
         .map(([id, label]) => this.section === id ? `[${label}]` : label).join('   '), 'muted'));
       if (this.section === 'results' && record.trials.length) {
-        const review = verdictSummary(record).review;
-        const pending = review.pending;
-        const failures = record.trials.filter(t => isAgentFailure(record, t)).length;
-        header.push(line(pending
-          ? `Разбор: осталось ${pending} провал(ов) из ${failures}. Отмечены точкой.`
-          : review.findings.length ? `Замечания человека: ${review.flagged} диалогов · расхождения оценок: ${review.disagreements}.`
-          : failures ? `Разбор: все ${failures} провал(ов) разобраны.` : 'Автоматические проверки не отметили провалов.', pending || review.findings.length ? 'warning' : 'muted'));
+        const review = reviewHeader(record, inner);
+        header.push(line(review.text, review.color));
       }
       const draft = this.draftHeadline(record);
       header.push(line(`${record.trials.length && !activePhases.has(record.phase) ? verdictHeadline(this.viewFor(record))
