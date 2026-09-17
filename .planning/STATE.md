@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 1
 current_phase_name: Одно честное число
 status: verifying
-stopped_at: Completed 01-10-PLAN.md
-last_updated: "2026-09-16T22:34:46.623Z"
+stopped_at: Completed 01-11-PLAN.md
+last_updated: "2026-09-17T00:17:22.772Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 1 execution started
-state_head: 64f0259925f558c531c9860bbc4592de49a7b5a8
+state_head: 49f96c8675b0ad1b7a8bdda866e7867cf00dd78d
 progress:
   total_phases: 7
   completed_phases: 0
-  total_plans: 19
-  completed_plans: 10
+  total_plans: 28
+  completed_plans: 11
   percent: 0
 ---
 
@@ -68,6 +68,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P08 | 7min | 2 tasks | 6 files |
 | Phase 01 P09 | 12min | 2 tasks | 8 files |
 | Phase 01 P10 | 28min | 3 tasks | 4 files |
+| Phase 01 P11 | 5 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -100,6 +101,7 @@ Recent decisions affecting current work:
 - [Phase 1]: 01-09: Явный --control вне оставленных --case отклоняется ошибкой; унаследованный контроль, выпавший из --case, убирается
 - [Phase 1]: [01-10]: ae812a24 не годится как положительный контроль — за 3 живые попытки цель не засчитана; нужен другой контрольный кейс (кандидат — единственная засчитанная карточка a92fd6ae)
 - [Phase 1]: [01-10]: «судья не оценивал» важнее «судья не уверен в симуляторе», когда оценок нет вовсе (ca55767)
+- [Phase 1]: 01-11: a positive control always runs as one turn (maxFollowUps 0) in repeat/loadSuite; compareRuns leaves controls of either run out of the diff, identity taken from the original records
 
 ### Pending Todos
 
@@ -126,6 +128,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-16T22:34:46.597Z
-Stopped at: Completed 01-10-PLAN.md
+Last session: 2026-09-17T00:17:22.743Z
+Stopped at: Completed 01-11-PLAN.md
 Resume file: None
