@@ -11,7 +11,7 @@ import { awaitingVerdict, evidenceSummary, plannedTrials } from '../dist/compari
 import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
 import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
-import { allFailuresPointer, buildResultView, causeSection, resultViewLines, SECTION_TEXT, type ResultView } from '../dist/result-view.js';
+import { agreementSectionLines, allFailuresPointer, buildResultView, causeSection, resultViewLines, SECTION_TEXT, type ResultView } from '../dist/result-view.js';
 import { rowsToLines } from '../dist/explain.js';
 import { scoreSettings } from '../dist/normalize.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
@@ -30,7 +30,15 @@ const toolDisplay: Pick<ToolDefinition, 'renderCall' | 'renderResult'> = {
       // The ResultView block is the first thing shown; no surface computes its own headline count.
       const block: string | undefined = Array.isArray(data.viewLines) && data.viewLines.length ? data.viewLines.join('\n') : undefined;
       // Why the agent failed, in the same words as the CLI: never a separate list of cause names.
-      const failures: string | undefined = Array.isArray(data.failureLines) && data.failureLines.length ? data.failureLines.join('\n') : undefined;
+      // The owner's disagreements with the judge (F7) and where to mark the rest (F8) sit between
+      // that section and the pointer to the board, so the pointer stays the last row (UI-SPEC F7).
+      const failureRows: string[] = Array.isArray(data.failureLines) ? data.failureLines : [];
+      const pointer = (failureRows.at(-1) ?? '').startsWith('Все провалы — ') ? failureRows.at(-1) : undefined;
+      const causeBlock = pointer ? failureRows.slice(0, -1) : failureRows;
+      const agreementBlock: string[] = Array.isArray(data.disagreementLines) ? data.disagreementLines : [];
+      const parts = [causeBlock, agreementBlock].filter(rows => rows.length).map(rows => rows.join('\n'));
+      if (pointer) parts.push(pointer);
+      const failures: string | undefined = parts.length ? parts.join('\n\n') : undefined;
       if (data.brief) return new Text(theme.fg('text', safeText([data.scoreState, block, failures, data.brief].filter(Boolean).join('\n\n'))), 0, 0);
       if (data.proofs?.length) return new Text(theme.fg('text', safeText([
         data.error ?? block ?? data.quality?.headline ?? data.evidence?.verdict?.headline,
@@ -114,6 +122,8 @@ function summary(record: Experiment, directory: string, view?: ResultView) {
     ...(block ? { view: block, viewLines: resultViewLines(block) } : {}),
     // The same failure section the CLI prints under the block; raw text, escaped by each surface.
     ...(failureLines ? { failureLines } : {}),
+    // The same disagreement list and next-step row the CLI prints after the causes (F7, F8).
+    ...(block ? { disagreementLines: agreementSectionLines(block) } : {}),
     id: record.id, phase: record.phase, mode: record.mode, workflow: record.workflow,
     reviewMode: record.reviewMode, resultsReviewedAt: record.resultsReviewedAt,
     draftHash: draftHash(record), acceptedDraftHash: record.acceptedDraftHash, resultHash: record.trials.length ? resultHash(record) : undefined,

@@ -15,6 +15,7 @@ import { createInputSchema, goalAttainment } from '../src/contracts.js';
 import { demoEvaluationInput } from '../src/demo.js';
 import { ExperimentStore } from '../src/store.js';
 import { buildResultView, resultViewLines } from '../src/result-view.js';
+import { primaryMetricId } from '../src/outcomes.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 
 function registered(onUserMessage?: (message: unknown) => void) {
@@ -1016,9 +1017,14 @@ test('Pi inspect payload, its collapsed result and CLI summary open with the sam
     if (payload.view.failures.length) {
       assert.ok(Array.isArray(payload.failureLines) && payload.failureLines.length, 'a run with failures carries the failure section');
       assert.ok(['Главные причины провалов:', 'Провалы:'].includes(payload.failureLines[0]), payload.failureLines[0]);
-      assert.equal(payload.failureLines.at(-1), `Все провалы — /agent-lab ${record.id.slice(0, 8)}, раздел 1, Enter.`);
-      assert.ok(text.startsWith(`${payload.viewLines.join('\n')}\n\n${payload.failureLines.join('\n')}`),
-        'the failure section follows the block in the collapsed result');
+      const pointer = `Все провалы — /agent-lab ${record.id.slice(0, 8)}, раздел 1, Enter.`;
+      assert.equal(payload.failureLines.at(-1), pointer);
+      // The pointer to the board is the last row: the disagreements (F7) and the next step (F8)
+      // come between the causes and it, so the Pi order matches the CLI one.
+      const causes = payload.failureLines.slice(0, -1).join('\n');
+      const agreement = (payload.disagreementLines ?? []).join('\n');
+      assert.ok(text.startsWith([payload.viewLines.join('\n'), causes, agreement, pointer].filter(Boolean).join('\n\n')),
+        'the block, the failure section, the agreement section and the pointer follow in that order');
       assert.ok(!text.includes('ЧТО ТРЕБУЕТ ВНИМАНИЯ'));
     }
     const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
@@ -1031,6 +1037,73 @@ test('Pi inspect payload, its collapsed result and CLI summary open with the sam
     const block = lines.slice(0, lines.indexOf(''));
     const details = block.indexOf('Не измерено по причинам:');
     assert.deepEqual(details < 0 ? block : block.slice(0, details), payload.viewLines);
+  } finally {
+    await shutdown();
+    await rm(cwd, { recursive: true, force: true });
+    await rm(demo.directory, { recursive: true, force: true });
+  }
+});
+
+test('the owner’s disagreement with the judge reads the same in the Pi payload, its collapsed result and the CLI summary', { timeout: 60000 }, async () => {
+  const demo = await demoEvaluateRecord('agent-lab-pi-disagreement-');
+  const cwd = await mkdtemp(join(tmpdir(), 'agent-lab-pi-disagreement-cwd-'));
+  const { tools, shutdown } = registered();
+  try {
+    const source = demo.record;
+    // The first situation the judge failed; the mark answers exactly that judgment.
+    const marked = source.trials.flatMap(trial => {
+      const scenario = source.scenarios.find(item => item.id === trial.scenarioId);
+      const metricId = scenario && primaryMetricId(scenario, trial);
+      if (!scenario || !metricId) return [];
+      if (trial.assessments?.find(item => item.metricId === metricId)?.result !== 'fail') return [];
+      return [{ trial, scenario, metricId }];
+    })[0];
+    assert.ok(marked, 'the demo run has a failed situation to disagree about');
+    await demo.lab.addHumanReview(source.id, { trialId: marked.trial.id, metricId: marked.metricId, source: 'quick',
+      verdict: 'pass', note: 'Проверка:  судья не учёл\nуточнение клиента.', durationMs: 1200 });
+    const record = await demo.lab.get(source.id);
+    await demo.lab.close();
+    const store = new ExperimentStore(join(cwd, '.agent-lab'));
+    await store.init();
+    try { await store.save(record); } finally { await store.close(); }
+
+    const expected = ['Несогласия с судьёй (1):', `! ${marked.scenario.title}`,
+      '  Судья: не справился → владелец: справился', '  Причина: «Проверка: судья не учёл уточнение клиента.»'];
+    const nextStep = `Отметить согласие с судьёй можно в Pi: /agent-lab ${record.id.slice(0, 8)}, раздел 3.`;
+    const inspect = tools.get('agent_lab_inspect')!;
+    const result = await inspect.execute('inspect-disagreement', { id: record.id }, undefined, undefined, { cwd, hasUI: false, mode: 'print' } as ExtensionContext);
+    const payload = output(result);
+    assert.deepEqual(payload.disagreementLines, [...expected, '', nextStep]);
+
+    const rendered = inspect.renderResult!(result as never, { expanded: false, isPartial: false }, { fg: (_color: string, text: string) => text } as never) as unknown as Component;
+    const shown = rendered.render(400).map(line => line.trimEnd().trim());
+    for (const line of [...expected, nextStep]) assert.ok(shown.includes(line.trim()), `${line} is missing from the collapsed result`);
+
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    const child = spawn(process.execPath, [cli, 'summary', '--id', record.id, '--data-dir', join(cwd, '.agent-lab')]);
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+    const code = await new Promise<number | null>(resolve => child.on('close', resolve));
+    assert.equal(code, 0, stderr);
+    const lines = stdout.split('\n');
+    const causeAt = lines.findIndex(line => ['Главные причины провалов:', 'Провалы:'].includes(line));
+    const startAt = lines.findIndex(line => line.startsWith('Несогласия с судьёй ('));
+    const endAt = lines.findIndex(line => line.startsWith('Все провалы (') || line === 'Подробности:');
+    assert.ok(causeAt >= 0 && causeAt < startAt && startAt < endAt, `${causeAt} / ${startAt} / ${endAt}`);
+    assert.deepEqual(lines.slice(startAt, endAt).filter(line => line.trim()), [...expected, nextStep]);
+
+    // No chat path writes a mark: no tool takes a verdict, a one-key mark or the judgment it
+    // answers, and the review tool still asks only which dialogue to show the owner. The one
+    // `source` in any schema belongs to `agent_lab_build`: it names where the owner's materials
+    // came from, its own schema fixes it to `owner`, and it can never name a mark.
+    for (const tool of tools.values()) {
+      const schema = JSON.stringify(tool.parameters ?? {});
+      for (const forbidden of ['"verdict"', '"judgeVerdict"', '"quick"']) {
+        assert.ok(!schema.includes(forbidden), `${tool.name} offers ${forbidden}`);
+      }
+    }
+    const review = tools.get('agent_lab_review')!.parameters as { properties: Record<string, unknown> };
+    assert.deepEqual(Object.keys(review.properties), ['id', 'trialId']);
   } finally {
     await shutdown();
     await rm(cwd, { recursive: true, force: true });

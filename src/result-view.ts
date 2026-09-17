@@ -345,3 +345,46 @@ export function causeSection(view: ResultView): { kind: 'causes' | 'failures'; r
 export function failureListRows(view: ResultView): SectionRow[] {
   return blocks(view.failures.map(item => item.rows));
 }
+
+/** The board heading of the disagreement section (C-60); the text surfaces use `disagreementTitle`. */
+export const DISAGREEMENT_BOARD_TITLE = 'НЕСОГЛАСИЯ С СУДЬЁЙ';
+export const disagreementTitle = (k: number) => `Несогласия с судьёй (${k}):`;
+
+export type DisagreementRole = 'dis-title' | 'dis-verdicts' | 'dis-reason' | 'blank';
+export interface DisagreementRow { role: DisagreementRole; indent: number; text: string }
+
+/** The owner's own words on one row: whitespace runs become one space, nothing is ever cut. */
+const oneLine = (value: string) => value.replace(/\s+/gu, ' ').trim();
+
+/**
+ * The disagreement section (F7): the situations where the owner overturned the judge, in the card
+ * order of the record — the title, both verdicts and the owner's reason in full. Only current
+ * quick disagreements are listed: an unsure or a stale mark overturned nothing. The text is raw,
+ * because each surface escapes at its own boundary (`safeLine` on the CLI, `safeText` in Pi).
+ */
+export function disagreementRows(view: ResultView): DisagreementRow[] {
+  return view.agreement.disagreements.flatMap((item, i) => [
+    ...(i ? [{ role: 'blank' as const, indent: 0, text: '' }] : []),
+    { role: 'dis-title' as const, indent: 0, text: `! ${item.title}` },
+    { role: 'dis-verdicts' as const, indent: 2, text: `Судья: ${VERDICT_WORD[item.judge]} → владелец: ${VERDICT_WORD[item.human]}` },
+    { role: 'dis-reason' as const, indent: 2, text: `Причина: «${oneLine(item.note)}»` },
+  ]);
+}
+
+/**
+ * Where the rest of the queue is marked (F8). The mark itself is made on the board and nowhere
+ * else, so this row only points there; it is silent once every queued situation has been answered.
+ */
+export function agreementNextStep(view: ResultView): string | null {
+  if (!view.agreement.unmarked.length) return null;
+  return `Отметить согласие с судьёй можно в Pi: /agent-lab ${view.runId.slice(0, 8)}, раздел 3.`;
+}
+
+/** F7 and F8 as plain lines for the CLI and the Pi answer; empty when there is neither. */
+export function agreementSectionLines(view: ResultView): string[] {
+  const rows = disagreementRows(view);
+  const lines = rows.length ? [disagreementTitle(view.agreement.disagreements.length), ...rowsToLines(rows)] : [];
+  const next = agreementNextStep(view);
+  if (!next) return lines;
+  return [...lines, ...(lines.length ? [''] : []), next];
+}

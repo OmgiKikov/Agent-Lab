@@ -16,7 +16,7 @@ import { getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
 import { ExperimentStore } from './store.js';
-import { allFailuresTitle, buildResultView, causeSection, failureListRows, resultViewLines, SECTION_TEXT } from './result-view.js';
+import { agreementSectionLines, allFailuresTitle, buildResultView, causeSection, failureListRows, resultViewLines, SECTION_TEXT } from './result-view.js';
 import { rowsToLines } from './explain.js';
 import { evidenceBundle, exportArtifacts, resolveVerified } from './artifacts.js';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
@@ -105,9 +105,12 @@ async function main() {
     // Block, top causes with a full example, every failed situation, then the details. Each row is escaped on its own.
     const section = causeSection(view);
     const causeLines = section ? ['', SECTION_TEXT[section.kind].text, ...rowsToLines(section.rows).map(safeLine)] : [];
+    // Where the owner overturned the judge, and where the rest of the queue is marked (F7, F8).
+    const agreement = agreementSectionLines(view);
+    const agreementLines = agreement.length ? ['', ...agreement.map(line => line ? safeLine(line) : line)] : [];
     const failureLines = view.failures.length ? ['', allFailuresTitle(view.failures.length), ...rowsToLines(failureListRows(view)).map(safeLine)] : [];
     process.stdout.write([...resultViewLines(view, { details: true }).map(safeLine), ...warnings.map(warning => `Внимание: ${safeLine(warning)}`),
-      ...causeLines, ...failureLines, '', 'Подробности:', ...text.metrics, '',
+      ...causeLines, ...agreementLines, ...failureLines, '', 'Подробности:', ...text.metrics, '',
       ...(text.rag.length ? [...text.rag, ''] : []), text.queue, '', text.scope, text.limits, ''].join('\n'));
     return;
   }
