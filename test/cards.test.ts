@@ -15,7 +15,7 @@ import { emptyUsage, fingerprint, type Experiment } from '../src/contracts.js';
 import { compareRuns } from '../src/comparison.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { markdownReport } from '../src/report.js';
-import { buildResultView, causeSection, failureListRows, resultViewLines, SECTION_TEXT, type ResultView } from '../src/result-view.js';
+import { buildResultView, causeSection, disagreementRows, failureListRows, resultViewLines, SECTION_TEXT, type ResultView } from '../src/result-view.js';
 import { expectationSheet } from '../src/quality.js';
 
 const theme = { fg: (_: string, value: string) => value, bold: (value: string) => value };
@@ -1414,4 +1414,141 @@ test('блок согласия с длинной причиной и управ
   }
   const change = structuredClone(record); change.humanReviews[0]!.verdict = 'fail';
   for (const row of wrapRows([rowOf(blockOf(change), 'Изменить')!], 36).slice(1)) assert.match(row.text, /^ {2}[ns] /, 'the change hint breaks at «·» too');
+});
+
+/** Failed cards whose judgment the owner overturned on the first `count` of them. */
+async function overturned(cards: number, count: number, note = (i: number) => `Агент выполнил просьбу клиента номер ${i + 1}, судья ошибся.`) {
+  const record = await failedCard(cards);
+  record.humanReviews = record.trials.slice(0, count).map((trial, i) => ({ id: `dis-${i}`, trialId: trial.id, metricId: 'goal_attainment',
+    source: 'quick' as const, verdict: 'pass' as const, judgeVerdict: 'fail' as const, note: note(i), createdAt: '2026-09-17T00:00:00.000Z' }));
+  return record;
+}
+
+test('обзор показывает строку согласия в своих цветах и несогласия владельца между причинами и «Все провалы: Enter.»', async () => {
+  const record = await overturned(2, 1);
+  const view = buildResultView(record);
+  const title = record.scenarios[0]!.title;
+  const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 3000);
+  const cells = bodyCells(board, 300);
+  const heading = cells.indexOf('НЕСОГЛАСИЯ С СУДЬЁЙ');
+  const causes = cells.indexOf(SECTION_TEXT[causeSection(view)!.kind].board);
+  const hint = cells.indexOf(SECTION_TEXT.all.hint);
+  assert.ok(causes >= 0 && heading > causes && hint > heading, `order: causes ${causes}, heading ${heading}, hint ${hint}`);
+  assert.equal(cells[heading - 1], '', 'a blank row separates the cause section from the disagreements');
+  assert.deepEqual(cells.slice(heading + 1, heading + 4), [`! ${title}`, 'Судья: не справился → владелец: справился', 'Причина: «Агент выполнил просьбу клиента номер 1, судья ошибся.»']);
+  assert.ok(cells.slice(heading + 4, hint).every(cell => cell === ''), 'nothing but spacing before the hint');
+
+  board.handleInput('\r');
+  const expanded = bodyCells(board, 300);
+  board.dispose();
+  const block = expanded.findIndex(cell => cell.startsWith('Согласие с судьёй'));
+  const expandedHeading = expanded.indexOf('НЕСОГЛАСИЯ С СУДЬЁЙ');
+  const all = expanded.indexOf(SECTION_TEXT.all.board);
+  assert.ok(expanded.indexOf('ИТОГ') < block && block < expandedHeading && expandedHeading < all, `expanded order: ${block}, ${expandedHeading}, ${all}`);
+  assert.equal(expanded[expandedHeading + 1], `! ${title}`);
+  assert.equal(expanded.filter(cell => cell === 'НЕСОГЛАСИЯ С СУДЬЁЙ').length, 1);
+
+  const colored = new LabBoard({ record }, sgrTheme, () => {}, () => {}, () => 3000);
+  const rows = colored.render(300).join('\n');
+  colored.dispose();
+  const agreement = resultViewLines(view).find(entry => entry.startsWith('Согласие с судьёй'))!;
+  assert.ok(rows.includes(painted('text', agreement)), 'the agreement row is text');
+  assert.ok(rows.includes(painted('muted', '  Цель — согласие в 9 случаях из 10.')), 'its tail rows are muted');
+  assert.ok(rows.includes(painted('accent', 'НЕСОГЛАСИЯ С СУДЬЁЙ', true)), 'the heading is accent and bold');
+  assert.ok(rows.includes(painted('warning', `! ${title}`)), 'an item title is warning');
+  assert.ok(rows.includes(painted('text', '  Судья: не справился → владелец: справился')), 'the verdict row is text');
+  assert.ok(rows.includes(painted('text', '  Причина: «Агент выполнил просьбу клиента номер 1, судья ошибся.»')), 'the reason row is text');
+});
+
+test('два несогласия разделены пустой строкой, а без несогласий раздела нет ни в одном виде', async () => {
+  const record = await overturned(2, 2);
+  const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 3000);
+  const cells = bodyCells(board, 300);
+  board.dispose();
+  const heading = cells.indexOf('НЕСОГЛАСИЯ С СУДЬЁЙ');
+  assert.ok(heading >= 0);
+  const items = disagreementRows(buildResultView(record)).map(row => row.text);
+  assert.deepEqual(cells.slice(heading + 1, heading + 1 + items.length), items, 'items and the blank row between them');
+  assert.equal(items.filter(item => item === '').length, 1);
+
+  const calm = await failedCard(2);
+  const quiet = new LabBoard({ record: calm }, theme, () => {}, () => {}, () => 3000);
+  assert.ok(!bodyCells(quiet, 300).includes('НЕСОГЛАСИЯ С СУДЬЁЙ'));
+  quiet.handleInput('\r');
+  assert.ok(!bodyCells(quiet, 300).includes('НЕСОГЛАСИЯ С СУДЬЁЙ'));
+  quiet.dispose();
+});
+
+test('обзор с самой длинной строкой согласия и двумя длинными несогласиями помещается в 36–156 колонок без обрезки', async () => {
+  const reason = (i: number) => `Причина номер ${i + 1}: ${'агент выполнил просьбу, судья ошибся в оценке ответа. '.repeat(4)}\n\n`
+    + `Второй абзац\x1b[31m: ${'клиент получил то, что просил, и сказал спасибо. '.repeat(4)}`;
+  const record = await overturned(2, 2, reason);
+  const base = buildResultView(record);
+  // The longest F6 row: M ≥ 10 with both parts, plus every tail row.
+  const view: ResultView = { ...base, agreement: { ...base.agreement, agreed: 18, checked: 20, unsure: 1, stale: 13,
+    failures: { agreed: 16, checked: 17 }, passes: { agreed: 2, checked: 3 } } };
+  const longest = 'Согласие с судьёй: 18 из 20 проверенных — 90% (провалы: 16 из 17 · успехи: 2 из 3).';
+  assert.ok(resultViewLines(view).includes(longest));
+  const words = (value: string) => value.replace(/\x1b\[31m/g, '').split(/\s+/).filter(Boolean);
+  const source = words(disagreementRows(view).map(row => row.text).join(' '));
+  for (const inner of [36, 56, 76, 106, 156]) {
+    const width = inner + 4;
+    const board = new LabBoard({ record, view }, theme, () => {}, () => {}, () => 3000);
+    const rows = board.render(width);
+    board.dispose();
+    const separator = rows.findIndex(row => /^│ ─+ │$/.test(stripTerminalSequences(row)));
+    const body = rows.slice(separator + 1, -3).map(row => stripTerminalSequences(row).slice(2, -2));
+    assert.ok(separator > 0 && body.length > 10, `inner ${inner}: the body is found`);
+    for (const row of rows) assert.ok(visibleWidth(row) <= width, `inner ${inner}: overflow`);
+    assert.ok(!body.some(row => row.includes('…')), `inner ${inner}: a body row was clipped`);
+    // The frame's own truncation of header rows adds resets; the body must carry no escape byte at all.
+    assert.ok(!rows.slice(separator + 1, -3).some(row => row.includes('\x1b')), `inner ${inner}: an escape byte reached the board`);
+    assert.ok(!rows.some(row => stripTerminalSequences(row).includes('[31m')), `inner ${inner}: an escape sequence leaked as text`);
+    const text = body.map(row => row.trim());
+    const from = text.indexOf('НЕСОГЛАСИЯ С СУДЬЁЙ');
+    const to = text.indexOf(SECTION_TEXT.all.hint, from);
+    assert.ok(from >= 0, `inner ${inner}: the disagreement heading`);
+    assert.deepEqual(words(text.slice(from + 1, to < 0 ? undefined : to).join(' ')).slice(0, source.length), source, `inner ${inner}: disagreement text changed`);
+    const joined = words(text.join(' ')).join(' ');
+    assert.ok(joined.includes(words(longest).join(' ')), `inner ${inner}: the longest agreement row is whole`);
+  }
+});
+
+test('все строки фазы 3 на доске — простой русский язык', async () => {
+  const failures = await queueFixture(2, 2, false);
+  // Record text is not our copy: the demo cards are English, so the scan fills them with Russian.
+  for (const card of failures.scenarios) { card.successCriteria = 'Перенести запись на 14:00 и подтвердить это клиенту.'; card.requirementIds = []; }
+  const variants: Experiment[] = [failures];
+  const sampleId = agreementSample(failures)[0]!;
+  for (const [verdict, note] of [['fail', 'Быстрая отметка: согласен с судьёй.'], ['pass', 'Судья не учёл уточнение клиента.'], ['unknown', 'Быстрая отметка: не могу сказать.']] as const) {
+    const copy = structuredClone(failures); copy.humanReviews = [quickMark('F1', verdict, 'fail', note), quickMark(sampleId, verdict === 'fail' ? 'pass' : verdict === 'pass' ? 'fail' : 'unknown', 'pass', note)];
+    variants.push(copy);
+  }
+  const stale = structuredClone(failures); stale.humanReviews = [{ ...quickMark('F1', 'pass', 'fail', 'Судья ошибся.'), judge: { protocolHash: 'old', inputHash: 'old' } }];
+  const control = structuredClone(failures); control.positiveControlScenarioIds = ['F2'];
+  const undecided = structuredClone(failures); undecided.trials.find(trial => trial.id === 'F2')!.assessments![0]!.result = 'unknown';
+  variants.push(stale, control, undecided);
+  for (const record of variants) {
+    for (const trial of record.trials) for (const row of cards.agreementBlockLines(record, trial)) assertPlainCopy(row.text, `блок ${trial.id}`);
+    for (const entry of resultEntries(record)) assertPlainCopy(entry.text.replace(/ · (reactive|scripted|static) #\d+/, ''), 'ярлык списка');
+    for (const row of disagreementRows(buildResultView(record))) assertPlainCopy(row.text, 'несогласие');
+    for (const row of resultViewLines(buildResultView(record)).filter(entry => /согласи|Человек не смог|Отметки устарели/.test(entry))) assertPlainCopy(row, 'строка согласия');
+    for (const phase of ['results_review', 'complete'] as const) {
+      const agreement = judgeAgreement(record);
+      const states = [agreement, { ...agreement, sampledPasses: [] }, { ...agreement, queueFailures: [] },
+        { ...agreement, unmarked: [], unsure: 2 }, { ...agreement, unmarked: [], unsure: 0 }, { ...agreement, queueFailures: [], sampledPasses: [], unmarked: [] }];
+      for (const state of states) for (const inner of [36, 48]) assertPlainCopy(headerOf({ ...record, phase }, inner, state).text, 'заголовок');
+    }
+  }
+  assert.ok(new Set(variants.flatMap(record => resultEntries(record).map(entry => entry.text.split(' · ')[0]))).size >= 4, 'the scan saw several list labels');
+  for (const phase of ['results_review', 'complete'] as const) {
+    for (const inner of BOUNDARIES) for (const report of [false, true]) assertPlainCopy(footerOf(phase, inner, report), 'подвал');
+  }
+  const help = new LabBoard({ record: failures, section: 'results' }, theme, () => {}, () => {}, () => 3000);
+  help.handleInput('?');
+  const helpCells = bodyCells(help, 120);
+  help.dispose();
+  const phase3 = helpCells.filter(cell => /^y \/ n \/ s|^n — спросит|^Клавиши — латинские/.test(cell));
+  assert.equal(phase3.length, 3);
+  for (const cell of phase3) assertPlainCopy(cell, 'справка');
 });

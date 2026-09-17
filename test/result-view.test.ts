@@ -1052,3 +1052,15 @@ test('the agreement row, the disagreements and the next step are plain Russian o
   assertPlainCopy('y · n · s — согласие с судьёй');
   assertPlainCopy(NEXT_STEP);
 });
+
+test('строки согласия в первом блоке несут свои роли, а текст блока не меняется', () => {
+  const record = { ...scored(1, 2), humanReviews: [quick('t-f0', 'fail', 'fail'), quick('t-f1', 'unknown', 'fail'), quick('t-p0', 'pass', 'fail')] };
+  const view = buildResultView(record);
+  const rows = resultViewRows(view);
+  const at = rows.findIndex(row => row.text.startsWith('Согласие с судьёй'));
+  assert.deepEqual(rows.slice(at).map(row => [row.role, row.indent]),
+    [['agreement', 0], ['agreement-tail', 2], ['agreement-tail', 2], ['agreement-tail', 2]]);
+  assert.ok(rows.slice(0, at).every(row => !String(row.role).startsWith('agreement')), 'no other row takes the agreement roles');
+  assert.deepEqual(resultViewLines(view), rowsToLines(rows));
+  assert.equal(resultViewRows(buildResultView(scored(1, 1))).find(row => row.text === 'Согласие с судьёй: ещё не проверено.')?.role, 'agreement');
+});
