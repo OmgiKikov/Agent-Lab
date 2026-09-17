@@ -1,13 +1,13 @@
 ---
 gsd_state_version: "1.0"
-current_phase: "03.1"
-current_phase_name: Справился = запрос выполнен и правила промпта соблюдены
-status: verifying
+current_phase: 4
+current_phase_name: Экран результата в Pi
+status: executing
 stopped_at: Completed 03.1-04-PLAN.md
-last_updated: "2026-09-17T21:05:09.212Z"
-last_activity: 2026-09-17
-last_activity_desc: Phase 03.1 execution started
-state_head: 729e61a218bd6bb47d9e5e99e0a4ff2a158ac177
+last_updated: "2026-09-17T21:20:57.969Z"
+last_activity: 2026-09-18
+last_activity_desc: Phase 4 execution started
+state_head: ae98e04c3470e637e979cd5dad93f67128041a63
 progress:
   total_phases: 8
   completed_phases: 1
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-16)
 
 **Core value:** Владелец агента и заказчик за 10 секунд понимают, насколько хорош агент и почему он ошибается, и верят этому числу.
-**Current focus:** Phase 03.1 — Справился = запрос выполнен и правила промпта соблюдены
+**Current focus:** Phase 4 — Экран результата в Pi
 
 ## Current Position
 
-Phase: 03.1 (Справился = запрос выполнен и правила промпта соблюдены) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
-Last activity: 2026-09-17 — Phase 03.1 execution started
+Phase: 4 (Экран результата в Pi) — EXECUTING
+Plan: 1 of 10
+Status: Executing Phase 4
+Last activity: 2026-09-18 — Phase 4 execution started
 
 Progress: [█░░░░░░░░░] 13%
 
@@ -196,6 +196,18 @@ None yet.
 | 1 | verification_stale_deferred | /gsd-verify-work 1 — после фазы 6, когда код перестанет меняться |
 | 2 | verification_deferred_human | /gsd-verify-work 2 — после фазы 6; живую проверку Pi (`/agent-lab 37f78e1a`: 2, e, y, r в светлой и тёмной теме) владелец проводит сам |
 | 3 | verification_deferred_human | /gsd-verify-work 3 — 3 пункта в `03-UAT.md` для владельца за живым Pi (настоящие отметки после заморозки судьи, светлая и тёмная тема, клавиша `n`); автоматические проверки пройдены 11/12 |
+
+## Deferred Plans (owner decision 2026-09-17, autonomous `--to 6`, вариант «б»)
+
+Живые проверки и матрица рендера отложены до репетиции вс 2026-09-20, чтобы успеть основной объём фаз 4–6 к заморозке кода 2026-09-19:
+
+| Plan | What | Resume |
+|------|------|--------|
+| 04-09 | матрица рендера 40–160 / светлая-тёмная, pi-reopen-check | /gsd-execute-phase 4 (подхватит несделанные планы) |
+| 04-10 | живой прогресс на настоящем прогоне `aigw-local` | /gsd-execute-phase 4 |
+| 05-07 | выжимка и HTML-отчёт по настоящему прогону, verify-share.mjs | /gsd-execute-phase 5 |
+
+Фаза 03.1: 4/4 планов выполнены, 558/558, `dist/` подменён (729e61a); verifier и код-ревью — в общем пакете в конце прогона.
 
 ## Deferred Items
 
