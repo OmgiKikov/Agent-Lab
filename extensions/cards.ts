@@ -60,6 +60,17 @@ export function agreementTarget(record: Experiment, trial: Trial | undefined): A
   return { kind: 'ready', metricId, judgeVerdict: recorded, sampled: agreementSample(record).includes(trial.id) };
 }
 
+/**
+ * Section-3 list rows, in review order. `waiting` is what the `u` filter keeps: a situation the
+ * board is still waiting on.
+ */
+export function resultEntries(record: Experiment): { id: string; text: string; waiting: boolean }[] {
+  const pending = awaitingVerdict(record);
+  const flagged = new Set(humanFindings(record).map(f => f.trialId));
+  return reviewOrder(record).map(trial => ({ id: trial.id, waiting: pending.has(trial.id),
+    text: `${pending.has(trial.id) ? '● ' : ''}${flagged.has(trial.id) ? 'ЗАМЕЧАНИЕ ЧЕЛОВЕКА' : isAgentFailure(record, trial) ? 'НЕ ПРОЙДЕНО' : verdicts[trial.outcome]} · ${record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId} · ${trial.userMode ?? 'reactive'} #${trial.repeat + 1}` }));
+}
+
 export type Section = 'agent' | 'cards' | 'results';
 export type BoardAction =
   | { type: 'close' }
@@ -473,11 +484,8 @@ export class LabBoard implements Component {
     let entries: { text: string; index: number; id: string }[];
     if (!record) entries = (this.options.records ?? []).map((r, index) => ({ text: `${phases[r.phase] ?? r.phase} · ${r.task}`, index, id: r.id }));
     else if (this.section === 'results') {
-      const pending = awaitingVerdict(record);
-      const flagged = new Set(humanFindings(record).map(f => f.trialId));
-      entries = reviewOrder(record).map((t, index) => ({ id: t.id, index,
-        text: `${pending.has(t.id) ? '● ' : ''}${flagged.has(t.id) ? 'ЗАМЕЧАНИЕ ЧЕЛОВЕКА' : isAgentFailure(record, t) ? 'НЕ ПРОЙДЕНО' : verdicts[t.outcome]} · ${record.scenarios.find(s => s.id === t.scenarioId)?.title ?? t.scenarioId} · ${t.userMode ?? 'reactive'} #${t.repeat + 1}`,
-      })).filter(e => !this.pendingOnly || pending.has(e.id));
+      entries = resultEntries(record).flatMap((entry, index) => !this.pendingOnly || entry.waiting
+        ? [{ id: entry.id, index, text: entry.text }] : []);
     } else if (this.section === 'cards') {
       const edited = new Set(record.ownerExpectationScenarioIds ?? []);
       entries = record.scenarios.map((s, index) => ({ text: `${s.tier === 'smoke' ? '◆ ' : ''}${s.title}${edited.has(s.id) ? ' · ожидание изменено' : ''}`, index, id: s.id }));

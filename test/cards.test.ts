@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { visibleWidth, stripTerminalSequences } from '@earendil-works/pi-tui';
-import { LabBoard, reviewOrder, safeText, wrapRows, type BoardAction, type BoardOptions } from '../extensions/cards.ts';
+import { LabBoard, resultEntries, reviewOrder, safeText, wrapRows, type BoardAction, type BoardOptions } from '../extensions/cards.ts';
+import { agreementSample } from '../src/agreement.js';
 import { htmlReport } from '../src/report.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { emptyUsage, fingerprint, type Experiment } from '../src/contracts.js';
@@ -470,6 +471,105 @@ test('y, n и s отвечают судье только там, где судь
   assert.deepEqual(press({ record, section: 'results' }, ['?', 'y', 'n', 's']), []);
   // В списке прогонов `n` по-прежнему начинает новую проверку.
   assert.equal(press({ records: [record] }, ['n'])[0]?.type, 'new');
+});
+
+/**
+ * A finished evaluation with named situations: `failures` the judge failed, `passes` it passed and
+ * — when asked — one dialogue still waiting for a verdict on the simulator. The record order
+ * interleaves passes and failures on purpose, so a list that claims the queue comes first has to
+ * prove it against the record order.
+ */
+async function queueFixture(failures: number, passes: number, withPending = true): Promise<Experiment> {
+  const record = await fixture();
+  record.phase = 'results_review'; record.reviewedAt = new Date().toISOString();
+  const base = record.scenarios[0]!;
+  const goal = { id: 'goal', name: 'Цель достигнута', subject: 'agent' as const, description: 'Клиент получил то, что просил', passCriteria: 'Получил', failCriteria: 'Не получил' };
+  const card = (id: string, title: string, agent: boolean) => ({ ...structuredClone(base), id, familyId: id, title, metrics: agent ? [goal] : [] });
+  const trial = (id: string, result: 'pass' | 'fail') => ({
+    id, revisionId: 'revision-1', scenarioId: id, familyId: id, repeat: 0, userMode: 'reactive' as const,
+    split: 'dev' as const, manifestHash: 'hash', outcome: result, reason: '',
+    checks: [{ id: 'time', description: 'Запись переставлена', passed: result === 'pass', evidence: 'e' }],
+    events: [{ seq: 0, type: 'assistant' as const, text: 'Ответ агента' }],
+    initialState: base.initialState, finalState: base.initialState, usage: emptyUsage(), elapsedMs: 1,
+    assessments: [{ metricId: 'goal', result, rationale: 'Обоснование судьи', evidence: [0] }],
+  });
+  const failIds = Array.from({ length: failures }, (_, i) => `F${i + 1}`);
+  const passIds = Array.from({ length: passes }, (_, i) => `P${i + 1}`);
+  record.scenarios = [
+    ...failIds.map((id, i) => card(id, `Провал ${i + 1}`, true)),
+    ...passIds.map((id, i) => card(id, `Успех ${i + 1}`, true)),
+    ...(withPending ? [card('sim', 'Симулятор отклонился', false)] : []),
+  ] as typeof record.scenarios;
+  const pending = {
+    ...trial('sim', 'pass'), assessments: [],
+    simulatorChecks: [{ id: 'simulator_leak' as const, description: 'Симулятор выдал лишнее', passed: false, evidence: 'e', heuristic: false }],
+    events: [{ seq: 0, type: 'simulator' as const, text: '', result: { done: false, message: 'ещё' } }, { seq: 1, type: 'assistant' as const, text: 'Ответ агента' }],
+  };
+  const order: Experiment['trials'] = [];
+  for (let i = 0; i < Math.max(failures, passes); i++) {
+    if (passIds[i]) order.push(trial(passIds[i]!, 'pass') as Experiment['trials'][number]);
+    if (failIds[i]) order.push(trial(failIds[i]!, 'fail') as Experiment['trials'][number]);
+    if (i === 0 && withPending) order.push(pending as unknown as Experiment['trials'][number]);
+  }
+  record.trials = order;
+  record.humanReviews = [];
+  return record;
+}
+
+/** One saved answer to the judge, exactly as the board writes it (`source: 'quick'`). */
+const quickMark = (trialId: string, verdict: 'pass' | 'fail' | 'unknown', judgeVerdict: 'pass' | 'fail', note: string) =>
+  ({ id: `h-${trialId}-${verdict}`, trialId, metricId: 'goal', source: 'quick' as const, verdict, judgeVerdict, note, createdAt: '2026-09-17T00:00:00.000Z' });
+
+test('очередь разбора ведёт неотмеченными провалами, затем проверяемыми успехами, и каждая строка говорит, где ситуация стоит', async () => {
+  const record = await queueFixture(2, 4);
+  const sample = agreementSample(record);
+  assert.equal(sample.length, 3, 'из четырёх успехов на проверку берутся три');
+  const recordOrder = record.trials.map(t => t.id);
+  const sampled = recordOrder.filter(id => sample.includes(id));
+  const spare = ['P1', 'P2', 'P3', 'P4'].filter(id => !sample.includes(id));
+  assert.deepEqual(reviewOrder(record).map(t => t.id), ['F1', 'F2', ...sampled, 'sim', ...spare],
+    `порядок записи: ${recordOrder.join(', ')}`);
+
+  const rows = () => new Map(resultEntries(record).map(entry => [entry.id, entry.text]));
+  assert.equal(rows().get('F2'), '● ПРОВЕРЬТЕ ПРОВАЛ · Провал 2 · reactive #1');
+  const successTitle = record.scenarios.find(card => card.id === sampled[0])!.title;
+  assert.equal(rows().get(sampled[0]!), `● ПРОВЕРЬТЕ И УСПЕХ · ${successTitle} · reactive #1`);
+
+  // Ответ уводит ситуацию из очереди, и та же позиция списка показывает следующую.
+  record.humanReviews.push(quickMark('F1', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.'));
+  assert.equal(reviewOrder(record)[0]?.id, 'F2');
+  assert.equal(rows().get('F1'), 'НЕ ПРОЙДЕНО · Провал 1 · reactive #1 · = согласен');
+
+  record.humanReviews.push(quickMark('F2', 'pass', 'fail', 'Судья не учёл уточнение клиента.'));
+  assert.equal(rows().get('F2'), 'НЕСОГЛАСИЕ С СУДЬЁЙ · Провал 2 · reactive #1');
+
+  record.humanReviews.push(quickMark(sampled[0]!, 'unknown', 'pass', 'Быстрая отметка: не могу сказать.'));
+  assert.equal(rows().get(sampled[0]!), `● ПРОЙДЕНО · ${successTitle} · reactive #1 · ~ не могу сказать`);
+
+  // «Только неразобранные» держит непроверенные успехи и всё, что ещё ждёт человека.
+  const waiting = resultEntries(record).filter(entry => entry.waiting).map(entry => entry.id);
+  assert.deepEqual(waiting, [...sampled.slice(1), 'sim']);
+
+  for (const id of sampled.slice(1)) record.humanReviews.push(quickMark(id, 'pass', 'pass', 'Быстрая отметка: согласен с судьёй.'));
+  assert.equal(reviewOrder(record)[0]?.id, 'sim');
+  assert.deepEqual(resultEntries(record).filter(entry => entry.waiting).map(entry => entry.id), ['sim']);
+});
+
+test('при тринадцати провалах и одном проверяемом успехе успех стоит четырнадцатым', async () => {
+  const record = await queueFixture(13, 1, false);
+  const entries = resultEntries(record);
+  assert.deepEqual(entries.slice(0, 13).map(entry => entry.id), Array.from({ length: 13 }, (_, i) => `F${i + 1}`));
+  assert.equal(entries[13]?.text, '● ПРОВЕРЬТЕ И УСПЕХ · Успех 1 · reactive #1');
+});
+
+test('управляющая последовательность в названии ситуации не доходит до терминала', async () => {
+  const record = await queueFixture(1, 1, false);
+  record.scenarios[0]!.title = 'Возврат[31m платежа';
+  const board = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 40);
+  const raw = board.render(140).join('\n');
+  assert.doesNotMatch(raw, /\[31m/, 'ни список, ни боковая колонка не печатают управляющую последовательность');
+  assert.match(raw, /ПРОВЕРЬТЕ ПРОВАЛ · Возврат/);
+  board.dispose();
 });
 
 test('HTML reports escape untrusted text and remain self-contained with explicit evidence limits', async () => {
