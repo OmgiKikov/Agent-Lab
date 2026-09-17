@@ -995,6 +995,14 @@ test('Pi inspect payload, its collapsed result and CLI summary open with the sam
     const rendered = inspect.renderResult!(result as never, { expanded: false, isPartial: false }, { fg: (_color: string, text: string) => text } as never) as unknown as Component;
     const text = rendered.render(400).map(line => line.trimEnd()).join('\n').trim();
     assert.ok(text.startsWith(payload.viewLines.join('\n')), 'the collapsed tool result opens with the ResultView block');
+    if (payload.view.failures.length) {
+      assert.ok(Array.isArray(payload.failureLines) && payload.failureLines.length, 'a run with failures carries the failure section');
+      assert.ok(['Главные причины провалов:', 'Провалы:'].includes(payload.failureLines[0]), payload.failureLines[0]);
+      assert.equal(payload.failureLines.at(-1), `Все провалы — /agent-lab ${record.id.slice(0, 8)}, раздел 1, Enter.`);
+      assert.ok(text.startsWith(`${payload.viewLines.join('\n')}\n\n${payload.failureLines.join('\n')}`),
+        'the failure section follows the block in the collapsed result');
+      assert.ok(!text.includes('ЧТО ТРЕБУЕТ ВНИМАНИЯ'));
+    }
     const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
     const child = spawn(process.execPath, [cli, 'summary', '--id', record.id, '--data-dir', join(cwd, '.agent-lab')]);
     let stdout = ''; let stderr = '';

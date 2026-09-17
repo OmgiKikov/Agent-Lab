@@ -3,9 +3,9 @@ import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, wrap
 import type { Experiment, Scenario, Trial } from '../dist/contracts.js';
 import { describeCheck } from '../dist/contracts.js';
 import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
-import { qualitySummary, qualityLines, dialogues as dlg } from '../dist/quality.js';
+import { qualitySummary, qualityLines } from '../dist/quality.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
-import { buildResultView, resultViewLines, type ResultView } from '../dist/result-view.js';
+import { buildResultView, causeSection, failureListRows, resultViewRows, SECTION_TEXT, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
 
 /** All material, model and persisted text crosses this boundary before terminal rendering. */
 export function safeText(value: unknown): string {
@@ -66,6 +66,24 @@ type Line = { text: string; color?: ThemeColor; bold?: boolean };
 const line = (text: unknown, color?: ThemeColor, bold = false): Line => ({ text: safeText(text), color, bold });
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 const outcomeColor = (value: string): ThemeColor => value === 'pass' ? 'success' : value === 'fail' || value === 'invalid' ? 'error' : 'warning';
+
+/*
+ * One color per row, decided by the row's role (UI-SPEC «Row role → token»): the board never
+ * colors a row by its position in the list, and never rewords or reorders what result-view.ts
+ * and explain.ts produced.
+ */
+const VIEW_ROLE: Record<ResultRow['role'], { color: ThemeColor; bold: boolean }> = {
+  lead: { color: 'text', bold: true }, line: { color: 'muted', bold: false },
+  detail: { color: 'muted', bold: false }, situation: { color: 'warning', bold: false },
+};
+const SECTION_ROLE: Record<SectionRow['role'], { color?: ThemeColor; bold: boolean }> = {
+  cause: { color: 'accent', bold: false }, example: { color: 'text', bold: true }, title: { color: 'error', bold: true },
+  expected: { color: 'text', bold: false }, said: { color: 'text', bold: false },
+  rule: { color: 'muted', bold: false }, more: { color: 'muted', bold: false }, violated: { color: 'muted', bold: false },
+  unverified: { color: 'warning', bold: false }, blank: { bold: false },
+};
+const viewRow = (row: ResultRow): Line => line(' '.repeat(row.indent) + row.text, VIEW_ROLE[row.role].color, VIEW_ROLE[row.role].bold);
+const sectionRow = (row: SectionRow): Line => line(' '.repeat(row.indent) + row.text, SECTION_ROLE[row.role].color, SECTION_ROLE[row.role].bold);
 
 function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean): Line[] {
   const profile = record.profiles.find(p => p.id === scenario.profileId);
@@ -193,19 +211,17 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
     const text = qualityLines(q);
     const finding = v.review.findings[0];
     const measuredAny = q.scope.dialogues > 0;
-    // The first block is ResultView's, line for line: the board never counts or picks a not-measured card itself.
+    const section = causeSection(view);
+    // The first block is ResultView's, row for row: the board never counts or picks a not-measured card itself.
     return [line('ИТОГ', 'accent', true),
-      ...(measuredAny ? resultViewLines(view).map((text, i) => line(text, i === 0 ? 'text' : 'muted', i === 0)) : [line(v.headline, 'text', true)]),
+      ...(measuredAny ? resultViewRows(view).map(viewRow) : [line(v.headline, 'text', true)]),
       ...(measuredAny && q.metrics.length ? text.metrics.map(m => line(m)) : []),
       ...(measuredAny ? text.rag.map(item => line(item, 'muted')) : []),
       line(''),
       ...(finding ? [line(humanFindingText(finding), 'warning')] : []),
-      ...(q.causes.length ? [line('ЧТО ТРЕБУЕТ ВНИМАНИЯ', 'accent'),
-        ...q.causes.slice(0, 3).flatMap((c, i) => [
-          line(`${i + 1}. ${c.name} — ${dlg(c.dialogues)}${c.stage ? ` · ${c.stage}` : ''}`, 'warning'),
-          ...(c.example ? [line(`   ${c.example.card}: «${c.example.quote}»${c.example.seq !== undefined ? ` · реплики #${c.example.seq}` : ''}`, 'muted')] : []),
-          ...c.promptQuotes.slice(0, 1).map(quote => line(`   Правило промпта: «${quote}»`, 'muted')),
-        ]), line('3 — открыть диалог и основание оценки', 'muted')]
+      // The same explanations the CLI and the Pi result show; nothing here is clipped or reworded.
+      ...(section ? [line(SECTION_TEXT[section.kind].board, 'accent', true), ...section.rows.map(sectionRow),
+        ...(view.failures.length ? [line(SECTION_TEXT.all.hint, 'muted')] : [])]
         : measuredAny ? [line('Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.', 'success')] : [line('Сохраните полезные тесты и повторите их после следующей правки.')]),
       line(''),
       ...(measuredAny ? [line(text.judge), line(text.queue, q.humanQueue.total ? 'warning' : 'muted')] : []),

@@ -8,7 +8,7 @@ import { emptyUsage, fingerprint, type Experiment } from '../src/contracts.js';
 import { compareRuns } from '../src/comparison.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { markdownReport } from '../src/report.js';
-import { buildResultView, resultViewLines, type ResultView } from '../src/result-view.js';
+import { buildResultView, causeSection, resultViewLines, SECTION_TEXT, type ResultView } from '../src/result-view.js';
 
 const theme = { fg: (_: string, value: string) => value, bold: (value: string) => value };
 
@@ -209,8 +209,9 @@ test('result cards keep model grades, missing grades, traces and human annotatio
   ];
   const overview = new LabBoard({ record }, theme, () => {}, () => {}, () => 120);
   const overviewText = overview.render(120).join('\n');
-  assert.match(overviewText, /AGENT_FAILURE_SENTINEL/); assert.doesNotMatch(overviewText, /SIMULATOR_FAILURE_SENTINEL/);
-  assert.match(overviewText, /реплики #1/); overview.dispose();
+  // The overview explains only decided failures, with verified text: no judge rationale reaches it.
+  assert.doesNotMatch(overviewText, /AGENT_FAILURE_SENTINEL/); assert.doesNotMatch(overviewText, /SIMULATOR_FAILURE_SENTINEL/);
+  assert.match(stripTerminalSequences(overviewText), /Не измерено: 2/); overview.dispose();
   const html = htmlReport(record);
   // The simulator rubric failed, so the agent grade is not a usable measurement yet: the first screen says «—», not 0%, and queues one dialogue for a human.
   assert.match(html, /Точность · судья, предварительно<\/h3><strong>—<\/strong>/); assert.match(html, /неясно 1/);
@@ -299,7 +300,8 @@ test('the board leads with a plain verdict once dialogues exist and has only thr
   assert.match(text, /Точные проверки · код · 2\/3/);
   assert.ok(text.includes(resultViewLines(buildResultView(record))[0]!));
   assert.match(text, /спорных 0/);
-  assert.match(text, /Время изменено/);
+  // The failed repeat leaves the card unstable, so it is named as not measured, not as a failure.
+  assert.match(text, /Провалов не зарегистрировано/);
   assert.match(text, /Дальше/);
   assert.doesNotMatch(text, /TPR/);
   assert.match(text, /1 Обзор.*2 Карточки.*3 Диалоги/);
@@ -307,7 +309,7 @@ test('the board leads with a plain verdict once dialogues exist and has only thr
   for (const width of [16, 40, 80]) for (const line of board.render(width)) assert.ok(visibleWidth(line) <= width, `overflow at ${width}`);
   board.dispose();
   const results = new LabBoard({ record }, theme, () => {}, () => {}, () => 40);
-  assert.match(results.render(120).join('\n'), /ЧТО ТРЕБУЕТ ВНИМАНИЯ/);
+  assert.doesNotMatch(results.render(120).join('\n'), /ЧТО ТРЕБУЕТ ВНИМАНИЯ/);
   assert.ok(stripTerminalSequences(results.render(120).join('\n')).includes(`Итог: ${buildResultView(record).headline.text} · 1 подробнее`));
   results.dispose();
 });
@@ -454,5 +456,55 @@ test('after refresh the board shows the refreshed bundle view', async () => {
   const cells = boardCells(board);
   assert.ok(cells.includes('ОБНОВЛЁННЫЙ ИТОГ'));
   assert.ok(cells.includes('Итог: ОБНОВЛЁННЫЙ ИТОГ · 1 подробнее'));
+  board.dispose();
+});
+
+/** One card decided as failed by its own exact check, so the overview has a failure to explain. */
+async function failedCard(): Promise<Experiment> {
+  const record = await fixture();
+  record.phase = 'complete'; record.reviewedAt = record.createdAt; record.resultsReviewedAt = record.updatedAt;
+  // One planned attempt per card, so the card with its single failed attempt is decided, not «запись неполная».
+  record.settings = { ...record.settings, userModes: ['static'], repeats: 1 };
+  const scenario = record.scenarios[0]!;
+  scenario.successCriteria = 'Время изменилось на 14:00.';
+  scenario.metrics = [{ id: 'goal_attainment', name: 'Достижение цели', subject: 'agent',
+    description: 'Задача пользователя решена.', passCriteria: 'Время изменено.', failCriteria: 'Время не изменено.' }];
+  record.trials = [{ id: 'f0', revisionId: 'revision-1', scenarioId: scenario.id, familyId: scenario.familyId, repeat: 0,
+    userMode: 'static' as const, split: 'dev' as const, manifestHash: 'hash', outcome: 'fail' as const, reason: 'Время не изменилось.',
+    checks: [{ id: 'time', description: 'Время изменено', passed: false, evidence: 'В состоянии осталось 12:00' }],
+    events: [{ seq: 0, type: 'user' as const, text: 'Перенесите запись на 14:00.' }, { seq: 1, type: 'assistant' as const, text: 'Ничего менять не буду.' }],
+    initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1,
+    assessments: [{ metricId: 'goal_attainment', result: 'fail' as const, rationale: 'CLIPPED_JUDGE_RATIONALE',
+      evidence: [1], citations: [{ seq: 1, quote: 'Ничего менять не буду.' }] }] }];
+  return record;
+}
+
+test('the board overview shows the failure section of result-view, with the pointer and no clipped quote', async () => {
+  const record = await failedCard();
+  const view = buildResultView(record);
+  const section = causeSection(view);
+  assert.ok(section, 'the fixture has a failed situation to explain');
+  const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 200);
+  const cells = boardCells(board);
+  assert.ok(cells.includes(SECTION_TEXT[section.kind].board), `board misses the heading ${SECTION_TEXT[section.kind].board}`);
+  for (const row of section.rows) {
+    if (!row.text.trim()) continue;
+    assert.ok(cells.includes(row.text.trim()), `board misses the section row: ${row.text}`);
+  }
+  assert.ok(cells.includes(SECTION_TEXT.all.hint));
+  assert.ok(!cells.includes('ЧТО ТРЕБУЕТ ВНИМАНИЯ'), 'the old block with a clipped quote is gone');
+  assert.ok(!cells.some(cell => cell.endsWith('…')), 'nothing on the overview is clipped');
+  assert.ok(!cells.some(cell => cell.includes('CLIPPED_JUDGE_RATIONALE')), 'the judge rationale never reaches the overview');
+  board.dispose();
+});
+
+test('with nothing failed the overview says so and shows no failure heading', async () => {
+  const record = await failedCard();
+  const view: ResultView = { ...buildResultView(record), failures: [], topCauses: [] };
+  const board = new LabBoard({ record, view }, theme, () => {}, () => {}, () => 200);
+  const cells = boardCells(board);
+  assert.ok(cells.includes('Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.'));
+  assert.ok(!cells.includes(SECTION_TEXT.causes.board) && !cells.includes(SECTION_TEXT.failures.board));
+  assert.ok(!cells.includes(SECTION_TEXT.all.hint));
   board.dispose();
 });
