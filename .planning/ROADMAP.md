@@ -133,7 +133,7 @@ Plans:
 - [x] 03-03-PLAN.md
 - [x] 03-04-PLAN.md
 - [x] 03-05-PLAN.md
-- [ ] 03-06-PLAN.md
+- [x] 03-06-PLAN.md
 - [ ] 03-07-PLAN.md
 
 **UI hint**: yes
@@ -234,7 +234,7 @@ Phases execute in numeric order: 1 → 2 → 3 → (4 ∥ 5) → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Одно честное число | 12/12 | Complete    | 2026-09-17 |
 | 2. Судья объясняет провалы | 9/9 | Complete (human check deferred) | 2026-09-17 |
-| 3. Согласие человека с судьёй | 5/7 | In Progress|  |
+| 3. Согласие человека с судьёй | 6/7 | In Progress|  |
 | 4. Экран результата в Pi | 0/TBD | Not started | - |
 | 5. Выжимка и HTML-отчёт для менеджера | 0/TBD | Not started | - |
 | 6. Лёгкий старт | 0/TBD | Not started | - |

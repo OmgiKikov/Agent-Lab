@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 03
 current_phase_name: Согласие человека с судьёй
 status: executing
-stopped_at: Completed 03-05-PLAN.md
-last_updated: "2026-09-17T13:24:45.475Z"
+stopped_at: Completed 03-06-PLAN.md
+last_updated: "2026-09-17T14:31:29.729Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 03 execution started
-state_head: cfccec0f247b2840760b03b10ac33f89d93b75f6
+state_head: c20e2b2f691a4351b0588e16fee0dbc300983a2f
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 50
-  completed_plans: 26
+  completed_plans: 27
   percent: 13
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 03 (Согласие человека с судьёй) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 03 execution started
 
@@ -84,6 +84,7 @@ Progress: [█░░░░░░░░░] 13%
 | Phase 03 P03 | 13 min | 2 tasks | 7 files |
 | Phase 03 P04 | 27 min | 3 tasks | 4 files |
 | Phase 03 P05 | 10 min | 2 tasks | 2 files |
+| Phase 03 P06 | 16min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -143,6 +144,9 @@ Recent decisions affecting current work:
 - [Phase 03]: Отметка согласия пишется только с доски: agreementTarget читает решение судьи из записи, а действие agree несёт его с собой, поэтому лаборатория отказывает устаревшей отметке — Так согласие нельзя поставить вслепую или поверх изменившегося вердикта
 - [Phase 03]: Очередь разбора ведёт список раздела 3: неотмеченные провалы, затем взятые на проверку успехи; ответ уводит ситуацию из очереди, и та же позиция показывает следующую — Владелец проходит провалы и выборку успехов без навигации
 - [Phase 03]: 03-05: the F11 header reads failures.checked and sampleChecked from judgeAgreement (same counts as the C-95 notice); resultsFooter owns the report prefix in section 3, so it prints at most once
+- [Phase 03]: 03-06: доказательство для блока согласия строится на записи без отметок человека (situationEvidence); провал и успех идут через один построитель F1
+- [Phase 03]: 03-06: строки клавиш C-71/C-72 переносятся только у «·» и продолжаются со второй колонки (Line.hang/breakAt в wrapRows)
+- [Phase 03]: 03-06: trialLines убирает быструю отметку и строку «Вердикта человека нет» только при показанном блоке; редактор v видит все отметки
 
 ### Pending Todos
 
@@ -182,6 +186,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T13:24:45.424Z
-Stopped at: Completed 03-05-PLAN.md
+Last session: 2026-09-17T14:31:21.285Z
+Stopped at: Completed 03-06-PLAN.md
 Resume file: None
