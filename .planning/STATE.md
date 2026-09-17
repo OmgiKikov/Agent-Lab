@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
 current_phase: 2
-current_phase_name: Судья объясняет провалы
-status: verifying
-stopped_at: Completed 02-09-PLAN.md
-last_updated: "2026-09-17T10:39:13.688Z"
+current_phase_name: Согласие человека с судьёй
+status: executing
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-09-17T11:52:02.238Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 2 execution started
-state_head: c44f927242b74e6fe7f29b8d0b20d91f2750f0c9
+last_activity_desc: Phase 3 execution started
+state_head: 25cb62afb7718d665868ee28d211a5c100d5085f
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 50
-  completed_plans: 21
+  completed_plans: 22
   percent: 14
 ---
 
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-16)
 
 **Core value:** Владелец агента и заказчик за 10 секунд понимают, насколько хорош агент и почему он ошибается, и верят этому числу.
-**Current focus:** Phase 2 — Судья объясняет провалы
+**Current focus:** Phase 3 — Согласие человека с судьёй
 
 ## Current Position
 
-Phase: 3 (Согласие человека с судьёй) — next; Phase 2 complete 2026-09-17 (verification human_needed: live Pi walkthrough on draft 37f78e1a deferred)
-Plan: 9 of 9
-Status: Phase complete — ready for verification
-Last activity: 2026-09-17 — Phase 2 execution started
+Phase: 3 (Согласие человека с судьёй) — EXECUTING
+Plan: 2 of 7
+Status: Ready to execute
+Last activity: 2026-09-17 — Phase 3 execution started
 
 Progress: [█░░░░░░░░░] 14%
 
@@ -79,6 +79,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 02 P07 | 34min | 2 tasks | 7 files |
 | Phase 02 P08 | 78min | 3 tasks | 4 files |
 | Phase 02 P09 | 12min | 2 tasks | 1 files |
+| Phase 03 P01 | 52min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -130,6 +131,8 @@ Recent decisions affecting current work:
 - [Phase 2]: [Phase 2]: 02-09: final dist built from HEAD 376562e after 443/443; previous build kept at .gsd/dist-before-02-09-20260917-133450 — the next Pi start gets the whole expectations sheet
 - [Phase 2]: [Phase 2]: 02-09: TRUST-10/11 proved on the real acquiring draft 37f78e1a (13 situations, 55 rule rows, 0 unverified): owner text verbatim in successCriteria, the goal rubric and the judge input; 13 confirmed in one step; board fits 40-160 columns; y/e map to accept/expect
 - [Phase 2]: [Phase 2]: 02-09: the confirmed draft stays local and unrun — diff against its source is incomparable by construction, but names «Содержимое карточек изменилось»; the live light/dark Pi check is carried to phase 4 as a backstop
+- [Phase 2]: Согласие считается по записанной оценке судьи, а не по исправленной человеком (03-01)
+- [Phase 2]: Версию судьи и его вердикт в отметку пишет лаборатория, значения от вызывающего не сохраняются (03-01)
 
 ### Pending Todos
 
@@ -156,6 +159,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T10:39:03.365Z
-Stopped at: Completed 02-09-PLAN.md
+Last session: 2026-09-17T11:51:54.206Z
+Stopped at: Completed 03-01-PLAN.md
 Resume file: None
