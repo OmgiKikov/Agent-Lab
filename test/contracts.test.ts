@@ -119,6 +119,19 @@ test('a quick agreement mark extends the review schema and old reviews still par
   assert.equal(humanReviewInputSchema.safeParse({ ...quick, mood: 'good' }).success, false, 'the object stays strict');
 });
 
+test('a quick mark carries the counting rule it was given under; an old review without it parses unchanged (03.1)', () => {
+  const legacy = { trialId: 't1', metricId: 'goal_attainment', verdict: 'fail' as const, note: 'разбор без новых полей' };
+  assert.deepEqual(humanReviewInputSchema.parse(legacy), legacy, 'a phase-3 review has no counting rule and parses to an equal object');
+  const quick = { ...legacy, source: 'quick' as const, judgeVerdict: 'fail' as const, judge: { protocolHash: 'p', inputHash: 'i' } };
+  assert.deepEqual(humanReviewInputSchema.parse(quick), quick, 'a phase-3 quick mark without the stamp still parses');
+  assert.equal('countingRules' in humanReviewInputSchema.parse(quick), false, 'no stamp is added by parsing');
+  const stamped = { ...quick, countingRules: 'goal-and-rules-v2' };
+  assert.deepEqual(humanReviewInputSchema.parse(stamped), stamped, 'a stamped quick mark round-trips');
+  assert.deepEqual(humanReviewInputSchema.parse({ ...legacy, countingRules: 'goal-v1' }), { ...legacy, countingRules: 'goal-v1' }, 'the schema accepts the field on any review; the lab decides what to keep');
+  assert.equal(humanReviewInputSchema.safeParse({ ...stamped, countingRules: '' }).success, false, 'an empty stamp is not a stamp');
+  assert.equal(humanReviewInputSchema.safeParse({ ...stamped, countingRule: 'goal-and-rules-v2' }).success, false, 'an unknown key still fails: the object stays strict');
+});
+
 test('only a whole-dialogue verdict can mark an explicit complete review', () => {
   const legacy = { trialId: 't1', verdict: 'unknown' as const, note: '#1: legacy review' };
   const complete = { ...legacy, reviewedDialogue: true as const };

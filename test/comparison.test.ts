@@ -4,6 +4,7 @@ import { sourceIdentity } from '../src/normalize.js';
 import { awaitingVerdict, cardOutcome, cardVerdict, compareRuns, evidenceSummary, goalCardOutcome, headlineCardOutcome, humanFindings, isAgentFailure, judgeModel, repeatResults, stabilityAfterReassess, stabilityBetweenRuns, verdictSummary } from '../src/comparison.js';
 import { embeddedBefore } from '../src/artifacts.js';
 import { suiteEvidence } from '../src/connection.js';
+import { COUNTING_RULES } from '../src/outcomes.js';
 import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources, sealJudgeReceipt, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { emptyUsage, fingerprint, goalAttainment, promptCompliance, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
 
@@ -761,15 +762,15 @@ test('a control in either run is left out of the diff: union, added control, sel
   assert.deepEqual(compareRuns(self, self).notes, ['Выбран один и тот же прогон.', 'Контрольные ситуации не сравниваются: они не входят в главное число.']);
 });
 
-// ---- Quick agreement marks: one decided mark on the main verdict closes the situation. ----
+// ---- Quick agreement marks: a situation closes when every metric that decided it is answered (CR-02). ----
 const agentRubric = (id: string, name: string) =>
   ({ id, name, subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' });
-/** A one-key mark as the lab stores it: the judgment it answers is stamped on the review. */
+/** A one-key mark as the lab stores it: the judgment it answers and the counting rule are stamped on the review; `unstamped` is a phase-3 mark. */
 const quick = (id: string, trialId: string, verdict: HumanReview['verdict'], metricId: string,
-  judgeVerdict: 'pass' | 'fail', options: { note?: string; createdAt?: string } = {}): HumanReview =>
-  ({ ...review(id, trialId, verdict, { metricId }, options.createdAt), source: 'quick', judgeVerdict, ...(options.note ? { note: options.note } : {}) });
+  judgeVerdict: 'pass' | 'fail', options: { note?: string; createdAt?: string; unstamped?: true } = {}): HumanReview =>
+  ({ ...review(id, trialId, verdict, { metricId }, options.createdAt), source: 'quick', judgeVerdict, ...(options.unstamped ? {} : { countingRules: COUNTING_RULES }), ...(options.note ? { note: options.note } : {}) });
 
-/** One failed situation: the goal failed, a second agent criterion failed and an exact check failed too. */
+/** One failed legacy situation: the goal failed, a second agent criterion failed and an exact check failed too. */
 function quickFixture() {
   const card = { ...scenario('s1'), metrics: [agentRubric('goal', 'Goal'), agentRubric('quality', 'Quality'), metrics[1]!] };
   const failing = trial('t', 's1', 'reactive', 'fail', { failed: ['time'], assessments: [
@@ -780,18 +781,24 @@ function quickFixture() {
   return record({ scenarios: [card], trials: [failing] });
 }
 
-test('a decided quick mark on the main verdict closes the situation, an unsure one keeps it waiting', () => {
+test('on a legacy card a quick mark answers its metric alone: the other failed rubric keeps the situation waiting until it is reviewed (CR-02)', () => {
   const base = quickFixture();
   const pending = (...reviews: HumanReview[]) => awaitingVerdict({ ...base, humanReviews: reviews }).size;
 
   assert.equal(pending(), 1, 'a failure nobody marked waits for a verdict');
-  assert.equal(pending(quick('agree', 't', 'fail', 'goal', 'fail')), 0,
-    'agreeing closes it even though another criterion and an exact check also failed');
-  assert.equal(pending(quick('disagree', 't', 'pass', 'goal', 'fail')), 0, 'disagreeing closes it too');
-  assert.equal(pending(quick('unsure', 't', 'unknown', 'goal', 'fail')), 1, 'doubt is not a decision: the situation stays open');
-  assert.equal(pending(quick('agree', 't', 'fail', 'goal', 'fail'),
+  assert.equal(pending(quick('agree', 't', 'fail', 'goal', 'fail')), 1,
+    'agreeing on the main verdict does not close it while another agent criterion the judge failed has no decision');
+  assert.equal(pending(quick('disagree', 't', 'pass', 'goal', 'fail')), 1, 'disagreeing does not close it either');
+  assert.equal(pending(quick('agree', 't', 'fail', 'goal', 'fail'), review('quality', 't', 'fail', { metricId: 'quality' })), 0,
+    'a full review on the other failed rubric closes it; the failed exact check is not part of the headline');
+  assert.equal(pending(quick('agree', 't', 'fail', 'goal', 'fail'), review('quality', 't', 'unknown', { metricId: 'quality' })), 1,
+    'a full review that cannot decide the other rubric leaves it waiting');
+  assert.equal(pending(quick('unsure', 't', 'unknown', 'goal', 'fail'), review('quality', 't', 'fail', { metricId: 'quality' })), 1, 'doubt is not a decision: the situation stays open');
+  assert.equal(pending(quick('agree', 't', 'fail', 'goal', 'fail'), review('quality', 't', 'fail', { metricId: 'quality' }),
     review('full', 't', 'unknown', { metricId: 'goal' }, '2026-09-09T00:00:00Z')), 1,
     'a later full review that cannot decide supersedes the quick mark');
+  assert.equal(pending(quick('agree', 't', 'fail', 'goal', 'fail', { unstamped: true }), review('quality', 't', 'fail', { metricId: 'quality' })), 0,
+    'a legacy card asks the same question under both rules, so a phase-3 mark still closes it');
 
   // A card without a goal rubric: the main verdict is the first agent criterion the judge failed.
   const noGoal = { ...base, scenarios: [{ ...base.scenarios[0]!, metrics: [agentRubric('style', 'Style'), agentRubric('answer', 'Answer'), metrics[1]!] }],
@@ -801,14 +808,54 @@ test('a decided quick mark on the main verdict closes the situation, an unsure o
       { metricId: 'fidelity', result: 'pass' as const, rationale: 'r', evidence: [0] },
     ] }] };
   assert.equal(awaitingVerdict(noGoal).size, 1);
-  assert.equal(awaitingVerdict({ ...noGoal, humanReviews: [quick('agree', 't', 'fail', 'answer', 'fail')] }).size, 0);
+  assert.equal(awaitingVerdict({ ...noGoal, humanReviews: [quick('agree', 't', 'fail', 'answer', 'fail')] }).size, 0, 'the only failed rubric answered closes it');
 
   // The simulator is judged separately: a mark on the agent's verdict does not answer for it.
   // `simulatorWasUsed` needs a reactive dialogue with a simulator turn, so the events carry one.
   const deviated = { ...base, trials: [{ ...base.trials[0]!, events: dialogue(['hello'], 'continue'),
     simulatorChecks: [{ id: 'simulator_leak' as const, description: 'утечка', passed: false, evidence: '#1', heuristic: true }] }] };
-  assert.equal(awaitingVerdict({ ...deviated, humanReviews: [quick('agree', 't', 'fail', 'goal', 'fail')] }).size, 1,
+  assert.equal(awaitingVerdict({ ...deviated, humanReviews: [quick('agree', 't', 'fail', 'goal', 'fail'), review('quality', 't', 'fail', { metricId: 'quality' })] }).size, 1,
     'an undecided simulator check keeps the dialogue in the queue');
+});
+
+test('on a goal card quick marks close a situation only when every metric that decided it is answered under the current rule (CR-02, CTX-18)', () => {
+  const card = { ...ruledCard('c', [{ ...goalAttainment }, { ...promptCompliance }, { ...replyQuality }, { ...simulatorFidelity }]), checks: scenario('c').checks };
+  const votesOf = (goal: Vote, rules: Vote): MetricAssessment[] => [judged('goal_attainment', goal), judged('prompt_compliance', rules), judged('reply_quality', 'fail'), judged('user_fidelity', 'pass')];
+  // Reply quality fails and an exact check fails on every attempt here: neither is part of the headline.
+  const failedCheck = { checks: [{ id: 'time', description: 'time', passed: false, evidence: '' }, { id: 'extra', description: 'extra', passed: true, evidence: '' }], outcome: 'fail' as const };
+  const runOf = (goal: Vote, rules: Vote, ...reviews: HumanReview[]) => ruledRun([card], [ruledAttempt('t', 'c', votesOf(goal, rules), failedCheck)], { humanReviews: reviews });
+  const pending = (goal: Vote, rules: Vote, ...reviews: HumanReview[]) => awaitingVerdict(runOf(goal, rules, ...reviews)).size;
+
+  assert.equal(pending('fail', 'fail'), 1);
+  assert.equal(pending('fail', 'fail', quick('g', 't', 'fail', 'goal_attainment', 'fail')), 1, 'one mark on a double failure leaves it waiting');
+  assert.equal(pending('fail', 'fail', quick('r', 't', 'fail', 'prompt_compliance', 'fail')), 1);
+  assert.equal(pending('fail', 'fail', quick('g', 't', 'fail', 'goal_attainment', 'fail'), quick('r', 't', 'fail', 'prompt_compliance', 'fail')), 0,
+    'both marked closes it even though reply quality failed and an exact check failed');
+  assert.equal(pending('fail', 'fail', quick('g', 't', 'pass', 'goal_attainment', 'fail'), quick('r', 't', 'fail', 'prompt_compliance', 'fail')), 0, 'a partial overturn is an answer on both');
+  assert.equal(pending('fail', 'fail', quick('g', 't', 'fail', 'goal_attainment', 'fail'), quick('r', 't', 'unknown', 'prompt_compliance', 'fail')), 1, 'doubt on one target keeps it waiting');
+  assert.equal(pending('fail', 'fail', quick('g', 't', 'fail', 'goal_attainment', 'fail', { unstamped: true }), quick('r', 't', 'fail', 'prompt_compliance', 'fail')), 1,
+    'a phase-3 mark on a double failure answers the previous rule, not this one');
+  assert.equal(pending('fail', 'pass', quick('g', 't', 'fail', 'goal_attainment', 'fail', { unstamped: true })), 0, 'on a goal-only failure the phase-3 mark still closes it');
+  assert.equal(pending('pass', 'fail', quick('r', 't', 'fail', 'prompt_compliance', 'fail')), 0, 'a rules-only failure has one target');
+  assert.equal(pending('pass', 'fail', quick('g', 't', 'pass', 'goal_attainment', 'pass')), 1, 'a mark on the goal does not answer a rules-only failure');
+  assert.equal(pending('pass', 'pass'), 0, 'a pass with nothing failed in the headline never waits');
+});
+
+test('compareRuns names a run that holds marks under the previous counting rule, once, and stays comparable', () => {
+  const before = ruledRecord(RULED_SOURCE, { A: { goal: 'fail', rules: 'fail' }, B: { goal: 'pass', rules: 'pass' } });
+  const after = ruledRecord(RULED_REPEAT, { A: { goal: 'fail', rules: 'fail' }, B: { goal: 'pass', rules: 'pass' } }, { parentRunId: RULED_SOURCE }, { reply: 'another reply' });
+  after.humanReviews = [quick('old', 't-A-0', 'fail', 'goal_attainment', 'fail', { unstamped: true })];
+  const diff = compareRuns(before, after);
+  assert.equal(diff.comparable, true, diff.notes.join(' '));
+  assert.equal(diff.notes.filter(note => note === 'В прогоне d0d0d0d0 есть отметки по прежнему правилу подсчёта: 1.').length, 1);
+  assert.deepEqual(diff.unchanged, { passing: 1, failing: 1 }, 'the note is informational: the comparison itself is untouched');
+  // Current-rule marks and a run without marks add nothing.
+  after.humanReviews = [quick('g', 't-A-0', 'fail', 'goal_attainment', 'fail'), quick('r', 't-A-0', 'fail', 'prompt_compliance', 'fail')];
+  assert.ok(!compareRuns(before, after).notes.some(note => note.includes('по прежнему правилу подсчёта')));
+  // Both sides are named separately.
+  before.humanReviews = [quick('old', 't-A-0', 'fail', 'goal_attainment', 'fail', { unstamped: true })];
+  after.humanReviews = [quick('old', 't-A-0', 'fail', 'goal_attainment', 'fail', { unstamped: true })];
+  assert.equal(compareRuns(before, after).notes.filter(note => note.includes('по прежнему правилу подсчёта')).length, 2);
 });
 
 test('a quick agreement is not a human remark, a quick disagreement still is', () => {
