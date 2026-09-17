@@ -1214,3 +1214,52 @@ test('лист из 13 ситуаций с 11 правилами прокруч�
   assert.match(full, /Версия ожиданий: /);
   tall.dispose();
 });
+
+/** Distinct SGR colors per theme token: the frame measures them as zero-width, so nothing is cut. */
+const SGR: Record<string, number> = { accent: 31, error: 32, text: 33, muted: 34, success: 35, warning: 36, borderMuted: 37, dim: 90 };
+const sgrTheme = { fg: (color: string, value: string) => `\x1b[${SGR[color] ?? 97}m${value}\x1b[39m`, bold: (value: string) => `\x1b[1m${value}\x1b[22m` };
+const painted = (color: string, text: string, bold = false) => `\x1b[${SGR[color]}m${bold ? `\x1b[1m${text}\x1b[22m` : text}\x1b[39m`;
+/** The detail pane of a board, one trimmed cell per row: the last cell before the right border. */
+function bodyCells(board: LabBoard, width: number): string[] {
+  return stripTerminalSequences(board.render(width).join('\n')).split('\n').map(row => (row.split('│').at(-2) ?? '').trim());
+}
+function blockOf(record: Experiment, trialId = record.trials[0]!.id) {
+  assert.equal(typeof cards.agreementBlockLines, 'function', 'cards.ts exports agreementBlockLines (UI-SPEC F10)');
+  return cards.agreementBlockLines(record, record.trials.find(trial => trial.id === trialId)!);
+}
+const KEYS = 'y — согласен · n — не согласен · s — не могу сказать';
+
+test('в разделе 3 провал читается с доказательства, потом «Судья: ✗ не справился», потом клавиши', async () => {
+  const record = await failedCard();
+  const title = record.scenarios[0]!.title;
+  const block = blockOf(record);
+  assert.ok(block.length > 0, 'a failed situation with a recorded judge verdict shows the block');
+  const board = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 3000);
+  const cells = bodyCells(board, 120);
+  board.dispose();
+  const at = (text: string, from = 0) => cells.findIndex((cell, i) => i >= from && cell.startsWith(text));
+  const head = at('ПРОВЕРКА СУДЬИ');
+  assert.ok(head >= 0, 'the block heading is on the board');
+  assert.equal(cells[head + 1], title, 'the title follows the heading, with no verdict glyph');
+  assert.equal(cells[head + 2], 'Проверьте провал: сначала прочитайте доказательство.');
+  const expected = at('Должен был:', head);
+  const said = at('Сказал (реплика #1):', head);
+  const judge = at('Судья: ✗ не справился', head);
+  const keys = at(KEYS, head);
+  assert.ok(expected > head + 2 && said > expected, 'the evidence rows come right after the lead row');
+  assert.ok(expected < judge && said < judge, 'the evidence is read before the judge verdict');
+  assert.ok(judge < keys, 'the keys come after the verdict');
+  assert.equal(cells[keys + 1], '', 'one blank row closes the block');
+  assert.ok(at(title, keys) > keys, "today's dialogue rows follow the block");
+  assert.ok(!cells.slice(head, keys + 1).some(cell => cell.includes('✗') && !cell.startsWith('Судья:')), 'no ✗ before or beside the title');
+
+  const colored = new LabBoard({ record, section: 'results' }, sgrTheme, () => {}, () => {}, () => 3000);
+  const rows = colored.render(120).join('\n');
+  colored.dispose();
+  assert.ok(rows.includes(painted('accent', 'ПРОВЕРКА СУДЬИ', true)), 'the heading is accent and bold');
+  assert.ok(rows.includes(painted('text', title, true)), 'the title is text and bold');
+  assert.ok(rows.includes(painted('muted', 'Проверьте провал: сначала прочитайте доказательство.')), 'the lead row is muted');
+  assert.ok(rows.includes(painted('error', 'Судья: ✗ не справился')), 'the judge row is error');
+  assert.ok(rows.includes(painted('accent', KEYS)), 'the key row is accent, not bold');
+  assert.ok(rows.includes(painted('text', '  Должен был: Время изменилось на 14:00.')), 'an expectation row keeps the phase-2 text token');
+});

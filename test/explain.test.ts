@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emptyUsage, goalAttainment, promptCompliance, settingsSchema, type Experiment, type MetricAssessment, type Requirement, type Source, type Trial } from '../src/contracts.js';
-import { exampleRows, failureExplanation, ruleRegister, UNVERIFIED } from '../src/explain.js';
+import { exampleRows, failureExplanation, ruleRegister, rowsToLines, UNVERIFIED } from '../src/explain.js';
+// Phase-3 evidence is read through the namespace, so a missing export fails an assertion, not the module link.
+import * as explain from '../src/explain.js';
 import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView } from '../src/result-view.js';
 import { ExperimentStore } from '../src/store.js';
@@ -348,4 +350,27 @@ test('a short knowledge source is named without a line; a source of four lines a
   const four = structuredClone(three);
   four.sources[0]!.content += '\nЖалобы принимает отделение.';
   assert.equal(ruleRegister(four).get('refund-money')?.line, 3, 'from four non-blank lines the line is named');
+});
+
+/** The evidence the agreement block shows (UI-SPEC F10); asserts the export exists before calling it. */
+function evidenceOf(record: Experiment, scenarioIndex: number, metricId: string) {
+  assert.equal(typeof explain.situationEvidence, 'function', 'explain.ts exports situationEvidence (UI-SPEC F10)');
+  const scenario = record.scenarios[scenarioIndex]!;
+  const trial = record.trials.find(item => item.scenarioId === scenario.id)!;
+  return explain.situationEvidence(record, scenario, trial, metricId);
+}
+/** The owner's one-key answer, stored as the board writes it. */
+const quickReview = (trialId: string, verdict: 'pass' | 'fail' | 'unknown', judgeVerdict: 'pass' | 'fail', note: string) =>
+  ({ id: `q-${trialId}-${verdict}`, trialId, metricId: 'goal_attainment', source: 'quick' as const, verdict, judgeVerdict, note, createdAt: 'now' });
+
+test('доказательство провала — строки объяснения без заголовка, и несогласие владельца их не меняет', () => {
+  const record = refundRun();
+  const rows = evidenceOf(record, 0, 'goal_attainment');
+  assert.deepEqual(rowsToLines(rows), REFUND_LINES.slice(1), 'the same rows as the phase-2 explanation, title removed');
+  assert.ok(rows.every(row => row.role !== 'title' && row.indent === 2));
+  const marked: Experiment = { ...record, humanReviews: [quickReview('t-refund', 'pass', 'fail', 'Агент ответил верно, судья ошибся.')] };
+  assert.equal(failureExplanation(marked, marked.scenarios[0]!), null, 'the overridden result hides the phase-2 explanation');
+  assert.deepEqual(evidenceOf(marked, 0, 'goal_attainment'), rows, 'a disagreement never rewrites the evidence the owner judged');
+  const agreed: Experiment = { ...record, humanReviews: [quickReview('t-refund', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.')] };
+  assert.deepEqual(evidenceOf(agreed, 0, 'goal_attainment'), rows);
 });
