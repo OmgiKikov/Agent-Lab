@@ -115,6 +115,15 @@ function causesOf(record: Experiment, failures: FailureExplanation[]): ResultVie
     .slice(0, 3);
 }
 
+/**
+ * A control the run could not measure. The alarm above the number and the control line below it use
+ * this one predicate, so they never disagree: a control that is `unknown` with no recorded reason —
+ * or one still running — is «ещё не проверен», never «не измерен».
+ */
+export function unmeasuredControl(card: { outcome: 'pass' | 'fail' | 'unknown'; reason?: NotMeasuredCode }): card is typeof card & { reason: NotMeasuredCode } {
+  return card.outcome === 'unknown' && !!card.reason && card.reason !== 'in_progress';
+}
+
 export function buildResultView(input: Experiment, options: { before?: Experiment } = {}): ResultView {
   const record = observedRecord(input);
   // Positive controls are real situations the agent is known to handle; they never enter the number.
@@ -138,7 +147,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     ...(card.reason ? { reason: card.reason } : {}), synthetic: card.provenance === 'synthetic', unstable: card.unstable }));
   // Worded like the control line: a failed control is «не пройден», an unmeasured one «не измерен».
   const controlFailed = controlCards.some(card => card.outcome === 'fail');
-  const controlUnmeasured = controlCards.some(card => card.outcome === 'unknown' && card.reason !== 'in_progress');
+  const controlUnmeasured = controlCards.some(unmeasuredControl);
   const controlWarning = controlFailed || controlUnmeasured
     ? `Контроль ${controlFailed && controlUnmeasured ? 'не пройден или не измерен' : controlFailed ? 'не пройден' : 'не измерен'} — числу пока не верить: проверьте судью и связь с агентом.` : null;
   const passed = counted.filter(card => card.outcome === 'pass').length;
@@ -211,7 +220,7 @@ function controlLine(view: ResultView): string {
   const base = passed === n ? (n === 1 ? 'Контроль: пройден ✓' : `Контроль: пройдено ${n} из ${n} ✓`)
     : n > 1 ? `Контроль: пройдено ${passed} из ${n}.`
     : only.outcome === 'fail' ? 'Контроль: не пройден ✗'
-    : notStarted || only.reason === 'in_progress' || !only.reason ? 'Контроль: ещё не проверен.'
+    : notStarted || !unmeasuredControl(only) ? 'Контроль: ещё не проверен.'
     : `Контроль: не измерен — ${NOT_MEASURED_TEXT[only.reason]}.`;
   const synthetic = cards.some(card => card.synthetic) ? ' · синтетическая ситуация' : '';
   const unstable = cards.some(card => card.unstable) ? ' · нестабильно' : '';

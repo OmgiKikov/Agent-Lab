@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Trial, type ValidationExclusion } from '../src/contracts.js';
-import { allFailuresPointer, allFailuresTitle, buildResultView, causeSection, failureListRows, NOT_MEASURED_TEXT, resultViewLines, resultViewRows, SECTION_TEXT, wilson } from '../src/result-view.js';
+import { allFailuresPointer, allFailuresTitle, buildResultView, causeSection, failureListRows, NOT_MEASURED_TEXT, resultViewLines, resultViewRows, SECTION_TEXT, unmeasuredControl, wilson } from '../src/result-view.js';
 import { rowsToLines } from '../src/explain.js';
 import { compareRuns, NOT_MEASURED_CODES, stabilityBetweenRuns, type NotMeasuredCode } from '../src/comparison.js';
 import { AGREED_RATIONALE_PREFIX, GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
@@ -588,6 +588,25 @@ test('a synthetic control is labelled, and several controls are counted on their
   const p0 = record.trials.find(item => item.scenarioId === 'p0')!;
   p0.assessments = p0.assessments!.map(item => item.metricId === 'goal_attainment' ? { ...item, result: 'unknown' as const, evidence: [], rationale: SPLIT } : item);
   assert.equal(resultViewLines(buildResultView(record))[0], 'Контроль не пройден или не измерен — числу пока не верить: проверьте судью и связь с агентом.');
+});
+
+test('the control alarm and the control line read one predicate, so they never contradict each other', () => {
+  // A control that is `unknown` with no recorded reason is still being decided. The line calls it
+  // «ещё не проверен», so the row above it must not shout «не измерен» about the same card.
+  assert.equal(unmeasuredControl({ outcome: 'unknown' }), false);
+  assert.equal(unmeasuredControl({ outcome: 'unknown', reason: 'in_progress' }), false);
+  assert.equal(unmeasuredControl({ outcome: 'pass' }), false);
+  assert.equal(unmeasuredControl({ outcome: 'fail' }), false);
+  for (const reason of NOT_MEASURED_CODES.filter(code => code !== 'in_progress')) {
+    assert.equal(unmeasuredControl({ outcome: 'unknown', reason }), true, reason);
+  }
+  // The end-to-end pair still agrees on a real record.
+  const running = withControl({ goal: 'pass' });
+  running.phase = 'evaluating';
+  running.trials = running.trials.filter(item => item.scenarioId !== 'ctl');
+  const view = buildResultView(running);
+  assert.equal(view.control.warning, null);
+  assert.ok(resultViewLines(view).includes('Контроль: ещё не проверен.'));
 });
 
 test('a control id that is not in the set is ignored by the view', () => {
