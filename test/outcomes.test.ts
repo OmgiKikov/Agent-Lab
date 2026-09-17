@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { emptyUsage, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
-import { agentRubricResult, automaticTrialResult, latestHumanReviews, trialAssessmentComplete } from '../src/outcomes.js';
+import { emptyUsage, simulatorFidelity, type HumanReview, type JudgeReceipt, type Scenario, type SimulatorCheck, type Trial } from '../src/contracts.js';
+import { agentRubricResult, automaticTrialResult, judgedCut, latestHumanReviews, simulatorUsable, trialAssessmentComplete } from '../src/outcomes.js';
 
 const rubric = (id: string) => ({
   id, name: id, subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f',
@@ -71,4 +71,53 @@ test('persisted append order determines the latest review even when timestamps m
     { id: 'whole-newer', trialId: trial.id, verdict: 'unknown', note: '#1: revised', createdAt: '2026-09-15T09:00:00Z' },
   ] }).get(`${trial.id}|dialogue`);
   assert.equal(whole?.reviewedDialogue, undefined, 'a newer unmarked whole-dialogue review revokes the marker');
+});
+
+// ---- goal-v2: the simulator cut. ----
+const receipt = (cutBefore?: number): JudgeReceipt => ({
+  protocolHash: 'p', inputHash: 'i', provider: 'x', model: 'm', auditHash: 'a', votes: [], notApplicable: [], complete: true,
+  ...(cutBefore === undefined ? {} : { cutBefore }),
+});
+const reactiveCard: Scenario = { ...scenario, metrics: [rubric('goal_attainment'), { ...simulatorFidelity }] };
+const heuristic = (seq?: number): SimulatorCheck => ({ id: 'simulator_leak', description: 'd', passed: false, evidence: 'e', heuristic: true, ...(seq === undefined ? {} : { seq }) });
+function reactive(fidelity: 'pass' | 'fail' | 'unknown', checks: SimulatorCheck[] = []): Trial {
+  return {
+    ...trial, id: 't2', userMode: 'reactive', simulatorChecks: checks,
+    events: [{ seq: 0, type: 'user', text: 'o' }, { seq: 1, type: 'assistant', text: 'a' }, { seq: 2, type: 'simulator', result: { message: 'm', done: false } },
+      { seq: 3, type: 'user', text: 'u' }, { seq: 4, type: 'assistant', text: 'b' }],
+    assessments: [
+      { metricId: 'goal_attainment', result: 'fail', rationale: 'r', evidence: [1] },
+      { metricId: 'user_fidelity', result: fidelity, rationale: 'r', evidence: fidelity === 'unknown' ? [] : [3] },
+    ],
+  };
+}
+
+test('simulatorUsable with a cut ignores the fidelity vote and heuristic checks at or after the cut', () => {
+  const cut = { beforeSeq: 3 };
+  assert.equal(simulatorUsable(reactiveCard, reactive('fail'), [], cut), true, 'failed fidelity without review');
+  assert.equal(simulatorUsable(reactiveCard, reactive('unknown'), [], cut), true, 'unknown fidelity without review');
+  assert.equal(simulatorUsable(reactiveCard, reactive('pass', [heuristic(3)]), [], cut), true, 'check at the cut');
+  assert.equal(simulatorUsable(reactiveCard, reactive('pass', [heuristic(2)]), [], cut), false, 'check before the cut');
+  assert.equal(simulatorUsable(reactiveCard, reactive('pass', [heuristic()]), [], cut), false, 'check without seq');
+  assert.equal(simulatorUsable(reactiveCard, reactive('pass', [{ ...heuristic(4), heuristic: false }]), [], cut), false, 'a non-heuristic check always counts');
+  assert.equal(simulatorUsable(reactiveCard, reactive('pass'), [review('fail', 'user_fidelity', undefined, 't2')], cut), false, 'human fail on fidelity');
+  assert.equal(simulatorUsable(reactiveCard, reactive('fail'), [review('pass', 'user_fidelity', undefined, 't2')], cut), true, 'human pass on fidelity');
+});
+
+test('simulatorUsable without options keeps the goal-v1 result', () => {
+  assert.equal(simulatorUsable(reactiveCard, reactive('fail')), false);
+  assert.equal(simulatorUsable(reactiveCard, reactive('unknown')), false);
+  assert.equal(simulatorUsable(reactiveCard, reactive('pass', [heuristic(3)])), false);
+  assert.equal(simulatorUsable(reactiveCard, reactive('pass')), true);
+  const cutTrial = { ...reactive('fail'), judgedBeforeSeq: 3, judgeReceipt: receipt(3) };
+  assert.equal(automaticTrialResult(reactiveCard, cutTrial), 'unknown', 'the strict outcome ignores the cut');
+});
+
+test('judgedCut needs the same cutBefore in the receipt', () => {
+  assert.equal(judgedCut({ judgedBeforeSeq: 3, judgeReceipt: receipt(3) }), 3);
+  assert.equal(judgedCut({ judgedBeforeSeq: 0, judgeReceipt: receipt(0) }), 0);
+  assert.equal(judgedCut({ judgedBeforeSeq: 3, judgeReceipt: receipt(2) }), undefined);
+  assert.equal(judgedCut({ judgedBeforeSeq: 3, judgeReceipt: receipt() }), undefined);
+  assert.equal(judgedCut({ judgedBeforeSeq: 3 }), undefined);
+  assert.equal(judgedCut({ judgeReceipt: receipt(3) }), undefined);
 });
