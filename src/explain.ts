@@ -240,12 +240,14 @@ function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind:
 
 /**
  * The evidence of the agreement block (UI-SPEC F10): the F1 detail rows of one attempt, read on
- * the judge's recorded judgment only. Every human review is removed first, so the owner's own mark
+ * the judge's recorded judgment only. A failure is explained exactly as phase 2 explains it; a pass
+ * quotes the reply the judge cited (else the last reply) and never names a violated rule. Every human review is removed first, so the owner's own mark
  * can neither hide nor rewrite the evidence the owner is asked to judge.
  */
 export function situationEvidence(record: Experiment, scenario: Scenario, trial: Trial, metricId: string): ExplanationRow[] {
   const judged: Experiment = { ...record, humanReviews: [] };
   const cited = assessment(trial, metricId);
+  if (cited?.result === 'pass') return detailRows(judged, scenario, trial, 'pass', cited).rows;
   if (cited?.result !== 'fail') return [];
   const explanation = failureExplanation(judged, scenario, trial);
   if (explanation) return explanation.rows.filter(row => row.role !== 'title');

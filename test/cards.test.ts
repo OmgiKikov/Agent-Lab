@@ -1388,10 +1388,13 @@ test('блок согласия с длинной причиной и управ
   record.humanReviews = [{ id: 'q-long', trialId: 'f0', metricId: 'goal_attainment', source: 'quick', verdict: 'pass', judgeVerdict: 'fail',
     note: reason, createdAt: '2026-09-17T00:00:00.000Z' }];
   const block = blockOf(record);
+  const unmarked = structuredClone(record); unmarked.humanReviews = [];
+  const keyRow = rowOf(blockOf(unmarked), 'y — ');
+  assert.ok(keyRow, 'an unmarked situation shows the key row');
   const words = (value: string) => value.split(/\s+/).filter(Boolean);
   const reasonRow = rowOf(block, 'Причина');
   assert.ok(reasonRow, 'a disagreement shows its reason in the block');
-  assert.deepEqual(words(reasonRow.text), words(`Причина: «${reason.replace('\x1b[31m', '')}»`), 'every word of the reason, in order');
+  assert.deepEqual(words(reasonRow.text), words(`Причина: «${reason.replace('\x1b[31m', '').trim()}»`), 'every word of the reason, in order');
   for (const width of [36, 56, 76, 106, 156]) {
     const wrapped = wrapRows(block, width);
     for (const row of wrapped) assert.ok(visibleWidth(row.text) <= width, `width ${width}: ${visibleWidth(row.text)} > ${width}`);
@@ -1404,7 +1407,7 @@ test('блок согласия с длинной причиной и управ
       }
     }
     // The key row sits at column 0, continues at column 2 and breaks only at «·».
-    const keys = wrapRows([rowOf(block, 'y — ')!], width);
+    const keys = wrapRows([keyRow], width);
     assert.equal(keys.length, width >= 52 ? 1 : 2, `width ${width}: key row lines`);
     for (const row of keys.slice(1)) assert.match(row.text, /^ {2}[yns] — /, `width ${width}: key row continuation`);
     for (const row of keys) assert.match(row.text.trim(), /^[yns] — .*[^·\s]( ·)?$/, `width ${width}: key row breaks at «·»`);

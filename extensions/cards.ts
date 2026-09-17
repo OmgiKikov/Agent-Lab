@@ -74,19 +74,36 @@ export function agreementTarget(record: Experiment, trial: Trial | undefined): A
  */
 export function agreementBlockLines(record: Experiment, trial: Trial): Line[] {
   const target = agreementTarget(record, trial);
+  // UI-D-21: where there is nothing to agree with, one muted row says why, and the keys stay inert.
+  if (target?.kind === 'control') return [line('Контрольная ситуация — в согласие с судьёй не входит.', 'muted')];
+  if (target?.kind === 'undecided') return [line('Судья не вынес решения — отметка согласия не нужна.', 'muted')];
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   if (target?.kind !== 'ready' || !scenario) return [];
   const failed = target.judgeVerdict === 'fail';
+  const marks = judgeAgreement(record).marks.filter(m => m.trialId === trial.id);
+  const mark = marks.find(m => !m.stale);
+  const keys = (text: string, color: ThemeColor): Line => ({ ...line(text, color), hang: 2, breakAt: ' · ' });
+  const answer: Line[] = mark
+    ? [keys('Изменить отметку: y согласен · n не согласен · s не могу сказать', 'muted'),
+      ...(mark.answer === 'agree' ? [line('Ваша отметка: = согласен', 'success')]
+        : mark.answer === 'disagree' ? [line('Ваша отметка: ! не согласен', 'warning'), line(`Причина: «${oneLine(safeText(mark.note))}»`, 'text', false, 2)]
+        : [line('Ваша отметка: ~ не могу сказать', 'muted')])]
+    : marks.length ? [line('Ваша отметка устарела: судья сменился. Отметьте заново: y · n · s', 'warning')]
+    : [keys('y — согласен · n — не согласен · s — не могу сказать', 'accent')];
   return [
     line('ПРОВЕРКА СУДЬИ', 'accent', true),
     line(scenario.title, 'text', true),
-    ...(failed ? [line('Проверьте провал: сначала прочитайте доказательство.', 'muted')] : []),
+    line(failed ? 'Проверьте провал: сначала прочитайте доказательство.'
+      : target.sampled ? 'Проверьте и успех: судья мог ошибочно похвалить.'
+      : 'Судья счёл ситуацию успешной. Проверьте, если сомневаетесь.', 'muted'),
     ...situationEvidence(record, scenario, trial, target.metricId).map(sectionRow),
     failed ? line('Судья: ✗ не справился', 'error') : line('Судья: ✓ справился', 'success'),
-    line('y — согласен · n — не согласен · s — не могу сказать', 'accent'),
+    ...answer,
     line(''),
   ];
 }
+/** The owner's own words on one row: whitespace runs become one space, nothing is cut. */
+const oneLine = (value: string) => value.replace(/\s+/gu, ' ').trim();
 
 /**
  * Section-3 list rows, in review order. `waiting` is what the `u` filter keeps: a situation the
@@ -206,8 +223,12 @@ export interface BoardOptions {
   reviewTimes?: Map<string, number>;
 }
 type BoardTheme = Pick<Theme, 'fg' | 'bold'>;
-/** `lead` replaces the first line's indent with a same-width prefix (the sheet gutter `▸ ` and the number `12.`). */
-type Line = { text: string; color?: ThemeColor; bold?: boolean; indent?: number; lead?: string };
+/**
+ * `lead` replaces the first line's indent with a same-width prefix (the sheet gutter `▸ ` and the number `12.`).
+ * `hang` is the continuation column when it is not `indent + 2`; `breakAt` names the separator a key
+ * hint row breaks at, so a narrow board never splits one key from its word.
+ */
+type Line = { text: string; color?: ThemeColor; bold?: boolean; indent?: number; lead?: string; hang?: number; breakAt?: string };
 const line = (text: unknown, color?: ThemeColor, bold = false, indent?: number): Line => ({ text: safeText(text), color, bold, ...(indent ? { indent } : {}) });
 
 /**
@@ -219,11 +240,33 @@ export function wrapRows(rows: Line[], inner: number): Line[] {
   const width = Math.max(1, Math.floor(inner));
   return rows.flatMap(row => {
     const indent = row.indent ?? 0;
+    const hang = row.hang ?? indent + 2;
     // A terminal too narrow for the hanging indent falls back to plain wrapping, still never wider.
-    if (!indent || width <= indent + 3) return wrapTextWithAnsi(row.lead ? row.lead + row.text : row.text, width).map(text => ({ ...row, text }));
-    const body = Math.max(1, width - indent - 2);
-    return wrapTextWithAnsi(row.text, body).map((text, i) => ({ ...row, text: (i ? ' '.repeat(indent + 2) : row.lead ?? ' '.repeat(indent)) + text }));
+    if ((!indent && row.hang === undefined) || width <= hang + 1) return wrapTextWithAnsi(row.lead ? row.lead + row.text : row.text, width).map(text => ({ ...row, text }));
+    const body = Math.max(1, width - hang);
+    const pieces = (row.breakAt ? packAt(row.text, row.breakAt, body) : undefined) ?? wrapTextWithAnsi(row.text, body);
+    return pieces.map((text, i) => ({ ...row, text: (i ? ' '.repeat(hang) : row.lead ?? ' '.repeat(indent)) + text }));
   });
+}
+
+/**
+ * A key hint split only at its separator, each line ending with the separator mark when another
+ * part follows; undefined when one part alone is wider than `width`, so plain wrapping takes over.
+ */
+function packAt(text: string, separator: string, width: number): string[] | undefined {
+  const parts = text.split(separator);
+  const mark = separator.trimEnd();
+  const lines: string[] = [];
+  let current = '';
+  for (const [i, part] of parts.entries()) {
+    const tail = i < parts.length - 1 ? mark : '';
+    const joined = current ? `${current}${separator}${part}` : part;
+    if (visibleWidth(joined + tail) <= width) { current = joined; continue; }
+    if (!current || visibleWidth(part + tail) > width) return undefined;
+    lines.push(current + mark);
+    current = part;
+  }
+  return [...lines, current];
 }
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 const outcomeColor = (value: string): ThemeColor => value === 'pass' ? 'success' : value === 'fail' || value === 'invalid' ? 'error' : 'warning';
@@ -307,7 +350,11 @@ function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean
   return rows;
 }
 
-export function trialLines(trial: Trial, record: Experiment, expanded: boolean): Line[] {
+/**
+ * Today's dialogue rows. `agreementShown` says the F10 block stands above them: its quick mark is
+ * then not listed again, and the row that names the keys is left to the block.
+ */
+export function trialLines(trial: Trial, record: Experiment, expanded: boolean, agreementShown = false): Line[] {
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   const findings = humanFindings(record).filter(f => f.trialId === trial.id);
   const rows = [
@@ -337,12 +384,12 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean):
     }),
     ...(trial.assessmentError ? [line(`Ошибка оценщика: ${trial.assessmentError}`, 'error')] : []),
     line(''), line('ОТДЕЛЬНАЯ ПРОВЕРКА ЧЕЛОВЕКОМ', 'accent'),
-    ...(record.humanReviews?.filter(r => r.trialId === trial.id).flatMap(r => [
+    ...(record.humanReviews?.filter(r => r.trialId === trial.id && !(agreementShown && r.source === 'quick')).flatMap(r => [
       line(`${verdicts[r.verdict]} · ${r.metricId ? `метрика ${r.metricId}` : r.checkId ? `проверка ${r.checkId}` : 'весь диалог'}`, outcomeColor(r.verdict)), line(r.note),
     ]) ?? []),
   ];
   // C-77/C-78: `p` is retired and `n` now means «не согласен», so this row names only `v`.
-  if (!record.humanReviews?.some(r => r.trialId === trial.id)) rows.push(line(
+  if (!agreementShown && !record.humanReviews?.some(r => r.trialId === trial.id)) rows.push(line(
     verdictSummary(record).review.status === 'complete' ? 'Разбор набора завершён; у этого диалога отдельного вердикта нет. v — оценить подробно.'
       : 'Вердикта человека нет. v — оценить критерий или весь диалог.', 'muted'));
   const transcript: Line[] = [line('ДИАЛОГ', 'accent', true)];
@@ -732,7 +779,7 @@ export class LabBoard implements Component {
       if (sheet && this.query && !entries.length) detail = [line('Ничего не найдено. Esc — сбросить поиск.', 'muted')];
     } else if (this.section === 'results') {
       const trial = reviewOrder(record).find(t => t.id === entries[this.selected]?.id);
-      detail = trial ? [...agreementBlockLines(record, trial), ...trialLines(trial, record, this.expanded)] : this.query || this.pendingOnly ? [line('Ничего не найдено. Esc — сбросить фильтр.', 'muted')]
+      detail = trial ? [...agreementBlockLines(record, trial), ...trialLines(trial, record, this.expanded, agreementTarget(record, trial)?.kind === 'ready')] : this.query || this.pendingOnly ? [line('Ничего не найдено. Esc — сбросить фильтр.', 'muted')]
         : activePhases.has(record.phase) ? [line('ДИАЛОГ ВЫПОЛНЯЕТСЯ', 'accent', true), line(record.message), line('Первый результат появится после ответа и проверки критериев.', 'muted'), line('c — остановить с сохранением уже полученных реплик', 'muted')]
         : [line('Диалогов ещё нет.', 'text', true), line(record.phase === 'review' ? 'Проверьте карточки и нажмите r для запуска.' : record.error ?? 'Прогон остановлен до завершения первой попытки.')];
     } else {
