@@ -1,7 +1,8 @@
 import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
-import { agentMetricResult, agentRubricResult, automaticTrialResult, GOAL_METRIC_ID, graded, headlineMetricIds, headlineTrialResult, isAgentFailure, latestHumanReviews, measured, measurementUsable, observedRecord, primaryMetricId, RULES_METRIC_ID, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, GOAL_METRIC_ID, graded, headlineMetricIds, headlineTrialResult, isAgentFailure, latestHumanReviews, markTargets, markUnderCurrentRule, measured, measurementUsable, observedRecord, RULES_METRIC_ID, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { judgeAgreement } from './agreement.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
 /*
@@ -223,13 +224,24 @@ export function awaitingVerdict(record: Experiment): Set<string> {
       ];
       if (pending.some(key => !['pass', 'fail', 'invalid'].includes(latest.get(`${trial.id}|${key}`)?.verdict ?? ''))) return true;
     }
-    // A one-key mark answers the main verdict of the situation, and that closes it: the owner has
-    // looked and decided. Doubt («не могу сказать») is not a decision, so it falls through and the
-    // judge's own failure keeps the dialogue in the queue. The simulator is judged above, separately.
+    // Quick marks close a situation only when every metric that decided it is answered (CTX-18);
+    // on a goal card other rubrics and objective checks are not part of the headline. Doubt
+    // («не могу сказать») is not a decision, and a phase-3 mark on a two-target situation answered
+    // the previous rule, so either leaves the judge's own failure in the queue. The simulator is
+    // judged above, separately.
     {
-      const metricId = primaryMetricId(record.scenarios.find(s => s.id === trial.scenarioId), trial);
-      const mark = metricId ? latest.get(`${trial.id}|metric:${metricId}`) : undefined;
-      if (mark?.source === 'quick' && ['pass', 'fail'].includes(mark.verdict)) return false;
+      const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
+      const targets = markTargets(scenario, trial);
+      const quickClosed = !!targets && targets.metricIds.every(id => {
+        const mark = latest.get(`${trial.id}|metric:${id}`);
+        return mark?.source === 'quick' && ['pass', 'fail'].includes(mark.verdict) && markUnderCurrentRule(scenario, mark, targets.metricIds);
+      });
+      if (quickClosed) {
+        if (headlineMetricIds(scenario).length) return false;
+        // A legacy strict card: every other agent rubric the judge failed is part of its headline and still needs a decision.
+        return (scenario?.metrics ?? []).some(m => m.subject === 'agent' && !targets.metricIds.includes(m.id)
+          && trial.assessments?.some(a => a.metricId === m.id && a.result === 'fail') && !decided(`${trial.id}|metric:${m.id}`));
+      }
     }
     if (!isAgentFailure(record, trial) || decided(`${trial.id}|dialogue`) || latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid') return false;
     const failed = [
@@ -763,10 +775,18 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   // Taken from the original records: a stripped copy is not a registered rebuilt source.
   const identity = reconstructedIdentity(before, after) ?? undefined;
   const controls = new Set([...before.positiveControlScenarioIds ?? [], ...after.positiveControlScenarioIds ?? []]);
-  if (!controls.size) return compareRunsAgainst(before, after, identity);
-  // A control never enters the headline (CTX-11), and a repeat runs it as one turn, so it is not a pair either.
-  const result = compareRunsAgainst(withoutControls(before, controls), withoutControls(after, controls), identity);
-  result.notes.push(CONTROL_NOTE);
+  let result: RunComparison;
+  if (!controls.size) result = compareRunsAgainst(before, after, identity);
+  else {
+    // A control never enters the headline (CTX-11), and a repeat runs it as one turn, so it is not a pair either.
+    result = compareRunsAgainst(withoutControls(before, controls), withoutControls(after, controls), identity);
+    result.notes.push(CONTROL_NOTE);
+  }
+  // Marks given under the previous counting rule are named, never mixed in silently (CTX-21). Informational: `comparable` is untouched.
+  for (const run of [before, after]) {
+    const stale = judgeAgreement(run).staleRule;
+    if (stale > 0) result.notes.push(`В прогоне ${run.id.slice(0, 8)} есть отметки по прежнему правилу подсчёта: ${stale}.`);
+  }
   return result;
 }
 

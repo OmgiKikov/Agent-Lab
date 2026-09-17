@@ -838,7 +838,10 @@ test('on a goal card quick marks close a situation only when every metric that d
   assert.equal(pending('fail', 'pass', quick('g', 't', 'fail', 'goal_attainment', 'fail', { unstamped: true })), 0, 'on a goal-only failure the phase-3 mark still closes it');
   assert.equal(pending('pass', 'fail', quick('r', 't', 'fail', 'prompt_compliance', 'fail')), 0, 'a rules-only failure has one target');
   assert.equal(pending('pass', 'fail', quick('g', 't', 'pass', 'goal_attainment', 'pass')), 1, 'a mark on the goal does not answer a rules-only failure');
-  assert.equal(pending('pass', 'pass'), 0, 'a pass with nothing failed in the headline never waits');
+  // A two-metric pass: without quick marks the failed reply quality and check still go through the full review path, as before.
+  assert.equal(pending('pass', 'pass'), 1);
+  assert.equal(pending('pass', 'pass', quick('g', 't', 'pass', 'goal_attainment', 'pass')), 1, 'one mark on a two-target pass is not an answer');
+  assert.equal(pending('pass', 'pass', quick('g', 't', 'pass', 'goal_attainment', 'pass'), quick('r', 't', 'pass', 'prompt_compliance', 'pass')), 0, 'both targets answered closes it');
 });
 
 test('compareRuns names a run that holds marks under the previous counting rule, once, and stays comparable', () => {
