@@ -4,6 +4,7 @@
  * `/agent-lab` board must show every one of those lines as a whole line. The failure section
  * (top causes, or the first failures) is compared the same way, and so is the agreement section
  * below it: the owner's disagreements with the judge and the row that says where to mark the rest.
+ * The board must also show every disagreement item line as a whole cell, under its own heading.
  *
  * The board and the collapsed render indent their rows, so both sides of those two comparisons
  * are trimmed; the payload is compared verbatim.
@@ -133,6 +134,12 @@ for (const id of values.id) {
   if (missingAt >= 0) { process.stdout.write(`DIFF id=${short} surface=agreement line=${missingAt}\n`); ok = false; }
   const disagreements = cliAgreement.filter(entry => entry.startsWith('! ')).length;
   const next = cliAgreement.some(entry => entry.startsWith('Отметить согласие с судьёй можно в Pi:')) ? 1 : 0;
+  // (g) The same disagreement items on the collapsed board: every item line (not the CLI heading,
+  // not the next-step row, which the board does not print) is a whole cell, under the board heading.
+  const items = cliAgreement.filter(entry => !entry.startsWith('Несогласия с судьёй (') && !entry.startsWith('Отметить согласие с судьёй можно в Pi:'));
+  const itemAt = items.findIndex(entry => !cells.has(entry));
+  if (itemAt >= 0) { process.stdout.write(`DIFF id=${short} surface=board-agreement line=${itemAt}\n`); ok = false; }
+  if (disagreements > 0 && !cells.has('НЕСОГЛАСИЯ С СУДЬЁЙ')) { process.stdout.write(`DIFF id=${short} surface=board-agreement line=-1\n`); ok = false; }
 
   if (ok) process.stdout.write(`OK surfaces=${surfaces.length} lines=${cliBlock.length} sections=${cliSection.length} disagreements=${disagreements} next=${next} id=${short}\n`);
   else failed = true;

@@ -8,7 +8,7 @@ import { agreementSample, judgeAgreement, type JudgeAgreement } from '../dist/ag
 import { primaryMetricId } from '../dist/outcomes.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
 import { situationEvidence } from '../dist/explain.js';
-import { buildResultView, causeSection, failureListRows, resultViewRows, SECTION_TEXT, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
+import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
 
 /** All material, model and persisted text crosses this boundary before terminal rendering. */
 export function safeText(value: unknown): string {
@@ -280,6 +280,7 @@ const VIEW_ROLE: Record<ResultRow['role'], { color: ThemeColor; bold: boolean }>
   lead: { color: 'text', bold: true }, line: { color: 'muted', bold: false },
   detail: { color: 'muted', bold: false }, situation: { color: 'warning', bold: false },
   alarm: { color: 'error', bold: true },
+  agreement: { color: 'text', bold: false }, 'agreement-tail': { color: 'muted', bold: false },
 };
 const SECTION_ROLE: Record<SectionRow['role'], { color?: ThemeColor; bold: boolean }> = {
   cause: { color: 'accent', bold: false }, example: { color: 'text', bold: true }, title: { color: 'error', bold: true },
@@ -291,6 +292,13 @@ const SECTION_ROLE: Record<SectionRow['role'], { color?: ThemeColor; bold: boole
 const SHEET_ROLE: Record<ExpectationRole, ThemeColor> = {
   expected: 'text', rule: 'muted', unverified: 'warning', more: 'muted', marker: 'warning',
 };
+const DISAGREEMENT_ROLE: Record<DisagreementRow['role'], ThemeColor | undefined> = {
+  'dis-title': 'warning', 'dis-verdicts': 'text', 'dis-reason': 'text', blank: undefined,
+};
+/** F7 on the board (CTX-11, UI-D-16): the heading and every current disagreement; nothing when there is none. */
+const disagreementLines = (view: ResultView): Line[] => view.agreement.disagreements.length
+  ? [line(DISAGREEMENT_BOARD_TITLE, 'accent', true), ...disagreementRows(view).map(row => line(row.text, DISAGREEMENT_ROLE[row.role], false, row.indent))]
+  : [];
 const viewRow = (row: ResultRow): Line => line(row.text, VIEW_ROLE[row.role].color, VIEW_ROLE[row.role].bold, row.indent);
 const sectionRow = (row: SectionRow): Line => line(row.text, SECTION_ROLE[row.role].color, SECTION_ROLE[row.role].bold, row.indent);
 
@@ -426,6 +434,7 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
     const finding = v.review.findings[0];
     const measuredAny = q.scope.dialogues > 0;
     const section = causeSection(view);
+    const disagreements = disagreementLines(view);
     // The first block is ResultView's, row for row: the board never counts or picks a not-measured card itself.
     return [line('ИТОГ', 'accent', true),
       ...(measuredAny ? resultViewRows(view).map(viewRow) : [line(v.headline, 'text', true)]),
@@ -434,9 +443,11 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
       line(''),
       ...(finding ? [line(humanFindingText(finding), 'warning')] : []),
       // The same explanations the CLI and the Pi result show; nothing here is clipped or reworded.
-      ...(section ? [line(SECTION_TEXT[section.kind].board, 'accent', true), ...section.rows.map(sectionRow),
-        ...(view.failures.length ? [line(SECTION_TEXT.all.hint, 'muted')] : [])]
+      ...(section ? [line(SECTION_TEXT[section.kind].board, 'accent', true), ...section.rows.map(sectionRow)]
         : measuredAny ? [line('Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.', 'success')] : [line('Сохраните полезные тесты и повторите их после следующей правки.')]),
+      // UI-SPEC F7 S3: the owner's disagreements follow the causes and come before the pointer to all failures.
+      ...(disagreements.length ? [line(''), ...disagreements] : []),
+      ...(section && view.failures.length ? [...(disagreements.length ? [line('')] : []), line(SECTION_TEXT.all.hint, 'muted')] : []),
       line(''),
       ...(measuredAny ? [line(text.judge), line(text.queue, q.humanQueue.total ? 'warning' : 'muted')] : []),
       line(`Дальше: ${v.nextSteps[0]?.text ?? 'Повторите тест после изменения агента.'}`),
@@ -451,6 +462,7 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
     line('ИТОГ', 'accent', true),
     ...resultViewRows(view).map(viewRow),
     line(''),
+    ...(view.agreement.disagreements.length ? [...disagreementLines(view), line('')] : []),
     // Every failure, in record order, with the explanation the CLI and the collapsed result show.
     ...(view.failures.length ? [line(SECTION_TEXT.all.board, 'accent', true), ...failureListRows(view).map(sectionRow), line('')] : []),
     ...(v.review.findings.length ? [line(''), line('ЗАМЕЧАНИЯ ЧЕЛОВЕКА', 'warning', true),

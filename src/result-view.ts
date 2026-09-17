@@ -245,7 +245,7 @@ function agreementRows(view: ResultView): ResultRow[] {
   const queued = found.queueFailures.length + found.sampledPasses.length;
   if (!queued && !found.checked && !found.unsure && !found.stale) return [];
   const rows: ResultRow[] = [];
-  if (!found.checked) rows.push({ role: 'line', indent: 0, text: 'Согласие с судьёй: ещё не проверено.' });
+  if (!found.checked) rows.push({ role: 'agreement', indent: 0, text: 'Согласие с судьёй: ещё не проверено.' });
   else {
     const percent = found.checked >= PERCENT_FROM ? ` — ${Math.round(100 * found.agreed / found.checked)}%` : '';
     const few = found.checked < SMALL_SAMPLE ? ' · мало проверок' : '';
@@ -253,17 +253,20 @@ function agreementRows(view: ResultView): ResultRow[] {
       : found.queueFailures.length ? 'провалы ещё не проверены' : 'провалов нет';
     const passPart = found.passes.checked > 0 ? `успехи: ${found.passes.agreed} из ${found.passes.checked}`
       : found.sampledPasses.length ? 'успехи ещё не проверены' : 'успехов нет';
-    rows.push({ role: 'line', indent: 0,
+    rows.push({ role: 'agreement', indent: 0,
       text: `Согласие с судьёй: ${found.agreed} из ${found.checked} проверенных${percent}${few} (${failPart} · ${passPart}).` });
   }
-  if (found.checked > 0) rows.push({ role: 'detail', indent: 2, text: 'Цель — согласие в 9 случаях из 10.' });
-  if (found.unsure > 0) rows.push({ role: 'detail', indent: 2, text: `Человек не смог решить: ${found.unsure}.` });
-  if (found.stale > 0) rows.push({ role: 'detail', indent: 2, text: `Отметки устарели после смены судьи: ${found.stale}.` });
+  if (found.checked > 0) rows.push({ role: 'agreement-tail', indent: 2, text: 'Цель — согласие в 9 случаях из 10.' });
+  if (found.unsure > 0) rows.push({ role: 'agreement-tail', indent: 2, text: `Человек не смог решить: ${found.unsure}.` });
+  if (found.stale > 0) rows.push({ role: 'agreement-tail', indent: 2, text: `Отметки устарели после смены судьи: ${found.stale}.` });
   return rows;
 }
 
-/** `alarm` is the control warning above the number; `lead` is always the number itself. */
-export type ResultRowRole = 'lead' | 'line' | 'situation' | 'detail' | 'alarm';
+/**
+ * `alarm` is the control warning above the number; `lead` is always the number itself;
+ * `agreement` is the F6 row and `agreement-tail` its indented rows, so a surface can color them.
+ */
+export type ResultRowRole = 'lead' | 'line' | 'situation' | 'detail' | 'alarm' | 'agreement' | 'agreement-tail';
 export interface ResultRow { role: ResultRowRole; indent: number; text: string }
 
 /**
