@@ -106,7 +106,7 @@ Plans:
 - [x] 02-04-PLAN.md
 - [x] 02-05-PLAN.md
 - [x] 02-06-PLAN.md
-- [ ] 02-07-PLAN.md
+- [x] 02-07-PLAN.md
 - [ ] 02-08-PLAN.md
 - [ ] 02-09-PLAN.md
 
@@ -204,7 +204,7 @@ Phases execute in numeric order: 1 → 2 → 3 → (4 ∥ 5) → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Одно честное число | 12/12 | Complete    | 2026-09-17 |
-| 2. Судья объясняет провалы | 6/9 | In Progress|  |
+| 2. Судья объясняет провалы | 7/9 | In Progress|  |
 | 3. Согласие человека с судьёй | 0/TBD | Not started | - |
 | 4. Экран результата в Pi | 0/TBD | Not started | - |
 | 5. Выжимка и HTML-отчёт для менеджера | 0/TBD | Not started | - |

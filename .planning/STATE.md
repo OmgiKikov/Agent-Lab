@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 2
 current_phase_name: Судья объясняет провалы
 status: executing
-stopped_at: Completed 02-06-PLAN.md
-last_updated: "2026-09-17T09:43:59.390Z"
+stopped_at: Completed 02-07-PLAN.md
+last_updated: "2026-09-17T10:01:31.920Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 2 execution started
-state_head: 7c0ffef6a820b0b8dee71221411876871a69b326
+state_head: c2b84127980d52baff825d482b4582a284de8dd8
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 50
-  completed_plans: 18
+  completed_plans: 19
   percent: 14
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 2 (Судья объясняет провалы) — EXECUTING
-Plan: 7 of 9
+Plan: 8 of 9
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 2 execution started
 
@@ -76,6 +76,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 02 P04 | 8min | 3 tasks | 7 files |
 | Phase 02 P05 | 55min | 3 tasks | 9 files |
 | Phase 02 P06 | 8min | 2 tasks | 2 files |
+| Phase 02 P07 | 34min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -119,6 +120,9 @@ Recent decisions affecting current work:
 - [Phase 2]: [Phase 2]: 02-06: live dist/ rebuilt from HEAD 83882d7 after a pgrep+lock check; previous build kept at .gsd/dist-before-02-06-20260917-123753
 - [Phase 2]: [Phase 2]: 02-06: explanations proved on the real acquiring runs — 9/9 and 7/7 failed situations explained, judge-cited 100%, 0 unverified rows, 0 jargon or «…» hits before «Подробности:»; board fits 40–160 columns with nothing truncated
 - [Phase 2]: [Phase 2]: 02-06: v11 steps (RE11/A11/NEW11, «Оценено до реплики #», goal-v2) skipped — 02-03 NO-GO, protocol frozen at v10; cut columns printed as -/0
+- [Phase 2]: [Phase 2]: 02-07: подтверждение накрывает весь черновик (acceptDraft), одиночный тест остаётся частным случаем на одну ситуацию; CLI ветвится по scenarios.length > 1
+- [Phase 2]: [Phase 2]: 02-07: слова владельца попадают и в successCriteria, и в passCriteria рубрики goal_attainment дословно; ситуация помечается в записи (ownerExpectationScenarioIds), draftHash старых записей не меняется, measurementHash не трогается
+- [Phase 2]: [Phase 2]: 02-07: отказ updateDraft «ожидание изменилось, проверки прежние» снимается только для ситуаций с судейской рубрикой goal_attainment; requireAccepted пока никем не вызывается — подключает 02-08
 
 ### Pending Todos
 
@@ -145,6 +149,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T09:43:59.347Z
-Stopped at: Completed 02-06-PLAN.md
+Last session: 2026-09-17T10:01:20.781Z
+Stopped at: Completed 02-07-PLAN.md
 Resume file: None
