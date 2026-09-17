@@ -1,5 +1,6 @@
-import { type Experiment, type MetricAssessment, type Scenario, type Trial, verbatimSpan } from './contracts.js';
+import { MACHINE_FORMAT, type Experiment, type MetricAssessment, type Requirement, type Scenario, type Trial, verbatimSpan } from './contracts.js';
 import { agentMetricResult, automaticTrialResult } from './outcomes.js';
+import { AGREED_RATIONALE_PREFIX } from './judge.js';
 import { pluralForm } from './plural.js';
 
 /*
@@ -14,7 +15,7 @@ import { pluralForm } from './plural.js';
  */
 export const UNVERIFIED = 'объяснение не подтверждено цитатой';
 
-export type ExplanationRole = 'title' | 'example' | 'expected' | 'said' | 'rule' | 'more' | 'violated' | 'cut' | 'unverified';
+export type ExplanationRole = 'title' | 'example' | 'expected' | 'said' | 'rule' | 'more' | 'violated' | 'unverified';
 export interface ExplanationRow { role: ExplanationRole; indent: number; text: string }
 /** One owner rule: its number in the owner's materials and where to find it. */
 export interface RuleRef {
@@ -35,13 +36,16 @@ export interface FailureExplanation {
   rules: RuleRef[];
   unverifiedRules: number;
   moreRules: number;
+  /** The one registered prompt rule the failed prompt-rule check quotes; absent when it cannot be named uniquely. */
   violated?: RuleRef;
-  judgedBeforeSeq?: number;
   rows: ExplanationRow[];
   lines: string[];
 }
 
 const GOAL = 'goal_attainment';
+const COMPLIANCE = 'prompt_compliance';
+/** A «…» span of the judge's rationale long enough to identify a rule. */
+const QUOTED_SPAN = /«([^«»]{12,})»/g;
 const RULE_FORMS: [string, string, string] = ['правило', 'правила', 'правил'];
 const collapse = (value: string) => value.replace(/\s+/g, ' ').trim();
 
@@ -86,45 +90,120 @@ function assessment(trial: Trial, metricId: string): MetricAssessment | undefine
   return trial.assessments?.find(item => item.metricId === metricId);
 }
 
-/** The agent reply the judge cited, checked against the stored event. */
+/**
+ * The agent reply behind the verdict, checked against the stored event: the first cited
+ * agent reply; a reply named only by evidence is shown whole; otherwise the last reply,
+ * marked as not chosen by the judge.
+ */
 function saidRow(trial: Trial, cited: MetricAssessment | undefined): { row: ExplanationRow; said: FailureExplanation['said'] } {
-  const replies = trial.events.filter(event => event.type === 'assistant' && typeof event.text === 'string');
-  const citation = cited?.citations?.find(item => replies.some(event => event.seq === item.seq));
+  const replies = trial.events.filter(event => event.type === 'assistant' && typeof event.text === 'string' && collapse(event.text));
+  const reply = (seq: number) => replies.find(event => event.seq === seq);
+  const shown = (seq: number, quote: string, judgeCited: boolean): ReturnType<typeof saidRow> => ({
+    row: { role: 'said', indent: 2, text: `Сказал (реплика #${seq}${judgeCited ? '' : ', судья не указал реплику'}): «${quote}»` },
+    said: { seq, quote, judgeCited },
+  });
+  const citation = cited?.citations?.find(item => reply(item.seq));
   if (citation) {
-    const quote = collapse(citation.quote);
-    return { row: { role: 'said', indent: 2, text: `Сказал (реплика #${citation.seq}): «${quote}»` }, said: { seq: citation.seq, quote, judgeCited: true } };
+    return reply(citation.seq)?.text?.includes(citation.quote)
+      ? shown(citation.seq, collapse(citation.quote), true)
+      : { row: { role: 'unverified', indent: 2, text: `Сказал (реплика #${citation.seq}): ${UNVERIFIED}` }, said: null };
   }
-  const last = replies.filter(event => collapse(event.text ?? '')).at(-1);
-  if (last) {
-    const quote = collapse(last.text ?? '');
-    return { row: { role: 'said', indent: 2, text: `Сказал (реплика #${last.seq}, судья не указал реплику): «${quote}»` }, said: { seq: last.seq, quote, judgeCited: false } };
-  }
+  const evidence = cited && !cited.citations ? cited.evidence.map(reply).find(Boolean) : undefined;
+  if (evidence) return shown(evidence.seq, collapse(evidence.text ?? ''), true);
+  const last = replies.at(-1);
+  if (last) return shown(last.seq, collapse(last.text ?? ''), false);
   return { row: { role: 'unverified', indent: 2, text: 'Сказал: в записи нет ответа агента.' }, said: null };
+}
+
+const machineFormat = (record: Experiment, requirement: Requirement) =>
+  record.sources.find(source => source.id === requirement.sourceId)?.kind === 'prompt' && MACHINE_FORMAT.test(requirement.quote);
+
+/**
+ * The prompt rule a failed prompt-rule check names: the «…» spans of its rationale (the agreed
+ * prefix removed) are matched against registered, observable prompt rules. Exactly one
+ * distinct match names the rule; none or several name nothing, so nothing is guessed.
+ */
+function violatedRule(record: Experiment, trial: Trial, register: Map<string, RuleRef>): RuleRef | undefined {
+  if (agentMetricResult(trial, COMPLIANCE, record.humanReviews) !== 'fail') return undefined;
+  const rationale = (assessment(trial, COMPLIANCE)?.rationale ?? '').replace(AGREED_RATIONALE_PREFIX, '');
+  const normal = (value: string) => collapse(value).toLowerCase();
+  const spans = [...rationale.matchAll(QUOTED_SPAN)].map(match => normal(match[1] ?? '')).filter(span => span.length >= 12);
+  const found = new Map<number, RuleRef>();
+  for (const requirement of record.requirements) {
+    const rule = register.get(requirement.id);
+    if (!rule?.prompt || machineFormat(record, requirement)) continue;
+    const quote = normal(rule.quote);
+    if (spans.some(span => quote.includes(span) || span.includes(quote))) found.set(rule.number, rule);
+  }
+  return found.size === 1 ? [...found.values()][0] : undefined;
 }
 
 /**
  * The explanation of one failed situation, or null when the record holds no failed attempt
- * for it. `trial` picks the attempt (a cause example); otherwise the first failed one is used.
+ * for it. `trial` picks the attempt (a cause example); otherwise the first attempt whose goal
+ * failed is used, then the first whose prompt-rule check failed.
  */
 export function failureExplanation(record: Experiment, scenario: Scenario, trial?: Trial): FailureExplanation | null {
   const reviews = record.humanReviews;
-  const hasGoal = scenario.metrics?.some(metric => metric.subject === 'agent' && metric.id === GOAL) ?? false;
+  const agentMetrics = (scenario.metrics ?? []).filter(metric => metric.subject === 'agent').map(metric => metric.id);
+  const hasGoal = agentMetrics.includes(GOAL);
   const goalFailed = (item: Trial) => hasGoal ? agentMetricResult(item, GOAL, reviews) === 'fail' : automaticTrialResult(scenario, item, reviews) === 'fail';
+  const rulesFailed = (item: Trial) => agentMetricResult(item, COMPLIANCE, reviews) === 'fail';
   const attempts = record.trials.filter(item => item.scenarioId === scenario.id);
-  const chosen = trial ?? attempts.find(goalFailed);
-  if (!chosen || chosen.scenarioId !== scenario.id || !goalFailed(chosen)) return null;
+  const chosen = trial ?? attempts.find(goalFailed) ?? attempts.find(rulesFailed);
+  if (!chosen || chosen.scenarioId !== scenario.id) return null;
+  const kind = goalFailed(chosen) ? 'goal' : rulesFailed(chosen) ? 'rules' : null;
+  if (!kind) return null;
+
   const register = ruleRegister(record);
-  const rules = [...new Set(scenario.requirementIds)].flatMap(id => register.get(id) ?? [])
+  const requirements = new Map(record.requirements.map(item => [item.id, item]));
+  // Internal machine-format prompt rules are never shown or counted; their register numbers stay.
+  const ids = [...new Set(scenario.requirementIds)].filter(id => { const item = requirements.get(id); return !item || !machineFormat(record, item); });
+  const rules = ids.flatMap(id => requirements.has(id) ? register.get(id) ?? [] : [])
     .sort((a, b) => Number(a.prompt) - Number(b.prompt) || a.number - b.number);
+  const unverifiedRules = ids.length - rules.length;
+  const listed: (RuleRef | null)[] = [...rules, ...Array<null>(unverifiedRules).fill(null)];
+  const shownRules = listed.slice(0, 2);
+  const moreRules = listed.length - shownRules.length;
+  const violated = violatedRule(record, chosen, register);
+
   const rows: ExplanationRow[] = [{ role: 'title', indent: 0, text: `✗ ${collapse(scenario.title)}` }];
-  rows.push({ role: 'expected', indent: 2, text: `Должен был: ${collapse(scenario.successCriteria ?? '')}` });
-  const { row, said } = saidRow(chosen, assessment(chosen, GOAL));
+  const criteria = collapse(scenario.successCriteria ?? '');
+  const firstRule = shownRules.find((rule): rule is RuleRef => rule !== null);
+  if (kind === 'rules') {
+    rows.push(violated
+      ? { role: 'expected', indent: 2, text: `Должен был: соблюдать ${ruleText(violated, 'правило')}` }
+      : { role: 'unverified', indent: 2, text: `Должен был: соблюдать правила из ваших материалов — ${UNVERIFIED}` });
+  } else if (criteria) {
+    rows.push({ role: 'expected', indent: 2, text: `Должен был: ${criteria}` });
+  } else if (firstRule) {
+    rows.push({ role: 'expected', indent: 2, text: `Должен был (из правила): ${collapse(requirements.get(firstRule.requirementId)?.text ?? '')}` });
+  } else {
+    rows.push({ role: 'unverified', indent: 2, text: 'Должен был: ожидание не записано в ситуации.' });
+  }
+
+  const cited = kind === 'rules' ? assessment(chosen, COMPLIANCE)
+    : assessment(chosen, GOAL) ?? chosen.assessments?.find(item => item.result === 'fail' && agentMetrics.includes(item.metricId));
+  const { row, said } = saidRow(chosen, cited);
   rows.push(row);
-  for (const rule of rules.slice(0, 2)) rows.push({ role: 'rule', indent: 2, text: ruleText(rule) });
-  const moreRules = Math.max(0, rules.length - 2);
+
+  if (!listed.length) rows.push({ role: 'unverified', indent: 2, text: 'Правило: у ситуации нет правила из ваших материалов.' });
+  for (const rule of shownRules) {
+    rows.push(rule ? { role: 'rule', indent: 2, text: ruleText(rule) } : { role: 'unverified', indent: 2, text: `Правило: ${UNVERIFIED}` });
+  }
   if (moreRules) rows.push({ role: 'more', indent: 2, text: `и ещё ${moreRules} ${pluralForm(moreRules, RULE_FORMS)}` });
+  if (kind === 'goal' && violated && !shownRules.some(rule => rule?.number === violated.number)) {
+    rows.push({ role: 'violated', indent: 2, text: ruleText(violated, 'Нарушено правило') });
+  }
   return {
-    scenarioId: scenario.id, trialId: chosen.id, title: scenario.title, kind: 'goal', said, rules, unverifiedRules: 0, moreRules,
-    rows, lines: rowsToLines(rows),
+    scenarioId: scenario.id, trialId: chosen.id, title: scenario.title, kind, said, rules, unverifiedRules, moreRules,
+    ...(violated ? { violated } : {}), rows, lines: rowsToLines(rows),
   };
+}
+
+/** The same block as a cause example: titled `Пример:` and indented three more columns. */
+export function exampleRows(explanation: FailureExplanation): ExplanationRow[] {
+  return explanation.rows.map(row => row.role === 'title'
+    ? { role: 'example', indent: row.indent + 3, text: `Пример: ${collapse(explanation.title)}` }
+    : { ...row, indent: row.indent + 3 });
 }
