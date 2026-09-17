@@ -23,7 +23,11 @@ let insecureWarningLogged = false;
 export function readGigaConfig(env: Record<string, string | undefined> = process.env): GigaConfig | undefined {
   const url = env.GIGACHAT_URL;
   const certPath = env.GIGACHAT_CERT_PATH;
-  const keyPath = env.GIGACHAT_KEY_PATH;
+  // Внутренние проекты держат один .env на прод-код и на Agent Lab, а там ключ назван
+  // GIGACHAT_KEY и цепочка CA — GIGACHAT_VERIFY_PATH (конвенция суффиксов _KEY_PATH /
+  // _VERIFY_PATH). Явные переменные провайдера остаются главными.
+  const keyPath = env.GIGACHAT_KEY_PATH ?? env.GIGACHAT_KEY;
+  const caPath = env.GIGACHAT_CA_PATH ?? env.GIGACHAT_VERIFY_PATH;
   if (!url || !certPath || !keyPath) return undefined;
   const rejectUnauthorized = env.GIGACHAT_INSECURE !== '1';
   if (!rejectUnauthorized && !insecureWarningLogged) {
@@ -34,7 +38,7 @@ export function readGigaConfig(env: Record<string, string | undefined> = process
     baseUrl: url.replace(/\/+$/, '').replace(/\/v[12]$/, ''),
     cert: readFileSync(certPath),
     key: readFileSync(keyPath),
-    ca: env.GIGACHAT_CA_PATH ? readFileSync(env.GIGACHAT_CA_PATH) : undefined,
+    ca: caPath ? readFileSync(caPath) : undefined,
     rejectUnauthorized,
   };
 }
