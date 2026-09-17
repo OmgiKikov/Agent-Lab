@@ -217,7 +217,11 @@ test('business accuracy follows goal attainment while strict success and other r
   assert.match(q.headline, /Бизнес-цель достигнута в 1 из 2 карточек \(50%\)/);
   assert.match(q.headline, /Полностью прошли все критерии: 0 из 2 \(0%\)/);
   assert.match(q.headline, /В 1 карточке цель достигнута, но провален другой критерий/);
-  assert.equal(q.causes[0]?.example?.quote, 'goal', 'a business failure explains the headline before secondary prompt/style failures');
+  // The saved example is the verified agent reply of that dialogue, not the judge's rationale.
+  assert.equal(q.causes[0]?.example?.quote, 'ok');
+  assert.equal(q.causes[0]?.example?.seq, 1);
+  assert.equal(q.causes[0]?.example?.explanation?.trialId, 't2', 'a business failure explains the headline before secondary prompt/style failures');
+  assert.equal(q.causes[0]?.example?.explanation?.said?.judgeCited, true, 'the quote is the reply the judge pointed at');
 });
 
 test('an unresolved simulator flag makes the card undecided on the first screen instead of counting as a failure, and clusters fall back to weak spots', () => {
@@ -236,8 +240,9 @@ test('an unresolved simulator flag makes the card undecided on the first screen 
   assert.deepEqual([cleared.cards.passed, cleared.cards.failed, cleared.cards.unknown], [0, 1, 0]);
   assert.equal(cleared.humanQueue.total, 0);
   assert.equal(cleared.causes[0]!.name, 'Цель выполнена');
-  assert.equal(cleared.causes[0]!.example?.quote, 'Агент не назвал путь в СберБизнес. Вместо этого он переспросил терминал.', 'the judge preamble is stripped from the quote');
+  assert.equal(cleared.causes[0]!.example?.quote, 'ok', 'the verified agent reply is quoted, never the judge rationale');
   assert.equal(cleared.causes[0]!.example?.seq, 1);
+  assert.ok(cleared.causes[0]!.example?.explanation, 'the full explanation is saved with the cause');
 });
 
 test('plural forms and sentence-bounded shortening', () => {
@@ -532,7 +537,8 @@ test('weak spots, stages and saved failure clusters use authoritative human rubr
   assert.deepEqual(verdict.weakSpots.filter(spot => spot.kind === 'metric').map(spot => [spot.description, spot.failures]), [['Формат ответа', 1]]);
   assert.deepEqual(verdict.stages.map(stage => [stage.stage, stage.passed, stage.evaluated]), [['формат', 1, 2], ['цель', 2, 2]]);
   const summary = qualitySummary(r);
-  assert.deepEqual([summary.causes[0]?.dialogues, summary.causes[0]?.example?.trialId, summary.causes[0]?.example?.quote], [1, 't2', 'r']);
+  // The weak-spot fallback follows the same rule: the verified reply of that dialogue.
+  assert.deepEqual([summary.causes[0]?.dialogues, summary.causes[0]?.example?.trialId, summary.causes[0]?.example?.quote], [1, 't2', 'ok']);
 });
 
 test('multiple disputed criteria count as one disputed dialogue', () => {
@@ -588,4 +594,24 @@ test('the headline names only non-zero leftovers, exclusions sit next to the num
     ] }));
     assert.equal(excluded.coverage, 'Не вошли в набор 3 диалога: нужны данные клиента — 2, слишком длинный диалог или нет реплик клиента — 1. В accuracy они не считаются.');
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('a cause example that cannot be quoted says so instead of showing a judge rationale', () => {
+  const failed = trial('t1', 'a', 'fail', 'fail');
+  // No exact check failed, and the judge cites words the stored reply does not contain.
+  failed.checks = [];
+  failed.assessments = [{ metricId: 'goal', result: 'fail', rationale: 'Агент ошибся.', evidence: [1], citations: [{ seq: 1, quote: 'этого в ответе нет' }] }];
+  const q = qualitySummary(record({ scenarios: [scenario('a')], trials: [failed],
+    failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
+  assert.equal(q.causes[0]?.example?.quote, 'объяснение не подтверждено цитатой');
+  assert.equal(q.causes[0]?.example?.seq, undefined);
+  assert.ok(!JSON.stringify(q.causes[0]).includes('Агент ошибся'));
+});
+
+test('a failed exact check is quoted with its own evidence, not with the explanation', () => {
+  const failed = trial('t1', 'a', 'fail', 'fail');
+  const q = qualitySummary(record({ scenarios: [scenario('a')], trials: [failed],
+    failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
+  assert.equal(q.causes[0]?.example?.quote, 'осталось 0');
+  assert.equal(q.causes[0]?.example?.explanation, undefined);
 });

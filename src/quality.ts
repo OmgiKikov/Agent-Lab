@@ -3,6 +3,7 @@ import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, 
 import { agentMetricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
 import { cardOutcome, goalCardOutcome, humanFindings, isAgentFailure, judgeModel as runJudgeModel, verdictSummary, type VerdictSummary } from './comparison.js';
 import { exclusionCounts, pluralForm } from './result-view.js';
+import { failureExplanation, UNVERIFIED, type FailureExplanation } from './explain.js';
 import { draftHash } from './experiment.js';
 
 /*
@@ -22,8 +23,8 @@ export interface QualityMetric {
 }
 export interface QualityCause {
   name: string; description: string; stage?: string; dialogues: number;
-  /** The card title and one cited reason from the first dialogue of the cluster. */
-  example?: { trialId: string; card: string; quote: string; seq?: number };
+  /** The card title and one checked reason from the first dialogue of the cluster; never a clipped rationale. */
+  example?: { trialId: string; card: string; quote: string; seq?: number; explanation?: FailureExplanation };
   promptQuotes: string[];
 }
 export interface QualityCardScore {
@@ -427,17 +428,18 @@ export function shorten(text: string, limit = 220): string {
   const stop = Math.max(head.lastIndexOf('. '), head.lastIndexOf('; '), head.lastIndexOf(': '));
   return `${(stop > limit / 2 ? head.slice(0, stop + 1) : head.replace(/\s+\S*$/, '')).trim()}…`;
 }
-/** The reason a person would quote first: the failed exact check, otherwise the failed agent rubric's cited rationale. */
-function firstReason(record: Experiment, trial: Trial): { quote: string; seq?: number } {
-  const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
+/**
+ * The example a person can check: a failed exact check quotes its own harness-written evidence;
+ * otherwise the verified explanation of the failure — its reply quote, or the named «не подтверждено»
+ * when the record cannot show one. The judge's rationale is never quoted here (CTX-08).
+ */
+function causeExample(record: Experiment, trial: Trial): { quote: string; seq?: number; explanation?: FailureExplanation } {
   const check = trial.checks.find(c => !c.passed);
   if (check) return { quote: check.evidence || check.description };
-  const failed = (trial.assessments ?? []).filter(a => scenario?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent')
-    && agentMetricResult(trial, a.metricId, record.humanReviews) === 'fail');
-  const assessment = ['goal_attainment', 'reply_quality', 'prompt_compliance']
-    .flatMap(id => failed.find(item => item.metricId === id) ?? []).at(0) ?? failed[0];
-  if (assessment) return { quote: shorten(assessment.rationale.replace(/^Совпало \d\/\d оценок этой рубрики в свежих сессиях; это не проверка правильности\.\s*/, '').replace(/^Pass condition is not met:\s*/i, '')), seq: assessment.evidence[0] };
-  return { quote: trial.reason };
+  const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
+  const explanation = scenario ? failureExplanation(record, scenario, trial) : null;
+  if (!explanation) return { quote: trial.reason };
+  return { quote: explanation.said?.quote ?? UNVERIFIED, ...(explanation.said ? { seq: explanation.said.seq } : {}), explanation };
 }
 
 function causes(record: Experiment, v: VerdictSummary): QualityCause[] {
@@ -446,7 +448,7 @@ function causes(record: Experiment, v: VerdictSummary): QualityCause[] {
     const trials = mode.trialIds.map(id => record.trials.find(t => t.id === id)).filter((t): t is Trial => !!t && isAgentFailure(record, t));
     const first = trials[0];
     return first ? [{ name: mode.name, description: mode.description, stage: mode.stage, dialogues: trials.length, promptQuotes: mode.promptQuotes ?? [],
-      example: { trialId: first.id, card: title(first), ...firstReason(record, first) } }] : [];
+      example: { trialId: first.id, card: title(first), ...causeExample(record, first) } }] : [];
   }).sort((a, b) => b.dialogues - a.dialogues);
   if (clusters.length) return clusters;
   // Before clustering ran (or when it found nothing), the weakest criteria are the causes we can name.
@@ -454,7 +456,7 @@ function causes(record: Experiment, v: VerdictSummary): QualityCause[] {
     const failing = record.trials.find(t => spot.kind === 'check' ? t.checks.some(c => !c.passed && c.description === spot.description)
       : record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.some(m => m.name === spot.description && agentMetricResult(t, m.id, record.humanReviews) === 'fail'));
     return { name: spot.description, description: spot.kind === 'check' ? 'Точная проверка не пройдена.' : 'Рубрика агента не выполнена по оценке судьи.', stage: spot.stage, dialogues: spot.failures, promptQuotes: [],
-      ...(failing ? { example: { trialId: failing.id, card: title(failing), ...firstReason(record, failing) } } : {}) };
+      ...(failing ? { example: { trialId: failing.id, card: title(failing), ...causeExample(record, failing) } } : {}) };
   });
 }
 
