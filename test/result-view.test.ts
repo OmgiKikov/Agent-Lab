@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Trial, type ValidationExclusion } from '../src/contracts.js';
-import { allFailuresPointer, allFailuresTitle, buildResultView, causeSection, failureListRows, NOT_MEASURED_TEXT, resultViewLines, resultViewRows, SECTION_TEXT, unmeasuredControl, wilson } from '../src/result-view.js';
+import { agreementNextStep, agreementSectionLines, allFailuresPointer, allFailuresTitle, buildResultView, causeSection, disagreementRows, disagreementTitle, DISAGREEMENT_BOARD_TITLE, failureListRows, NOT_MEASURED_TEXT, resultViewLines, resultViewRows, SECTION_TEXT, unmeasuredControl, wilson } from '../src/result-view.js';
+import { assertPlainCopy } from './helpers/copy-check.js';
 import { rowsToLines } from '../src/explain.js';
 import { compareRuns, NOT_MEASURED_CODES, stabilityBetweenRuns, type NotMeasuredCode } from '../src/comparison.js';
 import { AGREED_RATIONALE_PREFIX, GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
@@ -919,4 +920,135 @@ test('stale marks alone report themselves, and a run with nothing to check keeps
   assert.ok(resultViewLines(empty, { details: true }).every(line => !line.includes('Согласие с судьёй')), 'nothing to check prints no agreement row');
   assert.deepEqual(resultViewLines(empty), ['Проверенных ситуаций нет.', 'Не измерено: 2 — судья не уверен: голоса разошлись.',
     '  ? Ситуация u0 — судья не уверен: голоса разошлись', '  ? Ситуация u1 — судья не уверен: голоса разошлись', 'Контроль: не задан.']);
+});
+
+// ---- F7 and F8: whose judgment the owner overturned, and where the rest of the queue is marked. ----
+const HEX_ID = '0123abcd-0000-4000-8000-000000000000';
+const NEXT_STEP = 'Отметить согласие с судьёй можно в Pi: /agent-lab 0123abcd, раздел 3.';
+
+/**
+ * Two overturned judgments: a success the owner called a failure and a failure he called a
+ * success. The dialogues are recorded the other way round from the cards, so the order of the
+ * list proves it follows the record's card order and not the order the marks were written in.
+ */
+function disagreed(notes: [string, string] = ['Агент пообещал перевод, которого не делает.', 'Клиент назвал номер заявки, агент его не использовал.']): Experiment {
+  const cards = [card('pass0', { title: 'Смена реквизитов' }), card('fail0', { title: 'Возврат через терминал' })];
+  const trials = [attempt('fail0', { goal: 'fail' }), attempt('pass0', { goal: 'pass' })];
+  return run(cards, trials, { id: HEX_ID, humanReviews: [
+    { ...quick('t-fail0', 'pass', 'fail'), note: notes[1] },
+    { ...quick('t-pass0', 'fail', 'pass'), note: notes[0] },
+  ] });
+}
+
+test('the disagreements read in the card order of the record, with both directions of the verdict', () => {
+  const view = buildResultView(disagreed());
+  assert.deepEqual(disagreementRows(view).map(row => row.role),
+    ['dis-title', 'dis-verdicts', 'dis-reason', 'blank', 'dis-title', 'dis-verdicts', 'dis-reason']);
+  assert.deepEqual(rowsToLines(disagreementRows(view)), [
+    '! Смена реквизитов',
+    '  Судья: справился → владелец: не справился',
+    '  Причина: «Агент пообещал перевод, которого не делает.»',
+    '',
+    '! Возврат через терминал',
+    '  Судья: не справился → владелец: справился',
+    '  Причина: «Клиент назвал номер заявки, агент его не использовал.»',
+  ]);
+  assert.equal(disagreementTitle(2), 'Несогласия с судьёй (2):');
+  assert.equal(DISAGREEMENT_BOARD_TITLE, 'НЕСОГЛАСИЯ С СУДЬЁЙ');
+  assert.deepEqual(agreementSectionLines(view), ['Несогласия с судьёй (2):', ...rowsToLines(disagreementRows(view))]);
+  assert.equal(agreementNextStep(view), null, 'both queued situations are answered, so nothing is left to mark');
+});
+
+test('the owner’s reason is shown whole: whitespace runs become one space and 600 characters survive', () => {
+  const long = 'Клиент назвал номер заявки, агент его не использовал. '.repeat(20).slice(0, 600).trimEnd().padEnd(600, 'о');
+  assert.equal(long.length, 600);
+  const lines = rowsToLines(disagreementRows(buildResultView(disagreed(['Агент\tответил\n\nне  по правилам.', long]))));
+  assert.equal(lines[2], '  Причина: «Агент ответил не по правилам.»');
+  assert.equal(lines[6], `  Причина: «${long}»`);
+  assert.equal(lines[6]!.length, 600 + '  Причина: «»'.length, 'nothing was cut from the reason');
+  assert.ok(!lines.some(line => line.includes('…')), lines.join('\n'));
+});
+
+test('the next step points at the board while something in the queue is unmarked, and only then', () => {
+  const open = buildResultView(run([card('f0')], [attempt('f0', { goal: 'fail' })], { id: HEX_ID }));
+  assert.deepEqual(disagreementRows(open), []);
+  assert.equal(agreementNextStep(open), NEXT_STEP);
+  assert.deepEqual(agreementSectionLines(open), [NEXT_STEP], 'without a disagreement the section is the next step alone');
+  const answered = buildResultView(run([card('f0'), card('f1')], [attempt('f0', { goal: 'fail' }), attempt('f1', { goal: 'fail' })],
+    { id: HEX_ID, humanReviews: [quick('t-f0', 'fail', 'fail'), quick('t-f1', 'unknown', 'fail')] }));
+  assert.equal(agreementNextStep(answered), null, '«не могу сказать» is an answer for the queue too');
+  assert.deepEqual(agreementSectionLines(answered), []);
+  const nothing = buildResultView(run([card('u0')], [attempt('u0', { goal: 'unknown', goalRationale: SPLIT })], { id: HEX_ID }));
+  assert.deepEqual(agreementSectionLines(nothing), [], 'the judge decided nothing, so there is nothing to mark');
+});
+
+test('CLI summary puts the disagreement and the next step between the causes and the full list, escaped', { timeout: 20000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-disagreement-cli-'));
+  try {
+    const escape = String.fromCharCode(27);
+    const record = clustered();
+    record.id = HEX_ID;
+    record.scenarios[1]!.title = 'Возврат через терминал';
+    // The owner overturns one failure and leaves the other two in the queue; his reason is untrusted text.
+    record.humanReviews = [{ ...quick('t-f0', 'pass', 'fail'), note: `Судья ${escape}[31mне учёл уточнение клиента.` }];
+    const store = new ExperimentStore(directory);
+    await store.init();
+    try { await store.save(record); } finally { await store.close(); }
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    const child = spawn(process.execPath, [cli, 'summary', '--id', record.id, '--data-dir', directory]);
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+    const code = await new Promise<number | null>(resolve => child.on('close', resolve));
+    assert.equal(code, 0, stderr);
+    const lines = stdout.split('\n');
+    const causes = lines.findIndex(line => ['Главные причины провалов:', 'Провалы:'].includes(line));
+    const at = lines.indexOf('Несогласия с судьёй (1):');
+    const all = lines.findIndex(line => line.startsWith('Все провалы ('));
+    assert.ok(causes > 0 && at > causes && all > at, stdout);
+    assert.equal(lines[at - 1], '', 'a blank line separates the section from the causes');
+    assert.deepEqual(lines.slice(at, all - 1), [
+      'Несогласия с судьёй (1):',
+      '! Возврат через терминал',
+      '  Судья: не справился → владелец: справился',
+      '  Причина: «Судья не учёл уточнение клиента.»',
+      '',
+      NEXT_STEP,
+    ]);
+    assert.ok(!stdout.includes(escape), 'a terminal sequence from the reason never reaches the terminal');
+    assert.ok(stdout.includes('Судья не учёл уточнение клиента.'), 'the visible words stay');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+/** The same record with every situation titled in Russian: a card title is record text, not our copy. */
+const inRussian = (record: Experiment): Experiment =>
+  ({ ...record, scenarios: record.scenarios.map((scenario, i) => ({ ...scenario, title: `Ситуация №${i + 1}` })) });
+/** The F6 rows of a record: the main agreement row and the tail rows under it. */
+function agreementBlock(record: Experiment): string[] {
+  const lines = resultViewLines(buildResultView(record));
+  const at = lines.findIndex(line => line.startsWith('Согласие с судьёй'));
+  return at < 0 ? [] : lines.slice(at).filter(line => line.startsWith('Согласие с судьёй') || line.startsWith('  '));
+}
+
+test('the agreement row, the disagreements and the next step are plain Russian on every band', () => {
+  const tails = { ...scored(1, 2), humanReviews: [quick('t-f0', 'fail', 'fail'), quick('t-f1', 'unknown', 'fail'), quick('t-p0', 'pass', 'fail')] };
+  const bands: [string, Experiment][] = [
+    ['M = 0', scored(1, 1)],
+    ['M = 1', { ...scored(1, 1), humanReviews: [quick('t-f0', 'fail', 'fail')] }],
+    ['M = 10', marked(1, 9, 8, 1)],
+    ['M = 20', marked(3, 17, 16, 2)],
+    ['M with tails', tails],
+  ];
+  for (const [label, record] of bands) {
+    const rows = agreementBlock(inRussian(record));
+    assert.ok(rows.length, `${label} prints an agreement row`);
+    for (const line of rows) assertPlainCopy(line, label);
+  }
+  for (const line of agreementSectionLines(buildResultView(inRussian(disagreed())))) assertPlainCopy(line, 'F7');
+  assertPlainCopy(agreementNextStep(buildResultView(run([card('f0')], [attempt('f0', { goal: 'fail' })], { id: HEX_ID })))!, 'F8');
+  // The scan itself: it catches machine words and lets the allowed key letters and command through.
+  assert.throws(() => assertPlainCopy('Согласие с судьёй: метрика сходится.'), /метрик/);
+  assert.throws(() => assertPlainCopy('Оценка goal_attainment не сошлась.'), /goal/);
+  assert.throws(() => assertPlainCopy('Отметка stale после смены судьи.'), /stale/);
+  assertPlainCopy('y · n · s — согласие с судьёй');
+  assertPlainCopy(NEXT_STEP);
 });
