@@ -640,12 +640,22 @@ export interface Comparison {
   verdict: 'improved' | 'regressed' | 'no_change' | 'insufficient' | 'incomparable';
   reasons: string[]; cases: { scenarioId: string; baselinePasses: number; candidatePasses: number; repeats: number }[];
 }
+/** The judgment a human verdict refers to: the judge protocol and the exact input it was asked about. */
+export const judgeSnapshotSchema = z.strictObject({ protocolHash: text, inputHash: text });
+export type JudgeSnapshot = z.infer<typeof judgeSnapshotSchema>;
 export const humanReviewInputSchema = z.strictObject({
   trialId: identifier, metricId: identifier.optional(), checkId: identifier.optional(),
   verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000), reviewedDialogue: z.literal(true).optional(),
   durationMs: z.number().int().nonnegative().max(3600000).optional(),
+  /** A one-key agreement mark on the situation's primary metric. */
+  source: z.literal('quick').optional(),
+  /** The recorded judge result the person saw; filled and checked by the lab, never trusted from a caller. */
+  judgeVerdict: z.enum(['pass', 'fail', 'unknown']).optional(),
+  /** The judgment the person agreed or disagreed with; absent when the trial has neither receipt nor audit (demo). */
+  judge: judgeSnapshotSchema.optional(),
 }).refine(v => !(v.metricId && v.checkId), 'Review either one metric, one check, or the whole trial')
-  .refine(v => !v.reviewedDialogue || (!v.metricId && !v.checkId), 'Only a whole-dialogue verdict can mark a complete review');
+  .refine(v => !v.reviewedDialogue || (!v.metricId && !v.checkId), 'Only a whole-dialogue verdict can mark a complete review')
+  .refine(v => v.source !== 'quick' || (!!v.metricId && v.verdict !== 'invalid'), 'Быстрая отметка ставится на одну оценку судьи.');
 export type HumanReviewInput = z.infer<typeof humanReviewInputSchema>;
 export type HumanReview = HumanReviewInput & { id: string; createdAt: string };
 const humanReviewSchema = humanReviewInputSchema.safeExtend({ id: identifier, createdAt: text });

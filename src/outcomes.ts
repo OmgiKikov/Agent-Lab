@@ -31,6 +31,19 @@ export function latestHumanReviews(record: Pick<Experiment, 'trials' | 'humanRev
   return latest;
 }
 
+/**
+ * The metric a one-key agreement mark lands on: goal attainment; else the first agent metric the
+ * judge failed; else the first one it passed. Only `scenario.metrics` with `subject === 'agent'`
+ * are considered — the RAG rubrics `assessmentRubrics` adds are diagnostic, never the main
+ * judgment. Reads recorded assessments only, so a human verdict never moves the primary metric.
+ */
+export function primaryMetricId(scenario: Scenario | undefined, trial: Trial): string | undefined {
+  const agent = (scenario?.metrics ?? []).filter(m => m.subject === 'agent');
+  if (agent.some(m => m.id === 'goal_attainment')) return 'goal_attainment';
+  const result = (id: string) => trial.assessments?.find(a => a.metricId === id)?.result;
+  return agent.find(m => result(m.id) === 'fail')?.id ?? agent.find(m => result(m.id) === 'pass')?.id;
+}
+
 /** Rubric outcomes stay separate from objective checks everywhere they are presented. A human verdict on a criterion is authoritative. */
 export function agentMetricResult(trial: Trial, metricId: string, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
   const human = latestHumanReviews({ trials: [trial], humanReviews: reviews }).get(`${trial.id}|metric:${metricId}`)?.verdict;

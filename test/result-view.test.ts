@@ -11,6 +11,7 @@ import { rowsToLines } from '../src/explain.js';
 import { compareRuns, NOT_MEASURED_CODES, stabilityBetweenRuns, type NotMeasuredCode } from '../src/comparison.js';
 import { AGREED_RATIONALE_PREFIX, GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { ExperimentStore } from '../src/store.js';
+import { ExperimentLab } from '../src/experiment.js';
 import { embeddedBefore, evidenceBundle } from '../src/artifacts.js';
 import { sealJudgeReceipt } from '../src/judge.js';
 import { sourceIdentity } from '../src/normalize.js';
@@ -93,6 +94,9 @@ const ACQUIRING_BLOCK = [
   '  ? Ситуация unclear0 — судья не уверен, что симулятор держался диалога',
   '  ? Ситуация split0 — судья не уверен: голоса разошлись',
   'Контроль: не задан.',
+  // The acquiring run has 11 failed goals queued for review and one passed goal in the sample,
+  // so the agreement row is printed even before the first mark (F6).
+  'Согласие с судьёй: ещё не проверено.',
   'Из 40 диалогов в набор вошли 13. Не вошли 27: в правилах нет ожидаемого ответа — 21, нужны данные клиента — 6.',
 ];
 
@@ -183,6 +187,41 @@ test('CLI summary prints the ResultView block first, from the built dist', { tim
     assert.equal(block[0], ACQUIRING_BLOCK[0]);
     assert.ok(lines.includes('Подробности:'));
     assert.ok(!stdout.includes('Бизнес-цель достигнута'), 'the old headline with another denominator is gone');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('a quick mark saved by the lab shows as the agreement row in the CLI summary', { timeout: 20000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-agreement-'));
+  try {
+    const record = acquiringShape();
+    const store = new ExperimentStore(directory);
+    await store.init();
+    try { await store.save(record); } finally { await store.close(); }
+    // The lab holds the writer lock, so it is opened and closed around the mark alone.
+    const lab = new ExperimentLab(directory);
+    await lab.init();
+    try {
+      await lab.addHumanReview(record.id, { trialId: 't-fail0', metricId: 'goal_attainment', source: 'quick',
+        verdict: 'fail', judgeVerdict: 'fail', note: 'Быстрая отметка: согласен с судьёй.', durationMs: 1200 });
+    } finally { await lab.close(); }
+    const reader = new ExperimentStore(directory);
+    await reader.init();
+    let stored: Experiment;
+    try { stored = await reader.get(record.id); } finally { await reader.close(); }
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    const child = spawn(process.execPath, [cli, 'summary', '--id', record.id, '--data-dir', directory]);
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+    const code = await new Promise<number | null>(resolve => child.on('close', resolve));
+    assert.equal(code, 0, stderr);
+    const lines = stdout.split('\n');
+    const block = lines.slice(0, lines.indexOf(''));
+    assert.ok(block.includes('Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы: 1 из 1 · успехи ещё не проверены).'), block.join('\n'));
+    assert.ok(block.includes('  Цель — согласие в 9 случаях из 10.'), block.join('\n'));
+    assert.deepEqual(block, resultViewLines(buildResultView(stored), { details: true }));
+    const view = buildResultView(stored);
+    assert.equal(view.agreement.queueFailures.length, 11, '9 failed goals plus the unmeasured deviated0 and unclear0');
+    assert.deepEqual(view.agreement.sampledPasses, ['t-deviated1'], 'the single recorded pass is the whole sample');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -543,6 +582,8 @@ test('a passing control stays out of the headline and gets its own line', () => 
     'Справился в 3 из 12 проверенных ситуаций — 25%.',
     'Мало данных: реальная доля где-то от 9% до 53%.',
     'Контроль: пройден ✓',
+    // Deliberate change: the 9 failures and the 3 sampled passes are a review queue, so F6 is printed.
+    'Согласие с судьёй: ещё не проверено.',
   ]);
 });
 
@@ -675,7 +716,9 @@ test('every unmeasured situation sits under the not-measured row with its phase-
 test('with nothing unmeasured there is no not-measured row and no situation row', () => {
   const measured = buildResultView(scored(2, 1));
   assert.deepEqual(resultViewLines(measured, { details: true }), [
-    'Справился в 2 из 3 проверенных ситуаций — 67%.', 'Мало данных: реальная доля где-то от 21% до 94%.', 'Контроль: не задан.']);
+    'Справился в 2 из 3 проверенных ситуаций — 67%.', 'Мало данных: реальная доля где-то от 21% до 94%.', 'Контроль: не задан.',
+    // Deliberate change: one failure and two sampled passes make a review queue, so F6 is printed.
+    'Согласие с судьёй: ещё не проверено.']);
   assert.ok(resultViewRows(measured).every(row => row.role !== 'situation'));
   const draft = buildResultView(run([card('a')], [], { phase: 'review' }));
   assert.ok(resultViewLines(draft).every(line => !line.includes('?')));

@@ -1,5 +1,6 @@
 import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
 import { observedRecord } from './outcomes.js';
+import { judgeAgreement, type JudgeAgreement } from './agreement.js';
 import { cardVerdict, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
 import { exampleRows, failureExplanation, rowsToLines, type ExplanationRole, type FailureExplanation } from './explain.js';
 import { pluralForm } from './plural.js';
@@ -17,6 +18,8 @@ export const COUNTING_RULES = 'goal-v1';
 
 /** Below this many decided situations the headline percent is shown with its Wilson range. */
 const SMALL_SAMPLE = 20;
+/** Below this many checked marks the agreement row names no percent: a share of a handful is not a share. */
+export const PERCENT_FROM = 10;
 const Z = 1.959963984540054;
 
 /** 95% Wilson score interval for passed/decided; null when nothing was decided. */
@@ -85,6 +88,8 @@ export interface ResultView {
   scope: { cards: number; synthetic: number; dialogues: number; judgeModel?: string; costUsd: number | null; target: string };
   /** Found flips against the source run, control situations left out; absent when there is nothing to compare with. Never changes the headline. */
   stability?: Stability;
+  /** How often the owner confirmed the judge's own decisions. Never changes the headline: it says how much the number can be trusted, not what it is. */
+  agreement: JudgeAgreement;
 }
 
 /** The source run to check stability against; the record's own parent or the run it reassessed. */
@@ -189,6 +194,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     cards,
     failures,
     topCauses,
+    agreement: judgeAgreement(input),
     scope: {
       cards: record.scenarios.length,
       synthetic: record.scenarios.filter(scenario => scenario.provenance === 'synthetic').length,
@@ -227,6 +233,35 @@ function controlLine(view: ResultView): string {
   return base + synthetic + unstable;
 }
 
+/**
+ * The agreement rows (F6): one main row plus its tail rows, or nothing at all when there is
+ * neither a review queue nor a single mark. Fed only by `view.agreement`, so every surface words
+ * it identically. No percent below PERCENT_FROM checks and «мало проверок» below SMALL_SAMPLE:
+ * a share of a handful of marks is not a share. The 9-of-10 target is worded as a goal, never as
+ * a reached bar, and no kappa or error matrix is shown.
+ */
+function agreementRows(view: ResultView): ResultRow[] {
+  const found = view.agreement;
+  const queued = found.queueFailures.length + found.sampledPasses.length;
+  if (!queued && !found.checked && !found.unsure && !found.stale) return [];
+  const rows: ResultRow[] = [];
+  if (!found.checked) rows.push({ role: 'line', indent: 0, text: 'Согласие с судьёй: ещё не проверено.' });
+  else {
+    const percent = found.checked >= PERCENT_FROM ? ` — ${Math.round(100 * found.agreed / found.checked)}%` : '';
+    const few = found.checked < SMALL_SAMPLE ? ' · мало проверок' : '';
+    const failPart = found.failures.checked > 0 ? `провалы: ${found.failures.agreed} из ${found.failures.checked}`
+      : found.queueFailures.length ? 'провалы ещё не проверены' : 'провалов нет';
+    const passPart = found.passes.checked > 0 ? `успехи: ${found.passes.agreed} из ${found.passes.checked}`
+      : found.sampledPasses.length ? 'успехи ещё не проверены' : 'успехов нет';
+    rows.push({ role: 'line', indent: 0,
+      text: `Согласие с судьёй: ${found.agreed} из ${found.checked} проверенных${percent}${few} (${failPart} · ${passPart}).` });
+  }
+  if (found.checked > 0) rows.push({ role: 'detail', indent: 2, text: 'Цель — согласие в 9 случаях из 10.' });
+  if (found.unsure > 0) rows.push({ role: 'detail', indent: 2, text: `Человек не смог решить: ${found.unsure}.` });
+  if (found.stale > 0) rows.push({ role: 'detail', indent: 2, text: `Отметки устарели после смены судьи: ${found.stale}.` });
+  return rows;
+}
+
 /** `alarm` is the control warning above the number; `lead` is always the number itself. */
 export type ResultRowRole = 'lead' | 'line' | 'situation' | 'detail' | 'alarm';
 export interface ResultRow { role: ResultRowRole; indent: number; text: string }
@@ -257,6 +292,7 @@ export function resultViewRows(view: ResultView, options: { details?: boolean } 
     }
   }
   add('line', controlLine(view));
+  rows.push(...agreementRows(view));
   if (coverage.text) add('line', coverage.text);
   if (options.details && notMeasured.reasons.length > 1) {
     add('detail', 'Не измерено по причинам:');
