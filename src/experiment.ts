@@ -59,6 +59,15 @@ function retainAcceptedTests(record: Experiment): void {
   });
 }
 
+/** A control checks the judge and the connection, not the simulator: it runs as the opening and the agent's first reply. */
+function oneTurnControls(record: Experiment): void {
+  const controls = new Set(record.positiveControlScenarioIds ?? []);
+  if (!controls.size) return;
+  record.scenarios = record.scenarios.map(scenario => controls.has(scenario.id)
+    ? { ...scenario, user: { ...scenario.user, maxFollowUps: 0, ...(scenario.user.script !== undefined ? { script: [] } : {}) } }
+    : scenario);
+}
+
 function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
   const record = structuredClone(previous);
   if (scenarioIds) {
@@ -752,6 +761,9 @@ export class ExperimentLab {
         if (missing !== undefined) throw new Error(`Контрольная ситуация должна быть из этого набора: ${missing}.`);
         record.positiveControlScenarioIds = [...controlScenarioIds];
       }
+      // Explicit and inherited controls alike; an accepted control card changed, so its acceptance is dropped.
+      oneTurnControls(record);
+      retainAcceptedTests(record);
       record.targetFingerprint = await targetFingerprint(record.target);
       await this.store.save(record);
       return structuredClone(record);
@@ -778,6 +790,7 @@ export class ExperimentLab {
       const record = freshDraft(previous, scenarioIds);
       // Keep the original run as the comparison source, not the exported draft's temporary ID.
       record.parentRunId = previous.parentRunId;
+      oneTurnControls(record);
       const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions,
         agent: record.revisions[0]?.spec, scenarios: record.scenarios.map(({ split: _split, ...s }) => s) }, record.sources, 'evaluate', record.profiles);
       record.scenarios = prepared.scenarios;

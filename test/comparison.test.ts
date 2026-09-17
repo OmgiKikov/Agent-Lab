@@ -694,3 +694,32 @@ test('a reassessment rebuilt from receipt-carrying source evidence keeps the sam
   assert.ok(rebuilt);
   assert.deepEqual(stabilityAfterReassess(next, rebuilt), stored);
 });
+
+// ---- Positive controls are left out of the repeat diff. ----
+const CONTROL_NOTE = 'Контрольные ситуации не сравниваются: они не входят в главное число.';
+/** A repeat of `source` that made `ctl` a one-turn control, carrying the source evidence and its identity. */
+function controlledRepeat(source: Experiment, edit?: (run: Experiment) => void): Experiment {
+  const ids = source.scenarios.map(s => s.id);
+  const after = goalRun('c0ffee00-0000-4000-8000-000000000003', Object.fromEntries(ids.map(id => [id, 'pass'])), source.manifestHash!, {
+    parentRunId: source.id, positiveControlScenarioIds: ['ctl'],
+    sourceEvidence: { runId: source.id, trials: structuredClone(source.trials), humanReviews: [], identity: sourceIdentity(source, ids) } });
+  after.scenarios.find(s => s.id === 'ctl')!.user.maxFollowUps = 0;
+  edit?.(after);
+  return after;
+}
+
+test('a rebuilt source keeps its card identity when control situations are left out of the diff', () => {
+  const source = goalRun(REASSESSED_SOURCE, { s1: 'pass', s2: 'pass', ctl: 'pass' }, 'h');
+  const same = controlledRepeat(source);
+  const sameDiff = compareRuns(embeddedBefore(same, source.id)!, same);
+  assert.equal(sameDiff.comparable, true, sameDiff.notes.join(' '));
+  assert.ok(sameDiff.notes.includes(CONTROL_NOTE));
+  assert.equal(sameDiff.cards.shared, 2);
+  assert.ok([...sameDiff.pairs, ...sameDiff.incomparable].every(row => row.scenarioId !== 'ctl'));
+
+  // The rebuilt source holds the current cards; only the identity from the original record reveals the edit.
+  const edited = controlledRepeat(source, run => { run.scenarios.find(s => s.id === 's1')!.user.goal = 'another goal'; });
+  const editedDiff = compareRuns(embeddedBefore(edited, source.id)!, edited);
+  assert.equal(editedDiff.comparable, false);
+  assert.ok(editedDiff.notes.some(note => note.startsWith('Содержимое карточек изменилось')), editedDiff.notes.join(' '));
+});

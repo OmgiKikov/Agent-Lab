@@ -697,9 +697,33 @@ export function stabilityAfterReassess(record: Experiment, source: Experiment): 
 
 const JUDGE_INCOMPLETE = 'Судья не завершил оценку этой попытки.';
 
+const CONTROL_NOTE = 'Контрольные ситуации не сравниваются: они не входят в главное число.';
+
 export function compareRuns(before: Experiment, after: Experiment): RunComparison {
   // A rebuilt source carries the current cards; its embedded identity says what the source cards were.
-  return compareRunsAgainst(before, after, reconstructedIdentity(before, after) ?? undefined);
+  // Taken from the original records: a stripped copy is not a registered rebuilt source.
+  const identity = reconstructedIdentity(before, after) ?? undefined;
+  const controls = new Set([...before.positiveControlScenarioIds ?? [], ...after.positiveControlScenarioIds ?? []]);
+  if (!controls.size) return compareRunsAgainst(before, after, identity);
+  // A control never enters the headline (CTX-11), and a repeat runs it as one turn, so it is not a pair either.
+  const result = compareRunsAgainst(withoutControls(before, controls), withoutControls(after, controls), identity);
+  result.notes.push(CONTROL_NOTE);
+  return result;
+}
+
+/** A shallow copy of a run without its control situations: cards, attempts, selection and reassessed attempts. */
+function withoutControls(run: Experiment, controls: Set<string>): Experiment {
+  const trials = run.trials.filter(trial => !controls.has(trial.scenarioId));
+  const copy: Experiment = { ...run, scenarios: run.scenarios.filter(scenario => !controls.has(scenario.id)), trials };
+  delete copy.positiveControlScenarioIds;
+  const selected = run.selectedScenarioIds?.filter(id => !controls.has(id));
+  if (selected?.length) copy.selectedScenarioIds = selected;
+  else delete copy.selectedScenarioIds;
+  if (run.assessmentTrialIds) {
+    const kept = new Set(trials.map(trial => trial.id));
+    copy.assessmentTrialIds = run.assessmentTrialIds.filter(id => kept.has(id));
+  }
+  return copy;
 }
 
 function compareRunsAgainst(before: Experiment, after: Experiment, identity: SourceIdentity | undefined): RunComparison {

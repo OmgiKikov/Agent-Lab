@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { ExperimentLab, draftHash, measurementHash, planDiscovery, resultHash } from '../src/experiment.js';
 import { ExperimentStore } from '../src/store.js';
 import { createDemoRuntime, demoEvaluationInput, demoInput } from '../src/demo.js';
-import { createInputSchema, experimentSchema, fingerprint, goalAttainment, validatePreparation, type Experiment, type Runtime } from '../src/contracts.js';
+import { createInputSchema, experimentSchema, fingerprint, goalAttainment, metricApplies, validatePreparation, type Experiment, type Runtime } from '../src/contracts.js';
 import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
 import { awaitingVerdict, compareRuns } from '../src/comparison.js';
 import { simulatorUsable } from '../src/outcomes.js';
@@ -1717,23 +1717,51 @@ test('a positive control rides on the record: hashes and card identity unchanged
   await assert.rejects(lab.repeat(source.id, [a], [b]), /из этого набора: /, 'a control that the case filter drops is not silently lost');
   assert.equal((await lab.store.list()).length, saved, 'nothing is saved on a rejected control');
 
+  const sourceHash = draftHash(await lab.get(source.id));
   const controlled = await lab.repeat(source.id, undefined, [a]);
   assert.deepEqual(controlled.positiveControlScenarioIds, [a]);
-  assert.deepEqual(controlled.scenarios, (await lab.repeat(source.id)).scenarios, 'the marker never enters the cards');
+  // A control runs as one turn: only its own follow-up limit (and a script, when present) changes; no marker enters the cards.
+  const plain = (await lab.repeat(source.id)).scenarios;
+  assert.equal(controlled.scenarios.length, plain.length);
+  for (const card of controlled.scenarios) {
+    const reference = plain.find(item => item.id === card.id)!;
+    if (card.id !== a) { assert.deepEqual(card, reference, 'a counted card is unchanged'); continue; }
+    assert.equal(card.user.maxFollowUps, 0);
+    if (reference.user.script === undefined) assert.equal('script' in card.user, false, 'no script appears where there was none');
+    else assert.deepEqual(card.user.script, []);
+    const { maxFollowUps: _m, script: _s, ...rest } = card.user;
+    const { maxFollowUps: _rm, script: _rs, ...referenceRest } = reference.user;
+    assert.deepEqual({ ...card, user: rest }, { ...reference, user: referenceRest });
+  }
+  assert.equal(draftHash(await lab.get(source.id)), sourceHash, 'the stored source keeps its draft hash');
   assert.equal(measurementHash(controlled), measurementHash({ ...controlled, positiveControlScenarioIds: undefined }));
   assert.notEqual(draftHash(controlled), draftHash({ ...controlled, positiveControlScenarioIds: undefined }), 'the draft hash sees the marker');
 
   await lab.start(controlled.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(controlled) }); await lab.waitForIdle();
   const ran = await lab.get(controlled.id);
+  assert.equal(ran.phase, 'results_review', ran.error ?? '');
   assert.deepEqual(ran.positiveControlScenarioIds, [a]);
+  const controlCard = ran.scenarios.find(s => s.id === a)!;
+  const controlTrials = ran.trials.filter(trial => trial.scenarioId === a);
+  assert.ok(controlTrials.length);
+  for (const trial of controlTrials) {
+    assert.equal(trial.events.filter(event => event.type === 'simulator').length, 0, 'the control never reaches the simulator');
+    assert.equal(trial.events.filter(event => event.type === 'assistant').length, 1, 'the control is the opening and one reply');
+    const fidelity = controlCard.metrics?.find(metric => metric.id === 'user_fidelity');
+    if (fidelity) assert.equal(metricApplies(fidelity, trial), false);
+  }
   const diff = compareRuns(source, ran);
   assert.equal(diff.comparable, true, diff.notes.join(' '));
-  assert.ok(diff.notes.every(note => !note.startsWith('Содержимое карточек изменилось')));
+  assert.ok(diff.notes.every(note => !note.startsWith('Содержимое карточек изменилось') && !note.startsWith('Набор карточек изменился')), diff.notes.join(' '));
+  assert.ok(diff.notes.includes('Контрольные ситуации не сравниваются: они не входят в главное число.'));
+  assert.equal(diff.cards.shared, source.scenarios.length - 1);
+  assert.ok([...diff.pairs, ...diff.incomparable].every(row => row.scenarioId !== a), 'the control is not a pair of the diff');
 
   // Inheritance: repeat, reassess, save and load keep the marker; a case filter that drops it removes the field.
   assert.deepEqual((await lab.repeat(ran.id)).positiveControlScenarioIds, [a]);
   const reassessed = await lab.reassess(ran.id, { codeOnly: true }); await lab.waitForIdle();
   assert.deepEqual((await lab.get(reassessed.id)).positiveControlScenarioIds, [a]);
+  assert.deepEqual((await lab.get(reassessed.id)).scenarios, ran.scenarios, 'reassessment never transforms the cards again');
   const suite = await lab.saveSuite(reassessed.id, join(directory, 'control-suite.json'));
   const loaded = await lab.loadSuite(suite);
   assert.deepEqual(loaded.positiveControlScenarioIds, [a]);
