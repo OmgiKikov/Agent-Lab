@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolve } from 'node:path';
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent';
-import { Text } from '@earendil-works/pi-tui';
+import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme, ToolDefinition, ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
+import { Text, type Component } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { z } from 'zod';
 import { ExperimentLab, draftHash, planDiscovery, resultHash } from '../dist/experiment.js';
@@ -20,41 +20,51 @@ import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit
 import { readData, selectValidationDialogues } from '../dist/imports.js';
 import { ExperimentStore } from '../dist/store.js';
 import { activePhases, reviewOrder, safeText, showBoard, trialLines, type BoardAction, type BoardOptions, type Section } from './cards.ts';
+import { rememberView, renderAgentLabResult, VERDICT_KIND, type VerdictDetails } from './render/verdict-block.ts';
 
+/** C-119: what the model reads instead of the block, so it does not restate the number and the causes (CTX-08). */
+const SHOWN_TO_OWNER = 'Блок-вердикт уже показан владельцу. Не пересказывайте число и причины; ответьте на вопрос или предложите следующий шаг.';
+
+/**
+ * Today's tool-row text for every result that is not a phase-4 verdict block: old sessions whose
+ * `details` hold the whole summary, and the tools that still return it. Unchanged (UI-SPEC B4).
+ */
+function legacyResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme): Component {
+  const raw = result.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+  if (options.expanded) return new Text(safeText(raw), 0, 0);
+  try {
+    const data = JSON.parse(raw);
+    // The ResultView block is the first thing shown; no surface computes its own headline count.
+    const block: string | undefined = Array.isArray(data.viewLines) && data.viewLines.length ? data.viewLines.join('\n') : undefined;
+    // Why the agent failed, in the same words as the CLI: never a separate list of cause names.
+    // The owner's disagreements with the judge (F7) and where to mark the rest (F8) sit between
+    // that section and the pointer to the board, so the pointer stays the last row (UI-SPEC F7).
+    const failureRows: string[] = Array.isArray(data.failureLines) ? data.failureLines : [];
+    const pointer = (failureRows.at(-1) ?? '').startsWith('Все провалы — ') ? failureRows.at(-1) : undefined;
+    const causeBlock = pointer ? failureRows.slice(0, -1) : failureRows;
+    const agreementBlock: string[] = Array.isArray(data.disagreementLines) ? data.disagreementLines : [];
+    const parts = [causeBlock, agreementBlock].filter(rows => rows.length).map(rows => rows.join('\n'));
+    if (pointer) parts.push(pointer);
+    const failures: string | undefined = parts.length ? parts.join('\n\n') : undefined;
+    if (data.brief) return new Text(theme.fg('text', safeText([data.scoreState, block, failures, data.brief].filter(Boolean).join('\n\n'))), 0, 0);
+    if (data.proofs?.length) return new Text(theme.fg('text', safeText([
+      data.error ?? block ?? data.quality?.headline ?? data.evidence?.verdict?.headline,
+      ...(data.error ? [] : [failures]),
+      ...data.proofs.map((proof: { lines: string[] }) => proof.lines.join('\n')),
+    ].filter(Boolean).join('\n\n'))), 0, 0);
+    const title = data.error ?? (data.phase === 'review' ? data.message ?? `Готово ${data.scenarioCount} сценариев. Посмотрите их перед запуском.`
+      : block ?? data.quality?.headline ?? data.evidence?.verdict?.headline ?? data.message ?? 'Доказательства прочитаны.');
+    // A draft answer shows the whole sheet under its title: the owner reads it without opening the board.
+    const sheetLines: string[] | undefined = Array.isArray(data.sheetLines) && data.sheetLines.length ? data.sheetLines : undefined;
+    const lines = [title, ...(title === block && failures ? ['', failures] : []),
+      ...(sheetLines ? ['', ...sheetLines] : []), ...(data.quality?.queue ? [data.quality.queue] : [])];
+    return new Text(theme.fg(data.error ? 'error' : 'text', safeText(lines.join('\n'))), 0, 0);
+  } catch { return new Text(safeText(raw), 0, 0); }
+}
 const toolDisplay: Pick<ToolDefinition, 'renderCall' | 'renderResult'> = {
   renderCall: (_args, theme) => new Text(theme.fg('accent', 'Проверка агента'), 0, 0),
-  renderResult: (result, options, theme) => {
-    const raw = result.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-    if (options.expanded) return new Text(safeText(raw), 0, 0);
-    try {
-      const data = JSON.parse(raw);
-      // The ResultView block is the first thing shown; no surface computes its own headline count.
-      const block: string | undefined = Array.isArray(data.viewLines) && data.viewLines.length ? data.viewLines.join('\n') : undefined;
-      // Why the agent failed, in the same words as the CLI: never a separate list of cause names.
-      // The owner's disagreements with the judge (F7) and where to mark the rest (F8) sit between
-      // that section and the pointer to the board, so the pointer stays the last row (UI-SPEC F7).
-      const failureRows: string[] = Array.isArray(data.failureLines) ? data.failureLines : [];
-      const pointer = (failureRows.at(-1) ?? '').startsWith('Все провалы — ') ? failureRows.at(-1) : undefined;
-      const causeBlock = pointer ? failureRows.slice(0, -1) : failureRows;
-      const agreementBlock: string[] = Array.isArray(data.disagreementLines) ? data.disagreementLines : [];
-      const parts = [causeBlock, agreementBlock].filter(rows => rows.length).map(rows => rows.join('\n'));
-      if (pointer) parts.push(pointer);
-      const failures: string | undefined = parts.length ? parts.join('\n\n') : undefined;
-      if (data.brief) return new Text(theme.fg('text', safeText([data.scoreState, block, failures, data.brief].filter(Boolean).join('\n\n'))), 0, 0);
-      if (data.proofs?.length) return new Text(theme.fg('text', safeText([
-        data.error ?? block ?? data.quality?.headline ?? data.evidence?.verdict?.headline,
-        ...(data.error ? [] : [failures]),
-        ...data.proofs.map((proof: { lines: string[] }) => proof.lines.join('\n')),
-      ].filter(Boolean).join('\n\n'))), 0, 0);
-      const title = data.error ?? (data.phase === 'review' ? data.message ?? `Готово ${data.scenarioCount} сценариев. Посмотрите их перед запуском.`
-        : block ?? data.quality?.headline ?? data.evidence?.verdict?.headline ?? data.message ?? 'Доказательства прочитаны.');
-      // A draft answer shows the whole sheet under its title: the owner reads it without opening the board.
-      const sheetLines: string[] | undefined = Array.isArray(data.sheetLines) && data.sheetLines.length ? data.sheetLines : undefined;
-      const lines = [title, ...(title === block && failures ? ['', failures] : []),
-        ...(sheetLines ? ['', ...sheetLines] : []), ...(data.quality?.queue ? [data.quality.queue] : [])];
-      return new Text(theme.fg(data.error ? 'error' : 'text', safeText(lines.join('\n'))), 0, 0);
-    } catch { return new Text(safeText(raw), 0, 0); }
-  },
+  // The verdict block for phase-4 details; everything else keeps today's look (UI-SPEC B3, B4).
+  renderResult: (result, options, theme) => renderAgentLabResult(result, options, theme, legacyResult),
 };
 const returnToBoard = (ctx: ExtensionContext, id: string) => {
   if (!ctx.hasUI || ctx.mode !== 'tui') return;
@@ -657,10 +667,18 @@ export default function agentLab(pi: ExtensionAPI) {
         await lab.waitForIdle(); await progress();
         const record = await lab.get(draft.id);
         const bundle = await evidenceBundle(record, lab.store);
+        // `content` stays the model's JSON plus C-119; the session holds ids only (REV-01, T-04-03):
+        // the block is drawn from the remembered view, never from text written into the 0644 session file.
         const output = { ...summary(record, lab.store.directory, bundle.view), proofs: record.trials.map(trial => trialProofLines(record, trial.id)),
-          comparison: bundle.comparison, artifacts: await exportArtifacts(bundle, lab.store.directory) };
+          comparison: bundle.comparison, artifacts: await exportArtifacts(bundle, lab.store.directory), shownToOwner: SHOWN_TO_OWNER };
+        const resultKey = `${record.id}:${resultHash(record)}`;
+        let details: VerdictDetails | { id: string } = { id: record.id };
+        if (bundle.view) {
+          rememberView(resultKey, bundle.view);
+          details = { kind: VERDICT_KIND, version: 1, runId: record.id, resultKey };
+        }
         returnToBoard(ctx, record.id);
-        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
+        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details };
       } finally { clearInterval(timer); signal.removeEventListener('abort', cancel); await polling; await close(); }
     },
   });

@@ -17,8 +17,10 @@ export { COUNTING_RULES } from './outcomes.js';
  * rule COUNTING_RULES lives in outcomes.ts and is re-exported here for the surfaces.
  */
 
-/** Below this many decided situations the headline percent is shown with its Wilson range. */
-const SMALL_SAMPLE = 20;
+/** Below this many decided situations the headline percent is shown with its Wilson range; the verdict line says «мало данных» below it too. */
+export const SMALL_SAMPLE = 20;
+/** The first 8 characters of a run id: the form every pointer and command prints (`/agent-lab <id8>`). */
+export const shortId = (runId: string): string => runId.slice(0, 8);
 /** Below this many checked marks the agreement row names no percent: a share of a handful is not a share. */
 export const PERCENT_FROM = 10;
 const Z = 1.959963984540054;
@@ -389,7 +391,7 @@ export const SECTION_TEXT = {
   all: { board: 'ВСЕ ПРОВАЛЫ', hint: 'Все провалы: Enter.' },
 } as const;
 export const allFailuresTitle = (n: number) => `Все провалы (${n}):`;
-export const allFailuresPointer = (runId: string) => `Все провалы — /agent-lab ${runId.slice(0, 8)}, раздел 1, Enter.`;
+export const allFailuresPointer = (runId: string) => `Все провалы — /agent-lab ${shortId(runId)}, раздел 1, Enter.`;
 
 export interface SectionRow { role: ExplanationRole | 'cause' | 'blank'; indent: number; text: string }
 const BLANK: SectionRow = { role: 'blank', indent: 0, text: '' };
