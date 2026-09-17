@@ -8,29 +8,46 @@
 | [examples/agent-oc-dialogues.py](../examples/agent-oc-dialogues.py) | прод-разметка `.xlsx` → диалоги в схеме Agent Lab |
 | [examples/agent-oc-adapter.py](../examples/agent-oc-adapter.py) | испытуемый: контракт `kind: "command"` поверх `harness_core.run_turn` |
 
-## Окружение: один `.env` в agent_oc
+## Окружение
 
-Испытуемого поднимает `harness_core.bootstrap_environment` — он сам читает `.env` в корне
-`agent_oc`, ставит `DEV_MODE=True`, пути логов и модель. Ему отдельно ничего задавать не нужно.
-
-Agent Lab — отдельный процесс, и переменные шлюза нужны и ему тоже. Тот же файл подхватывается
-штатным ключом Node:
+Переменные agent_oc живут в его conda-окружении, а не только в `.env`. Активируйте окружение один
+раз и запускайте оттуда всё — и Agent Lab, и прогоны:
 
 ```bash
-node --env-file=/путь/agent_oc/.env /путь/conductor-playground/dist/cli.js …
+conda activate agent_oc
 ```
+
+Этого достаточно: Agent Lab запускает испытуемого дочерним процессом с собственным окружением,
+поэтому переменные доходят до адаптера сами, а `python` в подключении разрешается в интерпретатор
+активированного окружения.
+
+Важно, что переменные conda применяются **при активации**, а не самим путём к интерпретатору:
+запуск `~/miniconda3/envs/agent_oc/bin/python` в обход `conda activate` окружения не получит. Если
+активировать нельзя, вызывайте через `conda run` и обязательно с `--no-capture-output`, иначе он
+буферизует stdout и протокол JSON-строк рвётся:
+
+```json
+{ "command": "conda",
+  "args": ["run", "-n", "agent_oc", "--no-capture-output", "python",
+           "/путь/conductor-playground/examples/agent-oc-adapter.py", "/путь/agent_oc"] }
+```
+
+`.env` в корне agent_oc остаётся вторым источником: `bootstrap_environment` подгружает его, но
+`load_dotenv` не перекрывает уже заданные переменные — значения conda главнее. Если Agent Lab
+запускается вне окружения, тот же файл подхватывается штатным ключом Node:
+`node --env-file=/путь/agent_oc/.env dist/cli.js …`.
 
 Провайдер `giga` принимает как свои имена, так и принятые в agent_oc: ключ читается из
 `GIGACHAT_KEY_PATH` либо `GIGACHAT_KEY`, цепочка CA — из `GIGACHAT_CA_PATH` либо
-`GIGACHAT_VERIFY_PATH`. То есть отдельной правки `.env` для Agent Lab не требуется.
+`GIGACHAT_VERIFY_PATH`. Отдельного набора переменных для Agent Lab заводить не нужно.
 
-Одна проверка остаётся за вами: `GIGACHAT_URL` в `.env` указывает на шлюз, которым пользуется
+Одна проверка остаётся за вами: `GIGACHAT_URL` в окружении указывает на шлюз, которым пользуется
 прод-код агента. Если модели Agent Lab живут на другом адресе, перекройте переменную в команде
-(`GIGACHAT_URL=… node --env-file=…`) — значения из окружения важнее файла.
+(`GIGACHAT_URL=… node dist/cli.js …`).
 
 ### ППРБ и ЕПК
 
-ППРБ берётся из того же `.env`: `API_PPRB_URL` (договоры РМ ОЦ), `API_PPRB_URL_objectList` и
+ППРБ берётся из того же окружения: `API_PPRB_URL` (договоры РМ ОЦ), `API_PPRB_URL_objectList` и
 `API_PPRB_URL_objectList_loc` (объекты и договоры ветки B; при `DEV_MODE=True` работает вариант
 `_loc`), `API_PPRB_URL_doc` (закрывающие документы). Сертификаты — `INCASS_CERT_PATH`,
 `INCASS_KEY_PATH`, `INCASS_VERIFY_PATH`, а без них клиенты берут
@@ -39,7 +56,7 @@ node --env-file=/путь/agent_oc/.env /путь/conductor-playground/dist/cli.
 Именно `API_PPRB_URL_doc` даёт `pprb_available` в `bootstrap_environment`, поэтому адаптер при
 старте печатает предупреждение ровно тогда, когда эта переменная пуста: без неё `document_lookup`
 уходит на пустой адрес и всегда отвечает «недоступно» — маршрут измерится, данные нет. Если
-переменная в `.env` есть, предупреждения не будет.
+переменная в активированном окружении есть, предупреждения не будет.
 
 ЕПК окружением не передаётся: это свойство конкретного клиента, поэтому оно живёт в карточке —
 в записи `session` (см. ниже). Если на инструменте включён список допуска
@@ -49,13 +66,14 @@ node --env-file=/путь/agent_oc/.env /путь/conductor-playground/dist/cli.
 Проверка, что доступ поднялся:
 
 ```bash
-echo '{"type":"close"}' | /путь/agent_oc/.venv/bin/python examples/agent-oc-adapter.py /путь/agent_oc
+conda activate agent_oc
+echo '{"type":"close"}' | python examples/agent-oc-adapter.py /путь/agent_oc
 ```
 
 ## Карточки бизнес-сценариев из логов
 
 ```bash
-python3 examples/agent-oc-dialogues.py \
+python examples/agent-oc-dialogues.py \
     --input "/путь/agent_oc/data/размеченные логи 1607_2007.xlsx" \
     --output dialogues.jsonl --multi-turn-only --limit 60
 ```
@@ -85,7 +103,7 @@ python3 examples/agent-oc-dialogues.py \
 ```
 
 ```bash
-node --env-file=/путь/agent_oc/.env dist/cli.js build --input task-cards.json --dialogues-file dialogues.jsonl > cards-draft.json
+node dist/cli.js build --input task-cards.json --dialogues-file dialogues.jsonl > cards-draft.json
 node dist/cli.js export --id RUN_ID --format markdown --output cards.md
 ```
 
@@ -100,7 +118,7 @@ node dist/cli.js export --id RUN_ID --format markdown --output cards.md
 {
   "target": {
     "kind": "command",
-    "command": "/путь/agent_oc/.venv/bin/python",
+    "command": "python",
     "args": ["/путь/conductor-playground/examples/agent-oc-adapter.py", "/путь/agent_oc"],
     "cwd": "/путь/agent_oc",
     "timeoutMs": 180000
@@ -134,8 +152,8 @@ node dist/cli.js export --id RUN_ID --format markdown --output cards.md
 `tool_count`.
 
 ```bash
-node --env-file=/путь/agent_oc/.env dist/cli.js build --input task-e2e.json --connection connection.json > draft.json
-node --env-file=/путь/agent_oc/.env dist/cli.js run --id RUN_ID --yes
+node dist/cli.js build --input task-e2e.json --connection connection.json > draft.json
+node dist/cli.js run --id RUN_ID --yes
 node dist/cli.js export --id RUN_ID --format html --output report.html
 ```
 
