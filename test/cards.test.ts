@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { visibleWidth, stripTerminalSequences } from '@earendil-works/pi-tui';
 import { LabBoard, resultEntries, reviewOrder, safeText, wrapRows, type BoardAction, type BoardOptions } from '../extensions/cards.ts';
-import { agreementSample } from '../src/agreement.js';
+// Phase-3 chrome (F11, footer tiers) is read through the namespace, so a missing export fails an assertion, not the module link.
+import * as cards from '../extensions/cards.ts';
+import { agreementSample, judgeAgreement } from '../src/agreement.js';
+import { primaryMetricId } from '../src/outcomes.js';
+import { demoEvaluateRecord } from './helpers/demo-record.js';
+import { rm } from 'node:fs/promises';
 import { htmlReport } from '../src/report.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { emptyUsage, fingerprint, type Experiment } from '../src/contracts.js';
@@ -319,7 +324,8 @@ test('разбор начинается с провалов без вердик�
   const actions: BoardAction[] = [];
   const board = new LabBoard({ record, section: 'results' }, theme, a => actions.push(a), () => {}, () => 40);
   const text = stripTerminalSequences(board.render(120).join('\n'));
-  assert.match(text, /Разбор: осталось 1 провал\(ов\) из 2/);
+  // UI-SPEC F11: заголовок считает провалы и успехи очереди; вердикт по диалогу целиком — не отметка согласия.
+  assert.ok(boardCells(board, 120).includes('Проверено провалов: 0 из 2 · успехов: 0 из 1'));
   assert.match(text, /Запись переставлена/, 'первым открыт тот диалог, который ждёт человека');
   // UI-SPEC F12: очередь согласия ведёт список. Вердикт по диалогу целиком у t_done — не отметка
   // согласия, поэтому провал остаётся неразобранным и стоит первым по порядку записи.
@@ -360,8 +366,10 @@ test('разбор начинается с провалов без вердик�
   active.dispose();
 
   const reviewed = { ...record, humanReviews: [...record.humanReviews, { id: 'h2', trialId: 't_pending', verdict: 'pass' as const, note: 'ok', createdAt: record.createdAt }] };
-  assert.match(stripTerminalSequences(new LabBoard({ record: reviewed, section: 'results' }, theme, () => {}, () => {}, () => 40).render(120).join('\n')),
-    /Замечания человека: 1 диалогов · расхождения оценок: 1/);
+  // Замечания человека больше не стоят в заголовке раздела 3: там только ход проверки судьи.
+  const reviewedCells = boardCells(new LabBoard({ record: reviewed, section: 'results' }, theme, () => {}, () => {}, () => 40), 120);
+  assert.ok(reviewedCells.includes('Проверено провалов: 0 из 2 · успехов: 0 из 1'));
+  assert.ok(!reviewedCells.some(cell => cell.startsWith('Замечания человека:')));
 });
 
 test('live polling stops on dispose and never applies a late response to a closed board', async () => {
@@ -573,6 +581,106 @@ test('управляющая последовательность в назва�
   assert.doesNotMatch(raw, /\[31m/, 'ни список, ни боковая колонка не печатают управляющую последовательность');
   assert.match(raw, /ПРОВЕРЬТЕ ПРОВАЛ · Возврат/);
   board.dispose();
+});
+
+/** The F11 header of a record, as the board would choose it at `inner` columns. */
+function headerOf(record: Experiment, inner: number, agreement?: ReturnType<typeof judgeAgreement>) {
+  assert.equal(typeof cards.reviewHeader, 'function', 'cards.ts exports reviewHeader (UI-SPEC F11)');
+  return cards.reviewHeader(record, inner, agreement);
+}
+
+test('после настоящей отметки заголовок раздела 3 говорит, сколько провалов и успехов проверено', async () => {
+  const demo = await demoEvaluateRecord('agent-lab-review-header-');
+  try {
+    const source = demo.record;
+    const decided = source.trials.flatMap(trial => {
+      const scenario = source.scenarios.find(item => item.id === trial.scenarioId);
+      const metricId = scenario && primaryMetricId(scenario, trial);
+      const result = metricId ? trial.assessments?.find(item => item.metricId === metricId)?.result : undefined;
+      return metricId && (result === 'pass' || result === 'fail') ? [{ trial, metricId, result }] : [];
+    })[0];
+    assert.ok(decided, 'в демо-прогоне судья решил хотя бы одну ситуацию');
+    await demo.lab.addHumanReview(source.id, { trialId: decided.trial.id, metricId: decided.metricId, source: 'quick',
+      verdict: decided.result, note: 'Быстрая отметка: согласен с судьёй.' });
+    const record = await demo.lab.get(source.id);
+    const agreement = judgeAgreement(record);
+    const Q = agreement.queueFailures.length;
+    const S = agreement.sampledPasses.length;
+    const expected = decided.result === 'fail'
+      ? S ? `Проверено провалов: 1 из ${Q} · успехов: 0 из ${S}` : `Проверено провалов: 1 из ${Q} · успехов нет`
+      : Q ? `Проверено провалов: 0 из ${Q} · успехов: 1 из ${S}` : `Проверено успехов: 1 из ${S} · провалов нет`;
+    const recording = { fg: (color: string, value: string) => `<${color}>${value}</${color}>`, bold: (value: string) => value };
+    const board = new LabBoard({ record, section: 'results' }, recording, () => {}, () => {}, () => 40);
+    // At 120 columns the sidebar takes 35, so the header is chosen for the wide tier (inner 81).
+    const painted = board.render(120).join('\n');
+    board.dispose();
+    assert.ok(painted.includes(`<warning>${expected}</warning>`), `заголовок «${expected}» в цвете warning`);
+    assert.deepEqual(headerOf(record, 81), { text: expected, color: 'warning' });
+  } finally {
+    await demo.lab.close();
+    await rm(demo.directory, { recursive: true, force: true });
+  }
+});
+
+test('заголовок раздела 3 выбирает состояние и ширину по UI-SPEC F11 и не считает сомнения проверенными', async () => {
+  const at = (record: Experiment, mark?: (r: Experiment) => void) => { const copy = structuredClone(record); mark?.(copy); return copy; };
+  const both = await queueFixture(1, 1, false);
+  const agreeF1 = (r: Experiment) => r.humanReviews.push(quickMark('F1', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.'));
+  const unsureF1 = (r: Experiment) => r.humanReviews.push(quickMark('F1', 'unknown', 'fail', 'Быстрая отметка: не могу сказать.'));
+  const disagreeP1 = (r: Experiment) => r.humanReviews.push(quickMark('P1', 'fail', 'pass', 'Судья зря похвалил.'));
+  const undecided = await judgedFixture('undecided', 'fail');
+  undecided.trials[0]!.assessments = [{ metricId: 'goal', result: 'unknown', rationale: 'Судья не решил', evidence: [0] }];
+  const cases: [string, Experiment, string, string, 'warning' | 'success' | 'muted'][] = [
+    ['обе группы', both, 'Проверено провалов: 0 из 1 · успехов: 0 из 1', 'Провалы 0 из 1 · успехи 0 из 1', 'warning'],
+    ['согласие считается', at(both, agreeF1), 'Проверено провалов: 1 из 1 · успехов: 0 из 1', 'Провалы 1 из 1 · успехи 0 из 1', 'warning'],
+    ['сомнение не считается', at(both, unsureF1), 'Проверено провалов: 0 из 1 · успехов: 0 из 1', 'Провалы 0 из 1 · успехи 0 из 1', 'warning'],
+    ['успехов нет', await queueFixture(1, 0, false), 'Проверено провалов: 0 из 1 · успехов нет', 'Провалы 0 из 1 · успехов нет', 'warning'],
+    ['провалов нет', await queueFixture(0, 1, false), 'Проверено успехов: 0 из 1 · провалов нет', 'Успехи 0 из 1 · провалов нет', 'warning'],
+    ['остались сомнения', at(both, r => { unsureF1(r); disagreeP1(r); }), 'Не решено: 1. y или n — чтобы завершить разбор.', 'Не решено: 1. Нажмите y или n.', 'warning'],
+    ['всё решено, разбор открыт', at(both, r => { agreeF1(r); disagreeP1(r); }), 'Проверка окончена. f — завершить разбор.', 'Всё проверено. f — завершить.', 'success'],
+    ['всё решено, прогон завершён', at(both, r => { agreeF1(r); disagreeP1(r); r.phase = 'complete'; }), 'Проверка окончена.', 'Всё проверено.', 'muted'],
+    ['очередь пуста', undecided, 'Проверять нечего: судья не вынес решений.', 'Судья не вынес решений.', 'muted'],
+  ];
+  for (const [label, record, wide, narrow, color] of cases) {
+    assert.deepEqual(headerOf(record, 48), { text: wide, color }, `${label}: широкий`);
+    assert.deepEqual(headerOf(record, 156), { text: wide, color }, `${label}: широкий 156`);
+    assert.deepEqual(headerOf(record, 47), { text: narrow, color }, `${label}: узкий 47`);
+    assert.deepEqual(headerOf(record, 36), { text: narrow, color }, `${label}: узкий 36`);
+  }
+
+  // Пустая очередь: y, n и s ничего не делают, а доска говорит, что проверять нечего.
+  const actions: BoardAction[] = [];
+  const empty = new LabBoard({ record: undecided, section: 'results' }, theme, a => actions.push(a), () => {}, () => 40);
+  for (const key of ['y', 'n', 's']) empty.handleInput(key);
+  assert.deepEqual(actions, []);
+  assert.ok(boardCells(empty, 120).includes('Проверять нечего: судья не вынес решений.'));
+  assert.ok(boardCells(empty, 40).includes('Судья не вынес решений.'));
+  empty.dispose();
+
+  // Худший случай — каждое число 99 (в прогоне не больше 20 ситуаций): широкий текст ≤ 48, узкий ≤ 34.
+  const nines = await queueFixture(99, 0, false);
+  for (const id of nines.trials.map(t => t.id)) nines.humanReviews.push(quickMark(id, 'unknown', 'fail', 'Быстрая отметка: не могу сказать.'));
+  assert.equal(headerOf(nines, 36).text, 'Не решено: 99. Нажмите y или n.');
+  const real = judgeAgreement(nines);
+  const ids = Array.from({ length: 99 }, (_, i) => `id${i}`);
+  const worst = (patch: Partial<typeof real>) => ({ ...real, queueFailures: ids, sampledPasses: ids, unmarked: [], unsure: 0, failures: { agreed: 99, checked: 99 }, sampleChecked: 99, ...patch });
+  const states = [
+    worst({ unmarked: ['id0'] }), worst({ unmarked: ['id0'], sampledPasses: [] }), worst({ unmarked: ['id0'], queueFailures: [] }),
+    worst({ unsure: 99 }), worst({}), worst({ queueFailures: [], sampledPasses: [] }),
+  ];
+  const seen = new Set<string>();
+  for (const phase of ['results_review', 'complete'] as const) for (const agreement of states) {
+    const record = { ...nines, phase };
+    const wide = headerOf(record, 48, agreement).text;
+    const narrow = headerOf(record, 36, agreement).text;
+    seen.add(wide); seen.add(narrow);
+    assert.ok(visibleWidth(wide) <= 48, `«${wide}» шире 48`);
+    assert.ok(visibleWidth(narrow) <= 34, `«${narrow}» шире 34`);
+  }
+  assert.ok(seen.has('Проверено провалов: 99 из 99 · успехов: 99 из 99'));
+  assert.ok(seen.has('Провалы 99 из 99 · успехи 99 из 99'));
+  assert.ok(seen.has('Не решено: 99. y или n — чтобы завершить разбор.'));
+  assert.equal(seen.size, 14, 'все семь состояний в двух ширинах');
 });
 
 test('HTML reports escape untrusted text and remain self-contained with explicit evidence limits', async () => {
