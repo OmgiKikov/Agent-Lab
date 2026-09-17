@@ -3,8 +3,8 @@ import { test } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources, sealJudgeReceipt, JUDGE_PROTOCOL } from '../src/judge.js';
-import { emptyUsage, fingerprint, goalAttainment, RAG_METRIC_IDS, ragEvidenceComplete, replyQuality, simulatorFidelity, type JudgeAudit, type Scenario, type Trial } from '../src/contracts.js';
+import { assessRepeated, auditCut, hasCompleteJudgment, judgeInput, observableSources, prefixTrial, sealJudgeReceipt, simulatorCut, JUDGE_PROTOCOL } from '../src/judge.js';
+import { assessmentEventContent, emptyUsage, fingerprint, goalAttainment, RAG_METRIC_IDS, ragEvidenceComplete, replyQuality, simulatorFidelity, type JudgeAudit, type Scenario, type Trial } from '../src/contracts.js';
 import { ExperimentStore } from '../src/store.js';
 
 const scenario: Scenario = { id: 'card', familyId: 'family', title: 'A fixed input', split: 'dev', provenance: 'synthetic', requirementIds: [],
@@ -417,7 +417,7 @@ test('reactive fidelity applies to actual simulator decisions, including a decis
       if (ids[0] === 'user_fidelity') answer.assessments[0] = { ...answer.assessments[0], metricId: 'user_fidelity', evidence: [2], citations: [{ seq: 2, quote: '"done":true' }] };
       return JSON.stringify(answer);
     });
-    assert.deepEqual(requests, invoked ? [['goal'], ['goal'], ['user_fidelity'], ['user_fidelity']] : [['goal'], ['goal']]);
+    assert.deepEqual(requests, invoked ? [['user_fidelity'], ['user_fidelity'], ['goal'], ['goal']] : [['goal'], ['goal']]);
     assert.equal(result[1]!.result, invoked ? 'pass' : 'unknown');
     assert.deepEqual(audit!.notApplicable, invoked ? [] : ['user_fidelity']);
     assert.equal(hasCompleteJudgment({ ...value, trial: { ...value.trial, judgeAudit: audit, assessments: result } }), true);
@@ -470,4 +470,119 @@ test('a judgment made on observable prompt rules is complete against the same so
   const recorded = { ...trial, assessments, judgeAudit: audit };
   assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(sources, requirements), trial: recorded }), true);
   assert.equal(hasCompleteJudgment({ scenario, sources, trial: recorded }), false, 'the raw prompt is not what the judge saw');
+});
+
+/** A reactive dialogue whose simulated user asks about something off the card at event #3. */
+const reactiveTrial: Trial = { ...trial, userMode: 'reactive', events: [
+  { seq: 0, type: 'user', text: 'Help' }, { seq: 1, type: 'assistant', text: 'Do this.' },
+  { seq: 2, type: 'simulator', result: { done: false, message: 'What about a refund?' } },
+  { seq: 3, type: 'user', text: 'What about a refund?' }, { seq: 4, type: 'assistant', text: 'A refund goes to the card.' },
+  { seq: 5, type: 'simulator', result: { done: true, message: '' } },
+] };
+const reactive = { ...input, trial: reactiveTrial };
+const DEVIATION = 'The simulated user deviated from the card at event #3';
+const quiet = () => ({ signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} });
+const fidelityRow = (result: 'pass' | 'fail', evidence: number[]) => JSON.stringify({ assessments: [{ metricId: 'user_fidelity',
+  passCondition: result === 'pass' ? 'met' : 'not_met', failCondition: result === 'pass' ? 'not_met' : 'met',
+  rationale: 'The simulated user compared with the card.', evidence,
+  citations: evidence.map(seq => ({ seq, quote: assessmentEventContent(reactiveTrial.events.find(event => event.seq === seq)!) })) }] });
+type FidelityVote = 'pass' | 'fail' | 'error';
+/** Fidelity votes as given, citing `fidelityEvidence`; every agent vote passes citing `goalEvidence`. */
+function reactiveJudge(fidelity: [FidelityVote, FidelityVote], goalEvidence = [1], fidelityEvidence = [3]) {
+  const requests: { ids: string[]; data: string }[] = [];
+  let audit: JudgeAudit | undefined;
+  let fidelityCalls = 0;
+  const run = assessRepeated(reactive, model, { ...quiet(), onJudgment(_id, value) { audit = value; } }, async (_prompt, data) => {
+    const ids = (JSON.parse(data).scenario.metrics as { id: string }[]).map(metric => metric.id);
+    requests.push({ ids, data });
+    if (ids[0] !== 'user_fidelity') return row('met', 'not_met', goalEvidence);
+    const vote = fidelity[fidelityCalls++]!;
+    if (vote === 'error') throw new Error('fidelity request failed');
+    return fidelityRow(vote, fidelityEvidence);
+  });
+  return { run, requests, audit: () => audit! };
+}
+const seqs = (data: string) => (JSON.parse(data).trial.events as { seq: number }[]).map(event => event.seq);
+
+test('the cut is the earliest user or simulator event a failing fidelity vote cites after the first agent reply', () => {
+  const events = reactiveTrial.events;
+  assert.equal(simulatorCut([{ result: 'fail', evidence: [4, 3] }], events), 3);
+  assert.equal(simulatorCut([{ result: 'pass', evidence: [3] }, { result: 'unknown', evidence: [2] }], events), undefined, 'only failing votes cut');
+  assert.equal(simulatorCut([{ result: 'fail', evidence: [0, 1] }], events), undefined, 'the opening belongs to the card and agent replies never cut');
+  assert.equal(simulatorCut([{ result: 'fail', evidence: [5] }, { result: 'fail', evidence: [3, 2] }], events), 2, 'the minimum over the failing votes');
+  assert.equal(simulatorCut([{ result: 'fail', evidence: [0, 1] }], [{ seq: 0, type: 'user' }, { seq: 1, type: 'simulator' }]), undefined, 'no agent reply, no cut');
+  // The stored-data shape: tool and retrieval events before the first reply at #11.
+  const stored: Trial['events'] = [{ seq: 0, type: 'user' }, { seq: 1, type: 'tool_call' }, { seq: 2, type: 'tool_result' },
+    ...Array.from({ length: 8 }, (_, i) => ({ seq: 3 + i, type: 'retrieval' as const })), { seq: 11, type: 'assistant' },
+    { seq: 12, type: 'simulator' }, { seq: 13, type: 'user' }, { seq: 14, type: 'retrieval' }, { seq: 15, type: 'assistant' },
+    { seq: 16, type: 'simulator' }, { seq: 17, type: 'user' }, { seq: 18, type: 'simulator' }, { seq: 19, type: 'user' }];
+  assert.equal(simulatorCut([{ result: 'fail', evidence: [11, 12, 18, 19] }], stored), 12);
+  assert.equal(simulatorCut([{ result: 'fail', evidence: [0, 5] }], stored), undefined);
+  assert.deepEqual(prefixTrial({ ...reactiveTrial, events: stored }, 16).events.map(event => event.seq), Array.from({ length: 16 }, (_, i) => i),
+    'retrieval for the last reply stays in the prefix');
+});
+
+test('the prefix keeps the dialogue up to the last agent reply before the cut and withholds what was observed after it', () => {
+  const observed: Trial = { ...reactiveTrial, observation: { state: 'reported', tools: 'complete' }, checks: [{ id: 'saved', description: 'Saved', passed: true, evidence: 'yes' }] };
+  const prefix = prefixTrial(observed, 3);
+  assert.deepEqual(prefix.events.map(event => event.seq), [0, 1]);
+  assert.deepEqual(prefix.observation, { state: 'missing', tools: 'partial' });
+  assert.deepEqual(prefix.checks, []);
+  assert.equal(prefix.id, observed.id);
+  assert.equal(observed.events.length, 6, 'the recorded trial is untouched');
+  assert.equal(prefixTrial(observed, 5).events.at(-1)!.seq, 4);
+  assert.ok(!JSON.stringify(judgeInput(reactive)).includes('deviated'));
+  assert.ok(judgeInput({ ...reactive, trial: prefix }, 3).evaluationScope.includes(DEVIATION));
+});
+
+test('a deviated reactive dialogue: fidelity is judged first on the whole dialogue, the agent on the faithful prefix', async () => {
+  const judge = reactiveJudge(['fail', 'fail']);
+  const result = await judge.run;
+  assert.deepEqual(judge.requests.map(r => r.ids), [['user_fidelity'], ['user_fidelity'], ['goal'], ['goal']]);
+  for (const request of judge.requests.slice(0, 2)) {
+    assert.deepEqual(seqs(request.data), [0, 1, 2, 3, 4, 5]);
+    assert.ok(!request.data.includes('deviated'));
+  }
+  for (const request of judge.requests.slice(2)) {
+    assert.deepEqual(seqs(request.data), [0, 1], 'the agent is judged before the deviation');
+    assert.ok(JSON.parse(request.data).evaluationScope.includes(DEVIATION));
+  }
+  assert.deepEqual(result.map(r => [r.metricId, r.result]), [['goal', 'pass'], ['user_fidelity', 'fail']]);
+  const audit = judge.audit();
+  assert.equal(audit.protocolHash, JUDGE_PROTOCOL);
+  assert.equal(audit.attempts.length, 4, 'still two calls per applicable rubric');
+  assert.deepEqual(seqs(audit.input), [0, 1, 2, 3, 4, 5], 'the audit input stays the whole dialogue');
+  assert.equal(auditCut(audit, reactiveTrial.events), 3);
+  const judged = { ...reactive, trial: { ...reactiveTrial, assessments: result, judgeAudit: audit } };
+  assert.equal(hasCompleteJudgment(judged), false, 'a cut the trial does not carry is not verifiable');
+  assert.equal(hasCompleteJudgment({ ...judged, trial: { ...judged.trial, judgedBeforeSeq: 3 } }), true);
+});
+
+test('an agent vote on the prefix that cites an event after it is rejected with every raw reply kept', async () => {
+  const judge = reactiveJudge(['fail', 'fail'], [4]);
+  await assert.rejects(judge.run, /Judge response rejected/);
+  const audit = judge.audit();
+  assert.equal(audit.attempts.length, 4);
+  assert.ok(audit.attempts.every(attempt => attempt.raw), 'every raw reply is preserved');
+  assert.ok(audit.attempts.filter(a => a.metricId === 'goal').every(a => /nonexistent trace event/.test(a.error ?? '')));
+});
+
+test('without a failing fidelity vote the agent is judged on the whole dialogue; one failing vote is enough to cut', async () => {
+  const faithful = reactiveJudge(['pass', 'pass'], [1], [2]);
+  const result = await faithful.run;
+  for (const request of faithful.requests.filter(r => r.ids[0] === 'goal')) {
+    assert.deepEqual(seqs(request.data), [0, 1, 2, 3, 4, 5]);
+    assert.ok(!request.data.includes('deviated'));
+  }
+  const audit = faithful.audit();
+  assert.equal(auditCut(audit, reactiveTrial.events), undefined);
+  const judged = { ...reactive, trial: { ...reactiveTrial, assessments: result, judgeAudit: audit } };
+  assert.equal(hasCompleteJudgment(judged), true);
+  assert.equal(hasCompleteJudgment({ ...judged, trial: { ...judged.trial, judgedBeforeSeq: 3 } }), false, 'an invented cut is rejected');
+
+  const split = reactiveJudge(['fail', 'pass']);
+  const splitResult = await split.run;
+  assert.equal(splitResult.find(r => r.metricId === 'user_fidelity')!.result, 'unknown');
+  for (const request of split.requests.filter(r => r.ids[0] === 'goal')) assert.deepEqual(seqs(request.data), [0, 1]);
+  assert.equal(auditCut(split.audit(), reactiveTrial.events), 3);
 });

@@ -8,7 +8,7 @@ import { assessTrial, evaluateTrial } from '../src/evaluation.js';
 import { compareTrials } from '../src/comparison.js';
 import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
-import { checkSchema, fingerprint, observedGoalSchema, validationScenario, validatePreparation, type CallContext, type JudgeAudit, type MetricAssessment, type Revision, type Rubric, type Runtime, type Scenario, type Source, type Tool, type Trial } from '../src/contracts.js';
+import { checkSchema, fingerprint, observedGoalSchema, simulatorFidelity, validationScenario, validatePreparation, type CallContext, type JudgeAudit, type MetricAssessment, type Revision, type Rubric, type Runtime, type Scenario, type Source, type Tool, type Trial } from '../src/contracts.js';
 
 function context(signal = new AbortController().signal): CallContext {
   return { signal, timeoutMs: 1000, beforeCall() { signal.throwIfAborted(); }, addUsage() {} };
@@ -658,6 +658,33 @@ test('a receipt hashes the audit exactly as the sidecar stores it, even with a w
   const stored = await store.readJudgeAudit('run-1', trial.id);
   assert.ok(stored?.attempts.some(attempt => attempt.error === '429 Too Many Requests'));
   assert.equal(fingerprint(stored), trial.judgeReceipt.auditHash, 'an honest receipt matches its sidecar');
+});
+
+test('assessment records where a deviated simulated user cut the dialogue, on the trial and in its sealed receipt', async () => {
+  const f = await fixture();
+  const scenario: Scenario = { ...structuredClone(f.preparation.scenarios[0]!), checks: [],
+    metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'Original task', passCriteria: 'Instruction supplied', failCriteria: 'A refusal is supplied' }, { ...simulatorFidelity }] };
+  const trial: Trial = { id: 'trial', revisionId: 'baseline', scenarioId: scenario.id, familyId: scenario.familyId, repeat: 0, split: 'dev', userMode: 'reactive', manifestHash: 'frozen',
+    outcome: 'ungraded', reason: 'rubric only', checks: [], events: [{ seq: 0, type: 'user', text: scenario.user.opening }, { seq: 1, type: 'assistant', text: 'Сделайте так.' },
+      { seq: 2, type: 'simulator', result: { done: false, message: 'А возврат?' } }, { seq: 3, type: 'user', text: 'А возврат?' },
+      { seq: 4, type: 'assistant', text: 'На карту.' }, { seq: 5, type: 'simulator', result: { done: true, message: '' } }],
+    initialState: scenario.initialState, finalState: scenario.initialState, usage: { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: null }, elapsedMs: 1 };
+  const runtime: Runtime = { ...f.runtime, async assess(input, ctx) {
+    return assessRepeated(input, { provider: 'offline', id: 'judge' }, ctx, async (_prompt, data) => {
+      const parsed = JSON.parse(data) as { scenario: { metrics: { id: string }[] }; trial: { events: { seq: number; content: string }[] } };
+      const metricId = parsed.scenario.metrics[0]!.id;
+      const fidelity = metricId === 'user_fidelity';
+      const event = parsed.trial.events.find(e => e.seq === (fidelity ? 3 : 1))!;
+      return JSON.stringify({ assessments: [{ metricId, passCondition: fidelity ? 'not_met' : 'met', failCondition: fidelity ? 'met' : 'not_met',
+        rationale: 'Cited evidence.', evidence: [event.seq], citations: [{ seq: event.seq, quote: event.content }] }] });
+    });
+  } };
+  trial.assessments = await assessTrial(runtime, scenario, f.sources, trial, context(), []);
+  assert.equal(trial.judgedBeforeSeq, 3);
+  assert.equal(trial.judgeReceipt?.cutBefore, 3);
+  assert.equal(trial.judgeReceipt?.complete, true);
+  assert.equal(trial.judgeAudit, undefined);
+  assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(f.sources, []), trial }), true);
 });
 
 test('assessment hands the judge observable prompt rules in place of the raw prompt, with every other source intact', async () => {

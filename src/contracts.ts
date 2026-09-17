@@ -261,6 +261,7 @@ export const judgeReceiptSchema = z.strictObject({
   votes: z.array(z.strictObject({ metricId: identifier, result: z.enum(['pass', 'fail', 'unknown']).optional(), error: z.boolean().optional() })).max(48),
   notApplicable: z.array(identifier),
   complete: z.boolean(),
+  cutBefore: z.number().int().nonnegative().optional(),
 });
 export type JudgeReceipt = z.infer<typeof judgeReceiptSchema>;
 export const userSchema = z.strictObject({
@@ -569,6 +570,8 @@ export interface Trial {
   checks: CheckResult[]; simulatorChecks?: SimulatorCheck[]; events: TraceEvent[]; initialState: World; finalState: World;
   usage: Usage; elapsedMs: number;
   assessments?: MetricAssessment[]; assessmentError?: string; judgeAudit?: JudgeAudit; judgeReceipt?: JudgeReceipt;
+  /** Protocol v11: the agent was judged on the dialogue before this event, where the simulated user deviated. Set only from the judge audit. */
+  judgedBeforeSeq?: number;
   observation?: { state: 'sandbox' | 'reported' | 'missing'; tools: 'sandbox' | 'complete' | 'partial'; resetConfirmed?: boolean; version?: string; toolScope?: string[] };
   externalUsage?: Usage;
 }
@@ -793,6 +796,7 @@ export const trialSchema = z.strictObject({
   externalUsage: usageSchema.optional(),
   judgeAudit: judgeAuditSchema.optional(),
   judgeReceipt: judgeReceiptSchema.optional(),
+  judgedBeforeSeq: z.number().int().nonnegative().optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),
