@@ -101,8 +101,11 @@ async function main() {
     if (values.json) { process.stdout.write(`${JSON.stringify({ ...q, view, warnings }, null, 2)}\n`); return; }
     const text = qualityLines(q);
     // One denominator in the first block; the other scores stay below «Подробности».
+    // Every failed situation, explained from stored data; rows are escaped one by one, never joined first.
+    const failureList = view.failures.length
+      ? ['', `Все провалы (${view.failures.length}):`, ...view.failures.flatMap((item, i) => [...(i ? [''] : []), ...item.lines.map(safeLine)])] : [];
     process.stdout.write([...resultViewLines(view, { details: true }).map(safeLine), ...warnings.map(warning => `Внимание: ${safeLine(warning)}`),
-      '', 'Подробности:', ...text.metrics, '',
+      ...failureList, '', 'Подробности:', ...text.metrics, '',
       ...(text.causes.length ? ['Почему:', ...text.causes, ''] : []), ...(text.rag.length ? [...text.rag, ''] : []), text.queue, '', text.scope, text.limits, ''].join('\n'));
     return;
   }

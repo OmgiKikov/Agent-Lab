@@ -1,6 +1,10 @@
 import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
 import { observedRecord } from './outcomes.js';
 import { cardVerdict, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
+import { failureExplanation, type FailureExplanation } from './explain.js';
+import { pluralForm } from './plural.js';
+
+export { pluralForm } from './plural.js';
 
 /*
  * The one result every surface shows first: how many situations the agent handled, over one
@@ -22,12 +26,6 @@ export function wilson(passed: number, decided: number): [number, number] | null
   const centre = (p + Z * Z / (2 * decided)) / d;
   const half = Z * Math.sqrt(p * (1 - p) / decided + Z * Z / (4 * decided * decided)) / d;
   return [Math.min(1, Math.max(0, centre - half)), Math.min(1, Math.max(0, centre + half))];
-}
-
-/** Russian plural form only: pluralForm(2, ['диалог', 'диалога', 'диалогов']) → «диалога». */
-export function pluralForm(n: number, forms: [string, string, string]): string {
-  const mod10 = n % 10, mod100 = n % 100;
-  return mod10 === 1 && mod100 !== 11 ? forms[0] : mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20) ? forms[1] : forms[2];
 }
 
 export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
@@ -80,6 +78,8 @@ export interface ResultView {
   control: { cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; synthetic: boolean; unstable: boolean }[]; warning: string | null };
   coverage: { examined: number; included: number; excluded: { kind: ExclusionKind; label: string; count: number }[]; text: string | null };
   cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; control: boolean; unstable: boolean; provenance: Scenario['provenance'] }[];
+  /** One explanation per failed situation of the headline (controls left out), in record order; built from stored data only. */
+  failures: FailureExplanation[];
   scope: { cards: number; synthetic: number; dialogues: number; judgeModel?: string; costUsd: number | null; target: string };
   /** Found flips against the source run, control situations left out; absent when there is nothing to compare with. Never changes the headline. */
   stability?: Stability;
@@ -105,6 +105,11 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
       control: controlIds.has(scenario.id), unstable: unstableIds.has(scenario.id), provenance: scenario.provenance };
   });
   const counted = cards.filter(card => !card.control);
+  const failures = record.scenarios.flatMap(scenario => {
+    const row = cards.find(card => card.scenarioId === scenario.id);
+    if (row?.outcome !== 'fail' || row.control) return [];
+    return failureExplanation(record, scenario) ?? [];
+  });
   const controlCards = cards.filter(card => card.control).map(card => ({ scenarioId: card.scenarioId, title: card.title, outcome: card.outcome,
     ...(card.reason ? { reason: card.reason } : {}), synthetic: card.provenance === 'synthetic', unstable: card.unstable }));
   // Worded like the control line: a failed control is «не пройден», an unmeasured one «не измерен».
@@ -149,6 +154,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     control: { cards: controlCards, warning: notStarted ? null : controlWarning },
     coverage: { examined, included, excluded, text: coverageText },
     cards,
+    failures,
     scope: {
       cards: record.scenarios.length,
       synthetic: record.scenarios.filter(scenario => scenario.provenance === 'synthetic').length,
