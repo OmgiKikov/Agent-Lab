@@ -34,6 +34,17 @@ extends: "02-UI-SPEC.md, 03-UI-SPEC.md, 04-UI-SPEC.md"
 > **Autonomous run.** The user was asleep and asked for no questions. Every open choice is recorded in `## Decisions Log`.
 >
 > **Scope markers.** `[P5]` marks text and layout locked for this phase. `[CUST]` marks rules that hold for every customer-profile string (M1, M2).
+>
+> **Revised 2026-09-17.** Two changes:
+> - ROADMAP Phase 5 success criteria 1 and 2 (f63f9ff) and START-04 require the synthetic share in the summary and in the HTML header.
+> - Phase 03.1 (inserted before phase 5) adds a row directly under the headline.
+>
+> Changed here:
+> - M1: L3a, L11a, the budget, variant G;
+> - M2: the H synthetic fact, S1 row 3a and the S1 synthetic row;
+> - the new copy ids C-182…C-184, four UI Considerations rows and D-29…D-31.
+>
+> The synthetic words are phase 6's (06-UI-SPEC C-646), so Pi, the summary and the HTML agree.
 
 ---
 
@@ -56,6 +67,9 @@ extends: "02-UI-SPEC.md, 03-UI-SPEC.md, 04-UI-SPEC.md"
 | M3 | The «Не пересылать» banner, the first child of `<main>` |
 
 **One source of numbers.** M1 and M2 print `ResultView` fields and the phase 2–4 row builders. They count nothing. A test asserts that M1 and M2 contain `view.headline.text` and `verdictLine(view)` verbatim.
+- The synthetic share is `view.scope.synthetic` of `view.scope.cards`.
+- The rows under the headline are the rows `resultViewRows` emits there.
+- Neither is recounted or retyped.
 
 ---
 
@@ -184,6 +198,7 @@ Not accent: V1 (colored by verdict), `h2`/`h3`, the headline number, the change 
 | L1 | `Agent Lab · <agent name> · <date>` | always |
 | L2 | V1 verbatim (`verdictLine(view)`) | always |
 | L3 | `view.headline.text` verbatim | `decided > 0` (when `decided = 0`, V1 already says «Проверенных ситуаций нет») |
+| L3a | the rows under the headline (C-184), verbatim, one line each | when `resultViewRows` emits any (phase 03.1 adds one); right after L2 when L3 is absent |
 | L4 | `view.headline.smallSample` verbatim | when not null |
 | L5 | `Не измерено: <K> — <label>.` / `Не измерено: <K> — чаще всего <label> (<C>).` (the `resultViewLines` wording) | `notMeasured.total > 0` |
 | L6 | `Главные причины провалов:` (C-14 plain form) | failures > 0 |
@@ -191,11 +206,24 @@ Not accent: V1 (colored by verdict), `h2`/`h3`, the headline number, the change 
 | L6′ | `Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.` (replaces L6–L9) | `decided > 0` and failures = 0 |
 | L10 | F6 main row verbatim (C-51…C-54); no tail rows | when F6 prints it |
 | L11 | control line verbatim (`Контроль: пройден ✓`, `Контроль: не пройден ✗`, `Контроль: не задан.`, …) | always |
+| L11a | synthetic share C-182 | `view.scope.synthetic > 0` |
 | L12 | comparison line (below) | `view.changes` present |
 | L13 | `Версия агента: <version> · ситуаций: <n>, диалогов: <m> · судья: <judge>` | always |
 | L14 | `Подробности — в HTML-отчёте.` | always |
 
-The maximum is 14 lines.
+There are at most 16 candidate lines (14 before phase 03.1 and without synthetic situations). The budget keeps at most 15.
+
+**Rows under the headline (L3a, C-184).**
+- **Which rows.** Those that `resultViewRows(view)` emits directly after the `lead` row, with role `line`. The pick stops at the first row that has another role, equals `view.headline.smallSample`, or starts with `Нестабильных:`, `Стабильность не проверена:`, `Ещё проверяется:`, `Не измерено:` or `Контроль:`.
+- **Why by position.** The pick is by position, not by text, so the row that phase 03.1 adds (its wording is locked in 03.1 CONTEXT) reaches M1 and M2 unchanged, and later wording changes need no phase-5 edit.
+- **What stays out.** The stability row carries a run id, and the per-situation `?` rows carry unguarded titles.
+- **Output.** Each picked text passes the guard and `plain()`, like every other M1 line.
+
+**Synthetic share (L11a, C-182).**
+- **Counts.** M = `view.scope.synthetic`, T = `view.scope.cards`, both taken as they are (controls included, as in phase 6).
+- **Wording.** `Синтетических ситуаций: <M> из <T> — они придуманы по описанию, а не взяты из реальных диалогов.` When M = T, ` На реальных диалогах итог может быть другим.` is appended.
+- **Phase-6 row.** When `resultViewRows(view)` already carries a row starting with `Синтетических ситуаций: ` (06-UI-SPEC S7), that row is printed instead, once.
+- **No synthetic situations.** With M = 0 nothing is printed, and no M1 line contains `синтетическ`.
 
 **Values:**
 - `<agent name>`: `guard.text(selected revision spec.name)`, or `проверка агента` when absent.
@@ -218,7 +246,12 @@ The maximum is 14 lines.
 
 - The line never contains `Сказал`, the agent quote, a rule quote, the judge's reasoning or a cause name.
 - **Comparison line (L12):** `Сравнение с прошлым прогоном: исправлено <a> · сломано <b> · нестабильно <c> из <n> <сравнимой|сравнимых>.` When `n = 0`: `Сравнение с прошлым прогоном: сравнимых ситуаций нет.`
-- **Budget:** while the text is over 900 characters, drop lines in this order: L12, then L4, then L9, then L8. The test uses the worst case: 99/99 counts, 494-character expectations and a 120-character agent name.
+- **Budget:** while the text is over 900 characters or over 15 lines, apply these steps in order:
+  1. drop L12, then L4, then L9, then L8;
+  2. shorten the agent name in L1 at a word boundary with `…`;
+  3. shorten X of the remaining cause line at a word boundary with `…`, not below 40 characters.
+
+  L2, L3, L3a, L5, L6, L7, L10, L11, L11a, L13 and L14 are never dropped. The test uses the worst case: 99/99 counts, 494-character expectations, a 120-character agent name, M = T synthetic and one 88-character row under the headline.
 
 ### Variants (exact, test vectors)
 
@@ -240,6 +273,8 @@ Agent Lab · Эквайринг-помощник · 16 сентября 2026, 18
 Подробности — в HTML-отчёте.
 ```
 
+When `resultViewRows` emits rows under the headline (phase 03.1), they sit between L3 and L4 of A. The test inserts them the same way and also checks the 14 lines above with those rows removed.
+
 **B. No failures:** L6–L9 are replaced by `Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.`
 
 **C. Zero decided:**
@@ -258,6 +293,26 @@ Agent Lab · Эквайринг-помощник · 16 сентября 2026, 18
 **E. No agreement yet:** L10 = `Согласие с судьёй: ещё не проверено.` When F6 prints nothing (empty queue), L10 is omitted.
 
 **F. No comparison:** L12 is omitted. There is no «сравнивать не с чем» line.
+
+**G. Synthetic situations in the set** (A with 2 of 15 synthetic; the row under the headline is shown with sample numbers):
+```
+Agent Lab · Эквайринг-помощник · 16 сентября 2026, 18:40 МСК
+Агент справляется с ошибками: 9 из 13 ситуаций (мало данных)
+Справился в 9 из 13 проверенных ситуаций — 69%.
+<row under the headline, when phase 03.1 emits one>
+Мало данных: реальная доля где-то от 42% до 87%.
+Не измерено: 2 — симулятор отклонился от диалога.
+Главные причины провалов:
+1. Должен был: объяснить порядок возврата покупки через терминал и срок зачисления — правило 7 · 2 ситуации
+2. Должен был: назвать срок подключения СБП — правило 12
+3. Должен был: соблюдать правило 31
+Согласие с судьёй: 3 из 4 проверенных · мало проверок (провалы: 3 из 4 · успехов нет).
+Контроль: пройден ✓
+Синтетических ситуаций: 2 из 15 — они придуманы по описанию, а не взяты из реальных диалогов.
+Версия агента: не названа · ситуаций: 15, диалогов: 13 · судья: openai/gpt-5.6-sol
+Подробности — в HTML-отчёте.
+```
+With the row under the headline there are 16 candidate lines, so L12 (comparison) is dropped. Without that row, L12 stays and the text has 15 lines. With 15 of 15 synthetic, the synthetic line ends with ` На реальных диалогах итог может быть другим.`
 
 **Refused states (no file is written; notice N6/N7):**
 - the run is still active (`preparing`, `evaluating`);
@@ -289,8 +344,8 @@ Agent Lab · Эквайринг-помощник · 16 сентября 2026, 18
 
 ```
 <main>
-  H  <header>              brand line + 5 facts
-  S1 <section class="first"> V1 · headline · bar · small sample · facts · top causes
+  H  <header>              brand line + 5 facts (+ synthetic share when the set has synthetic situations)
+  S1 <section class="first"> V1 · headline · bar · rows under the headline · small sample · facts (+ synthetic row) · top causes
   S2 <section>             Все провалы (n)            [omitted when failures = 0]
   S3 <section>             Несогласия с судьёй (K)    [omitted when K = 0]
   S4 <section>             Сравнение с прошлым прогоном [omitted without view.changes]
@@ -307,6 +362,7 @@ Agent Lab · Эквайринг-помощник · 16 сентября 2026, 18
 | date | `Прогон: <mskDateTime(createdAt)>`; plus `, разбор: <mskDateTime(reviewedAt)>` when `reviewedAt` is set |
 | version | `Версия агента: <targetVersion ?? targetRelease>`; without either: `Версия агента: не названа · метка сборки <targetFingerprint first 8>`; without a fingerprint: `Версия агента: не названа` |
 | set | `Набор: <n> <ситуация\|ситуации\|ситуаций>, <m> <диалог\|диалога\|диалогов>` (`view.scope.cards`, `view.scope.dialogues`) |
+| synthetic | `Синтетических ситуаций: <M> из <T>` (C-183; `view.scope.synthetic`, `view.scope.cards`); **omitted** when M = 0 |
 | judge | `Судья: <judgeModel>` / `Судья: не записан` |
 | cost | `Стоимость проверки: ≈ $<D.DD> (оценка)` / `Стоимость проверки: не записана` / `Стоимость проверки: без оплаты` (demo) |
 
@@ -314,10 +370,12 @@ Agent Lab · Эквайринг-помощник · 16 сентября 2026, 18
 1. `<h1 id="verdict" class="v-ok|v-caution|v-bad">` V1 verbatim. The class follows the phase-4 V1 tone: rule 5 → `v-ok`; rules 4, 6 → `v-caution`; rules 1–3, 7 → `v-bad`.
 2. `<p class="headline">` `view.headline.text`. Omitted when `decided = 0`.
 3. Bar `<svg class="bar" viewBox="0 0 100 8" preserveAspectRatio="none" role="img" aria-label="<P>%">`, with `<rect class="track" width="100" height="8" rx="4"/>` and `<rect class="fill" width="<P>" height="8" rx="4"/>`. `P = clamp(round(accuracy*100), 0, 100)`. Omitted when `accuracy === null`.
+3a. The rows under the headline (C-184, the same texts as M1 L3a): one `<p>` each, after the bar, or after the headline when there is no bar. They are body text, not muted, because they explain the number. With none, nothing is added.
 4. `<p class="muted">` smallSample. Only when not null.
 5. `<div class="facts">`: one `<p>` for each of the following, in order:
    - L5 not-measured, followed by `<details><summary>Какие ситуации не измерены (<K>)</summary><ul>` with every F3 row as `<li>` (`? <guarded title> — <reason>`);
    - L11 control;
+   - the synthetic share C-182 (the same text as M1 L11a), only when `view.scope.synthetic > 0`. This is the place of the Pi S7 row: right after control, before agreement;
    - L10 agreement (when printed), with the F6 tail rows as `<p class="muted">`.
    - When `bundle.warnings` is non-empty, a last `<p class="muted">`: `Часть проверок не подтверждена — подробности у владельца.`
 6. `<div class="causes">`: `<h2>Главные причины провалов</h2>` + `<ol class="top">` with the M1 cause lines (without the `<i>. ` prefix; the list numbers them). In the HTML, X is **not** shortened. With no failures and `decided > 0`: `<p>Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.</p>` instead. With `decided = 0`: the block is omitted.
@@ -604,12 +662,15 @@ Paths are absolute and escaped with `safeText`. The notices name paths only, whi
 | C-179 | N1…N9 (table above) | M4 |
 | C-180 | `x — выгрузить: отчёт и выжимка для заказчика или полный отчёт для аудита · o — открыть отчёт для заказчика` | M4 help |
 | C-181 | `Выжимка: <path>` / `Отчёт для заказчика: <path>` / `Полный отчёт для аудита (не пересылать): <path>` | M5 |
+| C-182 | `Синтетических ситуаций: <M> из <T> — они придуманы по описанию, а не взяты из реальных диалогов.` + ` На реальных диалогах итог может быть другим.` (only when M = T). Same text as 06-UI-SPEC C-646; when `resultViewRows` already carries that row, it is used verbatim | M1 L11a, M2 S1 facts |
+| C-183 | `Синтетических ситуаций: <M> из <T>` (the lead words of C-182) | M2 H |
+| C-184 | No own text: the rows `resultViewRows` emits directly under the headline (phase 03.1 adds one; its wording is locked in 03.1 CONTEXT «Главная строка и объяснение»), verbatim | M1 L3a, M2 S1 row 3a |
 
 ---
 
 ## UI Considerations
 
-Applicable state considerations resolved: 17 covered, 3 backstop, 0 unresolved.
+Applicable state considerations resolved: 21 covered, 3 backstop, 0 unresolved.
 
 Elements:
 - E1: M1 summary;
@@ -626,6 +687,9 @@ Elements:
 | empty | E1/E2/E3 no failures | ✅ covered | The «Провалов не зарегистрировано…» row replaces the causes; S2 omitted |
 | empty | E4 no comparison | ✅ covered | M1 L12 and M2 S4 omitted; no «сравнивать не с чем» text |
 | empty | agreement not checked / nothing to check | ✅ covered | «Согласие с судьёй: ещё не проверено.» / row omitted |
+| empty | E1/E2 set without synthetic situations (the acquiring logs) | ✅ covered | No L11a, no H fact, no S1 row; no `синтетическ` in M1 or the visible M2 text |
+| populated | E1/E2 set with synthetic situations | ✅ covered | C-182 in M1 L11a and in S1 after control; C-183 in H; M = T adds «На реальных диалогах итог может быть другим.» (live: synthetic copy in `verify-share.mjs`) |
+| partial | E1/E2 headline explained by phase 03.1 | ✅ covered | L3a / S1 row 3a picked by position; injected-row tests in the lane; live check on `a92fd6ae` and `fae4ee59` (`breakdown=1`) after the merge |
 | loading | E6 run still active | ✅ covered | Refused with N6; no file written |
 | error | E6 clipboard throws | ✅ covered | N3 editor fallback plus file path |
 | error | E6 write fails / opener fails / bad id | ✅ covered | N8, N9, N5, N5a, N5b |
@@ -635,6 +699,7 @@ Elements:
 | partial | E2 warnings present | ✅ covered | The fixed C-164 sentence; the raw warnings are never shown |
 | partial | E5 title mostly client text | ✅ covered | R3 `…` cuts; R4 `Ситуация <n>` fallback |
 | overflow | E1 over 900 characters | ✅ covered | Drop order L12 → L4 → L9 → L8; X shortened to 110 characters at a word boundary |
+| overflow | E1 16 candidate lines (L3a and L11a present) | ✅ covered | L12 dropped first, then the steps above; L3a and L11a never dropped; worst case with M = T and an 88-character L3a fits 900 (must-keep lines ≤ 856 characters, measured) |
 | overflow | E2 long words and URLs | ✅ covered | `overflow-wrap:anywhere` on `h1`, `h3`, `article p`, `blockquote` |
 | zero-one-many | counts in M1/M2 | ✅ covered | `pluralForm` for ситуация/диалог/правило/сравнимой; «на 1 ситуации» / «на 13 ситуациях» |
 | long-text | E5 masked card number at a line end | ✅ covered | R1 uses U+00A0 (found in the mockup) |
@@ -704,6 +769,9 @@ Not checked (human items): Segoe UI on Windows (macOS has no Segoe UI; the Micro
 | D-26 | The audit header switches to MSK time | One clock on every surface | 05-RESEARCH Pattern 5 |
 | D-27 | The M1 date is the run start (`createdAt`); M2 adds `разбор: <reviewedAt>` when set | The run start identifies the run; the review date shows freshness | 05-RESEARCH Open Question 1 |
 | D-28 | Public URLs in agent text stay as escaped text, never as links; M2 has no `<a>` at all | A link is a tracking risk; CSP forbids navigation anyway | 05-RESEARCH Open Question 2 |
+| D-29 | The synthetic share is its own M1 line (L11a) and an M2 S1 row, using the phase-6 C-646 sentence, plus the short C-183 fact in the M2 header. It is shown only when M > 0 and is never dropped by the budget | SC1 and SC2 require the share; the full sentence tells a manager what «синтетических» means; one wording for Pi, M1 and M2 | ROADMAP Phase 5 SC1/SC2 (f63f9ff); START-04; 06-UI-SPEC S7, D-25 |
+| D-30 | The rows under the headline are picked by position (directly after `lead`, stopping at the known phase-1 rows), not by a fixed text, and not by printing every row down to the causes | The 03.1 row lands in parallel and its text may change; the full range would also print the stability row (run id), the `?` rows (unguarded titles) and the owner warning | 03.1 CONTEXT «Главная строка и объяснение»; 03.1 RESEARCH Pattern 4; R «Never in M1 or M2» |
+| D-31 | The M1 budget keeps the old drop order and adds a last step (shorten X of the remaining cause, not below 40 characters); the comparison line goes first when 16 lines compete | The comparison is not in the CONTEXT composition and stays in M2; with the last step, the must-keep lines always fit 900 | CONTEXT (≤ ~15 lines, ~900 characters); measurement above |
 
 ---
 
