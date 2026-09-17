@@ -8,7 +8,9 @@
 //   node live-check.mjs record --id RUN
 //   node live-check.mjs build-plan --task FILE --dialogues FILE
 //   node live-check.mjs build-status --since ISO
-//   node live-check.mjs watch --id RUN|latest-assessment-of:RUN --pid PID --ledger FILE [--cap 10] [--minutes 45]
+//   node live-check.mjs watch --id RUN|latest-assessment-of:RUN|latest-child-of:RUN --pid PID --ledger FILE [--cap 10] [--minutes 45]
+//   node live-check.mjs pick-counted --id RUN --exclude SCENARIO     (plan 01-12)
+//   node live-check.mjs control --id RUN                             (plan 01-12; exit 0 pass, 1 not all pass, 2 no control)
 //
 // Common options: --dist DIR (default <repo>/dist), --data DIR (default <repo>/.agent-lab).
 import { createReadStream } from 'node:fs';
@@ -26,7 +28,7 @@ const { values } = parseArgs({ args: rest, options: {
   reference: { type: 'string' }, ledger: { type: 'string' }, next: { type: 'string' },
   cap: { type: 'string', default: '10' }, id: { type: 'string' }, task: { type: 'string' },
   dialogues: { type: 'string' }, since: { type: 'string' }, pid: { type: 'string' },
-  minutes: { type: 'string', default: '45' },
+  minutes: { type: 'string', default: '45' }, exclude: { type: 'string' },
 } });
 const cap = Number(values.cap);
 const load = name => import(pathToFileURL(resolve(values.dist, name)).href);
@@ -215,12 +217,18 @@ async function watch() {
   const started = Date.now();
   const deadline = started + Number(values.minutes) * 60_000;
   const sourceId = target.startsWith('latest-assessment-of:') ? target.slice('latest-assessment-of:'.length) : null;
-  let id = sourceId ? null : target;
+  const parentId = target.startsWith('latest-child-of:') ? target.slice('latest-child-of:'.length) : null;
+  let id = sourceId || parentId ? null : target;
   let stopped = false;
   for (;;) {
     if (!id && sourceId) {
       const [found] = await recordsSince(started - 60_000, raw => raw.assessmentOf === sourceId);
       if (found) id = found.id;
+    }
+    if (!id && parentId) {
+      const listed = new Set(await ledgerIds(ledger));
+      const [found] = await recordsSince(started - 60_000, raw => raw.parentRunId === parentId && !listed.has(raw.id));
+      if (found) { id = found.id; console.log(`resolved id=${id}`); }
     }
     const raw = id ? await rawRecord(id) : null;
     const cost = recordCost(raw);
@@ -243,9 +251,66 @@ async function watch() {
   }
 }
 
-const commands = { budget, spent, record, 'build-plan': buildPlan, 'build-status': buildStatus, watch };
+/** Plan 01-12: the counted card with the fewest recorded events (lower id on a tie). Prints the full id. */
+async function pickCounted() {
+  const { ExperimentStore } = await load('store.js');
+  const { cardVerdict } = await load('comparison.js');
+  const run = await new ExperimentStore(values.data).get(need('id'));
+  const exclude = need('exclude');
+  const controls = new Set(run.positiveControlScenarioIds ?? []);
+  const candidates = run.scenarios
+    .filter(scenario => scenario.id !== exclude && !controls.has(scenario.id))
+    .filter(scenario => ['pass', 'fail'].includes(cardVerdict(run, scenario).outcome))
+    .map(scenario => ({ id: scenario.id, events: run.trials.filter(trial => trial.scenarioId === scenario.id)
+      .reduce((n, trial) => n + (trial.events?.length ?? 0), 0) }))
+    .sort((a, b) => a.events - b.events || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  if (!candidates.length) { process.stderr.write('No counted card\n'); process.exit(3); }
+  process.stderr.write(`events=${candidates[0].events} candidates=${candidates.length}\n`);
+  console.log(candidates[0].id);
+}
+
+/** Plan 01-12: the control entries and the summary block lines the CLI prints (fixed vocabulary only). */
+async function control() {
+  const { ExperimentStore } = await load('store.js');
+  const { resolveSource } = await load('artifacts.js');
+  const { buildResultView, resultViewLines } = await load('result-view.js');
+  const { metricApplies } = await load('contracts.js');
+  const store = new ExperimentStore(values.data);
+  const record = await store.get(need('id'));
+  const baseId = record.assessmentOf ?? record.parentRunId;
+  const before = baseId ? (await resolveSource(record, store, baseId)).before : undefined;
+  const view = buildResultView(record, before ? { before } : {});
+  const lines = resultViewLines(view);
+  const controlIds = new Set(record.positiveControlScenarioIds ?? []);
+  const entries = view.control.cards.map(card => {
+    const scenario = record.scenarios.find(item => item.id === card.scenarioId);
+    const trials = record.trials.filter(trial => trial.scenarioId === card.scenarioId);
+    const fidelity = scenario?.metrics?.find(metric => metric.id === 'user_fidelity');
+    return {
+      id8: card.scenarioId.slice(0, 8), outcome: card.outcome, reason: card.reason ?? null, synthetic: card.synthetic,
+      provenance: scenario?.provenance ?? null, maxFollowUps: scenario?.user?.maxFollowUps ?? null, trials: trials.length,
+      simulatorEvents: trials.reduce((n, trial) => n + trial.events.filter(event => event.type === 'simulator').length, 0),
+      assistantReplies: trials.reduce((n, trial) => n + trial.events.filter(event => event.type === 'assistant').length, 0),
+      userFidelityApplies: trials.length > 0 && Boolean(fidelity) && trials.some(trial => metricApplies(fidelity, trial)),
+    };
+  });
+  const out = {
+    id8: record.id.slice(0, 8), phase: record.phase, parent8: record.parentRunId?.slice(0, 8) ?? null,
+    cards: record.scenarios.length, controlIds: controlIds.size,
+    headline: { passed: view.headline.passed, decided: view.headline.decided },
+    notMeasured: view.notMeasured.total, warning: view.control.warning !== null,
+    controlLine: lines.find(line => line.startsWith('Контроль:')) ?? null,
+    stabilityLine: lines.find(line => line.startsWith('Нестабильных:') || line.startsWith('Стабильность не проверена:')) ?? null,
+    control: entries,
+  };
+  console.log(JSON.stringify(out));
+  if (!entries.length) process.exit(2);
+  process.exit(entries.every(entry => entry.outcome === 'pass') && !out.warning ? 0 : 1);
+}
+
+const commands = { budget, spent, record, 'build-plan': buildPlan, 'build-status': buildStatus, watch, 'pick-counted': pickCounted, control };
 if (!commands[command]) {
-  process.stderr.write('Usage: live-check.mjs budget|spent|record|build-plan|build-status|watch …\n');
+  process.stderr.write('Usage: live-check.mjs budget|spent|record|build-plan|build-status|watch|pick-counted|control …\n');
   process.exit(2);
 }
 await commands[command]();
