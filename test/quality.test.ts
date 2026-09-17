@@ -6,6 +6,8 @@ import { emptyUsage, RAG_RUBRICS, settingsSchema, type Experiment, type HumanRev
 import { draftHash } from '../src/experiment.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 import { verdictSummary } from '../src/comparison.js';
+import { buildResultView } from '../src/result-view.js';
+import { htmlReport } from '../src/report.js';
 
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
 const goal = { id: 'goal', name: 'Цель выполнена', subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' };
@@ -293,7 +295,7 @@ test('the first screen counts cards, criteria and causes from the shared outcome
   assert.match(text.queue, /Разметить человеку: 1/);
 });
 
-test('business accuracy follows goal attainment while strict success and other rubric failures stay separate', () => {
+test('business accuracy follows the headline rule (request met and prompt rules kept) while strict success and other rubric failures stay separate', () => {
   const goalAttainment = { ...goal, id: 'goal_attainment', name: 'Достижение цели' };
   const promptCompliance = { ...format, id: 'prompt_compliance', name: 'Соблюдение промпта' };
   const scenarios = ['solved', 'failed', 'broken'].map(id => ({ ...scenario(id, false), metrics: [goalAttainment, promptCompliance] }));
@@ -307,16 +309,81 @@ test('business accuracy follows goal attainment while strict success and other r
   const q = qualitySummary(record({ scenarios, trials: [assessed('t1', 'solved', 'pass', 'fail'), assessed('t2', 'failed', 'fail', 'fail'), invalid],
     failureModes: [{ id: 'business', name: 'Бизнес-причина', description: 'd', trialIds: ['t2'] }] }));
   assert.equal(q.primary, 'goal_attainment');
-  assert.deepEqual(q.cards, { passed: 1, failed: 1, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0.5 });
-  assert.deepEqual(q.strict, { passed: 0, failed: 2, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0, goalMetWithOtherFailures: 1 });
-  assert.match(q.headline, /Бизнес-цель достигнута в 1 из 2 карточек \(50%\)/);
+  // Phase 03.1 (deliberate pin change): t1 met the request but broke a prompt rule, so it is no longer «справился».
+  assert.deepEqual(q.cards, { passed: 0, failed: 2, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0 });
+  assert.deepEqual(q.strict, { passed: 0, failed: 2, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0, goalMetWithOtherFailures: 0 });
+  assert.ok(q.headline.startsWith('Справился (запрос выполнен и правила промпта соблюдены) в 0 из 2 карточек (0%). '), q.headline);
   assert.match(q.headline, /Полностью прошли все критерии: 0 из 2 \(0%\)/);
-  assert.match(q.headline, /В 1 карточке цель достигнута, но провален другой критерий/);
+  assert.doesNotMatch(q.headline, /провален другой критерий/);
+  assert.doesNotMatch(q.headline, /Бизнес-цель|по цели/);
+  assert.match(q.headline, /\. Невалидно: 1; разобрано человеком 0 из 3 диалогов\.$/);
+  assert.equal(q.cardsLabel, 'Справился · запрос и правила промпта');
   // The saved example is the verified agent reply of that dialogue, not the judge's rationale.
   assert.equal(q.causes[0]?.example?.quote, 'ok');
   assert.equal(q.causes[0]?.example?.seq, 1);
   assert.equal(q.causes[0]?.example?.explanation?.trialId, 't2', 'a business failure explains the headline before secondary prompt/style failures');
   assert.equal(q.causes[0]?.example?.explanation?.said?.judgeCited, true, 'the quote is the reply the judge pointed at');
+});
+
+// ---- Phase 03.1: the report number is the CLI number — same rule, same non-control cards. ----
+const GOAL_ATTAINMENT = { ...goal, id: 'goal_attainment', name: 'Достижение цели' };
+const PROMPT_COMPLIANCE = { ...format, id: 'prompt_compliance', name: 'Соблюдение правил промпта' };
+const REPLY_QUALITY = { ...format, id: 'reply_quality', name: 'Качество ответа' };
+type Verdict = 'pass' | 'fail' | 'unknown';
+/** One attempt judged on the given rubrics; `votes` are in the order of `metrics`. */
+function judgedCard(id: string, metrics: typeof goal[], votes: Verdict[]): { scenario: Scenario; trial: Trial } {
+  const card = { ...scenario(id, false), metrics };
+  const attempt: Trial = { ...trial(`t-${id}`, id, 'ungraded', 'pass'), checks: [],
+    assessments: metrics.map((metric, i) => ({ metricId: metric.id, result: votes[i]!, rationale: 'r', evidence: votes[i] === 'unknown' ? [] : [1] })) };
+  return { scenario: card, trial: attempt };
+}
+function judgedRecord(cards: ReturnType<typeof judgedCard>[], overrides: Partial<Experiment> = {}): Experiment {
+  return record({ scenarios: cards.map(c => c.scenario), trials: cards.map(c => c.trial), ...overrides });
+}
+
+test('the report counts the same non-control cards by the same rule as the CLI headline', () => {
+  const rubrics = [GOAL_ATTAINMENT, PROMPT_COMPLIANCE];
+  const r = judgedRecord([
+    judgedCard('met', rubrics, ['pass', 'pass']), judgedCard('broke', rubrics, ['pass', 'fail']), judgedCard('missed', rubrics, ['fail', 'pass']),
+    judgedCard('unsure', rubrics, ['pass', 'unknown']), judgedCard('ctl', rubrics, ['pass', 'fail']),
+  ], { positiveControlScenarioIds: ['ctl'] });
+  const q = qualitySummary(r);
+  const view = buildResultView(r);
+  assert.equal(q.cards.passed, view.headline.passed);
+  assert.equal(q.cards.passed + q.cards.failed, view.headline.decided);
+  assert.deepEqual(q.cards, { passed: 1, failed: 2, unknown: 1, invalid: 0, notReached: 0, total: 4, accuracy: 1 / 3 }, 'the control is not in the cards');
+  assert.equal(q.strict.total, 4, 'nor in the strict score');
+  assert.equal(view.headline.text, 'Справился в 1 из 3 проверенных ситуаций — 33%.');
+  assert.ok(q.headline.startsWith('Справился (запрос выполнен и правила промпта соблюдены) в 1 из 3 карточек (33%). '), q.headline);
+  assert.match(q.headline, /\. Без решения: 1; разобрано человеком 0 из 5 диалогов\.$/);
+  assert.equal(q.cardsLabel, 'Справился · запрос и правила промпта');
+  assert.ok(htmlReport(r).includes('<h3>Справился · запрос и правила промпта</h3>'), 'the HTML grid carries the same label');
+  assert.ok(!htmlReport(r).includes('Достижение бизнес-цели'));
+});
+
+test('reply quality never moves the report number: it is its own row, and a pass with a quality failure is counted and named', () => {
+  const rubrics = [GOAL_ATTAINMENT, PROMPT_COMPLIANCE, REPLY_QUALITY];
+  const q = qualitySummary(judgedRecord([judgedCard('a', rubrics, ['pass', 'pass', 'fail']), judgedCard('b', rubrics, ['fail', 'fail', 'pass'])]));
+  assert.deepEqual([q.cards.passed, q.cards.failed], [1, 1]);
+  assert.equal(q.strict.goalMetWithOtherFailures, 1);
+  assert.ok(q.headline.startsWith('Справился (запрос выполнен и правила промпта соблюдены) в 1 из 2 карточек (50%). Полностью прошли все критерии: 0 из 2 (0%). В 1 карточке справился, но провален другой критерий. '), q.headline);
+  const quality = q.metrics.find(m => m.id === 'reply_quality');
+  assert.ok(quality, 'reply quality keeps its own row');
+  assert.deepEqual([quality!.passed, quality!.failed], [1, 1]);
+});
+
+test('cardsLabel names the rule the number is counted by', () => {
+  assert.equal(qualitySummary(judgedRecord([judgedCard('a', [GOAL_ATTAINMENT, PROMPT_COMPLIANCE], ['pass', 'pass'])])).cardsLabel, 'Справился · запрос и правила промпта');
+  const goalOnly = qualitySummary(judgedRecord([judgedCard('a', [GOAL_ATTAINMENT, REPLY_QUALITY], ['pass', 'fail'])]));
+  assert.equal(goalOnly.cardsLabel, 'Справился · запрос');
+  assert.ok(goalOnly.headline.startsWith('Справился (запрос выполнен) в 1 из 1 карточки (100%). '), goalOnly.headline);
+  const legacy = qualitySummary(record({ scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] }));
+  assert.equal(legacy.primary, 'all_criteria');
+  assert.equal(legacy.cardsLabel, 'Справился · карточки');
+  assert.ok(htmlReport(record({ scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] })).includes('<h3>Справился · карточки</h3>'));
+  // A control whose rules were broken never turns a goal-only set into a ruled one.
+  const mixed = qualitySummary(judgedRecord([judgedCard('a', [GOAL_ATTAINMENT], ['pass']), judgedCard('ctl', [GOAL_ATTAINMENT, PROMPT_COMPLIANCE], ['pass', 'fail'])], { positiveControlScenarioIds: ['ctl'] }));
+  assert.equal(mixed.cardsLabel, 'Справился · запрос');
 });
 
 test('an unresolved simulator flag makes the card undecided on the first screen instead of counting as a failure, and clusters fall back to weak spots', () => {

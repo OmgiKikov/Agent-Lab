@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { sourceIdentity } from '../src/normalize.js';
-import { awaitingVerdict, cardOutcome, cardVerdict, compareRuns, evidenceSummary, goalCardOutcome, headlineCardOutcome, humanFindings, isAgentFailure, judgeModel, repeatResults, stabilityAfterReassess, verdictSummary } from '../src/comparison.js';
+import { awaitingVerdict, cardOutcome, cardVerdict, compareRuns, evidenceSummary, goalCardOutcome, headlineCardOutcome, humanFindings, isAgentFailure, judgeModel, repeatResults, stabilityAfterReassess, stabilityBetweenRuns, verdictSummary } from '../src/comparison.js';
 import { embeddedBefore } from '../src/artifacts.js';
 import { suiteEvidence } from '../src/connection.js';
 import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources, sealJudgeReceipt, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
@@ -952,4 +952,96 @@ test('goalCardOutcome is the goal-only result in every case, and the control ver
   }
   assert.equal(one(votes('pass', 'fail', 'fail')).goal, 'unknown', 'the goal-only result keeps the usability gate');
   assert.deepEqual(cardVerdict(one(votes('unknown', 'fail')).run, ruledCard('c'), 'goal'), { outcome: 'unknown', reason: 'judge_split' }, 'the goal-only reasons ignore the rules vote');
+});
+
+// ---- 03.1: repeats, reassessments and before/after comparisons count by the headline rule and say so. ----
+const RULE_NOTE = 'Сравнение считает «справился» как главное число: запрос выполнен и правила промпта соблюдены.';
+const RULED_SOURCE = 'd0d0d0d0-0000-4000-8000-000000000001', RULED_REPEAT = 'd0d0d0d0-0000-4000-8000-000000000002';
+type Ruled = { goal: Vote; rules: Vote | 'none'; quality?: Vote };
+/** opening → reply → the simulator ends the dialogue; the reply text tells two runs apart, so identical answers never trigger the review note. */
+const replied = (text: string): TraceEvent[] => [{ seq: 0, type: 'user', text: 'hello' }, { seq: 1, type: 'assistant', text }, { seq: 2, type: 'simulator', result: { message: '', done: true } }];
+/** One demo run: `repeats` reactive attempts per card, every card judged on the goal, the prompt rules (unless 'none') and, when asked, reply quality. */
+function ruledRecord(id: string, cards: Record<string, Ruled>, overrides: Partial<Experiment> = {}, options: { repeats?: number; reply?: string } = {}): Experiment {
+  const repeats = options.repeats ?? 1;
+  const scenarios = Object.entries(cards).map(([key, c]) => ruledCard(key, [{ ...goalAttainment },
+    ...(c.rules === 'none' ? [] : [{ ...promptCompliance }]), ...(c.quality ? [{ ...replyQuality }] : []), { ...simulatorFidelity }]));
+  const trials = Object.entries(cards).flatMap(([key, c]) => Array.from({ length: repeats }, (_, repeat) => ruledAttempt(`t-${key}-${repeat}`, key, [
+    judged('goal_attainment', c.goal, c.goal === 'unknown' ? SPLIT : 'r'),
+    ...(c.rules === 'none' ? [] : [judged('prompt_compliance', c.rules, c.rules === 'unknown' ? SPLIT : 'r')]),
+    ...(c.quality ? [judged('reply_quality', c.quality)] : []),
+    judged('user_fidelity', 'pass'),
+  ], { repeat, events: replied(options.reply ?? 'ok') })));
+  return record({ id, mode: 'demo', targetFingerprint: 'fp-agent', settings: settingsSchema.parse({ userModes: ['reactive'], repeats }), scenarios, trials, ...overrides });
+}
+
+test('a repeat is unstable when the request holds but the prompt rules flip; a flip only in reply quality is not', () => {
+  const source = ruledRecord(RULED_SOURCE, { A: { goal: 'pass', rules: 'pass', quality: 'pass' }, B: { goal: 'pass', rules: 'pass', quality: 'pass' }, C: { goal: 'fail', rules: 'pass', quality: 'pass' } });
+  const repeat = ruledRecord(RULED_REPEAT, { A: { goal: 'pass', rules: 'fail', quality: 'pass' }, B: { goal: 'pass', rules: 'pass', quality: 'fail' }, C: { goal: 'fail', rules: 'fail', quality: 'pass' } },
+    { parentRunId: RULED_SOURCE }, { reply: 'another reply' });
+  const stability = stabilityBetweenRuns(source, repeat);
+  assert.equal(stability.skipped, null);
+  assert.equal(stability.checked, 3);
+  assert.deepEqual(stability.unstable, [{ scenarioId: 'A', title: 'A', before: 'pass', after: 'fail' }], 'B flipped only in reply quality, C stayed «не справился»');
+  // The same for a reassessment of the saved answers.
+  const reassessment = ruledRecord('d0d0d0d0-0000-4000-8000-000000000003', { A: { goal: 'pass', rules: 'fail', quality: 'pass' }, B: { goal: 'pass', rules: 'pass', quality: 'fail' }, C: { goal: 'fail', rules: 'fail', quality: 'pass' } },
+    { parentRunId: RULED_SOURCE, assessmentOf: RULED_SOURCE, assessmentTrialIds: ['t-A-0', 't-B-0', 't-C-0'], evidenceHash: 'evidence',
+      sourceEvidence: { runId: RULED_SOURCE, trials: structuredClone(source.trials), humanReviews: [] } });
+  const found = stabilityAfterReassess(reassessment, source);
+  assert.equal(found?.skipped, null);
+  assert.equal(found?.checked, 3);
+  assert.deepEqual(found?.unstable, [{ scenarioId: 'A', title: 'A', before: 'pass', after: 'fail' }]);
+});
+
+test('compareRuns counts a card by the headline rule, names the rule once, and leaves reply quality out of the card verdict', () => {
+  const before = ruledRecord(RULED_SOURCE, { A: { goal: 'pass', rules: 'fail', quality: 'pass' }, B: { goal: 'pass', rules: 'pass', quality: 'pass' }, C: { goal: 'fail', rules: 'pass', quality: 'pass' } });
+  const after = ruledRecord(RULED_REPEAT, { A: { goal: 'pass', rules: 'pass', quality: 'pass' }, B: { goal: 'pass', rules: 'pass', quality: 'fail' }, C: { goal: 'fail', rules: 'pass', quality: 'pass' } },
+    { parentRunId: RULED_SOURCE }, { reply: 'another reply' });
+  const diff = compareRuns(before, after);
+  assert.equal(diff.comparable, true, diff.notes.join(' '));
+  assert.deepEqual(diff.fixed.map(row => row.scenarioId), ['A'], 'the rules were kept this time, so the request-met card is now «справился»');
+  assert.deepEqual(diff.regressed, []);
+  assert.deepEqual(diff.unchanged, { passing: 1, failing: 1 }, 'B flipped only in reply quality and stays a pass; C stays a failure');
+  assert.equal(diff.pairs.find(pair => pair.scenarioId === 'A')?.change, 'fixed');
+  assert.equal(diff.pairs.find(pair => pair.scenarioId === 'B')?.change, 'unchanged');
+  assert.equal(diff.pairs.find(pair => pair.scenarioId === 'C')?.change, 'unchanged');
+  assert.equal(diff.notes.filter(note => note === RULE_NOTE).length, 1, 'the rule is named exactly once');
+  assert.equal(diff.incomparable.length, 0, 'the note never makes a comparable pair incomparable');
+
+  // Goal-only cards: the same rule, but without prompt rules there is nothing to name.
+  const plainBefore = ruledRecord(RULED_SOURCE, { A: { goal: 'fail', rules: 'none', quality: 'pass' } });
+  const plainAfter = ruledRecord(RULED_REPEAT, { A: { goal: 'pass', rules: 'none', quality: 'fail' } }, { parentRunId: RULED_SOURCE }, { reply: 'another reply' });
+  const plain = compareRuns(plainBefore, plainAfter);
+  assert.equal(plain.comparable, true, plain.notes.join(' '));
+  assert.deepEqual(plain.fixed.map(row => row.scenarioId), ['A'], 'a reply-quality failure does not hide the fixed request');
+  assert.ok(!plain.notes.includes(RULE_NOTE));
+
+  // An incomparable pair keeps its reasons; the rule note is not added to them.
+  const other = ruledRecord(RULED_REPEAT, { A: { goal: 'pass', rules: 'pass' } }, { parentRunId: RULED_SOURCE, mode: 'live' });
+  const incomparable = compareRuns(before, other);
+  assert.equal(incomparable.comparable, false);
+  assert.ok(!incomparable.notes.includes(RULE_NOTE));
+});
+
+test('compareRuns decides a card from its matched attempts when a repeat is missing, as the strict rule did', () => {
+  const before = ruledRecord(RULED_SOURCE, { A: { goal: 'pass', rules: 'fail' }, B: { goal: 'fail', rules: 'fail' } }, {}, { repeats: 2 });
+  const after = ruledRecord(RULED_REPEAT, { A: { goal: 'pass', rules: 'pass' }, B: { goal: 'fail', rules: 'fail' } }, { parentRunId: RULED_SOURCE }, { repeats: 2, reply: 'another reply' });
+  after.trials = after.trials.filter(trial => trial.repeat === 0);
+  const diff = compareRuns(before, after);
+  assert.equal(diff.comparable, true, diff.notes.join(' '));
+  assert.equal(diff.coverage.validPairs, 2);
+  assert.ok(diff.headline.includes('Частичное сравнение (2/4 пар)'), diff.headline);
+  assert.deepEqual(diff.fixed.map(row => row.scenarioId), ['A'], 'the matched pair decides the card; the missing repeat is disclosed, not a reason to leave it ungraded');
+  assert.deepEqual(diff.unchanged, { passing: 0, failing: 1 });
+  assert.equal(diff.ungraded, 0);
+  // The strict rule on legacy cards behaves the same way (the phase-1 partial comparison).
+  const strictBefore = ruledRecord(RULED_SOURCE, { A: { goal: 'fail', rules: 'none' } }, {}, { repeats: 2 });
+  for (const card of strictBefore.scenarios) card.metrics = [{ ...replyQuality }, { ...simulatorFidelity }];
+  for (const t of strictBefore.trials) t.assessments = [judged('reply_quality', 'fail'), judged('user_fidelity', 'pass')];
+  const strictAfter = structuredClone(strictBefore);
+  strictAfter.id = RULED_REPEAT; strictAfter.parentRunId = RULED_SOURCE;
+  strictAfter.trials = strictAfter.trials.filter(trial => trial.repeat === 0).map(trial => ({ ...trial, events: replied('another reply'), assessments: [judged('reply_quality', 'pass'), judged('user_fidelity', 'pass')] }));
+  const strict = compareRuns(strictBefore, strictAfter);
+  assert.equal(strict.comparable, true, strict.notes.join(' '));
+  assert.deepEqual(strict.fixed.map(row => row.scenarioId), ['A']);
+  assert.ok(!strict.notes.includes(RULE_NOTE), 'a legacy card has no headline rule to name');
 });
