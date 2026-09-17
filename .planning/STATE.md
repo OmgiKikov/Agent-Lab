@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 
 ## Current Position
 
-Phase: 2 (Судья объясняет провалы) — EXECUTING
+Phase: 3 (Согласие человека с судьёй) — next; Phase 2 complete 2026-09-17 (verification human_needed: live Pi walkthrough on draft 37f78e1a deferred)
 Plan: 9 of 9
 Status: Phase complete — ready for verification
 Last activity: 2026-09-17 — Phase 2 execution started
