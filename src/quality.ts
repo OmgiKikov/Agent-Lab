@@ -533,7 +533,9 @@ function causeExample(record: Experiment, trial: Trial): { quote: string; seq?: 
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   const explanation = scenario ? failureExplanation(record, scenario, trial) : null;
   if (!explanation) return { quote: trial.reason };
-  return { quote: explanation.said?.quote ?? UNVERIFIED, ...(explanation.said ? { seq: explanation.said.seq } : {}), explanation };
+  // The explanation keeps the whole reply for the board, which wraps it; the flattened quote is what
+  // the HTML and Markdown reports inline into the cause list, so only that copy is clamped.
+  return { quote: shorten(explanation.said?.quote ?? UNVERIFIED), ...(explanation.said ? { seq: explanation.said.seq } : {}), explanation };
 }
 
 function causes(record: Experiment, v: VerdictSummary): QualityCause[] {

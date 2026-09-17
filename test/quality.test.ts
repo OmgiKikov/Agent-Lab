@@ -703,6 +703,24 @@ test('a cause example that cannot be quoted says so instead of showing a judge r
   assert.ok(!JSON.stringify(q.causes[0]).includes('Агент ошибся'));
 });
 
+test('the flattened cause quote is clamped for the report while the board keeps the whole reply', () => {
+  const long = `Здравствуйте! ${'Разъясняю условия эквайринга по пунктам. '.repeat(40)}`.trim();
+  const failed = trial('t1', 'a', 'fail', 'fail');
+  failed.checks = [];
+  failed.events = [{ seq: 0, type: 'user', text: 'hi' }, { seq: 1, type: 'assistant', text: long }];
+  const q = qualitySummary(record({ scenarios: [scenario('a', false)], trials: [failed],
+    failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
+  const example = q.causes[0]?.example;
+  assert.ok(example, 'the cluster has an example');
+  // The exporters inline this string into one <li>; a multi-thousand-character reply destroys the
+  // cause list the customer reads first.
+  assert.ok(long.length > 1000);
+  assert.ok(example.quote.length <= 221, `the report quote is clamped, got ${example.quote.length}`);
+  assert.equal(example.quote, shorten(long));
+  // The board wraps and shows every word, so the explanation keeps the reply in full.
+  assert.equal(example.explanation?.said?.quote, long);
+});
+
 test('a failed exact check is quoted with its own evidence, not with the explanation', () => {
   const failed = trial('t1', 'a', 'fail', 'fail');
   const q = qualitySummary(record({ scenarios: [scenario('a')], trials: [failed],
