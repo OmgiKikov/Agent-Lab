@@ -374,3 +374,48 @@ test('доказательство провала — строки объясн�
   const agreed: Experiment = { ...record, humanReviews: [quickReview('t-refund', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.')] };
   assert.deepEqual(evidenceOf(agreed, 0, 'goal_attainment'), rows);
 });
+
+test('доказательство успеха: цитата, на которую сослался судья, иначе последняя реплика; строки «Нарушено правило» нет', () => {
+  const passed = (assessments: MetricAssessment[], overrides: Partial<Trial> = {}, requirementIds = ['refund-path', 'no-promises']) =>
+    run([card('ok', { title: 'Возврат прошёл', requirementIds })], [attempt('ok', assessments, overrides)]);
+  const cited = evidenceOf(passed([verdict('goal_attainment', 'pass', { citations: [{ seq: 1, quote: 'Ожидайте, заявка передана специалисту.' }] }),
+    complianceFail(QUOTES_RULE_6)]), 0, 'goal_attainment');
+  assert.deepEqual(rowsToLines(cited), [EXPECTED, SAID, RULE_1, `  ${RULE_6}`]);
+  assert.ok(cited.every(row => row.role !== 'violated' && !row.text.startsWith('Нарушено')), 'a pass never names a violated rule');
+
+  const twoReplies = { events: [
+    { seq: 0, type: 'user' as const, text: 'Как вернуть покупку?' },
+    { seq: 1, type: 'assistant' as const, text: 'Первый ответ.' },
+    { seq: 2, type: 'user' as const, text: 'А подробнее?' },
+    { seq: 3, type: 'assistant' as const, text: 'Второй   ответ\nагента.' },
+  ] };
+  const uncited = evidenceOf(passed([verdict('goal_attainment', 'pass', { evidence: [] })], twoReplies), 0, 'goal_attainment');
+  assert.equal(rowsToLines(uncited)[1], '  Сказал (реплика #3, судья не указал реплику): «Второй ответ агента.»');
+
+  const bad = evidenceOf(passed([verdict('goal_attainment', 'pass', { citations: [{ seq: 1, quote: 'Деньги уже на карте.' }] })]), 0, 'goal_attainment');
+  assert.equal(rowsToLines(bad)[1], `  Сказал (реплика #1): ${UNVERIFIED}`, 'an unverifiable citation is a status row, never a quotation');
+  assert.equal(bad[1]?.role, 'unverified');
+
+  const bare = evidenceOf(passed([verdict('goal_attainment', 'pass')], {}, []), 0, 'goal_attainment');
+  assert.equal(rowsToLines(bare).at(-1), '  Правило: у ситуации нет правила из ваших материалов.');
+  assert.ok(bare.every(row => row.indent === 2));
+
+  const undecided = evidenceOf(passed([verdict('goal_attainment', 'unknown')]), 0, 'goal_attainment');
+  assert.deepEqual(undecided, [], 'no recorded pass or fail, no evidence');
+});
+
+test('варианты объяснения провала попадают в блок согласия без изменений', () => {
+  const variants: Variant[] = [
+    { assessments: [goalFail({ citations: [{ seq: 1, quote: 'Деньги уже на карте.' }] })] },
+    { card: { requirementIds: ['ghost', 'refund-path'] } },
+    { card: { requirementIds: [] } },
+    { card: { requirementIds: ['refund-path', 'refund-money', 'no-promises'] }, assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] },
+    { assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] },
+  ];
+  for (const variant of variants) {
+    const explanation = explainOne(variant);
+    const subject = card('refund', { title: 'Возврат через терминал', requirementIds: ['refund-money', 'refund-path'], ...variant.card });
+    const record = structuredClone(run([subject], [attempt('refund', variant.assessments ?? [goalFail(), verdict('prompt_compliance', 'pass')], variant.trial)]));
+    assert.deepEqual(evidenceOf(record, 0, 'goal_attainment'), explanation.rows.slice(1), JSON.stringify(variant.card ?? variant.assessments));
+  }
+});

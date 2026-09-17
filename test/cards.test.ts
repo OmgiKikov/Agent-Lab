@@ -302,7 +302,10 @@ test('result cards keep model grades, missing grades, traces and human annotatio
   assert.doesNotMatch(html.match(/<section id="why">[\s\S]*?<\/section>/)?.[0] ?? '', /SIMULATOR_FAILURE_SENTINEL/);
   record.phase = 'complete'; record.resultsReviewedAt = record.updatedAt; record.humanReviews = [];
   const reviewed = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 120);
-  assert.match(reviewed.render(120).join('\n'), /Вердикта человека нет/);
+  // UI-SPEC F10: the judge decided the main question, so the agreement block carries the keys and
+  // the «Вердикта человека нет» row is left out.
+  assert.match(reviewed.render(120).join('\n'), /y — согласен · n — не согласен · s — не могу сказать/);
+  assert.doesNotMatch(reviewed.render(120).join('\n'), /Вердикта человека нет/);
   assert.doesNotMatch(reviewed.render(120).join('\n'), /Набор проверен человеком|Разбор набора завершён/);
   reviewed.dispose();
 });
@@ -1262,4 +1265,150 @@ test('в разделе 3 провал читается с доказатель�
   assert.ok(rows.includes(painted('error', 'Судья: ✗ не справился')), 'the judge row is error');
   assert.ok(rows.includes(painted('accent', KEYS)), 'the key row is accent, not bold');
   assert.ok(rows.includes(painted('text', '  Должен был: Время изменилось на 14:00.')), 'an expectation row keeps the phase-2 text token');
+});
+
+/** A block row by its text start; the block is read as the board gets it, before wrapping. */
+const rowOf = (rows: ReturnType<typeof blockOf>, start: string) => rows.find(row => row.text.startsWith(start));
+const STALE = 'Ваша отметка устарела: судья сменился. Отметьте заново: y · n · s';
+const CHANGE = 'Изменить отметку: y согласен · n не согласен · s не могу сказать';
+
+test('успех из выборки и вне её, отметки и устаревшие отметки дают свои строки блока', async () => {
+  const passes = await queueFixture(0, 4, false);
+  const sample = agreementSample(passes);
+  const spare = passes.trials.find(trial => !sample.includes(trial.id))!.id;
+  const sampled = blockOf(passes, sample[0]);
+  assert.equal(rowOf(sampled, 'Проверьте')?.text, 'Проверьте и успех: судья мог ошибочно похвалить.');
+  assert.deepEqual([rowOf(sampled, 'Судья:')?.text, rowOf(sampled, 'Судья:')?.color], ['Судья: ✓ справился', 'success']);
+  assert.ok(!sampled.some(row => row.text.includes('Нарушено правило')));
+  assert.ok(sampled.findIndex(row => row.text.startsWith('Сказал')) < sampled.findIndex(row => row.text.startsWith('Судья:')));
+  assert.equal(blockOf(passes, spare)[2]?.text, 'Судья счёл ситуацию успешной. Проверьте, если сомневаетесь.');
+
+  const record = await judgedFixture('m', 'fail');
+  const withMark = (verdict: 'pass' | 'fail' | 'unknown', note: string, extra: object = {}) => {
+    const copy = structuredClone(record); copy.humanReviews = [{ ...quickMark('m', verdict, 'fail', note), ...extra }]; return blockOf(copy);
+  };
+  const fresh = blockOf(record);
+  assert.deepEqual([rowOf(fresh, 'y — ')?.text, rowOf(fresh, 'y — ')?.color], [KEYS, 'accent']);
+  assert.ok(!rowOf(fresh, 'Ваша отметка'));
+
+  const agreed = withMark('fail', 'Быстрая отметка: согласен с судьёй.');
+  assert.deepEqual([rowOf(agreed, 'Изменить')?.text, rowOf(agreed, 'Изменить')?.color], [CHANGE, 'muted']);
+  assert.deepEqual([rowOf(agreed, 'Ваша отметка')?.text, rowOf(agreed, 'Ваша отметка')?.color], ['Ваша отметка: = согласен', 'success']);
+  assert.ok(!rowOf(agreed, 'y — ') && !rowOf(agreed, 'Причина'), 'an agree mark has no reason row and no first-time keys');
+  assert.ok(!agreed.some(row => row.text.includes('Быстрая отметка')), 'the stored note of a quick mark is never shown');
+
+  const disagreed = withMark('pass', 'Судья   не учёл\n  уточнение клиента.');
+  assert.deepEqual([rowOf(disagreed, 'Ваша отметка')?.text, rowOf(disagreed, 'Ваша отметка')?.color], ['Ваша отметка: ! не согласен', 'warning']);
+  const reason = rowOf(disagreed, 'Причина');
+  assert.deepEqual([reason?.text, reason?.color, reason?.indent], ['Причина: «Судья не учёл уточнение клиента.»', 'text', 2]);
+  assert.equal(disagreed.indexOf(reason!) - disagreed.indexOf(rowOf(disagreed, 'Ваша отметка')!), 1, 'the reason sits under the mark');
+  assert.ok(rowOf(disagreed, 'Изменить'));
+
+  const unsure = withMark('unknown', 'Быстрая отметка: не могу сказать.');
+  assert.deepEqual([rowOf(unsure, 'Ваша отметка')?.text, rowOf(unsure, 'Ваша отметка')?.color], ['Ваша отметка: ~ не могу сказать', 'muted']);
+  assert.ok(rowOf(unsure, 'Изменить'));
+
+  const tampered = withMark('pass', 'Судья не учёл уточнение клиента.', { judge: { protocolHash: 'old-protocol', inputHash: 'old-input' } });
+  const carried = structuredClone(record);
+  carried.sourceEvidence = { runId: 'source-run', trials: structuredClone(record.trials), humanReviews: [quickMark('m', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.')] };
+  for (const [label, stale] of [['judge hash', tampered], ['source run', blockOf(carried)]] as const) {
+    assert.deepEqual([rowOf(stale, 'Ваша отметка устарела')?.text, rowOf(stale, 'Ваша отметка устарела')?.color], [STALE, 'warning'], label);
+    assert.ok(!rowOf(stale, 'y — ') && !rowOf(stale, 'Изменить') && !rowOf(stale, 'Ваша отметка:') && !rowOf(stale, 'Причина'), `${label}: the stale row replaces keys and mark`);
+    assert.ok(stale.findIndex(row => row.text.startsWith('Судья:')) < stale.findIndex(row => row.text === STALE));
+  }
+
+  // Role → token (UI-SPEC «Row role → token»).
+  assert.deepEqual([fresh[0]?.color, fresh[0]?.bold, fresh[1]?.color, fresh[1]?.bold, fresh[2]?.color], ['accent', true, 'text', true, 'muted']);
+  assert.equal(fresh.at(-1)?.text, '', 'one blank row closes the block');
+  assert.ok(!rowOf(fresh, 'y — ')?.bold, 'the key row is not bold');
+});
+
+test('контрольная ситуация и ситуация без решения судьи показывают одну приглушённую строку и не отвечают на y, n, s', async () => {
+  const record = await judgedFixture('c', 'fail');
+  const control = structuredClone(record); control.positiveControlScenarioIds = [control.scenarios[0]!.id];
+  const undecided = structuredClone(record); undecided.trials[0]!.assessments = [{ metricId: 'goal', result: 'unknown', rationale: 'Судья не решил', evidence: [0] }];
+  const unjudged = structuredClone(record); delete unjudged.trials[0]!.assessments;
+  const cases: [Experiment, string][] = [
+    [control, 'Контрольная ситуация — в согласие с судьёй не входит.'],
+    [undecided, 'Судья не вынес решения — отметка согласия не нужна.'],
+    [unjudged, 'Судья не вынес решения — отметка согласия не нужна.'],
+  ];
+  for (const [subject, text] of cases) {
+    assert.deepEqual(blockOf(subject).map(row => [row.text, row.color]), [[text, 'muted']], text);
+    const actions: BoardAction[] = [];
+    const board = new LabBoard({ record: subject, section: 'results' }, theme, a => actions.push(a), () => {}, () => 3000);
+    const cells = bodyCells(board, 100);
+    const first = cells.findIndex(cell => cell.startsWith(text));
+    assert.ok(first >= 0 && cells.findIndex(cell => cell === subject.scenarios[0]!.title) > first, 'the row opens the detail pane');
+    assert.ok(!cells.includes('ПРОВЕРКА СУДЬИ'));
+    assert.ok(cells.some(cell => cell.startsWith('Вердикта человека нет')), 'without the block the row that names v stays');
+    for (const key of ['y', 'n', 's']) board.handleInput(key);
+    assert.deepEqual(actions, [], text);
+    board.dispose();
+  }
+});
+
+test('быстрая отметка не повторяется под ОТДЕЛЬНОЙ ПРОВЕРКОЙ ЧЕЛОВЕКОМ, а доказательство после несогласия то же', async () => {
+  const record = await judgedFixture('q', 'fail');
+  record.humanReviews = [quickMark('q', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.'),
+    { id: 'h-full', trialId: 'q', checkId: 'time', verdict: 'fail', note: 'Полная проверка: запись не переставлена.', createdAt: '2026-09-17T00:00:00.000Z' }];
+  const board = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 3000);
+  const cells = bodyCells(board, 100);
+  board.dispose();
+  const human = cells.indexOf('ОТДЕЛЬНАЯ ПРОВЕРКА ЧЕЛОВЕКОМ');
+  assert.ok(human >= 0);
+  assert.deepEqual(cells.slice(human + 1, human + 3), ['НЕ ПРОЙДЕНО · проверка time', 'Полная проверка: запись не переставлена.']);
+  assert.ok(!cells.includes('Быстрая отметка: согласен с судьёй.'), 'the quick mark is shown by the block only');
+  assert.ok(!cells.some(cell => cell.startsWith('Вердикта человека нет')));
+  const trial = record.trials[0]!;
+  assert.ok(cards.trialLines(trial, record, false).some(row => row.text === 'Быстрая отметка: согласен с судьёй.'), 'other callers still list every review');
+  const bare = structuredClone(record); bare.humanReviews = [];
+  assert.ok(cards.trialLines(bare.trials[0]!, bare, false).some(row => row.text.startsWith('Вердикта человека нет')));
+  assert.ok(!cards.trialLines(bare.trials[0]!, bare, false, true).some(row => row.text.startsWith('Вердикта человека нет')));
+
+  const failed = await failedCard();
+  const evidence = (rows: ReturnType<typeof blockOf>) => rows.slice(3, rows.findIndex(row => row.text.startsWith('Судья:'))).map(row => row.text);
+  const before = evidence(blockOf(failed));
+  assert.ok(before.length >= 2);
+  failed.humanReviews = [{ id: 'q-dis', trialId: 'f0', metricId: 'goal_attainment', source: 'quick', verdict: 'pass', judgeVerdict: 'fail',
+    note: 'Агент поступил верно.', createdAt: '2026-09-17T00:00:00.000Z' }];
+  const after = blockOf(failed);
+  assert.equal(rowOf(after, 'Ваша отметка')?.text, 'Ваша отметка: ! не согласен');
+  assert.deepEqual(evidence(after), before, 'the owner judged the same evidence that is shown after the mark');
+});
+
+test('блок согласия с длинной причиной и управляющей последовательностью помещается в 36–156 колонок без обрезки', async () => {
+  const record = await failedCard();
+  record.scenarios[0]!.title = LONG_TITLE;
+  record.trials[0]!.events[1]!.text = LONG_REPLY;
+  record.trials[0]!.assessments![0]!.citations = [{ seq: 1, quote: LONG_REPLY.trim() }];
+  const reason = `${'Судья не заметил, что агент предложил клиенту перенос записи и дождался подтверждения. '.repeat(3)}\n\n`
+    + `Второй абзац:\x1b[31m ${'клиент получил ответ по существу, и это видно из реплики. '.repeat(3)}`;
+  assert.ok(reason.length > 400);
+  record.humanReviews = [{ id: 'q-long', trialId: 'f0', metricId: 'goal_attainment', source: 'quick', verdict: 'pass', judgeVerdict: 'fail',
+    note: reason, createdAt: '2026-09-17T00:00:00.000Z' }];
+  const block = blockOf(record);
+  const words = (value: string) => value.split(/\s+/).filter(Boolean);
+  const reasonRow = rowOf(block, 'Причина');
+  assert.ok(reasonRow, 'a disagreement shows its reason in the block');
+  assert.deepEqual(words(reasonRow.text), words(`Причина: «${reason.replace('\x1b[31m', '')}»`), 'every word of the reason, in order');
+  for (const width of [36, 56, 76, 106, 156]) {
+    const wrapped = wrapRows(block, width);
+    for (const row of wrapped) assert.ok(visibleWidth(row.text) <= width, `width ${width}: ${visibleWidth(row.text)} > ${width}`);
+    assert.ok(!wrapped.some(row => row.text.includes('…')), `width ${width}: a row was clipped`);
+    assert.ok(!wrapped.some(row => row.text.includes('\x1b')), `width ${width}: an escape byte reached the board`);
+    assert.deepEqual(words(wrapped.map(row => row.text).join(' ')), words(block.map(row => row.text).join(' ')), `width ${width}: words changed`);
+    for (const source of block.filter(row => (row.indent ?? 0) > 0)) {
+      for (const row of wrapRows([source], width).slice(1)) {
+        assert.ok(row.text.startsWith(' '.repeat(source.indent! + 2)) && row.text[source.indent! + 2] !== ' ', `width ${width}: hanging indent lost in «${source.text.slice(0, 20)}»`);
+      }
+    }
+    // The key row sits at column 0, continues at column 2 and breaks only at «·».
+    const keys = wrapRows([rowOf(block, 'y — ')!], width);
+    assert.equal(keys.length, width >= 52 ? 1 : 2, `width ${width}: key row lines`);
+    for (const row of keys.slice(1)) assert.match(row.text, /^ {2}[yns] — /, `width ${width}: key row continuation`);
+    for (const row of keys) assert.match(row.text.trim(), /^[yns] — .*[^·\s]( ·)?$/, `width ${width}: key row breaks at «·»`);
+  }
+  const change = structuredClone(record); change.humanReviews[0]!.verdict = 'fail';
+  for (const row of wrapRows([rowOf(blockOf(change), 'Изменить')!], 36).slice(1)) assert.match(row.text, /^ {2}[ns] /, 'the change hint breaks at «·» too');
 });
