@@ -44,16 +44,18 @@ export function resultHash(record: Experiment): string {
   return fingerprint({ draft: draftHash(record), trials: record.trials, humanReviews: record.humanReviews ?? [] });
 }
 /**
- * What the record claims two runs measured the same way. The control set and the owner-edited
- * expectations belong in it: a control card is excluded from the headline denominator, so two runs
- * marking different controls measure different things even when every scenario is byte-identical.
- * `undefined` drops out of `JSON.stringify`, so a record written before these fields existed keeps
- * its old hash.
+ * What the record claims two runs measured the same way. The control set belongs in it: a control
+ * card is excluded from the headline denominator, so two runs marking different controls measure
+ * different things even when every scenario is byte-identical. `ownerExpectationScenarioIds` does
+ * not: an owner edit rewrites `successCriteria` and the goal rubric, so the card fingerprint — and
+ * with it `scenarios` — already moves; the marker itself is only a label on that change.
+ * `undefined` drops out of `JSON.stringify`, so a record written before the field existed keeps its
+ * old hash.
  */
 export function measurementHash(record: Experiment): string {
   return fingerprint({ version: VERSION, workflow: record.workflow, task: record.task, baseline: record.revisions[0], mode: record.mode, sources: record.sources, requirements: record.requirements, scenarios: record.scenarios, settings: record.settings,
     target: record.target, goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
-    positiveControlScenarioIds: record.positiveControlScenarioIds, ownerExpectationScenarioIds: record.ownerExpectationScenarioIds,
+    positiveControlScenarioIds: record.positiveControlScenarioIds,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
 }
 function revision(spec: Revision['spec'], parentId: string | null, hypothesis: string): Revision {

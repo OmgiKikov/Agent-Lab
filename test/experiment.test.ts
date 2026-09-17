@@ -630,7 +630,7 @@ test('confirming the expectations is recorded as exactly that, and never upgrade
   assert.equal(experimentSchema.parse({ ...result, reviewMode: 'automated' }).reviewMode, 'automated');
 });
 
-test('the manifest covers the control set and the owner-edited expectations, and old records keep their hash', async t => {
+test('the manifest covers the control set but not the owner-expectation label, and old records keep their hash', async t => {
   const { lab } = await setup(t, createDemoRuntime());
   const input = demoInput(); input.workflow = 'evaluate'; input.scenarioCount = 2;
   const created = await lab.create(input); await lab.waitForIdle();
@@ -643,7 +643,8 @@ test('the manifest covers the control set and the owner-edited expectations, and
   assert.notEqual(measurementHash({ ...record, positiveControlScenarioIds: [first] }), base);
   assert.notEqual(measurementHash({ ...record, positiveControlScenarioIds: [first] }),
     measurementHash({ ...record, positiveControlScenarioIds: [second] }));
-  assert.notEqual(measurementHash({ ...record, ownerExpectationScenarioIds: [first] }), base);
+  // The owner-expectation marker is only a label: the edit that sets it already rewrote the card.
+  assert.equal(measurementHash({ ...record, ownerExpectationScenarioIds: [first] }), base);
 
   // A record written before either field existed hashes exactly as it did then.
   const legacy = structuredClone(record);
@@ -855,11 +856,9 @@ test('an exact-check situation keeps the old refusal; the owner marker survives 
   const legacy = structuredClone(edited); delete legacy.ownerExpectationScenarioIds;
   assert.equal(draftHash(legacy), draftHash({ ...legacy, ownerExpectationScenarioIds: undefined }));
   assert.notEqual(draftHash(edited), draftHash(legacy), 'the marker is part of the draft version');
-  // The sheet tells the owner «с прошлыми прогонами не сравнивается», so the manifest must say the
-  // same: an owner-edited expectation is not the measurement the unedited run made.
-  assert.notEqual(measurementHash(edited), measurementHash(legacy), 'the marker changes what is measured');
-  assert.equal(measurementHash(legacy), measurementHash({ ...legacy, ownerExpectationScenarioIds: undefined }),
-    'an old record without the field keeps the manifest hash it had before the field existed');
+  // The edit itself already moved the measurement: it rewrote successCriteria and the goal rubric,
+  // so the card fingerprint changed. The marker is only a label on that change.
+  assert.equal(measurementHash(edited), measurementHash(legacy), 'the marker never changes what is measured');
 
   experimentSchema.parse(legacy);
   assert.throws(() => experimentSchema.parse({ ...edited, ownerExpectationScenarioIds: ['not_a_card'] }), /ситуации этого набора/);
