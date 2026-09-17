@@ -3,6 +3,12 @@
 // Normal runs hide the gateway's own error behind a sanitized message, so this sends the
 // variants directly and prints the HTTP status with the gateway's reply. Needs the same
 // GIGACHAT_* variables as the other live scripts (docs/REFERENCE.md).
+//
+// Step 0 uses the gateway's own POST /v1/functions/validate endpoint (from the official
+// GigaChat B2Bank OpenAPI spec): it checks one function description against GigaChat's JSON
+// Schema subset and returns explicit errors/warnings with a schema_location, no model call
+// spent. Step 1 still sends the variants through real chat completions, because validate only
+// checks a single function in isolation, not how the gateway behaves with two declared at once.
 import assert from 'node:assert/strict';
 import { createGigaTransport, readGigaConfig } from '../../src/giga-transport.js';
 
@@ -35,6 +41,19 @@ const variants: { name: string; specifications: Specification[] }[] = [
   { name: 'two specs, changes as a bare object', specifications: [lookup, update({ type: 'object' })] },
 ];
 
+console.log('--- step 0: POST /v1/functions/validate on each function alone ---');
+const bySpecName = new Map<string, Specification>();
+for (const variant of variants) for (const spec of variant.specifications) bySpecName.set(spec.name, spec);
+for (const spec of bySpecName.values()) {
+  try {
+    const response = await transport('/v1/functions/validate', spec);
+    console.log(JSON.stringify({ function: spec.name, status: response.status, reply: response.text.slice(0, 500) }));
+  } catch (error) {
+    console.log(JSON.stringify({ function: spec.name, error: error instanceof Error ? error.message : String(error) }));
+  }
+}
+
+console.log('--- step 1: full chat/completions with each tool declaration ---');
 for (const variant of variants) {
   const body = {
     model,
