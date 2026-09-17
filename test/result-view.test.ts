@@ -1189,10 +1189,10 @@ test('a disagreement that overturned one half of a double failure names both hal
   assert.equal(verdictRow(judgePassed('fail', 'fail')), '  Судья: справился → владелец: не справился', 'a full overturn of a pass keeps C-62');
   assert.equal(judgePassed('fail', 'pass').headline.text, 'Справился в 0 из 1 проверенной ситуации — 0%.', 'one overturned half is enough to take the pass out of the number');
 
-  // Every new row is plain Russian.
+  // Every new row is plain Russian (the title row is record text, so only our rows are scanned).
   const jargon = /goal_attainment|prompt_compliance|user_fidelity|unknown|рубрик|протокол|кластер|метрик|judge|seq|agree|disagree|unsure|stale|quick/i;
   for (const view of [judgeFailed('fail', 'pass'), judgeFailed('pass', 'unknown'), judgePassed('unknown', 'fail'), doubled([ruledQuick('t-d', GOAL, 'fail', 'fail', false)])]) {
-    for (const line of [...rowsToLines(disagreementRows(view)), ...resultViewLines(view).filter(line => line.startsWith('  Отметки'))]) {
+    for (const line of [...rowsToLines(disagreementRows(view)).filter(line => line.startsWith('  Судья:')), ...resultViewLines(view).filter(line => line.startsWith('  Отметки'))]) {
       assert.doesNotMatch(line, jargon, line);
       assertPlainCopy(line, 'F7');
     }

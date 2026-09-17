@@ -1,5 +1,5 @@
 import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
-import { agentMetricResult, COUNTING_RULES, observedRecord, RULES_METRIC_ID } from './outcomes.js';
+import { agentMetricResult, COUNTING_RULES, GOAL_METRIC_ID, observedRecord, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
 import { cardVerdict, headlineCardOutcome, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
 import { exampleRows, failureExplanation, rowsToLines, violatedRuleNumber, type ExplanationRole, type FailureExplanation } from './explain.js';
@@ -310,7 +310,7 @@ function controlLine(view: ResultView): string {
 function agreementRows(view: ResultView): ResultRow[] {
   const found = view.agreement;
   const queued = found.queueFailures.length + found.sampledPasses.length;
-  if (!queued && !found.checked && !found.unsure && !found.stale) return [];
+  if (!queued && !found.checked && !found.unsure && !found.stale && !found.staleRule) return [];
   const rows: ResultRow[] = [];
   if (!found.checked) rows.push({ role: 'agreement', indent: 0, text: 'Согласие с судьёй: ещё не проверено.' });
   else {
@@ -326,6 +326,8 @@ function agreementRows(view: ResultView): ResultRow[] {
   if (found.checked > 0) rows.push({ role: 'agreement-tail', indent: 2, text: 'Цель — согласие в 9 случаях из 10.' });
   if (found.unsure > 0) rows.push({ role: 'agreement-tail', indent: 2, text: `Человек не смог решить: ${found.unsure}.` });
   if (found.stale > 0) rows.push({ role: 'agreement-tail', indent: 2, text: `Отметки устарели после смены судьи: ${found.stale}.` });
+  // Marks given under the previous counting rule answered another question; they are named, never counted (CTX-21, CTX-28).
+  if (found.staleRule > 0) rows.push({ role: 'agreement-tail', indent: 2, text: `Отметки поставлены по прежнему правилу подсчёта: ${found.staleRule}. Отметьте заново.` });
   return rows;
 }
 
@@ -428,6 +430,32 @@ export interface DisagreementRow { role: DisagreementRole; indent: number; text:
 /** The owner's own words on one row: whitespace runs become one space, nothing is ever cut. */
 const oneLine = (value: string) => value.replace(/\s+/gu, ' ').trim();
 
+/** The owner's side of one headline metric on the F7 row (C-315): the metric after the mark, or that the owner could not tell. */
+const OWNER_PART: Record<string, Record<'pass' | 'fail' | 'unsure', string>> = {
+  [GOAL_METRIC_ID]: { pass: 'запрос выполнен', fail: 'запрос не выполнен', unsure: 'про запрос не уверен' },
+  [RULES_METRIC_ID]: { pass: 'правила промпта соблюдены', fail: 'правила промпта нарушены', unsure: 'про правила промпта не уверен' },
+};
+
+/**
+ * What the owner said about the situation (C-62 / C-315). A full overturn is one word, the
+ * opposite of the judge's. When the owner overturned one of the two metrics that decided the
+ * situation, the verdict word would read absurdly («не справился → не справился»), so the row
+ * names both halves instead: the overturned metric first, then the other one — the judge's side
+ * where the owner agreed, «не уверен» where the owner could not tell (CTX-26).
+ */
+function ownerVerdict(view: ResultView, item: JudgeAgreement['disagreements'][number]): string {
+  if (!item.overturned) return VERDICT_WORD[item.human];
+  const overturned = new Set(item.overturned);
+  const targets = view.agreement.marks.find(mark => mark.trialId === item.trialId)?.targets ?? [];
+  const opposite = item.judge === 'fail' ? 'pass' : 'fail';
+  const part = (target: (typeof targets)[number]) => {
+    const words = OWNER_PART[target.metricId];
+    if (!words) return target.answer === 'disagree' ? VERDICT_WORD[opposite] : VERDICT_WORD[item.judge];
+    return target.answer === 'unsure' ? words.unsure : words[target.answer === 'disagree' ? opposite : item.judge];
+  };
+  return [...targets.filter(target => overturned.has(target.metricId)), ...targets.filter(target => !overturned.has(target.metricId))].map(part).join('; ');
+}
+
 /**
  * The disagreement section (F7): the situations where the owner overturned the judge, in the card
  * order of the record — the title, both verdicts and the owner's reason in full. Only current
@@ -438,7 +466,7 @@ export function disagreementRows(view: ResultView): DisagreementRow[] {
   return view.agreement.disagreements.flatMap((item, i) => [
     ...(i ? [{ role: 'blank' as const, indent: 0, text: '' }] : []),
     { role: 'dis-title' as const, indent: 0, text: `! ${item.title}` },
-    { role: 'dis-verdicts' as const, indent: 2, text: `Судья: ${VERDICT_WORD[item.judge]} → владелец: ${VERDICT_WORD[item.human]}` },
+    { role: 'dis-verdicts' as const, indent: 2, text: `Судья: ${VERDICT_WORD[item.judge]} → владелец: ${ownerVerdict(view, item)}` },
     { role: 'dis-reason' as const, indent: 2, text: `Причина: «${oneLine(item.note)}»` },
   ]);
 }
