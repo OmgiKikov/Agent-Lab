@@ -44,10 +44,17 @@ export function primaryMetricId(scenario: Scenario | undefined, trial: Trial): s
   return agent.find(m => result(m.id) === 'fail')?.id ?? agent.find(m => result(m.id) === 'pass')?.id;
 }
 
-/** Rubric outcomes stay separate from objective checks everywhere they are presented. A human verdict on a criterion is authoritative. */
+/**
+ * Rubric outcomes stay separate from objective checks everywhere they are presented. A human
+ * verdict on a criterion is authoritative — except a one-key «не могу сказать», which is doubt,
+ * not a verdict: it leaves the judge's own result in place, so the owner's hesitation can never
+ * quietly take a failure out of the headline. A full review that says `unknown` still overrides.
+ */
 export function agentMetricResult(trial: Trial, metricId: string, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
-  const human = latestHumanReviews({ trials: [trial], humanReviews: reviews }).get(`${trial.id}|metric:${metricId}`)?.verdict;
-  return human === 'invalid' ? undefined : human ?? trial.assessments?.find(a => a.metricId === metricId)?.result;
+  const human = latestHumanReviews({ trials: [trial], humanReviews: reviews }).get(`${trial.id}|metric:${metricId}`);
+  const recorded = trial.assessments?.find(a => a.metricId === metricId)?.result;
+  if (human?.source === 'quick' && human.verdict === 'unknown') return recorded;
+  return human?.verdict === 'invalid' ? undefined : human?.verdict ?? recorded;
 }
 
 export function agentRubricResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
@@ -62,12 +69,12 @@ export function isAgentFailure(record: Experiment, trial: Trial): boolean {
   return measurementUsable(scenario, trial, record.humanReviews) && (trial.outcome === 'fail'
     || agentRubricResult(scenario, trial, record.humanReviews) === 'fail');
 }
-/** A candidate cannot be accepted on a partially scored agent rubric. */
+/** A candidate cannot be accepted on a partially scored agent rubric. A quick «не могу сказать» is skipped here too: the judge's recorded result still decides. */
 export function trialAssessmentComplete(scenario: Scenario, trial: Trial, reviews: HumanReview[] = []): boolean {
   const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
   return measurementUsable(scenario, trial, reviews) && (scenario.metrics ?? []).filter(m => m.subject === 'agent')
-    .every(m => { const human = latest.get(`${trial.id}|metric:${m.id}`)?.verdict;
-      if (human) return human !== 'unknown';
+    .every(m => { const human = latest.get(`${trial.id}|metric:${m.id}`);
+      if (human && !(human.source === 'quick' && human.verdict === 'unknown')) return human.verdict !== 'unknown';
       const result = trial.assessments?.find(a => a.metricId === m.id)?.result;
       return result === 'pass' || result === 'fail'; });
 }

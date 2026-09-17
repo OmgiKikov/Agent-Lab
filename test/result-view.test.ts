@@ -190,7 +190,12 @@ test('CLI summary prints the ResultView block first, from the built dist', { tim
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test('a quick mark saved by the lab shows as the agreement row in the CLI summary', { timeout: 20000 }, async () => {
+/**
+ * One quick mark on the failed situation `t-fail0` of a freshly stored acquiring run, written
+ * through the lab (which stamps the judgment it answers), then read back out of the spawned CLI.
+ * Each call uses its own store, so the three marks below never see one another.
+ */
+async function quickMarked(verdict: HumanReview['verdict'], note: string): Promise<{ block: string[]; stored: Experiment }> {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-agreement-'));
   try {
     const record = acquiringShape();
@@ -202,7 +207,7 @@ test('a quick mark saved by the lab shows as the agreement row in the CLI summar
     await lab.init();
     try {
       await lab.addHumanReview(record.id, { trialId: 't-fail0', metricId: 'goal_attainment', source: 'quick',
-        verdict: 'fail', judgeVerdict: 'fail', note: 'Быстрая отметка: согласен с судьёй.', durationMs: 1200 });
+        verdict, judgeVerdict: 'fail', note, durationMs: 1200 });
     } finally { await lab.close(); }
     const reader = new ExperimentStore(directory);
     await reader.init();
@@ -215,14 +220,46 @@ test('a quick mark saved by the lab shows as the agreement row in the CLI summar
     const code = await new Promise<number | null>(resolve => child.on('close', resolve));
     assert.equal(code, 0, stderr);
     const lines = stdout.split('\n');
-    const block = lines.slice(0, lines.indexOf(''));
-    assert.ok(block.includes('Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы: 1 из 1 · успехи ещё не проверены).'), block.join('\n'));
-    assert.ok(block.includes('  Цель — согласие в 9 случаях из 10.'), block.join('\n'));
-    assert.deepEqual(block, resultViewLines(buildResultView(stored), { details: true }));
-    const view = buildResultView(stored);
-    assert.equal(view.agreement.queueFailures.length, 11, '9 failed goals plus the unmeasured deviated0 and unclear0');
-    assert.deepEqual(view.agreement.sampledPasses, ['t-deviated1'], 'the single recorded pass is the whole sample');
+    return { block: lines.slice(0, lines.indexOf('')), stored };
   } finally { await rm(directory, { recursive: true, force: true }); }
+}
+
+test('a quick mark saved by the lab shows as the agreement row in the CLI summary', { timeout: 20000 }, async () => {
+  const { block, stored } = await quickMarked('fail', 'Быстрая отметка: согласен с судьёй.');
+  assert.equal(block[0], ACQUIRING_BLOCK[0], 'agreeing with the judge leaves the number where it was');
+  assert.ok(block.includes('Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы: 1 из 1 · успехи ещё не проверены).'), block.join('\n'));
+  assert.ok(block.includes('  Цель — согласие в 9 случаях из 10.'), block.join('\n'));
+  assert.deepEqual(block, resultViewLines(buildResultView(stored), { details: true }));
+  const view = buildResultView(stored);
+  assert.equal(view.agreement.queueFailures.length, 11, '9 failed goals plus the unmeasured deviated0 and unclear0');
+  assert.deepEqual(view.agreement.sampledPasses, ['t-deviated1'], 'the single recorded pass is the whole sample');
+});
+
+test('a quick «не согласен» moves the headline and is counted against the judge', { timeout: 20000 }, async () => {
+  const { block, stored } = await quickMarked('pass', 'Проверка: судья не учёл уточнение клиента.');
+  assert.equal(block[0], 'Справился в 1 из 9 проверенных ситуаций — 11%.');
+  assert.ok(block.includes('Согласие с судьёй: 0 из 1 проверенных · мало проверок (провалы: 0 из 1 · успехи ещё не проверены).'), block.join('\n'));
+  assert.deepEqual(block, resultViewLines(buildResultView(stored), { details: true }));
+  const view = buildResultView(stored);
+  assert.equal(view.agreement.failures.checked, 1);
+  assert.equal(view.agreement.failures.agreed, 0);
+  assert.deepEqual(view.agreement.disagreements.map(item => item.trialId), ['t-fail0']);
+});
+
+test('a quick «не могу сказать» leaves the judge failure in the number and only counts itself', { timeout: 20000 }, async () => {
+  const { block, stored } = await quickMarked('unknown', 'Быстрая отметка: не могу сказать.');
+  assert.equal(block[0], ACQUIRING_BLOCK[0], 'the owner’s doubt does not remove a failure from the number');
+  // The whole first block is the untouched acquiring block plus the one tail row the mark earns.
+  assert.deepEqual(resultViewLines(buildResultView(stored)),
+    [...ACQUIRING_BLOCK.slice(0, -1), '  Человек не смог решить: 1.', ACQUIRING_BLOCK.at(-1)!]);
+  assert.ok(block.includes('Согласие с судьёй: ещё не проверено.'), block.join('\n'));
+  assert.ok(block.includes('  Человек не смог решить: 1.'), block.join('\n'));
+  assert.ok(!block.some(line => line.includes('человек не смог решить')), 'the card keeps the judge verdict, so it has no such reason');
+  assert.deepEqual(block, resultViewLines(buildResultView(stored), { details: true }));
+  const view = buildResultView(stored);
+  assert.equal(view.agreement.unsure, 1);
+  assert.equal(view.agreement.checked, 0, 'doubt is not a check');
+  assert.deepEqual(view.agreement.disagreements, []);
 });
 
 // ---- One test per not-measured reason: a minimal card that yields exactly that code. ----

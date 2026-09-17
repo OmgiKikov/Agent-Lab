@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { emptyUsage, RAG_METRIC_IDS, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
-import { agentRubricResult, automaticTrialResult, latestHumanReviews, primaryMetricId, trialAssessmentComplete } from '../src/outcomes.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, latestHumanReviews, primaryMetricId, trialAssessmentComplete } from '../src/outcomes.js';
 
 const rubric = (id: string) => ({
   id, name: id, subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f',
@@ -90,6 +90,37 @@ test('the primary metric is the goal, else the first failed agent rubric, else t
   const [ragId] = [...RAG_METRIC_IDS];
   assert.ok(ragId);
   assert.equal(primaryMetricId(card(['a']), judged(['a', 'pass'], [ragId, 'fail'])), 'a', 'a RAG diagnostic is never the primary metric');
+});
+
+test('a quick «не могу сказать» leaves the judge result in place, a full one still overrides it', () => {
+  const failedGoal: Trial = { ...trial, assessments: [
+    { metricId: 'goal_attainment', result: 'fail', rationale: 'клиент остался без ответа', evidence: [1] },
+    { metricId: 'prompt_compliance', result: 'pass', rationale: 'правила соблюдены', evidence: [1] },
+  ] };
+  const quick = (verdict: HumanReview['verdict'], at = '2026-09-15T10:00:00Z'): HumanReview =>
+    ({ ...review(verdict, 'goal_attainment', at), source: 'quick', judgeVerdict: 'fail' });
+
+  // A one-key «не могу сказать» is doubt, not a verdict: the judge's failure stays in the number.
+  assert.equal(agentMetricResult(failedGoal, 'goal_attainment', [quick('unknown')]), 'fail');
+  assert.equal(agentRubricResult(scenario, failedGoal, [quick('unknown')]), 'fail');
+  assert.equal(automaticTrialResult(scenario, failedGoal, [quick('unknown')]), 'fail');
+  assert.equal(trialAssessmentComplete(scenario, failedGoal, [quick('unknown')]), true);
+
+  // A full review that says «не могу сказать» works exactly as before: the card loses its verdict.
+  const full = review('unknown', 'goal_attainment');
+  assert.equal(agentMetricResult(failedGoal, 'goal_attainment', [full]), 'unknown');
+  assert.equal(agentRubricResult(scenario, failedGoal, [full]), 'unknown');
+  assert.equal(trialAssessmentComplete(scenario, failedGoal, [full]), false);
+
+  // A decided quick mark still overrides the judge in both directions.
+  assert.equal(agentMetricResult(failedGoal, 'goal_attainment', [quick('pass')]), 'pass');
+  assert.equal(agentRubricResult(scenario, failedGoal, [quick('pass')]), 'pass');
+  assert.equal(agentMetricResult(trial, 'goal_attainment', [{ ...quick('fail'), judgeVerdict: 'pass' }]), 'fail');
+
+  // The latest review wins, and a quick unsure falls back to the judge, not to the earlier human verdict.
+  assert.equal(agentMetricResult(failedGoal, 'goal_attainment', [
+    review('pass', 'goal_attainment'), quick('unknown', '2026-09-15T11:00:00Z'),
+  ]), 'fail');
 });
 
 test('a quick mark supersedes and is superseded on its own key like any other review', () => {

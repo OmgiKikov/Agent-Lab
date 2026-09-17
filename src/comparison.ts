@@ -1,7 +1,7 @@
 import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
-import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, measured, measurementUsable, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, measured, measurementUsable, observedRecord, primaryMetricId, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
 /*
@@ -563,7 +563,9 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, goal
   const result = agentMetricResult(trial, goalId, record.humanReviews);
   if (result === 'pass' || result === 'fail') return codes;
   const assessment = trial.assessments?.find(a => a.metricId === goalId);
-  if (latest.get(`${trial.id}|metric:${goalId}`)?.verdict === 'unknown') codes.push('human_unknown');
+  // A one-key «не могу сказать» leaves the judge's verdict in place, so it is never the reason a card has none.
+  const goalReview = latest.get(`${trial.id}|metric:${goalId}`);
+  if (goalReview?.verdict === 'unknown' && goalReview.source !== 'quick') codes.push('human_unknown');
   else if (!assessment) codes.push('not_judged');
   else if (assessment.rationale.startsWith(SPLIT_RATIONALE_PREFIX)) codes.push('judge_split');
   // Agreed votes carry a prefix, so the unsupported-goal sentence is matched anywhere.
