@@ -608,6 +608,28 @@ test('goal observation is part of the existing full draft hash while legacy draf
   assert.notEqual(draftHash(toolDraft), draftHash(edited));
 });
 
+test('the manifest covers the control set and the owner-edited expectations, and old records keep their hash', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const input = demoInput(); input.workflow = 'evaluate'; input.scenarioCount = 2;
+  const created = await lab.create(input); await lab.waitForIdle();
+  const record = await lab.get(created.id);
+  const base = measurementHash(record);
+  const [first, second] = record.scenarios.map(scenario => scenario.id) as [string, string];
+
+  // A control card leaves the headline denominator, so two runs marking different controls did not
+  // measure the same thing even when every scenario is byte-identical.
+  assert.notEqual(measurementHash({ ...record, positiveControlScenarioIds: [first] }), base);
+  assert.notEqual(measurementHash({ ...record, positiveControlScenarioIds: [first] }),
+    measurementHash({ ...record, positiveControlScenarioIds: [second] }));
+  assert.notEqual(measurementHash({ ...record, ownerExpectationScenarioIds: [first] }), base);
+
+  // A record written before either field existed hashes exactly as it did then.
+  const legacy = structuredClone(record);
+  delete (legacy as Partial<Experiment>).positiveControlScenarioIds;
+  delete (legacy as Partial<Experiment>).ownerExpectationScenarioIds;
+  assert.equal(measurementHash(legacy), base);
+});
+
 test('accepting a draft records exact one-test review metadata without granting execution authority', async t => {
   const runtime = createDemoRuntime();
   let runtimeCalls = 0;
@@ -811,7 +833,11 @@ test('an exact-check situation keeps the old refusal; the owner marker survives 
   const legacy = structuredClone(edited); delete legacy.ownerExpectationScenarioIds;
   assert.equal(draftHash(legacy), draftHash({ ...legacy, ownerExpectationScenarioIds: undefined }));
   assert.notEqual(draftHash(edited), draftHash(legacy), 'the marker is part of the draft version');
-  assert.equal(measurementHash(edited), measurementHash(legacy), 'the marker never changes what is measured');
+  // The sheet tells the owner «с прошлыми прогонами не сравнивается», so the manifest must say the
+  // same: an owner-edited expectation is not the measurement the unedited run made.
+  assert.notEqual(measurementHash(edited), measurementHash(legacy), 'the marker changes what is measured');
+  assert.equal(measurementHash(legacy), measurementHash({ ...legacy, ownerExpectationScenarioIds: undefined }),
+    'an old record without the field keeps the manifest hash it had before the field existed');
 
   experimentSchema.parse(legacy);
   assert.throws(() => experimentSchema.parse({ ...edited, ownerExpectationScenarioIds: ['not_a_card'] }), /ситуации этого набора/);
@@ -1890,7 +1916,12 @@ test('a positive control rides on the record: hashes and card identity unchanged
     assert.deepEqual({ ...card, user: rest }, { ...reference, user: referenceRest });
   }
   assert.equal(draftHash(await lab.get(source.id)), sourceHash, 'the stored source keeps its draft hash');
-  assert.equal(measurementHash(controlled), measurementHash({ ...controlled, positiveControlScenarioIds: undefined }));
+  // A control leaves the headline denominator, so two runs with different control sets did not
+  // measure the same thing; the manifest hash is the record's own claim that they did.
+  assert.notEqual(measurementHash(controlled), measurementHash({ ...controlled, positiveControlScenarioIds: undefined }),
+    'the manifest sees the control set');
+  assert.equal(measurementHash(source), measurementHash({ ...source, positiveControlScenarioIds: undefined }),
+    'an old record without the field keeps the manifest hash it had before the field existed');
   assert.notEqual(draftHash(controlled), draftHash({ ...controlled, positiveControlScenarioIds: undefined }), 'the draft hash sees the marker');
 
   await lab.start(controlled.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(controlled) }); await lab.waitForIdle();

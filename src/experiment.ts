@@ -43,9 +43,17 @@ export function draftHash(record: Experiment): string {
 export function resultHash(record: Experiment): string {
   return fingerprint({ draft: draftHash(record), trials: record.trials, humanReviews: record.humanReviews ?? [] });
 }
+/**
+ * What the record claims two runs measured the same way. The control set and the owner-edited
+ * expectations belong in it: a control card is excluded from the headline denominator, so two runs
+ * marking different controls measure different things even when every scenario is byte-identical.
+ * `undefined` drops out of `JSON.stringify`, so a record written before these fields existed keeps
+ * its old hash.
+ */
 export function measurementHash(record: Experiment): string {
   return fingerprint({ version: VERSION, workflow: record.workflow, task: record.task, baseline: record.revisions[0], mode: record.mode, sources: record.sources, requirements: record.requirements, scenarios: record.scenarios, settings: record.settings,
     target: record.target, goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
+    positiveControlScenarioIds: record.positiveControlScenarioIds, ownerExpectationScenarioIds: record.ownerExpectationScenarioIds,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
 }
 function revision(spec: Revision['spec'], parentId: string | null, hypothesis: string): Revision {
