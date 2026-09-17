@@ -1,6 +1,6 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 2
+current_phase: 3
 current_phase_name: Согласие человека с судьёй
 status: executing
 stopped_at: Completed 03-01-PLAN.md
