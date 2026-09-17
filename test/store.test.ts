@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import test, { type TestContext } from 'node:test';
 import { ExperimentStore } from '../src/store.js';
-import { ExperimentLab } from '../src/experiment.js';
-import { demoEvaluationInput } from '../src/demo.js';
-import type { JudgeAudit } from '../src/contracts.js';
+import { ExperimentLab, draftHash } from '../src/experiment.js';
+import { createDemoRuntime, demoEvaluationInput } from '../src/demo.js';
+import { createInputSchema, type JudgeAudit } from '../src/contracts.js';
 
 async function directory(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'agent-lab-store-'));
@@ -160,4 +160,30 @@ test('judge audit sidecar rejects unsafe ids before touching the disk and oversi
   await assert.rejects(new ExperimentStore(dir).readJudgeAudit('big', 'trial'), /Judge audit exceeds 20 MB/);
   await writeFile(join(dir, 'big.judge', 'trial.json'), JSON.stringify({ ...audit('x'), extra: true }));
   await assert.rejects(new ExperimentStore(dir).readJudgeAudit('big', 'trial'));
+});
+
+test('a quick agreement mark survives a reload with its judge verdict and judge version', async t => {
+  const dir = await directory(t);
+  const lab = new ExperimentLab(dir, createDemoRuntime());
+  await lab.init();
+  const base = demoEvaluationInput();
+  const created = await lab.create(createInputSchema.parse({ ...base, scenarioCount: 1, settings: { ...base.settings, repeats: 1 } }));
+  await lab.waitForIdle();
+  await lab.start(created.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(created.id)) });
+  await lab.waitForIdle();
+  const record = await lab.get(created.id);
+  const trial = record.trials[0]!;
+  const scenario = record.scenarios.find(candidate => candidate.id === trial.scenarioId)!;
+  const metricId = scenario.metrics.find(metric => metric.subject === 'agent')!.id;
+  const mark = { id: 'mark-1', createdAt: '2026-09-17T00:00:00Z', trialId: trial.id, metricId,
+    verdict: 'fail' as const, note: 'Согласен с судьёй.', durationMs: 1200,
+    source: 'quick' as const, judgeVerdict: 'fail' as const, judge: { protocolHash: 'protocol-10', inputHash: 'input-1' } };
+  record.humanReviews = [mark];
+  await lab.store.save(record);
+  await lab.close();
+
+  const reopened = new ExperimentStore(dir);
+  await reopened.init();
+  t.after(() => reopened.close());
+  assert.deepEqual((await reopened.get(record.id)).humanReviews, [mark], 'every new field reads back unchanged');
 });

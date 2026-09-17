@@ -103,6 +103,22 @@ test('old experiment files load with defaults for workflow, human reviews, targe
   assert.equal(experimentSchema.safeParse({ ...legacy, acceptedTests: [accepted, { ...accepted, scenarioId: 'scenario_2' }] }).success, false);
 });
 
+test('a quick agreement mark extends the review schema and old reviews still parse unchanged', () => {
+  const legacy = { trialId: 't1', metricId: 'goal_attainment', verdict: 'fail' as const, note: 'разбор без новых полей' };
+  assert.deepEqual(humanReviewInputSchema.parse(legacy), legacy, 'an old review parses to an equal object');
+  const quick = { ...legacy, source: 'quick' as const, judgeVerdict: 'fail' as const, judge: { protocolHash: 'p', inputHash: 'i' } };
+  assert.deepEqual(humanReviewInputSchema.parse(quick), quick);
+  assert.ok(humanReviewInputSchema.safeParse({ ...quick, verdict: 'unknown' }).success, '«не могу сказать» is a quick answer');
+  const { metricId: _withoutMetric, ...noMetric } = quick;
+  assert.equal(humanReviewInputSchema.safeParse(noMetric).success, false, 'a quick mark always names one rubric');
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, verdict: 'invalid' }).success, false, '«ошибочный тест» is not an agreement answer');
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, checkId: 'state' }).success, false);
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, source: 'board' }).success, false);
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, judgeVerdict: 'invalid' }).success, false);
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, judge: { protocolHash: 'p', inputHash: 'i', model: 'm' } }).success, false);
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, mood: 'good' }).success, false, 'the object stays strict');
+});
+
 test('only a whole-dialogue verdict can mark an explicit complete review', () => {
   const legacy = { trialId: 't1', verdict: 'unknown' as const, note: '#1: legacy review' };
   const complete = { ...legacy, reviewedDialogue: true as const };

@@ -1988,3 +1988,92 @@ test('a positive control rides on the record: hashes and card identity unchanged
   assert.deepEqual((await lab.repeat(ran.id, [a])).positiveControlScenarioIds, [a]);
 });
 
+
+/**
+ * A finished one-card run whose goal rubric the judge decided, with a sealed receipt on the trial.
+ * `judge: 'audit'` keeps the legacy full audit instead; `judge: 'none'` leaves the trial unjudged
+ * (the demo path), so the lab has no version to record.
+ */
+async function agreementRecord(lab: ExperimentLab, goal: 'pass' | 'fail' | 'unknown' = 'fail', judge: 'receipt' | 'audit' | 'none' = 'receipt') {
+  const base = demoEvaluationInput();
+  const created = await lab.create(createInputSchema.parse({ ...base, scenarioCount: 1, settings: { ...base.settings, userModes: ['reactive'], repeats: 1 } }));
+  await lab.waitForIdle();
+  await lab.start(created.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(created.id)) }); await lab.waitForIdle();
+  const record = await lab.get(created.id);
+  const trial = record.trials[0]!;
+  const scenario = record.scenarios.find(candidate => candidate.id === trial.scenarioId)!;
+  record.scenarios = [scenario]; record.trials = [trial]; record.humanReviews = [];
+  const criterion = (id: string) => ({ id, name: id, subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' });
+  scenario.metrics = [criterion('goal_attainment'), criterion('prompt_compliance')];
+  trial.checks = [];
+  const seq = trial.events[0]!.seq;
+  trial.assessments = [
+    { metricId: 'goal_attainment', result: goal, rationale: 'r', evidence: goal === 'unknown' ? [] : [seq] },
+    { metricId: 'prompt_compliance', result: 'pass', rationale: 'r', evidence: [seq] },
+  ];
+  delete trial.judgeReceipt; delete trial.judgeAudit;
+  if (judge === 'receipt') {
+    trial.judgeReceipt = { protocolHash: 'protocol-10', inputHash: 'input-1', provider: 'openrouter', model: 'judge',
+      auditHash: 'audit-1', votes: [{ metricId: 'goal_attainment', result: goal }], notApplicable: [], complete: true };
+  }
+  if (judge === 'audit') {
+    trial.judgeAudit = { protocolHash: 'protocol-10', inputHash: 'input-1', provider: 'openrouter', model: 'judge',
+      prompt: 'p', input: 'i', attempts: [{ startedAt: 'now', assessments: trial.assessments }], notApplicable: [] };
+  }
+  await lab.store.save(record);
+  return { record, trial, scenario };
+}
+
+test('the lab, not the caller, records which judgment a quick mark refers to', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const { record, trial } = await agreementRecord(lab, 'fail');
+  const before = await lab.get(record.id);
+  const measured = measurementHash(before);
+  const results = resultHash(before);
+
+  await assert.rejects(lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'fail', note: 'не главная оценка' }),
+    /^Error: Отметку согласия можно поставить только на главную оценку ситуации\.$/);
+  await assert.rejects(lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'pass', judgeVerdict: 'pass', note: 'судья менялся' }),
+    /^Error: Оценка судьи изменилась, пока вы смотрели\. Проверьте ситуацию ещё раз\.$/);
+
+  const saved = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail',
+    judge: { protocolHash: 'подделка', inputHash: 'подделка' }, note: 'Согласен с судьёй.', durationMs: 1200 });
+  const mark = saved.humanReviews.at(-1)!;
+  assert.equal(mark.source, 'quick');
+  assert.equal(mark.judgeVerdict, 'fail', 'the recorded judge result, not the caller value');
+  assert.deepEqual(mark.judge, { protocolHash: 'protocol-10', inputHash: 'input-1' }, 'a forged judge version is replaced by the trial receipt');
+  assert.equal(mark.durationMs, 1200);
+  assert.equal(saved.phase, 'results_review');
+  assert.equal(measurementHash(saved), measured, 'a mark never changes what was measured');
+  assert.notEqual(resultHash(saved), results, 'a mark does change the result');
+
+  const plain = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'prompt_compliance', verdict: 'fail', note: 'обычный разбор' });
+  const second = plain.humanReviews.at(-1)!;
+  assert.equal(second.source, undefined, 'a full review is not an agreement mark');
+  assert.equal(second.judgeVerdict, 'pass', 'every metric review keeps the judgment it argues with');
+  assert.deepEqual(second.judge, { protocolHash: 'protocol-10', inputHash: 'input-1' });
+});
+
+test('a mark takes its judge version from the legacy audit, and none when the trial was never judged', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const audited = await agreementRecord(lab, 'fail', 'audit');
+  const withAudit = await lab.addHumanReview(audited.record.id, { trialId: audited.trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'pass', note: 'Не согласен.' });
+  assert.deepEqual(withAudit.humanReviews.at(-1)!.judge, { protocolHash: 'protocol-10', inputHash: 'input-1' });
+
+  const bare = await agreementRecord(lab, 'fail', 'none');
+  const withoutJudge = await lab.addHumanReview(bare.record.id, { trialId: bare.trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail',
+    judge: { protocolHash: 'выдумка', inputHash: 'выдумка' }, note: 'Согласен.' });
+  const mark = withoutJudge.humanReviews.at(-1)!;
+  assert.equal('judge' in mark, false, 'no receipt and no audit means no judge version to store');
+  assert.equal(mark.judgeVerdict, 'fail');
+});
+
+test('a quick mark on a judgment the judge never made is refused', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const { record, trial } = await agreementRecord(lab, 'unknown');
+  await assert.rejects(lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail', note: 'соглашаться не с чем' }),
+    /^Error: Судья не вынес решения по этой ситуации — соглашаться не с чем\.$/);
+  // The same undecided rubric still takes a full human verdict: only the one-key answer needs a judgment.
+  const reviewed = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'goal_attainment', verdict: 'fail', note: 'разобрал сам' });
+  assert.equal(reviewed.humanReviews.at(-1)!.judgeVerdict, 'unknown');
+});

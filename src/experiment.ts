@@ -15,6 +15,7 @@ import { preflightTarget, readPrompt, runRelease } from './targets.js';
 const GOAL_BATCH = 8;
 /** Dialogues a run may hold open against the target at once. */
 export const MAX_PARALLEL = 16;
+import { primaryMetricId } from './outcomes.js';
 import { simulatorChecks } from './simulator.js';
 import { goalObservationDefault, withDefaultGoalObservation } from './normalize.js';
 import { validationDialogueIssue } from './imports.js';
@@ -960,6 +961,20 @@ export class ExperimentLab {
       if (input.checkId && !objectiveCheck && !simulatorCheck) throw new Error('Такой объективной проверки или проверки симулятора в этом диалоге нет.');
       const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
       if (input.metricId && (!scenario || !assessmentRubrics(scenario, trial).some(m => m.id === input.metricId))) throw new Error('Такой рубрики в этой карточке нет.');
+      if (input.metricId) {
+        const recorded = trial.assessments?.find(a => a.metricId === input.metricId)?.result;
+        const judged = trial.judgeReceipt ?? trial.judgeAudit;
+        // A one-key mark is an answer to one judgment, so it is refused when there is no single
+        // judgment to answer, and when the judgment moved while the person was looking at it.
+        if (input.source === 'quick') {
+          if (input.metricId !== primaryMetricId(scenario, trial)) throw new Error('Отметку согласия можно поставить только на главную оценку ситуации.');
+          if (recorded !== 'pass' && recorded !== 'fail') throw new Error('Судья не вынес решения по этой ситуации — соглашаться не с чем.');
+          if (input.judgeVerdict !== undefined && input.judgeVerdict !== recorded) throw new Error('Оценка судьи изменилась, пока вы смотрели. Проверьте ситуацию ещё раз.');
+        }
+        // What the verdict argues with is read from the trial; a caller value is never kept.
+        if (recorded) input.judgeVerdict = recorded; else delete input.judgeVerdict;
+        if (judged) input.judge = { protocolHash: judged.protocolHash, inputHash: judged.inputHash }; else delete input.judge;
+      }
       (record.humanReviews ??= []).push({ ...input, id: randomUUID(), createdAt: new Date().toISOString() });
       delete record.resultsReviewedAt; delete record.resultsReviewHash;
       await this.checkpoint(record, 'results_review', 'Human annotation saved separately from the original assessment.');

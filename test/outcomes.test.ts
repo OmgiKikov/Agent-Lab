@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { emptyUsage, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
-import { agentRubricResult, automaticTrialResult, latestHumanReviews, trialAssessmentComplete } from '../src/outcomes.js';
+import { emptyUsage, RAG_METRIC_IDS, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
+import { agentRubricResult, automaticTrialResult, latestHumanReviews, primaryMetricId, trialAssessmentComplete } from '../src/outcomes.js';
 
 const rubric = (id: string) => ({
   id, name: id, subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f',
@@ -71,4 +71,30 @@ test('persisted append order determines the latest review even when timestamps m
     { id: 'whole-newer', trialId: trial.id, verdict: 'unknown', note: '#1: revised', createdAt: '2026-09-15T09:00:00Z' },
   ] }).get(`${trial.id}|dialogue`);
   assert.equal(whole?.reviewedDialogue, undefined, 'a newer unmarked whole-dialogue review revokes the marker');
+});
+
+test('the primary metric is the goal, else the first failed agent rubric, else the first passed one', () => {
+  const card = (ids: string[]): Scenario => ({ ...scenario, metrics: ids.map(rubric) });
+  const judged = (...rows: [string, 'pass' | 'fail' | 'unknown'][]): Trial =>
+    ({ ...trial, assessments: rows.map(([metricId, result]) => ({ metricId, result, rationale: 'r', evidence: [] })) });
+
+  assert.equal(primaryMetricId(scenario, trial), 'goal_attainment', 'the goal wins even when another rubric failed');
+  assert.equal(primaryMetricId(card(['a', 'b']), judged(['a', 'pass'], ['b', 'fail'])), 'b');
+  assert.equal(primaryMetricId(card(['a', 'b']), judged(['a', 'pass'], ['b', 'pass'])), 'a');
+  assert.equal(primaryMetricId(card(['a', 'b']), judged(['a', 'unknown'], ['b', 'unknown'])), undefined);
+  assert.equal(primaryMetricId(card(['a']), { ...trial, assessments: undefined }), undefined);
+  assert.equal(primaryMetricId(undefined, trial), undefined);
+
+  const simulatorOnly: Scenario = { ...scenario, metrics: [{ ...rubric('user_fidelity'), subject: 'simulator' }] };
+  assert.equal(primaryMetricId(simulatorOnly, judged(['user_fidelity', 'fail'])), undefined, 'the simulator rubric is not the main judgment');
+  const [ragId] = [...RAG_METRIC_IDS];
+  assert.ok(ragId);
+  assert.equal(primaryMetricId(card(['a']), judged(['a', 'pass'], [ragId, 'fail'])), 'a', 'a RAG diagnostic is never the primary metric');
+});
+
+test('a quick mark supersedes and is superseded on its own key like any other review', () => {
+  const quick = (verdict: HumanReview['verdict'], at: string): HumanReview =>
+    ({ ...review(verdict, 'goal_attainment', at), source: 'quick', judgeVerdict: 'pass' });
+  const latest = latestHumanReviews({ trials: [trial], humanReviews: [quick('pass', '2026-09-15T10:00:00Z'), review('fail', 'goal_attainment', '2026-09-15T11:00:00Z')] });
+  assert.equal(latest.get('t1|metric:goal_attainment')?.source, undefined, 'a later full review replaces the quick mark');
 });
