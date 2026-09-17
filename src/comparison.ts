@@ -183,6 +183,9 @@ export function humanFindings(record: Experiment): HumanFinding[] {
     const automatic = !measured(trial) ? 'unknown' : review.metricId ? trial.assessments?.find(a => a.metricId === review.metricId)?.result ?? 'unknown'
       : review.checkId ? check ? check.passed ? 'pass' : 'fail' : 'unknown' : automaticTrialResult(scenario, trial, record.humanReviews);
     const disagreement = automatic !== 'unknown' && review.verdict !== automatic;
+    // Confirming the judge is not a remark of the owner: a one-key «согласен» with a failure says
+    // the failure is real, so reporting it back as «замечание человека» would double-count it.
+    if (review.source === 'quick' && !disagreement) return [];
     if (review.verdict !== 'fail' && review.verdict !== 'invalid' && !disagreement) return [];
     return [{ trialId: trial.id, reviewId: review.id, target: metric?.name ?? check?.description ?? review.metricId ?? review.checkId ?? 'Весь диалог',
       subject: simulatorCheck ? 'simulator' : review.verdict === 'invalid' ? 'test' : review.checkId ? 'check' : metric?.subject ?? 'agent', verdict: review.verdict as 'pass' | 'fail' | 'invalid', automatic, disagreement, note: review.note }];
@@ -219,6 +222,14 @@ export function awaitingVerdict(record: Experiment): Set<string> {
           .filter(m => m.subject === 'simulator' && metricApplies(m, trial) && trial.assessments?.find(a => a.metricId === m.id)?.result !== 'pass').map(m => `metric:${m.id}`),
       ];
       if (pending.some(key => !['pass', 'fail', 'invalid'].includes(latest.get(`${trial.id}|${key}`)?.verdict ?? ''))) return true;
+    }
+    // A one-key mark answers the main verdict of the situation, and that closes it: the owner has
+    // looked and decided. Doubt («не могу сказать») is not a decision, so it falls through and the
+    // judge's own failure keeps the dialogue in the queue. The simulator is judged above, separately.
+    {
+      const metricId = primaryMetricId(record.scenarios.find(s => s.id === trial.scenarioId), trial);
+      const mark = metricId ? latest.get(`${trial.id}|metric:${metricId}`) : undefined;
+      if (mark?.source === 'quick' && ['pass', 'fail'].includes(mark.verdict)) return false;
     }
     if (!isAgentFailure(record, trial) || decided(`${trial.id}|dialogue`) || latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid') return false;
     const failed = [

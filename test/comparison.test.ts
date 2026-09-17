@@ -804,7 +804,8 @@ test('a decided quick mark on the main verdict closes the situation, an unsure o
   assert.equal(awaitingVerdict({ ...noGoal, humanReviews: [quick('agree', 't', 'fail', 'answer', 'fail')] }).size, 0);
 
   // The simulator is judged separately: a mark on the agent's verdict does not answer for it.
-  const deviated = { ...base, trials: [{ ...base.trials[0]!,
+  // `simulatorWasUsed` needs a reactive dialogue with a simulator turn, so the events carry one.
+  const deviated = { ...base, trials: [{ ...base.trials[0]!, events: dialogue(['hello'], 'continue'),
     simulatorChecks: [{ id: 'simulator_leak' as const, description: 'утечка', passed: false, evidence: '#1', heuristic: true }] }] };
   assert.equal(awaitingVerdict({ ...deviated, humanReviews: [quick('agree', 't', 'fail', 'goal', 'fail')] }).size, 1,
     'an undecided simulator check keeps the dialogue in the queue');
