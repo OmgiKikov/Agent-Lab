@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 1
 current_phase_name: Одно честное число
 status: verifying
-stopped_at: Completed 01-11-PLAN.md
-last_updated: "2026-09-17T00:17:22.772Z"
+stopped_at: Completed 01-12-PLAN.md
+last_updated: "2026-09-17T00:24:16.157Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 1 execution started
-state_head: 49f96c8675b0ad1b7a8bdda866e7867cf00dd78d
+state_head: f0e460cc0fb98ca3cef99c3f41801b71652d2f35
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 28
-  completed_plans: 11
+  completed_plans: 12
   percent: 0
 ---
 
@@ -69,6 +69,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01 P09 | 12min | 2 tasks | 8 files |
 | Phase 01 P10 | 28min | 3 tasks | 4 files |
 | Phase 01 P11 | 5 min | 2 tasks | 7 files |
+| Phase 01 P12 | 6min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,7 @@ Recent decisions affecting current work:
 - [Phase 1]: [01-10]: «судья не оценивал» важнее «судья не уверен в симуляторе», когда оценок нет вовсе (ca55767)
 - [Phase 1]: 01-11: a positive control always runs as one turn (maxFollowUps 0) in repeat/loadSuite; compareRuns leaves controls of either run out of the diff, identity taken from the original records
 - [Phase 1]: [01-11]: a positive control runs as one turn (opening + first reply, no simulator) and is left out of the repeat diff and the instability check
+- [Phase 1]: [01-12]: TRUST-04 closed on live evidence — real control ae812a24 passed as one turn in c1b9f043 (repeat of a92fd6ae), $0.2413
 
 ### Pending Todos
 
@@ -129,6 +131,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T00:17:22.743Z
-Stopped at: Completed 01-11-PLAN.md
+Last session: 2026-09-17T00:24:16.127Z
+Stopped at: Completed 01-12-PLAN.md
 Resume file: None
