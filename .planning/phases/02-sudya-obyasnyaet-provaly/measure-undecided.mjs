@@ -6,11 +6,13 @@
 //   node measure-undecided.mjs [--dist DIR] [--data DIR] --id RUN [--id RUN …]
 //     --cards PREFIX,PREFIX       per-card lines for scenario ids with these prefixes
 //     --print-trials              with --cards: one `trial=` line per matching trial
+//     --explain                   per failed situation: row roles and verification counts, no text
 //   node measure-undecided.mjs --newest-assessment-of RUN --since ISO
 //     prints the id of the newest reassessment of RUN created at or after ISO; exit 1 when none
 //
 // A RUN may be a full id or a unique prefix. Exit 2 when a requested record is missing.
 // `simulatorCut` and `JUDGE_PROTOCOL_V10` are optional exports, so the phase-1 dist also works.
+// `explain.js` is optional too: a dist without it prints `explain=n/a` instead of the rows.
 import { parseArgs } from 'node:util';
 import { readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -23,6 +25,7 @@ const { values } = parseArgs({ options: {
   id: { type: 'string', multiple: true, default: [] },
   cards: { type: 'string' },
   'print-trials': { type: 'boolean', default: false },
+  explain: { type: 'boolean', default: false },
   'newest-assessment-of': { type: 'string' },
   since: { type: 'string' },
 } });
@@ -30,6 +33,9 @@ const load = name => import(pathToFileURL(resolve(values.dist, name)).href);
 const [{ ExperimentStore }, { buildResultView }, judge, { fingerprint }] =
   await Promise.all(['store.js', 'result-view.js', 'judge.js', 'contracts.js'].map(load));
 const { JUDGE_PROTOCOL, JUDGE_PROTOCOL_V10, simulatorCut } = judge;
+// Optional: a dist built before 02-04 has no explanations at all.
+const { failureExplanation } = await load('explain.js').catch(() => ({}));
+if (values.explain && typeof failureExplanation !== 'function') console.log('explain=n/a');
 
 const store = new ExperimentStore(values.data);
 const FIDELITY = 'user_fidelity';
@@ -106,6 +112,46 @@ for (const requested of values.id) {
     const cut = trials.map(trial => trial.judgedBeforeSeq).filter(seq => seq !== undefined);
     console.log(`card=${row.scenarioId.slice(0, 8)} outcome=${row.outcome} reason=${row.reason ?? '-'} cut=${cut.length ? cut.join('/') : '-'}`);
     if (values['print-trials']) for (const trial of trials) console.log(`trial=${trial.id} card=${row.scenarioId.slice(0, 8)}`);
+  }
+}
+
+/**
+ * `--explain`: the shape of every failed situation's explanation, never its text. One line per
+ * failed headline situation (controls left out, record order — the same set `buildResultView`
+ * puts in `view.failures`), then one run line of totals.
+ */
+if (values.explain && typeof failureExplanation === 'function') {
+  for (const requested of values.id) {
+    const id = await resolveId(requested);
+    if (!id) continue;
+    const record = await store.get(id);
+    const view = buildResultView(record);
+    const byId = new Map(view.cards.map(card => [card.scenarioId, card]));
+    const trialById = new Map(record.trials.map(trial => [trial.id, trial]));
+    let judgeCited = 0, unverifiedRows = 0, violated = 0, cuts = 0;
+    let failed = 0;
+    for (const scenario of record.scenarios) {
+      const card = byId.get(scenario.id);
+      if (card?.outcome !== 'fail' || card.control) continue;
+      const explanation = failureExplanation(record, scenario);
+      if (!explanation) continue;
+      failed++;
+      const cited = explanation.said?.judgeCited === true;
+      if (cited) judgeCited++;
+      const unverified = explanation.rows.filter(row => row.role === 'unverified').length;
+      unverifiedRows += unverified;
+      if (explanation.violated) violated++;
+      // v10 keeps no cut: `judgedBeforeSeq` is absent, so this column reads `-` on every row.
+      const cut = trialById.get(explanation.trialId)?.judgedBeforeSeq;
+      if (cut !== undefined) cuts++;
+      console.log(`card=${scenario.id.slice(0, 8)} kind=${explanation.kind} `
+        + `roles=${explanation.rows.map(row => row.role).join(',')} judgeCited=${cited} `
+        + `rules=${explanation.rules.length}+${explanation.moreRules} unverifiedRules=${explanation.unverifiedRules} `
+        + `unverifiedRows=${unverified} violated=${explanation.violated ? explanation.violated.number : '-'} `
+        + `cut=${cut ?? '-'}`);
+    }
+    console.log(`explain run=${id.slice(0, 8)} failed=${failed} judgeCited=${judgeCited} `
+      + `unverifiedRows=${unverifiedRows} violated=${violated} cut=${cuts} viewFailures=${view.failures.length}`);
   }
 }
 if (missing) process.exit(2);
