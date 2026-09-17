@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 2
 current_phase_name: Судья объясняет провалы
 status: executing
-stopped_at: Completed 02-07-PLAN.md
-last_updated: "2026-09-17T10:01:31.920Z"
+stopped_at: Completed 02-08-PLAN.md
+last_updated: "2026-09-17T10:30:15.222Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 2 execution started
-state_head: c2b84127980d52baff825d482b4582a284de8dd8
+state_head: 7c6b26308fb5efde1ae16ed149109e0c96694298
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 50
-  completed_plans: 19
+  completed_plans: 20
   percent: 14
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 2 (Судья объясняет провалы) — EXECUTING
-Plan: 8 of 9
+Plan: 9 of 9
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 2 execution started
 
@@ -77,6 +77,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 02 P05 | 55min | 3 tasks | 9 files |
 | Phase 02 P06 | 8min | 2 tasks | 2 files |
 | Phase 02 P07 | 34min | 2 tasks | 7 files |
+| Phase 02 P08 | 78min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,8 @@ Recent decisions affecting current work:
 - [Phase 2]: [Phase 2]: 02-07: подтверждение накрывает весь черновик (acceptDraft), одиночный тест остаётся частным случаем на одну ситуацию; CLI ветвится по scenarios.length > 1
 - [Phase 2]: [Phase 2]: 02-07: слова владельца попадают и в successCriteria, и в passCriteria рубрики goal_attainment дословно; ситуация помечается в записи (ownerExpectationScenarioIds), draftHash старых записей не меняется, measurementHash не трогается
 - [Phase 2]: [Phase 2]: 02-07: отказ updateDraft «ожидание изменилось, проверки прежние» снимается только для ситуаций с судейской рубрикой goal_attainment; requireAccepted пока никем не вызывается — подключает 02-08
+- [Phase 2]: Оба Pi-пути запуска записывают reviewMode: 'human' вместе с requireAccepted: true — запуск невозможен без подтверждённых ожиданий, поэтому оговорка об автоматической проверке была бы ложью
+- [Phase 2]: y и e привязаны только к листу ожиданий раздела 2 черновика; фаза 3 может занять y только в области результатов и не должна трогать e
 
 ### Pending Todos
 
@@ -149,6 +152,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T10:01:20.781Z
-Stopped at: Completed 02-07-PLAN.md
+Last session: 2026-09-17T10:30:07.030Z
+Stopped at: Completed 02-08-PLAN.md
 Resume file: None
