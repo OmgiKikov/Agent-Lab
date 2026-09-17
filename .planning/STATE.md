@@ -177,6 +177,7 @@ None yet.
 |-------|-------|--------|
 | 1 | verification_stale_deferred | /gsd-verify-work 1 — после фазы 6, когда код перестанет меняться |
 | 2 | verification_deferred_human | /gsd-verify-work 2 — после фазы 6; живую проверку Pi (`/agent-lab 37f78e1a`: 2, e, y, r в светлой и тёмной теме) владелец проводит сам |
+| 3 | verification_deferred_human | /gsd-verify-work 3 — 3 пункта в `03-UAT.md` для владельца за живым Pi (настоящие отметки после заморозки судьи, светлая и тёмная тема, клавиша `n`); автоматические проверки пройдены 11/12 |
 
 ## Deferred Items
 
