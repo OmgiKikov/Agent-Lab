@@ -37,6 +37,7 @@ export function draftHash(record: Experiment): string {
     settings: record.settings, target: record.target, requirements: record.requirements, questions: record.questions,
     goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
     scenarios: record.scenarios, agent: record.revisions[0]?.spec, positiveControlScenarioIds: record.positiveControlScenarioIds,
+    ownerExpectationScenarioIds: record.ownerExpectationScenarioIds,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
 }
 export function resultHash(record: Experiment): string {
@@ -59,6 +60,11 @@ function retainAcceptedTests(record: Experiment): void {
   });
 }
 
+/** The agent rubric that scores the goal in the owner's words; without it the situation is decided by exact checks alone. */
+function judgeGoalRubric(scenario: Scenario) {
+  return (scenario.metrics ?? []).find(metric => metric.id === 'goal_attainment' && metric.subject === 'agent');
+}
+
 /** A control checks the judge and the connection, not the simulator: it runs as the opening and the agent's first reply. */
 function oneTurnControls(record: Experiment): void {
   const controls = new Set(record.positiveControlScenarioIds ?? []);
@@ -79,6 +85,9 @@ function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
   const keptControls = (record.positiveControlScenarioIds ?? []).filter(id => record.scenarios.some(s => s.id === id));
   if (keptControls.length) record.positiveControlScenarioIds = keptControls;
   else delete record.positiveControlScenarioIds;
+  const keptOwnerExpectations = (record.ownerExpectationScenarioIds ?? []).filter(id => record.scenarios.some(s => s.id === id));
+  if (keptOwnerExpectations.length) record.ownerExpectationScenarioIds = keptOwnerExpectations;
+  else delete record.ownerExpectationScenarioIds;
   record.scenarios = record.scenarios.map(scenario => withDefaultGoalObservation(scenario, record.target.kind));
   Object.assign(record, { id: randomUUID(), parentRunId: previous.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     phase: 'review', message: 'Тесты готовы. Проверьте подключение и запустите проверку.',
@@ -689,7 +698,8 @@ export class ExperimentLab {
       for (const scenario of patch.scenarios ?? []) {
         const before = record.scenarios.find(s => s.id === scenario.id);
         if (scenario.provenance !== (before?.provenance ?? 'synthetic')) throw new Error('Происхождение карточки нельзя повысить правкой. Golden и production добавляются через импорт исходных данных.');
-        if (before && scenario.successCriteria !== before.successCriteria
+        // A judge-evaluated goal is scored by the words themselves, so changing them is a real change of the test (CTX-21).
+        if (before && scenario.successCriteria !== before.successCriteria && !judgeGoalRubric(before)
           && fingerprint([scenario.checks, scenario.metrics ?? []]) === fingerprint([before.checks, before.metrics ?? []])) {
           throw new Error(`Ожидание «${scenario.title}» изменилось, а исполняемые проверки остались прежними. Измените checks или metrics вместе с successCriteria; описание само по себе не меняет тест.`);
         }
@@ -708,22 +718,66 @@ export class ExperimentLab {
       const cards = new Map(record.scenarios.filter(s => !removed.has(s.id)).map(({ split: _split, ...s }) => [s.id, s]));
       for (const { split: _split, ...scenario } of patch.scenarios ?? []) cards.set(scenario.id, scenario);
       const scenarios = [...cards.values()];
-      const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions, agent, scenarios }, record.sources, record.workflow ?? 'compare', record.profiles);
-      record.scenarios = prepared.scenarios;
-      retainAcceptedTests(record);
-      if (patch.agent) record.revisions = [revision(patch.agent, null, 'Agent configuration reviewed in the draft.')];
-      record.settings = settingsSchema.parse({ ...record.settings, ...patch.settings,
-        roles: Object.fromEntries(Object.entries({ ...record.settings.roles, ...patch.settings?.roles }).filter(([, value]) => value !== null)) });
-      record.evaluatorVersion = evaluatorVersion(record.settings);
-      if (patch.target) record.target = patch.target;
-      if (patch.targetVersion) record.targetVersion = patch.targetVersion;
-      await preflightTarget(record.target);
-      record.targetFingerprint = await targetFingerprint(record.target);
-      record.selectedRevisionId = record.revisions[0]!.id;
-      record.reviewedAt = null; record.reviewMode = null; record.manifestHash = null;
-      const added = record.scenarios.filter(s => !beforeCards.has(s.id)).length;
-      const changed = record.scenarios.filter(s => beforeCards.has(s.id) && fingerprint(s) !== fingerprint(beforeCards.get(s.id))).length;
-      await this.checkpoint(record, 'review', `${patch.agent ? 'Агент обновлён. ' : ''}${patch.settings || patch.target || patch.targetVersion ? 'Настройки прогона обновлены. ' : ''}Карточки: изменено ${changed}, добавлено ${added}, удалено ${removed.size}. Проверьте черновик перед запуском.`);
+      await this.finishDraftEdit(record, scenarios, agent, current => {
+        const added = current.scenarios.filter(s => !beforeCards.has(s.id)).length;
+        const changed = current.scenarios.filter(s => beforeCards.has(s.id) && fingerprint(s) !== fingerprint(beforeCards.get(s.id))).length;
+        return `${patch.agent ? 'Агент обновлён. ' : ''}${patch.settings || patch.target || patch.targetVersion ? 'Настройки прогона обновлены. ' : ''}Карточки: изменено ${changed}, добавлено ${added}, удалено ${removed.size}. Проверьте черновик перед запуском.`;
+      }, async () => {
+        if (patch.agent) record.revisions = [revision(patch.agent, null, 'Agent configuration reviewed in the draft.')];
+        record.settings = settingsSchema.parse({ ...record.settings, ...patch.settings,
+          roles: Object.fromEntries(Object.entries({ ...record.settings.roles, ...patch.settings?.roles }).filter(([, value]) => value !== null)) });
+        if (patch.target) record.target = patch.target;
+        if (patch.targetVersion) record.targetVersion = patch.targetVersion;
+        await preflightTarget(record.target);
+        record.targetFingerprint = await targetFingerprint(record.target);
+        record.selectedRevisionId = record.revisions[0]!.id;
+      });
+      return structuredClone(record);
+    });
+  }
+  /**
+   * Every draft edit ends the same way: revalidate the cards, drop confirmations whose definition
+   * changed, restamp the evaluator and clear the review stamps, so no edit can keep an earlier approval.
+   */
+  private async finishDraftEdit(record: Experiment, scenarios: Omit<Scenario, 'split'>[], agent: Revision['spec'] | undefined,
+    message: (record: Experiment) => string, between?: () => Promise<void>): Promise<void> {
+    const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions, agent, scenarios },
+      record.sources, record.workflow ?? 'compare', record.profiles);
+    record.scenarios = prepared.scenarios;
+    retainAcceptedTests(record);
+    await between?.();
+    record.evaluatorVersion = evaluatorVersion(record.settings);
+    record.reviewedAt = null; record.reviewMode = null; record.manifestHash = null;
+    await this.checkpoint(record, 'review', message(record));
+  }
+  /**
+   * The owner's own words become what is scored: the situation's `successCriteria` and the pass
+   * criterion of its judge goal rubric, verbatim — nothing is rewritten, summarised or translated.
+   * The situation is marked as changed by the owner, so the sheet and the comparison both say it
+   * cannot be compared with earlier runs (CTX-20, CTX-21).
+   */
+  async setExpectation(id: string, expectedHash: string, scenarioId: string, text: string): Promise<Experiment> {
+    return this.change(async () => {
+      const record = await this.store.get(id);
+      if (record.workflow !== 'evaluate') throw new Error('Поправить ожидание можно только в workflow evaluate.');
+      if (record.phase !== 'review') throw new Error('Поправить ожидание можно только в незапущенном черновике.');
+      if (draftHash(record) !== expectedHash) throw new Error('Черновик изменился, пока вы смотрели. Проверьте ожидания ещё раз.');
+      const expectation = text.trim();
+      if (!expectation) throw new Error('Ожидание пустое. Напишите, что агент должен сделать.');
+      if (expectation.length > 3000) throw new Error('Ожидание длиннее 3000 знаков. Сократите и попробуйте снова.');
+      const scenario = record.scenarios.find(item => item.id === scenarioId);
+      if (!scenario) throw new Error(`Нет такой ситуации в черновике: ${scenarioId}.`);
+      const goal = judgeGoalRubric(scenario);
+      if (!goal) throw new Error('Эту ситуацию проверяют точные проверки, а не судья. Поправьте её словами: a.');
+      if (scenario.successCriteria === expectation) return structuredClone(record);
+      // `split` is assigned by the preparation, exactly as in updateDraft.
+      const scenarios = record.scenarios.map(({ split: _split, ...item }) => item.id === scenarioId
+        ? { ...item, successCriteria: expectation,
+          metrics: (item.metrics ?? []).map(metric => metric === goal ? { ...metric, passCriteria: expectation } : metric) }
+        : item);
+      record.ownerExpectationScenarioIds = [...new Set([...(record.ownerExpectationScenarioIds ?? []), scenarioId])];
+      // The target did not change, so no preflight: only the words being scored moved.
+      await this.finishDraftEdit(record, scenarios, record.revisions[0]?.spec, () => `Ожидание изменено владельцем: «${scenario.title}».`);
       return structuredClone(record);
     });
   }
@@ -915,7 +969,7 @@ export class ExperimentLab {
     });
   }
   /** `parallel` is an execution knob, not a measurement setting: dialogues are independent, so several may run at once without changing what is measured. */
-  async start(id: string, options: { approved: boolean; reviewer?: 'human' | 'automated'; expectedHash?: string; parallel?: number }): Promise<Experiment> {
+  async start(id: string, options: { approved: boolean; reviewer?: 'human' | 'automated'; expectedHash?: string; parallel?: number; requireAccepted?: boolean }): Promise<Experiment> {
     const parallel = options.parallel ?? 1;
     if (!Number.isInteger(parallel) || parallel < 1 || parallel > MAX_PARALLEL) throw new Error(`Параллельных диалогов может быть от 1 до ${MAX_PARALLEL}.`);
     return this.change(async () => {
@@ -925,6 +979,10 @@ export class ExperimentLab {
       if (!options.approved) throw new Error('Набор карточек замораживается только после вашего подтверждения.');
       if (record.workflow === 'evaluate' && options.expectedHash !== draftHash(record)) {
         throw new Error('Нужно подтверждение именно этой версии черновика. Откройте свежие тесты и план запуска.');
+      }
+      // The Pi path asks for confirmed expectations; CLI `run` and `evaluate` keep today's behaviour (CTX-22).
+      if (options.requireAccepted && record.acceptedDraftHash !== draftHash(record)) {
+        throw new Error('Сначала подтвердите ожидания ситуаций: они изменились или ещё не подтверждены.');
       }
       if (record.questions.length) throw new Error('Сначала ответьте на бизнес-вопросы из черновика: добавьте ответы в материалы и подготовьте новый эксперимент.');
       if (record.settings.userModes.includes('scripted')) for (const scenario of record.scenarios) {

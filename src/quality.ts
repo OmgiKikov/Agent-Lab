@@ -151,8 +151,7 @@ export function expectationSheet(record: Experiment): ExpectationSheet {
   }
   const register = ruleRegister(record);
   const requirements = new Map(record.requirements.map(item => [item.id, item]));
-  // Situations whose expectation the owner rewrote; filled in by the record field once it exists.
-  const edited = new Set<string>();
+  const edited = new Set(record.ownerExpectationScenarioIds ?? []);
   const built = record.scenarios.map((scenario, index) => {
     const ids = [...new Set(scenario.requirementIds)]
       .filter(id => { const item = requirements.get(id); return !item || !machineFormatRule(record, item); });

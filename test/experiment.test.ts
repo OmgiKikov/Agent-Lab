@@ -9,8 +9,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { ExperimentLab, draftHash, measurementHash, planDiscovery, resultHash } from '../src/experiment.js';
 import { ExperimentStore } from '../src/store.js';
 import { createDemoRuntime, demoEvaluationInput, demoInput } from '../src/demo.js';
-import { createInputSchema, experimentSchema, fingerprint, goalAttainment, metricApplies, validatePreparation, type Experiment, type Runtime } from '../src/contracts.js';
-import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
+import { createInputSchema, emptyUsage, experimentSchema, fingerprint, goalAttainment, metricApplies, validatePreparation, type Experiment, type Runtime, type Trial } from '../src/contracts.js';
+import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources } from '../src/judge.js';
 import { awaitingVerdict, compareRuns } from '../src/comparison.js';
 import { simulatorUsable } from '../src/outcomes.js';
 import { qualityLines, qualitySummary } from '../src/quality.js';
@@ -694,6 +694,138 @@ test('one confirmation covers every situation of the draft and keeps unchanged e
   const again = await lab.acceptDraft(edited.id, draftHash(edited));
   assert.equal(again.acceptedTests!.length, 2);
   assert.deepEqual(again.acceptedTests!.find(test => test.scenarioId === kept), keptEntry, 'an unchanged situation keeps its entry');
+});
+
+const REFUND_RULE = 'Верните деньги через терминал в течение трёх дней.';
+/** Two judge-evaluated situations: their goal is scored by the `goal_attainment` rubric, not by exact checks. */
+function judgeGoalRuntime(): Runtime {
+  const situation = (index: number) => ({
+    id: `case_${index}`, familyId: `case_${index}`, title: `Ситуация ${index}`, requirementIds: ['refund_rule'],
+    provenance: 'synthetic' as const, tier: 'regression' as const,
+    user: { goal: `Вернуть деньги по операции ${index}`, facts: 'Оплата картой.', behavior: 'Спрашивает один раз.',
+      opening: 'Как вернуть деньги?', maxFollowUps: 0 },
+    initialState: { records: {}, writableFields: [], transientFailures: 0 },
+    checks: [{ id: 'mentions_terminal', kind: 'answer_contains' as const, description: 'Ответ называет терминал.', value: 'терминал' }],
+    metrics: [{ ...goalAttainment, passCriteria: `Ожидание ${index}` }],
+    successCriteria: `Ожидание ${index}`, goalObservation: 'reply' as const,
+  });
+  return {
+    async prepare({ sources }) {
+      return { requirements: [{ id: 'refund_rule', text: REFUND_RULE, sourceId: sources[0]!.id, quote: REFUND_RULE, critical: true }],
+        questions: [], agent: { name: 'Агент эквайринга', instructions: REFUND_RULE, tools: [] }, scenarios: [situation(1), situation(2)] };
+    },
+    async assess({ scenario }) { return (scenario.metrics ?? []).map(metric => ({ metricId: metric.id, result: 'pass' as const, rationale: 'Фикстура.', evidence: [1] })); },
+    async improve() { throw new Error('unused'); },
+    async openTarget() { return { async respond() { return 'Верните через терминал.'; }, async close() {} }; },
+    async userTurn() { throw new Error('unused'); },
+  };
+}
+const judgeGoalInput = () => ({ task: 'Проверить возвраты', goalObservation: 'reply' as const,
+  mode: 'live' as const, workflow: 'evaluate' as const, scenarioCount: 2, materials: [{ name: 'Правила возврата', content: REFUND_RULE }],
+  target: { kind: 'sandbox' as const }, settings: { repeats: 1, maxIterations: 1, userModes: ['static' as const] } });
+
+test('the owner rewrites one expectation in their own words; it becomes the criterion and the old confirmation goes stale', async t => {
+  const { lab } = await setup(t, judgeGoalRuntime());
+  const created = await lab.create(judgeGoalInput()); await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  assert.equal(draft.phase, 'review', draft.error ?? '');
+  assert.equal(draft.scenarios.length, 2);
+  const hash = draftHash(draft);
+  const accepted = await lab.acceptDraft(draft.id, hash);
+  const card = accepted.scenarios[0]!;
+  const other = accepted.scenarios[1]!;
+
+  const before = await lab.get(draft.id);
+  await assert.rejects(lab.setExpectation(draft.id, '0'.repeat(64), card.id, 'Текст'), /Черновик изменился, пока вы смотрели/);
+  await assert.rejects(lab.setExpectation(draft.id, hash, card.id, '   \n  '), /Ожидание пустое/);
+  await assert.rejects(lab.setExpectation(draft.id, hash, card.id, 'я'.repeat(3001)), /Ожидание длиннее 3000 знаков/);
+  await assert.rejects(lab.setExpectation(draft.id, hash, 'no_such_card', 'Текст'), /Нет такой ситуации в черновике: no_such_card\./);
+  assert.deepEqual(await lab.get(draft.id), before, 'a rejected expectation writes nothing');
+
+  const text = 'Объяснить порядок возврата через терминал.';
+  const edited = await lab.setExpectation(draft.id, hash, card.id, `  ${text}  `);
+  const changed = edited.scenarios.find(item => item.id === card.id)!;
+  assert.equal(changed.successCriteria, text, 'the owner text is stored verbatim');
+  const goal = changed.metrics!.find(metric => metric.id === 'goal_attainment')!;
+  assert.equal(goal.passCriteria, text);
+  assert.equal(goal.failCriteria, goalAttainment.failCriteria);
+  assert.equal(goal.description, goalAttainment.description);
+  assert.deepEqual(changed.checks, card.checks);
+  assert.deepEqual(edited.scenarios.find(item => item.id === other.id), other, 'the other situation is untouched');
+  assert.deepEqual(edited.ownerExpectationScenarioIds, [card.id]);
+  assert.notEqual(draftHash(edited), hash);
+  assert.equal(edited.acceptedDraftHash, hash, 'the earlier confirmation stays visibly stale');
+  assert.deepEqual(edited.acceptedTests!.map(entry => entry.scenarioId), [other.id]);
+  assert.equal(edited.reviewedAt, null); assert.equal(edited.reviewMode, null); assert.equal(edited.manifestHash, null);
+
+  const again = await lab.setExpectation(draft.id, draftHash(edited), card.id, text);
+  assert.equal(again.updatedAt, edited.updatedAt, 'the same text writes nothing');
+
+  const stub: Trial = { id: 'trial', revisionId: 'rev', scenarioId: changed.id, familyId: changed.familyId, repeat: 0, userMode: 'static',
+    split: 'dev', manifestHash: 'h', outcome: 'fail', reason: 'r', checks: [],
+    events: [{ seq: 0, type: 'user', text: 'Как вернуть деньги?' }, { seq: 1, type: 'assistant', text: 'Не знаю.' }],
+    initialState: changed.initialState, finalState: changed.initialState, usage: emptyUsage(), elapsedMs: 1 };
+  const judged = judgeInput({ scenario: changed, sources: edited.sources, trial: stub });
+  assert.equal(judged.scenario.successCriteria, text);
+  assert.equal(judged.scenario.metrics!.find(metric => metric.id === 'goal_attainment')!.passCriteria, text);
+
+  const notes = compareRuns({ ...accepted, id: 'before-run', phase: 'results_review' },
+    { ...edited, id: 'after-run', phase: 'results_review' }).notes;
+  assert.ok(notes.some(note => note.startsWith('Содержимое карточек изменилось')), notes.join(' | '));
+
+  await assert.rejects(lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(edited), requireAccepted: true }),
+    /Сначала подтвердите ожидания ситуаций/);
+  assert.equal((await lab.get(draft.id)).phase, 'review', 'a refused start writes nothing');
+  const reconfirmed = await lab.acceptDraft(draft.id, draftHash(edited));
+  await lab.start(reconfirmed.id, { approved: true, reviewer: 'human', expectedHash: draftHash(reconfirmed), requireAccepted: true });
+  await lab.waitForIdle();
+  assert.notEqual((await lab.get(draft.id)).phase, 'review', 'a confirmed draft starts');
+});
+
+test('an exact-check situation keeps the old refusal; the owner marker survives hashes, schema, repeat and case selection', async t => {
+  const { lab } = await setup(t, judgeGoalRuntime());
+  const created = await lab.create(judgeGoalInput()); await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  const hash = draftHash(draft);
+  const card = draft.scenarios[0]!;
+
+  // A situation the judge does not score keeps today's refusal, in setExpectation and in updateDraft.
+  const { lab: demoLab } = await setup(t, createDemoRuntime());
+  const demo = await demoLab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 }); await demoLab.waitForIdle();
+  const demoDraft = await demoLab.get(demo.id);
+  const demoCard = demoDraft.scenarios[0]!;
+  assert.equal((demoCard.metrics ?? []).some(metric => metric.id === 'goal_attainment'), false);
+  await assert.rejects(demoLab.setExpectation(demoDraft.id, draftHash(demoDraft), demoCard.id, 'Своими словами.'),
+    /Эту ситуацию проверяют точные проверки, а не судья\. Поправьте её словами: a\./);
+  assert.deepEqual(await demoLab.get(demoDraft.id), demoDraft);
+  await assert.rejects(demoLab.updateDraft(demoDraft.id, draftHash(demoDraft), { scenarios: [{ ...demoCard, successCriteria: 'Другое ожидание' }] }),
+    /изменилось, а исполняемые проверки остались прежними/);
+  // The same edit of a judge-evaluated situation now goes through.
+  const relaxed = await lab.updateDraft(draft.id, hash, { scenarios: [{ ...card, successCriteria: 'Другое ожидание' }] });
+  assert.equal(relaxed.scenarios.find(item => item.id === card.id)!.successCriteria, 'Другое ожидание');
+
+  const edited = await lab.setExpectation(draft.id, draftHash(relaxed), card.id, 'Ожидание владельца.');
+  assert.deepEqual(edited.ownerExpectationScenarioIds, [card.id]);
+
+  // Old records keep their exact hash and the field never enters the measurement hash.
+  const legacy = structuredClone(edited); delete legacy.ownerExpectationScenarioIds;
+  assert.equal(draftHash(legacy), draftHash({ ...legacy, ownerExpectationScenarioIds: undefined }));
+  assert.notEqual(draftHash(edited), draftHash(legacy), 'the marker is part of the draft version');
+  assert.equal(measurementHash(edited), measurementHash(legacy), 'the marker never changes what is measured');
+
+  experimentSchema.parse(legacy);
+  assert.throws(() => experimentSchema.parse({ ...edited, ownerExpectationScenarioIds: ['not_a_card'] }), /ситуации этого набора/);
+  assert.throws(() => experimentSchema.parse({ ...edited, ownerExpectationScenarioIds: [card.id, card.id] }), /Duplicate owner expectation IDs/);
+
+  await lab.acceptDraft(edited.id, draftHash(edited));
+  const confirmed = await lab.get(edited.id);
+  await lab.start(confirmed.id, { approved: true, reviewer: 'human', expectedHash: draftHash(confirmed) });
+  await lab.waitForIdle();
+  const done = await lab.get(edited.id);
+  const repeated = await lab.repeat(done.id);
+  assert.deepEqual(repeated.ownerExpectationScenarioIds, [card.id], 'a repeat keeps the marker');
+  const narrowed = await lab.repeat(done.id, [done.scenarios[1]!.id]);
+  assert.equal(narrowed.ownerExpectationScenarioIds, undefined, 'a --case selection drops markers of situations left out');
 });
 
 test('validation grounds expectations and user facts, uses reactive turns, excludes missing customer data and masked dialogues', async t => {

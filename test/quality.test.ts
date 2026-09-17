@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { rm } from 'node:fs/promises';
-import { discoveryBrief, qualityLines, qualitySummary, plural, scoreBrief, shorten, testPlanLines, trialProofLines } from '../src/quality.js';
+import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, plural, scoreBrief, shorten, testPlanLines, trialProofLines } from '../src/quality.js';
 import { emptyUsage, RAG_RUBRICS, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
 import { draftHash } from '../src/experiment.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
@@ -97,6 +97,101 @@ test('acceptance projection rejects ambiguous drafts and names tool/state observ
   const state = testPlanLines(stateRecord);
   assert.match(state.lines.join('\n'), /Исходное состояние: \{"records":\{"A":\{"status":"new"\}\},"writableFields":\["status"\],"transientFailures":0\}/);
   assert.match(state.lines.join('\n'), /НАБЛЮДЕНИЕ\n  итоговое состояние \(state\)/);
+});
+
+const ruleSource = { id: 'src_rules', name: 'Правила возврата', content: 'Первая строка.\nВерните деньги через терминал.\nТретья строка.\nЧетвёртая строка.\nПятая строка.' };
+const promptSource = { id: 'src_prompt', name: 'Промпт агента', content: 'Отвечайте вежливо.\nresponse_format: json\nЕщё строка.\nИ ещё строка.', kind: 'prompt' as const };
+const rulesRecord = (overrides: Partial<Experiment> = {}): Experiment => record({
+  phase: 'review', reviewMode: null, sources: [ruleSource, promptSource],
+  requirements: [
+    { id: 'refund', text: 'Возврат через терминал', sourceId: ruleSource.id, quote: 'Верните деньги через терминал.', critical: true },
+    { id: 'polite', text: 'Вежливость', sourceId: promptSource.id, quote: 'Отвечайте вежливо.', critical: false },
+    { id: 'machine', text: 'Формат', sourceId: promptSource.id, quote: 'response_format: json', critical: false },
+  ],
+  ...overrides,
+});
+const sheetCard = (id: string, extra: Partial<Scenario> = {}): Scenario => ({ ...scenario(id), requirementIds: ['refund'], successCriteria: `Ожидание ${id}`, ...extra });
+
+test('the expectation sheet names every situation, its expectation and its owner rules', () => {
+  const draft = rulesRecord({ scenarios: [
+    sheetCard('a'),
+    sheetCard('b', { requirementIds: ['refund', 'polite', 'machine', 'unknown_rule'], successCriteria: '   ' }),
+    sheetCard('c', { requirementIds: [] }),
+  ] });
+  const sheet = expectationSheet(draft);
+  assert.equal(sheet.count, 3);
+  assert.equal(sheet.countText, '3 ситуации');
+  assert.equal(sheet.labelWidth, 2);
+  assert.deepEqual(sheet.boardHead, ['ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ', '3 ситуации · номер правила — порядок в ваших материалах']);
+  assert.equal(sheet.lines[0], 'Что агент должен сделать: 3 ситуации. Номер правила — порядок в ваших материалах.');
+  assert.equal(sheet.lines[1], '');
+  assert.equal(sheet.lines.at(-1), `Версия ожиданий: ${draftHash(draft).slice(0, 12)}`);
+  assert.equal(sheet.lines[2], '1. Ситуация: g');
+  assert.deepEqual(sheet.cards[0]!.details, [
+    { role: 'expected', text: 'Должен: Ожидание a' },
+    { role: 'rule', text: 'Правило 1 · Правила возврата, строка 2: «Верните деньги через терминал.»' },
+  ]);
+  assert.equal(sheet.lines[3], '   Должен: Ожидание a');
+  assert.equal(sheet.lines[4], '   Правило 1 · Правила возврата, строка 2: «Верните деньги через терминал.»');
+  assert.equal(sheet.lines[5], '');
+  // An empty expectation, an unknown rule and the internal machine-format prompt rule.
+  assert.deepEqual(sheet.cards[1]!.details, [
+    { role: 'unverified', text: 'Должен: ожидание не записано.' },
+    { role: 'rule', text: 'Правило 1 · Правила возврата, строка 2: «Верните деньги через терминал.»' },
+    { role: 'rule', text: 'Правило 2 · Промпт агента, строка 1: «Отвечайте вежливо.»' },
+    { role: 'unverified', text: 'Правило: объяснение не подтверждено цитатой' },
+  ]);
+  assert.deepEqual(sheet.cards[2]!.details, [
+    { role: 'expected', text: 'Должен: Ожидание c' },
+    { role: 'unverified', text: 'Правило: у ситуации нет правила из ваших материалов.' },
+  ]);
+  assert.equal(sheet.cards.every(item => item.ownerEdited === false), true);
+  assert.throws(() => expectationSheet({ ...draft, workflow: 'compare' }), /evaluate/);
+  assert.throws(() => expectationSheet({ ...draft, phase: 'results_review' }), /незапущенного/);
+});
+
+test('the sheet marks a situation the owner changed and the compact form points at the full list', () => {
+  const draft = rulesRecord({ id: 'run_1234567890', scenarios: [sheetCard('a'), sheetCard('b', { requirementIds: ['refund', 'polite', 'unknown_1', 'unknown_2'] })],
+    ownerExpectationScenarioIds: ['a'] });
+  const sheet = expectationSheet(draft);
+  assert.equal(sheet.cards[0]!.ownerEdited, true);
+  assert.deepEqual(sheet.cards[0]!.details.at(-1), { role: 'marker', text: 'Ожидание изменено владельцем — с прошлыми прогонами не сравнивается.' });
+  assert.equal(sheet.cards[1]!.ownerEdited, false);
+  assert.equal(sheet.cards[1]!.details.some(detail => detail.role === 'marker'), false);
+  assert.equal(sheet.lines.filter(line => line.includes('Ожидание изменено владельцем')).length, 1);
+
+  const compact = sheet.compactLines(draft.id);
+  assert.equal(compact.filter(line => line.trim().startsWith('Правило')).length, 3, 'at most two rule rows per situation');
+  assert.equal(compact.some(line => line.trim() === 'и ещё 2 правила'), true);
+  assert.equal(compact.some(line => line.includes('Ожидание изменено владельцем')), true);
+  assert.equal(compact.at(-2), `Все правила — /agent-lab ${draft.id.slice(0, 8)}, раздел 2.`);
+  assert.equal(compact.at(-1), sheet.lines.at(-1));
+});
+
+test('the sheet handles no situations, twelve situations and eleven rules in one situation', () => {
+  const empty = expectationSheet(rulesRecord({ scenarios: [] }));
+  assert.deepEqual(empty.lines, ['Ситуаций пока нет.', 'Они появятся после подготовки. a — рассказать Pi, что проверить.']);
+  assert.deepEqual(empty.cards, []);
+  assert.equal(empty.countText, '0 ситуаций');
+  assert.deepEqual(empty.compactLines('run_1234'), empty.lines);
+
+  const many = expectationSheet(rulesRecord({ scenarios: Array.from({ length: 12 }, (_, index) => sheetCard(`card_${index}`)) }));
+  assert.equal(many.labelWidth, 3);
+  assert.equal(many.countText, '12 ситуаций');
+  assert.equal(many.lines[2], ' 1. Ситуация: g');
+  assert.equal(many.lines[3], '    Должен: Ожидание card_0');
+  assert.equal(many.lines.find(line => line.includes('Ситуация') && line.startsWith('12.')), '12. Ситуация: g');
+
+  const eleven = rulesRecord({
+    sources: [{ ...ruleSource, content: Array.from({ length: 11 }, (_, index) => `Правило номер ${index} про возврат.`).join('\n') }],
+    requirements: Array.from({ length: 11 }, (_, index) => ({ id: `rule_${index}`, text: `Правило ${index}`, sourceId: ruleSource.id,
+      quote: `Правило номер ${index} про возврат.`, critical: false })),
+    scenarios: [sheetCard('a', { requirementIds: Array.from({ length: 11 }, (_, index) => `rule_${index}`) })],
+  });
+  const sheet = expectationSheet(eleven);
+  assert.equal(sheet.cards[0]!.details.filter(detail => detail.role === 'rule').length, 11);
+  assert.equal(sheet.cards[0]!.details.every(detail => detail.role !== 'unverified'), true);
+  assert.equal(sheet.compactLines(eleven.id).some(line => line.trim() === 'и ещё 9 правил'), true);
 });
 
 test('trial proof preserves passing and failing dialogue evidence with exact citation ids', () => {

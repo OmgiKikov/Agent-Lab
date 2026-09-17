@@ -767,6 +767,8 @@ export interface Experiment {
   selectedScenarioIds?: string[];
   /** Real situations the agent is known to handle. Shown apart from the headline number and never counted in it. */
   positiveControlScenarioIds?: string[];
+  /** Situations whose expectation the owner wrote in their own words; they cannot be compared with runs before the change. */
+  ownerExpectationScenarioIds?: string[];
   targetVersion?: string;
   targetFingerprint?: string;
   evaluatorVersion?: string;
@@ -869,6 +871,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   validationExclusions: z.array(validationExclusionSchema).max(300).optional(),
   parentRunId: identifier.optional(), selectedScenarioIds: z.array(identifier).min(1).max(200).optional(),
   positiveControlScenarioIds: z.array(identifier).min(1).max(5).refine(unique, 'Duplicate control IDs').optional(),
+  ownerExpectationScenarioIds: z.array(identifier).min(1).max(40).refine(unique, 'Duplicate owner expectation IDs').optional(),
   targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),
   clarifications: z.array(z.strictObject({ question: text.max(3000), answer: text.max(5000) })).max(100).optional(),
   assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
@@ -886,6 +889,9 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   const scenarioIds = new Set(record.scenarios.map(scenario => scenario.id));
   record.positiveControlScenarioIds?.forEach((id, index) => {
     if (!scenarioIds.has(id)) ctx.addIssue({ code: 'custom', path: ['positiveControlScenarioIds', index], message: 'Контрольная ситуация должна быть из этого набора.' });
+  });
+  record.ownerExpectationScenarioIds?.forEach((id, index) => {
+    if (!scenarioIds.has(id)) ctx.addIssue({ code: 'custom', path: ['ownerExpectationScenarioIds', index], message: 'Изменённое ожидание должно относиться к ситуации этого набора.' });
   });
   validateReviewReferences(record.humanReviews, record.trials, ['humanReviews'], ctx);
   if (record.sourceEvidence) validateReviewReferences(record.sourceEvidence.humanReviews, record.sourceEvidence.trials, ['sourceEvidence', 'humanReviews'], ctx);
