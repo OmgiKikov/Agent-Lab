@@ -46,6 +46,14 @@ const GOAL = 'goal_attainment';
 const COMPLIANCE = 'prompt_compliance';
 /** A «…» span of the judge's rationale long enough to identify a rule. */
 const QUOTED_SPAN = /«([^«»]{12,})»/g;
+/**
+ * How close a span must be before it may name a rule. Twelve characters is a coincidence in Russian
+ * rule text («оплата картой» is 13), and the row asserts the rule flatly, so a near-miss must stay
+ * unnamed: a span inside a rule has to cover most of it, and a rule inside a long judge span has to
+ * be long enough to be that rule and not a common phrase.
+ */
+const MIN_SPAN_RATIO = 0.6;
+const MIN_CONTAINED_QUOTE = 24;
 const RULE_FORMS: [string, string, string] = ['правило', 'правила', 'правил'];
 const collapse = (value: string) => value.replace(/\s+/g, ' ').trim();
 /**
@@ -127,8 +135,9 @@ const machineFormat = (record: Experiment, requirement: Requirement) =>
 
 /**
  * The prompt rule a failed prompt-rule check names: the «…» spans of its rationale (the agreed
- * prefix removed) are matched against registered, observable prompt rules. Exactly one
- * distinct match names the rule; none or several name nothing, so nothing is guessed.
+ * prefix removed) are matched against registered, observable prompt rules. A match must be exact or
+ * near-exact, and exactly one distinct rule may match; a weak match, none or several name nothing,
+ * so nothing is guessed.
  */
 function violatedRule(record: Experiment, trial: Trial, register: Map<string, RuleRef>): RuleRef | undefined {
   if (agentMetricResult(trial, COMPLIANCE, record.humanReviews) !== 'fail') return undefined;
@@ -140,7 +149,8 @@ function violatedRule(record: Experiment, trial: Trial, register: Map<string, Ru
     const rule = register.get(requirement.id);
     if (!rule?.prompt || machineFormat(record, requirement)) continue;
     const quote = normal(rule.quote);
-    if (spans.some(span => quote.includes(span) || span.includes(quote))) found.set(rule.number, rule);
+    if (spans.some(span => (quote.includes(span) && span.length >= Math.ceil(quote.length * MIN_SPAN_RATIO))
+      || (span.includes(quote) && quote.length >= MIN_CONTAINED_QUOTE))) found.set(rule.number, rule);
   }
   return found.size === 1 ? [...found.values()][0] : undefined;
 }

@@ -266,6 +266,21 @@ test('only the prompt-rule check failed: the expectation is the one violated rul
   const short = explainOne({ assessments: [verdict('goal_attainment', 'pass'), complianceFail('Нарушено «сроки».')] });
   assert.equal(short.lines[1], unnamed, 'a quote shorter than 12 characters names nothing');
 
+  // A span long enough to pass the 12-character filter but far from the whole rule is a
+  // coincidence, not evidence: «по инструкциям банка» is 20 of the 36 characters of rule 5.
+  const partial = explainOne({ assessments: [verdict('goal_attainment', 'pass'),
+    complianceFail(`${AGREED_RATIONALE_PREFIX} Агент ответил не «по инструкциям банка», а своими словами.`)] });
+  assert.equal(partial.violated, undefined, 'a span covering part of one rule names nothing');
+  assert.equal(partial.lines[1], unnamed);
+  // A short rule quoted inside a long judge span is the same coincidence from the other side.
+  const swallowed = explainOne({ assessments: [verdict('goal_attainment', 'pass'),
+    complianceFail(`${AGREED_RATIONALE_PREFIX} Нарушено «агент упомянул тариф, эквайринг и сроки в одном ответе».`)] });
+  assert.equal(swallowed.violated, undefined);
+  // A near-exact span still names its rule, and so does a rule quoted whole inside a longer span.
+  const inside = explainOne({ assessments: [verdict('goal_attainment', 'pass'),
+    complianceFail(`${AGREED_RATIONALE_PREFIX} Нарушено «правило: Отвечай только по инструкциям банка. Агент ушёл в сторону».`)] });
+  assert.equal(inside.violated?.number, 5);
+
   const record = run([card('fine')], [attempt('fine', [verdict('goal_attainment', 'pass'), verdict('prompt_compliance', 'pass')])]);
   assert.equal(failureExplanation(record, record.scenarios[0]!), null, 'nothing failed, nothing to explain');
 });
