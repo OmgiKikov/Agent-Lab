@@ -7,6 +7,7 @@
 |---|---|
 | [examples/agent-oc-dialogues.py](../examples/agent-oc-dialogues.py) | прод-разметка `.xlsx` → диалоги в схеме Agent Lab |
 | [examples/agent-oc-adapter.py](../examples/agent-oc-adapter.py) | испытуемый: контракт `kind: "command"` поверх `harness_core.run_turn` |
+| [examples/agent-oc-materials.py](../examples/agent-oc-materials.py) | реестр скиллов агента → готовый вход `build --input` |
 
 ## Откуда запускать
 
@@ -112,25 +113,16 @@ python examples/agent-oc-dialogues.py \
 каждому диалогу: по ним карточка настраивается на нужный канал и прослеживается до строки
 разметки.
 
-`task-cards.json`:
+Вход для генератора карточек — реестр скиллов агента, иначе он придумает сценарии, которых в
+агенте нет. Полные тексты скиллов не годятся: их около 420 000 символов при пределе Agent Lab
+в 300 000, и это инструкции модели, а не описание покрытия.
 
-```json
-{
-  "task": "Собрать карточки бизнес-сценариев клиентов инкассации по реальным логам: какие задачи люди приносят, что они знают сами и чем заканчивается разговор.",
-  "mode": "live",
-  "scenarioCount": 10,
-  "materials": [{ "name": "Реестр скиллов и маршруты", "content": "<описание скиллов агента>" }],
-  "notes": "Клиенты пишут короткими фразами, часто не знают номера договора и путают инкассацию с эквайрингом.",
-  "settings": {
-    "provider": "giga", "model": "glm-5.2",
-    "roles": {
-      "builder": { "provider": "giga", "model": "GigaChat-3-Ultra" },
-      "simulator": { "provider": "giga", "model": "glm-5.2" },
-      "judge": { "provider": "giga", "model": "GigaChat-3-Ultra" }
-    }
-  }
-}
+```bash
+python examples/agent-oc-materials.py --root ../agent_oc --output task-cards.json
 ```
+
+В полученном файле заполните `notes` своими вводными про клиентов; модели уже проставлены
+(`glm-5.2` симулятором, `GigaChat-3-Ultra` генератором карточек и судьёй).
 
 ```bash
 node dist/cli.js build --input task-cards.json --dialogues-file dialogues.jsonl > cards-draft.json
