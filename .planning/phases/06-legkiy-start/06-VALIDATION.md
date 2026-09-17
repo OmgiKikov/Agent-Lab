@@ -3,6 +3,7 @@ phase: "6"
 slug: "legkiy-start"
 status: draft
 nyquist_compliant: true
+wave_0_planned: true
 wave_0_complete: false
 created: "2026-09-17"
 ---
@@ -59,6 +60,8 @@ Never run `npm test` or `npm run build` in the worktree. Plans run one at a time
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
 ## Wave 0 Requirements
+
+`wave_0_planned: true` and `wave_0_complete: false` are both correct at plan time, and they are consistent with `nyquist_compliant: true`: every missing test file is scheduled inside the task that needs it, and each of those tasks writes its tests first. `wave_0_complete` flips to `true` once the files below exist.
 
 - [ ] `test/connection-check.test.ts`: created in 06-01 T1.
 - [ ] `test/start-path.test.ts`: created in 06-02 T1.

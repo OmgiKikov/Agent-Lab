@@ -615,13 +615,16 @@ See the `checkConnection`, widget lifecycle and test skeletons above. All identi
 | A10 | `score` is treated as a non-offered branch (not in the locked list but not in the main path) | START-04 | The customer wants prod-dialogue scoring next; they may want it offered |
 | A11 | Exact `World`/`CallContext` literal in the `checkConnection` sketch | START-03 | Typecheck failure; fixed at implementation |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does a ping to aigw count as "free"?**
    - Known: it makes no Lab/OpenRouter call, but the mock proxies one real GigaChat call on the corp key.
    - Recommendation: call it «бесплатно для Lab» and mention «один короткий запрос к агенту» in the checklist text.
+   - **RESOLVED:** the cost is always named as Lab's own. 06-05 truth: «Lab spends $0: no Lab record is created and no OpenRouter call happens», and its Task 3 action states that the up case «makes one real agent turn: one GigaChat call through the mock on its own key». 06-01 carries the same wording into the product texts (truths on D1 and K1: «бесплатно для Lab · один короткий запрос к агенту», «Lab ничего не потратил») with a grep gate that every «бесплатно» is followed by «для Lab».
 2. **Board `d` hint.** Phase 4 rewrites the board empty state. Recommendation: Phase 6 removes the hint text only if Phase 4 kept it, and grep-anchors the edit.
+   - **RESOLVED:** 06-02 states it as a post-condition, not an edit: «No demo hint text is present in the board empty state, and the key `d` still opens the built-in example». A hint phase 4 already removed passes unchanged; 06-02 Task 2 locates it with `grep -rn` and only removes what is found.
 3. **CLI `evaluate --yes` gate.** It is out of the Pi-only scope. Recommendation: do not add it now (CI already gets invalid trials with exit code 2).
+   - **RESOLVED — deferred, not planned.** No phase-6 plan touches `src/cli.ts`: the gate lives in `extensions/agent-lab.ts` only (06-01 truths name `agent_lab_build` validate and live, `agent_lab_run` and the board run action). The Pi-only constraint in CLAUDE.md keeps the CLI out of scope; CI keeps its exit code 2 on invalid trials.
 
 ## Environment Availability
 
