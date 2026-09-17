@@ -82,7 +82,7 @@ export function ruleText(rule: RuleRef, word = 'Правило'): string {
   return `${word} ${rule.number} · ${collapse(rule.sourceName)}${rule.line === null ? '' : `, строка ${rule.line}`}: «${rule.quote}»`;
 }
 
-export function rowsToLines(rows: ExplanationRow[]): string[] {
+export function rowsToLines(rows: { indent: number; text: string }[]): string[] {
   return rows.map(row => ' '.repeat(row.indent) + row.text);
 }
 

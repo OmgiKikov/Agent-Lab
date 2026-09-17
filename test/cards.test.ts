@@ -417,7 +417,8 @@ test('the board overview shows the ResultView block verbatim and no private not-
   const view = buildResultView(record);
   const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 80);
   const cells = boardCells(board);
-  for (const expected of resultViewLines(view)) assert.ok(cells.includes(expected), `board misses block line: ${expected}`);
+  // Board cells are trimmed; the indented rows under «Не измерено» are compared without their indent.
+  for (const expected of resultViewLines(view)) assert.ok(cells.includes(expected.trim()), `board misses block line: ${expected}`);
   assert.ok(!cells.includes('НЕ ИЗМЕРЕНО'), 'the single-trial not-measured header is gone');
   const broken = record.scenarios.find(scenario => scenario.id === record.trials.find(trial => trial.outcome === 'invalid')?.scenarioId)!;
   assert.ok(!cells.includes(`${broken.title}: ОДИНОЧНЫЙ СБОЙ`), 'the first invalid trial is not picked on its own');

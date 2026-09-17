@@ -16,7 +16,8 @@ import { getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
 import { ExperimentStore } from './store.js';
-import { buildResultView, resultViewLines } from './result-view.js';
+import { allFailuresTitle, buildResultView, causeSection, failureListRows, resultViewLines, SECTION_TEXT } from './result-view.js';
+import { rowsToLines } from './explain.js';
 import { evidenceBundle, exportArtifacts, resolveVerified } from './artifacts.js';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
 
@@ -101,12 +102,13 @@ async function main() {
     if (values.json) { process.stdout.write(`${JSON.stringify({ ...q, view, warnings }, null, 2)}\n`); return; }
     const text = qualityLines(q);
     // One denominator in the first block; the other scores stay below «Подробности».
-    // Every failed situation, explained from stored data; rows are escaped one by one, never joined first.
-    const failureList = view.failures.length
-      ? ['', `Все провалы (${view.failures.length}):`, ...view.failures.flatMap((item, i) => [...(i ? [''] : []), ...item.lines.map(safeLine)])] : [];
+    // Block, top causes with a full example, every failed situation, then the details. Each row is escaped on its own.
+    const section = causeSection(view);
+    const causeLines = section ? ['', SECTION_TEXT[section.kind].text, ...rowsToLines(section.rows).map(safeLine)] : [];
+    const failureLines = view.failures.length ? ['', allFailuresTitle(view.failures.length), ...rowsToLines(failureListRows(view)).map(safeLine)] : [];
     process.stdout.write([...resultViewLines(view, { details: true }).map(safeLine), ...warnings.map(warning => `Внимание: ${safeLine(warning)}`),
-      ...failureList, '', 'Подробности:', ...text.metrics, '',
-      ...(text.causes.length ? ['Почему:', ...text.causes, ''] : []), ...(text.rag.length ? [...text.rag, ''] : []), text.queue, '', text.scope, text.limits, ''].join('\n'));
+      ...causeLines, ...failureLines, '', 'Подробности:', ...text.metrics, '',
+      ...(text.rag.length ? [...text.rag, ''] : []), text.queue, '', text.scope, text.limits, ''].join('\n'));
     return;
   }
   // Reading an atomic snapshot must not take the writer lock or mark another process interrupted.

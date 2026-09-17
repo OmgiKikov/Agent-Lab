@@ -1,7 +1,7 @@
 import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
 import { observedRecord } from './outcomes.js';
 import { cardVerdict, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
-import { failureExplanation, type FailureExplanation } from './explain.js';
+import { exampleRows, failureExplanation, rowsToLines, type ExplanationRole, type FailureExplanation } from './explain.js';
 import { pluralForm } from './plural.js';
 
 export { pluralForm } from './plural.js';
@@ -80,6 +80,8 @@ export interface ResultView {
   cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; control: boolean; unstable: boolean; provenance: Scenario['provenance'] }[];
   /** One explanation per failed situation of the headline (controls left out), in record order; built from stored data only. */
   failures: FailureExplanation[];
+  /** Up to three failure causes, largest first; each counts distinct failed situations and carries one full explanation. */
+  topCauses: { name: string; count: number; example: FailureExplanation }[];
   scope: { cards: number; synthetic: number; dialogues: number; judgeModel?: string; costUsd: number | null; target: string };
   /** Found flips against the source run, control situations left out; absent when there is nothing to compare with. Never changes the headline. */
   stability?: Stability;
@@ -90,6 +92,27 @@ function stabilityOf(input: Experiment, before: Experiment | undefined): Stabili
   if (!before) return undefined;
   if (input.assessmentOf === before.id) return stabilityAfterReassess(input, before) ?? undefined;
   return stabilityBetweenRuns(before, input);
+}
+
+/**
+ * The recorded failure clusters, counted in failed headline situations only. The example is
+ * the goal explanation of the first failing cluster attempt, or the situation's own one.
+ */
+function causesOf(record: Experiment, failures: FailureExplanation[]): ResultView['topCauses'] {
+  const failed = new Map(failures.map(item => [item.scenarioId, item]));
+  const trials = new Map(record.trials.map(trial => [trial.id, trial]));
+  const scenarios = new Map(record.scenarios.map(scenario => [scenario.id, scenario]));
+  return (record.failureModes ?? []).flatMap(mode => {
+    const attempts = mode.trialIds.flatMap(id => trials.get(id) ?? []).filter(trial => failed.has(trial.scenarioId));
+    const [first] = attempts;
+    if (!first) return [];
+    const own = attempts.map(trial => failureExplanation(record, scenarios.get(trial.scenarioId)!, trial)).find(item => item?.kind === 'goal');
+    const example = own ?? failed.get(first.scenarioId)!;
+    return [{ name: mode.name, count: new Set(attempts.map(trial => trial.scenarioId)).size, example }];
+  })
+    // Array.prototype.sort is stable: equal counts keep the recorded cluster order.
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3);
 }
 
 export function buildResultView(input: Experiment, options: { before?: Experiment } = {}): ResultView {
@@ -110,6 +133,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     if (row?.outcome !== 'fail' || row.control) return [];
     return failureExplanation(record, scenario) ?? [];
   });
+  const topCauses = causesOf(record, failures);
   const controlCards = cards.filter(card => card.control).map(card => ({ scenarioId: card.scenarioId, title: card.title, outcome: card.outcome,
     ...(card.reason ? { reason: card.reason } : {}), synthetic: card.provenance === 'synthetic', unstable: card.unstable }));
   // Worded like the control line: a failed control is «не пройден», an unmeasured one «не измерен».
@@ -155,6 +179,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     coverage: { examined, included, excluded, text: coverageText },
     cards,
     failures,
+    topCauses,
     scope: {
       cards: record.scenarios.length,
       synthetic: record.scenarios.filter(scenario => scenario.provenance === 'synthetic').length,
@@ -193,26 +218,82 @@ function controlLine(view: ResultView): string {
   return base + synthetic + unstable;
 }
 
-/** The first block of every result surface, as plain text lines. */
-export function resultViewLines(view: ResultView, options: { details?: boolean } = {}): string[] {
+export type ResultRowRole = 'lead' | 'line' | 'situation' | 'detail';
+export interface ResultRow { role: ResultRowRole; indent: number; text: string }
+
+/**
+ * The first block of every result surface as rows. Each unmeasured situation follows the
+ * `Не измерено:` row with its reason, grouped in the order of the reasons.
+ */
+export function resultViewRows(view: ResultView, options: { details?: boolean } = {}): ResultRow[] {
   const { headline, notMeasured, control, coverage } = view;
   const [main] = notMeasured.reasons;
-  const lines = control.warning ? [control.warning, headline.text] : [headline.text];
-  if (headline.smallSample) lines.push(headline.smallSample);
-  if (view.stability) lines.push(stabilityLine(view.stability));
-  if (view.pending > 0) lines.push(`Ещё проверяется: ${view.pending}.`);
+  const rows: ResultRow[] = [];
+  const add = (role: ResultRowRole, text: string, indent = 0) => { rows.push({ role: rows.length ? role : 'lead', indent, text }); };
+  if (control.warning) add('line', control.warning);
+  add('line', headline.text);
+  if (headline.smallSample) add('line', headline.smallSample);
+  if (view.stability) add('line', stabilityLine(view.stability));
+  if (view.pending > 0) add('line', `Ещё проверяется: ${view.pending}.`);
   if (notMeasured.total > 0 && main) {
-    lines.push(notMeasured.reasons.length === 1
+    add('line', notMeasured.reasons.length === 1
       ? `Не измерено: ${notMeasured.total} — ${main.label}.`
       : `Не измерено: ${notMeasured.total} — чаще всего ${main.label} (${main.count}).`);
+    const titles = new Map(view.cards.map(card => [card.scenarioId, card.title]));
+    for (const reason of notMeasured.reasons) {
+      for (const id of reason.scenarioIds) add('situation', `? ${titles.get(id) ?? id} — ${reason.label}`, 2);
+    }
   }
-  lines.push(controlLine(view));
-  if (coverage.text) lines.push(coverage.text);
+  add('line', controlLine(view));
+  if (coverage.text) add('line', coverage.text);
   if (options.details && notMeasured.reasons.length > 1) {
-    lines.push('Не измерено по причинам:', ...notMeasured.reasons.map(reason => `  ${reason.label} — ${reason.count}`));
+    add('detail', 'Не измерено по причинам:');
+    for (const reason of notMeasured.reasons) add('detail', `${reason.label} — ${reason.count}`, 2);
   }
   if (options.details && view.stability) {
-    lines.push(...view.stability.unstable.map(row => `  нестабильно: ${row.title} — было «${VERDICT_WORD[row.before]}», стало «${VERDICT_WORD[row.after]}»`));
+    for (const row of view.stability.unstable) add('detail', `нестабильно: ${row.title} — было «${VERDICT_WORD[row.before]}», стало «${VERDICT_WORD[row.after]}»`, 2);
   }
-  return lines;
+  return rows;
+}
+
+/** The first block of every result surface, as plain text lines. */
+export function resultViewLines(view: ResultView, options: { details?: boolean } = {}): string[] {
+  return rowsToLines(resultViewRows(view, options));
+}
+
+export const SECTION_TEXT = {
+  causes: { text: 'Главные причины провалов:', board: 'ГЛАВНЫЕ ПРИЧИНЫ ПРОВАЛОВ' },
+  failures: { text: 'Провалы:', board: 'ПРОВАЛЫ' },
+  all: { board: 'ВСЕ ПРОВАЛЫ', hint: 'Все провалы: Enter.' },
+} as const;
+export const allFailuresTitle = (n: number) => `Все провалы (${n}):`;
+export const allFailuresPointer = (runId: string) => `Все провалы — /agent-lab ${runId.slice(0, 8)}, раздел 1, Enter.`;
+
+export interface SectionRow { role: ExplanationRole | 'cause' | 'blank'; indent: number; text: string }
+const BLANK: SectionRow = { role: 'blank', indent: 0, text: '' };
+const SITUATION_FORMS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
+
+/** Explanation blocks separated by one blank row. */
+function blocks(items: SectionRow[][]): SectionRow[] {
+  return items.flatMap((rows, i) => i ? [BLANK, ...rows] : rows);
+}
+
+/**
+ * The top causes, each with a full example; without recorded causes, the first three failed
+ * situations under `Провалы:`; null when nothing failed. The heading is SECTION_TEXT[kind].
+ */
+export function causeSection(view: ResultView): { kind: 'causes' | 'failures'; rows: SectionRow[] } | null {
+  if (view.topCauses.length) {
+    return { kind: 'causes', rows: blocks(view.topCauses.map((cause, i) => [
+      { role: 'cause', indent: 0, text: `${i + 1}. ${cause.name} — ${cause.count} ${pluralForm(cause.count, SITUATION_FORMS)}` },
+      ...exampleRows(cause.example),
+    ])) };
+  }
+  if (!view.failures.length) return null;
+  return { kind: 'failures', rows: blocks(view.failures.slice(0, 3).map(item => item.rows)) };
+}
+
+/** Every failed situation, in record order. */
+export function failureListRows(view: ResultView): SectionRow[] {
+  return blocks(view.failures.map(item => item.rows));
 }

@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Trial, type ValidationExclusion } from '../src/contracts.js';
-import { buildResultView, NOT_MEASURED_TEXT, resultViewLines, wilson } from '../src/result-view.js';
+import { allFailuresPointer, allFailuresTitle, buildResultView, causeSection, failureListRows, NOT_MEASURED_TEXT, resultViewLines, resultViewRows, SECTION_TEXT, wilson } from '../src/result-view.js';
+import { rowsToLines } from '../src/explain.js';
 import { compareRuns, NOT_MEASURED_CODES, stabilityBetweenRuns, type NotMeasuredCode } from '../src/comparison.js';
 import { AGREED_RATIONALE_PREFIX, GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { ExperimentStore } from '../src/store.js';
@@ -87,6 +88,10 @@ const ACQUIRING_BLOCK = [
   'Справился в 0 из 9 проверенных ситуаций — 0%.',
   'Мало данных: реальная доля где-то от 0% до 30%.',
   'Не измерено: 4 — чаще всего симулятор отклонился от диалога (2).',
+  '  ? Ситуация deviated0 — симулятор отклонился от диалога',
+  '  ? Ситуация deviated1 — симулятор отклонился от диалога',
+  '  ? Ситуация unclear0 — судья не уверен, что симулятор держался диалога',
+  '  ? Ситуация split0 — судья не уверен: голоса разошлись',
   'Контроль: не задан.',
   'Из 40 диалогов в набор вошли 13. Не вошли 27: в правилах нет ожидаемого ответа — 21, нужны данные клиента — 6.',
 ];
@@ -131,7 +136,8 @@ test('no decided situation shows no percent, and the reason sits in the not-meas
   assert.equal(view.headline.accuracy, null);
   assert.equal(view.headline.range, null);
   const lines = resultViewLines(view);
-  assert.deepEqual(lines, ['Проверенных ситуаций нет.', 'Не измерено: 2 — судья не уверен: голоса разошлись.', 'Контроль: не задан.']);
+  assert.deepEqual(lines, ['Проверенных ситуаций нет.', 'Не измерено: 2 — судья не уверен: голоса разошлись.',
+    '  ? Ситуация u0 — судья не уверен: голоса разошлись', '  ? Ситуация u1 — судья не уверен: голоса разошлись', 'Контроль: не задан.']);
   assert.ok(lines.every(line => !line.includes('%')));
 });
 
@@ -149,7 +155,7 @@ test('the acquiring-shaped run gives exactly the first block promised for fae4ee
   assert.deepEqual(resultViewLines(view), ACQUIRING_BLOCK);
   assert.deepEqual(view.notMeasured.reasons.map(reason => [reason.code, reason.count]),
     [['simulator_deviated', 2], ['simulator_unclear', 1], ['judge_split', 1]]);
-  assert.deepEqual(view.coverage, { examined: 40, included: 13, text: ACQUIRING_BLOCK[4],
+  assert.deepEqual(view.coverage, { examined: 40, included: 13, text: ACQUIRING_BLOCK.at(-1),
     excluded: [{ kind: 'unconfirmed', label: 'в правилах нет ожидаемого ответа', count: 21 }, { kind: 'customer_data', label: 'нужны данные клиента', count: 6 }] });
   assert.deepEqual(resultViewLines(view, { details: true }), [...ACQUIRING_BLOCK, 'Не измерено по причинам:',
     '  симулятор отклонился от диалога — 2', '  судья не уверен, что симулятор держался диалога — 1', '  судья не уверен: голоса разошлись — 1']);
@@ -614,4 +620,127 @@ test('a control that became one turn in a repeat is another question, so its fli
   assert.ok(lines.includes('Нестабильных: 1 (повтор прогона a1b2c3d4).'));
   assert.ok(lines.includes('Контроль: пройден ✓'), lines.join('\n'));
   assert.ok(lines.every(line => !line.startsWith('Контроль:') || !line.includes('нестабильно')));
+});
+
+// ---- Phase 2: named unmeasured situations, top causes and the full failure list. ----
+
+test('every unmeasured situation sits under the not-measured row with its phase-1 reason', () => {
+  const view = buildResultView(acquiringShape());
+  const rows = resultViewRows(view);
+  const at = rows.findIndex(row => row.text.startsWith('Не измерено:'));
+  assert.deepEqual(rows.slice(at + 1, at + 5).map(row => [row.role, row.indent]), Array.from({ length: 4 }, () => ['situation', 2]));
+  assert.equal(rows[0]?.role, 'lead');
+  assert.ok(resultViewLines(view).includes('  ? Ситуация split0 — судья не уверен: голоса разошлись'));
+  const unsupported = run([card('c'), card('d')], [
+    attempt('c', { goal: 'unknown', goalRationale: `${AGREED_RATIONALE_PREFIX} ${GOAL_UNSUPPORTED_RATIONALE}` }),
+    attempt('d', { goal: 'unknown', goalRationale: SPLIT }),
+  ]);
+  const lines = resultViewLines(buildResultView(unsupported));
+  assert.ok(lines.includes('  ? Ситуация c — нет доказательства в ответе'), lines.join('\n'));
+  assert.ok(lines.includes('  ? Ситуация d — судья не уверен: голоса разошлись'), lines.join('\n'));
+});
+
+test('with nothing unmeasured there is no not-measured row and no situation row', () => {
+  const measured = buildResultView(scored(2, 1));
+  assert.deepEqual(resultViewLines(measured, { details: true }), [
+    'Справился в 2 из 3 проверенных ситуаций — 67%.', 'Мало данных: реальная доля где-то от 21% до 94%.', 'Контроль: не задан.']);
+  assert.ok(resultViewRows(measured).every(row => row.role !== 'situation'));
+  const draft = buildResultView(run([card('a')], [], { phase: 'review' }));
+  assert.ok(resultViewLines(draft).every(line => !line.includes('?')));
+  assert.equal(causeSection(measured)?.kind, 'failures');
+  assert.equal(causeSection(buildResultView(scored(2, 0))), null, 'no failures, no heading');
+  assert.deepEqual(failureListRows(buildResultView(scored(2, 0))), []);
+});
+
+/** The explanation rows of a fixture failure: no expectation, the whole reply, no rules. */
+const NO_RULE_DETAILS = (indent: string) => [
+  `${indent}Должен был: ожидание не записано в ситуации.`,
+  `${indent}Сказал (реплика #1): «Ответ агента»`,
+  `${indent}Правило: у ситуации нет правила из ваших материалов.`,
+];
+
+/** One passed and three failed situations; clusters of 1, 3, 0 (a passing card only), 1 and 1 failed situations. */
+function clustered(): Experiment {
+  const record = scored(1, 3);
+  record.failureModes = [
+    { id: 'small', name: 'Не уточняет модель терминала', description: 'd', trialIds: ['t-f1'] },
+    { id: 'big', name: 'Не называет срок возврата', description: 'd', trialIds: ['t-p0', 't-f0', 't-f1', 't-f2'] },
+    { id: 'passing', name: 'Лишние извинения', description: 'd', trialIds: ['t-p0'] },
+    { id: 'third', name: 'Отвечает вне инструкций', description: 'd', trialIds: ['t-f2'] },
+    { id: 'fourth', name: 'Путает тарифы', description: 'd', trialIds: ['t-f0'] },
+  ];
+  return record;
+}
+
+test('top causes count distinct failed situations, drop clusters without one, and keep three', () => {
+  const view = buildResultView(clustered());
+  assert.deepEqual(view.topCauses.map(cause => [cause.name, cause.count, cause.example.scenarioId]), [
+    ['Не называет срок возврата', 3, 'f0'], ['Не уточняет модель терминала', 1, 'f1'], ['Отвечает вне инструкций', 1, 'f2']]);
+  const section = causeSection(view);
+  assert.equal(section?.kind, 'causes');
+  assert.deepEqual(rowsToLines(section!.rows), [
+    '1. Не называет срок возврата — 3 ситуации',
+    '   Пример: Ситуация f0',
+    ...NO_RULE_DETAILS('     '),
+    '',
+    '2. Не уточняет модель терминала — 1 ситуация',
+    '   Пример: Ситуация f1',
+    ...NO_RULE_DETAILS('     '),
+    '',
+    '3. Отвечает вне инструкций — 1 ситуация',
+    '   Пример: Ситуация f2',
+    ...NO_RULE_DETAILS('     '),
+  ]);
+  assert.equal(SECTION_TEXT[section!.kind].text, 'Главные причины провалов:');
+  assert.equal(allFailuresTitle(16), 'Все провалы (16):');
+  assert.equal(allFailuresPointer('fae4ee59-1234'), 'Все провалы — /agent-lab fae4ee59, раздел 1, Enter.');
+});
+
+test('without clusters the first three failures are shown; the full list keeps every failure in record order', () => {
+  const view = buildResultView(scored(0, 16));
+  assert.equal(view.failures.length, 16);
+  assert.deepEqual(view.failures.map(item => item.scenarioId), Array.from({ length: 16 }, (_, i) => `f${i}`));
+  const section = causeSection(view);
+  assert.equal(section?.kind, 'failures');
+  assert.equal(SECTION_TEXT[section!.kind].text, 'Провалы:');
+  assert.deepEqual(section!.rows.filter(row => row.role === 'title').map(row => row.text), ['✗ Ситуация f0', '✗ Ситуация f1', '✗ Ситуация f2']);
+  const all = failureListRows(view);
+  assert.equal(all.filter(row => row.role === 'title').length, 16);
+  assert.equal(all.filter(row => row.role === 'blank').length, 15);
+  const jargon = /goal_attainment|prompt_compliance|user_fidelity|unknown|рубрик|протокол|кластер|метрик|judge|seq/i;
+  const acquiring = buildResultView(acquiringShape());
+  for (const line of [...rowsToLines(all), ...rowsToLines(causeSection(buildResultView(clustered()))!.rows), ...resultViewLines(acquiring, { details: true })]) {
+    assert.doesNotMatch(line, jargon, line);
+  }
+});
+
+test('CLI summary: block, top causes, every failure, then the details; the old «Почему» part is gone', { timeout: 20000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-result-view-causes-'));
+  try {
+    const record = clustered();
+    const escape = String.fromCharCode(27);
+    record.scenarios[3]!.title = `Ситуация ${escape}[31mf2`;
+    const store = new ExperimentStore(directory);
+    await store.init();
+    try { await store.save(record); } finally { await store.close(); }
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    const child = spawn(process.execPath, [cli, 'summary', '--id', record.id, '--data-dir', directory]);
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+    const code = await new Promise<number | null>(resolve => child.on('close', resolve));
+    assert.equal(code, 0, stderr);
+    assert.ok(!stdout.includes(escape), 'terminal sequences from a title never reach the output');
+    const lines = stdout.split('\n');
+    const block = resultViewLines(buildResultView(record), { details: true });
+    assert.deepEqual(lines.slice(0, block.length + 2), [...block, '', 'Главные причины провалов:']);
+    const causes = lines.indexOf('Главные причины провалов:');
+    const all = lines.indexOf('Все провалы (3):');
+    const details = lines.indexOf('Подробности:');
+    assert.ok(causes > 0 && all > causes && details > all, stdout);
+    assert.equal(lines[causes + 1], '1. Не называет срок возврата — 3 ситуации');
+    assert.equal(lines[all - 1], '');
+    assert.deepEqual(lines.slice(all + 1, details - 1).filter(line => line.startsWith('✗')), ['✗ Ситуация f0', '✗ Ситуация f1', '✗ Ситуация f2']);
+    assert.equal(lines[details - 1], '');
+    assert.ok(!lines.includes('Почему:'));
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
