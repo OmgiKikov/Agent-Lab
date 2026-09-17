@@ -20,25 +20,35 @@ const config = readGigaConfig();
 assert(config, 'Set GIGACHAT_URL, GIGACHAT_CERT_PATH and GIGACHAT_KEY_PATH first');
 const transport = createGigaTransport(config, 60000);
 
-const recordId = { type: 'string', minLength: 1, maxLength: 1000 };
-const lookup: Specification = {
+// GigaChat's functions/validate errors (a live run, quoted verbatim):
+//   "Property 'properties' does not match the schema" at #/properties/parameters
+//   "Property 'recordId' does not match the pattern schema" at #/patternProperties/recordId
+//   "Required property 'description' is missing"
+//   chat/completions 422: "Field 'properties.changes.properties' is missing"
+// Read together: every object-typed property needs its OWN nested `properties`, recursively;
+// extra JSON-Schema keys (minLength/maxLength/required/additionalProperties) are not tolerated;
+// every property needs a description. update_record's `changes` is a dynamic map (the set of
+// writable fields differs per record), which cannot list its properties in advance — so these
+// variants test encoding it as a plain string instead of a nested object schema.
+const recordId = { type: 'string', description: 'The exact record ID.' };
+const lookupBare: Specification = {
   name: 'lookup_record', description: 'Read an existing sandbox record by its exact ID.',
-  parameters: { type: 'object', properties: { recordId }, required: ['recordId'], additionalProperties: false },
+  parameters: { properties: { recordId } },
 };
-// Exactly what src/sandbox.ts declares today, including the union type and the property counts.
-const changesAsSentToday = { type: 'object', minProperties: 1, maxProperties: 16, additionalProperties: { type: ['string', 'number', 'boolean', 'null'] } };
+const lookupWithType: Specification = {
+  name: 'lookup_record', description: 'Read an existing sandbox record by its exact ID.',
+  parameters: { type: 'object', properties: { recordId }, required: ['recordId'] },
+};
 const update = (changes: Record<string, unknown>): Specification => ({
   name: 'update_record', description: 'Update existing, explicitly writable fields in an existing record.',
-  parameters: { type: 'object', properties: { recordId, changes }, required: ['recordId', 'changes'], additionalProperties: false },
+  parameters: { properties: { recordId, changes } },
 });
 
 const variants: { name: string; specifications: Specification[] }[] = [
-  { name: 'one spec: lookup_record', specifications: [lookup] },
-  { name: 'one spec: update_record as sent today', specifications: [update(changesAsSentToday)] },
-  { name: 'two specs as sent today', specifications: [lookup, update(changesAsSentToday)] },
-  { name: 'two specs, changes with a single type instead of a union', specifications: [lookup, update({ type: 'object', minProperties: 1, maxProperties: 16, additionalProperties: { type: 'string' } })] },
-  { name: 'two specs, changes without minProperties/maxProperties', specifications: [lookup, update({ type: 'object', additionalProperties: { type: ['string', 'number', 'boolean', 'null'] } })] },
-  { name: 'two specs, changes as a bare object', specifications: [lookup, update({ type: 'object' })] },
+  { name: 'lookup_record: bare properties, described, no type/required', specifications: [lookupBare] },
+  { name: 'lookup_record: with type object and required (today\'s shape, minus min/maxLength)', specifications: [lookupWithType] },
+  { name: 'update_record: changes as a described string instead of a nested object', specifications: [update({ type: 'string', description: 'A JSON object of field:value pairs to change, encoded as a string, e.g. {"status":"delivered"}.' })] },
+  { name: 'update_record: changes as a bare described object (no nested properties)', specifications: [update({ type: 'object', description: 'A map of field:value pairs to change.' })] },
 ];
 
 console.log('--- step 0: POST /v1/functions/validate on each function alone ---');
