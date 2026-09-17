@@ -601,3 +601,17 @@ test('a control that flipped in a repeat is marked on its line and left out of t
   assert.ok(lines.includes('Нестабильных: 1 (повтор прогона a1b2c3d4).'));
   assert.ok(lines.includes('Контроль: пройден ✓ · нестабильно'));
 });
+
+test('a control that became one turn in a repeat is another question, so its flip is never called unstable', () => {
+  const { source, repeat } = repeatPair({ A: 'fail', B: 'pass' }, { A: 'pass', B: 'fail' });
+  source.scenarios.find(s => s.id === 'A')!.user.maxFollowUps = 5;
+  repeat.scenarios.find(s => s.id === 'A')!.user.maxFollowUps = 0;
+  repeat.positiveControlScenarioIds = ['A'];
+  const stability = stabilityBetweenRuns(source, repeat);
+  assert.equal(stability.skipped, null);
+  assert.deepEqual(stability.unstable.map(row => row.scenarioId), ['B'], 'the counted card that flipped is still reported');
+  const lines = resultViewLines(buildResultView(repeat, { before: source }));
+  assert.ok(lines.includes('Нестабильных: 1 (повтор прогона a1b2c3d4).'));
+  assert.ok(lines.includes('Контроль: пройден ✓'), lines.join('\n'));
+  assert.ok(lines.every(line => !line.startsWith('Контроль:') || !line.includes('нестабильно')));
+});

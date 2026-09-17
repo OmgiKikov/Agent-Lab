@@ -1765,6 +1765,16 @@ test('a positive control rides on the record: hashes and card identity unchanged
   const suite = await lab.saveSuite(reassessed.id, join(directory, 'control-suite.json'));
   const loaded = await lab.loadSuite(suite);
   assert.deepEqual(loaded.positiveControlScenarioIds, [a]);
+  // A suite whose control card still allows follow-ups loads as a one-turn control; the other card is untouched.
+  const plainSuite = JSON.parse(await readFile(await lab.saveSuite(source.id, join(directory, 'plain-suite.json')), 'utf8'));
+  plainSuite.definition.positiveControlScenarioIds = [a];
+  plainSuite.definition.scenarios.find((s: { id: string }) => s.id === a).user.maxFollowUps = 5;
+  const multiTurn = join(directory, 'multi-turn-control-suite.json');
+  await writeFile(multiTurn, JSON.stringify(plainSuite), { mode: 0o600 });
+  const oneTurn = await lab.loadSuite(multiTurn);
+  assert.deepEqual(oneTurn.positiveControlScenarioIds, [a]);
+  assert.equal(oneTurn.scenarios.find(s => s.id === a)!.user.maxFollowUps, 0);
+  assert.equal(oneTurn.scenarios.find(s => s.id === b)!.user.maxFollowUps, plainSuite.definition.scenarios.find((s: { id: string }) => s.id === b).user.maxFollowUps);
   const narrowed = await lab.repeat(ran.id, [b]);
   assert.equal('positiveControlScenarioIds' in narrowed, false);
   assert.deepEqual((await lab.repeat(ran.id, [a])).positiveControlScenarioIds, [a]);

@@ -723,3 +723,40 @@ test('a rebuilt source keeps its card identity when control situations are left 
   assert.equal(editedDiff.comparable, false);
   assert.ok(editedDiff.notes.some(note => note.startsWith('Содержимое карточек изменилось')), editedDiff.notes.join(' '));
 });
+
+test('a control in either run is left out of the diff: union, added control, selected tests and the same run', () => {
+  const SOURCE = 'c0ffee00-0000-4000-8000-000000000010', REPEAT = 'c0ffee00-0000-4000-8000-000000000011';
+  const assertComparable = (diff: ReturnType<typeof compareRuns>) => {
+    assert.equal(diff.comparable, true, diff.notes.join(' '));
+    assert.ok(diff.notes.includes(CONTROL_NOTE));
+    assert.ok(diff.notes.every(note => !note.startsWith('Набор карточек изменился') && !note.startsWith('Содержимое карточек изменилось')), diff.notes.join(' '));
+    assert.ok([...diff.pairs, ...diff.incomparable].every(row => row.scenarioId !== 'ctl'));
+  };
+
+  // Union: the control is marked only in the source run, and its card differs in the repeat.
+  const marked = goalRun(SOURCE, { s1: 'pass', ctl: 'pass' }, 'h', { positiveControlScenarioIds: ['ctl'] });
+  const unmarked = goalRun(REPEAT, { s1: 'pass', ctl: 'fail' }, 'h', { parentRunId: SOURCE });
+  unmarked.scenarios.find(s => s.id === 'ctl')!.user.maxFollowUps = 0;
+  const union = compareRuns(marked, unmarked);
+  assertComparable(union);
+  assert.equal(union.cards.shared, 1);
+
+  // Added: the repeat has a control card the source never had.
+  const plain = goalRun(SOURCE, { s1: 'pass', s2: 'fail' }, 'h');
+  const added = goalRun(REPEAT, { s1: 'pass', s2: 'fail', ctl: 'pass' }, 'h', { parentRunId: SOURCE, positiveControlScenarioIds: ['ctl'] });
+  const addedDiff = compareRuns(plain, added);
+  assertComparable(addedDiff);
+  assert.deepEqual(addedDiff.cards.onlyAfter, []);
+
+  // Selected tests: the subset names the control and one counted card.
+  const full = goalRun(SOURCE, { s1: 'pass', s2: 'fail', s3: 'pass', ctl: 'pass' }, 'h');
+  const subset = goalRun(REPEAT, { ctl: 'pass', s1: 'pass' }, 'h', { parentRunId: SOURCE, selectedScenarioIds: ['ctl', 's1'], positiveControlScenarioIds: ['ctl'] });
+  const selected = compareRuns(full, subset);
+  assertComparable(selected);
+  assert.ok(selected.headline.startsWith('Выбранные тесты (1/'), selected.headline);
+  assert.ok(selected.notes.includes('Сравнение относится только к явно выбранным тестам. Остальной регрессионный набор не проверен.'));
+
+  // The same run: only the same-run note decides, the control note follows it.
+  const self = goalRun(SOURCE, { s1: 'pass', ctl: 'pass' }, 'h', { positiveControlScenarioIds: ['ctl'] });
+  assert.deepEqual(compareRuns(self, self).notes, ['Выбран один и тот же прогон.', 'Контрольные ситуации не сравниваются: они не входят в главное число.']);
+});
