@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { sourceIdentity } from '../src/normalize.js';
-import { awaitingVerdict, compareRuns, evidenceSummary, humanFindings, isAgentFailure, judgeModel, repeatResults, stabilityAfterReassess, verdictSummary } from '../src/comparison.js';
+import { awaitingVerdict, cardOutcome, cardVerdict, compareRuns, evidenceSummary, goalCardOutcome, headlineCardOutcome, humanFindings, isAgentFailure, judgeModel, repeatResults, stabilityAfterReassess, verdictSummary } from '../src/comparison.js';
 import { embeddedBefore } from '../src/artifacts.js';
 import { suiteEvidence } from '../src/connection.js';
-import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources, sealJudgeReceipt } from '../src/judge.js';
-import { emptyUsage, fingerprint, goalAttainment, settingsSchema, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
+import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources, sealJudgeReceipt, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
+import { emptyUsage, fingerprint, goalAttainment, promptCompliance, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
 
 const TRUSTED = 30;
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
@@ -837,4 +837,119 @@ test('a quick agreement is not a human remark, a quick disagreement still is', (
 
   const full = { ...both, humanReviews: [review('full', 't', 'fail', { metricId: 'goal' })] };
   assert.equal(humanFindings(full).length, 1, 'a full review on the same rubric is reported as before');
+});
+
+// ---- The headline rule (03.1): the goal and, when the card has it, the prompt rules; one gate for both. ----
+type Vote = 'pass' | 'fail' | 'unknown';
+const SPLIT = `${SPLIT_RATIONALE_PREFIX} pass / fail. Основания каждой оценки сохранены в judgeAudit.`;
+const RULED = [{ ...goalAttainment }, { ...promptCompliance }, { ...simulatorFidelity }];
+/** A card with the acquiring rubrics (goal, prompt rules, simulator fidelity) and no exact checks. */
+function ruledCard(id: string, metrics = RULED): Scenario { return { ...scenario(id), checks: [], metrics }; }
+const judged = (metricId: string, result: Vote, rationale = 'r'): MetricAssessment => ({ metricId, result, rationale, evidence: result === 'unknown' ? [] : [1] });
+/** One reactive attempt: opening, reply, and the simulator closing the dialogue, so fidelity applies. */
+function ruledAttempt(id: string, scenarioId: string, votes: MetricAssessment[], extra: Partial<Trial> = {}): Trial {
+  return { ...trial(id, scenarioId, 'reactive', 'ungraded', { assessments: votes, events: dialogue(['hello'], 'done') }), checks: [], ...extra };
+}
+const votes = (goal: Vote, rules: Vote, fidelity: Vote = 'pass', extra: MetricAssessment[] = []): MetricAssessment[] =>
+  [judged('goal_attainment', goal, goal === 'unknown' ? SPLIT : 'r'), judged('prompt_compliance', rules, rules === 'unknown' ? SPLIT : 'r'), judged('user_fidelity', fidelity), ...extra];
+function ruledRun(cards: Scenario[], trials: Trial[], overrides: Partial<Experiment> = {}): Experiment {
+  return record({ id: 'ruled', settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1 }), scenarios: cards, trials, ...overrides });
+}
+/** One card `c` with one attempt; returns the headline outcome, the verdict with its reason and the goal-only outcome. */
+function one(assessments: MetricAssessment[], extra: Partial<Trial> = {}, overrides: Partial<Experiment> = {}, card = ruledCard('c')) {
+  const run = ruledRun([card], [ruledAttempt('t', 'c', assessments, extra)], overrides);
+  return { headline: headlineCardOutcome(run, card), verdict: cardVerdict(run, card), goal: goalCardOutcome(run, card), run, card };
+}
+
+test('the headline card passes only when the goal and the prompt rules pass; either failing fails it', () => {
+  assert.deepEqual(one(votes('pass', 'pass')).headline, { outcome: 'pass', goal: 'pass', rules: 'pass' });
+  assert.deepEqual(one(votes('pass', 'fail')).headline, { outcome: 'fail', goal: 'pass', rules: 'fail' }, 'a met request that broke a prompt rule is not «справился»');
+  assert.deepEqual(one(votes('fail', 'pass')).headline, { outcome: 'fail', goal: 'fail', rules: 'pass' });
+  assert.deepEqual(one(votes('fail', 'fail')).headline, { outcome: 'fail', goal: 'fail', rules: 'fail' });
+  assert.deepEqual(one(votes('unknown', 'fail')).headline, { outcome: 'fail', goal: 'unknown', rules: 'fail' }, 'an undecided goal next to broken rules is still a failure');
+  assert.deepEqual(one(votes('pass', 'unknown')).headline, { outcome: 'unknown', goal: 'pass', rules: 'unknown' });
+  assert.deepEqual(one(votes('pass', 'unknown')).verdict, { outcome: 'unknown', reason: 'judge_split' }, 'the rules vote that split names the reason');
+  assert.deepEqual(one(votes('unknown', 'pass')).headline, { outcome: 'unknown', goal: 'unknown', rules: 'pass' });
+  assert.deepEqual(one(votes('unknown', 'pass')).verdict, { outcome: 'unknown', reason: 'judge_split' });
+  assert.deepEqual(one(votes('pass', 'pass')).verdict, { outcome: 'pass' });
+  assert.deepEqual(one(votes('pass', 'fail')).verdict, { outcome: 'fail' });
+  // The other undecided rules reasons reuse the goal ladder.
+  const unjudgedRules = one([judged('goal_attainment', 'pass'), judged('user_fidelity', 'pass')]);
+  assert.deepEqual(unjudgedRules.verdict, { outcome: 'unknown', reason: 'not_judged' });
+  assert.deepEqual(one(votes('pass', 'unknown').map(v => v.metricId === 'prompt_compliance' ? { ...v, rationale: 'Условие не проверялось.' } : v)).verdict,
+    { outcome: 'unknown', reason: 'judge_unclear' });
+  assert.deepEqual(one(votes('pass', 'fail'), {}, { humanReviews: [review('h', 't', 'unknown', { metricId: 'prompt_compliance' })] }).verdict,
+    { outcome: 'unknown', reason: 'human_unknown' }, 'a full «не могу сказать» on the rules takes the card out of the number');
+});
+
+test('an unusable measurement stays unknown with its reason whatever the rules say', () => {
+  const deviated = one(votes('pass', 'fail', 'fail'));
+  assert.deepEqual(deviated.headline, { outcome: 'unknown', goal: 'unknown', rules: 'unknown' }, 'the gate runs before any fail is read');
+  assert.deepEqual(deviated.verdict, { outcome: 'unknown', reason: 'simulator_deviated' });
+  const errored = one(votes('pass', 'fail'), { assessmentError: 'Judge response rejected; original responses and errors are preserved in judgeAudit' });
+  assert.deepEqual(errored.headline, { outcome: 'unknown', goal: 'unknown', rules: 'unknown' });
+  assert.deepEqual(errored.verdict, { outcome: 'unknown', reason: 'judge_error' });
+  const invalid = one(votes('pass', 'fail'), {}, { humanReviews: [review('h', 't', 'invalid')] });
+  assert.deepEqual(invalid.headline, { outcome: 'unknown', goal: 'unknown', rules: 'unknown' });
+  assert.deepEqual(invalid.verdict, { outcome: 'unknown', reason: 'human_invalid' });
+  const unreset = one(votes('pass', 'fail'), {}, {}, { ...ruledCard('c'), initialState: { ...world, external: { account: 'a1' } } });
+  assert.deepEqual(unreset.verdict, { outcome: 'unknown', reason: 'reset_unconfirmed' });
+});
+
+test('two attempts: a rules failure in one of them fails the card; a missing attempt leaves it unknown', () => {
+  const card = ruledCard('c');
+  const two = { settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 2 }) };
+  const mixed = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'pass')), ruledAttempt('t1', 'c', votes('pass', 'fail'), { repeat: 1 })], two);
+  assert.deepEqual(headlineCardOutcome(mixed, card), { outcome: 'fail', goal: 'pass', rules: 'fail' });
+  const clean = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'pass')), ruledAttempt('t1', 'c', votes('pass', 'pass'), { repeat: 1 })], two);
+  assert.deepEqual(headlineCardOutcome(clean, card), { outcome: 'pass', goal: 'pass', rules: 'pass' });
+  const missing = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'fail'))], two);
+  assert.deepEqual(headlineCardOutcome(missing, card), { outcome: 'unknown', goal: 'unknown', rules: 'unknown' });
+  assert.deepEqual(cardVerdict(missing, card), { outcome: 'unknown', reason: 'attempts_mismatch' });
+  assert.deepEqual(headlineCardOutcome(missing, card, { partial: true }), { outcome: 'fail', goal: 'pass', rules: 'fail' }, 'the partial gate decides the matched attempts alone');
+  const foreign = ruledRun([card], [ruledAttempt('t', 'c', votes('pass', 'fail'), { manifestHash: 'other' })]);
+  assert.deepEqual(cardVerdict(foreign, card), { outcome: 'unknown', reason: 'attempts_mismatch' });
+  assert.equal(headlineCardOutcome(foreign, card, { partial: true }).outcome, 'unknown', 'a foreign attempt is never decided, even partially');
+});
+
+test('a card without the prompt-rule check is decided by its goal; reply quality never moves the headline', () => {
+  const goalOnly = ruledCard('c', [{ ...goalAttainment }, { ...replyQuality }, { ...simulatorFidelity }]);
+  const passed = one([judged('goal_attainment', 'pass'), judged('reply_quality', 'fail'), judged('user_fidelity', 'pass')], {}, {}, goalOnly);
+  assert.deepEqual(passed.headline, { outcome: 'pass', goal: 'pass', rules: 'none' });
+  assert.deepEqual(passed.verdict, { outcome: 'pass' });
+  const ruled = one(votes('pass', 'pass', 'pass', [judged('reply_quality', 'fail')]), {}, {}, ruledCard('c', [...RULED, { ...replyQuality }]));
+  assert.deepEqual(ruled.headline, { outcome: 'pass', goal: 'pass', rules: 'pass' }, 'goal pass + rules pass + quality fail is «справился»');
+  assert.equal(cardOutcome(ruled.run, ruled.card), 'fail', 'the strict card outcome still sees the quality failure');
+});
+
+test('a legacy card without the goal rubric keeps the strict card outcome, with no goal and no rules part', () => {
+  const legacy = ruledCard('c', [{ ...replyQuality }, { ...simulatorFidelity }]);
+  const failed = one([judged('reply_quality', 'fail'), judged('user_fidelity', 'pass')], {}, {}, legacy);
+  assert.deepEqual(failed.headline, { outcome: 'fail', goal: 'none', rules: 'none' });
+  assert.equal(failed.headline.outcome, cardOutcome(failed.run, legacy));
+  assert.equal(failed.goal, cardOutcome(failed.run, legacy));
+  const passed = one([judged('reply_quality', 'pass'), judged('user_fidelity', 'pass')], {}, {}, legacy);
+  assert.deepEqual(passed.headline, { outcome: 'pass', goal: 'none', rules: 'none' });
+  assert.deepEqual(passed.verdict, { outcome: 'pass' });
+});
+
+test('a human verdict on the prompt rules applies to the headline; a quick «не могу сказать» leaves the judge in place', () => {
+  const overruled = one(votes('pass', 'fail'), {}, { humanReviews: [review('h', 't', 'pass', { metricId: 'prompt_compliance' })] });
+  assert.deepEqual(overruled.headline, { outcome: 'pass', goal: 'pass', rules: 'pass' });
+  const doubted = one(votes('pass', 'fail'), {}, { humanReviews: [{ ...review('h', 't', 'unknown', { metricId: 'prompt_compliance' }), source: 'quick', judgeVerdict: 'fail' }] });
+  assert.deepEqual(doubted.headline, { outcome: 'fail', goal: 'pass', rules: 'fail' });
+  assert.deepEqual(doubted.verdict, { outcome: 'fail' });
+});
+
+test('goalCardOutcome is the goal-only result in every case, and the control verdict reads it', () => {
+  const cases: [Vote, Vote, Vote][] = [['pass', 'pass', 'pass'], ['pass', 'fail', 'pass'], ['fail', 'pass', 'fail'], ['fail', 'fail', 'fail'],
+    ['unknown', 'fail', 'unknown'], ['pass', 'unknown', 'pass'], ['unknown', 'pass', 'unknown']];
+  for (const [goal, rules, expected] of cases) {
+    const found = one(votes(goal, rules));
+    assert.equal(found.goal, expected, `${goal}/${rules}`);
+    assert.equal(found.headline.goal, expected, `${goal}/${rules} goal part`);
+    assert.equal(cardVerdict(found.run, found.card, 'goal').outcome, expected, `${goal}/${rules} goal verdict`);
+  }
+  assert.equal(one(votes('pass', 'fail', 'fail')).goal, 'unknown', 'the goal-only result keeps the usability gate');
+  assert.deepEqual(cardVerdict(one(votes('unknown', 'fail')).run, ruledCard('c'), 'goal'), { outcome: 'unknown', reason: 'judge_split' }, 'the goal-only reasons ignore the rules vote');
 });

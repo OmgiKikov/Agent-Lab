@@ -105,3 +105,42 @@ export function automaticTrialResult(scenario: Scenario | undefined, trial: Tria
   return (!scenario.checks.length || trial.outcome === 'pass')
     && (rubric === 'pass' || (rubric === undefined && scenario.checks.length > 0)) ? 'pass' : 'unknown';
 }
+
+/** The agent metric the headline reads first: whether the client's request was carried out. */
+export const GOAL_METRIC_ID = 'goal_attainment';
+/** The agent metric that says whether the agent kept the observable rules of its own prompt. */
+export const RULES_METRIC_ID = 'prompt_compliance';
+/**
+ * The counting rule of the headline: a situation is «справился» only when the request was met
+ * and, where the card carries the prompt-rule check, no rule was broken. The previous rule was
+ * `goal-v1` (goal only). It is derived when a result is shown and stamped by the lab on quick
+ * marks (03.1-02), never stored on a run record: every stored run is recounted by the current
+ * rule. It lives here because experiment.ts needs it and must not import result-view.ts.
+ */
+export const COUNTING_RULES = 'goal-and-rules-v2';
+
+/**
+ * The agent metrics the headline counts for this card, goal first: [] for a legacy card without
+ * the goal rubric (the strict card outcome decides it), [GOAL_METRIC_ID, RULES_METRIC_ID] when the
+ * card also carries the prompt-rule check, else [GOAL_METRIC_ID]. Reply quality and the RAG
+ * rubrics are never returned: they keep their own rows and never move the number.
+ */
+export function headlineMetricIds(scenario: Scenario | undefined): string[] {
+  const agent = (scenario?.metrics ?? []).filter(m => m.subject === 'agent').map(m => m.id);
+  if (!agent.includes(GOAL_METRIC_ID)) return [];
+  return agent.includes(RULES_METRIC_ID) ? [GOAL_METRIC_ID, RULES_METRIC_ID] : [GOAL_METRIC_ID];
+}
+
+/**
+ * One attempt decided by the headline rule: unknown when the measurement is unusable, the strict
+ * automatic result for a legacy card, else the headline metrics combined fail-first — any fail is
+ * a fail, all pass is a pass, anything else is unknown. Reads recorded assessments with the
+ * human verdicts applied as in agentMetricResult.
+ */
+export function headlineTrialResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' {
+  if (!scenario || !measurementUsable(scenario, trial, reviews)) return 'unknown';
+  const ids = headlineMetricIds(scenario);
+  if (!ids.length) return automaticTrialResult(scenario, trial, reviews);
+  const results = ids.map(id => agentMetricResult(trial, id, reviews) ?? 'unknown');
+  return results.includes('fail') ? 'fail' : results.every(r => r === 'pass') ? 'pass' : 'unknown';
+}

@@ -1,20 +1,21 @@
 import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
-import { observedRecord } from './outcomes.js';
+import { COUNTING_RULES, observedRecord } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
-import { cardVerdict, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
+import { cardVerdict, headlineCardOutcome, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
 import { exampleRows, failureExplanation, rowsToLines, type ExplanationRole, type FailureExplanation } from './explain.js';
 import { pluralForm } from './plural.js';
 
 export { pluralForm } from './plural.js';
+export { COUNTING_RULES } from './outcomes.js';
 
 /*
  * The one result every surface shows first: how many situations the agent handled, over one
  * denominator, what was not measured and why, and which dialogues never entered the set.
  * Pure: no I/O, no escaping (each surface escapes at its own boundary). Cards are decided by
  * cardVerdict in comparison.ts; this module only counts and words them. It must not import
- * quality.ts or experiment.ts, so quality.ts can reuse pluralForm without a cycle.
+ * quality.ts or experiment.ts, so quality.ts can reuse pluralForm without a cycle. The counting
+ * rule COUNTING_RULES lives in outcomes.ts and is re-exported here for the surfaces.
  */
-export const COUNTING_RULES = 'goal-v1';
 
 /** Below this many decided situations the headline percent is shown with its Wilson range. */
 const SMALL_SAMPLE = 20;
@@ -78,9 +79,15 @@ export interface ResultView {
   /** Cards still waiting in a running phase; never part of notMeasured. */
   pending: number;
   notMeasured: { total: number; reasons: { code: NotMeasuredCode; label: string; count: number; scenarioIds: string[] }[] };
-  control: { cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; synthetic: boolean; unstable: boolean }[]; warning: string | null };
+  /** The positive controls: `outcome` is the goal-only verdict the control is decided by; `rules` is its prompt-rule result, shown in words and never an alarm ('none' without the check). */
+  control: { cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; rules: CardOutcome | 'none'; synthetic: boolean; unstable: boolean }[]; warning: string | null };
   coverage: { examined: number; included: number; excluded: { kind: ExclusionKind; label: string; count: number }[]; text: string | null };
-  cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; control: boolean; unstable: boolean; provenance: Scenario['provenance'] }[];
+  /**
+   * One row per card: `outcome` is the headline verdict (goal-only for a control); `goal` and `rules`
+   * are its two parts — the goal result and the prompt-rule result — each 'none' when the card has no
+   * such check (a legacy card without the goal rubric has neither).
+   */
+  cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; goal: CardOutcome | 'none'; rules: CardOutcome | 'none'; control: boolean; unstable: boolean; provenance: Scenario['provenance'] }[];
   /** One explanation per failed situation of the headline (controls left out), in record order; built from stored data only. */
   failures: FailureExplanation[];
   /** Up to three failure causes, largest first; each counts distinct failed situations and carries one full explanation. */
@@ -137,9 +144,11 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const unstableIds = new Set(found?.unstable.map(row => row.scenarioId) ?? []);
   const stability = found && { ...found, unstable: found.unstable.filter(row => !controlIds.has(row.scenarioId)) };
   const cards: ResultView['cards'] = record.scenarios.map(scenario => {
-    const verdict = cardVerdict(record, scenario);
+    // A control is decided by its goal alone; every counted card by the goal and the prompt rules.
+    const verdict = cardVerdict(record, scenario, controlIds.has(scenario.id) ? 'goal' : 'headline');
+    const parts = headlineCardOutcome(record, scenario);
     return { scenarioId: scenario.id, title: scenario.title, outcome: verdict.outcome, ...(verdict.reason ? { reason: verdict.reason } : {}),
-      control: controlIds.has(scenario.id), unstable: unstableIds.has(scenario.id), provenance: scenario.provenance };
+      goal: parts.goal, rules: parts.rules, control: controlIds.has(scenario.id), unstable: unstableIds.has(scenario.id), provenance: scenario.provenance };
   });
   const counted = cards.filter(card => !card.control);
   const failures = record.scenarios.flatMap(scenario => {
@@ -149,7 +158,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   });
   const topCauses = causesOf(record, failures);
   const controlCards = cards.filter(card => card.control).map(card => ({ scenarioId: card.scenarioId, title: card.title, outcome: card.outcome,
-    ...(card.reason ? { reason: card.reason } : {}), synthetic: card.provenance === 'synthetic', unstable: card.unstable }));
+    ...(card.reason ? { reason: card.reason } : {}), rules: card.rules, synthetic: card.provenance === 'synthetic', unstable: card.unstable }));
   // Worded like the control line: a failed control is «не пройден», an unmeasured one «не измерен».
   const controlFailed = controlCards.some(card => card.outcome === 'fail');
   const controlUnmeasured = controlCards.some(unmeasuredControl);

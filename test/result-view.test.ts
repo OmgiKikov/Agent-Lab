@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Trial, type ValidationExclusion } from '../src/contracts.js';
+import { emptyUsage, goalAttainment, promptCompliance, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Trial, type ValidationExclusion } from '../src/contracts.js';
 import { agreementNextStep, agreementSectionLines, allFailuresPointer, allFailuresTitle, buildResultView, causeSection, disagreementRows, disagreementTitle, DISAGREEMENT_BOARD_TITLE, failureListRows, NOT_MEASURED_TEXT, resultViewLines, resultViewRows, SECTION_TEXT, unmeasuredControl, wilson } from '../src/result-view.js';
 import { assertPlainCopy } from './helpers/copy-check.js';
 import { rowsToLines } from '../src/explain.js';
@@ -106,7 +106,7 @@ test('the headline names passed over decided situations and the Wilson caveat fo
   assert.equal(view.headline.text, 'Справился в 3 из 12 проверенных ситуаций — 25%.');
   assert.equal(view.headline.smallSample, 'Мало данных: реальная доля где-то от 9% до 53%.');
   assert.deepEqual(resultViewLines(view).slice(0, 2), [view.headline.text, view.headline.smallSample]);
-  assert.equal(view.countingRules, 'goal-v1');
+  assert.equal(view.countingRules, 'goal-and-rules-v2');
   assert.equal(buildResultView(scored(1, 0)).headline.text, 'Справился в 1 из 1 проверенной ситуации — 100%.');
 });
 
@@ -708,6 +708,29 @@ test('a control id that is not in the set is ignored by the view', () => {
   assert.equal(view.control.cards.length, 0);
   assert.equal(view.headline.decided, 12);
   assert.ok(resultViewLines(view).includes('Контроль: не задан.'));
+});
+
+// ---- Phase 03.1: the control is decided by its goal alone; a counted card by the goal and the prompt rules. ----
+const RULED_METRICS = [{ ...goalAttainment }, { ...promptCompliance }, { ...simulatorFidelity }];
+/** One reactive attempt whose request was met but which broke a prompt rule (the shape of the stored control ae812a24). */
+const metButBroke = (id: string) => attempt(id, { assessments: [vote('goal_attainment', 'pass'), vote('prompt_compliance', 'fail'), vote('user_fidelity', 'pass')] });
+
+test('a control that met its goal but broke a rule still passes as a control, while the same counted card fails the headline', () => {
+  const record = run([card('ctl', { metrics: RULED_METRICS }), card('c', { metrics: RULED_METRICS })], [metButBroke('ctl'), metButBroke('c')],
+    { positiveControlScenarioIds: ['ctl'] });
+  const view = buildResultView(record);
+  assert.equal(view.headline.text, 'Справился в 0 из 1 проверенной ситуации — 0%.');
+  assert.deepEqual([view.headline.passed, view.headline.decided], [0, 1], 'the control is left out of the number');
+  const control = view.cards.find(item => item.scenarioId === 'ctl')!;
+  assert.deepEqual([control.outcome, control.goal, control.rules, control.control], ['pass', 'pass', 'fail', true]);
+  assert.deepEqual(view.control.cards.map(item => [item.outcome, item.rules]), [['pass', 'fail']]);
+  assert.equal(view.control.warning, null, 'a broken rule on the control is shown, never the «числу пока не верить» alarm');
+  const counted = view.cards.find(item => item.scenarioId === 'c')!;
+  assert.deepEqual([counted.outcome, counted.goal, counted.rules], ['fail', 'pass', 'fail']);
+  assert.equal(view.countingRules, 'goal-and-rules-v2');
+  // The phase-1 fixtures carry no prompt rules: their cards say so instead of inventing a rules result.
+  const plain = buildResultView(scored(1, 1));
+  assert.deepEqual(plain.cards.map(item => [item.goal, item.rules]), [['pass', 'none'], ['fail', 'none']]);
 });
 
 test('a control that flipped in a repeat is marked on its line and left out of the instability count', () => {
