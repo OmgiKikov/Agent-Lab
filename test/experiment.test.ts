@@ -649,17 +649,15 @@ test('accepting a draft records exact one-test review metadata without granting 
   assert.deepEqual(repeated.acceptedTests, []);
 });
 
-test('accepting rejects zero, multiple, compare and non-review drafts without mutation', async t => {
+test('accepting rejects an empty draft, a compare record and a started run without mutation', async t => {
   const { lab } = await setup(t, createDemoRuntime());
   const one = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 }); await lab.waitForIdle();
   const emptyRecord = await lab.get(one.id); emptyRecord.scenarios = []; await lab.store.save(emptyRecord);
-  await assert.rejects(lab.acceptDraft(emptyRecord.id, draftHash(emptyRecord)), /ровно один/i);
+  await assert.rejects(lab.acceptDraft(emptyRecord.id, draftHash(emptyRecord)), /нечего/i);
   assert.deepEqual(await lab.get(emptyRecord.id), emptyRecord);
 
   const many = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2 }); await lab.waitForIdle();
   const manyRecord = await lab.get(many.id);
-  await assert.rejects(lab.acceptDraft(manyRecord.id, draftHash(manyRecord)), /ровно один/i);
-  assert.deepEqual(await lab.get(manyRecord.id), manyRecord);
 
   const compare = await lab.create(demoInput()); await lab.waitForIdle();
   const compareRecord = await lab.get(compare.id);
@@ -670,6 +668,32 @@ test('accepting rejects zero, multiple, compare and non-review drafts without mu
   const completed = await lab.get(manyRecord.id);
   await assert.rejects(lab.acceptDraft(completed.id, draftHash(completed)), /черновик/i);
   assert.deepEqual(await lab.get(completed.id), completed);
+});
+
+test('one confirmation covers every situation of the draft and keeps unchanged entries', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const created = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2 }); await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  assert.equal(draft.scenarios.length, 2, draft.error ?? '');
+  const hash = draftHash(draft);
+
+  await assert.rejects(lab.acceptDraft(draft.id, '0'.repeat(64)), /Черновик изменился, пока вы смотрели/);
+  assert.deepEqual(await lab.get(draft.id), draft, 'a stale confirmation writes nothing');
+
+  const accepted = await lab.acceptDraft(draft.id, hash);
+  assert.equal(accepted.acceptedDraftHash, hash);
+  assert.deepEqual(accepted.acceptedTests!.map(test => test.scenarioId), accepted.scenarios.map(scenario => scenario.id));
+  assert.deepEqual(accepted.acceptedTests!.map(test => test.definitionHash), accepted.scenarios.map(scenario => fingerprint(scenario)));
+  assert.deepEqual(await lab.acceptDraft(draft.id, hash), accepted, 'confirming the same draft twice writes nothing');
+  assert.equal((await lab.get(draft.id)).updatedAt, accepted.updatedAt);
+
+  const kept = accepted.scenarios[1]!.id;
+  const keptEntry = accepted.acceptedTests!.find(test => test.scenarioId === kept)!;
+  const edited = await lab.updateDraft(draft.id, hash, { scenarios: [{ ...accepted.scenarios[0]!, title: 'Другая ситуация' }] });
+  assert.deepEqual(edited.acceptedTests!.map(test => test.scenarioId), [kept], 'only the untouched situation stays confirmed');
+  const again = await lab.acceptDraft(edited.id, draftHash(edited));
+  assert.equal(again.acceptedTests!.length, 2);
+  assert.deepEqual(again.acceptedTests!.find(test => test.scenarioId === kept), keptEntry, 'an unchanged situation keeps its entry');
 });
 
 test('validation grounds expectations and user facts, uses reactive turns, excludes missing customer data and masked dialogues', async t => {

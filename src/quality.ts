@@ -1,9 +1,9 @@
 import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, UserMode, ValidationExclusion } from './contracts.js';
-import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, metricApplies, ragEvidenceComplete, RAG_METRIC_IDS, verbatimSpan } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, MACHINE_FORMAT, metricApplies, ragEvidenceComplete, RAG_METRIC_IDS, verbatimSpan } from './contracts.js';
 import { agentMetricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
 import { cardOutcome, goalCardOutcome, humanFindings, isAgentFailure, judgeModel as runJudgeModel, verdictSummary, type VerdictSummary } from './comparison.js';
 import { exclusionCounts, pluralForm } from './result-view.js';
-import { failureExplanation, UNVERIFIED, type FailureExplanation } from './explain.js';
+import { failureExplanation, ruleRegister, ruleText, UNVERIFIED, type FailureExplanation } from './explain.js';
 import { draftHash } from './experiment.js';
 
 /*
@@ -69,6 +69,30 @@ export interface TestPlanLines {
   draftHash: string;
 }
 
+/** `expected` — «Должен: …»; `rule` — a verified owner rule; `unverified` — a named gap; `more` — the compact tail; `marker` — «ожидание изменено владельцем». */
+export type ExpectationRole = 'expected' | 'rule' | 'unverified' | 'more' | 'marker';
+export interface ExpectationCard {
+  scenarioId: string;
+  title: string;
+  /** `1.`, `12.` — the situation's position in the draft. */
+  label: string;
+  goal: string;
+  details: { role: ExpectationRole; text: string }[];
+  ownerEdited: boolean;
+}
+export interface ExpectationSheet {
+  draftHash: string;
+  count: number;
+  /** `13 ситуаций` */
+  countText: string;
+  labelWidth: number;
+  boardHead: [string, string];
+  cards: ExpectationCard[];
+  lines: string[];
+  /** At most two rule rows per situation, then where to read all of them. */
+  compactLines(runId: string): string[];
+}
+
 export interface TrialProofLines {
   trialId: string;
   scenarioId: string;
@@ -98,6 +122,77 @@ const labelled = (label: string, value: string): string[] => {
   const [first = '', ...rest] = planText(value).split('\n');
   return [`${label}${first}`, ...rest.map(line => `  ${line}`)];
 };
+
+const SITUATION_FORMS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
+const SHEET_RULE_FORMS: [string, string, string] = ['правило', 'правила', 'правил'];
+const collapseText = (value: string): string => value.replace(/\s+/gu, ' ').trim();
+/** An internal machine-format prompt rule is not a rule the owner recognises, so the sheet leaves it out. */
+const machineFormatRule = (record: Experiment, requirement: Requirement): boolean =>
+  record.sources.find(source => source.id === requirement.sourceId)?.kind === 'prompt' && MACHINE_FORMAT.test(requirement.quote);
+
+/**
+ * What the agent must do in every situation of a draft, in the owner's words: the goal, the
+ * expectation that will be scored, and every owner rule the situation rests on. Built from the
+ * record only, with the same rule numbering and row shape as the failure explanations, so the
+ * owner sees the same `Правило N` before the run and after it.
+ */
+export function expectationSheet(record: Experiment): ExpectationSheet {
+  if (record.workflow !== 'evaluate') throw new Error('Показать ожидания можно только для теста workflow evaluate.');
+  if (record.phase !== 'review') throw new Error('Показать ожидания можно только для незапущенного черновика.');
+  const hash = draftHash(record);
+  const version = `Версия ожиданий: ${hash.slice(0, 12)}`;
+  const count = record.scenarios.length;
+  const countText = `${count} ${pluralForm(count, SITUATION_FORMS)}`;
+  const labelWidth = `${count}.`.length;
+  const boardHead: [string, string] = ['ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ', `${countText} · номер правила — порядок в ваших материалах`];
+  if (!count) {
+    const empty = ['Ситуаций пока нет.', 'Они появятся после подготовки. a — рассказать Pi, что проверить.'];
+    return { draftHash: hash, count, countText, labelWidth, boardHead, cards: [], lines: empty, compactLines: () => [...empty] };
+  }
+  const register = ruleRegister(record);
+  const requirements = new Map(record.requirements.map(item => [item.id, item]));
+  // Situations whose expectation the owner rewrote; filled in by the record field once it exists.
+  const edited = new Set<string>();
+  const built = record.scenarios.map((scenario, index) => {
+    const ids = [...new Set(scenario.requirementIds)]
+      .filter(id => { const item = requirements.get(id); return !item || !machineFormatRule(record, item); });
+    const rules = ids.flatMap(id => requirements.has(id) ? register.get(id) ?? [] : [])
+      .sort((a, b) => Number(a.prompt) - Number(b.prompt) || a.number - b.number);
+    const criteria = collapseText(scenario.successCriteria ?? '');
+    const must: { role: ExpectationRole; text: string } = criteria
+      ? { role: 'expected', text: `Должен: ${criteria}` }
+      : { role: 'unverified', text: 'Должен: ожидание не записано.' };
+    const ruleRows: { role: ExpectationRole; text: string }[] = ids.length
+      ? [...rules.map(rule => ({ role: 'rule' as const, text: ruleText(rule) })),
+        ...Array.from({ length: ids.length - rules.length }, () => ({ role: 'unverified' as const, text: `Правило: ${UNVERIFIED}` }))]
+      : [{ role: 'unverified', text: 'Правило: у ситуации нет правила из ваших материалов.' }];
+    const ownerEdited = edited.has(scenario.id);
+    const markerRows: { role: ExpectationRole; text: string }[] = ownerEdited
+      ? [{ role: 'marker', text: 'Ожидание изменено владельцем — с прошлыми прогонами не сравнивается.' }] : [];
+    const card: ExpectationCard = {
+      scenarioId: scenario.id, title: collapseText(scenario.title), label: `${index + 1}.`,
+      goal: `Ситуация: ${collapseText(scenario.user.goal)}`,
+      details: [must, ...ruleRows, ...markerRows], ownerEdited,
+    };
+    return { card, must, ruleRows, markerRows };
+  });
+  const block = (card: ExpectationCard, details: { text: string }[]): string[] => [
+    `${card.label.padStart(labelWidth)} ${card.goal}`,
+    ...details.map(detail => `${' '.repeat(labelWidth + 1)}${detail.text}`),
+  ];
+  const head = `Что агент должен сделать: ${countText}. Номер правила — порядок в ваших материалах.`;
+  const lines = [head, '', ...built.flatMap(item => [...block(item.card, item.card.details), '']), version];
+  const compactLines = (runId: string): string[] => {
+    const blocks = built.flatMap(item => {
+      const shown = item.ruleRows.slice(0, 2);
+      const hidden = item.ruleRows.length - shown.length;
+      const more = hidden ? [{ text: `и ещё ${hidden} ${pluralForm(hidden, SHEET_RULE_FORMS)}` }] : [];
+      return [...block(item.card, [item.must, ...shown, ...more, ...item.markerRows]), ''];
+    });
+    return [head, '', ...blocks, `Все правила — /agent-lab ${runId.slice(0, 8)}, раздел 2.`, version];
+  };
+  return { draftHash: hash, count, countText, labelWidth, boardHead, cards: built.map(item => item.card), lines, compactLines };
+}
 
 /** The exact one-test proposal shown before the owner accepts its definition. */
 export function testPlanLines(record: Experiment): TestPlanLines {

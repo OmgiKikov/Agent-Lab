@@ -732,14 +732,20 @@ export class ExperimentLab {
       const record = await this.store.get(id);
       if (record.workflow !== 'evaluate') throw new Error('Принять тест можно только в workflow evaluate.');
       if (record.phase !== 'review') throw new Error('Принять можно только незапущенный черновик.');
-      if (record.scenarios.length !== 1) throw new Error('Принять можно ровно один тест.');
+      if (!record.scenarios.length) throw new Error('Подтверждать нечего: в черновике нет ситуаций.');
       const currentHash = draftHash(record);
-      if (expectedHash !== currentHash) throw new Error('Черновик изменился. Откройте тест заново, прежде чем принимать.');
-      const scenario = record.scenarios[0]!;
-      const definitionHash = fingerprint(scenario);
-      const existing = (record.acceptedTests ?? []).find(test => test.scenarioId === scenario.id && test.definitionHash === definitionHash);
-      if (record.acceptedDraftHash === currentHash && existing) return structuredClone(record);
-      record.acceptedTests = [existing ?? { testId: randomUUID(), scenarioId: scenario.id, definitionHash, acceptedAt: new Date().toISOString() }];
+      if (expectedHash !== currentHash) throw new Error('Черновик изменился, пока вы смотрели. Проверьте ожидания ещё раз.');
+      // One confirmation covers every situation of the draft; an entry whose definition did not change keeps its identity and date.
+      const previous = new Map((record.acceptedTests ?? []).map(test => [test.scenarioId, test]));
+      const acceptedAt = new Date().toISOString();
+      const accepted = record.scenarios.map(scenario => {
+        const definitionHash = fingerprint(scenario);
+        const kept = previous.get(scenario.id);
+        return kept?.definitionHash === definitionHash ? kept : { testId: randomUUID(), scenarioId: scenario.id, definitionHash, acceptedAt };
+      });
+      if (record.acceptedDraftHash === currentHash && previous.size === accepted.length
+        && accepted.every(test => previous.get(test.scenarioId) === test)) return structuredClone(record);
+      record.acceptedTests = accepted;
       record.acceptedDraftHash = currentHash;
       await this.store.save(record);
       return structuredClone(record);

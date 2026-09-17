@@ -14,7 +14,7 @@ import { inspectPrompt, promptVersion, proposePrompt } from './prompt-edit.js';
 import { readData } from './imports.js';
 import { getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
-import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
+import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { allFailuresTitle, buildResultView, causeSection, failureListRows, resultViewLines, SECTION_TEXT } from './result-view.js';
 import { rowsToLines } from './explain.js';
@@ -71,7 +71,7 @@ async function main() {
   const command = positionals[0];
   if (values.help || !command) {
     process.stdout.write('  agent-lab summary --id RUN [--json]     Сколько ситуаций агент прошёл, что не измерено и почему\n');
-    process.stdout.write('  agent-lab accept --id RUN [--yes]\n');
+    process.stdout.write('  agent-lab accept --id RUN [--yes]      Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания\n');
     process.stdout.write('Agent Lab — validation set, accuracy и причины провалов вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
     process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab discover-resume --id RUN [--yes] [--json]\n  agent-lab discover-build --id RUN [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
     process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID] · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
@@ -277,6 +277,23 @@ async function main() {
     if (command === 'accept') {
       if (!id) throw new Error('Укажите --id RUN.');
       const record = await lab.get(id);
+      if (record.scenarios.length > 1) {
+        const sheet = expectationSheet(record);
+        await writeStdout(values.json
+          ? `${JSON.stringify({ type: 'test_proposal', text: sheet.lines.join('\n'), lines: sheet.lines, draftHash: sheet.draftHash })}\n`
+          : `${sheet.lines.map(safeLine).join('\n')}\n`);
+        if (!values.yes) {
+          await writeStdout(values.json
+            ? `${JSON.stringify({ type: 'next_step', command: `agent-lab accept --id ${id} --yes` })}\n`
+            : `\nПодтвердить все ожидания: agent-lab accept --id ${id} --yes\n`);
+          return;
+        }
+        const confirmed = await lab.acceptDraft(id, sheet.draftHash);
+        await writeStdout(values.json
+          ? `${JSON.stringify({ type: 'accepted', id: confirmed.id, acceptedDraftHash: confirmed.acceptedDraftHash, agentRun: false })}\n`
+          : `\nОжидания подтверждены: ${sheet.countText}.\n`);
+        return;
+      }
       const projection = testPlanLines(record);
       await writeStdout(values.json
         ? `${JSON.stringify({ type: 'test_proposal', text: projection.lines.join('\n'), lines: projection.lines, draftHash: projection.draftHash })}\n`
