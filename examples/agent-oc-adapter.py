@@ -4,10 +4,13 @@
 Живёт здесь, а не в agent_oc: прод-репозиторий остаётся нетронутым, скрипт только читает его
 через публичные точки `harness_core.bootstrap_environment` и `harness_core.run_turn`.
 
-    python3 examples/agent-oc-adapter.py /абсолютный/путь/agent_oc
+    python examples/agent-oc-adapter.py ../agent_oc < /dev/null
 
-Окружение целиком берётся из `.env` в корне agent_oc — его загружает `bootstrap_environment`,
-он же ставит `DEV_MODE=True`, пути логов и модель. Отдельно ничего экспортировать не нужно.
+Так проверяется окружение: скрипт поднимает agent_oc, печатает замечания в stderr и выходит.
+
+Окружение наследуется от вызывающего процесса (на рабочей машине — активированное conda-окружение
+`agent_oc`), а `bootstrap_environment` дополняет его `.env` из корня репозитория, не перекрывая уже
+заданные значения, и ставит `DEV_MODE=True`, пути логов и модель.
 
 Протокол (docs/REFERENCE.md), по одной JSON-строке в каждую сторону:
 
@@ -190,7 +193,13 @@ def main(argv: List[str]) -> int:
         line = line.strip()
         if not line:
             continue
-        request = json.loads(line)
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError:
+            # Писать сюда должен только Agent Lab. Человек, запускающий проверку руками, чаще всего
+            # приносит строку с «ёлочками» вместо кавычек — traceback об этом ничего не говорит.
+            print(f"agent-oc-adapter: строка не является JSON протокола: {line[:200]}", file=sys.stderr)
+            return 2
         if request.get("type") == "close":
             break
         try:

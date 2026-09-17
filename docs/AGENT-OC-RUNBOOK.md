@@ -94,8 +94,11 @@ conda activate agent_oc
 
 ```bash
 conda activate agent_oc
-echo '{"type":"close"}' | python examples/agent-oc-adapter.py ../agent_oc
+python examples/agent-oc-adapter.py ../agent_oc < /dev/null
 ```
+
+Без кавычек намеренно: скопированная из документа строка с `{"type":"close"}` легко приезжает в
+терминал с «ёлочками» вместо кавычек, и тогда падает разбор JSON, а не окружение.
 
 ## Карточки бизнес-сценариев из логов
 
