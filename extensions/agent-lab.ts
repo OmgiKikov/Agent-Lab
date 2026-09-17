@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { ExperimentLab, draftHash, planDiscovery, resultHash } from '../dist/experiment.js';
 import { agentSchema, createInputSchema, discoverInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, goldenCaseSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput } from '../dist/contracts.js';
 import { awaitingVerdict, evidenceSummary, plannedTrials } from '../dist/comparison.js';
-import { discoveryBrief, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from '../dist/quality.js';
+import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
 import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
 import { allFailuresPointer, buildResultView, causeSection, resultViewLines, SECTION_TEXT, type ResultView } from '../dist/result-view.js';
@@ -744,7 +744,7 @@ export default function agentLab(pi: ExtensionAPI) {
         // Elapsed time with the dialogue visible plus its verdict form, including time spent idle.
         const reviewTimes = new Map<string, number>();
         let notice: BoardOptions['notice'];
-        const inform = (message: string, kind: 'info' | 'error' = 'info') => {
+        const inform = (message: string, kind: 'success' | 'info' | 'error' = 'success') => {
           notice = { message: safeText(message), kind };
         };
         while (true) {
@@ -811,6 +811,16 @@ export default function agentLab(pi: ExtensionAPI) {
                 await lab.start(r.id, { approved: true, reviewer: 'automated', expectedHash: hash, parallel: runParallel(r) }); section = 'results'; selected = 0;
                 reportPath = undefined;
               }
+            } else if (action.type === 'accept') {
+              // TRUST-10: one key confirms every expectation of the shown draft version, and only that version.
+              const r = await lab.get(action.record.id);
+              const sheet = expectationSheet(r);
+              if (r.acceptedDraftHash === sheet.draftHash) inform('Ожидания уже подтверждены. r — запуск.', 'info');
+              else {
+                await lab.acceptDraft(r.id, sheet.draftHash);
+                inform(`Ожидания подтверждены: ${sheet.countText}. r — запуск.`);
+              }
+              section = 'cards';
             } else if (action.type === 'cancel') {
               await lab.cancel(action.record.id); await lab.waitForIdle();
               reportPath = undefined;

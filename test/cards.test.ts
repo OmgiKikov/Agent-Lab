@@ -9,6 +9,7 @@ import { compareRuns } from '../src/comparison.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { markdownReport } from '../src/report.js';
 import { buildResultView, causeSection, failureListRows, resultViewLines, SECTION_TEXT, type ResultView } from '../src/result-view.js';
+import { expectationSheet } from '../src/quality.js';
 
 const theme = { fg: (_: string, value: string) => value, bold: (value: string) => value };
 
@@ -79,6 +80,9 @@ test('80×24 shows the opening and first reply before metadata, with visible fee
   scenario.title = 'Перенос записи'; scenario.user.opening = 'Перенесите запись на 14:00.';
   scenario.user.goal = 'Изменить время записи'; scenario.successCriteria = 'Время изменилось на 14:00.';
   const cards = new LabBoard({ record, notice: { kind: 'info', message: 'Изменена 1 карточка, остальные сохранены.' } }, theme, () => {}, () => {}, () => 24);
+  // Раздел 2 черновика открывается листом ожиданий; первая реплика и остальная карточка — по Enter.
+  assert.match(cards.render(80).join('\n'), /Ситуация: Изменить время записи/);
+  cards.handleInput('\r');
   const cardText = cards.render(80).join('\n');
   assert.match(cardText, /Перенесите запись на 14:00/);
   assert.match(cardText, /Изменена 1 карточка/);
@@ -304,7 +308,7 @@ test('the board leads with a plain verdict once dialogues exist and has only thr
   assert.match(text, /Провалов не зарегистрировано/);
   assert.match(text, /Дальше/);
   assert.doesNotMatch(text, /TPR/);
-  assert.match(text, /1 Обзор.*2 Карточки.*3 Диалоги/);
+  assert.match(text, /1 Обзор.*2 Ситуации.*3 Диалоги/);
   assert.doesNotMatch(text, /4 Статистика|5 Сравнение/);
   for (const width of [16, 40, 80]) for (const line of board.render(width)) assert.ok(visibleWidth(line) <= width, `overflow at ${width}`);
   board.dispose();
@@ -582,4 +586,99 @@ test('every board row keeps one color by its role and fits widths 40 to 160', as
     for (const row of wide.render(width)) assert.ok(visibleWidth(row) <= width, `overflow at ${width}`);
   }
   wide.dispose();
+});
+
+test('раздел 2 черновика показывает лист ожиданий, а y и e работают только в его границах', async () => {
+  const record = await fixture();
+  const recording = { fg: (color: string, value: string) => `<${color}>${value}</${color}>`, bold: (value: string) => value };
+  const actions: BoardAction[] = [];
+  const board = new LabBoard({ record, section: 'cards' }, theme, a => actions.push(a), () => {}, () => 120);
+  const text = stripTerminalSequences(board.render(120).join('\n'));
+  assert.match(text, /ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ/);
+  assert.match(text, /2 ситуации · номер правила — порядок в ваших материалах/);
+  assert.equal(text.match(/Ситуация:/g)?.length, 2, 'обе ситуации на одном листе');
+  assert.match(text, /▸\s+1\. Ситуация:/, 'выбранная ситуация помечена гаттером');
+  assert.match(text, /\s{2}2\. Ситуация:/, 'невыбранная — двумя пробелами');
+  assert.match(text, new RegExp(`Версия ожиданий: ${expectationSheet(record).draftHash.slice(0, 12)}`));
+  assert.match(text, /Проверьте ожидания: 2 ситуации\. y — подтвердить все · e — поправить выбранную\./);
+  assert.match(text, /\[2 Ситуации 2\]/);
+  // Первая строка подвала — четыре ступени по ширине (UI-SPEC «Footer, first line»).
+  assert.match(text, /y Подтвердить всё · e Поправить ожидание · r Запустить прогон/, 'inner 81 → средняя ступень');
+  assert.match(stripTerminalSequences(board.render(160).join('\n')), /a Правка словами · y Подтвердить ожидания · e Поправить ожидание · r Запустить прогон/);
+  assert.match(stripTerminalSequences(board.render(60).join('\n')), /y Подтвердить всё · e Поправить ожидание/);
+  assert.match(stripTerminalSequences(board.render(40).join('\n')), /y Подтвердить всё · e Изменить одно/);
+  const colored = new LabBoard({ record, section: 'cards' }, recording, () => {}, () => {}, () => 3000);
+  const painted = colored.render(300).join('\n');
+  assert.match(painted, /<accent>ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ<\/accent>/, 'заголовок листа — accent');
+  assert.match(painted, /<warning>Проверьте ожидания/, 'неподтверждённые ожидания — warning');
+  assert.match(painted, /<accent>▸ 1\. Ситуация:/, 'выбранная ситуация — accent');
+  assert.match(painted, /<text>  2\. Ситуация:/, 'невыбранная — text');
+  assert.match(painted, /<muted>\s+Правило 1 · /, 'правила — muted');
+  assert.match(painted, /<text>\s+Должен: /, 'ожидание — text');
+  colored.dispose();
+  board.handleInput('y');
+  assert.equal(actions[0]?.type, 'accept');
+  assert.equal(actions.length, 1);
+  board.handleInput('y');
+  assert.equal(actions.length, 1, 'закрытая доска не подтверждает дважды');
+
+  const second = new LabBoard({ record, section: 'cards' }, theme, a => actions.push(a), () => {}, () => 120);
+  second.render(120);
+  second.handleInput('j');
+  second.handleInput('e');
+  assert.equal(actions[1]?.type, 'expect');
+  if (actions[1]?.type === 'expect') assert.equal(actions[1].scenarioId, record.scenarios[1]!.id);
+
+  // Вне границ листа обе клавиши молчат: другой раздел, сравнение, вопросы, завершённый прогон, поиск, помощь.
+  const outside: { record: Experiment; section?: 'agent' | 'cards' | 'results'; keys: string[] }[] = [
+    { record, section: 'agent', keys: ['y', 'e'] },
+    { record: { ...record, workflow: 'compare' as const }, section: 'cards', keys: ['y', 'e'] },
+    { record: { ...record, questions: ['Уточнить правило'] }, section: 'cards', keys: ['y', 'e'] },
+    { record: { ...record, phase: 'complete' as const, reviewedAt: record.createdAt }, section: 'cards', keys: ['y', 'e'] },
+    { record: { ...record, scenarios: [] }, section: 'cards', keys: ['y', 'e'] },
+  ];
+  for (const item of outside) {
+    const silent: BoardAction[] = [];
+    const blocked = new LabBoard({ record: item.record, section: item.section }, theme, a => silent.push(a), () => {}, () => 120);
+    blocked.render(120);
+    for (const key of item.keys) blocked.handleInput(key);
+    assert.equal(silent.length, 0, `клавиши сработали вне области: ${item.record.workflow} ${item.record.phase} ${item.section}`);
+    blocked.dispose();
+  }
+  const searching: BoardAction[] = [];
+  const typed = new LabBoard({ record, section: 'cards' }, theme, a => searching.push(a), () => {}, () => 120);
+  typed.handleInput('/'); typed.handleInput('y'); typed.handleInput('e');
+  assert.equal(searching.length, 0);
+  assert.match(stripTerminalSequences(typed.render(120).join('\n')), /Поиск: ye/);
+  typed.dispose();
+  const helped: BoardAction[] = [];
+  const helpBoard = new LabBoard({ record, section: 'cards' }, theme, a => helped.push(a), () => {}, () => 120);
+  helpBoard.handleInput('?'); helpBoard.handleInput('y'); helpBoard.handleInput('e');
+  assert.equal(helped.length, 0);
+  assert.match(stripTerminalSequences(helpBoard.render(120).join('\n')), /y — подтвердить все ожидания · e — поправить ожидание выбранной ситуации/);
+  helpBoard.dispose();
+  board.dispose(); second.dispose();
+});
+
+test('заголовок черновика различает неподтверждённые, подтверждённые и изменённые ожидания, а уведомления — три вида', async () => {
+  const record = await fixture();
+  const hash = expectationSheet(record).draftHash;
+  const recording = { fg: (color: string, value: string) => `<${color}>${value}</${color}>`, bold: (value: string) => value };
+  const confirmed = new LabBoard({ record: { ...record, acceptedDraftHash: hash }, section: 'cards' }, recording, () => {}, () => {}, () => 3000);
+  assert.match(confirmed.render(300).join('\n'), /<success>Ожидания подтверждены\. r — запуск\./);
+  confirmed.dispose();
+  const staleRecord = { ...record, acceptedDraftHash: 'a'.repeat(64), ownerExpectationScenarioIds: [record.scenarios[0]!.id] };
+  const stale = new LabBoard({ record: staleRecord, section: 'cards' }, recording, () => {}, () => {}, () => 3000);
+  const staleText = stale.render(300).join('\n');
+  assert.match(staleText, /<warning>Ожидание изменено после подтверждения\. y — подтвердить снова\./);
+  assert.match(staleText, /<warning>\s+Ожидание изменено владельцем — с прошлыми прогонами не сравнивается\./);
+  stale.dispose();
+  const list = new LabBoard({ record: staleRecord, section: 'cards' }, theme, () => {}, () => {}, () => 120);
+  assert.match(stripTerminalSequences(list.render(100).join('\n')), / · ожидание изменено/);
+  list.dispose();
+  for (const [kind, token] of [['success', 'success'], ['info', 'text'], ['error', 'error']] as const) {
+    const noticed = new LabBoard({ record, section: 'cards', notice: { message: `УВЕДОМЛЕНИЕ_${kind}`, kind } }, recording, () => {}, () => {}, () => 3000);
+    assert.match(noticed.render(300).join('\n'), new RegExp(`<${token}>УВЕДОМЛЕНИЕ_${kind}</${token}>`));
+    noticed.dispose();
+  }
 });

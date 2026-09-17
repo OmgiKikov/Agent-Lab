@@ -1019,3 +1019,38 @@ test('Pi inspect payload, its collapsed result and CLI summary open with the sam
     await rm(demo.directory, { recursive: true, force: true });
   }
 });
+
+test('на доске y подтверждает все ожидания черновика и доска возвращается с уведомлением', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-board-accept-'));
+  const { tools, shutdown, command } = registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const ctx = { cwd: directory, model: undefined, mode: 'tui', hasUI: true } as ExtensionCommandContext;
+  const report = output(await tools.get('agent_lab_build')!.execute('prepare', { mode: 'demo', scenarioCount: 2 }, undefined, undefined, ctx));
+  const screens: { text: string; notice?: { message: string; kind: string } }[] = [];
+  const keys = ['y', 'y', 'q'];
+  ctx.ui = {
+    custom: (factory: (tui: unknown, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?(): void },
+      options: unknown, boardOptions?: unknown) => new Promise(resolve => {
+      const current = screens.length;
+      let component: Component & { dispose?(): void };
+      component = factory({ terminal: { rows: 40 }, requestRender() {} }, { fg: (_: string, text: string) => text, bold: (text: string) => text }, {},
+        value => { component.dispose?.(); resolve(value); });
+      screens.push({ text: component.render(100).join('\n') });
+      void Promise.resolve().then(() => component.handleInput!(keys[current]!));
+      void boardOptions; void options;
+    }),
+    confirm: async () => false,
+    notify: () => {},
+  } as unknown as ExtensionContext['ui'];
+  await command(`${report.id}`, ctx);
+  assert.equal(screens.length, 3);
+  // Экран 1 — лист ожиданий без подтверждения; после y доска открыта снова и говорит, что подтверждено.
+  assert.match(screens[0]!.text, /ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ/);
+  assert.match(screens[0]!.text, /Проверьте ожидания: 2 ситуации\./);
+  assert.match(screens[1]!.text, /Ожидания подтверждены: 2 ситуации\. r — запуск\./);
+  assert.match(screens[1]!.text, /Ожидания подтверждены\. r — запуск\./, 'заголовок черновика тоже переключился');
+  assert.match(screens[2]!.text, /Ожидания уже подтверждены\. r — запуск\./);
+  const stored = output(await tools.get('agent_lab_inspect')!.execute('after', { id: report.id }, undefined, undefined, ctx));
+  assert.equal(stored.acceptedDraftHash, stored.draftHash, 'подтверждена именно показанная версия');
+  assert.equal(stored.trialCount, 0, 'подтверждение не запускает агента');
+});

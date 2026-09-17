@@ -3,7 +3,7 @@ import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, wrap
 import type { Experiment, Scenario, Trial } from '../dist/contracts.js';
 import { describeCheck } from '../dist/contracts.js';
 import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
-import { qualitySummary, qualityLines } from '../dist/quality.js';
+import { expectationSheet, qualitySummary, qualityLines, type ExpectationRole, type ExpectationSheet } from '../dist/quality.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
 import { buildResultView, causeSection, failureListRows, resultViewRows, SECTION_TEXT, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
 
@@ -42,7 +42,9 @@ export type BoardAction =
   | { type: 'new' }
   | { type: 'demo' }
   | { type: 'open'; id: string }
-  | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number }
+  | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat' | 'accept'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number }
+  /** The owner rewrites one expectation in their own words; the text itself comes from the native editor, never from here. */
+  | { type: 'expect'; scenarioId: string; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean }
   | { type: 'verdict'; verdict: 'pass' | 'fail'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number };
 export interface BoardOptions {
   records?: Experiment[];
@@ -54,7 +56,7 @@ export interface BoardOptions {
   view?: ResultView;
   comparison?: RunComparison;
   before?: Experiment;
-  notice?: { message: string; kind: 'info' | 'error' };
+  notice?: { message: string; kind: 'success' | 'info' | 'error' };
   warnings?: string[];
   reportPath?: string;
   query?: string;
@@ -62,7 +64,8 @@ export interface BoardOptions {
   reviewTimes?: Map<string, number>;
 }
 type BoardTheme = Pick<Theme, 'fg' | 'bold'>;
-type Line = { text: string; color?: ThemeColor; bold?: boolean; indent?: number };
+/** `lead` replaces the first line's indent with a same-width prefix (the sheet gutter `▸ ` and the number `12.`). */
+type Line = { text: string; color?: ThemeColor; bold?: boolean; indent?: number; lead?: string };
 const line = (text: unknown, color?: ThemeColor, bold = false, indent?: number): Line => ({ text: safeText(text), color, bold, ...(indent ? { indent } : {}) });
 
 /**
@@ -75,9 +78,9 @@ export function wrapRows(rows: Line[], inner: number): Line[] {
   return rows.flatMap(row => {
     const indent = row.indent ?? 0;
     // A terminal too narrow for the hanging indent falls back to plain wrapping, still never wider.
-    if (!indent || width <= indent + 3) return wrapTextWithAnsi(row.text, width).map(text => ({ ...row, text }));
+    if (!indent || width <= indent + 3) return wrapTextWithAnsi(row.lead ? row.lead + row.text : row.text, width).map(text => ({ ...row, text }));
     const body = Math.max(1, width - indent - 2);
-    return wrapTextWithAnsi(row.text, body).map((text, i) => ({ ...row, text: ' '.repeat(indent + (i ? 2 : 0)) + text }));
+    return wrapTextWithAnsi(row.text, body).map((text, i) => ({ ...row, text: (i ? ' '.repeat(indent + 2) : row.lead ?? ' '.repeat(indent)) + text }));
   });
 }
 const json = (value: unknown) => JSON.stringify(value, null, 2);
@@ -97,6 +100,10 @@ const SECTION_ROLE: Record<SectionRow['role'], { color?: ThemeColor; bold: boole
   expected: { color: 'text', bold: false }, said: { color: 'text', bold: false },
   rule: { color: 'muted', bold: false }, more: { color: 'muted', bold: false }, violated: { color: 'muted', bold: false },
   unverified: { color: 'warning', bold: false }, blank: { bold: false },
+};
+/** The expectation sheet uses the same role → token rule (UI-SPEC «Row role → token»): `warning` only means «не подтверждено». */
+const SHEET_ROLE: Record<ExpectationRole, ThemeColor> = {
+  expected: 'text', rule: 'muted', unverified: 'warning', more: 'muted', marker: 'warning',
 };
 const viewRow = (row: ResultRow): Line => line(row.text, VIEW_ROLE[row.role].color, VIEW_ROLE[row.role].bold, row.indent);
 const sectionRow = (row: SectionRow): Line => line(row.text, SECTION_ROLE[row.role].color, SECTION_ROLE[row.role].bold, row.indent);
@@ -304,6 +311,11 @@ export class LabBoard implements Component {
   private help = false;
   private viewedTrial?: string;
   private viewedAt = performance.now();
+  private sheetCache?: { record: Experiment; sheet?: ExpectationSheet };
+  /** Row index of the selected situation's first sheet row, before wrapping; set while the detail is built. */
+  private sheetAnchor?: number;
+  /** ↑/↓ put the selected situation at the top of the body; an explicit scroll key hands control back. */
+  private followSelection = true;
 
   constructor(private options: BoardOptions, private theme: BoardTheme, private done: (action: BoardAction) => void,
     private redraw: () => void, private rows: () => number = () => 32) {
@@ -337,6 +349,66 @@ export class LabBoard implements Component {
     }
     finally { this.loading = false; }
   }
+  /**
+   * What the agent must do in every situation of this draft (UI-SPEC F5). Only an unstarted
+   * evaluate draft has one; every other record keeps today's card detail.
+   */
+  private sheet(): ExpectationSheet | undefined {
+    const record = this.record;
+    if (!record || record.workflow !== 'evaluate' || record.phase !== 'review') return undefined;
+    if (this.sheetCache?.record !== record) {
+      let sheet: ExpectationSheet | undefined;
+      try { sheet = expectationSheet(record); } catch { sheet = undefined; }
+      this.sheetCache = { record, sheet };
+    }
+    return this.sheetCache.sheet;
+  }
+  /**
+   * The sheet as board rows: heading, then every situation of `entries` (so the search filters it)
+   * with its gutter, right-aligned number, expectation and all owner rules, then the version row.
+   */
+  private sheetRows(sheet: ExpectationSheet, entries: { index: number }[]): Line[] {
+    if (!sheet.cards.length) return [line(sheet.lines[0], 'text', true), line(sheet.lines[1], 'muted')];
+    const column = 2 + sheet.labelWidth + 1;
+    const rows: Line[] = [line(sheet.boardHead[0], 'accent', true), line(sheet.boardHead[1], 'muted'), line('')];
+    this.sheetAnchor = undefined;
+    entries.forEach((entry, position) => {
+      const card = sheet.cards[entry.index];
+      if (!card) return;
+      const selected = position === this.selected;
+      if (selected) this.sheetAnchor = rows.length;
+      const label = ' '.repeat(Math.max(0, sheet.labelWidth - visibleWidth(card.label))) + card.label;
+      rows.push({ ...line(card.goal, selected ? 'accent' : 'text', true, column), lead: `${selected ? '▸ ' : '  '}${label} ` });
+      for (const detail of card.details) rows.push(line(detail.text, SHEET_ROLE[detail.role], false, column));
+      rows.push(line(''));
+    });
+    rows.push(line(sheet.lines.at(-1), 'muted'));
+    return rows;
+  }
+  /**
+   * What the draft header says about the expectations (UI-SPEC F5): not confirmed, confirmed, or
+   * confirmed and then changed. Open questions come first, so that older text stays untouched.
+   */
+  private draftHeadline(record: Experiment): { text: string; color?: ThemeColor } {
+    const sheet = this.sheet();
+    if (!sheet?.count || record.questions.length) return { text: 'Проверьте цель, первую реплику и критерии. r — запуск.' };
+    if (record.acceptedDraftHash === sheet.draftHash) return { text: 'Ожидания подтверждены. r — запуск.', color: 'success' };
+    if (record.acceptedDraftHash) return { text: 'Ожидание изменено после подтверждения. y — подтвердить снова.', color: 'warning' };
+    return { text: `Проверьте ожидания: ${sheet.countText}. y — подтвердить все · e — поправить выбранную.`, color: 'warning' };
+  }
+  /**
+   * The draft's key hints, cut to the terminal (UI-SPEC «Footer, first line»): every label is a verb
+   * with its object, and the narrow tiers drop the key the header line already names.
+   */
+  private draftFooter(record: Experiment, inner: number): string {
+    const sheet = this.sheet();
+    if (record.questions.length || !sheet?.count) return `a Правка словами · ${record.questions.length ? 'Ответьте на вопросы' : 'r Запустить'}`;
+    const confirmed = record.acceptedDraftHash === sheet.draftHash;
+    if (inner >= 85) return 'a Правка словами · y Подтвердить ожидания · e Поправить ожидание · r Запустить прогон';
+    if (inner >= 61) return 'y Подтвердить всё · e Поправить ожидание · r Запустить прогон';
+    if (inner >= 41) return confirmed ? 'r Запустить прогон · e Поправить ожидание' : 'y Подтвердить всё · e Поправить ожидание';
+    return confirmed ? 'r Запустить прогон · e Изменить одно' : 'y Подтвердить всё · e Изменить одно';
+  }
   /** The supplied view when it describes the shown run; otherwise a fresh one, so a stale view is never shown. */
   private viewFor(record: Experiment): ResultView {
     return this.options.view?.runId === record.id ? this.options.view : buildResultView(record);
@@ -364,7 +436,10 @@ export class LabBoard implements Component {
       entries = reviewOrder(record).map((t, index) => ({ id: t.id, index,
         text: `${pending.has(t.id) ? '● ' : ''}${flagged.has(t.id) ? 'ЗАМЕЧАНИЕ ЧЕЛОВЕКА' : isAgentFailure(record, t) ? 'НЕ ПРОЙДЕНО' : verdicts[t.outcome]} · ${record.scenarios.find(s => s.id === t.scenarioId)?.title ?? t.scenarioId} · ${t.userMode ?? 'reactive'} #${t.repeat + 1}`,
       })).filter(e => !this.pendingOnly || pending.has(e.id));
-    } else if (this.section === 'cards') entries = record.scenarios.map((s, index) => ({ text: `${s.tier === 'smoke' ? '◆ ' : ''}${s.title}`, index, id: s.id }));
+    } else if (this.section === 'cards') {
+      const edited = new Set(record.ownerExpectationScenarioIds ?? []);
+      entries = record.scenarios.map((s, index) => ({ text: `${s.tier === 'smoke' ? '◆ ' : ''}${s.title}${edited.has(s.id) ? ' · ожидание изменено' : ''}`, index, id: s.id }));
+    }
     else entries = [];
     return entries.filter(e => safeText(e.text).toLocaleLowerCase().includes(this.query.toLocaleLowerCase()));
   }
@@ -391,7 +466,7 @@ export class LabBoard implements Component {
     if (!this.record && key('d')) return this.finish({ type: 'demo' });
     if (this.record) {
       const section = key('1') ? 'agent' : key('2') ? 'cards' : key('3') ? 'results' : undefined;
-      if (section) { this.section = section; this.selected = 0; this.scroll = 0; this.query = ''; this.help = false; }
+      if (section) { this.section = section; this.selected = 0; this.scroll = 0; this.query = ''; this.help = false; this.followSelection = true; }
       if (key('u') && this.section === 'results') { this.pendingOnly = !this.pendingOnly; this.selected = 0; this.scroll = 0; }
       const editable = this.record.workflow === 'evaluate' && this.record.phase === 'review';
       const reviewable = this.record.workflow === 'evaluate' && this.section === 'results'
@@ -411,14 +486,18 @@ export class LabBoard implements Component {
         : key('o') && this.options.reportPath ? 'openReport'
         : key('c') && activePhases.has(this.record.phase) ? 'cancel' : undefined;
       if (type) return this.finish({ type, ...state });
+      // TRUST-10/11 (UI-D-01): the expectation sheet is the only scope of `y` and `e`; outside it they do nothing.
+      const sheetScope = editable && this.section === 'cards' && !this.record.questions.length && this.record.scenarios.length > 0;
+      if (sheetScope && key('y')) return this.finish({ type: 'accept', ...state });
+      if (sheetScope && key('e') && entry) return this.finish({ type: 'expect', ...state, scenarioId: entry.id });
     }
     const entries = this.entries();
-    if (key('down') || key('j')) { this.selected = Math.min(entries.length - 1, this.selected + 1); this.scroll = 0; }
-    if (key('up') || key('k')) { this.selected = Math.max(0, this.selected - 1); this.scroll = 0; }
-    if (key('pageDown') || key('right')) this.scroll = Math.min(this.maxScroll, this.scroll + Math.max(1, this.rows() - 12));
-    if (key('pageUp') || key('left')) this.scroll = Math.max(0, this.scroll - Math.max(1, this.rows() - 12));
-    if (key('home')) this.scroll = 0;
-    if (key('end')) this.scroll = this.maxScroll;
+    if (key('down') || key('j')) { this.selected = Math.min(entries.length - 1, this.selected + 1); this.scroll = 0; this.followSelection = true; }
+    if (key('up') || key('k')) { this.selected = Math.max(0, this.selected - 1); this.scroll = 0; this.followSelection = true; }
+    if (key('pageDown') || key('right')) { this.scroll = Math.min(this.maxScroll, this.scroll + Math.max(1, this.rows() - 12)); this.followSelection = false; }
+    if (key('pageUp') || key('left')) { this.scroll = Math.max(0, this.scroll - Math.max(1, this.rows() - 12)); this.followSelection = false; }
+    if (key('home')) { this.scroll = 0; this.followSelection = false; }
+    if (key('end')) { this.scroll = this.maxScroll; this.followSelection = false; }
     if (key('enter')) {
       if (!this.record && entries[this.selected]) return this.finish({ type: 'open', id: entries[this.selected]!.id });
       this.expanded = !this.expanded;
@@ -445,7 +524,7 @@ export class LabBoard implements Component {
     if (record) {
       const unresolved = record.phase === 'complete' && awaitingVerdict(record).size > 0;
       header.push(line(`${unresolved ? 'НЕРАЗОБРАННЫЕ ПРОВАЛЫ' : phases[record.phase] ?? record.phase} · ${record.mode === 'demo' ? 'ДЕМО · без модели' : 'ЖИВОЙ ПРОГОН'}`, activePhases.has(record.phase) ? 'accent' : record.phase === 'complete' && !unresolved ? 'success' : 'warning'));
-      header.push(line([['agent', '1 Обзор'], ['cards', `2 Карточки ${record.scenarios.length}`], ['results', `3 Диалоги ${record.trials.length}`]]
+      header.push(line([['agent', '1 Обзор'], ['cards', `2 Ситуации ${record.scenarios.length}`], ['results', `3 Диалоги ${record.trials.length}`]]
         .map(([id, label]) => this.section === id ? `[${label}]` : label).join('   '), 'muted'));
       if (this.section === 'results' && record.trials.length) {
         const review = verdictSummary(record).review;
@@ -456,9 +535,13 @@ export class LabBoard implements Component {
           : review.findings.length ? `Замечания человека: ${review.flagged} диалогов · расхождения оценок: ${review.disagreements}.`
           : failures ? `Разбор: все ${failures} провал(ов) разобраны.` : 'Автоматические проверки не отметили провалов.', pending || review.findings.length ? 'warning' : 'muted'));
       }
-      header.push(line(`${record.trials.length && !activePhases.has(record.phase) ? verdictHeadline(this.viewFor(record)) : record.phase === 'review' ? 'Проверьте цель, первую реплику и критерии. r — запуск.' : record.message}${this.loadError ? ` · ${this.loadError}` : ''}`));
+      const draft = this.draftHeadline(record);
+      header.push(line(`${record.trials.length && !activePhases.has(record.phase) ? verdictHeadline(this.viewFor(record))
+        : record.phase === 'review' ? draft.text : record.message}${this.loadError ? ` · ${this.loadError}` : ''}`,
+        record.trials.length && !activePhases.has(record.phase) ? undefined : record.phase === 'review' ? draft.color : undefined));
     } else header.push(line('n — свой агент · d — учебный пример без провайдера', 'muted'));
-    if (this.options.notice) header.push(line(this.options.notice.message, this.options.notice.kind === 'error' ? 'error' : 'success'));
+    if (this.options.notice) header.push(line(this.options.notice.message,
+      this.options.notice.kind === 'error' ? 'error' : this.options.notice.kind === 'info' ? 'text' : 'success'));
     if (this.options.warnings?.length) header.push(line(`Внимание: ${this.options.warnings[0]}${this.options.warnings.length > 1 ? ` (+${this.options.warnings.length - 1})` : ''}`, 'warning'));
     const items = entries.map(e => e.text);
     this.selected = Math.max(0, Math.min(this.selected, items.length - 1));
@@ -474,6 +557,7 @@ export class LabBoard implements Component {
       header.push(line(`${'━'.repeat(filled)}${'─'.repeat(20 - filled)}  ${record.trials.length} / ${planned} диалогов · c Остановить`, 'accent'));
     }
     let detail: Line[] = [];
+    this.sheetAnchor = undefined;
     if (!record) {
       const chosen = this.options.records?.[entries[this.selected]?.index ?? -1];
       detail = chosen ? [line(chosen.task, 'text', true), line(`Создан: ${chosen.createdAt}`, 'muted'), line(chosen.phase === 'review' ? 'Черновик готов. Откройте его, чтобы проверить и уточнить сценарии.' : chosen.trials.length ? verdictSummary(chosen).headline : chosen.message)]
@@ -487,7 +571,12 @@ export class LabBoard implements Component {
           line('Оценки модели и ваши вердикты хранятся отдельно; результат повторяем и сравним с прошлым прогоном.', 'muted')];
     } else if (this.section === 'cards') {
       const scenario = record.scenarios[entries[this.selected]?.index ?? -1];
-      detail = scenario ? scenarioLines(scenario, record, this.expanded) : [line(this.query ? 'Ничего не найдено. Esc — сбросить поиск.' : 'Карточки появятся после подготовки.', 'muted')];
+      const sheet = this.expanded ? undefined : this.sheet();
+      // Section 2 of a draft is the expectation sheet; Enter still opens today's full card detail.
+      detail = sheet ? this.sheetRows(sheet, entries)
+        : scenario ? scenarioLines(scenario, record, this.expanded)
+        : [line(this.query ? 'Ничего не найдено. Esc — сбросить поиск.' : 'Карточки появятся после подготовки.', 'muted')];
+      if (sheet && this.query && !entries.length) detail = [line('Ничего не найдено. Esc — сбросить поиск.', 'muted')];
     } else if (this.section === 'results') {
       const trial = reviewOrder(record).find(t => t.id === entries[this.selected]?.id);
       detail = trial ? trialLines(trial, record, this.expanded) : this.query || this.pendingOnly ? [line('Ничего не найдено. Esc — сбросить фильтр.', 'muted')]
@@ -521,11 +610,13 @@ export class LabBoard implements Component {
       if (record.trials.length && !this.expanded) detail = verdictLines(record, false, this.options.comparison, this.viewFor(record));
     }
     if (this.options.warnings?.length) detail.push(line(''), line('ДИАГНОСТИКА', 'warning'), ...this.options.warnings.map(w => line(w, 'warning')));
-    if (this.help) detail = [line('КЛАВИШИ', 'accent', true), line('1 Обзор — качество агента · 2 Карточки · 3 Диалоги'), line('a — правка или разбор словами с Pi · n в списке — новая проверка'), line('↑ ↓ или j k — выбрать карточку или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), line('Enter — раскрыть источники, инструменты и состояния'), line('p / n — вердикт на выбранный диалог · v — оценить критерий'), line('r — запустить черновик или создать повтор готового прогона'), line('x — экспортировать · c — остановить запуск · Esc — назад · q — закрыть'), line(''), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')];
+    if (this.help) { detail = [line('КЛАВИШИ', 'accent', true), line('1 Обзор — качество агента · 2 Карточки · 3 Диалоги'), line('a — правка или разбор словами с Pi · n в списке — новая проверка'), line('↑ ↓ или j k — выбрать карточку или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), line('Enter — раскрыть источники, инструменты и состояния'), line('p / n — вердикт на выбранный диалог · v — оценить критерий'), line('r — запустить черновик или создать повтор готового прогона'), line('y — подтвердить все ожидания · e — поправить ожидание выбранной ситуации'), line('x — экспортировать · c — остановить запуск · Esc — назад · q — закрыть'), line(''), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')]; this.sheetAnchor = undefined; }
     const content = wrapRows(detail, inner).map(paint);
+    // The selected situation starts the body, so its expectation and rules are read without scrolling.
+    if (this.followSelection && this.sheetAnchor !== undefined) this.scroll = wrapRows(detail.slice(0, this.sheetAnchor), inner).length;
     const footer = record ? [
       record.workflow !== 'evaluate' ? 'Сравнительный эксперимент · только просмотр и экспорт'
-        : record.phase === 'review' ? `a Правка словами · ${record.questions.length ? 'Ответьте на вопросы' : 'r Запустить'}`
+        : record.phase === 'review' ? this.draftFooter(record, inner)
         : activePhases.has(record.phase) ? 'c Остановить · обновляется автоматически'
         : record.phase === 'results_review' ? this.section === 'results' ? 'a Обсудить · p Пройдено · n Провал · v Оценка · f Завершить' : 'a Обсудить · 3 Диалоги · f Завершить · r Повторить · x Экспорт'
         : record.reviewedAt ? 'a Обсудить результат · r Повторить · x Экспорт' : 'a Обсудить исправление · результат сохранён',
