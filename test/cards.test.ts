@@ -312,7 +312,7 @@ test('разбор начинается с провалов без вердик�
     events: [{ seq: 0, type: 'assistant' as const, text: 'Ответ агента' }], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1,
     assessments: [{ metricId: 'demo_task_state', result: outcome, rationale: 'Обоснование судьи', evidence: [0] }],
   });
-  // Порядок в записи нарочно неудобный: пройденный первым, неразобранный провал последним.
+  // Порядок в записи нарочно неудобный: пройденный первым, провалы за ним.
   record.trials = [trial('t_pass', 'pass'), trial('t_done', 'fail'), trial('t_pending', 'fail')];
   record.humanReviews = [{ id: 'h1', trialId: 't_done', verdict: 'fail', note: 'разобрано', createdAt: record.createdAt }];
 
@@ -321,6 +321,9 @@ test('разбор начинается с провалов без вердик�
   const text = stripTerminalSequences(board.render(120).join('\n'));
   assert.match(text, /Разбор: осталось 1 провал\(ов\) из 2/);
   assert.match(text, /Запись переставлена/, 'первым открыт тот диалог, который ждёт человека');
+  // UI-SPEC F12: очередь согласия ведёт список. Вердикт по диалогу целиком у t_done — не отметка
+  // согласия, поэтому провал остаётся неразобранным и стоит первым по порядку записи.
+  assert.deepEqual(reviewOrder(record).map(t => t.id), ['t_done', 't_pending', 't_pass']);
 
   // UI-D-02: быстрая `p` в разделе результатов снята; вердикт по диалогу целиком остаётся на `v`.
   board.handleInput('p');
@@ -331,8 +334,8 @@ test('разбор начинается с провалов без вердик�
   assert.equal(agreed.type === 'agree' && agreed.answer, 'agree');
   assert.equal(agreed.type === 'agree' && agreed.judgeVerdict, 'fail');
   assert.equal(agreed.type === 'agree' && agreed.metricId, 'demo_task_state');
-  assert.equal(agreed.type === 'agree' && agreed.trialId, 't_pending');
-  assert.equal(agreed.type === 'agree' && reviewOrder(record)[agreed.selected]?.id, 't_pending');
+  assert.equal(agreed.type === 'agree' && agreed.trialId, 't_done');
+  assert.equal(agreed.type === 'agree' && reviewOrder(record)[agreed.selected]?.id, 't_done');
   board.dispose();
 
   const failing: BoardAction[] = [];

@@ -26,14 +26,20 @@ export const verdicts: Record<string, string> = {
 };
 
 /**
- * Review order: dialogues still waiting for a decisive verdict come first, then the rest.
- * Reviewing one moves it out of the queue, so the same position lands on the next case
- * and a person can go through failures without navigating.
+ * Review order (UI-SPEC F12): the review queue leads — first the failures the judge recorded and
+ * the owner has not answered yet, then the passes drawn for a double-check — and today's rank
+ * (waiting for a verdict, flagged, failed, the rest) follows. Answering a situation takes it out of
+ * groups 0 and 1, so the same list position lands on the next case and a person goes through the
+ * failures and then the checked successes without navigating.
  */
 export function reviewOrder(record: Experiment): Trial[] {
   const pending = awaitingVerdict(record);
   const flagged = new Set(humanFindings(record).map(f => f.trialId));
-  const rank = (trial: Trial) => pending.has(trial.id) ? 0 : flagged.has(trial.id) ? 1 : isAgentFailure(record, trial) || trial.outcome === 'invalid' ? 2 : 3;
+  const agreement = judgeAgreement(record);
+  const unmarked = new Set(agreement.unmarked);
+  const queued = new Set(agreement.queueFailures);
+  const rank = (trial: Trial) => unmarked.has(trial.id) ? (queued.has(trial.id) ? 0 : 1)
+    : pending.has(trial.id) ? 2 : flagged.has(trial.id) ? 3 : isAgentFailure(record, trial) || trial.outcome === 'invalid' ? 4 : 5;
   return record.trials.map((trial, index) => ({ trial, index })).sort((a, b) => rank(a.trial) - rank(b.trial) || a.index - b.index).map(v => v.trial);
 }
 
@@ -67,8 +73,23 @@ export function agreementTarget(record: Experiment, trial: Trial | undefined): A
 export function resultEntries(record: Experiment): { id: string; text: string; waiting: boolean }[] {
   const pending = awaitingVerdict(record);
   const flagged = new Set(humanFindings(record).map(f => f.trialId));
-  return reviewOrder(record).map(trial => ({ id: trial.id, waiting: pending.has(trial.id),
-    text: `${pending.has(trial.id) ? '● ' : ''}${flagged.has(trial.id) ? 'ЗАМЕЧАНИЕ ЧЕЛОВЕКА' : isAgentFailure(record, trial) ? 'НЕ ПРОЙДЕНО' : verdicts[trial.outcome]} · ${record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId} · ${trial.userMode ?? 'reactive'} #${trial.repeat + 1}` }));
+  const agreement = judgeAgreement(record);
+  const unmarked = new Set(agreement.unmarked);
+  const queued = new Set(agreement.queueFailures);
+  const answers = new Map(agreement.marks.filter(m => !m.stale).map(m => [m.trialId, m.answer]));
+  return reviewOrder(record).map(trial => {
+    const answer = answers.get(trial.id);
+    const today = flagged.has(trial.id) ? 'ЗАМЕЧАНИЕ ЧЕЛОВЕКА' : isAgentFailure(record, trial) ? 'НЕ ПРОЙДЕНО' : verdicts[trial.outcome];
+    // A situation still in the queue says what to do with it; an answered one says what was said.
+    const queue = unmarked.has(trial.id) ? queued.has(trial.id) ? 'ПРОВЕРЬТЕ ПРОВАЛ' : 'ПРОВЕРЬТЕ И УСПЕХ' : undefined;
+    const label = queue ?? (answer === 'disagree' ? 'НЕСОГЛАСИЕ С СУДЬЁЙ' : today);
+    const suffix = answer === 'agree' ? ' · = согласен' : answer === 'unsure' ? ' · ~ не могу сказать' : '';
+    // UI-D-22: «только неразобранные» keeps the unanswered queue, not just today's pending dialogues.
+    const waiting = !!queue || pending.has(trial.id);
+    return { id: trial.id, waiting,
+      // One `●` at most: doubt keeps the situation waiting, and today's rule would add a second.
+      text: `${queue || answer === 'unsure' || (!answer && pending.has(trial.id)) ? '● ' : ''}${label} · ${record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId} · ${trial.userMode ?? 'reactive'} #${trial.repeat + 1}${suffix}` };
+  });
 }
 
 export type Section = 'agent' | 'cards' | 'results';
