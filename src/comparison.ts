@@ -1,7 +1,7 @@
 import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
-import { agentMetricResult, agentRubricResult, automaticTrialResult, GOAL_METRIC_ID, graded, headlineMetricIds, isAgentFailure, latestHumanReviews, measured, measurementUsable, observedRecord, primaryMetricId, RULES_METRIC_ID, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, GOAL_METRIC_ID, graded, headlineMetricIds, headlineTrialResult, isAgentFailure, latestHumanReviews, measured, measurementUsable, observedRecord, primaryMetricId, RULES_METRIC_ID, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
 /*
@@ -687,8 +687,9 @@ const isDecided = (outcome: 'pass' | 'fail' | 'unknown'): outcome is Decided => 
 
 /**
  * A repeat of the same set against its source run. Gated on comparability and on the same agent,
- * so a change of the agent, the judge or the criteria is never called instability. Uses the goal
- * verdict (the headline criterion), not the strict all-rubric change of compareRuns.
+ * so a change of the agent, the judge or the criteria is never called instability. Uses the headline
+ * verdict (goal and prompt rules, CTX-21), so «нестабильно» matches the number; reply quality and the
+ * RAG rubrics never flip a card here.
  */
 export function stabilityBetweenRuns(before: Experiment, after: Experiment): Stability {
   const result: Stability = { basis: 'repeat', comparedWith: before.id, checked: 0, unstable: [], skipped: null };
@@ -704,7 +705,7 @@ export function stabilityBetweenRuns(before: Experiment, after: Experiment): Sta
     if (!sourceCard) continue;
     // A card edited since the source attempts were judged is another question, not a repeat of it.
     if (fingerprint(normalizeScenarioIdentity(card, after.target.kind)) !== sourceCardIdentity(before, sourceCard, identity)) continue;
-    const was = goalCardOutcome(source, sourceCard), now = goalCardOutcome(repeat, card);
+    const was = headlineCardOutcome(source, sourceCard).outcome, now = headlineCardOutcome(repeat, card).outcome;
     if (!isDecided(was) || !isDecided(now)) continue;
     result.checked++;
     if (was !== now) result.unstable.push({ scenarioId: card.id, title: card.title, before: was, after: now });
@@ -713,8 +714,9 @@ export function stabilityBetweenRuns(before: Experiment, after: Experiment): Sta
 }
 
 /**
- * A reassessment of saved answers against its source run: pass↔fail flips of the goal verdict on
- * the same attempts, the same criteria and the same judge (model, routing and protocol). Null when the record is not a reassessment of `source`.
+ * A reassessment of saved answers against its source run: pass↔fail flips of the headline verdict
+ * (goal and prompt rules) on the same attempts, the same criteria and the same judge (model, routing
+ * and protocol). Null when the record is not a reassessment of `source`.
  * compareRuns is not used here: it always marks a reassessment as incomparable.
  */
 export function stabilityAfterReassess(record: Experiment, source: Experiment): Stability | null {
@@ -742,7 +744,7 @@ export function stabilityAfterReassess(record: Experiment, source: Experiment): 
     // Only a card whose every source attempt was reassessed, and nothing else, compares the same answers.
     if ([...trialIds].some(id => !sourceTrialIds.has(id))
       || source.trials.some(trial => trial.scenarioId === card.id && !trialIds.has(trial.id))) continue;
-    const was = goalCardOutcome(source, sourceCard), now = goalCardOutcome(record, card);
+    const was = headlineCardOutcome(source, sourceCard).outcome, now = headlineCardOutcome(record, card).outcome;
     if (!isDecided(was) || !isDecided(now)) continue;
     result.checked++;
     if (was !== now) result.unstable.push({ scenarioId: card.id, title: card.title, before: was, after: now });
@@ -753,6 +755,8 @@ export function stabilityAfterReassess(record: Experiment, source: Experiment): 
 const JUDGE_INCOMPLETE = 'Судья не завершил оценку этой попытки.';
 
 const CONTROL_NOTE = 'Контрольные ситуации не сравниваются: они не входят в главное число.';
+/** Named whenever a shared card carries the prompt-rule check, so a reader knows which rule the before/after counts by (CTX-22). */
+const RULE_NOTE = 'Сравнение считает «справился» как главное число: запрос выполнен и правила промпта соблюдены.';
 
 export function compareRuns(before: Experiment, after: Experiment): RunComparison {
   // A rebuilt source carries the current cards; its embedded identity says what the source cards were.
@@ -890,9 +894,10 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   if (!pairs.length) { result.headline = 'Нет совпадающих валидных попыток. Повторите неудавшиеся диалоги, чтобы получить сравнение.'; return result; }
   result.pairs = pairs.map(trial => {
     const scenario = shared.find(s => s.id === trial.scenarioId);
-    const was = automaticTrialResult(scenario, trial, before.humanReviews);
+    // The headline rule per attempt (goal and prompt rules); a legacy card falls back to the strict trial result.
+    const was = headlineTrialResult(scenario, trial, before.humanReviews);
     const following = afterAttempts.get(attemptKey(trial))!;
-    const now = automaticTrialResult(scenario, following, after.humanReviews);
+    const now = headlineTrialResult(scenario, following, after.humanReviews);
     let change: RunComparison['pairs'][number]['change'] = was === 'unknown' || now === 'unknown' ? 'unknown'
       : was === now ? 'unchanged' : now === 'pass' ? 'fixed' : 'regressed';
     const reviewNote = rubricReviewNote(scenario, trial, following);
@@ -911,8 +916,9 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   result.comparable = true;
   for (const scenario of shared) {
     if (result.pairs.some(p => p.scenarioId === scenario.id && p.reviewNote)) { result.ungraded++; continue; }
-    const was = cardOutcome(before, scenario, true);
-    const now = cardOutcome(after, scenario, true);
+    // The headline rule over the matched attempts (partial gate); a legacy card reaches the strict cardOutcome(…, true) through it.
+    const was = headlineCardOutcome(before, scenario, { partial: true }).outcome;
+    const now = headlineCardOutcome(after, scenario, { partial: true }).outcome;
     if (was === 'unknown' || now === 'unknown') { result.ungraded++; continue; }
     const row = { scenarioId: scenario.id, title: scenario.title, tier: scenario.tier ?? 'regression' };
     if (was === 'fail' && now === 'pass') result.fixed.push(row);
@@ -933,6 +939,7 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   if (disputed) result.headline += ` Пар с совпавшими ответами и разными оценками: ${disputed}. Нужна проверка.`;
   if (result.ungraded) notes.push(`${result.ungraded} карточек без решающей оценки; они не считаются пройденными.`);
   if (result.includesRubrics) notes.push('Сравнение включает предварительные оценки по рубрикам. Это не подтверждённое улучшение.');
+  if (shared.some(s => headlineMetricIds(s).includes(RULES_METRIC_ID))) notes.push(RULE_NOTE);
   const smoke = result.regressed.filter(r => r.tier === 'smoke').length;
   if (smoke) notes.push(`Сломано ${smoke} дымовых карточек: сначала восстановите базовое поведение.`);
   if (compared < TRUSTED_SAMPLE) notes.push(`Сравнение по ${compared} карточкам: разница может быть случайной. Повторы не создают новые ситуации.`);

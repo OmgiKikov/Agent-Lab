@@ -1,7 +1,7 @@
 import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, UserMode, ValidationExclusion } from './contracts.js';
 import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, MACHINE_FORMAT, metricApplies, ragEvidenceComplete, RAG_METRIC_IDS, verbatimSpan } from './contracts.js';
 import { agentMetricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
-import { cardOutcome, goalCardOutcome, humanFindings, isAgentFailure, judgeModel as runJudgeModel, verdictSummary, type VerdictSummary } from './comparison.js';
+import { cardOutcome, headlineCardOutcome, humanFindings, isAgentFailure, judgeModel as runJudgeModel, verdictSummary, type VerdictSummary } from './comparison.js';
 import { exclusionCounts, pluralForm } from './result-view.js';
 import { failureExplanation, ruleRegister, ruleText, UNVERIFIED, UNVERIFIED_REPLY, type FailureExplanation } from './explain.js';
 import { draftHash } from './experiment.js';
@@ -35,11 +35,13 @@ export interface QualityCardScore {
   passed: number; failed: number; unknown: number; invalid: number; notReached: number; total: number; accuracy: number | null;
 }
 export interface QualitySummary {
-  /** Primary business result. Generated prompt/RAG runs use goal_attainment; legacy runs fall back to all criteria. */
+  /** Primary business result over the counted (non-control) cards. Generated prompt/RAG runs use goal_attainment: the headline rule (goal and prompt rules); legacy runs fall back to all criteria. */
   cards: QualityCardScore;
   /** Strict card result: every applicable code check and agent rubric must pass. */
   strict: QualityCardScore & { goalMetWithOtherFailures: number };
   primary: 'goal_attainment' | 'all_criteria';
+  /** The label printed next to `cards`: which rule the number is counted by (C-310). */
+  cardsLabel: string;
   metrics: QualityMetric[];
   rag: { complete: number; partial: number; missing: number; signals: { trialId: string; explanation: string }[] };
   /** Recorded dialogues left out of the validation set; never part of the denominator. */
@@ -573,15 +575,21 @@ const limitTexts: Record<string, string> = {
 export function qualitySummary(input: Experiment): QualitySummary {
   const record = observedRecord(input);
   const v = verdictSummary(record);
-  const primary = record.scenarios.length > 0 && record.scenarios.every(scenario => scenario.metrics?.some(metric => metric.subject === 'agent' && metric.id === 'goal_attainment'))
+  // Positive controls never enter the number (CTX-11): the report counts the same cards as the result view.
+  const controlIds = new Set(record.positiveControlScenarioIds ?? []);
+  const counted = record.scenarios.filter(scenario => !controlIds.has(scenario.id));
+  const primary = counted.length > 0 && counted.every(scenario => scenario.metrics?.some(metric => metric.subject === 'agent' && metric.id === 'goal_attainment'))
     ? 'goal_attainment' as const : 'all_criteria' as const;
-  const strictOutcomes = record.scenarios.map(scenario => ({ scenario, outcome: cardOutcome(record, scenario) }));
+  const strictOutcomes = counted.map(scenario => ({ scenario, outcome: cardOutcome(record, scenario) }));
   const cardOutcomes = primary === 'goal_attainment'
-    ? record.scenarios.map(scenario => ({ scenario, outcome: goalCardOutcome(record, scenario) })) : strictOutcomes;
-  const cards = cardScore(record, cardOutcomes);
-  const strictBase = cardScore(record, strictOutcomes);
+    ? counted.map(scenario => ({ scenario, outcome: headlineCardOutcome(record, scenario).outcome })) : strictOutcomes;
+  const countedRecord = { ...record, scenarios: counted };
+  const cards = cardScore(countedRecord, cardOutcomes);
+  const strictBase = cardScore(countedRecord, strictOutcomes);
   const strict = { ...strictBase, goalMetWithOtherFailures: primary === 'goal_attainment'
     ? cardOutcomes.filter((item, index) => item.outcome === 'pass' && strictOutcomes[index]?.outcome !== 'pass').length : 0 };
+  const withRules = counted.some(scenario => scenario.metrics?.some(metric => metric.subject === 'agent' && metric.id === 'prompt_compliance'));
+  const cardsLabel = primary === 'all_criteria' ? 'Справился · карточки' : withRules ? 'Справился · запрос и правила промпта' : 'Справился · запрос';
   const metrics = metricRows(record);
   const rubricUnknown = metrics.filter(m => m.kind === 'rubric' && !RAG_METRIC_IDS.has(m.id)).reduce((n, m) => n + m.unknown, 0);
   const rag: QualitySummary['rag'] = { complete: 0, partial: 0, missing: 0, signals: [] };
@@ -629,12 +637,14 @@ export function qualitySummary(input: Experiment): QualitySummary {
   // Only non-zero leftovers are named; the human-review count is always shown next to the automatic number.
   const leftovers = (items: [number, string][]) => items.filter(([n]) => n > 0).map(([, label]) => label);
   const sentence = (parts: string[]) => { const text = parts.join('; '); return text.charAt(0).toLocaleUpperCase() + text.slice(1); };
+  // The rule the number is counted by is said in the sentence itself (C-309), so an old export is told apart by its wording.
+  const ruleWords = withRules ? 'Справился (запрос выполнен и правила промпта соблюдены)' : 'Справился (запрос выполнен)';
   const headline = primary === 'goal_attainment'
-    ? `Бизнес-цель достигнута в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${plural(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} цель достигнута, но провален другой критерий.` : ''} ${sentence([...leftovers([[cards.unknown, `без решения по цели: ${cards.unknown}`], [cards.invalid, `невалидно: ${cards.invalid}`], [cards.notReached, `не дошли: ${cards.notReached}`]]), reviewText])}.`
+    ? `${ruleWords} в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${plural(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} справился, но провален другой критерий.` : ''} ${sentence([...leftovers([[cards.unknown, `без решения: ${cards.unknown}`], [cards.invalid, `невалидно: ${cards.invalid}`], [cards.notReached, `не дошли: ${cards.notReached}`]]), reviewText])}.`
     : `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)})${leftovers([[cards.unknown, `${cards.unknown} без решения`], [cards.invalid, `${cards.invalid} невалидны`], [cards.notReached, `${cards.notReached} не дошли`]]).map(part => `, ${part}`).join('')}; ${reviewText}.`;
   const exclusions = record.validationExclusions ?? [];
   const excluded = { total: exclusions.length, kinds: exclusionCounts(exclusions) };
-  return { cards, strict, primary, metrics, rag, excluded, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
+  return { cards, strict, primary, cardsLabel, metrics, rag, excluded, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
     human,
     scope: { cards: record.scenarios.length, dialogues: record.trials.length, modes: record.settings.userModes, provenance, target, ...(judgeModel ? { judgeModel } : {}) },
     cost: { usd: record.usage.costUsd, calls: record.usage.calls, elapsedMs: record.trials.reduce((n, t) => n + t.elapsedMs, 0) }, limits, headline };
