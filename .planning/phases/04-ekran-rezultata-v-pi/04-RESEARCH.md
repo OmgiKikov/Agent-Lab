@@ -753,20 +753,24 @@ Cost basis: the phase-1 single-situation control runs cost $0.1663 and $0.1653, 
 | A9 | Append the entry only after state-changing board actions, not on every open [ASSUMED: CONTEXT does not say] | Pattern 3 | Owner may expect a block on every open |
 | A10 | Draft tabs `1 Итог · 2 Ситуации`, run tabs `1–4`; keys `3/4` inert on drafts [ASSUMED: discretion per CONTEXT] | Pattern 4 | Minor |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Does phase 3 publish an «unmarked queue» count in `ResultView`?**
+1. **RESOLVED — Does phase 3 publish an «unmarked queue» count in `ResultView`?**
+   - Resolution: the counts are derived from the published `JudgeAgreement` fields (`unmarked`, `queueFailures`, `sampledPasses`, `marks`) inside `src/verdict.ts` (plan 04-01, Task 2); `src/agreement.ts` is not changed.
    - What we know: F11 counts x/Q_fail and y/S, and `judgeAgreement` holds the groups.
    - What's unclear: whether Q_fail and S live in `view.agreement`.
-   - Recommendation: phase 4 adds `agreement.queue = { failures, passes, unmarked }` in `src/agreement.ts` if phase 3 did not.
-2. **A live «исправлено / сломано / нестабильно» example.**
+   - Original recommendation (superseded by the resolution): add `agreement.queue` in `src/agreement.ts` if phase 3 did not publish the counts.
+2. **RESOLVED — A live «исправлено / сломано / нестабильно» example.**
+   - Resolution: the only live comparable pair (`fae4ee59` → `61521e0d`, same agent) has 0 flips. «Исправлено», «сломано» and «нестабильно» are proven by unit fixtures only (plans 04-04, 04-05); the live check (04-09) shows «без изменений» / «несравнимо» and records any flip as a note; no paid run is made to create one.
    - What we know: the only comparable live pair (`fae4ee59` → `61521e0d`) has 0 flips and the same agent. Out of scope: «Исправленная версия агента для «до и после»».
    - What's unclear: whether the demo needs a visible flip.
    - Recommendation: unit fixtures cover all five codes. The live check verifies «без изменений» / «несравнимо». Record a flip only if a later repeat produces one; do not buy one.
-3. **Which old runs does the phase-2 protocol change make incomparable?**
+3. **RESOLVED — Which old runs does the phase-2 protocol change make incomparable?**
+   - Resolution: measured, not assumed. Plan 04-04 (Task 2) records the `situationChanges` counts and the K1 row of the stored pair after phase 2 lands, and `render-matrix.mts` (04-09) prints the comparison counts again; whatever they show is written to the SUMMARY.
    - What we know: `compareRuns` compares the recorded judge identities of both records, so `fae4ee59` → `61521e0d` (both v10) stays comparable [VERIFIED: comparison.ts `judgeIdentities` read from each record's trials].
    - Recommendation: the render-matrix script prints the comparison counts for that pair after phase 2 lands.
-4. **Session file permissions (0644) hold block quotes.** See the Security section. The user should decide whether that is acceptable. Recommendation: keep only view data (no transcripts) and note it for the human checklist.
+4. **RESOLVED — Session file permissions (0644) hold block quotes.**
+   - Resolution (orchestrator decision, revision 1; CLAUDE.md «Data»): session `details` and entries hold only `{ kind, version, runId, resultKey }`, with no text. Both renderers take the view from an in-memory cache or rebuild it synchronously from the 0600 record in `.agent-lab` (same guards as `store.get`); a missing or unreadable record shows a short honest row (plans 04-01, 04-03). The `details` recommendation in Pattern 1 and Pattern 3 above is superseded by this, and so is the V8 row of the Security section below.
 
 ## Environment Availability
 
@@ -844,7 +848,7 @@ Cost basis: the phase-1 single-situation control runs cost $0.1663 and $0.1653, 
 | V5 Input Validation | yes | Every record, model and human text goes through `safeText` inside `renderRows`. `details` are type-guarded (`isVerdictDetails`) before rendering; unknown shapes are never trusted. |
 | V6 Cryptography | no | `resultHash` / `fingerprint` exist already (not security use) |
 | V7 Error Handling and Logging | yes | Renderer errors are shown in words, not raw stacks; the progress `setStatus` is cleared in `finally` |
-| V8 Data Protection | yes | `VerdictDetails` holds only the view (verdict, counts, cause titles, cited quotes), with no transcripts, `proofs` or trace. Pi writes session files as 0644 (observed: `-rw-r--r--` on the spike session file); `appendFileSync` is used without a mode [VERIFIED: dist/core/session-manager.js:745,766]. Today's `details: output` already stores more than that. Phase-4 verification scripts must write session files only under `mktemp -d` and delete them. |
+| V8 Data Protection | yes | (Revised per Open Question 4, RESOLVED: `VerdictDetails` hold only `{ kind, version, runId, resultKey }`; the view is rebuilt from the 0600 record.) Original note: `VerdictDetails` held the view (verdict, counts, cause titles, cited quotes), with no transcripts, `proofs` or trace. Pi writes session files as 0644 (observed: `-rw-r--r--` on the spike session file); `appendFileSync` is used without a mode [VERIFIED: dist/core/session-manager.js:745,766]. Today's `details: output` already stores more than that. Phase-4 verification scripts must write session files only under `mktemp -d` and delete them. |
 
 ### Known Threat Patterns for Pi extension rendering
 

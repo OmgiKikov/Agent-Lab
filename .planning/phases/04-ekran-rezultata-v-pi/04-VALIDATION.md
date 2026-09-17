@@ -35,15 +35,15 @@ Never run `npm test` or `npm run build` in the worktree. Plans run one at a time
 
 | Req | Plan / Task | Behavior | Test Type | Automated Command | File Exists | Status |
 |-----|-------------|----------|-----------|-------------------|-------------|--------|
-| SCREEN-01/02 | 04-01 T1 (tracer) | `agent_lab_run` result drawn as the verdict block by Pi's `ToolExecutionComponent` from `details` | integration | `snap-test.sh test/verdict-block.test.ts test/extension.test.ts test/result-view.test.ts` | ❌ W0 (created here) | ⬜ |
+| SCREEN-01/02 | 04-01 T1 (tracer) | `agent_lab_run` result drawn as the verdict block by Pi's `ToolExecutionComponent`; `details` are four text-free keys (marker test) | integration | `snap-test.sh test/verdict-block.test.ts test/extension.test.ts test/result-view.test.ts` | ❌ W0 (created here) | ⬜ |
 | SCREEN-01 | 04-01 T2 | V1/V2 vectors, B1/B2 order, jargon scan | unit | `snap-test.sh test/verdict.test.ts test/result-view.test.ts` | ❌ W0 | ⬜ |
 | SCREEN-02/07 | 04-01 T3 | widths 40–160, fake and real themes, legacy fallback, lint | unit | `snap-test.sh test/theme.test.ts test/verdict-block.test.ts test/verdict.test.ts test/extension.test.ts` | ❌ W0 | ⬜ |
 | SCREEN-07 | 04-02 T1 (tracer) | theme owns escaping/rows/wrap; output unchanged | unit | `snap-test.sh test/theme.test.ts test/cards.test.ts test/extension.test.ts test/verdict-block.test.ts` | ✅ | ⬜ |
 | SCREEN-03 | 04-02 T2 | split with no drawn change; surface check OK | unit + stored runs | `snap-test.sh` + `pi-surface-check.mts` from a kept snapshot | ✅ | ⬜ |
 | SCREEN-03 | 04-02 T3 | real board driven by keys | pty (free) | `board-pty-check.sh` | ❌ W0 | ⬜ |
-| SCREEN-02 | 04-03 T1 (tracer) | board run → one entry; host parity in both themes | integration | `snap-test.sh test/extension.test.ts test/verdict-block.test.ts test/cards.test.ts` | ✅ | ⬜ |
-| SCREEN-01/02 | 04-03 T2 | all result tools return verdict details; prompt and skill | unit | `snap-test.sh test/extension.test.ts test/skill.test.ts test/verdict-block.test.ts` | ✅ | ⬜ |
-| SCREEN-02 | 04-03 T3 | append only on changed result | unit | `snap-test.sh test/extension.test.ts test/cards.test.ts` | ✅ | ⬜ |
+| SCREEN-02 | 04-03 T1 (tracer) | board run → one text-free entry; host parity in both themes; marker test on entry data | integration | `snap-test.sh test/extension.test.ts test/verdict-block.test.ts test/cards.test.ts` | ✅ | ⬜ |
+| SCREEN-02 | 04-03 T2 | reopen: view rebuilt from the 0600 record (same as `evidenceBundle`), size/mtime cache, missing/unreadable/changed rows, hostile id | unit | `snap-test.sh test/store.test.ts test/verdict-block.test.ts test/extension.test.ts` | ✅ | ⬜ |
+| SCREEN-01/02 | 04-03 T3 | all result tools return four-key details; prompt and skill; append only on changed result | unit | `snap-test.sh` (whole tree) | ✅ | ⬜ |
 | SCREEN-05 | 04-04 T1 (tracer) | `situationChanges` codes, gates, parity with stability | unit | `snap-test.sh test/comparison.test.ts` | ✅ | ⬜ |
 | SCREEN-05 | 04-04 T2 | `view.changes`, `compareRows` texts; stored pair counts | unit + stored run | `snap-test.sh test/result-view.test.ts test/comparison.test.ts test/verdict.test.ts` | ✅ | ⬜ |
 | SCREEN-03/05 | 04-05 T1 (tracer) | tab sets, digits/Tab/Shift+Tab, tier tab row, Сравнение tab | unit | `snap-test.sh test/cards.test.ts test/theme.test.ts test/extension.test.ts` | ✅ | ⬜ |
@@ -79,6 +79,8 @@ Never run `npm test` or `npm run build` in the worktree. Plans run one at a time
 | A person watches the live progress during a real run: tool row, Pi footer and board header move, show time and money with «оценка», and the footer clears at the end | SCREEN-06 | The pty and capture scripts prove the events, not how the live screen reads to a person | During the next real run of the acquiring set (for example the phase-7 demo recording), watch the three places for a minute and at the end |
 | Reopening a real session that contains a board-appended block and a chat block shows both blocks | SCREEN-02 | The pty check uses a built session file; a person confirms it on a real session | Close and reopen the Pi session used above (`pi --session …`) and check that both blocks are drawn |
 | If 04-10 stopped at preflight or budget: the live progress item is `human_needed` | SCREEN-06 | Mock server or budget not available unattended | Run 04-10 Task 2 when the mock server is up and the budget says GO |
+| If another Pi was running during 04-02 or 04-09: the pty checks and/or the `dist/` swap are `human_needed` | SCREEN-02, SCREEN-03 | The scripts never start next to, or kill, another session's Pi | When no Pi runs: `board-pty-check.sh --keys tabs`, `pi-reopen-check.sh`, then 04-09 Task 3 steps 1–4 |
+| Сравнение with a real flip | SCREEN-05 | The only live comparable pair has 0 flips; «исправлено / сломано / нестабильно» are proven by unit fixtures only | After the next real repeat with a changed agent, open tab 4 and check the `+`/`-` rows |
 
 ## Validation Sign-Off
 
