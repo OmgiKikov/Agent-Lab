@@ -20,7 +20,7 @@ export interface ExplanationRow { role: ExplanationRole; indent: number; text: s
 /** One owner rule: its number in the owner's materials and where to find it. */
 export interface RuleRef {
   number: number; requirementId: string; sourceId: string; sourceName: string;
-  /** 1-based line of the quote start; null for a one-line source. */
+  /** 1-based line of the quote start; null for a short source, found by name alone. */
   line: number | null;
   /** The source's own characters, whitespace runs collapsed to one space. */
   quote: string;
@@ -48,6 +48,12 @@ const COMPLIANCE = 'prompt_compliance';
 const QUOTED_SPAN = /«([^«»]{12,})»/g;
 const RULE_FORMS: [string, string, string] = ['правило', 'правила', 'правил'];
 const collapse = (value: string) => value.replace(/\s+/g, ' ').trim();
+/**
+ * A line number helps only in a long source. Knowledge files of a few lines are found by name,
+ * so `, строка L` is added only from this many non-blank lines up.
+ */
+const NUMBERED_FROM = 4;
+const nonBlankLines = (content: string) => content.split('\n').filter(row => row.trim()).length;
 
 /**
  * Owner rule numbers: sources in the order supplied, then the start of the verbatim quote in
@@ -67,17 +73,17 @@ export function ruleRegister(record: Pick<Experiment, 'sources' | 'requirements'
   const register = new Map<string, RuleRef>();
   for (const row of rows) {
     if (register.has(row.requirement.id)) continue;
-    const multiline = /\n/.test(row.source.content.trim());
+    const numbered = nonBlankLines(row.source.content) >= NUMBERED_FROM;
     register.set(row.requirement.id, {
       number: register.size + 1, requirementId: row.requirement.id, sourceId: row.source.id, sourceName: row.source.name,
-      line: multiline ? row.source.content.slice(0, row.offset).split('\n').length : null,
+      line: numbered ? row.source.content.slice(0, row.offset).split('\n').length : null,
       quote: collapse(row.span), prompt: row.source.kind === 'prompt',
     });
   }
   return register;
 }
 
-/** `Правило 7 · Возврат покупки: «…»`; the line is named only for a multi-line source. */
+/** `Правило 7 · Возврат покупки: «…»`; the line is named only for a source of several lines. */
 export function ruleText(rule: RuleRef, word = 'Правило'): string {
   return `${word} ${rule.number} · ${collapse(rule.sourceName)}${rule.line === null ? '' : `, строка ${rule.line}`}: «${rule.quote}»`;
 }

@@ -317,3 +317,20 @@ test('jargon backstop: no explanation row carries machine words or requirement i
     for (const id of ids) assert.ok(!line.includes(id), `${id} in ${line}`);
   }
 });
+
+test('a short knowledge source is named without a line; a source of four lines and more keeps it', () => {
+  const record = run([], []);
+  const register = ruleRegister(record);
+  // src-a and src-b are one-line knowledge files, src-p is a four-line prompt.
+  assert.equal(register.get('refund-money')?.line, null);
+  assert.equal(register.get('fee')?.line, null);
+  assert.ok((register.get('bank-only')?.line ?? 0) > 0);
+
+  const three = structuredClone(record);
+  three.sources[0]!.content = 'Возврат выполняется через меню терминала в течение 30 дней.\n\nДеньги приходят на карту за пять рабочих дней.\nОстальное решает поддержка.';
+  assert.equal(ruleRegister(three).get('refund-money')?.line, null, 'three non-blank lines are still found by name');
+
+  const four = structuredClone(three);
+  four.sources[0]!.content += '\nЖалобы принимает отделение.';
+  assert.equal(ruleRegister(four).get('refund-money')?.line, 3, 'from four non-blank lines the line is named');
+});
