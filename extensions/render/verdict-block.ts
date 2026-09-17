@@ -75,8 +75,8 @@ function contentText(result: AgentToolResult<unknown>): string {
 }
 
 /**
- * The tool host (B3, B4): verdict details with a remembered view → the block; verdict details
- * without one → the C-190 row; anything else → the unchanged legacy renderer. A throw anywhere
+ * The tool host (B3, B4): verdict details with a remembered view give the block; verdict details
+ * without one give the C-190 row; anything else goes to the unchanged legacy renderer. A throw anywhere
  * ends as the escaped content text, never as an exception inside Pi (T-04-05).
  */
 export function renderAgentLabResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme, legacy: LegacyRenderer): Component {

@@ -35,9 +35,10 @@ export const GLYPH = {
 } as const;
 
 /**
- * Row role → token (UI-SPEC «Row role → token»): the phase-2 result rows and cause rows, the
+ * Row role to token (the UI-SPEC «Row role / token» table): the phase-2 result rows and cause rows, the
  * phase-3 agreement and disagreement rows, and the phase-4 verdict rows. A row without a role
- * and without a tone is printed in the terminal's own colour.
+ * and without a tone is printed in the terminal's own colour. No glyph is written here: the
+ * lint test allows a literal glyph only inside GLYPH above.
  */
 export const ROLE_TONE: Record<string, { tone: Tone; bold: boolean }> = {
   // phase 1–2 result rows (result-view.ts ResultRowRole)

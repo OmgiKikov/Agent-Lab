@@ -183,7 +183,7 @@ const verdictResult = (resultKey: string, text = '{"shownToOwner":"скрыты�
 const strip = (lines: string[]) => lines.map(line => stripTerminalSequences(line).trim()).filter(Boolean);
 const realTheme = (): Theme => {
   let captured: Theme | undefined;
-  const probe = new ToolExecutionComponent('agent_lab_run', 'c', {}, {}, { renderResult: (_r, _o, theme) => { captured = theme; return new Text('', 0, 0); } }, { requestRender() {} } as never, '/tmp');
+  const probe = new ToolExecutionComponent('agent_lab_run', 'c', {}, {}, { renderResult: (_r: unknown, _o: unknown, theme: Theme) => { captured = theme; return new Text('', 0, 0); } }, { requestRender() {} } as never, '/tmp');
   probe.updateResult({ content: [{ type: 'text', text: 'x' }], details: undefined, isError: false });
   probe.render(40);
   assert.ok(captured, 'Pi hands its current theme to the renderer');
@@ -238,8 +238,9 @@ test('through Pi\'s real tool row in the dark and light themes, at 40–160 colu
   const tool = tools.get('agent_lab_run')!;
   const result = verdictResult(key);
   const heights: Record<string, number> = {};
-  for (const name of ['dark', 'light'] as const) {
-    initTheme(name, false);
+  const themes: [string, () => void][] = [['dark', () => initTheme('dark', false)], ['light', () => initTheme('light', false)]];
+  for (const [name, apply] of themes) {
+    apply();
     for (const width of WIDTHS) {
       for (const expanded of [false, true]) {
         const row = new ToolExecutionComponent('agent_lab_run', 'call-1', {}, {}, tool, { requestRender() {} } as never, '/tmp');
