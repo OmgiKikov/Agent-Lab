@@ -1,8 +1,8 @@
 import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
-import { COUNTING_RULES, observedRecord } from './outcomes.js';
+import { agentMetricResult, COUNTING_RULES, observedRecord, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
 import { cardVerdict, headlineCardOutcome, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
-import { exampleRows, failureExplanation, rowsToLines, type ExplanationRole, type FailureExplanation } from './explain.js';
+import { exampleRows, failureExplanation, rowsToLines, violatedRuleNumber, type ExplanationRole, type FailureExplanation } from './explain.js';
 import { pluralForm } from './plural.js';
 
 export { pluralForm } from './plural.js';
@@ -76,6 +76,14 @@ export interface ResultView {
   phase: Experiment['phase'];
   countingRules: string;
   headline: { passed: number; decided: number; accuracy: number | null; range: [number, number] | null; text: string; smallSample: string | null };
+  /**
+   * The two halves of the headline over the counted (non-control) cards: how many requests were met
+   * of those decided, how many situations broke a prompt rule of those where the rules were decided,
+   * the one rule broken more often than any other (named only with a strict top count) and the
+   * counted cards without the prompt-rule check. `text` is the row under the number, or null when
+   * the draft never ran, no counted card has the goal rubric or nothing was decided. Never changes the headline.
+   */
+  breakdown: { goal: { met: number; decided: number }; rules: { broken: number; decided: number; commonRule: number | null; commonRuleCount: number }; withoutRules: number; text: string | null };
   /** Cards still waiting in a running phase; never part of notMeasured. */
   pending: number;
   notMeasured: { total: number; reasons: { code: NotMeasuredCode; label: string; count: number; scenarioIds: string[] }[] };
@@ -108,7 +116,8 @@ function stabilityOf(input: Experiment, before: Experiment | undefined): Stabili
 
 /**
  * The recorded failure clusters, counted in failed headline situations only. The example is
- * the goal explanation of the first failing cluster attempt, or the situation's own one.
+ * the explanation of the first failing cluster attempt whose goal failed (alone or with the
+ * rules), or the situation's own one.
  */
 function causesOf(record: Experiment, failures: FailureExplanation[]): ResultView['topCauses'] {
   const failed = new Map(failures.map(item => [item.scenarioId, item]));
@@ -118,7 +127,7 @@ function causesOf(record: Experiment, failures: FailureExplanation[]): ResultVie
     const attempts = mode.trialIds.flatMap(id => trials.get(id) ?? []).filter(trial => failed.has(trial.scenarioId));
     const [first] = attempts;
     if (!first) return [];
-    const own = attempts.map(trial => failureExplanation(record, scenarios.get(trial.scenarioId)!, trial)).find(item => item?.kind === 'goal');
+    const own = attempts.map(trial => failureExplanation(record, scenarios.get(trial.scenarioId)!, trial)).find(item => !!item && item.kind !== 'rules');
     const example = own ?? failed.get(first.scenarioId)!;
     return [{ name: mode.name, count: new Set(attempts.map(trial => trial.scenarioId)).size, example }];
   })
@@ -134,6 +143,35 @@ function causesOf(record: Experiment, failures: FailureExplanation[]): ResultVie
  */
 export function unmeasuredControl(card: { outcome: 'pass' | 'fail' | 'unknown'; reason?: NotMeasuredCode }): card is typeof card & { reason: NotMeasuredCode } {
   return card.outcome === 'unknown' && !!card.reason && card.reason !== 'in_progress';
+}
+
+/**
+ * The breakdown row (C-301…C-304) over the counted cards. The most frequent rule is read the way the
+ * explanation names it — the first attempt of each rule-breaking card whose rules the judge failed,
+ * through violatedRuleNumber — and named only when its count is strictly above every other named rule's.
+ */
+function breakdownOf(record: Experiment, counted: ResultView['cards'], notStarted: boolean): ResultView['breakdown'] {
+  const goal = { met: counted.filter(card => card.goal === 'pass').length, decided: counted.filter(card => card.goal === 'pass' || card.goal === 'fail').length };
+  const broken = counted.filter(card => card.rules === 'fail');
+  const tally = new Map<number, number>();
+  for (const card of broken) {
+    const attempt = record.trials.find(trial => trial.scenarioId === card.scenarioId && agentMetricResult(trial, RULES_METRIC_ID, record.humanReviews) === 'fail');
+    const number = attempt ? violatedRuleNumber(record, attempt) : null;
+    if (number !== null) tally.set(number, (tally.get(number) ?? 0) + 1);
+  }
+  const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+  const [top, next] = ranked;
+  const commonRule = top && (!next || top[1] > next[1]) ? top[0] : null;
+  const rules = { broken: broken.length, decided: counted.filter(card => card.rules === 'pass' || card.rules === 'fail').length, commonRule, commonRuleCount: top && commonRule !== null ? top[1] : 0 };
+  const withoutRules = counted.filter(card => card.goal !== 'none' && card.rules === 'none').length;
+  const withRules = counted.some(card => card.rules !== 'none');
+  const text = notStarted || !counted.some(card => card.goal !== 'none') || goal.decided + rules.decided === 0 ? null
+    : withRules
+      ? `Запрос выполнен: ${goal.met} из ${goal.decided}. Правила промпта нарушены: ${rules.broken} из ${rules.decided}`
+        + (commonRule === null ? '' : `, из них правило ${commonRule} — ${rules.commonRuleCount}`) + '.'
+        + (withoutRules ? ` Без правил промпта: ${withoutRules} — по ним считается только запрос.` : '')
+      : 'Правил промпта в наборе нет — считается только запрос.';
+  return { goal, rules, withoutRules, text };
 }
 
 export function buildResultView(input: Experiment, options: { before?: Experiment } = {}): ResultView {
@@ -182,6 +220,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     : `Справился в ${passed} из ${decided} ${pluralForm(decided, ['проверенной ситуации', 'проверенных ситуаций', 'проверенных ситуаций'])} — ${Math.round(accuracy * 100)}%.`;
   const smallSample = range && decided < SMALL_SAMPLE
     ? `Мало данных: реальная доля где-то от ${Math.round(range[0] * 100)}% до ${Math.round(range[1] * 100)}%.` : null;
+  const breakdown = breakdownOf(record, counted, notStarted);
   const exclusions = record.validationExclusions ?? [];
   const excluded = exclusionCounts(exclusions);
   const examined = record.dialogues.length + exclusions.length;
@@ -195,6 +234,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     phase: record.phase,
     countingRules: COUNTING_RULES,
     headline: { passed, decided, accuracy, range, text, smallSample },
+    breakdown,
     pending,
     notMeasured: { total: reasons.reduce((n, reason) => n + reason.count, 0), reasons },
     // A draft that never ran has no control verdict to warn about yet.
@@ -224,7 +264,14 @@ function stabilityLine(stability: Stability): string {
   return `Нестабильных: ${stability.unstable.length} (${stability.basis === 'repeat' ? 'повтор' : 'переоценка'} прогона ${stability.comparedWith.slice(0, 8)}).`;
 }
 
-/** One line for the positive controls; never merged into the headline. */
+/** The prompt-rule half of a single control's line, in words (C-305). */
+const CONTROL_RULES_TEXT: Record<'pass' | 'fail' | 'unknown', string> = { pass: 'правила промпта соблюдены ✓', fail: 'правила промпта нарушены ✗', unknown: 'правила промпта не измерены' };
+
+/**
+ * One line for the positive controls; never merged into the headline. A control is decided by its
+ * goal alone, but when it carries the prompt-rule check the line names both facts, so a broken rule
+ * on the control is shown and never hidden (C-305, C-306). Without the check the phase-1 text is kept.
+ */
 function controlLine(view: ResultView): string {
   const { cards } = view.control;
   const [only] = cards;
@@ -232,11 +279,22 @@ function controlLine(view: ResultView): string {
   const n = cards.length;
   const passed = cards.filter(card => card.outcome === 'pass').length;
   const notStarted = !view.scope.dialogues && (view.phase === 'preparing' || view.phase === 'review');
-  const base = passed === n ? (n === 1 ? 'Контроль: пройден ✓' : `Контроль: пройдено ${n} из ${n} ✓`)
-    : n > 1 ? `Контроль: пройдено ${passed} из ${n}.`
-    : only.outcome === 'fail' ? 'Контроль: не пройден ✗'
-    : notStarted || !unmeasuredControl(only) ? 'Контроль: ещё не проверен.'
-    : `Контроль: не измерен — ${NOT_MEASURED_TEXT[only.reason]}.`;
+  const ruled = cards.filter(card => card.rules !== 'none');
+  // The phase-1 stems; a multi-control stem that ends in a period keeps it after any rules suffix.
+  const [stem, period] = passed === n ? [n === 1 ? 'Контроль: пройден ✓' : `Контроль: пройдено ${n} из ${n} ✓`, '']
+    : n > 1 ? [`Контроль: пройдено ${passed} из ${n}`, '.']
+    : only.outcome === 'fail' ? ['Контроль: не пройден ✗', '']
+    : notStarted || !unmeasuredControl(only) ? ['Контроль: ещё не проверен.', '']
+    : [`Контроль: не измерен — ${NOT_MEASURED_TEXT[only.reason]}.`, ''];
+  let base = stem + period;
+  if (n === 1 && only.rules !== 'none' && (only.outcome === 'pass' || only.outcome === 'fail')) {
+    base = `Контроль: запрос ${only.outcome === 'pass' ? 'выполнен ✓' : 'не выполнен ✗'} · ${CONTROL_RULES_TEXT[only.rules]}`;
+  } else if (n > 1 && ruled.length) {
+    const brokenRules = ruled.filter(card => card.rules === 'fail').length;
+    const keptRules = ruled.filter(card => card.rules === 'pass').length;
+    const suffix = brokenRules > 0 ? ` · правила промпта нарушены в ${brokenRules} из ${ruled.length}` : ` · правила промпта соблюдены в ${keptRules} из ${ruled.length}`;
+    base = stem + suffix + period;
+  }
   const synthetic = cards.some(card => card.synthetic) ? ' · синтетическая ситуация' : '';
   const unstable = cards.some(card => card.unstable) ? ' · нестабильно' : '';
   return base + synthetic + unstable;
@@ -291,6 +349,8 @@ export function resultViewRows(view: ResultView, options: { details?: boolean } 
   if (control.warning) rows.push({ role: 'alarm', indent: 0, text: control.warning });
   rows.push({ role: 'lead', indent: 0, text: headline.text });
   const add = (role: ResultRowRole, text: string, indent = 0) => { rows.push({ role, indent, text }); };
+  // The breakdown sits right under the number so a zero explains itself before any caveat.
+  if (view.breakdown.text) add('line', view.breakdown.text);
   if (headline.smallSample) add('line', headline.smallSample);
   if (view.stability) add('line', stabilityLine(view.stability));
   if (view.pending > 0) add('line', `Ещё проверяется: ${view.pending}.`);

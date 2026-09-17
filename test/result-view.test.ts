@@ -425,7 +425,8 @@ test('a repeat counts situations whose goal verdict flipped, and they stay in th
   assert.equal(view.cards.find(item => item.scenarioId === 'B')?.unstable, false);
   assert.equal(view.headline.text, 'Справился в 0 из 2 проверенных ситуаций — 0%.');
   const lines = resultViewLines(view);
-  assert.deepEqual(lines.slice(0, 3), [view.headline.text, view.headline.smallSample, 'Нестабильных: 1 (повтор прогона a1b2c3d4).']);
+  // Phase 03.1: the C-304 row sits between the number and the caveat (the fixture cards carry no prompt rules).
+  assert.deepEqual(lines.slice(0, 4), [view.headline.text, 'Правил промпта в наборе нет — считается только запрос.', view.headline.smallSample, 'Нестабильных: 1 (повтор прогона a1b2c3d4).']);
   assert.ok(resultViewLines(view, { details: true }).includes('  нестабильно: Ситуация A — было «справился», стало «не справился»'));
   assert.ok(lines.every(line => !line.startsWith('  нестабильно')), 'the per-card lines are details only');
   assert.equal(buildResultView(repeat).stability, undefined, 'no source run, no stability line');

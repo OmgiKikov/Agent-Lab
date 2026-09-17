@@ -33,8 +33,11 @@ export interface RuleRef {
 }
 export interface FailureExplanation {
   scenarioId: string; trialId: string; title: string;
-  /** goal: the situation goal failed; rules: only the prompt-rule check failed. */
-  kind: 'goal' | 'rules';
+  /**
+   * goal: the situation goal failed (the prompt rules passed or the card has no such check);
+   * rules: only the prompt-rule check failed; both: the goal and the prompt-rule check failed in the same attempt.
+   */
+  kind: 'goal' | 'rules' | 'both';
   /** The verified agent reply; null when it could not be shown verbatim. */
   said: { seq: number; quote: string; judgeCited: boolean } | null;
   /** Verified rules shown or counted, knowledge first; unverified ones are only counted. */
@@ -160,10 +163,17 @@ function violatedRule(record: Experiment, trial: Trial, register: Map<string, Ru
   return found.size === 1 ? [...found.values()][0] : undefined;
 }
 
+/** The owner rule number a failed prompt-rule check names, or null when it cannot be named uniquely (or the rules were kept). */
+export function violatedRuleNumber(record: Experiment, trial: Trial): number | null {
+  return violatedRule(record, trial, ruleRegister(record))?.number ?? null;
+}
+
 /**
  * The explanation of one failed situation, or null when the record holds no failed attempt
  * for it. `trial` picks the attempt (a cause example); otherwise the first attempt whose goal
- * failed is used, then the first whose prompt-rule check failed.
+ * failed is used, then the first whose prompt-rule check failed. An attempt where the goal and
+ * the prompt-rule check both failed is «оба»; a legacy card without the goal rubric keeps the
+ * phase-2 kinds.
  */
 export function failureExplanation(record: Experiment, scenario: Scenario, trial?: Trial): FailureExplanation | null {
   const reviews = record.humanReviews;
@@ -174,7 +184,7 @@ export function failureExplanation(record: Experiment, scenario: Scenario, trial
   const attempts = record.trials.filter(item => item.scenarioId === scenario.id);
   const chosen = trial ?? attempts.find(goalFailed) ?? attempts.find(rulesFailed);
   if (!chosen || chosen.scenarioId !== scenario.id) return null;
-  const kind = goalFailed(chosen) ? 'goal' : rulesFailed(chosen) ? 'rules' : null;
+  const kind = hasGoal && goalFailed(chosen) && rulesFailed(chosen) ? 'both' : goalFailed(chosen) ? 'goal' : rulesFailed(chosen) ? 'rules' : null;
   if (!kind) return null;
 
   const cited = kind === 'rules' ? assessment(chosen, COMPLIANCE)
@@ -194,7 +204,8 @@ interface Details extends Pick<FailureExplanation, 'said' | 'rules' | 'unverifie
 /**
  * The F1 detail rows of one attempt, without its title: what the agent had to do, what it said
  * (the reply `cited` points at), the owner rules and, for a failed goal, the violated prompt rule.
- * A pass never names a violated rule.
+ * A double failure («оба») takes the goal rows and always says its second half: the named rule,
+ * or a row that the rules were broken but the rule cannot be named. A pass never names a violated rule.
  */
 function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind: DetailKind, cited: MetricAssessment | undefined): Details {
   const register = ruleRegister(record);
@@ -232,8 +243,10 @@ function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind:
     rows.push(rule ? { role: 'rule', indent: 2, text: ruleText(rule) } : { role: 'unverified', indent: 2, text: `Правило: ${UNVERIFIED}` });
   }
   if (moreRules) rows.push({ role: 'more', indent: 2, text: `и ещё ${moreRules} ${pluralForm(moreRules, RULE_FORMS)}` });
-  if (kind === 'goal' && violated && !shownRules.some(rule => rule?.number === violated.number)) {
+  if (kind !== 'rules' && kind !== 'pass' && violated && !shownRules.some(rule => rule?.number === violated.number)) {
     rows.push({ role: 'violated', indent: 2, text: ruleText(violated, 'Нарушено правило') });
+  } else if (kind === 'both' && !violated) {
+    rows.push({ role: 'unverified', indent: 2, text: `Нарушены правила промпта — ${UNVERIFIED}` });
   }
   return { rows, said, rules, unverifiedRules, moreRules, ...(violated ? { violated } : {}) };
 }
