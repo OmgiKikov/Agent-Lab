@@ -13,20 +13,22 @@ import { expectationSheet } from '../src/quality.js';
 
 const theme = { fg: (_: string, value: string) => value, bold: (value: string) => value };
 
-test('a quick verdict includes time spent reading the selected dialogue', async () => {
-  const record = await fixture(); record.phase = 'results_review'; record.reviewedAt = new Date().toISOString();
-  const scenario = record.scenarios[0]!;
-  record.trials = [{ id: 'timed', revisionId: 'revision-1', scenarioId: scenario.id, familyId: scenario.familyId,
-    repeat: 0, userMode: 'static', split: 'dev', manifestHash: 'hash', outcome: 'ungraded', reason: '', checks: [],
-    events: [{ seq: 0, type: 'assistant', text: 'Recorded answer' }], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 10 }];
+test('a quick agreement mark includes time spent reading the selected dialogue', async () => {
+  const record = await judgedFixture('timed', 'fail');
   let action: BoardAction | undefined;
   const reviewTimes = new Map([[`${record.id}|timed`, 100]]);
   const board = new LabBoard({ record, section: 'results', reviewTimes }, theme, value => { action = value; }, () => {});
   board.render(120);
   await new Promise(resolve => setTimeout(resolve, 20));
   board.handleInput('n');
-  assert.equal(action?.type, 'verdict');
-  if (action?.type === 'verdict') { assert.equal(action.trialId, 'timed'); assert.ok(action.reviewMs! >= 115); }
+  assert.equal(action?.type, 'agree');
+  if (action?.type === 'agree') {
+    assert.equal(action.answer, 'disagree');
+    assert.equal(action.trialId, 'timed');
+    assert.equal(action.metricId, 'goal');
+    assert.equal(action.judgeVerdict, 'fail');
+    assert.ok(action.reviewMs! >= 115);
+  }
 });
 
 test('coincident replies with different scores are visible in Pi and exported reports', async () => {
@@ -123,6 +125,24 @@ async function fixture(): Promise<Experiment> {
     selectedRevisionId: 'revision-1', manifestHash: null, reviewedAt: null, reviewMode: null, controlConsumedAt: null,
     trials: [], comparisons: [], iterations: [], usage: emptyUsage(), error: null, limitations: [], humanReviews: [], target: { kind: 'sandbox' }, goldenCases: [], dialogues: [], profiles: [],
   };
+}
+
+/**
+ * A finished evaluation whose only situation carries one recorded judge verdict on its main
+ * question — the shape the agreement keys need (UI-SPEC F10: «главная оценка ситуации»).
+ */
+async function judgedFixture(trialId: string, result: 'pass' | 'fail'): Promise<Experiment> {
+  const record = await fixture();
+  record.phase = 'results_review'; record.reviewedAt = new Date().toISOString();
+  const scenario = record.scenarios[0]!;
+  scenario.metrics = [{ id: 'goal', name: 'Цель достигнута', subject: 'agent', description: 'Клиент получил то, что просил', passCriteria: 'Получил', failCriteria: 'Не получил' }];
+  record.trials = [{ id: trialId, revisionId: 'revision-1', scenarioId: scenario.id, familyId: scenario.familyId,
+    repeat: 0, userMode: 'static', split: 'dev', manifestHash: 'hash', outcome: result, reason: '',
+    checks: [{ id: 'time', description: 'Запись переставлена', passed: result === 'pass', evidence: 'e' }],
+    events: [{ seq: 0, type: 'assistant', text: 'Recorded answer' }], initialState: scenario.initialState,
+    finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 10,
+    assessments: [{ metricId: 'goal', result, rationale: 'Обоснование судьи', evidence: [0] }] }];
+  return record;
 }
 
 test('80×24 shows the opening and first reply before metadata, with visible feedback and scroll position', async () => {
@@ -280,7 +300,7 @@ test('result cards keep model grades, missing grades, traces and human annotatio
   reviewed.dispose();
 });
 
-test('разбор начинается с провалов без вердикта, счётчик их считает, вердикт ставится одной клавишей', async () => {
+test('разбор начинается с провалов без вердикта, счётчик их считает, согласие с судьёй ставится одной клавишей', async () => {
   const record = await fixture();
   record.phase = 'results_review';
   const scenario = record.scenarios[0]!;
@@ -288,7 +308,8 @@ test('разбор начинается с провалов без вердик�
     id, revisionId: 'revision-1', scenarioId: scenario.id, familyId: scenario.familyId, repeat: 0, split: 'dev' as const,
     manifestHash: 'hash', outcome, reason: outcome === 'pass' ? 'Все объективные проверки пройдены.' : 'Часть объективных проверок провалена.',
     checks: [{ id: 'time', description: 'Запись переставлена', passed: outcome === 'pass', evidence: 'e' }],
-    events: [], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1,
+    events: [{ seq: 0, type: 'assistant' as const, text: 'Ответ агента' }], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1,
+    assessments: [{ metricId: 'demo_task_state', result: outcome, rationale: 'Обоснование судьи', evidence: [0] }],
   });
   // Порядок в записи нарочно неудобный: пройденный первым, неразобранный провал последним.
   record.trials = [trial('t_pass', 'pass'), trial('t_done', 'fail'), trial('t_pending', 'fail')];
@@ -300,23 +321,37 @@ test('разбор начинается с провалов без вердик�
   assert.match(text, /Разбор: осталось 1 провал\(ов\) из 2/);
   assert.match(text, /Запись переставлена/, 'первым открыт тот диалог, который ждёт человека');
 
+  // UI-D-02: быстрая `p` в разделе результатов снята; вердикт по диалогу целиком остаётся на `v`.
   board.handleInput('p');
-  const verdict = actions[0];
-  assert.equal(verdict?.type, 'verdict');
-  assert.equal(verdict.type === 'verdict' && verdict.verdict, 'pass');
-  assert.equal(verdict.type === 'verdict' && reviewOrder(record)[verdict.selected]?.id, 't_pending');
+  assert.deepEqual(actions, []);
+  board.handleInput('y');
+  const agreed = actions[0];
+  assert.equal(agreed?.type, 'agree');
+  assert.equal(agreed.type === 'agree' && agreed.answer, 'agree');
+  assert.equal(agreed.type === 'agree' && agreed.judgeVerdict, 'fail');
+  assert.equal(agreed.type === 'agree' && agreed.metricId, 'demo_task_state');
+  assert.equal(agreed.type === 'agree' && agreed.trialId, 't_pending');
+  assert.equal(agreed.type === 'agree' && reviewOrder(record)[agreed.selected]?.id, 't_pending');
   board.dispose();
 
   const failing: BoardAction[] = [];
   const second = new LabBoard({ record, section: 'results' }, theme, a => failing.push(a), () => {}, () => 40);
   second.handleInput('n');
-  assert.equal(failing[0]?.type === 'verdict' && failing[0].verdict, 'fail');
+  assert.equal(failing[0]?.type === 'agree' && failing[0].answer, 'disagree');
+  second.handleInput('s');
+  assert.equal(failing.length, 1, 'закрытая доска второй ответ не отправляет');
   second.dispose();
 
-  // Пока диалоги идут, вердикт ставить не по чему.
+  const unsure: BoardAction[] = [];
+  const third = new LabBoard({ record, section: 'results' }, theme, a => unsure.push(a), () => {}, () => 40);
+  third.handleInput('s');
+  assert.equal(unsure[0]?.type === 'agree' && unsure[0].answer, 'unsure');
+  third.dispose();
+
+  // Пока диалоги идут, соглашаться не с чем.
   const running: BoardAction[] = [];
   const active = new LabBoard({ record: { ...record, phase: 'evaluating' }, section: 'results' }, theme, a => running.push(a), () => {}, () => 40);
-  active.handleInput('p');
+  for (const key of ['y', 'n', 's', 'p']) active.handleInput(key);
   assert.deepEqual(running, []);
   active.dispose();
 
@@ -369,9 +404,9 @@ test('the board leads with a plain verdict once dialogues exist and has only thr
   results.dispose();
 });
 
-test('filtered review targets the visible trial ID and help cannot accidentally submit a verdict', async () => {
+test('filtered review targets the visible trial ID and help cannot accidentally submit a mark', async () => {
   const record = await fixture(); record.phase = 'results_review';
-  record.trials = record.scenarios.map((s, i) => ({ id: `trial-${i}`, scenarioId: s.id, revisionId: 'r', familyId: s.familyId, repeat: 0, userMode: 'reactive', split: 'dev', manifestHash: 'h', outcome: 'fail', reason: '', checks: [{ id: 'c', passed: false, evidence: '', description: 'c' }], events: [], initialState: s.initialState, finalState: s.initialState, elapsedMs: 1, usage: emptyUsage() }));
+  record.trials = record.scenarios.map((s, i) => ({ id: `trial-${i}`, scenarioId: s.id, revisionId: 'r', familyId: s.familyId, repeat: 0, userMode: 'reactive', split: 'dev', manifestHash: 'h', outcome: 'fail', reason: '', checks: [{ id: 'c', passed: false, evidence: '', description: 'c' }], events: [{ seq: 0, type: 'assistant', text: 'Ответ агента' }], initialState: s.initialState, finalState: s.initialState, elapsedMs: 1, usage: emptyUsage(), assessments: [{ metricId: 'demo_task_state', result: 'fail', rationale: 'Обоснование судьи', evidence: [0] }] }));
   record.scenarios[0]!.title = 'Первый'; record.scenarios[1]!.title = 'Возврат';
   const actions: BoardAction[] = [];
   const board = new LabBoard({ record, section: 'results' }, theme, a => actions.push(a), () => {}, () => 30);
@@ -381,12 +416,60 @@ test('filtered review targets the visible trial ID and help cannot accidentally 
   assert.ok(lines.at(-1)?.endsWith('╯'), 'footer fits the terminal');
   assert.match(lines.join('\n'), /Возврат/);
   board.handleInput('n');
-  assert.equal(actions[0]?.type === 'verdict' && actions[0].trialId, 'trial-1');
+  assert.equal(actions[0]?.type === 'agree' && actions[0].trialId, 'trial-1');
   const discussion = new LabBoard({ record, section: 'cards', query: 'Возврат' }, theme, a => actions.push(a), () => {});
   discussion.handleInput('a');
   assert.equal(actions[1]?.type === 'discuss' && record.scenarios[actions[1].selected]?.id, record.scenarios[1]!.id);
   const empty = new LabBoard({ records: [] }, theme, a => actions.push(a), () => {});
   empty.handleInput('n'); assert.equal(actions[2]?.type, 'new');
+});
+
+test('y, n и s отвечают судье только там, где судья вынес решение по главному вопросу', async () => {
+  const record = await judgedFixture('judged', 'fail');
+  const press = (options: BoardOptions, keys: string[]) => {
+    const actions: BoardAction[] = [];
+    const board = new LabBoard(options, theme, a => actions.push(a), () => {}, () => 40);
+    for (const key of keys) board.handleInput(key);
+    board.dispose();
+    return actions;
+  };
+
+  // В области действия каждая клавиша — один ответ, и ответ несёт то решение судьи, на которое отвечает.
+  for (const [key, answer] of [['y', 'agree'], ['n', 'disagree'], ['s', 'unsure']] as const) {
+    const action = press({ record, section: 'results' }, [key])[0];
+    assert.equal(action?.type, 'agree', `клавиша ${key}`);
+    assert.equal(action?.type === 'agree' && action.answer, answer);
+    assert.equal(action?.type === 'agree' && action.judgeVerdict, 'fail');
+    assert.equal(action?.type === 'agree' && action.metricId, 'goal');
+    assert.equal(action?.type === 'agree' && action.trialId, 'judged');
+  }
+
+  const control = structuredClone(record); control.positiveControlScenarioIds = [control.scenarios[0]!.id];
+  const undecided = structuredClone(record); undecided.trials[0]!.assessments = [{ metricId: 'goal', result: 'unknown', rationale: 'Судья не решил', evidence: [0] }];
+  const noRubric = structuredClone(record); delete noRubric.trials[0]!.assessments;
+  const cases: [string, BoardOptions][] = [
+    ['раздел 1', { record, section: 'agent' }],
+    ['раздел 2', { record, section: 'cards' }],
+    ['сравнение', { record: { ...record, workflow: 'compare' }, section: 'results' }],
+    ['идут диалоги', { record: { ...record, phase: 'evaluating' }, section: 'results' }],
+    ['контрольная ситуация', { record: control, section: 'results' }],
+    ['судья не решил', { record: undecided, section: 'results' }],
+    ['судья не оценивал', { record: noRubric, section: 'results' }],
+  ];
+  for (const [label, options] of cases) assert.deepEqual(press(options, ['y', 'n', 's', 'p']), [], label);
+
+  // Во время поиска буквы набираются, а не отвечают судье.
+  const searching: BoardAction[] = [];
+  const search = new LabBoard({ record, section: 'results' }, theme, a => searching.push(a), () => {}, () => 40);
+  search.handleInput('/'); search.handleInput('y'); search.handleInput('n'); search.handleInput('s');
+  assert.deepEqual(searching, []);
+  assert.match(stripTerminalSequences(search.render(120).join('\n')), /Поиск: yns/);
+  search.dispose();
+
+  // При открытой справке доска не отправляет ответ.
+  assert.deepEqual(press({ record, section: 'results' }, ['?', 'y', 'n', 's']), []);
+  // В списке прогонов `n` по-прежнему начинает новую проверку.
+  assert.equal(press({ records: [record] }, ['n'])[0]?.type, 'new');
 });
 
 test('HTML reports escape untrusted text and remain self-contained with explicit evidence limits', async () => {

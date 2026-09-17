@@ -4,6 +4,8 @@ import type { Experiment, Scenario, Trial } from '../dist/contracts.js';
 import { describeCheck, fingerprint } from '../dist/contracts.js';
 import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
 import { expectationSheet, qualitySummary, qualityLines, type ExpectationRole, type ExpectationSheet } from '../dist/quality.js';
+import { agreementSample, judgeAgreement } from '../dist/agreement.js';
+import { primaryMetricId } from '../dist/outcomes.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
 import { buildResultView, causeSection, failureListRows, resultViewRows, SECTION_TEXT, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
 
@@ -35,6 +37,29 @@ export function reviewOrder(record: Experiment): Trial[] {
   return record.trials.map((trial, index) => ({ trial, index })).sort((a, b) => rank(a.trial) - rank(b.trial) || a.index - b.index).map(v => v.trial);
 }
 
+/** What a one-key answer would land on for the selected situation (UI-SPEC F10). */
+export type AgreementTarget =
+  /** A positive control: it is not part of the agreement count. */
+  | { kind: 'control' }
+  /** The judge said nothing decisive about the main question, so there is nothing to agree with. */
+  | { kind: 'undecided' }
+  | { kind: 'ready'; metricId: string; judgeVerdict: 'pass' | 'fail'; sampled: boolean };
+
+/**
+ * UI-D-21: the agreement keys are inert unless the situation shows a single recorded judge verdict
+ * on its main question. The verdict is read from `trial.assessments` only — never from
+ * `agentMetricResult`, or a mark would be compared with a verdict it had already changed.
+ */
+export function agreementTarget(record: Experiment, trial: Trial | undefined): AgreementTarget | undefined {
+  if (!trial || record.workflow !== 'evaluate' || !['results_review', 'complete'].includes(record.phase)) return undefined;
+  const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
+  if (scenario && (record.positiveControlScenarioIds ?? []).includes(scenario.id)) return { kind: 'control' };
+  const metricId = primaryMetricId(scenario, trial);
+  const recorded = metricId ? trial.assessments?.find(a => a.metricId === metricId)?.result : undefined;
+  if (!metricId || (recorded !== 'pass' && recorded !== 'fail')) return { kind: 'undecided' };
+  return { kind: 'ready', metricId, judgeVerdict: recorded, sampled: agreementSample(record).includes(trial.id) };
+}
+
 export type Section = 'agent' | 'cards' | 'results';
 export type BoardAction =
   | { type: 'close' }
@@ -45,7 +70,12 @@ export type BoardAction =
   | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat' | 'accept'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number }
   /** The owner rewrites one expectation in their own words; the text itself comes from the native editor, never from here. */
   | { type: 'expect'; scenarioId: string; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean }
-  | { type: 'verdict'; verdict: 'pass' | 'fail'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number };
+  /**
+   * CTX-01/CTX-18: the owner answered the judge with one key. The answer carries the judgment it
+   * refers to, so a verdict that moved while the situation was on screen is refused by the lab.
+   */
+  | { type: 'agree'; answer: 'agree' | 'disagree' | 'unsure'; trialId: string; metricId: string; judgeVerdict: 'pass' | 'fail';
+      record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; reviewMs?: number };
 export interface BoardOptions {
   records?: Experiment[];
   record?: Experiment;
@@ -435,7 +465,7 @@ export class LabBoard implements Component {
   }
   private finish(action: BoardAction) {
     this.recordReading();
-    if ((action.type === 'verdict' || action.type === 'annotate') && action.trialId) action.reviewMs = Math.round(this.options.reviewTimes?.get(`${action.record.id}|${action.trialId}`) ?? 0);
+    if ((action.type === 'agree' || action.type === 'annotate') && action.trialId) action.reviewMs = Math.round(this.options.reviewTimes?.get(`${action.record.id}|${action.trialId}`) ?? 0);
     this.dispose(); this.done(action);
   }
   private entries(): { text: string; index: number; id: string }[] {
@@ -488,7 +518,13 @@ export class LabBoard implements Component {
         ...(this.section === 'results' && entry ? { trialId: entry.id } : {}) };
       if (key('a') && !activePhases.has(this.record.phase)) return this.finish({ type: 'discuss', ...state,
         selected: this.section === 'cards' && entry ? entry.index : this.selected });
-      if (reviewable && (key('p') || key('n'))) return this.finish({ type: 'verdict', verdict: key('p') ? 'pass' : 'fail', ...state });
+      // CTX-01/UI-D-01…UI-D-04: three answers, one Latin key each, only where the F10 block is
+      // shown. `p` is retired here (UI-D-02); a whole-dialogue verdict is still reachable with `v`.
+      const target = reviewable && entry ? agreementTarget(this.record, this.record.trials.find(t => t.id === entry.id)) : undefined;
+      if (target?.kind === 'ready' && entry) {
+        const answer = key('y') ? 'agree' as const : key('n') ? 'disagree' as const : key('s') ? 'unsure' as const : undefined;
+        if (answer) return this.finish({ type: 'agree', answer, ...state, trialId: entry.id, metricId: target.metricId, judgeVerdict: target.judgeVerdict });
+      }
       const finished = this.record.workflow === 'evaluate' && !!this.record.reviewedAt && !activePhases.has(this.record.phase);
       const type = key('r') && editable && !this.record.questions.length ? 'run'
         : key('r') && finished ? 'repeat'

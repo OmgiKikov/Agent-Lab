@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { ExperimentLab, draftHash, planDiscovery, resultHash } from '../dist/experiment.js';
 import { agentSchema, createInputSchema, discoverInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, goldenCaseSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput } from '../dist/contracts.js';
 import { awaitingVerdict, evidenceSummary, plannedTrials } from '../dist/comparison.js';
+import { judgeAgreement } from '../dist/agreement.js';
 import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
 import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
@@ -916,16 +917,47 @@ export default function agentLab(pi: ExtensionAPI) {
             } else if (action.type === 'cancel') {
               await lab.cancel(action.record.id); await lab.waitForIdle();
               reportPath = undefined;
-            } else if (action.type === 'verdict') {
-              const trial = action.trialId ? action.record.trials.find(t => t.id === action.trialId) : reviewOrder(action.record)[action.selected];
-              if (!trial) throw new Error('Диалог не выбран.');
+            } else if (action.type === 'agree') {
+              // CTX-18: a mark exists only because the owner pressed a key here, and a disagreement
+              // only because they typed a reason into the native editor. No tool writes one.
+              const before = await lab.get(action.record.id);
+              const current = judgeAgreement(before).marks.find(m => m.trialId === action.trialId && !m.stale);
+              const title = before.scenarios.find(s => s.id === before.trials.find(t => t.id === action.trialId)?.scenarioId)?.title ?? '';
+              const started = performance.now();
+              let note: string;
+              if (action.answer === 'disagree') {
+                // UI-D-28: `n` always opens the editor, prefilled with the reason already given, so
+                // the same key edits a reason; the duplicate check runs only after it closes.
+                const reason = await ctx.ui.editor(`Судья решил: ${action.judgeVerdict === 'fail' ? 'не справился' : 'справился'}. Почему вы не согласны? Коротко, своими словами.`,
+                  current?.answer === 'disagree' ? current.note : '');
+                if (reason === undefined) continue;
+                if (!reason.trim()) { inform('Несогласие не сохранено: напишите причину.', 'error'); continue; }
+                note = reason;
+              } else {
+                // UI-D-19: the same answer again writes nothing, so the record keeps one mark per answer.
+                if (current?.answer === action.answer) { inform(`Отметка уже стоит: ${action.answer === 'agree' ? 'согласен' : 'не могу сказать'}.`, 'info'); continue; }
+                note = action.answer === 'agree' ? 'Быстрая отметка: согласен с судьёй.' : 'Быстрая отметка: не могу сказать.';
+              }
+              // CTX-04: согласен — вердикт судьи, не согласен — противоположный, не могу сказать — сомнение.
+              const verdict = action.answer === 'agree' ? action.judgeVerdict
+                : action.answer === 'disagree' ? (action.judgeVerdict === 'fail' ? 'pass' as const : 'fail' as const) : 'unknown' as const;
               await lab.addHumanReview(action.record.id, {
-                trialId: trial.id, verdict: action.verdict,
-                note: 'Быстрый вердикт из терминала, без записанного основания.',
-                durationMs: action.reviewMs,
+                trialId: action.trialId, metricId: action.metricId, source: 'quick', verdict,
+                judgeVerdict: action.judgeVerdict, note,
+                // CTX-05: reading time on the board plus the time the answer itself took.
+                durationMs: Math.min(3600000, Math.round((action.reviewMs ?? 0) + performance.now() - started)),
               });
-              reviewTimes.delete(`${action.record.id}|${trial.id}`);
+              reviewTimes.delete(`${action.record.id}|${action.trialId}`);
               reportPath = undefined;
+              const after = judgeAgreement(await lab.get(action.record.id));
+              // C-98: a mark on a finished run reopens the review, and the notice says so.
+              const reopened = before.phase === 'complete' ? ' Разбор снова открыт: f — завершить.' : '';
+              const progress = after.queueFailures.length
+                ? `Проверено провалов: ${after.failures.checked} из ${after.queueFailures.length}.`
+                : `Проверено успехов: ${after.sampleChecked} из ${after.sampledPasses.length}.`;
+              inform(action.answer === 'agree' ? `Отмечено: согласен с судьёй · «${title}». ${progress}${reopened}`
+                : action.answer === 'disagree' ? `Отмечено: не согласен · «${title}». Итог пересчитан с учётом вашей отметки.${reopened}`
+                : `Отмечено: не могу сказать · «${title}». В итоге остаётся оценка судьи; чтобы закрыть ситуацию, позже нажмите y или n.${reopened}`);
             } else if (action.type === 'annotate') {
               const index = action.trialId ? reviewOrder(action.record).findIndex(t => t.id === action.trialId) : action.selected;
               const reviews = await humanAnnotation(ctx, action.record, index, action.reviewMs, reviewTimes);

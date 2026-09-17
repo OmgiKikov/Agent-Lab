@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { DefaultResourceLoader, SettingsManager, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext, type ToolDefinition } from '@earendil-works/pi-coding-agent';
-import type { Component } from '@earendil-works/pi-tui';
+import { stripTerminalSequences, type Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { ExperimentLab, draftHash, planDiscovery } from '../dist/experiment.js';
@@ -442,10 +442,19 @@ test('Pi connects a new request, conversational correction, reviewed run, eviden
     const discussion = JSON.parse(contexts.at(-1)!.content); assert.equal(discussion.experimentId, built.id); assert.ok(discussion.trialId);
     const evidence = await call('agent_lab_inspect', { id: built.id, trialId: discussion.trialId });
     assert.equal(evidence.outcome, 'fail'); assert.ok(evidence.events.length); assert.ok(evidence.checks.some((c: { passed: boolean }) => !c.passed));
-    steps = [['3', 'n'], ['f'], ['q']];
+    steps = [['3', 'y'], ['f'], ['q']];
     await command(built.id, ctx);
     const reviewed = await call('agent_lab_inspect', { id: built.id, export: true });
     assert.equal(reviewed.phase, 'complete'); assert.equal(reviewed.humanReviews.length, 1);
+    // Одна клавиша пишет быструю отметку на главную оценку ситуации и закрывает её (UI-SPEC F13).
+    const mark = reviewed.humanReviews[0];
+    const marked = await call('agent_lab_inspect', { id: built.id, trialId: mark.trialId });
+    const markedCard = reviewed.scenarios.find((card: { id: string }) => card.id === marked.scenarioId);
+    assert.equal(mark.source, 'quick');
+    assert.equal(mark.metricId, primaryMetricId(markedCard, marked));
+    assert.equal(mark.verdict, marked.assessments.find((a: { metricId: string }) => a.metricId === mark.metricId).result);
+    assert.equal(mark.note, 'Быстрая отметка: согласен с судьёй.');
+    assert.equal(typeof mark.durationMs, 'number');
     const original = await call('agent_lab_inspect', { id: built.id, trialId: discussion.trialId }); assert.deepEqual(original, evidence);
     const controlId = draft.scenarios[0].id;
     const controlled = await call('agent_lab_repeat', { id: built.id, controlScenarioIds: [controlId] });
@@ -992,6 +1001,100 @@ test('conversation completes human finding → prompt diff → unchanged SQLite 
   assert.ok(screens.some(body => body.includes('-Updates disabled.') && body.includes('+Allow updates after lookup.')));
   const evidence = JSON.parse(await readFile(after.artifacts.evidence, 'utf8'));
   assert.equal(evidence.parentRunId, before.id);
+});
+
+/** A finished demo evaluation copied into a fresh Pi working directory, ready for `/agent-lab`. */
+async function boardFixture(prefix: string) {
+  const demo = await demoEvaluateRecord(prefix);
+  const cwd = await mkdtemp(join(tmpdir(), `${prefix}cwd-`));
+  await demo.lab.close();
+  const store = new ExperimentStore(join(cwd, '.agent-lab'));
+  await store.init();
+  try { await store.save(demo.record); } finally { await store.close(); }
+  return { cwd, record: demo.record,
+    cleanup: async () => { await rm(cwd, { recursive: true, force: true }); await rm(demo.directory, { recursive: true, force: true }); } };
+}
+
+/**
+ * A scripted owner at the board: `steps` is one key list per board opening, `reason` is what the
+ * native editor returns, and `screens` keeps what each board showed when it opened — that is where
+ * the notice of the previous answer is read from.
+ */
+function boardSession(cwd: string) {
+  const screens: string[] = [];
+  const editorCalls: { title: string; initial: string }[] = [];
+  const confirmBodies: string[] = [];
+  const state = { steps: [] as string[][], reason: undefined as string | undefined };
+  const ctx = { cwd, hasUI: true, mode: 'tui', ui: {
+    editor: async (title: string, initial: string) => { editorCalls.push({ title, initial }); return state.reason; },
+    confirm: async (_title: string, body: string) => { confirmBodies.push(body); return true; },
+    notify: () => {},
+    custom: (factory: (tui: unknown, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?(): void }) => new Promise((resolve, reject) => {
+      const component = factory({ terminal: { rows: 40 }, requestRender() {} }, { fg: (_: string, text: string) => text, bold: (text: string) => text }, {}, value => { component.dispose?.(); resolve(value); });
+      void (async () => {
+        const keys = state.steps.shift(); assert.ok(keys, 'unexpected board');
+        screens.push(stripTerminalSequences(component.render(160).join('\n')));
+        for (const key of keys) component.handleInput!(key);
+      })().catch(error => { component.dispose?.(); reject(error); });
+    }),
+  } } as unknown as ExtensionCommandContext;
+  return { ctx, screens, editorCalls, confirmBodies, state };
+}
+
+test('одна клавиша на доске сохраняет согласие, несогласие с причиной и сомнение', { timeout: 120000 }, async () => {
+  const fixture = await boardFixture('agent-lab-board-agree-');
+  const { tools, shutdown, command } = registered();
+  const session = boardSession(fixture.cwd);
+  const inspect = async () => output(await tools.get('agent_lab_inspect')!.execute('board', { id: fixture.record.id }, undefined, undefined,
+    { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext));
+  const titleOf = (report: { scenarios: { id: string; title: string }[]; trials: { id: string; scenarioId: string }[] }, trialId: string) =>
+    report.scenarios.find(card => card.id === report.trials.find(trial => trial.id === trialId)!.scenarioId)!.title;
+  try {
+    // «Не согласен» всегда спрашивает причину, и причина владельца сохраняется дословно.
+    session.state.reason = 'Проверка: судья не учёл уточнение клиента.';
+    session.state.steps = [['3', 'n'], ['q']];
+    await command(fixture.record.id, session.ctx);
+    const disagreed = await inspect();
+    assert.equal(disagreed.humanReviews.length, 1, JSON.stringify(disagreed.humanReviews));
+    const mark = disagreed.humanReviews[0];
+    assert.equal(mark.source, 'quick');
+    assert.equal(mark.note, 'Проверка: судья не учёл уточнение клиента.');
+    assert.ok(['pass', 'fail'].includes(mark.judgeVerdict));
+    assert.notEqual(mark.verdict, mark.judgeVerdict, 'несогласие пишет противоположный вердикт');
+    assert.equal(session.editorCalls.at(-1)!.title,
+      `Судья решил: ${mark.judgeVerdict === 'fail' ? 'не справился' : 'справился'}. Почему вы не согласны? Коротко, своими словами.`);
+    assert.equal(session.editorCalls.at(-1)!.initial, '');
+    assert.ok(session.screens.at(-1)!.includes(`Отмечено: не согласен · «${titleOf(disagreed, mark.trialId)}». Итог пересчитан с учётом вашей отметки.`),
+      session.screens.at(-1));
+
+    // «Не могу сказать» — сомнение: оценка судьи остаётся, ситуация ждёт решения.
+    session.state.steps = [['3', 's'], ['q']];
+    await command(fixture.record.id, session.ctx);
+    const unsure = await inspect();
+    assert.equal(unsure.humanReviews.length, 2);
+    const doubt = unsure.humanReviews.at(-1);
+    assert.equal(doubt.source, 'quick'); assert.equal(doubt.verdict, 'unknown');
+    assert.equal(doubt.note, 'Быстрая отметка: не могу сказать.');
+    assert.ok(session.screens.at(-1)!.includes(`Отмечено: не могу сказать · «${titleOf(unsure, doubt.trialId)}». В итоге остаётся оценка судьи; чтобы закрыть ситуацию, позже нажмите y или n.`),
+      session.screens.at(-1));
+
+    // Закрытый редактор ничего не пишет и ничего не говорит.
+    session.state.reason = undefined;
+    session.state.steps = [['3', 'n'], ['q']];
+    await command(fixture.record.id, session.ctx);
+    assert.equal((await inspect()).humanReviews.length, 2);
+    assert.doesNotMatch(session.screens.at(-1)!, /Отмечено:|Несогласие не сохранено|Отметка уже стоит/);
+
+    // Пустая причина — несогласия нет, и доска говорит, чего не хватает.
+    session.state.reason = '   \n  ';
+    session.state.steps = [['3', 'n'], ['q']];
+    await command(fixture.record.id, session.ctx);
+    assert.equal((await inspect()).humanReviews.length, 2);
+    assert.ok(session.screens.at(-1)!.includes('Несогласие не сохранено: напишите причину.'), session.screens.at(-1));
+  } finally {
+    await shutdown();
+    await fixture.cleanup();
+  }
 });
 
 test('Pi inspect payload, its collapsed result and CLI summary open with the same ResultView block', { timeout: 60000 }, async () => {
