@@ -8,6 +8,33 @@
 | [examples/agent-oc-dialogues.py](../examples/agent-oc-dialogues.py) | прод-разметка `.xlsx` → диалоги в схеме Agent Lab |
 | [examples/agent-oc-adapter.py](../examples/agent-oc-adapter.py) | испытуемый: контракт `kind: "command"` поверх `harness_core.run_turn` |
 
+## Откуда запускать
+
+Все команды — из каталога `conductor-playground`, при активированном окружении agent_oc. Здесь
+лежат `dist/cli.js` и скрипты, а `.agent-lab/` уже в `.gitignore`, так что артефакты прогонов не
+засоряют репозиторий агента (в agent_oc этот каталог не игнорируется). Другой каталог для
+артефактов выбирается флагом `--data-dir`.
+
+Пути в `connection.json` считаются от каталога самого файла, а `args` передаются процессу как есть
+и считаются от его `cwd`. Если оба репозитория лежат рядом, `connection.json` в
+`conductor-playground` выглядит так:
+
+```json
+{
+  "target": {
+    "kind": "command",
+    "command": "python",
+    "args": ["../conductor-playground/examples/agent-oc-adapter.py", "."],
+    "cwd": "../agent_oc",
+    "timeoutMs": 180000
+  }
+}
+```
+
+`cwd` — относительно `connection.json`, а путь к адаптеру и аргумент с корнем agent_oc —
+относительно `cwd`, то есть уже изнутри agent_oc. Абсолютные пути работают везде и читаются проще,
+если репозитории лежат не рядом.
+
 ## Окружение
 
 Переменные agent_oc живут в его conda-окружении, а не только в `.env`. Активируйте окружение один
@@ -35,7 +62,7 @@ conda activate agent_oc
 `.env` в корне agent_oc остаётся вторым источником: `bootstrap_environment` подгружает его, но
 `load_dotenv` не перекрывает уже заданные переменные — значения conda главнее. Если Agent Lab
 запускается вне окружения, тот же файл подхватывается штатным ключом Node:
-`node --env-file=/путь/agent_oc/.env dist/cli.js …`.
+`node --env-file=../agent_oc/.env dist/cli.js …`.
 
 Провайдер `giga` принимает как свои имена, так и принятые в agent_oc: ключ читается из
 `GIGACHAT_KEY_PATH` либо `GIGACHAT_KEY`, цепочка CA — из `GIGACHAT_CA_PATH` либо
@@ -67,14 +94,14 @@ conda activate agent_oc
 
 ```bash
 conda activate agent_oc
-echo '{"type":"close"}' | python examples/agent-oc-adapter.py /путь/agent_oc
+echo '{"type":"close"}' | python examples/agent-oc-adapter.py ../agent_oc
 ```
 
 ## Карточки бизнес-сценариев из логов
 
 ```bash
 python examples/agent-oc-dialogues.py \
-    --input "/путь/agent_oc/data/размеченные логи 1607_2007.xlsx" \
+    --input "../agent_oc/data/размеченные логи 1607_2007.xlsx" \
     --output dialogues.jsonl --multi-turn-only --limit 60
 ```
 
@@ -112,19 +139,10 @@ node dist/cli.js export --id RUN_ID --format markdown --output cards.md
 
 ## End2end
 
-`connection.json`:
+`connection.json` — см. «Откуда запускать»; в записи полезно сохранить версию испытуемого:
 
 ```json
-{
-  "target": {
-    "kind": "command",
-    "command": "python",
-    "args": ["/путь/conductor-playground/examples/agent-oc-adapter.py", "/путь/agent_oc"],
-    "cwd": "/путь/agent_oc",
-    "timeoutMs": 180000
-  },
-  "targetVersion": "<git rev-parse --short HEAD в agent_oc>"
-}
+{ "targetVersion": "<git rev-parse --short HEAD в agent_oc>" }
 ```
 
 Канал задаётся в карточке записью `session` — адаптер читает из неё поверхность, полномочия и ЕПК:
