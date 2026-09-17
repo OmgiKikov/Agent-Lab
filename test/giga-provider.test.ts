@@ -206,7 +206,8 @@ test('a completed answer is delivered as start and done events', async () => {
   assert.deepEqual(message.content, [{ type: 'text', text: 'Hello' }]);
   assert.equal(message.usage.input, 15);
   assert.equal(sent[1]?.path, '/v2/chat/completions');
-  assert.deepEqual(sent[1]?.body, { model: 'GigaChat-3-Pro', messages: [{ role: 'user', content: [{ text: 'Hi' }] }], model_options: { temperature: 0 } });
+  assert.deepEqual(sent[1]?.body, { model: 'GigaChat-3-Pro', messages: [{ role: 'user', content: [{ text: 'Hi' }] }],
+    model_options: { temperature: 0, reasoning: { effort: 'off' } } });
 });
 
 test('the judge payload hook is applied and normalized into model options', async () => {
@@ -217,8 +218,9 @@ test('the judge payload hook is applied and normalized into model options', asyn
   } as never;
   await provider.streamSimple!(model, { messages: [{ role: 'user', content: 'grade', timestamp: 1 }] }, options).result();
 
+  // The judge's schema lands next to the reasoning switch instead of replacing model_options.
   assert.deepEqual((sent[1]?.body as { model_options?: unknown }).model_options,
-    { response_format: { type: 'json_schema', schema: { type: 'object' }, strict: true } });
+    { reasoning: { effort: 'off' }, response_format: { type: 'json_schema', schema: { type: 'object' }, strict: true } });
 });
 
 test('a gateway error surfaces as a failed model call, not as a parse error', async () => {

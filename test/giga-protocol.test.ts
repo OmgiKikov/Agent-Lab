@@ -62,13 +62,21 @@ test('request carries system prompt, roles and content parts', () => {
       { role: 'assistant', content: [{ text: 'Hi' }] },
       { role: 'user', content: [{ text: 'Again' }] },
     ],
-    model_options: { temperature: 0, max_tokens: 512 },
+    model_options: { temperature: 0, max_tokens: 512, reasoning: { effort: 'off' } },
   });
 });
 
-test('request without sampling options omits model_options', () => {
+test('a request without sampling options still forbids reasoning', () => {
   const payload = buildChatRequest('Qwen3.6-35b', { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, {});
-  assert.deepEqual(payload, { model: 'Qwen3.6-35b', messages: [{ role: 'user', content: [{ text: 'Hi' }] }] });
+  assert.deepEqual(payload, {
+    model: 'Qwen3.6-35b', messages: [{ role: 'user', content: [{ text: 'Hi' }] }],
+    model_options: { reasoning: { effort: 'off' } },
+  });
+});
+
+test('a request that asks Pi for thinking passes the only depth the gateway documents', () => {
+  const payload = buildChatRequest('Qwen3.6-35b', { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, { reasoning: 'high' } as never);
+  assert.deepEqual(payload.model_options, { reasoning: { effort: 'medium' } });
 });
 
 test('declared tools become function specifications', () => {

@@ -128,6 +128,11 @@ export function buildChatRequest(modelId: string, context: GigaContext, options:
   const modelOptions: Record<string, unknown> = {};
   if (options.temperature !== undefined) modelOptions.temperature = options.temperature;
   if (options.maxTokens !== undefined) modelOptions.max_tokens = options.maxTokens;
+  // Qwen, GLM и DeepSeek за шлюзом рассуждают по умолчанию и выбирают весь лимит выходных
+  // токенов, не дойдя до ответа. Уровень размышления Pi здесь всегда "off" (модели каталога
+  // объявлены без reasoning), и это транслируется явным запретом рассуждений: на ИФТ-контуре
+  // принимается значение off, хотя в опубликованной спецификации enum сведён к одному medium.
+  modelOptions.reasoning = { effort: options.reasoning ? 'medium' : 'off' };
   const request: GigaRequest = { model: modelId, messages };
   if (Object.keys(modelOptions).length) request.model_options = modelOptions;
   if (context.tools?.length) {
