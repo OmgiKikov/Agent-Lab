@@ -1,11 +1,12 @@
 import { pluralForm } from './plural.js';
-import { causeSection, resultViewRows, SECTION_TEXT, SMALL_SAMPLE, unmeasuredControl, type ResultView } from './result-view.js';
+import { causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, resultViewRows, SECTION_TEXT, shortId, SMALL_SAMPLE, unmeasuredControl, type ResultView } from './result-view.js';
 
 /*
  * The verdict block of phase 4: one line in plain words about how well the agent does, what to do
  * next, and the rows of the chat block in their locked order (04-UI-SPEC V1, V2, B1, B2).
  * Pure: no I/O, no escaping (each surface escapes at its own boundary), no model text. Every number
  * comes from `ResultView`; this module only words it. The thresholds live here and nowhere else.
+ * No displayed text is measured or cut here: `shortId` and `causeSection` own their own limits.
  */
 
 /** From this rounded percent of decided situations the agent «справляется хорошо». */
@@ -15,6 +16,13 @@ export const MIXED_FROM = 50;
 
 /** Genitive after «из»: «1 из 1 ситуации», «9 из 13 ситуаций». */
 const SITUATIONS_OF: [string, string, string] = ['ситуации', 'ситуаций', 'ситуаций'];
+/** Dative after «по»: «по 1 ситуации», «по 3 ситуациям». */
+const SITUATIONS_BY: [string, string, string] = ['ситуации', 'ситуациям', 'ситуациям'];
+
+/** The phase-2 row when something was decided and nothing failed (the board prints the same words). */
+export const NO_FAILURES_TEXT = 'Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.';
+/** R-01: where every failure is read, by tab name (the phase-2 «раздел 1» pointer is never printed in the block). */
+export const allFailuresTab = (runId: string): string => `Все провалы — /agent-lab ${shortId(runId)}, вкладка «Провалы».`;
 
 export type VerdictLevel = 'good' | 'warn' | 'bad';
 export type Surface = 'chat' | 'board';
@@ -56,13 +64,41 @@ export function verdictLevel(view: ResultView): VerdictLevel {
 }
 
 /**
+ * What the phase-3 review queue still waits for, read from the published agreement fields only:
+ * unmarked failures and unmarked sampled passes are the queue entries without a current mark on
+ * every target; K is the current (not stale) «не могу сказать» marks on a queued situation — phase 3
+ * keeps them open, so they are never treated as done (UI-D-02, rule 2c).
+ */
+function reviewQueue(view: ResultView): { unmarkedFailures: number; unmarkedPasses: number; unsure: number } {
+  const { queueFailures, sampledPasses, unmarked, marks } = view.agreement;
+  const failures = new Set(queueFailures);
+  const passes = new Set(sampledPasses);
+  return {
+    unmarkedFailures: unmarked.filter(id => failures.has(id)).length,
+    unmarkedPasses: unmarked.filter(id => passes.has(id)).length,
+    unsure: marks.filter(mark => !mark.stale && mark.answer === 'unsure' && (failures.has(mark.trialId) || passes.has(mark.trialId))).length,
+  };
+}
+
+/**
  * V2, the one «Дальше» row (C-110…C-117, C-147), in the locked evaluation order: the control first,
- * then a run still going, then the review queue, then what is left to do with the number.
+ * then a run still going, then the review queue (failures, sampled passes, doubts), then nothing
+ * decided, then what is left to do with the number. The board variant names the tab instead of the command.
  */
 export function nextStep(view: ResultView, options: { runId: string; surface: Surface }): string {
   const { passed, decided } = view.headline;
+  const chat = options.surface === 'chat';
+  const open = `откройте /agent-lab ${shortId(options.runId)}`;
   if (view.control.warning !== null) return 'Дальше: проверьте судью и связь с агентом.';
   if (view.pending > 0) return 'Дальше: дождитесь конца прогона.';
+  const queue = reviewQueue(view);
+  if (queue.unmarkedFailures > 0) return chat ? `Дальше: ${open} и отметьте согласие с провалами.` : 'Дальше: откройте вкладку «Провалы» и отметьте согласие с провалами.';
+  if (queue.unmarkedPasses > 0) return chat ? `Дальше: ${open} и отметьте согласие с судьёй.` : 'Дальше: откройте вкладку «Провалы» и отметьте согласие с судьёй.';
+  if (queue.unsure > 0) {
+    const k = `${queue.unsure} ${pluralForm(queue.unsure, SITUATIONS_BY)}`;
+    return chat ? `Дальше: ${open} и решите по ${k}: согласны ли вы с судьёй.` : `Дальше: на вкладке «Провалы» решите по ${k}: y или n.`;
+  }
+  if (decided === 0) return chat ? `Дальше: ${open} и посмотрите, почему ситуации не измерены.` : 'Дальше: откройте вкладку «Диалоги» и посмотрите, почему ситуации не измерены.';
   if (decided - passed > 0) return 'Дальше: повторите прогон после исправления агента.';
   return 'Дальше: выгрузите отчёт для заказчика.';
 }
@@ -78,35 +114,44 @@ function groups(items: VerdictRow[][]): VerdictRow[] {
 
 /**
  * The first block of the result (phase 1–3 rows) inside the verdict block: the headline row loses
- * its `lead` weight, because the verdict line above it is the focal element now (UI-D-10).
+ * its `lead` weight, because the verdict line above it is the focal element now (UI-D-10). Collapsed,
+ * the per-situation «?» rows stay out so the block stays short (UI-D-13); the agreement tail rows stay.
  */
-function firstBlock(view: ResultView, options: { details: boolean }): VerdictRow[] {
-  const rows = resultViewRows(view, options.details ? { details: true } : {});
-  const kept = options.details ? rows : rows.filter(row => row.role !== 'situation');
+function firstBlock(view: ResultView, expanded: boolean): VerdictRow[] {
+  const rows = resultViewRows(view, expanded ? { details: true } : {});
+  const kept = expanded ? rows : rows.filter(row => row.role !== 'situation');
   return kept.map(row => row.role === 'lead' ? { ...row, role: 'headline' } : row);
 }
 
 /**
- * B1 row 4: the section heading and only the short rows of the cause section — the cause names,
- * or the situation titles when there are no clusters — so the collapsed block stays short (UI-D-13).
+ * Row 4 of the block: the cause section under its board heading — collapsed, only the short rows
+ * (the cause names, or the situation titles when there are no clusters); expanded, every row. When
+ * something was decided and nothing failed, the phase-2 no-failures sentence; before any decision, nothing.
  */
-function causeNames(view: ResultView): VerdictRow[] {
+function causes(view: ResultView, expanded: boolean): VerdictRow[] {
   const section = causeSection(view);
-  if (!section) return [];
+  if (!section) return view.headline.decided > 0 && !view.failures.length ? [{ role: 'no-failures', indent: 0, text: NO_FAILURES_TEXT }] : [];
   const short = section.kind === 'causes' ? 'cause' : 'title';
-  return [{ role: 'heading', indent: 0, text: SECTION_TEXT[section.kind].board }, ...section.rows.filter(row => row.role === short)];
+  const rows = expanded ? section.rows : section.rows.filter(row => row.role === short);
+  return [{ role: 'heading', indent: 0, text: SECTION_TEXT[section.kind].board }, ...rows];
+}
+
+/** F7 in the expanded block: the heading and every current disagreement, nothing when there is none. */
+function disagreements(view: ResultView): VerdictRow[] {
+  if (!view.agreement.disagreements.length) return [];
+  return [{ role: 'heading', indent: 0, text: DISAGREEMENT_BOARD_TITLE }, ...disagreementRows(view)];
 }
 
 /**
- * The chat verdict block (B1 collapsed, B2 expanded), in the locked row order: V1, the first block,
- * the causes, then V2. A blank row appears only between two non-empty groups.
+ * The chat verdict block in the locked row order. Collapsed (B1): V1, the first block without the
+ * «?» rows, the cause names, V2. Expanded (B2): V1, the whole first block, the full causes, the
+ * disagreements, the pointer to the «Провалы» tab, V2. A blank row appears only between two
+ * non-empty groups; the host adds the expand hint under the last row.
  */
 export function verdictBlockRows(view: ResultView, options: { expanded: boolean; runId: string; surface: Surface }): VerdictRow[] {
   const verdict: VerdictRow = { role: `verdict:${verdictLevel(view)}`, indent: 0, text: verdictLine(view) };
   const next: VerdictRow = { role: 'next', indent: 0, text: nextStep(view, options) };
-  return groups([
-    [verdict, ...firstBlock(view, { details: false })],
-    causeNames(view),
-    [next],
-  ]);
+  if (!options.expanded) return groups([[verdict, ...firstBlock(view, false)], causes(view, false), [next]]);
+  const pointer: VerdictRow[] = view.failures.length ? [{ role: 'pointer', indent: 0, text: allFailuresTab(options.runId) }] : [];
+  return groups([[verdict, ...firstBlock(view, true)], causes(view, true), disagreements(view), pointer, [next]]);
 }
