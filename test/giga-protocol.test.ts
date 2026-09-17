@@ -84,6 +84,39 @@ test('declared tools become function specifications', () => {
   }]);
 });
 
+test('a dynamic-object parameter (no nested properties) is declared to the gateway as a string', () => {
+  // GigaChat rejects an object-typed property that has no properties of its own (confirmed via
+  // functions/validate and a live 422: "Field 'properties.changes.properties' is missing") -
+  // update_record's changes is exactly this, since the set of writable fields is per-record.
+  const payload = buildChatRequest('GigaChat-3-Pro', {
+    messages: [{ role: 'user', content: 'Update A-1024', timestamp: 1 }],
+    tools: [{
+      name: 'update_record', description: 'Update a record',
+      parameters: { type: 'object', properties: {
+        recordId: { type: 'string' },
+        changes: { type: 'object', description: 'Fields to change', additionalProperties: { type: ['string', 'number', 'boolean', 'null'] } },
+      }, required: ['recordId', 'changes'] },
+    }],
+  } as never, {});
+
+  const declared = payload.tools?.[0]?.functions.specifications[0]?.parameters as { properties: Record<string, unknown> };
+  assert.deepEqual(declared.properties.recordId, { type: 'string' });
+  assert.deepEqual(declared.properties.changes, { type: 'string', description: 'Fields to change Provide this as a JSON-encoded string.' });
+});
+
+test('an object parameter that already lists its own properties is left unchanged', () => {
+  const payload = buildChatRequest('GigaChat-3-Pro', {
+    messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
+    tools: [{
+      name: 'lookup_record', description: 'Read a record',
+      parameters: { type: 'object', properties: { filter: { type: 'object', properties: { status: { type: 'string' } } } } },
+    }],
+  } as never, {});
+
+  const declared = payload.tools?.[0]?.functions.specifications[0]?.parameters as { properties: Record<string, unknown> };
+  assert.deepEqual(declared.properties.filter, { type: 'object', properties: { status: { type: 'string' } } });
+});
+
 test('a request without tools omits the tools field', () => {
   const payload = buildChatRequest('GigaChat-3-Pro', { messages: [{ role: 'user', content: 'hi', timestamp: 1 }], tools: [] } as never, {});
   assert.equal('tools' in payload, false);
@@ -216,6 +249,47 @@ test('a function call becomes a tool call whose id carries the tool state', () =
   assert.deepEqual(message.content, [{
     type: 'toolCall', id: '019e8373-dc9a-7883-af60-ebb20b79e1e1#0', name: 'lookup_record', arguments: { id: 'A-1024' },
   }]);
+});
+
+test('a dynamic-object argument sent back as a JSON string is decoded into an object', () => {
+  const tools = [{
+    name: 'update_record', description: 'Update a record',
+    parameters: { type: 'object', properties: { recordId: { type: 'string' }, changes: { type: 'object', description: 'Fields to change' } } },
+  }];
+  const message = parseChatResponse(model, {
+    finish_reason: 'function_call',
+    messages: [{ role: 'assistant', tools_state_id: 'state-3',
+      content: [{ function_call: { name: 'update_record', arguments: { recordId: 'A-1024', changes: '{"status":"delivered"}' } } }] }],
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  } as never, tools as never);
+
+  assert.deepEqual(message.content, [{
+    type: 'toolCall', id: 'state-3#0', name: 'update_record', arguments: { recordId: 'A-1024', changes: { status: 'delivered' } },
+  }]);
+});
+
+test('a dynamic-object argument that is not valid JSON is left as the original string', () => {
+  const tools = [{ name: 'update_record', description: 'Update a record',
+    parameters: { type: 'object', properties: { changes: { type: 'object', description: 'Fields to change' } } } }];
+  const message = parseChatResponse(model, {
+    finish_reason: 'function_call',
+    messages: [{ role: 'assistant', tools_state_id: 'state-4',
+      content: [{ function_call: { name: 'update_record', arguments: { changes: 'not json' } } }] }],
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  } as never, tools as never);
+
+  assert.deepEqual(message.content, [{ type: 'toolCall', id: 'state-4#0', name: 'update_record', arguments: { changes: 'not json' } }]);
+});
+
+test('without a matching tool declaration, arguments are returned unchanged', () => {
+  const message = parseChatResponse(model, {
+    finish_reason: 'function_call',
+    messages: [{ role: 'assistant', tools_state_id: 'state-5',
+      content: [{ function_call: { name: 'unknown_tool', arguments: { changes: '{"a":1}' } } }] }],
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  } as never);
+
+  assert.deepEqual(message.content, [{ type: 'toolCall', id: 'state-5#0', name: 'unknown_tool', arguments: { changes: '{"a":1}' } }]);
 });
 
 test('a function call whose arguments arrive as a JSON string is parsed into an object', () => {

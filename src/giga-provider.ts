@@ -72,7 +72,7 @@ export async function createGigaProvider(
         let body: GigaResponse;
         try { body = JSON.parse(response.text) as GigaResponse; }
         catch { throw new Error('Giga gateway returned a non-JSON response'); }
-        return parseChatResponse(model, body);
+        return parseChatResponse(model, body, context.tools);
       })();
       // AssistantMessageEventStream — класс с приватными полями из pi-ai, который сюда нельзя
       // импортировать напрямую; объект ниже реализует его публичный контракт (result +

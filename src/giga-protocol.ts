@@ -56,6 +56,47 @@ function stateOf(toolCallId: string): { tools_state_id?: string } {
   return state ? { tools_state_id: state } : {};
 }
 
+interface JsonSchemaProperty { type?: string; description?: string; properties?: unknown }
+interface ObjectParameters { properties?: Record<string, JsonSchemaProperty> }
+
+/*
+ * GigaChat принимает только скалярные типы аргументов: object-свойство без собственного
+ * properties (динамическая карта вроде "какие поля записи менять") отклоняется на уровне
+ * шлюза (подтверждено /v1/functions/validate и живым 422 "properties.changes.properties is
+ * missing"). Единственный способ передать такое поле — строкой; функция ищет, каким именно
+ * ключам нужен такой обход, чтобы одинаково применить его при сборке запроса и разборе ответа.
+ */
+function dynamicObjectKeys(parameters: unknown): Set<string> {
+  const properties = (parameters as ObjectParameters | undefined)?.properties ?? {};
+  return new Set(Object.entries(properties)
+    .filter(([, schema]) => schema?.type === 'object' && !schema.properties)
+    .map(([key]) => key));
+}
+
+function encodeDynamicObjects(parameters: unknown, keys: Set<string>): unknown {
+  if (!keys.size) return parameters;
+  const original = parameters as ObjectParameters;
+  const properties = { ...original.properties };
+  for (const key of keys) {
+    const description = properties[key]?.description;
+    properties[key] = { type: 'string', description: `${description ? `${description} ` : ''}Provide this as a JSON-encoded string.` };
+  }
+  return { ...original, properties };
+}
+
+function decodeDynamicObjects(toolName: string, args: Record<string, unknown>, tools: GigaContext['tools']): Record<string, unknown> {
+  const tool = tools?.find(t => t.name === toolName);
+  const keys = dynamicObjectKeys(tool?.parameters);
+  if (!keys.size) return args;
+  const decoded = { ...args };
+  for (const key of keys) {
+    const value = decoded[key];
+    if (typeof value !== 'string') continue;
+    try { decoded[key] = JSON.parse(value); } catch { /* not valid JSON: leave the string, the tool's own validation will reject it clearly */ }
+  }
+  return decoded;
+}
+
 export function buildChatRequest(modelId: string, context: GigaContext, options: GigaOptions): GigaRequest {
   const messages: GigaRequestMessage[] = [];
   if (context.systemPrompt) messages.push({ role: 'system', content: [{ text: context.systemPrompt }] });
@@ -92,7 +133,10 @@ export function buildChatRequest(modelId: string, context: GigaContext, options:
   if (context.tools?.length) {
     request.tools = [{
       functions: {
-        specifications: context.tools.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })),
+        specifications: context.tools.map(tool => ({
+          name: tool.name, description: tool.description,
+          parameters: encodeDynamicObjects(tool.parameters, dynamicObjectKeys(tool.parameters)),
+        })),
       },
     }];
   }
@@ -125,7 +169,7 @@ function functionArguments(raw: unknown): Record<string, unknown> {
   return (raw ?? {}) as Record<string, unknown>;
 }
 
-export function parseChatResponse(model: GigaModel, body: GigaResponse): GigaAssistantMessage {
+export function parseChatResponse(model: GigaModel, body: GigaResponse, tools: GigaContext['tools'] = []): GigaAssistantMessage {
   const answer = body.messages?.find(message => message.role === 'assistant');
   const state = answer?.tools_state_id ?? answer?.tool_state_id ?? '';
   const parts = answer?.content ?? [];
@@ -139,7 +183,7 @@ export function parseChatResponse(model: GigaModel, body: GigaResponse): GigaAss
     if (!part.function_call) continue;
     content.push({
       type: 'toolCall', id: `${state}#${callIndex}`, name: part.function_call.name,
-      arguments: functionArguments(part.function_call.arguments),
+      arguments: decodeDynamicObjects(part.function_call.name, functionArguments(part.function_call.arguments), tools),
     });
     callIndex += 1;
   }
