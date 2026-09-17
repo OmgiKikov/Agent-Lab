@@ -7,6 +7,7 @@ import * as cards from '../extensions/cards.ts';
 import { agreementSample, judgeAgreement } from '../src/agreement.js';
 import { primaryMetricId } from '../src/outcomes.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
+import { assertPlainCopy } from './helpers/copy-check.js';
 import { rm } from 'node:fs/promises';
 import { htmlReport } from '../src/report.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
@@ -681,6 +682,132 @@ test('заголовок раздела 3 выбирает состояние и
   assert.ok(seen.has('Провалы 99 из 99 · успехи 99 из 99'));
   assert.ok(seen.has('Не решено: 99. y или n — чтобы завершить разбор.'));
   assert.equal(seen.size, 14, 'все семь состояний в двух ширинах');
+});
+
+/** Key Map Registry, footer tiers of section 3 (UI-SPEC C-90), with their measured widths. */
+const FOOTER = {
+  results_review: [
+    'a Обсудить · y Согласен с судьёй · n Не согласен · s Не могу сказать · v Оценить подробно · f Завершить разбор',
+    'y Согласен с судьёй · n Не согласен · s Не могу сказать · v Оценить подробно · f Завершить разбор',
+    'y Согласен · n Не согласен · s Не могу сказать · f Завершить разбор',
+    'y Согласен · n Не согласен · s Не могу сказать',
+    'y · n · s — согласие с судьёй',
+  ],
+  complete: [
+    'y Согласен с судьёй · n Не согласен · s Не могу сказать · r Повторить прогон · x Экспортировать',
+    'y Согласен · n Не согласен · s Не могу сказать · r Повторить прогон',
+    'y Согласен · n Не согласен · s Не могу сказать',
+    'y · n · s — согласие с судьёй',
+  ],
+} as const;
+const REPORT = 'o Открыть отчёт · ';
+const BOUNDARIES = [36, 46, 47, 64, 66, 67, 84, 85, 94, 95, 96, 97, 109, 110, 115, 128, 156];
+
+function footerOf(phase: 'results_review' | 'complete', inner: number, hasReport: boolean): string {
+  assert.equal(typeof cards.resultsFooter, 'function', 'cards.ts exports resultsFooter (Key Map Registry)');
+  return cards.resultsFooter(phase, inner, hasReport);
+}
+
+test('подвал раздела 3 выбирает первую влезающую ступень и печатает отчёт только там, где он влезает', () => {
+  assert.deepEqual(FOOTER.results_review.map(visibleWidth), [110, 97, 67, 46, 29]);
+  assert.deepEqual(FOOTER.complete.map(visibleWidth), [95, 67, 46, 29]);
+  assert.equal(visibleWidth(REPORT), 18);
+  const [R1, R2, R3, R4, R5] = FOOTER.results_review;
+  const [C1, C2, C3, C4] = FOOTER.complete;
+  const cases: ['results_review' | 'complete', number, boolean, string][] = [
+    ['results_review', 110, false, R1], ['results_review', 109, false, R2], ['results_review', 97, false, R2],
+    ['results_review', 96, false, R3], ['results_review', 67, false, R3], ['results_review', 66, false, R4],
+    ['results_review', 46, false, R4], ['results_review', 36, false, R5],
+    ['results_review', 128, true, REPORT + R1], ['results_review', 127, true, REPORT + R2], ['results_review', 85, true, REPORT + R3],
+    ['results_review', 84, true, REPORT + R4], ['results_review', 64, true, REPORT + R4], ['results_review', 47, true, REPORT + R5],
+    // Ни одна ступень не влезает вместе с отчётом: ссылка на отчёт уходит, клавиша o продолжает работать.
+    ['results_review', 46, true, R4], ['results_review', 36, true, R5],
+    ['complete', 95, false, C1], ['complete', 94, false, C2], ['complete', 67, false, C2],
+    ['complete', 66, false, C3], ['complete', 46, false, C3], ['complete', 36, false, C4],
+    ['complete', 113, true, REPORT + C1], ['complete', 112, true, REPORT + C2], ['complete', 85, true, REPORT + C2],
+    ['complete', 84, true, REPORT + C3], ['complete', 64, true, REPORT + C3], ['complete', 63, true, REPORT + C4],
+    ['complete', 47, true, REPORT + C4], ['complete', 46, true, C3], ['complete', 36, true, C4],
+  ];
+  for (const [phase, inner, report, expected] of cases) assert.equal(footerOf(phase, inner, report), expected, `${phase} ${inner}${report ? ' с отчётом' : ''}`);
+
+  for (const phase of ['results_review', 'complete'] as const) for (const inner of BOUNDARIES) for (const report of [false, true]) {
+    const row = footerOf(phase, inner, report);
+    assert.ok(visibleWidth(row) <= inner, `${phase} ${inner}${report ? ' с отчётом' : ''}: «${row}» шире ${inner}`);
+    assert.ok(!row.includes('…'), `${phase} ${inner}: подвал обрезан`);
+    assert.ok((FOOTER[phase] as readonly string[]).includes(row.replace(REPORT, '')), `${phase} ${inner}: «${row}» — не ступень из таблицы`);
+    assertPlainCopy(row, 'подвал');
+  }
+});
+
+test('доска печатает в разделе 3 ту же ступень подвала, не повторяет отчёт и не трогает другие разделы', async () => {
+  const width = (w: number, sidebar: boolean) => w - 4 - (sidebar ? 35 : 0);
+  for (const phase of ['results_review', 'complete'] as const) for (const report of [false, true]) {
+    const record = await queueFixture(2, 2, false);
+    record.phase = phase;
+    const options = { record, section: 'results' as const, ...(report ? { reportPath: '/tmp/agent-lab-report.html' } : {}) };
+    const board = new LabBoard(options, theme, () => {}, () => {}, () => 3000);
+    for (const w of [40, 60, 80, 110, 160]) {
+      const rows = board.render(w);
+      for (const row of rows) assert.ok(visibleWidth(row) <= w, `${phase} ${w}: строка шире доски`);
+      const footer = stripTerminalSequences(rows.at(-3)!).split('│')[1]!.trim();
+      const expected = footerOf(phase, width(w, w >= 110), report);
+      assert.equal(footer, expected, `${phase} ${w}${report ? ' с отчётом' : ''}`);
+      assert.ok(footer.indexOf(REPORT) === footer.lastIndexOf(REPORT), 'отчёт назван не больше одного раза');
+      // Вторая строка подвала прежняя.
+      assert.equal(stripTerminalSequences(rows.at(-2)!).split('│')[1]!.trim(), width(w, w >= 110) < 80
+        ? '↑↓ Выбор · ←→ Текст · Enter Детали · / Поиск · ? Помощь'
+        : '↑↓ Выбор · PgUp/PgDn Текст · Enter Подробнее · / Поиск · u Неразобранные · ? Помощь');
+    }
+    board.dispose();
+  }
+  const record = await queueFixture(2, 2, false);
+  const wide = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 3000);
+  assert.equal(stripTerminalSequences(wide.render(160).at(-3)!).split('│')[1]!.trim(), FOOTER.results_review[0]);
+  assert.equal(stripTerminalSequences(wide.render(40).at(-3)!).split('│')[1]!.trim(), FOOTER.results_review[4]);
+  wide.dispose();
+
+  // Разделы 1 и 2 сохраняют свои подвалы.
+  const footerIn = (r: Experiment, section: 'agent' | 'cards', reportPath?: string) => {
+    const board = new LabBoard({ record: r, section, ...(reportPath ? { reportPath } : {}) }, theme, () => {}, () => {}, () => 3000);
+    try { return stripTerminalSequences(board.render(160).at(-3)!).split('│')[1]!.trim(); } finally { board.dispose(); }
+  };
+  assert.equal(footerIn(record, 'agent'), 'a Обсудить · 3 Диалоги · f Завершить · r Повторить · x Экспорт');
+  assert.equal(footerIn(record, 'cards', '/tmp/r.html'), 'o Открыть отчёт · a Обсудить · 3 Диалоги · f Завершить · r Повторить · x Экспорт');
+  const finished = { ...record, phase: 'complete' as const };
+  assert.equal(footerIn(finished, 'agent'), 'a Обсудить результат · r Повторить · x Экспорт');
+  assert.equal(footerIn(finished, 'cards', '/tmp/r.html'), 'o Открыть отчёт · a Обсудить результат · r Повторить · x Экспорт');
+});
+
+test('справка и подробности диалога называют новые клавиши и не называют снятую p', async () => {
+  const record = await judgedFixture('open', 'fail');
+  const recording = { fg: (color: string, value: string) => `<${color}>${value}</${color}>`, bold: (value: string) => value };
+  const board = new LabBoard({ record, section: 'results' }, recording, () => {}, () => {}, () => 3000);
+  board.handleInput('?');
+  const help = stripTerminalSequences(board.render(200).join('\n'));
+  board.dispose();
+  const rows = help.split('\n').flatMap(row => row.split('│')).map(cell => cell.trim()).filter(Boolean);
+  const at = (text: string) => rows.findIndex(row => row.includes(text));
+  assert.ok(rows.includes('y / n / s — согласен с судьёй / не согласен / не могу сказать'), 'строка C-87');
+  assert.equal(at('n — спросит причину · v — оценить критерий или весь диалог') - at('y / n / s — согласен с судьёй'), 1, 'C-88 сразу за C-87');
+  assert.ok(at('a — правка или разбор словами с Pi · n в списке — новая проверка') >= 0, 'строка про a не изменилась');
+  const latin = at('<muted>Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.</muted>');
+  const last = at('<muted>Все оценки и подтверждения относятся к показанной версии.</muted>');
+  assert.ok(latin >= 0, 'C-89 приглушённой строкой');
+  assert.equal(last - latin, 1, 'C-89 стоит прямо перед последней приглушённой строкой');
+  assert.doesNotMatch(help, /p \/ n|\bp — |\bp Пройдено/);
+  for (const text of ['y / n / s — согласен с судьёй / не согласен / не могу сказать', 'n — спросит причину · v — оценить критерий или весь диалог',
+    'Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.']) assertPlainCopy(text, 'справка');
+
+  const open = cards.trialLines(record.trials[0]!, record, false);
+  const hint = open.find(row => row.text.startsWith('Вердикта человека нет'));
+  assert.equal(hint?.text, 'Вердикта человека нет. v — оценить критерий или весь диалог.');
+  assert.equal(hint?.color, 'muted');
+  const done = await judgedFixture('done', 'pass');
+  done.phase = 'complete'; done.resultsReviewedAt = done.updatedAt;
+  const closed = cards.trialLines(done.trials[0]!, done, true);
+  assert.ok(closed.some(row => row.text === 'Разбор набора завершён; у этого диалога отдельного вердикта нет. v — оценить подробно.'));
+  for (const row of [...open, ...closed]) assert.doesNotMatch(row.text, /\bp — |p \/ n|\bn — не пройдено/);
+  for (const row of [hint!.text, 'Разбор набора завершён; у этого диалога отдельного вердикта нет. v — оценить подробно.']) assertPlainCopy(row, 'подробности');
 });
 
 test('HTML reports escape untrusted text and remain self-contained with explicit evidence limits', async () => {
