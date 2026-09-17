@@ -1706,7 +1706,8 @@ test('все строки фазы 3 на доске — простой русс
   const undecided = structuredClone(failures); undecided.trials.find(trial => trial.id === 'F2')!.assessments![0]!.result = 'unknown';
   variants.push(stale, control, undecided);
   // 03.1 rows: the two-metric judge row (C-322), the old-rule mark (C-324), the unmeasured situation (C-323).
-  const ruled = await ruledCard(); ruled.scenarios[0]!.title = 'Перенос записи на другое время';
+  // The demo requirement quotes are record text in English, so the card cites none (as the queue fixture above).
+  const ruled = await ruledCard(); ruled.scenarios[0]!.title = 'Перенос записи на другое время'; ruled.scenarios[0]!.requirementIds = [];
   const ruledOld = structuredClone(ruled); ruledOld.humanReviews = [{ ...ruledMark('f0', 'goal_attainment', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.'), countingRules: undefined }];
   const ruledHalf = structuredClone(ruled); ruledHalf.humanReviews = [ruledMark('f0', 'goal_attainment', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.'), ruledMark('f0', 'prompt_compliance', 'pass', 'fail', 'Агент никого в отделение не отправлял.')];
   const ruledUnmeasured = structuredClone(ruled); ruledUnmeasured.trials[0]!.assessmentError = 'Судья не ответил.';

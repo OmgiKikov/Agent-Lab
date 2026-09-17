@@ -5,7 +5,7 @@ import { describeCheck, fingerprint } from '../dist/contracts.js';
 import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
 import { expectationSheet, qualitySummary, qualityLines, type ExpectationRole, type ExpectationSheet } from '../dist/quality.js';
 import { agreementSample, judgeAgreement, type JudgeAgreement } from '../dist/agreement.js';
-import { markTargets, measurementUsable } from '../dist/outcomes.js';
+import { GOAL_METRIC_ID, headlineMetricIds, markTargets, measurementUsable, recordedResult, RULES_METRIC_ID } from '../dist/outcomes.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
 import { situationEvidence } from '../dist/explain.js';
 import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
@@ -94,8 +94,13 @@ export function agreementBlockLines(record: Experiment, trial: Trial): Line[] {
       ...(mark.answer === 'agree' ? [line('Ваша отметка: = согласен', 'success')]
         : mark.answer === 'disagree' ? [line('Ваша отметка: ! не согласен', 'warning'), line(`Причина: «${oneLine(safeText(mark.note))}»`, 'text', false, 2)]
         : [line('Ваша отметка: ~ не могу сказать', 'muted')])]
+    // CTX-21/CTX-28: a mark given under the previous counting rule answered another question; a judge that changed keeps the phase-3 row.
+    : marks.some(m => m.staleRule) ? [line('Ваша отметка поставлена по прежнему правилу подсчёта. Отметьте заново: y · n · s', 'warning')]
     : marks.length ? [line('Ваша отметка устарела: судья сменился. Отметьте заново: y · n · s', 'warning')]
     : [keys('y — согласен · n — не согласен · s — не могу сказать', 'accent')];
+  // CTX-10: on a card with prompt rules the judge row names which half failed (C-322); it wraps like
+  // the key rows. A card without the rules check and a pass keep C-70 byte for byte.
+  const halves = failed ? failedHalves(scenario, trial) : '';
   return [
     line('ПРОВЕРКА СУДЬИ', 'accent', true),
     line(scenario.title, 'text', true),
@@ -104,13 +109,24 @@ export function agreementBlockLines(record: Experiment, trial: Trial): Line[] {
       : 'Судья счёл ситуацию успешной. Проверьте, если сомневаетесь.', 'muted'),
     // The first target is the goal on a double failure, and its explanation carries both halves («оба»).
     ...situationEvidence(record, scenario, trial, target.metricIds[0]!).map(sectionRow),
-    failed ? line('Судья: ✗ не справился', 'error') : line('Судья: ✓ справился', 'success'),
+    !failed ? line('Судья: ✓ справился', 'success') : halves ? keys(`Судья: ✗ не справился${halves}`, 'error') : line('Судья: ✗ не справился', 'error'),
     ...answer,
     line(''),
   ];
 }
 /** The owner's own words on one row: whitespace runs become one space, nothing is cut. */
 const oneLine = (value: string) => value.replace(/\s+/gu, ' ').trim();
+/**
+ * What the judge failed on a card that carries both headline metrics, from the recorded results
+ * (never the human ones): both halves, the request alone or the rules alone; empty without the
+ * prompt-rule check, so those cards keep the phase-3 row.
+ */
+function failedHalves(scenario: Scenario, trial: Trial): string {
+  if (headlineMetricIds(scenario).length < 2) return '';
+  const goal = recordedResult(trial, GOAL_METRIC_ID) === 'fail';
+  const rules = recordedResult(trial, RULES_METRIC_ID) === 'fail';
+  return goal && rules ? ' — запрос не выполнен · правила промпта нарушены' : goal ? ' — запрос не выполнен' : rules ? ' — правила промпта нарушены' : '';
+}
 
 /**
  * Section-3 list rows, in review order. `waiting` is what the `u` filter keeps: a situation the
