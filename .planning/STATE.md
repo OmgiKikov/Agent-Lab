@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: "03.1"
 current_phase_name: Справился = запрос выполнен и правила промпта соблюдены
 status: executing
-stopped_at: Completed 03.1-02-PLAN.md
-last_updated: "2026-09-17T19:44:53.688Z"
+stopped_at: Completed 03.1-03-PLAN.md
+last_updated: "2026-09-17T20:33:11.689Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 03.1 execution started
-state_head: e246ee039316f35adb999432d3aefeffb0f9444b
+state_head: 35cdcd35a20d4811669ffb06f7679626dde7f161
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 54
-  completed_plans: 30
+  completed_plans: 31
   percent: 13
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 03.1 (Справился = запрос выполнен и правила промпта соблюдены) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 03.1 execution started
 
@@ -88,6 +88,7 @@ Progress: [█░░░░░░░░░] 13%
 | Phase 03 P07 | 8min | 2 tasks | 2 files |
 | Phase 03.1 P01 | 48 min | 3 tasks | 11 files |
 | Phase 03.1 P02 | 45 min | 3 tasks | 12 files |
+| Phase 03.1 P03 | 40 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -159,6 +160,9 @@ Recent decisions affecting current work:
 - [Phase 03.1]: 03.1-02: a quick mark lands only on a metric that decided the situation (markTargets); the lab refuses marks on controls, unmeasured, undecided and non-target metrics (C-312/C-311/C-100/C-313) and stamps countingRules = 'goal-and-rules-v2', never keeping a caller value
 - [Phase 03.1]: 03.1-02: a situation is checked only when every mark target carries a current mark (CR-02); unusable and undecided situations are not in the agreement at all (CR-01); an unstamped mark counts only where the sole target is the goal or the card is legacy — elsewhere staleRule, shown as «по прежнему правилу подсчёта»
 - [Phase 03.1]: 03.1-02: on a goal card a quick-closed situation is closed — reply quality, RAG and objective checks do not keep it open (recorded deviation from RESEARCH Pattern 6); a legacy card waits for its other failed rubric; a half-overturned double failure reads «Судья: не справился → владелец: правила промпта соблюдены; запрос не выполнен»
+- [Phase 03.1]: 03.1-03: the board's agreement target is unmeasured (C-323, keys inert) for any unusable situation or missing card, decided by measurementUsable on the recorded record — the same gate the lab and the agreement use (CR-01); reviewOrder is unchanged and the handed-over board test was fixed by its navigation
+- [Phase 03.1]: 03.1-03: n on two targets asks ctx.ui.select «С чем вы не согласны?» (C-317…C-319, no new key); disputing one half writes an agreement on the other (A6); «Отметка уже стоит» compares the disputed metric set + reason for n and every target's answer for y/s; durationMs is recorded on the first mark only
+- [Phase 03.1]: 03.1-03: the disagree notice is derived from cardVerdict before/after — C-96 only when the verdict moved, C-320 «Ситуация остаётся «не справился»: …» naming the failed halves (a legacy card: «остальные провалы — через v»), else C-321 «Итог не изменился.»; the F10 judge row names which half failed (C-322), old-rule marks get C-324, the finalize row is C-325
 
 ### Pending Todos
 
@@ -199,6 +203,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T19:44:53.632Z
-Stopped at: Completed 03.1-02-PLAN.md
+Last session: 2026-09-17T20:32:56.783Z
+Stopped at: Completed 03.1-03-PLAN.md
 Resume file: None
