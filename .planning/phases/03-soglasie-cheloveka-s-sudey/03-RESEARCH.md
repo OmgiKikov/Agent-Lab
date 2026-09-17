@@ -574,14 +574,17 @@ See Patterns 1–7 above. All values in them are quoted from files read this ses
 | A4 | Source-run quick marks in a reassessment are always «устарели» | Pattern 4 rule 5 | A same-version reassessment would under-count; rare |
 | A5 | `s` is an acceptable key for «не могу сказать» | Pattern 6 | UI-SPEC may choose another free letter (`b g h i l m t w z`) |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should a quick «не могу сказать» remove the situation from the number?**
    - What we know: the lock maps it to `unknown`, and the existing counting then gives `human_unknown`.
    - What's unclear: whether the user wants that effect or only a record of the doubt.
-   - Recommendation: keep the lock and make the effect visible (Pitfall 2). Add a human-verify item for the owner.
+   - Recommendation (superseded): keep the lock and make the effect visible (Pitfall 2).
+   - RESOLVED (CONTEXT, autonomous decision; UI-SPEC D-17/C-97; plan 03-02): a quick «не могу сказать» does NOT change the headline. It is skipped by the metric override, `trialAssessmentComplete` and `trialReasons`, counted only as «не смог решить», and the trial stays in `awaitingVerdict`. Wherever the Pattern 2 / Pitfall 2 text above contradicts this, follow the plans.
 2. **Which record is the demo record?** The v11 reassessment id is known only after 02-03 runs. The check script takes `--id`. Real marks are the owner's job after the freeze (human item).
+   - RESOLVED: the check script takes `--id`; 03-07 uses fae4ee59/a92fd6ae copies; the demo id comes from 02-03.
 3. **Per-trial vs per-situation with repeats > 1.** Not relevant for the demo (repeats=1). Recommendation: count per trial and switch the word to «диалог». Document it.
+   - RESOLVED (03-01): count per trial, documented as a known limitation in the `src/agreement.ts` header; the UI-SPEC strings need no noun change.
 
 ## Environment Availability
 
