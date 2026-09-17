@@ -606,6 +606,9 @@ export class ExperimentLab {
         // The deep judgment is not a trial of this record: its sidecar and journal entry get their own key,
         // unique per attempt, so a retry or resume never overwrites an earlier audit, and the record names it.
         const judgeTrialId = `deep-${randomUUID()}`;
+        // Named in the record only once a judgment was reported, so the key never points to an unwritten file.
+        let judged = false;
+        const judgeKey = () => (judged ? { judgeTrialId } : {});
         try {
           const deep = await modelCall(`deep ${dialogueId}`, async () => {
             const { outcome: _storedOutcome, ...dialogueEvidence } = dialogue;
@@ -618,14 +621,15 @@ export class ExperimentLab {
             const scenario: Scenario = { ...base, goalObservation: DEFAULT_GOAL_OBSERVATION, split: 'dev' };
             if (record.sources.some(source => source.kind === 'prompt')) scenario.metrics!.unshift({ ...promptCompliance });
             const trial = { ...dialogueToTrial(dialogue, scenario, record.revisions[0]!.id), id: judgeTrialId };
-            return { goal, assessments: await assessTrial(runtime, scenario, record.sources, trial, ctx, [focus]) };
+            return { goal, assessments: await assessTrial(runtime, scenario, record.sources, trial,
+              { ...ctx, onJudgment: (id, audit, final) => { ctx.onJudgment?.(id, audit, final); judged = true; } }, [focus]) };
           });
-          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', judgeTrialId, ...deep });
+          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', ...judgeKey(), ...deep });
           discovery.completedDeepIds.push(dialogueId); updateCalls();
           await this.checkpoint(record, 'preparing', `Подробно проверено ${discovery.completedDeepIds.length}/${discovery.selectedIds.length}; controls — false-negative probe.`);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', judgeTrialId, error: message });
+          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', ...judgeKey(), error: message });
           if (message !== 'Judge response rejected; original responses and errors are preserved in judgeAudit') throw error;
           delete discovery.activeCall;
           discovery.completedDeepIds.push(dialogueId); updateCalls();

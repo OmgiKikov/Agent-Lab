@@ -196,8 +196,9 @@ test('discovery keeps going when one deep judge response is rejected', async t =
     async goals({ dialogues: [dialogue] }) { return [{ id: `goal_${dialogue!.id}`, goal: 'Get an approved answer', opening: dialogue!.messages[0]!.content,
       requirementIds: ['rule'], evidenceDialogueIds: [dialogue!.id], successCriteria: quote }]; },
     async assess({ scenario, trial }, ctx) {
-      ctx.onJudgment?.(trial.id, { protocolHash: 'p', inputHash: 'i', provider: 'offline', model: 'judge', prompt: 'p', input: '{}', attempts: [], notApplicable: [] }, true);
+      // 'clean' fails before any judgment is reported, so no sidecar exists for it.
       if (scenario.id === 'clean') throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
+      ctx.onJudgment?.(trial.id, { protocolHash: 'p', inputHash: 'i', provider: 'offline', model: 'judge', prompt: 'p', input: '{}', attempts: [], notApplicable: [] }, true);
       return scenario.metrics!.map(metric => ({ metricId: metric.id, result: 'fail' as const, rationale: 'Deep check result.', evidence: [1],
         citations: [{ seq: 1, quote: trial.events[1]!.text! }] }));
     },
@@ -213,7 +214,8 @@ test('discovery keeps going when one deep judge response is rejected', async t =
   assert.match(result.discovery?.deep.find(item => item.dialogueId === 'clean')?.error ?? '', /Judge response rejected/);
   assert.ok(result.discovery?.hypothesis);
   // Deep judgments are keyed per attempt and named by the record, never by the dialogue id.
-  const keys = result.discovery!.deep.map(item => item.judgeTrialId);
+  assert.equal(result.discovery!.deep.find(item => item.dialogueId === 'clean')?.judgeTrialId, undefined, 'no key for a judgment that was never written');
+  const keys = result.discovery!.deep.filter(item => item.dialogueId !== 'clean').map(item => item.judgeTrialId);
   assert.ok(keys.every(key => key?.startsWith('deep-')), JSON.stringify(keys));
   assert.equal(new Set(keys).size, keys.length);
   for (const key of keys) assert.ok(await lab.store.readJudgeAudit(result.id, key!), `sidecar for ${key}`);
