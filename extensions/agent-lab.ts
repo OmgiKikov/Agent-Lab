@@ -112,16 +112,23 @@ async function humanAnnotation(ctx: ExtensionContext, record: Experiment, select
 }
 
 /** Conversational execution asks the human to authorize a concrete plan; it never invents human reviews. */
-export default function agentLab(pi: ExtensionAPI) {
+export default async function agentLab(pi: ExtensionAPI) {
   /*
    * Внутренний шлюз нельзя описать декларативным models.json: там нужен клиентский сертификат.
    * Вложенные сессии Agent Lab регистрируют его сами (src/pi.ts), но внешний разговор — обычный
    * Pi, и без этой регистрации он отвечает «no api key» на моделях, которыми идёт прогон.
-   * Без переменных шлюза вызов возвращает undefined, не обращаясь к сети.
+   * Регистрация ждётся здесь, а не в фоне: список моделей Pi строит сразу после загрузки
+   * расширений, и провайдер, доехавший позже, в выборе уже не появится. Без переменных шлюза
+   * вызов возвращает undefined, не обращаясь к сети.
    */
-  void createGigaProvider()
-    .then(provider => { if (provider) pi.registerProvider(GIGA_PROVIDER_ID, provider); })
-    .catch(error => process.stderr.write(`giga: провайдер не зарегистрирован в разговоре (${error instanceof Error ? error.message : 'ошибка'})\n`));
+  let gigaNote: string | undefined;
+  try {
+    const provider = await createGigaProvider();
+    if (provider) pi.registerProvider(GIGA_PROVIDER_ID, provider);
+    else gigaNote = 'Внутренний шлюз не подключён: проверьте GIGACHAT_URL, GIGACHAT_CERT_PATH и ключ.';
+  } catch (error) {
+    gigaNote = `Внутренний шлюз не подключён: ${error instanceof Error ? error.message : 'ошибка регистрации'}.`;
+  }
 
   let activeClose: (() => Promise<void>) | undefined;
   const open = (cwd: string) => {
@@ -137,7 +144,10 @@ export default function agentLab(pi: ExtensionAPI) {
     ctx.ui.setTitle(`Agent Lab · ${ctx.cwd.split('/').at(-1)}`);
     ctx.ui.setHeader((_tui, theme) => new Text(theme.bold('Agent Lab') + '\nПроверьте, что сломала правка вашего агента.\n' + safeText(ctx.cwd), 1, 1));
     ctx.ui.setWidget('agent-lab-start', ['Напишите: «Проверь агента в этой папке» или «Воспроизведи эту ошибку: …»',
-      'Один тест → доказательство → проверка исправления. /agent-lab demo — учебный пример.']);
+      'Один тест → доказательство → проверка исправления. /agent-lab demo — учебный пример.',
+      // Отказ регистрации провайдера иначе виден только в stderr, который TUI не показывает,
+      // и выглядит как необъяснимое «no api key» при выборе модели.
+      ...(gigaNote ? [gigaNote] : [])]);
   });
   pi.on('before_agent_start', async (event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1') return;

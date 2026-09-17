@@ -10,13 +10,13 @@ import type { Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
 
-function registered(onUserMessage?: (message: unknown) => void) {
+async function registered(onUserMessage?: (message: unknown) => void) {
   const tools = new Map<string, ToolDefinition>();
   const contexts: { content: string; display: boolean }[] = [];
   const userMessages: unknown[] = [];
   let shutdown!: () => Promise<void>;
   let command!: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
-  agentLab({
+  await agentLab({
     registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
     registerCommand: (name: string, options: { handler: typeof command }) => { assert.equal(name, 'agent-lab'); command = options.handler; },
     on: (name: string, handler: () => Promise<void>) => { if (name === 'session_shutdown') shutdown = handler; else assert.ok(['session_start', 'before_agent_start'].includes(name)); },
@@ -32,7 +32,7 @@ function output(result: Awaited<ReturnType<ToolDefinition['execute']>>) {
 
 test('conversation runs only the confirmed plan, then saves and loads the same case without claiming human review', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-conversation-'));
-  const { tools, shutdown } = registered();
+  const { tools, shutdown } = await registered();
   t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
   const plans: string[] = [];
   let consent = false;
@@ -61,7 +61,7 @@ test('conversation runs only the confirmed plan, then saves and loads the same c
 
 test('Pi connects a new request, conversational correction, reviewed run, evidence discussion and repeat without UI JSON', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-journey-fixture-'));
-  const { tools, shutdown, command, contexts, userMessages } = registered(() => {
+  const { tools, shutdown, command, contexts, userMessages } = await registered(() => {
     assert.equal(existsSync(join(directory, '.agent-lab', '.lock')), false, 'conversation starts only after the board releases its writer lock');
   });
   const errors: string[] = []; const editorCommands: string[] = [];
@@ -145,7 +145,7 @@ test('Pi connects a new request, conversational correction, reviewed run, eviden
 
 test('headless model tools prepare and edit only; approvals and human assessments are not callable', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-extension-'));
-  const { tools, shutdown, command } = registered();
+  const { tools, shutdown, command } = await registered();
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
   const updates: string[] = [];
   try {
@@ -178,7 +178,7 @@ test('headless model tools prepare and edit only; approvals and human assessment
 
 test('native profile editor changes linked cards, detaches one and restores original evidence', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-profile-ui-fixture-'));
-  const { tools, shutdown, command } = registered();
+  const { tools, shutdown, command } = await registered();
   const ctx = { cwd: directory, model: undefined, mode: 'tui', hasUI: true } as ExtensionCommandContext;
   try {
     const report = output(await tools.get('agent_lab_build')!.execute('prepare', { mode: 'demo', scenarioCount: 2,
@@ -216,7 +216,7 @@ test('native profile editor changes linked cards, detaches one and restores orig
 
 test('native command demo fixture requires two separate confirmations and preserves human annotation separately', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-human-ui-fixture-'));
-  const { tools, shutdown, command } = registered();
+  const { tools, shutdown, command } = await registered();
   const ctx = { cwd: directory, model: undefined, mode: 'tui', hasUI: true } as ExtensionCommandContext;
   try {
     const report = output(await tools.get('agent_lab_build')!.execute('prepare', { mode: 'demo', scenarioCount: 1 }, undefined, undefined, ctx));
@@ -276,7 +276,7 @@ test('native command demo fixture requires two separate confirmations and preser
 
 test('native tool cancellation preserves partial preparation and releases ownership', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-extension-cancel-'));
-  const { tools, shutdown } = registered();
+  const { tools, shutdown } = await registered();
   const controller = new AbortController();
   try {
     const result = await tools.get('agent_lab_build')!.execute('build-cancel', { mode: 'demo' }, controller.signal,
@@ -314,7 +314,7 @@ test('actual Pi SDK loader imports native cards, preparation-only tools and embe
 
 test('build accepts an external module target, real dialogues and golden cases; inspect and exports carry the evidence summary', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-extension-v2-'));
-  const { tools, shutdown } = registered();
+  const { tools, shutdown } = await registered();
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
   try {
     const target = { kind: 'module', path: fileURLToPath(new URL('../examples/echo-agent.mjs', import.meta.url)), exportName: 'createSession' };
@@ -347,7 +347,7 @@ test('build accepts an external module target, real dialogues and golden cases; 
 
 test('the plain verdict leads every surface and the thorough preset widens the run without extra knobs', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-extension-verdict-'));
-  const { tools, shutdown } = registered();
+  const { tools, shutdown } = await registered();
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
   try {
     const quick = output(await tools.get('agent_lab_build')!.execute('build-quick', { mode: 'demo', scenarioCount: 1, notes: 'Users rarely know their ID.' }, undefined, undefined, ctx));
