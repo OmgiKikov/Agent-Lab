@@ -1,7 +1,7 @@
 import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
-import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, measured, measurementUsable, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, judgedCut, measured, measurementUsable, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
 /*
@@ -515,7 +515,7 @@ export function goalCardOutcome(record: Experiment, scenario: Scenario): 'pass' 
   if (!expected.size || trials.length !== expected.size || seen.size !== expected.size || [...expected].some(key => !seen.has(key))
     || trials.some(trial => trial.familyId !== scenario.familyId || trial.split !== scenario.split
       || record.manifestHash && trial.manifestHash !== record.manifestHash
-      || !measurementUsable(scenario, trial, record.humanReviews))) return 'unknown';
+      || !measurementUsable(scenario, trial, record.humanReviews, { beforeSeq: judgedCut(trial) }))) return 'unknown';
   const results = trials.map(trial => agentMetricResult(trial, metric.id, record.humanReviews) ?? 'unknown');
   return results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
 }
@@ -547,13 +547,17 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, goal
   if (latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid'
     || goalId && latest.get(`${trial.id}|metric:${goalId}`)?.verdict === 'invalid') codes.push('human_invalid');
   if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) codes.push('reset_unconfirmed');
-  // Mirrors simulatorUsable: a human verdict overrides the check or the fidelity vote.
+  // Mirrors simulatorUsable with the goal-v2 cut: a human verdict overrides the check or the fidelity vote;
+  // under a cut a heuristic check at or after it is ignored and fidelity speaks only through a human verdict.
+  const beforeSeq = judgedCut(trial);
   const checksDeviate = (simulatorWasUsed(trial) ? trial.simulatorChecks ?? [] : []).some(c => {
+    if (beforeSeq !== undefined && c.heuristic && c.seq !== undefined && c.seq >= beforeSeq) return false;
     const review = latest.get(`${trial.id}|check:${c.id}`);
     return !(review?.verdict === 'invalid' || (review ? review.verdict === 'pass' : c.passed));
   });
   const fidelity = (scenario.metrics ?? []).filter(m => m.subject === 'simulator' && metricApplies(m, trial)).flatMap(m => {
     const review = latest.get(`${trial.id}|metric:${m.id}`);
+    if (beforeSeq !== undefined && !review) return [];
     return review?.verdict === 'invalid' ? [] : [review?.verdict ?? trial.assessments?.find(a => a.metricId === m.id)?.result];
   });
   if (checksDeviate || fidelity.includes('fail')) codes.push('simulator_deviated');
@@ -675,7 +679,7 @@ export function stabilityAfterReassess(record: Experiment, source: Experiment): 
   const sourceProtocols = protocols(source), recordProtocols = protocols(record);
   if (judgeSettingsIdentity(record.settings) !== (identity?.judge ?? judgeSettingsIdentity(source.settings))
     || sourceProtocols.length && recordProtocols.length && fingerprint(sourceProtocols) !== fingerprint(recordProtocols)) {
-    return { ...result, skipped: 'судья или его настройки изменились' };
+    return { ...result, skipped: 'не с чем сравнить: судья с тех пор изменился' };
   }
   const sourceTrialIds = new Set(source.trials.map(trial => trial.id));
   for (const card of record.scenarios) {

@@ -9,7 +9,7 @@ import { cardVerdict, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, st
  * cardVerdict in comparison.ts; this module only counts and words them. It must not import
  * quality.ts or experiment.ts, so quality.ts can reuse pluralForm without a cycle.
  */
-export const COUNTING_RULES = 'goal-v1';
+export const COUNTING_RULES = 'goal-v2';
 
 /** Below this many decided situations the headline percent is shown with its Wilson range. */
 const SMALL_SAMPLE = 20;

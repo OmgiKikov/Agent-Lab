@@ -96,7 +96,7 @@ test('the headline names passed over decided situations and the Wilson caveat fo
   assert.equal(view.headline.text, 'Справился в 3 из 12 проверенных ситуаций — 25%.');
   assert.equal(view.headline.smallSample, 'Мало данных: реальная доля где-то от 9% до 53%.');
   assert.deepEqual(resultViewLines(view).slice(0, 2), [view.headline.text, view.headline.smallSample]);
-  assert.equal(view.countingRules, 'goal-v1');
+  assert.equal(view.countingRules, 'goal-v2');
   assert.equal(buildResultView(scored(1, 0)).headline.text, 'Справился в 1 из 1 проверенной ситуации — 100%.');
 });
 
@@ -261,6 +261,49 @@ test('reason simulator_deviated: a failed simulator check or a failed fidelity v
   expectReason('simulator_deviated', card('c'), [attempt('c', { fidelity: 'fail' })]);
   const overruled = buildResultView(run([card('c')], [attempt('c', { simulatorChecks: [leak] })], { humanReviews: [review('t-c', 'pass', { checkId: 'simulator_leak' })] }));
   assert.equal(overruled.cards[0]?.outcome, 'pass', 'a human overruling the check restores the verdict');
+});
+
+/** goal-v2: the smallest receipt; the view does not verify receipts. */
+const receipt = (cutBefore?: number) => ({
+  protocolHash: 'p', inputHash: 'i', provider: 'openrouter', model: 'm', auditHash: 'a', votes: [], notApplicable: [], complete: true,
+  ...(cutBefore === undefined ? {} : { cutBefore }),
+});
+const cutAttempt = (overrides: Parameters<typeof attempt>[1] = {}) =>
+  attempt('c', { goal: 'fail', fidelity: 'fail', judgedBeforeSeq: 2, judgeReceipt: receipt(2), ...overrides });
+function cardRow(trials: Trial[], overrides: Partial<Experiment> = {}) {
+  const view = buildResultView(run([card('c')], trials, overrides));
+  return view.cards.find(item => item.scenarioId === 'c');
+}
+
+test('goal-v2: a situation judged before the cut is decided by its goal vote despite failed fidelity', () => {
+  const row = cardRow([cutAttempt()]);
+  assert.equal(row?.outcome, 'fail');
+  assert.equal(row?.reason, undefined);
+  assert.equal(cardRow([cutAttempt({ fidelity: 'unknown' })])?.outcome, 'fail', 'unknown fidelity under the cut is decided too');
+});
+
+test('goal-v2: a judgedBeforeSeq without the same cutBefore in the receipt changes nothing', () => {
+  for (const judgeReceipt of [undefined, receipt(), receipt(1)]) {
+    const row = cardRow([cutAttempt({ judgeReceipt })]);
+    assert.equal(row?.outcome, 'unknown');
+    assert.equal(row?.reason, 'simulator_deviated');
+  }
+});
+
+test('goal-v2: heuristic checks before the cut or without a seq still leave the situation unmeasured', () => {
+  assert.equal(cardRow([cutAttempt({ simulatorChecks: [{ ...leak, seq: 2 }] })])?.outcome, 'fail', 'a check at the cut is ignored');
+  const before = cardRow([cutAttempt({ simulatorChecks: [{ ...leak, seq: 1 }] })]);
+  assert.equal(before?.outcome, 'unknown');
+  assert.equal(before?.reason, 'simulator_deviated');
+  assert.equal(cardRow([cutAttempt({ simulatorChecks: [leak] })])?.outcome, 'unknown', 'a check without seq is not placed after the cut');
+});
+
+test('goal-v2: a human verdict on fidelity or on a check keeps precedence over the cut', () => {
+  const fidelity = cardRow([cutAttempt()], { humanReviews: [review('t-c', 'fail', { metricId: 'user_fidelity' })] });
+  assert.equal(fidelity?.outcome, 'unknown');
+  assert.equal(fidelity?.reason, 'simulator_deviated');
+  const check = cardRow([cutAttempt({ simulatorChecks: [{ ...leak, seq: 1 }] })], { humanReviews: [review('t-c', 'pass', { checkId: 'simulator_leak' })] });
+  assert.equal(check?.outcome, 'fail');
 });
 
 test('reason simulator_unclear: the fidelity vote is unknown or missing', () => {
@@ -508,7 +551,7 @@ test('a reassessment names the situations whose judge verdict flipped on the sam
 test('a reassessment by another judge, or without evidence, prints no instability count', () => {
   const judge = reassessPair({ A: 'fail' }, { A: 'pass' }, { settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1, judge: { provider: 'openrouter', model: 'another-judge' } }) });
   const view = buildResultView(judge.record, { before: judge.source });
-  assert.ok(resultViewLines(view).includes('Стабильность не проверена: судья или его настройки изменились.'));
+  assert.ok(resultViewLines(view).includes('Стабильность не проверена: не с чем сравнить: судья с тех пор изменился.'));
   assert.ok(view.cards.every(item => !item.unstable));
   const bare = reassessPair({ A: 'fail' }, { A: 'pass' });
   delete bare.record.evidenceHash;
