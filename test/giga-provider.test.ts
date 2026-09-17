@@ -85,6 +85,58 @@ test('loads an optional CA and disables certificate verification when insecure m
   assert.equal(relaxed?.rejectUnauthorized, false);
 });
 
+test('accepts the internal naming of the key and CA chain variables', async () => {
+  // Внутренние проекты (agent_oc) держат один .env на прод-код и на Agent Lab: там ключ лежит
+  // в GIGACHAT_KEY, а цепочка CA — в GIGACHAT_VERIFY_PATH по конвенции _VERIFY_PATH.
+  const directory = await certDirectory();
+  const config = readGigaConfig({
+    GIGACHAT_URL: 'https://gateway.example',
+    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
+    GIGACHAT_KEY: join(directory, 'key.pem'),
+    GIGACHAT_VERIFY_PATH: join(directory, 'ca.pem'),
+  });
+  assert.equal(config?.key.toString(), 'test-key');
+  assert.equal(config?.ca?.toString(), 'test-ca');
+});
+
+test('the explicit path variables win over the internal aliases', async () => {
+  const directory = await certDirectory();
+  await writeFile(join(directory, 'other-key.pem'), 'explicit-key');
+  const config = readGigaConfig({
+    GIGACHAT_URL: 'https://gateway.example',
+    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
+    GIGACHAT_KEY_PATH: join(directory, 'other-key.pem'),
+    GIGACHAT_KEY: join(directory, 'key.pem'),
+  });
+  assert.equal(config?.key.toString(), 'explicit-key');
+});
+
+test('accepts the internal naming of the key and CA chain variables', async () => {
+  // Внутренние проекты держат один .env на прод-код и на Agent Lab: там ключ лежит в
+  // GIGACHAT_KEY, а цепочка CA — в GIGACHAT_VERIFY_PATH по конвенции суффикса _VERIFY_PATH.
+  const directory = await certDirectory();
+  const config = readGigaConfig({
+    GIGACHAT_URL: 'https://gateway.example',
+    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
+    GIGACHAT_KEY: join(directory, 'key.pem'),
+    GIGACHAT_VERIFY_PATH: join(directory, 'ca.pem'),
+  });
+  assert.equal(config?.key.toString(), 'test-key');
+  assert.equal(config?.ca?.toString(), 'test-ca');
+});
+
+test('the explicit path variables win over the internal aliases', async () => {
+  const directory = await certDirectory();
+  await writeFile(join(directory, 'other-key.pem'), 'explicit-key');
+  const config = readGigaConfig({
+    GIGACHAT_URL: 'https://gateway.example',
+    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
+    GIGACHAT_KEY_PATH: join(directory, 'other-key.pem'),
+    GIGACHAT_KEY: join(directory, 'key.pem'),
+  });
+  assert.equal(config?.key.toString(), 'explicit-key');
+});
+
 test('a configured but unreadable certificate path fails loudly', async () => {
   const directory = await certDirectory();
   assert.throws(() => readGigaConfig({
