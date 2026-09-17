@@ -16,6 +16,7 @@ import { ExperimentLab } from '../src/experiment.js';
 import { embeddedBefore, evidenceBundle } from '../src/artifacts.js';
 import { sealJudgeReceipt } from '../src/judge.js';
 import { sourceIdentity } from '../src/normalize.js';
+import { COUNTING_RULES } from '../src/outcomes.js';
 
 const world = { records: {}, writableFields: [], transientFailures: 0 };
 type Card = Experiment['scenarios'][number];
@@ -97,8 +98,9 @@ const ACQUIRING_BLOCK = [
   '  ? Ситуация unclear0 — судья не уверен, что симулятор держался диалога',
   '  ? Ситуация split0 — судья не уверен: голоса разошлись',
   'Контроль: не задан.',
-  // The acquiring run has 11 failed goals queued for review and one passed goal in the sample,
-  // so the agreement row is printed even before the first mark (F6).
+  // The acquiring run has 9 usable goal failures queued for review and no pass in the sample (the
+  // only recorded pass, deviated1, is unusable), so the agreement row is printed before the first
+  // mark because the queue is not empty (F6, CR-01).
   'Согласие с судьёй: ещё не проверено.',
   'Из 40 диалогов в набор вошли 13. Не вошли 27: в правилах нет ожидаемого ответа — 21, нужны данные клиента — 6.',
 ];
@@ -230,18 +232,20 @@ async function quickMarked(verdict: HumanReview['verdict'], note: string): Promi
 test('a quick mark saved by the lab shows as the agreement row in the CLI summary', { timeout: 20000 }, async () => {
   const { block, stored } = await quickMarked('fail', 'Быстрая отметка: согласен с судьёй.');
   assert.equal(block[0], ACQUIRING_BLOCK[0], 'agreeing with the judge leaves the number where it was');
-  assert.ok(block.includes('Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы: 1 из 1 · успехи ещё не проверены).'), block.join('\n'));
+  // CR-01: the only recorded pass (deviated1) is unusable, so there is no sample and the pass part reads «успехов нет».
+  assert.ok(block.includes('Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы: 1 из 1 · успехов нет).'), block.join('\n'));
   assert.ok(block.includes('  Цель — согласие в 9 случаях из 10.'), block.join('\n'));
   assert.deepEqual(block, resultViewLines(buildResultView(stored), { details: true }));
   const view = buildResultView(stored);
-  assert.equal(view.agreement.queueFailures.length, 11, '9 failed goals plus the unmeasured deviated0 and unclear0');
-  assert.deepEqual(view.agreement.sampledPasses, ['t-deviated1'], 'the single recorded pass is the whole sample');
+  assert.equal(view.agreement.queueFailures.length, 9, '9 failed goals; the unmeasured deviated0 and unclear0 are not queued (CR-01)');
+  assert.deepEqual(view.agreement.sampledPasses, [], 'the single recorded pass is unusable, so the sample is empty');
+  assert.equal(view.agreement.queueFailures.length, view.headline.decided - view.headline.passed, 'the queue holds exactly the failures the headline counts');
 });
 
 test('a quick «не согласен» moves the headline and is counted against the judge', { timeout: 20000 }, async () => {
   const { block, stored } = await quickMarked('pass', 'Проверка: судья не учёл уточнение клиента.');
   assert.equal(block[0], 'Справился в 1 из 9 проверенных ситуаций — 11%.');
-  assert.ok(block.includes('Согласие с судьёй: 0 из 1 проверенных · мало проверок (провалы: 0 из 1 · успехи ещё не проверены).'), block.join('\n'));
+  assert.ok(block.includes('Согласие с судьёй: 0 из 1 проверенных · мало проверок (провалы: 0 из 1 · успехов нет).'), block.join('\n'));
   assert.deepEqual(block, resultViewLines(buildResultView(stored), { details: true }));
   const view = buildResultView(stored);
   assert.equal(view.agreement.failures.checked, 1);
@@ -1065,12 +1069,16 @@ test('the agreement tail rows appear only under their condition and in one fixed
 });
 
 test('stale marks alone report themselves, and a run with nothing to check keeps the old block', () => {
-  const undecided = scored(0, 0, 1);
-  const stale = { ...undecided, sourceEvidence: { runId: 'run-0', trials: undecided.trials, humanReviews: [quick('t-u0', 'fail', 'fail')] } };
+  // A carried mark on a decided failure is stale (03.1: an undecided situation is not in the agreement at all, so its old mark has nothing to be stale against).
+  const failed = scored(0, 1);
+  const stale = { ...failed, sourceEvidence: { runId: 'run-0', trials: failed.trials, humanReviews: [quick('t-f0', 'fail', 'fail')] } };
   const lines = resultViewLines(buildResultView(stale));
   assert.equal(agreementRow(stale), 'Согласие с судьёй: ещё не проверено.');
   assert.ok(lines.includes('  Отметки устарели после смены судьи: 1.'));
   assert.ok(!lines.some(line => line.startsWith('  Цель')));
+  const undecided = scored(0, 0, 1);
+  const forgotten = { ...undecided, sourceEvidence: { runId: 'run-0', trials: undecided.trials, humanReviews: [quick('t-u0', 'fail', 'fail')] } };
+  assert.ok(resultViewLines(buildResultView(forgotten)).every(line => !line.includes('Согласие с судьёй') && !line.includes('устарели')), 'a mark on a situation the judge no longer decides prints nothing');
   const empty = buildResultView(scored(0, 0, 2));
   assert.ok(resultViewLines(empty, { details: true }).every(line => !line.includes('Согласие с судьёй')), 'nothing to check prints no agreement row');
   assert.deepEqual(resultViewLines(empty), ['Проверенных ситуаций нет.', 'Не измерено: 2 — судья не уверен: голоса разошлись.',
@@ -1112,6 +1120,96 @@ test('the disagreements read in the card order of the record, with both directio
   assert.equal(DISAGREEMENT_BOARD_TITLE, 'НЕСОГЛАСИЯ С СУДЬЁЙ');
   assert.deepEqual(agreementSectionLines(view), ['Несогласия с судьёй (2):', ...rowsToLines(disagreementRows(view))]);
   assert.equal(agreementNextStep(view), null, 'both queued situations are answered, so nothing is left to mark');
+});
+
+// ---- 03.1: marks under the previous counting rule, and a disagreement that overturned one half of a double failure. ----
+/** A quick mark the lab would store today: on `metricId`, stamped with the counting rule unless `stamped` is false. */
+const ruledQuick = (trialId: string, metricId: string, verdict: HumanReview['verdict'], saw: 'pass' | 'fail', stamped = true, note = 'отметка'): HumanReview =>
+  ({ ...review(trialId, verdict, { metricId }), id: `q-${trialId}-${metricId}`, note, source: 'quick', judgeVerdict: saw, ...(stamped ? { countingRules: COUNTING_RULES } : {}) });
+const GOAL = 'goal_attainment', RULES = 'prompt_compliance';
+const RULE_STALE_ROW = '  Отметки поставлены по прежнему правилу подсчёта: 1. Отметьте заново.';
+/** One double failure `d` (goal and rules failed), optionally beside more ruled cards; `HEX_ID` so the F8 row can be scanned. */
+const doubled = (reviews: HumanReview[], more: Record<string, RuledSpec> = {}) =>
+  buildResultView(ruledRun({ d: { goal: 'fail', rules: 'fail' }, ...more }, { id: HEX_ID, humanReviews: reviews }));
+const verdictRow = (view: ReturnType<typeof buildResultView>) => rowsToLines(disagreementRows(view)).find(line => line.startsWith('  Судья:'));
+
+test('a mark given under the previous counting rule is named in its own tail row and told to be made again', () => {
+  const view = doubled([ruledQuick('t-d', GOAL, 'fail', 'fail', false)]);
+  assert.equal(view.agreement.staleRule, 1);
+  const lines = resultViewLines(view);
+  const at = lines.indexOf('Согласие с судьёй: ещё не проверено.');
+  assert.ok(at >= 0, lines.join('\n'));
+  assert.equal(lines[at + 1], RULE_STALE_ROW);
+  assert.ok(!lines.includes('  Отметки устарели после смены судьи: 1.'), 'an old-rule mark is not a judge change');
+  assert.ok(!lines.some(line => line.startsWith('  Цель')), 'nothing was checked yet');
+  assert.equal(agreementNextStep(view), NEXT_STEP, 'the situation still needs marks under the current rule');
+  // A stamped goal mark next to it answers only half: the row and the next step stay.
+  const half = doubled([ruledQuick('t-d', GOAL, 'fail', 'fail', false), ruledQuick('t-d', RULES, 'fail', 'fail')]);
+  assert.ok(resultViewLines(half).includes(RULE_STALE_ROW));
+  assert.equal(half.agreement.checked, 0);
+});
+
+test('the agreement tail rows keep one order: the target, the doubt, the judge change, the previous rule', () => {
+  const view = doubled([
+    ...[GOAL, RULES].map(id => ruledQuick('t-a', id, 'fail', 'fail')),
+    ...[GOAL, RULES].map(id => ruledQuick('t-u', id, 'unknown', 'fail')),
+    ...[GOAL, RULES].map(id => ruledQuick('t-s', id, 'pass', 'pass')),
+    ruledQuick('t-d', GOAL, 'fail', 'fail', false),
+  ], { a: { goal: 'fail', rules: 'fail' }, u: { goal: 'fail', rules: 'fail' }, s: { goal: 'fail', rules: 'fail' } });
+  const lines = resultViewLines(view);
+  assert.deepEqual(lines.slice(lines.findIndex(line => line.startsWith('Согласие')), lines.findIndex(line => line.startsWith('Согласие')) + 5), [
+    'Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы: 1 из 1 · успехов нет).',
+    '  Цель — согласие в 9 случаях из 10.',
+    '  Человек не смог решить: 1.',
+    '  Отметки устарели после смены судьи: 1.',
+    RULE_STALE_ROW,
+  ]);
+  for (const line of lines.filter(line => line.startsWith('  ') && !line.startsWith('  ?'))) assertPlainCopy(line, 'F6');
+});
+
+test('a disagreement that overturned one half of a double failure names both halves, the overturned one first', () => {
+  const judgeFailed = (goalAnswer: HumanReview['verdict'], rulesAnswer: HumanReview['verdict']) =>
+    doubled([ruledQuick('t-d', GOAL, goalAnswer, 'fail', true, 'Причина владельца.'), ruledQuick('t-d', RULES, rulesAnswer, 'fail', true, 'Причина владельца.')]);
+  assert.equal(verdictRow(judgeFailed('fail', 'pass')), '  Судья: не справился → владелец: правила промпта соблюдены; запрос не выполнен');
+  assert.equal(verdictRow(judgeFailed('pass', 'fail')), '  Судья: не справился → владелец: запрос выполнен; правила промпта нарушены');
+  assert.equal(verdictRow(judgeFailed('pass', 'unknown')), '  Судья: не справился → владелец: запрос выполнен; про правила промпта не уверен');
+  assert.equal(verdictRow(judgeFailed('unknown', 'pass')), '  Судья: не справился → владелец: правила промпта соблюдены; про запрос не уверен');
+  assert.equal(verdictRow(judgeFailed('pass', 'pass')), '  Судья: не справился → владелец: справился', 'a full overturn keeps C-62 byte for byte');
+  assert.equal(verdictRow(judgeFailed('fail', 'fail')), undefined, 'agreement is not a disagreement');
+  const view = judgeFailed('fail', 'pass');
+  assert.deepEqual(rowsToLines(disagreementRows(view)), ['! Ситуация d', '  Судья: не справился → владелец: правила промпта соблюдены; запрос не выполнен', '  Причина: «Причина владельца.»']);
+  assert.equal(view.headline.text, 'Справился в 0 из 1 проверенной ситуации — 0%.', 'the request is still unmet, so the number does not move');
+
+  const judgePassed = (goalAnswer: HumanReview['verdict'], rulesAnswer: HumanReview['verdict']) => buildResultView(ruledRun({ p: { goal: 'pass', rules: 'pass' } },
+    { id: HEX_ID, humanReviews: [ruledQuick('t-p', GOAL, goalAnswer, 'pass', true, 'Причина владельца.'), ruledQuick('t-p', RULES, rulesAnswer, 'pass', true, 'Причина владельца.')] }));
+  assert.equal(verdictRow(judgePassed('fail', 'pass')), '  Судья: справился → владелец: запрос не выполнен; правила промпта соблюдены');
+  assert.equal(verdictRow(judgePassed('pass', 'fail')), '  Судья: справился → владелец: правила промпта нарушены; запрос выполнен');
+  assert.equal(verdictRow(judgePassed('fail', 'unknown')), '  Судья: справился → владелец: запрос не выполнен; про правила промпта не уверен');
+  assert.equal(verdictRow(judgePassed('unknown', 'fail')), '  Судья: справился → владелец: правила промпта нарушены; про запрос не уверен');
+  assert.equal(verdictRow(judgePassed('fail', 'fail')), '  Судья: справился → владелец: не справился', 'a full overturn of a pass keeps C-62');
+  assert.equal(judgePassed('fail', 'pass').headline.text, 'Справился в 0 из 1 проверенной ситуации — 0%.', 'one overturned half is enough to take the pass out of the number');
+
+  // Every new row is plain Russian.
+  const jargon = /goal_attainment|prompt_compliance|user_fidelity|unknown|рубрик|протокол|кластер|метрик|judge|seq|agree|disagree|unsure|stale|quick/i;
+  for (const view of [judgeFailed('fail', 'pass'), judgeFailed('pass', 'unknown'), judgePassed('unknown', 'fail'), doubled([ruledQuick('t-d', GOAL, 'fail', 'fail', false)])]) {
+    for (const line of [...rowsToLines(disagreementRows(view)), ...resultViewLines(view).filter(line => line.startsWith('  Отметки'))]) {
+      assert.doesNotMatch(line, jargon, line);
+      assertPlainCopy(line, 'F7');
+    }
+  }
+});
+
+test('the agreement queue holds exactly the failures the headline decides, on the phase-1 and the rules shape of fae4ee59', () => {
+  const goalOnly = buildResultView(acquiringShape());
+  assert.equal(goalOnly.agreement.queueFailures.length, 9, 'deviated0 and unclear0 are «не измерено», so they are not queued');
+  assert.deepEqual(goalOnly.agreement.sampledPasses, [], 'deviated1 is unusable, so it is not sampled');
+  assert.equal(goalOnly.agreement.queueFailures.length, goalOnly.headline.decided - goalOnly.headline.passed);
+  const rules = buildResultView(acquiringRulesShape());
+  assert.equal(rules.headline.decided - rules.headline.passed, 10);
+  assert.equal(rules.agreement.queueFailures.length, rules.headline.decided - rules.headline.passed, 'nine double failures and the rules-only failure of split0');
+  assert.ok(rules.agreement.queueFailures.includes('t-split0'), 'an undecided goal next to broken rules is a rules-only failure with one target');
+  assert.ok(!rules.agreement.queueFailures.includes('t-deviated0') && !rules.agreement.queueFailures.includes('t-unclear0'));
+  assert.deepEqual(rules.agreement.sampledPasses, []);
 });
 
 test('the owner’s reason is shown whole: whitespace runs become one space and 600 characters survive', () => {
