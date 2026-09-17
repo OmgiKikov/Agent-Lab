@@ -88,6 +88,8 @@ function acquiringShape(): Experiment {
 }
 const ACQUIRING_BLOCK = [
   'Справился в 0 из 9 проверенных ситуаций — 0%.',
+  // Phase 03.1: the fixture cards carry no prompt rules, so the breakdown row says so (C-304).
+  'Правил промпта в наборе нет — считается только запрос.',
   'Мало данных: реальная доля где-то от 0% до 30%.',
   'Не измерено: 4 — чаще всего симулятор отклонился от диалога (2).',
   '  ? Ситуация deviated0 — симулятор отклонился от диалога',
@@ -105,7 +107,7 @@ test('the headline names passed over decided situations and the Wilson caveat fo
   const view = buildResultView(scored(3, 9));
   assert.equal(view.headline.text, 'Справился в 3 из 12 проверенных ситуаций — 25%.');
   assert.equal(view.headline.smallSample, 'Мало данных: реальная доля где-то от 9% до 53%.');
-  assert.deepEqual(resultViewLines(view).slice(0, 2), [view.headline.text, view.headline.smallSample]);
+  assert.deepEqual(resultViewLines(view).slice(0, 3), [view.headline.text, 'Правил промпта в наборе нет — считается только запрос.', view.headline.smallSample]);
   assert.equal(view.countingRules, 'goal-and-rules-v2');
   assert.equal(buildResultView(scored(1, 0)).headline.text, 'Справился в 1 из 1 проверенной ситуации — 100%.');
 });
@@ -618,6 +620,7 @@ test('a passing control stays out of the headline and gets its own line', () => 
   assert.equal(view.cards.find(item => item.scenarioId === 'ctl')?.control, true);
   assert.deepEqual(resultViewLines(view), [
     'Справился в 3 из 12 проверенных ситуаций — 25%.',
+    'Правил промпта в наборе нет — считается только запрос.',
     'Мало данных: реальная доля где-то от 9% до 53%.',
     'Контроль: пройден ✓',
     // Deliberate change: the 9 failures and the 3 sampled passes are a review queue, so F6 is printed.
@@ -733,6 +736,133 @@ test('a control that met its goal but broke a rule still passes as a control, wh
   assert.deepEqual(plain.cards.map(item => [item.goal, item.rules]), [['pass', 'none'], ['fail', 'none']]);
 });
 
+// ---- Phase 03.1: the breakdown row under the headline and the control line with the rules result. ----
+const PROMPT_SOURCE = { id: 'src-p', name: 'Системный промпт', hash: 'p', kind: 'prompt' as const,
+  content: 'Ты помощник по эквайрингу.\n- Не направляй клиента в поддержку.\n- Не обещай сроки, которых нет в инструкциях.\n- Отвечай по инструкциям банка.' };
+const PROMPT_RULES = [
+  { id: 'no-support', text: 'Не направляй клиента в поддержку.', sourceId: 'src-p', quote: 'Не направляй клиента в поддержку.', critical: false },
+  { id: 'no-promises', text: 'Не обещай сроки, которых нет в инструкциях.', sourceId: 'src-p', quote: 'Не обещай сроки, которых нет в инструкциях.', critical: false },
+];
+/** Judge wording that names owner rule 1 / rule 2 uniquely, and one that names nothing. */
+const BROKE_1 = 'Нарушено правило «Не направляй клиента в поддержку» — агент отправил клиента в поддержку.';
+const BROKE_2 = 'Нарушено правило «Не обещай сроки, которых нет в инструкциях» — агент назвал срок.';
+const BROKE_UNNAMED = 'Агент нарушил правило о сроках.';
+type RuledSpec = { goal: Result; rules: Result | 'none'; rationale?: string; fidelity?: Result; control?: boolean };
+/** One reactive attempt per card; a card with `rules: 'none'` carries the phase-1 rubrics (goal, reply quality, fidelity) instead. */
+function ruledRun(specs: Record<string, RuledSpec>, overrides: Partial<Experiment> = {}): Experiment {
+  const entries = Object.entries(specs);
+  const cards = entries.map(([id, spec]) => card(id, { requirementIds: ['no-support', 'no-promises'],
+    metrics: spec.rules === 'none' ? [{ ...goalAttainment }, { ...replyQuality }, { ...simulatorFidelity }] : RULED_METRICS }));
+  const trials = entries.map(([id, spec]) => attempt(id, { assessments: [
+    vote('goal_attainment', spec.goal, spec.goal === 'unknown' ? SPLIT : undefined),
+    spec.rules === 'none' ? vote('reply_quality', 'pass') : vote('prompt_compliance', spec.rules, spec.rules === 'unknown' ? SPLIT : spec.rationale),
+    vote('user_fidelity', spec.fidelity ?? 'pass'),
+  ] }));
+  const controls = entries.filter(([, spec]) => spec.control).map(([id]) => id);
+  return run(cards, trials, { sources: [PROMPT_SOURCE], requirements: PROMPT_RULES, ...(controls.length ? { positiveControlScenarioIds: controls } : {}), ...overrides });
+}
+const BREAKDOWN_TEXT = (view: ReturnType<typeof buildResultView>) => view.breakdown.text;
+
+test('the breakdown row counts met requests and broken rules over the counted cards, and names the one most frequent rule with its count', () => {
+  const plain = buildResultView(ruledRun({ a: { goal: 'pass', rules: 'fail' }, b: { goal: 'fail', rules: 'fail' }, u: { goal: 'pass', rules: 'fail', fidelity: 'fail' } }));
+  assert.equal(plain.headline.text, 'Справился в 0 из 2 проверенных ситуаций — 0%.');
+  assert.deepEqual(plain.breakdown, { goal: { met: 1, decided: 2 }, rules: { broken: 2, decided: 2, commonRule: null, commonRuleCount: 0 }, withoutRules: 0,
+    text: 'Запрос выполнен: 1 из 2. Правила промпта нарушены: 2 из 2.' }, 'an unusable card counts in neither part');
+  const named = buildResultView(ruledRun({ a: { goal: 'pass', rules: 'fail', rationale: BROKE_1 }, b: { goal: 'fail', rules: 'fail', rationale: BROKE_1 } }));
+  assert.equal(BREAKDOWN_TEXT(named), 'Запрос выполнен: 1 из 2. Правила промпта нарушены: 2 из 2, из них правило 1 — 2.');
+  assert.deepEqual([named.breakdown.rules.commonRule, named.breakdown.rules.commonRuleCount], [1, 2]);
+  const tie = buildResultView(ruledRun({ a: { goal: 'pass', rules: 'fail', rationale: BROKE_1 }, b: { goal: 'fail', rules: 'fail', rationale: BROKE_2 } }));
+  assert.equal(BREAKDOWN_TEXT(tie), 'Запрос выполнен: 1 из 2. Правила промпта нарушены: 2 из 2.', 'a tie names no rule');
+  const top = buildResultView(ruledRun({ a: { goal: 'pass', rules: 'fail', rationale: BROKE_1 }, b: { goal: 'fail', rules: 'fail', rationale: BROKE_1 },
+    c: { goal: 'fail', rules: 'fail', rationale: BROKE_2 }, d: { goal: 'fail', rules: 'fail', rationale: BROKE_UNNAMED }, e: { goal: 'pass', rules: 'pass' } }));
+  assert.equal(BREAKDOWN_TEXT(top), 'Запрос выполнен: 2 из 5. Правила промпта нарушены: 4 из 5, из них правило 1 — 2.', 'the strict top count names the rule');
+  assert.equal(top.headline.text, 'Справился в 1 из 5 проверенных ситуаций — 20%.');
+  // Controls are never counted in A, B, C, D or K.
+  const controlled = buildResultView(ruledRun({ a: { goal: 'pass', rules: 'fail', rationale: BROKE_1 }, b: { goal: 'fail', rules: 'fail', rationale: BROKE_1 },
+    ctl: { goal: 'pass', rules: 'fail', rationale: BROKE_2, control: true } }));
+  assert.equal(BREAKDOWN_TEXT(controlled), 'Запрос выполнен: 1 из 2. Правила промпта нарушены: 2 из 2, из них правило 1 — 2.');
+  // Goal unknown + rules fail: the request is undecided, the broken rule still counts.
+  const undecidedGoal = buildResultView(ruledRun({ a: { goal: 'unknown', rules: 'fail' }, b: { goal: 'pass', rules: 'unknown' } }));
+  assert.deepEqual(undecidedGoal.breakdown.goal, { met: 1, decided: 1 });
+  assert.deepEqual([undecidedGoal.breakdown.rules.broken, undecidedGoal.breakdown.rules.decided], [1, 1]);
+});
+
+test('a mixed set names the cards without prompt rules; a goal-only set says the rules are absent; legacy and never-run sets print nothing', () => {
+  const mixed = buildResultView(ruledRun({ a: { goal: 'pass', rules: 'fail' }, b: { goal: 'fail', rules: 'none' } }));
+  assert.equal(BREAKDOWN_TEXT(mixed), 'Запрос выполнен: 1 из 2. Правила промпта нарушены: 1 из 1. Без правил промпта: 1 — по ним считается только запрос.');
+  assert.equal(mixed.breakdown.withoutRules, 1);
+  const goalOnly = buildResultView(scored(3, 9));
+  assert.equal(BREAKDOWN_TEXT(goalOnly), 'Правил промпта в наборе нет — считается только запрос.');
+  assert.deepEqual(goalOnly.breakdown.goal, { met: 3, decided: 12 });
+  assert.deepEqual(goalOnly.breakdown.rules, { broken: 0, decided: 0, commonRule: null, commonRuleCount: 0 });
+  const legacy = buildResultView(run([card('c', { metrics: [{ ...replyQuality }] })], [attempt('c', { assessments: [vote('reply_quality', 'fail')] })]));
+  assert.equal(legacy.headline.decided, 1, 'the legacy card is still decided by the strict rule');
+  assert.equal(BREAKDOWN_TEXT(legacy), null);
+  const draft = buildResultView(run([card('a', { metrics: RULED_METRICS })], [], { phase: 'review' }));
+  assert.equal(BREAKDOWN_TEXT(draft), null);
+  assert.deepEqual(resultViewLines(draft), ['Прогон ещё не запускался.', 'Контроль: не задан.']);
+  const nothingDecided = buildResultView(scored(0, 0, 2));
+  assert.equal(BREAKDOWN_TEXT(nothingDecided), null, 'no decided part, no row');
+  // The row sits right under the number, before the small-sample caveat, as an ordinary line.
+  const rows = resultViewRows(mixed);
+  assert.deepEqual(rows.slice(0, 3).map(row => [row.role, row.indent, row.text]), [
+    ['lead', 0, 'Справился в 0 из 2 проверенных ситуаций — 0%.'],
+    ['line', 0, mixed.breakdown.text],
+    ['line', 0, mixed.headline.smallSample],
+  ]);
+});
+
+/** The stored run fae4ee59 under the new rule, in counts only: 9 double failures, 1 goal unknown + rules fail, 3 unusable; no rule named. */
+function acquiringRulesShape(): Experiment {
+  const specs: Record<string, RuledSpec> = {};
+  for (let i = 0; i < 9; i++) specs[`both${i}`] = { goal: 'fail', rules: 'fail' };
+  specs.split0 = { goal: 'unknown', rules: 'fail' };
+  specs.deviated0 = { goal: 'fail', rules: 'fail', fidelity: 'fail' };
+  specs.deviated1 = { goal: 'pass', rules: 'fail', fidelity: 'fail' };
+  specs.unclear0 = { goal: 'fail', rules: 'fail', fidelity: 'unknown' };
+  return ruledRun(specs, { sources: [], requirements: [] });
+}
+
+test('the acquiring run under the new rule reads 0 of 10 with the breakdown 0 of 9 and 10 of 10 right under it', () => {
+  const view = buildResultView(acquiringRulesShape());
+  assert.deepEqual(resultViewLines(view).slice(0, 2), ['Справился в 0 из 10 проверенных ситуаций — 0%.', 'Запрос выполнен: 0 из 9. Правила промпта нарушены: 10 из 10.']);
+  assert.equal(view.notMeasured.total, 3);
+  assert.deepEqual(view.notMeasured.reasons.map(reason => [reason.code, reason.count]), [['simulator_deviated', 2], ['simulator_unclear', 1]]);
+  assert.equal(view.failures.length, 10);
+  assert.deepEqual(new Set(view.failures.map(item => item.kind)), new Set(['both', 'rules']), 'nine double failures and one rules-only failure');
+  // A double failure can be a cause example.
+  const record = acquiringRulesShape();
+  record.failureModes = [{ id: 'support', name: 'Отправляет клиента в поддержку', description: 'd', trialIds: ['t-both0', 't-both1'] }];
+  assert.equal(buildResultView(record).topCauses[0]?.example.kind, 'both');
+});
+
+test('a control with prompt rules names both facts on its line; a broken rule there is never the alarm', () => {
+  const line = (specs: Record<string, RuledSpec>) => resultViewLines(buildResultView(ruledRun({ c: { goal: 'fail', rules: 'pass' }, ...specs }))).find(row => row.startsWith('Контроль:'));
+  const warning = (specs: Record<string, RuledSpec>) => buildResultView(ruledRun({ c: { goal: 'fail', rules: 'pass' }, ...specs })).control.warning;
+  assert.equal(line({ ctl: { goal: 'pass', rules: 'fail', control: true } }), 'Контроль: запрос выполнен ✓ · правила промпта нарушены ✗');
+  assert.equal(warning({ ctl: { goal: 'pass', rules: 'fail', control: true } }), null);
+  assert.equal(line({ ctl: { goal: 'pass', rules: 'pass', control: true } }), 'Контроль: запрос выполнен ✓ · правила промпта соблюдены ✓');
+  assert.equal(line({ ctl: { goal: 'pass', rules: 'unknown', control: true } }), 'Контроль: запрос выполнен ✓ · правила промпта не измерены');
+  assert.equal(line({ ctl: { goal: 'fail', rules: 'fail', control: true } }), 'Контроль: запрос не выполнен ✗ · правила промпта нарушены ✗');
+  assert.equal(warning({ ctl: { goal: 'fail', rules: 'fail', control: true } }), CONTROL_WARNING, 'the failed goal is still the alarm');
+  assert.equal(line({ ctl: { goal: 'unknown', rules: 'fail', control: true } }), 'Контроль: не измерен — судья не уверен: голоса разошлись.', 'an undecided goal keeps the phase-1 text');
+  assert.equal(line({ ctl: { goal: 'pass', rules: 'fail', control: true }, ctl2: { goal: 'pass', rules: 'pass', control: true } }),
+    'Контроль: пройдено 2 из 2 ✓ · правила промпта нарушены в 1 из 2');
+  assert.equal(line({ ctl: { goal: 'pass', rules: 'pass', control: true }, ctl2: { goal: 'pass', rules: 'pass', control: true } }),
+    'Контроль: пройдено 2 из 2 ✓ · правила промпта соблюдены в 2 из 2');
+  assert.equal(line({ ctl: { goal: 'pass', rules: 'pass', control: true }, ctl2: { goal: 'fail', rules: 'fail', control: true } }),
+    'Контроль: пройдено 1 из 2 · правила промпта нарушены в 1 из 2.');
+  // A control without prompt rules keeps the phase-1 line byte for byte.
+  assert.equal(line({ ctl: { goal: 'pass', rules: 'none', control: true } }), 'Контроль: пройден ✓');
+  assert.equal(line({ ctl: { goal: 'fail', rules: 'none', control: true } }), 'Контроль: не пройден ✗');
+  assert.equal(line({ ctl: { goal: 'pass', rules: 'none', control: true }, ctl2: { goal: 'fail', rules: 'none', control: true } }), 'Контроль: пройдено 1 из 2.');
+  const jargon = /goal_attainment|prompt_compliance|user_fidelity|unknown|рубрик|протокол|кластер|метрик|judge|seq/i;
+  for (const text of [line({ ctl: { goal: 'pass', rules: 'fail', control: true } })!, BREAKDOWN_TEXT(buildResultView(ruledRun({ a: { goal: 'pass', rules: 'fail', rationale: BROKE_1 } })))!]) {
+    assert.doesNotMatch(text, jargon, text);
+    assertPlainCopy(text);
+  }
+});
+
 test('a control that flipped in a repeat is marked on its line and left out of the instability count', () => {
   const { source, repeat } = repeatPair({ A: 'fail', B: 'pass' }, { A: 'pass', B: 'fail' });
   repeat.positiveControlScenarioIds = ['A'];
@@ -777,7 +907,8 @@ test('every unmeasured situation sits under the not-measured row with its phase-
 test('with nothing unmeasured there is no not-measured row and no situation row', () => {
   const measured = buildResultView(scored(2, 1));
   assert.deepEqual(resultViewLines(measured, { details: true }), [
-    'Справился в 2 из 3 проверенных ситуаций — 67%.', 'Мало данных: реальная доля где-то от 21% до 94%.', 'Контроль: не задан.',
+    'Справился в 2 из 3 проверенных ситуаций — 67%.', 'Правил промпта в наборе нет — считается только запрос.',
+    'Мало данных: реальная доля где-то от 21% до 94%.', 'Контроль: не задан.',
     // Deliberate change: one failure and two sampled passes make a review queue, so F6 is printed.
     'Согласие с судьёй: ещё не проверено.']);
   assert.ok(resultViewRows(measured).every(row => row.role !== 'situation'));

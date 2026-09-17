@@ -288,6 +288,7 @@ test('only the prompt-rule check failed: the expectation is the one violated rul
 });
 
 test('a failed goal names the violated prompt rule once, unless it is already shown', () => {
+  // Phase 03.1: the goal failed and the prompt-rule check failed in the same attempt, so this is «оба»; the rows are the goal rows.
   const extra = explainOne({ assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] });
   assert.deepEqual(extra.lines, [TITLE, EXPECTED, SAID, RULE_1, RULE_2, VIOLATED_6]);
   assert.equal(extra.rows.at(-1)?.role, 'violated');
@@ -296,6 +297,53 @@ test('a failed goal names the violated prompt rule once, unless it is already sh
   const counted = explainOne({ card: { requirementIds: ['refund-path', 'refund-money', 'no-promises'] }, assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] });
   assert.deepEqual(counted.lines.slice(3), [RULE_1, RULE_2, '  и ещё 1 правило', VIOLATED_6],
     'a rule hidden behind «и ещё» is still named as violated');
+});
+
+// ---- Phase 03.1: a double failure is «оба»; the phase-2 kinds keep their rows byte for byte. ----
+
+test('a failed goal with a broken rule in the same attempt is «оба»: the goal rows plus the rule, or a named unverified row', () => {
+  const named = explainOne({ assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] });
+  assert.equal(named.kind, 'both');
+  assert.deepEqual(named.lines, [TITLE, EXPECTED, SAID, RULE_1, RULE_2, VIOLATED_6], 'the goal rows, then the violated rule named once');
+  assert.equal(named.violated?.number, 6);
+  const shown = explainOne({ card: { requirementIds: ['refund-path', 'no-promises'] }, assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] });
+  assert.equal(shown.kind, 'both');
+  assert.deepEqual(shown.lines, [TITLE, EXPECTED, SAID, RULE_1, `  ${RULE_6}`], 'a rule already shown is not repeated');
+  const unnamed = explainOne({ assessments: [goalFail(), complianceFail('Агент нарушил правило о сроках.')] });
+  assert.equal(unnamed.kind, 'both');
+  assert.deepEqual(unnamed.lines, [TITLE, EXPECTED, SAID, RULE_1, RULE_2, `  Нарушены правила промпта — ${UNVERIFIED}`],
+    'when the rule cannot be named, the second half of the failure is still said');
+  assert.equal(unnamed.rows.at(-1)?.role, 'unverified');
+  assert.equal(unnamed.violated, undefined);
+  const tie = explainOne({ assessments: [goalFail(),
+    complianceFail(`${AGREED_RATIONALE_PREFIX} Нарушены «Не обещай сроки, которых нет в инструкциях» и «Отвечай только по инструкциям банка».`)] });
+  assert.equal(tie.kind, 'both');
+  assert.equal(tie.lines.at(-1), `  Нарушены правила промпта — ${UNVERIFIED}`, 'two candidate rules name nothing');
+
+  // The phase-2 kinds are unchanged: only the goal failed, or only the rules failed.
+  const goalOnly = explainOne({ assessments: [goalFail(), verdict('prompt_compliance', 'pass')] });
+  assert.equal(goalOnly.kind, 'goal');
+  assert.deepEqual(goalOnly.lines, [TITLE, EXPECTED, SAID, RULE_1, RULE_2]);
+  const rulesOnly = explainOne({ assessments: [verdict('goal_attainment', 'unknown'), complianceFail(QUOTES_RULE_6)] });
+  assert.equal(rulesOnly.kind, 'rules');
+  assert.deepEqual(rulesOnly.lines, [TITLE, `  Должен был: соблюдать правило 6 · Системный промпт, строка 3: «Не обещай сроки, которых нет в инструкциях.»`,
+    '  Сказал (реплика #1): «Срок — два дня.»', RULE_1, RULE_2], 'a rules-only failure never gets the «Нарушено» row');
+  // A legacy card without the goal rubric is explained as before and never becomes «оба».
+  const legacy = explainOne({ card: { metrics: [{ ...promptCompliance }] }, assessments: [complianceFail(QUOTES_RULE_6)] });
+  assert.equal(legacy.kind, 'goal');
+});
+
+test('violatedRuleNumber names the rule the explanation names, else null', () => {
+  assert.equal(typeof explain.violatedRuleNumber, 'function', 'explain.ts exports violatedRuleNumber (03.1)');
+  const named = run([card('refund')], [attempt('refund', [goalFail(), complianceFail(QUOTES_RULE_6)])]);
+  assert.equal(explain.violatedRuleNumber(named, named.trials[0]!), 6);
+  assert.equal(explain.violatedRuleNumber(named, named.trials[0]!), failureExplanation(named, named.scenarios[0]!)?.violated?.number);
+  const unnamed = run([card('refund')], [attempt('refund', [goalFail(), complianceFail('Агент нарушил правило о сроках.')])]);
+  assert.equal(explain.violatedRuleNumber(unnamed, unnamed.trials[0]!), null);
+  const kept = run([card('refund')], [attempt('refund', [goalFail(), verdict('prompt_compliance', 'pass')])]);
+  assert.equal(explain.violatedRuleNumber(kept, kept.trials[0]!), null, 'rules that were kept name nothing');
+  const machine = run([card('refund')], [attempt('refund', [goalFail(), complianceFail(`${AGREED_RATIONALE_PREFIX} Нарушено «Ответ оформляй в JSON с полем "answer"».`)])]);
+  assert.equal(explain.violatedRuleNumber(machine, machine.trials[0]!), null, 'a machine-format rule is never named');
 });
 
 test('quotes are shown whole with whitespace collapsed; no row is shortened', () => {
