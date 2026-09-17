@@ -76,7 +76,7 @@ return `<!doctype html>
 - The manager file has **no** `script-src` and no `<script>` (the audit file keeps its hashed script, :15-16, :185, :212).
 - Section/list helper style: `list(values)` at :30 (`<ul>${values.map(v => `<li>${escape(v)}</li>`).join('')}</ul>`).
 - Ids only from counters, like `trialId`/`eventId` (:19-20) but never built from record text.
-- Failure rows come from `FailureExplanation.rows` `[plan 02-04]` (roles `title | example | expected | said | rule | more | violated | cut | unverified`); disagreement data from `view.agreement.disagreements` `[plan 03-01]` and the `dis-verdicts` rows of `disagreementRows(view)` `[plan 03-03]`; change rows from `compareRows(view)` `[plan 04-04]`.
+- Failure rows come from `FailureExplanation.rows` `[plan 02-04]` (roles `title | example | expected | said | rule | more | violated | unverified` — verified in `src/explain.ts`; judge stays on v10, so there is no cut row; re-read `src/explain.ts` and `src/result-view.ts` and use only symbols that exist); disagreement data from `view.agreement.disagreements` `[plan 03-01]` and the `dis-verdicts` rows of `disagreementRows(view)` `[plan 03-03]`; change rows from `compareRows(view)` `[plan 04-04]`.
 
 ### `src/render/escape.ts` (moved)
 

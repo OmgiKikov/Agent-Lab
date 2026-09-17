@@ -23,7 +23,7 @@ extends: "02-UI-SPEC.md, 03-UI-SPEC.md, 04-UI-SPEC.md"
 > **This contract extends the approved `02-UI-SPEC.md`, `03-UI-SPEC.md` and `04-UI-SPEC.md`.** The following are reused **verbatim** and never reworded:
 > - V1 (C-104…C-109) and V2 (C-110…C-117, C-147);
 > - the phase-1 headline, small-sample, not-measured and control rows;
-> - F1 detail rows (C-01…C-13);
+> - F1 detail rows (C-01…C-12; C-13 не применяется: судья остаётся на v10);
 > - F6 (C-51…C-59) and F7 (C-60…C-63);
 > - K1 and the change rows with their reason words (C-129, C-132);
 > - the glyph words;
@@ -333,7 +333,7 @@ Agent Lab · Эквайринг-помощник · 16 сентября 2026, 18
 | rules ≤ 2 | `<p><span class="label">Правило <N> · <source>[, строка <L>]:</span> «<quote>»</p>` (C-08); C-09 and C-10 as plain `<p>` |
 | more | `<p class="label">и ещё <K> <правило\|правила\|правил></p>` (C-11) |
 | violated | `<p><span class="label">Нарушено правило <N> · <source>[, строка <L>]:</span> «<quote>»</p>` (C-12) |
-| cut | `<p class="label">Оценено до реплики #<D>: дальше симулятор отклонился от диалога.</p>` (C-13) |
+| cut | не применяется: судья остаётся на v10 (C-13 is not rendered; the real explanation rows have no cut role) |
 | agent reply | `<details><summary>Что ответил агент (реплика #<seq>, личные данные скрыты)</summary><blockquote>«<redacted+guarded Y>»</blockquote></details>` |
 | reply variants | C-05 → summary `Что ответил агент (реплика #<seq>, судья не указал реплику; личные данные скрыты)`; C-06 → `<p class="label">Ответ агента: объяснение не подтверждено цитатой</p>` with no details; C-07 → `<p class="label">Ответ агента не записан.</p>` |
 

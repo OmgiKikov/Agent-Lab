@@ -551,7 +551,7 @@ All of these were verified on 2026-09-17 with Chrome for Testing 151.0.7922.34: 
 | A6 | A 20-character window is the right leak threshold (CONTEXT fixes 20) and the 25-character title fallback is reasonable | Pattern 3 | Too many «Ситуация N» titles; tune after the first render |
 | A7 | «Demo run after phase 2» and «run with agreement (copy)» will exist by execution time; today only fae4ee59, a92fd6ae, 61521e0d exist | Validation | Use `test/helpers/demo-record.ts` plus a synthetic agreement fixture instead |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Which date to show: run start or result review?**
    - What we know: `createdAt` is the start; `reviewedAt` exists for reviewed runs.
