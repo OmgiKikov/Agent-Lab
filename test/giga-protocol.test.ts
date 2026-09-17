@@ -104,8 +104,21 @@ test('tool call and its result travel back with the original tool state', () => 
 
   assert.deepEqual(payload.messages.slice(1), [
     { role: 'assistant', content: [{ function_call: { name: 'lookup_record', arguments: { id: 'A-1024' } } }], tools_state_id: 'state-7' },
-    { role: 'function', content: [{ function_result: { name: 'lookup_record', result: '{"status":"packed"}' } }], tools_state_id: 'state-7' },
+    { role: 'tool', content: [{ function_result: { name: 'lookup_record', result: { status: 'packed' } } }], tools_state_id: 'state-7' },
   ]);
+});
+
+test('a tool result that is not JSON travels back as plain text', () => {
+  const payload = buildChatRequest('GigaChat-3-Pro', {
+    messages: [
+      { role: 'user', content: 'Check A-1024', timestamp: 1 },
+      { role: 'toolResult', toolCallId: 'state-7#0', toolName: 'lookup_record', isError: false,
+        content: [{ type: 'text', text: 'not json' }] },
+    ],
+  } as never, {});
+
+  assert.deepEqual(payload.messages[1],
+    { role: 'tool', content: [{ function_result: { name: 'lookup_record', result: 'not json' } }], tools_state_id: 'state-7' });
 });
 
 const model = { id: 'GigaChat-3-Pro', api: 'giga-v2', provider: 'giga' } as GigaModel;

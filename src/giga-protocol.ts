@@ -43,6 +43,13 @@ function textOf(content: GigaMessage['content']): string {
   return content.filter(part => part.type === 'text').map(part => (part as { text: string }).text).join('\n');
 }
 
+// Шлюз ждёт result объектом (видно в записи вызовов официального SDK), а инструменты Pi отдают
+// результат текстом. Нераспознанный текст оставляем как есть: пусть решает шлюз, а не мы.
+function toolResult(text: string): unknown {
+  try { return JSON.parse(text); }
+  catch { return text; }
+}
+
 /** Идентификатор вызова собран как `${tools_state_id}#${индекс}`, чтобы состояние читалось обратно из истории. */
 function stateOf(toolCallId: string): { tools_state_id?: string } {
   const state = toolCallId.split('#')[0];
@@ -54,9 +61,10 @@ export function buildChatRequest(modelId: string, context: GigaContext, options:
   if (context.systemPrompt) messages.push({ role: 'system', content: [{ text: context.systemPrompt }] });
   for (const message of context.messages) {
     if (message.role === 'toolResult') {
+      // Роль именно tool: с role: 'function' шлюз отвергает запрос, несущий результат инструмента.
       messages.push({
-        role: 'function',
-        content: [{ function_result: { name: message.toolName, result: textOf(message.content) } }],
+        role: 'tool',
+        content: [{ function_result: { name: message.toolName, result: toolResult(textOf(message.content)) } }],
         ...stateOf(message.toolCallId),
       });
       continue;
