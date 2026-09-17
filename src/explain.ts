@@ -14,6 +14,11 @@ import { pluralForm } from './plural.js';
  * experiment.ts, quality.ts or result-view.ts.
  */
 export const UNVERIFIED = 'объяснение не подтверждено цитатой';
+/**
+ * The status line that stands where an agent reply would be quoted. It is never wrapped in «…»:
+ * a surface that quoted it would state that the agent said these words.
+ */
+export const UNVERIFIED_REPLY = 'реплика агента не подтверждена цитатой';
 
 export type ExplanationRole = 'title' | 'example' | 'expected' | 'said' | 'rule' | 'more' | 'violated' | 'unverified';
 export interface ExplanationRow { role: ExplanationRole; indent: number; text: string }

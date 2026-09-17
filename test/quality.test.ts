@@ -698,9 +698,25 @@ test('a cause example that cannot be quoted says so instead of showing a judge r
   failed.assessments = [{ metricId: 'goal', result: 'fail', rationale: 'Агент ошибся.', evidence: [1], citations: [{ seq: 1, quote: 'этого в ответе нет' }] }];
   const q = qualitySummary(record({ scenarios: [scenario('a')], trials: [failed],
     failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
-  assert.equal(q.causes[0]?.example?.quote, 'объяснение не подтверждено цитатой');
+  assert.equal(q.causes[0]?.example?.quote, 'реплика агента не подтверждена цитатой');
   assert.equal(q.causes[0]?.example?.seq, undefined);
+  assert.equal(q.causes[0]?.example?.verified, false, 'the gap travels with the example, not inside the quote');
   assert.ok(!JSON.stringify(q.causes[0]).includes('Агент ошибся'));
+
+  // No surface may wrap that status line in «…»: doing so states that the agent said it.
+  const causeLine = qualityLines(q).causes[0]!;
+  assert.match(causeLine, /Карточка a: реплика агента не подтверждена цитатой/);
+  assert.doesNotMatch(causeLine, /«реплика агента не подтверждена цитатой»/);
+});
+
+test('a verified reply is still quoted, and only a verified one', () => {
+  const failed = trial('t1', 'a', 'fail', 'fail');
+  failed.checks = [];
+  const q = qualitySummary(record({ scenarios: [scenario('a', false)], trials: [failed],
+    failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
+  assert.equal(q.causes[0]?.example?.verified, true);
+  assert.equal(q.causes[0]?.example?.quote, 'ok');
+  assert.match(qualityLines(q).causes[0]!, /Карточка a: «ok»/);
 });
 
 test('the flattened cause quote is clamped for the report while the board keeps the whole reply', () => {

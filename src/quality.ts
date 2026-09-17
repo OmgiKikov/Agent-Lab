@@ -3,7 +3,7 @@ import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, 
 import { agentMetricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
 import { cardOutcome, goalCardOutcome, humanFindings, isAgentFailure, judgeModel as runJudgeModel, verdictSummary, type VerdictSummary } from './comparison.js';
 import { exclusionCounts, pluralForm } from './result-view.js';
-import { failureExplanation, ruleRegister, ruleText, UNVERIFIED, type FailureExplanation } from './explain.js';
+import { failureExplanation, ruleRegister, ruleText, UNVERIFIED, UNVERIFIED_REPLY, type FailureExplanation } from './explain.js';
 import { draftHash } from './experiment.js';
 
 /*
@@ -23,8 +23,12 @@ export interface QualityMetric {
 }
 export interface QualityCause {
   name: string; description: string; stage?: string; dialogues: number;
-  /** The card title and one checked reason from the first dialogue of the cluster; never a clipped rationale. */
-  example?: { trialId: string; card: string; quote: string; seq?: number; explanation?: FailureExplanation };
+  /**
+   * The card title and one checked reason from the first dialogue of the cluster; never a clipped
+   * rationale. `verified: false` means the record could not show what the agent said, so `quote`
+   * holds a status line: a surface must print it plainly, never inside «…».
+   */
+  example?: { trialId: string; card: string; quote: string; seq?: number; verified: boolean; explanation?: FailureExplanation };
   promptQuotes: string[];
 }
 export interface QualityCardScore {
@@ -527,15 +531,19 @@ export function shorten(text: string, limit = 220): string {
  * otherwise the verified explanation of the failure — its reply quote, or the named «не подтверждено»
  * when the record cannot show one. The judge's rationale is never quoted here (CTX-08).
  */
-function causeExample(record: Experiment, trial: Trial): { quote: string; seq?: number; explanation?: FailureExplanation } {
+function causeExample(record: Experiment, trial: Trial): { quote: string; seq?: number; verified: boolean; explanation?: FailureExplanation } {
   const check = trial.checks.find(c => !c.passed);
-  if (check) return { quote: check.evidence || check.description };
+  if (check) return { quote: check.evidence || check.description, verified: true };
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   const explanation = scenario ? failureExplanation(record, scenario, trial) : null;
-  if (!explanation) return { quote: trial.reason };
+  if (!explanation) return { quote: trial.reason, verified: true };
+  // The gap travels with the example instead of being smuggled inside `quote`: an exporter that
+  // wrapped the sentinel in «…» would state that the agent uttered it.
   // The explanation keeps the whole reply for the board, which wraps it; the flattened quote is what
   // the HTML and Markdown reports inline into the cause list, so only that copy is clamped.
-  return { quote: shorten(explanation.said?.quote ?? UNVERIFIED), ...(explanation.said ? { seq: explanation.said.seq } : {}), explanation };
+  return explanation.said
+    ? { quote: shorten(explanation.said.quote), seq: explanation.said.seq, verified: true, explanation }
+    : { quote: UNVERIFIED_REPLY, verified: false, explanation };
 }
 
 function causes(record: Experiment, v: VerdictSummary): QualityCause[] {
@@ -643,7 +651,9 @@ export function qualityLines(q: QualitySummary): { headline: string; coverage: s
     rag: !(q.rag.complete || q.rag.partial) ? [] : [
       `RAG-контекст: полный в ${q.rag.complete} из ${q.scope.dialogues} диалогов; частичный ${q.rag.partial}; отсутствует ${q.rag.missing}. Диагностика отдельно от accuracy; это указания для разбора, не доказанные первопричины.`,
       ...q.rag.signals.slice(0, 3).map(signal => `${signal.trialId}: ${signal.explanation}`)],
-    causes: q.causes.slice(0, 3).map((c, i) => `${i + 1}. ${c.name} — ${dialogues(c.dialogues)}${c.example ? `. ${c.example.card}: «${c.example.quote}»` : ''}${c.promptQuotes[0] ? ` · правило промпта: «${c.promptQuotes[0]}»` : ''}`),
+    // An unverified example is a status line about the record, not something the agent said, so it
+    // is printed plainly; only a checked quote goes inside «…».
+    causes: q.causes.slice(0, 3).map((c, i) => `${i + 1}. ${c.name} — ${dialogues(c.dialogues)}${c.example ? `. ${c.example.card}: ${c.example.verified ? `«${c.example.quote}»` : c.example.quote}` : ''}${c.promptQuotes[0] ? ` · правило промпта: «${c.promptQuotes[0]}»` : ''}`),
     judge: `Судья: ${q.judge.label}.`,
     queue: !q.humanQueue.total ? 'Ручная разметка не требуется: спорных диалогов нет.'
       : `Разметить человеку: ${q.humanQueue.total} (неясных ${q.humanQueue.unknownJudgments}, расхождений ${q.humanQueue.disagreements}, пометок симулятора ${q.humanQueue.simulatorFlags}). Попросите разобрать только спорный диалог в чате или откройте его на доске.`,

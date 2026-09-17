@@ -57,6 +57,37 @@ test('coincident replies with different scores are visible in Pi and exported re
   } finally { board.dispose(); }
 });
 
+test('an unverified reply is a status line in the exported report, never a quotation', async () => {
+  const record = await fixture();
+  record.phase = 'results_review';
+  record.scenarios = [record.scenarios[0]!];
+  const card = record.scenarios[0]!;
+  card.checks = [];
+  card.metrics = [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'd', passCriteria: 'p', failCriteria: 'f' }];
+  // The judge cites words the stored reply does not contain, so the record cannot show what the agent said.
+  record.trials = [{ id: 'unverified_trial', revisionId: 'revision-1', scenarioId: card.id, familyId: card.familyId,
+    repeat: 0, userMode: 'reactive', split: 'dev', manifestHash: 'hash', outcome: 'ungraded', reason: '', checks: [],
+    events: [{ seq: 0, type: 'user', text: 'Вопрос' }, { seq: 1, type: 'assistant', text: 'Ответ агента.' }],
+    initialState: card.initialState, finalState: card.initialState, elapsedMs: 1, usage: emptyUsage(),
+    assessments: [{ metricId: 'goal', result: 'fail', rationale: 'Обоснование судьи.', evidence: [1],
+      citations: [{ seq: 1, quote: 'этих слов в ответе нет' }] }] }];
+  record.failureModes = [{ id: 'cluster', name: 'Причина', description: 'Описание.', trialIds: ['unverified_trial'] }];
+  record.settings.userModes = ['reactive']; record.settings.repeats = 1;
+
+  const bundle = await evidenceBundle(record, { get: async () => record, traceJournal: async () => '' });
+  const html = htmlReport(record);
+  const markdown = markdownReport(bundle);
+  const whyHtml = html.match(/<section id="why">[\s\S]*?<\/section>/)?.[0] ?? '';
+  const whyMarkdown = markdown.split('### Почему не справился')[1]?.split('\n###')[0] ?? '';
+  for (const why of [whyHtml, markdown && whyMarkdown]) {
+    assert.ok(why, 'the cause list is exported');
+    assert.match(why, /реплика агента не подтверждена цитатой/);
+    // The customer reads this list first: quoting the sentinel would say the agent uttered it.
+    assert.doesNotMatch(why, /«реплика агента не подтверждена цитатой»/);
+    assert.doesNotMatch(why, /Обоснование судьи/, 'the judge rationale is never the cause quote');
+  }
+});
+
 async function fixture(): Promise<Experiment> {
   const input = demoInput();
   const sources = input.materials.map((m, i) => ({ ...m, id: `source-${i + 1}`, hash: fingerprint(m.content) }));
