@@ -819,3 +819,67 @@ test('CLI summary: block, top causes, every failure, then the details; the old �
     assert.ok(!lines.includes('Почему:'));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+// ---- F6: the agreement row at every size, fed by quick marks written straight into the record. ----
+/** `saw` is the judgment the person was shown; `verdict` is the answer they gave. */
+const quick = (trialId: string, verdict: HumanReview['verdict'], saw: 'pass' | 'fail'): HumanReview =>
+  ({ ...review(trialId, verdict, { metricId: 'goal_attainment' }), source: 'quick', judgeVerdict: saw });
+const agreementRow = (record: Experiment) => resultViewLines(buildResultView(record)).find(line => line.startsWith('Согласие с судьёй'));
+/** `agreed` failures answered right, one more answered wrong; the same for passes. */
+function marked(passes: number, failures: number, agreedFailures: number, agreedPasses: number): Experiment {
+  const record = scored(passes, failures);
+  const reviews: HumanReview[] = [];
+  for (let i = 0; i < failures; i++) reviews.push(quick(`t-f${i}`, i < agreedFailures ? 'fail' : 'pass', 'fail'));
+  for (let i = 0; i < passes; i++) reviews.push(quick(`t-p${i}`, i < agreedPasses ? 'pass' : 'fail', 'pass'));
+  return { ...record, humanReviews: reviews };
+}
+
+test('the agreement row follows the number of checks: no percent below 10, «мало проверок» below 20', () => {
+  assert.equal(agreementRow(scored(1, 1)), 'Согласие с судьёй: ещё не проверено.', 'M = 0 with a queue');
+  assert.equal(agreementRow({ ...scored(1, 1), humanReviews: [quick('t-f0', 'fail', 'fail')] }),
+    'Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы: 1 из 1 · успехи ещё не проверены).', 'M = 1 keeps «N из M проверенных»');
+  assert.equal(agreementRow(marked(1, 1, 1, 0)), 'Согласие с судьёй: 1 из 2 проверенных · мало проверок (провалы: 1 из 1 · успехи: 0 из 1).', 'M = 2');
+  assert.equal(agreementRow(marked(0, 9, 8, 0)), 'Согласие с судьёй: 8 из 9 проверенных · мало проверок (провалы: 8 из 9 · успехов нет).', 'M = 9');
+  assert.equal(agreementRow(marked(1, 9, 8, 1)), 'Согласие с судьёй: 9 из 10 проверенных — 90% · мало проверок (провалы: 8 из 9 · успехи: 1 из 1).', 'M = 10');
+  assert.equal(agreementRow(marked(2, 17, 16, 2)), 'Согласие с судьёй: 18 из 19 проверенных — 95% · мало проверок (провалы: 16 из 17 · успехи: 2 из 2).', 'M = 19');
+  assert.equal(agreementRow(marked(3, 17, 16, 2)), 'Согласие с судьёй: 18 из 20 проверенных — 90% (провалы: 16 из 17 · успехи: 2 из 3).', 'M = 20');
+  const rows = resultViewLines(buildResultView(marked(0, 9, 8, 0)));
+  assert.ok(rows.every(line => !line.includes('каппа') && !line.toLowerCase().includes('kappa')), 'no kappa, no error matrix');
+});
+
+test('the agreement parts name what is still unchecked instead of counting it as agreement', () => {
+  const failuresOnly = { ...scored(1, 1), humanReviews: [quick('t-f0', 'fail', 'fail')] };
+  assert.equal(agreementRow(failuresOnly), 'Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы: 1 из 1 · успехи ещё не проверены).');
+  const passesOnly = { ...scored(1, 1), humanReviews: [quick('t-p0', 'pass', 'pass')] };
+  assert.equal(agreementRow(passesOnly), 'Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы ещё не проверены · успехи: 1 из 1).');
+  const noFailures = { ...scored(2, 0), humanReviews: [quick('t-p0', 'pass', 'pass')] };
+  assert.equal(agreementRow(noFailures), 'Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалов нет · успехи: 1 из 1).');
+});
+
+test('the agreement tail rows appear only under their condition and in one fixed order', () => {
+  const record = { ...scored(1, 2), humanReviews: [quick('t-f0', 'fail', 'fail'), quick('t-f1', 'unknown', 'fail'), quick('t-p0', 'pass', 'fail')] };
+  // The unsure mark also makes its card unmeasured, so only the agreement block is compared here.
+  const lines = resultViewLines(buildResultView(record));
+  assert.deepEqual(lines.slice(lines.findIndex(line => line.startsWith('Согласие'))), [
+    'Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы: 1 из 1 · успехи ещё не проверены).',
+    '  Цель — согласие в 9 случаях из 10.',
+    '  Человек не смог решить: 1.',
+    '  Отметки устарели после смены судьи: 1.',
+  ]);
+  const goalOnly = resultViewLines(buildResultView(marked(0, 1, 1, 0)));
+  assert.deepEqual(goalOnly.filter(line => line.startsWith('  ')), ['  Цель — согласие в 9 случаях из 10.']);
+  assert.ok(!resultViewLines(buildResultView(scored(1, 1))).some(line => line.startsWith('  Цель')), 'no goal row before the first check');
+});
+
+test('stale marks alone report themselves, and a run with nothing to check keeps the old block', () => {
+  const undecided = scored(0, 0, 1);
+  const stale = { ...undecided, sourceEvidence: { runId: 'run-0', trials: undecided.trials, humanReviews: [quick('t-u0', 'fail', 'fail')] } };
+  const lines = resultViewLines(buildResultView(stale));
+  assert.equal(agreementRow(stale), 'Согласие с судьёй: ещё не проверено.');
+  assert.ok(lines.includes('  Отметки устарели после смены судьи: 1.'));
+  assert.ok(!lines.some(line => line.startsWith('  Цель')));
+  const empty = buildResultView(scored(0, 0, 2));
+  assert.ok(resultViewLines(empty, { details: true }).every(line => !line.includes('Согласие с судьёй')), 'nothing to check prints no agreement row');
+  assert.deepEqual(resultViewLines(empty), ['Проверенных ситуаций нет.', 'Не измерено: 2 — судья не уверен: голоса разошлись.',
+    '  ? Ситуация u0 — судья не уверен: голоса разошлись', '  ? Ситуация u1 — судья не уверен: голоса разошлись', 'Контроль: не задан.']);
+});

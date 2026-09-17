@@ -57,16 +57,17 @@ function recordedResult(trial: Trial, metricId: string | undefined): 'pass' | 'f
   return metricId ? trial.assessments?.find(a => a.metricId === metricId)?.result : undefined;
 }
 
-/** Non-control trials with a primary metric the judge decided, paired with that decision. */
-function decided(record: Experiment): { trial: Trial; scenario: Scenario; metricId: string; base: 'pass' | 'fail' }[] {
+interface Situation { trial: Trial; scenario: Scenario; metricId: string; base: 'pass' | 'fail' | 'unknown' | undefined }
+
+/** Non-control trials that have a primary metric, in record order; `base` is what the judge said about it. */
+function situations(record: Experiment): Situation[] {
   const controls = new Set(record.positiveControlScenarioIds ?? []);
   return record.trials.flatMap(trial => {
     const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
     if (!scenario || controls.has(scenario.id)) return [];
     const metricId = primaryMetricId(scenario, trial);
-    const base = recordedResult(trial, metricId);
-    if (!metricId || (base !== 'pass' && base !== 'fail')) return [];
-    return [{ trial, scenario, metricId, base }];
+    if (!metricId) return [];
+    return [{ trial, scenario, metricId, base: recordedResult(trial, metricId) }];
   });
 }
 
@@ -79,7 +80,7 @@ function decided(record: Experiment): { trial: Trial; scenario: Scenario; metric
 export function agreementSample(record: Experiment): string[] {
   if (runningPhases.has(record.phase)) return [];
   const observed = observedRecord(record);
-  const passed = decided(observed).filter(item => item.base === 'pass').map(item => item.trial.id);
+  const passed = situations(observed).filter(item => item.base === 'pass').map(item => item.trial.id);
   if (passed.length <= PASS_SAMPLE) return passed;
   return passed.map(id => ({ id, key: fingerprint({ run: record.id, trial: id }) }))
     .sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
@@ -97,8 +98,11 @@ function answerOf(verdict: HumanReview['verdict'], judged: 'pass' | 'fail'): Agr
 export function judgeAgreement(input: Experiment): JudgeAgreement {
   if (input.workflow !== 'evaluate' || runningPhases.has(input.phase)) return empty();
   const record = observedRecord(input);
-  const rows = decided(record);
+  const rows = situations(record);
   const latest = latestHumanReviews(record);
+  // A reassessment is a new judgment by definition, so a mark that only lives in the source run
+  // refers to a verdict that has been replaced. It counts as stale, never as a check.
+  const carried = new Map((input.sourceEvidence?.humanReviews ?? []).filter(item => item.source === 'quick').map(item => [`${item.trialId}|metric:${item.metricId}`, item]));
   const sampledPasses = agreementSample(input);
   const sampled = new Set(sampledPasses);
   const result = empty();
@@ -106,22 +110,30 @@ export function judgeAgreement(input: Experiment): JudgeAgreement {
   result.sampledPasses = sampledPasses;
   const current = new Set<string>();
   for (const { trial, scenario, metricId, base } of rows) {
-    const review = latest.get(`${trial.id}|metric:${metricId}`);
-    if (review?.source !== 'quick') continue;
-    const answer = answerOf(review.verdict, review.judgeVerdict === 'pass' || review.judgeVerdict === 'fail' ? review.judgeVerdict : base);
+    const key = `${trial.id}|metric:${metricId}`;
+    const own = latest.get(key);
+    // A later full review on the same rubric supersedes the quick mark: the pair stops counting.
+    const review = own ? (own.source === 'quick' ? own : undefined) : carried.get(key);
+    if (!review) continue;
+    const saw = review.judgeVerdict;
+    if (saw !== 'pass' && saw !== 'fail') continue;
+    const answer = answerOf(review.verdict, saw);
     if (!answer) continue;
-    const stale = review.judgeVerdict !== base;
-    result.marks.push({ trialId: trial.id, scenarioId: scenario.id, title: scenario.title, answer, judge: base, note: review.note, stale });
+    const judged = trial.judgeReceipt ?? trial.judgeAudit;
+    const stale = !own || saw !== base
+      || (review.judge?.protocolHash ?? null) !== (judged?.protocolHash ?? null)
+      || (review.judge?.inputHash ?? null) !== (judged?.inputHash ?? null);
+    result.marks.push({ trialId: trial.id, scenarioId: scenario.id, title: scenario.title, answer, judge: saw, note: review.note, stale });
     if (stale) { result.stale++; continue; }
     current.add(trial.id);
     if (answer === 'unsure') { result.unsure++; continue; }
-    const group = base === 'fail' ? result.failures : result.passes;
+    const group = saw === 'fail' ? result.failures : result.passes;
     group.checked++; result.checked++;
     if (answer === 'agree') { group.agreed++; result.agreed++; }
     if (sampled.has(trial.id)) result.sampleChecked++;
     if (answer === 'disagree') {
       result.disagreements.push({ trialId: trial.id, scenarioId: scenario.id, title: scenario.title,
-        judge: base, human: base === 'fail' ? 'pass' : 'fail', note: review.note });
+        judge: saw, human: saw === 'fail' ? 'pass' : 'fail', note: review.note });
     }
   }
   result.unmarked = [...result.queueFailures, ...sampledPasses].filter(id => !current.has(id));

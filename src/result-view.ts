@@ -238,7 +238,7 @@ function controlLine(view: ResultView): string {
  * neither a review queue nor a single mark. Fed only by `view.agreement`, so every surface words
  * it identically. No percent below PERCENT_FROM checks and «мало проверок» below SMALL_SAMPLE:
  * a share of a handful of marks is not a share. The 9-of-10 target is worded as a goal, never as
- * a reached bar, and no kappa or error matrix is shown.
+ * a reached bar, and no statistical coefficient or confusion matrix is shown.
  */
 function agreementRows(view: ResultView): ResultRow[] {
   const found = view.agreement;
