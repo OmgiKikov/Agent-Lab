@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 4
 current_phase_name: Экран результата в Pi
 status: executing
-stopped_at: Completed 03.1-04-PLAN.md
-last_updated: "2026-09-17T21:20:57.969Z"
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-09-17T22:22:36.603Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 4 execution started
-state_head: ae98e04c3470e637e979cd5dad93f67128041a63
+state_head: d9c51d608bc0e3b5294e02e746ae8e897f994be2
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 54
-  completed_plans: 32
+  completed_plans: 33
   percent: 13
 ---
 
@@ -28,8 +28,8 @@ See: .planning/PROJECT.md (updated 2026-09-16)
 ## Current Position
 
 Phase: 4 (Экран результата в Pi) — EXECUTING
-Plan: 1 of 10
-Status: Executing Phase 4
+Plan: 2 of 10
+Status: Ready to execute
 Last activity: 2026-09-18 — Phase 4 execution started
 
 Progress: [█░░░░░░░░░] 13%
@@ -90,6 +90,7 @@ Progress: [█░░░░░░░░░] 13%
 | Phase 03.1 P02 | 45 min | 3 tasks | 12 files |
 | Phase 03.1 P03 | 40 min | 2 tasks | 4 files |
 | Phase 03.1 P04 | 29 min | 2 tasks | 2 files |
+| Phase 04 P01 | 37 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -167,6 +168,9 @@ Recent decisions affecting current work:
 - [Phase 03.1]: 03.1-04: dist/ built from 729e61a (03.1 complete, 558/558) and swapped by rename after a pgrep + lock check; the phase-3 build is kept at .gsd/dist-before-03.1-20260917-235837 — roll forward only after the first real mark
 - [Phase 03.1]: 03.1-04: the new rule proven on the real acquiring runs — 0/10/3, 0/9/6, 0/1/0 with breakdowns goal=0/9 rules=10/10 K=34:3, goal=1/8 rules=9/9 K=34:2, goal=0/1 rules=1/1 K=34:1 and control pass/fail; scripted y/n(select)/s on 0700 copies wrote 6/6/2 stamped marks, headline 0/10, 0/9, 1/1; originals byte-identical, 0 real stamps
 - [Phase 03.1]: 03.1-04: the phase-2 «0 unverified rows» claim is retired for the acquiring runs — kind «оба» prints «Нарушены правила промпта — объяснение не подтверждено цитатой» where the judge did not name the rule (fae4ee59 7 rows, a92fd6ae 4); pi-surface-check now cuts CLI-only detail rows at «Не измерено по причинам:» or «нестабильно: …»
+- [Phase 4]: 04-01: agent_lab_run session details hold { kind: 'agent-lab/verdict', version: 1, runId, resultKey } only (REV-01); the view lives in an in-memory cache keyed by runId:resultHash and a miss draws «Прогон <id8> не найден в .agent-lab — блок нельзя показать.» (C-190); the record rebuild is 04-03
+- [Phase 4]: 04-01: the collapsed block drops only situation rows from resultViewRows (alarm, agreement and agreement-tail stay); the expanded block also prints the no-failures sentence; V2 queue counts are derived from view.agreement (unmarked ∩ queueFailures / sampledPasses, current unsure marks) — no new agreement field
+- [Phase 4]: 04-01: the render lint (test/theme.test.ts) treats comments as code — GLYPH is the only place a glyph is spelled in extensions/render/**; NO_FAILURES_TEXT lives in src/verdict.ts byte-identical to the cards.ts literal until 04-06 moves the tab
 
 ### Pending Todos
 
@@ -219,6 +223,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T21:05:09.149Z
-Stopped at: Completed 03.1-04-PLAN.md
+Last session: 2026-09-17T22:22:36.541Z
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None
