@@ -177,6 +177,26 @@ export function failureExplanation(record: Experiment, scenario: Scenario, trial
   const kind = goalFailed(chosen) ? 'goal' : rulesFailed(chosen) ? 'rules' : null;
   if (!kind) return null;
 
+  const cited = kind === 'rules' ? assessment(chosen, COMPLIANCE)
+    : assessment(chosen, GOAL) ?? chosen.assessments?.find(item => item.result === 'fail' && agentMetrics.includes(item.metricId));
+  const details = detailRows(record, scenario, chosen, kind, cited);
+  const rows: ExplanationRow[] = [{ role: 'title', indent: 0, text: `✗ ${collapse(scenario.title)}` }, ...details.rows];
+  return {
+    scenarioId: scenario.id, trialId: chosen.id, title: scenario.title, kind, said: details.said,
+    rules: details.rules, unverifiedRules: details.unverifiedRules, moreRules: details.moreRules,
+    ...(details.violated ? { violated: details.violated } : {}), rows, lines: rowsToLines(rows),
+  };
+}
+
+type DetailKind = FailureExplanation['kind'] | 'pass';
+interface Details extends Pick<FailureExplanation, 'said' | 'rules' | 'unverifiedRules' | 'moreRules' | 'violated'> { rows: ExplanationRow[] }
+
+/**
+ * The F1 detail rows of one attempt, without its title: what the agent had to do, what it said
+ * (the reply `cited` points at), the owner rules and, for a failed goal, the violated prompt rule.
+ * A pass never names a violated rule.
+ */
+function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind: DetailKind, cited: MetricAssessment | undefined): Details {
   const register = ruleRegister(record);
   const requirements = new Map(record.requirements.map(item => [item.id, item]));
   // Internal machine-format prompt rules are never shown or counted; their register numbers stay.
@@ -187,9 +207,9 @@ export function failureExplanation(record: Experiment, scenario: Scenario, trial
   const listed: (RuleRef | null)[] = [...rules, ...Array<null>(unverifiedRules).fill(null)];
   const shownRules = listed.slice(0, 2);
   const moreRules = listed.length - shownRules.length;
-  const violated = violatedRule(record, chosen, register);
+  const violated = kind === 'pass' ? undefined : violatedRule(record, chosen, register);
 
-  const rows: ExplanationRow[] = [{ role: 'title', indent: 0, text: `✗ ${collapse(scenario.title)}` }];
+  const rows: ExplanationRow[] = [];
   const criteria = collapse(scenario.successCriteria ?? '');
   const firstRule = shownRules.find((rule): rule is RuleRef => rule !== null);
   if (kind === 'rules') {
@@ -204,8 +224,6 @@ export function failureExplanation(record: Experiment, scenario: Scenario, trial
     rows.push({ role: 'unverified', indent: 2, text: 'Должен был: ожидание не записано в ситуации.' });
   }
 
-  const cited = kind === 'rules' ? assessment(chosen, COMPLIANCE)
-    : assessment(chosen, GOAL) ?? chosen.assessments?.find(item => item.result === 'fail' && agentMetrics.includes(item.metricId));
   const { row, said } = saidRow(chosen, cited);
   rows.push(row);
 
@@ -217,10 +235,21 @@ export function failureExplanation(record: Experiment, scenario: Scenario, trial
   if (kind === 'goal' && violated && !shownRules.some(rule => rule?.number === violated.number)) {
     rows.push({ role: 'violated', indent: 2, text: ruleText(violated, 'Нарушено правило') });
   }
-  return {
-    scenarioId: scenario.id, trialId: chosen.id, title: scenario.title, kind, said, rules, unverifiedRules, moreRules,
-    ...(violated ? { violated } : {}), rows, lines: rowsToLines(rows),
-  };
+  return { rows, said, rules, unverifiedRules, moreRules, ...(violated ? { violated } : {}) };
+}
+
+/**
+ * The evidence of the agreement block (UI-SPEC F10): the F1 detail rows of one attempt, read on
+ * the judge's recorded judgment only. Every human review is removed first, so the owner's own mark
+ * can neither hide nor rewrite the evidence the owner is asked to judge.
+ */
+export function situationEvidence(record: Experiment, scenario: Scenario, trial: Trial, metricId: string): ExplanationRow[] {
+  const judged: Experiment = { ...record, humanReviews: [] };
+  const cited = assessment(trial, metricId);
+  if (cited?.result !== 'fail') return [];
+  const explanation = failureExplanation(judged, scenario, trial);
+  if (explanation) return explanation.rows.filter(row => row.role !== 'title');
+  return detailRows(judged, scenario, trial, 'goal', cited).rows;
 }
 
 /** The same block as a cause example: titled `Пример:` and indented three more columns. */

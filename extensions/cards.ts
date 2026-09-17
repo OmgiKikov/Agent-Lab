@@ -7,6 +7,7 @@ import { expectationSheet, qualitySummary, qualityLines, type ExpectationRole, t
 import { agreementSample, judgeAgreement, type JudgeAgreement } from '../dist/agreement.js';
 import { primaryMetricId } from '../dist/outcomes.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
+import { situationEvidence } from '../dist/explain.js';
 import { buildResultView, causeSection, failureListRows, resultViewRows, SECTION_TEXT, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
 
 /** All material, model and persisted text crosses this boundary before terminal rendering. */
@@ -64,6 +65,27 @@ export function agreementTarget(record: Experiment, trial: Trial | undefined): A
   const recorded = metricId ? trial.assessments?.find(a => a.metricId === metricId)?.result : undefined;
   if (!metricId || (recorded !== 'pass' && recorded !== 'fail')) return { kind: 'undecided' };
   return { kind: 'ready', metricId, judgeVerdict: recorded, sampled: agreementSample(record).includes(trial.id) };
+}
+
+/**
+ * The agreement block (UI-SPEC F10, CTX-06): the owner reads what the agent had to do, what it said
+ * and which rule applies before the judge's verdict and the keys. The title carries no ✗/✓, so the
+ * verdict is never seen before the evidence (UI-D-06).
+ */
+export function agreementBlockLines(record: Experiment, trial: Trial): Line[] {
+  const target = agreementTarget(record, trial);
+  const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
+  if (target?.kind !== 'ready' || !scenario) return [];
+  const failed = target.judgeVerdict === 'fail';
+  return [
+    line('ПРОВЕРКА СУДЬИ', 'accent', true),
+    line(scenario.title, 'text', true),
+    ...(failed ? [line('Проверьте провал: сначала прочитайте доказательство.', 'muted')] : []),
+    ...situationEvidence(record, scenario, trial, target.metricId).map(sectionRow),
+    failed ? line('Судья: ✗ не справился', 'error') : line('Судья: ✓ справился', 'success'),
+    line('y — согласен · n — не согласен · s — не могу сказать', 'accent'),
+    line(''),
+  ];
 }
 
 /**
@@ -710,7 +732,7 @@ export class LabBoard implements Component {
       if (sheet && this.query && !entries.length) detail = [line('Ничего не найдено. Esc — сбросить поиск.', 'muted')];
     } else if (this.section === 'results') {
       const trial = reviewOrder(record).find(t => t.id === entries[this.selected]?.id);
-      detail = trial ? trialLines(trial, record, this.expanded) : this.query || this.pendingOnly ? [line('Ничего не найдено. Esc — сбросить фильтр.', 'muted')]
+      detail = trial ? [...agreementBlockLines(record, trial), ...trialLines(trial, record, this.expanded)] : this.query || this.pendingOnly ? [line('Ничего не найдено. Esc — сбросить фильтр.', 'muted')]
         : activePhases.has(record.phase) ? [line('ДИАЛОГ ВЫПОЛНЯЕТСЯ', 'accent', true), line(record.message), line('Первый результат появится после ответа и проверки критериев.', 'muted'), line('c — остановить с сохранением уже полученных реплик', 'muted')]
         : [line('Диалогов ещё нет.', 'text', true), line(record.phase === 'review' ? 'Проверьте карточки и нажмите r для запуска.' : record.error ?? 'Прогон остановлен до завершения первой попытки.')];
     } else {
