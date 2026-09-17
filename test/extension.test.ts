@@ -1187,7 +1187,8 @@ test('повтор ответа, длинная причина и сменивш
     assert.equal(current[0]!.answer, 'agree');
 
     // T-03-13: доска показывала другое решение судьи — лаборатория отказывает, и отказ назван.
-    const moved = await answer({ answer: 'agree', judgeVerdict: target.judgeVerdict === 'fail' ? 'pass' : 'fail' });
+    // Ответ здесь новый: правило «отметка уже стоит» стоит раньше и иначе перехватило бы отказ.
+    const moved = await answer({ answer: 'unsure', judgeVerdict: target.judgeVerdict === 'fail' ? 'pass' : 'fail' });
     assert.equal(moved.notice, 'Оценка судьи изменилась, пока вы смотрели. Проверьте ситуацию ещё раз.');
     assert.equal(moved.reviews.length, 5);
 

@@ -931,7 +931,11 @@ export default function agentLab(pi: ExtensionAPI) {
                 const reason = await ctx.ui.editor(`Судья решил: ${action.judgeVerdict === 'fail' ? 'не справился' : 'справился'}. Почему вы не согласны? Коротко, своими словами.`,
                   current?.answer === 'disagree' ? current.note : '');
                 if (reason === undefined) continue;
+                // Input validation, not display: the schema caps a stored reason at 3000 characters,
+                // so the owner is told to shorten it instead of losing the text to a write error.
                 if (!reason.trim()) { inform('Несогласие не сохранено: напишите причину.', 'error'); continue; }
+                if (reason.length > 3000) { inform('Причина длиннее 3000 знаков. Сократите и попробуйте снова.', 'error'); continue; }
+                if (current?.answer === 'disagree' && reason.trim() === current.note.trim()) { inform('Отметка уже стоит: не согласен.', 'info'); continue; }
                 note = reason;
               } else {
                 // UI-D-19: the same answer again writes nothing, so the record keeps one mark per answer.
@@ -967,13 +971,13 @@ export default function agentLab(pi: ExtensionAPI) {
               const pending = awaitingVerdict(r).size;
               if (pending) {
                 section = 'results'; pendingOnly = true; selected = 0; query = '';
-                inform(`Осталось разобрать ${pending} провал(ов). p / n — вердикт; v — пояснение или оценка критерия.`, 'error');
+                inform(`Не разобрано ситуаций: ${pending}. y / n — согласие с судьёй · v — подробная оценка.`, 'error');
                 continue;
               }
               const hash = resultHash(r);
               const invalid = r.trials.filter(t => t.outcome === 'invalid' || t.outcome === 'cancelled').length;
               const ungraded = r.trials.filter(t => t.outcome === 'ungraded').length;
-              if (await ctx.ui.confirm('Завершить человеческий аудит?', `Я проверил диалоги, основания оценок и поведение симуляторов.\nДиалогов: ${r.trials.length}; невалидных/остановленных: ${invalid}; без объективной оценки: ${ungraded}.\nОтдельных заметок человека: ${r.humanReviews?.length ?? 0}. ${r.mode === 'demo' ? 'Сценарные оценки демо останутся отдельными от моих.' : 'Оценки модели останутся отдельными от моих.'}\nВерсия результатов: ${hash}\nПодтвердить проверку всего набора?`)) {
+              if (await ctx.ui.confirm('Завершить человеческий аудит?', `Я проверил диалоги, основания оценок и поведение симуляторов.\nДиалогов: ${r.trials.length}; невалидных/остановленных: ${invalid}; без объективной оценки: ${ungraded}.\nОтдельных заметок человека: ${r.humanReviews?.length ?? 0}. ${r.mode === 'demo' ? 'Сценарные оценки демо останутся отдельными от моих.' : 'Оценки модели останутся отдельными от моих.'}\nОтметка согласия ставится на главную оценку ситуации; остальные критерии — через v.\nВерсия результатов: ${hash}\nПодтвердить проверку всего набора?`)) {
                 const reviewed = await lab.reviewResults(r.id, hash);
                 section = 'agent'; selected = 0; query = ''; pendingOnly = false;
                 const artifacts = await exportArtifacts(await evidenceBundle(reviewed, lab.store, beforeId), lab.store.directory);
