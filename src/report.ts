@@ -253,7 +253,7 @@ export function markdownReport(bundle: EvidenceBundle): string {
     `Кодовые проверки: ${v.graded ? `${v.passed}/${v.graded} диалогов` : observedRecord(record).scenarios.some(s => s.checks.length) ? 'заданы, измерений нет' : 'не заданы'}. ${modelLabel(record)} по рубрикам: ${v.rubric.passed}/${v.rubric.assessed}; неясно ${v.rubric.unknown}.`,
     `Вердикт на весь диалог: ${v.review.reviewed}/${v.review.total}. Пройдено ${v.review.passed}, не пройдено ${v.review.failed}. Автоматических провалов без решения: ${v.review.pending}. ${reviewWord(bundle)}.`,
     `Карточки: синтетических ${v.provenance.synthetic.cards}, golden ${v.provenance.curated.cards}, из продакшна ${v.provenance.production.cards}.`, '',
-    `Проверка карточек: ${record.reviewMode === 'human' ? 'человеком' : record.reviewMode === 'automated' ? 'автоматическая' : 'ожидается'}.`,
+    `Проверка карточек: ${record.reviewMode === 'human' ? 'человеком' : record.reviewMode === 'expectations' ? 'ожидания подтверждены владельцем' : record.reviewMode === 'automated' ? 'автоматическая' : 'ожидается'}.`,
     `Испытуемый: ${md(target(record))}. Версия: ${md(version(record))}. Прогон: ${md(record.id)}.`, '',
     ...metadata(record).map(md), '',
     ...bundle.warnings.map(w => `- ${md(w)}`), '',

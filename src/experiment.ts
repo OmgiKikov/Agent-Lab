@@ -977,7 +977,7 @@ export class ExperimentLab {
     });
   }
   /** `parallel` is an execution knob, not a measurement setting: dialogues are independent, so several may run at once without changing what is measured. */
-  async start(id: string, options: { approved: boolean; reviewer?: 'human' | 'automated'; expectedHash?: string; parallel?: number; requireAccepted?: boolean }): Promise<Experiment> {
+  async start(id: string, options: { approved: boolean; reviewer?: 'human' | 'expectations' | 'automated'; expectedHash?: string; parallel?: number; requireAccepted?: boolean }): Promise<Experiment> {
     const parallel = options.parallel ?? 1;
     if (!Number.isInteger(parallel) || parallel < 1 || parallel > MAX_PARALLEL) throw new Error(`Параллельных диалогов может быть от 1 до ${MAX_PARALLEL}.`);
     return this.change(async () => {
@@ -1005,6 +1005,9 @@ export class ExperimentLab {
       record.reviewedAt = new Date().toISOString();
       record.reviewMode = options.reviewer ?? 'human';
       if (record.reviewMode === 'automated') record.limitations.push('Generated scenario expectations were checked automatically, without human validation. Spot-check disputes; decisive automatic results remain usable as provisional evidence.');
+      // The owner confirmed the expectations, and nothing else. The verdicts are produced after this
+      // point, so no confirmation here can mean a person checked them: say so instead of going quiet.
+      if (record.reviewMode === 'expectations') record.limitations.push('Владелец подтвердил ожидания ситуаций перед запуском. Определения карточек и оценки судьи человеком не проверялись.');
       record.manifestHash = measurementHash(record);
       record.phase = record.workflow === 'evaluate' ? 'evaluating' : 'baseline';
       record.message = record.workflow === 'evaluate' ? 'Выполняю согласованный план проверки.' : 'Starting the frozen development comparison.';
@@ -1280,6 +1283,8 @@ export class ExperimentLab {
     if (best.id !== baseline.id) await evaluate(best, 'control');
     guard();
     const final = compareTrials({ baselineId: baseline.id, candidateId: best.id, manifestHash: hash, scenarios: record.scenarios, repeats: record.settings.repeats, trials: record.trials, split: 'control', mode: record.mode });
+    // `expectations` is not `human`: confirming the expectations in the run dialog says nothing about
+    // the results, so it must not lift a comparison that rests on a human having reviewed them.
     if (record.reviewMode !== 'human') {
       final.reasons.push('Scenario expectations have not been validated by a human; this comparison is provisional.');
       if (final.verdict === 'improved') final.verdict = 'insufficient';

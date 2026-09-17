@@ -306,11 +306,12 @@ test('conversation runs only the confirmed plan, then saves and loads the same c
   consent = true;
   const result = await call('agent_lab_run', { id: draft.id, expectedHash: draft.draftHash });
   assert.equal(result.phase, 'results_review'); assert.equal(result.trialCount, 1);
-  // Пи-путь стартует только на подтверждённых ожиданиях, поэтому карточки проверены человеком;
-  // отдельных вердиктов человека по диалогам Agent Lab по-прежнему не выдумывает.
-  assert.equal(result.reviewMode, 'human'); assert.deepEqual(result.humanReviews, []);
+  // Пи-путь стартует только на подтверждённых ожиданиях — это и записано, не больше: владелец
+  // подтвердил ожидания, а вердикты судьи он не видел, потому что их ещё не было.
+  assert.equal(result.reviewMode, 'expectations'); assert.deepEqual(result.humanReviews, []);
   assert.equal(result.acceptedDraftHash, draft.draftHash);
   assert.doesNotMatch(result.limitations.join(' '), /without human validation/);
+  assert.match(result.limitations.join(' '), /Владелец подтвердил ожидания ситуаций перед запуском\. Определения карточек и оценки судьи человеком не проверялись\./);
   assert.equal(result.proofs.length, 1);
   const proof = result.proofs[0];
   const proofText = proof.lines.join('\n');
@@ -320,7 +321,10 @@ test('conversation runs only the confirmed plan, then saves and loads the same c
   assert.match(proofText, /РЕПЛИКИ\n#0 ПОЛЬЗОВАТЕЛЬ: [^\n]+\n#\d+ АГЕНТ:/);
   assert.match(proofText, /ПРОВЕРКИ\n(?:PASS|FAIL) \[/);
   assert.match(proofText, /ОЦЕНКИ\n(?:PASS|FAIL|UNKNOWN) \[[^\]]+\].*события: #\d+/);
-  assert.match(plans[1]!, /Запуск не означает/); assert.match(plans[1]!, /20 вызовов/);
+  // Диалог подтверждения говорит ровно то, что «Да» записывает, и не отрицает это же.
+  assert.match(plans[1]!, /Подтверждая, вы подтверждаете ожидания ситуаций выше\. Оценки судьи вы не проверяли\./);
+  assert.doesNotMatch(plans[1]!, /Запуск не означает/);
+  assert.match(plans[1]!, /20 вызовов/);
   const inspection = await call('agent_lab_inspect', { id: draft.id });
   const ids = [inspection.scenarios[0].id];
   const saved = await call('agent_lab_suite', { action: 'save', id: draft.id, scenarioIds: ids, file: '.evals/regression.json' });
@@ -545,7 +549,8 @@ test('native command demo fixture requires two separate confirmations and preser
     assert.deepEqual(errors, []); assert.equal(confirmations.length, 4);
     assert.match(confirmations[0]!, /Версия тестов/); assert.match(confirmations[2]!, /результатов/);
     const evidence = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
-    assert.equal(evidence.phase, 'complete'); assert.equal(evidence.reviewMode, 'human');
+    // Первое подтверждение — ожидания, второе — результаты: они записаны раздельно.
+    assert.equal(evidence.phase, 'complete'); assert.equal(evidence.reviewMode, 'expectations');
     assert.ok(evidence.resultsReviewedAt); assert.ok(evidence.resultsReviewHash);
     assert.equal(evidence.trials.length, 1); assert.equal(evidence.humanReviews.length, 1);
     assert.equal(evidence.humanReviews[0].verdict, 'fail'); assert.match(evidence.humanReviews[0].note, /fixture/);
@@ -1175,7 +1180,7 @@ test('r подтверждает ожидания и запускает одни
   assert.equal(confirms[0]!.body.match(/ {2}Проверка: /g)?.length ?? 0, cards.reduce((n, s) => n + s.checks.length, 0));
   assert.equal(startCalls.length, 1, 'отказ ничего не запускает');
   assert.equal(startCalls[0]!.requireAccepted, true);
-  assert.equal(startCalls[0]!.reviewer, 'human');
+  assert.equal(startCalls[0]!.reviewer, 'expectations', 'подтверждены ожидания, а не результаты');
   const ran = output(await tools.get('agent_lab_inspect')!.execute('ran', { id: first.id }, undefined, undefined, ctx));
   assert.equal(ran.acceptedDraftHash, ran.draftHash, 'подтверждение записано перед запуском');
   assert.ok(ran.trialCount > 0);

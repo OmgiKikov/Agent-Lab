@@ -90,7 +90,7 @@ function runPlan(record: Experiment): string {
     ...(record.mode === 'live' ? [`Судья: ${safeText(record.settings.judge?.provider ?? record.settings.provider)}/${safeText(record.settings.judge?.model ?? record.settings.model)}; по 2 вызова в свежих сессиях на каждую применимую рубрику.`] : []),
     'Если адаптер передаёт полный RAG-контекст: ещё до 6 вызовов судьи на диалог в пределах указанного бюджета; диагностика отдельно от accuracy.',
     `Агент: ${safeText(target)}`, `Версия тестов: ${draftHash(record).slice(0, 12)}`,
-    'Запуск не означает, что вы вручную проверили все ожидания или оценки.',
+    'Подтверждая, вы подтверждаете ожидания ситуаций выше. Оценки судьи вы не проверяли.',
   ].join('\n');
 }
 
@@ -634,7 +634,7 @@ export default function agentLab(pi: ExtensionAPI) {
         }
         signal.throwIfAborted();
         if (!confirmed) await lab.acceptDraft(draft.id, params.expectedHash);
-        await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: params.expectedHash, parallel: runParallel(draft), requireAccepted: true });
+        await lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: params.expectedHash, parallel: runParallel(draft), requireAccepted: true });
         signal.addEventListener('abort', cancel, { once: true });
         if (signal.aborted) cancel();
         const progress = async () => {
@@ -876,7 +876,7 @@ export default function agentLab(pi: ExtensionAPI) {
               const plan = confirmed ? runPlan(r) : `${runPlan(r)}\nДа — подтвердить все ожидания и начать прогон.`;
               if (await ctx.ui.confirm(confirmed ? 'Запустить проверку?' : 'Подтвердить ожидания и запустить?', plan)) {
                 if (!confirmed) await lab.acceptDraft(r.id, hash);
-                await lab.start(r.id, { approved: true, reviewer: 'human', expectedHash: hash, parallel: runParallel(r), requireAccepted: true });
+                await lab.start(r.id, { approved: true, reviewer: 'expectations', expectedHash: hash, parallel: runParallel(r), requireAccepted: true });
                 section = 'results'; selected = 0;
                 reportPath = undefined;
               }

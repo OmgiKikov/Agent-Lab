@@ -608,6 +608,28 @@ test('goal observation is part of the existing full draft hash while legacy draf
   assert.notEqual(draftHash(toolDraft), draftHash(edited));
 });
 
+test('confirming the expectations is recorded as exactly that, and never upgrades a comparison', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const created = await lab.create(demoInput()); await lab.waitForIdle();
+  const ready = await lab.get(created.id);
+  await lab.start(ready.id, { approved: true, reviewer: 'expectations' });
+  await lab.waitForIdle();
+  const result = await lab.get(ready.id);
+  assert.equal(result.phase, 'complete', result.error ?? '');
+  assert.equal(result.reviewMode, 'expectations');
+  // The run dialog confirms expectations; the verdicts do not exist yet, so nothing here says a
+  // person checked them. The limitation must say so instead of disappearing.
+  assert.match(result.limitations.join(' '), /Владелец подтвердил ожидания ситуаций перед запуском\. Определения карточек и оценки судьи человеком не проверялись\./);
+  assert.doesNotMatch(result.limitations.join(' '), /without human validation/);
+  const final = result.comparisons.at(-1)!;
+  assert.equal(final.split, 'control');
+  assert.notEqual(final.verdict, 'improved', 'a confirmed draft does not lift a provisional comparison');
+  assert.ok(final.reasons.includes('Scenario expectations have not been validated by a human; this comparison is provisional.'));
+  // An old record parses and keeps the two modes it could already hold.
+  assert.equal(experimentSchema.parse({ ...result, reviewMode: 'human' }).reviewMode, 'human');
+  assert.equal(experimentSchema.parse({ ...result, reviewMode: 'automated' }).reviewMode, 'automated');
+});
+
 test('the manifest covers the control set and the owner-edited expectations, and old records keep their hash', async t => {
   const { lab } = await setup(t, createDemoRuntime());
   const input = demoInput(); input.workflow = 'evaluate'; input.scenarioCount = 2;

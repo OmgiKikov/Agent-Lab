@@ -57,6 +57,26 @@ test('coincident replies with different scores are visible in Pi and exported re
   } finally { board.dispose(); }
 });
 
+test('a confirmed draft says the owner confirmed the expectations, never that a human checked the cards', async () => {
+  const record = await fixture();
+  record.phase = 'results_review'; record.reviewedAt = '2026-09-17T00:00:00.000Z'; record.reviewMode = 'expectations';
+  const bundle = await evidenceBundle(record, { get: async () => record, traceJournal: async () => '' });
+  const markdown = markdownReport(bundle);
+  assert.match(markdown, /Проверка карточек: ожидания подтверждены владельцем\./);
+  assert.doesNotMatch(markdown, /Проверка карточек: человеком/);
+
+  const board = new LabBoard({ record, section: 'agent' }, theme, () => {}, () => {}, () => 120);
+  const text = stripTerminalSequences(board.render(120).join('\n'));
+  assert.match(text, /Карточки: ожидания подтверждены владельцем/);
+  assert.doesNotMatch(text, /Карточки: подтверждены человеком/);
+  board.dispose();
+
+  // A person who really reviewed the card definitions still gets the stronger word.
+  const reviewed = new LabBoard({ record: { ...record, reviewMode: 'human' }, section: 'agent' }, theme, () => {}, () => {}, () => 120);
+  assert.match(stripTerminalSequences(reviewed.render(120).join('\n')), /Карточки: подтверждены человеком/);
+  reviewed.dispose();
+});
+
 test('an unverified reply is a status line in the exported report, never a quotation', async () => {
   const record = await fixture();
   record.phase = 'results_review';

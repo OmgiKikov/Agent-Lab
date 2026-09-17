@@ -609,7 +609,7 @@ export class LabBoard implements Component {
         line(`До ${record.settings.maxTurns} ходов · ${record.settings.maxCalls} вызовов модели · ${Math.round(record.settings.maxDurationMs / 60000)} мин`, 'muted'),
         ...(this.expanded ? [line(json(record.settings))] : []),
         line(''), line('ПРОВЕРКА ЧЕЛОВЕКОМ', 'accent'),
-        line(`Карточки: ${record.reviewedAt ? record.reviewMode === 'human' ? 'подтверждены человеком' : 'автоматическая проверка' : 'ожидают проверки'}`),
+        line(`Карточки: ${!record.reviewedAt ? 'ожидают проверки' : record.reviewMode === 'human' ? 'подтверждены человеком' : record.reviewMode === 'expectations' ? 'ожидания подтверждены владельцем' : 'автоматическая проверка'}`),
         line(`Диалоги с заметкой: ${new Set(record.humanReviews?.map(r => r.trialId)).size} / ${record.trials.length}`),
         line(`Разбор: ${verdictSummary(record).review.status === 'complete' ? 'завершён' : 'ещё не завершён'}`),
         line(`${record.usage.calls} ${record.mode === 'demo' ? 'сценарных' : 'модельных'} вызовов · стоимость ${record.usage.costUsd === null ? 'неизвестна' : `$${record.usage.costUsd.toFixed(4)}`}`, 'muted'),

@@ -751,7 +751,13 @@ export interface Experiment {
   sources: Source[]; settings: Settings; target: Target; requirements: Requirement[]; questions: string[];
   goldenCases: GoldenCase[]; dialogues: Dialogue[]; profiles: Profile[]; notes: string;
   scenarios: Scenario[]; revisions: Revision[]; selectedRevisionId: string | null;
-  manifestHash: string | null; reviewedAt: string | null; reviewMode: 'human' | 'automated' | null; controlConsumedAt: string | null;
+  manifestHash: string | null; reviewedAt: string | null;
+  /**
+   * Who checked what before the run. `expectations`: the owner confirmed the expectations of the
+   * situations in the run dialog — narrower than `human`, which also means a person reviewed the
+   * card definitions. Neither ever means a person checked the judge's verdicts.
+   */
+  reviewMode: 'human' | 'expectations' | 'automated' | null; controlConsumedAt: string | null;
   acceptedDraftHash?: string;
   /** Portable identity of explicitly accepted scenario definitions. Optional only for legacy in-memory fixtures. */
   acceptedTests?: AcceptedTest[];
@@ -859,7 +865,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   requirements: z.array(requirementSchema), questions: z.array(z.string()), scenarios: z.array(scenarioSchema.extend({ split: z.enum(['dev', 'control']) })),
   goldenCases: z.array(goldenCaseSchema).max(40).default([]), dialogues: z.array(dialogueSchema).max(300).default([]), profiles: z.array(profileSchema).max(12).default([]),
   notes: z.string().max(8000).default(''),
-  revisions: z.array(revisionSchema), selectedRevisionId: text.nullable(), manifestHash: text.nullable(), reviewedAt: text.nullable(), reviewMode: z.enum(['human', 'automated']).nullable().default(null), controlConsumedAt: text.nullable(),
+  revisions: z.array(revisionSchema), selectedRevisionId: text.nullable(), manifestHash: text.nullable(), reviewedAt: text.nullable(), reviewMode: z.enum(['human', 'expectations', 'automated']).nullable().default(null), controlConsumedAt: text.nullable(),
   acceptedDraftHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   acceptedTests: z.array(acceptedTestSchema).max(200)
     .refine(tests => unique(tests.map(test => test.testId)) && unique(tests.map(test => test.scenarioId)), 'Accepted test identities must be unique').default([]),
