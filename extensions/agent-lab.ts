@@ -13,6 +13,7 @@ import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit.js';
 import { readData } from '../dist/imports.js';
+import { createGigaProvider, GIGA_PROVIDER_ID } from '../dist/giga-provider.js';
 import { editDraft, inputError } from './editor.ts';
 import { previewCriteria } from '../dist/preview.js';
 import { activePhases, reviewOrder, safeText, showBoard, verdicts, type BoardAction, type BoardOptions, type Section } from './cards.ts';
@@ -112,6 +113,16 @@ async function humanAnnotation(ctx: ExtensionContext, record: Experiment, select
 
 /** Conversational execution asks the human to authorize a concrete plan; it never invents human reviews. */
 export default function agentLab(pi: ExtensionAPI) {
+  /*
+   * Внутренний шлюз нельзя описать декларативным models.json: там нужен клиентский сертификат.
+   * Вложенные сессии Agent Lab регистрируют его сами (src/pi.ts), но внешний разговор — обычный
+   * Pi, и без этой регистрации он отвечает «no api key» на моделях, которыми идёт прогон.
+   * Без переменных шлюза вызов возвращает undefined, не обращаясь к сети.
+   */
+  void createGigaProvider()
+    .then(provider => { if (provider) pi.registerProvider(GIGA_PROVIDER_ID, provider); })
+    .catch(error => process.stderr.write(`giga: провайдер не зарегистрирован в разговоре (${error instanceof Error ? error.message : 'ошибка'})\n`));
+
   let activeClose: (() => Promise<void>) | undefined;
   const open = (cwd: string) => {
     if (activeClose) throw new Error('Another Agent Lab operation is active. Finish it or cancel it first.');
