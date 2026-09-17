@@ -43,6 +43,18 @@ export function readGigaConfig(env: Record<string, string | undefined> = process
   };
 }
 
+/**
+ * Какие обязательные переменные шлюза не заданы. Провайдер без них просто не появляется,
+ * и снаружи это неотличимо от отказа авторизации Pi — команда status показывает этот список.
+ */
+export function missingGigaVariables(env: Record<string, string | undefined> = process.env): string[] {
+  const missing: string[] = [];
+  if (!env.GIGACHAT_URL) missing.push('GIGACHAT_URL');
+  if (!env.GIGACHAT_CERT_PATH) missing.push('GIGACHAT_CERT_PATH');
+  if (!env.GIGACHAT_KEY_PATH && !env.GIGACHAT_KEY) missing.push('GIGACHAT_KEY_PATH');
+  return missing;
+}
+
 export type GigaTransport = (path: string, body?: unknown, signal?: AbortSignal) => Promise<{ status: number; text: string }>;
 
 /** Собирает опции для `https.request`: клиентский сертификат аутентифицирует запрос, заголовка Authorization нет. */

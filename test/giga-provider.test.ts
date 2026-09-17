@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
-import { readGigaConfig, requestOptions } from '../src/giga-transport.js';
+import { missingGigaVariables, readGigaConfig, requestOptions } from '../src/giga-transport.js';
 import { createGigaProvider, registerGigaProvider } from '../src/giga-provider.js';
 import type { GigaModel } from '../src/giga-protocol.js';
 
@@ -135,6 +135,16 @@ test('the explicit path variables win over the internal aliases', async () => {
     GIGACHAT_KEY: join(directory, 'key.pem'),
   });
   assert.equal(config?.key.toString(), 'explicit-key');
+});
+
+test('names the variables that keep the gateway unconfigured', () => {
+  // Без этого отсутствие провайдера выглядит как общий отказ авторизации Pi, и непонятно,
+  // чинить окружение или доступ к моделям.
+  assert.deepEqual(missingGigaVariables({}), ['GIGACHAT_URL', 'GIGACHAT_CERT_PATH', 'GIGACHAT_KEY_PATH']);
+  assert.deepEqual(missingGigaVariables({ GIGACHAT_URL: 'https://gateway.example', GIGACHAT_KEY: '/key.pem' }), ['GIGACHAT_CERT_PATH']);
+  assert.deepEqual(missingGigaVariables({
+    GIGACHAT_URL: 'https://gateway.example', GIGACHAT_CERT_PATH: '/cert.pem', GIGACHAT_KEY_PATH: '/key.pem',
+  }), []);
 });
 
 test('a configured but unreadable certificate path fails loudly', async () => {
