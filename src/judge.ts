@@ -193,11 +193,19 @@ export function sealJudgeReceipt(audit: JudgeAudit, complete: boolean, cutBefore
 /**
  * A receipt is trusted only as far as the record backs it: the input hash is re-derived from the
  * current record and the votes must re-aggregate to the recorded assessments.
+ *
+ * The receipt cannot re-derive a v11 cut, because its votes carry no evidence. It can only require
+ * that the sealed `cutBefore` equals the trial's `judgedBeforeSeq` and that a failing fidelity vote
+ * exists when there is a cut; the sidecar audit, bound by `auditHash`, remains the full check.
  */
 function hasCompleteReceipt(input: Input, receipt: JudgeReceipt, metrics: NonNullable<Input['scenario']['metrics']>): boolean {
   if (!receipt.complete || input.trial.assessmentError) return false;
-  if (receipt.protocolHash !== expectedProtocol(JUDGE_PROTOCOL_V10, receipt.configurationHash)
-    && receipt.protocolHash !== expectedProtocol(JUDGE_PROTOCOL, receipt.configurationHash)) return false;
+  if (receipt.protocolHash === expectedProtocol(JUDGE_PROTOCOL_V10, receipt.configurationHash)) {
+    if (receipt.cutBefore !== undefined || input.trial.judgedBeforeSeq !== undefined) return false;
+  } else if (receipt.protocolHash === expectedProtocol(JUDGE_PROTOCOL, receipt.configurationHash)) {
+    if (receipt.cutBefore !== input.trial.judgedBeforeSeq) return false;
+    if (receipt.cutBefore !== undefined && !receipt.votes.some(v => v.metricId === FIDELITY_ID && v.result === 'fail')) return false;
+  } else return false;
   const applicable = metrics.filter(m => metricApplies(m, input.trial));
   const notApplicable = metrics.filter(m => !metricApplies(m, input.trial)).map(m => m.id);
   if (fingerprint(receipt.notApplicable) !== fingerprint(notApplicable)) return false;

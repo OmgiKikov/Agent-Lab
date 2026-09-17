@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assessRepeated, auditCut, hasCompleteJudgment, judgeInput, observableSources, prefixTrial, sealJudgeReceipt, simulatorCut, JUDGE_PROTOCOL } from '../src/judge.js';
+import { assessRepeated, auditCut, hasCompleteJudgment, judgeInput, observableSources, prefixTrial, JUDGE_PROMPT, JUDGE_RESPONSE_FORMAT, sealJudgeReceipt, simulatorCut, JUDGE_PROTOCOL, JUDGE_PROTOCOL_V10 } from '../src/judge.js';
 import { assessmentEventContent, emptyUsage, fingerprint, goalAttainment, RAG_METRIC_IDS, ragEvidenceComplete, replyQuality, simulatorFidelity, type JudgeAudit, type Scenario, type Trial } from '../src/contracts.js';
 import { ExperimentStore } from '../src/store.js';
 
@@ -488,7 +488,7 @@ const fidelityRow = (result: 'pass' | 'fail', evidence: number[]) => JSON.string
   citations: evidence.map(seq => ({ seq, quote: assessmentEventContent(reactiveTrial.events.find(event => event.seq === seq)!) })) }] });
 type FidelityVote = 'pass' | 'fail' | 'error';
 /** Fidelity votes as given, citing `fidelityEvidence`; every agent vote passes citing `goalEvidence`. */
-function reactiveJudge(fidelity: [FidelityVote, FidelityVote], goalEvidence = [1], fidelityEvidence = [3]) {
+function reactiveJudge(fidelity: [FidelityVote | 'malformed', FidelityVote | 'malformed'], goalEvidence = [1], fidelityEvidence = [3]) {
   const requests: { ids: string[]; data: string }[] = [];
   let audit: JudgeAudit | undefined;
   let fidelityCalls = 0;
@@ -498,6 +498,7 @@ function reactiveJudge(fidelity: [FidelityVote, FidelityVote], goalEvidence = [1
     if (ids[0] !== 'user_fidelity') return row('met', 'not_met', goalEvidence);
     const vote = fidelity[fidelityCalls++]!;
     if (vote === 'error') throw new Error('fidelity request failed');
+    if (vote === 'malformed') return 'not json';
     return fidelityRow(vote, fidelityEvidence);
   });
   return { run, requests, audit: () => audit! };
@@ -585,4 +586,101 @@ test('without a failing fidelity vote the agent is judged on the whole dialogue;
   assert.equal(splitResult.find(r => r.metricId === 'user_fidelity')!.result, 'unknown');
   for (const request of split.requests.filter(r => r.ids[0] === 'goal')) assert.deepEqual(seqs(request.data), [0, 1]);
   assert.equal(auditCut(split.audit(), reactiveTrial.events), 3);
+});
+
+test('an erred or rejected fidelity vote stops the judgment before any agent vote is requested', async () => {
+  for (const [votes, rejection] of [[['error', 'pass'], /fidelity request failed/], [['malformed', 'pass'], /Judge response rejected/]] as const) {
+    const judge = reactiveJudge([votes[0], votes[1]]);
+    await assert.rejects(judge.run, rejection);
+    assert.deepEqual(judge.requests.map(r => r.ids), [['user_fidelity'], ['user_fidelity']], 'no agent vote without a known cut');
+    assert.equal(judge.audit().attempts.length, 2);
+  }
+});
+
+test('v11 judgments verify only with an untouched cut and v10 judgments stay verifiable as before', async () => {
+  const cutJudge = reactiveJudge(['fail', 'fail']);
+  const cutResult = await cutJudge.run;
+  const cutAudit = cutJudge.audit();
+  const whole = reactiveJudge(['pass', 'pass'], [1], [2]);
+  const wholeResult = await whole.run;
+  const wholeAudit = whole.audit();
+  const seal = (audit: JudgeAudit, trialValue: Trial, cut?: number) => sealJudgeReceipt(audit, hasCompleteJudgment({ ...reactive, trial: { ...trialValue, judgeAudit: audit } }), cut);
+
+  // v11 with a cut: full audit and receipt.
+  const cutTrial: Trial = { ...reactiveTrial, assessments: cutResult, judgedBeforeSeq: 3 };
+  const cutReceipt = seal(cutAudit, cutTrial, 3);
+  assert.equal(cutReceipt.complete, true);
+  assert.equal(cutReceipt.cutBefore, 3);
+  const withAudit = { ...reactive, trial: { ...cutTrial, judgeAudit: cutAudit } };
+  const withReceipt = { ...reactive, trial: { ...cutTrial, judgeReceipt: cutReceipt } };
+  assert.equal(hasCompleteJudgment(withAudit), true);
+  assert.equal(hasCompleteJudgment(withReceipt), true);
+  const both: [string, (value: typeof withAudit) => void][] = [
+    ['judgedBeforeSeq removed', value => { delete value.trial.judgedBeforeSeq; }],
+    ['judgedBeforeSeq changed', value => { value.trial.judgedBeforeSeq = 2; }],
+  ];
+  for (const [name, mutate] of both) {
+    for (const base of [withAudit, withReceipt]) {
+      const value = structuredClone(base);
+      mutate(value);
+      assert.equal(hasCompleteJudgment(value), false, `${name} must fail (${base.trial.judgeAudit ? 'audit' : 'receipt'})`);
+    }
+  }
+  const audited: [string, (value: typeof withAudit) => void][] = [
+    ['prefix vote input replaced by the whole dialogue', value => {
+      value.trial.judgeAudit!.attempts.find(a => a.metricId === 'goal')!.input = wholeAudit.attempts.find(a => a.metricId === 'goal')!.input; }],
+    ['protocol relabelled v10', value => { value.trial.judgeAudit!.protocolHash = JUDGE_PROTOCOL_V10; }],
+  ];
+  for (const [name, mutate] of audited) {
+    const value = structuredClone(withAudit);
+    mutate(value);
+    assert.equal(hasCompleteJudgment(value), false, `${name} must fail (audit)`);
+  }
+  const receipted: [string, (value: typeof withReceipt) => void][] = [
+    ['cutBefore changed', value => { value.trial.judgeReceipt!.cutBefore = 2; }],
+    ['cutBefore removed', value => { delete value.trial.judgeReceipt!.cutBefore; }],
+    ['protocol relabelled v10', value => { value.trial.judgeReceipt!.protocolHash = JUDGE_PROTOCOL_V10; }],
+  ];
+  for (const [name, mutate] of receipted) {
+    const value = structuredClone(withReceipt);
+    mutate(value);
+    assert.equal(hasCompleteJudgment(value), false, `${name} must fail (receipt)`);
+  }
+  assert.equal(hasCompleteJudgment(structuredClone(withReceipt)), true, 'tampering never touched the original');
+
+  // A cut without any failing fidelity vote cannot hide in a receipt.
+  const wholeTrial: Trial = { ...reactiveTrial, assessments: wholeResult };
+  const wholeReceipt = seal(wholeAudit, wholeTrial);
+  assert.equal(wholeReceipt.cutBefore, undefined);
+  assert.equal(hasCompleteJudgment({ ...reactive, trial: { ...wholeTrial, judgeReceipt: wholeReceipt } }), true);
+  assert.equal(hasCompleteJudgment({ ...reactive, trial: { ...wholeTrial, judgedBeforeSeq: 3, judgeReceipt: { ...wholeReceipt, cutBefore: 3 } } }), false);
+
+  // The same judgment without a cut, relabelled v10, verifies in both paths; v10 never carries a cut.
+  const v10Audit = { ...structuredClone(wholeAudit), protocolHash: JUDGE_PROTOCOL_V10 };
+  assert.equal(hasCompleteJudgment({ ...reactive, trial: { ...wholeTrial, judgeAudit: v10Audit } }), true);
+  const v10Receipt = seal(v10Audit, wholeTrial);
+  assert.equal(v10Receipt.complete, true);
+  assert.equal(hasCompleteJudgment({ ...reactive, trial: { ...wholeTrial, judgeReceipt: v10Receipt } }), true);
+  assert.equal(hasCompleteJudgment({ ...reactive, trial: { ...wholeTrial, judgeReceipt: { ...v10Receipt, cutBefore: 3 } } }), false);
+  assert.equal(hasCompleteJudgment({ ...reactive, trial: { ...wholeTrial, judgedBeforeSeq: 3, judgeReceipt: v10Receipt } }), false);
+  assert.equal(hasCompleteJudgment({ ...reactive, trial: { ...wholeTrial, judgedBeforeSeq: 3, judgeAudit: v10Audit } }), false);
+
+  // A v10 writer judged every rubric on the whole dialogue even when fidelity failed.
+  const v10Failing: JudgeAudit = { ...structuredClone(wholeAudit), protocolHash: JUDGE_PROTOCOL_V10, attempts: [
+    ...structuredClone(cutAudit.attempts.filter(a => a.metricId === 'user_fidelity')),
+    ...structuredClone(wholeAudit.attempts.filter(a => a.metricId === 'goal')),
+  ] };
+  const failingTrial: Trial = { ...reactiveTrial, assessments: cutResult };
+  assert.equal(hasCompleteJudgment({ ...reactive, trial: { ...failingTrial, judgeAudit: v10Failing } }), true, 'a v10 audit never gets prefix semantics');
+  assert.equal(auditCut(v10Failing, reactiveTrial.events), undefined);
+  const relabelled = { ...v10Failing, protocolHash: JUDGE_PROTOCOL };
+  assert.equal(hasCompleteJudgment({ ...reactive, trial: { ...failingTrial, judgeAudit: relabelled } }), false, 'labelled v11 it needs a cut');
+  assert.equal(hasCompleteJudgment({ ...reactive, trial: { ...failingTrial, judgedBeforeSeq: 3, judgeAudit: relabelled } }), false, 'and its agent votes on the prefix');
+});
+
+test('judge protocol v10 is frozen and v11 is pinned', () => {
+  assert.equal(JUDGE_PROTOCOL_V10, '32c413cf3a12121a697981a18b5e5c4a1d05934150ab3032800b6fa4934d5736');
+  assert.equal(fingerprint(JUDGE_PROMPT), '891c8c65226e2f6cb3eab30638da3c288fd6d488d833faa5811d9b91ab58d210');
+  assert.equal(fingerprint(JUDGE_RESPONSE_FORMAT), 'd367899779956e5fa0ac227dfe9905e89e3ff459a0afe4e43886bd26602854de');
+  assert.equal(JUDGE_PROTOCOL, '9b08dc89e9fd8b042c244cc95c716a9d7ae7ced30416fde7e30656f3b07889ee');
 });

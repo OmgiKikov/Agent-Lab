@@ -1689,6 +1689,25 @@ test('a record whose trials carry the legacy full audit reassesses without migra
   assert.deepEqual(await lab.get(legacy.id), saved, 'the legacy source record stays unchanged on disk');
 });
 
+test('a reassessment removes the judged-before cut together with the old judgment', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const created = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2 }); await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
+  const current = await lab.get(draft.id);
+  assert.equal(current.phase, 'results_review', current.error ?? '');
+  const cut = structuredClone(current);
+  cut.id = randomUUID();
+  for (const trial of cut.trials) trial.judgedBeforeSeq = 1;
+  await lab.store.save(cut);
+  assert.ok((await lab.get(cut.id)).trials.every(trial => trial.judgedBeforeSeq === 1));
+  const pending = await lab.reassess(cut.id); await lab.waitForIdle();
+  const reassessed = await lab.get(pending.id);
+  assert.equal(reassessed.phase, 'results_review', reassessed.error ?? '');
+  assert.ok(reassessed.trials.length);
+  assert.ok(reassessed.trials.every(trial => trial.judgedBeforeSeq === undefined && trial.judgeReceipt?.cutBefore === undefined));
+});
+
 test('a positive control rides on the record: hashes and card identity unchanged, inherited, and bad ids rejected before saving', async t => {
   const { lab, directory } = await setup(t, createDemoRuntime());
   const created = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2 }); await lab.waitForIdle();
