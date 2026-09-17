@@ -66,12 +66,14 @@ const sectionEnds = (entry: string) => entry.trimStart().startsWith('Все пр
 let failed = false;
 for (const id of values.id) {
   const short = id.slice(0, 8);
-  // (a) CLI summary block: lines before the first blank line, minus the per-reason detail lines.
+  // (a) CLI summary block: lines before the first blank line, minus the detail rows the CLI alone
+  // prints (`details: true` in resultViewRows): the per-reason block and the per-situation
+  // «нестабильно: …» rows of a repeat. Both come last in the block, so the cut at the first one is safe.
   const cli = spawnSync(process.execPath, [resolve(root, 'dist/cli.js'), 'summary', '--id', id, '--data-dir', dataDir], { encoding: 'utf8' });
   if (cli.status !== 0) { process.stdout.write(`DIFF id=${short} surface=cli line=-1\n`); failed = true; continue; }
   const all = cli.stdout.split('\n');
   let cliBlock = all.slice(0, all.indexOf(''));
-  const details = cliBlock.indexOf('Не измерено по причинам:');
+  const details = cliBlock.findIndex(entry => entry === 'Не измерено по причинам:' || entry.trimStart().startsWith('нестабильно: '));
   if (details >= 0) cliBlock = cliBlock.slice(0, details);
 
   // (b) Pi tool payload.
