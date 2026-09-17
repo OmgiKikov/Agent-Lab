@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
+  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, verbatimSpanAt, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 import { selectValidationDialogues } from '../src/imports.js';
@@ -400,6 +400,26 @@ test('a quote that differs from its source only in typography is still that sour
   // A quote that starts mid-sentence is capitalised by the model; only its first letter may differ in case.
   assert.equal(verbatimSpan(content, 'Оператор этого сделать не может'), 'оператор этого сделать не может');
   assert.equal(verbatimSpan(content, 'оператор Этого сделать не может'), undefined);
+});
+
+test('a verbatim match reports the offset it was made at, so a place is never re-searched for', () => {
+  const content = 'Раздел «Эквайринг» → «Мои точки продаж» → карточка точки → «Тариф»: показана действующая ставка и дата начала её действия.\n\nИзменить тариф можно только через заявку — оператор этого сделать не может.';
+  // Whatever the typography of the quote, the offset points at the span in the source's own characters.
+  for (const quote of ['карточка точки → «Тариф»', 'Раздел "Эквайринг" -> "Мои точки продаж"',
+    ' дата начала ее действия.  Изменить тариф ', 'через заявку - оператор', 'Оператор этого сделать не может']) {
+    const found = verbatimSpanAt(content, quote);
+    assert.ok(found, quote);
+    assert.equal(found.span, verbatimSpan(content, quote), quote);
+    assert.equal(content.slice(found.offset, found.offset + found.span.length), found.span, quote);
+  }
+  assert.equal(verbatimSpanAt(content, 'Раздел Эквайринг показывает тариф'), undefined);
+
+  // A sentence that repeats in the source resolves to a place the match was actually made at, and
+  // the offset always belongs to the returned span rather than to some other copy of its text.
+  const repeated = 'Оплата картой разрешена.\nПрочее.\nОплата картой разрешена.';
+  const second = verbatimSpanAt(repeated, repeated.slice(repeated.lastIndexOf('Оплата')));
+  assert.ok(second);
+  assert.equal(repeated.slice(second.offset, second.offset + second.span.length), second.span);
 });
 
 test('a quote that skips the list markers of its source is still that source', () => {

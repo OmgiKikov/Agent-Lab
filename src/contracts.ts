@@ -968,8 +968,15 @@ function foldTypography(text: string): { text: string; starts: number[]; ends: n
   }
   return { text: out.join(''), starts, ends };
 }
-export function verbatimSpan(content: string, quote: string): string | undefined {
-  if (content.includes(quote)) return quote;
+/**
+ * The source's own characters behind a quote, together with the offset the match was actually made
+ * at. Callers that need the place (a line number, a sort key) take `offset` from here instead of
+ * searching the source again for the returned text: a re-search answers «the first copy of these
+ * characters», which is a different question from «where this requirement's quote was found».
+ */
+export function verbatimSpanAt(content: string, quote: string): { span: string; offset: number } | undefined {
+  const direct = content.indexOf(quote);
+  if (direct >= 0) return { span: quote, offset: direct };
   const source = foldTypography(content);
   const needle = foldTypography(quote).text.trim();
   if (!needle) return undefined;
@@ -977,9 +984,15 @@ export function verbatimSpan(content: string, quote: string): string | undefined
   const first = needle[0]!, swapped = first === first.toLowerCase() ? first.toUpperCase() : first.toLowerCase();
   for (const candidate of [needle, ...(swapped !== first ? [swapped + needle.slice(1)] : [])]) {
     const at = source.text.indexOf(candidate);
-    if (at >= 0) return content.slice(source.starts[at]!, source.ends[at + candidate.length - 1]!);
+    if (at >= 0) {
+      const start = source.starts[at]!;
+      return { span: content.slice(start, source.ends[at + candidate.length - 1]!), offset: start };
+    }
   }
   return undefined;
+}
+export function verbatimSpan(content: string, quote: string): string | undefined {
+  return verbatimSpanAt(content, quote)?.span;
 }
 export function fingerprint(value: unknown): string {
   const normalize = (v: unknown): unknown => Array.isArray(v) ? v.map(normalize)

@@ -1,4 +1,4 @@
-import { MACHINE_FORMAT, type Experiment, type MetricAssessment, type Requirement, type Scenario, type Trial, verbatimSpan } from './contracts.js';
+import { MACHINE_FORMAT, type Experiment, type MetricAssessment, type Requirement, type Scenario, type Trial, verbatimSpanAt } from './contracts.js';
 import { agentMetricResult, automaticTrialResult } from './outcomes.js';
 import { AGREED_RATIONALE_PREFIX } from './judge.js';
 import { pluralForm } from './plural.js';
@@ -65,10 +65,11 @@ export function ruleRegister(record: Pick<Experiment, 'sources' | 'requirements'
   const rows = record.requirements.flatMap((requirement, index) => {
     const sourceIndex = record.sources.findIndex(source => source.id === requirement.sourceId);
     const source = record.sources[sourceIndex];
-    const span = source ? verbatimSpan(source.content, requirement.quote) : undefined;
-    if (!source || span === undefined) return [];
-    const offset = source.content.indexOf(span);
-    return offset < 0 ? [] : [{ requirement, index, sourceIndex, source, span, offset }];
+    // The offset is the one the match was made at, never a fresh search for the matched text: a
+    // sentence that repeats in the source must not pull the rule's line back to the first copy.
+    const found = source ? verbatimSpanAt(source.content, requirement.quote) : undefined;
+    if (!source || !found) return [];
+    return [{ requirement, index, sourceIndex, source, span: found.span, offset: found.offset }];
   }).sort((a, b) => a.sourceIndex - b.sourceIndex || a.offset - b.offset || a.index - b.index);
   const register = new Map<string, RuleRef>();
   for (const row of rows) {
