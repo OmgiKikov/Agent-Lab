@@ -1,7 +1,7 @@
 import type { ExtensionContext, Theme, ThemeColor } from '@earendil-works/pi-coding-agent';
 import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 import type { Experiment, Scenario, Trial } from '../dist/contracts.js';
-import { describeCheck } from '../dist/contracts.js';
+import { describeCheck, fingerprint } from '../dist/contracts.js';
 import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
 import { expectationSheet, qualitySummary, qualityLines, type ExpectationRole, type ExpectationSheet } from '../dist/quality.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
@@ -389,12 +389,23 @@ export class LabBoard implements Component {
   /**
    * What the draft header says about the expectations (UI-SPEC F5): not confirmed, confirmed, or
    * confirmed and then changed. Open questions come first, so that older text stays untouched.
+   *
+   * «Ожидание изменено» is said only when an expectation really changed. `draftHash` also covers the
+   * judge model, the target fingerprint, the materials and the settings, so a re-preflight or an
+   * `agent_lab_edit` of the model must not tell the owner that one of their expectations moved.
    */
   private draftHeadline(record: Experiment): { text: string; color?: ThemeColor } {
     const sheet = this.sheet();
     if (!sheet?.count || record.questions.length) return { text: 'Проверьте цель, первую реплику и критерии. r — запуск.' };
     if (record.acceptedDraftHash === sheet.draftHash) return { text: 'Ожидания подтверждены. r — запуск.', color: 'success' };
-    if (record.acceptedDraftHash) return { text: 'Ожидание изменено после подтверждения. y — подтвердить снова.', color: 'warning' };
+    if (record.acceptedDraftHash) {
+      // An accepted entry seals the whole card definition, so a dropped entry is a changed expectation.
+      const sealed = new Map((record.acceptedTests ?? []).map(test => [test.scenarioId, test.definitionHash]));
+      const expectationsChanged = record.scenarios.some(scenario => sealed.get(scenario.id) !== fingerprint(scenario));
+      return expectationsChanged
+        ? { text: 'Ожидание изменено после подтверждения. y — подтвердить снова.', color: 'warning' }
+        : { text: 'Черновик изменился после подтверждения. y — подтвердить снова.', color: 'warning' };
+    }
     return { text: `Проверьте ожидания: ${sheet.countText}. y — подтвердить все · e — поправить выбранную.`, color: 'warning' };
   }
   /**

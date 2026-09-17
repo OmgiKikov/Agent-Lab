@@ -667,12 +667,24 @@ test('заголовок черновика различает неподтве�
   const confirmed = new LabBoard({ record: { ...record, acceptedDraftHash: hash }, section: 'cards' }, recording, () => {}, () => {}, () => 3000);
   assert.match(confirmed.render(300).join('\n'), /<success>Ожидания подтверждены\. r — запуск\./);
   confirmed.dispose();
-  const staleRecord = { ...record, acceptedDraftHash: 'a'.repeat(64), ownerExpectationScenarioIds: [record.scenarios[0]!.id] };
+  const sealed = record.scenarios.map((scenario, index) => ({ testId: `t${index}`, scenarioId: scenario.id,
+    definitionHash: fingerprint(scenario), acceptedAt: '2026-09-17T00:00:00Z' }));
+  const staleRecord = { ...record, acceptedDraftHash: 'a'.repeat(64), ownerExpectationScenarioIds: [record.scenarios[0]!.id],
+    acceptedTests: sealed.map((test, index) => index ? test : { ...test, definitionHash: 'b'.repeat(64) }) };
   const stale = new LabBoard({ record: staleRecord, section: 'cards' }, recording, () => {}, () => {}, () => 3000);
   const staleText = stale.render(300).join('\n');
   assert.match(staleText, /<warning>Ожидание изменено после подтверждения\. y — подтвердить снова\./);
   assert.match(staleText, /<warning>\s+Ожидание изменено владельцем — с прошлыми прогонами не сравнивается\./);
   stale.dispose();
+  // The draft hash also covers the judge model, the target fingerprint, the materials and the
+  // settings. When every card is still sealed exactly as confirmed, no expectation moved, and the
+  // header must not say one did.
+  const elsewhere = new LabBoard({ record: { ...record, acceptedDraftHash: 'a'.repeat(64), acceptedTests: sealed }, section: 'cards' },
+    recording, () => {}, () => {}, () => 3000);
+  const elsewhereText = elsewhere.render(300).join('\n');
+  assert.match(elsewhereText, /<warning>Черновик изменился после подтверждения\. y — подтвердить снова\./);
+  assert.doesNotMatch(elsewhereText, /Ожидание изменено после подтверждения/);
+  elsewhere.dispose();
   const list = new LabBoard({ record: staleRecord, section: 'cards' }, theme, () => {}, () => {}, () => 120);
   assert.match(stripTerminalSequences(list.render(100).join('\n')), / · ожидание изменено/);
   list.dispose();
