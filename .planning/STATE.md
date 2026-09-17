@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: "03.1"
 current_phase_name: Справился = запрос выполнен и правила промпта соблюдены
 status: executing
-stopped_at: Completed 03-07-PLAN.md
-last_updated: "2026-09-17T17:55:48.368Z"
+stopped_at: Completed 03.1-01-PLAN.md
+last_updated: "2026-09-17T18:53:20.961Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 03 execution started
-state_head: efbf2a4bc57406a3e6bfcf9beacfbc98eda529f9
+last_activity_desc: Phase 03.1 execution started
+state_head: 3016dbffe73bddb91199054ecee11c9823997a5e
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 54
-  completed_plans: 28
+  completed_plans: 29
   percent: 13
 ---
 
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-16)
 
 **Core value:** Владелец агента и заказчик за 10 секунд понимают, насколько хорош агент и почему он ошибается, и верят этому числу.
-**Current focus:** Phase 03 — Согласие человека с судьёй
+**Current focus:** Phase 03.1 — Справился = запрос выполнен и правила промпта соблюдены
 
 ## Current Position
 
-Phase: 03.1 (Справился = запрос выполнен и правила промпта соблюдены) — READY TO EXECUTE
-Plan: 7 of 7
+Phase: 03.1 (Справился = запрос выполнен и правила промпта соблюдены) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-09-17 — Phase 03 execution started
+Last activity: 2026-09-17 — Phase 03.1 execution started
 
 Progress: [█░░░░░░░░░] 13%
 
@@ -86,6 +86,7 @@ Progress: [█░░░░░░░░░] 13%
 | Phase 03 P05 | 10 min | 2 tasks | 2 files |
 | Phase 03 P06 | 16min | 3 tasks | 7 files |
 | Phase 03 P07 | 8min | 2 tasks | 2 files |
+| Phase 03.1 P01 | 48 min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -149,6 +150,11 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-06: строки клавиш C-71/C-72 переносятся только у «·» и продолжаются со второй колонки (Line.hang/breakAt в wrapRows)
 - [Phase 03]: 03-06: trialLines убирает быструю отметку и строку «Вердикта человека нет» только при показанном блоке; редактор v видит все отметки
 - [Phase 03]: 03-07: dist/ built from 5ccc792 and swapped; once the owner puts real marks, roll dist forward only (older dist cannot read quick-mark fields)
+- [Phase 03.1]: 03.1-01: COUNTING_RULES = 'goal-and-rules-v2' lives in outcomes.ts (re-exported from result-view.ts), is derived when a result is shown and never written into a run record; VERSION, evaluatorVersion and JUDGE_PROTOCOL unchanged
+- [Phase 03.1]: 03.1-01: both headline metrics pass one attempt/usability gate (attemptsMatch + metricCardOutcome) before any fail is read, so an unusable situation stays «не измерено» whatever the rules say — pinned live: fae4ee59 0/10/3, a92fd6ae 0/9/6 (not 0/13 / 0/14)
+- [Phase 03.1]: 03.1-01: the positive control is decided by cardVerdict(…, 'goal') and its line names both facts («Контроль: запрос выполнен ✓ · правила промпта нарушены ✗»); the alarm stays goal-only
+- [Phase 03.1]: 03.1-01: compareRuns cards and pairs, repeat and reassessment stability and qualitySummary count by headlineCardOutcome; controls are left out of the report cards/strict so the report number equals the CLI headline; RULE_NOTE named once when shared cards have prompt rules
+- [Phase 03.1]: 03.1-01: a started run whose counted cards have the goal rubric but no prompt rules prints «Правил промпта в наборе нет — считается только запрос.» as its second line; legacy strict sets and never-run drafts print nothing
 
 ### Pending Todos
 
@@ -189,6 +195,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-17T14:39:48.007Z
-Stopped at: Completed 03-07-PLAN.md
+Last session: 2026-09-17T18:52:58.606Z
+Stopped at: Completed 03.1-01-PLAN.md
 Resume file: None
