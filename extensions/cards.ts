@@ -9,6 +9,7 @@ import { GOAL_METRIC_ID, headlineMetricIds, markTargets, measurementUsable, reco
 import type { EvidenceBundle } from '../dist/artifacts.js';
 import { situationEvidence } from '../dist/explain.js';
 import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
+import { verdictLevel, verdictLine } from '../dist/verdict.js';
 
 /** All material, model and persisted text crosses this boundary before terminal rendering. */
 export function safeText(value: unknown): string {
@@ -247,6 +248,7 @@ export interface BoardOptions {
   reviewTimes?: Map<string, number>;
 }
 type BoardTheme = Pick<Theme, 'fg' | 'bold'>;
+type ThemeColorLike = ThemeColor;
 /**
  * `lead` replaces the first line's indent with a same-width prefix (the sheet gutter `▸ ` and the number `12.`).
  * `hang` is the continuation column when it is not `indent + 2`; `breakAt` names the separator a key
@@ -389,29 +391,31 @@ function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean
 export function trialLines(trial: Trial, record: Experiment, expanded: boolean, agreementShown = false): Line[] {
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   const findings = humanFindings(record).filter(f => f.trialId === trial.id);
+  // Demo 2026-09-18: under the agreement block the title and the outcome tag are already on screen.
   const rows = [
-    line(scenario?.title ?? trial.scenarioId, 'accent', true),
-    line(`${verdicts[trial.outcome]} · ${trial.userMode} · повтор ${trial.repeat + 1}`, outcomeColor(trial.outcome)),
+    ...(agreementShown && !expanded ? [] : [line(scenario?.title ?? trial.scenarioId, 'accent', true),
+      line(`${verdicts[trial.outcome]} · ${trial.userMode === 'reactive' ? 'клиента играл симулятор' : trial.userMode} · попытка ${trial.repeat + 1}`, outcomeColor(trial.outcome))]),
     ...findings.map(f => line(expanded ? humanFindingText(f) : humanFindingText(f).slice(0, 240), 'warning')),
     ...(record.workflow !== 'evaluate' ? [line(`Версия агента: ${trial.revisionId}`, 'muted')] : []),
-    line(trial.reason),
-    ...(trial.observation ? [line(`Наблюдение: состояние ${trial.observation.state} · события ${trial.observation.tools} · сброс ${trial.observation.resetConfirmed === true ? 'заявлен' : 'не подтверждён'}`, 'muted')] : []),
-    ...(trial.externalUsage ? [line(`Внешний агент: ${trial.externalUsage.calls} вызовов · стоимость ${trial.externalUsage.costUsd === null ? 'неизвестна' : `$${trial.externalUsage.costUsd.toFixed(4)}`}`, 'muted')] : []),
-    line(`Модель лаборатории: ${trial.usage.calls} вызовов · ${(trial.elapsedMs / 1000).toFixed(1)} с · стоимость ${trial.usage.costUsd === null ? 'неизвестна' : `$${trial.usage.costUsd.toFixed(4)}`}`, 'muted'),
-    ...(record.target.kind !== 'sandbox' ? [line('Вызовы и расходы внешнего агента в эту оценку не входят.', 'muted')] : []),
-    line(''), line('ДЕТЕРМИНИРОВАННЫЕ ПРОВЕРКИ', 'accent'),
-    ...(trial.checks.length ? trial.checks.flatMap(c => [
-      line(`${c.passed ? '✓' : '×'} ${c.description} [${c.id}]`, c.passed ? 'success' : 'error'), line(c.evidence, 'muted'),
-    ]) : [line('Проверок состояния нет. Итог не означает успех по всем метрикам.', 'muted')]),
-    ...(trial.userMode === 'reactive' ? [line(''), line('ПРОВЕРКИ СИМУЛЯТОРА · эвристики', 'accent'),
+    ...(expanded || trial.outcome === 'invalid' ? [line(trial.reason)] : []),
+    // Demo 2026-09-18: service rows (observation, calls, cost, empty check lists) wait behind Enter.
+    ...(expanded && trial.observation ? [line(`Наблюдение: состояние ${trial.observation.state} · события ${trial.observation.tools} · сброс ${trial.observation.resetConfirmed === true ? 'заявлен' : 'не подтверждён'}`, 'muted')] : []),
+    ...(expanded && trial.externalUsage ? [line(`Внешний агент: ${trial.externalUsage.calls} вызовов · стоимость ${trial.externalUsage.costUsd === null ? 'неизвестна' : `$${trial.externalUsage.costUsd.toFixed(4)}`}`, 'muted')] : []),
+    ...(expanded ? [line(`Модель лаборатории: ${trial.usage.calls} вызовов · ${(trial.elapsedMs / 1000).toFixed(1)} с · стоимость ${trial.usage.costUsd === null ? 'неизвестна' : `$${trial.usage.costUsd.toFixed(4)}`}`, 'muted')] : []),
+    ...(expanded && record.target.kind !== 'sandbox' ? [line('Вызовы и расходы внешнего агента в эту оценку не входят.', 'muted')] : []),
+    ...(expanded || trial.checks.length ? [line(''), line('ДЕТЕРМИНИРОВАННЫЕ ПРОВЕРКИ', 'accent'),
+      ...(trial.checks.length ? trial.checks.flatMap(c => [
+        line(`${c.passed ? '✓' : '×'} ${c.description} [${c.id}]`, c.passed ? 'success' : 'error'), line(c.evidence, 'muted'),
+      ]) : [line('Проверок состояния нет. Итог не означает успех по всем метрикам.', 'muted')])] : []),
+    ...(trial.userMode === 'reactive' && (expanded || trial.simulatorChecks?.some(c => !c.passed)) ? [line(''), line('ПРОВЕРКИ СИМУЛЯТОРА · эвристики', 'accent'),
       ...(trial.simulatorChecks?.length ? trial.simulatorChecks.flatMap(c => [line(`${c.passed ? '✓' : '?'} ${c.description} [${c.id}]`, c.passed ? 'success' : 'warning'), line(c.evidence, 'muted')])
         : [line('Не применялись: симулятор не отправил реплик после первой.', 'muted')])] : []),
-    line(''), line(record.mode === 'demo' ? 'СЦЕНАРНАЯ ОЦЕНКА ДЕМО — ПРОВЕРЬТЕ ПО ТРАССЕ' : 'ОЦЕНКА МОДЕЛЬЮ — ПРОВЕРЬТЕ ПО ТРАССЕ', 'accent'),
+    line(''), line(record.mode === 'demo' ? 'СЦЕНАРНАЯ ОЦЕНКА ДЕМО — ПРОВЕРЬТЕ ПО ТРАССЕ' : 'РЕШЕНИЕ СУДЬИ ПО РУБРИКАМ — ПРОВЕРЬТЕ ПО ДИАЛОГУ', 'accent'),
     ...(scenario?.metrics ?? []).flatMap(m => {
       const a = trial.assessments?.find(a => a.metricId === m.id);
       return [line(`${m.subject === 'simulator' ? 'Симулятор' : 'Агент'} · ${m.name}: ${a ? verdicts[a.result] : 'НЕТ ОЦЕНКИ'}`, a ? outcomeColor(a.result) : 'warning'),
-        line(a?.rationale ?? 'Оценка отсутствует; это не прохождение.'),
-        line(`Основания: ${a?.evidence.length ? a.evidence.map(seq => `#${seq}`).join(', ') : 'не указаны'}`, 'muted'),
+        line(a ? plainRationale(a.rationale) : 'Оценка отсутствует; это не прохождение.'),
+        ...(a?.evidence.length || expanded ? [line(`Основания: ${a?.evidence.length ? a.evidence.map(seq => `#${seq}`).join(', ') : 'не указаны'}`, 'muted')] : []),
         ...(expanded ? [line(`Критерий успеха: ${m.passCriteria}`), line(`Критерий провала: ${m.failCriteria}`)] : [])];
     }),
     ...(trial.assessmentError ? [line(`Ошибка оценщика: ${trial.assessmentError}`, 'error')] : []),
@@ -437,15 +441,18 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean, 
   }
   const tools = [...new Set(trial.events.filter(e => e.type === 'tool_call').map(e => e.tool))];
   if (!expanded && tools.length) transcript.push(line(`Инструменты: ${tools.join(' · ')}. Enter — раскрыть трассу.`, 'muted'));
+  const failedRationale = trial.assessments?.find(a => a.result === 'fail')?.rationale;
   const problem = trial.checks.find(c => !c.passed)?.description
-    ?? trial.assessments?.find(a => a.result === 'fail')?.rationale ?? trial.assessmentError;
-  rows.splice(2 + findings.length, 0, ...transcript, ...(problem ? [line(`Требует внимания: ${problem}`, 'warning'), line('')] : []));
+    ?? (failedRationale ? plainRationale(failedRationale) : undefined) ?? trial.assessmentError;
+  rows.splice((agreementShown && !expanded ? 0 : 2) + findings.length, 0, ...transcript, ...(problem ? [line(`Требует внимания: ${problem}`, 'warning'), line('')] : []));
   if (expanded) rows.push(line(`Диалог: ${trial.id}`, 'muted'));
   if (expanded) rows.push(line('СОСТОЯНИЕ ДО', 'accent'), line(json(trial.initialState)), line('СОСТОЯНИЕ ПОСЛЕ', 'accent'), line(json(trial.finalState)));
   return rows;
 }
 
 const tierLabels: Record<string, string> = { smoke: 'дымовые', regression: 'регрессия', frontier: 'фронтир' };
+/** The judge's self-consistency preamble («Совпало 2/2 оценок … это не проверка правильности.») is bookkeeping; the board shows the reason itself. */
+const plainRationale = (text: string): string => text.replace(/^Совпало \d+\/\d+ оценок этой рубрики в свежих сессиях; это не проверка правильности\.\s*/u, '');
 /** Verdict wording comes from the record itself, so the board, the report and the CLI never disagree. */
 const noteText = (note: VerdictNote): string => note.text;
 
@@ -460,10 +467,14 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
     const section = causeSection(view);
     const disagreements = disagreementLines(view);
     // The first block is ResultView's, row for row: the board never counts or picks a not-measured card itself.
-    return [line('ИТОГ', 'accent', true),
-      ...(measuredAny ? resultViewRows(view).map(viewRow) : [line(v.headline, 'text', true)]),
-      ...(measuredAny && q.metrics.length ? text.metrics.map(m => line(m)) : []),
-      ...(measuredAny ? text.rag.map(item => line(item, 'muted')) : []),
+    // Demo 2026-09-18: the verdict in plain words leads; the per-situation «?» rows and the metric bars
+    // move behind Enter — section 3 lists every unmeasured situation with its reason.
+    const unmeasuredRows = measuredAny ? resultViewRows(view).filter(row => row.role === 'situation').length : 0;
+    const levelColor: Record<ReturnType<typeof verdictLevel>, ThemeColorLike> = { good: 'success', warn: 'warning', bad: 'error' };
+    return [
+      ...(measuredAny ? [line(verdictLine(view), levelColor[verdictLevel(view)], true)] : [line('ИТОГ', 'accent', true)]),
+      ...(measuredAny ? resultViewRows(view).filter(row => row.role !== 'situation').map(viewRow) : [line(v.headline, 'text', true)]),
+      ...(unmeasuredRows ? [line(`Какие ситуации не измерены и почему — раздел 3 (метка «?») или Enter.`, 'muted', false, 2)] : []),
       line(''),
       ...(finding ? [line(humanFindingText(finding), 'warning')] : []),
       // The same explanations the CLI and the Pi result show; nothing here is clipped or reworded.
@@ -765,7 +776,7 @@ export class LabBoard implements Component {
     if (record) {
       const unresolved = record.phase === 'complete' && awaitingVerdict(record).size > 0;
       header.push(line(`${unresolved ? 'НЕРАЗОБРАННЫЕ ПРОВАЛЫ' : phases[record.phase] ?? record.phase} · ${record.mode === 'demo' ? 'ДЕМО · без модели' : 'ЖИВОЙ ПРОГОН'}`, activePhases.has(record.phase) ? 'accent' : record.phase === 'complete' && !unresolved ? 'success' : 'warning'));
-      header.push(line([['agent', '1 Обзор'], ['cards', `2 Ситуации ${record.scenarios.length}`], ['results', `3 Диалоги ${record.trials.length}`]]
+      header.push(line([['agent', '1 Итог'], ['cards', `2 Ситуации ${record.scenarios.length}`], ['results', `3 Провалы и диалоги ${record.trials.length}`]]
         .map(([id, label]) => this.section === id ? `[${label}]` : label).join('   '), 'muted'));
       if (this.section === 'results' && record.trials.length) {
         const review = reviewHeader(record, inner);
