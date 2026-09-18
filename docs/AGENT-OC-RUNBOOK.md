@@ -47,6 +47,7 @@ node ../conductor-playground/dist/cli.js chat
 
 ```json
 {
+  "format": "agent-lab-connection-1",
   "target": {
     "kind": "command",
     "command": "python",
@@ -162,6 +163,24 @@ node dist/cli.js export --id RUN_ID --format markdown --output cards.md
 
 Артефакт — карточки с `provenance: "production"`, дословными первыми репликами клиентов,
 наблюдёнными профилями и ссылками на `id` диалогов-доказательств.
+
+## End2end одной командой
+
+Команды с флагами и heredoc не переживают копирование через мессенджер: двойной дефис приезжает
+длинным тире, кавычки — типографскими. Поэтому подготовка и прогон собраны в скрипт, а от
+оператора нужны только два значения ЕПК:
+
+```bash
+AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… bash examples/agent-oc-e2e.sh
+```
+
+Скрипт кладёт `task.json`, `connection.json`, черновик и `report.html` в `.agent-lab-run`.
+Карточку правьте в [examples/agent-oc-e2e/task.json](../examples/agent-oc-e2e/task.json) —
+ЕПК туда не вписываются, они подставляются из окружения при запуске. Полезные переменные:
+`AGENT_OC_ROOT` (по умолчанию `../agent_oc`), `AGENT_OC_SURFACE`, `AGENT_OC_AUTHORITY`,
+`DRY_RUN=1` (остановиться после подготовки файлов и посмотреть, что получилось).
+
+Ниже — те же шаги по отдельности.
 
 ## End2end
 
