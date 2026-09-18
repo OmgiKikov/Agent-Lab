@@ -33,5 +33,7 @@ echo "Переоценка ${new_id} прогона ${run_id}"
 
 node dist/cli.js export --id "${new_id}" --format html --output "${run_dir}/report.html"
 node dist/cli.js export --id "${new_id}" --format markdown --output "${run_dir}/report.md"
-echo "Отчёт: ${run_dir}/report.html и ${run_dir}/report.md"
+# Короткая сводка качества: accuracy, покрытие, повторяющиеся причины провалов, судья.
+node dist/cli.js summary --id "${new_id}" | tee "${run_dir}/summary.txt"
+echo "Отчёт: ${run_dir}/report.html, report.md и summary.txt"
 exit "${verdict}"
