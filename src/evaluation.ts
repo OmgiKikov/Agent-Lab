@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import {
-  emptyUsage, userTurnSchema, scriptIssue, metricApplies, validateAssessments,
-  type CallContext, type CheckResult, type DialogueMessage, type Revision,
+  assessmentRubrics, emptyUsage, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
+  type CallContext, type CheckResult, type DialogueMessage, type Requirement, type Revision,
   type Runtime, type Scenario, type Settings, type Source, type Target, type TargetSession, type TraceEvent, type Trial, type UserMode,
 } from './contracts.js';
+import { observableSources } from './judge.js';
 import { sandbox } from './sandbox.js';
 import { openExternalTarget } from './targets.js';
+import { simulatorChecks } from './simulator.js';
 
 /*
  * One trial = one fresh world, one target session, one user side.
@@ -65,6 +67,9 @@ const stages: Record<string, string> = {
 };
 
 export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
+  if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) {
+    throw new Error('Внешнее состояние карточки не подтверждено адаптером (resetConfirmed). Измерение недействительно.');
+  }
   if (scenario.checks.some(c => c.kind === 'state_equals') && trial.observation?.state === 'missing') {
     throw new Error('Внешний агент не сообщил итоговое состояние. Проверки состояния не измерены.');
   }
@@ -122,10 +127,10 @@ export function previewAnswer(scenario: Scenario, answer: string) {
 
 export async function evaluateTrial(input: {
   runtime: Runtime; revision: Revision; scenario: Scenario; repeat: number; manifestHash: string;
-  sources: Source[]; settings: Settings; ctx: CallContext; userMode: UserMode; target: Target;
+  sources: Source[]; requirements: Requirement[]; settings: Settings; ctx: CallContext; userMode: UserMode; target: Target;
   onStage?(stage: 'target' | 'user' | 'assessment'): void;
 }): Promise<Trial> {
-  const { runtime, revision, scenario, repeat, manifestHash, sources, settings, ctx, userMode, target, onStage } = input;
+  const { runtime, revision, scenario, repeat, manifestHash, sources, requirements, settings, ctx, userMode, target, onStage } = input;
   const started = performance.now();
   const state = structuredClone(scenario.initialState);
   const trial: Trial = {
@@ -234,6 +239,8 @@ export async function evaluateTrial(input: {
       finalUserReply = user.done;
     }
     trial.finalState = structuredClone(state);
+    // Simulator checks describe the user side only; they are computed before grading and never touch the outcome.
+    trial.simulatorChecks = simulatorChecks(scenario, trial);
     stage = 'проверка наблюдений';
     trial.checks = grade(scenario, trial);
     const allPassed = trial.checks.length > 0 && trial.checks.every(check => check.passed);
@@ -262,7 +269,7 @@ export async function evaluateTrial(input: {
     trial.elapsedMs = Math.round(performance.now() - started);
     if (persistenceFailed) throw persistenceError;
   }
-  if (stopped && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && scenario.metrics?.length) {
+  if (stopped && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && assessmentRubrics(scenario, trial).length) {
     try {
       if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');
       ctx.signal.throwIfAborted();
@@ -270,7 +277,7 @@ export async function evaluateTrial(input: {
       trial.assessments = await assessTrial(runtime, scenario, sources, trial, { ...localCtx, onJudgment: (id, audit) => {
         try { ctx.onJudgment?.(id, audit); }
         catch (error) { persistenceFailed = true; persistenceError = error; throw error; }
-      } });
+      } }, requirements);
     } catch (error) {
       if (persistenceFailed) throw persistenceError;
       trial.assessmentError = (ctx.signal.aborted ? 'Metric assessment cancelled' : error instanceof Error ? error.message : 'Metric assessment failed').slice(0, 4000);
@@ -280,18 +287,19 @@ export async function evaluateTrial(input: {
   return trial;
 }
 
-/** Shared by live evaluation and reassessment of immutable recorded evidence. */
-export async function assessTrial(runtime: Runtime, scenario: Scenario, sources: Source[], trial: Trial, ctx: CallContext) {
+/** Shared by live evaluation and reassessment of immutable recorded evidence. The judge sees the agent prompt only as its observable rules. */
+export async function assessTrial(runtime: Runtime, scenario: Scenario, sources: Source[], trial: Trial, ctx: CallContext, requirements: Requirement[]) {
   if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');
-  const metrics = scenario.metrics ?? [];
+  const metrics = assessmentRubrics(scenario, trial);
   const assessments = validateAssessments(metrics, trial.events, await runtime.assess({
-    scenario: structuredClone(scenario), sources: structuredClone(sources), trial: structuredClone(trial),
+    scenario: structuredClone({ ...scenario, metrics }), sources: structuredClone(observableSources(sources, requirements)), trial: structuredClone(trial),
   }, { ...ctx, onTargetEvent: undefined, onTrace: undefined, onJudgment: (id, audit) => {
     trial.judgeAudit = structuredClone(audit);
     ctx.onJudgment?.(id, audit);
   } }));
   ctx.signal.throwIfAborted();
   return assessments.map(assessment => !metricApplies(metrics.find(m => m.id === assessment.metricId)!, trial)
-    ? { metricId: assessment.metricId, result: 'unknown' as const, evidence: [], rationale: 'Реактивный симулятор не участвовал в этом диалоге; его качество не измерено.' }
+    ? { metricId: assessment.metricId, result: 'unknown' as const, evidence: [], rationale: RAG_METRIC_IDS.has(assessment.metricId)
+      ? 'Полный RAG-контекст каждого ответа не подтверждён адаптером; причина не установлена.' : 'Реактивный симулятор не участвовал в этом диалоге; его качество не измерено.' }
     : assessment);
 }

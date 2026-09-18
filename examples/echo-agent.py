@@ -3,10 +3,18 @@
 
 Agent Lab starts this script once per dialogue and speaks JSON lines:
   stdin  -> {"type": "respond", "sessionId": ..., "scenarioId": ..., "initialState": {...}, "messages": [...], "message": "..."}
-  stdout <- "plain reply"  or  {"reply": "...", "events": [{"tool": ..., "args": ..., "result": ...}], "records": {...}}
+  stdout <- "plain reply"  or  {"reply": "...", "events": [{"tool": ..., "args": ..., "result": ...}], "records": {...},
+             "retrievals": [{"source": "...", "content": "exact chunk", "score": 0.8}], "retrievalsComplete": true}
   stdin  -> {"type": "close", "sessionId": ...}   (then stdin ends)
 
 Replace `handle` with a call into your RAG agent. Keep one reply per request and flush stdout.
+"retrievals" are the exact knowledge-base chunks given to the model for this reply; set
+retrievalsComplete=true only when the list is the whole context. Without them Agent Lab cannot tell
+a search miss from a bad answer, and the RAG diagnosis stays silent.
+
+initialState may carry "external": opaque data for your test environment (cards, contracts, tool fixtures).
+Apply it before the first reply and keep resetConfirmed=True only if you did; Agent Lab treats an
+unconfirmed external state as an invalid (unmeasured) dialogue, never as a pass.
 """
 import json
 import re
@@ -32,6 +40,7 @@ def handle(request, records):
 
 
 records = None  # One process per dialogue: retain state until close, then reset in the next process.
+applied_external = False
 turn = 0
 for line in sys.stdin:
     line = line.strip()
@@ -42,9 +51,11 @@ for line in sys.stdin:
         break
     if records is None:
         records = json.loads(json.dumps(request["initialState"]["records"]))
+        # This echo agent has no backend to load "external" into, so it only confirms a reset it actually performed.
+        applied_external = "external" not in request["initialState"]
     turn += 1
     reply = handle(request, records)
-    reply.update(eventsComplete=True, resetConfirmed=True, turn=turn, version="echo-python-1",
+    reply.update(eventsComplete=True, resetConfirmed=applied_external, turn=turn, version="echo-python-1",
                  usage={"calls": 0, "inputTokens": 0, "outputTokens": 0, "costUsd": 0})
     if request.get("sessionId"):
         reply["sessionId"] = request["sessionId"]

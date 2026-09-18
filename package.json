@@ -1,7 +1,7 @@
 {
   "name": "pi-agent-lab",
   "version": "0.3.0",
-  "description": "Check an agent change from a conversation: reproducible tests, evidence and regression comparisons",
+  "description": "Run a real AI agent on a repeatable validation set and explain its accuracy and failures",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -14,10 +14,8 @@
     "dist",
     "extensions",
     "skills",
-    "docs",
     "examples",
-    "README.md",
-    "CONTEXT.md"
+    "README.md"
   ],
   "pi": {
     "extensions": [

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, access, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, access, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -9,6 +9,7 @@ import { DefaultResourceLoader, SettingsManager, type ExtensionAPI, type Extensi
 import type { Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
+import { ExperimentLab, planDiscovery } from '../dist/experiment.js';
 
 async function registered(onUserMessage?: (message: unknown) => void) {
   const tools = new Map<string, ToolDefinition>();
@@ -16,19 +17,260 @@ async function registered(onUserMessage?: (message: unknown) => void) {
   const userMessages: unknown[] = [];
   let shutdown!: () => Promise<void>;
   let command!: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+  let beforeAgentStart!: (event: { systemPrompt: string }, ctx: ExtensionContext) => Promise<{ systemPrompt: string } | undefined>;
   await agentLab({
     registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
     registerCommand: (name: string, options: { handler: typeof command }) => { assert.equal(name, 'agent-lab'); command = options.handler; },
-    on: (name: string, handler: () => Promise<void>) => { if (name === 'session_shutdown') shutdown = handler; else assert.ok(['session_start', 'before_agent_start'].includes(name)); },
+    on: (name: string, handler: () => Promise<void>) => {
+      if (name === 'session_shutdown') shutdown = handler;
+      else if (name === 'before_agent_start') beforeAgentStart = handler as typeof beforeAgentStart;
+      else assert.equal(name, 'session_start');
+    },
     sendMessage: (message: { content: string; display: boolean }, options: { deliverAs: string }) => { assert.equal(options.deliverAs, 'followUp'); contexts.push(message); },
     sendUserMessage: (message: unknown, options: { deliverAs: string; expandPromptTemplates: boolean }) => { assert.equal(options.deliverAs, 'followUp'); assert.equal(options.expandPromptTemplates, false); userMessages.push(message); onUserMessage?.(message); },
   } as unknown as ExtensionAPI);
-  assert.ok(shutdown); assert.ok(command);
-  return { tools, shutdown, command, contexts, userMessages };
+  assert.ok(shutdown); assert.ok(command); assert.ok(beforeAgentStart);
+  return { tools, shutdown, command, beforeAgentStart, contexts, userMessages };
 }
 function output(result: Awaited<ReturnType<ToolDefinition['execute']>>) {
   return JSON.parse(result.content.filter(c => c.type === 'text').map(c => c.text).join('\n'));
 }
+
+test('injected Pi instructions hand saved discovery directly to one test after the owner answers', async () => {
+  const previous = process.env.AGENT_LAB_SESSION;
+  process.env.AGENT_LAB_SESSION = '1';
+  const { beforeAgentStart, shutdown } = await registered();
+  try {
+    const result = await beforeAgentStart({ systemPrompt: 'base' }, { cwd: '.', hasUI: false, mode: 'print' } as ExtensionContext);
+    const prompt = result?.systemPrompt ?? '';
+    assert.match(prompt, /primary flow.*mode=validate/is);
+    assert.match(prompt, /up to 15 measurable prompt\/RAG cases.*reactive simulator/is);
+    assert.match(prompt, /estimated card accuracy/is);
+    assert.match(prompt, /agent_lab_build mode=discover/i);
+    assert.match(prompt, /selection, not an accuracy estimate/i);
+    assert.match(prompt, /Show that saved brief exactly; do not reconstruct or paraphrase it/i);
+    assert.match(prompt, /answers yes.*exact fromRunId and hypothesis/is);
+    assert.match(prompt, /re-reads the saved evidence and builds exactly one editable test/is);
+    assert.match(prompt, /refusal or correction builds nothing/i);
+    assert.match(prompt, /agent_lab_accept.*decision about the test definition/is);
+    assert.match(prompt, /one-test flow.*agent_lab_run only after acceptance/is);
+    assert.match(prompt, /multi-test validation\/regression suites.*not one-test acceptance metadata/is);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_LAB_SESSION; else process.env.AGENT_LAB_SESSION = previous;
+    await shutdown();
+  }
+});
+
+test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-card set', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-validation-surface-'));
+  const fixtureLab = new ExperimentLab(join(directory, 'fixture'), createDemoRuntime());
+  await fixtureLab.init();
+  const seeded = await fixtureLab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 });
+  await fixtureLab.waitForIdle();
+  const prepared = await fixtureLab.get(seeded.id);
+  await fixtureLab.close();
+
+  const originalCreate = ExperimentLab.prototype.create;
+  const originalGet = ExperimentLab.prototype.get;
+  const originalWait = ExperimentLab.prototype.waitForIdle;
+  const originalStart = ExperimentLab.prototype.start;
+  let captured: Parameters<ExperimentLab['create']>[0] | undefined;
+  let record = structuredClone(prepared);
+  ExperimentLab.prototype.create = async function(raw) {
+    captured = raw;
+    const dialogues = raw.dialogues!.slice(0, 15);
+    record = { ...structuredClone(prepared), id: 'validation-run', task: raw.task, mode: 'live', phase: 'review',
+      settings: raw.settings, target: raw.target!, dialogues: structuredClone(dialogues),
+      scenarios: dialogues.map((dialogue, index) => ({ ...structuredClone(prepared.scenarios[0]!), id: dialogue.id, provenance: 'production' as const,
+        familyId: dialogue.id, title: `Карточка ${index + 1}`, user: { ...structuredClone(prepared.scenarios[0]!.user),
+          opening: dialogue.messages[0]!.content, script: [] } })) };
+    return structuredClone(record);
+  };
+  ExperimentLab.prototype.get = async function(id) { return id === record.id ? structuredClone(record) : originalGet.call(this, id); };
+  ExperimentLab.prototype.waitForIdle = async function() {};
+  let startOptions: Parameters<ExperimentLab['start']>[1] | undefined;
+  ExperimentLab.prototype.start = async function(_id, options) { startOptions = options; return structuredClone(record); };
+  t.after(async () => {
+    ExperimentLab.prototype.create = originalCreate;
+    ExperimentLab.prototype.get = originalGet;
+    ExperimentLab.prototype.waitForIdle = originalWait;
+    ExperimentLab.prototype.start = originalStart;
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const { tools, shutdown } = await registered();
+  t.after(shutdown);
+  const confirmations: { title: string; body: string }[] = [];
+  const ctx = { cwd: directory, mode: 'tui', hasUI: true, model: { provider: 'fixture', id: 'fixture' }, ui: {
+    confirm: async (title: string, body: string) => { confirmations.push({ title, body }); return true; },
+  } } as unknown as ExtensionContext;
+  const dialogues = Array.from({ length: 300 }, (_, index) => ({ id: `dialogue_${index}`, outcome: index % 2 ? 'success' : 'failure',
+    messages: [{ role: 'user', content: `Вопрос ${index}` }, { role: 'assistant', content: `Старый ответ ${index}` }] }));
+  const result = output(await tools.get('agent_lab_build')!.execute('validate', { mode: 'validate', task: 'Проверить агента',
+    materials: [{ name: 'policy.md', content: 'Отвечать по базе знаний.' }], dialogues,
+    target: { kind: 'command', command: process.execPath, args: [] } }, undefined, undefined, ctx));
+
+  assert.equal(captured?.validationCount, 15);
+  assert.equal(captured?.dialogues?.length, 40);
+  assert.deepEqual(captured?.settings.userModes, ['reactive']);
+  assert.equal(captured?.settings.maxTurns, 6);
+  assert.equal(captured?.settings.maxCalls, 385);
+  assert.equal(captured?.settings.timeoutMs, 600000, 'grounding ten materials with a small model takes longer than the two-minute default');
+  assert.equal(result.validation.sourceDialogues, 300);
+  assert.equal(result.validation.candidateDialogues, 40);
+  assert.equal(result.validation.sampledDialogues, 15);
+  assert.match(confirmations[0]!.body, /Исходных диалогов: 300; outcome-blind пул: 40; карточек: 15/);
+  await tools.get('agent_lab_run')!.execute('run-validation', { id: result.id, expectedHash: result.draftHash }, undefined, undefined, ctx);
+  assert.match(confirmations[1]!.body, /Validation set: 15 реальных диалогов/);
+  assert.equal(startOptions?.parallel, 8, 'an external agent is checked on several dialogues at once');
+  assert.match(confirmations[1]!.body, /Клиент отвечает на уточнения симулятором/);
+  assert.equal(confirmations[1]!.body.match(/Ожидается:/g)?.length, 15);
+  assert.equal(confirmations[1]!.body.match(/Основание:/g)?.length, 15);
+});
+
+test('Pi discovery confirms a computed budget, accepts 300 logs and hands the exact saved hypothesis to one visible test', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-discovery-surface-'));
+  const fixtureLab = new ExperimentLab(join(directory, 'fixture'), createDemoRuntime());
+  await fixtureLab.init();
+  const seeded = await fixtureLab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 });
+  await fixtureLab.waitForIdle();
+  const prepared = await fixtureLab.get(seeded.id);
+  await fixtureLab.close();
+  prepared.id = 'draft-from-discovery';
+  prepared.scenarios = [prepared.scenarios[0]!];
+  prepared.scenarios[0]!.goalObservation = 'reply';
+  prepared.phase = 'review';
+  prepared.message = 'Тест готов.';
+  prepared.error = null;
+
+  const originalDiscover = ExperimentLab.prototype.discover;
+  const originalResume = ExperimentLab.prototype.resumeDiscovery;
+  const originalBuild = ExperimentLab.prototype.buildFromDiscovery;
+  const originalGet = ExperimentLab.prototype.get;
+  const originalWait = ExperimentLab.prototype.waitForIdle;
+  let ready: typeof prepared | undefined;
+  let discoverCalls = 0;
+  let resumeCalls = 0;
+  let discoverySettings: { maxCalls: number; maxDurationMs: number } | undefined;
+  let handoff: { fromRunId: string; hypothesis: string } | undefined;
+  ExperimentLab.prototype.discover = async function(raw) {
+    discoverCalls++;
+    const plan = planDiscovery(raw);
+    discoverySettings = { maxCalls: raw.settings.maxCalls, maxDurationMs: raw.settings.maxDurationMs };
+    const { batches: _batches, batchCount: _batchCount, oversizedIds: _oversizedIds, seed: _seed, ...callPlan } = plan;
+    const requirement = { id: 'support', text: 'Назвать адрес поддержки', sourceId: prepared.sources[0]!.id,
+      quote: prepared.sources[0]!.content.slice(0, 20), critical: true };
+    const hypothesis = 'Агент может не назвать адрес поддержки.\nНАБЛЮДЕНИЕ: ответ агента (reply)';
+    ready = { ...structuredClone(prepared), id: 'discovery-run', phase: 'complete', dialogues: structuredClone(raw.dialogues), scenarios: [], trials: [],
+      discovery: { protocol: 'discovery-1', phase: 'ready', error: null, requirements: [requirement],
+        observations: [
+          { dialogueId: raw.dialogues[0]!.id, classification: 'candidate', requirementId: requirement.id, summary: 'Адрес не назван.', citations: [{ seq: 1, quote: raw.dialogues[0]!.messages[1]!.content }] },
+          { dialogueId: raw.dialogues[1]!.id, classification: 'candidate', requirementId: requirement.id, summary: 'Адрес не назван.', citations: [{ seq: 1, quote: raw.dialogues[1]!.messages[1]!.content }] },
+          { dialogueId: raw.dialogues[2]!.id, classification: 'clean', summary: 'Контроль.', citations: [] },
+        ], seed: plan.seed, focusRequirementId: requirement.id, representativeIds: [raw.dialogues[0]!.id, raw.dialogues[1]!.id],
+        controlIds: [raw.dialogues[2]!.id], selectedIds: [raw.dialogues[0]!.id, raw.dialogues[1]!.id, raw.dialogues[2]!.id],
+        completedBatchCount: plan.batchCount, groupingComplete: true,
+        completedDeepIds: [raw.dialogues[0]!.id, raw.dialogues[1]!.id, raw.dialogues[2]!.id], deep: [],
+        hypothesis: { text: hypothesis, proposedGoalObservation: 'reply', requirementId: requirement.id,
+          eventIds: [{ dialogueId: raw.dialogues[0]!.id, seq: 1 }, { dialogueId: raw.dialogues[1]!.id, seq: 1 }] },
+        callPlan: { ...callPlan, batches: plan.batchCount },
+        callsUsed: plan.nominalCalls, totalDialogues: raw.dialogues.length, oversizedIds: plan.oversizedIds } };
+    return structuredClone(ready);
+  };
+  ExperimentLab.prototype.buildFromDiscovery = async function(fromRunId, hypothesis) {
+    handoff = { fromRunId, hypothesis };
+    return structuredClone(prepared);
+  };
+  ExperimentLab.prototype.resumeDiscovery = async function(id) {
+    resumeCalls++;
+    assert.equal(id, 'discovery-run');
+    assert.ok(ready?.discovery);
+    ready.discovery.phase = 'ready';
+    ready.phase = 'complete';
+    return structuredClone(ready);
+  };
+  ExperimentLab.prototype.get = async function(id) {
+    if (id === ready?.id) return structuredClone(ready);
+    if (id === prepared.id) return structuredClone(prepared);
+    return originalGet.call(this, id);
+  };
+  ExperimentLab.prototype.waitForIdle = async function() {};
+  t.after(async () => {
+    ExperimentLab.prototype.discover = originalDiscover;
+    ExperimentLab.prototype.resumeDiscovery = originalResume;
+    ExperimentLab.prototype.buildFromDiscovery = originalBuild;
+    ExperimentLab.prototype.get = originalGet;
+    ExperimentLab.prototype.waitForIdle = originalWait;
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const { tools, shutdown } = await registered();
+  t.after(shutdown);
+  const confirmations: { title: string; body: string }[] = [];
+  let consent = false;
+  const ctx = { cwd: directory, mode: 'tui', hasUI: true, model: { provider: 'fixture', id: 'fixture' }, ui: {
+    confirm: async (title: string, body: string) => { confirmations.push({ title, body }); return consent; },
+  } } as unknown as ExtensionContext;
+  const call = async (params: unknown) => output(await tools.get('agent_lab_build')!.execute('fixture', params, undefined, undefined, ctx));
+  const logs = Array.from({ length: 300 }, (_, index) => ({ id: `dialogue_${index}`,
+    messages: [{ role: 'user', content: `Где поддержка ${index}?` }, { role: 'assistant', content: 'Позвоните позже.' }] }));
+  const base = { mode: 'discover', task: 'Найти один полезный тест', materials: [{ name: 'policy.md', content: 'Называйте support@example.com.' }] };
+
+  const cancelled = await call({ ...base, dialogues: logs });
+  assert.equal(cancelled.status, 'cancelled'); assert.equal(cancelled.calls, 0); assert.equal(cancelled.mutated, false);
+  assert.equal(discoverCalls, 0);
+  assert.match(confirmations[0]!.body, /потолок: (\d+)/);
+  assert.ok(Number(confirmations[0]!.body.match(/потолок: (\d+)/)![1]) > 20);
+  assert.match(confirmations[0]!.body, /время: до (\d+) секунд/);
+  assert.ok(Number(confirmations[0]!.body.match(/время: до (\d+) секунд/)![1]) > 180);
+  await assert.rejects(access(join(directory, '.agent-lab')), /ENOENT/);
+  await assert.rejects(call({ ...base, dialogues: [...logs, { ...logs[0], id: 'dialogue_300' }] }), /300|Too big|слишком/i);
+  assert.equal(discoverCalls, 0);
+
+  consent = true;
+  const found = await call({ ...base, dialogues: logs.slice(0, 50) });
+  assert.equal(discoverCalls, 1);
+  assert.ok(found.plan.maxCalls > 20);
+  assert.ok(found.plan.maxDurationMs > 180000);
+  assert.deepEqual(discoverySettings, { maxCalls: 20, maxDurationMs: 180000 }, 'core derives discovery ceilings while retaining the test defaults');
+  assert.equal(found.fromRunId, 'discovery-run');
+  assert.match(found.brief, /отбор, не accuracy/);
+  assert.match(found.brief, /диалог dialogue_0, событие #1/);
+  assert.match(found.brief, /НАБЛЮДЕНИЕ: ответ агента \(reply\)\n\nПроверим\?$/);
+
+  assert.ok(ready?.discovery);
+  ready.discovery.phase = 'partial';
+  ready.phase = 'interrupted';
+  const saved = new ExperimentLab(join(directory, '.agent-lab'), createDemoRuntime());
+  await saved.init();
+  await saved.store.save(ready);
+  await saved.close();
+
+  consent = false;
+  const resumeCancelled = await call({ mode: 'discover', resumeRunId: ready.id });
+  assert.equal(resumeCancelled.status, 'cancelled'); assert.equal(resumeCancelled.mutated, false); assert.equal(resumeCalls, 0);
+  assert.match(confirmations.at(-1)!.body, /Статус: partial/);
+  assert.match(confirmations.at(-1)!.body, new RegExp(`Вызовы: ${ready.discovery.callsUsed}/${ready.discovery.callPlan.maxCalls}`));
+  assert.match(confirmations.at(-1)!.body, /Сохранённый общий лимит времени: до \d+ секунд/);
+
+  consent = true;
+  const resumed = await call({ mode: 'discover', resumeRunId: ready.id });
+  assert.equal(resumeCalls, 1); assert.equal(resumed.resumed, true); assert.equal(resumed.phase, 'ready');
+  assert.equal(resumed.brief, resumed.discovery.lines.join('\n'));
+  const completed = new ExperimentLab(join(directory, '.agent-lab'), createDemoRuntime());
+  await completed.init(); await completed.store.save(ready); await completed.close();
+  await assert.rejects(call({ mode: 'discover', resumeRunId: ready.id }), /не требует возобновления/);
+
+  const built = await call({ mode: 'discover', fromRunId: found.fromRunId, hypothesis: found.hypothesis });
+  assert.deepEqual(handoff, { fromRunId: found.fromRunId, hypothesis: found.hypothesis });
+  assert.equal(built.builtTests, 1); assert.equal(built.accepted, false); assert.equal(built.agentRun, false);
+  assert.deepEqual(built.testPlan.lines.join('\n'), built.brief);
+  assert.match(built.brief, /^ТЕСТ\nСИТУАЦИЯ/m);
+  assert.match(built.brief, /ВХОД\n/);
+  assert.match(built.brief, /УСПЕХ\n/);
+  assert.match(built.brief, /НАБЛЮДЕНИЕ\n  ответ агента \(reply\)/);
+  assert.match(built.brief, /Этот тест действительно проверяет нужное поведение\?$/);
+});
 
 test('conversation runs only the confirmed plan, then saves and loads the same case without claiming human review', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-conversation-'));
@@ -50,6 +292,15 @@ test('conversation runs only the confirmed plan, then saves and loads the same c
   const result = await call('agent_lab_run', { id: draft.id, expectedHash: draft.draftHash });
   assert.equal(result.phase, 'results_review'); assert.equal(result.trialCount, 1);
   assert.equal(result.reviewMode, 'automated'); assert.deepEqual(result.humanReviews, []);
+  assert.equal(result.proofs.length, 1);
+  const proof = result.proofs[0];
+  const proofText = proof.lines.join('\n');
+  assert.equal(proof.trialId, (await call('agent_lab_inspect', { id: draft.id })).trials[0].id);
+  assert.match(proofText, /^ДОКАЗАТЕЛЬСТВО\nТест:/);
+  assert.match(proofText, /Диалог: .*\nИсход: (pass|fail|unknown|invalid|ungraded|cancelled)/);
+  assert.match(proofText, /РЕПЛИКИ\n#0 ПОЛЬЗОВАТЕЛЬ: [^\n]+\n#\d+ АГЕНТ:/);
+  assert.match(proofText, /ПРОВЕРКИ\n(?:PASS|FAIL) \[/);
+  assert.match(proofText, /ОЦЕНКИ\n(?:PASS|FAIL|UNKNOWN) \[[^\]]+\].*события: #\d+/);
   assert.match(plans[1]!, /Запуск не означает/); assert.match(plans[1]!, /20 вызовов/);
   const inspection = await call('agent_lab_inspect', { id: draft.id });
   const ids = [inspection.scenarios[0].id];
@@ -57,6 +308,56 @@ test('conversation runs only the confirmed plan, then saves and loads the same c
   const loaded = await call('agent_lab_suite', { action: 'load', file: saved.file });
   assert.equal(loaded.phase, 'review'); assert.equal(loaded.scenarioCount, 1); assert.equal(loaded.trialCount, 0);
   assert.equal(loaded.reviewMode, null); assert.equal(loaded.usage.calls, 0);
+});
+
+test('accept tool shows and records only the current one-test definition, while refusal and edits stay inert', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-accept-'));
+  const { tools, shutdown } = await registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const shown: { question: string; body: string }[] = [];
+  let consent = false;
+  const ctx = { cwd: directory, mode: 'tui', hasUI: true, ui: {
+    confirm: async (question: string, body: string) => { shown.push({ question, body }); return consent; },
+  } } as ExtensionContext;
+  const call = async (name: string, params: unknown) => output(await tools.get(name)!.execute('fixture', params, undefined, undefined, ctx));
+  const built = await call('agent_lab_build', { mode: 'demo', scenarioCount: 1 });
+  const draft = await call('agent_lab_inspect', { id: built.id });
+  draft.scenarios[0].goalObservation = 'reply';
+  draft.scenarios[0].user.opening = `Первая строка\n${'полный вход '.repeat(200)}`;
+  const prepared = await call('agent_lab_edit', { id: built.id, expectedHash: built.draftHash, patch: { scenarios: draft.scenarios } });
+
+  const refused = await call('agent_lab_accept', { id: built.id });
+  assert.equal(refused.accepted, false);
+  let current = await call('agent_lab_inspect', { id: built.id });
+  assert.equal(current.acceptedDraftHash, undefined);
+  assert.equal(current.trialCount, 0); assert.equal(current.usage.calls, prepared.usage.calls);
+  assert.equal(shown[0]!.question, 'Этот тест действительно проверяет нужное поведение?');
+  assert.match(shown[0]!.body, /^ТЕСТ\nСИТУАЦИЯ/m);
+  assert.match(shown[0]!.body, /НАБЛЮДЕНИЕ\n  ответ агента \(reply\)/);
+  assert.match(shown[0]!.body, new RegExp(`Версия: ${prepared.draftHash.slice(0, 12)}`));
+  assert.ok(shown[0]!.body.includes(draft.scenarios[0].user.opening.trimEnd().replace('\n', '\n  ')));
+  assert.ok(shown[0]!.body.includes(draft.scenarios[0].successCriteria.replace('\n', '\n  ')));
+
+  consent = true;
+  const accepted = await call('agent_lab_accept', { id: built.id });
+  assert.equal(accepted.accepted, true); assert.equal(accepted.acceptedDraftHash, prepared.draftHash);
+  current = await call('agent_lab_inspect', { id: built.id });
+  assert.equal(current.acceptedDraftHash, prepared.draftHash);
+  assert.equal(current.reviewMode, null); assert.equal(current.resultsReviewedAt, undefined); assert.equal(current.trialCount, 0);
+  assert.equal(current.usage.calls, prepared.usage.calls);
+
+  current.scenarios[0].user.opening = 'Исправленный полный вход';
+  const edited = await call('agent_lab_edit', { id: built.id, expectedHash: current.draftHash, patch: { scenarios: current.scenarios } });
+  assert.notEqual(edited.draftHash, prepared.draftHash);
+  assert.equal(edited.acceptedDraftHash, prepared.draftHash, 'old acceptance remains audit metadata but is visibly stale');
+  const acceptedAgain = await call('agent_lab_accept', { id: built.id });
+  assert.equal(acceptedAgain.acceptedDraftHash, edited.draftHash);
+  assert.match(shown.at(-1)!.body, /Исправленный полный вход/);
+  assert.match(shown.at(-1)!.body, new RegExp(`Версия: ${edited.draftHash.slice(0, 12)}`));
+  assert.equal((await call('agent_lab_inspect', { id: built.id })).trialCount, 0);
+  const run = await call('agent_lab_run', { id: built.id, expectedHash: edited.draftHash });
+  assert.equal(run.phase, 'results_review');
+  assert.equal(run.acceptedDraftHash, edited.draftHash, 'explicit execution preserves acceptance metadata');
 });
 
 test('Pi connects a new request, conversational correction, reviewed run, evidence discussion and repeat without UI JSON', async () => {
@@ -128,13 +429,13 @@ test('Pi connects a new request, conversational correction, reviewed run, eviden
     await call('agent_lab_edit', { id: repeated.id, expectedHash: repeated.draftHash, patch: {
       agent: { ...fixture.agent, tools: [...fixture.agent.tools, 'update_record'] }, targetVersion: 'fixture-fixed',
     } });
-    steps = [['r'], ['5', 'a']]; awaitResults = true; request = 'Покажи конкретное исправление до и после.';
+    steps = [['r'], ['3', 'a']]; awaitResults = true; request = 'Покажи конкретное исправление до и после.';
     await command(repeated.id, ctx);
     const pairDiscussion = JSON.parse(contexts.at(-1)!.content);
     assert.deepEqual(pairDiscussion.comparisonSource, { kind: 'parent', beforeId: built.id, afterId: repeated.id });
     assert.equal(pairDiscussion.comparedPair.beforeTrialId, discussion.trialId);
     assert.equal(pairDiscussion.comparedPair.afterTrialId, pairDiscussion.trialId);
-    steps = [['5', 'x'], ['q']];
+    steps = [['1', 'x'], ['q']];
     await command(repeated.id, ctx);
     const exportDir = join(directory, '.agent-lab', 'exports');
     const html = (await readdir(exportDir)).find(name => name.startsWith(repeated.id) && name.endsWith('.html'));
@@ -149,13 +450,13 @@ test('headless model tools prepare and edit only; approvals and human assessment
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
   const updates: string[] = [];
   try {
-    assert.deepEqual([...tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_prompt', 'agent_lab_clarify']);
+    assert.deepEqual([...tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
     const report = output(await tools.get('agent_lab_build')!.execute('build-1', { mode: 'demo', scenarioCount: 2 }, undefined,
       value => { updates.push(JSON.stringify(value)); }, ctx));
     assert.equal(report.phase, 'review'); assert.equal(report.workflow, 'evaluate');
     assert.equal(report.reviewMode, null); assert.equal(report.trialCount, 0);
     assert.equal(report.comparison, undefined); assert.equal(report.scenarioCount, 2);
-    assert.ok(updates.length >= 1); assert.match(report.nextStep, /Человеку/);
+    assert.ok(updates.length >= 1); assert.match(report.nextStep, /Дальше/);
     const evidence = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
     assert.equal(evidence.settings.repeats, 1); assert.equal(evidence.trials.length, 0);
     assert.equal(evidence.controlConsumedAt, null);
@@ -173,44 +474,6 @@ test('headless model tools prepare and edit only; approvals and human assessment
     const unchanged = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
     assert.equal(unchanged.reviewMode, null); assert.equal(unchanged.phase, 'review');
     await assert.rejects(access(join(directory, '.agent-lab', '.lock')));
-  } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
-});
-
-test('native profile editor changes linked cards, detaches one and restores original evidence', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-profile-ui-fixture-'));
-  const { tools, shutdown, command } = await registered();
-  const ctx = { cwd: directory, model: undefined, mode: 'tui', hasUI: true } as ExtensionCommandContext;
-  try {
-    const report = output(await tools.get('agent_lab_build')!.execute('prepare', { mode: 'demo', scenarioCount: 2,
-      dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'move A101 to 14:00 pls' }] }],
-    }, undefined, undefined, ctx));
-    const steps = [['2', 'e'], ['e'], ['s'], ['q']];
-    const choices = ['Расширенные настройки', 'Персона', 'Расширенные настройки', 'Профиль пользователя · выбрать или убрать', 'Без профиля и персоны', 'Профили пользователей', 'observed_1', 'Восстановить исходный профиль'];
-    const errors: string[] = [];
-    ctx.ui = {
-      custom: (factory: (tui: unknown, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?(): void }) => new Promise(resolve => {
-        const component = factory({ terminal: { rows: 40 }, requestRender() {} }, { fg: (_: string, text: string) => text, bold: (text: string) => text }, {}, value => { component.dispose?.(); resolve(value); });
-        const step = steps.shift(); assert.ok(step);
-        if (steps.length === 2) assert.match(component.render(120).join('\n'), /правка черновика/);
-        for (const key of step) component.handleInput!(key);
-      }),
-      select: async (_title: string, labels: string[]) => {
-        const choice = choices.shift(); const value = labels.find(label => label.startsWith(choice!));
-        assert.ok(value, `missing choice ${choice} in ${labels.join(', ')}`); return value;
-      },
-      editor: async (title: string) => { assert.match(title, /3 карточек/); return 'Уточнённая роль'; },
-      notify: (message: string, type: string) => { if (type === 'error') errors.push(message); },
-    } as unknown as ExtensionContext['ui'];
-    await command(report.id, ctx);
-    assert.deepEqual(errors, []); assert.equal(choices.length, 0); assert.equal(steps.length, 0);
-    const inspected = output(await tools.get('agent_lab_inspect')!.execute('inspect', { id: report.id, export: true }, undefined, undefined, ctx));
-    assert.equal(inspected.profiles[0].draftOverride, undefined);
-    assert.equal(inspected.profiles[0].source, 'observed'); assert.deepEqual(inspected.profiles[0].evidenceDialogueIds, ['d1']);
-    assert.equal(inspected.scenarios[0].profileId, undefined); assert.equal(inspected.scenarios[0].user.persona, undefined);
-    assert.equal(inspected.scenarios[1].user.persona, inspected.profiles[0].persona);
-    assert.equal(inspected.trialCount, 0); assert.equal(inspected.reviewMode, null);
-    const html = await readFile(inspected.artifacts.htmlReport, 'utf8');
-    assert.match(html, /Без персоны/); assert.match(html, /Исходные профили и правки/); assert.match(html, /Выведен из логов/);
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -301,7 +564,7 @@ test('actual Pi SDK loader imports native cards, preparation-only tools and embe
     await loader.reload();
     const loaded = loader.getExtensions();
     assert.deepEqual(loaded.errors, []); assert.equal(loaded.extensions.length, 1);
-    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_preview', 'agent_lab_reassess', 'agent_lab_prompt', 'agent_lab_clarify']);
+    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
     assert.ok(loaded.extensions[0]!.commands.has('agent-lab'));
     assert.deepEqual(loader.getAgentsFiles().agentsFiles, []);
     const skills = loader.getSkills();
@@ -328,24 +591,21 @@ test('build accepts an external module target, real dialogues and golden cases; 
     assert.equal(report.phase, 'review', report.error ?? '');
     assert.deepEqual(report.target, target);
     assert.equal(report.scenarioCount, 3);
-    assert.equal(report.profileCount, 1);
+    assert.equal(report.profileCount, 0, 'logs supply test evidence, not inferred user profiles');
     assert.equal(report.evidence.verdict.provenance.production.cards, 1);
     assert.equal(report.evidence.comparison, null);
-    assert.deepEqual(report.evidence.modes.map((m: { userMode: string }) => m.userMode), ['static', 'reactive']);
-    assert.ok(report.evidence.notes.some((n: string) => /Вердиктов человека по метрикам и проверкам ещё нет/.test(n)));
     const inspect = output(await tools.get('agent_lab_inspect')!.execute('inspect-v2', { id: report.id, export: true }, undefined, undefined, ctx));
-    assert.equal(inspect.evidence.fidelity.realDialogues, 1);
     assert.equal(inspect.artifacts.agent, undefined, 'external agent is not exported as a sandbox AgentSpec');
     assert.match(await readFile(inspect.artifacts.htmlReport, 'utf8'), /<!doctype html>/);
     assert.equal(inspect.scenarios.filter((s: { provenance: string }) => s.provenance === 'curated').length, 1);
     const markdown = await readFile(inspect.artifacts.report, 'utf8');
-    assert.match(markdown, /Наблюдаемый результат/); assert.match(markdown, /Режимы пользователя/); assert.match(markdown, /Сверка с ручными вердиктами/); assert.match(markdown, /Верность симулятора/);
+    assert.match(markdown, /Наблюдаемый результат/); assert.match(markdown, /Диалоги и основания/); assert.match(markdown, /Карточки бизнес-сценария/); assert.match(markdown, /Границы доказательств/);
     assert.match(markdown, /Испытуемый: модуль/);
     await assert.rejects(access(join(directory, '.agent-lab', '.lock')));
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('the plain verdict leads every surface and the thorough preset widens the run without extra knobs', async () => {
+test('the plain verdict leads every surface without research presets', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-extension-verdict-'));
   const { tools, shutdown } = await registered();
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
@@ -355,14 +615,294 @@ test('the plain verdict leads every surface and the thorough preset widens the r
     assert.deepEqual(quick.evidence.verdict.provenance.synthetic.cards, 1);
     assert.match(quick.evidence.verdict.headline, /Черновик готов.*после подтверждения/);
     assert.ok(quick.evidence.verdict.nextSteps.length >= 1);
-    const thorough = output(await tools.get('agent_lab_build')!.execute('build-thorough', { mode: 'demo', scenarioCount: 1, preset: 'thorough' }, undefined, undefined, ctx));
-    const evidence = JSON.parse(await readFile(thorough.artifacts.evidence, 'utf8'));
-    assert.deepEqual(evidence.settings.userModes, ['static', 'scripted', 'reactive']);
-    assert.equal(evidence.settings.repeats, 2);
-    const markdown = await readFile(thorough.artifacts.report, 'utf8');
+    await assert.rejects(tools.get('agent_lab_build')!.execute('build-thorough', { mode: 'demo', preset: 'thorough' }, undefined, undefined, ctx));
+    const markdown = await readFile(quick.artifacts.report, 'utf8');
     assert.ok(markdown.indexOf('## Итог') < markdown.indexOf('## Наблюдаемый результат'));
-    assert.match(markdown, /Полнота аудита: низкая/);
     assert.match(markdown, /Карточки: синтетических 1, golden 0, из продакшна 0/);
     await assert.rejects(access(join(directory, '.agent-lab', '.lock')));
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('live preparation asks for optional logs before creating a run; explicit skip and imports cross that gate', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-intake-'));
+  const { tools, shutdown } = await registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const ctx = { cwd: directory, hasUI: false, mode: 'print' } as ExtensionContext;
+  const build = (params: unknown) => tools.get('agent_lab_build')!.execute('intake', params, undefined, undefined, ctx);
+  const question = output(await build({ task: 'Check my agent', dialogues: [] }));
+  assert.equal(question.status, 'needs_input'); assert.match(question.message, /начать без логов/);
+  assert.deepEqual(await readdir(directory), [], 'asking must not spend, preflight or create a run');
+  // Deliberately invalid task fails input validation only after the intake gate opens, without a provider call.
+  await assert.rejects(build({ task: '', withoutDialogues: true }), /task/);
+  const dialogues = [{ id: 'provided', messages: [{ role: 'user', content: 'Move A101 to 14:00 please' }], outcome: 'success' }];
+  const file = join(directory, 'dialogues.jsonl'); await writeFile(file, JSON.stringify(dialogues[0]) + '\n');
+  await assert.rejects(build({ task: '', dialoguesFile: file }), /task/);
+  await assert.rejects(build({ task: '', dialogues }), /task/);
+  const imported = output(await build({ mode: 'demo', scenarioCount: 1, dialoguesFile: file }));
+  assert.equal(imported.phase, 'review'); assert.equal(imported.dialogueCount, 1);
+  assert.equal(imported.evidence.verdict.provenance.production.cards, 1);
+  await writeFile(file, 'invalid json');
+  await assert.rejects(build({ dialoguesFile: file, withoutDialogues: true }), /JSON/);
+});
+
+test('Pi score imports recorded evidence code-only and gates every model call with native consent', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-score-extension-'));
+  const { tools, shutdown } = await registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const build = tools.get('agent_lab_build')!;
+  const dialogues = [{ id: 'd1', messages: [{ role: 'user' as const, content: 'Создай заявку' }, { role: 'assistant' as const, content: 'Готово ✅' }] }];
+  const params = { mode: 'score', task: 'Проверить заявления о действиях', materials: [{ name: 'policy.md', content: 'Успех подтверждается наблюдаемым результатом.' }], dialogues };
+
+  const headless = { cwd: directory, hasUI: false, mode: 'print' } as ExtensionContext;
+  const missing = output(await build.execute('missing', { mode: 'score', task: 'Score', materials: params.materials }, undefined, undefined, headless));
+  assert.equal(missing.status, 'needs_input');
+  assert.match(missing.message, /Есть реальные диалоги с агентом/);
+  const empty = output(await build.execute('empty', { mode: 'score', task: 'Score', materials: params.materials, withoutDialogues: true }, undefined, undefined, headless));
+  assert.equal(empty.status, 'insufficient');
+  assert.match(empty.brief, /^Недостаточно данных для гипотезы/);
+
+  const updates: string[] = [];
+  const scoreResult = await build.execute('code-only', { ...params, codeOnly: true }, undefined,
+    value => { updates.push(value.content.filter(item => item.type === 'text').map(item => item.text).join('\n')); }, headless);
+  const codeOnly = output(scoreResult);
+  assert.equal(codeOnly.phase, 'results_review', codeOnly.error ?? '');
+  assert.equal(codeOnly.usage.calls, 0);
+  assert.match(codeOnly.scoreState, /без вызовов модели/);
+  assert.equal(codeOnly.brief, 'Недостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.');
+  assert.ok(codeOnly.artifacts.evidence && codeOnly.artifacts.report && codeOnly.artifacts.traceJournal);
+  assert.equal(updates[0], 'Читаю требования и записи…');
+  assert.ok(updates.some(line => /Импортировано 1 из 1 диалогов/.test(line)));
+  assert.ok(updates.every(line => !/Оценено/.test(line)), 'code-only never reports judge progress');
+  assert.ok(build.renderResult);
+  const rendered = build.renderResult(scoreResult, { expanded: false, isPartial: false }, { fg: (_color: string, text: string) => text } as never);
+  assert.match(rendered.render(80).join('\n'), /Недостаточно данных для гипотезы/);
+
+  const connectionFile = join(directory, 'score-connection.json');
+  await writeFile(connectionFile, JSON.stringify({ format: 'agent-lab-connection-1', target: { kind: 'command', command: 'never-run', args: [] }, targetVersion: 'recorded-v1' }));
+  const connected = output(await build.execute('connected', { ...params, codeOnly: true, connectionFile }, undefined, undefined, headless));
+  assert.equal(connected.target.kind, 'command');
+  assert.equal(connected.targetVersion, 'recorded-v1');
+
+  await assert.rejects(build.execute('headless-model', params, undefined, undefined, headless), /native Pi confirmation/);
+  const confirmations: string[] = [];
+  const tui = { cwd: directory, hasUI: true, mode: 'tui', ui: { confirm: async (_title: string, body: string) => { confirmations.push(body); return false; } } } as ExtensionContext;
+  const cancelled = output(await build.execute('cancel-model', params, undefined, undefined, tui));
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(cancelled.phase, 'results_review');
+  assert.equal(cancelled.usage.calls, 0);
+  assert.match(confirmations[0]!, /Агент и симулятор не запускаются.*1 диалог.*План: 7–9 модельных вызовов; потолок: 20.*Время: до 3 минут/s);
+
+  const invalid = join(directory, 'invalid.jsonl');
+  await writeFile(invalid, '{bad}\n');
+  await assert.rejects(build.execute('bad-file', { ...params, dialogues: undefined, dialoguesFile: invalid, codeOnly: true }, undefined, undefined, headless), /Не удалось прочитать записи:.*повторите.*агент не запускался/is);
+});
+
+test('Pi code-only score preserves the public 200-dialogue and configured budget bounds', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-score-max-'));
+  const { tools, shutdown } = await registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const dialogues = Array.from({ length: 200 }, (_, index) => ({ id: `d${index}`, messages: [{ role: 'user' as const, content: `Question ${index}` }, { role: 'assistant' as const, content: `Answer ${index}` }] }));
+  const report = output(await tools.get('agent_lab_build')!.execute('max-score', { mode: 'score', codeOnly: true, task: 'Score all records',
+    materials: [{ name: 'policy.md', content: 'Answer from the owner policy.' }], dialogues, settings: { maxCalls: 7, maxDurationMs: 14_400_000 },
+  }, undefined, undefined, { cwd: directory, hasUI: false, mode: 'print' } as ExtensionContext));
+  assert.equal(report.dialogueCount, 200);
+  assert.equal(report.trialCount, 200);
+  const saved = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
+  assert.equal(saved.settings.maxCalls, 7);
+  assert.equal(saved.settings.maxDurationMs, 14_400_000);
+});
+
+test('Pi score scales its default batch budget and preserves explicit owner limits', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-score-budget-'));
+  const { tools, shutdown } = await registered();
+  const score = ExperimentLab.prototype.score;
+  const reassess = ExperimentLab.prototype.reassess;
+  const inputs: { maxCalls: number; maxDurationMs: number; codeOnly: boolean }[] = [];
+  let providerRuns = 0;
+  ExperimentLab.prototype.score = function(raw, options) {
+    inputs.push({ maxCalls: raw.settings.maxCalls, maxDurationMs: raw.settings.maxDurationMs, codeOnly: options?.codeOnly === true });
+    if (!options?.codeOnly) providerRuns++;
+    return score.call(this, raw, { ...options, codeOnly: true });
+  };
+  ExperimentLab.prototype.reassess = function(id) { return this.get(id); };
+  t.after(async () => {
+    ExperimentLab.prototype.score = score;
+    ExperimentLab.prototype.reassess = reassess;
+    await shutdown();
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const confirmations: string[] = [];
+  let consent = true;
+  const ctx = { cwd: directory, hasUI: true, mode: 'tui', ui: { confirm: async (_title: string, body: string) => {
+    confirmations.push(body); return consent;
+  } } } as ExtensionContext;
+  const dialogues = Array.from({ length: 15 }, (_, index) => ({ id: `d${index}`,
+    messages: [{ role: 'user' as const, content: `Question ${index}` }, { role: 'assistant' as const, content: `Answer ${index}` }] }));
+  const params = { mode: 'score', task: 'Score recorded dialogues', materials: [{ name: 'policy.md', content: 'Answer from the owner policy.' }], dialogues };
+
+  const report = output(await tools.get('agent_lab_build')!.execute('scaled-score', params, undefined, undefined, ctx));
+  assert.equal(report.phase, 'results_review', report.error ?? JSON.stringify(report));
+  assert.match(confirmations[0]!, /15 диалогов/);
+  assert.match(confirmations[0]!, /План: 77–107 модельных вызовов; потолок: 120/);
+  assert.match(confirmations[0]!, /Время: до 30 минут/);
+  assert.deepEqual(inputs.slice(0, 2), [
+    { maxCalls: 120, maxDurationMs: 1_800_000, codeOnly: true },
+    { maxCalls: 120, maxDurationMs: 1_800_000, codeOnly: false },
+  ]);
+  assert.equal(providerRuns, 1);
+  const saved = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
+  assert.equal(saved.settings.maxCalls, 120);
+  assert.equal(saved.settings.maxDurationMs, 1_800_000);
+
+  consent = false;
+  const cancelled = output(await tools.get('agent_lab_build')!.execute('explicit-score', {
+    ...params, settings: { maxCalls: 23, maxDurationMs: 300_000 },
+  }, undefined, undefined, ctx));
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(cancelled.usage.calls, 0);
+  assert.equal(providerRuns, 1, 'cancellation performs no provider call');
+  assert.match(confirmations[1]!, /потолок: 23/);
+  assert.match(confirmations[1]!, /Время: до 5 минут/);
+  assert.deepEqual(inputs.at(-1), { maxCalls: 23, maxDurationMs: 300_000, codeOnly: true });
+});
+
+test('Pi score reports judge progress only after reassessment starts', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-score-progress-'));
+  const { tools, shutdown } = await registered();
+  const score = ExperimentLab.prototype.score;
+  const reassess = ExperimentLab.prototype.reassess;
+  let scoreCalls = 0;
+  let reassessmentStarted = false;
+  ExperimentLab.prototype.score = async function(raw, options) {
+    scoreCalls++;
+    const result = await score.call(this, raw, { ...options, codeOnly: true });
+    if (scoreCalls === 2) {
+      await this.waitForIdle();
+      const saved = await this.get(result.id);
+      const source = saved.sources[0]!;
+      saved.requirements = [{ id: 'owner_rule', text: source.content, sourceId: source.id, quote: source.content, critical: true }];
+      for (const scenario of saved.scenarios) scenario.requirementIds = ['owner_rule'];
+      await this.store.save(saved);
+      return saved;
+    }
+    return result;
+  };
+  ExperimentLab.prototype.reassess = function(id, raw, options) {
+    reassessmentStarted = true;
+    return reassess.call(this, id, { ...raw, codeOnly: true }, options);
+  };
+  t.after(async () => {
+    ExperimentLab.prototype.score = score;
+    ExperimentLab.prototype.reassess = reassess;
+    await shutdown();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const updates: { text: string; reassessmentStarted: boolean }[] = [];
+  const result = await tools.get('agent_lab_build')!.execute('progress', {
+    mode: 'score', task: 'Проверить ответ', materials: [{ name: 'policy.md', content: 'Отвечать по правилам.' }],
+    dialogues: [{ id: 'd1', goal: 'Пользователь получает адрес поддержки.', messages: [{ role: 'user', content: 'Как связаться?' }, { role: 'assistant', content: 'Напишите в поддержку.' }] }],
+  }, undefined, value => updates.push({
+    text: value.content.filter(item => item.type === 'text').map(item => item.text).join('\n'), reassessmentStarted,
+  }), { cwd: directory, hasUI: true, mode: 'tui', ui: { confirm: async () => true } } as ExtensionContext);
+  const report = output(result);
+  assert.equal(report.phase, 'results_review', report.error ?? JSON.stringify(report));
+  assert.ok(updates.some(update => /Оценено/.test(update.text)));
+  assert.ok(updates.filter(update => /Оценено/.test(update.text)).every(update => update.reassessmentStarted));
+});
+
+test('conversation completes human finding → prompt diff → unchanged SQLite suite → comparison', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-prompt-journey-'));
+  const { tools, shutdown } = await registered();
+  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
+  const screens: string[] = [];
+  let note: string | undefined;
+  let targetLabel = 'Проверка ·';
+  let cancelTarget = false;
+  const targetChoices: string[][] = [];
+  const ctx = { cwd: directory, hasUI: true, mode: 'tui', ui: {
+    confirm: async (_title: string, body: string) => { screens.push(body); return true; },
+    select: async (title: string, choices: string[]) => {
+      if (title === 'Область вашей оценки') {
+        targetChoices.push(choices);
+        if (cancelTarget) return undefined;
+        return choices.find(choice => choice.startsWith(targetLabel));
+      }
+      return choices.find(choice => choice === 'Ошибся агент');
+    },
+    editor: async (_title: string, initial: string) => { if (initial) { screens.push(initial); return initial; } return note; },
+  } } as ExtensionContext;
+  const call = async (name: string, params: unknown) => output(await tools.get(name)!.execute('journey', params, undefined, undefined, ctx));
+  const prompt = join(directory, 'prompt.md'); await writeFile(prompt, 'Updates disabled.');
+  const built = await call('agent_lab_build', { mode: 'demo', scenarioCount: 1, settings: { userModes: ['static'] } });
+  const inspection = await call('agent_lab_inspect', { id: built.id });
+  const initialState = { records: { A: { time: '09:00' } }, writableFields: ['time'], transientFailures: 0 };
+  const move = { ...inspection.scenarios[0], initialState, goalObservation: 'state' as const, successCriteria: 'Move A to 14:00',
+    user: { ...inspection.scenarios[0].user, opening: 'Move A to 14:00' },
+    checks: [{ id: 'time', kind: 'state_equals', recordId: 'A', field: 'time', value: '14:00', description: 'Move the record' }] };
+  const guard = { ...move, id: 'read_only', familyId: 'read_only', title: 'Read without changes', successCriteria: 'Report that A is still at 09:00',
+    user: { ...move.user, opening: 'What time is A?' }, checks: [{ ...move.checks[0], description: 'Shared failing fixture check' }] };
+  const prepared = await call('agent_lab_edit', { id: built.id, expectedHash: built.draftHash, patch: {
+    target: { kind: 'command', command: 'python3', args: [fileURLToPath(new URL('../examples/stateful-agent.py', import.meta.url))], promptFile: prompt },
+    scenarios: [move, guard],
+  } });
+  const baseline = await call('agent_lab_run', { id: prepared.id, expectedHash: prepared.draftHash });
+  assert.equal(baseline.phase, 'results_review'); assert.equal(baseline.trialCount, 2);
+  const before = await call('agent_lab_inspect', { id: prepared.id });
+  assert.deepEqual(before.trials.map((trial: { outcome: string }) => trial.outcome), ['fail', 'fail']);
+  const trialId = before.trials[0].id;
+  const proposalInput = { action: 'propose', id: before.id, candidate: 'Allow updates after lookup.', hypothesis: 'Enable the requested update; preserve read-only access.', trialIds: [trialId] };
+  await assert.rejects(call('agent_lab_prompt', proposalInput), /подтверждённые/);
+  await assert.rejects(call('agent_lab_review', { id: before.id, trialId, verdict: 'fail' }), /verdict/);
+  await assert.rejects(tools.get('agent_lab_review')!.execute('headless', { id: before.id, trialId }, undefined, undefined, { ...ctx, hasUI: false } as ExtensionContext), /интерактивного/);
+  assert.equal((await call('agent_lab_review', { id: before.id, trialId })).cancelled, true);
+  assert.deepEqual((await call('agent_lab_inspect', { id: before.id })).humanReviews, []);
+  assert.ok(targetChoices.at(-1)!.some(choice => choice.startsWith('Критерий ·')));
+  assert.ok(targetChoices.at(-1)!.some(choice => choice.startsWith('Проверка ·')));
+  assert.ok(targetChoices.at(-1)!.every(choice => !/Такие же|Причина/.test(choice)), targetChoices.at(-1)!.join('\n'));
+  const abort = new AbortController();
+  const abortedCtx = { ...ctx, ui: { ...ctx.ui, editor: async (_title: string, initial: string) => { if (initial) return initial; abort.abort(new Error('Review interrupted')); return 'Not a saved verdict'; } } } as ExtensionContext;
+  await assert.rejects(tools.get('agent_lab_review')!.execute('abort', { id: before.id, trialId }, abort.signal, undefined, abortedCtx), /Review interrupted/);
+  assert.deepEqual((await call('agent_lab_inspect', { id: before.id })).humanReviews, []);
+  note = 'Test fixture, not a real owner verdict: #1 retained 09:00 instead of the requested 14:00.';
+  const reviewed = await call('agent_lab_review', { id: before.id, trialId });
+  assert.equal(reviewed.humanReviews.length, 1); assert.equal(reviewed.humanReviews[0].verdict, 'fail');
+  assert.equal(reviewed.humanReviews[0].note, note);
+  assert.equal(reviewed.humanReviews[0].trialId, trialId);
+  assert.equal(reviewed.humanReviews[0].reviewedDialogue, undefined);
+  assert.match(reviewed.quality.headline, /разобрано человеком 0 из 2 диалогов/);
+  assert.equal(reviewed.humanReviews.some((review: { trialId: string }) => review.trialId === before.trials[1].id), false);
+
+  targetLabel = 'Весь диалог';
+  note = 'Test fixture full review: #1 shows the retained time.';
+  const complete = await call('agent_lab_review', { id: before.id, trialId });
+  assert.equal(complete.humanReviews.length, 2);
+  assert.equal(complete.humanReviews.at(-1).trialId, trialId);
+  assert.equal(complete.humanReviews.at(-1).reviewedDialogue, true);
+  assert.match(complete.quality.headline, /разобрано человеком 1 из 2 диалогов/);
+
+  note = 'Invalid event reference: #999.';
+  const invalidReference = await call('agent_lab_review', { id: before.id, trialId });
+  assert.equal(invalidReference.cancelled, true);
+  assert.equal((await call('agent_lab_inspect', { id: before.id })).humanReviews.length, 2);
+  cancelTarget = true;
+  assert.equal((await call('agent_lab_review', { id: before.id, trialId })).cancelled, true);
+  cancelTarget = false;
+  assert.equal((await call('agent_lab_inspect', { id: before.id })).humanReviews.length, 2);
+  assert.ok(screens.some(body => body.includes('Move A to 14:00') && body.includes('#0') && body.includes('09:00')));
+  const proposal = await call('agent_lab_prompt', proposalInput);
+  const diff = await call('agent_lab_prompt', { action: 'inspect', file: proposal.file });
+  assert.match(diff.diff, /-Updates disabled/); assert.match(diff.diff, /\+Allow updates after lookup/);
+  const candidate = await call('agent_lab_prompt', { action: 'apply', file: proposal.file });
+  const candidateDraft = await call('agent_lab_inspect', { id: candidate.id });
+  assert.deepEqual(candidateDraft.scenarios, before.scenarios);
+  assert.ok(candidateDraft.scenarios.every((scenario: { goalObservation?: string }) => scenario.goalObservation === 'state'), 'owner-selected state observation survives the fresh draft');
+  assert.deepEqual(candidateDraft.humanReviews, []);
+  const after = await call('agent_lab_run', { id: candidate.id, expectedHash: candidate.draftHash });
+  assert.equal(after.comparison.fixed.length, 1); assert.equal(after.comparison.regressed.length, 0);
+  assert.equal(after.comparison.coverage.validPairs, 2);
+  assert.equal(await readFile(prompt, 'utf8'), 'Updates disabled.');
+  assert.ok(screens.some(body => body.includes('-Updates disabled.') && body.includes('+Allow updates after lookup.')));
+  const evidence = JSON.parse(await readFile(after.artifacts.evidence, 'utf8'));
+  assert.equal(evidence.parentRunId, before.id);
 });

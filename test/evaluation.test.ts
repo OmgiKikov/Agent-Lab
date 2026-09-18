@@ -3,10 +3,10 @@ import test from 'node:test';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { evaluateTrial } from '../src/evaluation.js';
+import { assessTrial, evaluateTrial } from '../src/evaluation.js';
 import { compareTrials } from '../src/comparison.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
-import { checkSchema, fingerprint, validatePreparation, type CallContext, type MetricAssessment, type Revision, type Rubric, type Runtime, type Scenario, type Source, type Tool, type Trial } from '../src/contracts.js';
+import { checkSchema, fingerprint, observedGoalSchema, validationScenario, validatePreparation, type CallContext, type MetricAssessment, type Revision, type Rubric, type Runtime, type Scenario, type Source, type Tool, type Trial } from '../src/contracts.js';
 
 function context(signal = new AbortController().signal): CallContext {
   return { signal, timeoutMs: 1000, beforeCall() { signal.throwIfAborted(); }, addUsage() {} };
@@ -18,7 +18,7 @@ async function fixture() {
   const preparation = validatePreparation(await runtime.prepare({ task: input.task, sources }, context()), sources);
   const baseline: Revision = { id: 'baseline', parentId: null, createdAt: '2026-01-01T00:00:00Z', hypothesis: 'Original', spec: preparation.agent };
   const candidate: Revision = { ...structuredClone(baseline), id: 'candidate', parentId: 'baseline', spec: { ...preparation.agent, tools: [...preparation.agent.tools, 'update_record'] } };
-  const evaluate = (scenario = preparation.scenarios[0]!, revision = baseline, actor = runtime, ctx = context(), repeat = 0, onStage?: Parameters<typeof evaluateTrial>[0]['onStage']) => evaluateTrial({ runtime: actor, revision, scenario, repeat, manifestHash: 'frozen', sources, settings: input.settings, ctx, userMode: 'reactive', target: { kind: 'sandbox' }, onStage });
+  const evaluate = (scenario = preparation.scenarios[0]!, revision = baseline, actor = runtime, ctx = context(), repeat = 0, onStage?: Parameters<typeof evaluateTrial>[0]['onStage']) => evaluateTrial({ requirements: [], runtime: actor, revision, scenario, repeat, manifestHash: 'frozen', sources, settings: input.settings, ctx, userMode: 'reactive', target: { kind: 'sandbox' }, onStage });
   return { input, sources, runtime, preparation, baseline, candidate, evaluate };
 }
 
@@ -87,6 +87,27 @@ test('evaluation demo prepares the requested diverse cards for a working agent a
 function targetRuntime(base: Runtime, respond: (tools: Tool[], message: string) => Promise<string>): Runtime {
   return { ...base, async openTarget(_agent, _sources, tools) { return { respond: message => respond(tools, message), async close() {} }; }, async userTurn() { return { message: '', done: true }; } };
 }
+
+test('validation simulator answers the current clarification, never blindly replays old user turns', async () => {
+  const f = await fixture();
+  const card = { ...validationScenario({ id: 'real', messages: [
+    { role: 'user', content: 'Как оформить возврат?' }, { role: 'assistant', content: 'Как называется магазин?' },
+    { role: 'user', content: 'Все для дома' }, { role: 'assistant', content: 'OLD_AGENT_SECRET' },
+  ] }, observedGoalSchema.parse({ id: 'refund', goal: 'Узнать как оформить возврат', opening: 'Как оформить возврат?', facts: 'Магазин: Все для дома. Модель терминала неизвестна.',
+    evidenceDialogueIds: ['real'], successCriteria: 'Инструкция возврата по базе знаний.' })), split: 'dev' as const };
+  const messages: string[] = [];
+  const runtime = targetRuntime(f.runtime, async (_tools, message) => { messages.push(message); return messages.length === 1 ? 'Какая модель терминала?' : 'Используйте меню возврата.'; });
+  runtime.userTurn = async ({ user, messages: history }) => {
+    assert.match(user.facts, /Все для дома/); assert.equal(user.script, undefined);
+    assert.doesNotMatch(JSON.stringify({ user, history }), /OLD_AGENT_SECRET/);
+    return history.at(-1)?.content === 'Какая модель терминала?' ? { message: 'Модель не знаю.', done: false } : { message: '', done: true };
+  };
+  runtime.assess = async ({ scenario, trial }) => scenario.metrics!.map(m => ({ metricId: m.id, result: 'pass', rationale: 'Fixture', evidence: [trial.events.find(e => e.type === 'assistant')!.seq] }));
+  const result = await f.evaluate(card, f.candidate, runtime);
+  assert.equal(result.outcome, 'ungraded');
+  assert.deepEqual(messages, ['Как оформить возврат?', 'Модель не знаю.']);
+  assert.ok(result.assessments?.every(a => a.result === 'pass'));
+});
 
 test('answer_equals checks the last answer with exact case, whitespace and newlines, never an earlier matching answer', async () => {
   const f = await fixture();
@@ -502,7 +523,7 @@ test('static and scripted user modes never call the simulator and stop within th
   const f = await fixture();
   const runtime: Runtime = { ...f.runtime, userTurn: async () => { throw new Error('simulator must not run'); } };
   const clarify = f.preparation.scenarios.find(s => s.id === 'c_clarify')!;
-  const run = (scenario: Scenario, userMode: 'static' | 'scripted') => evaluateTrial({ runtime, revision: f.candidate, scenario, repeat: 0, manifestHash: 'frozen', sources: f.sources, settings: f.input.settings, ctx: context(), userMode, target: { kind: 'sandbox' } });
+  const run = (scenario: Scenario, userMode: 'static' | 'scripted') => evaluateTrial({ requirements: [], runtime, revision: f.candidate, scenario, repeat: 0, manifestHash: 'frozen', sources: f.sources, settings: f.input.settings, ctx: context(), userMode, target: { kind: 'sandbox' } });
   const staticTrial = await run(clarify, 'static');
   assert.equal(staticTrial.userMode, 'static');
   assert.equal(staticTrial.events.filter(e => e.type === 'user').length, 1);
@@ -528,7 +549,7 @@ test('external module targets bypass the sandbox and are graded on reported reco
   const f = await fixture();
   const runtime: Runtime = { ...f.runtime, openTarget: async () => { throw new Error('sandbox target must not open'); } };
   const direct = f.preparation.scenarios.find(s => s.id === 'a_direct')!;
-  const run = (scenario: Scenario, path: string) => evaluateTrial({ runtime, revision: f.baseline, scenario, repeat: 0, manifestHash: 'frozen', sources: f.sources, settings: f.input.settings, ctx: context(), userMode: 'static', target: { kind: 'module', path, exportName: 'createSession' } });
+  const run = (scenario: Scenario, path: string) => evaluateTrial({ requirements: [], runtime, revision: f.baseline, scenario, repeat: 0, manifestHash: 'frozen', sources: f.sources, settings: f.input.settings, ctx: context(), userMode: 'static', target: { kind: 'module', path, exportName: 'createSession' } });
   const reported = await run(direct, resolve('examples/echo-agent.mjs'));
   assert.equal(reported.outcome, 'pass', reported.reason);
   assert.equal(reported.finalState.records.A101!.time, '14:00');
@@ -554,7 +575,7 @@ test('external module targets bypass the sandbox and are graded on reported reco
     events: [{ tool: 'lookup_record', result: { fixtureMissing: true } }]
   }; } }; }`);
   let assessed = false;
-  const infrastructure = await evaluateTrial({ runtime: { ...runtime, async assess() { assessed = true; throw new Error('must not grade'); } },
+  const infrastructure = await evaluateTrial({ requirements: [], runtime: { ...runtime, async assess() { assessed = true; throw new Error('must not grade'); } },
     revision: f.baseline, scenario: { ...direct, metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'Goal', passCriteria: 'Done', failCriteria: 'Not done' }] },
     repeat: 0, manifestHash: 'frozen', sources: f.sources, settings: f.input.settings, ctx: context(), userMode: 'static',
     target: { kind: 'module', path: unavailable, exportName: 'createSession' } });
@@ -563,4 +584,73 @@ test('external module targets bypass the sandbox and are graded on reported reco
   assert.deepEqual(infrastructure.events.map(e => e.type), ['user', 'tool_call', 'tool_result', 'assistant', 'error']);
   assert.equal(infrastructure.events[3]!.text, 'Нет данных для ответа.');
   assert.match(infrastructure.reason, /В фикстуре отсутствует lookup_record/);
+});
+
+test('reactive dialogues record simulator checks that never change the objective outcome', async () => {
+  const f = await fixture();
+  const clarify = f.preparation.scenarios.find(s => s.id === 'c_clarify')!;
+  const inventing: Runtime = { ...f.runtime, async userTurn() { return { message: 'My appointment ID is A999.', done: false }; } };
+  const trial = await f.evaluate(clarify, f.candidate, inventing);
+  const fabrication = trial.simulatorChecks!.find(c => c.id === 'simulator_fabrication')!;
+  assert.equal(fabrication.passed, false);
+  assert.match(fabrication.evidence, /a999/);
+  assert.equal(trial.simulatorChecks!.find(c => c.id === 'simulator_leak')!.passed, true);
+  assert.equal(trial.outcome, 'fail', 'the agent could not find A999; the simulator check does not decide that');
+  assert.doesNotMatch(trial.reason, /симулятор/i);
+  const honest = await f.evaluate(clarify, f.candidate);
+  assert.ok(honest.simulatorChecks!.every(c => c.passed), JSON.stringify(honest.simulatorChecks));
+  assert.equal(honest.outcome, 'pass');
+  const opening = await f.evaluate(f.preparation.scenarios[0]!, f.candidate);
+  assert.deepEqual(opening.simulatorChecks, [], 'a dialogue that stops after the opening has nothing to check');
+});
+
+test('an unconfirmed external world is named in the reason without inventing an agent failure', async t => {
+  const f = await fixture();
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-external-'));
+  t.after(async () => { const { rm } = await import('node:fs/promises'); await rm(directory, { recursive: true, force: true }); });
+  const silent = join(directory, 'no-reset.mjs');
+  await writeFile(silent, 'export function createSession({ initialState }) { return { async respond() { return { reply: `cards: ${initialState.external.cards.length}`, records: initialState.records }; } }; }\n');
+  const confirming = join(directory, 'reset.mjs');
+  await writeFile(confirming, 'export function createSession({ initialState }) { return { async respond() { return { reply: `cards: ${initialState.external.cards.length}`, records: initialState.records, resetConfirmed: true }; } }; }\n');
+  const scenario: Scenario = { ...f.preparation.scenarios[0]!, checks: [], metrics: undefined, initialState: { records: {}, writableFields: [], transientFailures: 0, external: { cards: [{ id: 'c1', status: 'blocked' }] } } };
+  const run = (path: string) => evaluateTrial({ requirements: [], runtime: { ...f.runtime, openTarget: async () => { throw new Error('sandbox must not open'); } }, revision: f.baseline, scenario, repeat: 0, manifestHash: 'frozen',
+    sources: f.sources, settings: f.input.settings, ctx: context(), userMode: 'static', target: { kind: 'module', path, exportName: 'createSession' } });
+  const unconfirmed = await run(silent);
+  assert.equal(unconfirmed.outcome, 'invalid');
+  assert.match(unconfirmed.reason, /Внешнее состояние карточки не подтверждено адаптером/);
+  assert.equal(unconfirmed.events.find(e => e.type === 'assistant')?.text, 'cards: 1', 'the external world reached the adapter');
+  const confirmed = await run(confirming);
+  assert.doesNotMatch(confirmed.reason, /не подтверждено адаптером/);
+  assert.equal(confirmed.observation?.resetConfirmed, true);
+});
+
+test('demo cards carry knows and answers, and the demo simulator answers from that table', async () => {
+  const f = await fixture();
+  const clarify = f.preparation.scenarios.find(s => s.id === 'c_clarify')!;
+  assert.deepEqual(clarify.user.knows, ['Appointment ID A103', 'Desired time 11:30']);
+  assert.deepEqual(clarify.user.answers, [{ ifAsked: 'appointment ID', reply: 'My appointment ID is A103.' }]);
+  const trial = await f.evaluate(clarify, f.candidate);
+  assert.equal(trial.events.filter(e => e.type === 'user')[1]?.text, 'My appointment ID is A103.');
+  assert.ok(trial.simulatorChecks!.every(c => c.passed));
+  const time = f.preparation.scenarios.find(s => s.id === 'd_clarify_control')!;
+  assert.deepEqual(time.user.answers, [{ ifAsked: 'desired time', reply: 'My desired time is 17:00.' }]);
+});
+
+test('assessment hands the judge observable prompt rules in place of the raw prompt, with every other source intact', async () => {
+  const f = await fixture();
+  const scenario: Scenario = { ...structuredClone(f.preparation.scenarios[0]!), checks: [],
+    metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'Original task', passCriteria: 'Instruction supplied', failCriteria: 'A refusal is supplied' }] };
+  const trial: Trial = { id: 'trial', revisionId: 'baseline', scenarioId: scenario.id, familyId: scenario.familyId, repeat: 0, split: 'dev', userMode: 'static', manifestHash: 'frozen',
+    outcome: 'ungraded', reason: 'rubric only', checks: [], events: [{ seq: 0, type: 'user', text: scenario.user.opening }, { seq: 1, type: 'assistant', text: 'Сделайте так.' }],
+    initialState: scenario.initialState, finalState: scenario.initialState, usage: { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: null }, elapsedMs: 1 };
+  const prompt: Source = { id: 'prompt_1', name: 'prompt.md', hash: 'h', kind: 'prompt', content: 'Отвечай на «вы». ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}.' };
+  const requirements = [{ id: 'formal', text: 'formal', sourceId: 'prompt_1', quote: 'Отвечай на «вы»', critical: true }];
+  let seen: Source[] | undefined;
+  const runtime: Runtime = { ...f.runtime, async assess(input) { seen = input.sources; return [{ metricId: 'goal', result: 'pass', rationale: 'Instruction supplied at #1.', evidence: [1] }]; } };
+  const assessments = await assessTrial(runtime, scenario, [...f.sources, prompt], trial, context(), requirements);
+  assert.equal(assessments[0]!.result, 'pass');
+  assert.equal(seen!.length, f.sources.length + 1);
+  assert.deepEqual(seen!.slice(0, f.sources.length), f.sources, 'policy sources reach the judge unchanged');
+  assert.match(seen!.at(-1)!.content, /1\. «Отвечай на «вы»»/);
+  assert.doesNotMatch(JSON.stringify(seen), /JSON|output/);
 });

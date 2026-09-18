@@ -3,15 +3,15 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, rm, readFile, writeFile, mkdir, cp } from 'node:fs/promises';
+import { access, mkdtemp, rm, readFile, readdir, writeFile, mkdir, cp } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { ExperimentLab, draftHash } from '../src/experiment.js';
 import { evaluateTrial } from '../src/evaluation.js';
-import { previewCriteria } from '../src/preview.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { createInputSchema, fingerprint, settingsSchema } from '../src/contracts.js';
+import { demoEvaluationInput } from '../src/demo.js';
 
 const spec = { name: 'Review fixture', instructions: 'Answer correctly without revealing internal_key.', tools: [] };
 const material = { name: 'policy', content: 'Answer the question correctly. Never reveal internal_key.' };
@@ -45,25 +45,64 @@ async function labFixture(t, adapter) {
 const input = workflow => createInputSchema.parse({ task: 'Review fixture', mode: 'demo', materials: [material], workflow,
   settings: { repeats: 1, maxIterations: 1, userModes: ['static'] } });
 
-test('semantic answer preview grades both examples, preserves the run and rejects invented evidence', async t => {
-  const lab = await labFixture(t, runtime([card()]));
+test('CLI accept prints the complete current test before recording its exact hash', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-cli-accept-'));
+  const data = join(directory, 'data');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const lab = new ExperimentLab(data, runtime([card()]));
+  await lab.init();
   const created = await lab.create(input('evaluate')); await lab.waitForIdle();
-  const record = await lab.get(created.id);
-  const original = JSON.stringify(record);
-  let calls = 0;
-  const judge = { ...runtime([]), async assess({ trial }, ctx) {
-    ctx.beforeCall(); ctx.addUsage({ inputTokens: 5, outputTokens: 2, costUsd: 0.01 }); calls++;
-    return [{ metricId: 'correctness', result: trial.events.at(-1).text === 'Correct' ? 'pass' : 'fail', evidence: [1], rationale: 'Check the supplied answer.' }];
-  } };
-  const result = await previewCriteria(record, 'card_0', { good: 'Correct', bad: 'Wrong' }, { directory: lab.store.directory, runtime: judge });
-  assert.deepEqual(result.results.map(r => r.matchesExpected), [true, true]);
-  assert.equal(calls, 2); assert.equal(result.usage.costUsd, 0.02);
-  assert.equal(JSON.stringify(await lab.get(record.id)), original);
-  assert.equal(JSON.parse(await readFile(result.file, 'utf8')).criteriaHash, result.criteriaHash);
-  const invalid = await previewCriteria(record, 'card_0', { good: 'Correct', bad: 'Wrong' }, { directory: lab.store.directory,
-    runtime: { ...judge, async assess() { return [{ metricId: 'correctness', result: 'pass', evidence: [99], rationale: 'Invented event.' }]; } } });
-  assert.ok(invalid.results.every(r => r.result === 'unknown' && /nonexistent/.test(r.error)));
-  await assert.rejects(previewCriteria(record, 'card_0', { good: 'same', bad: 'same' }, { directory: lab.store.directory, runtime: judge }), /должны отличаться/);
+  const current = await lab.get(created.id);
+  const opening = `Что делать?\n${'полный вход '.repeat(180)}`;
+  const successCriteria = current.scenarios[0]!.successCriteria!;
+  const prepared = await lab.updateDraft(current.id, draftHash(current), { scenarios: [{ ...current.scenarios[0]!, goalObservation: 'reply',
+    user: { ...current.scenarios[0]!.user, opening } }] });
+  await lab.close();
+
+  const preview = spawnSync(process.execPath, [resolve('dist/cli.js'), 'accept', '--id', prepared.id, '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(preview.status, 0, preview.stderr);
+  assert.match(preview.stdout, /^ТЕСТ\nСИТУАЦИЯ/m);
+  assert.ok(preview.stdout.includes(opening.trimEnd().replace('\n', '\n  ')));
+  assert.ok(preview.stdout.includes(successCriteria));
+  assert.match(preview.stdout, /НАБЛЮДЕНИЕ\n  ответ агента \(reply\)/);
+  assert.match(preview.stdout, new RegExp(`Версия: ${draftHash(prepared).slice(0, 12)}`));
+  assert.match(preview.stdout, /Этот тест действительно проверяет нужное поведение\?/);
+  assert.equal(JSON.parse(await readFile(join(data, `${prepared.id}.json`), 'utf8')).acceptedDraftHash, undefined);
+
+  const accepted = spawnSync(process.execPath, [resolve('dist/cli.js'), 'accept', '--id', prepared.id, '--yes', '--json', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(accepted.status, 0, accepted.stderr);
+  const events = accepted.stdout.trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(events[0].type, 'test_proposal');
+  assert.equal(events[0].draftHash, draftHash(prepared));
+  assert.match(events[0].text, /Этот тест действительно проверяет нужное поведение\?$/);
+  assert.deepEqual(events[1], { type: 'accepted', id: prepared.id, acceptedDraftHash: events[0].draftHash, agentRun: false });
+  const stored = JSON.parse(await readFile(join(data, `${prepared.id}.json`), 'utf8'));
+  assert.equal(stored.acceptedDraftHash, events[0].draftHash);
+  assert.deepEqual(stored.trials, []); assert.equal(stored.reviewedAt, null); assert.equal(stored.reviewMode, null);
+});
+
+test('CLI run returns the full persisted dialogue, automatic verdict and cited proof in JSON', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-cli-run-proof-'));
+  const data = join(directory, 'data');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const lab = new ExperimentLab(data);
+  await lab.init();
+  const created = await lab.create(createInputSchema.parse({ ...demoEvaluationInput(), scenarioCount: 1 }));
+  await lab.waitForIdle();
+  const draft = await lab.get(created.id);
+  const accepted = await lab.acceptDraft(draft.id, draftHash(draft));
+  await lab.close();
+
+  const cli = spawnSync(process.execPath, [resolve('dist/cli.js'), 'run', '--id', accepted.id, '--yes', '--json', '--data-dir', data], { encoding: 'utf8' });
+  const output = JSON.parse(cli.stdout);
+  assert.equal(cli.status, output.exitCode, cli.stderr);
+  assert.equal(output.proofs.length, 1);
+  const proof = output.proofs[0];
+  assert.match(proof.automaticVerdict, /^(?:pass|fail|unknown)$/);
+  assert.match(proof.lines.join('\n'), /РЕПЛИКИ\n#0 ПОЛЬЗОВАТЕЛЬ: [^\n]+\n#\d+ АГЕНТ:/);
+  assert.match(proof.lines.join('\n'), /Автоматический вердикт: (?:pass|fail|unknown)/);
+  assert.match(proof.lines.join('\n'), /ПРОВЕРКИ\n(?:PASS|FAIL) \[[^\]]+\].*\n  Доказательство:/);
+  assert.match(proof.lines.join('\n'), /ОЦЕНКИ\n(?:PASS|FAIL|UNKNOWN) \[[^\]]+\].*события: #\d+/);
 });
 
 test('external LLM adapter commits tools in SQLite, isolates history, attests prompt and accounts calls', async t => {
@@ -107,7 +146,7 @@ test('external state must not pass when the adapter never reported it', async t 
   const scenario = { ...card(), split: 'dev', metrics: [],
     initialState: { records: { A: { time: '09:00' } }, writableFields: [], transientFailures: 0 },
     checks: [{ id: 'state', kind: 'state_equals', description: 'The backend record is unchanged', recordId: 'A', field: 'time', value: '09:00' }] };
-  const trial = await evaluateTrial({ runtime: runtime([]), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'Fixture', createdAt: new Date().toISOString() },
+  const trial = await evaluateTrial({ requirements: [], runtime: runtime([]), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'Fixture', createdAt: new Date().toISOString() },
     scenario, repeat: 0, manifestHash: 'review', sources: [], settings: settingsSchema.parse({}), userMode: 'static',
     target: { kind: 'http', url: `http://127.0.0.1:${server.address().port}`, headersEnv: {}, timeoutMs: 1000 },
     ctx: { signal: AbortSignal.timeout(5000), timeoutMs: 1000, beforeCall() {}, addUsage() {} } });
@@ -141,7 +180,7 @@ test('generated cards cannot claim owner-curated provenance', async t => {
 
 import { doctor, readConnection, listSuites, rememberedConnection } from '../src/connection.js';
 import { proposePrompt, promptVersion } from '../src/prompt-edit.js';
-import { compareRuns, pilotSummary } from '../src/comparison.js';
+import { compareRuns } from '../src/comparison.js';
 import { previewAnswer } from '../src/evaluation.js';
 import { readData } from '../src/imports.js';
 
@@ -236,7 +275,7 @@ test('reassessment never opens the target, preserves original evidence, versions
   assert.equal(judgedResult.settings.roles.judge, undefined);
 });
 
-test('rejudged version pairs remain comparable and calibration refers to unchanged original human labels', async t => {
+test('rejudged version pairs remain comparable without copying original human labels', async t => {
   const adapter = runtime([card()]);
   const lab = await labFixture(t, adapter);
   const created = await lab.create(input('evaluate')); await lab.waitForIdle();
@@ -247,14 +286,7 @@ test('rejudged version pairs remain comparable and calibration refers to unchang
   adapter.assess = async () => [{ metricId: 'correctness', result: 'pass', rationale: 'Changed evaluator fixture', evidence: [1] }];
   const first = await lab.reassess(original.id); await lab.waitForIdle();
   const before = await lab.get(first.id);
-  const bundle = await evidenceBundle(before, lab.store);
-  assert.equal(bundle.calibrationComparison.reviewIds.length, 1);
-  assert.equal(bundle.calibrationComparison.before.find(c => c.key === 'correctness').agreement, 0);
-  assert.equal(bundle.calibrationComparison.after.find(c => c.key === 'correctness').agreement, 1);
   assert.deepEqual(before.humanReviews, [], 'Referenced labels do not become new human approvals');
-  const changed = await lab.reassess(original.id, { criteria: [{ scenarioId: 'card_0', metrics: [{ ...card().metrics[0], passCriteria: 'A different criterion' }] }] });
-  await lab.waitForIdle();
-  assert.equal((await evidenceBundle(await lab.get(changed.id), lab.store)).calibrationComparison.reviewIds.length, 0);
   const next = await lab.repeat(original.id);
   await lab.start(next.id, { approved: true, expectedHash: draftHash(next) }); await lab.waitForIdle();
   const second = await lab.reassess(next.id); await lab.waitForIdle();
@@ -277,20 +309,174 @@ test('good/bad previews and local JSONL imports validate actual criteria without
   await writeFile(file, '{bad}\n'); await assert.rejects(readData(file, 'dialogues'), /строке 1/);
 });
 
-test('draft edits cannot launder provenance; clarification keeps the old questions and records owner answers as a source', async t => {
-  const adapter = runtime([card()]);
-  const prepare = adapter.prepare;
-  adapter.prepare = async args => ({ ...await prepare(args), questions: args.sources.length === 1 ? ['Which answer is correct?'] : [] });
-  const lab = await labFixture(t, adapter);
+test('CLI score imports ordered JSONL evidence and exports it without calling an agent or model', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-score-cli-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const task = join(directory, 'task.json');
+  const dialogues = join(directory, 'dialogues.jsonl');
+  const data = join(directory, 'data');
+  await writeFile(task, JSON.stringify({ task: 'Проверить ответ по тарифу', mode: 'live',
+    materials: [{ name: 'policy.md', content: 'Тариф показывается в разделе «Мои точки продаж».' }] }));
+  const messages = [
+    { role: 'user', content: 'Где тариф?' },
+    { role: 'assistant', content: 'Уточните терминал.' },
+    { role: 'user', content: 'Терминал 4321.' },
+    { role: 'assistant', content: 'Откройте «Мои точки продаж».' },
+  ];
+  await writeFile(dialogues, JSON.stringify({ id: 'recorded_1', goal: 'Узнать тариф', messages }) + '\n');
+  const result = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--code-only', '--json', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.phase, 'results_review');
+  assert.equal(output.imported, 1);
+  assert.equal(output.scoreState, 'Оценено по коду без вызовов модели; кластеры провалов не строились.');
+  assert.equal(output.brief, 'Недостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.');
+  assert.match(output.quality.scope, /\$0\.00/);
+  assert.ok(output.artifacts.report && output.artifacts.snapshot && output.artifacts.traceJournal);
+  const record = JSON.parse(await readFile(output.artifacts.evidence, 'utf8'));
+  assert.deepEqual(record.trials[0].events, messages.map((message, seq) => ({ seq, type: message.role, text: message.content })));
+  assert.equal(record.trials[0].outcome, 'ungraded');
+  assert.deepEqual(record.trials[0].observation, { state: 'missing', tools: 'partial' });
+  assert.equal(record.usage.calls, 0);
+  assert.deepEqual(record.failureModes, undefined);
+
+  const human = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--code-only', '--data-dir', join(directory, 'human-data')], { encoding: 'utf8' });
+  assert.equal(human.status, 0, human.stderr);
+  assert.ok(human.stdout.indexOf('Недостаточно данных для гипотезы') < human.stdout.indexOf('АРТЕФАКТЫ'));
+  assert.match(human.stdout, /Оценено по коду без вызовов модели/);
+  assert.match(human.stdout, /• report: .*\.report\.md/);
+
+  const invalidData = join(directory, 'invalid-data');
+  await writeFile(dialogues, '{bad}\n');
+  const invalid = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--code-only', '--data-dir', invalidData], { encoding: 'utf8' });
+  assert.equal(invalid.status, 2);
+  assert.match(invalid.stderr, /строке 1/);
+  assert.match(invalid.stderr, /Исправьте JSON\/JSONL и повторите команду/);
+  assert.match(invalid.stderr, /агент не запускался/i);
+  assert.deepEqual((await readdir(invalidData)).filter(name => name.endsWith('.json')), []);
+
+  const schemaDialogues = join(directory, 'schema-dialogues.jsonl');
+  const invalidTask = join(directory, 'invalid-task.json');
+  await writeFile(schemaDialogues, JSON.stringify({ id: 'recorded_1', goal: 'Узнать тариф', messages }) + '\n');
+  await writeFile(invalidTask, JSON.stringify({ task: 'Без материалов', mode: 'live', materials: [] }));
+  const invalidSchema = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', schemaDialogues, '--task', invalidTask, '--code-only', '--data-dir', join(directory, 'invalid-schema-data')], { encoding: 'utf8' });
+  assert.equal(invalidSchema.status, 2);
+  assert.match(invalidSchema.stderr, /Исправьте JSON\/JSONL и повторите команду/);
+  assert.match(invalidSchema.stderr, /агент не запускался/i);
+
+  const unsafePath = join(directory, '\u001b[31mmissing\u202e\nFAKE STATUS.jsonl');
+  const unsafe = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', unsafePath, '--task', task, '--code-only', '--data-dir', join(directory, 'unsafe-data')], { encoding: 'utf8' });
+  assert.equal(unsafe.status, 2);
+  assert.match(unsafe.stderr, /Исправьте JSON\/JSONL и повторите команду/);
+  assert.match(unsafe.stderr, /агент не запускался/i);
+  assert.doesNotMatch(unsafe.stderr, /\u001b|\u202e/);
+  assert.doesNotMatch(unsafe.stderr, /\nFAKE STATUS/);
+
+  const unconfirmed = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score', '--input', dialogues, '--task', task, '--data-dir', join(directory, 'unconfirmed')], { encoding: 'utf8' });
+  assert.equal(unconfirmed.status, 2);
+  assert.match(unconfirmed.stderr, /--yes/);
+});
+
+test('CLI discovery shows the computed ceiling before consent, accepts 300 logs and rejects 301 without mutation', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-discover-cli-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const task = join(directory, 'task.json');
+  const dialogues = join(directory, 'dialogues.json');
+  const tooMany = join(directory, 'dialogues-301.json');
+  const data = join(directory, 'no-consent-data');
+  const rejectedData = join(directory, 'rejected-data');
+  await writeFile(task, JSON.stringify({ task: 'Найти полезный тест', mode: 'live',
+    materials: [{ name: 'policy.md', content: 'Агент обязан назвать адрес support@example.com.' }],
+    settings: { maxCalls: 20, maxDurationMs: 180000 } }));
+  const logs = Array.from({ length: 300 }, (_, index) => ({ id: `dialogue_${index}`,
+    messages: [{ role: 'user', content: `Где поддержка ${index}?` }, { role: 'assistant', content: 'Позвоните позже.' }] }));
+  await writeFile(dialogues, JSON.stringify(logs));
+  await writeFile(tooMany, JSON.stringify([...logs, { ...logs[0], id: 'dialogue_300' }]));
+
+  const preview = spawnSync(process.execPath, [resolve('dist/cli.js'), 'discover', '--input', dialogues, '--task', task, '--json', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(preview.status, 0, preview.stderr);
+  const events = preview.stdout.trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(events[0].type, 'discovery_plan');
+  assert.equal(events[0].dialogueCount, 300);
+  assert.ok(events[0].batches > 1);
+  assert.ok(events[0].maxCalls > 20, 'discovery receives its computed ceiling instead of the normal 20-call default');
+  assert.ok(events[0].maxDurationMs > 180000, 'the shown time ceiling scales with the discovery call budget');
+  assert.equal(events[1].type, 'next_step');
+  await assert.rejects(access(data), /ENOENT/, 'preview does not initialize or mutate the lab');
+
+  const rejected = spawnSync(process.execPath, [resolve('dist/cli.js'), 'discover', '--input', tooMany, '--task', task, '--json', '--data-dir', rejectedData], { encoding: 'utf8' });
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /Too big|300|слишком|maximum/i);
+  assert.match(rejected.stderr, /агент не запускался/i);
+  await assert.rejects(access(rejectedData), /ENOENT/, 'invalid input does not initialize or mutate the lab');
+});
+
+test('CLI discovery handoff rereads the saved hypothesis and does not build before confirmation', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-discovery-build-cli-'));
+  const data = join(directory, 'data');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const lab = new ExperimentLab(data, runtime([card()]));
+  await lab.init();
+  const created = await lab.create(input('evaluate')); await lab.waitForIdle();
+  const source = await lab.get(created.id);
+  source.dialogues = [{ id: 'evidence_1', messages: [
+    { role: 'user', content: 'What is the answer?' },
+    { role: 'assistant', content: 'An incorrect answer' },
+  ], outcome: 'failure' }];
+  source.discovery = {
+    protocol: 'discovery-1', phase: 'ready', error: null, requirements: source.requirements,
+    observations: [{ dialogueId: 'evidence_1', classification: 'candidate', requirementId: 'answer',
+      summary: 'The answer conflicts with the policy.', citations: [{ seq: 1, quote: 'An incorrect answer' }] }],
+    seed: 'saved-seed', focusRequirementId: 'answer', representativeIds: ['evidence_1'], controlIds: [], selectedIds: ['evidence_1'],
+    completedBatchCount: 1, groupingComplete: true, completedDeepIds: ['evidence_1'], deep: [],
+    hypothesis: { text: 'The agent may answer against the owner policy.\nНАБЛЮДЕНИЕ: ответ агента (reply)', proposedGoalObservation: 'reply',
+      requirementId: 'answer', eventIds: [{ dialogueId: 'evidence_1', seq: 1 }] },
+    callPlan: { batches: 1, selectedCap: 1, metrics: 2, nominalCalls: 7, maxCalls: 12,
+      baseMaxCalls: 20, baseMaxDurationMs: 180000, maxDurationMs: 180000 }, callsUsed: 7,
+    totalDialogues: 1, oversizedIds: [],
+  };
+  await lab.store.save(source);
+  const resumeSource = structuredClone(source);
+  resumeSource.id = `${source.id}_resume`;
+  resumeSource.phase = 'interrupted';
+  resumeSource.discovery!.phase = 'partial';
+  await lab.store.save(resumeSource);
+  await lab.close();
+  const before = await readFile(join(data, `${source.id}.json`), 'utf8');
+  const namesBefore = (await readdir(data)).filter(name => name.endsWith('.json')).sort();
+
+  const resumePreview = spawnSync(process.execPath, [resolve('dist/cli.js'), 'discover-resume', '--id', resumeSource.id, '--json', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(resumePreview.status, 0, resumePreview.stderr);
+  const resume = JSON.parse(resumePreview.stdout);
+  assert.deepEqual({ type: resume.type, id: resume.id, status: resume.status, callsUsed: resume.callsUsed, maxCalls: resume.maxCalls }, {
+    type: 'discovery_resume', id: resumeSource.id, status: 'partial', callsUsed: 7, maxCalls: 12,
+  });
+  assert.equal(resume.maxDurationMs, JSON.parse(before).discovery.callPlan.maxDurationMs);
+  assert.match(resume.command, new RegExp(`discover-resume --id ${resumeSource.id} --yes`));
+  assert.equal(await readFile(join(data, `${source.id}.json`), 'utf8'), before, 'resume preview is read-only');
+  assert.deepEqual((await readdir(data)).filter(name => name.endsWith('.json')).sort(), namesBefore);
+
+  const readyResume = spawnSync(process.execPath, [resolve('dist/cli.js'), 'discover-resume', '--id', source.id, '--yes', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(readyResume.status, 2); assert.match(readyResume.stderr, /не требует возобновления/);
+
+  const preview = spawnSync(process.execPath, [resolve('dist/cli.js'), 'discover-build', '--id', source.id, '--json', '--data-dir', data], { encoding: 'utf8' });
+  assert.equal(preview.status, 0, preview.stderr);
+  const event = JSON.parse(preview.stdout);
+  assert.deepEqual({ type: event.type, id: event.id, hypothesis: event.hypothesis }, {
+    type: 'hypothesis_confirmation', id: source.id, hypothesis: source.discovery.hypothesis.text,
+  });
+  assert.match(event.command, new RegExp(`discover-build --id ${source.id} --yes`));
+  assert.equal(await readFile(join(data, `${source.id}.json`), 'utf8'), before);
+  assert.deepEqual((await readdir(data)).filter(name => name.endsWith('.json')).sort(), namesBefore);
+});
+
+test('draft edits cannot launder provenance', async t => {
+  const lab = await labFixture(t, runtime([card()]));
   const created = await lab.create(input('evaluate')); await lab.waitForIdle();
   const original = await lab.get(created.id);
-  await assert.rejects(lab.updateDraft(original.id, draftHash(original), { scenarios: [{ ...original.scenarios[0], provenance: 'curated' }] }), /Происхождение/);
-  await assert.rejects(lab.clarify(original.id, [{ question: 'Wrong question', answer: '42' }]), /каждый вопрос/);
-  const next = await lab.clarify(original.id, [{ question: original.questions[0], answer: '42, according to the owner.' }]);
-  assert.equal(next.phase, 'review'); assert.equal(next.parentRunId, original.id);
-  assert.equal(next.clarifications[0].answer, '42, according to the owner.');
-  assert.match(next.sources.at(-1).content, /Ответ владельца: 42/);
-  assert.deepEqual(await lab.get(original.id), original);
+  await assert.rejects(lab.updateDraft(original.id, draftHash(original), {
+    scenarios: [{ ...original.scenarios[0], provenance: 'curated' }],
+  }), /Происхождение/);
 });
 
 test('partial external observations, unreported costs and out-of-scope tools cannot look like complete measurements', async t => {
@@ -307,7 +493,7 @@ test('partial external observations, unreported costs and out-of-scope tools can
   const scenario = { ...card(), metrics: [], split: 'dev', user: { ...card().user, opening: 'Read', script: ['Read again'], maxFollowUps: 1 },
     initialState: { records: { A: { time: '09:00' } }, writableFields: [], transientFailures: 0 },
     checks: [{ id: 'state', kind: 'state_equals', recordId: 'A', field: 'time', value: '09:00', description: 'Unchanged' }] };
-  const run = (s = scenario) => evaluateTrial({ runtime: runtime([]), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'fixture', createdAt: new Date().toISOString() },
+  const run = (s = scenario) => evaluateTrial({ requirements: [], runtime: runtime([]), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'fixture', createdAt: new Date().toISOString() },
     scenario: s, repeat: 0, manifestHash: 'fixture', sources: [], settings: settingsSchema.parse({}), userMode: 'scripted',
     target: { kind: 'http', url: `http://127.0.0.1:${server.address().port}`, headersEnv: {}, timeoutMs: 1000 },
     ctx: { signal: AbortSignal.timeout(5000), timeoutMs: 1000, beforeCall() {}, addUsage() {} } });
@@ -326,21 +512,11 @@ test('partial external observations, unreported costs and out-of-scope tools can
   result = await run(); assert.equal(result.outcome, 'invalid'); assert.match(result.reason, /Версия.*изменилась/);
 });
 
-test('a partially scored candidate cannot be accepted, and pilot statistics require real human annotations', async t => {
+test('a partially scored candidate cannot be accepted', async t => {
   const adapter = runtime(Array.from({ length: 4 }, (_, i) => card(i)));
   adapter.assess = async ({ scenario }) => [{ metricId: scenario.metrics[0].id, result: 'unknown', rationale: 'Insufficient evidence', evidence: [] }];
   const lab = await labFixture(t, adapter);
   const created = await lab.create(input('compare')); await lab.waitForIdle();
   await lab.start(created.id, { approved: true }); await lab.waitForIdle();
   const incomplete = await lab.get(created.id); assert.equal(incomplete.phase, 'error'); assert.match(incomplete.error, /assessment is incomplete/);
-  const record = structuredClone(incomplete); record.workflow = 'evaluate'; record.settings.userModes = ['static', 'reactive']; record.scenarios = [record.scenarios[0]];
-  const base = { ...record.trials[0], userMode: 'static', outcome: 'pass', assessments: [{ metricId: 'correctness', result: 'pass', rationale: 'fixture', evidence: [1] }] };
-  const reactive = { ...base, id: 'reactive_trial', userMode: 'reactive', outcome: 'fail' };
-  record.trials = [base, reactive]; record.humanReviews = [];
-  assert.equal(pilotSummary(record).modes[1].exclusiveConfirmed.length, 0);
-  record.humanReviews = [{ id: 'fixture_review', createdAt: record.createdAt, trialId: reactive.id, verdict: 'fail', note: 'Synthetic test annotation, not owner evidence.', durationMs: 500 }];
-  const summary = pilotSummary(record);
-  assert.equal(summary.modes[1].exclusiveConfirmed.length, 1); assert.equal(summary.modes[1].reviewMs, 500);
-  record.humanReviews.push({ ...record.humanReviews[0], id: 'invalid_review', verdict: 'invalid', createdAt: '2099-01-01' });
-  assert.equal(pilotSummary(record).modes[1].exclusiveConfirmed.length, 0);
 });

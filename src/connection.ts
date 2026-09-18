@@ -25,6 +25,12 @@ export function resolveTarget(raw: unknown, base: string): Target {
     target.cwd = resolve(base, typeof target.cwd === 'string' ? target.cwd : '.');
     if (typeof target.command === 'string' && target.command.includes('/')) target.command = resolve(target.cwd as string, target.command);
   }
+  if (target.kind !== 'sandbox' && target.release && typeof target.release === 'object') {
+    const release = { ...(target.release as Record<string, unknown>) };
+    release.cwd = resolve(base, typeof release.cwd === 'string' ? release.cwd : '.');
+    if (typeof release.command === 'string' && release.command.includes('/')) release.command = resolve(typeof release.cwd === 'string' ? release.cwd : base, release.command);
+    target.release = release;
+  }
   return targetSchema.parse(target);
 }
 
@@ -32,10 +38,12 @@ export function portableTarget(target: Target, base: string): unknown {
   const path = (file: string) => relative(base, file) || '.';
   const executable = (cwd: string, file: string) => { const value = relative(cwd, file); return value.includes('/') ? value : `./${value}`; };
   const prompt = target.kind !== 'sandbox' && target.promptFile ? { promptFile: path(target.promptFile) } : {};
-  if (target.kind === 'module') return { ...target, ...prompt, path: path(target.path) };
-  if (target.kind !== 'command') return { ...target, ...prompt };
+  const release = target.kind !== 'sandbox' && target.release ? { release: { ...target.release, ...(target.release.cwd ? { cwd: path(target.release.cwd) } : {}),
+    command: isAbsolute(target.release.command) ? executable(target.release.cwd ?? base, target.release.command) : target.release.command } } : {};
+  if (target.kind === 'module') return { ...target, ...prompt, ...release, path: path(target.path) };
+  if (target.kind !== 'command') return { ...target, ...prompt, ...release };
   const cwd = target.cwd ?? process.cwd();
-  return { ...target, ...prompt, cwd: path(cwd), command: isAbsolute(target.command) ? executable(cwd, target.command) : target.command,
+  return { ...target, ...prompt, ...release, cwd: path(cwd), command: isAbsolute(target.command) ? executable(cwd, target.command) : target.command,
     args: target.args.map(arg => isAbsolute(arg) && /\.(?:[cm]?js|ts|py|sh)$/.test(arg) ? relative(cwd, arg) : arg) };
 }
 
@@ -66,7 +74,12 @@ export async function listSuites(directory: string) {
       const raw = JSON.parse(await readFile(path, 'utf8'));
       if (raw.format !== 'agent-lab-suite-1') return { file: path, error: 'Не является набором Agent Lab.' };
       const record = experimentSchema.parse({ ...raw.definition, target: resolveTarget(raw.definition.target, dirname(path)) });
+      const accepted = (record.acceptedTests ?? []).filter(test => {
+        const scenario = record.scenarios.find(candidate => candidate.id === test.scenarioId);
+        return scenario !== undefined && fingerprint(scenario) === test.definitionHash;
+      });
       return { file: path, task: record.task, cases: record.scenarios.map(s => ({ id: s.id, title: s.title, tier: s.tier })),
+        acceptedCount: accepted.length, acceptedTestIds: accepted.map(test => test.testId),
         sourceRunId: record.sourceEvidence?.runId ?? record.parentRunId, sourceTrials: record.sourceEvidence?.trials.length ?? 0 };
     } catch (error) { return { file: path, error: error instanceof Error ? error.message : String(error) }; }
   }));
@@ -97,7 +110,7 @@ export async function doctor(connection: Connection, signal = new AbortControlle
   });
   try {
     const trials = [];
-    for (const reset of [false, true]) trials.push(await evaluateTrial({ runtime, revision, scenario: makeCard(reset), sources: [], repeat: 0,
+    for (const reset of [false, true]) trials.push(await evaluateTrial({ runtime, revision, scenario: makeCard(reset), sources: [], requirements: [], repeat: 0,
       manifestHash: fingerprint(probe), settings, userMode: 'scripted', target: connection.target,
       ctx: { signal: combined, timeoutMs: 60000, beforeCall() { combined.throwIfAborted(); if (++usage.calls > 3) throw new Error('Probe call limit exceeded'); },
         addUsage(u) { usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens; usage.costUsd = u.costUsd === null || usage.costUsd === null ? null : usage.costUsd + u.costUsd; } } }));
@@ -113,11 +126,9 @@ export async function doctor(connection: Connection, signal = new AbortControlle
 }
 
 export function suiteEvidence(record: Experiment, scenarioIds: string[]) {
-  const trials = scenarioIds.flatMap(id => {
-    const candidates = record.trials.filter(t => t.scenarioId === id);
-    const reviewed = candidates.find(t => record.humanReviews.some(r => r.trialId === t.id && r.verdict === 'fail'));
-    const trial = reviewed ?? candidates.find(t => t.outcome === 'fail' || t.assessments?.some(a => a.result === 'fail')) ?? candidates[0];
-    return trial ? [structuredClone(trial)] : [];
-  });
-  return { runId: record.id, ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}), trials, humanReviews: record.humanReviews.filter(r => trials.some(t => t.id === r.trialId)) };
+  const selected = new Set(scenarioIds);
+  const trials = record.trials.filter(trial => selected.has(trial.scenarioId)).map(trial => structuredClone(trial));
+  const trialIds = new Set(trials.map(trial => trial.id));
+  return { runId: record.id, ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}), trials,
+    humanReviews: record.humanReviews.filter(review => trialIds.has(review.trialId)).map(review => structuredClone(review)) };
 }

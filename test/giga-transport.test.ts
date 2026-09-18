@@ -30,7 +30,9 @@ function testConfig(port: number): GigaConfig {
   return { baseUrl: `https://127.0.0.1:${port}`, cert: serverCert, key: serverKey, rejectUnauthorized: false };
 }
 
-test('a response cut off mid-body rejects instead of hanging forever', { timeout: 3000 }, async () => {
+// Лимит отделяет «завис навсегда» от «ответил»: скорость тут не проверяется. Под нагрузкой полного
+// набора локальное TLS-рукопожатие занимает секунды, и трёхсекундный лимит падал без поломки.
+test('a response cut off mid-body rejects instead of hanging forever', { timeout: 15000 }, async () => {
   // A raw socket, not a real http.Server: promises a 100-byte body, writes far fewer bytes,
   // then closes cleanly (FIN, not RST) — exactly what a proxy/gateway does mid-stream.
   const { port, close } = await startTlsServer(socket => {

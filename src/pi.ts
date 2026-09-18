@@ -2,21 +2,23 @@ import {
   createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager,
   type ResourceLoader, type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Type } from 'typebox';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.js';
 import { z } from 'zod';
 import {
-  agentSchema, failureModeSchema, observedGoalSchema, observedProfileSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema,
-  TOOL_NAMES, VERSION, fingerprint, simulatorFidelity, userTurnSchema, validateObservedGoals,
+  agentSchema, discoveryGroupSchema, discoveryObservationSchema, failureModeSchema, observedGoalSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema,
+  MACHINE_FORMAT, REQUIREMENT_LIMIT, SCENARIO_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens, verbatimSpan,
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
 import { GIGA_PROVIDER_ID, registerGigaProvider } from './giga-provider.js';
 import { missingGigaVariables, unreadableGigaFiles } from './giga-transport.js';
-import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, PROFILES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
+import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, DISCOVERY_COARSE_ROLE, DISCOVERY_GROUP_ROLE, DISCOVERY_HYPOTHESIS_ROLE, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
 
 type Model = NonNullable<ReturnType<ModelRuntime['getModel']>>;
 const groundingSchema = z.strictObject({
-  requirements: z.array(requirementSchema).min(1).max(30),
+  requirements: z.array(requirementSchema).min(1).max(REQUIREMENT_LIMIT, { error: `Return at most ${REQUIREMENT_LIMIT} requirements: merge closely related rules into one requirement with one exact quote, and keep the rules a user can see violated in a reply` }),
   questions: z.array(z.string().trim().min(1).max(2000)).max(12),
 });
 const familyPlanSchema = z.strictObject({ families: z.array(z.strictObject({
@@ -24,24 +26,57 @@ const familyPlanSchema = z.strictObject({ families: z.array(z.strictObject({
   mechanism: z.string().trim().min(1).max(300),
   requirementIds: scenarioSchema.shape.requirementIds,
 })).min(4).max(16) });
+function groundingProblem(value: z.infer<typeof groundingSchema>, sources: { id: string; name: string; content: string; kind?: 'knowledge' | 'prompt' }[]): string | undefined {
+  const missing: string[] = [];
+  for (const requirement of value.requirements) {
+    const source = sources.find(candidate => candidate.id === requirement.sourceId);
+    if (!source) return `Requirement ${requirement.id} cites source ${requirement.sourceId}, which was not supplied.`;
+    const exact = verbatimSpan(source.content, requirement.quote);
+    if (exact && source.kind === 'prompt' && MACHINE_FORMAT.test(exact)) {
+      return `Requirement ${requirement.id} quotes a machine output format ("${exact.slice(0, 60)}"): a JSON envelope or a named field is an internal interface between the agent's components, not a rule a user can observe. Drop this requirement.`;
+    }
+    if (exact) { requirement.quote = exact; continue; }
+    const elsewhere = sources.filter(candidate => candidate.id !== source.id && verbatimSpan(candidate.content, requirement.quote));
+    if (elsewhere.length === 1) {
+      requirement.sourceId = elsewhere[0]!.id;
+      requirement.quote = verbatimSpan(elsewhere[0]!.content, requirement.quote)!;
+      continue;
+    }
+    missing.push(`${requirement.id} (not in "${source.name}")`);
+  }
+  return missing.length
+    ? `These quotes are not verbatim substrings of their sources: ${missing.join('; ')}. Copy the exact characters from the source instead of paraphrasing; a shorter contiguous fragment is safer than a long one. Keep every other requirement as it is.`
+    : undefined;
+}
 // New generated cards require an explicit interaction budget; older saved cards keep their original semantics.
-// With observed profiles the model may only choose a profileId; persona text is copied from the profile later.
-const generatedScenarioSchema = (external: boolean) => scenarioSchema.required({ successCriteria: true, assumptions: true, metrics: true })
-  .extend({ user: scenarioSchema.shape.user.required({ maxFollowUps: true }) })
-  .refine(s => external ? s.checks.length > 0 || s.metrics.some(m => m.subject === 'agent')
-    : s.metrics.some(m => m.subject === 'agent') && s.metrics.some(m => m.subject === 'simulator'),
+// With owner profiles the model may only choose a profileId; persona text is copied from the profile later.
+const RUBRIC_LIMIT = 8;
+const CONFIRMED_TEST_CLAUSE = `CONFIRMED HYPOTHESIS: return exactly one generated agent rubric with id "goal_attainment" and subject "agent". Its passCriteria must equal successCriteria verbatim. Generate no other rubric: the harness adds prompt_compliance when a prompt source exists and user_fidelity only for a reactive simulator mode. goalObservation is owner-owned metadata: you must not return, infer, or replace it. This overrides the general and external-target rubric instructions above.`;
+// ponytail: conservative serialized-input cap; derive it from model token metadata if legitimate score inputs regularly hit it.
+const GOALS_INPUT_LIMIT = 120_000;
+const scoredGoalSchema = observedGoalSchema.extend({ requirementIds: observedGoalSchema.shape.requirementIds.unwrap().min(1) });
+/** Instructions about the shape of a machine reply: an envelope the user never sees. */
+/** external cards get harness rubrics after generation (fidelity, and prompt compliance when a prompt source exists); the model may use only what is left. */
+const generatedScenarioSchema = (external: boolean, harnessRubrics = 0, confirmed = false) => scenarioSchema.omit({ goalObservation: true }).required({ successCriteria: true, assumptions: true, metrics: true })
+  // Models like to label the whole card with a stage; stages belong to criteria, so the label is accepted here and dropped in the review.
+  .extend({ user: scenarioSchema.shape.user.required({ maxFollowUps: true }), stage: z.string().max(80).optional() })
+  .refine(s => confirmed || (external ? s.checks.length > 0 || s.metrics.some(m => m.subject === 'agent')
+    : s.metrics.some(m => m.subject === 'agent') && s.metrics.some(m => m.subject === 'simulator')),
     'Provide an agent-goal rubric, or literal answer checks for an external goal; sandbox cards also need simulator fidelity')
-  .refine(s => !external || s.checks.every(c => ['answer_equals', 'answer_contains', 'answer_omits'].includes(c.kind))
+  .refine(s => !external || confirmed || s.checks.every(c => ['answer_equals', 'answer_contains', 'answer_omits'].includes(c.kind))
     && !Object.keys(s.initialState.records).length && !s.initialState.writableFields.length && !s.initialState.transientFailures,
     'Without an external state/tool contract use only source-grounded answer checks and an empty initialState; assess semantic answers with agent rubrics')
-  .refine(s => !external || s.metrics.length < 8 && s.metrics.every(m => m.subject === 'agent' && m.id !== simulatorFidelity.id),
-    'External generation uses at most 7 agent rubrics only; the harness adds user_fidelity for the simulator');
+  .refine(s => !external || s.metrics.length <= RUBRIC_LIMIT - harnessRubrics && s.metrics.every(m => m.subject === 'agent' && m.id !== simulatorFidelity.id && m.id !== promptCompliance.id),
+    `External generation uses at most ${RUBRIC_LIMIT - harnessRubrics} agent rubrics only; the harness adds user_fidelity for the simulator${harnessRubrics > 1 ? ' and prompt_compliance for the supplied prompt source' : ' and prompt_compliance when a prompt source is supplied'}`)
+  .refine(s => !confirmed || s.metrics.length === 1 && s.metrics[0]?.id === 'goal_attainment' && s.metrics[0].subject === 'agent'
+    && s.metrics[0].passCriteria === s.successCriteria,
+    'A confirmed test must contain exactly one generated agent rubric: goal_attainment, with passCriteria equal to successCriteria verbatim');
 const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, message: userTurnSchema.shape.message.optional() })
   .refine(v => v.done || !!v.message?.trim(), 'A continuing user turn needs a message')
   .describe('To stop immediately, return done:true and omit message. A nonempty message is always delivered to the target. done:true with a nonempty message means deliver this final user message, receive the target response, then end. done:true with an empty message means stop now without another target response.');
 const authHelp = 'Войдите в Pi через /login или задайте ключ выбранного провайдера, затем выберите доступную модель. Живой прогон никогда не подменяется демо.';
 
-export const evaluatorVersion = (settings: Settings): string => fingerprint({ protocol: VERSION, judge: JUDGE_PROTOCOL, simulator: SIMULATOR_ROLE,
+export const evaluatorVersion = (settings: Settings): string => fingerprint({ protocol: VERSION, judge: JUDGE_PROTOCOL, simulator: { role: SIMULATOR_ROLE, protocol: SIMULATOR_PROTOCOL },
   provider: settings.provider, model: settings.model, roles: settings.roles ?? {}, judgeModel: settings.judge });
 
 /** Explicit resources avoid global/project extensions, skills, AGENTS files and prompt discovery. */
@@ -221,11 +256,72 @@ async function controlledSession(
  * guessing where an object starts is not the same as reading a delimiter. The schema
  * still decides what is valid.
  */
+/** Models put raw line breaks and tabs inside JSON strings, which JSON forbids. Escape control characters inside string literals only. */
+function escapeControlCharacters(text: string): string {
+  let out = '', inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      if (ch === '\\') { out += ch + (text[i + 1] ?? ''); i++; continue; }
+      if (ch === '"') inString = false;
+      else if (ch < ' ') { out += ch === '\n' ? '\\n' : ch === '\r' ? '\\r' : ch === '\t' ? '\\t' : `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`; continue; }
+    } else if (ch === '"') inString = true;
+    out += ch;
+  }
+  return out;
+}
+/**
+ * Models copy source text with straight double quotes into JSON strings without escaping them.
+ * A quote can close a string only where the container allows: a key is followed by ':', an
+ * object value by '}' or by ',' and another key, an array item by ',' or ']'. Every other
+ * double quote inside a string is escaped. Runs only after a plain parse has failed.
+ */
+function repairUnescapedQuotes(text: string): string {
+  const out: string[] = [], stack: Array<'{' | '['> = [];
+  let expectKey = false;
+  const skipSpace = (j: number) => { while (j < text.length && /\s/.test(text[j]!)) j++; return j; };
+  const keyFollows = (j: number) => {
+    if (text[j] !== '"') return false;
+    const end = text.indexOf('"', j + 1);
+    return end > 0 && text[skipSpace(end + 1)] === ':';
+  };
+  for (let i = 0; i < text.length;) {
+    const ch = text[i]!;
+    if (ch === '{' || ch === '[') { stack.push(ch); expectKey = ch === '{'; out.push(ch); i++; continue; }
+    if (ch === '}' || ch === ']') { stack.pop(); expectKey = false; out.push(ch); i++; continue; }
+    if (ch === ',') { expectKey = stack[stack.length - 1] === '{'; out.push(ch); i++; continue; }
+    if (ch === ':') { expectKey = false; out.push(ch); i++; continue; }
+    if (ch !== '"') { out.push(ch); i++; continue; }
+    const isKey = expectKey, container = stack[stack.length - 1];
+    out.push('"'); i++;
+    while (i < text.length) {
+      const c = text[i]!;
+      if (c === '\\') { out.push(c, text[i + 1] ?? ''); i += 2; continue; }
+      if (c !== '"') { out.push(c); i++; continue; }
+      const next = text[skipSpace(i + 1)] ?? '';
+      const closes = isKey ? next === ':'
+        : container === '{' ? next === '}' || (next === ',' && keyFollows(skipSpace(skipSpace(i + 1) + 1)))
+        : next === ',' || next === ']' || next === '';
+      if (closes) { out.push('"'); i++; break; }
+      out.push('\\"'); i++;
+    }
+    expectKey = false;
+  }
+  return out.join('');
+}
+/** The raw reply, then its fenced form, each as written and with control characters and quotes repaired. The first parse error is the one worth showing the model. */
 function parseJsonOutput(output: string): unknown {
-  try { return JSON.parse(output); } catch { /* fall through to the fenced form */ }
+  const candidates = [output];
   const fenced = /```[a-zA-Z]*\s*\n?([\s\S]*?)\n?```/.exec(output);
-  if (!fenced?.[1]) throw new Error('Output is not JSON');
-  return JSON.parse(fenced[1].trim());
+  if (fenced?.[1]) candidates.push(fenced[1].trim());
+  let failure: unknown;
+  for (const candidate of candidates) {
+    const escaped = escapeControlCharacters(candidate);
+    for (const text of [candidate, escaped, repairUnescapedQuotes(escaped)]) {
+      try { return JSON.parse(text); } catch (error) { failure ??= error; }
+    }
+  }
+  throw new Error(`Output is not JSON: ${failure instanceof Error ? failure.message : 'unreadable'}`);
 }
 
 /**
@@ -235,13 +331,13 @@ function parseJsonOutput(output: string): unknown {
  * spinning and spending the owner's budget. Rejection text is model-facing and stays
  * English, like the roles; what the owner reads is translated at the throw site.
  */
-const REPAIR_ATTEMPTS = 3;
+export const REPAIR_ATTEMPTS = 5;
 
 async function jsonResponse<S extends z.ZodType>(
   modelRuntime: ModelRuntime, model: Model, label: string, role: string, input: unknown, schema: S, ctx: CallContext,
   review?: (value: z.infer<S>) => string | undefined,
 ): Promise<z.infer<S>> {
-  const prompt = `${role}\n${DATA_BOUNDARY}\nReturn exactly one compact JSON object, without markdown fences or pretty-printing whitespace, matching this JSON schema:\n${JSON.stringify(z.toJSONSchema(schema))}`;
+  const prompt = `${role}\n${DATA_BOUNDARY}\nReturn exactly one compact JSON object, without markdown fences or pretty-printing whitespace, matching this JSON schema:\n${JSON.stringify(z.toJSONSchema(schema))}\nInside strings, escape double quotes as \\" and line breaks as \\n; when copying source text, «» may stand for its straight double quotes.`;
   // Only target sessions contribute target trace events; simulator/planner events cannot affect target grades.
   const session = await controlledSession(modelRuntime, model, prompt, [], { ...ctx, onTargetEvent: undefined });
   try {
@@ -251,7 +347,7 @@ async function jsonResponse<S extends z.ZodType>(
       const output = await session.respond(message);
       let parsed: unknown;
       try { parsed = parseJsonOutput(output); rejection = ''; }
-      catch { rejection = 'The reply was not a single JSON object.'; }
+      catch (error) { rejection = `The reply was not a single JSON object (${error instanceof Error ? error.message : 'unreadable'}). Return one JSON object and nothing else; escape line breaks inside strings as \\n.`; }
       if (!rejection) {
         const validated = schema.safeParse(parsed);
         if (!validated.success) {
@@ -261,6 +357,10 @@ async function jsonResponse<S extends z.ZodType>(
           if (!problem) return validated.data;
           rejection = problem;
         }
+      }
+      if (process.env['AGENT_LAB_DEBUG_DIR']) {
+        await mkdir(process.env['AGENT_LAB_DEBUG_DIR'], { recursive: true });
+        await writeFile(join(process.env['AGENT_LAB_DEBUG_DIR'], `${label.replace(/[^\p{L}\p{N}]+/gu, '_')}-${Date.now()}-${attempt}.txt`), `${rejection}\n\n${output}`, { mode: 0o600 });
       }
       message = `Your previous answer was rejected. ${rejection}\nReturn the corrected object in full, as one compact JSON object and nothing else.`;
     }
@@ -326,27 +426,27 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   };
   return {
     async prepare(input, ctx) {
-      const grounding = await ask(
-        'Требования',
-        REQUIREMENTS_ROLE,
-        { task: input.task, sources: input.sources.map(({ id, name, content }) => ({ id, name, content })) },
-        groundingSchema, ctx,
-        value => {
-          for (const requirement of value.requirements) {
-            const source = input.sources.find(s => s.id === requirement.sourceId);
-            if (!source) return `Requirement ${requirement.id} cites source ${requirement.sourceId}, which was not supplied.`;
-            if (!source.content.includes(requirement.quote)) {
-              return `Requirement ${requirement.id}: the quote is not a verbatim substring of "${source.name}". Copy the exact characters from that source instead of paraphrasing.`;
-            }
-          }
-          return undefined;
-        },
+      const grounding = input.requirements ? groundingSchema.parse({ requirements: structuredClone(input.requirements), questions: [] }) : await ask(
+        'Требования', REQUIREMENTS_ROLE,
+        { task: input.task, sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, ...(kind ? { kind } : {}) })) },
+        groundingSchema, ctx, value => groundingProblem(value, input.sources),
       );
+      const suppliedProblem = groundingProblem(grounding, input.sources);
+      if (suppliedProblem) throw new Error(`Требования: ${suppliedProblem}`);
       const evidence = { task: input.task, requirements: grounding.requirements, questions: grounding.questions };
       const requirementIds = new Set(grounding.requirements.map(r => r.id));
       if (requirementIds.size !== grounding.requirements.length) throw new Error('Requirements: duplicate requirement IDs');
       const compare = input.workflow === 'compare';
+      const confirmed = !!input.confirmedHypothesis;
+      const groundedValues = confirmed ? valueTokens([
+        ...input.sources.map(source => source.content),
+        ...(input.dialogues ?? []).flatMap(dialogue => dialogue.messages.filter(message => message.role === 'user').map(message => message.content)),
+      ].join('\n')) : undefined;
       const external = !!input.targetKind && input.targetKind !== 'sandbox';
+      const hasPrompt = input.sources.some(s => s.kind === 'prompt');
+      const simulatorCapable = (input.userModes ?? ['reactive']).includes('reactive');
+      const harnessRubrics = confirmed ? Number(hasPrompt) + Number(simulatorCapable)
+        : external ? 1 + Number(hasPrompt) : 0;
       const plan = compare ? await ask(
         'План семейств сценариев',
         FAMILY_PLAN_ROLE,
@@ -366,31 +466,49 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       const total = plan?.families.length ?? input.scenarioCount ?? 5;
       const batchLimit = compare ? 4 : 3;
       // Evaluation needs only the requested goals; a separate family plan is reserved for version comparison.
-      for (let offset = 0; offset < total; offset += batchLimit) {
+      for (let offset = 0; offset < total;) {
         const requestedFamilies = plan?.families.slice(offset, offset + batchLimit);
         const batchSize = Math.min(batchLimit, total - offset);
+        // A reply may carry more than its batch: without a family plan the surplus fills the suite, with one it is cut to the requested families.
+        const keep = plan ? batchSize : total - offset;
         const batchLabel = `Карточки, партия ${Math.floor(offset / batchLimit) + 1}${requestedFamilies ? ` (${requestedFamilies.map(f => f.familyId).join(', ')})` : ''}`;
         const profiles = input.profiles ?? [];
         const observedGoals = input.observedGoals ?? [];
         const cards = await ask(
           batchLabel,
-          cardsRole(compare, profiles.length > 0, observedGoals.length > 0) + (external ? `\n${EXTERNAL_CARDS_CLAUSE}` : ''),
+          cardsRole(compare, profiles.length > 0, observedGoals.length > 0)
+            + (external ? `\n${EXTERNAL_CARDS_CLAUSE}` : '')
+            + (confirmed ? `\n${CONFIRMED_TEST_CLAUSE}` : ''),
           {
             ...evidence,
+            ...(confirmed ? {
+              confirmedHypothesis: input.confirmedHypothesis,
+              dialogueEvidence: (input.dialogues ?? []).map(dialogue => ({
+                id: dialogue.id,
+                userMessages: dialogue.messages.filter(message => message.role === 'user').map(message => message.content),
+              })),
+            } : {}),
             ...(input.notes ? { ownerNotes: input.notes } : {}),
-            ...(profiles.length ? { observedProfiles: profiles } : {}),
+            ...(profiles.length ? { ownerProfiles: profiles } : {}),
             ...(observedGoals.length ? { observedGoals: observedGoals.map(g => ({ id: g.id, goal: g.goal, profileId: g.profileId })) } : {}),
             ...(plan ? { familyPlan: plan.families, requestedFamilies } : {
-              scenarioCount: total, requestedCount: batchSize,
+              requestedCount: batchSize, plannedTotal: total,
               earlierGoals: scenarios.map(s => ({ id: s.id, familyId: s.familyId, goal: s.user.goal })),
             }),
           },
-          z.strictObject({ scenarios: z.array(generatedScenarioSchema(external)).length(batchSize) }), ctx,
+          z.strictObject({ scenarios: confirmed
+            ? z.tuple([generatedScenarioSchema(external, harnessRubrics, true)])
+            : z.array(generatedScenarioSchema(external, harnessRubrics)).min(batchSize).max(SCENARIO_LIMIT) }), ctx,
           // Pure review: attribution problems are a reason for the model to rewrite the
           // batch, not a reason to lose the whole run. Nothing is recorded until it passes.
           value => {
+            // Surplus cards are the model overshooting a count, not a defect worth an attempt.
+            if (!confirmed && value.scenarios.length > keep) value.scenarios.splice(keep);
             const seen = new Set<string>();
             for (const scenario of value.scenarios) {
+              // A profile invented where none were supplied carries nothing; the card keeps its own persona.
+              if (scenario.profileId !== undefined && !profiles.length) delete scenario.profileId;
+              delete (scenario as { stage?: string }).stage;
               const family = requestedFamilies?.find(f => f.familyId === scenario.familyId);
               if (requestedFamilies && !family) return `Card ${scenario.id} claims family "${scenario.familyId}", which was not requested in this batch.`;
               if (requestedFamilies && seen.has(scenario.familyId)) return `Family "${scenario.familyId}" is used by two cards in this batch; each requested family needs exactly one card.`;
@@ -403,15 +521,61 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
               if (unknown.length) return `Card ${scenario.id} references requirements that do not exist: ${unknown.join(', ')}.`;
               const missing = family?.requirementIds.filter(id => !scenario.requirementIds.includes(id)) ?? [];
               if (missing.length) return `Card ${scenario.id} must cover the requirements of its family: ${missing.join(', ')}.`;
+              if (external) {
+                if (input.sources.some(s => s.kind === 'prompt')) {
+                  // The agent's JSON envelope or a named field is an interface between its components: a criterion that pins it measures the adapter, not the agent. Dropping it is deterministic and costs no attempt.
+                  scenario.checks = scenario.checks.filter(c => !MACHINE_FORMAT.test(`${(c as { value?: unknown }).value ?? ''}`) && !MACHINE_FORMAT.test(c.description));
+                  scenario.metrics = scenario.metrics?.filter(m => m.subject !== 'agent' || !MACHINE_FORMAT.test(`${m.name}\n${m.description}\n${m.passCriteria}\n${m.failCriteria}`));
+                }
+                // A literal check on an external agent may only pin wording the source itself mandates or the user literally asked for; everything else is a rubric's job.
+                const literal = scenario.checks.filter(c => c.kind === 'answer_equals' || c.kind === 'answer_contains' || c.kind === 'answer_omits');
+                // Wording a source mandates or forbids appears in that source; the user's own opening may also be echoed.
+                const grounds = [...input.sources.map(s => s.content), scenario.user.opening];
+                for (const check of literal) {
+                  if (!grounds.some(ground => verbatimSpan(ground, check.value))) {
+                    return `Card ${scenario.id}: check ${check.id} requires the wording "${check.value.slice(0, 80)}", which is not a verbatim fragment of any supplied source or the user's opening. Literal checks only pin wording a source mandates or forbids; assess everything else with an agent rubric and drop this check.`;
+                  }
+                }
+                if (literal.length > 2) return `Card ${scenario.id} has ${literal.length} literal checks; keep at most two literal checks per card and express the rest as agent rubrics.`;
+              }
+              if (confirmed) {
+                const stateChecks = scenario.checks.filter(check => check.kind === 'state_equals');
+                const seeded = Object.keys(scenario.initialState.records).length > 0
+                  || scenario.initialState.writableFields.length > 0
+                  || scenario.initialState.transientFailures > 0
+                  || Object.keys(scenario.initialState.external ?? {}).length > 0;
+                if (input.goalObservation === 'reply' && (seeded || scenario.checks.some(check => !['answer_equals', 'answer_contains', 'answer_omits'].includes(check.kind)))) {
+                  return `Card ${scenario.id}: reply-observed prompt/RAG tests cannot seed backend state or require tool/state checks. Keep initialState empty and use only source-grounded answer checks or the goal rubric.`;
+                }
+                if (seeded && !stateChecks.length) return `Card ${scenario.id}: non-empty seeded state needs at least one exact state_equals check.`;
+                const unresolved = stateChecks.filter(check => !Object.hasOwn(scenario.initialState.records, check.recordId)
+                  || !Object.hasOwn(scenario.initialState.records[check.recordId]!, check.field));
+                if (unresolved.length) return `Card ${scenario.id}: state_equals paths do not resolve in the seeded state: ${unresolved.map(check => `${check.recordId}.${check.field}`).join(', ')}.`;
+              }
+              const known = valueTokens([scenario.user.opening, scenario.user.facts, ...(scenario.user.knows ?? [])].join('\n'));
+              if (groundedValues) {
+                const answerValues = new Set((scenario.user.answers ?? []).flatMap(answer => [...valueTokens(answer.reply)]));
+                const unsupported = [...answerValues].filter(token => !groundedValues.has(token)).sort();
+                if (unsupported.length) return `Card ${scenario.id}: answer values are not grounded in owner sources or user-authored dialogue evidence: ${unsupported.join(', ')}.`;
+                const additions = [...answerValues].filter(token => !known.has(token)).sort();
+                const next = [...(scenario.user.knows ?? []), ...additions];
+                if (next.length > 20) return `Card ${scenario.id}: answer enrichment produces ${next.length} known values; maximum is 20. Nothing was truncated.`;
+                if (additions.length) scenario.user.knows = next;
+              } else for (const answer of scenario.user.answers ?? []) {
+                const unknown = [...valueTokens(answer.reply)].find(token => !known.has(token));
+                if (unknown) return `Card ${scenario.id}: the reply to "${answer.ifAsked}" contains "${unknown}", which is not in knows, facts or opening. Either add that value to user.knows when the user really knows it, or answer with a value already in knows, facts or opening; a reply must never contradict the card's facts.`;
+              }
               seen.add(scenario.familyId);
             }
             return undefined;
           },
         );
         for (const scenario of cards.scenarios) {
-          if (external) scenario.metrics.push({ ...simulatorFidelity });
+          if (confirmed ? simulatorCapable : external) scenario.metrics.push({ ...simulatorFidelity });
+          if ((confirmed || external) && hasPrompt) scenario.metrics.unshift({ ...promptCompliance });
           scenarioIds.add(scenario.id); scenarios.push(scenario);
         }
+        offset += cards.scenarios.length;
       }
       // An external target answers with its own agent, so a sandbox AgentSpec would be
       // built, paid for and never used.
@@ -421,27 +585,93 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           : await ask('Сборка агента', AGENT_ROLE, evidence, agentSchema, ctx));
       return preparationSchema.parse({ ...grounding, scenarios, agent });
     },
-    async goals(input, ctx) {
+    async discover(input, ctx) {
+      if (input.kind === 'requirements') {
+        const grounded = await ask(
+          'Требования для поиска теста', REQUIREMENTS_ROLE,
+          { task: input.task, sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, ...(kind ? { kind } : {}) })) },
+          groundingSchema, ctx, value => groundingProblem(value, input.sources),
+        );
+        return { kind: 'requirements', ...grounded };
+      }
+      if (input.kind === 'coarse') {
+        const result = await ask(
+          'Первичный разбор записанных диалогов', DISCOVERY_COARSE_ROLE,
+          { ownerRequirements: input.requirements, dialogues: input.dialogues },
+          z.strictObject({ observations: z.array(discoveryObservationSchema).max(300) }), ctx,
+        );
+        return { kind: 'coarse', observations: result.observations };
+      }
+      if (input.kind === 'group') {
+        const result = await ask(
+          'Повторяющиеся проблемы в диалогах', DISCOVERY_GROUP_ROLE,
+          { ownerRequirements: input.requirements.map(({ id, text }) => ({ id, text })), observations: input.observations },
+          z.strictObject({ groups: z.array(discoveryGroupSchema).max(80) }), ctx,
+        );
+        return { kind: 'group', groups: result.groups };
+      }
       const result = await ask(
-        'Цели из реальных диалогов',
-        GOALS_ROLE,
-        {
-          task: input.task,
-          profiles: input.profiles.map(({ id, persona, characteristics }) => ({ id, persona, characteristics })),
-          dialogues: input.dialogues.map(d => ({ id: d.id, outcome: d.outcome, userMessages: d.messages.filter(m => m.role === 'user').map(m => m.content) })),
-        },
-        z.strictObject({ goals: z.array(observedGoalSchema).min(1).max(20) }), ctx,
+        'Гипотеза для нового теста', DISCOVERY_HYPOTHESIS_ROLE,
+        { ownerRequirement: input.requirement, observations: input.observations, deepChecks: input.deep },
+        z.strictObject({ hypothesis: z.string().trim().min(1).max(3000) }), ctx,
       );
-      try { validateObservedGoals(result.goals, input.dialogues, input.profiles); }
+      return { kind: 'hypothesis', hypothesis: result.hypothesis };
+    },
+    async goals(input, ctx) {
+      if (!input.sources.length) throw new Error('Observed goals: без материалов владельца ожидаемое поведение остаётся неизвестным.');
+      const sources = input.sources.map(({ id, name, content, kind }) => ({ id, name, content, ...(kind ? { kind } : {}) }));
+      const profiles = input.profiles.map(({ id, persona, characteristics }) => ({ id, persona, characteristics }));
+      if (!input.requirements) {
+        const result = await ask(
+          'Цели из реальных диалогов', GOALS_ROLE,
+          { task: input.task, sources, profiles, dialogues: input.dialogues.map(dialogue => ({ id: dialogue.id, userMessages: dialogue.messages.filter(message => message.role === 'user').map(message => message.content) })) },
+          z.strictObject({ goals: z.array(observedGoalSchema).min(1).max(20) }), ctx,
+        );
+        try { validateObservedGoals(result.goals, input.dialogues, input.profiles); }
+        catch (error) { throw new Error(`Observed goals: ${error instanceof Error ? error.message : String(error)}`); }
+        return result.goals;
+      }
+      if (!input.requirements.length) throw new Error('Observed goals: нет требований владельца, на которые можно сослаться.');
+      const knownRequirements = new Set(input.requirements.map(requirement => requirement.id));
+      const goals = [];
+      for (const dialogue of input.dialogues) {
+        const payload = {
+          task: input.task,
+          sources, ownerRequirements: input.requirements.map(({ id, text, sourceId, quote, critical }) => ({ id, text, sourceId, quote, critical })), profiles,
+          dialogues: [{ id: dialogue.id, userMessages: dialogue.messages.filter(message => message.role === 'user').map(message => message.content) }],
+          ...(input.requireApplicable ? { requireApplicable: true } : {}),
+        };
+        if (JSON.stringify(payload).length > GOALS_INPUT_LIMIT) {
+          throw new Error(`Неизвестно: полный диалог ${dialogue.id} и материалы владельца не помещаются в контекст; критерий не опубликован.`);
+        }
+        const result = await ask(
+          `Цель из реального диалога ${dialogue.id}`,
+          GOALS_ROLE,
+          payload,
+          z.strictObject({ goals: input.requireApplicable ? z.array(scoredGoalSchema.extend({ facts: observedGoalSchema.shape.facts.removeDefault() }).required({ testability: true, testabilityReason: true })).max(1) : z.array(scoredGoalSchema).length(1) }), ctx,
+          value => {
+            const goal = value.goals[0];
+            if (!goal) return undefined;
+            if (goal.evidenceDialogueIds.length !== 1 || goal.evidenceDialogueIds[0] !== dialogue.id) return `Goal ${goal.id} must cite only dialogue ${dialogue.id}.`;
+            const unknown = goal.requirementIds.filter(id => !knownRequirements.has(id));
+            if (unknown.length) return `Goal ${goal.id} cites unknown owner requirements: ${unknown.join(', ')}.`;
+            try { validateObservedGoals([goal], [dialogue], input.profiles); }
+            catch (error) { return error instanceof Error ? error.message : String(error); }
+            return undefined;
+          },
+        );
+        if (result.goals[0]) goals.push(result.goals[0]);
+      }
+      try { validateObservedGoals(goals, input.dialogues, input.profiles); }
       catch (error) { throw new Error(`Observed goals: ${error instanceof Error ? error.message : String(error)}`); }
-      return result.goals;
+      return goals;
     },
     async failureModes(input, ctx) {
       const known = new Set(input.failures.map(f => f.trialId));
       const result = await ask(
         'Разбор провалов',
         FAILURE_MODES_ROLE,
-        { task: input.task, failures: input.failures },
+        { task: input.task, failures: input.failures, ...(input.prompt !== undefined ? { prompt: input.prompt } : {}) },
         z.strictObject({ modes: z.array(failureModeSchema).min(1).max(12) }), ctx,
         value => {
           for (const mode of value.modes) {
@@ -450,23 +680,17 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
             if (/^(bad|poor|wrong|incorrect|quality|agent failed|плохой|неверный)/i.test(mode.name.trim())) {
               return `Cluster ${mode.id} is named "${mode.name}", which does not say what went wrong. Name the specific behaviour visible in the traces.`;
             }
+            for (const [index, quote] of (mode.promptQuotes ?? []).entries()) {
+              if (input.prompt === undefined) return `No prompt was supplied; promptQuotes must be empty for cluster ${mode.id}.`;
+              const exact = verbatimSpan(input.prompt, quote);
+              if (!exact) return `Cluster ${mode.id} quotes "${quote.slice(0, 60)}", which is not a verbatim substring of the supplied prompt. Copy the exact characters.`;
+              mode.promptQuotes![index] = exact;
+            }
           }
           return undefined;
         },
       );
       return result.modes;
-    },
-    async profiles(input, ctx) {
-      const supplied = new Set(input.dialogues.map(d => d.id));
-      const result = await ask(
-        'Профили пользователей',
-        PROFILES_ROLE,
-        // Assistant turns stay out: a profile describes how the user writes, not what the business answered.
-        { task: input.task, dialogues: input.dialogues.map(d => ({ id: d.id, outcome: d.outcome, userMessages: d.messages.filter(m => m.role === 'user').map(m => m.content) })) },
-        z.strictObject({ profiles: z.array(observedProfileSchema).max(6) }), ctx,
-      );
-      for (const profile of result.profiles) for (const id of profile.evidenceDialogueIds) if (!supplied.has(id)) throw new Error(`User profiles: profile ${profile.id} cites evidence dialogue ${id} that was not supplied`);
-      return result.profiles;
     },
     async improve(input, ctx) {
       if (input.feedback.some(f => f.scenario.split !== 'dev' || f.trials.some(t => t.split !== 'dev'))) {
@@ -528,6 +752,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           user: {
             goal: input.user.goal, persona: input.user.persona, characteristics: input.user.characteristics,
             facts: input.user.facts, behavior: input.user.behavior, opening: input.user.opening, maxFollowUps: input.user.maxFollowUps,
+            knows: input.user.knows ?? [], cannotKnow: input.user.cannotKnow ?? [], answers: input.user.answers ?? [],
           },
           messages: input.messages.map(({ role, content }) => ({ role, content })), turn: input.turn,
         }, simulatorReplySchema, ctx,
