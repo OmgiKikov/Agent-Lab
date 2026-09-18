@@ -25,7 +25,7 @@ node ../conductor-playground/dist/cli.js chat
 полномочия и ЕПК, и что диалоги для карточек — в подготовленном `dialogues.jsonl`.
 
 Модели шлюза доступны и в самом разговоре: расширение регистрирует провайдера `giga` при старте,
-если заданы переменные шлюза. Выберите `giga/glm-5.2` или `giga/GigaChat-3-Ultra` в Pi. Без этой
+если заданы переменные `AGENT_LAB_GATEWAY_*`. Выберите `giga/glm-5.2` или `giga/GigaChat-3-Ultra` в Pi. Без этой
 регистрации внешний разговор — обычный Pi, и он отвечает «no api key».
 
 Логи в `.xlsx` разговор прочитать не может, поэтому `dialogues.jsonl` готовится скриптом заранее
@@ -85,18 +85,24 @@ conda activate agent_oc
            "/путь/conductor-playground/examples/agent-oc-adapter.py", "/путь/agent_oc"] }
 ```
 
-`.env` в корне agent_oc остаётся вторым источником: `bootstrap_environment` подгружает его, но
-`load_dotenv` не перекрывает уже заданные переменные — значения conda главнее. Если Agent Lab
-запускается вне окружения, тот же файл подхватывается штатным ключом Node:
-`node --env-file=../agent_oc/.env dist/cli.js …`.
+Сертификаты у двух сервисов **разные**: agent_oc ходит в GigaChat своими, Agent Lab — в шлюз
+моделей своими. Поэтому переменные Agent Lab называются `AGENT_LAB_GATEWAY_*` и с `GIGACHAT_*`
+агента не пересекаются: обе пары спокойно живут в одном окружении, хотя агент и запускается
+дочерним процессом Agent Lab.
 
-Провайдер `giga` принимает как свои имена, так и принятые в agent_oc: ключ читается из
-`GIGACHAT_KEY_PATH` либо `GIGACHAT_KEY`, цепочка CA — из `GIGACHAT_CA_PATH` либо
-`GIGACHAT_VERIFY_PATH`. Отдельного набора переменных для Agent Lab заводить не нужно.
+```bash
+export AGENT_LAB_GATEWAY_URL=https://<шлюз>
+export AGENT_LAB_GATEWAY_CERT_PATH=/абсолютный/путь/tls.cer
+export AGENT_LAB_GATEWAY_KEY_PATH=/абсолютный/путь/tls.key
+export AGENT_LAB_GATEWAY_CA_PATH=/абсолютный/путь/chain.pem   # необязательно
+```
 
-Одна проверка остаётся за вами: `GIGACHAT_URL` в окружении указывает на шлюз, которым пользуется
-прод-код агента. Если модели Agent Lab живут на другом адресе, перекройте переменную в команде
-(`GIGACHAT_URL=… node dist/cli.js …`).
+Пути лучше абсолютные: относительные считаются от каталога запуска, а не от репозитория.
+Проверка — `node dist/cli.js status`, блок `giga` называет недостающие переменные и нечитаемые
+файлы.
+
+Переменные самого agent_oc (`GIGACHAT_*`, ППРБ, сертификаты инкассации) Agent Lab не трогает: они
+приходят из активированного conda-окружения и достаются агенту как есть.
 
 ### ППРБ и ЕПК
 

@@ -1,7 +1,7 @@
 // Opt-in live check: node --import tsx test/live/sandbox-tool-call.ts PROVIDER MODEL
 // Does a sandbox agent on the chosen model call sandbox tools, get the results back and keep answering?
-// Two cases, up to six model calls each; no business verdicts. For provider giga set GIGACHAT_URL,
-// GIGACHAT_CERT_PATH and GIGACHAT_KEY_PATH (docs/REFERENCE.md). A gateway rejection shows up as a
+// Two cases, up to six model calls each; no business verdicts. For provider giga set AGENT_LAB_GATEWAY_URL,
+// AGENT_LAB_GATEWAY_CERT_PATH and AGENT_LAB_GATEWAY_KEY_PATH (docs/REFERENCE.md). A gateway rejection shows up as a
 // failed case whose trace ends at the round that was rejected.
 import assert from 'node:assert/strict';
 import { createPiRuntime } from '../../src/pi.js';

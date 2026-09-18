@@ -2,7 +2,7 @@
 //   node --import tsx test/live/probe-tool-schema.ts MODEL
 // Normal runs hide the gateway's own error behind a sanitized message, so this sends the
 // variants directly and prints the HTTP status with the gateway's reply. Needs the same
-// GIGACHAT_* variables as the other live scripts (docs/REFERENCE.md).
+// AGENT_LAB_GATEWAY_* variables as the other live scripts (docs/REFERENCE.md).
 //
 // Step 0 uses the gateway's own POST /v1/functions/validate endpoint (from the official
 // GigaChat B2Bank OpenAPI spec): it checks one function description against GigaChat's JSON
@@ -17,7 +17,7 @@ interface Specification { name: string; description: string; parameters: Record<
 const model = process.argv[2];
 assert(model, 'Usage: node --import tsx test/live/probe-tool-schema.ts MODEL');
 const config = readGigaConfig();
-assert(config, 'Set GIGACHAT_URL, GIGACHAT_CERT_PATH and GIGACHAT_KEY_PATH first');
+assert(config, 'Set AGENT_LAB_GATEWAY_URL, AGENT_LAB_GATEWAY_CERT_PATH and AGENT_LAB_GATEWAY_KEY_PATH first');
 const transport = createGigaTransport(config, 60000);
 
 // GigaChat's functions/validate errors (a live run, quoted verbatim):

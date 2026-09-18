@@ -119,11 +119,11 @@ Qwen, GLM и другие. Какие именно доступны — опре
 Экспортирует `createGigaProvider(env = process.env): Promise<Provider | undefined>`.
 
 - Конфигурация из переменных окружения:
-  `GIGACHAT_URL`, `GIGACHAT_CERT_PATH`, `GIGACHAT_KEY_PATH` — обязательные;
-  `GIGACHAT_CA_PATH`, `GIGACHAT_INSECURE` — опциональные (см. «Проверка TLS»).
+  `AGENT_LAB_GATEWAY_URL`, `AGENT_LAB_GATEWAY_CERT_PATH`, `AGENT_LAB_GATEWAY_KEY_PATH` — обязательные;
+  `AGENT_LAB_GATEWAY_CA_PATH`, `AGENT_LAB_GATEWAY_INSECURE` — опциональные (см. «Проверка TLS»).
   Без обязательных переменных функция возвращает `undefined`, провайдер просто
   не регистрируется.
-- Запрос: `POST {GIGACHAT_URL без хвостового /v1|/v2}/v2/chat/completions`,
+- Запрос: `POST {AGENT_LAB_GATEWAY_URL без хвостового /v1|/v2}/v2/chat/completions`,
   клиентский сертификат на каждом запросе, без `Authorization`.
 
 ### `src/pi.ts` (правка)
@@ -253,9 +253,9 @@ GigaChat поток устроен как именованные SSE-событ�
 
 ## Проверка TLS
 
-Проверка серверного сертификата по умолчанию включена: с `GIGACHAT_CA_PATH` —
+Проверка серверного сертификата по умолчанию включена: с `AGENT_LAB_GATEWAY_CA_PATH` —
 против этого CA bundle, без него — против системного доверенного хранилища
-Node. Отключается только явно, через `GIGACHAT_INSECURE=1`, и такой запуск
+Node. Отключается только явно, через `AGENT_LAB_GATEWAY_INSECURE=1`, и такой запуск
 логирует предупреждение.
 
 Так сделано потому, что CA-цепочки внутреннего контура на руках нет (её нет и в
@@ -265,7 +265,7 @@ mTLS. Компромисс: небезопасный режим остаётся
 видимым. Молчаливого отката на запрос без сертификата при сбое mTLS нет.
 
 Открытый вопрос, не блокирующий работу: проходит ли проверка против системного
-хранилища без CA-файла — прогон делался сразу с `GIGACHAT_INSECURE=1`.
+хранилища без CA-файла — прогон делался сразу с `AGENT_LAB_GATEWAY_INSECURE=1`.
 
 ## Секреты
 

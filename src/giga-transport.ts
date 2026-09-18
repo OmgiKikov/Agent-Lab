@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { accessSync, constants, readFileSync } from 'node:fs';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
 
 export interface GigaConfig {
@@ -9,7 +9,7 @@ export interface GigaConfig {
   rejectUnauthorized: boolean;
 }
 
-// GIGACHAT_INSECURE отключает проверку сертификата шлюза без каких-либо других признаков в
+// AGENT_LAB_GATEWAY_INSECURE отключает проверку сертификата шлюза без каких-либо других признаков в
 // работе провайдера; предупреждение печатается один раз за процесс, чтобы боевой запуск
 // с этим флагом не остался незамеченным, но не заспамил лог на каждое обращение к конфигу.
 let insecureWarningLogged = false;
@@ -21,18 +21,19 @@ let insecureWarningLogged = false;
  * поэтому хвостовой /v1 или /v2 из настроенного адреса срезается.
  */
 export function readGigaConfig(env: Record<string, string | undefined> = process.env): GigaConfig | undefined {
-  const url = env.GIGACHAT_URL;
-  const certPath = env.GIGACHAT_CERT_PATH;
-  // Внутренние проекты держат один .env на прод-код и на Agent Lab, а там ключ назван
-  // GIGACHAT_KEY и цепочка CA — GIGACHAT_VERIFY_PATH (конвенция суффиксов _KEY_PATH /
-  // _VERIFY_PATH). Явные переменные провайдера остаются главными.
-  const keyPath = env.GIGACHAT_KEY_PATH ?? env.GIGACHAT_KEY;
-  const caPath = env.GIGACHAT_CA_PATH ?? env.GIGACHAT_VERIFY_PATH;
+  // Имена намеренно свои, а не GIGACHAT_*: проверяемый агент может ходить в GigaChat по
+  // собственным сертификатам, и его переменные живут в том же окружении — Agent Lab запускает
+  // его дочерним процессом. Общее имя означало бы, что один из двух сервисов молча получит
+  // чужой сертификат.
+  const url = env.AGENT_LAB_GATEWAY_URL;
+  const certPath = env.AGENT_LAB_GATEWAY_CERT_PATH;
+  const keyPath = env.AGENT_LAB_GATEWAY_KEY_PATH;
+  const caPath = env.AGENT_LAB_GATEWAY_CA_PATH;
   if (!url || !certPath || !keyPath) return undefined;
-  const rejectUnauthorized = env.GIGACHAT_INSECURE !== '1';
+  const rejectUnauthorized = env.AGENT_LAB_GATEWAY_INSECURE !== '1';
   if (!rejectUnauthorized && !insecureWarningLogged) {
     insecureWarningLogged = true;
-    process.stderr.write('giga: GIGACHAT_INSECURE=1 — проверка сертификата шлюза отключена\n');
+    process.stderr.write('giga: AGENT_LAB_GATEWAY_INSECURE=1 — проверка сертификата шлюза отключена\n');
   }
   return {
     baseUrl: url.replace(/\/+$/, '').replace(/\/v[12]$/, ''),
@@ -49,10 +50,24 @@ export function readGigaConfig(env: Record<string, string | undefined> = process
  */
 export function missingGigaVariables(env: Record<string, string | undefined> = process.env): string[] {
   const missing: string[] = [];
-  if (!env.GIGACHAT_URL) missing.push('GIGACHAT_URL');
-  if (!env.GIGACHAT_CERT_PATH) missing.push('GIGACHAT_CERT_PATH');
-  if (!env.GIGACHAT_KEY_PATH && !env.GIGACHAT_KEY) missing.push('GIGACHAT_KEY_PATH');
+  for (const name of ['AGENT_LAB_GATEWAY_URL', 'AGENT_LAB_GATEWAY_CERT_PATH', 'AGENT_LAB_GATEWAY_KEY_PATH'] as const) {
+    if (!env[name]) missing.push(name);
+  }
   return missing;
+}
+
+/**
+ * Имена переменных, чей файл не читается. Значения не возвращаются: путь к приватному ключу
+ * не должен попадать в вывод команд и записи прогонов. Относительный путь считается от текущего
+ * каталога, поэтому переменные проекта с относительными путями видны здесь, а не в общем отказе.
+ */
+export function unreadableGigaFiles(env: Record<string, string | undefined> = process.env): string[] {
+  const names = ['AGENT_LAB_GATEWAY_CERT_PATH', 'AGENT_LAB_GATEWAY_KEY_PATH', 'AGENT_LAB_GATEWAY_CA_PATH'] as const;
+  return names.filter(name => {
+    const path = env[name];
+    if (!path) return false;
+    try { accessSync(path, constants.R_OK); return false; } catch { return true; }
+  });
 }
 
 export type GigaTransport = (path: string, body?: unknown, signal?: AbortSignal) => Promise<{ status: number; text: string }>;
