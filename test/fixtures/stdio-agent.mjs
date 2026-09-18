@@ -8,6 +8,11 @@ rl.on('line', line => {
   const request = JSON.parse(line);
   if (request.type === 'close') process.exit(0);
   if (mode === 'hang') return;
+  if (mode === 'external') {
+    const cards = (request.initialState.external?.cards ?? []).map(card => card.id).join(', ');
+    process.stdout.write(`${JSON.stringify({ reply: `cards: ${cards}`, events: [], records: request.initialState.records, resetConfirmed: true, eventsComplete: true, version: 'fixture-external-1' })}\n`);
+    return;
+  }
   const time = request.message.match(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/)?.[0];
   const id = Object.keys(request.initialState.records)[0];
   if (id && time) {

@@ -14,7 +14,7 @@
 # AGENT_OC_SURFACE, AGENT_OC_AUTHORITY. DRY_RUN=1 останавливается после подготовки файлов,
 # BUILD_ONLY=1 - после сборки черновика: его карточки смотрят и запускают на доске /agent-lab.
 #
-# Переменные шлюза (AGENT_LAB_GATEWAY_*) должны быть в окружении: см. docs/REFERENCE.md.
+# Переменные шлюза (AGENT_LAB_GATEWAY_*) должны быть в окружении: см. раздел о провайдере giga в README.
 set -euo pipefail
 
 # Готовое задание (например, собранное examples/agent-oc-cases.py) берётся как есть: ЕПК и
@@ -70,7 +70,8 @@ run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])
 echo "Черновик ${run_id}"
 
 # Открытые бизнес-вопросы блокируют запуск: это решения владельца, а не догадка модели.
-# Скрипт выкладывает их заготовкой, а с готовыми ответами сам делает clarify и берёт новый черновик.
+# Скрипт выкладывает их заготовкой, а с готовыми ответами добавляет их в задание отдельным
+# материалом и собирает черновик заново.
 answers="${AGENT_LAB_ANSWERS:-${run_dir}/answers.json}"
 questions="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["questions"]))' "${run_dir}/draft.json")"
 if [ "${questions}" != "0" ]; then
@@ -82,9 +83,14 @@ if [ "${questions}" != "0" ]; then
     python3 -c 'import json,sys; [print(" -", q) for q in json.load(open(sys.argv[1]))["questions"]]' "${run_dir}/draft.json"
     exit 3
   fi
-  node dist/cli.js clarify --id "${run_id}" --input "${answers}" > "${run_dir}/clarified.json"
-  run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${run_dir}/clarified.json")"
+  python3 "${lab_root}/examples/agent-oc-e2e/add-answers.py" "${run_dir}/task.json" "${answers}"
+  node dist/cli.js build --input "${run_dir}/task.json" --connection "${run_dir}/connection.json" > "${run_dir}/draft.json"
+  run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${run_dir}/draft.json")"
   echo "Ответы учтены, новый черновик ${run_id}"
+  if [ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["questions"]))' "${run_dir}/draft.json")" != "0" ]; then
+    echo "Черновик всё ещё задаёт вопросы - дополните ответы в ${answers} и запустите снова." >&2
+    exit 3
+  fi
 fi
 
 if [ "${BUILD_ONLY:-}" = "1" ]; then

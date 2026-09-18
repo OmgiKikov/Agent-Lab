@@ -42,10 +42,13 @@ test('coincident replies with different scores are visible in Pi and exported re
   const after = structuredClone(before); after.id = 'after'; after.parentRunId = before.id;
   after.trials[0]!.id = 'after_trial'; after.trials[0]!.assessments![0]!.result = 'pass';
   const bundle = await evidenceBundle(after, { get: async () => before, traceJournal: async () => '' });
-  const board = new LabBoard({ record: after, before, comparison: bundle.comparison, section: 'comparison' }, theme, () => {}, () => {}, () => 40);
+  const board = new LabBoard({ record: after, before, comparison: bundle.comparison, section: 'agent' }, theme, () => {}, () => {}, () => 40);
   try {
-    for (const text of [board.render(120).join('\n'), htmlReport(bundle), markdownReport(bundle)]) {
-      assert.match(text, /Общих оценённых карточек нет/);
+    const overview = board.render(120).join('\n');
+    assert.match(overview, /Общих оценённых карточек нет/);
+    assert.match(overview, /совпавшими ответами.*1/is);
+    assert.doesNotMatch(overview, /Исправлено 1/);
+    for (const text of [htmlReport(bundle), markdownReport(bundle)]) {
       assert.match(text, /Ответы агента совпали/);
       assert.doesNotMatch(text, /Исправлено 1/);
     }
@@ -98,7 +101,7 @@ test('80×24 shows the opening and first reply before metadata, with visible fee
   running.dispose();
 });
 
-test('comparison refreshes with a finished repeat, so 5 opens current paired evidence immediately', async t => {
+test('a finished repeat refreshes the comparison headline in the overview', async t => {
   const before = await fixture();
   before.id = 'before'; before.phase = 'results_review'; before.reviewedAt = before.createdAt;
   before.settings.repeats = 2;
@@ -120,19 +123,16 @@ test('comparison refreshes with a finished repeat, so 5 opens current paired evi
   let rendered!: () => void;
   const refreshed = new Promise<void>(resolve => { rendered = resolve; });
   const actions: BoardAction[] = [];
-  const board = new LabBoard({ record: running, before, comparison: compareRuns(before, running),
+  const board = new LabBoard({ record: running, before, comparison: compareRuns(before, running), section: 'agent',
     warnings: ['Прогон ещё идёт.'], reportPath: '/fixture/partial.html', notice: { kind: 'info', message: 'Промежуточный отчёт сохранён.' },
     load: async () => ({ record: after, before, comparison: compareRuns(before, after), warnings: [] }) }, theme, a => actions.push(a), rendered, () => 40);
   let timer: ReturnType<typeof setTimeout>;
   t.after(() => { clearTimeout(timer); board.dispose(); });
   await Promise.race([refreshed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('board did not refresh')), 3000); })]);
-  board.handleInput('5');
   const text = board.render(120).join('\n');
   assert.match(text, /Исправлено 1, сломалось 0/);
-  assert.match(text, /Раньше не мог изменить запись/);
-  assert.match(text, /Теперь запись изменена/);
-  const list = text.split('\n').map(line => line.split('│')[1] ?? '');
-  assert.equal(list.filter(line => line.includes('+ ')).length, 1, 'only the changed attempt gets a plus; its unchanged repeat must not');
+  assert.match(text, /После исправления/);
+  assert.doesNotMatch(text, /4 Статистика|5 Сравнение/);
   assert.doesNotMatch(text, /Прогон ещё идёт|Промежуточный отчёт|o Открыть отчёт/);
   board.handleInput('o');
   assert.deepEqual(actions, []);
@@ -210,7 +210,12 @@ test('result cards keep model grades, missing grades, traces and human annotatio
   const overviewText = overview.render(120).join('\n');
   assert.match(overviewText, /AGENT_FAILURE_SENTINEL/); assert.doesNotMatch(overviewText, /SIMULATOR_FAILURE_SENTINEL/);
   assert.match(overviewText, /реплики #1/); overview.dispose();
-  assert.match(htmlReport(record), /Оценено моделью · предварительно<\/h3><strong>0<span class="muted"> \/ 1/);
+  const html = htmlReport(record);
+  // The simulator rubric failed, so the agent grade is not a usable measurement yet: the first screen says «—», not 0%, and queues one dialogue for a human.
+  assert.match(html, /Точность · судья, предварительно<\/h3><strong>—<\/strong>/); assert.match(html, /неясно 1/);
+  assert.match(html, /Разметить человеку<\/h3><strong>1<\/strong>/); assert.match(html, /пометок симулятора 1/);
+  assert.match(html, /Почему не справился/); assert.match(html, /AGENT_FAILURE_SENTINEL/);
+  assert.doesNotMatch(html.match(/<section id="why">[\s\S]*?<\/section>/)?.[0] ?? '', /SIMULATOR_FAILURE_SENTINEL/);
   record.phase = 'complete'; record.resultsReviewedAt = record.updatedAt; record.humanReviews = [];
   const reviewed = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 120);
   assert.match(reviewed.render(120).join('\n'), /Вердикта человека нет/);
@@ -279,30 +284,7 @@ test('live polling stops on dispose and never applies a late response to a close
   assert.equal(renders, 0);
 });
 
-test('the statistics section renders the evidence summary in narrow and wide terminals without claiming more than the data', async () => {
-  const record = await fixture();
-  record.settings.userModes = ['static', 'reactive'];
-  record.dialogues = [{ id: 'd1', messages: [{ role: 'user', content: 'hi?' }], outcome: 'abandoned' }];
-  const board = new LabBoard({ record, section: 'stats' }, theme, () => {}, () => {}, () => 40);
-  for (const width of [16, 40, 80, 132]) for (const line of board.render(width)) assert.ok(visibleWidth(line) <= width, `overflow at ${width}`);
-  const firstPage = board.render(120).join('\n');
-  board.handleInput('\u001b[F');
-  const text = stripTerminalSequences(firstPage + '\n' + board.render(120).join('\n'));
-  assert.match(text, /4 Статистика/);
-  assert.match(text, /static/); assert.match(text, /reactive/);
-  assert.match(text, /Вердиктов человека по метрикам и проверкам ещё нет/);
-  assert.match(text, /Реальные диалоги: 1/);
-  assert.match(text, /Сверка с ручными вердиктами/);
-  board.dispose();
-  const other = new LabBoard({ record }, theme, () => {}, () => {}, () => 40);
-  other.handleInput('4');
-  other.render(120);
-  other.handleInput('\u001b[F');
-  assert.match(stripTerminalSequences(other.render(120).join('\n')), /Верность симулятора/);
-  other.dispose();
-});
-
-test('the board leads with a plain verdict once dialogues exist and keeps the research statistics one key away', async () => {
+test('the board leads with a plain verdict once dialogues exist and has only three screens', async () => {
   const record = await fixture();
   record.phase = 'results_review';
   const scenario = record.scenarios[0]!;
@@ -313,17 +295,17 @@ test('the board leads with a plain verdict once dialogues exist and keeps the re
   const text = stripTerminalSequences(board.render(120).join('\n'));
   assert.match(text, /ИТОГ/);
   assert.match(text, /По кодовым проверкам пройдено 2 из 3/);
-  assert.match(text, /ожидают разбора 1/);
+  assert.match(text, /спорных 0/);
   assert.match(text, /Время изменено/);
   assert.match(text, /Дальше/);
   assert.doesNotMatch(text, /TPR/);
-  board.handleInput('4');
-  assert.match(board.render(120).join('\n'), /Полнота аудита: низкая/);
+  assert.match(text, /1 Обзор.*2 Карточки.*3 Диалоги/);
+  assert.doesNotMatch(text, /4 Статистика|5 Сравнение/);
   for (const width of [16, 40, 80]) for (const line of board.render(width)) assert.ok(visibleWidth(line) <= width, `overflow at ${width}`);
   board.dispose();
   const results = new LabBoard({ record }, theme, () => {}, () => {}, () => 40);
   assert.match(results.render(120).join('\n'), /ЧТО ТРЕБУЕТ ВНИМАНИЯ/);
-  assert.match(stripTerminalSequences(results.render(120).join('\n')), /Итог: По кодовым проверкам пройдено 2 из 3/);
+  assert.match(stripTerminalSequences(results.render(120).join('\n')), /Итог: Справился с 0 из 0 карточек \(—\), 1 без решения, 1 не дошли; разобрано человеком 0 из 3 диалогов/);
   results.dispose();
 });
 
@@ -368,4 +350,43 @@ test('HTML reports escape untrusted text and remain self-contained with explicit
   record.controlConsumedAt = 'now'; record.phase = 'control';
   assert.doesNotMatch(htmlReport(record), /CONTROL_CARD_SENTINEL/);
   record.phase = 'complete'; assert.match(htmlReport(record), /CONTROL_CARD_SENTINEL/);
+});
+
+test('the board keeps simulator checks in the dialogue and the repeat headline in the overview', async () => {
+  const record = await fixture(); record.phase = 'results_review'; record.reviewedAt = '2026-09-14T00:00:00.000Z';
+  record.settings.userModes = ['static', 'reactive']; record.settings.repeats = 1;
+  record.scenarios = [record.scenarios[0]!];
+  const card = record.scenarios[0]!;
+  card.metrics = card.metrics?.filter(m => m.subject === 'agent');
+  const events = [{ seq: 0, type: 'user' as const, text: card.user.opening }, { seq: 1, type: 'assistant' as const, text: 'Which appointment?' },
+    { seq: 2, type: 'simulator' as const, result: { message: 'Appointment A777', done: false } }, { seq: 3, type: 'user' as const, text: 'Appointment A777' }, { seq: 4, type: 'assistant' as const, text: 'Done.' }];
+  const base = { revisionId: 'revision-1', scenarioId: card.id, familyId: card.familyId, repeat: 0, split: 'dev' as const, manifestHash: 'hash', reason: '', initialState: card.initialState, finalState: card.initialState, usage: emptyUsage(), elapsedMs: 1 };
+  // The demo card carries the agent rubric demo_task_state; without an assessment its automatic result is unknown and mode value cannot resolve.
+  const assessed = (result: 'pass' | 'fail') => [{ metricId: 'demo_task_state', result, rationale: 'fixture', evidence: [1] }];
+  record.trials = [
+    { ...base, id: 'reactive', userMode: 'reactive', outcome: 'fail', checks: card.checks.map(c => ({ id: c.id, description: c.description, passed: false, evidence: 'e' })), events, assessments: assessed('fail'),
+      simulatorChecks: [{ id: 'simulator_fabrication', description: 'Пользователь не называет значения, которых нет в карточке (эвристика)', passed: false, evidence: 'Подозрение: реплика #3 содержит значение «a777»', seq: 3, heuristic: true }] },
+    { ...base, id: 'static', userMode: 'static', outcome: 'pass', checks: card.checks.map(c => ({ id: c.id, description: c.description, passed: true, evidence: 'e' })), events: events.slice(0, 2), assessments: assessed('pass') },
+  ];
+  const results = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 60);
+  try {
+    for (const width of [80, 132]) for (const row of results.render(width)) assert.ok(visibleWidth(row) <= width, `overflow at ${width}`);
+    const dialogue = stripTerminalSequences(results.render(132).join('\n'));
+    assert.match(dialogue, /ПРОВЕРКИ СИМУЛЯТОРА · эвристики/); assert.match(dialogue, /\? .*эвристика/); assert.match(dialogue, /Подозрение: реплика #3/);
+    // The static dialogue never involved the simulator, so its checks block is absent rather than "not applied".
+    results.handleInput('\u001b[B');
+    const staticView = stripTerminalSequences(results.render(132).join('\n'));
+    assert.doesNotMatch(staticView.split('ДЕТЕРМИНИРОВАННЫЕ ПРОВЕРКИ').at(-1) ?? '', /Не применялись/);
+  } finally { results.dispose(); }
+  const before = structuredClone(record); before.id = 'before'; before.settings.userModes = ['static']; before.trials = [before.trials[1]!];
+  before.trials[0]!.outcome = 'fail'; before.trials[0]!.checks = before.trials[0]!.checks.map(c => ({ ...c, passed: false })); before.trials[0]!.assessments = assessed('fail');
+  const after = structuredClone(before); after.id = 'after'; after.parentRunId = 'before'; after.trials[0]!.id = 'after_static'; after.trials[0]!.outcome = 'pass'; after.trials[0]!.checks = after.trials[0]!.checks.map(c => ({ ...c, passed: true })); after.trials[0]!.assessments = assessed('pass');
+  after.trials[0]!.events[1]!.text = 'Moved to 14:00.'; // a changed agent reply: identical replies with flipped scores would be sent to review instead
+  const bundle = await evidenceBundle(after, { get: async () => before, traceJournal: async () => '' });
+  const comparison = new LabBoard({ record: after, before, comparison: bundle.comparison, section: 'agent' }, theme, () => {}, () => {}, () => 40);
+  try {
+    const text = stripTerminalSequences(comparison.render(120).join('\n'));
+    assert.match(text, /После исправления: .*Оценка выросла/iu);
+    assert.doesNotMatch(text, /Парная дельта|Ценность режимов/);
+  } finally { comparison.dispose(); }
 });

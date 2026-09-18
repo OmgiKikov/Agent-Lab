@@ -12,7 +12,7 @@
 `agent_oc`), а `bootstrap_environment` дополняет его `.env` из корня репозитория, не перекрывая уже
 заданные значения, и ставит `DEV_MODE=True`, пути логов и модель.
 
-Протокол (docs/REFERENCE.md), по одной JSON-строке в каждую сторону:
+Протокол тот же, что у эталонного адаптера examples/echo-agent.py, по одной JSON-строке в каждую сторону:
 
     stdin  → {"type": "respond", "sessionId", "scenarioId", "initialState", "messages", "message"}
     stdout ← {"reply", "events", "records", "eventsComplete", "resetConfirmed", ...}

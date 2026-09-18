@@ -61,6 +61,9 @@ function sampleScenarios(): ReturnType<typeof preparationSchema.parse>['scenario
     id: v.familyId, familyId: ['a_direct', 'b_clarification', 'c_retry', 'd_read_only', 'e_preference'][Math.floor(index / 2)]!, title: v.title, requirementIds: v.requirementIds, provenance: 'curated' as const, tier: 'regression' as const,
     user: { goal: v.requirementIds.includes('read') ? `Learn the time of appointment ${v.id} without changing it.` : `Move appointment ${v.id} to ${v.time}.`, facts: `Your appointment ID is ${v.id}. Your desired time is ${v.time}.`, behavior: v.behavior, opening: v.opening,
       maxFollowUps: v.requirementIds.includes('clarify') || v.requirementIds.includes('preference') ? 1 : 0,
+      knows: [`Appointment ID ${v.id}`, `Desired time ${v.time}`],
+      cannotKnow: ['Whether the backend will accept the change before it answers'],
+      ...(v.requirementIds.includes('clarify') ? { answers: [v.opening.includes('my appointment') ? { ifAsked: 'appointment ID', reply: `My appointment ID is ${v.id}.` } : { ifAsked: 'desired time', reply: `My desired time is ${v.time}.` }] } : {}),
       // Scripted-mode lines mirror what the reactive simulator would say; direct and read-only cards have no follow-up to script.
       ...(v.requirementIds.includes('clarify') ? { script: [v.opening.includes('my appointment') ? `My appointment ID is ${v.id}.` : `My desired time is ${v.time}.`] }
         : v.requirementIds.includes('preference') ? { script: [`Actually, please move it to ${v.time} instead.`] } : {}) },
@@ -115,21 +118,6 @@ export function createDemoRuntime(): Runtime {
         requirements: ['change', 'read', 'clarify', 'retry', 'preference'].map((id, i) => ({ id, text: lines[i + 1], sourceId, quote: lines[i + 1], critical: true })),
         questions: [], agent: structuredClone(input.existingAgent ?? (input.workflow === 'evaluate' ? working : baseline)), scenarios,
       });
-    },
-    async profiles({ dialogues }, ctx) {
-      call(ctx);
-      if (!dialogues.length) return [];
-      // Deterministic stand-in for the model role: characteristics come from counted style, never invented.
-      const userMessages = dialogues.flatMap(d => d.messages.filter(m => m.role === 'user').map(m => m.content));
-      const average = userMessages.reduce((sum, m) => sum + m.length, 0) / Math.max(1, userMessages.length);
-      const questions = userMessages.filter(m => m.includes('?')).length / Math.max(1, userMessages.length);
-      const abandoned = dialogues.filter(d => d.outcome === 'abandoned').length / dialogues.length;
-      return [{
-        id: 'observed_1', source: 'observed' as const, persona: 'Appointment holder observed in the supplied real dialogues.',
-        characteristics: [average < 60 ? 'Writes short messages' : 'Writes detailed messages', questions >= 0.3 ? 'Often asks questions' : 'Rarely asks questions', abandoned > 0 ? 'May stop when blocked' : 'Stays until answered'],
-        observedStyle: `${userMessages.length} user messages, ${Math.round(average)} characters on average, ${Math.round(questions * 100)}% questions, ${Math.round(abandoned * 100)}% abandoned dialogues.`,
-        evidenceDialogueIds: dialogues.slice(0, 50).map(d => d.id),
-      }];
     },
     async goals({ dialogues, profiles }, ctx) {
       call(ctx);
@@ -218,8 +206,9 @@ export function createDemoRuntime(): Runtime {
     async userTurn({ user, messages, turn }, ctx) {
       call(ctx);
       const answer = messages.at(-1)?.content ?? '';
-      if (/what is your appointment id/i.test(answer)) return { message: `My appointment ID is ${user.facts.match(/\bA\d{3}\b/)?.[0] ?? 'unknown'}.`, done: false };
-      if (/what is your desired time/i.test(answer)) return { message: `My desired time is ${user.facts.match(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/)?.[0] ?? 'unknown'}.`, done: false };
+      const reply = (topic: RegExp, fallback: string) => user.answers?.find(a => topic.test(a.ifAsked))?.reply ?? fallback;
+      if (/what is your appointment id/i.test(answer)) return { message: reply(/appointment id/i, `My appointment ID is ${user.facts.match(/\bA\d{3}\b/)?.[0] ?? 'unknown'}.`), done: false };
+      if (/what is your desired time/i.test(answer)) return { message: reply(/desired time/i, `My desired time is ${user.facts.match(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/)?.[0] ?? 'unknown'}.`), done: false };
       if (turn === 0 && /change preference once/i.test(user.behavior)) {
         return { message: `Actually, please move it to ${user.behavior.match(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/)?.[0]} instead.`, done: false };
       }

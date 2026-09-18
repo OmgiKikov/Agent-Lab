@@ -2,6 +2,11 @@ node_modules/
 dist/
 .agent-lab/
 .context/
+.walk/
+.gsd/
+.planning/milestone.lock
+.planning/state.json
+.planning/research/.cache/
 *.tgz
 .env
 .DS_Store
@@ -30,3 +35,5 @@ dist/
 /test/live/judge-goal-scope.ts
 /test/live/judge-pilot.ts
 .cache
+# exported OpenCode transcripts
+session-*.md
