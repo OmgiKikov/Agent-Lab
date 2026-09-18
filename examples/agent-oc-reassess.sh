@@ -2,7 +2,11 @@
 #
 # Пересчитывает оценки судьи по уже записанным диалогам прогона и выгружает отчёт.
 #
-#   bash examples/agent-oc-reassess.sh RUN_ID
+#   bash examples/agent-oc-reassess.sh RUN_ID [criteria.json]
+#
+# criteria.json (examples/agent-oc-cases.py --criteria-output) заменяет критерии карточек: например,
+# голый код ответа из разбора становится точной проверкой result.status_code вместо рубрики судьи.
+# Точные проверки считаются по сохранённым фактам прогона.
 #
 # Агент и симулятор не вызываются: судья заново оценивает сохранённые трассы. Исходный прогон
 # не меняется — появляется отдельная переоценка со ссылкой на него. Лимиты берутся из прогона.
@@ -17,7 +21,11 @@ mkdir -p "${run_dir}"
 cd "${lab_root}"
 
 set +e
-node dist/cli.js reassess --id "${run_id}" --yes > "${run_dir}/reassess.json"
+if [ -n "${2:-}" ]; then
+  node dist/cli.js reassess --id "${run_id}" --input "$2" --yes > "${run_dir}/reassess.json"
+else
+  node dist/cli.js reassess --id "${run_id}" --yes > "${run_dir}/reassess.json"
+fi
 verdict=$?
 set -e
 new_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${run_dir}/reassess.json")"
