@@ -16,7 +16,7 @@ export const JUDGE_PROMPT = `${ASSESS_ROLE}\n${DATA_BOUNDARY}
 Evaluate passCriteria and failCriteria INDEPENDENTLY against the same evidence. Report met, not_met or unclear for EACH condition. Do not choose which condition takes precedence. If both apply, preserve both as met. An unspecified scope or priority is unclear; never invent one. Explain both conditions in rationale. A condition that is not exercised is unclear, not automatically met or not_met.
 Return exactly one compact JSON object, without markdown fences, matching this schema:
 ${JSON.stringify(z.toJSONSchema(responseSchema))}`;
-export const JUDGE_PROTOCOL = fingerprint({ version: 6, prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
+export const JUDGE_PROTOCOL = fingerprint({ version: 7, prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, evidence: 'empty list derived from verbatim citations', temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
 
 /** This is the complete, frozen judge input. Prior verdicts, usage and run identity are deliberately absent. */
@@ -33,8 +33,23 @@ export function judgeInput(input: Input) {
   };
 }
 
+type JudgmentRow = z.infer<typeof responseSchema>['assessments'][number];
+
+/*
+ * evidence обязано совпадать с номерами событий в citations (validateAssessments), то есть сверх
+ * цитат ничего не несёт. Модели вне семейства OpenAI цитируют событие дословно, но дубль оставляют
+ * пустым, и верная оценка отклонялась по форме. Пустой дубль берётся из самих цитат: вердикт,
+ * обоснование и цитаты не меняются, каждая цитата по-прежнему сверяется дословно, а непустой
+ * evidence, как и раньше, обязан совпасть с цитатами. Без цитат выводить нечего — такой
+ * pass/fail отклоняется, как раньше.
+ */
+function withCitedEvidence(row: JudgmentRow): JudgmentRow {
+  if (row.evidence.length || !row.citations.length) return row;
+  return { ...row, evidence: [...new Set(row.citations.map(citation => citation.seq))] };
+}
+
 function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['scenario']['metrics']>): MetricAssessment[] {
-  const rows = responseSchema.parse(JSON.parse(raw)).assessments;
+  const rows = responseSchema.parse(JSON.parse(raw)).assessments.map(withCitedEvidence);
   const ids = new Set(metrics.map(m => m.id));
   if (rows.length !== ids.size || new Set(rows.map(r => r.metricId)).size !== ids.size || rows.some(r => !ids.has(r.metricId))) {
     throw new Error('Assessment must cover every requested metric exactly once');

@@ -64,6 +64,29 @@ test('malformed, unsupported and invented judgments cannot escape validation or 
   }
 });
 
+test('an empty evidence list is taken from verbatim citations instead of rejecting a correct judgment', async () => {
+  // evidence обязано совпадать с номерами событий в citations, то есть не несёт ничего сверх
+  // цитат. GigaChat цитирует событие дословно, но дубль оставляет пустым — живой прогон
+  // терял на этом 28 из 50 оценок, хотя вердикт и цитата были верны.
+  const cited = JSON.stringify({ assessments: [{ metricId: 'goal', passCondition: 'met', failCondition: 'not_met',
+    rationale: 'The instruction is supplied.', evidence: [], citations: [{ seq: 1, quote: 'Do this.' }] }] });
+  const result = await assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment() {} }, async () => cited);
+  assert.equal(result[0]!.result, 'pass');
+  assert.deepEqual(result[0]!.evidence, [1]);
+});
+
+test('a derived evidence list still requires every citation to be verbatim', async () => {
+  const fabricated = JSON.stringify({ assessments: [{ metricId: 'goal', passCondition: 'met', failCondition: 'not_met',
+    rationale: 'The instruction is supplied.', evidence: [], citations: [{ seq: 1, quote: 'Fabricated quotation.' }] }] });
+  await assert.rejects(assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment() {} }, async () => fabricated), /Judge response rejected/);
+});
+
+test('an explicit evidence list that disagrees with the citations is still rejected', async () => {
+  const mismatched = JSON.stringify({ assessments: [{ metricId: 'goal', passCondition: 'met', failCondition: 'not_met',
+    rationale: 'The instruction is supplied.', evidence: [0], citations: [{ seq: 1, quote: 'Do this.' }] }] });
+  await assert.rejects(assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment() {} }, async () => mismatched), /Judge response rejected/);
+});
+
 test('judge input withholds case labels, prior grades, unobserved state and undelivered static follow-ups', () => {
   const data = judgeInput({ ...input, scenario: { ...scenario, id: 'EXPECTED_FAIL', title: 'EXPECTED_FAIL',
     user: { ...scenario.user, script: ['UNDELIVERED'], maxFollowUps: 1 } },
