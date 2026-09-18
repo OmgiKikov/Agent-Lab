@@ -203,11 +203,20 @@ AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… bash examples/agent-oc-e2e.sh
 ```
 
 Адаптер возвращает в `records.result` код ответа и его источник, поэтому ожидание разметки
-проверяется объективно, а не мнением судьи:
+проверяется объективно, а не мнением судьи. Запись `result` должна быть объявлена в карточке
+заранее, а меняющиеся поля — перечислены в `writableFields`: проверка состояния сравнивает
+исходный снимок с итоговым и отвергает поле, которого в исходном не было
+(`Invalid expected state`).
 
 ```json
-{ "id": "code", "kind": "state_equals", "description": "Код ответа совпал с разметкой",
-  "recordId": "result", "field": "status_code", "value": "202-5" }
+{
+  "initialState": {
+    "records": { "result": { "status_code": "", "produced_by": "", "seconds": 0 } },
+    "writableFields": ["status_code", "produced_by", "seconds"]
+  },
+  "checks": [{ "id": "code", "kind": "state_equals", "description": "Код ответа совпал с разметкой",
+               "recordId": "result", "field": "status_code", "value": "202-5" }]
+}
 ```
 
 Маршрут агента виден событиями инструментов `read` (какая инструкция открыта, какая ветка

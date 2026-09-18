@@ -3,13 +3,23 @@
   "mode": "live",
   "scenarioCount": 0,
   "materials": [
-    { "name": "Что проверяем", "content": "Агент инкассации отвечает клиенту в канале GIGAASSISTANT. Ожидание взято из колонок разметки «Ожидаемый код ответа» и «Ожидаемый ответ»." }
+    {
+      "name": "Что проверяем",
+      "content": "Агент инкассации отвечает клиенту в канале GIGAASSISTANT. Ожидание взято из колонок разметки «Ожидаемый код ответа» и «Ожидаемый ответ»."
+    }
   ],
   "settings": {
     "provider": "giga",
     "model": "glm-5.2",
-    "roles": { "judge": { "provider": "giga", "model": "GigaChat-3-Ultra" } },
-    "userModes": ["static"],
+    "roles": {
+      "judge": {
+        "provider": "giga",
+        "model": "GigaChat-3-Ultra"
+      }
+    },
+    "userModes": [
+      "static"
+    ],
     "repeats": 1,
     "maxTurns": 4
   },
@@ -21,13 +31,34 @@
       "successCriteria": "Агент уводит запрос в сценарий закрывающих документов, а не отвечает отказом по теме",
       "initialState": {
         "records": {
-          "session": { "surface": "GIGAASSISTANT", "authority": "3", "epk_ul": "EPK_UL_PLACEHOLDER", "epk_fl": "EPK_FL_PLACEHOLDER" }
+          "session": {
+            "surface": "GIGAASSISTANT",
+            "authority": "3",
+            "epk_ul": "EPK_UL_PLACEHOLDER",
+            "epk_fl": "EPK_FL_PLACEHOLDER"
+          },
+          "result": {
+            "status_code": "",
+            "produced_by": "",
+            "seconds": 0
+          }
         },
-        "writableFields": [],
+        "writableFields": [
+          "status_code",
+          "produced_by",
+          "seconds"
+        ],
         "transientFailures": 0
       },
       "checks": [
-        { "id": "code", "kind": "state_equals", "description": "Код ответа 200", "recordId": "result", "field": "status_code", "value": "200" }
+        {
+          "id": "code",
+          "kind": "state_equals",
+          "description": "Код ответа 200",
+          "recordId": "result",
+          "field": "status_code",
+          "value": "200"
+        }
       ]
     }
   ]
