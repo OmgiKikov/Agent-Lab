@@ -11,7 +11,8 @@
 # AGENT_LAB_TASK — готовое задание вместо шаблона одной карточки (examples/agent-oc-cases.py).
 # Необязательные переменные: AGENT_OC_ROOT (по умолчанию ../agent_oc), AGENT_LAB_RUN_DIR
 # (куда положить сгенерированные файлы и отчёт, по умолчанию .agent-lab-run),
-# AGENT_OC_SURFACE, AGENT_OC_AUTHORITY. DRY_RUN=1 останавливается после подготовки файлов.
+# AGENT_OC_SURFACE, AGENT_OC_AUTHORITY. DRY_RUN=1 останавливается после подготовки файлов,
+# BUILD_ONLY=1 - после сборки черновика: его карточки смотрят и запускают на доске /agent-lab.
 #
 # Переменные шлюза (AGENT_LAB_GATEWAY_*) должны быть в окружении: см. docs/REFERENCE.md.
 set -euo pipefail
@@ -84,6 +85,11 @@ if [ "${questions}" != "0" ]; then
   node dist/cli.js clarify --id "${run_id}" --input "${answers}" > "${run_dir}/clarified.json"
   run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${run_dir}/clarified.json")"
   echo "Ответы учтены, новый черновик ${run_id}"
+fi
+
+if [ "${BUILD_ONLY:-}" = "1" ]; then
+  echo "Черновик собран, не запущен. На доске: node dist/cli.js chat, затем /agent-lab ${run_id}"
+  exit 0
 fi
 
 echo "Прогон ${run_id}"
