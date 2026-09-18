@@ -56,37 +56,82 @@ function stateOf(toolCallId: string): { tools_state_id?: string } {
   return state ? { tools_state_id: state } : {};
 }
 
-interface JsonSchemaProperty { type?: string; description?: string; properties?: unknown }
-interface ObjectParameters { properties?: Record<string, JsonSchemaProperty> }
+interface JsonSchema {
+  type?: unknown; description?: string; properties?: Record<string, JsonSchema>; items?: JsonSchema;
+  enum?: unknown[]; const?: unknown; anyOf?: JsonSchema[]; oneOf?: JsonSchema[]; $ref?: string; $defs?: unknown; definitions?: unknown;
+}
+interface ObjectParameters { required?: unknown; properties?: Record<string, JsonSchema> }
 
 /*
- * GigaChat принимает только скалярные типы аргументов: object-свойство без собственного
- * properties (динамическая карта вроде "какие поля записи менять") отклоняется на уровне
- * шлюза (подтверждено /v1/functions/validate и живым 422 "properties.changes.properties is
- * missing"). Единственный способ передать такое поле — строкой; функция ищет, каким именно
- * ключам нужен такой обход, чтобы одинаково применить его при сборке запроса и разборе ответа.
+ * Шлюз принимает узкое подмножество JSON Schema: type, description, properties, items, enum и
+ * required. Лишние ключи (additionalProperties, pattern, minLength, $schema) отвергаются, у каждого
+ * свойства обязано быть описание, а объект без собственного properties не проходит валидацию —
+ * подтверждено ответами /v1/functions/validate и живыми 422. Инструменты разговора Agent Lab
+ * описаны богаче инструментов песочницы, поэтому правило общее:
+ *   - перечисление вида anyOf из const становится enum — без потерь;
+ *   - ограничения длины и шаблоны снимаются: их проверяет сам инструмент при вызове;
+ *   - параметр верхнего уровня, который шлюз выразить не может ($ref, разнотипные объединения,
+ *     объект без properties), объявляется JSON-строкой и расшифровывается при разборе ответа.
+ * Кодирование только на верхнем уровне: так разбор ответа однозначен по имени параметра.
  */
-function dynamicObjectKeys(parameters: unknown): Set<string> {
-  const properties = (parameters as ObjectParameters | undefined)?.properties ?? {};
-  return new Set(Object.entries(properties)
-    .filter(([, schema]) => schema?.type === 'object' && !schema.properties)
-    .map(([key]) => key));
+const SCALAR_TYPES = new Set(['string', 'number', 'integer', 'boolean']);
+
+/** Значения перечисления, если схема — anyOf/oneOf из const одного скалярного типа. */
+function literalUnion(schema: JsonSchema): { type: string; values: unknown[] } | undefined {
+  const options = schema.anyOf ?? schema.oneOf;
+  if (!options?.length || !options.every(option => option && 'const' in option)) return undefined;
+  const types = new Set(options.map(option => typeof option.const));
+  if (types.size !== 1) return undefined;
+  const type = [...types][0] === 'number' ? 'number' : [...types][0];
+  return SCALAR_TYPES.has(type as string) ? { type: type as string, values: options.map(option => option.const) } : undefined;
 }
 
-function encodeDynamicObjects(parameters: unknown, keys: Set<string>): unknown {
-  if (!keys.size) return parameters;
-  const original = parameters as ObjectParameters;
-  const properties = { ...original.properties };
-  for (const key of keys) {
-    const description = properties[key]?.description;
-    properties[key] = { type: 'string', description: `${description ? `${description} ` : ''}Provide this as a JSON-encoded string.` };
+function expressible(schema: JsonSchema | undefined): boolean {
+  if (!schema || typeof schema !== 'object' || schema.$ref || schema.$defs || schema.definitions) return false;
+  if (literalUnion(schema)) return true;
+  if (typeof schema.type !== 'string') return false;
+  if (SCALAR_TYPES.has(schema.type)) return true;
+  if (schema.type === 'array') return expressible(schema.items);
+  if (schema.type !== 'object') return false;
+  const properties = Object.values(schema.properties ?? {});
+  return properties.length > 0 && properties.every(expressible);
+}
+
+/** Схема в допустимом подмножестве; вызывается только для выразимых схем. */
+function acceptedSchema(name: string, schema: JsonSchema): JsonSchema {
+  const description = schema.description ?? name;
+  const union = literalUnion(schema);
+  if (union) return { type: union.type, description, enum: union.values };
+  const accepted: JsonSchema = { type: schema.type, description };
+  if (schema.enum) accepted.enum = schema.enum;
+  if (schema.type === 'array' && schema.items) accepted.items = acceptedSchema(`${name} item`, schema.items);
+  if (schema.type === 'object' && schema.properties) {
+    accepted.properties = Object.fromEntries(Object.entries(schema.properties).map(([key, value]) => [key, acceptedSchema(key, value)]));
   }
-  return { ...original, properties };
+  return accepted;
 }
 
-function decodeDynamicObjects(toolName: string, args: Record<string, unknown>, tools: GigaContext['tools']): Record<string, unknown> {
+/** Параметры верхнего уровня, которые придётся передавать строкой. */
+function stringEncodedKeys(parameters: unknown): Set<string> {
+  const properties = (parameters as ObjectParameters | undefined)?.properties ?? {};
+  return new Set(Object.entries(properties).filter(([, schema]) => !expressible(schema)).map(([key]) => key));
+}
+
+function declaredParameters(parameters: unknown): unknown {
+  const original = (parameters ?? {}) as ObjectParameters;
+  const encoded = stringEncodedKeys(parameters);
+  const properties = Object.fromEntries(Object.entries(original.properties ?? {}).map(([key, schema]) => {
+    if (!encoded.has(key)) return [key, acceptedSchema(key, schema)];
+    const description = schema?.description;
+    return [key, { type: 'string', description: `${description ? `${description} ` : ''}Provide this as a JSON-encoded string.` }];
+  }));
+  const required = Array.isArray(original.required) ? original.required.filter(key => typeof key === 'string' && key in properties) : [];
+  return { type: 'object', ...(required.length ? { required } : {}), properties };
+}
+
+function decodeStringEncoded(toolName: string, args: Record<string, unknown>, tools: GigaContext['tools']): Record<string, unknown> {
   const tool = tools?.find(t => t.name === toolName);
-  const keys = dynamicObjectKeys(tool?.parameters);
+  const keys = stringEncodedKeys(tool?.parameters);
   if (!keys.size) return args;
   const decoded = { ...args };
   for (const key of keys) {
@@ -140,7 +185,7 @@ export function buildChatRequest(modelId: string, context: GigaContext, options:
       functions: {
         specifications: context.tools.map(tool => ({
           name: tool.name, description: tool.description,
-          parameters: encodeDynamicObjects(tool.parameters, dynamicObjectKeys(tool.parameters)),
+          parameters: declaredParameters(tool.parameters),
         })),
       },
     }];
@@ -188,7 +233,7 @@ export function parseChatResponse(model: GigaModel, body: GigaResponse, tools: G
     if (!part.function_call) continue;
     content.push({
       type: 'toolCall', id: `${state}#${callIndex}`, name: part.function_call.name,
-      arguments: decodeDynamicObjects(part.function_call.name, functionArguments(part.function_call.arguments), tools),
+      arguments: decodeStringEncoded(part.function_call.name, functionArguments(part.function_call.arguments), tools),
     });
     callIndex += 1;
   }

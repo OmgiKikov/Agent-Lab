@@ -9,30 +9,32 @@
 | [examples/agent-oc-adapter.py](../examples/agent-oc-adapter.py) | испытуемый: контракт `kind: "command"` поверх `harness_core.run_turn` |
 | [examples/agent-oc-materials.py](../examples/agent-oc-materials.py) | реестр скиллов агента → готовый вход `build --input` |
 
-## Разговорный путь (обычный)
+## Весь end2end в интерфейсе
 
-Штатный способ — разговор в каталоге агента: Agent Lab сам читает проект, готовит подключение и
-карточки и показывает план прогона на подтверждение.
+Карточки генерирует разговор, прогон и разбор идут с доски `/agent-lab`. Заранее готовятся только
+файлы, которые разговор прочитать не может (`.xlsx`), и подключение к агенту:
 
 ```bash
-conda activate agent_oc
-cd ../agent_oc
-node ../conductor-playground/dist/cli.js chat
+python examples/agent-oc-cases.py --input "/путь/сломавшиеся кейсы раг.xlsx" --output cases-task.json --golden-output golden.json
+python examples/agent-oc-dialogues.py --input "../agent_oc/data/размеченные логи 1607_2007.xlsx" --output dialogues.jsonl --multi-turn-only --limit 60
+DRY_RUN=1 AGENT_LAB_TASK=cases-task.json bash examples/agent-oc-e2e.sh
+node dist/cli.js chat
 ```
 
-Дальше своими словами: какой агент проверяем, где его прод-путь (`src/tests/harness_core.py::run_turn`),
-что готовый адаптер лежит в `../conductor-playground/examples/agent-oc-adapter.py`, какая поверхность,
-полномочия и ЕПК, и что диалоги для карточек — в подготовленном `dialogues.jsonl`.
+Третья команда только кладёт `.agent-lab-run/connection.json`, ничего не запуская. В Pi:
+`/model` → `giga/GigaChat-3-Ultra`, затем своими словами, например:
 
-Модели шлюза доступны и в самом разговоре: расширение регистрирует провайдера `giga` при старте,
-если заданы переменные `AGENT_LAB_GATEWAY_*`. Выберите `giga/glm-5.2` или `giga/GigaChat-3-Ultra` в Pi. Без этой
-регистрации внешний разговор — обычный Pi, и он отвечает «no api key».
+> Собери карточки из golden.json и реальных диалогов dialogues.jsonl, подключение —
+> .agent-lab-run/connection.json. Симулятор giga/glm-5.2, судья giga/GigaChat-3-Ultra.
+> Покажи карточки до запуска.
 
-Логи в `.xlsx` разговор прочитать не может, поэтому `dialogues.jsonl` готовится скриптом заранее
-(ниже). Реестр скиллов в этом пути не нужен: материалы Agent Lab соберёт сам, читая проект.
-В этом режиме каталог `.agent-lab/` появится в `agent_oc`, где он не в `.gitignore`.
+Дальше — доска: карточки видны до запуска, `r` запускает после подтверждения плана, `p`/`n`
+ставят ручные вердикты, `x` выгружает отчёт.
 
-Ниже — тот же путь командами, если разговор не нужен.
+Разговор отдаёт модели свои инструменты вместе с инструментами `agent_lab_*`. Их схемы богаче того,
+что принимает шлюз, поэтому провайдер приводит их к допустимому подмножеству. Проверить, что шлюз
+это принимает, можно до разговора — `node --import tsx test/live/probe-conversation-tools.ts
+GigaChat-3-Ultra`: решает шаг 2, строка `OK` или причина отказа от самого шлюза.
 
 ## Откуда запускать
 
