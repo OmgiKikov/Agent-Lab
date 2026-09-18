@@ -3,17 +3,17 @@
 // does YOUR internal mTLS endpoint actually speak, and does cert-only auth work at all.
 //
 // Usage:
-//   GIGACHAT_URL=https://<internal-host> \
-//   GIGACHAT_CERT_PATH=/path/to/cert.pem \
-//   GIGACHAT_KEY_PATH=/path/to/key.pem \
-//   [GIGACHAT_CA_PATH=/path/to/ca-chain.pem] \
-//   [GIGACHAT_INSECURE=1] \
+//   AGENT_LAB_GATEWAY_URL=https://<internal-host> \
+//   AGENT_LAB_GATEWAY_CERT_PATH=/path/to/cert.pem \
+//   AGENT_LAB_GATEWAY_KEY_PATH=/path/to/key.pem \
+//   [AGENT_LAB_GATEWAY_CA_PATH=/path/to/ca-chain.pem] \
+//   [AGENT_LAB_GATEWAY_INSECURE=1] \
 //   node --import tsx test/live/probe-gigachat-mtls.ts
 //
-// GIGACHAT_URL is the bare host or host+prefix your gateway actually uses (e.g.
+// AGENT_LAB_GATEWAY_URL is the bare host or host+prefix your gateway actually uses (e.g.
 // "https://<internal-gateway-host>" or "https://.../v1") — this script
 // does not assume a shape, it tries several plausible ones and reports what responds.
-// GIGACHAT_INSECURE=1 skips server-certificate verification, for isolating "wrong CA
+// AGENT_LAB_GATEWAY_INSECURE=1 skips server-certificate verification, for isolating "wrong CA
 // bundle" from "wrong URL/contract" while probing; never use it outside this script.
 //
 // Never commit real certificate/key files. Point the *_PATH variables at files outside
@@ -21,22 +21,22 @@
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
 
-const url = process.env.GIGACHAT_URL;
-const certPath = process.env.GIGACHAT_CERT_PATH;
-const keyPath = process.env.GIGACHAT_KEY_PATH;
-const caPath = process.env.GIGACHAT_CA_PATH;
-const insecure = process.env.GIGACHAT_INSECURE === '1';
-const model = process.env.GIGACHAT_MODEL || 'GigaChat-2-Max';
+const url = process.env.AGENT_LAB_GATEWAY_URL;
+const certPath = process.env.AGENT_LAB_GATEWAY_CERT_PATH;
+const keyPath = process.env.AGENT_LAB_GATEWAY_KEY_PATH;
+const caPath = process.env.AGENT_LAB_GATEWAY_CA_PATH;
+const insecure = process.env.AGENT_LAB_GATEWAY_INSECURE === '1';
+const model = process.env.AGENT_LAB_GATEWAY_MODEL || 'GigaChat-2-Max';
 
 if (!url || !certPath || !keyPath) {
-  console.error('Usage: GIGACHAT_URL=... GIGACHAT_CERT_PATH=... GIGACHAT_KEY_PATH=... [GIGACHAT_CA_PATH=...] [GIGACHAT_INSECURE=1] node --import tsx test/live/probe-gigachat-mtls.ts');
+  console.error('Usage: AGENT_LAB_GATEWAY_URL=... AGENT_LAB_GATEWAY_CERT_PATH=... AGENT_LAB_GATEWAY_KEY_PATH=... [AGENT_LAB_GATEWAY_CA_PATH=...] [AGENT_LAB_GATEWAY_INSECURE=1] node --import tsx test/live/probe-gigachat-mtls.ts');
   process.exit(1);
 }
 
 const cert = readFileSync(certPath);
 const key = readFileSync(keyPath);
 const ca = caPath ? readFileSync(caPath) : undefined;
-if (insecure) console.warn('GIGACHAT_INSECURE=1: server certificate verification is OFF. Diagnostic use only.');
+if (insecure) console.warn('AGENT_LAB_GATEWAY_INSECURE=1: server certificate verification is OFF. Diagnostic use only.');
 
 const base = url.replace(/\/+$/, '');
 const withoutVersionSuffix = base.replace(/\/(v1|v2)$/, '');

@@ -11,7 +11,7 @@ import {
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
 import { GIGA_PROVIDER_ID, registerGigaProvider } from './giga-provider.js';
-import { missingGigaVariables } from './giga-transport.js';
+import { missingGigaVariables, unreadableGigaFiles } from './giga-transport.js';
 import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, PROFILES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
 
 type Model = NonNullable<ReturnType<ModelRuntime['getModel']>>;
@@ -270,7 +270,7 @@ async function jsonResponse<S extends z.ZodType>(
   } finally { await session.close(); }
 }
 
-interface GigaStatus { configured: boolean; registered?: boolean; missingVariables: string[] }
+interface GigaStatus { configured: boolean; registered?: boolean; missingVariables: string[]; unreadableFiles: string[] }
 
 /*
  * Провайдер внутреннего шлюза либо есть, либо его нет, и снаружи второе выглядит как отказ
@@ -278,7 +278,7 @@ interface GigaStatus { configured: boolean; registered?: boolean; missingVariabl
  */
 function gigaStatus(): GigaStatus {
   const missingVariables = missingGigaVariables();
-  return { configured: missingVariables.length === 0, missingVariables };
+  return { configured: missingVariables.length === 0, missingVariables, unreadableFiles: unreadableGigaFiles() };
 }
 
 export async function getPiStatus(injectedRuntime?: ModelRuntime): Promise<{

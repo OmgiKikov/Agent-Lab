@@ -28,7 +28,7 @@
 2. Не записывай в файлы репозитория адрес шлюза, пути к сертификатам и логин пользователя: репозиторий
    публичный. В отчёте используй плейсхолдеры `<хост шлюза>`, `<путь к сертификату>`.
 3. Не коммить, не пушь, не меняй `src/` и `test/`. Нашёл дефект — опиши его с воспроизведением.
-4. `GIGACHAT_INSECURE=1` — только если шаг 3 показал, что без флага не работает.
+4. `AGENT_LAB_GATEWAY_INSECURE=1` — только если шаг 3 показал, что без флага не работает.
 5. Бюджет: каждую команду на каждую модель запускай один раз. Повтор — только после сетевого сбоя и не
    больше одного.
 
@@ -42,10 +42,10 @@ git checkout probe/gigachat-mtls-contract
 git pull
 git log --oneline -3
 npm install
-export GIGACHAT_URL=https://<хост шлюза>/v1
-export GIGACHAT_CERT_PATH=<путь к сертификату>
-export GIGACHAT_KEY_PATH=<путь к ключу>
-export GIGACHAT_INSECURE=1
+export AGENT_LAB_GATEWAY_URL=https://<хост шлюза>/v1
+export AGENT_LAB_GATEWAY_CERT_PATH=<путь к сертификату>
+export AGENT_LAB_GATEWAY_KEY_PATH=<путь к ключу>
+export AGENT_LAB_GATEWAY_INSECURE=1
 ```
 
 В `git log` должны быть коммиты `test: живая проверка tool calling sandbox-агента на выбранной модели`
@@ -80,12 +80,12 @@ node dist/cli.js status
 ### Шаг 3. Проверка сертификата шлюза без `INSECURE`
 
 ```bash
-env -u GIGACHAT_INSECURE node dist/cli.js status
+env -u AGENT_LAB_GATEWAY_INSECURE node dist/cli.js status
 ```
 
 Запиши, находятся ли модели `giga` без флага. Причины `connection UNABLE_TO_VERIFY_LEAF_SIGNATURE`,
 `connection SELF_SIGNED_CERT_IN_CHAIN` или `connection DEPTH_ZERO_SELF_SIGNED_CERT` ожидаемы: CA-цепочки
-шлюза нет. В этом случае продолжай с `GIGACHAT_INSECURE=1`.
+шлюза нет. В этом случае продолжай с `AGENT_LAB_GATEWAY_INSECURE=1`.
 
 ### Шаг 4. Симулятор и судья — на каждую модель матрицы
 
@@ -133,20 +133,20 @@ node --import tsx test/live/sandbox-tool-call.ts giga <id модели>
 
 Скрипты сворачивают ответ шлюза в общую ошибку (`Pi provider response incomplete: …`) без HTTP-кода.
 Чтобы понять, что именно отвергает шлюз, повтори минимальный запрос через `curl` — только для
-упавшего шага и модели. Флаг `-k` нужен, только если работаешь с `GIGACHAT_INSECURE=1`.
+упавшего шага и модели. Флаг `-k` нужен, только если работаешь с `AGENT_LAB_GATEWAY_INSECURE=1`.
 
 Тело запроса положи во временный файл вне репозитория, например `/tmp/giga-body.json`.
 
 Запрос чата:
 
 ```bash
-curl -sS -k --cert "$GIGACHAT_CERT_PATH" --key "$GIGACHAT_KEY_PATH" -H 'Content-Type: application/json' -w '\nHTTP %{http_code}\n' -d @/tmp/giga-body.json "${GIGACHAT_URL%/v1}/v2/chat/completions"
+curl -sS -k --cert "$AGENT_LAB_GATEWAY_CERT_PATH" --key "$AGENT_LAB_GATEWAY_KEY_PATH" -H 'Content-Type: application/json' -w '\nHTTP %{http_code}\n' -d @/tmp/giga-body.json "${AGENT_LAB_GATEWAY_URL%/v1}/v2/chat/completions"
 ```
 
 Запрос каталога:
 
 ```bash
-curl -sS -k --cert "$GIGACHAT_CERT_PATH" --key "$GIGACHAT_KEY_PATH" -w '\nHTTP %{http_code}\n' "$GIGACHAT_URL/models"
+curl -sS -k --cert "$AGENT_LAB_GATEWAY_CERT_PATH" --key "$AGENT_LAB_GATEWAY_KEY_PATH" -w '\nHTTP %{http_code}\n' "$AGENT_LAB_GATEWAY_URL/models"
 ```
 
 Тела запросов чата (подставь id модели):
@@ -182,9 +182,9 @@ curl -sS -k --cert "$GIGACHAT_CERT_PATH" --key "$GIGACHAT_KEY_PATH" -w '\nHTTP %
 
 | Что видно | Что это значит | Что делать |
 | --- | --- | --- |
-| `(bad configuration)` | путь к сертификату или ключу не читается | проверить пути в `GIGACHAT_CERT_PATH` и `GIGACHAT_KEY_PATH` |
-| `(connection ENOTFOUND)`, `(connection ECONNREFUSED)` | неверный хост или нет сети до шлюза | проверить `GIGACHAT_URL` и сеть |
-| `(connection UNABLE_TO_VERIFY_LEAF_SIGNATURE)` и похожие | нет CA-цепочки шлюза | работать с `GIGACHAT_INSECURE=1` |
+| `(bad configuration)` | путь к сертификату или ключу не читается | проверить пути в `AGENT_LAB_GATEWAY_CERT_PATH` и `AGENT_LAB_GATEWAY_KEY_PATH` |
+| `(connection ENOTFOUND)`, `(connection ECONNREFUSED)` | неверный хост или нет сети до шлюза | проверить `AGENT_LAB_GATEWAY_URL` и сеть |
+| `(connection UNABLE_TO_VERIFY_LEAF_SIGNATURE)` и похожие | нет CA-цепочки шлюза | работать с `AGENT_LAB_GATEWAY_INSECURE=1` |
 | `(connection CERT_HAS_EXPIRED)` | истёк клиентский сертификат | остановиться, записать в отчёт |
 | `(HTTP 401)`, `(HTTP 403)` | сертификат не допущен к шлюзу | остановиться, записать в отчёт |
 | `(timeout or aborted)` | шлюз не ответил на запрос каталога за 10 секунд | повторить один раз |
@@ -199,7 +199,7 @@ curl -sS -k --cert "$GIGACHAT_CERT_PATH" --key "$GIGACHAT_KEY_PATH" -w '\nHTTP %
 
 Сохрани в `.context/giga-live-report.md`: каталог `.context/` не попадает в git.
 
-1. **Окружение:** вывод `git log --oneline -1`; находятся ли модели `giga` без `GIGACHAT_INSECURE`.
+1. **Окружение:** вывод `git log --oneline -1`; находятся ли модели `giga` без `AGENT_LAB_GATEWAY_INSECURE`.
 2. **Каталог:** сколько моделей `giga` и какие id фактически взяты в матрицу.
 3. **Сводная таблица:** строки — модели, столбцы — «Симулятор», «Судья», «Tool calling: чтение»,
    «Tool calling: запись». Значения — ✅ или ❌ с короткой причиной.

@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
-import { missingGigaVariables, readGigaConfig, requestOptions } from '../src/giga-transport.js';
+import { missingGigaVariables, readGigaConfig, requestOptions, unreadableGigaFiles } from '../src/giga-transport.js';
 import { createGigaProvider, registerGigaProvider } from '../src/giga-provider.js';
 import type { GigaModel } from '../src/giga-protocol.js';
 
@@ -38,9 +38,9 @@ async function certDirectory() {
 test('returns a complete configuration with a normalized url when all required variables are set', async () => {
   const directory = await certDirectory();
   const complete = {
-    GIGACHAT_URL: 'https://gateway.example/v1/',
-    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
-    GIGACHAT_KEY_PATH: join(directory, 'key.pem'),
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example/v1/',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
   };
   const config = readGigaConfig(complete);
   assert.equal(config?.baseUrl, 'https://gateway.example');
@@ -56,7 +56,7 @@ test('returns a complete configuration with a normalized url when all required v
     { label: 'host with only a trailing slash', url: 'https://gateway.example/', expected: 'https://gateway.example' },
   ];
   for (const { label, url, expected } of urlNormalizationCases) {
-    const cased = readGigaConfig({ ...complete, GIGACHAT_URL: url });
+    const cased = readGigaConfig({ ...complete, AGENT_LAB_GATEWAY_URL: url });
     assert.equal(cased?.baseUrl, expected, label);
   }
 });
@@ -64,11 +64,11 @@ test('returns a complete configuration with a normalized url when all required v
 test('returns undefined when a required variable is missing', async () => {
   const directory = await certDirectory();
   const complete = {
-    GIGACHAT_URL: 'https://gateway.example/v1/',
-    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
-    GIGACHAT_KEY_PATH: join(directory, 'key.pem'),
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example/v1/',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
   };
-  for (const missing of ['GIGACHAT_URL', 'GIGACHAT_CERT_PATH', 'GIGACHAT_KEY_PATH'] as const) {
+  for (const missing of ['AGENT_LAB_GATEWAY_URL', 'AGENT_LAB_GATEWAY_CERT_PATH', 'AGENT_LAB_GATEWAY_KEY_PATH'] as const) {
     assert.equal(readGigaConfig({ ...complete, [missing]: undefined }), undefined, `${missing} is required`);
   }
 });
@@ -76,93 +76,66 @@ test('returns undefined when a required variable is missing', async () => {
 test('loads an optional CA and disables certificate verification when insecure mode is set', async () => {
   const directory = await certDirectory();
   const complete = {
-    GIGACHAT_URL: 'https://gateway.example/v1/',
-    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
-    GIGACHAT_KEY_PATH: join(directory, 'key.pem'),
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example/v1/',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
   };
-  const relaxed = readGigaConfig({ ...complete, GIGACHAT_CA_PATH: join(directory, 'ca.pem'), GIGACHAT_INSECURE: '1' });
+  const relaxed = readGigaConfig({ ...complete, AGENT_LAB_GATEWAY_CA_PATH: join(directory, 'ca.pem'), AGENT_LAB_GATEWAY_INSECURE: '1' });
   assert.equal(relaxed?.ca?.toString(), 'test-ca');
   assert.equal(relaxed?.rejectUnauthorized, false);
 });
 
-test('accepts the internal naming of the key and CA chain variables', async () => {
-  // Внутренние проекты (agent_oc) держат один .env на прод-код и на Agent Lab: там ключ лежит
-  // в GIGACHAT_KEY, а цепочка CA — в GIGACHAT_VERIFY_PATH по конвенции _VERIFY_PATH.
-  const directory = await certDirectory();
-  const config = readGigaConfig({
-    GIGACHAT_URL: 'https://gateway.example',
-    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
-    GIGACHAT_KEY: join(directory, 'key.pem'),
-    GIGACHAT_VERIFY_PATH: join(directory, 'ca.pem'),
-  });
-  assert.equal(config?.key.toString(), 'test-key');
-  assert.equal(config?.ca?.toString(), 'test-ca');
-});
-
-test('the explicit path variables win over the internal aliases', async () => {
-  const directory = await certDirectory();
-  await writeFile(join(directory, 'other-key.pem'), 'explicit-key');
-  const config = readGigaConfig({
-    GIGACHAT_URL: 'https://gateway.example',
-    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
-    GIGACHAT_KEY_PATH: join(directory, 'other-key.pem'),
-    GIGACHAT_KEY: join(directory, 'key.pem'),
-  });
-  assert.equal(config?.key.toString(), 'explicit-key');
-});
-
-test('accepts the internal naming of the key and CA chain variables', async () => {
-  // Внутренние проекты держат один .env на прод-код и на Agent Lab: там ключ лежит в
-  // GIGACHAT_KEY, а цепочка CA — в GIGACHAT_VERIFY_PATH по конвенции суффикса _VERIFY_PATH.
-  const directory = await certDirectory();
-  const config = readGigaConfig({
-    GIGACHAT_URL: 'https://gateway.example',
-    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
-    GIGACHAT_KEY: join(directory, 'key.pem'),
-    GIGACHAT_VERIFY_PATH: join(directory, 'ca.pem'),
-  });
-  assert.equal(config?.key.toString(), 'test-key');
-  assert.equal(config?.ca?.toString(), 'test-ca');
-});
-
-test('the explicit path variables win over the internal aliases', async () => {
-  const directory = await certDirectory();
-  await writeFile(join(directory, 'other-key.pem'), 'explicit-key');
-  const config = readGigaConfig({
-    GIGACHAT_URL: 'https://gateway.example',
-    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
-    GIGACHAT_KEY_PATH: join(directory, 'other-key.pem'),
-    GIGACHAT_KEY: join(directory, 'key.pem'),
-  });
-  assert.equal(config?.key.toString(), 'explicit-key');
+test('ignores the GigaChat variables that belong to the agent under test', () => {
+  // Проверяемый агент ходит в GigaChat своими сертификатами и держит их в GIGACHAT_*.
+  // Agent Lab запускает его дочерним процессом, поэтому обе пары живут в одном окружении:
+  // подхватить чужие значения означало бы пойти в свой шлюз не тем сертификатом.
+  assert.equal(readGigaConfig({
+    GIGACHAT_URL: 'https://other-service.example',
+    GIGACHAT_CERT_PATH: '/agent/cert.pem',
+    GIGACHAT_KEY: '/agent/key.pem',
+    GIGACHAT_VERIFY_PATH: '/agent/chain.pem',
+  }), undefined);
 });
 
 test('names the variables that keep the gateway unconfigured', () => {
   // Без этого отсутствие провайдера выглядит как общий отказ авторизации Pi, и непонятно,
   // чинить окружение или доступ к моделям.
-  assert.deepEqual(missingGigaVariables({}), ['GIGACHAT_URL', 'GIGACHAT_CERT_PATH', 'GIGACHAT_KEY_PATH']);
-  assert.deepEqual(missingGigaVariables({ GIGACHAT_URL: 'https://gateway.example', GIGACHAT_KEY: '/key.pem' }), ['GIGACHAT_CERT_PATH']);
+  assert.deepEqual(missingGigaVariables({}), ['AGENT_LAB_GATEWAY_URL', 'AGENT_LAB_GATEWAY_CERT_PATH', 'AGENT_LAB_GATEWAY_KEY_PATH']);
+  assert.deepEqual(missingGigaVariables({ AGENT_LAB_GATEWAY_URL: 'https://gateway.example', AGENT_LAB_GATEWAY_KEY_PATH: '/key.pem' }), ['AGENT_LAB_GATEWAY_CERT_PATH']);
   assert.deepEqual(missingGigaVariables({
-    GIGACHAT_URL: 'https://gateway.example', GIGACHAT_CERT_PATH: '/cert.pem', GIGACHAT_KEY_PATH: '/key.pem',
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example', AGENT_LAB_GATEWAY_CERT_PATH: '/cert.pem', AGENT_LAB_GATEWAY_KEY_PATH: '/key.pem',
   }), []);
+});
+
+test('names the configured files it cannot read', async () => {
+  // Во внутренних проектах пути к сертификатам записаны относительно корня их репозитория;
+  // запущенный из другого каталога Agent Lab их не находит, и это нужно назвать прямо.
+  const directory = await certDirectory();
+  assert.deepEqual(unreadableGigaFiles({
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: 'certs/tls.key',
+    AGENT_LAB_GATEWAY_CA_PATH: join(directory, 'ca.pem'),
+  }), ['AGENT_LAB_GATEWAY_KEY_PATH']);
+  assert.deepEqual(unreadableGigaFiles({}), []);
 });
 
 test('a configured but unreadable certificate path fails loudly', async () => {
   const directory = await certDirectory();
   assert.throws(() => readGigaConfig({
-    GIGACHAT_URL: 'https://gateway.example',
-    GIGACHAT_CERT_PATH: join(directory, 'absent.pem'),
-    GIGACHAT_KEY_PATH: join(directory, 'key.pem'),
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'absent.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
   }), /absent\.pem/);
 });
 
 test('request options carry the client certificate and honour the verification switch', async () => {
   const directory = await certDirectory();
   const config = readGigaConfig({
-    GIGACHAT_URL: 'https://gateway.example/v1',
-    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
-    GIGACHAT_KEY_PATH: join(directory, 'key.pem'),
-    GIGACHAT_CA_PATH: join(directory, 'ca.pem'),
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example/v1',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
+    AGENT_LAB_GATEWAY_CA_PATH: join(directory, 'ca.pem'),
   })!;
 
   const post = requestOptions(config, '/v2/chat/completions', '{"model":"x"}', 60000);
@@ -195,9 +168,9 @@ test('the catalog of the gateway becomes the model list', async () => {
 test('an unreadable certificate path degrades to no provider instead of crashing the run', async () => {
   const directory = await certDirectory();
   const env = {
-    GIGACHAT_URL: 'https://gateway.example',
-    GIGACHAT_CERT_PATH: join(directory, 'absent.pem'),
-    GIGACHAT_KEY_PATH: join(directory, 'key.pem'),
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'absent.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
   };
   await assert.doesNotReject(createGigaProvider(env));
   assert.equal(await createGigaProvider(env), undefined);
@@ -237,7 +210,7 @@ async function capturedStderr(run: () => Promise<unknown>): Promise<string[]> {
 test('each catalog failure is reported to stderr by category only, never a path or a response body', async () => {
   const cases: { category: string; run: () => Promise<unknown> }[] = [
     { category: 'bad configuration', run: () => createGigaProvider({
-      GIGACHAT_URL: 'https://gateway.example', GIGACHAT_CERT_PATH: '/no/such/cert.pem', GIGACHAT_KEY_PATH: '/no/such/key.pem',
+      AGENT_LAB_GATEWAY_URL: 'https://gateway.example', AGENT_LAB_GATEWAY_CERT_PATH: '/no/such/cert.pem', AGENT_LAB_GATEWAY_KEY_PATH: '/no/such/key.pem',
     }) },
     { category: 'connection UNABLE_TO_VERIFY_LEAF_SIGNATURE', run: () => createGigaProvider({}, async () => {
       throw Object.assign(new Error('unable to verify the first certificate'), { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' });

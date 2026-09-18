@@ -95,9 +95,9 @@ async function certDirectory() {
 test('configuration requires url, certificate and key, and strips the version suffix', async () => {
   const directory = await certDirectory();
   const complete = {
-    GIGACHAT_URL: 'https://gateway.example/v1/',
-    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
-    GIGACHAT_KEY_PATH: join(directory, 'key.pem'),
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example/v1/',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
   };
   const config = readGigaConfig(complete);
   assert.equal(config?.baseUrl, 'https://gateway.example');
@@ -106,11 +106,11 @@ test('configuration requires url, certificate and key, and strips the version su
   assert.equal(config?.ca, undefined);
   assert.equal(config?.rejectUnauthorized, true);
 
-  for (const missing of ['GIGACHAT_URL', 'GIGACHAT_CERT_PATH', 'GIGACHAT_KEY_PATH'] as const) {
+  for (const missing of ['AGENT_LAB_GATEWAY_URL', 'AGENT_LAB_GATEWAY_CERT_PATH', 'AGENT_LAB_GATEWAY_KEY_PATH'] as const) {
     assert.equal(readGigaConfig({ ...complete, [missing]: undefined }), undefined, `${missing} is required`);
   }
 
-  const relaxed = readGigaConfig({ ...complete, GIGACHAT_CA_PATH: join(directory, 'ca.pem'), GIGACHAT_INSECURE: '1' });
+  const relaxed = readGigaConfig({ ...complete, AGENT_LAB_GATEWAY_CA_PATH: join(directory, 'ca.pem'), AGENT_LAB_GATEWAY_INSECURE: '1' });
   assert.equal(relaxed?.ca?.toString(), 'test-ca');
   assert.equal(relaxed?.rejectUnauthorized, false);
 });
@@ -118,9 +118,9 @@ test('configuration requires url, certificate and key, and strips the version su
 test('a configured but unreadable certificate path fails loudly', async () => {
   const directory = await certDirectory();
   assert.throws(() => readGigaConfig({
-    GIGACHAT_URL: 'https://gateway.example',
-    GIGACHAT_CERT_PATH: join(directory, 'absent.pem'),
-    GIGACHAT_KEY_PATH: join(directory, 'key.pem'),
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'absent.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
   }), /absent\.pem/);
 });
 ```
@@ -153,16 +153,16 @@ export interface GigaConfig {
  * поэтому хвостовой /v1 или /v2 из настроенного адреса срезается.
  */
 export function readGigaConfig(env: Record<string, string | undefined> = process.env): GigaConfig | undefined {
-  const url = env.GIGACHAT_URL;
-  const certPath = env.GIGACHAT_CERT_PATH;
-  const keyPath = env.GIGACHAT_KEY_PATH;
+  const url = env.AGENT_LAB_GATEWAY_URL;
+  const certPath = env.AGENT_LAB_GATEWAY_CERT_PATH;
+  const keyPath = env.AGENT_LAB_GATEWAY_KEY_PATH;
   if (!url || !certPath || !keyPath) return undefined;
   return {
     baseUrl: url.replace(/\/+$/, '').replace(/\/v[12]$/, ''),
     cert: readFileSync(certPath),
     key: readFileSync(keyPath),
-    ca: env.GIGACHAT_CA_PATH ? readFileSync(env.GIGACHAT_CA_PATH) : undefined,
-    rejectUnauthorized: env.GIGACHAT_INSECURE !== '1',
+    ca: env.AGENT_LAB_GATEWAY_CA_PATH ? readFileSync(env.AGENT_LAB_GATEWAY_CA_PATH) : undefined,
+    rejectUnauthorized: env.AGENT_LAB_GATEWAY_INSECURE !== '1',
   };
 }
 ```
@@ -904,10 +904,10 @@ import { requestOptions } from '../src/giga-transport.js';
 test('request options carry the client certificate and honour the verification switch', async () => {
   const directory = await certDirectory();
   const config = readGigaConfig({
-    GIGACHAT_URL: 'https://gateway.example/v1',
-    GIGACHAT_CERT_PATH: join(directory, 'cert.pem'),
-    GIGACHAT_KEY_PATH: join(directory, 'key.pem'),
-    GIGACHAT_CA_PATH: join(directory, 'ca.pem'),
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example/v1',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
+    AGENT_LAB_GATEWAY_CA_PATH: join(directory, 'ca.pem'),
   })!;
 
   const post = requestOptions(config, '/v2/chat/completions', '{"model":"x"}', 60000);
@@ -1353,11 +1353,11 @@ grep -n "^#" docs/REFERENCE.md | head -20
 
 | Переменная | Обязательна | Значение |
 | --- | --- | --- |
-| `GIGACHAT_URL` | да | Адрес шлюза. Хвостовой `/v1` или `/v2` срезается: версию пути выбирает сам провайдер. |
-| `GIGACHAT_CERT_PATH` | да | Файл клиентского сертификата. |
-| `GIGACHAT_KEY_PATH` | да | Файл приватного ключа. |
-| `GIGACHAT_CA_PATH` | нет | CA-цепочка для проверки сертификата шлюза. Без неё проверка идёт по системному хранилищу. |
-| `GIGACHAT_INSECURE` | нет | `1` отключает проверку сертификата шлюза. Только для отладки. |
+| `AGENT_LAB_GATEWAY_URL` | да | Адрес шлюза. Хвостовой `/v1` или `/v2` срезается: версию пути выбирает сам провайдер. |
+| `AGENT_LAB_GATEWAY_CERT_PATH` | да | Файл клиентского сертификата. |
+| `AGENT_LAB_GATEWAY_KEY_PATH` | да | Файл приватного ключа. |
+| `AGENT_LAB_GATEWAY_CA_PATH` | нет | CA-цепочка для проверки сертификата шлюза. Без неё проверка идёт по системному хранилищу. |
+| `AGENT_LAB_GATEWAY_INSECURE` | нет | `1` отключает проверку сертификата шлюза. Только для отладки. |
 
 Список моделей берётся из каталога шлюза (`GET /v1/models`), из него остаются только чат-модели.
 Файлы сертификатов в репозиторий не коммитятся.
@@ -1387,7 +1387,7 @@ git commit -m "docs: описать переменные окружения пр
 - [ ] **Step 1: Проверить, что провайдер виден и отвечает**
 
 ```bash
-env GIGACHAT_URL=https://<internal-gateway-host>/v1 GIGACHAT_CERT_PATH=<путь>/cert.pem GIGACHAT_KEY_PATH=<путь>/private.key GIGACHAT_INSECURE=1 node --import tsx test/live/simulator-stop.ts giga GigaChat-3-Pro
+env AGENT_LAB_GATEWAY_URL=https://<internal-gateway-host>/v1 AGENT_LAB_GATEWAY_CERT_PATH=<путь>/cert.pem AGENT_LAB_GATEWAY_KEY_PATH=<путь>/private.key AGENT_LAB_GATEWAY_INSECURE=1 node --import tsx test/live/simulator-stop.ts giga GigaChat-3-Pro
 ```
 
 Ожидается: прогон доходит до конца, симулятор и судья отрабатывают.
