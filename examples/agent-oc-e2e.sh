@@ -88,6 +88,14 @@ fi
 
 echo "Прогон ${run_id}"
 
+# Код возврата run - это вердикт, а не сбой: 1 - есть провал, 2 - неопределённые оценки или
+# неполные данные. Отчёт нужен именно в этих случаях, поэтому экспорт идёт при любом коде,
+# а сам код отдаётся наружу последним.
+set +e
 node dist/cli.js run --id "${run_id}" --yes
+verdict=$?
+set -e
 node dist/cli.js export --id "${run_id}" --format html --output "${run_dir}/report.html"
-echo "Отчёт: ${run_dir}/report.html"
+node dist/cli.js export --id "${run_id}" --format markdown --output "${run_dir}/report.md"
+echo "Отчёт: ${run_dir}/report.html и ${run_dir}/report.md"
+exit "${verdict}"
