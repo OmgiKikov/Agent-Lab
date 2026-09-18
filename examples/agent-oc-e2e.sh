@@ -64,6 +64,26 @@ if [ "${DRY_RUN:-}" = "1" ]; then exit 0; fi
 
 node dist/cli.js build --input "${run_dir}/task.json" --connection "${run_dir}/connection.json" > "${run_dir}/draft.json"
 run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${run_dir}/draft.json")"
+echo "Черновик ${run_id}"
+
+# Открытые бизнес-вопросы блокируют запуск: это решения владельца, а не догадка модели.
+# Скрипт выкладывает их заготовкой, а с готовыми ответами сам делает clarify и берёт новый черновик.
+answers="${AGENT_LAB_ANSWERS:-${run_dir}/answers.json}"
+questions="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["questions"]))' "${run_dir}/draft.json")"
+if [ "${questions}" != "0" ]; then
+  if [ ! -s "${answers}" ] || ! python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d and all(a.get("answer","").strip() for a in d) else 1)' "${answers}"; then
+    python3 -c 'import json,sys; json.dump([{"question": q, "answer": ""} for q in json.load(open(sys.argv[1]))["questions"]], open(sys.argv[2], "w"), ensure_ascii=False, indent=2)' \
+      "${run_dir}/draft.json" "${answers}"
+    echo
+    echo "Черновик задаёт ${questions} вопрос(ов) владельцу. Заполните поля answer в ${answers} и запустите скрипт снова:"
+    python3 -c 'import json,sys; [print(" -", q) for q in json.load(open(sys.argv[1]))["questions"]]' "${run_dir}/draft.json"
+    exit 3
+  fi
+  node dist/cli.js clarify --id "${run_id}" --input "${answers}" > "${run_dir}/clarified.json"
+  run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${run_dir}/clarified.json")"
+  echo "Ответы учтены, новый черновик ${run_id}"
+fi
+
 echo "Прогон ${run_id}"
 
 node dist/cli.js run --id "${run_id}" --yes

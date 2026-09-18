@@ -175,6 +175,11 @@ AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… bash examples/agent-oc-e2e.sh
 ```
 
 Скрипт кладёт `task.json`, `connection.json`, черновик и `report.html` в `.agent-lab-run`.
+
+Если черновик задаёт открытые бизнес-вопросы, запуск останавливается: это решения владельца, и
+модель их не выдумывает. Скрипт выложит их списком и заготовкой `.agent-lab-run/answers.json` —
+заполните поля `answer` и запустите скрипт снова, он сам применит ответы (`clarify`) и продолжит
+с новым черновиком.
 Карточку правьте в [examples/agent-oc-e2e/task.json](../examples/agent-oc-e2e/task.json) —
 ЕПК туда не вписываются, они подставляются из окружения при запуске. Полезные переменные:
 `AGENT_OC_ROOT` (по умолчанию `../agent_oc`), `AGENT_OC_SURFACE`, `AGENT_OC_AUTHORITY`,
