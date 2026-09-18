@@ -8,6 +8,7 @@
 # мессенджер: двойной дефис приезжает длинным тире, кавычки — типографскими. Здесь всё это
 # зафиксировано в файле, а от оператора нужны только два значения ЕПК в окружении.
 #
+# AGENT_LAB_TASK — готовое задание вместо шаблона одной карточки (examples/agent-oc-cases.py).
 # Необязательные переменные: AGENT_OC_ROOT (по умолчанию ../agent_oc), AGENT_LAB_RUN_DIR
 # (куда положить сгенерированные файлы и отчёт, по умолчанию .agent-lab-run),
 # AGENT_OC_SURFACE, AGENT_OC_AUTHORITY. DRY_RUN=1 останавливается после подготовки файлов.
@@ -15,8 +16,12 @@
 # Переменные шлюза (AGENT_LAB_GATEWAY_*) должны быть в окружении: см. docs/REFERENCE.md.
 set -euo pipefail
 
-: "${AGENT_OC_EPK_UL:?Задайте AGENT_OC_EPK_UL: ЕПК юридического лица}"
-: "${AGENT_OC_EPK_FL:?Задайте AGENT_OC_EPK_FL: ЕПК физического лица}"
+# Готовое задание (например, собранное examples/agent-oc-cases.py) берётся как есть: ЕПК и
+# поверхность там уже стоят из разбора кейсов. Иначе они подставляются в шаблон одной карточки.
+if [ -z "${AGENT_LAB_TASK:-}" ]; then
+  : "${AGENT_OC_EPK_UL:?Задайте AGENT_OC_EPK_UL: ЕПК юридического лица, либо AGENT_LAB_TASK с готовым заданием}"
+  : "${AGENT_OC_EPK_FL:?Задайте AGENT_OC_EPK_FL: ЕПК физического лица, либо AGENT_LAB_TASK с готовым заданием}"
+fi
 
 lab_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 agent_root="$(cd "${AGENT_OC_ROOT:-${lab_root}/../agent_oc}" && pwd)"
@@ -48,16 +53,13 @@ cat > "${run_dir}/connection.json" <<JSON
 }
 JSON
 
-python3 - "$AGENT_OC_EPK_UL" "$AGENT_OC_EPK_FL" "$surface" "$authority" \
-  "${lab_root}/examples/agent-oc-e2e/task.json" "${run_dir}/task.json" <<'PY'
-import json, sys
-epk_ul, epk_fl, surface, authority, template, output = sys.argv[1:7]
-task = json.load(open(template, encoding='utf-8'))
-for case in task['goldenCases']:
-    session = case['initialState']['records']['session']
-    session.update(epk_ul=epk_ul, epk_fl=epk_fl, surface=surface, authority=authority)
-json.dump(task, open(output, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
-PY
+if [ -n "${AGENT_LAB_TASK:-}" ]; then
+  cp "${AGENT_LAB_TASK}" "${run_dir}/task.json"
+else
+  python3 "${lab_root}/examples/agent-oc-e2e/fill-task.py" \
+    "${AGENT_OC_EPK_UL}" "${AGENT_OC_EPK_FL}" "${surface}" "${authority}" \
+    "${lab_root}/examples/agent-oc-e2e/task.json" "${run_dir}/task.json"
+fi
 
 echo "Подготовлено: ${run_dir}/task.json и ${run_dir}/connection.json"
 if [ "${DRY_RUN:-}" = "1" ]; then exit 0; fi
