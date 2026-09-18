@@ -12,10 +12,9 @@
 что сломалось на текущей редакции. `--passing` берёт вместо этого успешные строки — тогда прогон
 проверяет, что рабочее не развалилось.
 
-Ожидание владельца становится `successCriteria` и рубрикой судьи дословно. Проверки кода ответа
-здесь нет намеренно: в этом файле нет колонки с ожидаемым кодом, а выдумывать его нельзя —
-объективная проверка `state_equals` по `result.status_code` уместна для разметки логов, где такая
-колонка есть.
+Текстовое ожидание владельца становится `successCriteria` и рубрикой судьи дословно. Ожидание,
+записанное голым кодом ответа («202-2»), становится точной проверкой `result.status_code`: код
+кладёт туда адаптер, а судья смысла кодов агента не знает.
 
 Нужен `openpyxl`. Скрипт ничего не импортирует из agent_oc.
 """
@@ -41,6 +40,10 @@ _AUTHORITY = re.compile(r"Полномочия\s*:\s*(\d)")
 _EPK_UL = re.compile(r"EPC\s*UL\s*:\s*(\d+)", re.IGNORECASE)
 _EPK_FL = re.compile(r"EPC\s*FL\s*:\s*(\d+)", re.IGNORECASE)
 _SLUG = re.compile(r"[^a-zA-Zа-яА-Я0-9]+")
+# Часть ожиданий в разборе записана голым кодом ответа («202-2», «202-1»). Судья не знает, что
+# означают коды агента, и в живом прогоне засчитал инструкцию по заказу инкассации как «202-1».
+# Код ответа адаптер кладёт в result.status_code, поэтому такое ожидание проверяется объективно.
+_BARE_CODE = re.compile(r"^\s*(\d{3}(?:-\d+)?)\s*$")
 
 MAX_CRITERIA = 3000
 MAX_RUBRIC = 2000
@@ -103,7 +106,6 @@ def case(row: Dict[str, Any], index: int, epk_ul: str, epk_fl: str) -> Dict[str,
         "facts": "Клиент знает только то, что написал в своём вопросе.",
         "behavior": "Отвечай на уточнения агента только известными фактами; закончи, когда получишь ответ по существу или поймёшь, что его не будет.",
         "maxFollowUps": 2,
-        "successCriteria": f"Ответ агента по смыслу совпадает с ожиданием владельца: {expected}"[:MAX_CRITERIA],
         "initialState": {
             "records": {
                 "session": session(conditions, str(row.get("Поверхность") or ""), epk_ul, epk_fl),
@@ -112,6 +114,25 @@ def case(row: Dict[str, Any], index: int, epk_ul: str, epk_fl: str) -> Dict[str,
             "writableFields": ["status_code", "produced_by", "seconds"],
             "transientFailures": 0,
         },
+        **criteria(expected),
+    }
+
+
+def criteria(expected: str) -> Dict[str, Any]:
+    """Как проверять ожидание: голый код — точной проверкой состояния, текст — рубрикой судьи."""
+    code = _BARE_CODE.match(expected)
+    if code:
+        return {
+            "successCriteria": f"Агент завершает диалог кодом ответа {code.group(1)}",
+            "checks": [{
+                "id": "status_code", "kind": "state_equals", "stage": "understand",
+                "description": f"Код ответа агента {code.group(1)}, как в разборе кейсов",
+                "recordId": "result", "field": "status_code", "value": code.group(1),
+            }],
+            "metrics": [],
+        }
+    return {
+        "successCriteria": f"Ответ агента по смыслу совпадает с ожиданием владельца: {expected}"[:MAX_CRITERIA],
         "checks": [],
         "metrics": [{
             "id": "expected_answer",
@@ -180,6 +201,7 @@ def main() -> int:
     parser.add_argument("--epk-fl", default="EPK_FL_PLACEHOLDER", help="ЕПК ФЛ, если его нет в условиях кейса")
     parser.add_argument("--model", default="glm-5.2", help="Модель симулятора")
     parser.add_argument("--judge", default="GigaChat-3-Ultra", help="Модель судьи")
+    parser.add_argument("--criteria-output", help="Файл критериев для переоценки уже записанного прогона (reassess)")
     args = parser.parse_args()
 
     if args.limit > MAX_CASES:
@@ -187,9 +209,16 @@ def main() -> int:
 
     task = build(args)
     Path(args.output).write_text(json.dumps(task, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if args.criteria_output:
+        # Переоценка меняет критерии только у перечисленных карточек, а точные проверки считает по
+        # сохранённым фактам - агент заново не вызывается.
+        patch = {"criteria": [{"scenarioId": c["id"], "successCriteria": c["successCriteria"], "checks": c["checks"], "metrics": c["metrics"]}
+                              for c in task["goldenCases"]]}
+        Path(args.criteria_output).write_text(json.dumps(patch, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     surfaces = sorted({c["initialState"]["records"]["session"]["surface"] for c in task["goldenCases"]})
     count = len(task["goldenCases"])
-    print(f"{args.output}: карточек {count}, поверхности: {', '.join(surfaces)}")
+    objective = sum(1 for c in task["goldenCases"] if c["checks"])
+    print(f"{args.output}: карточек {count} (с точной проверкой кода ответа: {objective}), поверхности: {', '.join(surfaces)}")
     print(f"Ожидайте примерно {count} диалогов и до {count * 4} вызовов судьи; лимит прогона - час.")
     return 0
 
