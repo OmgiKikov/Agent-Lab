@@ -159,6 +159,10 @@ def build(args: argparse.Namespace) -> Dict[str, Any]:
             "provider": "giga", "model": args.model,
             "roles": {"judge": {"provider": "giga", "model": args.judge}},
             "userModes": ["reactive"], "repeats": 1, "maxTurns": 6,
+            # Лимиты по верхней границе Agent Lab: на карточку уходит диалог плюс по два вызова
+            # судьи на каждую применимую рубрику, и при десятиминутном умолчании прогон на
+            # десятке карточек обрывается уже после диалогов — вердиктов не остаётся вовсе.
+            "maxDurationMs": 3600000, "maxCalls": 3000,
         },
         "goldenCases": cases,
     }
@@ -171,7 +175,7 @@ def main() -> int:
     parser.add_argument("--sheet", action="append", help="Лист; можно повторять. По умолчанию все.")
     parser.add_argument("--version", default="Новая", help="Значение колонки «Версия» (по умолчанию «Новая»)")
     parser.add_argument("--passing", action="store_true", help="Взять успешные кейсы вместо сломавшихся")
-    parser.add_argument("--limit", type=int, default=MAX_CASES, help=f"Не больше {MAX_CASES} карточек (предел Agent Lab)")
+    parser.add_argument("--limit", type=int, default=MAX_CASES, help=f"Не больше {MAX_CASES} карточек (предел Agent Lab); на первый прогон разумно 5-8")
     parser.add_argument("--epk-ul", default="EPK_UL_PLACEHOLDER", help="ЕПК ЮЛ, если его нет в условиях кейса")
     parser.add_argument("--epk-fl", default="EPK_FL_PLACEHOLDER", help="ЕПК ФЛ, если его нет в условиях кейса")
     parser.add_argument("--model", default="glm-5.2", help="Модель симулятора")
@@ -184,7 +188,9 @@ def main() -> int:
     task = build(args)
     Path(args.output).write_text(json.dumps(task, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     surfaces = sorted({c["initialState"]["records"]["session"]["surface"] for c in task["goldenCases"]})
-    print(f"{args.output}: карточек {len(task['goldenCases'])}, поверхности: {', '.join(surfaces)}")
+    count = len(task["goldenCases"])
+    print(f"{args.output}: карточек {count}, поверхности: {', '.join(surfaces)}")
+    print(f"Ожидайте примерно {count} диалогов и до {count * 4} вызовов судьи; лимит прогона - час.")
     return 0
 
 

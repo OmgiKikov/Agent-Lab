@@ -21,7 +21,9 @@
       "static"
     ],
     "repeats": 1,
-    "maxTurns": 4
+    "maxTurns": 4,
+    "maxDurationMs": 3600000,
+    "maxCalls": 3000
   },
   "goldenCases": [
     {
