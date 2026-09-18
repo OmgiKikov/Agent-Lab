@@ -202,6 +202,7 @@ def main() -> int:
     parser.add_argument("--model", default="glm-5.2", help="Модель симулятора")
     parser.add_argument("--judge", default="GigaChat-3-Ultra", help="Модель судьи")
     parser.add_argument("--criteria-output", help="Файл критериев для переоценки уже записанного прогона (reassess)")
+    parser.add_argument("--golden-output", help="Те же карточки массивом golden-кейсов для разговора (agent_lab_build goldenFile)")
     args = parser.parse_args()
 
     if args.limit > MAX_CASES:
@@ -209,6 +210,10 @@ def main() -> int:
 
     task = build(args)
     Path(args.output).write_text(json.dumps(task, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if args.golden_output:
+        # В разговоре карточки передаются инструменту agent_lab_build файлом golden-кейсов: это та же
+        # карточка, что в задании, без обвязки задания (моделей, лимитов, материалов).
+        Path(args.golden_output).write_text(json.dumps(task["goldenCases"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if args.criteria_output:
         # Переоценка меняет критерии только у перечисленных карточек, а точные проверки считает по
         # сохранённым фактам - агент заново не вызывается.

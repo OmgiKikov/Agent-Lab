@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildChatRequest, type GigaModel, normalizeResponseFormat, parseCatalog, parseChatResponse } from '../src/giga-protocol.js';
+import { buildChatRequest, type GigaContext, type GigaModel, normalizeResponseFormat, parseCatalog, parseChatResponse } from '../src/giga-protocol.js';
 
 test('catalog keeps chat models and drops embeddings and service entries', () => {
   const ids = parseCatalog({
@@ -87,7 +87,7 @@ test('declared tools become function specifications', () => {
 
   assert.deepEqual(payload.tools, [{
     functions: {
-      specifications: [{ name: 'lookup_record', description: 'Read a record', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } }],
+      specifications: [{ name: 'lookup_record', description: 'Read a record', parameters: { type: 'object', properties: { id: { type: 'string', description: 'id' } }, required: ['id'] } }],
     },
   }]);
 });
@@ -108,11 +108,11 @@ test('a dynamic-object parameter (no nested properties) is declared to the gatew
   } as never, {});
 
   const declared = payload.tools?.[0]?.functions.specifications[0]?.parameters as { properties: Record<string, unknown> };
-  assert.deepEqual(declared.properties.recordId, { type: 'string' });
+  assert.deepEqual(declared.properties.recordId, { type: 'string', description: 'recordId' });
   assert.deepEqual(declared.properties.changes, { type: 'string', description: 'Fields to change Provide this as a JSON-encoded string.' });
 });
 
-test('an object parameter that already lists its own properties is left unchanged', () => {
+test('an object parameter that already lists its own properties keeps its structure', () => {
   const payload = buildChatRequest('GigaChat-3-Pro', {
     messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
     tools: [{
@@ -122,7 +122,66 @@ test('an object parameter that already lists its own properties is left unchange
   } as never, {});
 
   const declared = payload.tools?.[0]?.functions.specifications[0]?.parameters as { properties: Record<string, unknown> };
-  assert.deepEqual(declared.properties.filter, { type: 'object', properties: { status: { type: 'string' } } });
+  assert.deepEqual(declared.properties.filter, { type: 'object', description: 'filter', properties: { status: { type: 'string', description: 'status' } } });
+});
+
+test('a union of literal values is declared as an enum', () => {
+  // TypeBox описывает перечисление как anyOf из const; шлюз anyOf не принимает, а enum — да.
+  const payload = buildChatRequest('GigaChat-3-Pro', {
+    messages: [{ role: 'user', content: 'save', timestamp: 1 }],
+    tools: [{ name: 'agent_lab_suite', description: 'Suites', parameters: { type: 'object', properties: {
+      action: { anyOf: [{ const: 'save', type: 'string' }, { const: 'load', type: 'string' }, { const: 'list', type: 'string' }] },
+    } } }],
+  } as never, {});
+  const declared = payload.tools?.[0]?.functions.specifications[0]?.parameters as { properties: Record<string, unknown> };
+  assert.deepEqual(declared.properties.action, { type: 'string', description: 'action', enum: ['save', 'load', 'list'] });
+});
+
+test('keys outside the accepted schema subset are dropped from a declaration', () => {
+  // functions/validate отвергает лишние ключи JSON Schema; ограничения длины и шаблоны всё равно
+  // проверяет сам инструмент при вызове, поэтому их снятие не расширяет допустимые аргументы.
+  const payload = buildChatRequest('GigaChat-3-Pro', {
+    messages: [{ role: 'user', content: 'inspect', timestamp: 1 }],
+    tools: [{ name: 'agent_lab_inspect', description: 'Inspect', parameters: {
+      $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', additionalProperties: false, required: ['id'],
+      properties: { id: { type: 'string', pattern: '^[a-z]+$', minLength: 1, maxLength: 80 }, tags: { type: 'array', minItems: 1, items: { type: 'string' } } },
+    } }],
+  } as never, {});
+  assert.deepEqual(payload.tools?.[0]?.functions.specifications[0]?.parameters, {
+    type: 'object', required: ['id'],
+    properties: { id: { type: 'string', description: 'id' }, tags: { type: 'array', description: 'tags', items: { type: 'string', description: 'tags item' } } },
+  });
+});
+
+test('a parameter the gateway cannot express becomes a JSON-encoded string', () => {
+  // Ссылки на $defs, объединения разнотипных схем и вложенные объекты без собственных properties
+  // шлюз выразить не может; параметр объявляется строкой и расшифровывается при разборе ответа.
+  const payload = buildChatRequest('GigaChat-3-Pro', {
+    messages: [{ role: 'user', content: 'edit', timestamp: 1 }],
+    tools: [{ name: 'agent_lab_edit', description: 'Edit a draft', parameters: { type: 'object', properties: {
+      id: { type: 'string', description: 'Draft id' },
+      patch: { type: 'object', description: 'Changes', $defs: { card: { type: 'object' } }, properties: { scenarios: { type: 'array', items: { $ref: '#/$defs/card' } } } },
+      target: { description: 'Where the agent lives', anyOf: [{ type: 'string' }, { type: 'object', properties: { url: { type: 'string' } } }] },
+    } } }],
+  } as never, {});
+  const declared = payload.tools?.[0]?.functions.specifications[0]?.parameters as { properties: Record<string, unknown> };
+  assert.deepEqual(declared.properties.id, { type: 'string', description: 'Draft id' });
+  assert.deepEqual(declared.properties.patch, { type: 'string', description: 'Changes Provide this as a JSON-encoded string.' });
+  assert.deepEqual(declared.properties.target, { type: 'string', description: 'Where the agent lives Provide this as a JSON-encoded string.' });
+});
+
+test('the model answer decodes every parameter that was declared as a string', () => {
+  const tools = [{ name: 'agent_lab_edit', description: 'Edit a draft', parameters: { type: 'object', properties: {
+    id: { type: 'string' },
+    patch: { type: 'object', properties: { scenarios: { type: 'array', items: { $ref: '#/$defs/card' } } } },
+  } } }] as never as GigaContext['tools'];
+  const message = parseChatResponse(model, {
+    messages: [{ role: 'assistant', tools_state_id: 'state-1', content: [{ function_call: {
+      name: 'agent_lab_edit', arguments: { id: 'draft-1', patch: '{"scenarios":[{"id":"card"}]}' },
+    } }] }],
+  }, tools);
+  const call = message.content.find(item => item.type === 'toolCall') as { arguments: Record<string, unknown> };
+  assert.deepEqual(call.arguments, { id: 'draft-1', patch: { scenarios: [{ id: 'card' }] } });
 });
 
 test('a request without tools omits the tools field', () => {
