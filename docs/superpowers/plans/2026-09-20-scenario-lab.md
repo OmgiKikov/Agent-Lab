@@ -73,7 +73,7 @@ assert.throws(() => editLibrary(library, 'stale', patch), /измен|хеш/i);
 
 ### Task 2: Полная хронология, сохранение и интеграция подготовки
 
-**Files:** Create `src/scenario-store.ts`, `src/scenario-preparation.ts`, `test/scenario-store.test.ts`, `test/scenario-preparation.test.ts`. Modify `src/contracts.ts`, `src/pi.ts`, `src/prompts.ts`, `src/experiment.ts`, `src/store.ts`, `src/imports.ts` and relevant tests.
+**Files:** Create `src/scenario-store.ts`, `src/scenario-preparation.ts`, `test/scenario-store.test.ts`, `test/scenario-preparation.test.ts`. Modify `src/contracts.ts`, `src/pi.ts`, `src/prompts.ts`, `src/experiment.ts`, `src/store.ts`, `src/imports.ts` and relevant tests. В `extensions/agent-lab.ts` и `src/cli.ts` изменить только чтение/передачу исходного импорта: нынешний выбор ограниченного пула происходит до вызова ядра и иначе потеряет полную выборку. Новые UI-действия принадлежат Task 3.
 
 **Interfaces:** Consumes Task 1. Add optional `Runtime.scenarioProposals(input, ctx)` which receives indexed chronological dialogue plus requirements; returns proposals validated by Task 1. Add Experiment optional full `librarySnapshot` and original import reference. Store operations execute under ExperimentStore writer ownership; read operations need no lock. Public ExperimentLab prepare/edit/accept operations return libraries and compiled draft consistently.
 
@@ -112,7 +112,8 @@ assert.rejects(() => store.writeLibrary(updated, 'stale'), /измен|хеш/i)
 
 ```ts
 assert.throws(() => advanceUser(state, {kind:'answer', factIds:['hidden']}), /факт|разреш/i);
-assert.equal(result.trial.simulatorValid, false);
+assert.equal(result.trial.outcome, 'invalid');
+assert.match(result.trial.reason, /симулятор/i);
 assert.equal(targetMessages.includes('secret-value'), false);
 ```
 
