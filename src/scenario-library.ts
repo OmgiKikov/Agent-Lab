@@ -14,6 +14,12 @@ function canonical(value: unknown): string {
 }
 const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 const normalize = (value: string) => value.trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+const exactTokens = (value: string) => (normalize(value).match(/[\p{L}\p{N}_:./-]+/gu) ?? []).map(token => token.replace(/[.,:]+$/, '')).filter(Boolean);
+function containsExactValue(text: string, value: string): boolean {
+  const haystack = exactTokens(text);
+  const needle = exactTokens(value);
+  return needle.length > 0 && haystack.some((_, index) => needle.every((token, offset) => haystack[index + offset] === token));
+}
 const uniqueRefs = (refs: SourceDialogue[]) => [...new Map(refs.map(ref => [`${ref.batchId}/${ref.dialogueId}`, ref])).values()];
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 function scalarValues(value: unknown): string[] {
@@ -126,7 +132,7 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
       if (factIds.has(fact.id)) problem('duplicate_fact', path, 'Повторяющийся id факта');
       factIds.add(fact.id);
       if (fact.availability === 'uncertain') problem('uncertain_fact', path, fact.reason, 'needs_review');
-      if (fact.value !== undefined && !normalize(fact.statement).includes(normalize(String(fact.value)))) problem('fact_value_mismatch', path, 'Точное значение отсутствует в утверждении');
+      if (fact.value !== undefined && !containsExactValue(fact.statement, String(fact.value))) problem('fact_value_mismatch', path, 'Точное значение отсутствует в утверждении');
       if (fact.availability === 'initial') {
         const key = normalize(fact.statement.split(':')[0]!);
         if (fact.value !== undefined && values.has(key) && values.get(key) !== String(fact.value)) problem('contradictory_facts', path, 'Исходные факты противоречат друг другу');
@@ -136,7 +142,10 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
       if (origin.kind === 'dialogue') {
         const event = validRef(origin)?.events.find(e => e.index === origin.eventIndex);
         if (!variant.sourceDialogues.some(r => r.batchId === origin.batchId && r.dialogueId === origin.dialogueId) || !event?.content?.includes(origin.quote)) problem('invalid_citation', `${path}.origin`, 'Цитата не совпадает с указанным событием источника');
-        if (fact.value !== undefined && !normalize(origin.quote).includes(normalize(String(fact.value)))) problem('ungrounded_value', path, 'Значение факта отсутствует в цитате');
+        const sourceTokens = new Set(exactTokens(origin.quote));
+        const eventTokens = new Set(exactTokens(event?.content ?? ''));
+        const fabricatedToken = exactTokens(fact.statement).some(token => /\p{N}/u.test(token) && (!sourceTokens.has(token) || !eventTokens.has(token)));
+        if (fabricatedToken || fact.value !== undefined && (!containsExactValue(origin.quote, String(fact.value)) || !containsExactValue(event?.content ?? '', String(fact.value)))) problem('ungrounded_value', path, 'Точное значение факта отсутствует в цитате или исходном событии');
         if (fact.availability === 'initial' && event?.role !== 'user') problem('agent_fact_as_initial', path, 'Ответ старого агента не является исходным знанием пользователя');
       } else if (origin.kind === 'owner' && !variant.history.some(h => h.author === 'owner' && h.factEdit?.factId === fact.id && h.factEdit.editId === origin.editId && h.factEdit.factHash === digest(fact))) problem('unverified_owner_fact', path, 'Нет записанной правки владельца, подтверждающей факт');
       else if (origin.kind === 'synthetic' && (variant.provenance !== 'synthetic' || origin.parentVariantId !== variant.parentVariantId || !library.variants.some(p => p.id === origin.parentVariantId && p.id !== v))) problem('synthetic_provenance', path, 'Синтетическое допущение не связано с родителем варианта');
@@ -176,6 +185,8 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
     if (!world.success) problem('invalid_environment', 'environmentFixture', 'Окружение несовместимо с исполнимым Scenario');
     if (environment.mode === 'prompt' && world.success && (Object.keys(world.data.records).length || world.data.writableFields.length || world.data.transientFailures || world.data.external)) problem('unsupported_environment', 'environmentFixture', 'Управляемое состояние требует подтверждённого договора fixture');
     if (environment.mode === 'managed' && (!environment.contract?.confirmed || !environment.contract.reset)) problem('unsupported_environment', 'environmentFixture', 'Не подтверждены договор и сброс окружения');
+    const supportsObservation = (observation: 'reply' | 'tool' | 'state') => observation === 'reply' || environment.mode === 'managed' && environment.contract?.confirmed && environment.contract.reset && environment.contract.observations.includes(observation);
+    if (!supportsObservation(variant.evaluationSpec.goalObservation)) problem('unobservable_goal', 'evaluationSpec.goalObservation', 'Не подтверждён канал наблюдения результата');
     const checkpoints = variant.evaluationSpec.checkpoints;
     if (!checkpoints.some(c => c.role === 'required')) problem('missing_expectation', 'evaluationSpec', 'Нужна обязательная контрольная точка');
     const cpIds = new Set<string>();
@@ -184,8 +195,25 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
       cpIds.add(cp.id);
       const requirement = library.requirements.find(r => r.id === cp.requirementId);
       if (!requirement || !group?.requirementIds.includes(cp.requirementId) || !requirement.quote.includes(cp.quote)) problem('invalid_checkpoint_citation', `evaluationSpec.checkpoints.${cp.id}`, 'Контрольная точка не подтверждена применимым требованием');
-      if (cp.check !== undefined && !checkSchema.safeParse(cp.check).success) problem('invalid_check', `evaluationSpec.checkpoints.${cp.id}`, 'Проверка несовместима с исполнимым Scenario');
-      if (cp.observation !== 'reply' && (environment.mode !== 'managed' || !environment.contract?.observations.includes(cp.observation))) problem('unobservable_checkpoint', `evaluationSpec.checkpoints.${cp.id}`, 'Не подтверждён канал наблюдения');
+      const path = `evaluationSpec.checkpoints.${cp.id}`;
+      if (cp.check !== undefined) {
+        const parsed = checkSchema.safeParse(cp.check);
+        if (!parsed.success) problem('invalid_check', path, 'Проверка несовместима с исполнимым Scenario');
+        else {
+          const check = parsed.data;
+          const channel = ({ state_equals: 'state', tool_called: 'tool', tool_not_called: 'tool', tool_count: 'tool', fresh_read_before_update: 'tool', answer_contains: 'reply', answer_equals: 'reply', answer_omits: 'reply' } as const)[check.kind];
+          if (channel !== cp.observation) problem('check_observation_mismatch', path, 'Канал конкретной проверки не совпадает с объявленным наблюдением');
+          if (!supportsObservation(channel)) problem('unobservable_checkpoint', path, 'Не подтверждён канал конкретной проверки');
+          if (check.kind === 'state_equals') {
+            const state = world.success ? world.data.records[check.recordId] : undefined;
+            if (!state || !Object.hasOwn(state, check.field)) problem('invalid_state_check', path, 'Запись или поле проверки отсутствует в fixture');
+            else if (world.success && !Object.is(state[check.field], check.value) && !world.data.writableFields.includes(check.field)) problem('unreachable_state_check', path, 'Ожидаемое изменение поля не разрешено fixture');
+          }
+          const operations = 'tool' in check ? [check.tool] : check.kind === 'fresh_read_before_update' ? ['lookup_record', 'update_record'] : [];
+          if (operations.some(operation => environment.mode !== 'managed' || !environment.contract?.operations.includes(operation))) problem('unsupported_check_operation', path, 'Проверка требует неподдержанной операции fixture');
+        }
+      }
+      if (!supportsObservation(cp.observation)) problem('unobservable_checkpoint', path, 'Не подтверждён канал наблюдения');
     }
     // Excludes names and evidence references: exact duplicates cannot inflate the runnable set.
     const fingerprint = digest({ business: group && businessIdentity(group), user: { ...variant.userState, facts: initial.map(f => ({ statement: normalize(f.statement), value: f.value })) }, policy, environment, evaluation: variant.evaluationSpec });
