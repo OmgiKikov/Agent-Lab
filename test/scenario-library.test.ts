@@ -354,3 +354,42 @@ test('tool checks require a supported fixture operation', () => {
   const valid = editLibrary(draft, libraryHash(draft), { kind: 'upsert_variant', variant, reason: 'Операция поддержана' });
   assert.equal(compileLibrary(acceptLibrary(valid, libraryHash(valid), ['variant_1']))[0]!.checks[0]!.kind, 'tool_called');
 });
+
+test('rewritten dialogue facts without explicit values require review even for alphabetic identifiers', () => {
+  const draft = libraryFixture();
+  const variant = structuredClone(draft.variants[0]!);
+  delete variant.userState.facts[0]!.value;
+  for (const statement of ['Номер терминала: ABCD', 'Терминал пользователя — известен']) {
+    variant.userState.facts[0]!.statement = statement;
+    const changed = editLibrary(draft, libraryHash(draft), { kind: 'upsert_variant', variant, reason: 'Непроверенный пересказ' });
+    assert.equal(changed.variants[0]!.quality, 'needs_review');
+    assert.ok(libraryQuality(changed).some(i => i.code === 'unverified_fact_statement' && i.severity === 'needs_review'));
+    assert.throws(() => acceptLibrary(changed, libraryHash(changed), ['variant_1']), /готов/);
+  }
+  variant.userState.facts[0]!.statement = 'номер   терминала: 1234';
+  const normalized = editLibrary(draft, libraryHash(draft), { kind: 'upsert_variant', variant, reason: 'Нормализованная цитата' });
+  assert.equal(normalized.variants[0]!.quality, 'ready');
+  assert.deepEqual(compileLibrary(acceptLibrary(normalized, libraryHash(normalized), ['variant_1']))[0]!.user.knows, ['номер   терминала: 1234']);
+});
+
+test('changed state requires an explicitly supported mutation operation, not only a writable field', () => {
+  const draft = libraryFixture();
+  const variant = structuredClone(draft.variants[0]!);
+  variant.evaluationSpec.goalObservation = 'state';
+  variant.evaluationSpec.checkpoints[0]!.observation = 'state';
+  variant.evaluationSpec.checkpoints[0]!.check = { id: 'state', kind: 'state_equals', recordId: 'refund', field: 'status', value: 'done', description: 'Статус' };
+  variant.environmentFixture = { mode: 'managed', initialState: { records: { refund: { status: 'pending' } }, writableFields: ['status'] }, contract: { confirmed: true, reset: true, operations: [], observations: ['reply', 'state'] } };
+  for (const operations of [[], ['lookup_record'], ['custom_mutate']]) {
+    variant.environmentFixture.contract!.operations = operations;
+    const changed = editLibrary(draft, libraryHash(draft), { kind: 'upsert_variant', variant, reason: 'Нет поддержанной операции изменения' });
+    assert.ok(libraryQuality(changed).some(i => i.code === 'unreachable_state_check'), JSON.stringify(operations));
+    assert.throws(() => acceptLibrary(changed, libraryHash(changed), ['variant_1']), /готов/);
+  }
+  variant.environmentFixture.contract!.operations = ['update_record'];
+  const mutable = editLibrary(draft, libraryHash(draft), { kind: 'upsert_variant', variant, reason: 'Поддержанная операция изменения' });
+  assert.equal(compileLibrary(acceptLibrary(mutable, libraryHash(mutable), ['variant_1']))[0]!.checks[0]!.kind, 'state_equals');
+  variant.environmentFixture.contract!.operations = [];
+  variant.evaluationSpec.checkpoints[0]!.check = { id: 'state', kind: 'state_equals', recordId: 'refund', field: 'status', value: 'pending', description: 'Исходный статус' };
+  const unchanged = editLibrary(draft, libraryHash(draft), { kind: 'upsert_variant', variant, reason: 'Изменение состояния не требуется' });
+  assert.equal(compileLibrary(acceptLibrary(unchanged, libraryHash(unchanged), ['variant_1']))[0]!.checks[0]!.kind, 'state_equals');
+});

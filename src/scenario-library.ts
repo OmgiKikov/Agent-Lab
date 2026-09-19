@@ -142,6 +142,9 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
       if (origin.kind === 'dialogue') {
         const event = validRef(origin)?.events.find(e => e.index === origin.eventIndex);
         if (!variant.sourceDialogues.some(r => r.batchId === origin.batchId && r.dialogueId === origin.dialogueId) || !event?.content?.includes(origin.quote)) problem('invalid_citation', `${path}.origin`, 'Цитата не совпадает с указанным событием источника');
+        // Without an explicit value, only a normalized source extract is deterministically grounded.
+        const verbatim = [origin.quote, event?.content ?? ''].every(source => normalize(source).includes(normalize(fact.statement)) && containsExactValue(source, fact.statement));
+        if (fact.value === undefined && !verbatim) problem('unverified_fact_statement', path, 'Пересказ без точного значения требует проверки: укажите подтверждённое значение или исправьте факт от имени владельца', 'needs_review');
         const sourceTokens = new Set(exactTokens(origin.quote));
         const eventTokens = new Set(exactTokens(event?.content ?? ''));
         const fabricatedToken = exactTokens(fact.statement).some(token => /\p{N}/u.test(token) && (!sourceTokens.has(token) || !eventTokens.has(token)));
@@ -207,7 +210,7 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
           if (check.kind === 'state_equals') {
             const state = world.success ? world.data.records[check.recordId] : undefined;
             if (!state || !Object.hasOwn(state, check.field)) problem('invalid_state_check', path, 'Запись или поле проверки отсутствует в fixture');
-            else if (world.success && !Object.is(state[check.field], check.value) && !world.data.writableFields.includes(check.field)) problem('unreachable_state_check', path, 'Ожидаемое изменение поля не разрешено fixture');
+            else if (world.success && !Object.is(state[check.field], check.value) && (!world.data.writableFields.includes(check.field) || environment.mode !== 'managed' || !environment.contract?.operations.includes('update_record'))) problem('unreachable_state_check', path, 'Изменение состояния требует доступного для записи поля и объявленной операции update_record');
           }
           const operations = 'tool' in check ? [check.tool] : check.kind === 'fresh_read_before_update' ? ['lookup_record', 'update_record'] : [];
           if (operations.some(operation => environment.mode !== 'managed' || !environment.contract?.operations.includes(operation))) problem('unsupported_check_operation', path, 'Проверка требует неподдержанной операции fixture');
