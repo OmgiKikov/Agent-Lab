@@ -4,7 +4,7 @@ import { checkSchema, scenarioSchema, worldSchema, valueTokens, type Requirement
 import {
   importBatchSchema, libraryPatchSchema, scenarioLibrarySchema, scenarioProposalSchema,
   type BusinessScenario, type ImportBatch, type LibraryPatch, type LibraryQualityIssue,
-  type ScenarioLibrary, type ScenarioVariant, type SourceDialogue,
+  type ScenarioLibrary, type ScenarioVariant, type SourceDialogue, type SemanticFinding,
 } from './scenario-contracts.js';
 
 function canonical(value: unknown): string {
@@ -74,7 +74,7 @@ function businessIdentity(business: Pick<BusinessScenario, 'key' | 'goal' | 'con
   return digest({ key: normalize(business.key), goal: normalize(business.goal), conditions: business.conditions.map(normalize).sort(), requirementIds: [...business.requirementIds].sort() });
 }
 
-export function createLibrary(input: { id?: string; batch: ImportBatch; sources: Source[]; requirements: Requirement[]; proposals: unknown[]; createdAt?: string }): ScenarioLibrary {
+export function createLibrary(input: { id?: string; batch: ImportBatch; sources: Source[]; requirements: Requirement[]; proposals: unknown[]; createdAt?: string; semanticRequired?: true }): ScenarioLibrary {
   if (input.proposals.length > 200) throw new Error('Допустимо не больше 200 вариантов');
   const batch = importBatchSchema.parse(input.batch);
   const groups = new Map<string, BusinessScenario>();
@@ -91,7 +91,7 @@ export function createLibrary(input: { id?: string; batch: ImportBatch; sources:
     variants.push({ ...variant, businessScenarioId, familyId: businessScenarioId, revision: 1, quality: 'needs_review', issues: [], ownerDecision: 'pending', history: [{ author: 'generator', reason: 'Структурированное предложение из источников', revision: 1 }] });
   }
   unifyFamilies(variants);
-  const library = scenarioLibrarySchema.parse({ formatVersion: 1, id: input.id ?? `library_${digest({ batchId: batch.id, proposals: input.proposals }).slice(0, 24)}`, revision: 1, createdAt: input.createdAt ?? new Date().toISOString(), imports: [batch], sources: input.sources, requirements: input.requirements, businessScenarios: [...groups.values()], variants });
+  const library = scenarioLibrarySchema.parse({ formatVersion: 1, id: input.id ?? `library_${digest({ batchId: batch.id, proposals: input.proposals }).slice(0, 24)}`, revision: 1, createdAt: input.createdAt ?? new Date().toISOString(), imports: [batch], ...(input.semanticRequired ? { semanticRequired: true } : {}), sources: input.sources, requirements: input.requirements, businessScenarios: [...groups.values()], variants });
   return refreshQuality(library);
 }
 
@@ -101,9 +101,44 @@ export function libraryHash(library: ScenarioLibrary): string {
   return digest(body);
 }
 
+/** Findings bind to all evidence and editable content, not derived quality or acceptance badges. */
+export function semanticContentHash(library: ScenarioLibrary): string {
+  return digest({ imports: library.imports, sources: library.sources, requirements: library.requirements,
+    businessScenarios: library.businessScenarios, variants: library.variants.map(({ quality, issues, ownerDecision, ...content }) => content) });
+}
+export function semanticPaths(variant: ScenarioVariant): string[] {
+  return ['userState', ...variant.userState.facts.map(f => `userState.facts.${f.id}`), 'behaviorPolicy', 'environmentFixture',
+    'businessScenarioId', 'duplicates', ...variant.evaluationSpec.checkpoints.map(c => `evaluationSpec.checkpoints.${c.id}`)];
+}
+export function recordSemanticAssessment(library: ScenarioLibrary, findings: SemanticFinding[]): ScenarioLibrary {
+  const next = scenarioLibrarySchema.parse(library);
+  delete next.acceptance;
+  next.semanticRequired = true;
+  for (const variant of next.variants) variant.ownerDecision = 'pending';
+  next.semanticAssessment = { contentHash: semanticContentHash(next), findings };
+  return refreshQuality(next);
+}
+
 export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] {
   const issues: LibraryQualityIssue[] = [];
   const add = (code: string, path: string, message: string, variantId?: string, severity: LibraryQualityIssue['severity'] = 'blocked') => issues.push({ code, path, message, ...(variantId ? { variantId } : {}), severity });
+  if (library.semanticRequired) {
+    const assessment = library.semanticAssessment;
+    for (const variant of library.variants) {
+      if (!assessment || assessment.contentHash !== semanticContentHash(library)) {
+        add('semantic_pending', `variants.${variant.id}`, 'Смысловая проверка отсутствует или устарела', variant.id, 'needs_review');
+        continue;
+      }
+      for (const path of semanticPaths(variant)) {
+        const findings = assessment.findings.filter(f => f.variantId === variant.id && f.path === path);
+        if (findings.length !== 1) add('semantic_missing', `variants.${variant.id}.${path}`, 'Нужна отдельная смысловая проверка поля', variant.id, 'needs_review');
+        else if (findings[0]!.status !== 'ready') add('semantic_finding', `variants.${variant.id}.${path}`, findings[0]!.reason, variant.id, findings[0]!.status as 'needs_review' | 'blocked');
+      }
+      for (const finding of assessment.findings.filter(f => f.variantId === variant.id && !semanticPaths(variant).includes(f.path) && f.status !== 'ready')) {
+        add('semantic_finding', `variants.${variant.id}.${finding.path}`, finding.reason, variant.id, finding.status as 'needs_review' | 'blocked');
+      }
+    }
+  }
   const duplicateIds = (values: { id: string }[], path: string) => {
     const seen = new Set<string>();
     for (const value of values) { if (seen.has(value.id)) add('duplicate_id', path, `Повторяющийся id: ${value.id}`); seen.add(value.id); }

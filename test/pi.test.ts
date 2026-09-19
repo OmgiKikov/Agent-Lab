@@ -1263,3 +1263,61 @@ test('goal extraction for a prompt/RAG validation treats a recorded lookup of th
   const { GOALS_ROLE } = await import('../src/prompts.js');
   assert.match(GOALS_ROLE, /recorded agent asked for the user's merchant, point, terminal, contract, request number[^.]*testability=customer_data/);
 });
+
+test('Pi chronological proposals and separate semantic assessment pass every event through real transport', async () => {
+  const { importBatch, createLibrary } = await import('../src/scenario-library.js');
+  const { chronologicalInput } = await import('../src/scenario-preparation.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const batch = importBatch(rawDialogues);
+  const f = await fixture(scripted([{ proposals: proposals(batch.id) }, { findings: [] }]));
+  try {
+    assert.equal(typeof f.adapter.scenarioProposals, 'function', 'real Pi exposes chronological extraction');
+    const { ctx, usage } = callContext();
+    const extracted = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка', batchId: batch.id, sources, requirements, dialogues: chronologicalInput(batch) }, ctx);
+    const library = createLibrary({ batch, sources, requirements, proposals: extracted });
+    await f.adapter.assessScenarioProposals!({ protocol: 'chronological-scenarios-v1', library, fields: [] }, ctx);
+    const first = JSON.stringify(f.requests[0]);
+    assert.match(first, /Возврат займёт три дня/);
+    assert.match(first, /assistant/);
+    assert.match(first, /eventIndex/);
+    assert.equal(usage.calls, 2, 'semantic review has its own model budget call');
+    assert.match(JSON.stringify(f.requests[1]), /learned_in_source/);
+  } finally { await f.close(); }
+});
+
+test('real Pi extraction, semantic admission and library store form one chronological preparation path', async () => {
+  const { createInputSchema } = await import('../src/contracts.js');
+  const { libraryHash } = await import('../src/scenario-library.js');
+  const { importDialogues } = await import('../src/imports.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const payloads: any[] = [];
+  const f = await fixture(request => {
+    const message = request.messages.find(message => message.role === 'user')!;
+    const content = message.content;
+    const text = typeof content === 'string' ? content : content.filter(block => block.type === 'text').map(block => block.text).join('');
+    const payload = JSON.parse(text); payloads.push(payload);
+    if (payload.batchId) return JSON.stringify({ proposals: proposals(payload.batchId).filter(p => payload.dialogues.some((d: any) => d.id === p.variant.sourceDialogues[0]!.dialogueId)) });
+    if (payload.library) return JSON.stringify({ findings: payload.fields.flatMap((field: any) => field.paths.map((path: string) => ({ variantId: field.variantId, path, status: 'ready', reason: 'Проверено по всей хронологии и требованиям' }))) });
+    if (payload.user) return JSON.stringify({ done: true, message: '' });
+    return JSON.stringify({ requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [] });
+  });
+  const lab = new ExperimentLab(join(f.directory, 'store'), f.adapter);
+  try {
+    await lab.init();
+    const original = importDialogues(rawDialogues);
+    const seed = await lab.create(createInputSchema.parse({ task: 'Проверка', materials: sources.map(s => ({ name: s.name, content: s.content })),
+      mode: 'live', scenarioCount: 0, validationCount: 1, settings,
+      existingAgent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] },
+      originalImport: original.originalImport, dialogues: original.dialogues.slice(0, 1) }));
+    await lab.waitForIdle();
+    const result = await lab.readLibrary(seed.id);
+    assert.equal(result.experiment.phase, 'review', result.experiment.error ?? '');
+    assert.deepEqual(payloads.find(p => p.dialogues?.[0]?.id === 'repeated').dialogues[0].messages.map((m: any) => m.role), ['user', 'assistant', 'user']);
+    assert.equal(result.library.businessScenarios.length, 1);
+    assert.equal(result.experiment.scenarios.length, 0);
+    const accepted = await lab.acceptLibrary(seed.id, libraryHash(result.library), ['variant_2']);
+    await f.adapter.userTurn({ user: accepted.experiment.scenarios[0]!.user, messages: [], turn: 0 }, callContext().ctx);
+    assert.doesNotMatch(JSON.stringify(payloads.find(p => p.user)), /три дня/);
+    assert.equal((await lab.store.readImport(original.originalImport.id)).dialogues.length, 2);
+  } finally { await lab.close(); await f.close(); }
+});

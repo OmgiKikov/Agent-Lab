@@ -1,3 +1,6 @@
+import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
+import type { LibraryPatch, ScenarioLibrary } from './scenario-contracts.js';
+import { assertLibraryRun, compiledLibraryScenarios, prepareScenarioLibrary, SCENARIO_EXTRACTION_PROTOCOL } from './scenario-preparation.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -39,6 +42,7 @@ export function draftHash(record: Experiment): string {
     goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
     scenarios: record.scenarios, agent: record.revisions[0]?.spec, positiveControlScenarioIds: record.positiveControlScenarioIds,
     ownerExpectationScenarioIds: record.ownerExpectationScenarioIds,
+    librarySnapshot: record.librarySnapshot, originalImport: record.originalImport,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
 }
 export function resultHash(record: Experiment): string {
@@ -57,6 +61,7 @@ export function measurementHash(record: Experiment): string {
   return fingerprint({ version: VERSION, workflow: record.workflow, task: record.task, baseline: record.revisions[0], mode: record.mode, sources: record.sources, requirements: record.requirements, scenarios: record.scenarios, settings: record.settings,
     target: record.target, goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
     positiveControlScenarioIds: record.positiveControlScenarioIds,
+    librarySnapshot: record.librarySnapshot, originalImport: record.originalImport,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
 }
 function revision(spec: Revision['spec'], parentId: string | null, hypothesis: string): Revision {
@@ -306,15 +311,26 @@ export class ExperimentLab {
   async create(raw: CreateInput): Promise<Experiment> { return this.createPrepared(raw); }
   private async createPrepared(raw: CreateInput, preparedRequirements?: Requirement[]): Promise<Experiment> {
     this.ensureIdle();
-    const input = createInputSchema.parse(raw);
+    const originalImport = raw.originalImport ?? (raw.dialogues?.length ? importBatch(raw.dialogues) : undefined);
+    const input = createInputSchema.parse({ ...raw, ...(originalImport ? { originalImport } : {}) });
     if (input.validationCount) input.settings.userModes = ['reactive'];
     if (input.workflow === 'compare' && input.settings.userModes.length !== 1) throw new Error('Сравнительный эксперимент идёт в одном режиме пользователя: выберите static, scripted или reactive.');
     if (input.workflow === 'compare' && input.target.kind !== 'sandbox') throw new Error('Для внешнего агента используйте evaluate и повтор набора; автоматический ремонт поддерживает только песочницу.');
     const record = this.newRecord(input);
     await this.launch(record, async ctx => {
+      if (input.originalImport || input.dialogues.length) {
+        const batch = await this.store.writeImport(input.originalImport ?? importBatch(input.dialogues));
+        record.originalImport = { id: batch.id, contentHash: batch.contentHash };
+      }
       await preflightTarget(record.target);
       record.targetFingerprint = await targetFingerprint(record.target);
       const runtime = await this.runtime(record);
+      if (!input.confirmedHypothesis && (input.originalImport || record.dialogues.length) && runtime.scenarioProposals) {
+        await prepareScenarioLibrary(record, input, await this.store.readImport(record.originalImport!.id), runtime, ctx, this.store);
+        await this.checkpoint(record, 'review', 'Библиотека подготовлена. Проверьте варианты и примите выбранные перед запуском.');
+        return;
+      }
+      if (!input.confirmedHypothesis && record.dialogues.length) record.limitations.push('Legacy: происхождение и смысл фактов старого извлекателя не проверены; библиотека сценариев не подготовлена.');
       const confirmed = !!input.confirmedHypothesis;
       const replay = !confirmed && record.dialogues.length > 0 && input.scenarioCount === 0
         && (!!input.validationCount || input.settings.userModes.length === 1 && input.settings.userModes[0] === 'scripted');
@@ -337,13 +353,13 @@ export class ExperimentLab {
       // A validation replay first grounds owner requirements, then derives exactly one card per sampled dialogue.
       // Grounding is one long model call; identical task, materials and model settings give the same requirements, so it is reused.
       const groundingKey = fingerprint({ task: record.task, sources: record.sources.map(({ id, name, content, kind }) => ({ id, name, content, kind })),
-        provider: record.settings.provider, model: record.settings.model, roles: record.settings.roles, targetKind: record.target.kind, version: VERSION });
+        provider: record.settings.provider, model: record.settings.model, roles: record.settings.roles, targetKind: record.target.kind, version: VERSION, protocol: SCENARIO_EXTRACTION_PROTOCOL });
       const groundingFile = resolve(this.store.directory, 'grounding', `${groundingKey}.json`);
       const cachedGrounding = replay ? await readFile(groundingFile, 'utf8').then(text => JSON.parse(text) as Awaited<ReturnType<Runtime['prepare']>>, () => undefined) : undefined;
       if (cachedGrounding) record.limitations.push(`Требования взяты из кэша подготовки ${groundingKey.slice(0, 12)}: те же материалы, задача и модель.`);
       const grounding = replay ? cachedGrounding ?? await runtime.prepare(preparationInput(), ctx) : undefined;
       if (replay && grounding && !cachedGrounding) {
-        await mkdir(dirname(groundingFile), { recursive: true });
+        await mkdir(dirname(groundingFile), { recursive: true, mode: 0o700 });
         await writeFile(groundingFile, JSON.stringify({ ...grounding, scenarios: [] }), { mode: 0o600 });
       }
       let observedGoals: ObservedGoal[] = [];
@@ -697,12 +713,80 @@ export class ExperimentLab {
       throw error;
     }
   }
+  /** Detached library preview plus its current (empty until accepted) runnable draft. */
+  async readLibrary(id: string): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
+    const experiment = await this.get(id);
+    if (!experiment.librarySnapshot) throw new Error('У эксперимента нет библиотеки сценариев.');
+    return { library: structuredClone(experiment.librarySnapshot), experiment };
+  }
+  async editLibrary(id: string, expectedHash: string, patch: LibraryPatch): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
+    return this.change(async () => {
+      const { experiment, library } = await this.readLibrary(id);
+      if (experiment.phase !== 'review') throw new Error('Править библиотеку можно только в черновике.');
+      const next = editScenarioLibrary(library, expectedHash, patch);
+      experiment.librarySnapshot = next; experiment.scenarios = []; experiment.acceptedTests = [];
+      delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
+      experiment.reviewedAt = null; experiment.reviewMode = null; experiment.manifestHash = null;
+      await this.store.publishLibrary(experiment, next, expectedHash);
+      return { library: next, experiment };
+    });
+  }
+  async acceptLibrary(id: string, expectedHash: string, variantIds: string[]): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
+    return this.change(async () => {
+      const { experiment, library } = await this.readLibrary(id);
+      if (experiment.phase !== 'review') throw new Error('Принять библиотеку можно только в черновике.');
+      if (fingerprint(experiment.requirements) !== fingerprint(library.requirements) || fingerprint(experiment.sources) !== fingerprint(library.sources)) throw new Error('Требования библиотеки изменились.');
+      const next = acceptScenarioLibrary(library, expectedHash, variantIds);
+      experiment.librarySnapshot = next; experiment.scenarios = compiledLibraryScenarios(experiment, next);
+      delete experiment.selectedScenarioIds;
+      const acceptedAt = new Date().toISOString();
+      experiment.acceptedTests = experiment.scenarios.map(s => ({ testId: randomUUID(), scenarioId: s.id, definitionHash: fingerprint(s), acceptedAt }));
+      experiment.acceptedDraftHash = draftHash(experiment);
+      await this.store.publishLibrary(experiment, next, expectedHash);
+      return { library: next, experiment };
+    });
+  }
+  /** Reassess edited facts/expectations under the same usage, timeout and cancellation budget. */
+  async assessLibrary(id: string, expectedHash: string): Promise<Experiment> {
+    return this.change(async () => {
+      const { experiment, library } = await this.readLibrary(id);
+      if (experiment.phase !== 'review' || libraryHash(library) !== expectedHash) throw new Error('Библиотека изменилась или уже запущена.');
+      experiment.phase = 'preparing';
+      await this.launch(experiment, async ctx => {
+        const runtime = await this.runtime(experiment);
+        if (!runtime.assessScenarioProposals) throw new Error('Смысловая проверка недоступна.');
+        const findings = await runtime.assessScenarioProposals({ protocol: SCENARIO_EXTRACTION_PROTOCOL, library,
+          fields: library.variants.map(v => ({ variantId: v.id, paths: semanticPaths(v) })) }, ctx);
+        const next = recordSemanticAssessment(library, findings); next.revision++;
+        experiment.scenarios = []; experiment.acceptedTests = []; delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
+        experiment.librarySnapshot = next;
+        await this.store.publishLibrary(experiment, next, expectedHash);
+        await this.checkpoint(experiment, 'review', 'Смысловая проверка завершена. Проверьте замечания и примите варианты.');
+      }, true);
+      return structuredClone(experiment);
+    });
+  }
   async updateDraft(id: string, expectedHash: string, raw: DraftPatch): Promise<Experiment> {
     return this.change(async () => {
       const record = await this.store.get(id);
       if (record.phase !== 'review') throw new Error('Править можно только незапущенный черновик. Готовые доказательства остаются как есть, для изменений создайте новый эксперимент.');
       if (draftHash(record) !== expectedHash) throw new Error('Черновик изменился. Откройте карточки заново, прежде чем править.');
       const patch = draftPatchSchema.parse(raw);
+      if (record.librarySnapshot) {
+        if (patch.scenarios || patch.removeScenarioIds || patch.profileEdits) throw new Error('Используйте правку библиотеки сценариев и повторное принятие.');
+        if (record.librarySnapshot.acceptance) assertLibraryRun(record);
+        record.settings = settingsSchema.parse({ ...record.settings, ...patch.settings,
+          roles: Object.fromEntries(Object.entries({ ...record.settings.roles, ...patch.settings?.roles }).filter(([, value]) => value !== null)) });
+        if (patch.target) record.target = patch.target;
+        if (patch.targetVersion) record.targetVersion = patch.targetVersion;
+        if (patch.agent) { record.revisions = [revision(patch.agent, null, 'Конфигурация агента обновлена владельцем.')]; record.selectedRevisionId = record.revisions[0]!.id; }
+        await preflightTarget(record.target); record.targetFingerprint = await targetFingerprint(record.target);
+        record.evaluatorVersion = evaluatorVersion(record.settings);
+        delete record.acceptedDraftHash;
+        record.reviewedAt = null; record.reviewMode = null; record.manifestHash = null;
+        await this.checkpoint(record, 'review', 'Настройки прогона обновлены. Подтвердите новую версию перед запуском.');
+        return structuredClone(record);
+      }
       const beforeCards = new Map(record.scenarios.map(s => [s.id, s]));
       const removed = new Set(patch.removeScenarioIds ?? []);
       for (const id of removed) if (!beforeCards.has(id)) throw new Error(`Нет карточки для удаления: ${id}`);
@@ -770,6 +854,7 @@ export class ExperimentLab {
   async setExpectation(id: string, expectedHash: string, scenarioId: string, text: string): Promise<Experiment> {
     return this.change(async () => {
       const record = await this.store.get(id);
+      if (record.librarySnapshot) throw new Error('Используйте правку библиотеки сценариев и повторное принятие.');
       if (record.workflow !== 'evaluate') throw new Error('Поправить ожидание можно только в workflow evaluate.');
       if (record.phase !== 'review') throw new Error('Поправить ожидание можно только в незапущенном черновике.');
       if (draftHash(record) !== expectedHash) throw new Error('Черновик изменился, пока вы смотрели. Проверьте ожидания ещё раз.');
@@ -795,6 +880,7 @@ export class ExperimentLab {
   async acceptDraft(id: string, expectedHash: string): Promise<Experiment> {
     return this.change(async () => {
       const record = await this.store.get(id);
+      assertLibraryRun(record);
       if (record.workflow !== 'evaluate') throw new Error('Принять тест можно только в workflow evaluate.');
       if (record.phase !== 'review') throw new Error('Принять можно только незапущенный черновик.');
       if (!record.scenarios.length) throw new Error('Подтверждать нечего: в черновике нет ситуаций.');
@@ -836,6 +922,7 @@ export class ExperimentLab {
       oneTurnControls(record);
       retainAcceptedTests(record);
       record.targetFingerprint = await targetFingerprint(record.target);
+      assertLibraryRun(record);
       await this.store.save(record);
       return structuredClone(record);
     });
@@ -845,6 +932,7 @@ export class ExperimentLab {
     const previous = await this.get(id);
     if (previous.workflow !== 'evaluate' || !previous.scenarios.length || runningPhases.has(previous.phase)) throw new Error('Сначала дождитесь готовых тестов.');
     const definition = freshDraft(previous, scenarioIds);
+    assertLibraryRun(definition);
     if (previous.trials.length) definition.sourceEvidence = suiteEvidence(previous, definition.scenarios.map(s => s.id));
     const path = resolve(file);
     await mkdir(dirname(path), { recursive: true });
@@ -868,6 +956,7 @@ export class ExperimentLab {
       retainAcceptedTests(record);
       await preflightTarget(record.target);
       record.targetFingerprint = await targetFingerprint(record.target);
+      assertLibraryRun(record);
       await this.store.save(record);
       return structuredClone(record);
     });
@@ -891,6 +980,7 @@ export class ExperimentLab {
       const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions, agent: record.revisions[0]?.spec,
         scenarios: record.scenarios.map(({ split: _, ...s }) => s) }, record.sources, 'evaluate', record.profiles);
       record.scenarios = prepared.scenarios;
+      assertLibraryRun(record);
       retainAcceptedTests(record);
       if (input.judge) { record.settings.judge = input.judge; delete record.settings.roles.judge; }
       record.evaluatorVersion = evaluatorVersion(record.settings);
@@ -1008,6 +1098,7 @@ export class ExperimentLab {
     if (!Number.isInteger(parallel) || parallel < 1 || parallel > MAX_PARALLEL) throw new Error(`Параллельных диалогов может быть от 1 до ${MAX_PARALLEL}.`);
     return this.change(async () => {
       const record = await this.store.get(id);
+      assertLibraryRun(record);
       if (record.phase !== 'review') throw new Error('Запустить можно только эксперимент, ожидающий проверки. Чтобы поменять набор карточек, создайте новый.');
       if (record.workflow === 'compare' && (record.target.kind !== 'sandbox' || record.settings.userModes.length !== 1)) throw new Error('Автоматическое сравнение поддерживает только песочницу и один режим пользователя.');
       if (!options.approved) throw new Error('Набор карточек замораживается только после вашего подтверждения.');

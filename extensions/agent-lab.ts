@@ -17,7 +17,7 @@ import { rowsToLines } from '../dist/explain.js';
 import { scoreSettings } from '../dist/normalize.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit.js';
-import { readData, selectValidationDialogues } from '../dist/imports.js';
+import { readData, selectValidationDialogues, readDialogueImport, importDialogues } from '../dist/imports.js';
 import { ExperimentStore } from '../dist/store.js';
 import { activePhases, reviewOrder, safeText, showBoard, trialLines, type BoardAction, type BoardOptions, type Section } from './cards.ts';
 import { rememberView, renderAgentLabResult, VERDICT_KIND, type VerdictDetails } from './render/verdict-block.ts';
@@ -242,7 +242,7 @@ export default function agentLab(pi: ExtensionAPI) {
       target: Type.Optional(Type.Unsafe(z.toJSONSchema(targetSchema, { io: 'input' }))),
       targetVersion: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Agent release, commit or remote deployment version.' })),
       goldenCases: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(goldenCaseSchema).max(40), { io: 'input' }))),
-      dialogues: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(dialogueSchema).max(300), { io: 'input' }))),
+      dialogues: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(z.json()).max(300), { io: 'input' }))),
       notes: Type.Optional(Type.String({ maxLength: 8000, description: "The owner's own hints about users, goals and situations, in their words. First-class input for synthetic cards; never treated as a business rule." })),
       profiles: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(ownerProfileSchema).max(6), { io: 'input' }))),
       fromRunId: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$', description: 'Exact saved discovery run returned by the previous mode=discover call.' })),
@@ -323,7 +323,9 @@ export default function agentLab(pi: ExtensionAPI) {
       if (operation === 'discover' && hypothesis) throw new Error('Для точной сборки из discovery нужны и fromRunId, и hypothesis.');
       if (operation === 'score') onUpdate?.({ content: [{ type: 'text', text: 'Читаю требования и записи…' }], details: { phase: 'reading' } });
       let dialogues: unknown;
-      try { dialogues = dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues', { maxItems: ['discover', 'validate'].includes(operation) ? 300 : 200 }) : rest.dialogues; }
+      const libraryImport = !['score', 'discover', 'demo'].includes(operation) && (dialoguesFile || rest.dialogues)
+        ? dialoguesFile ? await readDialogueImport(resolve(ctx.cwd, dialoguesFile)) : importDialogues(rest.dialogues) : undefined;
+      try { dialogues = libraryImport?.dialogues ?? (dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues', { maxItems: ['discover', 'validate'].includes(operation) ? 300 : 200 }) : rest.dialogues); }
       catch (error) {
         if (!['score', 'discover', 'validate'].includes(operation)) throw error;
         throw new Error(safeText(`Не удалось прочитать записи: ${error instanceof Error ? error.message : String(error)}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`));
@@ -339,8 +341,8 @@ export default function agentLab(pi: ExtensionAPI) {
           nextStep: 'Ask for dialoguesFile or dialogues, then call mode=discover again.' };
         return { content: [{ type: 'text', text: JSON.stringify(output) }], details: output };
       }
-      if (operation === 'validate' && !parsedDialogues.length) throw new Error('Для validation set укажите JSON/JSONL с обезличенными реальными диалогами.');
-      if (operation !== 'demo' && !parsedDialogues.length && withoutDialogues !== true) {
+      if (operation === 'validate' && !parsedDialogues.length && !libraryImport?.originalImport.dialogues.length) throw new Error('Для validation set укажите JSON/JSONL с обезличенными реальными диалогами.');
+      if (operation !== 'demo' && !parsedDialogues.length && !libraryImport?.originalImport.dialogues.length && withoutDialogues !== true) {
         const output = { status: 'needs_input', message: 'Есть реальные диалоги с агентом? Укажите файл JSON/JSONL с обезличенными разговорами или скажите «начать без логов».',
           nextStep: 'Ask the user in ordinary language. Import their supplied dialoguesFile/dialogues, or set withoutDialogues=true after their explicit choice to skip. Do not silently skip or search unrelated logs.' };
         return { content: [{ type: 'text', text: JSON.stringify(output) }], details: output };
@@ -356,7 +358,7 @@ export default function agentLab(pi: ExtensionAPI) {
       const validationCount = operation === 'validate' ? rest.validationCount ?? 15 : 0;
       if (operation === 'validate') {
         parsedDialogues = selectValidationDialogues(parsedDialogues, Math.min(40, validationCount * 3));
-        if (!parsedDialogues.length) throw new Error('В логах нет пригодных диалогов с 1–16 репликами пользователя без полностью замаскированных реплик.');
+        if (!parsedDialogues.length && !libraryImport?.originalImport.dialogues.length) throw new Error('В логах нет пригодных диалогов с 1–16 репликами пользователя без полностью замаскированных реплик.');
         if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для сборки validation set нужен native Pi confirmation в интерактивном терминале.');
         const maxCalls = supplied.maxCalls ?? Math.max(140, 2 * parsedDialogues.length + 19 * validationCount + 20);
         const maxDurationMs = supplied.maxDurationMs ?? Math.max(180_000, 180_000 * parsedDialogues.length);
@@ -416,7 +418,8 @@ export default function agentLab(pi: ExtensionAPI) {
         ...(operation === 'validate' ? { validationCount } : {}), mode, workflow: 'evaluate',
         ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
         ...(goldenFile ? { goldenCases: await readData(resolve(ctx.cwd, goldenFile), 'golden') } : {}),
-        ...(dialogues !== undefined ? { dialogues: parsedDialogues } : {}),
+        ...(dialogues !== undefined ? { dialogues: parsedDialogues.slice(0, 200) } : {}),
+        ...(libraryImport ? { originalImport: libraryImport.originalImport } : {}),
         // Score settings come from the helper the CLI uses, so both paths save the same budget, judge and timeout.
         settings: operation === 'score' ? { ...scoreSettings(parsedDialogues.length, supplied, mode),
           provider: supplied.provider || ctx.model?.provider || '', model: supplied.model || ctx.model?.id || '' }

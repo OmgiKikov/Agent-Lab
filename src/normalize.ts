@@ -1,3 +1,4 @@
+import { libraryHash } from './scenario-library.js';
 import { DEFAULT_GOAL_OBSERVATION, DEFAULT_JUDGE, fingerprint, type Experiment, type GoalObservation, type Scenario, type Settings, type SourceIdentity, type Target } from './contracts.js';
 
 /*
@@ -43,6 +44,8 @@ export function sourceIdentity(record: Experiment, scenarioIds: string[]): Sourc
     ...(record.targetVersion ? { targetVersion: record.targetVersion } : {}),
     ...(record.evaluatorVersion ? { evaluatorVersion: record.evaluatorVersion } : {}),
     manifestHash: record.manifestHash,
+    ...(record.librarySnapshot ? { libraryHash: libraryHash(record.librarySnapshot) } : {}),
+    ...(record.originalImport ? { importHash: record.originalImport.contentHash } : {}),
     agent: agentIdentity(record),
     judge: judgeSettingsIdentity(record.settings),
     scenarios: Object.fromEntries(record.scenarios.filter(scenario => selected.has(scenario.id))

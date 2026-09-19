@@ -4,6 +4,9 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { experimentSchema, judgeAuditSchema, type Experiment, type TraceEvent, type JudgeAudit } from './contracts.js';
 
+import { ScenarioFiles } from './scenario-store.js';
+import type { ImportBatch, ScenarioLibrary } from './scenario-contracts.js';
+
 const idPattern = /^[a-zA-Z0-9_-]{1,80}$/;
 type LockOwner = { pid: number; token: string };
 const busy = () => new Error('This data directory is already open in another Agent Lab instance. Просмотр и экспорт остаются доступны.');
@@ -19,6 +22,27 @@ export class ExperimentStore {
   readonly directory: string;
   diagnostics: { id: string; message: string }[] = [];
   private lockToken: string | null = null;
+  private writerQueue: Promise<unknown> = Promise.resolve();
+  private async writeTransaction<T>(work: () => Promise<T>): Promise<T> {
+    const pending = this.writerQueue.then(async () => {
+      if (!this.lockToken) throw new Error('Для изменения записи откройте лабораторию как писатель.');
+      return work();
+    });
+    this.writerQueue = pending.catch(() => {});
+    return pending;
+  }
+  readImport(id: string): Promise<ImportBatch> { return new ScenarioFiles(this.directory).readImport(id); }
+  writeImport(batch: ImportBatch): Promise<ImportBatch> { return this.writeTransaction(() => new ScenarioFiles(this.directory).writeImport(batch)); }
+  readLibrary(id: string, hash?: string): Promise<ScenarioLibrary> { return new ScenarioFiles(this.directory).readLibrary(id, hash); }
+  writeLibrary(library: ScenarioLibrary, expectedHash?: string): Promise<void> {
+    return this.writeTransaction(() => new ScenarioFiles(this.directory).writeLibrary(library, expectedHash));
+  }
+  publishLibrary(record: Experiment, library: ScenarioLibrary, expectedHash?: string): Promise<void> {
+    return this.writeTransaction(async () => {
+      await new ScenarioFiles(this.directory).writeLibrary(library, expectedHash);
+      await this.saveRecord(Object.assign({}, record, { librarySnapshot: library }));
+    });
+  }
   constructor(directory: string) { this.directory = resolve(directory); }
   private path(id: string): string {
     if (!idPattern.test(id)) throw new Error('Invalid experiment ID');
@@ -75,6 +99,7 @@ export class ExperimentStore {
     }
   }
   async close(): Promise<void> {
+    await this.writerQueue;
     if (!this.lockToken) return;
     const token = this.lockToken;
     this.lockToken = null;
@@ -82,9 +107,11 @@ export class ExperimentStore {
     const owner = await this.owner();
     if (owner?.token === token) await unlink(lockPath);
   }
-  async save(record: Experiment): Promise<void> {
+  save(record: Experiment): Promise<void> { return this.writeTransaction(() => this.saveRecord(record)); }
+  private async saveRecord(record: Experiment): Promise<void> {
     if (!this.lockToken) throw new Error('Для изменения записи откройте лабораторию как писатель.');
     const validated = experimentSchema.parse(record);
+    if (validated.librarySnapshot) await new ScenarioFiles(this.directory).retainLibrary(validated.librarySnapshot);
     const target = this.path(validated.id);
     const temporary = `${target}.${randomUUID()}.tmp`;
     try {

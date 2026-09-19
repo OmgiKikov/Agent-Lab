@@ -1,3 +1,5 @@
+import { scenarioProposalSchema, semanticFindingSchema } from './scenario-contracts.js';
+import { SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE } from './prompts.js';
 import {
   createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager,
   type ResourceLoader, type ToolDefinition,
@@ -408,6 +410,14 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
     return jsonResponse(modelRuntime, selected, label, role, input, schema, ctx, review);
   };
   return {
+    async scenarioProposals(input, ctx) {
+      return (await ask('Варианты из полной хронологии', SCENARIO_PROPOSALS_ROLE, input,
+        z.strictObject({ proposals: z.array(scenarioProposalSchema).max(20) }), ctx)).proposals;
+    },
+    async assessScenarioProposals(input, ctx) {
+      return (await ask('Смысловая проверка вариантов', SCENARIO_SEMANTIC_ROLE, input,
+        z.strictObject({ findings: z.array(semanticFindingSchema).max(10000) }), ctx)).findings;
+    },
     async prepare(input, ctx) {
       const grounding = input.requirements ? groundingSchema.parse({ requirements: structuredClone(input.requirements), questions: [] }) : await ask(
         'Требования', REQUIREMENTS_ROLE,

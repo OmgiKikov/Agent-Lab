@@ -91,12 +91,25 @@ export const scenarioVariantSchema = variantProposalSchema.extend({
 });
 export type ScenarioVariant = z.infer<typeof scenarioVariantSchema>;
 
+export const semanticFindingSchema = z.strictObject({
+  variantId: id, path: text(400), status: z.enum(['ready', 'needs_review', 'blocked']), reason: text(2000),
+});
+export type SemanticFinding = z.infer<typeof semanticFindingSchema>;
+export const preparationProgressSchema = z.strictObject({
+  protocol: z.literal('chronological-scenarios-v1'),
+  processed: ids(300), pending: ids(300),
+  excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000) })).max(300),
+  status: z.enum(['preparing', 'complete', 'partial', 'cancelled']),
+});
+export type PreparationProgress = z.infer<typeof preparationProgressSchema>;
 export const scenarioLibrarySchema = z.strictObject({
   formatVersion: z.literal(1), id, revision: z.number().int().positive(), createdAt: timestamp,
   imports: z.array(importBatchSchema).max(30),
   sources: z.array(z.strictObject({ id, name: text(180), content: text(120000), hash: text(200), kind: z.enum(['knowledge', 'prompt']).optional() })).max(12),
   requirements: z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean() })).max(80),
   businessScenarios: z.array(businessScenarioSchema).max(200), variants: z.array(scenarioVariantSchema).max(200),
+  semanticRequired: z.literal(true).optional(),
+  semanticAssessment: z.strictObject({ contentHash: hash, findings: z.array(semanticFindingSchema).max(10000) }).optional(),
   acceptance: z.strictObject({ revision: z.number().int().positive(), libraryHash: hash, variantIds: ids(200).min(1), snapshotHash: hash }).optional(),
 });
 export type ScenarioLibrary = z.infer<typeof scenarioLibrarySchema>;

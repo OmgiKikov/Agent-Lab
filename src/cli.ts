@@ -11,7 +11,7 @@ import { scoreSettings } from './normalize.js';
 import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from './prompt-edit.js';
-import { readData } from './imports.js';
+import { readData, readDialogueImport, importDialogues } from './imports.js';
 import { getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
@@ -390,9 +390,10 @@ async function main() {
       if (command !== 'demo' && !values.input) throw new Error('Provide --input task.json');
       const raw = command === 'demo' ? demoInput() : JSON.parse(await readFile(values.input!, 'utf8'));
       const connection = command === 'demo' ? undefined : values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
+      const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file']) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
       const input = createInputSchema.parse({ ...raw, ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
         ...(values['golden-file'] ? { goldenCases: await readData(values['golden-file'], 'golden') } : {}),
-        ...(values['dialogues-file'] ? { dialogues: await readData(values['dialogues-file'], 'dialogues') } : {}) });
+        ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}) });
       const prepared = await lab.create(input); id = prepared.id; await lab.waitForIdle();
       const current = await lab.get(id);
       if (current.phase !== 'review') throw new Error(current.error ?? 'Preparation failed');

@@ -1,3 +1,4 @@
+import { importBatchSchema, preparationProgressSchema, scenarioLibrarySchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal, type SemanticFinding, type PreparationProgress } from './scenario-contracts.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
@@ -481,6 +482,7 @@ export function validationScenario(dialogue: Dialogue, goal: ObservedGoal): Omit
 
 export const createInputSchema = z.strictObject({
   task: text.max(8000),
+  originalImport: importBatchSchema.optional(),
   /** Owner-confirmed hypothesis that requests the strict one-test preparation path. */
   confirmedHypothesis: text.max(3000).optional(),
   goalObservation: goalObservationSchema.optional(),
@@ -505,14 +507,14 @@ export const createInputSchema = z.strictObject({
   if (v.dialogues.reduce((n, d) => n + d.messages.reduce((m, x) => m + x.content.length, 0), 0) > 2000000) ctx.addIssue({ code: 'custom', message: 'Dialogues exceed 2,000,000 characters', path: ['dialogues'] });
   if (!unique(v.dialogues.map(d => d.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate dialogue IDs', path: ['dialogues'] });
   if (!unique(v.goldenCases.map(g => g.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate golden case IDs', path: ['goldenCases'] });
-  if (v.scenarioCount === 0 && !v.goldenCases.length && !v.dialogues.length) {
+  if (v.scenarioCount === 0 && !v.goldenCases.length && !v.dialogues.length && !v.originalImport?.dialogues.length) {
     ctx.addIssue({ code: 'custom', message: 'scenarioCount 0 needs golden cases or production dialogues to have anything to run', path: ['scenarioCount'] });
   }
   if (!unique(v.profiles.map(p => p.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate profile IDs', path: ['profiles'] });
   if (v.confirmedHypothesis && (v.workflow !== 'evaluate' || v.scenarioCount !== 1 || v.goldenCases.length)) {
     ctx.addIssue({ code: 'custom', message: 'A confirmed hypothesis builds exactly one generated evaluate test without golden cases', path: ['confirmedHypothesis'] });
   }
-  if (v.validationCount && (v.workflow !== 'evaluate' || v.scenarioCount !== 0 || !v.dialogues.length)) {
+  if (v.validationCount && (v.workflow !== 'evaluate' || v.scenarioCount !== 0 || !v.dialogues.length && !v.originalImport?.dialogues.length)) {
     ctx.addIssue({ code: 'custom', message: 'validationCount needs evaluate, scenarioCount 0 and real dialogues', path: ['validationCount'] });
   }
   if (v.confirmedHypothesis && !v.goalObservation) {
@@ -749,6 +751,7 @@ export interface AcceptedTest {
  * copy of these fields. Absent in records written before it existed.
  */
 export interface SourceIdentity {
+  libraryHash?: string; importHash?: string;
   targetFingerprint?: string; targetVersion?: string; evaluatorVersion?: string; manifestHash: string | null;
   /** Fingerprint of the baseline agent definition (the sandbox agent or the reviewed external spec). */
   agent: string;
@@ -758,6 +761,9 @@ export interface SourceIdentity {
   scenarios: Record<string, string>;
 }
 export interface Experiment {
+  librarySnapshot?: ScenarioLibrary;
+  originalImport?: { id: string; contentHash: string };
+  preparationProgress?: PreparationProgress;
   schemaVersion: '1'; id: string; task: string; mode: 'demo' | 'live'; workflow: 'evaluate' | 'compare';
   createdAt: string; updatedAt: string; phase: Phase; message: string;
   sources: Source[]; settings: Settings; target: Target; requirements: Requirement[]; questions: string[];
@@ -869,6 +875,9 @@ function validateReviewReferences(reviews: HumanReview[], trials: Trial[], path:
 }
 
 export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
+  librarySnapshot: scenarioLibrarySchema.optional(),
+  originalImport: z.strictObject({ id: identifier, contentHash: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
+  preparationProgress: preparationProgressSchema.optional(),
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
   phase: z.enum(['preparing', 'review', 'evaluating', 'results_review', 'baseline', 'improving', 'control', 'complete', 'cancelled', 'error', 'interrupted']), message: z.string(),
@@ -895,7 +904,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
   evaluatorVersion: text.optional(), targetRelease: text.max(200).optional(),
   sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(600), humanReviews: z.array(humanReviewSchema).max(1000),
-    identity: z.strictObject({ targetFingerprint: text.optional(), targetVersion: text.max(200).optional(), evaluatorVersion: text.optional(), manifestHash: text.nullable(),
+    identity: z.strictObject({ libraryHash: text.optional(), importHash: text.optional(), targetFingerprint: text.optional(), targetVersion: text.max(200).optional(), evaluatorVersion: text.optional(), manifestHash: text.nullable(),
       agent: text, judge: text, scenarios: z.record(identifier, text).refine(value => Object.keys(value).length <= 200, 'Too many scenario identities') }).optional() }).optional(),
   discovery: discoveryRecordSchema.optional(),
 }).superRefine((record, ctx) => {
@@ -944,7 +953,14 @@ export interface ImproveInput {
   feedback: { scenario: Scenario; trials: Trial[] }[];
 }
 export const proposalSchema = z.strictObject({ agent: agentSchema, hypothesis: text.max(3000) });
+export interface ScenarioProposalsInput {
+  protocol: 'chronological-scenarios-v1'; task: string; sources: Source[]; requirements: Requirement[]; batchId: string;
+  dialogues: { id: string; observation: ImportBatch['dialogues'][number]['observation']; events: ImportBatch['dialogues'][number]['events'];
+    messages: { index: number; role: 'user' | 'assistant' | 'tool' | 'system'; content: string }[] }[];
+}
 export interface Runtime {
+  scenarioProposals?(input: ScenarioProposalsInput, ctx: CallContext): Promise<ScenarioProposal[]>;
+  assessScenarioProposals?(input: { protocol: 'chronological-scenarios-v1'; library: ScenarioLibrary; fields: { variantId: string; paths: string[] }[] }, ctx: CallContext): Promise<SemanticFinding[]>;
   prepare(input: PrepareInput, ctx: CallContext): Promise<z.infer<typeof preparationSchema>>;
   improve(input: ImproveInput, ctx: CallContext): Promise<z.infer<typeof proposalSchema>>;
   openTarget(agent: AgentSpec, sources: Source[], tools: Tool[], ctx: CallContext): Promise<TargetSession>;
