@@ -966,8 +966,9 @@ export interface ScenarioAssessmentInput {
     imports: { id: string; dialogues: Pick<ImportBatch['dialogues'][number], 'id' | 'events' | 'observation'>[] }[];
   };
   fields: { variantId: string; paths: string[] }[];
-  comparisonCandidates: { id: string; business: Pick<ScenarioLibrary['businessScenarios'][number], 'goal' | 'conditions' | 'requirementIds'>;
-    goal: string; opening: string; facts: { statement: string; value?: string | number | boolean }[]; purpose: string }[];
+  comparisonCandidates: (Omit<ScenarioLibrary['variants'][number], 'quality' | 'issues' | 'ownerDecision'> & {
+    business: Pick<ScenarioLibrary['businessScenarios'][number], 'goal' | 'conditions' | 'requirementIds'>;
+  })[];
 }
 export interface Runtime {
   scenarioProposals?(input: ScenarioProposalsInput, ctx: CallContext): Promise<ScenarioProposal[]>;

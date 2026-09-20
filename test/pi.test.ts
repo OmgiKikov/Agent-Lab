@@ -1340,3 +1340,22 @@ test('scenario transport rejects malformed world arrays before library compilati
     assert.match(f.requests[0]!.systemPrompt!, /not already disclosed/i);
   } finally { await f.close(); }
 });
+
+test('scenario proposal transport rejects a prose deterministic check and permits semantic checkpoints without one', async () => {
+  const { importBatch } = await import('../src/scenario-library.js');
+  const { chronologicalInput } = await import('../src/scenario-preparation.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
+  delete valid.variant.evaluationSpec.checkpoints[0]!.check;
+  const bad = structuredClone(valid); bad.variant.evaluationSpec.checkpoints[0]!.check = 'Проверить смысл ответа';
+  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
+  try {
+    const { ctx, usage } = callContext();
+    const result = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка возврата', batchId: batch.id,
+      sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, ctx);
+    assert.equal(usage.calls, 2, 'prose check must fail SDK schema admission');
+    assert.equal(result[0]!.variant.evaluationSpec.checkpoints[0]!.check, undefined);
+    assert.match(JSON.stringify(f.requests[1]), /checkpoints.*check/);
+    assert.match(f.requests[0]!.systemPrompt!, /omit.*check.*semantic/i);
+  } finally { await f.close(); }
+});

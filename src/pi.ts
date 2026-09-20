@@ -11,7 +11,7 @@ import { Type } from 'typebox';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.js';
 import { z } from 'zod';
 import {
-  agentSchema, discoveryGroupSchema, discoveryObservationSchema, failureModeSchema, observedGoalSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema, worldSchema,
+  agentSchema, checkSchema, discoveryGroupSchema, discoveryObservationSchema, failureModeSchema, observedGoalSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema, worldSchema,
   MACHINE_FORMAT, REQUIREMENT_LIMIT, SCENARIO_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens, verbatimSpan,
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
@@ -423,6 +423,9 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       return (await ask('Варианты из полной хронологии', SCENARIO_PROPOSALS_ROLE, input,
         z.strictObject({ proposals: z.array(scenarioProposalSchema.extend({ variant: scenarioProposalSchema.shape.variant.extend({
           environmentFixture: scenarioProposalSchema.shape.variant.shape.environmentFixture.extend({ initialState: worldSchema }),
+          evaluationSpec: scenarioProposalSchema.shape.variant.shape.evaluationSpec.extend({
+            checkpoints: z.array(scenarioProposalSchema.shape.variant.shape.evaluationSpec.shape.checkpoints.element.extend({ check: checkSchema.optional() })).min(1).max(12),
+          }),
         }) })).max(1) }), ctx)).proposals;
     },
     async assessScenarioProposals(input, ctx) {

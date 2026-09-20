@@ -72,3 +72,29 @@ test('resuming a split relation pass reuses completed calls and retains conserva
   assert.equal(complete.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'duplicates')!.status, 'blocked');
   assert.equal(complete.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'businessScenarioId')!.status, 'ready');
 });
+
+test('cross-group comparisons retain actual membership and complete differing policy fixture and checkpoints', async () => {
+  const { planSemanticWork } = await import('../src/scenario-work.js');
+  const library = libraryFixture(), seed = library.variants[0]!, business = library.businessScenarios[0]!;
+  library.businessScenarios.push({ ...structuredClone(business), id: 'other_business' });
+  library.variants = Array.from({ length: 4 }, (_, i) => ({ ...structuredClone(seed), id: `cross_${i}` }));
+  const child = library.variants[3]!;
+  child.businessScenarioId = 'other_business';
+  child.behaviorPolicy.actions[0]!.payload = 'Сообщить номер только после уточнения';
+  child.environmentFixture.initialState = { records: { terminal: { failure: true } }, writableFields: [] };
+  child.evaluationSpec.checkpoints[0]!.rule = 'При отказе инструмента объяснить невозможность завершить возврат';
+  const plan = planSemanticWork(library);
+  const input = plan.jobs.find(j => j.input.scope === 'relations' && j.input.fields.some(f => f.variantId === 'cross_0') && j.input.comparisonCandidates.some(c => c.id === child.id))!.input;
+  const candidate = input.comparisonCandidates.find(c => c.id === child.id)!;
+  assert.equal(candidate.businessScenarioId, child.businessScenarioId);
+  assert.notEqual(candidate.businessScenarioId, input.library.variants[0]!.businessScenarioId);
+  assert.equal(candidate.business.goal, business.goal, 'same-goal split remains visible via actual grouping IDs');
+  assert.deepEqual(candidate.behaviorPolicy, child.behaviorPolicy);
+  assert.deepEqual(candidate.environmentFixture, child.environmentFixture);
+  assert.deepEqual(candidate.evaluationSpec, child.evaluationSpec);
+  assert.deepEqual(candidate.userState, child.userState);
+  assert.ok(plan.jobs.every(j => Buffer.byteLength(JSON.stringify(j.input)) <= 64000 && j.outputBytes <= 12000));
+  child.environmentFixture.initialState = { payload: 'x'.repeat(70000) };
+  const oversized = planSemanticWork(library);
+  assert.ok(oversized.skipped.some(f => f.variantId === 'cross_0' && f.path === 'duplicates' && f.status === 'needs_review'), 'unrepresentable complete candidate cannot be declared checked');
+});

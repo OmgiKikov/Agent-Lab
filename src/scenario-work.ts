@@ -49,8 +49,8 @@ export function planSemanticWork(library: ScenarioLibrary): { contentHash: strin
   }
   const candidates = library.variants.map(v => {
     const business = library.businessScenarios.find(b => b.id === v.businessScenarioId)!;
-    return { id: v.id, business: { goal: business?.goal ?? '', conditions: business?.conditions ?? [], requirementIds: business?.requirementIds ?? [] },
-      goal: v.userState.goal, opening: v.userState.opening, facts: v.userState.facts.filter(f => f.availability === 'initial').map(({ statement, value }) => ({ statement, ...(value === undefined ? {} : { value }) })), purpose: v.purpose };
+    const { quality, issues, ownerDecision, ...definition } = v;
+    return { ...definition, business: { goal: business?.goal ?? '', conditions: business?.conditions ?? [], requirementIds: business?.requirementIds ?? [] } };
   });
   // Every target is compared against every bounded candidate block; findings are reduced conservatively across blocks.
   for (let offset = 0; offset < library.variants.length; offset += 3) {
@@ -86,7 +86,7 @@ export async function assessScenarioLibrary(library: ScenarioLibrary, runtime: P
   await persist(partial());
   for (const job of plan.jobs) {
     ctx.signal.throwIfAborted();
-    const workHash = fingerprint({ contentHash: plan.contentHash, scope: job.input.scope, fields: job.input.fields, candidates: job.input.comparisonCandidates.map(c => c.id) }), receipt = receipts.get(workHash);
+    const workHash = fingerprint({ evidenceVersion: 2, contentHash: plan.contentHash, scope: job.input.scope, fields: job.input.fields, candidates: job.input.comparisonCandidates.map(c => c.id) }), receipt = receipts.get(workHash);
     const raw = receipt?.findings ?? await runtime.assessScenarioProposals(job.input, ctx);
     if (serializedBytes({ findings: raw }) > SCENARIO_OUTPUT_BYTES) throw new Error('Смысловой ответ превышает допустимый объём. Частичные проверки сохранены.');
     const returned = raw.map(f => semanticFindingSchema.parse(f));
