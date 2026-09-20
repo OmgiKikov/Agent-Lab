@@ -124,8 +124,9 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
   const add = (code: string, path: string, message: string, variantId?: string, severity: LibraryQualityIssue['severity'] = 'blocked') => issues.push({ code, path, message, ...(variantId ? { variantId } : {}), severity });
   if (library.semanticRequired) {
     const assessment = library.semanticAssessment;
+    const contentHash = semanticContentHash(library);
     for (const variant of library.variants) {
-      if (!assessment || assessment.contentHash !== semanticContentHash(library)) {
+      if (!assessment || assessment.contentHash !== contentHash) {
         add('semantic_pending', `variants.${variant.id}`, 'Смысловая проверка отсутствует или устарела', variant.id, 'needs_review');
         continue;
       }

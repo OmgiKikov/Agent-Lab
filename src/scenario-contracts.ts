@@ -109,7 +109,9 @@ export const scenarioLibrarySchema = z.strictObject({
   requirements: z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean() })).max(80),
   businessScenarios: z.array(businessScenarioSchema).max(200), variants: z.array(scenarioVariantSchema).max(200),
   semanticRequired: z.literal(true).optional(),
-  semanticAssessment: z.strictObject({ contentHash: hash, findings: z.array(semanticFindingSchema).max(10000) }).optional(),
+  semanticAssessment: z.strictObject({ contentHash: hash, findings: z.array(semanticFindingSchema).max(10000),
+    workReceipts: z.array(z.strictObject({ workHash: hash, findings: z.array(semanticFindingSchema).max(6) })).max(20000).optional(),
+  }).optional(),
   acceptance: z.strictObject({ revision: z.number().int().positive(), libraryHash: hash, variantIds: ids(200).min(1), snapshotHash: hash }).optional(),
 });
 export type ScenarioLibrary = z.infer<typeof scenarioLibrarySchema>;

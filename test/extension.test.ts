@@ -1763,3 +1763,21 @@ test('в чате agent_lab_accept показывает лист ожидани�
   assert.match(shown, /Что агент должен сделать: 2 ситуации\./);
   assert.deepEqual(notices, []);
 });
+
+test('normal live ingress retains 300 original dialogues while bounding the legacy projection before parsing', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-full-import-'));
+  const originalCreate = ExperimentLab.prototype.create;
+  let captured: Parameters<ExperimentLab['create']>[0] | undefined;
+  ExperimentLab.prototype.create = async function(raw) { captured = raw; throw new Error('captured full import'); };
+  const { tools, shutdown } = registered();
+  try {
+    const dialogues = Array.from({ length: 300 }, (_, i) => ({ id: `full_${i}`, messages: [{ role: 'user', content: `Вопрос ${i}` }] }));
+    const ctx = { cwd: directory, mode: 'tui', hasUI: true, model: { provider: 'fixture', id: 'fixture' }, ui: { confirm: async () => true } } as unknown as ExtensionContext;
+    await assert.rejects(() => tools.get('agent_lab_build')!.execute('full-import', { mode: 'live', task: 'Проверить агента',
+      materials: [{ name: 'Правила', content: 'Ответить на вопрос.' }], dialogues, target: { kind: 'command', command: process.execPath, args: [] } },
+      undefined, undefined, ctx), /captured full import/);
+    assert.equal(captured!.dialogues.length, 200);
+    assert.equal(captured!.originalImport!.dialogues.length, 300);
+    assert.deepEqual(captured!.originalImport!.dialogues[299]!.original, dialogues[299]);
+  } finally { ExperimentLab.prototype.create = originalCreate; await shutdown(); await rm(directory, { recursive: true, force: true }); }
+});

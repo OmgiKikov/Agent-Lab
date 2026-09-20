@@ -1269,7 +1269,7 @@ test('Pi chronological proposals and separate semantic assessment pass every eve
   const { chronologicalInput } = await import('../src/scenario-preparation.js');
   const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
   const batch = importBatch(rawDialogues);
-  const f = await fixture(scripted([{ proposals: proposals(batch.id) }, { findings: [] }]));
+  const f = await fixture(scripted([{ proposals: proposals(batch.id).slice(1) }, { findings: [] }]));
   try {
     assert.equal(typeof f.adapter.scenarioProposals, 'function', 'real Pi exposes chronological extraction');
     const { ctx, usage } = callContext();
@@ -1320,4 +1320,23 @@ test('real Pi extraction, semantic admission and library store form one chronolo
     assert.doesNotMatch(JSON.stringify(payloads.find(p => p.user)), /три дня/);
     assert.equal((await lab.store.readImport(original.originalImport.id)).dialogues.length, 2);
   } finally { await lab.close(); await f.close(); }
+});
+
+test('scenario transport rejects malformed world arrays before library compilation and sends repair feedback', async () => {
+  const { importBatch } = await import('../src/scenario-library.js');
+  const { chronologicalInput } = await import('../src/scenario-preparation.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
+  const bad = structuredClone(valid); bad.variant.environmentFixture.initialState.records = [] as any;
+  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
+  try {
+    const { ctx, usage } = callContext();
+    const output = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка возврата', batchId: batch.id,
+      sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, ctx);
+    assert.equal(usage.calls, 2);
+    assert.deepEqual(output[0]!.variant.environmentFixture.initialState.records, {});
+    assert.match(JSON.stringify(f.requests[1]), /initialState.records/);
+    assert.match(f.requests[0]!.systemPrompt!, /5678/);
+    assert.match(f.requests[0]!.systemPrompt!, /not already disclosed/i);
+  } finally { await f.close(); }
 });

@@ -23,7 +23,7 @@ function runtimeFixture(payloads: any[]): Runtime {
       ctx.beforeCall(); payloads.push(structuredClone(input));
       return proposals(input.batchId).filter(p => input.dialogues.some(d => d.id === p.variant.sourceDialogues[0]!.dialogueId));
     },
-    async assessScenarioProposals(input, ctx) { ctx.beforeCall(); return semanticFindings(input.library); },
+    async assessScenarioProposals(input, ctx) { ctx.beforeCall(); return input.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready' as const, reason: 'Проверены смысл, хронология и применимость' }))); },
   } as Runtime;
 }
 const input = () => createInputSchema.parse({ task: 'Проверить возвраты', mode: 'demo', materials: sources.map(({ name, content }) => ({ name, content })), dialogues: rawDialogues, originalImport: importBatch(rawDialogues),
@@ -162,7 +162,7 @@ test('suite export/import preserves new identity and restores immutable imports 
 test('a semantic contradiction with a matching citation stays actionable and cannot be accepted', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'scenario-semantic-'));
   const runtime = runtimeFixture([]);
-  runtime.assessScenarioProposals = async ({ library }) => semanticFindings(library).map(f => f.variantId === 'variant_1' && f.path === 'userState.facts.terminal_number'
+  runtime.assessScenarioProposals = async ({ fields }) => fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready', reason: 'Проверено' }))).map(f => f.variantId === 'variant_1' && f.path === 'userState.facts.terminal_number'
     ? { ...f, status: 'needs_review', reason: 'Цитата совпадает, но применимость номера к этому запросу не доказана' } : f) as any;
   const lab = new ExperimentLab(directory, runtime);
   try {
@@ -245,4 +245,144 @@ test('reassessing an accepted library clears per-variant owner decisions as well
   const reassessed = recordSemanticAssessment(accepted, semanticFindings(accepted) as any);
   assert.equal(reassessed.acceptance, undefined);
   assert.ok(reassessed.variants.every(v => v.ownerDecision === 'pending'));
+});
+
+test('reopening completes a journaled library edit after a one-shot experiment write failure', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-recovery-'));
+  const lab = new ExperimentLab(directory, runtimeFixture([]));
+  const reopened = new ExperimentLab(directory, runtimeFixture([]));
+  try {
+    await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle();
+    const before = await lab.readLibrary(seed.id);
+    const store = lab.store as any, save = store.saveRecord.bind(store);
+    let fail = true;
+    store.saveRecord = async (...args: unknown[]) => {
+      if (fail) { fail = false; throw Object.assign(new Error('one-shot experiment write failure'), { code: 'EIO' }); }
+      return save(...args);
+    };
+    await assert.rejects(() => lab.editLibrary(seed.id, libraryHash(before.library), { kind: 'remove_variant', variantId: 'variant_2', reason: 'Выбран первый' }), /one-shot/);
+    assert.equal((await lab.store.readLibrary(before.library.id)).variants.length, 1);
+    assert.equal((await lab.readLibrary(seed.id)).library.variants.length, 2);
+    await lab.close(); await reopened.init();
+    const recovered = await reopened.readLibrary(seed.id);
+    assert.equal(recovered.library.variants.length, 1, 'valid B publication finishes through the public reopen path');
+    await assert.rejects(() => reopened.editLibrary(seed.id, libraryHash(before.library), { kind: 'remove_variant', variantId: 'variant_1', reason: 'Устаревшая правка' }), /хеш|измен/);
+    const changed = await reopened.editLibrary(seed.id, libraryHash(recovered.library), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number',
+      statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'after_recovery', reason: 'После восстановления' });
+    assert.equal(changed.library.variants[0]!.userState.facts[0]!.value, '4321');
+  } finally { await lab.close(); await reopened.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('extraction receives bounded deterministic repair feedback and prior business context without changing evidence', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-repair-'));
+  const runtime = runtimeFixture([]), requests: any[] = [];
+  runtime.scenarioProposals = async (request, ctx) => {
+    ctx.beforeCall(); requests.push(structuredClone(request));
+    const proposal = proposals(request.batchId).find(p => p.variant.sourceDialogues[0]!.dialogueId === request.dialogues[0]!.id)!;
+    if (request.dialogues[0]!.id === 'terminal' && !request.feedback) {
+      proposal.variant.environmentFixture.initialState = { records: [], writableFields: [] } as any;
+      proposal.variant.userState.facts[0]!.statement = 'Номер терминала';
+    }
+    return [proposal] as any;
+  };
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle();
+    const repaired = await lab.readLibrary(seed.id);
+    assert.equal(requests.length, 3, 'malformed model proposal gets one bounded repair call');
+    assert.ok(requests[1].feedback.issues.some((issue: any) => issue.code === 'invalid_environment'));
+    assert.ok(requests[1].feedback.issues.some((issue: any) => issue.code === 'fact_value_mismatch'));
+    assert.equal(requests[2].businessCatalog.length, 1, 'later source sees the existing business goal and conditions');
+    assert.equal(repaired.library.businessScenarios.length, 1);
+    assert.equal(repaired.library.variants[0]!.quality, 'ready');
+    for (const request of requests) assert.ok(Buffer.byteLength(JSON.stringify(request)) <= 64000);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('near-limit rich evidence is sent whole and an oversized dialogue is retained pending with a reason', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-rich-envelope-'));
+  const raw = [50_000, 120_000].map((size, i) => ({ id: i ? 'huge' : 'near', observation: 'partial', events: [
+    { type: 'message', role: 'user', content: 'Номер терминала: 1234' },
+    { type: 'tool', payload: 'x'.repeat(size) }, { type: 'message', role: 'assistant', content: 'Уточнение' },
+  ] }));
+  const batch = importBatch(raw), requests: any[] = [];
+  const runtime = runtimeFixture([]);
+  runtime.scenarioProposals = async request => {
+    requests.push(structuredClone(request));
+    const p = proposals(request.batchId)[0]!;
+    p.variant.sourceDialogues[0]!.dialogueId = 'near';
+    p.variant.userState.facts[0]!.origin.dialogueId = 'near';
+    return [p] as any;
+  };
+  const assess = runtime.assessScenarioProposals!;
+  runtime.assessScenarioProposals = async (request, ctx) => {
+    requests.push(structuredClone(request));
+    return assess(request, ctx);
+  };
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create({ ...input(), originalImport: batch, dialogues: [] }); await lab.waitForIdle();
+    const result = await lab.get(seed.id);
+    assert.equal(result.phase, 'review', result.error ?? '');
+    assert.deepEqual(result.preparationProgress!.processed, ['near']);
+    assert.deepEqual(result.preparationProgress!.pending, ['huge']);
+    assert.match(result.preparationProgress!.excluded.find(e => e.dialogueId === 'huge')!.reason, /байт|предел/);
+    for (const request of requests) assert.ok(Buffer.byteLength(JSON.stringify(request)) <= 64000);
+    assert.equal(requests[0].dialogues[0].events[1].data.payload.length, 50000);
+    assert.equal(requests.find(r => r.scope === 'fields').library.imports[0].dialogues[0].events[1].data.payload.length, 50000);
+    assert.equal(result.librarySnapshot!.imports[0]!.dialogues[1]!.events[1]!.data.payload.length, 120000);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('late independent personal disclosure is repaired as initial knowledge without leaking an old assistant duration', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-disclosure-'));
+  const raw = [rawDialogues[0], { id: 'late', messages: [{ role: 'user', content: 'Когда будет возврат?' }, { role: 'assistant', content: 'Назовите номер терминала' }, { role: 'user', content: 'Номер терминала: 5678' }] }];
+  const batch = importBatch(raw), runtime = runtimeFixture([]); let repaired = false;
+  runtime.scenarioProposals = async (request, ctx) => {
+    ctx.beforeCall();
+    const p = proposals(batch.id)[0]!;
+    if (request.dialogues[0]!.id === 'late') {
+      p.variant.id = 'late_variant'; p.variant.sourceDialogues[0]!.dialogueId = 'late';
+      Object.assign(p.variant.userState.facts[0]!, { statement: 'Номер терминала: 5678', value: '5678', availability: request.feedback ? 'initial' : 'learned_in_source',
+        origin: { kind: 'dialogue', batchId: batch.id, dialogueId: 'late', eventIndex: 2, quote: 'Номер терминала: 5678' } });
+      p.variant.behaviorPolicy.actions.push({ id: 'give_id', kind: 'answer', factIds: ['terminal_number'], payload: '5678', ifAsked: 'Номер терминала?' } as any);
+      p.variant.behaviorPolicy.transitions.unshift({ from: 'waiting', to: 'waiting', actionId: 'give_id', when: 'Агент запросил номер терминала' });
+      if (request.feedback) { repaired = true; assert.ok(request.feedback.issues.some(i => i.code === 'excluded_fact_action')); }
+    }
+    return [p] as any;
+  };
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create({ ...input(), originalImport: batch, dialogues: [] }); await lab.waitForIdle();
+    const draft = await lab.readLibrary(seed.id);
+    assert.ok(repaired); assert.equal(draft.library.businessScenarios.length, 1);
+    const late = draft.library.variants.find(v => v.id === 'late_variant')!;
+    assert.equal(late.quality, 'ready'); assert.equal(late.userState.facts[0]!.availability, 'initial');
+    assert.equal(late.userState.facts[0]!.origin.kind, 'dialogue'); assert.doesNotMatch(late.userState.opening, /5678/);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('public assessment resumes interrupted same-content work from a reviewable partial library', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-resume-'));
+  const runtime = runtimeFixture([]), original = runtime.assessScenarioProposals!;
+  const completed: string[] = []; let calls = 0, fail = true;
+  runtime.assessScenarioProposals = async (value, ctx) => {
+    if (++calls === 2 && fail) throw new Error('temporary semantic transport failure');
+    const signature = JSON.stringify(value.fields) + JSON.stringify(value.comparisonCandidates);
+    assert.ok(!completed.includes(signature), 'completed same-content work is not requested again');
+    const result = await original(value, ctx); completed.push(signature); return result;
+  };
+  let lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle();
+    const partial = await lab.get(seed.id);
+    assert.equal(partial.phase, 'review', 'partial library remains editable and assessable');
+    assert.match(partial.error!, /temporary semantic/);
+    assert.ok(partial.librarySnapshot!.semanticAssessment!.findings.length > 0);
+    await lab.close(); fail = false; lab = new ExperimentLab(directory, runtime); await lab.init();
+    await lab.assessLibrary(seed.id, libraryHash(partial.librarySnapshot!)); await lab.waitForIdle();
+    const done = await lab.get(seed.id); assert.equal(done.phase, 'review');
+    const accepted = await lab.acceptLibrary(seed.id, libraryHash(done.librarySnapshot!), ['variant_1', 'variant_2']);
+    assert.equal(accepted.experiment.scenarios.length, 2);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });

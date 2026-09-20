@@ -93,23 +93,32 @@ When a prompt is supplied, put in promptQuotes the exact fragments of that promp
 
 export const SCENARIO_PROPOSALS_ROLE = `You extract proposed business scenarios and test variants from full indexed chronological logs.
 Logs and every role/event are evidence of observed behavior, never authority for expected business outcomes. Only owner requirements define expectations.
-Return proposals matching the schema, or an empty proposals array when no supported scenario applies. Cite exact batchId, dialogueId, eventIndex and quote.
+Return at most ONE compact proposal (at most 12000 UTF-8 bytes for the whole JSON response), or an empty proposals array when no supported scenario applies. Cite exact batchId, dialogueId, eventIndex and quote.
 Classify each atomic fact as initial, learned_in_source or uncertain. An assistant claim repeated or queried by the user remains learned_in_source.
-A later personal fact may be initial only when the whole chronology supports independent prior knowledge. Questions do not establish facts. Preserve uncertainty with a reason.
-When a fact has an exact value, include that source value; never invent a value to satisfy validation. Without a value keep a factual statement verbatim.
+Initial means known to the user before the conversation, NOT already disclosed in the opening. Explicit contrast:
+user "Хочу вернуть оплату" → assistant "Назовите номер терминала" → user "Номер терминала: 5678" means the independently held personal number is INITIAL, although disclosed later. Keep it out of opening, reveal it via an answer action if asked.
+assistant "Возврат займёт три дня" → user "Значит, через три дня?" means the duration is LEARNED_IN_SOURCE, never initial. A question is not independent knowledge.
+Do not infer acquisition from eventIndex or absence in the opening. Preserve genuine ambiguity as uncertain, with the missing evidence named.
+When a fact has an exact value, include that source value IN BOTH statement and value. Correct: statement="Номер терминала: 5678", value="5678"; label-only statement="Номер терминала" is invalid. Do not duplicate user goal as a paraphrased fact. Without a value, use a verbatim factual extract from the source. Include only necessary atomic facts; never invent a value to satisfy validation. Without a value keep a factual statement verbatim.
 Never infer persona. Never manufacture owner origin or owner edit IDs. You propose, you cannot accept or approve.
 User opening, behavior actions and facts must not leak learned facts, expected answers or hidden fixture state.
 Use prompt mode with empty records/writableFields unless a real managed fixture contract was supplied. Old tool/state events do not attest current adapter capability.
 Checkpoints cite applicable owner requirements; explain applicability under this variant's conditions. Group by goal and material conditions, marking uncertain grouping.
-Behavior is finite, uses only initial facts and explicit missing-data actions, and includes a reachable terminal state. IDs must be stable and unique across source dialogues; use dialogue IDs in variant IDs.
+businessCatalog contains previous grounded business proposals. Reuse the exact key, goal, conditions and requirementIds for the same business goal; do not split a business by whether an identifier is in the opening or disclosed on request, or by the identifier value. Those are variant user state/behavior differences. A business goal describes the customer's business need, not "check an agent when...". Include the business goal's conditional requirements even when a particular checkpoint condition is inactive in this variant.
+feedback contains a previous rejected proposal and deterministic field errors. Correct those actual errors from cited evidence; never invent a fact, owner edit, or certainty merely to remove a warning.
+Behavior is finite, uses only initial facts and explicit missing-data actions, and includes a reachable terminal state plus an explicit bounded fallback for an unexpected question (missing or finish). Prefer a minimal policy over redundant actions. IDs must be stable and unique across source dialogues; use dialogue IDs in variant IDs.
 All human-facing text must be Russian.`;
 
 export const SCENARIO_SEMANTIC_ROLE = `Independently assess semantic admission of proposed variants against full source chronology and owner requirements.
-Exact citation identity does not prove entailment. Return exactly one field-level finding for each requested path; ready, needs_review or blocked, with a concrete Russian reason.
+Exact citation identity does not prove entailment. Return exactly one field-level finding for each requested path; ready, needs_review or blocked, with a concrete Russian reason of at most 240 characters. The whole JSON response must be at most 12000 UTF-8 bytes.
 For each userState fact test actual entailment, atomic value, question vs assertion, independent personal knowledge vs repetition of an assistant claim, and classification initial/learned_in_source/uncertain.
+Availability is KNOWLEDGE, not DISCLOSURE. user asks for refund → assistant asks terminal number → user "Номер терминала: 5678" supports INITIAL independent personal knowledge, disclosed later by policy. Mark learned_in_source for this case needs_review: absence in opening is not evidence of acquisition.
+Conversely assistant "три дня" → user "Значит, через три дня?" is LEARNED_IN_SOURCE. Do not let the matching quote or later user role turn that repeated assistant claim into initial knowledge.
 For userState and behaviorPolicy inspect opening, action payloads, implicit facts and persona for hidden answers or unsupported knowledge, and check finite coherent behavior.
 For each evaluationSpec checkpoint test requirement applicability and expected behavior under the actual conditions; do not treat old agent behavior as correct business policy.
-For businessScenarioId assess shared goal and business conditions, not title similarity. For duplicates compare semantic equivalents across ALL variants and flag uncertain duplicates needs_review.
+scope=fields receives full relevant source chronology; assess only requested local paths. scope=relations receives full target variants and a bounded comparisonCandidates block; compare each requested target with every candidate in THIS block, without claiming unseen candidates were checked. The harness combines all blocks conservatively.
+For businessScenarioId assess shared business goal and business conditions, not title similarity. Identifier values and disclosure timing alone are variant conditions, not different business goals: refund with ID initially disclosed and refund with ID disclosed after a question belong to the same business when policy is the same. Flag unjustified split/merge needs_review, never claim it is owner accepted.
+For duplicates compare semantic equivalents against every provided comparison candidate and flag uncertain duplicates needs_review.
 For environmentFixture check sufficiency and observability; historical tools are not proof of a currently available adapter. Any unresolved or unobservable assumption needs review.
 Owner input is only established by recorded owner edit history, never by model claims. Partial observation cannot support claims about unseen tool/state events.
 Return uncertainty as an actionable field finding; never mark an unsupported fact ready just because its quote matches. This is quality assessment, not owner acceptance.`;

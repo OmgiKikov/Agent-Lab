@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { experimentSchema, judgeAuditSchema, type Experiment, type TraceEvent, type JudgeAudit } from './contracts.js';
 
+import { libraryHash } from './scenario-library.js';
 import { ScenarioFiles } from './scenario-store.js';
 import type { ImportBatch, ScenarioLibrary } from './scenario-contracts.js';
 
@@ -26,6 +27,7 @@ export class ExperimentStore {
   private async writeTransaction<T>(work: () => Promise<T>): Promise<T> {
     const pending = this.writerQueue.then(async () => {
       if (!this.lockToken) throw new Error('Для изменения записи откройте лабораторию как писатель.');
+      await this.recoverPendingPublications();
       return work();
     });
     this.writerQueue = pending.catch(() => {});
@@ -37,10 +39,28 @@ export class ExperimentStore {
   writeLibrary(library: ScenarioLibrary, expectedHash?: string): Promise<void> {
     return this.writeTransaction(() => new ScenarioFiles(this.directory).writeLibrary(library, expectedHash));
   }
+  /** Finish durable publication intents before accepting another mutation; readers remain lock-free. */
+  recoverPublications(): Promise<void> { return this.writeTransaction(async () => {}); }
+  private async recoverPendingPublications(): Promise<void> {
+    const files = new ScenarioFiles(this.directory);
+    for (const { record, expectedHash } of await files.pendingPublications()) {
+      const library = record.librarySnapshot!;
+      const current = await files.readLibrary(library.id).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
+      if (!current || libraryHash(current) !== libraryHash(library)) await files.writeLibrary(library, expectedHash);
+      await this.saveRecord(record);
+      await files.finishPublication(record.id);
+    }
+  }
   publishLibrary(record: Experiment, library: ScenarioLibrary, expectedHash?: string): Promise<void> {
     return this.writeTransaction(async () => {
-      await new ScenarioFiles(this.directory).writeLibrary(library, expectedHash);
-      await this.saveRecord(Object.assign({}, record, { librarySnapshot: library }));
+      const next = experimentSchema.parse({ ...record, librarySnapshot: library });
+      const files = new ScenarioFiles(this.directory);
+      await files.checkLibraryWrite(library, expectedHash);
+      await files.retainLibrary(library);
+      await files.writePublication(next, expectedHash);
+      await files.writeLibrary(library, expectedHash ?? libraryHash(library));
+      await this.saveRecord(next);
+      await files.finishPublication(next.id);
     });
   }
   constructor(directory: string) { this.directory = resolve(directory); }
@@ -76,7 +96,7 @@ export class ExperimentStore {
   async init(): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const observed = await this.owner();
-    if (!observed) { await this.acquire(); return; }
+    if (!observed) { await this.acquire(); try { await this.recoverPublications(); } catch (error) { await this.close(); throw error; } return; }
     if (alive(observed.pid)) throw busy();
     // ponytail: one recovery gate per local directory; ambiguous gates need manual inspection, not recursive lock recovery.
     const recoveryPath = join(this.directory, '.recovery');
@@ -94,6 +114,7 @@ export class ExperimentStore {
         await unlink(join(this.directory, '.lock'));
       }
       await this.acquire();
+      await this.recoverPublications();
     } finally {
       try { await recovery.close(); } finally { await unlink(recoveryPath); }
     }

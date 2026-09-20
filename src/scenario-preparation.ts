@@ -1,4 +1,6 @@
-import { createLibrary, compileLibrary, libraryHash, librarySnapshot, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
+import { assessScenarioLibrary, workInputIssue, serializedBytes, SCENARIO_OUTPUT_BYTES } from './scenario-work.js';
+export { assessScenarioLibrary } from './scenario-work.js';
+import { createLibrary, compileLibrary, libraryHash, libraryQuality, librarySnapshot, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
 import { importBatchSchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal } from './scenario-contracts.js';
 import { fingerprint, validatePreparation, type CallContext, type CreateInput, type Experiment, type Runtime, type ScenarioProposalsInput } from './contracts.js';
 import type { ExperimentStore } from './store.js';
@@ -25,8 +27,14 @@ export async function prepareScenarioLibrary(record: Experiment, input: CreateIn
   await publish();
   try {
     ctx.signal.throwIfAborted();
-    const grounded = await runtime.prepare({ task: record.task, sources: record.sources, existingAgent: input.existingAgent, workflow: record.workflow,
-      scenarioCount: 0, targetKind: record.target.kind, notes: record.notes, dialogues: [], userModes: record.settings.userModes }, ctx);
+    const groundingRequest = { task: record.task, sources: record.sources, existingAgent: input.existingAgent, workflow: record.workflow,
+      scenarioCount: 0, targetKind: record.target.kind, notes: record.notes, dialogues: [], userModes: record.settings.userModes };
+    const groundingIssue = workInputIssue(groundingRequest);
+    if (groundingIssue) {
+      record.preparationProgress.excluded.push(...batch.dialogues.map(d => ({ dialogueId: d.id, reason: groundingIssue })));
+      record.preparationProgress.status = 'partial'; await publish(); return;
+    }
+    const grounded = await runtime.prepare(groundingRequest, ctx);
     record.requirements = grounded.requirements; record.questions = grounded.questions;
     const agent = input.existingAgent ?? grounded.agent;
     const baseline = { id: fingerprint(agent), parentId: null, spec: agent, hypothesis: 'Конфигурация агента для библиотеки сценариев.', createdAt: new Date().toISOString() };
@@ -35,12 +43,28 @@ export async function prepareScenarioLibrary(record: Experiment, input: CreateIn
     for (const dialogue of batch.dialogues) {
       ctx.signal.throwIfAborted();
       if (proposals.length >= 200) break;
-      const extracted = await runtime.scenarioProposals!({ protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, sources: structuredClone(record.sources),
-        requirements: structuredClone(record.requirements), batchId: original.id, dialogues: chronologicalInput(original, [dialogue.id]) }, ctx);
-      if (proposals.length + extracted.length > 200) break;
-      // The model does not receive owner edit capability. Task1 validates every proposal and its citations.
-      const next = createLibrary({ id: library.id, batch: original, sources: record.sources, requirements: record.requirements,
-        proposals: [...proposals, ...extracted], createdAt: library.createdAt, semanticRequired: true });
+      const request = { businessCatalog: library.businessScenarios.map(({ key, title, goal, conditions, requirementIds }) => ({ key, title, goal, conditions, requirementIds })), protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, sources: structuredClone(record.sources),
+        requirements: structuredClone(record.requirements), batchId: original.id, dialogues: chronologicalInput(original, [dialogue.id]) } as ScenarioProposalsInput;
+      const oversize = workInputIssue(request);
+      if (oversize) { record.preparationProgress.excluded.push({ dialogueId: dialogue.id, reason: oversize }); continue; }
+      let extracted: ScenarioProposal[] = [], next: ScenarioLibrary | undefined;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        ctx.signal.throwIfAborted();
+        const issue = workInputIssue(request);
+        if (issue) { record.preparationProgress.excluded.push({ dialogueId: dialogue.id, reason: issue }); break; }
+        extracted = await runtime.scenarioProposals!(request, ctx);
+        if (serializedBytes({ proposals: extracted }) > SCENARIO_OUTPUT_BYTES) throw new Error('Предложение превышает допустимый объём ответа. Источник остаётся необработанным.');
+        if (proposals.length + extracted.length > 200) break;
+        next = createLibrary({ id: library.id, batch: original, sources: record.sources, requirements: record.requirements,
+          proposals: [...proposals, ...extracted], createdAt: library.createdAt, semanticRequired: true });
+        const proposedIds = new Set(extracted.map(p => p.variant.id));
+        const issues = libraryQuality(next).filter(i => !i.code.startsWith('semantic_') && (!i.variantId || proposedIds.has(i.variantId))
+          && !['uncertain_fact', 'uncertain_grouping'].includes(i.code));
+        if (!issues.length) break;
+        request.feedback = { proposals: extracted, issues: issues.slice(0, 12).map(({ code, path, message }) => ({ code, path, message: message.slice(0, 240) })) };
+      }
+      if (!next) continue;
+      // Invalid but structurally parseable final proposals remain visible and blocked; there is no model-owned acceptance.
       next.revision = library.revision + 1;
       library = next; proposals.push(...extracted);
       record.preparationProgress.processed.push(dialogue.id);
@@ -49,9 +73,8 @@ export async function prepareScenarioLibrary(record: Experiment, input: CreateIn
       await publish();
     }
     if (library.variants.length && runtime.assessScenarioProposals) {
-      const findings = await runtime.assessScenarioProposals({ protocol: SCENARIO_EXTRACTION_PROTOCOL, library: structuredClone(library),
-        fields: library.variants.map(v => ({ variantId: v.id, paths: semanticPaths(v) })) }, ctx);
-      library = recordSemanticAssessment(library, findings); library.revision++;
+      library = await assessScenarioLibrary(library, runtime, ctx, async partial => { library = partial; await publish(); });
+      library.revision++;
     } else if (library.variants.length) record.limitations.push('Смысловая проверка недоступна: варианты требуют проверки и не могут быть приняты.');
     record.preparationProgress.status = record.preparationProgress.pending.length ? 'partial' : 'complete';
     await publish();

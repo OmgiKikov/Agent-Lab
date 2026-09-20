@@ -34,15 +34,14 @@ test('library writes share writer ownership, atomic readers and same-hash CAS ad
   } finally { await writer.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('failed experiment publication leaves a readable immutable library and no partial experiment', async () => {
+test('invalid experiment publication is rejected before any library pointer advances', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'scenario-publish-'));
   const store = new ExperimentStore(directory);
   try {
     await store.init();
     const library = libraryFixture();
     await assert.rejects(() => store.publishLibrary({ id: 'bad-record' } as never, library));
-    assert.equal((await store.readLibrary(library.id)).revision, 1);
-    assert.equal((await store.readImport(library.imports[0]!.id)).dialogues.length, 2);
+    await assert.rejects(() => store.readLibrary(library.id), /ENOENT/);
     await assert.rejects(() => store.get('bad-record'), /ENOENT/);
   } finally { await store.close(); await rm(directory, { recursive: true, force: true }); }
 });

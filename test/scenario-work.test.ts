@@ -1,0 +1,74 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { libraryFixture } from './helpers/scenario-library.js';
+import { semanticContentHash, semanticPaths } from '../src/scenario-library.js';
+import { emptyUsage, type CallContext } from '../src/contracts.js';
+
+const ctx: CallContext = { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} };
+
+test('200 variants with 20 facts and 12 checkpoints use bounded requests and complete separate relation findings', async () => {
+  const planner = await import('../src/scenario-preparation.js');
+  assert.equal(typeof planner.assessScenarioLibrary, 'function', 'initial preparation and reassessment share bounded work');
+  const library = libraryFixture();
+  const seed = library.variants[0]!;
+  library.variants = Array.from({ length: 200 }, (_, i) => ({ ...structuredClone(seed), id: `large_${i}`,
+    userState: { ...structuredClone(seed.userState), facts: Array.from({ length: 20 }, (_, j) => ({ ...structuredClone(seed.userState.facts[0]!), id: `fact_${j}` })) },
+    evaluationSpec: { ...structuredClone(seed.evaluationSpec), checkpoints: Array.from({ length: 12 }, (_, j) => ({ ...structuredClone(seed.evaluationSpec.checkpoints[0]!), id: `checkpoint_${j}` })) },
+  }));
+  const expectedHash = semanticContentHash(library);
+  let calls = 0, partials = 0, relations = 0;
+  const relationCandidates = new Set<string>();
+  const result = await planner.assessScenarioLibrary(library, { async assessScenarioProposals(input, context) {
+    context.beforeCall(); calls++;
+    assert.ok(Buffer.byteLength(JSON.stringify(input)) <= 64000, 'serialized request byte ceiling');
+    assert.ok(input.fields.reduce((n, f) => n + f.paths.length, 0) <= 6, 'bounded response cardinality');
+    assert.equal(input.contentHash, expectedHash);
+    if (input.scope === 'relations') { relations++; for (const candidate of input.comparisonCandidates) relationCandidates.add(candidate.id); }
+    return input.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready' as const, reason: 'Проверено' })));
+  } }, ctx, async partial => {
+    partials++; assert.equal(partial.semanticAssessment!.contentHash, expectedHash);
+  });
+  assert.ok(calls > 200); assert.ok(partials > 1); assert.ok(relations > 0); assert.equal(relationCandidates.size, 200);
+  assert.equal(result.semanticAssessment!.findings.length, 7400);
+  for (const variant of result.variants) for (const path of semanticPaths(variant)) assert.equal(result.semanticAssessment!.findings.filter(f => f.variantId === variant.id && f.path === path && f.status === 'ready').length, 1);
+});
+
+test('an interrupted semantic plan preserves partial findings bound to the complete unchanged evidence', async () => {
+  const { assessScenarioLibrary } = await import('../src/scenario-work.js');
+  const { acceptLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const library = libraryFixture(); const partials: typeof library[] = [];
+  let calls = 0;
+  await assert.rejects(() => assessScenarioLibrary(library, { async assessScenarioProposals(input) {
+    if (++calls === 2) throw new Error('interrupted assessment');
+    return input.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready' as const, reason: 'Проверено' })));
+  } }, ctx, async partial => { partials.push(structuredClone(partial)); }), /interrupted/);
+  const last = partials.at(-1)!;
+  assert.ok(last.semanticAssessment!.findings.length > 0);
+  assert.equal(last.semanticAssessment!.contentHash, semanticContentHash(library));
+  assert.deepEqual(last.imports, library.imports);
+  assert.throws(() => acceptLibrary(last, libraryHash(last), ['variant_1']), /готов/);
+});
+
+test('resuming a split relation pass reuses completed calls and retains conservative findings until every candidate block completes', async () => {
+  const { assessScenarioLibrary, planSemanticWork } = await import('../src/scenario-work.js');
+  const { fingerprint } = await import('../src/contracts.js');
+  const library = libraryFixture(), seed = library.variants[0]!;
+  library.variants = Array.from({ length: 10 }, (_, i) => ({ ...structuredClone(seed), id: `relation_${i}`,
+    userState: { ...structuredClone(seed.userState), facts: Array.from({ length: 20 }, (_, j) => ({ ...structuredClone(seed.userState.facts[0]!), id: `fact_${j}`, statement: 'x'.repeat(300) })) },
+  }));
+  const planned = planSemanticWork(library).jobs.filter(j => j.input.scope === 'relations');
+  assert.ok(planned.filter(j => j.input.fields[0]!.variantId === 'relation_0').length > 1);
+  const finished = new Set<string>(); let relationCalls = 0, partial = library;
+  const runtime = { async assessScenarioProposals(value: Parameters<NonNullable<import('../src/contracts.js').Runtime['assessScenarioProposals']>>[0]) {
+    const hash = fingerprint(value); assert.ok(!finished.has(hash), 'completed calls must not repeat');
+    if (value.scope === 'relations' && ++relationCalls === 2) throw new Error('interrupted relation block');
+    finished.add(hash);
+    return value.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path,
+      status: value.scope === 'relations' && relationCalls === 1 && path === 'duplicates' ? 'blocked' as const : 'ready' as const, reason: 'Проверено' })));
+  } };
+  await assert.rejects(() => assessScenarioLibrary(library, runtime, ctx, async next => { partial = structuredClone(next); }), /interrupted relation/);
+  assert.equal(partial.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'duplicates')!.status, 'needs_review');
+  const complete = await assessScenarioLibrary(partial, runtime, ctx, async () => {});
+  assert.equal(complete.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'duplicates')!.status, 'blocked');
+  assert.equal(complete.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'businessScenarioId')!.status, 'ready');
+});

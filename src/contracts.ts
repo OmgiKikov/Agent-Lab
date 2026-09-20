@@ -954,13 +954,24 @@ export interface ImproveInput {
 }
 export const proposalSchema = z.strictObject({ agent: agentSchema, hypothesis: text.max(3000) });
 export interface ScenarioProposalsInput {
+  businessCatalog?: Pick<ScenarioLibrary['businessScenarios'][number], 'key' | 'title' | 'goal' | 'conditions' | 'requirementIds'>[];
+  feedback?: { proposals: ScenarioProposal[]; issues: { code: string; path: string; message: string }[] };
   protocol: 'chronological-scenarios-v1'; task: string; sources: Source[]; requirements: Requirement[]; batchId: string;
   dialogues: { id: string; observation: ImportBatch['dialogues'][number]['observation']; events: ImportBatch['dialogues'][number]['events'];
     messages: { index: number; role: 'user' | 'assistant' | 'tool' | 'system'; content: string }[] }[];
 }
+export interface ScenarioAssessmentInput {
+  protocol: 'chronological-scenarios-v1'; contentHash: string; scope: 'fields' | 'relations';
+  library: Pick<ScenarioLibrary, 'sources' | 'requirements' | 'businessScenarios' | 'variants'> & {
+    imports: { id: string; dialogues: Pick<ImportBatch['dialogues'][number], 'id' | 'events' | 'observation'>[] }[];
+  };
+  fields: { variantId: string; paths: string[] }[];
+  comparisonCandidates: { id: string; business: Pick<ScenarioLibrary['businessScenarios'][number], 'goal' | 'conditions' | 'requirementIds'>;
+    goal: string; opening: string; facts: { statement: string; value?: string | number | boolean }[]; purpose: string }[];
+}
 export interface Runtime {
   scenarioProposals?(input: ScenarioProposalsInput, ctx: CallContext): Promise<ScenarioProposal[]>;
-  assessScenarioProposals?(input: { protocol: 'chronological-scenarios-v1'; library: ScenarioLibrary; fields: { variantId: string; paths: string[] }[] }, ctx: CallContext): Promise<SemanticFinding[]>;
+  assessScenarioProposals?(input: ScenarioAssessmentInput, ctx: CallContext): Promise<SemanticFinding[]>;
   prepare(input: PrepareInput, ctx: CallContext): Promise<z.infer<typeof preparationSchema>>;
   improve(input: ImproveInput, ctx: CallContext): Promise<z.infer<typeof proposalSchema>>;
   openTarget(agent: AgentSpec, sources: Source[], tools: Tool[], ctx: CallContext): Promise<TargetSession>;

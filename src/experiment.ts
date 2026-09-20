@@ -1,6 +1,6 @@
 import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
 import type { LibraryPatch, ScenarioLibrary } from './scenario-contracts.js';
-import { assertLibraryRun, compiledLibraryScenarios, prepareScenarioLibrary, SCENARIO_EXTRACTION_PROTOCOL } from './scenario-preparation.js';
+import { assessScenarioLibrary, assertLibraryRun, compiledLibraryScenarios, prepareScenarioLibrary, SCENARIO_EXTRACTION_PROTOCOL } from './scenario-preparation.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -751,16 +751,19 @@ export class ExperimentLab {
     return this.change(async () => {
       const { experiment, library } = await this.readLibrary(id);
       if (experiment.phase !== 'review' || libraryHash(library) !== expectedHash) throw new Error('Библиотека изменилась или уже запущена.');
-      experiment.phase = 'preparing';
+      experiment.phase = 'preparing'; experiment.error = null;
       await this.launch(experiment, async ctx => {
         const runtime = await this.runtime(experiment);
         if (!runtime.assessScenarioProposals) throw new Error('Смысловая проверка недоступна.');
-        const findings = await runtime.assessScenarioProposals({ protocol: SCENARIO_EXTRACTION_PROTOCOL, library,
-          fields: library.variants.map(v => ({ variantId: v.id, paths: semanticPaths(v) })) }, ctx);
-        const next = recordSemanticAssessment(library, findings); next.revision++;
         experiment.scenarios = []; experiment.acceptedTests = []; delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
-        experiment.librarySnapshot = next;
-        await this.store.publishLibrary(experiment, next, expectedHash);
+        let published = expectedHash;
+        const next = await assessScenarioLibrary(library, runtime, ctx, async partial => {
+          experiment.librarySnapshot = partial;
+          await this.store.publishLibrary(experiment, partial, published); published = libraryHash(partial);
+        });
+        next.revision++; experiment.librarySnapshot = next;
+        if (experiment.preparationProgress) experiment.preparationProgress.status = experiment.preparationProgress.pending.length ? 'partial' : 'complete';
+        await this.store.publishLibrary(experiment, next, published);
         await this.checkpoint(experiment, 'review', 'Смысловая проверка завершена. Проверьте замечания и примите варианты.');
       }, true);
       return structuredClone(experiment);
@@ -1193,7 +1196,8 @@ export class ExperimentLab {
         if (!saved) { failed(error); throw error; }
         const reason = controller.signal.aborted ? controller.signal.reason : error;
         record.error = reason instanceof Error ? reason.message : String(reason);
-        record.phase = controller.signal.aborted && /user|closing/i.test(record.error) ? 'cancelled' : 'error';
+        record.phase = record.phase === 'preparing' && record.librarySnapshot ? 'review'
+          : controller.signal.aborted && /user|closing/i.test(record.error) ? 'cancelled' : 'error';
         record.message = record.error;
       } finally {
         clearTimeout(timer); this.updateDiscoveryElapsed(record); record.updatedAt = new Date().toISOString();

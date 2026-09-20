@@ -1,3 +1,4 @@
+import { SCENARIO_OUTPUT_BYTES, SEMANTIC_BATCH_FIELDS, SEMANTIC_REASON_CHARS, serializedBytes, workInputIssue } from './scenario-work.js';
 import { scenarioProposalSchema, semanticFindingSchema } from './scenario-contracts.js';
 import { SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE } from './prompts.js';
 import {
@@ -10,7 +11,7 @@ import { Type } from 'typebox';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.js';
 import { z } from 'zod';
 import {
-  agentSchema, discoveryGroupSchema, discoveryObservationSchema, failureModeSchema, observedGoalSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema,
+  agentSchema, discoveryGroupSchema, discoveryObservationSchema, failureModeSchema, observedGoalSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema, worldSchema,
   MACHINE_FORMAT, REQUIREMENT_LIMIT, SCENARIO_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens, verbatimSpan,
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
@@ -99,7 +100,7 @@ function resources(systemPrompt: string): ResourceLoader {
 
 async function controlledSession(
   modelRuntime: ModelRuntime, model: Model, systemPrompt: string, tools: Tool[],
-  ctx: CallContext, maxTokens = 16384, temperature?: number, structuredJudge = false, thinkingLevel: 'off' | 'medium' = 'off',
+  ctx: CallContext, maxTokens = 16384, temperature?: number, structuredJudge = false, thinkingLevel: 'off' | 'medium' = 'off', maxInputBytes?: number,
 ): Promise<TargetSession> {
   ctx.signal.throwIfAborted();
   if (new Set(tools.map(t => t.name)).size !== tools.length
@@ -136,6 +137,10 @@ async function controlledSession(
   session.agent.streamFunction = async (m, context, options) => {
     try {
       activeSignal.throwIfAborted();
+      if (maxInputBytes && serializedBytes({ ...context, systemPrompt }) > Math.min(maxInputBytes, model.contextWindow - Math.min(maxTokens, model.maxTokens))) {
+        boundaryError = new Error('Запрос превышает безопасный контекст модели; полная хронология сохранена для меньшего пакета.');
+        throw boundaryError;
+      }
       try { ctx.beforeCall(); }
       catch (error) { boundaryError = error; throw error; }
       pendingUsage++;
@@ -337,16 +342,20 @@ async function jsonResponse<S extends z.ZodType>(
   modelRuntime: ModelRuntime, model: Model, label: string, role: string, input: unknown, schema: S, ctx: CallContext,
   review?: (value: z.infer<S>) => string | undefined,
 ): Promise<z.infer<S>> {
+  const bounded = role === SCENARIO_PROPOSALS_ROLE || role === SCENARIO_SEMANTIC_ROLE;
+  if (bounded && workInputIssue(input)) throw new Error(workInputIssue(input));
   const prompt = `${role}\n${DATA_BOUNDARY}\nReturn exactly one compact JSON object, without markdown fences or pretty-printing whitespace, matching this JSON schema:\n${JSON.stringify(z.toJSONSchema(schema))}\nInside strings, escape double quotes as \\" and line breaks as \\n; when copying source text, «» may stand for its straight double quotes.`;
   // Only target sessions contribute target trace events; simulator/planner events cannot affect target grades.
-  const session = await controlledSession(modelRuntime, model, prompt, [], { ...ctx, onTargetEvent: undefined });
+  const session = await controlledSession(modelRuntime, model, prompt, [], { ...ctx, onTargetEvent: undefined }, bounded ? SCENARIO_OUTPUT_BYTES : 16384, undefined, false, 'off', bounded ? 96000 : undefined);
   try {
     let message = JSON.stringify(input);
     let rejection = '';
     for (let attempt = 1; attempt <= REPAIR_ATTEMPTS; attempt++) {
       const output = await session.respond(message);
       let parsed: unknown;
-      try { parsed = parseJsonOutput(output); rejection = ''; }
+      try {
+        if (bounded && Buffer.byteLength(output, 'utf8') > SCENARIO_OUTPUT_BYTES) throw new Error('Ответ превышает 12000 байт; сократите его без потери обязательных полей');
+        parsed = parseJsonOutput(output); rejection = ''; }
       catch (error) { rejection = `The reply was not a single JSON object (${error instanceof Error ? error.message : 'unreadable'}). Return one JSON object and nothing else; escape line breaks inside strings as \\n.`; }
       if (!rejection) {
         const validated = schema.safeParse(parsed);
@@ -412,11 +421,17 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   return {
     async scenarioProposals(input, ctx) {
       return (await ask('Варианты из полной хронологии', SCENARIO_PROPOSALS_ROLE, input,
-        z.strictObject({ proposals: z.array(scenarioProposalSchema).max(20) }), ctx)).proposals;
+        z.strictObject({ proposals: z.array(scenarioProposalSchema.extend({ variant: scenarioProposalSchema.shape.variant.extend({
+          environmentFixture: scenarioProposalSchema.shape.variant.shape.environmentFixture.extend({ initialState: worldSchema }),
+        }) })).max(1) }), ctx)).proposals;
     },
     async assessScenarioProposals(input, ctx) {
       return (await ask('Смысловая проверка вариантов', SCENARIO_SEMANTIC_ROLE, input,
-        z.strictObject({ findings: z.array(semanticFindingSchema).max(10000) }), ctx)).findings;
+        z.strictObject({ findings: z.array(semanticFindingSchema.extend({ reason: z.string().trim().min(1).max(SEMANTIC_REASON_CHARS) })).max(SEMANTIC_BATCH_FIELDS) }), ctx, value => {
+          const expected = input.fields.flatMap(f => f.paths.map(path => `${f.variantId}/${path}`));
+          const actual = value.findings.map(f => `${f.variantId}/${f.path}`);
+          return expected.length !== actual.length || expected.some(id => actual.filter(value => value === id).length !== 1) ? 'Return exactly one finding for each requested field, and no other fields.' : undefined;
+        })).findings;
     },
     async prepare(input, ctx) {
       const grounding = input.requirements ? groundingSchema.parse({ requirements: structuredClone(input.requirements), questions: [] }) : await ask(

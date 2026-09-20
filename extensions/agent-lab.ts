@@ -325,7 +325,7 @@ export default function agentLab(pi: ExtensionAPI) {
       let dialogues: unknown;
       const libraryImport = !['score', 'discover', 'demo'].includes(operation) && (dialoguesFile || rest.dialogues)
         ? dialoguesFile ? await readDialogueImport(resolve(ctx.cwd, dialoguesFile)) : importDialogues(rest.dialogues) : undefined;
-      try { dialogues = libraryImport?.dialogues ?? (dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues', { maxItems: ['discover', 'validate'].includes(operation) ? 300 : 200 }) : rest.dialogues); }
+      try { dialogues = libraryImport ? libraryImport.dialogues.slice(0, ['discover', 'validate'].includes(operation) ? 300 : 200) : (dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues', { maxItems: ['discover', 'validate'].includes(operation) ? 300 : 200 }) : rest.dialogues); }
       catch (error) {
         if (!['score', 'discover', 'validate'].includes(operation)) throw error;
         throw new Error(safeText(`Не удалось прочитать записи: ${error instanceof Error ? error.message : String(error)}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`));
@@ -354,7 +354,7 @@ export default function agentLab(pi: ExtensionAPI) {
       }
       if (operation === 'score' && !codeOnly && (!ctx.hasUI || ctx.mode !== 'tui')) throw new Error('Для модельной оценки нужен native Pi confirmation в интерактивном терминале.');
       const supplied = (rest.settings ?? {}) as Partial<z.infer<typeof settingsSchema>>;
-      const sourceDialogueCount = parsedDialogues.length;
+      const sourceDialogueCount = libraryImport?.originalImport.dialogues.length ?? parsedDialogues.length;
       const validationCount = operation === 'validate' ? rest.validationCount ?? 15 : 0;
       if (operation === 'validate') {
         parsedDialogues = selectValidationDialogues(parsedDialogues, Math.min(40, validationCount * 3));
