@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptLibrary, compileLibrary, editLibrary, libraryHash, libraryQuality } from '../src/scenario-library.js';
+import { acceptLibrary, compileLibrary, editLibrary, libraryHash, libraryQuality, recordSemanticAssessment, semanticPaths } from '../src/scenario-library.js';
 import { proposeVariant } from '../src/scenario-variants.js';
 import { libraryFixture } from './helpers/scenario-library.js';
 
 const request = (parentId: string, operation: Parameters<typeof proposeVariant>[1]['operation'], input: Record<string, unknown>) => ({
   parentId, operation, reason: `Проверить ${operation}`, input,
 });
+const admit = (library: ReturnType<typeof libraryFixture>) => recordSemanticAssessment(library,
+  library.variants.flatMap(variant => semanticPaths(variant).map(path => ({ variantId: variant.id, path, status: 'ready' as const, reason: 'Проверено' }))));
 
 test('targeted variants cover disclosure, missing data, ambiguity, changed intent and supported tool failure', () => {
   const cases = [
@@ -62,6 +64,25 @@ test('disclosure keeps a known fact out of the opening and missing data creates 
   assert.doesNotMatch(JSON.stringify(compiled.user), /1234/, 'удалённое значение отсутствует во всём исполнимом UserView');
 });
 
+test('conditional disclosure removes an existing unconditional reveal of the selected fact', () => {
+  const source = libraryFixture();
+  const policy = source.variants[0]!.behaviorPolicy;
+  policy.actions = [{ id: 'always_reveal', kind: 'answer', factIds: ['terminal_number'], payload: 'Номер терминала: 1234' }];
+  policy.transitions = [{ from: 'waiting', to: 'done', actionId: 'always_reveal', when: 'После любого ответа агента' }];
+  const proposed = proposeVariant(source, request('variant_1', 'reveal_on_request', {
+    factId: 'terminal_number', ifAsked: 'Агент прямо запросил номер терминала',
+  }), libraryHash(source));
+  const checked = admit(proposed.library);
+  const compiled = compileLibrary(acceptLibrary(checked, libraryHash(checked), [proposed.variant.id]))[0]!;
+  assert.equal(proposed.variant.behaviorPolicy.actions.some(action => action.id === 'always_reveal'), false);
+  const reveals = proposed.variant.behaviorPolicy.actions.filter(action => action.factIds.includes('terminal_number') || /1234/.test(action.payload ?? ''));
+  assert.equal(reveals.length, 1);
+  assert.match(reveals[0]!.ifAsked ?? '', /прямо запросил/i);
+  assert.equal(proposed.variant.behaviorPolicy.transitions.some(transition => transition.when === 'После любого ответа агента'), false);
+  assert.doesNotMatch(compiled.user.behavior, /После любого ответа агента/);
+  assert.deepEqual(compiled.user.answers, [{ ifAsked: 'Агент прямо запросил номер терминала', reply: 'Номер терминала: 1234' }]);
+});
+
 test('disclosure and missing-fact operations can replace a source opening that revealed the selected value', () => {
   for (const operation of ['reveal_on_request', 'missing_fact'] as const) {
     const source = libraryFixture();
@@ -88,6 +109,25 @@ test('missing fact accepts a value-free slot for a natural-language fact without
   assert.throws(() => proposeVariant(source, request('variant_1', 'missing_fact', {
     factId: fact.id, ifAsked: 'В каком отделении вы работаете?',
   }), libraryHash(source)), /описание|данн/i);
+});
+
+test('missing fact removes a nonnumeric secret from an inherited owner persona and compiled UserView', () => {
+  const source = libraryFixture();
+  const variant = structuredClone(source.variants[0]!);
+  variant.userState.facts[0]!.statement = 'Кодовое слово: Сокол';
+  variant.userState.facts[0]!.value = 'Сокол';
+  variant.userState.facts[0]!.origin = { kind: 'owner', editId: 'owner_secret', text: 'Владелец указал кодовое слово' };
+  variant.userState.persona = { text: 'Помнит кодовое слово Сокол', ownerEditId: 'owner_persona' };
+  let edited = editLibrary(source, libraryHash(source), { kind: 'upsert_variant', variant, reason: 'Владелец задал персону' });
+  edited = editLibrary(edited, libraryHash(edited), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number',
+    statement: 'Кодовое слово: Сокол', value: 'Сокол', availability: 'initial', editId: 'owner_secret', reason: 'Владелец указал кодовое слово' });
+  const proposed = proposeVariant(edited, request('variant_1', 'missing_fact', {
+    factId: 'terminal_number', missingDescription: 'Кодовое слово', ifAsked: 'Какое кодовое слово?',
+  }), libraryHash(edited));
+  assert.equal(proposed.variant.userState.persona, undefined);
+  const checked = admit(proposed.library);
+  const compiled = compileLibrary(acceptLibrary(checked, libraryHash(checked), [proposed.variant.id]))[0]!;
+  assert.doesNotMatch(JSON.stringify(compiled.user), /Сокол/i);
 });
 
 test('changed intent has a finite declared transition and variants reject exact behavioral duplicates under renamed ids', () => {

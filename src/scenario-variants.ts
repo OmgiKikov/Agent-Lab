@@ -64,6 +64,13 @@ export function proposeVariant(library: ScenarioLibrary, request: VariantRequest
       variant.userState.opening = input.opening;
     }
     if (normalized(variant.userState.opening).includes(normalized(value))) throw new Error('Факт уже раскрыт в первой реплике');
+    const policyBefore = structuredClone(variant.behaviorPolicy);
+    const factSecrets = [normalized(value), normalized(fact.statement)];
+    const priorRevealActions = new Set(variant.behaviorPolicy.actions.filter(action => action.factIds.includes(fact.id)
+      || factSecrets.some(secret => normalized(action.payload ?? '').includes(secret))).map(action => action.id));
+    variant.behaviorPolicy.actions = variant.behaviorPolicy.actions.filter(action => !priorRevealActions.has(action.id));
+    variant.behaviorPolicy.transitions = variant.behaviorPolicy.transitions.filter(transition => !priorRevealActions.has(transition.actionId));
+    if (priorRevealActions.size) changed(diff, 'behaviorPolicy', policyBefore, variant.behaviorPolicy);
     addPolicyAction(variant, request.operation, { id: 'pending', kind: 'answer', factIds: [fact.id], ifAsked: input.ifAsked, payload: input.reply ?? fact.statement }, input.ifAsked, diff);
   } else if (request.operation === 'missing_fact') {
     const fact = variant.userState.facts.find(item => item.id === input.factId && item.availability === 'initial');
@@ -84,6 +91,11 @@ export function proposeVariant(library: ScenarioLibrary, request: VariantRequest
     changed(diff, 'userState.missing', before, variant.userState.missing);
     const policyBefore = structuredClone(variant.behaviorPolicy);
     const removedSecrets = [fact.value === undefined ? undefined : normalized(String(fact.value)), normalized(fact.statement)].filter((value): value is string => !!value);
+    const persona = variant.userState.persona;
+    if (persona && removedSecrets.some(secret => normalized(persona.text).includes(secret))) {
+      changed(diff, 'userState.persona', persona, undefined);
+      delete variant.userState.persona;
+    }
     const removedActions = new Set(variant.behaviorPolicy.actions.filter(action => action.factIds.includes(fact.id)
       || (action.kind === 'answer' || action.kind === 'correct') && removedSecrets.some(secret => normalized(action.payload ?? '').includes(secret))).map(action => action.id));
     variant.behaviorPolicy.actions = variant.behaviorPolicy.actions.filter(action => !removedActions.has(action.id));
@@ -91,7 +103,7 @@ export function proposeVariant(library: ScenarioLibrary, request: VariantRequest
     if (removedActions.size) changed(diff, 'behaviorPolicy', policyBefore, variant.behaviorPolicy);
     addPolicyAction(variant, request.operation, { id: 'pending', kind: 'missing', factIds: [], ifAsked: input.ifAsked,
       payload: input.reply ?? `У меня нет данных: ${missingLabel}.` }, input.ifAsked, diff);
-    const retainedUserText = [variant.userState.goal, variant.userState.opening, ...variant.userState.missing, ...variant.userState.cannotKnow,
+    const retainedUserText = [variant.userState.goal, variant.userState.opening, variant.userState.persona?.text ?? '', ...variant.userState.missing, ...variant.userState.cannotKnow,
       ...variant.userState.facts.map(item => item.statement), ...variant.behaviorPolicy.actions.flatMap(action => [action.payload ?? '', action.ifAsked ?? '']),
       ...variant.behaviorPolicy.transitions.map(transition => transition.when)];
     if (retainedUserText.some(text => removedSecrets.some(secret => normalized(text).includes(secret)))) throw new Error('Удалённое значение уже раскрыто в другом поле пользователя; укажите value-free описание и первую реплику');

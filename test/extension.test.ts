@@ -22,7 +22,7 @@ import { COUNTING_RULES, markTargets, measurementUsable, primaryMetricId } from 
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 import { libraryFixture } from './helpers/scenario-library.js';
 import { assessScenarioLibrary } from '../src/scenario-work.js';
-import { libraryHash } from '../src/scenario-library.js';
+import { libraryHash, recordSemanticAssessment, semanticPaths } from '../src/scenario-library.js';
 
 function registered(onUserMessage?: (message: unknown) => void) {
   const tools = new Map<string, ToolDefinition>();
@@ -79,9 +79,12 @@ test('injected Pi instructions hand saved discovery directly to one test after t
 });
 
 test('scenario tool paginates large libraries and expands only an explicitly selected variant', async () => {
-  const library = libraryFixture();
+  let library = libraryFixture();
   const seed = library.variants[0]!;
   library.variants = Array.from({ length: 200 }, (_, index) => ({ ...structuredClone(seed), id: `bounded_${index}`, title: `Вариант ${index}` }));
+  library = recordSemanticAssessment(library, library.variants.flatMap(variant => semanticPaths(variant).map(path => ({
+    variantId: variant.id, path, status: 'ready' as const, reason: 'Проверено',
+  }))));
   const fixture = await boardFixture('scenario-tool-large-', record => {
     record.phase = 'review'; record.scenarios = []; record.trials = [];
     record.librarySnapshot = library; record.sources = library.sources; record.requirements = library.requirements;
@@ -94,6 +97,8 @@ test('scenario tool paginates large libraries and expands only an explicitly sel
     const compact = JSON.parse(compactText);
     assert.equal(compact.variants.length, 20); assert.equal(compact.page.total, 200); assert.equal(compact.page.nextCursor, 20);
     assert.equal(compact.detail, undefined); assert.ok(Buffer.byteLength(compactText) < 100_000, 'default model context stays bounded');
+    assert.equal(compact.budget.semanticCompletedJobs, compact.budget.semanticTotalJobs);
+    assert.equal(compact.budget.semanticPendingJobs, 0, 'completed same-content assessment is not offered for repeat spending');
     const detailed = output(await tools.get('agent_lab_scenarios')!.execute('detail', {
       id: fixture.record.id, operation: 'inspect', variantId: 'bounded_199', limit: 1,
     }, undefined, undefined, ctx));

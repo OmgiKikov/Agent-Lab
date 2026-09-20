@@ -76,6 +76,26 @@ test('resuming a split relation pass reuses completed calls and retains conserva
   assert.equal(complete.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'businessScenarioId')!.status, 'ready');
 });
 
+test('a complete semantic assessment reports no pending calls and same-content reassessment makes no calls', async () => {
+  const { assessScenarioLibrary, semanticWorkStatus } = await import('../src/scenario-work.js');
+  const library = libraryFixture(); let calls = 0;
+  const runtime = { async assessScenarioProposals(input: Parameters<NonNullable<import('../src/contracts.js').Runtime['assessScenarioProposals']>>[0]) {
+    calls++;
+    return input.fields.flatMap(field => field.paths.map(path => ({ variantId: field.variantId, path, status: 'ready' as const, reason: 'Проверено' })));
+  } };
+  const complete = await assessScenarioLibrary(library, runtime, ctx, async () => {});
+  const initialCalls = calls;
+  const status = semanticWorkStatus(complete);
+  assert.ok(initialCalls > 0);
+  assert.equal(status.completedJobs, status.totalJobs);
+  assert.equal(status.pendingJobs, 0);
+  let persisted = 0;
+  const repeated = await assessScenarioLibrary(complete, runtime, ctx, async () => { persisted++; });
+  assert.equal(calls, initialCalls, 'same-content complete assessment does not spend model calls again');
+  assert.equal(persisted, 0, 'same-content complete assessment does not publish fake progress revisions');
+  assert.deepEqual(repeated, complete);
+});
+
 test('cross-group comparisons retain actual membership and complete differing policy fixture and checkpoints', async () => {
   const { planSemanticWork } = await import('../src/scenario-work.js');
   const library = libraryFixture(), seed = library.variants[0]!, business = library.businessScenarios[0]!;

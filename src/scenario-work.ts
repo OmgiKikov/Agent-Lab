@@ -72,6 +72,13 @@ function semanticWorkHash(job: Job, contentHash: string): string {
     candidates: job.input.comparisonCandidates.map(candidate => candidate.id) });
 }
 
+function finalAssessmentCoversPlan(library: ScenarioLibrary, plan: ReturnType<typeof planSemanticWork>): boolean {
+  const assessment = library.semanticAssessment;
+  if (!assessment || assessment.contentHash !== plan.contentHash || assessment.workReceipts !== undefined) return false;
+  return library.variants.every(variant => semanticPaths(variant).every(path =>
+    assessment.findings.filter(finding => finding.variantId === variant.id && finding.path === path).length === 1));
+}
+
 /** Counts only calls that do not already have a receipt for this exact semantic content. */
 export function semanticWorkStatus(library: ScenarioLibrary): {
   contentHash: string; totalJobs: number; completedJobs: number; pendingJobs: number; skipped: SemanticFinding[];
@@ -80,7 +87,8 @@ export function semanticWorkStatus(library: ScenarioLibrary): {
   const completed = new Set(library.semanticAssessment?.contentHash === plan.contentHash
     ? (library.semanticAssessment.workReceipts ?? []).map(receipt => receipt.workHash)
     : []);
-  const completedJobs = plan.jobs.reduce((count, job) => count + Number(completed.has(semanticWorkHash(job, plan.contentHash))), 0);
+  const completedJobs = finalAssessmentCoversPlan(library, plan) ? plan.jobs.length
+    : plan.jobs.reduce((count, job) => count + Number(completed.has(semanticWorkHash(job, plan.contentHash))), 0);
   return { contentHash: plan.contentHash, totalJobs: plan.jobs.length, completedJobs,
     pendingJobs: plan.jobs.length - completedJobs, skipped: plan.skipped };
 }
@@ -90,6 +98,7 @@ export async function assessScenarioLibrary(library: ScenarioLibrary, runtime: P
   persist: (partial: ScenarioLibrary) => Promise<void>): Promise<ScenarioLibrary> {
   if (!runtime.assessScenarioProposals) throw new Error('Смысловая проверка недоступна.');
   const plan = planSemanticWork(library), findings = new Map<string, SemanticFinding>(), relationResults = new Map<string, SemanticFinding>();
+  if (finalAssessmentCoversPlan(library, plan)) return structuredClone(library);
   const receipts = new Map((library.semanticAssessment?.contentHash === plan.contentHash ? library.semanticAssessment.workReceipts ?? [] : []).map(r => [r.workHash, r]));
   const key = (f: { variantId: string; path: string }) => `${f.variantId}/${f.path}`;
   for (const finding of plan.skipped) findings.set(key(finding), finding);
