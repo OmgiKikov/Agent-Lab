@@ -1,3 +1,7 @@
+import { compactIssues, compactDiagnostic } from '../dist/issue-view.js';
+import { showIssueWorkspace } from './issues.ts';
+import { diagnosticPreparationSchema } from '../dist/diagnostics.js';
+import { issueDecisionSchema } from '../dist/issues.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolve } from 'node:path';
@@ -157,7 +161,7 @@ function summary(record: Experiment, directory: string, view?: ResultView) {
     ...(failureLines ? { failureLines } : {}),
     // The same disagreement list and next-step row the CLI prints after the causes (F7, F8).
     ...(block ? { disagreementLines: agreementSectionLines(block) } : {}),
-    id: record.id, phase: record.phase, mode: record.mode, workflow: record.workflow,
+    id: record.id, runKind: record.runKind ?? 'evaluation', phase: record.phase, mode: record.mode, workflow: record.workflow,
     reviewMode: record.reviewMode, resultsReviewedAt: record.resultsReviewedAt,
     draftHash: draftHash(record), acceptedDraftHash: record.acceptedDraftHash, resultHash: record.trials.length ? resultHash(record) : undefined,
     message: record.message, error: record.error, questions: record.questions,
@@ -753,6 +757,65 @@ export default function agentLab(pi: ExtensionAPI) {
     },
   });
   pi.registerTool({
+    ...toolDisplay, name: 'agent_lab_issues', label: 'Постоянные проблемы',
+    description: 'Прочитать постоянные проблемы и точные исходные оценки, обновить индекс из прогона, восстановить индекс или сохранить подтверждённое владельцем объединение. Название само по себе не доказывает общий механизм. inspect id принимает проблему или прогон.',
+    parameters: Type.Object({ operation: Type.Union(['inspect', 'sync', 'rebuild', 'merge'].map(value => Type.Literal(value))), id: Type.Optional(Type.String()), assessmentId: Type.Optional(Type.String()), offset: Type.Optional(Type.Number({ minimum: 0 })), eventOffset: Type.Optional(Type.Number({ minimum: 0 })), limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })), decision: Type.Optional(Type.Unsafe(z.toJSONSchema(issueDecisionSchema))) }, { additionalProperties: false }),
+    executionMode: 'sequential',
+    async execute(_callId, params, signal, _onUpdate, ctx) {
+      signal?.throwIfAborted(); const { lab, close } = open(ctx.cwd);
+      try {
+        if (params.operation !== 'inspect') {
+          if (params.operation === 'merge') {
+            const decision = issueDecisionSchema.parse(params.decision);
+            if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Объединение требует решения владельца в интерактивном терминале.');
+            if (!await ctx.ui.confirm('Объединить проблемы?', safeText(`${decision.fromIssueId} → ${decision.intoIssueId}\n${decision.reason}`))) return { content: [{ type: 'text', text: JSON.stringify({ cancelled: true }) }], details: { cancelled: true } };
+          }
+          await lab.init();
+          if (params.operation === 'sync') { if (!params.id) throw new Error('Укажите исходный прогон.'); await lab.store.syncIssues(await lab.get(params.id)); }
+          else if (params.operation === 'merge') await lab.store.decideIssue(issueDecisionSchema.parse(params.decision));
+          else await lab.store.rebuildIssues();
+        }
+        const journal = await lab.store.readIssueJournal();
+        const output = compactIssues(journal, params.operation === 'inspect' ? params : {});
+        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: {} };
+      } finally { await close(); }
+    },
+  });
+  pi.registerTool({
+    ...toolDisplay, name: 'agent_lab_diagnostics', label: 'Парная диагностика',
+    description: 'prepare сохраняет неизменный план одной гипотезы без вызовов агента, inspect читает план, парный результат и исходные трассы, run запускает оба плеча через общий исполнитель после native подтверждения бюджета. Диагностика исключена из точности и не закрывает дефекты. Неподдерживаемое вмешательство отклоняется до расхода.',
+    parameters: Type.Object({ operation: Type.Union(['prepare', 'inspect', 'run'].map(value => Type.Literal(value))), id: Type.Optional(Type.String()), trialId: Type.Optional(Type.String()), offset: Type.Optional(Type.Number({ minimum: 0 })), limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })), input: Type.Optional(Type.Unsafe(z.toJSONSchema(diagnosticPreparationSchema))) }, { additionalProperties: false }),
+    executionMode: 'sequential',
+    async execute(_callId, params, toolSignal, _onUpdate, ctx) {
+      const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s)); signal.throwIfAborted();
+      const { lab, close } = open(ctx.cwd); let runId: string | undefined;
+      const cancel = () => { if (runId) void lab.cancel(runId).catch(() => {}); };
+      try {
+        let output: unknown;
+        if (params.operation === 'prepare') {
+          const request = diagnosticPreparationSchema.parse(params.input); await lab.init();
+          const plan = await lab.prepareDiagnostic(request.issueId, request.sourceRunId, request.intervention, request.repeats);
+          output = compactDiagnostic(await lab.store.readDiagnostic(plan.id));
+        } else {
+          if (!params.id) throw new Error('Укажите ID сохранённого плана.');
+          let file = await lab.store.readDiagnostic(params.id);
+          if (params.operation === 'run' && !file.runId) {
+            if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Запуск диагностики требует интерактивного подтверждения. В CLI используйте diagnostics --operation run --id PLAN --yes.');
+            const plan = file.plan;
+            const text = `${plan.intervention.hypothesis}\nОдин фактор: ${plan.intervention.kind}\nИсходный снимок: ${plan.sourceHash.slice(0, 12)}\nПар: ${plan.repeats * plan.source.settings.userModes.length}; общий лимит ${plan.budget.maxCalls} вызовов, ${Math.round(plan.budget.maxDurationMs / 1000)} секунд.\nДиагностика не закрывает проблему и не входит в общую точность.`;
+            if (!await ctx.ui.confirm('Запустить парную диагностику?', safeText(text))) return { content: [{ type: 'text', text: JSON.stringify({ cancelled: true }) }], details: { cancelled: true } };
+            signal.throwIfAborted(); await lab.init();
+            runId = (await lab.startDiagnostic(params.id)).id; signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) cancel();
+            await lab.waitForIdle(); file = await lab.store.readDiagnostic(params.id);
+          }
+          output = compactDiagnostic(file, file.runId ? await lab.get(file.runId) : undefined, params);
+          if (file.runId) returnToBoard(ctx, file.runId);
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: {} };
+      } finally { signal.removeEventListener('abort', cancel); await close(); }
+    },
+  });
+  pi.registerTool({
     ...toolDisplay, name: 'agent_lab_run', label: 'Run the proposed tests',
     description: 'Run the exact inspected evaluation draft, with native confirmation of its target, tests and budget. Does not record human review of expectations or results. Stay in the conversation and inspect the evidence after running. Cannot run headlessly or without the human confirmation. Never bypass this tool through shell or internal APIs.',
     parameters: Type.Object({ id: Type.String(), expectedHash: Type.String({ pattern: '^[a-f0-9]{64}$' }) }, { additionalProperties: false }),
@@ -1031,8 +1094,11 @@ export default function agentLab(pi: ExtensionAPI) {
           query = 'query' in action ? action.query ?? '' : ''; pendingOnly = 'pendingOnly' in action ? action.pendingOnly ?? false : false;
           dialogueOpen = 'dialogueOpen' in action ? action.dialogueOpen ?? false : false;
           try {
-            if (!['discuss', 'export', 'openReport', 'cancel'].includes(action.type)) await writing();
-            if (action.type === 'acceptLibrary') {
+            if (!['discuss', 'export', 'openReport', 'cancel', 'issues'].includes(action.type)) await writing();
+            if (action.type === 'issues') {
+              const next = await showIssueWorkspace(ctx, action.record, reading(), async () => { await writing(); return lab; });
+              if (next) { id = next; section = 'results'; selected = 0; }
+            } else if (action.type === 'acceptLibrary') {
               const shown = action.record.librarySnapshot;
               if (!shown) throw new Error('Библиотека сценариев отсутствует.');
               const accepted = await lab.acceptLibrary(action.record.id, libraryHash(shown), action.variantIds);

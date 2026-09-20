@@ -22,6 +22,8 @@ import { evidenceBundle, exportArtifacts, resolveVerified } from './artifacts.js
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
 import { libraryHash } from './scenario-library.js';
 import { libraryPatchSchema } from './scenario-contracts.js';
+import { diagnosticPreparationSchema } from './diagnostics.js';
+import { issueDecisionSchema } from './issues.js';
 import { semanticWorkStatus } from './scenario-work.js';
 
 const percent = (value: number | null) => value === null ? 'нет данных' : `${Math.round(value * 100)}%`;
@@ -78,10 +80,43 @@ async function main() {
     process.stdout.write('Agent Lab — validation set, accuracy и причины провалов вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
     process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab discover-resume --id RUN [--yes] [--json]\n  agent-lab discover-build --id RUN [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
     process.stdout.write('  agent-lab scenarios --id RUN --operation inspect [--json]\n  agent-lab scenarios --id RUN --operation edit|merge|split|variant|assess|accept --expected-hash HASH [--input action.json] [--yes]\n');
+    process.stdout.write('  agent-lab issues --operation inspect|sync|merge|rebuild [--id RUN_OR_ISSUE] [--input decision.json]\n  agent-lab diagnostics --operation prepare --input request.json\n  agent-lab diagnostics --operation inspect|run --id PLAN [--yes]\n');
     process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID] · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
   const directory = values['data-dir'] ?? resolve('.agent-lab');
+  if (command === 'issues' || command === 'diagnostics') {
+    const operation = values.operation ?? 'inspect', lab = new ExperimentLab(directory);
+    if (command === 'issues' && operation === 'inspect') {
+      const journal = await lab.store.readIssueJournal();
+      await writeStdout(JSON.stringify({ ...journal, issues: values.id ? journal.issues.filter(i => i.id === values.id || i.evidence.some(e => e.runId === values.id)) : journal.issues }, null, 2) + '\n'); return;
+    }
+    if (command === 'diagnostics' && operation === 'inspect') {
+      if (!values.id) throw new Error('Укажите --id PLAN.');
+      const file = await lab.store.readDiagnostic(values.id);
+      await writeStdout(JSON.stringify({ ...file, ...(file.runId ? { run: await lab.get(file.runId) } : {}) }, null, 2) + '\n'); return;
+    }
+    if (command === 'diagnostics' && operation === 'run' && !values.yes) throw new Error('Прочитайте сохранённый план; --yes разрешает расход его общего бюджета на обе стороны.');
+    await lab.init();
+    try {
+      const input = values.input ? JSON.parse(await readFile(values.input, 'utf8')) : {};
+      let result: unknown;
+      if (command === 'issues') {
+        if (operation === 'rebuild') result = { issues: await lab.store.rebuildIssues() };
+        else if (operation === 'sync' && values.id) result = { issues: await lab.store.syncIssues(await lab.get(values.id)) };
+        else if (operation === 'merge') result = { issues: await lab.store.decideIssue(issueDecisionSchema.parse(input)) };
+        else throw new Error('Укажите issues --operation inspect|sync|merge|rebuild.');
+      } else if (operation === 'prepare') {
+        const request = diagnosticPreparationSchema.parse(input);
+        result = { plan: await lab.prepareDiagnostic(request.issueId, request.sourceRunId, request.intervention, request.repeats) };
+      } else if (operation === 'run' && values.id) {
+        const run = await lab.startDiagnostic(values.id); await lab.waitForIdle();
+        result = { ...await lab.store.readDiagnostic(values.id), run: await lab.get(run.id) };
+      } else throw new Error('Укажите diagnostics --operation prepare|inspect|run.');
+      await writeStdout(JSON.stringify(result, null, 2) + '\n');
+    } finally { await lab.close(); }
+    return;
+  }
   if (command === 'suites') { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); return; }
   if (command === 'scenarios') {
     if (!values.id || !values.operation) throw new Error('Укажите --id RUN и --operation inspect|edit|merge|split|variant|assess|accept.');

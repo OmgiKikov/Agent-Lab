@@ -221,7 +221,7 @@ export type BoardAction =
   | { type: 'new' }
   | { type: 'demo' }
   | { type: 'open'; id: string }
-  | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat' | 'accept'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number; dialogueOpen?: boolean }
+  | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat' | 'accept' | 'issues'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number; dialogueOpen?: boolean }
   /** The owner rewrites one expectation in their own words; the text itself comes from the native editor, never from here. */
   | { type: 'expect'; scenarioId: string; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; dialogueOpen?: boolean }
   | { type: 'acceptLibrary'; variantIds: string[]; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
@@ -402,6 +402,7 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean, 
   // Demo 2026-09-18: under the agreement block the title and the outcome tag are already on screen.
   const rows = [
     ...(agreementShown && !expanded ? [] : [line(scenario?.title ?? trial.scenarioId, 'accent', true),
+      ...(trial.diagnosticReceipt ? [line(trial.diagnosticReceipt.arm === 'baseline' ? 'Диагностика · исходные условия' : 'Диагностика · вмешательство', 'warning')] : []),
       line(`${verdicts[trial.outcome]} · ${trial.userMode === 'reactive' ? 'клиента играл симулятор' : trial.userMode} · попытка ${trial.repeat + 1}`, outcomeColor(trial.outcome))]),
     ...findings.map(f => line(expanded ? humanFindingText(f) : humanFindingText(f).slice(0, 240), 'warning')),
     ...(record.workflow !== 'evaluate' ? [line(`Версия агента: ${trial.revisionId}`, 'muted')] : []),
@@ -494,7 +495,7 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
       line(''),
       ...(measuredAny ? [line(text.judge), line(text.queue, q.humanQueue.total ? 'warning' : 'muted')] : []),
       line(`Дальше: ${v.nextSteps[0]?.text ?? 'Повторите тест после изменения агента.'}`),
-      line('a — обсудить результат · r — повторить набор · d — все детали', 'accent'),
+      line('i — постоянные проблемы · a — обсудить · r — повторить · d — детали', 'accent'),
       ...(comparison ? [line(`После исправления: ${comparison.headline}`, 'accent')] : []),
       ...(measuredAny ? [line(text.scope, 'muted'), line(text.limits, 'muted')] : []),
       line(`Выполнено ${v.execution.completed}/${v.execution.planned} · спорных ${q.humanQueue.total} · сбоев ${v.invalid} · тестов отклонено ${v.review.invalid}`, 'muted'),
@@ -816,6 +817,7 @@ export class LabBoard implements Component {
         if (answer) return this.finish({ type: 'agree', answer, ...state, trialId: entry.id, metricIds: target.metricIds, judgeVerdict: target.judgeVerdict });
       }
       const finished = this.record.workflow === 'evaluate' && !!this.record.reviewedAt && !activePhases.has(this.record.phase);
+      if (key('i') && (this.section === 'results' || this.section === 'agent') && this.record.trials.length) return this.finish({ type: 'issues', ...state });
       const type = key('r') && editable && !this.record.questions.length && (!libraryPath || !!this.record.librarySnapshot?.acceptance) && (!libraryPath || this.section === 'agent') ? 'run'
         : key('r') && finished ? 'repeat'
         : key('v') && reviewable ? 'annotate'
@@ -984,7 +986,7 @@ export class LabBoard implements Component {
         : activePhases.has(record.phase) ? 'c Остановить · обновляется автоматически'
         : record.phase === 'results_review' ? 'a Обсудить · 3 Диалоги · f Завершить · r Повторить · x Экспорт'
         : record.reviewedAt ? 'a Обсудить результат · r Повторить · x Экспорт' : 'a Обсудить исправление · результат сохранён',
-      inner < 80 ? '↑↓ Выбор · PgUp/PgDn Текст · ? Помощь'
+      this.section === 'results' ? 'i Проблемы · ↑↓ Выбор · PgUp/PgDn Текст · ? Помощь' : inner < 80 ? '↑↓ Выбор · PgUp/PgDn Текст · ? Помощь'
         : '↑↓ Выбор · PgUp/PgDn Текст · d Детали · Tab Раздел · / Поиск · ? Помощь',
     ] : [this.primaryHint(), 'n Новая проверка · ↑↓ Выбор · ? Помощь'];
     if (this.options.reportPath && record && !answerPhase) footer[1] = `${REPORT_PREFIX}${footer[1]}`;

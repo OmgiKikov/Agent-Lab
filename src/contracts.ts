@@ -1,3 +1,4 @@
+import { diagnosticCapabilitiesSchema, diagnosticReceiptSchema, type DiagnosticRequest, type DiagnosticReceipt } from './diagnostic-contracts.js';
 import type { CheckpointInput } from './checkpoints.js';
 import { userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
 import { checkpointSchema } from './scenario-contracts.js';
@@ -103,20 +104,20 @@ const releaseSchema = z.strictObject({
 export const targetSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('sandbox') }),
   z.strictObject({
-    kind: z.literal('http'), promptFile, url: z.string().url().max(2000),
+    kind: z.literal('http'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, url: z.string().url().max(2000),
     headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/, 'Header values must name environment variables')).default({}),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),
     release: releaseSchema,
   }),
   z.strictObject({
-    kind: z.literal('module'), promptFile, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
+    kind: z.literal('module'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
     exportName: z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{0,99}$/).default('createSession'),
     timeoutMs: z.number().int().min(1000).max(600000).optional(),
     release: releaseSchema,
   }),
   /** A local process (for example `python3 agent.py`) speaking one JSON request/reply per line over stdin/stdout. */
   z.strictObject({
-    kind: z.literal('command'), promptFile, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
+    kind: z.literal('command'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
     cwd: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required').optional(),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),
     release: releaseSchema,
@@ -587,6 +588,7 @@ export type SimulatorCheckId = typeof SIMULATOR_CHECK_IDS[number];
 /** A code predicate over the simulated user's own replies. Never an agent grade; never shown to the judge. */
 export interface SimulatorCheck { id: SimulatorCheckId; description: string; passed: boolean; evidence: string; seq?: number; heuristic: boolean }
 export interface Trial {
+  diagnosticReceipt?: DiagnosticReceipt;
   id: string; revisionId: string; scenarioId: string; familyId: string; repeat: number; userMode: UserMode;
   split: 'dev' | 'control'; manifestHash: string; outcome: Outcome; reason: string;
   checkpoints?: CheckpointResult[]; checkpointReceipt?: z.infer<typeof checkpointReceiptSchema>;
@@ -684,7 +686,7 @@ export const humanReviewInputSchema = z.strictObject({
   .refine(v => v.source !== 'quick' || (!!v.metricId && v.verdict !== 'invalid'), 'Быстрая отметка ставится на одну оценку судьи.');
 export type HumanReviewInput = z.infer<typeof humanReviewInputSchema>;
 export type HumanReview = HumanReviewInput & { id: string; createdAt: string };
-const humanReviewSchema = humanReviewInputSchema.safeExtend({ id: identifier, createdAt: text });
+export const humanReviewSchema = humanReviewInputSchema.safeExtend({ id: identifier, createdAt: text });
 export const draftPatchSchema = z.strictObject({
   /** Full cards to update or add by id. Omitted cards are always preserved. */
   scenarios: z.array(scenarioSchema.extend({ split: z.enum(['dev', 'control']).optional() })).min(1).max(40)
@@ -783,6 +785,7 @@ export interface SourceIdentity {
   scenarios: Record<string, string>;
 }
 export interface Experiment {
+  runKind?: 'evaluation' | 'diagnostic' | 'generator';
   librarySnapshot?: ScenarioLibrary;
   originalImport?: { id: string; contentHash: string };
   preparationProgress?: PreparationProgress;
@@ -821,6 +824,7 @@ export interface Experiment {
   targetRelease?: string;
   sourceEvidence?: { runId: string; parentRunId?: string; trials: Trial[]; humanReviews: HumanReview[]; identity?: SourceIdentity };
   clarifications?: { question: string; answer: string }[];
+  executionRunId?: string;
   assessmentOf?: string;
   assessmentTrialIds?: string[];
   evidenceHash?: string;
@@ -829,6 +833,7 @@ export interface Experiment {
 export const usageSchema = z.strictObject({ calls: z.number().int().nonnegative(), inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), costUsd: z.number().finite().nonnegative().nullable() });
 const revisionSchema = z.strictObject({ id: text, parentId: text.nullable(), spec: agentSchema, hypothesis: z.string(), createdAt: text });
 export const trialSchema = z.strictObject({
+  diagnosticReceipt: diagnosticReceiptSchema.optional(),
   checkpoints: z.array(checkpointResultSchema).max(12).optional(), checkpointReceipt: checkpointReceiptSchema.optional(),
   id: identifier, revisionId: text, scenarioId: identifier, familyId: identifier, repeat: z.number().int().nonnegative(),
   userMode: userModeSchema.default('reactive'),
@@ -898,6 +903,7 @@ function validateReviewReferences(reviews: HumanReview[], trials: Trial[], path:
 }
 
 export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
+  runKind: z.enum(['evaluation', 'diagnostic', 'generator']).optional(),
   librarySnapshot: scenarioLibrarySchema.optional(),
   originalImport: z.strictObject({ id: identifier, contentHash: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
   preparationProgress: preparationProgressSchema.optional(),
@@ -924,7 +930,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   ownerExpectationScenarioIds: z.array(identifier).min(1).max(40).refine(unique, 'Duplicate owner expectation IDs').optional(),
   targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),
   clarifications: z.array(z.strictObject({ question: text.max(3000), answer: text.max(5000) })).max(100).optional(),
-  assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
+  executionRunId: identifier.optional(), assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
   evaluatorVersion: text.optional(), targetRelease: text.max(200).optional(),
   sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(600), humanReviews: z.array(humanReviewSchema).max(1000),
     identity: z.strictObject({ libraryHash: text.optional(), importHash: text.optional(), targetFingerprint: text.optional(), targetVersion: text.max(200).optional(), evaluatorVersion: text.optional(), manifestHash: text.nullable(),
@@ -947,6 +953,8 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   if (record.sourceEvidence) validateReviewReferences(record.sourceEvidence.humanReviews, record.sourceEvidence.trials, ['sourceEvidence', 'humanReviews'], ctx);
 });
 export interface CallContext {
+  diagnosticRequest?: DiagnosticRequest;
+  onDiagnosticReceipt?(receipt: DiagnosticReceipt): void;
   signal: AbortSignal; timeoutMs: number;
   beforeCall(): void;
   addUsage(usage: Omit<Usage, 'calls'>): void;

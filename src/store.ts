@@ -1,3 +1,6 @@
+import { diagnosticFileSchema, verifyDiagnosticPlan, type DiagnosticFile, type DiagnosticPlan } from './diagnostics.js';
+import { atomicPrivateJson } from './issues.js';
+import { IssueFiles, syncIssues, decideIssueMerge, issueDecisionSchema, type Issue, type IssueDecision } from './issues.js';
 import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
 import { appendFileSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -63,6 +66,38 @@ export class ExperimentStore {
       await files.finishPublication(next.id);
     });
   }
+  private diagnosticPath(id: string): string { if (!/^diag_[a-f0-9]{40}$/.test(id)) throw new Error('Неверный ID диагностики.'); return join(this.directory, 'diagnostics', `${id}.json`); }
+  async readDiagnostic(id: string): Promise<DiagnosticFile> { const value = diagnosticFileSchema.parse(JSON.parse(await readFile(this.diagnosticPath(id), 'utf8'))); verifyDiagnosticPlan(value.plan); if (value.plan.id !== id) throw new Error('ID плана не совпадает.'); return value; }
+  saveDiagnostic(value: DiagnosticFile): Promise<void> { return this.writeTransaction(async () => {
+    const next = diagnosticFileSchema.parse(value); verifyDiagnosticPlan(next.plan);
+    const existing = await this.readDiagnostic(next.plan.id).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
+    if (existing?.runId && existing.runId !== next.runId || existing?.result && JSON.stringify(existing.result) !== JSON.stringify(next.result)) throw new Error('Диагностика уже выполнена; сохранённый результат неизменяем.');
+    await mkdir(join(this.directory, 'diagnostics'), { recursive: true, mode: 0o700 });
+    await atomicPrivateJson(this.diagnosticPath(next.plan.id), next);
+    const files = new IssueFiles(this.directory), current = await files.read(), issue = current.issues.find(i => i.id === next.plan.issueId);
+    if (issue && !issue.experiments.includes(next.plan.id)) { issue.experiments.push(next.plan.id); if (!issue.hypotheses.includes(next.plan.intervention.hypothesis)) issue.hypotheses.push(next.plan.intervention.hypothesis); await files.write(current); }
+  }); }
+  async readIssues(): Promise<Issue[]> { return (await new IssueFiles(this.directory).read()).issues; }
+  async readIssueJournal() { return new IssueFiles(this.directory).read(); }
+  syncIssues(record: Experiment): Promise<Issue[]> { return this.writeTransaction(async () => {
+    const files = new IssueFiles(this.directory), current = await files.read(), next = syncIssues(record, current.issues);
+    await files.write({ ...current, ...next, suggestions: [...current.suggestions, ...next.suggestions].filter((s, i, all) => all.findIndex(x => x.issueId === s.issueId && x.candidateId === s.candidateId) === i) });
+    return next.issues;
+  }); }
+  decideIssue(raw: IssueDecision): Promise<Issue[]> { return this.writeTransaction(async () => {
+    const decision = issueDecisionSchema.parse(raw), files = new IssueFiles(this.directory), current = await files.read();
+    const old = current.decisions.find(d => d.id === decision.id);
+    if (old) { if (JSON.stringify(old) !== JSON.stringify(decision)) throw new Error('ID решения уже использован.'); return current.issues; }
+    const issues = decideIssueMerge(current.issues, decision);
+    await files.write({ ...current, issues, decisions: [...current.decisions, decision], suggestions: current.suggestions.filter(s => s.issueId !== decision.fromIssueId && s.candidateId !== decision.fromIssueId) });
+    return issues;
+  }); }
+  rebuildIssues(): Promise<Issue[]> { return this.writeTransaction(async () => {
+    const files = new IssueFiles(this.directory), current = await files.read();
+    let issues = current.issues;
+    for (const record of await this.list()) if (!['preparing', 'review', 'evaluating', 'baseline', 'improving', 'control'].includes(record.phase)) issues = syncIssues(record, issues).issues;
+    await files.write({ ...current, issues }); return issues;
+  }); }
   constructor(directory: string) { this.directory = resolve(directory); }
   private path(id: string): string {
     if (!idPattern.test(id)) throw new Error('Invalid experiment ID');

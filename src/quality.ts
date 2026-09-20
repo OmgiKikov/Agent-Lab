@@ -644,7 +644,7 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const sentence = (parts: string[]) => { const text = parts.join('; '); return text.charAt(0).toLocaleUpperCase() + text.slice(1); };
   // The rule the number is counted by is said in the sentence itself (C-309), so an old export is told apart by its wording.
   const ruleWords = withRules ? 'Справился (запрос выполнен и правила промпта соблюдены)' : 'Справился (запрос выполнен)';
-  const headline = primary === 'goal_attainment'
+  const headline = input.runKind === 'diagnostic' || input.runKind === 'generator' ? 'Служебный прогон исключён из общей точности и проверки исправлений; исходные трассы доступны отдельно.' : primary === 'goal_attainment'
     ? `${ruleWords} в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${plural(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} справился, но провален другой критерий.` : ''} ${sentence([...leftovers([[cards.unknown, `без решения: ${cards.unknown}`], [cards.invalid, `невалидно: ${cards.invalid}`], [cards.notReached, `не дошли: ${cards.notReached}`]]), reviewText])}.`
     : `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)})${leftovers([[cards.unknown, `${cards.unknown} без решения`], [cards.invalid, `${cards.invalid} невалидны`], [cards.notReached, `${cards.notReached} не дошли`]]).map(part => `, ${part}`).join('')}; ${reviewText}.`;
   const exclusions = record.validationExclusions ?? [];

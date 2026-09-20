@@ -1,3 +1,4 @@
+import { prepareDiagnostic, runDiagnostic, verifyDiagnosticPlan, type Intervention } from './diagnostics.js';
 import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
 import type { LibraryPatch, ScenarioLibrary } from './scenario-contracts.js';
 import { assessScenarioLibrary, assertLibraryRun, compiledLibraryScenarios, prepareScenarioLibrary, SCENARIO_EXTRACTION_PROTOCOL } from './scenario-preparation.js';
@@ -110,6 +111,7 @@ function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
     phase: 'review', message: 'Тесты готовы. Проверьте подключение и запустите проверку.',
     trials: [], comparisons: [], iterations: [], humanReviews: [], usage: emptyUsage(),
     reviewedAt: null, reviewMode: null, manifestHash: null, controlConsumedAt: null, error: null });
+  delete record.executionRunId;
   delete record.resultsReviewedAt; delete record.resultsReviewHash; delete record.failureModes;
   delete record.acceptedDraftHash;
   delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash; delete record.releaseLog;
@@ -918,6 +920,48 @@ export class ExperimentLab {
       return structuredClone(record);
     });
   }
+  async prepareDiagnostic(issueId: string, sourceRunId: string, intervention: Intervention, repeats: number) {
+    return this.change(async () => {
+      const issue = (await this.store.readIssues()).find(i => i.id === issueId && !i.mergedInto);
+      if (!issue) throw new Error('Проблема не найдена.');
+      const plan = prepareDiagnostic(issue, await this.store.get(sourceRunId), intervention, repeats);
+      const existing = await this.store.readDiagnostic(plan.id).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
+      if (!existing) await this.store.saveDiagnostic({ formatVersion: '1', plan });
+      return plan;
+    });
+  }
+  async startDiagnostic(id: string): Promise<Experiment> {
+    return this.change(async () => {
+      const file = await this.store.readDiagnostic(id), plan = file.plan; verifyDiagnosticPlan(plan);
+      if (file.runId) return this.store.get(file.runId);
+      await preflightTarget(plan.source.target);
+      if (plan.source.targetFingerprint && plan.source.targetFingerprint !== await targetFingerprint(plan.source.target)) throw new Error('Версия агента изменилась после исходного прогона.');
+      // Preserve the source scenario byte-for-byte. The original accepted library remains in plan.source.
+      const record = structuredClone(plan.source);
+      Object.assign(record, { id: randomUUID(), runKind: 'diagnostic', parentRunId: plan.source.id, phase: 'evaluating', trials: [], comparisons: [], humanReviews: [], iterations: [], usage: emptyUsage(), error: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      delete record.assessmentOf; delete record.executionRunId; delete record.sourceEvidence; delete record.failureModes; delete record.resultsReviewedAt; delete record.resultsReviewHash;
+      record.scenarios = record.scenarios.filter(s => s.id === plan.scenarioId);
+      record.selectedScenarioIds = [plan.scenarioId]; record.acceptedTests = record.acceptedTests?.filter(t => t.scenarioId === plan.scenarioId);
+      record.settings.repeats = plan.repeats;
+      record.limitations.push('Диагностический прогон: исключён из общей точности и проверки исправления. Исходное состояние и вмешательство сравниваются попарно.');
+      record.manifestHash = measurementHash(record);
+      await this.store.save(record);
+      await this.store.saveDiagnostic({ ...file, runId: record.id });
+      await this.launch(record, async ctx => {
+        const runtime = await this.runtime(record), revision = record.revisions[0];
+        if (!revision) throw new Error('Нет исходной версии агента.');
+        const result = await runDiagnostic(plan, async (arm, request) => {
+          const start = record.trials.length;
+          try { await this.runSuite(record, runtime, revision, record.scenarios[0]!.split, arm === 'baseline' ? 'Исходные условия · ' : 'Вмешательство · ', { ...ctx, diagnosticRequest: request }); }
+          catch (error) { const message = error instanceof Error ? error.message : String(error); record.limitations.push(message); return { trials: record.trials.slice(start), error: message }; }
+          return record.trials.slice(start);
+        });
+        await this.store.saveDiagnostic({ ...file, runId: record.id, result });
+        await this.checkpoint(record, 'results_review', result.reasons.join(' '));
+      }, true);
+      return structuredClone(record);
+    });
+  }
   /** Reuse the exact reviewed materials and cards; only evidence and approvals start afresh. */
   async repeat(id: string, scenarioIds?: string[], controlScenarioIds?: string[]): Promise<Experiment> {
     return this.change(async () => {
@@ -1001,6 +1045,13 @@ export class ExperimentLab {
       if (input.judge) { record.settings.judge = input.judge; delete record.settings.roles.judge; }
       record.evaluatorVersion = evaluatorVersion(record.settings);
       record.assessmentOf = previous.id;
+      let execution = previous;
+      const ancestry = new Set<string>();
+      while (execution.assessmentOf && !execution.executionRunId) {
+        if (ancestry.has(execution.id)) throw new Error('Цикл переоценок.'); ancestry.add(execution.id);
+        execution = await this.store.get(execution.assessmentOf);
+      }
+      record.executionRunId = execution.executionRunId ?? execution.id;
       const trials = previous.trials.filter(t => !input.trialIds || input.trialIds.includes(t.id));
       record.assessmentTrialIds = trials.map(t => t.id);
       record.evidenceHash = fingerprint(trials.map(t => ({ id: t.id, events: t.events, initialState: t.initialState, finalState: t.finalState, observation: t.observation })));
@@ -1203,7 +1254,8 @@ export class ExperimentLab {
       try {
         await this.store.save(record); saved = true; ready();
         controller.signal.throwIfAborted();
-        await work(ctx); controller.signal.throwIfAborted();
+        await work(ctx);
+        if (record.phase !== 'results_review' || record.runKind === 'diagnostic') controller.signal.throwIfAborted();
       }
       catch (error) {
         if (!saved) { failed(error); throw error; }
@@ -1214,7 +1266,13 @@ export class ExperimentLab {
         record.message = record.error;
       } finally {
         clearTimeout(timer); this.updateDiscoveryElapsed(record); record.updatedAt = new Date().toISOString();
-        try { if (saved) await this.store.save(record); }
+        try { if (saved) {
+          await this.store.save(record);
+          if (record.trials.length && record.runKind !== 'diagnostic' && record.runKind !== 'generator') {
+            try { await this.store.syncIssues(record); }
+            catch (error) { record.limitations.push(`Не удалось обновить индекс проблем; исходные результаты сохранены: ${error instanceof Error ? error.message : String(error)}`); await this.store.save(record); }
+          }
+        } }
         finally { if (this.active === active) this.active = null; }
       }
     })();
@@ -1369,7 +1427,6 @@ export class ExperimentLab {
       validateFailureModes(modes, failed, prompt);
       record.failureModes = modes;
     } catch (error) {
-      if (ctx.signal.aborted) throw error;
       record.limitations.push(`Не удалось назвать типы провалов: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

@@ -147,6 +147,7 @@ export async function evaluateTrial(input: {
   };
   const localCtx: CallContext = {
     ...ctx,
+    onDiagnosticReceipt(receipt) { trial.diagnosticReceipt = structuredClone(receipt); ctx.onDiagnosticReceipt?.(receipt); },
     beforeCall() { ctx.signal.throwIfAborted(); ctx.beforeCall(); trial.usage.calls += 1; },
     addUsage(usage) {
       ctx.addUsage(usage);

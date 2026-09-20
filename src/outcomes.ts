@@ -13,6 +13,7 @@ export const measured = (trial: Trial) => graded(trial) || trial.outcome === 'un
 
 /** Legacy optimization runs contain several agents; their headline describes only the selected version. */
 export function observedRecord(record: Experiment): Experiment {
+  if (record.runKind === 'diagnostic' || record.runKind === 'generator') return { ...record, trials: [], scenarios: [], humanReviews: [] };
   if (record.workflow !== 'compare') return record;
   const split = record.controlConsumedAt && !runningPhases.has(record.phase) ? 'control' : 'dev';
   const selected = record.selectedRevisionId ?? record.revisions[0]?.id;
