@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { scenarioSchema } from '../src/contracts.js';
-import { importBatch, createLibrary, libraryHash, libraryQuality, editLibrary, acceptLibrary, compileLibrary, librarySnapshot } from '../src/scenario-library.js';
+import { importBatch, createLibrary, libraryHash, libraryQuality, editLibrary, acceptLibrary, compileLibrary, librarySnapshot, recordSemanticAssessment, semanticPaths } from '../src/scenario-library.js';
 import { libraryFixture, proposals, rawDialogues, sources, requirements } from './helpers/scenario-library.js';
 
 test('groups explicit business proposals and compiles only grounded initial facts', () => {
@@ -107,10 +107,34 @@ test('owner fact edits record provenance and explicit variant removal preserves 
   const draft = libraryFixture();
   const edited = editLibrary(draft, libraryHash(draft), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number', statement: 'Номер терминала: 5678', value: '5678', availability: 'initial', editId: 'owner_1', reason: 'Владелец исправил опечатку' });
   assert.equal(edited.variants[0]!.userState.facts[0]!.origin.kind, 'owner');
-  assert.deepEqual(compileLibrary(acceptLibrary(edited, libraryHash(edited), ['variant_1']))[0]!.user.knows, ['Номер терминала: 5678']);
+  assert.ok(libraryQuality(edited).some(issue => issue.code === 'semantic_variant_pending'));
+  const checked = recordSemanticAssessment(edited, edited.variants.flatMap(variant => semanticPaths(variant).map(path => ({ variantId: variant.id, path, status: 'ready' as const, reason: 'Проверено' }))));
+  assert.deepEqual(compileLibrary(acceptLibrary(checked, libraryHash(checked), ['variant_1']))[0]!.user.knows, ['Номер терминала: 5678']);
   const removed = editLibrary(edited, libraryHash(edited), { kind: 'remove_variant', variantId: 'variant_1', reason: 'Исключить' });
   assert.equal(removed.variants.length, 1);
   assert.equal(removed.imports[0]!.dialogues.length, 2);
+});
+
+test('owner text edits cover opening, goal, expectation and checkpoint rule while preserving citations', () => {
+  let library = libraryFixture();
+  const edits = [
+    { field: 'opening', value: 'Помогите оформить возврат' },
+    { field: 'goal', value: 'Оформить возврат безопасно' },
+    { field: 'successCriteria', value: 'Агент запросил номер терминала и объяснил следующий шаг' },
+    { field: 'checkpointRule', checkpointId: 'ask_terminal', value: 'Агент запросил номер терминала до инструкции' },
+  ] as const;
+  for (const [index, edit] of edits.entries()) library = editLibrary(library, libraryHash(library), {
+    kind: 'edit_variant_text', variantId: 'variant_1', ...edit, editId: `owner_text_${index}`, reason: 'Явная правка владельца',
+  });
+  const variant = library.variants[0]!;
+  assert.equal(variant.userState.opening, edits[0].value);
+  assert.equal(variant.userState.goal, edits[1].value);
+  assert.equal(variant.evaluationSpec.successCriteria, edits[2].value);
+  assert.equal(variant.evaluationSpec.checkpoints[0]!.rule, edits[3].value);
+  assert.equal(variant.evaluationSpec.checkpoints[0]!.quote, 'Уточните номер терминала');
+  assert.equal(variant.history.filter(entry => entry.textEdit).length, 4);
+  assert.ok(libraryQuality(library).some(issue => issue.code === 'semantic_variant_pending'));
+  assert.throws(() => acceptLibrary(library, libraryHash(library), ['variant_1']), /готов/);
 });
 
 test('exact duplicate variants and ungrounded synthetic changes are blocked', () => {
@@ -191,6 +215,10 @@ test('policies cannot reference excluded facts, dangling states or unreachable s
   assert.ok(codes.includes('excluded_fact_action'));
   assert.ok(codes.includes('invalid_policy'));
   assert.ok(codes.includes('unreachable_stop'));
+  const danglingAction = structuredClone(draft.variants[0]!);
+  danglingAction.behaviorPolicy.transitions[0]!.actionId = 'missing_action';
+  const invalidAction = editLibrary(draft, libraryHash(draft), { kind: 'upsert_variant', variant: danglingAction, reason: 'Невалидная ссылка действия' });
+  assert.ok(libraryQuality(invalidAction).some(issue => issue.code === 'invalid_policy'), 'invalid references stay reviewable instead of crashing duplicate canonicalization');
 });
 
 test('unsupported managed fixtures and forged requirement citations prevent acceptance', () => {

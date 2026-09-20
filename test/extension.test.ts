@@ -20,6 +20,9 @@ import { ExperimentStore } from '../src/store.js';
 import { buildResultView, resultViewLines } from '../src/result-view.js';
 import { COUNTING_RULES, markTargets, measurementUsable, primaryMetricId } from '../src/outcomes.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
+import { libraryFixture } from './helpers/scenario-library.js';
+import { assessScenarioLibrary } from '../src/scenario-work.js';
+import { libraryHash } from '../src/scenario-library.js';
 
 function registered(onUserMessage?: (message: unknown) => void) {
   const tools = new Map<string, ToolDefinition>();
@@ -53,8 +56,12 @@ test('injected Pi instructions hand saved discovery directly to one test after t
   try {
     const result = await beforeAgentStart({ systemPrompt: 'base' }, { cwd: '.', hasUI: false, mode: 'print' } as ExtensionContext);
     const prompt = result?.systemPrompt ?? '';
-    assert.match(prompt, /primary flow.*mode=validate/is);
-    assert.match(prompt, /up to 15 measurable prompt\/RAG cases.*reactive simulator/is);
+    assert.match(prompt, /primary.*flow.*Логи.*Сценарии.*Прогон.*Результаты/is);
+    assert.match(prompt, /agent_lab_scenarios/i);
+    assert.match(prompt, /accepted revision/i);
+    assert.match(prompt, /source quotes.*semantic readiness/is);
+    assert.match(prompt, /Acceptance.*does not run the agent/is);
+    assert.match(prompt, /remaining cumulative budget/is);
     assert.match(prompt, /estimated card accuracy/is);
     assert.match(prompt, /agent_lab_build mode=discover/i);
     assert.match(prompt, /selection, not an accuracy estimate/i);
@@ -62,13 +69,65 @@ test('injected Pi instructions hand saved discovery directly to one test after t
     assert.match(prompt, /answers yes.*exact fromRunId and hypothesis/is);
     assert.match(prompt, /re-reads the saved evidence and builds exactly one editable test/is);
     assert.match(prompt, /refusal or correction builds nothing/i);
-    assert.match(prompt, /agent_lab_accept to show the owner what the agent must do in each situation/i);
-    assert.match(prompt, /confirms all expectations or corrects one in their own words/i);
+    assert.match(prompt, /agent_lab_accept for this supplemental one-test flow/i);
+    assert.match(prompt, /owner confirm or correct it in their own words/i);
     assert.match(prompt, /agent_lab_run asks to confirm expectations first when they are not confirmed/i);
   } finally {
     if (previous === undefined) delete process.env.AGENT_LAB_SESSION; else process.env.AGENT_LAB_SESSION = previous;
     await shutdown();
   }
+});
+
+test('scenario tool paginates large libraries and expands only an explicitly selected variant', async () => {
+  const library = libraryFixture();
+  const seed = library.variants[0]!;
+  library.variants = Array.from({ length: 200 }, (_, index) => ({ ...structuredClone(seed), id: `bounded_${index}`, title: `Вариант ${index}` }));
+  const fixture = await boardFixture('scenario-tool-large-', record => {
+    record.phase = 'review'; record.scenarios = []; record.trials = [];
+    record.librarySnapshot = library; record.sources = library.sources; record.requirements = library.requirements;
+  });
+  const { tools, shutdown } = registered();
+  try {
+    const ctx = { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext;
+    const compactResult = await tools.get('agent_lab_scenarios')!.execute('compact', { id: fixture.record.id, operation: 'inspect' }, undefined, undefined, ctx);
+    const compactText = compactResult.content.filter(item => item.type === 'text').map(item => item.text).join('\n');
+    const compact = JSON.parse(compactText);
+    assert.equal(compact.variants.length, 20); assert.equal(compact.page.total, 200); assert.equal(compact.page.nextCursor, 20);
+    assert.equal(compact.detail, undefined); assert.ok(Buffer.byteLength(compactText) < 100_000, 'default model context stays bounded');
+    const detailed = output(await tools.get('agent_lab_scenarios')!.execute('detail', {
+      id: fixture.record.id, operation: 'inspect', variantId: 'bounded_199', limit: 1,
+    }, undefined, undefined, ctx));
+    assert.equal(detailed.variants.length, 1); assert.equal(detailed.detail[0].id, 'bounded_199');
+    assert.match(detailed.detail[0].facts[0].origin.quote, /1234/);
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('scenario tool resume estimate excludes receipts and permits a bounded partial assessment', async t => {
+  const library = libraryFixture();
+  let partial = library; let calls = 0;
+  await assert.rejects(() => assessScenarioLibrary(library, { async assessScenarioProposals(input) {
+    if (++calls === 2) throw new Error('pause fixture');
+    return input.fields.flatMap(field => field.paths.map(path => ({ variantId: field.variantId, path, status: 'ready' as const, reason: 'Проверено' })));
+  } }, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async value => { partial = structuredClone(value); }), /pause fixture/);
+  const fixture = await boardFixture('scenario-tool-resume-', record => {
+    record.phase = 'review'; record.scenarios = []; record.trials = [];
+    record.librarySnapshot = partial; record.sources = partial.sources; record.requirements = partial.requirements;
+    record.usage.calls = record.settings.maxCalls - 1;
+  });
+  const { tools, shutdown } = registered();
+  const original = ExperimentLab.prototype.assessLibrary;
+  let resumed = 0;
+  ExperimentLab.prototype.assessLibrary = async function(id) { resumed++; return (await this.readLibrary(id)).experiment; };
+  t.after(() => { ExperimentLab.prototype.assessLibrary = original; });
+  try {
+    const ctx = { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext;
+    const before = output(await tools.get('agent_lab_scenarios')!.execute('inspect', { id: fixture.record.id, operation: 'inspect' }, undefined, undefined, ctx));
+    assert.ok(before.budget.semanticCompletedJobs > 0);
+    assert.equal(before.budget.semanticPendingJobs, before.budget.semanticTotalJobs - before.budget.semanticCompletedJobs);
+    assert.ok(before.budget.semanticPendingJobs > before.budget.remainingCalls);
+    await tools.get('agent_lab_scenarios')!.execute('resume', { id: fixture.record.id, operation: 'assess', expectedLibraryHash: libraryHash(partial) }, undefined, undefined, ctx);
+    assert.equal(resumed, 1, 'available calls may make partial progress instead of demanding the full nominal budget');
+  } finally { await shutdown(); await fixture.cleanup(); }
 });
 
 test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-card set', async t => {
@@ -490,7 +549,7 @@ test('headless model tools prepare and edit only; approvals and human assessment
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
   const updates: string[] = [];
   try {
-    assert.deepEqual([...tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
+    assert.deepEqual([...tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
     const report = output(await tools.get('agent_lab_build')!.execute('build-1', { mode: 'demo', scenarioCount: 2 }, undefined,
       value => { updates.push(JSON.stringify(value)); }, ctx));
     assert.equal(report.phase, 'review'); assert.equal(report.workflow, 'evaluate');
@@ -605,7 +664,7 @@ test('actual Pi SDK loader imports native cards, preparation-only tools and embe
     await loader.reload();
     const loaded = loader.getExtensions();
     assert.deepEqual(loaded.errors, []); assert.equal(loaded.extensions.length, 1);
-    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
+    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
     assert.ok(loaded.extensions[0]!.commands.has('agent-lab'));
     assert.deepEqual(loader.getAgentsFiles().agentsFiles, []);
     const skills = loader.getSkills();
@@ -1062,6 +1121,60 @@ function boardSession(cwd: string) {
   } } as unknown as ExtensionCommandContext;
   return { ctx, screens, editorCalls, selectCalls, confirmBodies, state };
 }
+
+test('history remains readable while another instance owns the data directory', async () => {
+  const fixture = await boardFixture('agent-lab-read-only-history-');
+  const owner = new ExperimentStore(join(fixture.cwd, '.agent-lab'));
+  await owner.init();
+  const running = { ...fixture.record, phase: 'evaluating' as const };
+  await owner.save(running);
+  const before = await readFile(join(owner.directory, `${running.id}.json`), 'utf8');
+  const lock = await readFile(join(owner.directory, '.lock'), 'utf8');
+  const { command, shutdown, tools } = registered();
+  const session = boardSession(fixture.cwd);
+  try {
+    session.state.steps = [['q']];
+    await command(running.id.slice(0, 8), session.ctx);
+    const inspected = output(await tools.get('agent_lab_inspect')!.execute('read', { id: running.id }, undefined, undefined, session.ctx));
+    assert.equal(inspected.phase, 'evaluating');
+    assert.ok(session.screens[0]?.includes('ИДУТ ДИАЛОГИ'));
+    assert.equal(session.confirmBodies.length, 0, 'leaving a reader does not ask to cancel the owner');
+    assert.equal(await readFile(join(owner.directory, `${running.id}.json`), 'utf8'), before);
+    assert.equal(await readFile(join(owner.directory, '.lock'), 'utf8'), lock, 'reader never releases another instance lock');
+  } finally { await shutdown(); await owner.close(); await rm(fixture.cwd, { recursive: true, force: true }); }
+});
+
+test('a board-started run outlives the board and releases ownership after completion', { timeout: 20000 }, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'agent-lab-board-background-'));
+  const script = join(cwd, 'target.cjs');
+  await writeFile(script, `process.stdin.once('data', () => setTimeout(() => process.stdout.write(JSON.stringify({reply:'Проверка завершена.', resetConfirmed:true})+'\\n'), 500));`);
+  const fixture = new ExperimentLab(join(cwd, '.agent-lab'), createDemoRuntime());
+  await fixture.init();
+  const input = demoEvaluationInput();
+  const draft = await fixture.create({ ...input, scenarioCount: 1,
+    target: { kind: 'command', command: process.execPath, args: [script], timeoutMs: 5000 },
+    settings: { ...input.settings, userModes: ['static'], maxTurns: 2 } });
+  await fixture.waitForIdle(); await fixture.close();
+  const { command, shutdown } = registered();
+  const session = boardSession(cwd);
+  const store = new ExperimentStore(join(cwd, '.agent-lab'));
+  try {
+    session.state.steps = [['r'], ['q']];
+    await command(draft.id, session.ctx);
+    assert.equal((await store.get(draft.id)).phase, 'evaluating', 'closing the board must not cancel the run');
+    assert.equal(session.confirmBodies.length, 1, 'only the launch, not exit, asks for confirmation');
+    session.state.steps = [['q']];
+    await command('', session.ctx);
+    assert.ok(session.screens.at(-1)?.includes('ИДУТ ДИАЛОГИ'), 'history remains available during own background work');
+    const deadline = Date.now()+10000;
+    while ((await store.get(draft.id)).phase === 'evaluating' || existsSync(join(store.directory, '.lock'))) {
+      assert.ok(Date.now()<deadline, 'background run did not finish and release its lock');
+      await new Promise(resolve=>setTimeout(resolve, 20));
+    }
+    assert.equal((await store.get(draft.id)).phase, 'results_review');
+    assert.equal((await store.get(draft.id)).trials.length, 1);
+  } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); }
+});
 
 test('одна клавиша на доске сохраняет согласие, несогласие с причиной и сомнение', { timeout: 120000 }, async () => {
   const fixture = await boardFixture('agent-lab-board-agree-');
@@ -1648,6 +1761,15 @@ test('r подтверждает ожидания и запускает одни
     editor: async () => undefined, notify: () => {},
   } as unknown as ExtensionContext['ui'];
   await command(first.id, ctx);
+
+  // Closing the board no longer cancels/waits for its run. Wait for completion explicitly
+  // before assertions about final trial counts and starting another write operation.
+  const completedStore = new ExperimentStore(join(directory, '.agent-lab'));
+  const deadline = Date.now() + 10000;
+  while ((await completedStore.get(first.id)).phase === 'evaluating' || existsSync(join(directory, '.agent-lab', '.lock'))) {
+    assert.ok(Date.now() < deadline, 'background fixture did not finish');
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
 
   assert.equal(confirms[0]!.title, 'Подтвердить ожидания и запустить?');
   assert.match(confirms[0]!.body, /Что агент должен сделать: 2 ситуации\. Номер правила — порядок в ваших материалах\./);

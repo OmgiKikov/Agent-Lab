@@ -8,8 +8,9 @@ import { agreementSample, judgeAgreement, type JudgeAgreement } from '../dist/ag
 import { GOAL_METRIC_ID, headlineMetricIds, markTargets, measurementUsable, recordedResult, RULES_METRIC_ID } from '../dist/outcomes.js';
 import type { EvidenceBundle } from '../dist/artifacts.js';
 import { situationEvidence } from '../dist/explain.js';
-import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
-import { verdictLevel, verdictLine } from '../dist/verdict.js';
+import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, pluralForm, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
+import { activeRunRows, preparationRows, progressLine } from './flow.ts';
+import { logsRows, runRows, scenarioEntries, scenarioRows } from './scenarios.ts';
 
 /** All material, model and persisted text crosses this boundary before terminal rendering. */
 export function safeText(value: unknown): string {
@@ -151,7 +152,7 @@ export function resultEntries(record: Experiment): { id: string; text: string; w
     const waiting = !!queue || pending.has(trial.id);
     return { id: trial.id, waiting,
       // One `●` at most: doubt keeps the situation waiting, and today's rule would add a second.
-      text: `${queue || answer === 'unsure' || (!answer && pending.has(trial.id)) ? '● ' : ''}${label} · ${record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId} · ${trial.userMode ?? 'reactive'} #${trial.repeat + 1}${suffix}` };
+      text: `${queue || answer === 'unsure' || (!answer && pending.has(trial.id)) ? '● ' : ''}${label} · ${record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId}${record.settings.repeats > 1 ? ` · попытка ${trial.repeat + 1}` : ''}${suffix}` };
   });
 }
 
@@ -213,25 +214,30 @@ export function resultsFooter(phase: 'results_review' | 'complete', inner: numbe
   return withReport !== undefined ? REPORT_PREFIX + withReport : fit(inner) ?? tiers.at(-1)!;
 }
 
-export type Section = 'agent' | 'cards' | 'results';
+export type Section = 'logs' | 'agent' | 'cards' | 'results';
 export type BoardAction =
   | { type: 'close' }
   | { type: 'back' }
   | { type: 'new' }
   | { type: 'demo' }
   | { type: 'open'; id: string }
-  | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat' | 'accept'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number }
+  | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat' | 'accept'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number; dialogueOpen?: boolean }
   /** The owner rewrites one expectation in their own words; the text itself comes from the native editor, never from here. */
-  | { type: 'expect'; scenarioId: string; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean }
+  | { type: 'expect'; scenarioId: string; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; dialogueOpen?: boolean }
+  | { type: 'acceptLibrary'; variantIds: string[]; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
+  | { type: 'editScenario' | 'variant' | 'removeVariant'; variantId: string; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
+  | { type: 'mergeScenarios' | 'splitScenario'; businessScenarioId: string; variantId: string; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
+  | { type: 'assessLibrary' | 'editBudget'; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
   /**
    * CTX-01/CTX-18: the owner answered the judge with one key. The answer carries the judgment it
    * refers to, so a verdict that moved while the situation was on screen is refused by the lab.
    * `metricIds` are every metric that decided the situation (CTX-15): one key, one mark per metric.
    */
   | { type: 'agree'; answer: 'agree' | 'disagree' | 'unsure'; trialId: string; metricIds: string[]; judgeVerdict: 'pass' | 'fail';
-      record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; reviewMs?: number };
+      record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; reviewMs?: number; dialogueOpen?: boolean };
 export interface BoardOptions {
   records?: Experiment[];
+  loadRecords?: () => Promise<Experiment[]>;
   record?: Experiment;
   section?: Section;
   selected?: number;
@@ -242,13 +248,15 @@ export interface BoardOptions {
   before?: Experiment;
   notice?: { message: string; kind: 'success' | 'info' | 'error' };
   warnings?: string[];
+  /** Mutable per-run selection retained when the board is recreated or navigated away from. */
+  selectedVariantIds?: string[];
   reportPath?: string;
   query?: string;
   pendingOnly?: boolean;
+  dialogueOpen?: boolean;
   reviewTimes?: Map<string, number>;
 }
 type BoardTheme = Pick<Theme, 'fg' | 'bold'>;
-type ThemeColorLike = ThemeColor;
 /**
  * `lead` replaces the first line's indent with a same-width prefix (the sheet gutter `▸ ` and the number `12.`).
  * `hang` is the continuation column when it is not `indent + 2`; `breakAt` names the separator a key
@@ -340,7 +348,7 @@ function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean
     ...scenario.checks.map(c => line(`Проверяется: ${describeCheck(c)}`)),
     line(''), line(`${origin} · ${tierLabels[scenario.tier]} · ${scenario.checks.length} точных проверок · ${scenario.metrics?.length ?? 0} рубрик`, 'muted'),
     ...(profile ? [line(`Профиль ${profile.id}${profile.draftOverride ? ' · правка черновика' : ''}`, 'muted')] : []),
-    line('Enter — пользователь, факты, поведение и все критерии', 'muted'),
+    line('d — пользователь, факты, поведение и все критерии', 'muted'),
   ];
   const rows = [
     line(scenario.title, 'accent', true),
@@ -398,7 +406,7 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean, 
     ...findings.map(f => line(expanded ? humanFindingText(f) : humanFindingText(f).slice(0, 240), 'warning')),
     ...(record.workflow !== 'evaluate' ? [line(`Версия агента: ${trial.revisionId}`, 'muted')] : []),
     ...(expanded || trial.outcome === 'invalid' ? [line(trial.reason)] : []),
-    // Demo 2026-09-18: service rows (observation, calls, cost, empty check lists) wait behind Enter.
+    // Service rows (observation, calls, cost, empty check lists) wait behind d.
     ...(expanded && trial.observation ? [line(`Наблюдение: состояние ${trial.observation.state} · события ${trial.observation.tools} · сброс ${trial.observation.resetConfirmed === true ? 'заявлен' : 'не подтверждён'}`, 'muted')] : []),
     ...(expanded && trial.externalUsage ? [line(`Внешний агент: ${trial.externalUsage.calls} вызовов · стоимость ${trial.externalUsage.costUsd === null ? 'неизвестна' : `$${trial.externalUsage.costUsd.toFixed(4)}`}`, 'muted')] : []),
     ...(expanded ? [line(`Модель лаборатории: ${trial.usage.calls} вызовов · ${(trial.elapsedMs / 1000).toFixed(1)} с · стоимость ${trial.usage.costUsd === null ? 'неизвестна' : `$${trial.usage.costUsd.toFixed(4)}`}`, 'muted')] : []),
@@ -440,7 +448,7 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean, 
     transcript.push(line(''));
   }
   const tools = [...new Set(trial.events.filter(e => e.type === 'tool_call').map(e => e.tool))];
-  if (!expanded && tools.length) transcript.push(line(`Инструменты: ${tools.join(' · ')}. Enter — раскрыть трассу.`, 'muted'));
+  if (!expanded && tools.length) transcript.push(line('d — вызовы инструментов и полная трасса.', 'muted'));
   const failedRationale = trial.assessments?.find(a => a.result === 'fail')?.rationale;
   const problem = trial.checks.find(c => !c.passed)?.description
     ?? (failedRationale ? plainRationale(failedRationale) : undefined) ?? trial.assessmentError;
@@ -466,27 +474,27 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
     const measuredAny = q.scope.dialogues > 0;
     const section = causeSection(view);
     const disagreements = disagreementLines(view);
-    // The first block is ResultView's, row for row: the board never counts or picks a not-measured card itself.
-    // Demo 2026-09-18: the verdict in plain words leads; the per-situation «?» rows and the metric bars
-    // move behind Enter — section 3 lists every unmeasured situation with its reason.
+    // The first screen gives the outcome and routes to evidence. The full canonical rows
+    // remain behind d; counts are always those of ResultView, never a UI-only denominator.
     const unmeasuredRows = measuredAny ? resultViewRows(view).filter(row => row.role === 'situation').length : 0;
-    const levelColor: Record<ReturnType<typeof verdictLevel>, ThemeColorLike> = { good: 'success', warn: 'warning', bad: 'error' };
     return [
-      ...(measuredAny ? [line(verdictLine(view), levelColor[verdictLevel(view)], true)] : [line('ИТОГ', 'accent', true)]),
+      line('ИТОГ ПРОВЕРКИ', 'accent', true),
+      ...(measuredAny ? [line(`Получили оценку: ${view.headline.decided} · не измерено: ${view.notMeasured.total}.`, 'muted')] : []),
       ...(measuredAny ? resultViewRows(view).filter(row => row.role !== 'situation').map(viewRow) : [line(v.headline, 'text', true)]),
-      ...(unmeasuredRows ? [line(`Какие ситуации не измерены и почему — раздел 3 (метка «?») или Enter.`, 'muted', false, 2)] : []),
+      ...(unmeasuredRows ? [line('Какие ситуации не измерены и почему — d (подробности) или раздел 3.', 'muted', false, 2)] : []),
       line(''),
       ...(finding ? [line(humanFindingText(finding), 'warning')] : []),
-      // The same explanations the CLI and the Pi result show; nothing here is clipped or reworded.
-      ...(section ? [line(SECTION_TEXT[section.kind].board, 'accent', true), ...section.rows.map(sectionRow)]
+      ...(section ? [line(SECTION_TEXT[section.kind].board, 'accent', true),
+        ...(view.topCauses.length ? view.topCauses.map((cause, i) => line(`${i+1}. ${cause.name} — ${cause.count} ${pluralForm(cause.count, ['ситуация', 'ситуации', 'ситуаций'])}`, 'accent'))
+          : view.failures.map(failure => line(failure.title)))]
         : measuredAny ? [line('Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.', 'success')] : [line('Сохраните полезные тесты и повторите их после следующей правки.')]),
       // UI-SPEC F7 S3: the owner's disagreements follow the causes and come before the pointer to all failures.
       ...(disagreements.length ? [line(''), ...disagreements] : []),
-      ...(section && view.failures.length ? [...(disagreements.length ? [line('')] : []), line(SECTION_TEXT.all.hint, 'muted')] : []),
+      ...(section && view.failures.length ? [...(disagreements.length ? [line('')] : []), line('Enter — открыть провал: ожидание → ответ → правило.', 'accent')] : []),
       line(''),
       ...(measuredAny ? [line(text.judge), line(text.queue, q.humanQueue.total ? 'warning' : 'muted')] : []),
       line(`Дальше: ${v.nextSteps[0]?.text ?? 'Повторите тест после изменения агента.'}`),
-      line('a — обсудить результат · r — повторить набор · Enter — все детали', 'accent'),
+      line('a — обсудить результат · r — повторить набор · d — все детали', 'accent'),
       ...(comparison ? [line(`После исправления: ${comparison.headline}`, 'accent')] : []),
       ...(measuredAny ? [line(text.scope, 'muted'), line(text.limits, 'muted')] : []),
       line(`Выполнено ${v.execution.completed}/${v.execution.planned} · спорных ${q.humanQueue.total} · сбоев ${v.invalid} · тестов отклонено ${v.review.invalid}`, 'muted'),
@@ -539,6 +547,7 @@ export class LabBoard implements Component {
   private scroll = 0;
   private maxScroll = 0;
   private expanded = false;
+  private dialogueOpen = false;
   private timer?: ReturnType<typeof setInterval>;
   private disposed = false;
   private loading = false;
@@ -554,15 +563,20 @@ export class LabBoard implements Component {
   private sheetAnchor?: number;
   /** ↑/↓ put the selected situation at the top of the body; an explicit scroll key hands control back. */
   private followSelection = true;
+  private selectedVariantIds: string[];
 
   constructor(private options: BoardOptions, private theme: BoardTheme, private done: (action: BoardAction) => void,
     private redraw: () => void, private rows: () => number = () => 32) {
     this.record = options.record;
-    this.section = options.section ?? (this.record?.trials.length || this.record?.questions.length || this.record?.phase === 'error' ? 'agent' : 'cards');
+    this.section = options.section ?? (this.record?.trials.length || this.record?.questions.length || this.record?.phase === 'error' || this.record && activePhases.has(this.record.phase) ? 'agent' : 'cards');
+    this.selectedVariantIds = options.selectedVariantIds ?? this.record?.librarySnapshot?.variants.filter(item => item.quality === 'ready').map(item => item.id) ?? [];
+    options.selectedVariantIds = this.selectedVariantIds;
     this.selected = options.selected ?? 0;
     this.query = options.query ?? '';
     this.pendingOnly = options.pendingOnly ?? false;
-    if (options.load && this.record && activePhases.has(this.record.phase)) {
+    this.dialogueOpen = options.dialogueOpen ?? false;
+    if (options.load && this.record && activePhases.has(this.record.phase)
+      || !this.record && options.loadRecords && options.records?.some(r => activePhases.has(r.phase))) {
       this.timer = setInterval(() => { void this.refresh(); }, 750);
     }
   }
@@ -570,6 +584,16 @@ export class LabBoard implements Component {
     if (this.loading || this.disposed) return;
     this.loading = true;
     try {
+      if (!this.record && this.options.loadRecords) {
+        const selectedId = this.entries()[this.selected]?.id;
+        const records = await this.options.loadRecords();
+        if (this.disposed) return;
+        this.options.records = records;
+        const next = this.entries().findIndex(entry => entry.id === selectedId);
+        if (next >= 0) this.selected = next;
+        if (!records.some(r => activePhases.has(r.phase))) { clearInterval(this.timer); this.timer = undefined; }
+        this.loadError = ''; this.redraw(); return;
+      }
       const refreshed = await this.options.load!();
       if (this.disposed) return;
       const { record } = refreshed;
@@ -617,6 +641,8 @@ export class LabBoard implements Component {
       if (selected) this.sheetAnchor = rows.length;
       const label = ' '.repeat(Math.max(0, sheet.labelWidth - visibleWidth(card.label))) + card.label;
       rows.push({ ...line(card.goal, selected ? 'accent' : 'text', true, column), lead: `${selected ? '▸ ' : '  '}${label} ` });
+      const scenario = this.record?.scenarios[entry.index];
+      if (scenario) rows.push(line(`Клиент спросит: «${scenario.user.opening}»`, 'text', false, column));
       for (const detail of card.details) rows.push(line(detail.text, SHEET_ROLE[detail.role], false, column));
       rows.push(line(''));
     });
@@ -632,6 +658,12 @@ export class LabBoard implements Component {
    * `agent_lab_edit` of the model must not tell the owner that one of their expectations moved.
    */
   private draftHeadline(record: Experiment): { text: string; color?: ThemeColor } {
+    if (record.librarySnapshot) {
+      const accepted = record.librarySnapshot.acceptance;
+      return accepted
+        ? { text: `Принята ревизия ${accepted.revision}: ${accepted.variantIds.length} вариантов. 3 — план запуска.`, color: 'success' }
+        : { text: `Выберите готовые варианты: ${this.selectedVariantIds.length}. y — принять без запуска.`, color: 'warning' };
+    }
     const sheet = this.sheet();
     if (!sheet?.count || record.questions.length) return { text: 'Проверьте цель, первую реплику и критерии. r — запуск.' };
     if (record.acceptedDraftHash === sheet.draftHash) return { text: 'Ожидания подтверждены. r — запуск.', color: 'success' };
@@ -650,6 +682,10 @@ export class LabBoard implements Component {
    * with its object, and the narrow tiers drop the key the header line already names.
    */
   private draftFooter(record: Experiment, inner: number): string {
+    if (record.librarySnapshot) return this.section === 'cards'
+      ? 'Space Выбрать · y Принять выбранные · e Изменить · v Вариант · g Перепроверить'
+      : this.section === 'logs' ? 'g Смысловая проверка · b Изменить бюджет · 2 Сценарии'
+      : record.librarySnapshot.acceptance ? 'r Открыть подтверждение запуска · 2 Сценарии' : '2 Сценарии · сначала принять выбранные';
     const sheet = this.sheet();
     if (record.questions.length || !sheet?.count) return `a Правка словами · ${record.questions.length ? 'Ответьте на вопросы' : 'r Запустить'}`;
     const confirmed = record.acceptedDraftHash === sheet.draftHash;
@@ -661,6 +697,26 @@ export class LabBoard implements Component {
   /** The supplied view when it describes the shown run; otherwise a fresh one, so a stale view is never shown. */
   private viewFor(record: Experiment): ResultView {
     return this.options.view?.runId === record.id ? this.options.view : buildResultView(record);
+  }
+  /** One prominent next action; the shortcuts remain available for experienced owners. */
+  private primaryHint(): string {
+    const record = this.record;
+    if (!record) return this.entries().length ? 'Enter — открыть выбранный прогон' : 'Enter — проверить своего агента';
+    if (this.expanded) return 'd — свернуть технические подробности';
+    if (record.phase === 'review' && this.section === 'cards' && !record.questions.length && record.scenarios.length) {
+      const confirmed = this.sheet()?.draftHash === record.acceptedDraftHash;
+      return confirmed ? 'Enter — проверить план и запустить' : `Enter — подтвердить ожидания (${record.scenarios.length})`;
+    }
+    if (record.phase === 'review' && record.librarySnapshot) {
+      if (this.section === 'cards') return this.selectedVariantIds.length ? `Enter — принять выбранные варианты (${this.selectedVariantIds.length})` : 'Space — выбрать готовый вариант';
+      if (this.section === 'agent') return record.librarySnapshot.acceptance ? 'Enter — проверить план и запустить' : '2 — выбрать и принять сценарии';
+      if (this.section === 'logs') return '2 — перейти к сценариям';
+    }
+    if (this.section === 'results' && record.trials.length) return this.dialogueOpen ? 'Enter — вернуться к объяснению' : 'Enter — открыть выбранный диалог';
+    if (record.trials.length && this.section === 'agent') return 'Enter — разобрать результаты';
+    if (record.phase === 'review') return 'Enter — открыть ожидания';
+    if (activePhases.has(record.phase)) return 'Проверка идёт · Esc — в историю';
+    return 'a — обсудить следующий шаг с Pi';
   }
   dispose() { this.disposed = true; clearInterval(this.timer); }
   invalidate() {}
@@ -683,8 +739,11 @@ export class LabBoard implements Component {
       entries = resultEntries(record).flatMap((entry, index) => !this.pendingOnly || entry.waiting
         ? [{ id: entry.id, index, text: entry.text }] : []);
     } else if (this.section === 'cards') {
-      const edited = new Set(record.ownerExpectationScenarioIds ?? []);
-      entries = record.scenarios.map((s, index) => ({ text: `${s.tier === 'smoke' ? '◆ ' : ''}${s.title}${edited.has(s.id) ? ' · ожидание изменено' : ''}`, index, id: s.id }));
+      if (record.librarySnapshot) entries = scenarioEntries(record);
+      else {
+        const edited = new Set(record.ownerExpectationScenarioIds ?? []);
+        entries = record.scenarios.map((s, index) => ({ text: `${s.tier === 'smoke' ? '◆ ' : ''}${s.title}${edited.has(s.id) ? ' · ожидание изменено' : ''}`, index, id: s.id }));
+      }
     }
     else entries = [];
     return entries.filter(e => safeText(e.text).toLocaleLowerCase().includes(this.query.toLocaleLowerCase()));
@@ -702,6 +761,7 @@ export class LabBoard implements Component {
     if (key('q') || key('ctrl+c')) return this.finish({ type: 'close' });
     if (key('escape')) {
       if (this.help) { this.help = false; this.redraw(); return; }
+      if (this.expanded || this.dialogueOpen) { this.expanded = false; this.dialogueOpen = false; this.scroll = 0; this.redraw(); return; }
       if (this.query || this.pendingOnly) { this.query = ''; this.pendingOnly = false; this.selected = 0; this.redraw(); return; }
       return this.finish({ type: this.record ? 'back' : 'close' });
     }
@@ -711,15 +771,41 @@ export class LabBoard implements Component {
     if (!this.record && key('n')) return this.finish({ type: 'new' });
     if (!this.record && key('d')) return this.finish({ type: 'demo' });
     if (this.record) {
-      const section = key('1') ? 'agent' : key('2') ? 'cards' : key('3') ? 'results' : undefined;
-      if (section) { this.section = section; this.selected = 0; this.scroll = 0; this.query = ''; this.help = false; this.followSelection = true; }
+      const libraryPath = !!this.record.librarySnapshot;
+      const sections: Section[] = libraryPath ? ['logs', 'cards', 'agent', 'results'] : ['agent', 'cards', 'results'];
+      const section = key('1') ? (libraryPath ? 'logs' : 'agent') : key('2') ? 'cards' : key('3') ? (libraryPath ? 'agent' : 'results') : key('4') && libraryPath ? 'results'
+        : key('tab') ? sections[(sections.indexOf(this.section)+1)%sections.length]
+        : key('shift+tab') ? sections[(sections.indexOf(this.section)+sections.length-1)%sections.length] : undefined;
+      if (section) { this.section = section; this.selected = 0; this.scroll = 0; this.query = ''; this.help = false; this.expanded = false; this.dialogueOpen = false; this.followSelection = true; }
+      if (key('d')) { this.expanded = !this.expanded; this.scroll = 0; this.redraw(); return; }
       if (key('u') && this.section === 'results') { this.pendingOnly = !this.pendingOnly; this.selected = 0; this.scroll = 0; }
       const editable = this.record.workflow === 'evaluate' && this.record.phase === 'review';
       const reviewable = this.record.workflow === 'evaluate' && this.section === 'results'
         && ['results_review', 'complete'].includes(this.record.phase) && this.entries().length > 0;
       const entry = this.entries()[this.selected];
-      const state = { record: this.record, section: this.section, selected: this.selected, query: this.query, pendingOnly: this.pendingOnly,
+      const state = { record: this.record, section: this.section, selected: this.selected, query: this.query, pendingOnly: this.pendingOnly, dialogueOpen: this.dialogueOpen,
+        selectedVariantIds: [...this.selectedVariantIds],
         ...(this.section === 'results' && entry ? { trialId: entry.id } : {}) };
+      if (libraryPath && this.section === 'cards' && entry && data === ' ') {
+        const variant = this.record.librarySnapshot!.variants.find(item => item.id === entry.id);
+        if (variant?.quality === 'ready') {
+          const index = this.selectedVariantIds.indexOf(entry.id);
+          if (index >= 0) this.selectedVariantIds.splice(index, 1); else this.selectedVariantIds.push(entry.id);
+        }
+        this.redraw(); return;
+      }
+      if (libraryPath && editable) {
+        const variant = entry && this.record.librarySnapshot!.variants.find(item => item.id === entry.id);
+        const groupId = variant?.businessScenarioId;
+        if (this.section === 'cards' && key('y') && this.selectedVariantIds.length) return this.finish({ type: 'acceptLibrary', ...state, variantIds: [...this.selectedVariantIds] });
+        if (this.section === 'cards' && variant && key('e')) return this.finish({ type: 'editScenario', ...state, variantId: variant.id });
+        if (this.section === 'cards' && variant && key('v')) return this.finish({ type: 'variant', ...state, variantId: variant.id });
+        if (this.section === 'cards' && variant && key('delete')) return this.finish({ type: 'removeVariant', ...state, variantId: variant.id });
+        if (this.section === 'cards' && variant && groupId && key('m')) return this.finish({ type: 'mergeScenarios', ...state, variantId: variant.id, businessScenarioId: groupId });
+        if (this.section === 'cards' && variant && groupId && key('s')) return this.finish({ type: 'splitScenario', ...state, variantId: variant.id, businessScenarioId: groupId });
+        if (key('g')) return this.finish({ type: 'assessLibrary', ...state });
+        if (key('b')) return this.finish({ type: 'editBudget', ...state });
+      }
       if (key('a') && !activePhases.has(this.record.phase)) return this.finish({ type: 'discuss', ...state,
         selected: this.section === 'cards' && entry ? entry.index : this.selected });
       // CTX-01/UI-D-01…UI-D-04: three answers, one Latin key each, only where the F10 block is
@@ -730,7 +816,7 @@ export class LabBoard implements Component {
         if (answer) return this.finish({ type: 'agree', answer, ...state, trialId: entry.id, metricIds: target.metricIds, judgeVerdict: target.judgeVerdict });
       }
       const finished = this.record.workflow === 'evaluate' && !!this.record.reviewedAt && !activePhases.has(this.record.phase);
-      const type = key('r') && editable && !this.record.questions.length ? 'run'
+      const type = key('r') && editable && !this.record.questions.length && (!libraryPath || !!this.record.librarySnapshot?.acceptance) && (!libraryPath || this.section === 'agent') ? 'run'
         : key('r') && finished ? 'repeat'
         : key('v') && reviewable ? 'annotate'
         : key('f') && this.record.phase === 'results_review' ? 'finalize'
@@ -739,9 +825,17 @@ export class LabBoard implements Component {
         : key('c') && activePhases.has(this.record.phase) ? 'cancel' : undefined;
       if (type) return this.finish({ type, ...state });
       // TRUST-10/11 (UI-D-01): the expectation sheet is the only scope of `y` and `e`; outside it they do nothing.
-      const sheetScope = editable && this.section === 'cards' && !this.record.questions.length && this.record.scenarios.length > 0;
+      const sheetScope = !libraryPath && editable && this.section === 'cards' && !this.record.questions.length && this.record.scenarios.length > 0;
       if (sheetScope && key('y')) return this.finish({ type: 'accept', ...state });
       if (sheetScope && key('e') && entry) return this.finish({ type: 'expect', ...state, scenarioId: entry.id });
+      if (key('enter') && !this.expanded) {
+        if (sheetScope) return this.finish({ type: this.sheet()?.draftHash === this.record.acceptedDraftHash ? 'run' : 'accept', ...state });
+        if (libraryPath && editable && this.section === 'cards' && this.selectedVariantIds.length) return this.finish({ type: 'acceptLibrary', ...state, variantIds: [...this.selectedVariantIds] });
+        if (libraryPath && editable && this.section === 'agent' && this.record.librarySnapshot?.acceptance) return this.finish({ type: 'run', ...state });
+        if (this.section === 'agent' && this.record.trials.length) { this.section = 'results'; this.selected = 0; this.scroll = 0; this.redraw(); return; }
+        if (this.section === 'agent' && editable) { this.section = 'cards'; this.selected = 0; this.scroll = 0; this.redraw(); return; }
+        if (this.section === 'results' && entry) { this.dialogueOpen = !this.dialogueOpen; this.scroll = 0; this.redraw(); return; }
+      }
     }
     const entries = this.entries();
     if (key('down') || key('j')) { this.selected = Math.min(entries.length - 1, this.selected + 1); this.scroll = 0; this.followSelection = true; }
@@ -752,7 +846,7 @@ export class LabBoard implements Component {
     if (key('end')) { this.scroll = this.maxScroll; this.followSelection = false; }
     if (key('enter')) {
       if (!this.record && entries[this.selected]) return this.finish({ type: 'open', id: entries[this.selected]!.id });
-      this.expanded = !this.expanded;
+      if (!this.record) return this.finish({ type: 'new' });
     }
     this.redraw();
   }
@@ -776,38 +870,43 @@ export class LabBoard implements Component {
     if (record) {
       const unresolved = record.phase === 'complete' && awaitingVerdict(record).size > 0;
       header.push(line(`${unresolved ? 'НЕРАЗОБРАННЫЕ ПРОВАЛЫ' : phases[record.phase] ?? record.phase} · ${record.mode === 'demo' ? 'ДЕМО · без модели' : 'ЖИВОЙ ПРОГОН'}`, activePhases.has(record.phase) ? 'accent' : record.phase === 'complete' && !unresolved ? 'success' : 'warning'));
-      header.push(line([['agent', '1 Итог'], ['cards', `2 Ситуации ${record.scenarios.length}`], ['results', `3 Провалы и диалоги ${record.trials.length}`]]
+      const navigation = record.librarySnapshot
+        ? [['logs', '1 Логи'], ['cards', `2 Сценарии ${record.librarySnapshot.variants.length}`], ['agent', '3 Прогон'], ['results', `4 Результаты ${record.trials.length}`]]
+        : [['agent', '1 Итог'], ['cards', `2 Ожидания ${record.scenarios.length}`], ['results', `3 Разбор ${record.trials.length}`]];
+      header.push(line(navigation
         .map(([id, label]) => this.section === id ? `[${label}]` : label).join('   '), 'muted'));
       if (this.section === 'results' && record.trials.length) {
         const review = reviewHeader(record, inner);
         header.push(line(review.text, review.color));
       }
       const draft = this.draftHeadline(record);
-      header.push(line(`${record.trials.length && !activePhases.has(record.phase) ? verdictHeadline(this.viewFor(record))
-        : record.phase === 'review' ? draft.text : record.message}${this.loadError ? ` · ${this.loadError}` : ''}`,
-        record.trials.length && !activePhases.has(record.phase) ? undefined : record.phase === 'review' ? draft.color : undefined));
-    } else header.push(line('n — свой агент · d — учебный пример без провайдера', 'muted'));
+      if (record.phase === 'review') header.push(line(draft.text, draft.color));
+      if (this.loadError) header.push(line(`Не удалось обновить запись: ${this.loadError}. Показываем последний полученный снимок.`, 'warning'));
+    } else {
+      header.push(line('n — свой агент · d — учебный пример без провайдера', 'muted'));
+      if (this.loadError) header.push(line(`Не удалось обновить историю: ${this.loadError}`, 'warning'));
+    }
     if (this.options.notice) header.push(line(this.options.notice.message,
       this.options.notice.kind === 'error' ? 'error' : this.options.notice.kind === 'info' ? 'text' : 'success'));
-    if (this.options.warnings?.length) header.push(line(`Внимание: ${this.options.warnings[0]}${this.options.warnings.length > 1 ? ` (+${this.options.warnings.length - 1})` : ''}`, 'warning'));
     const items = entries.map(e => e.text);
     this.selected = Math.max(0, Math.min(this.selected, items.length - 1));
     const visibleItems = record ? 1 : Math.max(1, Math.min(4, Math.floor(height / 5)));
     const from = Math.max(0, Math.min(this.selected - Math.floor(visibleItems / 2), items.length - visibleItems));
     if (items.length && !sidebar) for (let i = from; i < Math.min(items.length, from + visibleItems); i++) {
-      header.push(line(`${i === this.selected ? '▸' : ' '} ${i + 1}/${items.length}  ${items[i]}`, i === this.selected ? 'accent' : 'muted', i === this.selected));
+      const edited = record && !record.librarySnapshot && this.section === 'cards' && (record.ownerExpectationScenarioIds ?? []).includes(entries[i]!.id);
+      header.push(line(record ? `Выбрано: ${i+1} из ${items.length} · ↑↓ другая ситуация${edited ? ' · ожидание изменено' : ''}`
+        : `${i === this.selected ? '▸' : ' '} ${i + 1}/${items.length}  ${items[i]}`, i === this.selected ? 'accent' : 'muted', i === this.selected));
     }
     if (this.searching || this.query || this.pendingOnly) header.push(line(`${this.pendingOnly ? '● Только неразобранные · ' : ''}Поиск: ${this.query}${this.searching ? '▎  Enter — применить' : ' · Esc — сбросить'}`, 'accent'));
     if (record && activePhases.has(record.phase)) {
-      const planned = plannedTrials(record);
-      const filled = planned ? Math.min(20, Math.round(record.trials.length / planned * 20)) : 0;
-      header.push(line(`${'━'.repeat(filled)}${'─'.repeat(20 - filled)}  ${record.trials.length} / ${planned} диалогов · c Остановить`, 'accent'));
+      header.push(line(progressLine(record), 'accent'));
     }
     let detail: Line[] = [];
     this.sheetAnchor = undefined;
     if (!record) {
       const chosen = this.options.records?.[entries[this.selected]?.index ?? -1];
-      detail = chosen ? [line(chosen.task, 'text', true), line(`Создан: ${chosen.createdAt}`, 'muted'), line(chosen.phase === 'review' ? 'Черновик готов. Откройте его, чтобы проверить и уточнить сценарии.' : chosen.trials.length ? verdictSummary(chosen).headline : chosen.message)]
+      detail = chosen ? [line('ИСТОРИЯ ПРОВЕРОК', 'accent', true), line(chosen.task, 'text', true), line(`Прогон ${chosen.id.slice(0, 8)} · ${chosen.createdAt.slice(0, 10)}`, 'muted'), line(chosen.phase === 'review' ? 'Черновик готов. Откройте ожидания перед запуском.' : chosen.trials.length ? buildResultView(chosen).headline.text : chosen.message),
+        ...(activePhases.has(chosen.phase) ? [line('Прогон выполняется. Открытие и закрытие доски его не останавливает.', 'muted')] : []), line(''), line('Enter — открыть · n — новая проверка', 'accent')]
         : [line('НАСКОЛЬКО ХОРОШ ВАШ АГЕНТ', 'accent', true), line(''),
           line('1  Подключение', 'text', true), line('   Agent Lab читает папку агента: промпт, точку входа, базу знаний.', 'muted'),
           line('2  Карточки', 'text', true), line('   Ситуации пользователей — из правил промпта, статей или ваших логов.', 'muted'),
@@ -816,17 +915,26 @@ export class LabBoard implements Component {
           line('n  Проверить своего агента · укажите папку и что проверить', 'accent'),
           line('d  Учебный пример за минуту · без модели и ключей', 'accent'), line(''),
           line('Оценки модели и ваши вердикты хранятся отдельно; результат повторяем и сравним с прошлым прогоном.', 'muted')];
+    } else if (this.section === 'logs') {
+      detail = logsRows(record).map(row => line(row.text, row.color, row.bold));
     } else if (this.section === 'cards') {
-      const scenario = record.scenarios[entries[this.selected]?.index ?? -1];
-      const sheet = this.expanded ? undefined : this.sheet();
-      // Section 2 of a draft is the expectation sheet; Enter still opens today's full card detail.
-      detail = sheet ? this.sheetRows(sheet, entries)
-        : scenario ? scenarioLines(scenario, record, this.expanded)
-        : [line(this.query ? 'Ничего не найдено. Esc — сбросить поиск.' : 'Карточки появятся после подготовки.', 'muted')];
-      if (sheet && this.query && !entries.length) detail = [line('Ничего не найдено. Esc — сбросить поиск.', 'muted')];
+      if (record.librarySnapshot) detail = scenarioRows(record, entries[this.selected]?.id, this.selectedVariantIds).map(row => line(row.text, row.color, row.bold));
+      else {
+        const scenario = record.scenarios[entries[this.selected]?.index ?? -1];
+        const sheet = this.expanded ? undefined : this.sheet();
+        // Expectations lead. Full simulator/check definitions remain behind d, not the primary action.
+        detail = sheet ? this.sheetRows(sheet, entries)
+          : scenario ? scenarioLines(scenario, record, this.expanded)
+          : [line(this.query ? 'Ничего не найдено. Esc — сбросить поиск.' : 'Карточки появятся после подготовки.', 'muted')];
+        if (sheet && this.query && !entries.length) detail = [line('Ничего не найдено. Esc — сбросить поиск.', 'muted')];
+      }
     } else if (this.section === 'results') {
       const trial = reviewOrder(record).find(t => t.id === entries[this.selected]?.id);
-      detail = trial ? [...agreementBlockLines(record, trial), ...trialLines(trial, record, this.expanded, agreementTarget(record, trial)?.kind === 'ready')] : this.query || this.pendingOnly ? [line('Ничего не найдено. Esc — сбросить фильтр.', 'muted')]
+      const agreement = trial ? agreementBlockLines(record, trial) : [];
+      detail = trial ? this.dialogueOpen || this.expanded
+        ? trialLines(trial, record, this.expanded, agreementTarget(record, trial)?.kind === 'ready')
+        : [...agreement, ...(agreementTarget(record, trial)?.kind === 'ready' ? [] : [line(record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId, 'text', true), line(trial.reason)]), line('Enter — прочитать записанный разговор · d — технические подробности', 'accent')]
+        : this.query || this.pendingOnly ? [line('Ничего не найдено. Esc — сбросить фильтр.', 'muted')]
         : activePhases.has(record.phase) ? [line('ДИАЛОГ ВЫПОЛНЯЕТСЯ', 'accent', true), line(record.message), line('Первый результат появится после ответа и проверки критериев.', 'muted'), line('c — остановить с сохранением уже полученных реплик', 'muted')]
         : [line('Диалогов ещё нет.', 'text', true), line(record.phase === 'review' ? 'Проверьте карточки и нажмите r для запуска.' : record.error ?? 'Прогон остановлен до завершения первой попытки.')];
     } else {
@@ -855,30 +963,39 @@ export class LabBoard implements Component {
         ...(record.error ? [line(record.error, 'error')] : []),
       ];
       if (record.trials.length && !this.expanded) detail = verdictLines(record, false, this.options.comparison, this.viewFor(record));
+      if (!this.expanded && activePhases.has(record.phase)) detail = activeRunRows(record).map(r => line(r.text, r.color, r.bold));
+      else if (!this.expanded && !record.trials.length) detail = preparationRows(record).map(r => line(r.text, r.color, r.bold));
+    }
+    if (record && this.section === 'agent' && record.librarySnapshot && !record.trials.length && !activePhases.has(record.phase)) {
+      detail = runRows(record, this.selectedVariantIds).map(row => line(row.text, row.color, row.bold));
     }
     if (this.options.warnings?.length) detail.push(line(''), line('ДИАГНОСТИКА', 'warning'), ...this.options.warnings.map(w => line(w, 'warning')));
-    if (this.help) { detail = [line('КЛАВИШИ', 'accent', true), line('1 Обзор — качество агента · 2 Карточки · 3 Диалоги'), line('a — правка или разбор словами с Pi · n в списке — новая проверка'), line('↑ ↓ или j k — выбрать карточку или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), line('Enter — раскрыть источники, инструменты и состояния'), line('y / n / s — согласен с судьёй / не согласен / не могу сказать'), line('n — спросит причину · v — оценить критерий или весь диалог'), line('r — запустить черновик или создать повтор готового прогона'), line('y — подтвердить все ожидания · e — поправить ожидание выбранной ситуации'), line('x — экспортировать · c — остановить запуск · Esc — назад · q — закрыть'), line(''), line('Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.', 'muted'), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')]; this.sheetAnchor = undefined; }
+    if (this.help) { detail = [line('КЛАВИШИ', 'accent', true), line(record?.librarySnapshot ? '1 Логи · 2 Сценарии · 3 Прогон · 4 Результаты · Tab — следующий раздел' : '1 Итог · 2 Ожидания · 3 Разбор · Tab — следующий раздел'), line('Enter — следующее действие, написанное внизу экрана'), line('d — раскрыть источники, инструменты и состояния'), line('a — правка или разбор словами с Pi · n в истории — новая проверка'), line('↑ ↓ или j k — выбрать ситуацию или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), ...(record?.librarySnapshot ? [line('Space — выбрать вариант · y — принять выбранные без запуска'), line('e — изменить текст или факт · v — целевой вариант · m/s — объединить/разделить'), line('g — смысловая проверка · b — увеличить бюджет · r — запуск после принятия')] : [line('y / n / s — согласен с судьёй / не согласен / не могу сказать'), line('n — спросит причину · v — оценить критерий или весь диалог'), line('r — запустить черновик или создать повтор готового прогона'), line('y — подтвердить все ожидания · e — поправить ожидание выбранной ситуации')]), line('x — экспортировать · c — остановить запуск с подтверждением'), line('Esc — назад · q — закрыть доску; прогон продолжится, пока открыт Pi'), line(''), line('Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.', 'muted'), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')]; this.sheetAnchor = undefined; }
     const content = wrapRows(detail, inner).map(paint);
     // The selected situation starts the body, so its expectation and rules are read without scrolling.
     if (this.followSelection && this.sheetAnchor !== undefined) this.scroll = wrapRows(detail.slice(0, this.sheetAnchor), inner).length;
     // Section 3 of a finished evaluation picks its own tier and places the report link itself.
     const answerPhase = record?.workflow === 'evaluate' && this.section === 'results'
       && (record.phase === 'results_review' || record.phase === 'complete') ? record.phase : undefined;
-    const footer = record ? [
+    const footer = record ? [this.primaryHint(),
       answerPhase ? resultsFooter(answerPhase, inner, !!this.options.reportPath)
         : record.workflow !== 'evaluate' ? 'Сравнительный эксперимент · только просмотр и экспорт'
         : record.phase === 'review' ? this.draftFooter(record, inner)
         : activePhases.has(record.phase) ? 'c Остановить · обновляется автоматически'
         : record.phase === 'results_review' ? 'a Обсудить · 3 Диалоги · f Завершить · r Повторить · x Экспорт'
         : record.reviewedAt ? 'a Обсудить результат · r Повторить · x Экспорт' : 'a Обсудить исправление · результат сохранён',
-      inner < 80 ? '↑↓ Выбор · ←→ Текст · Enter Детали · / Поиск · ? Помощь'
-        : `↑↓ Выбор · PgUp/PgDn Текст · Enter ${this.expanded ? 'Свернуть' : 'Подробнее'} · / Поиск · u Неразобранные · ? Помощь`,
-    ] : ['n Свой агент · d Демо · ↑↓ Выбор · Enter Открыть · ? Помощь'];
-    if (this.options.reportPath && record && !answerPhase) footer[0] = `${REPORT_PREFIX}${footer[0]}`;
-    const available = Math.max(1, height - header.length - footer.length - 4);
+      inner < 80 ? '↑↓ Выбор · PgUp/PgDn Текст · ? Помощь'
+        : '↑↓ Выбор · PgUp/PgDn Текст · d Детали · Tab Раздел · / Поиск · ? Помощь',
+    ] : [this.primaryHint(), 'n Новая проверка · ↑↓ Выбор · ? Помощь'];
+    if (this.options.reportPath && record && !answerPhase) footer[1] = `${REPORT_PREFIX}${footer[1]}`;
+    const foot = wrapRows(footer.map((text,i) => line(text, i === 0 ? 'accent' : 'muted', i === 0)), Math.max(1, width-4)).map(paint);
+    const allHead = wrapRows(header, Math.max(1, width-4)).map(paint);
+    const headRoom = Math.max(1, height-foot.length-5);
+    const head = allHead.slice(0, headRoom);
+    content.unshift(...allHead.slice(headRoom));
+    const available = Math.max(1, height - head.length - foot.length - 3);
     this.maxScroll = Math.max(0, content.length - available);
     this.scroll = Math.min(this.scroll, this.maxScroll);
-    if (this.maxScroll > 0 && record) footer[1] = `${this.scroll + 1}–${Math.min(content.length, this.scroll + available)}/${content.length} · ${inner < 80 ? '←→ Текст · ↑↓ Выбор · Enter Детали · ?' : footer[1]}`;
     const border = (left: string, right: string) => this.theme.fg('borderMuted', width < 2 ? '─' : left + '─'.repeat(width - 2) + right);
     const body = content.slice(this.scroll, this.scroll + available);
     const listFrom = Math.max(0, Math.min(this.selected - Math.floor(available / 2), entries.length - available));
@@ -889,8 +1006,8 @@ export class LabBoard implements Component {
       const left = this.theme.fg(index === this.selected ? 'accent' : 'muted', truncateToWidth(label, sidebar, '…', true));
       return frame(`${left} ${this.theme.fg('borderMuted', '│')} ${body[i] ?? ''}`);
     }) : body.map(frame);
-    const rows = [border('╭', '╮'), ...header.map(r => frame(paint(r))), frame(this.theme.fg('borderMuted', '─'.repeat(Math.max(1, width - 4)))),
-      ...bodyRows, ...footer.map((text, i) => frame(this.theme.fg(i ? 'dim' : 'accent', text))), border('╰', '╯')];
+    const rows = [border('╭', '╮'), ...head.map(frame), frame(this.theme.fg('borderMuted', '─'.repeat(Math.max(1, width - 4)))),
+      ...bodyRows, ...foot.map(frame), border('╰', '╯')];
     // Even very small terminals remain valid; Pi requires each rendered line to fit.
     return rows.slice(0, height).map(row => visibleWidth(row) > width ? truncateToWidth(row, width, '…') : row);
   }

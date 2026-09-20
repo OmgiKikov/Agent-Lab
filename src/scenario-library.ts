@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { checkSchema, scenarioSchema, worldSchema, valueTokens, type Requirement, type Scenario, type Source } from './contracts.js';
 import {
-  importBatchSchema, libraryPatchSchema, scenarioLibrarySchema, scenarioProposalSchema,
+  importBatchSchema, libraryPatchSchema, scenarioLibrarySchema, scenarioProposalSchema, scenarioVariantSchema,
   type BusinessScenario, type ImportBatch, type LibraryPatch, type LibraryQualityIssue,
   type ScenarioLibrary, type ScenarioVariant, type SourceDialogue, type SemanticFinding,
 } from './scenario-contracts.js';
@@ -74,6 +74,60 @@ function businessIdentity(business: Pick<BusinessScenario, 'key' | 'goal' | 'con
   return digest({ key: normalize(business.key), goal: normalize(business.goal), conditions: business.conditions.map(normalize).sort(), requirementIds: [...business.requirementIds].sort() });
 }
 
+const factIdentity = (fact: ScenarioVariant['userState']['facts'][number]) => canonical({ statement: normalize(fact.statement), value: fact.value });
+const actionIdentity = (variant: ScenarioVariant, action: ScenarioVariant['behaviorPolicy']['actions'][number]) => canonical({
+  kind: action.kind,
+  facts: action.factIds.map(id => variant.userState.facts.find(fact => fact.id === id)).filter(Boolean).map(fact => factIdentity(fact!)).sort(),
+  payload: action.payload ? normalize(action.payload) : undefined,
+  ifAsked: action.ifAsked ? normalize(action.ifAsked) : undefined,
+});
+const referencedActionIdentity = (variant: ScenarioVariant, actionId: string) => {
+  const action = variant.behaviorPolicy.actions.find(item => item.id === actionId);
+  return action ? actionIdentity(variant, action) : canonical({ missingAction: true });
+};
+
+/** Execution identity excludes incidental state/action/fact ids while retaining their reference graph. */
+function policyIdentity(variant: ScenarioVariant): unknown {
+  const policy = variant.behaviorPolicy;
+  let stateLabels = new Map(policy.states.map(state => [state, digest({ initial: state === policy.initialState, terminal: policy.terminalStates.includes(state) })]));
+  for (let pass = 0; pass < policy.states.length + 1; pass++) {
+    const next = new Map<string, string>();
+    for (const state of policy.states) {
+      const outgoing = policy.transitions.filter(item => item.from === state).map(item => ({
+        when: normalize(item.when), action: referencedActionIdentity(variant, item.actionId), to: stateLabels.get(item.to),
+      })).sort((a, b) => canonical(a).localeCompare(canonical(b)));
+      const incoming = policy.transitions.filter(item => item.to === state).map(item => ({
+        when: normalize(item.when), action: referencedActionIdentity(variant, item.actionId), from: stateLabels.get(item.from),
+      })).sort((a, b) => canonical(a).localeCompare(canonical(b)));
+      next.set(state, digest({ initial: state === policy.initialState, terminal: policy.terminalStates.includes(state), outgoing, incoming }));
+    }
+    stateLabels = next;
+  }
+  return {
+    version: policy.version, maxFollowUps: policy.maxFollowUps, repetitionLimit: policy.repetitionLimit,
+    initial: stateLabels.get(policy.initialState), terminals: policy.terminalStates.map(state => stateLabels.get(state)).sort(),
+    states: policy.states.map(state => stateLabels.get(state)).sort(),
+    actions: policy.actions.map(action => actionIdentity(variant, action)).sort(),
+    transitions: policy.transitions.map(item => canonical({ from: stateLabels.get(item.from), to: stateLabels.get(item.to),
+      action: referencedActionIdentity(variant, item.actionId), when: normalize(item.when) })).sort(),
+  };
+}
+
+function executionFingerprint(library: ScenarioLibrary, variant: ScenarioVariant): string {
+  const group = library.businessScenarios.find(item => item.id === variant.businessScenarioId);
+  const initial = variant.userState.facts.filter(fact => fact.availability === 'initial');
+  return digest({
+    business: group && { goal: normalize(group.goal), conditions: group.conditions.map(normalize).sort() },
+    user: { goal: normalize(variant.userState.goal), opening: normalize(variant.userState.opening),
+      facts: initial.map(factIdentity).sort(), cannotKnow: variant.userState.cannotKnow.map(normalize).sort(),
+      missing: variant.userState.missing.map(normalize).sort(), persona: variant.userState.persona ? normalize(variant.userState.persona.text) : undefined },
+    policy: policyIdentity(variant), environment: variant.environmentFixture,
+    evaluation: { successCriteria: normalize(variant.evaluationSpec.successCriteria), goalObservation: variant.evaluationSpec.goalObservation,
+      checkpoints: variant.evaluationSpec.checkpoints.map(checkpoint => ({ applicability: normalize(checkpoint.applicability),
+        observation: checkpoint.observation, role: checkpoint.role, rule: normalize(checkpoint.rule), check: checkpoint.check })).sort((a, b) => canonical(a).localeCompare(canonical(b))) },
+  });
+}
+
 export function createLibrary(input: { id?: string; batch: ImportBatch; sources: Source[]; requirements: Requirement[]; proposals: unknown[]; createdAt?: string; semanticRequired?: true }): ScenarioLibrary {
   if (input.proposals.length > 200) throw new Error('Допустимо не больше 200 вариантов');
   const batch = importBatchSchema.parse(input.batch);
@@ -114,7 +168,7 @@ export function recordSemanticAssessment(library: ScenarioLibrary, findings: Sem
   const next = scenarioLibrarySchema.parse(library);
   delete next.acceptance;
   next.semanticRequired = true;
-  for (const variant of next.variants) variant.ownerDecision = 'pending';
+  for (const variant of next.variants) { variant.ownerDecision = 'pending'; delete variant.semanticReviewRequired; }
   next.semanticAssessment = { contentHash: semanticContentHash(next), findings };
   return refreshQuality(next);
 }
@@ -155,6 +209,7 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
     const v = variant.id;
     const problem = (code: string, path: string, message: string, severity: LibraryQualityIssue['severity'] = 'blocked') => add(code, `variants.${v}.${path}`, message, v, severity);
     const group = library.businessScenarios.find(b => b.id === variant.businessScenarioId);
+    if (variant.semanticReviewRequired) problem('semantic_variant_pending', '', 'Изменённый или целевой вариант требует смысловой проверки', 'needs_review');
     if (!group) problem('missing_business', 'businessScenarioId', 'Бизнес-сценарий отсутствует');
     if (group?.grouping.status === 'uncertain') problem('uncertain_grouping', 'businessScenarioId', group.grouping.reason, 'needs_review');
     if (group?.requirementIds.some(id => !library.requirements.some(r => r.id === id))) problem('missing_requirement', 'businessScenarioId', 'Ссылка на неизвестное требование');
@@ -186,11 +241,11 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
         const fabricatedToken = exactTokens(fact.statement).some(token => /\p{N}/u.test(token) && (!sourceTokens.has(token) || !eventTokens.has(token)));
         if (fabricatedToken || fact.value !== undefined && (!containsExactValue(origin.quote, String(fact.value)) || !containsExactValue(event?.content ?? '', String(fact.value)))) problem('ungrounded_value', path, 'Точное значение факта отсутствует в цитате или исходном событии');
         if (fact.availability === 'initial' && event?.role !== 'user') problem('agent_fact_as_initial', path, 'Ответ старого агента не является исходным знанием пользователя');
-      } else if (origin.kind === 'owner' && !variant.history.some(h => h.author === 'owner' && h.factEdit?.factId === fact.id && h.factEdit.editId === origin.editId && h.factEdit.factHash === digest(fact))) problem('unverified_owner_fact', path, 'Нет записанной правки владельца, подтверждающей факт');
+      } else if (origin.kind === 'owner' && !ownerFactReceipt(library, variant, fact)) problem('unverified_owner_fact', path, 'Нет записанной правки владельца, подтверждающей факт');
       else if (origin.kind === 'synthetic' && (variant.provenance !== 'synthetic' || origin.parentVariantId !== variant.parentVariantId || !library.variants.some(p => p.id === origin.parentVariantId && p.id !== v))) problem('synthetic_provenance', path, 'Синтетическое допущение не связано с родителем варианта');
     }
     const persona = variant.userState.persona;
-    if (persona && !variant.history.some(h => h.author === 'owner' && h.personaEdit?.editId === persona.ownerEditId && h.personaEdit.personaHash === digest(persona))) problem('unverified_owner_persona', 'userState.persona', 'Нет записанного выбора профиля владельцем');
+    if (persona && !ownerPersonaReceipt(library, variant, persona)) problem('unverified_owner_persona', 'userState.persona', 'Нет записанного выбора профиля владельцем');
     const initial = variant.userState.facts.filter(f => f.availability === 'initial');
     const policy = variant.behaviorPolicy;
     const payloads = [variant.userState.goal, variant.userState.opening, variant.userState.persona?.text ?? '', ...variant.userState.missing, ...variant.userState.cannotKnow, ...policy.actions.flatMap(a => [a.payload ?? '', a.ifAsked ?? '']), ...policy.transitions.map(t => t.when)];
@@ -255,7 +310,7 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
       if (!supportsObservation(cp.observation)) problem('unobservable_checkpoint', path, 'Не подтверждён канал наблюдения');
     }
     // Excludes names and evidence references: exact duplicates cannot inflate the runnable set.
-    const fingerprint = digest({ business: group && businessIdentity(group), user: { ...variant.userState, facts: initial.map(f => ({ statement: normalize(f.statement), value: f.value })) }, policy, environment, evaluation: variant.evaluationSpec });
+    const fingerprint = executionFingerprint(library, variant);
     const duplicate = fingerprints.get(fingerprint);
     if (duplicate) { problem('duplicate_variant', 'id', `Точный дубль варианта ${duplicate}`); add('duplicate_variant', `variants.${duplicate}.id`, `Точный дубль варианта ${v}`, duplicate); }
     else fingerprints.set(fingerprint, v);
@@ -271,6 +326,26 @@ function refreshQuality(library: ScenarioLibrary): ScenarioLibrary {
     variant.quality = variant.issues.some(i => i.severity === 'blocked') ? 'blocked' : variant.issues.length ? 'needs_review' : 'ready';
   }
   return scenarioLibrarySchema.parse(library);
+}
+
+function ownerFactReceipt(library: ScenarioLibrary, variant: ScenarioVariant, fact: ScenarioVariant['userState']['facts'][number], seen = new Set<string>()): boolean {
+  if (seen.has(variant.id)) return false;
+  seen.add(variant.id);
+  if (variant.history.some(entry => entry.author === 'owner' && entry.factEdit?.factId === fact.id
+    && fact.origin.kind === 'owner' && entry.factEdit.editId === fact.origin.editId && entry.factEdit.factHash === digest(fact))) return true;
+  if (!variant.parentVariantId) return false;
+  const parent = library.variants.find(item => item.id === variant.parentVariantId);
+  const inherited = parent?.userState.facts.find(item => item.id === fact.id);
+  return !!parent && !!inherited && digest(inherited) === digest(fact) && ownerFactReceipt(library, parent, inherited, seen);
+}
+
+function ownerPersonaReceipt(library: ScenarioLibrary, variant: ScenarioVariant, persona: NonNullable<ScenarioVariant['userState']['persona']>, seen = new Set<string>()): boolean {
+  if (seen.has(variant.id)) return false;
+  seen.add(variant.id);
+  if (variant.history.some(entry => entry.author === 'owner' && entry.personaEdit?.editId === persona.ownerEditId && entry.personaEdit.personaHash === digest(persona))) return true;
+  if (!variant.parentVariantId) return false;
+  const parent = library.variants.find(item => item.id === variant.parentVariantId);
+  return !!parent && !!parent.userState.persona && digest(parent.userState.persona) === digest(persona) && ownerPersonaReceipt(library, parent, parent.userState.persona, seen);
 }
 
 function checkHash(library: ScenarioLibrary, expectedHash: string): void {
@@ -312,6 +387,19 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
     if (!fact) throw new Error('Факт не найден');
     Object.assign(fact, { statement: patch.statement, availability: patch.availability, reason: patch.reason, origin: { kind: 'owner', editId: patch.editId, text: patch.reason } });
     if (patch.value === undefined) delete fact.value; else fact.value = patch.value;
+    variant.semanticReviewRequired = true;
+  } else if (patch.kind === 'edit_variant_text') {
+    const variant = getVariant(patch.variantId);
+    if (patch.field === 'opening') variant.userState.opening = patch.value;
+    else if (patch.field === 'goal') variant.userState.goal = patch.value;
+    else if (patch.field === 'successCriteria') variant.evaluationSpec.successCriteria = patch.value;
+    else {
+      if (!patch.checkpointId) throw new Error('Для правила выберите контрольную точку');
+      const checkpoint = variant.evaluationSpec.checkpoints.find(item => item.id === patch.checkpointId);
+      if (!checkpoint) throw new Error('Контрольная точка не найдена');
+      checkpoint.rule = patch.value;
+    }
+    variant.semanticReviewRequired = true;
   } else if (patch.kind === 'merge_business') {
     const target = getBusiness(patch.targetId);
     if (patch.sourceIds.includes(target.id)) throw new Error('Нельзя объединить бизнес-сценарий с самим собой');
@@ -346,6 +434,7 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
         ...(previousHash ? { previousHash } : {}), author: 'owner', reason: patch.reason, revision: variant.revision,
         ...(fact && patch.kind === 'edit_fact' ? { factEdit: { factId: fact.id, editId: patch.editId, factHash: digest(fact) } } : {}),
         ...(patch.kind === 'upsert_variant' && patch.variant.id === variant.id && persona && oldPersonas.get(variant.id) !== digest(persona) ? { personaEdit: { editId: persona.ownerEditId, personaHash: digest(persona) } } : {}),
+        ...(patch.kind === 'edit_variant_text' && patch.variantId === variant.id ? { textEdit: { editId: patch.editId, field: patch.field, valueHash: digest(patch.value) } } : {}),
       });
     }
     variant.ownerDecision = 'pending';
@@ -353,6 +442,29 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
   next.revision++;
   delete next.acceptance;
   return refreshQuality(next);
+}
+
+/** Generator-only append. It cannot mint owner receipts; inherited owner data is verified through the parent chain. */
+export function addGeneratedVariant(library: ScenarioLibrary, expectedHash: string, rawVariant: ScenarioVariant, reason: string): ScenarioLibrary {
+  checkHash(library, expectedHash);
+  const next = scenarioLibrarySchema.parse(library);
+  const candidate = scenarioVariantSchema.parse(rawVariant);
+  if (next.variants.some(item => item.id === candidate.id)) throw new Error(`Вариант ${candidate.id} уже существует`);
+  const parent = candidate.parentVariantId && next.variants.find(item => item.id === candidate.parentVariantId);
+  if (!parent || candidate.provenance !== 'synthetic' || !candidate.mutationReason) throw new Error('Целевой вариант должен быть синтетическим потомком существующего варианта');
+  if (candidate.businessScenarioId !== parent.businessScenarioId || candidate.familyId !== parent.familyId) throw new Error('Целевой вариант должен сохранить бизнес-группу и семейство родителя');
+  if (canonical(candidate.sourceDialogues) !== canonical(parent.sourceDialogues)) throw new Error('Целевой вариант должен сохранить источники родителя');
+  candidate.revision = 1;
+  candidate.quality = 'needs_review'; candidate.issues = []; candidate.ownerDecision = 'pending'; candidate.semanticReviewRequired = true;
+  candidate.history = [{ author: 'generator', reason, revision: 1 }];
+  next.variants.push(candidate);
+  unifyFamilies(next.variants);
+  for (const variant of next.variants) variant.ownerDecision = 'pending';
+  next.revision++;
+  delete next.acceptance;
+  const refreshed = refreshQuality(next);
+  if (refreshed.variants.find(item => item.id === candidate.id)?.issues.some(issue => issue.code === 'duplicate_variant')) throw new Error('Точный дубль варианта уже существует');
+  return refreshed;
 }
 
 export function acceptLibrary(library: ScenarioLibrary, expectedHash: string, variantIds: string[]): ScenarioLibrary {

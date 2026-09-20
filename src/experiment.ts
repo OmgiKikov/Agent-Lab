@@ -1,6 +1,7 @@
 import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
 import type { LibraryPatch, ScenarioLibrary } from './scenario-contracts.js';
 import { assessScenarioLibrary, assertLibraryRun, compiledLibraryScenarios, prepareScenarioLibrary, SCENARIO_EXTRACTION_PROTOCOL } from './scenario-preparation.js';
+import { proposeVariant as proposeScenarioVariant, type VariantProposalResult, type VariantRequest } from './scenario-variants.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -729,6 +730,18 @@ export class ExperimentLab {
       experiment.reviewedAt = null; experiment.reviewMode = null; experiment.manifestHash = null;
       await this.store.publishLibrary(experiment, next, expectedHash);
       return { library: next, experiment };
+    });
+  }
+  async proposeVariant(id: string, expectedHash: string, request: VariantRequest): Promise<VariantProposalResult & { experiment: Experiment }> {
+    return this.change(async () => {
+      const { experiment, library } = await this.readLibrary(id);
+      if (experiment.phase !== 'review') throw new Error('Добавить вариант можно только в черновике.');
+      const result = proposeScenarioVariant(library, request, expectedHash);
+      experiment.librarySnapshot = result.library; experiment.scenarios = []; experiment.acceptedTests = [];
+      delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
+      experiment.reviewedAt = null; experiment.reviewMode = null; experiment.manifestHash = null;
+      await this.store.publishLibrary(experiment, result.library, expectedHash);
+      return { ...result, experiment };
     });
   }
   async acceptLibrary(id: string, expectedHash: string, variantIds: string[]): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {

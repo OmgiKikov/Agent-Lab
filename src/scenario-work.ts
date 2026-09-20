@@ -67,6 +67,24 @@ export function planSemanticWork(library: ScenarioLibrary): { contentHash: strin
   return { contentHash, jobs, skipped };
 }
 
+function semanticWorkHash(job: Job, contentHash: string): string {
+  return fingerprint({ evidenceVersion: 2, contentHash, scope: job.input.scope, fields: job.input.fields,
+    candidates: job.input.comparisonCandidates.map(candidate => candidate.id) });
+}
+
+/** Counts only calls that do not already have a receipt for this exact semantic content. */
+export function semanticWorkStatus(library: ScenarioLibrary): {
+  contentHash: string; totalJobs: number; completedJobs: number; pendingJobs: number; skipped: SemanticFinding[];
+} {
+  const plan = planSemanticWork(library);
+  const completed = new Set(library.semanticAssessment?.contentHash === plan.contentHash
+    ? (library.semanticAssessment.workReceipts ?? []).map(receipt => receipt.workHash)
+    : []);
+  const completedJobs = plan.jobs.reduce((count, job) => count + Number(completed.has(semanticWorkHash(job, plan.contentHash))), 0);
+  return { contentHash: plan.contentHash, totalJobs: plan.jobs.length, completedJobs,
+    pendingJobs: plan.jobs.length - completedJobs, skipped: plan.skipped };
+}
+
 /** Same bounded plan for initial extraction and explicit reassessment. Each completed call has a persisted partial receipt. */
 export async function assessScenarioLibrary(library: ScenarioLibrary, runtime: Pick<Runtime, 'assessScenarioProposals'>, ctx: CallContext,
   persist: (partial: ScenarioLibrary) => Promise<void>): Promise<ScenarioLibrary> {
@@ -86,7 +104,7 @@ export async function assessScenarioLibrary(library: ScenarioLibrary, runtime: P
   await persist(partial());
   for (const job of plan.jobs) {
     ctx.signal.throwIfAborted();
-    const workHash = fingerprint({ evidenceVersion: 2, contentHash: plan.contentHash, scope: job.input.scope, fields: job.input.fields, candidates: job.input.comparisonCandidates.map(c => c.id) }), receipt = receipts.get(workHash);
+    const workHash = semanticWorkHash(job, plan.contentHash), receipt = receipts.get(workHash);
     const raw = receipt?.findings ?? await runtime.assessScenarioProposals(job.input, ctx);
     if (serializedBytes({ findings: raw }) > SCENARIO_OUTPUT_BYTES) throw new Error('Смысловой ответ превышает допустимый объём. Частичные проверки сохранены.');
     const returned = raw.map(f => semanticFindingSchema.parse(f));

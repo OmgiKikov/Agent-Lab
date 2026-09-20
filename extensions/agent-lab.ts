@@ -19,8 +19,13 @@ import { doctor, listSuites, readConnection, rememberedConnection, rememberConne
 import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit.js';
 import { readData, selectValidationDialogues, readDialogueImport, importDialogues } from '../dist/imports.js';
 import { ExperimentStore } from '../dist/store.js';
+import { libraryHash } from '../dist/scenario-library.js';
+import { semanticWorkStatus } from '../dist/scenario-work.js';
+import { libraryPatchSchema } from '../dist/scenario-contracts.js';
 import { activePhases, reviewOrder, safeText, showBoard, trialLines, type BoardAction, type BoardOptions, type Section } from './cards.ts';
+import { scenarioErrorText, scenarioLibrarySummary } from './scenarios.ts';
 import { rememberView, renderAgentLabResult, VERDICT_KIND, type VerdictDetails } from './render/verdict-block.ts';
+import { progressLine } from './flow.ts';
 
 /** C-119: what the model reads instead of the block, so it does not restate the number and the causes (CTX-08). */
 const SHOWN_TO_OWNER = 'Блок-вердикт уже показан владельцу. Не пересказывайте число и причины; ответьте на вопрос или предложите следующий шаг.';
@@ -70,7 +75,12 @@ const returnToBoard = (ctx: ExtensionContext, id: string) => {
   if (!ctx.hasUI || ctx.mode !== 'tui') return;
   ctx.ui?.setStatus?.('agent-lab', `Agent Lab · ${id.slice(0, 8)} · /agent-lab ${id} — детали`);
 };
-const inputError = (error: unknown): string => safeText(error instanceof Error ? error.message : error);
+const inputError = (error: unknown): string => {
+  const message = safeText(error instanceof Error ? error.message : error);
+  return message.startsWith('This data directory is already open')
+    ? 'Другая сессия выполняет проверку. Историю, диалоги и экспорт можно смотреть здесь. Изменения и новый запуск будут доступны после её завершения.'
+    : message;
+};
 
 /**
  * What is being checked, in the owner's words. A set of more than one situation leads with the
@@ -101,6 +111,18 @@ function runScope(record: Experiment): string[] {
 function runPlan(record: Experiment): string {
   const target = record.target.kind === 'sandbox' ? 'Учебная песочница' : record.target.kind === 'http' ? record.target.url
     : record.target.kind === 'module' ? record.target.path : `${[record.target.command, ...record.target.args].join(' ')}${record.target.cwd ? ` · ${record.target.cwd}` : ''}`;
+  if (record.librarySnapshot?.acceptance) {
+    const acceptance = record.librarySnapshot.acceptance;
+    const remaining = Math.max(0, record.settings.maxCalls - record.usage.calls);
+    return [
+      `Выбрано вариантов: ${acceptance.variantIds.length} · ревизия библиотеки ${acceptance.revision}.`,
+      `Диалогов: ${plannedTrials(record)}. Режимы: ${record.settings.userModes.join(', ')}.`,
+      `Бюджет: использовано ${record.usage.calls} из ${record.settings.maxCalls}; осталось ${remaining}. До ${Math.round(record.settings.maxDurationMs / 1000)} секунд.`,
+      `Агент: ${safeText(target)}`, `Версия тестов: ${draftHash(record).slice(0, 12)}`,
+      'Полные факты, источники и контрольные точки доступны в разделе «Сценарии».',
+      'Принятие библиотеки уже записано отдельно; это подтверждение запуска агента.',
+    ].join('\n');
+  }
   return [
     ...runScope(record),
     '', `Диалогов: ${plannedTrials(record)}. Режимы: ${record.settings.userModes.join(', ')}.`,
@@ -205,11 +227,12 @@ function runParallel(record: Experiment): number {
 /** Conversational execution asks the human to authorize a concrete plan; it never invents human reviews. */
 export default function agentLab(pi: ExtensionAPI) {
   let activeClose: (() => Promise<void>) | undefined;
+  let boardRun: { directory: string; id: string; lab: ExperimentLab; done: Promise<void> } | undefined;
   const open = (cwd: string) => {
-    if (activeClose) throw new Error('Another Agent Lab operation is active. Finish it or cancel it first.');
+    if (activeClose) throw new Error('Уже идёт другая операция Agent Lab. Историю и готовые результаты можно открыть; новый запуск — после её завершения.');
     const lab = new ExperimentLab(resolve(cwd, '.agent-lab'));
     let closing: Promise<void> | undefined;
-    const close = () => closing ??= lab.close().finally(() => { activeClose = undefined; });
+    const close = () => closing ??= lab.close().finally(() => { if (activeClose === close) activeClose = undefined; });
     activeClose = close;
     return { lab, close };
   };
@@ -223,7 +246,7 @@ export default function agentLab(pi: ExtensionAPI) {
   pi.on('before_agent_start', async (event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1') return;
     ctx.ui?.setWidget?.('agent-lab-start', undefined);
-    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for measuring the user's real agent. Work in their project and follow the agent-builder skill. The primary flow with de-identified real dialogues is agent_lab_build mode=validate: select up to 15 measurable prompt/RAG cases, ground expectations in owner requirements, use recorded user facts with a reactive simulator instead of scripted follow-ups, exclude masked-only turns and unavailable customer-data cases with explicit reasons, show the actual expectations and sources in the existing run confirmation, run the unchanged real agent after native confirmation, then lead with one estimated card accuracy number, grounded failure causes, separate metrics and limits; save the suite when useful. This is accuracy on the validation set, never a calibrated production guarantee. To mine one new regression test, call agent_lab_build mode=discover. Discovery selects evidence, proposes one saved hypothesis and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If the owner answers yes, call mode=discover again with the exact fromRunId and hypothesis; it re-reads the saved evidence and builds exactly one editable test. A refusal or correction builds nothing. Use agent_lab_accept to show the owner what the agent must do in each situation; the owner confirms all expectations or corrects one in their own words there. agent_lab_run asks to confirm expectations first when they are not confirmed. Execution consent remains separate from accepting a test and from reviewing results. Preserve budgets and model, cite actual event IDs, never invent a human verdict, and do not modify an external agent unless the user asked to fix it.` };
+    return { systemPrompt: event.systemPrompt + `\nYou are Agent Lab, a conversational tool for measuring the user's real agent. Work in their project and follow the agent-builder skill. The primary validation flow is Логи → Сценарии → Прогон → Результаты. Use agent_lab_build mode=validate to import de-identified dialogues, then agent_lab_scenarios to inspect grouped variants, source quotes and indexes, lineage, pending sources, origin readiness and semantic readiness. The owner selects ready variants and accepts one immutable accepted revision; acceptance does not run the agent. Keep the later run confirmation concise: selected count, accepted revision, real target, planned dialogues and remaining cumulative budget, while full expectations remain in Сценарии. Use recorded user facts with a reactive simulator, exclude masked-only turns and unavailable customer-data cases with explicit reasons, and never fabricate owner facts from model text. Semantic reassessment resumes semantic jobs only; it does not process pending sources. Show its call estimate and require a deliberate settings.maxCalls increase when the remaining cumulative budget is insufficient; never reset usage. After separate native execution confirmation, lead with one estimated card accuracy number, grounded failure causes, separate metrics and limits; save the suite when useful. This is accuracy on the validation set, never a calibrated production guarantee. To mine one new regression test, call agent_lab_build mode=discover. Discovery selects evidence, proposes one saved hypothesis and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If the owner answers yes, call mode=discover again with the exact fromRunId and hypothesis; it re-reads the saved evidence and builds exactly one editable test. A refusal or correction builds nothing. Use agent_lab_accept for this supplemental one-test flow: show what the agent must do, and let the owner confirm or correct it in their own words. agent_lab_run asks to confirm expectations first when they are not confirmed. Execution consent remains separate from accepting a test and from reviewing results. Preserve budgets and model, cite actual event IDs, never invent a human verdict, and do not modify an external agent unless the user asked to fix it.` };
   });
   pi.registerTool({
     ...toolDisplay,
@@ -511,8 +534,9 @@ export default function agentLab(pi: ExtensionAPI) {
     executionMode: 'sequential',
     async execute(_callId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
-      const { lab, close } = open(ctx.cwd);
-      try {
+      const directory = resolve(ctx.cwd, '.agent-lab');
+      const lab = boardRun?.directory === directory ? boardRun.lab : new ExperimentLab(directory);
+      {
         const record = await lab.get(params.id);
         const bundle = await evidenceBundle(record, lab.store);
         const controlVisible = record.workflow === 'evaluate' || !!record.controlConsumedAt && !activePhases.has(record.phase);
@@ -530,6 +554,101 @@ export default function agentLab(pi: ExtensionAPI) {
         };
         returnToBoard(ctx, record.id);
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: { id: record.id } };
+      }
+    },
+  });
+  pi.registerTool({
+    ...toolDisplay,
+    name: 'agent_lab_scenarios', label: 'Inspect and revise scenario library',
+    description: 'Use the same versioned scenario-library API as the native board and CLI. Supports inspect, edit, merge, split, variant, assess and bulk accept with expectedLibraryHash. Acceptance never runs the agent. Owner fact edits and grouping decisions use native Pi input/confirmation; model text never becomes an owner fact or verdict.',
+    parameters: Type.Object({
+      operation: Type.Union(['inspect', 'edit', 'merge', 'split', 'variant', 'assess', 'accept'].map(value => Type.Literal(value))),
+      id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }),
+      expectedLibraryHash: Type.Optional(Type.String({ pattern: '^[a-f0-9]{64}$' })),
+      patch: Type.Optional(Type.Any()), request: Type.Optional(Type.Any()),
+      variantIds: Type.Optional(Type.Array(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), { minItems: 1, maxItems: 200 })),
+      variantId: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
+      cursor: Type.Optional(Type.Integer({ minimum: 0 })),
+    }, { additionalProperties: false }),
+    executionMode: 'sequential',
+    async execute(_callId, params, signal, _onUpdate, ctx) {
+      signal?.throwIfAborted();
+      const directory = resolve(ctx.cwd, '.agent-lab');
+      const output = (record: Experiment, library = record.librarySnapshot!) => {
+        const semantic = semanticWorkStatus(library);
+        const offset = params.variantId ? 0 : params.cursor ?? 0;
+        const limit = params.variantId ? 1 : params.limit ?? 20;
+        const page = params.variantId ? library.variants.filter(variant => variant.id === params.variantId) : library.variants.slice(offset, offset + limit);
+        if (params.variantId && !page.length) throw new Error('Вариант не найден в свежей ревизии библиотеки.');
+        const detail = params.variantId ? page.map(variant => ({
+          id: variant.id, title: variant.title, quality: variant.quality, ownerDecision: variant.ownerDecision, provenance: variant.provenance,
+          businessScenarioId: variant.businessScenarioId, parentVariantId: variant.parentVariantId, mutationReason: variant.mutationReason,
+          opening: variant.userState.opening,
+          facts: variant.userState.facts.map(fact => ({ id: fact.id, statement: fact.statement, value: fact.value, availability: fact.availability, reason: fact.reason, origin: fact.origin })),
+          missing: variant.userState.missing, cannotKnow: variant.userState.cannotKnow, issues: variant.issues,
+          sourceDialogues: variant.sourceDialogues,
+          behavior: variant.behaviorPolicy.transitions.map(transition => { const action = variant.behaviorPolicy.actions.find(item => item.id === transition.actionId);
+            return { condition: transition.when, action: action?.kind ?? 'invalid', payload: action?.payload, ifAsked: action?.ifAsked }; }),
+          checkpoints: variant.evaluationSpec.checkpoints.map(item => ({ id: item.id, rule: item.rule, quote: item.quote, observation: item.observation, role: item.role })),
+          environment: { mode: variant.environmentFixture.mode, contract: variant.environmentFixture.contract },
+        })) : undefined;
+        return {
+          ...scenarioLibrarySummary(record, library.acceptance?.variantIds ?? []),
+          progress: record.preparationProgress,
+          budget: { usedCalls: record.usage.calls, maxCalls: record.settings.maxCalls, remainingCalls: Math.max(0, record.settings.maxCalls - record.usage.calls),
+            semanticTotalJobs: semantic.totalJobs, semanticCompletedJobs: semantic.completedJobs, semanticPendingJobs: semantic.pendingJobs, skipped: semantic.skipped },
+          groups: library.businessScenarios.map(group => ({ id: group.id, title: group.title, goal: group.goal, grouping: group.grouping,
+            variantCount: library.variants.filter(variant => variant.businessScenarioId === group.id).length })),
+          variants: page.map(variant => ({ id: variant.id, businessScenarioId: variant.businessScenarioId, title: variant.title, quality: variant.quality,
+            provenance: variant.provenance, parentVariantId: variant.parentVariantId, issueCount: variant.issues.length, sourceCount: variant.sourceDialogues.length })),
+          page: { offset, limit, total: library.variants.length, nextCursor: offset + page.length < library.variants.length ? offset + page.length : null },
+          ...(detail ? { detail } : {}),
+          agentRun: false,
+        };
+      };
+      if (params.operation === 'inspect') {
+        const reader = new ExperimentLab(directory);
+        const { experiment, library } = await reader.readLibrary(params.id);
+        const result = output(experiment, library); returnToBoard(ctx, experiment.id);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], details: result };
+      }
+      if (!params.expectedLibraryHash) throw new Error('Укажите expectedLibraryHash из свежего inspect.');
+      const { lab, close } = open(ctx.cwd);
+      try {
+        await lab.init();
+        let result;
+        if (params.operation === 'variant') {
+          if (!params.request) throw new Error('Для variant нужен request.');
+          result = await lab.proposeVariant(params.id, params.expectedLibraryHash, params.request as any);
+        } else if (params.operation === 'assess') {
+          const current = await lab.readLibrary(params.id);
+          const plan = semanticWorkStatus(current.library);
+          const remaining = Math.max(0, current.experiment.settings.maxCalls - current.experiment.usage.calls);
+          if (!remaining && plan.pendingJobs) throw new Error(`Осталось ${plan.pendingJobs} смысловых вызовов, модельный бюджет исчерпан. Увеличьте settings.maxCalls через agent_lab_edit; использованный бюджет не сбрасывается.`);
+          await lab.assessLibrary(params.id, params.expectedLibraryHash); await lab.waitForIdle();
+          const currentResult = await lab.readLibrary(params.id); result = { ...currentResult, variant: undefined, diff: undefined };
+        } else if (params.operation === 'accept') {
+          if (!params.variantIds?.length) throw new Error('Для accept выберите variantIds.');
+          if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Принятие библиотеки требует native Pi confirmation; в CLI используйте scenarios --operation accept --yes.');
+          if (!await ctx.ui.confirm('Принять выбранные сценарии?', `${params.variantIds.length} вариантов · агент не запускается. Полные факты и источники доступны в разделе «Сценарии».`)) {
+            return { content: [{ type: 'text', text: 'Принятие отменено. Агент не запускался.' }], details: { cancelled: true } };
+          }
+          result = await lab.acceptLibrary(params.id, params.expectedLibraryHash, params.variantIds);
+        } else {
+          if (!params.patch) throw new Error(`Для ${params.operation} нужен patch.`);
+          const patch = libraryPatchSchema.parse(params.patch);
+          const expectedKind = params.operation === 'merge' ? 'merge_business' : params.operation === 'split' ? 'split_business' : undefined;
+          if (expectedKind && patch.kind !== expectedKind) throw new Error(`Операция ${params.operation} требует patch.kind=${expectedKind}.`);
+          if (params.operation === 'edit' && !['remove_variant'].includes(patch.kind)) throw new Error('Факты владельца редактируются только через native Pi editor или явный CLI input; модельный текст не записывается как факт владельца.');
+          if (['merge', 'split'].includes(params.operation) && (!ctx.hasUI || ctx.mode !== 'tui'
+            || !await ctx.ui.confirm('Изменить бизнес-группировку?', safeText(patch.reason)))) return { content: [{ type: 'text', text: 'Изменение группировки отменено.' }], details: { cancelled: true } };
+          result = await lab.editLibrary(params.id, params.expectedLibraryHash, patch);
+        }
+        const record = result.experiment;
+        const response = { ...output(record, result.library), ...('variant' in result && result.variant ? { variant: result.variant, diff: result.diff } : {}) };
+        returnToBoard(ctx, record.id);
+        return { content: [{ type: 'text', text: JSON.stringify(response, null, 2) }], details: response };
       } finally { await close(); }
     },
   });
@@ -663,7 +782,9 @@ export default function agentLab(pi: ExtensionAPI) {
         if (signal.aborted) cancel();
         const progress = async () => {
           const r = await lab.get(draft.id);
-          onUpdate?.({ content: [{ type: 'text', text: safeText(`Проверено ${r.trials.length} из ${plannedTrials(r)} · ${r.message}`) }], details: { id: r.id, phase: r.phase } });
+          const text = safeText(progressLine(r));
+          ctx.ui.setStatus?.('agent-lab-progress', text);
+          onUpdate?.({ content: [{ type: 'text', text: `${text}\n${safeText(r.message)}` }], details: { id: r.id, phase: r.phase } });
         };
         await progress();
         timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);
@@ -682,7 +803,7 @@ export default function agentLab(pi: ExtensionAPI) {
         }
         returnToBoard(ctx, record.id);
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details };
-      } finally { clearInterval(timer); signal.removeEventListener('abort', cancel); await polling; await close(); }
+      } finally { clearInterval(timer); signal.removeEventListener('abort', cancel); await polling; ctx.ui.setStatus?.('agent-lab-progress', undefined); await close(); }
     },
   });
   pi.registerTool({
@@ -825,18 +946,42 @@ export default function agentLab(pi: ExtensionAPI) {
       if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Human review requires the native Pi terminal. Start interactive Pi and open /agent-lab. Headless tools only prepare and edit drafts.');
       const startRequest = args.trim() === 'new' || args.trim().startsWith('/') || args.trim().startsWith('~');
       let handoff: { request: string; context: unknown } | undefined;
-      const { lab, close } = open(ctx.cwd);
+      // Opening history is a read, not a writer operation. In particular, never call init()
+      // here: it acquires the lock and recovers running records as interrupted.
+      const directory = resolve(ctx.cwd, '.agent-lab');
+      const reader = new ExperimentLab(directory);
+      let lab = reader;
+      let lease: ReturnType<typeof open> | undefined;
+      const reading = () => boardRun?.directory === directory ? boardRun.lab : reader;
+      const release = async () => {
+        const owned = lease; lease = undefined; lab = reader;
+        if (owned) await owned.close();
+      };
+      const writing = async () => {
+        if (lease) return;
+        const owned = open(ctx.cwd);
+        try { await owned.lab.init(); lease = owned; lab = owned.lab; }
+        catch (error) { await owned.close(); throw error; }
+      };
       try {
-        await lab.init();
         let id = startRequest || args.trim() === 'demo' ? undefined : args.trim() || undefined;
+        if (id) {
+          const candidates = (await reading().list()).filter(record => record.id === id || record.id.startsWith(id!));
+          const exact = candidates.find(record => record.id === id);
+          if (exact) id = exact.id;
+          else if (candidates.length === 1) id = candidates[0]!.id;
+          else throw new Error(candidates.length ? 'Нашлось несколько прогонов. Откройте /agent-lab и выберите нужный.' : 'Прогон не найден. Откройте /agent-lab, чтобы посмотреть историю.');
+        }
         let section: Section | undefined;
         let selected = 0;
         let query = '';
         let pendingOnly = false;
+        let dialogueOpen = false;
         let beforeId: string | undefined;
         let newRequested = startRequest;
         let demoRequested = args.trim() === 'demo';
         let reportPath: string | undefined;
+        const scenarioSelections = new Map<string, string[]>();
         // Elapsed time with the dialogue visible plus its verdict form, including time spent idle.
         const reviewTimes = new Map<string, number>();
         let notice: BoardOptions['notice'];
@@ -844,22 +989,26 @@ export default function agentLab(pi: ExtensionAPI) {
           notice = { message: safeText(message), kind };
         };
         while (true) {
-          const record = id ? await lab.get(id) : undefined;
-          const bundle = record ? await evidenceBundle(record, lab.store, beforeId) : undefined;
+          const record = id ? await reading().get(id) : undefined;
+          if (record?.librarySnapshot && !scenarioSelections.has(record.id)) scenarioSelections.set(record.id, record.librarySnapshot.acceptance?.variantIds.slice()
+            ?? record.librarySnapshot.variants.filter(variant => variant.quality === 'ready').map(variant => variant.id));
+          const bundle = record ? await evidenceBundle(record, reader.store, beforeId) : undefined;
           const action: BoardAction = demoRequested ? { type: 'demo' } : newRequested ? { type: 'new' } : await showBoard(ctx, record
-            ? { record, section, selected, query, pendingOnly, comparison: bundle?.comparison, before: bundle?.before, notice, reportPath, reviewTimes,
-                warnings: bundle?.warnings, view: bundle?.view, load: async () => evidenceBundle(await lab.get(record.id), lab.store, beforeId) }
-            : { records: await lab.list(), notice, warnings: lab.store.diagnostics.map(d => `${d.id}: ${d.message}`) });
+            ? { record, section, selected, query, pendingOnly, dialogueOpen, selectedVariantIds: scenarioSelections.get(record.id), comparison: bundle?.comparison, before: bundle?.before, notice, reportPath, reviewTimes,
+                warnings: bundle?.warnings, view: bundle?.view, load: async () => evidenceBundle(await reading().get(record.id), reader.store, beforeId) }
+            : { records: await reading().list(), loadRecords: () => reading().list(), notice, warnings: reader.store.diagnostics.map(d => `${d.id}: ${d.message}`) });
           notice = undefined;
           if ('record' in action && (action.record.updatedAt !== record?.updatedAt || action.record.phase !== record?.phase)) reportPath = undefined;
           if (action.type === 'demo') {
             demoRequested = false;
             try {
+              await writing();
               const draft = await lab.create(demoEvaluationInput());
               await lab.waitForIdle();
               id = draft.id; section = 'cards'; selected = 0; query = ''; pendingOnly = false; beforeId = undefined; reportPath = undefined;
               inform('Учебный пример: агенту не хватает инструмента изменения записи. r — найти провал. Модель и провайдер не нужны.');
             } catch (error) { inform(inputError(error), 'error'); }
+            finally { await release(); }
             continue;
           }
           if (action.type === 'new') {
@@ -870,20 +1019,169 @@ export default function agentLab(pi: ExtensionAPI) {
             handoff = { request, context: { task: 'Prepare a new Agent Lab draft. Ask once for optional real dialogue logs or an explicit choice to start without them; honor the answer already given in this conversation. Read the authorized local agent project and relevant materials; infer or prepare its adapter. Use agent_lab_build, then explain the proposed user scenarios in plain language. Explain the first test and use agent_lab_run when the user asked to check the agent. Do not claim human review. Follow the agent-builder skill.' } };
             break;
           }
-          if (action.type === 'open') { id = action.id; section = undefined; selected = 0; query = ''; pendingOnly = false; beforeId = undefined; reportPath = undefined; continue; }
+          if (action.type === 'open') { id = action.id; section = undefined; selected = 0; query = ''; pendingOnly = false; dialogueOpen = false; beforeId = undefined; reportPath = undefined; continue; }
           if (action.type === 'close' || action.type === 'back') {
-            const latest = id ? await lab.get(id) : undefined;
-            if (latest && activePhases.has(latest.phase)) {
-              if (!await ctx.ui.confirm('Остановить диалоги и выйти?', 'Текущий запуск будет остановлен. Уже записанные доказательства сохранятся.')) continue;
-              await lab.cancel(latest.id); await lab.waitForIdle();
-            }
+            // Navigating away is not cancellation. The session owns a started run until
+            // completion (or Pi shutdown), independently of this board's lifetime.
             if (action.type === 'close') break;
-            id = undefined; section = undefined; selected = 0; query = ''; pendingOnly = false; beforeId = undefined; reportPath = undefined; continue;
+            id = undefined; section = undefined; selected = 0; query = ''; pendingOnly = false; dialogueOpen = false; beforeId = undefined; reportPath = undefined; continue;
           }
           section = action.section; selected = action.selected;
-          query = action.query ?? ''; pendingOnly = action.pendingOnly ?? false;
+          if ('selectedVariantIds' in action) scenarioSelections.set(action.record.id, action.selectedVariantIds);
+          query = 'query' in action ? action.query ?? '' : ''; pendingOnly = 'pendingOnly' in action ? action.pendingOnly ?? false : false;
+          dialogueOpen = 'dialogueOpen' in action ? action.dialogueOpen ?? false : false;
           try {
-            if (action.type === 'discuss') {
+            if (!['discuss', 'export', 'openReport', 'cancel'].includes(action.type)) await writing();
+            if (action.type === 'acceptLibrary') {
+              const shown = action.record.librarySnapshot;
+              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
+              const accepted = await lab.acceptLibrary(action.record.id, libraryHash(shown), action.variantIds);
+              scenarioSelections.set(action.record.id, accepted.library.acceptance!.variantIds.slice());
+              section = 'agent'; selected = 0;
+              inform(`Принята ревизия ${accepted.library.revision}: ${action.variantIds.length} вариантов. Агент не запускался. 3 — проверить план запуска.`);
+            } else if (action.type === 'editScenario') {
+              const shown = action.record.librarySnapshot;
+              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
+              const variant = shown.variants.find(item => item.id === action.variantId);
+              if (!variant) throw new Error('Выбранный вариант уже отсутствует.');
+              const textFields = [
+                { label: 'Первая реплика пользователя', field: 'opening' as const, value: variant.userState.opening },
+                { label: 'Цель пользователя', field: 'goal' as const, value: variant.userState.goal },
+                { label: 'Ожидаемый результат', field: 'successCriteria' as const, value: variant.evaluationSpec.successCriteria },
+                ...variant.evaluationSpec.checkpoints.map(checkpoint => ({ label: `Правило проверки · ${checkpoint.id}`, field: 'checkpointRule' as const, value: checkpoint.rule, checkpointId: checkpoint.id })),
+              ];
+              const factOptions = variant.userState.facts.map(fact => safeText(`Факт · ${fact.statement} · ${fact.availability}`));
+              const options = [...textFields.map(item => item.label), ...factOptions];
+              const picked = await ctx.ui.select('Что изменить своими словами?', options);
+              if (!picked) continue;
+              const textField = textFields.find(item => item.label === picked);
+              if (textField) {
+                const value = await ctx.ui.editor(`${textField.label} · обычным текстом`, textField.value);
+                if (!value?.trim() || value.trim() === textField.value) continue;
+                const reason = await ctx.ui.editor('Почему вы вносите эту правку?', 'Правка владельца в разделе «Сценарии»');
+                if (!reason?.trim()) continue;
+                await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'edit_variant_text', variantId: variant.id,
+                  field: textField.field, ...('checkpointId' in textField ? { checkpointId: textField.checkpointId } : {}), value: value.trim(),
+                  editId: `owner_${Date.now().toString(36)}`, reason: reason.trim() });
+              } else {
+                const fact = variant.userState.facts[factOptions.indexOf(picked)];
+                if (!fact) continue;
+                const statement = await ctx.ui.editor('Факт пользователя · обычным текстом', fact.statement);
+                if (statement === undefined || !statement.trim()) continue;
+                const currentValue = fact.value === undefined ? '' : String(fact.value);
+                const valueText = await ctx.ui.editor('Точное значение · оставьте пустым, если отдельного значения нет', currentValue);
+                if (valueText === undefined) continue;
+                const availability = await ctx.ui.select('Когда пользователь знает этот факт?', ['initial · знает до разговора', 'learned_in_source · узнал только в старом разговоре', 'uncertain · нужно уточнить']);
+                if (!availability) continue;
+                const reason = await ctx.ui.editor('Почему вы исправляете факт?', 'Правка владельца в разделе «Сценарии»');
+                if (!reason?.trim()) continue;
+                await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'edit_fact', variantId: variant.id, factId: fact.id,
+                  statement: statement.trim(), ...(valueText.trim() ? { value: valueText.trim() } : {}), availability: availability.split(' ')[0] as 'initial' | 'learned_in_source' | 'uncertain',
+                  editId: `owner_${Date.now().toString(36)}`, reason: reason.trim() });
+              }
+              scenarioSelections.set(action.record.id, []);
+              inform('Правка записана как явное решение владельца. Цитаты источников сохранены. Выполните смысловую проверку: g.');
+            } else if (action.type === 'variant') {
+              const shown = action.record.librarySnapshot;
+              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
+              const variant = shown.variants.find(item => item.id === action.variantId);
+              if (!variant) throw new Error('Выбранный вариант уже отсутствует.');
+              const labels = ['Раскрыть известный факт только по запросу', 'Сделать известный факт отсутствующим', 'Неоднозначная первая реплика', 'Смена намерения на выбранном шаге', 'Временный сбой update_record'];
+              const operation = await ctx.ui.select('Какой целевой вариант добавить?', labels);
+              if (!operation) continue;
+              let requestInput: Record<string, unknown>;
+              if (operation === labels[0] || operation === labels[1]) {
+                const facts = variant.userState.facts.filter(fact => fact.availability === 'initial');
+                const choices = facts.map(fact => safeText(fact.statement));
+                const fact = facts[choices.indexOf(await ctx.ui.select('Какой известный факт изменить?', choices) ?? '')];
+                if (!fact) continue;
+                const value = String(fact.value ?? '');
+                const suggestedOpening = value ? variant.userState.opening.replaceAll(value, '').replace(/\s{2,}/g, ' ').trim() : variant.userState.opening;
+                const opening = await ctx.ui.editor('Первая реплика без выбранного значения', suggestedOpening);
+                if (!opening?.trim()) continue;
+                const ifAsked = await ctx.ui.editor('Как понять, что агент запросил этот факт?', `Агент запросил: ${fact.statement.split(':')[0]}`);
+                if (!ifAsked?.trim()) continue;
+                let missingDescription: string | undefined;
+                if (operation === labels[1]) {
+                  const separator = fact.statement.indexOf(':');
+                  const suggested = separator > 0 ? fact.statement.slice(0, separator).trim() : fact.id.replaceAll('_', ' ');
+                  const written = await ctx.ui.editor('Название отсутствующих данных без секретного значения', suggested);
+                  if (!written?.trim()) continue;
+                  missingDescription = written.trim();
+                }
+                requestInput = { factId: fact.id, opening: opening.trim(), ifAsked: ifAsked.trim(), ...(missingDescription ? { missingDescription } : {}) };
+              } else if (operation === labels[2]) {
+                const opening = await ctx.ui.editor('Новая неоднозначная первая реплика', variant.userState.opening);
+                if (!opening?.trim()) continue;
+                requestInput = { opening: opening.trim() };
+              } else if (operation === labels[3]) {
+                const choices = variant.behaviorPolicy.actions.map(item => `${item.id} · ${item.kind}${item.kind === 'finish' ? ' · сменить намерение вместо завершения' : ''}`);
+                const chosen = await ctx.ui.select('После какого шага сменить намерение?', choices);
+                const actionId = chosen?.split(' · ')[0];
+                if (!actionId) continue;
+                const intent = await ctx.ui.editor('Новое намерение пользователя', '');
+                if (!intent?.trim()) continue;
+                requestInput = { intent: intent.trim(), afterActionId: actionId };
+              } else {
+                const failures = await ctx.ui.editor('Сколько первых update_record завершатся временной ошибкой?', '1');
+                if (!failures || !/^\d+$/.test(failures.trim())) continue;
+                requestInput = { operation: 'update_record', failures: Number(failures) };
+              }
+              const reason = await ctx.ui.editor('Зачем нужен этот синтетический вариант?', operation);
+              if (!reason?.trim()) continue;
+              const kind = operation === labels[0] ? 'reveal_on_request' : operation === labels[1] ? 'missing_fact' : operation === labels[2] ? 'ambiguous_opening' : operation === labels[3] ? 'changed_intent' : 'tool_failure';
+              const proposed = await lab.proposeVariant(action.record.id, libraryHash(shown), { parentId: variant.id, operation: kind, reason: reason.trim(), input: requestInput });
+              scenarioSelections.set(action.record.id, []);
+              selected = proposed.library.variants.findIndex(item => item.id === proposed.variant.id);
+              inform(`Добавлен синтетический вариант «${safeText(proposed.variant.title)}». Он требует смысловой проверки.`);
+            } else if (action.type === 'removeVariant') {
+              const shown = action.record.librarySnapshot;
+              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
+              const variant = shown.variants.find(item => item.id === action.variantId);
+              if (!variant || !await ctx.ui.confirm('Удалить вариант из новой ревизии?', safeText(`${variant.title}\nИсходный импорт и прошлые снимки сохранятся.`))) continue;
+              await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'remove_variant', variantId: variant.id, reason: 'Владелец удалил вариант в native workspace' });
+              scenarioSelections.set(action.record.id, action.selectedVariantIds.filter(id => id !== variant.id));
+              inform('Вариант удалён из новой ревизии; исходный импорт и прошлые прогоны сохранены.');
+            } else if (action.type === 'mergeScenarios') {
+              const shown = action.record.librarySnapshot;
+              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
+              const targets = shown.businessScenarios.filter(group => group.id !== action.businessScenarioId);
+              const labels = targets.map(group => safeText(`${group.title} · ${group.goal}`));
+              const target = targets[labels.indexOf(await ctx.ui.select('С какой группой объединить выбранную?', labels) ?? '')];
+              if (!target) continue;
+              const reason = await ctx.ui.editor('Почему это один бизнес-сценарий?', 'Решение владельца о группировке');
+              if (!reason?.trim()) continue;
+              await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'merge_business', targetId: target.id, sourceIds: [action.businessScenarioId], reason: reason.trim() });
+              scenarioSelections.set(action.record.id, []); inform('Группы объединены. Выполните смысловую проверку: g.');
+            } else if (action.type === 'splitScenario') {
+              const shown = action.record.librarySnapshot;
+              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
+              const source = shown.businessScenarios.find(group => group.id === action.businessScenarioId);
+              if (!source) throw new Error('Группа уже отсутствует.');
+              const title = await ctx.ui.editor('Название новой бизнес-группы', `${source.title} · отдельный случай`);
+              const goal = title === undefined ? undefined : await ctx.ui.editor('Цель новой бизнес-группы', source.goal);
+              const reason = goal === undefined ? undefined : await ctx.ui.editor('Почему вариант нужно отделить?', 'Решение владельца о группировке');
+              if (!title?.trim() || !goal?.trim() || !reason?.trim()) continue;
+              await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'split_business', businessScenarioId: source.id,
+                newBusiness: { key: `split_${Date.now().toString(36)}`, title: title.trim(), goal: goal.trim(), conditions: source.conditions,
+                  requirementIds: source.requirementIds, grouping: { status: 'confirmed', reason: reason.trim() } }, variantIds: [action.variantId], reason: reason.trim() });
+              scenarioSelections.set(action.record.id, []); inform('Вариант выделен в отдельную бизнес-группу. Выполните смысловую проверку: g.');
+            } else if (action.type === 'assessLibrary') {
+              const shown = action.record.librarySnapshot;
+              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
+              const plan = semanticWorkStatus(shown); const remaining = Math.max(0, action.record.settings.maxCalls - action.record.usage.calls);
+              if (!remaining && plan.pendingJobs) { inform(`Осталось ${plan.pendingJobs} смысловых вызовов, бюджет исчерпан. b — увеличить maxCalls; использованный бюджет не сбрасывается.`, 'error'); continue; }
+              if (!await ctx.ui.confirm('Запустить смысловую проверку?', `Осталось ${plan.pendingJobs} из ${plan.totalJobs} вызовов · сохранено ${plan.completedJobs} · доступно сейчас ${remaining}.${plan.pendingJobs > remaining ? ` Будет выполнено до ${remaining}, частичный результат сохранится.` : ''} Ожидающие источники: ${action.record.preparationProgress?.pending.length ?? 0}; они не будут обработаны этой операцией.`)) continue;
+              await lab.assessLibrary(action.record.id, libraryHash(shown)); await lab.waitForIdle();
+              scenarioSelections.set(action.record.id, []); inform('Смысловая проверка завершена. Просмотрите замечания и выберите готовые варианты.');
+            } else if (action.type === 'editBudget') {
+              const current = await lab.get(action.record.id);
+              const written = await ctx.ui.editor('Новый общий потолок model calls · уже использованные вызовы сохранятся', String(current.settings.maxCalls));
+              const maxCalls = Number(written);
+              if (!Number.isInteger(maxCalls) || maxCalls <= current.usage.calls) { inform(`Введите целое число больше уже использованных ${current.usage.calls}.`, 'error'); continue; }
+              await lab.updateDraft(current.id, draftHash(current), { settings: { maxCalls } });
+              inform(`Общий потолок увеличен до ${maxCalls}; использовано ${current.usage.calls}.`);
+            } else if (action.type === 'discuss') {
               const r = action.record;
               const request = await ctx.ui.editor(r.phase === 'review' ? 'Что изменить или уточнить? · обычными словами' : 'Что разобрать вместе с Pi?',
                 r.phase === 'review' ? '' : 'Объясни, что сломалось, на каких репликах это видно и что делать дальше.');
@@ -896,11 +1194,11 @@ export default function agentLab(pi: ExtensionAPI) {
                 task: 'This user request concerns the selected Agent Lab experiment. Inspect fresh evidence with agent_lab_inspect. For draft corrections, use agent_lab_edit with the current hash and summarize changes. For unresolved business questions or a preparation error, read the original evidence file and prepare a new draft with the supplied corrections; preserve the old one. For results, inspect actual trial traces and report the failure, cited trial/event IDs, whether a human confirmed it, and a concrete next step. Distinguish facts from suspected causes. Never overwrite measured results or invent human verdicts. Use agent_lab_run for requested execution with native plan confirmation. Do not alter the external agent without an explicit request to fix it.' } };
               break;
             } else if (action.type === 'repeat') {
-              const scenarioId = action.section === 'results' ? action.record.trials.find(t => t.id === action.trialId)?.scenarioId : undefined;
-              const next = await lab.repeat(action.record.id, scenarioId ? [scenarioId] : undefined);
-              beforeId = action.record.id; id = next.id; section = 'agent'; selected = 0; query = ''; pendingOnly = false; reportPath = undefined;
+              const next = await lab.repeat(action.record.id);
+              beforeId = action.record.id; id = next.id; section = 'cards'; selected = 0; query = ''; pendingOnly = false; dialogueOpen = false; reportPath = undefined;
+              inform(`Создан повтор того же набора: ${next.scenarios.length} ситуаций. Исходный прогон сохранён. Проверьте ожидания перед новым запуском.`);
             } else if (action.type === 'run') {
-              const r = action.record;
+              const r = await lab.get(action.record.id);
               if (r.workflow !== 'evaluate') throw new Error('Legacy comparison records cannot run from the evaluation board.');
               const hash = draftHash(r);
               // UI-D-02: an unconfirmed draft confirms every expectation and starts in one dialog.
@@ -909,6 +1207,30 @@ export default function agentLab(pi: ExtensionAPI) {
               if (await ctx.ui.confirm(confirmed ? 'Запустить проверку?' : 'Подтвердить ожидания и запустить?', plan)) {
                 if (!confirmed) await lab.acceptDraft(r.id, hash);
                 await lab.start(r.id, { approved: true, reviewer: 'expectations', expectedHash: hash, parallel: runParallel(r), requireAccepted: true });
+                const owned = lease!;
+                lease = undefined; lab = reader;
+                const job = { directory, id: r.id, lab: owned.lab, done: Promise.resolve() };
+                boardRun = job;
+                let updates = Promise.resolve();
+                const update = async () => { if (boardRun === job) ctx.ui.setStatus?.('agent-lab-progress', safeText(progressLine(await job.lab.get(job.id)))); };
+                const progressTimer = setInterval(() => { updates = updates.then(update).catch(() => {}); }, 750);
+                job.done = (async () => {
+                  try {
+                    await owned.lab.waitForIdle();
+                    const finished = await owned.lab.get(r.id);
+                    returnToBoard(ctx, r.id);
+                    ctx.ui.notify?.(finished.phase === 'results_review' || finished.phase === 'complete'
+                      ? `Проверка завершена: /agent-lab ${r.id.slice(0, 8)} — открыть результат.`
+                      : `Проверка ${r.id.slice(0, 8)} остановлена. Записанные диалоги доступны в истории.`, 'info');
+                  } catch (error) { ctx.ui.notify?.(`Не удалось завершить проверку: ${inputError(error)}`, 'error'); }
+                  finally {
+                    clearInterval(progressTimer);
+                    try { await updates; ctx.ui.setStatus?.('agent-lab-progress', undefined); }
+                    finally { try { await owned.close(); } finally { if (boardRun === job) boardRun = undefined; } }
+                  }
+                })();
+                // A UI or close failure must remain observable without an unhandled rejection.
+                void job.done.catch(error => console.error(`Agent Lab: ${inputError(error)}`));
                 section = 'results'; selected = 0;
                 reportPath = undefined;
               }
@@ -936,7 +1258,12 @@ export default function agentLab(pi: ExtensionAPI) {
               }
               section = 'cards';
             } else if (action.type === 'cancel') {
-              await lab.cancel(action.record.id); await lab.waitForIdle();
+              const job = boardRun;
+              if (!job || job.directory !== directory || job.id !== action.record.id) {
+                throw new Error('Этот прогон запущен в другой сессии. Здесь доступен просмотр; остановите его в сессии, которая его запустила.');
+              }
+              if (!await ctx.ui.confirm('Остановить прогон?', 'Текущие попытки будут остановлены. Уже записанные диалоги сохранятся. Для возврата в историю останавливать прогон не нужно.')) continue;
+              await job.lab.cancel(action.record.id); await job.done;
               reportPath = undefined;
             } else if (action.type === 'agree') {
               // CTX-18: a mark exists only because the owner pressed a key here, and a disagreement
@@ -1055,11 +1382,11 @@ export default function agentLab(pi: ExtensionAPI) {
             }
           } catch (error) {
             // A start refused for stale expectations names the key that fixes it (UI-SPEC Board flow 4).
-            const message = inputError(error);
+            const message = scenarioErrorText(error);
             inform(message.startsWith('Сначала подтвердите ожидания ситуаций') ? `${message} y — подтвердить.` : message, 'error');
-          }
+          } finally { await release(); }
         }
-      } finally { await close(); }
+      } finally { await release(); }
       if (handoff) {
         pi.sendMessage({ customType: 'agent-lab-context', content: JSON.stringify(handoff.context), display: false }, { deliverAs: 'followUp' });
         pi.sendUserMessage(handoff.request, { deliverAs: 'followUp', expandPromptTemplates: false });

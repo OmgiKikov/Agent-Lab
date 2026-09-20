@@ -50,7 +50,7 @@ test('an interrupted semantic plan preserves partial findings bound to the compl
 });
 
 test('resuming a split relation pass reuses completed calls and retains conservative findings until every candidate block completes', async () => {
-  const { assessScenarioLibrary, planSemanticWork } = await import('../src/scenario-work.js');
+  const { assessScenarioLibrary, planSemanticWork, semanticWorkStatus } = await import('../src/scenario-work.js');
   const { fingerprint } = await import('../src/contracts.js');
   const library = libraryFixture(), seed = library.variants[0]!;
   library.variants = Array.from({ length: 10 }, (_, i) => ({ ...structuredClone(seed), id: `relation_${i}`,
@@ -67,6 +67,9 @@ test('resuming a split relation pass reuses completed calls and retains conserva
       status: value.scope === 'relations' && relationCalls === 1 && path === 'duplicates' ? 'blocked' as const : 'ready' as const, reason: 'Проверено' })));
   } };
   await assert.rejects(() => assessScenarioLibrary(library, runtime, ctx, async next => { partial = structuredClone(next); }), /interrupted relation/);
+  const status = semanticWorkStatus(partial);
+  assert.equal(status.completedJobs, finished.size);
+  assert.equal(status.pendingJobs, status.totalJobs - finished.size, 'resume estimate excludes persisted same-content receipts');
   assert.equal(partial.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'duplicates')!.status, 'needs_review');
   const complete = await assessScenarioLibrary(partial, runtime, ctx, async () => {});
   assert.equal(complete.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'duplicates')!.status, 'blocked');

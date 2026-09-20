@@ -139,6 +139,27 @@ test('owner correction invalidates semantic admission, reassessment binds new co
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test('targeted variants publish through the owning writer and preserve the accepted revision as immutable history', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-targeted-'));
+  const lab = new ExperimentLab(directory, runtimeFixture([]));
+  try {
+    await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle();
+    const draft = await lab.readLibrary(seed.id);
+    const accepted = await lab.acceptLibrary(seed.id, libraryHash(draft.library), ['variant_1']);
+    const acceptedHash = libraryHash(accepted.library);
+    const result = await lab.proposeVariant(seed.id, acceptedHash, {
+      parentId: 'variant_1', operation: 'ambiguous_opening', reason: 'Проверить неоднозначное начало', input: { opening: 'Помогите с этим' },
+    });
+    assert.equal(result.experiment.scenarios.length, 0, 'новую ревизию нужно принять отдельно');
+    assert.equal(result.library.acceptance, undefined);
+    assert.equal(result.variant.history.at(-1)?.author, 'generator');
+    assert.deepEqual((await lab.store.readLibrary(accepted.library.id, acceptedHash)).acceptance, accepted.library.acceptance);
+    await assert.rejects(() => lab.proposeVariant(seed.id, acceptedHash, {
+      parentId: 'variant_1', operation: 'ambiguous_opening', reason: 'Устаревшая правка', input: { opening: 'Ещё одно начало' },
+    }), /хеш|измен/i);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test('suite export/import preserves new identity and restores immutable imports in a different store', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'scenario-suite-'));
   const lab = new ExperimentLab(join(directory, 'first'), runtimeFixture([]));

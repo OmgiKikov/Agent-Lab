@@ -83,10 +83,12 @@ export const scenarioVariantSchema = variantProposalSchema.extend({
   businessScenarioId: id, familyId: id, revision: z.number().int().positive(),
   quality: z.enum(['ready', 'needs_review', 'blocked']), issues: z.array(libraryQualityIssueSchema).max(500),
   ownerDecision: z.enum(['pending', 'accepted', 'excluded']),
+  semanticReviewRequired: z.literal(true).optional(),
   history: z.array(z.strictObject({
     previousHash: hash.optional(), author: z.enum(['owner', 'generator']), reason: text(1000), revision: z.number().int().positive(),
     factEdit: z.strictObject({ factId: id, editId: id, factHash: hash }).optional(),
     personaEdit: z.strictObject({ editId: id, personaHash: hash }).optional(),
+    textEdit: z.strictObject({ editId: id, field: z.enum(['opening', 'goal', 'successCriteria', 'checkpointRule']), valueHash: hash }).optional(),
   })).max(1000),
 });
 export type ScenarioVariant = z.infer<typeof scenarioVariantSchema>;
@@ -123,5 +125,7 @@ export const libraryPatchSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('merge_business'), targetId: id, sourceIds: ids(200).min(1), ...reason }),
   z.strictObject({ kind: z.literal('split_business'), businessScenarioId: id, newBusiness: businessProposalSchema, variantIds: ids(200).min(1), ...reason }),
   z.strictObject({ kind: z.literal('edit_fact'), variantId: id, factId: id, statement: text(300), value: userFactSchema.shape.value, availability: userFactSchema.shape.availability, editId: id, ...reason }),
+  z.strictObject({ kind: z.literal('edit_variant_text'), variantId: id, field: z.enum(['opening', 'goal', 'successCriteria', 'checkpointRule']),
+    checkpointId: id.optional(), value: text(3000), editId: id, ...reason }),
 ]);
 export type LibraryPatch = z.infer<typeof libraryPatchSchema>;
