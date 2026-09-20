@@ -1,3 +1,5 @@
+import { SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE } from './prompts.js';
+import { runGeneratorOperation, type GeneratorRequest } from './generator-service.js';
 import { targetSchema } from './contracts.js';
 import { createFixBundle, prepareResolutionPolicy, type ResolutionRequest } from './resolution.js';
 import { prepareDiagnostic, runDiagnostic, verifyDiagnosticPlan, diagnosticRevision, type Intervention } from './diagnostics.js';
@@ -46,7 +48,7 @@ export function draftHash(record: Experiment): string {
     goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
     scenarios: record.scenarios, agent: record.revisions[0]?.spec, positiveControlScenarioIds: record.positiveControlScenarioIds,
     ownerExpectationScenarioIds: record.ownerExpectationScenarioIds,
-    librarySnapshot: record.librarySnapshot, originalImport: record.originalImport,
+    librarySnapshot: record.librarySnapshot, originalImport: record.originalImport, generatorConfig:record.generatorConfig,generatorIdentity:record.generatorIdentity,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
 }
 export function resultHash(record: Experiment): string {
@@ -65,7 +67,7 @@ export function measurementHash(record: Experiment): string {
   return fingerprint({ version: VERSION, workflow: record.workflow, task: record.task, baseline: record.revisions[0], mode: record.mode, sources: record.sources, requirements: record.requirements, scenarios: record.scenarios, settings: record.settings,
     target: record.target, goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
     positiveControlScenarioIds: record.positiveControlScenarioIds,
-    librarySnapshot: record.librarySnapshot, originalImport: record.originalImport,
+    librarySnapshot: record.librarySnapshot, originalImport: record.originalImport, generatorConfig:record.generatorConfig,generatorIdentity:record.generatorIdentity,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
 }
 function revision(spec: Revision['spec'], parentId: string | null, hypothesis: string): Revision {
@@ -296,6 +298,7 @@ export class ExperimentLab {
     return {
       schemaVersion: '1', id: randomUUID(), task: input.task, mode: input.mode, createdAt: now, updatedAt: now,
       phase: 'preparing', message: 'Подключаю агента и готовлю требования и первый тест.',
+      ...(input.generatorConfig?{generatorConfig:structuredClone(input.generatorConfig),generatorIdentity:{configHash:fingerprint(input.generatorConfig),protocol:SCENARIO_EXTRACTION_PROTOCOL,protocolHash:fingerprint({protocol:SCENARIO_EXTRACTION_PROTOCOL,extraction:SCENARIO_PROPOSALS_ROLE,semantic:SCENARIO_SEMANTIC_ROLE})}}:{}),
       sources: input.materials.map((m, i) => ({ id: `source-${i + 1}`, name: m.name, content: m.content, hash: fingerprint(m.content), ...(m.kind ? { kind: m.kind } : {}) })),
       settings: input.settings, requirements: [], questions: [], scenarios: [], revisions: [], selectedRevisionId: null,
       manifestHash: null, reviewedAt: null, reviewMode: null, controlConsumedAt: null, acceptedTests: [], trials: [], comparisons: [], iterations: [],
@@ -330,6 +333,7 @@ export class ExperimentLab {
       await preflightTarget(record.target);
       record.targetFingerprint = await targetFingerprint(record.target);
       const runtime = await this.runtime(record);
+      if(input.generatorConfig&&!runtime.scenarioProposals)throw new Error('Среда не поддерживает настраиваемый генератор библиотеки.');
       if (!input.confirmedHypothesis && (input.originalImport || record.dialogues.length) && runtime.scenarioProposals) {
         await prepareScenarioLibrary(record, input, await this.store.readImport(record.originalImport!.id), runtime, ctx, this.store);
         await this.checkpoint(record, 'review', 'Библиотека подготовлена. Проверьте варианты и примите выбранные перед запуском.');
@@ -736,11 +740,24 @@ export class ExperimentLab {
       return { library: next, experiment };
     });
   }
+  evaluateGenerator(input:GeneratorRequest, options:{signal?:AbortSignal}={}) { return this.change(()=>runGeneratorOperation('evaluate',input,this.store,this.injectedRuntime,options.signal)); }
+  optimizeGenerator(input:GeneratorRequest, options:{signal?:AbortSignal}={}) { return this.change(()=>runGeneratorOperation('optimize',input,this.store,this.injectedRuntime,options.signal)); }
   async proposeVariant(id: string, expectedHash: string, request: VariantRequest): Promise<VariantProposalResult & { experiment: Experiment }> {
     return this.change(async () => {
       const { experiment, library } = await this.readLibrary(id);
-      if (experiment.phase !== 'review') throw new Error('Добавить вариант можно только в черновике.');
-      const result = proposeScenarioVariant(library, request, expectedHash);
+      let result:VariantProposalResult;
+      try {
+        if (experiment.phase !== 'review') throw new Error('Добавить вариант можно только в черновике.');
+        result = proposeScenarioVariant(library, request, expectedHash);
+      }
+      catch(error) {
+        const attempted=JSON.stringify(request),rejection=error instanceof Error?error.message:String(error);
+        try { await this.store.saveGeneratorRecord({id:`gen_${randomUUID()}`,formatVersion:'1',kind:'rejected-targeted-proposal',runKind:'generator',createdAt:new Date().toISOString(),experimentId:id,
+          libraryHash:libraryHash(library),expectedHash,protocol:'targeted-proposal-v1',configHash:fingerprint({protocol:'targeted-proposal-v1',operation:request.operation}),requestHash:fingerprint(request),
+          attempt:attempted.length<=12000?structuredClone(request):{excerpt:attempted.slice(0,12000),truncated:true},rejection:rejection.slice(0,4000)}); }
+        catch(auditError) { if(error instanceof Error) error.message+=` Аудит отклонения не сохранён: ${String(auditError).slice(0,500)}`; }
+        throw error;
+      }
       experiment.librarySnapshot = result.library; experiment.scenarios = []; experiment.acceptedTests = [];
       delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
       experiment.reviewedAt = null; experiment.reviewMode = null; experiment.manifestHash = null;

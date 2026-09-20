@@ -1,4 +1,4 @@
-import { USER_CONTROLLER_ROLE, CHECKPOINT_ROLE } from './prompts.js';
+import { USER_CONTROLLER_ROLE, CHECKPOINT_ROLE, LEGACY_CHECKPOINT_ROLE } from './prompts.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { checkSchema, scenarioSchema, worldSchema, valueTokens, type Requirement, type Scenario, type Source } from './contracts.js';
@@ -146,7 +146,7 @@ export function createLibrary(input: { id?: string; batch: ImportBatch; sources:
     variants.push({ ...variant, businessScenarioId, familyId: businessScenarioId, revision: 1, quality: 'needs_review', issues: [], ownerDecision: 'pending', history: [{ author: 'generator', reason: 'Структурированное предложение из источников', revision: 1 }] });
   }
   unifyFamilies(variants);
-  const library = scenarioLibrarySchema.parse({ formatVersion: 1, id: input.id ?? `library_${digest({ batchId: batch.id, proposals: input.proposals }).slice(0, 24)}`, revision: 1, createdAt: input.createdAt ?? new Date().toISOString(), imports: [batch], ...(input.semanticRequired ? { semanticRequired: true } : {}), sources: input.sources, requirements: input.requirements, businessScenarios: [...groups.values()], variants });
+  const library = scenarioLibrarySchema.parse({ checkpointContext:'observed-tools-v1', formatVersion: 1, id: input.id ?? `library_${digest({ batchId: batch.id, proposals: input.proposals }).slice(0, 24)}`, revision: 1, createdAt: input.createdAt ?? new Date().toISOString(), imports: [batch], ...(input.semanticRequired ? { semanticRequired: true } : {}), sources: input.sources, requirements: input.requirements, businessScenarios: [...groups.values()], variants });
   return refreshQuality(library);
 }
 
@@ -511,7 +511,7 @@ function compileVariant(library: ScenarioLibrary, variant: ScenarioVariant): Sce
       ...(variant.userState.persona ? { persona: variant.userState.persona.text } : {}),
     },
     initialState: worldSchema.parse(variant.environmentFixture.initialState), checks,
-    execution: { protocol: 'controlled-user-v1', checkpointProtocol: 'checkpoints-v1', controllerHash: digest({ protocol: 'controlled-user-v1', role: USER_CONTROLLER_ROLE }), checkpointHash: digest({ protocol: 'checkpoints-v1', role: CHECKPOINT_ROLE }),
+    execution: { protocol: 'controlled-user-v1', ...(library.checkpointContext?{checkpointContext:library.checkpointContext}:{}), checkpointProtocol: 'checkpoints-v1', controllerHash: digest({ protocol: 'controlled-user-v1', role: USER_CONTROLLER_ROLE }), checkpointHash: digest({ protocol: 'checkpoints-v1', role: library.checkpointContext?CHECKPOINT_ROLE:LEGACY_CHECKPOINT_ROLE }),
       userView: { goal: variant.userState.goal, opening: variant.userState.opening, facts: known.map(({ id, statement, value }) => ({ id, statement, ...(value !== undefined ? { value } : {}) })), policy: variant.behaviorPolicy, missing: variant.userState.missing, ...(variant.userState.persona ? { persona: variant.userState.persona.text } : {}) },
       environmentView: { mode: variant.environmentFixture.mode, ...(variant.environmentFixture.contract ? { contract: variant.environmentFixture.contract } : {}) },
       evaluatorView: { checkpoints: variant.evaluationSpec.checkpoints, requirements: library.requirements.filter(r => variant.evaluationSpec.checkpoints.some(c => c.requirementId === r.id)) },

@@ -1,3 +1,7 @@
+import { generatorConfigSchema } from './generator-corpus.js';
+import type { GeneratedCaseAssessment } from './generator-production.js';
+import type { GeneratorCaseInput, GeneratorConfig } from './generator-corpus.js';
+import type { GeneratorAdapter } from './generator-evaluation.js';
 import { diagnosticCapabilitiesSchema, diagnosticReceiptSchema, type DiagnosticRequest, type DiagnosticReceipt } from './diagnostic-contracts.js';
 import type { CheckpointInput } from './checkpoints.js';
 import { userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
@@ -305,7 +309,7 @@ export type GoalObservation = z.infer<typeof goalObservationSchema>;
 /** The evidence channel an external agent is judged on when the owner did not pick one. */
 export const DEFAULT_GOAL_OBSERVATION: GoalObservation = 'reply';
 export const executionSchema = z.strictObject({
-  protocol: z.literal('controlled-user-v1'), checkpointProtocol: z.literal('checkpoints-v1'), controllerHash: text, checkpointHash: text,
+  protocol: z.literal('controlled-user-v1'), checkpointContext:z.literal('observed-tools-v1').optional(), checkpointProtocol: z.literal('checkpoints-v1'), controllerHash: text, checkpointHash: text,
   userView: userViewSchema,
   environmentView: z.strictObject({ mode: z.enum(['prompt', 'managed']), contract: z.strictObject({ operations: z.array(z.string()), reset: z.boolean(), observations: z.array(z.enum(['reply', 'tool', 'state'])), confirmed: z.boolean() }).optional() }),
   evaluatorView: z.strictObject({ checkpoints: z.array(checkpointSchema).max(12), requirements: z.array(requirementSchema).max(80) }),
@@ -503,6 +507,7 @@ export function validationScenario(dialogue: Dialogue, goal: ObservedGoal): Omit
 }
 
 export const createInputSchema = z.strictObject({
+  generatorConfig: generatorConfigSchema.optional(),
   task: text.max(8000),
   originalImport: importBatchSchema.optional(),
   /** Owner-confirmed hypothesis that requests the strict one-test preparation path. */
@@ -525,6 +530,7 @@ export const createInputSchema = z.strictObject({
   notes: z.string().trim().max(8000).default(''),
   profiles: z.array(ownerProfileSchema).max(6).default([]),
 }).superRefine((v, ctx) => {
+  if(v.generatorConfig && (v.confirmedHypothesis || !v.dialogues.length&&!v.originalImport?.dialogues.length))ctx.addIssue({code:'custom',message:'Настройка генератора применяется только при подготовке новой библиотеки из диалогов.',path:['generatorConfig']});
   if (v.materials.reduce((n, m) => n + m.content.length, 0) > 300000) ctx.addIssue({ code: 'custom', message: 'Materials exceed 300,000 characters', path: ['materials'] });
   if (v.dialogues.reduce((n, d) => n + d.messages.reduce((m, x) => m + x.content.length, 0), 0) > 2000000) ctx.addIssue({ code: 'custom', message: 'Dialogues exceed 2,000,000 characters', path: ['dialogues'] });
   if (!unique(v.dialogues.map(d => d.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate dialogue IDs', path: ['dialogues'] });
@@ -785,6 +791,8 @@ export interface SourceIdentity {
   scenarios: Record<string, string>;
 }
 export interface Experiment {
+  generatorConfig?: GeneratorConfig;
+  generatorIdentity?: {configHash:string;protocol:string;protocolHash:string};
   runKind?: 'evaluation' | 'diagnostic' | 'generator';
   librarySnapshot?: ScenarioLibrary;
   originalImport?: { id: string; contentHash: string };
@@ -903,6 +911,7 @@ function validateReviewReferences(reviews: HumanReview[], trials: Trial[], path:
 }
 
 export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
+  generatorConfig:generatorConfigSchema.optional(),generatorIdentity:z.strictObject({configHash:z.string(),protocol:z.string(),protocolHash:z.string()}).optional(),
   runKind: z.enum(['evaluation', 'diagnostic', 'generator']).optional(),
   librarySnapshot: scenarioLibrarySchema.optional(),
   originalImport: z.strictObject({ id: identifier, contentHash: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
@@ -953,6 +962,8 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   if (record.sourceEvidence) validateReviewReferences(record.sourceEvidence.humanReviews, record.sourceEvidence.trials, ['sourceEvidence', 'humanReviews'], ctx);
 });
 export interface CallContext {
+  onGeneratorTransport?(transport:{role:string;provider:string;model:string;api:string;requestedTemperature?:number;effectiveTemperature:number|'provider-default'}):void;
+  onGeneratorOutput?(response:{role:string;text:string}):void;
   diagnosticRequest?: DiagnosticRequest;
   onDiagnosticReceipt?(receipt: DiagnosticReceipt): void;
   signal: AbortSignal; timeoutMs: number;
@@ -985,6 +996,7 @@ export interface ImproveInput {
 }
 export const proposalSchema = z.strictObject({ agent: agentSchema, hypothesis: text.max(3000) });
 export interface ScenarioProposalsInput {
+  generatorConfig?: GeneratorConfig;
   businessCatalog?: Pick<ScenarioLibrary['businessScenarios'][number], 'key' | 'title' | 'goal' | 'conditions' | 'requirementIds'>[];
   feedback?: { proposals: ScenarioProposal[]; issues: { code: string; path: string; message: string }[] };
   protocol: 'chronological-scenarios-v1'; task: string; sources: Source[]; requirements: Requirement[]; batchId: string;
@@ -1002,6 +1014,10 @@ export interface ScenarioAssessmentInput {
   })[];
 }
 export interface Runtime {
+  generatorTransport?:'pi-model'|'deterministic-test';
+  assessGeneratedCase?(input:GeneratedCaseAssessment,ctx:CallContext):Promise<unknown>;
+  generateScenarioCase?(input: {input: GeneratorCaseInput; config: GeneratorConfig}, ctx: CallContext): Promise<unknown>;
+  proposeGeneratorConfig?(input: Parameters<NonNullable<GeneratorAdapter['propose']>>[0],ctx:CallContext):Promise<unknown>;
   assessCheckpoints?(input: CheckpointInput, ctx: CallContext): Promise<unknown[]>;
   selectUserAction?(input: { user: UserView; state: string; actions: AllowedUserAction[]; messages: DialogueMessage[]; turn: number; repair?: string }, ctx: CallContext): Promise<UserDecision>;
   scenarioProposals?(input: ScenarioProposalsInput, ctx: CallContext): Promise<ScenarioProposal[]>;

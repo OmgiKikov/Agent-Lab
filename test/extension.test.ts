@@ -554,7 +554,7 @@ test('headless model tools prepare and edit only; approvals and human assessment
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
   const updates: string[] = [];
   try {
-    assert.deepEqual([...tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
+    assert.deepEqual([...tools.keys()], ['agent_lab_generator', 'agent_lab_build', 'agent_lab_inspect', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
     const report = output(await tools.get('agent_lab_build')!.execute('build-1', { mode: 'demo', scenarioCount: 2 }, undefined,
       value => { updates.push(JSON.stringify(value)); }, ctx));
     assert.equal(report.phase, 'review'); assert.equal(report.workflow, 'evaluate');
@@ -669,7 +669,7 @@ test('actual Pi SDK loader imports native cards, preparation-only tools and embe
     await loader.reload();
     const loaded = loader.getExtensions();
     assert.deepEqual(loaded.errors, []); assert.equal(loaded.extensions.length, 1);
-    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
+    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_generator', 'agent_lab_build', 'agent_lab_inspect', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
     assert.ok(loaded.extensions[0]!.commands.has('agent-lab'));
     assert.deepEqual(loader.getAgentsFiles().agentsFiles, []);
     const skills = loader.getSkills();
@@ -1907,4 +1907,14 @@ test('normal live ingress retains 300 original dialogues while bounding the lega
     assert.equal(captured!.originalImport!.dialogues.length, 300);
     assert.deepEqual(captured!.originalImport!.dialogues[299]!.original, dialogues[299]);
   } finally { ExperimentLab.prototype.create = originalCreate; await shutdown(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('generator tool inspection stays compact and read only while an existing writer owns the data',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'generator-tool-')),store=new ExperimentStore(join(directory,'.agent-lab'));await store.init();
+  const {tools,shutdown}=registered();
+  try {
+    await store.saveGeneratorRecord({id:'gen_inspect',formatVersion:'1',kind:'generator-evaluation',runKind:'generator',transport:'deterministic-test',cases:[{id:'case',errors:['provenance'],unknown:false,rawOutput:{secret:'RAW_OUTPUT_MUST_STAY_LOCAL'}}],dimensions:{provenance:{total:1,errors:1,unknown:0}},usage:{calls:0},controls:null,limitations:['Предварительная разметка']});
+    const result=output(await tools.get('agent_lab_generator')!.execute('inspect',{operation:'inspect',id:'gen_inspect'},undefined,undefined,{cwd:directory,hasUI:false} as ExtensionContext));
+    assert.equal(result.id,'gen_inspect');assert.equal(result.dimensions.provenance.errors,1);assert.doesNotMatch(JSON.stringify(result),/RAW_OUTPUT_MUST_STAY_LOCAL/);
+  }finally{await shutdown();await store.close();await rm(directory,{recursive:true,force:true});}
 });

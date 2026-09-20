@@ -43,7 +43,7 @@ export async function prepareScenarioLibrary(record: Experiment, input: CreateIn
     for (const dialogue of batch.dialogues) {
       ctx.signal.throwIfAborted();
       if (proposals.length >= 200) break;
-      const request = { businessCatalog: library.businessScenarios.map(({ key, title, goal, conditions, requirementIds }) => ({ key, title, goal, conditions, requirementIds })), protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, sources: structuredClone(record.sources),
+      const request = { ...(record.generatorConfig?{generatorConfig:structuredClone(record.generatorConfig)}:{}), businessCatalog: library.businessScenarios.map(({ key, title, goal, conditions, requirementIds }) => ({ key, title, goal, conditions, requirementIds })), protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, sources: structuredClone(record.sources),
         requirements: structuredClone(record.requirements), batchId: original.id, dialogues: chronologicalInput(original, [dialogue.id]) } as ScenarioProposalsInput;
       const oversize = workInputIssue(request);
       if (oversize) { record.preparationProgress.excluded.push({ dialogueId: dialogue.id, reason: oversize }); continue; }

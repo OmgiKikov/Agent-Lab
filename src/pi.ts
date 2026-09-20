@@ -1,5 +1,8 @@
+import { generateProductionCase } from './generator-production.js';
+import { GENERATOR_ROLE, GENERATOR_PROPOSER_ROLE } from './generator-evaluation.js';
+import { generatorOutputSchema, generatorConfigSchema } from './generator-corpus.js';
 import { checkpointResponseSchema } from './checkpoints.js';
-import { CHECKPOINT_ROLE } from './prompts.js';
+import { CHECKPOINT_ROLE, LEGACY_CHECKPOINT_ROLE } from './prompts.js';
 import { userDecisionSchema } from './user-controller.js';
 import { USER_CONTROLLER_ROLE } from './prompts.js';
 import { SCENARIO_OUTPUT_BYTES, SEMANTIC_BATCH_FIELDS, SEMANTIC_REASON_CHARS, serializedBytes, workInputIssue } from './scenario-work.js';
@@ -346,16 +349,20 @@ async function jsonResponse<S extends z.ZodType>(
   modelRuntime: ModelRuntime, model: Model, label: string, role: string, input: unknown, schema: S, ctx: CallContext,
   review?: (value: z.infer<S>) => string | undefined,
 ): Promise<z.infer<S>> {
-  const bounded = role === SCENARIO_PROPOSALS_ROLE || role === SCENARIO_SEMANTIC_ROLE;
+  const bounded = role === SCENARIO_PROPOSALS_ROLE || role === SCENARIO_SEMANTIC_ROLE || role === GENERATOR_ROLE || role === GENERATOR_PROPOSER_ROLE;
   if (bounded && workInputIssue(input)) throw new Error(workInputIssue(input));
-  const prompt = `${role}\n${DATA_BOUNDARY}\nReturn exactly one compact JSON object, without markdown fences or pretty-printing whitespace, matching this JSON schema:\n${JSON.stringify(z.toJSONSchema(schema))}\nInside strings, escape double quotes as \\" and line breaks as \\n; when copying source text, «» may stand for its straight double quotes.`;
+  const generationConfig = role===SCENARIO_PROPOSALS_ROLE ? (input as {generatorConfig?:import('./generator-corpus.js').GeneratorConfig}).generatorConfig : undefined;
+  const prompt = `${role}${generationConfig ? `\nНастройка генератора (не меняет правила владельца): ${generationConfig.instructions}` : ''}\n${DATA_BOUNDARY}\nReturn exactly one compact JSON object, without markdown fences or pretty-printing whitespace, matching this JSON schema:\n${JSON.stringify(z.toJSONSchema(schema))}\nInside strings, escape double quotes as \\" and line breaks as \\n; when copying source text, «» may stand for its straight double quotes.`;
   // Only target sessions contribute target trace events; simulator/planner events cannot affect target grades.
-  const session = await controlledSession(modelRuntime, model, prompt, [], { ...ctx, onTargetEvent: undefined }, bounded ? SCENARIO_OUTPUT_BYTES : 16384, undefined, false, 'off', bounded ? 96000 : undefined);
+  const effectiveTemperature=model.reasoning?undefined:generationConfig?.temperature;
+  if(bounded)ctx.onGeneratorTransport?.({role:label,provider:model.provider,model:model.id,api:model.api,...(generationConfig?{requestedTemperature:generationConfig.temperature}:{}),effectiveTemperature:effectiveTemperature??'provider-default'});
+  const session = await controlledSession(modelRuntime, model, prompt, [], { ...ctx, onTargetEvent: undefined }, bounded ? SCENARIO_OUTPUT_BYTES : 16384, effectiveTemperature, false, 'off', bounded ? 96000 : undefined);
   try {
     let message = JSON.stringify(input);
     let rejection = '';
     for (let attempt = 1; attempt <= REPAIR_ATTEMPTS; attempt++) {
       const output = await session.respond(message);
+      if(bounded)ctx.onGeneratorOutput?.({role,text:output});
       let parsed: unknown;
       try {
         if (bounded && Buffer.byteLength(output, 'utf8') > SCENARIO_OUTPUT_BYTES) throw new Error('Ответ превышает 12000 байт; сократите его без потери обязательных полей');
@@ -412,7 +419,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   if (!available.some(m => m.id === model.id)) throw new Error(authHelp);
   const ask = async <S extends z.ZodType>(label: string, role: string, input: unknown, schema: S, ctx: CallContext,
     review?: (value: z.infer<S>) => string | undefined): Promise<z.infer<S>> => {
-    const choice = settings.roles?.[(role === ASSESS_ROLE || role === CHECKPOINT_ROLE) ? 'judge' : (role === SIMULATOR_ROLE || role === USER_CONTROLLER_ROLE) ? 'simulator' : 'builder'] ?? (role === CHECKPOINT_ROLE ? settings.judge : undefined);
+    const choice = settings.roles?.[(role === ASSESS_ROLE || role === CHECKPOINT_ROLE || role === LEGACY_CHECKPOINT_ROLE || role === GENERATOR_ROLE) ? 'judge' : (role === SIMULATOR_ROLE || role === USER_CONTROLLER_ROLE) ? 'simulator' : 'builder'] ?? (role === CHECKPOINT_ROLE || role===LEGACY_CHECKPOINT_ROLE ? settings.judge : undefined);
     let selected = model;
     if (choice) {
       const override = modelRuntime.getModel(choice.provider, choice.model);
@@ -420,13 +427,23 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       if (!override || !models.some(m => m.id === override.id)) throw new Error(`Модель роли недоступна: ${choice.provider}/${choice.model}. ${authHelp}`);
       selected = override;
     }
-    if (role === CHECKPOINT_ROLE && selected.provider === 'openrouter') {
+    if ((role === CHECKPOINT_ROLE || role===LEGACY_CHECKPOINT_ROLE) && selected.provider === 'openrouter') {
       const upstream = settings.roles?.judge ? undefined : settings.judge?.upstream;
       selected = { ...selected, api: 'openai-completions', baseUrl: 'https://openrouter.ai/api/v1', compat: { ...selected.compat, supportsDeveloperRole: false, maxTokensField: 'max_tokens', ...(upstream ? { openRouterRouting: { only: [upstream], allow_fallbacks: false } } : {}) } };
     }
     return jsonResponse(modelRuntime, selected, label, role, input, schema, ctx, review);
   };
-  return {
+  const runtime:Runtime = {
+    generatorTransport:'pi-model',
+    async generateScenarioCase(input, ctx) {
+      return generateProductionCase(runtime,input.input,input.config,ctx);
+    },
+    async assessGeneratedCase(input,ctx) {
+      return ask('Разбор фактического предложения',GENERATOR_ROLE,input,generatorOutputSchema,ctx);
+    },
+    async proposeGeneratorConfig(input,ctx) {
+      return ask('Настройка генератора',GENERATOR_PROPOSER_ROLE,input,generatorConfigSchema,ctx);
+    },
     async scenarioProposals(input, ctx) {
       return (await ask('Варианты из полной хронологии', SCENARIO_PROPOSALS_ROLE, input,
         z.strictObject({ proposals: z.array(scenarioProposalSchema.extend({ variant: scenarioProposalSchema.shape.variant.extend({
@@ -757,7 +774,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       );
     },
     async assessCheckpoints(input, ctx) {
-      return (await ask('Контрольные точки', CHECKPOINT_ROLE, input, checkpointResponseSchema(input.checkpoints.map(item => item.checkpoint)), ctx)).results;
+      return (await ask('Контрольные точки', input.checkpoints.some(c=>Object.hasOwn(c,'context'))?CHECKPOINT_ROLE:LEGACY_CHECKPOINT_ROLE, input, checkpointResponseSchema(input.checkpoints.map(item => item.checkpoint)), ctx)).results;
     },
     async selectUserAction(input, ctx) {
       return ask('Действие пользователя', USER_CONTROLLER_ROLE, input, userDecisionSchema, ctx);
@@ -778,4 +795,5 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       return { ...reply, message: reply.message ?? '' };
     },
   };
+  return runtime;
 }

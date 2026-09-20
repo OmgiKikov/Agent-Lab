@@ -1,3 +1,5 @@
+import type { GeneratorRecord } from './generator-evaluation.js';
+import { fingerprint } from './contracts.js';
 import { prepareResolutionPolicy, verifyResolutionPolicy, resolutionDraftHash, evaluateResolution, applyResolution } from './resolution.js';
 import type { ResolutionPolicy } from './resolution-contracts.js';
 import { diagnosticFileSchema, verifyDiagnosticPlan, type DiagnosticFile, type DiagnosticPlan } from './diagnostics.js';
@@ -68,6 +70,38 @@ export class ExperimentStore {
       await files.finishPublication(next.id);
     });
   }
+  private generatorPath(id: string): string { if (!/^gen_[a-zA-Z0-9_-]{1,80}$/.test(id)) throw new Error('Неверный ID генератора.'); return join(this.directory,'generator-evals',`${id}.json`); }
+  async readGeneratorRecord(id:string):Promise<GeneratorRecord> {
+    const envelope=JSON.parse(await readFile(this.generatorPath(id),'utf8'));
+    if(envelope.hash!==fingerprint(envelope.record)||envelope.record.id!==id)throw new Error('Повреждена неизменяемая запись генератора.');
+    return envelope.record;
+  }
+  saveGeneratorRecord(record:GeneratorRecord):Promise<void> { const snapshot=structuredClone(record); return this.writeTransaction(async()=>{
+    const path=this.generatorPath(snapshot.id),old=await this.readGeneratorRecord(snapshot.id).catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;});
+    if(old&&fingerprint(old)!==fingerprint(snapshot))throw new Error('Запись генератора неизменяема.');
+    if(!old){await mkdir(join(this.directory,'generator-evals'),{recursive:true,mode:0o700});await atomicPrivateJson(path,{hash:fingerprint(snapshot),record:snapshot});}
+  }); }
+  private holdoutPath(hash:string):string {if(!/^[a-f0-9]{64}$/.test(hash))throw new Error('Неверный хеш holdout.');return join(this.directory,'generator-evals',`holdout_${hash}.json`);}
+  async assertGeneratorHoldoutFresh(hash:string,caseHashes:string[]=[]):Promise<void> {
+    for(const identity of [hash,...caseHashes]){
+    const existing=await readFile(this.holdoutPath(identity),'utf8').catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;});
+    if(existing)throw new Error('Holdout уже использован; нужна новая независимая скрытая выборка.');}
+    // Earlier audit versions consumed a whole-corpus hash. Read their immutable reports;
+    // changing the key recipe must never make already revealed inputs independent again.
+    if(caseHashes.length){
+      const names=await readdir(join(this.directory,'generator-evals')).catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;return [] as string[];});
+      for(const name of names.filter(name=>/^gen_[a-zA-Z0-9_-]+\.json$/.test(name))){
+        const record=await this.readGeneratorRecord(name.slice(0,-5));
+        if(record.kind!=='generator-evaluation'||record.holdoutConsumed===false)continue;
+        const cases=(record.corpus as {cases?:{split:string;input:unknown}[]}|undefined)?.cases;
+        if(cases?.some(c=>c.split==='holdout'&&caseHashes.includes(fingerprint(c.input))))throw new Error('Holdout уже использован в сохранённом аудите; новая версия протокола не скрывает прежние результаты.');
+      }
+    }
+  }
+  consumeGeneratorHoldout(hash:string,identity:Record<string,string>,caseHashes:string[]=[]):Promise<void> { return this.writeTransaction(async()=>{
+    await this.assertGeneratorHoldoutFresh(hash,caseHashes);await mkdir(join(this.directory,'generator-evals'),{recursive:true,mode:0o700});
+    for(const key of [hash,...caseHashes])await atomicPrivateJson(this.holdoutPath(key),{formatVersion:'1',hash,...identity,consumedAt:new Date().toISOString()});
+  }); }
   private diagnosticPath(id: string): string { if (!/^diag_[a-f0-9]{40}$/.test(id)) throw new Error('Неверный ID диагностики.'); return join(this.directory, 'diagnostics', `${id}.json`); }
   async readDiagnostic(id: string): Promise<DiagnosticFile> { const value = diagnosticFileSchema.parse(JSON.parse(await readFile(this.diagnosticPath(id), 'utf8'))); verifyDiagnosticPlan(value.plan); if (value.plan.id !== id) throw new Error('ID плана не совпадает.'); return value; }
   saveDiagnostic(value: DiagnosticFile): Promise<void> { return this.writeTransaction(async () => {

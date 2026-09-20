@@ -1,3 +1,6 @@
+import {generatorConfigSchema} from '../dist/generator-corpus.js';
+import {generatorSummary, selectNextVariants} from '../dist/generator-evaluation.js';
+import {generatorRequestSchema} from '../dist/generator-service.js';
 import { resolutionRequestSchema } from '../dist/resolution.js';
 import { compactIssues, compactDiagnostic, resolutionText, resolutionRunText, compactResolution, compactFixBundle } from '../dist/issue-view.js';
 import { showIssueWorkspace } from './issues.ts';
@@ -241,6 +244,16 @@ export default function agentLab(pi: ExtensionAPI) {
     activeClose = close;
     return { lab, close };
   };
+  pi.registerTool({name:'agent_lab_generator',label:'Качество генератора',description:'Отдельная оценка/ограниченная оптимизация генератора. Не меняет принятые наборы и промпт агента. inspect/select не расходуют модельный бюджет.',
+    parameters:Type.Object({operation:Type.Union(['evaluate','optimize','select','inspect'].map(value=>Type.Literal(value))),id:Type.Optional(Type.String()),
+      request:Type.Optional(Type.Unsafe(z.toJSONSchema(generatorRequestSchema,{io:'input'}))),candidates:Type.Optional(Type.Array(Type.Any(),{maxItems:200})),history:Type.Optional(Type.Array(Type.Any(),{maxItems:200}))}),
+    async execute(_toolCallId,params,_signal,_onUpdate,ctx){
+      let result:unknown;
+      if(params.operation==='select')result=selectNextVariants(params.candidates??[],params.history??[]);
+      else if(params.operation==='inspect'){if(!params.id)throw new Error('Укажите id записи генератора.');result=generatorSummary(await new ExperimentStore(resolve(ctx.cwd,'.agent-lab')).readGeneratorRecord(params.id));}
+      else {if(!params.request)throw new Error('Нужны config и ограниченные settings.');const {lab,close}=open(ctx.cwd);try{await lab.init();result=generatorSummary(params.operation==='evaluate'?await lab.evaluateGenerator(generatorRequestSchema.parse(params.request),{signal:_signal}):await lab.optimizeGenerator(generatorRequestSchema.parse(params.request),{signal:_signal}));}finally{await close();}}
+      return {content:[{type:'text',text:JSON.stringify(result)}],details:result};
+    }});
   pi.on('session_start', async (_event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1' || !ctx.hasUI || ctx.mode !== 'tui') return;
     ctx.ui.setTitle(`Agent Lab · ${ctx.cwd.split('/').at(-1)}`);
@@ -260,6 +273,7 @@ export default function agentLab(pi: ExtensionAPI) {
     parameters: Type.Object({
       task: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
       materials: Type.Optional(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 180 }), content: Type.String({ minLength: 1, maxLength: 120000 }), kind: Type.Optional(Type.Union([Type.Literal('knowledge'), Type.Literal('prompt')], { description: "'prompt' marks the agent's own system prompt: observable rules are extracted from it and every generated card gets the prompt_compliance rubric" })) }, { additionalProperties: false }), { minItems: 1, maxItems: 12 })),
+      generatorConfig:Type.Optional(Type.Unsafe(z.toJSONSchema(generatorConfigSchema,{io:'input'}))),
       existingAgent: Type.Optional(Type.Unsafe(z.toJSONSchema(agentSchema))),
       settings: Type.Optional(Type.Unsafe(z.toJSONSchema(settingsSchema, { io: 'input' }))),
       scenarioCount: Type.Optional(Type.Integer({ minimum: 0, maximum: SCENARIO_LIMIT })),

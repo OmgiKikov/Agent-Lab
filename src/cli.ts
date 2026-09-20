@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { generatorSummary, selectNextVariants } from './generator-evaluation.js';
 import { parseArgs } from 'node:util';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -84,10 +85,19 @@ async function main() {
     process.stdout.write('  agent-lab scenarios --id RUN --operation inspect [--json]\n  agent-lab scenarios --id RUN --operation edit|merge|split|variant|assess|accept --expected-hash HASH [--input action.json] [--yes]\n');
     process.stdout.write('  agent-lab issues --operation inspect|sync|merge|rebuild [--id RUN_OR_ISSUE] [--input decision.json]\n  agent-lab diagnostics --operation prepare --input request.json\n  agent-lab diagnostics --operation inspect|run --id PLAN [--yes]\n');
     process.stdout.write('  agent-lab resolutions --operation bundle|candidate|prompt|prepare --input request.json\n  agent-lab resolutions --operation inspect|run|resolve --id POLICY [--yes] [--json]\n');
+    process.stdout.write('  agent-lab generator --operation evaluate|optimize --input config.json --yes\n  agent-lab generator --operation select --input candidates.json\n  agent-lab generator --operation inspect --id GEN [--json]\n');
     process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID] · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
   const directory = values['data-dir'] ?? resolve('.agent-lab');
+  if(command==='generator') {
+    const operation=values.operation??'inspect',lab=new ExperimentLab(directory),input=values.input?JSON.parse(await readFile(values.input,'utf8')):{};
+    if(operation==='inspect'){if(!values.id)throw new Error('Укажите --id GEN.');const record=await lab.store.readGeneratorRecord(values.id);await writeStdout(JSON.stringify(values.json?record:generatorSummary(record),null,2)+'\n');return;}
+    if(operation==='select'){await writeStdout(JSON.stringify(selectNextVariants(input.candidates,input.history??[]),null,2)+'\n');return;}
+    if(!['evaluate','optimize'].includes(operation))throw new Error('Укажите generator --operation evaluate|select|optimize|inspect.');
+    if(!values.yes)throw new Error('Модельные вызовы ограничены settings; укажите --yes для запуска.');
+    await lab.init();try{const report=operation==='evaluate'?await lab.evaluateGenerator(input):await lab.optimizeGenerator(input);await writeStdout(JSON.stringify(generatorSummary(report),null,2)+'\n');}finally{await lab.close();}return;
+  }
   if (command === 'resolutions') {
     const operation=values.operation ?? 'inspect',lab=new ExperimentLab(directory);
     const input=values.input ? JSON.parse(await readFile(values.input,'utf8')) : {};

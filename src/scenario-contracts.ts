@@ -105,6 +105,7 @@ export const preparationProgressSchema = z.strictObject({
 });
 export type PreparationProgress = z.infer<typeof preparationProgressSchema>;
 export const scenarioLibrarySchema = z.strictObject({
+  checkpointContext:z.literal('observed-tools-v1').optional(),
   formatVersion: z.literal(1), id, revision: z.number().int().positive(), createdAt: timestamp,
   imports: z.array(importBatchSchema).max(30),
   sources: z.array(z.strictObject({ id, name: text(180), content: text(120000), hash: text(200), kind: z.enum(['knowledge', 'prompt']).optional() })).max(12),

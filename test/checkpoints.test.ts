@@ -196,3 +196,17 @@ test('required malformed or duplicate results and unknown checkpoint IDs remain 
     [...decision('pass'), { ...decision('unknown')[0], checkpointId: 'undeclared' }],
   ]) assert.throws(() => evaluateCheckpoints(scenario, trial, raw, grade));
 });
+
+test('reply checkpoint retains observed tool failure as context while requiring actual reply evidence',()=>{
+ const {scenario,trial}=fixture();trial.events=[{seq:0,type:'user',text:'Обновите адрес'},{seq:1,type:'tool_result',tool:'update_record',result:{ok:false,error:'Ошибка обновления'},state:trial.initialState},{seq:2,type:'assistant',text:'Адрес обновлён'}];
+ const input=checkpointInput(scenario,trial);assert.deepEqual(input.checkpoints[0].context,[{seq:1,type:'tool_result',tool:'update_record',result:{ok:false,error:'Ошибка обновления'}}]);
+ const evaluated=evaluateCheckpoints(scenario,trial,decision('fail',[1,2]),grade)[0];assert.equal(evaluated.result,'fail');assert.deepEqual(evaluated.evidence,[2]);assert.deepEqual(evaluated.contextEvidence,[1]);
+ assert.equal(evaluateCheckpoints(scenario,trial,decision('fail',[1]),grade)[0].result,'unknown');
+});
+
+test('legacy library compilation preserves frozen checkpoint protocol and omits newly observed tool context',()=>{
+ const library=libraryFixture();delete library.checkpointContext;
+ const scenario=compileLibrary(acceptLibrary(library,libraryHash(library),['variant_1']))[0]!;
+ assert.equal(scenario.execution!.checkpointContext,undefined);
+ assert.equal(scenario.execution!.checkpointHash,'670d394b822ba251e5a791dab189d1a4b9c35ec1e10649ce7d0c93b1ca9cba33');
+});

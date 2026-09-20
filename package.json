@@ -15,7 +15,8 @@
     "extensions",
     "skills",
     "examples",
-    "README.md"
+    "README.md",
+    "test/fixtures/generator-corpus.json"
   ],
   "pi": {
     "extensions": [

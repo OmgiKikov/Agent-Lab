@@ -65,7 +65,7 @@ function callContext(options: { timeoutMs?: number; signal?: AbortSignal; limit?
   return { ctx, usage };
 }
 
-async function fixture(reply: (request: Request, index: number, options?: Options) => Reply | Promise<Reply>, roleModel = false) {
+async function fixture(reply: (request: Request, index: number, options?: Options) => Reply | Promise<Reply>, roleModel = false, reasoning = false) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-pi-'));
   const requests: Request[] = [];
   const modelsUsed: string[] = [];
@@ -76,7 +76,7 @@ async function fixture(reply: (request: Request, index: number, options?: Option
   runtime.registerProvider('agent-lab-test', {
     api: 'openai-completions', apiKey: 'fixture-only-not-a-real-key', baseUrl: 'http://127.0.0.1:1',
     models: (roleModel ? ['test-model', 'role-model'] : ['test-model']).map(id => ({
-      id, name: 'Offline SDK fixture', reasoning: false, input: ['text'],
+      id, name: 'Offline SDK fixture', reasoning, input: ['text'],
       cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }, contextWindow: 200000, maxTokens: 16384,
     })),
     streamSimple(model, request, options) {
@@ -1453,4 +1453,27 @@ test('checkpoint SDK boundary tolerates malformed known diagnostics while requir
   try {
     await assert.rejects(invalid.adapter.assessCheckpoints!(checkpointInput(scenario, trial), callContext().ctx), /не проходит проверку/);
   } finally { await invalid.close(); }
+});
+
+test('generator production applies separate configuration and retains malformed raw transport responses', async () => {
+  const {evaluateGenerator,loadGeneratorCorpus}=await import('../src/generator-evaluation.js');
+  let temperature: number | undefined;
+  const f=await fixture((_request,index,options)=>{temperature=options?.temperature;return index===0?'BROKEN_GENERATOR_JSON':JSON.stringify({proposals:[]});});
+  try {
+    const corpus=await loadGeneratorCorpus();corpus.cases=corpus.cases.slice(0,1);
+    const config={instructions:'GENERATOR_CONFIG_ONLY_SENTINEL',temperature:0.2};
+    const report=await evaluateGenerator(corpus,{config,transport:'deterministic-test',generate:(input,config,ctx)=>f.adapter.generateScenarioCase!({input,config},ctx)},false,callContext().ctx);
+    assert.match(f.requests[0]!.systemPrompt??'',/GENERATOR_CONFIG_ONLY_SENTINEL/);
+    assert.equal(temperature,0.2);assert.equal(report.cases[0]!.unknown,true);
+    assert.ok(report.cases[0]!.rawResponses?.some(r=>r.text==='BROKEN_GENERATOR_JSON'),'Malformed raw proposal response must survive for audit');
+  } finally {await f.close();}
+});
+
+test('reasoning generator records unsupported temperature as provider default and omits it from transport',async()=>{
+ const {evaluateGenerator,loadGeneratorCorpus}=await import('../src/generator-evaluation.js');let optionsSeen:any;
+ const f=await fixture((_request,_index,options)=>{optionsSeen=options;return JSON.stringify({proposals:[]});},false,true);
+ try{const corpus=await loadGeneratorCorpus();corpus.cases=corpus.cases.slice(0,1);const config={instructions:'Настройки только генератора',temperature:0};
+ const report=await evaluateGenerator(corpus,{config,transport:'deterministic-test',generate:(input,config,ctx)=>f.adapter.generateScenarioCase!({input,config},ctx)},false,callContext().ctx);
+ assert.equal(optionsSeen.temperature,undefined);assert.equal(report.cases[0].transports[0].requestedTemperature,0);assert.equal(report.cases[0].transports[0].effectiveTemperature,'provider-default');
+ }finally{await f.close();}
 });

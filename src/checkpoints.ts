@@ -8,6 +8,7 @@ export type { CheckpointDecision, CheckpointResult } from './contracts.js';
 
 const channelEvents = (cp: Checkpoint, trial: Trial): TraceEvent[] => trial.events.filter(e => cp.observation === 'reply' ? e.type === 'assistant'
   : cp.observation === 'tool' ? e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'observation' : e.state !== undefined || e.type === 'tool_result');
+const toolContext = (scenario:Scenario, cp:Checkpoint, trial:Trial) => scenario.execution?.checkpointContext==='observed-tools-v1' && cp.observation==='reply' ? trial.events.filter(e=>e.type==='tool_call'||e.type==='tool_result') : [];
 function missingObservation(cp: Checkpoint, trial: Trial): string | undefined {
   if (cp.observation === 'tool' && (!trial.observation || trial.observation.tools === 'partial')) return 'Полнота событий инструментов не подтверждена';
   if (cp.observation === 'state' && (!trial.observation || trial.observation.state === 'missing')) return 'Итоговое состояние не наблюдалось';
@@ -22,7 +23,8 @@ export function checkpointInput(scenario: Scenario, trial: Trial) {
       dialogue: trial.events.filter(e => e.type === 'user' || e.type === 'assistant').map(({ seq, type, text }) => ({ seq, type, text })),
       evidence: channelEvents(checkpoint, trial).map(({ seq, type, text, tool, args, result, state }) => ({ seq, type, text, tool, args, result, ...(checkpoint.observation === 'state' && state ? { state } : {}) })),
       allowedEvidence: channelEvents(checkpoint, trial).map(e => e.seq),
-      applicabilityEvidence: trial.events.filter(e => ['user', 'assistant'].includes(e.type)).map(e => e.seq),
+      ...(scenario.execution!.checkpointContext==='observed-tools-v1' && checkpoint.observation==='reply'?{context:toolContext(scenario,checkpoint,trial).map(({seq,type,text,tool,args,result})=>({seq,type,...(text===undefined?{}:{text}),...(tool===undefined?{}:{tool}),...(args===undefined?{}:{args}),...(result===undefined?{}:{result})}))}:{}),
+      applicabilityEvidence: trial.events.filter(e => ['user', 'assistant'].includes(e.type)||toolContext(scenario,checkpoint,trial).some(c=>c.seq===e.seq)).map(e => e.seq),
       observation: trial.observation ?? { state: 'missing', tools: 'partial' },
       ...(checkpoint.observation === 'state' && !missingObservation(checkpoint, trial) ? { state: trial.finalState } : {}),
     })),
@@ -62,14 +64,14 @@ export function evaluateCheckpoints(scenario: Scenario, trial: Trial, raw: unkno
     if (d.result === 'unknown') return base;
     if (!d.evidence.length) return unknown('Нет конкретных событий, подтверждающих решение');
     if (d.result === 'not_applicable') {
-      return d.evidence.every(seq => trial.events.some(e => e.seq === seq && ['user', 'assistant'].includes(e.type))) ? base : unknown('Неприменимость не подтверждена условиями диалога');
+      return d.evidence.every(seq => trial.events.some(e => e.seq === seq && (['user', 'assistant'].includes(e.type)||toolContext(scenario,cp,trial).some(c=>c.seq===seq)))) ? base : unknown('Неприменимость не подтверждена условиями диалога');
     }
     const unavailable = missingObservation(cp, trial);
     if (unavailable) return unknown(unavailable);
     const events = channelEvents(cp, trial);
     const evidence = d.evidence.filter(seq => events.some(e => e.seq === seq));
     const contextEvidence = d.evidence.filter(seq => !evidence.includes(seq));
-    if (!evidence.length || contextEvidence.some(seq => !trial.events.some(e => e.seq === seq && ['user', 'assistant'].includes(e.type)))) return unknown('Доказательство не относится к объявленному каналу наблюдения');
+    if (!evidence.length || contextEvidence.some(seq => !trial.events.some(e => e.seq === seq && (['user', 'assistant'].includes(e.type)||toolContext(scenario,cp,trial).some(c=>c.seq===seq))))) return unknown('Доказательство не относится к объявленному каналу наблюдения');
     base.evidence = evidence;
     if (contextEvidence.length) base.contextEvidence = contextEvidence;
     if (cp.check !== undefined) {
