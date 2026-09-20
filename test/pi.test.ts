@@ -1490,3 +1490,23 @@ test('scenario proposal transport separates no-log owner requirements from real 
     assert.equal(f.requests.length, 1);
   } finally { await f.close(); }
 });
+
+test('Pi semantic transport receives authenticated owner authority beside unchanged source chronology', async () => {
+  const { libraryFixture } = await import('./helpers/scenario-library.js');
+  const { editLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { planSemanticWork } = await import('../src/scenario-work.js');
+  const source = libraryFixture();
+  const edited = editLibrary(source, libraryHash(source), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number', statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'owner_transport', reason: 'Личные данные известны заранее' });
+  const job = planSemanticWork(edited).jobs.find(j => j.input.scope === 'fields' && j.input.fields[0]!.variantId === 'variant_1')!;
+  const expected = job.input.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready', reason: 'Тест передачи контекста, не модельная оценка' })));
+  const f = await fixture(scripted([{ findings: expected }]));
+  try {
+    await f.adapter.assessScenarioProposals!(job.input, callContext().ctx);
+    const request = JSON.stringify(f.requests[0]);
+    assert.match(request, /ownerFactEvidence/);
+    assert.match(request, /verified/);
+    assert.match(request, /owner_transport/);
+    assert.match(request, /1234/, 'old chronology is retained independently of edited 4321');
+    assert.match(request, /4321/);
+  } finally { await f.close(); }
+});

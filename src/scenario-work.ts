@@ -1,5 +1,5 @@
 import { semanticFindingSchema, type ScenarioLibrary, type SemanticFinding } from './scenario-contracts.js';
-import { semanticContentHash, semanticPaths, recordSemanticAssessment } from './scenario-library.js';
+import { semanticContentHash, semanticPaths, recordSemanticAssessment, ownerFactEvidence } from './scenario-library.js';
 import { fingerprint, type CallContext, type Runtime, type ScenarioAssessmentInput } from './contracts.js';
 
 /** Conservative UTF-8 data envelopes, leaving prompt/schema and transport overhead outside the body budget. */
@@ -7,6 +7,7 @@ export const SCENARIO_INPUT_BYTES = 64_000;
 export const SCENARIO_OUTPUT_BYTES = 12_000;
 export const SEMANTIC_REASON_CHARS = 240;
 export const SEMANTIC_BATCH_FIELDS = 6;
+export const SEMANTIC_CONTEXT_VERSION = 3;
 export const serializedBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), 'utf8');
 export function workInputIssue(value: unknown): string | undefined {
   const size = serializedBytes(value);
@@ -34,6 +35,7 @@ export function planSemanticWork(library: ScenarioLibrary): { contentHash: strin
   };
   const make = (ids: string[], fields: ScenarioAssessmentInput['fields'], scope: ScenarioAssessmentInput['scope'], candidates: ScenarioAssessmentInput['comparisonCandidates'] = []): ScenarioAssessmentInput => ({
     protocol: 'chronological-scenarios-v1', contentHash, scope, library: context(ids, scope === 'fields'), fields, comparisonCandidates: candidates,
+    ownerFactEvidence: library.variants.filter(v => ids.includes(v.id) || candidates.some(c => c.id === v.id)).flatMap(v => ownerFactEvidence(library, v)),
   });
   const add = (input: ScenarioAssessmentInput) => {
     const issue = workInputIssue(input), outputBytes = responseBound(input.fields);
@@ -68,13 +70,13 @@ export function planSemanticWork(library: ScenarioLibrary): { contentHash: strin
 }
 
 function semanticWorkHash(job: Job, contentHash: string): string {
-  return fingerprint({ evidenceVersion: 2, contentHash, scope: job.input.scope, fields: job.input.fields,
+  return fingerprint({ evidenceVersion: SEMANTIC_CONTEXT_VERSION, contentHash, scope: job.input.scope, fields: job.input.fields,
     candidates: job.input.comparisonCandidates.map(candidate => candidate.id) });
 }
 
 function finalAssessmentCoversPlan(library: ScenarioLibrary, plan: ReturnType<typeof planSemanticWork>): boolean {
   const assessment = library.semanticAssessment;
-  if (!assessment || assessment.contentHash !== plan.contentHash || assessment.workReceipts !== undefined) return false;
+  if (!assessment || assessment.contextVersion !== SEMANTIC_CONTEXT_VERSION || assessment.contentHash !== plan.contentHash || assessment.workReceipts !== undefined) return false;
   return library.variants.every(variant => semanticPaths(variant).every(path =>
     assessment.findings.filter(finding => finding.variantId === variant.id && finding.path === path).length === 1));
 }
@@ -109,7 +111,7 @@ export async function assessScenarioLibrary(library: ScenarioLibrary, runtime: P
   const severity = { ready: 0, needs_review: 1, blocked: 2 };
   let revision = library.revision;
   const partial = () => ({ ...library, revision: ++revision, acceptance: undefined, semanticRequired: true as const,
-    variants: library.variants.map(v => ({ ...v, ownerDecision: 'pending' as const })), semanticAssessment: { contentHash: plan.contentHash, findings: [...findings.values()], workReceipts: [...receipts.values()] } });
+    variants: library.variants.map(v => ({ ...v, ownerDecision: 'pending' as const })), semanticAssessment: { contextVersion: SEMANTIC_CONTEXT_VERSION, contentHash: plan.contentHash, findings: [...findings.values()], workReceipts: [...receipts.values()] } });
   await persist(partial());
   for (const job of plan.jobs) {
     ctx.signal.throwIfAborted();
@@ -135,5 +137,7 @@ export async function assessScenarioLibrary(library: ScenarioLibrary, runtime: P
     }
     if (!receipt) await persist(partial());
   }
-  return recordSemanticAssessment({ ...library, revision }, [...findings.values()]);
+  const complete = recordSemanticAssessment({ ...library, revision }, [...findings.values()]);
+  complete.semanticAssessment!.contextVersion = SEMANTIC_CONTEXT_VERSION;
+  return complete;
 }

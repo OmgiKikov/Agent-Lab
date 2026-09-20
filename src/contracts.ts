@@ -1010,6 +1010,7 @@ export interface ScenarioAssessmentInput {
   library: Pick<ScenarioLibrary, 'sources' | 'requirements' | 'businessScenarios' | 'variants'> & {
     imports: { id: string; dialogues: Pick<ImportBatch['dialogues'][number], 'id' | 'events' | 'observation'>[] }[];
   };
+  ownerFactEvidence: { variantId: string; factId: string; editId: string; status: 'verified' | 'unverified' }[];
   fields: { variantId: string; paths: string[] }[];
   comparisonCandidates: (Omit<ScenarioLibrary['variants'][number], 'quality' | 'issues' | 'ownerDecision'> & {
     business: Pick<ScenarioLibrary['businessScenarios'][number], 'goal' | 'conditions' | 'requirementIds'>;

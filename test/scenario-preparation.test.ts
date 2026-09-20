@@ -118,7 +118,16 @@ test('cancellation preserves processed, excluded and pending without making a ru
 
 test('owner correction invalidates semantic admission, reassessment binds new content and changed requirements cannot run', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'scenario-owner-'));
-  const lab = new ExperimentLab(directory, runtimeFixture([]));
+  const runtime = runtimeFixture([]), assess = runtime.assessScenarioProposals!;
+  let ownerEvidenceSeen = false;
+  runtime.assessScenarioProposals = async (request, ctx) => {
+    if (request.library.variants.some(v => v.userState.facts.some(f => f.origin.kind === 'owner'))) {
+      assert.ok(request.ownerFactEvidence.some(e => e.variantId === 'variant_1' && e.factId === 'terminal_number' && e.editId === 'owner_correction' && e.status === 'verified'));
+      ownerEvidenceSeen = true;
+    }
+    return assess(request, ctx);
+  };
+  const lab = new ExperimentLab(directory, runtime);
   try {
     await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle();
     const draft = await lab.readLibrary(seed.id);
@@ -131,6 +140,7 @@ test('owner correction invalidates semantic admission, reassessment binds new co
     const checked = await lab.readLibrary(seed.id);
     const accepted = await lab.acceptLibrary(seed.id, libraryHash(checked.library), ['variant_1']);
     assert.match(accepted.experiment.scenarios[0]!.user.facts, /4321/);
+    assert.equal(ownerEvidenceSeen, true, 'public edit/reassessment passes authenticated owner evidence');
     const altered = structuredClone(accepted.experiment);
     altered.requirements[0]!.text = 'Другое требование';
     await lab.store.save(altered);

@@ -334,6 +334,14 @@ function refreshQuality(library: ScenarioLibrary): ScenarioLibrary {
   return scenarioLibrarySchema.parse(library);
 }
 
+/** Harness-authenticated owner grounding; semantic readiness is still assessed independently. */
+export function ownerFactEvidence(library: ScenarioLibrary, variant: ScenarioVariant): { variantId: string; factId: string; editId: string; status: 'verified' | 'unverified' }[] {
+  return variant.userState.facts.flatMap(fact => fact.origin.kind === 'owner' ? [{
+    variantId: variant.id, factId: fact.id, editId: fact.origin.editId,
+    status: ownerFactReceipt(library, variant, fact) ? 'verified' as const : 'unverified' as const,
+  }] : []);
+}
+
 function ownerFactReceipt(library: ScenarioLibrary, variant: ScenarioVariant, fact: ScenarioVariant['userState']['facts'][number], seen = new Set<string>()): boolean {
   if (seen.has(variant.id)) return false;
   seen.add(variant.id);

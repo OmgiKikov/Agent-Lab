@@ -121,3 +121,54 @@ test('cross-group comparisons retain actual membership and complete differing po
   const oversized = planSemanticWork(library);
   assert.ok(oversized.skipped.some(f => f.variantId === 'cross_0' && f.path === 'duplicates' && f.status === 'needs_review'), 'unrepresentable complete candidate cannot be declared checked');
 });
+
+test('semantic context authenticates owner facts including inherited receipts without rewriting chronology', async () => {
+  const { editLibrary, libraryHash, libraryQuality } = await import('../src/scenario-library.js');
+  const { planSemanticWork } = await import('../src/scenario-work.js');
+  const source = libraryFixture(), original = structuredClone(source.imports);
+  const edited = editLibrary(source, libraryHash(source), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number', statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'owner_prior_knowledge', reason: 'Владелец уточнил исходное личное знание' });
+  const child = structuredClone(edited.variants[0]!);
+  child.id = 'inherited'; child.parentVariantId = 'variant_1'; child.provenance = 'synthetic'; child.history = [{ author: 'generator', revision: 1, reason: 'Унаследован факт' }];
+  edited.variants.push(child);
+  const evidence = (library: typeof edited, id: string) => (planSemanticWork(library).jobs.find(j => j.input.scope === 'fields' && j.input.fields[0]!.variantId === id)!.input as any).ownerFactEvidence;
+  for (const id of ['variant_1', 'inherited']) assert.deepEqual(evidence(edited, id), [{ variantId: id, factId: 'terminal_number', editId: 'owner_prior_knowledge', status: 'verified' }]);
+  assert.deepEqual(edited.imports, original, 'owner authority is an additional source, never a rewritten log');
+  const tampered = structuredClone(edited); tampered.variants[0]!.userState.facts[0]!.availability = 'learned_in_source';
+  assert.equal(evidence(tampered, 'variant_1')[0].status, 'unverified');
+  assert.equal(evidence(tampered, 'inherited')[0].status, 'unverified', 'stale parent chain cannot vouch for child');
+  const invented = structuredClone(edited); invented.variants[0]!.history = [];
+  assert.equal(evidence(invented, 'variant_1')[0].status, 'unverified');
+  assert.ok(libraryQuality(invented).some(i => i.code === 'unverified_owner_fact'));
+  const minted = structuredClone(edited); minted.variants[0]!.history.at(-1)!.author = 'generator';
+  assert.equal(evidence(minted, 'variant_1')[0].status, 'unverified');
+});
+
+test('new owner evidence context does not reuse old semantic findings while historical acceptance stays intact', async () => {
+  const { assessScenarioLibrary, planSemanticWork, semanticWorkStatus } = await import('../src/scenario-work.js');
+  const { recordSemanticAssessment, acceptLibrary, libraryHash, editLibrary } = await import('../src/scenario-library.js');
+  const { fingerprint } = await import('../src/contracts.js');
+  const original = libraryFixture();
+  const library = editLibrary(original, libraryHash(original), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number', statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'verified_but_inconsistent', reason: 'Подтверждён факт; первая реплика всё ещё содержит другой номер' });
+  // Historical assessment predates the context contract; its accepted hash remains readable.
+  const findings = library.variants.flatMap(v => semanticPaths(v).map(path => ({ variantId: v.id, path, status: 'ready' as const, reason: 'Историческая оценка' })));
+  const oldFinal = acceptLibrary(recordSemanticAssessment(library, findings), libraryHash(recordSemanticAssessment(library, findings)), ['variant_1']);
+  const bytes = JSON.stringify(oldFinal);
+  assert.ok(semanticWorkStatus(oldFinal).pendingJobs > 0, 'explicit reassessment uses new context version');
+  assert.equal(JSON.stringify(oldFinal), bytes, 'reading a legacy accepted snapshot does not change it');
+  const plan = planSemanticWork(oldFinal);
+  const partial = structuredClone(oldFinal);
+  partial.semanticAssessment = { contentHash: plan.contentHash, findings, workReceipts: plan.jobs.map(job => ({
+    workHash: fingerprint({ evidenceVersion: 2, contentHash: plan.contentHash, scope: job.input.scope, fields: job.input.fields, candidates: job.input.comparisonCandidates.map(c => c.id) }),
+    findings: job.input.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready' as const, reason: 'Старый контекст' }))),
+  })) };
+  assert.equal(semanticWorkStatus(partial).completedJobs, 0);
+  let calls = 0;
+  const complete = await assessScenarioLibrary(partial, { async assessScenarioProposals(input) {
+    calls++;
+    if (input.fields.some(f => f.variantId === 'variant_1')) assert.ok(input.ownerFactEvidence.some(e => e.editId === 'verified_but_inconsistent' && e.status === 'verified'));
+    return input.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: path === 'userState' ? 'needs_review' as const : 'ready' as const, reason: 'Остаётся конкретное смысловое противоречие' })));
+  } }, ctx, async () => {});
+  assert.equal(calls, plan.jobs.length);
+  assert.equal(semanticWorkStatus(complete).pendingJobs, 0);
+  assert.throws(() => acceptLibrary(complete, libraryHash(complete), ['variant_1']), /готов/, 'verified evidence never forces semantic approval');
+});
