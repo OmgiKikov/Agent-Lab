@@ -1,5 +1,5 @@
 import {generatorConfigSchema} from '../dist/generator-corpus.js';
-import {generatorSummary, selectNextVariants} from '../dist/generator-evaluation.js';
+import {generatorSummary, selectNextVariants, generatorSelectionSchema} from '../dist/generator-evaluation.js';
 import {generatorRequestSchema} from '../dist/generator-service.js';
 import { resolutionRequestSchema } from '../dist/resolution.js';
 import { compactIssues, compactDiagnostic, resolutionText, resolutionRunText, compactResolution, compactFixBundle } from '../dist/issue-view.js';
@@ -246,10 +246,10 @@ export default function agentLab(pi: ExtensionAPI) {
   };
   pi.registerTool({name:'agent_lab_generator',label:'Качество генератора',description:'Отдельная оценка/ограниченная оптимизация генератора. Не меняет принятые наборы и промпт агента. inspect/select не расходуют модельный бюджет.',
     parameters:Type.Object({operation:Type.Union(['evaluate','optimize','select','inspect'].map(value=>Type.Literal(value))),id:Type.Optional(Type.String()),
-      request:Type.Optional(Type.Unsafe(z.toJSONSchema(generatorRequestSchema,{io:'input'}))),candidates:Type.Optional(Type.Array(Type.Any(),{maxItems:200})),history:Type.Optional(Type.Array(Type.Any(),{maxItems:200}))}),
+      request:Type.Optional(Type.Unsafe(z.toJSONSchema(generatorRequestSchema,{io:'input'}))),candidates:Type.Optional(Type.Unsafe<z.input<typeof generatorSelectionSchema.shape.candidates>>(z.toJSONSchema(generatorSelectionSchema.shape.candidates))),history:Type.Optional(Type.Unsafe<z.input<typeof generatorSelectionSchema.shape.history>>(z.toJSONSchema(generatorSelectionSchema.shape.history)))}),
     async execute(_toolCallId,params,_signal,_onUpdate,ctx){
       let result:unknown;
-      if(params.operation==='select')result=selectNextVariants(params.candidates??[],params.history??[]);
+      if(params.operation==='select')result=selectNextVariants(params.candidates,params.history);
       else if(params.operation==='inspect'){if(!params.id)throw new Error('Укажите id записи генератора.');result=generatorSummary(await new ExperimentStore(resolve(ctx.cwd,'.agent-lab')).readGeneratorRecord(params.id));}
       else {if(!params.request)throw new Error('Нужны config и ограниченные settings.');const {lab,close}=open(ctx.cwd);try{await lab.init();result=generatorSummary(params.operation==='evaluate'?await lab.evaluateGenerator(generatorRequestSchema.parse(params.request),{signal:_signal}):await lab.optimizeGenerator(generatorRequestSchema.parse(params.request),{signal:_signal}));}finally{await close();}}
       return {content:[{type:'text',text:JSON.stringify(result)}],details:result};

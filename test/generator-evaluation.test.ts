@@ -42,7 +42,7 @@ test('three controls execute actual runner tools and controller, independently r
 test('selection blocks invalid, leaked, exact and unresolved semantic duplicates before rewarding coverage', async () => {
   const { selectNextVariants } = await api();
   const base = { quality: 'ready', provenanceErrors: 0, applicabilityErrors: 0, validity: 'valid', duplicate: 'none', coverage: ['new'], unmetConditions: 1, reproducibleIssues: 0, instability: 0, targetFailures: 0 };
-  const selected = selectNextVariants([{ ...base, id: 'good', contentHash: 'same' }, { ...base, id: 'copy', contentHash: 'same', targetFailures: 999 }, { ...base, id: 'invalid', contentHash: 'bad', validity: 'invalid', targetFailures: 999 }, { ...base, id: 'semantic', contentHash: 'semantic', duplicate: 'unresolved' }, { ...base, id: 'leak', contentHash: 'leak', provenanceErrors: 1 }], []);
+  const selected = selectNextVariants([{ ...base, id: 'good', contentHash: 'a'.repeat(64) }, { ...base, id: 'copy', contentHash: 'a'.repeat(64), targetFailures: 999 }, { ...base, id: 'invalid', contentHash: 'b'.repeat(64), validity: 'invalid', targetFailures: 999 }, { ...base, id: 'semantic', contentHash: 'c'.repeat(64), duplicate: 'unresolved' }, { ...base, id: 'leak', contentHash: 'd'.repeat(64), provenanceErrors: 1 }], []);
   assert.deepEqual(selected.selected.map(c => c.id), ['good']); assert.equal(selected.excluded.length, 4);
 });
 
@@ -142,4 +142,43 @@ test('consumed holdout from an earlier report remains consumed after audit key u
  const directory=await mkdtemp(join(tmpdir(),'generator-legacy-audit-')),store=new ExperimentStore(directory);await store.init();t.after(async()=>{await store.close();await rm(directory,{recursive:true,force:true});});
  await store.saveGeneratorRecord({id:'gen_earlier',formatVersion:'1',kind:'generator-evaluation',corpus,holdoutConsumed:true});
  await assert.rejects(evaluateGenerator(corpus,{config,transport:'deterministic-test',async generate(){throw new Error('Must not run');}},false,{...context(),store}),/использован/);
+});
+
+test('control admission cannot exchange a missed defect for a false positive',async()=>{
+ const {evaluateGenerator,loadGeneratorCorpus,compareGenerators}=await api();const corpus=await loadGeneratorCorpus();corpus.cases=corpus.cases.filter(c=>c.id==='p1');
+ const generated=(availability:string)=>({facts:[{id:'ticket',availability}],applicability:'applicable',duplicate:'none',validity:'valid',rationale:'Синтетическая проверка'});
+ const baseline=await evaluateGenerator(corpus,{config,transport:'deterministic-test',async generate(){return generated('learned_in_source');},judge:{async assessCheckpoints(input){return input.checkpoints.map(c=>({checkpointId:c.checkpoint.id,result:'pass',evidence:c.allowedEvidence,rationale:'Контрольная оценка'}));}}},true,context());
+ const candidate=await evaluateGenerator(corpus,{config,transport:'deterministic-test',async generate(){return generated('initial');},judge:{async assessCheckpoints(input){return input.checkpoints.map(c=>({checkpointId:c.checkpoint.id,result:c.checkpoint.id==='repeat_identifier'?'fail':'pass',evidence:c.allowedEvidence,rationale:'Контрольная оценка'}));}}},true,context());
+ assert.equal(baseline.controls.calibration.missedDefects,3);assert.equal(candidate.controls.calibration.missedDefects,2);assert.equal(candidate.controls.calibration.falsePositives,1);
+ assert.deepEqual(compareGenerators(baseline,candidate),{admitted:false,reason:'Регрессия controls.calibration.falsePositives: 0 → 1.'});
+});
+
+test('each execution and calibration error category independently blocks a candidate despite a lower total',async()=>{
+ const {evaluateGenerator,loadGeneratorCorpus,compareGenerators}=await api();const corpus=await loadGeneratorCorpus();corpus.cases=corpus.cases.filter(c=>c.id==='p1');
+ const measured=await evaluateGenerator(corpus,{config,transport:'deterministic-test',async generate(){throw new Error('Нет ответа');}},true,context());
+ for(const [section,category] of [['execution','missedDefects'],['execution','falsePositives'],['execution','invalid'],['execution','unknown'],['calibration','missedDefects'],['calibration','falsePositives'],['calibration','unknown']]){
+   const baseline=structuredClone(measured),candidate=structuredClone(measured);
+   for(const report of [baseline,candidate]){for(const key of ['missedDefects','falsePositives','invalid','unknown'])report.controls[key]=0;for(const key of ['missedDefects','falsePositives','unknown'])report.controls.calibration[key]=0;}
+   const other=section==='execution'?baseline.controls.calibration:baseline.controls;other.missedDefects=3;
+   (section==='execution'?candidate.controls.calibration:candidate.controls).missedDefects=1;
+   (section==='execution'?candidate.controls:candidate.controls.calibration)[category]=1;
+   candidate.dimensions.provenance.errors=0;candidate.dimensions.provenance.unknown=0;candidate.cases[0].errors=[];candidate.cases[0].unknown=false;
+   const path=section==='execution'?`controls.${category}`:`controls.calibration.${category}`;
+   assert.deepEqual(compareGenerators(baseline,candidate),{admitted:false,reason:`Регрессия ${path}: 0 → 1.`});
+ }
+});
+
+const selectionReady=()=>({id:'ready',contentHash:'a'.repeat(64),quality:'ready',provenanceErrors:0,applicabilityErrors:0,validity:'valid',duplicate:'none',coverage:['new'],unmetConditions:1,reproducibleIssues:0,instability:0});
+test('selection rejects missing null nonfinite and noninteger correctness evidence instead of admitting it',async()=>{
+ const {selectNextVariants}=await api();assert.deepEqual(selectNextVariants([selectionReady()],[]).selected.map(c=>c.id),['ready']);
+ for(const field of ['provenanceErrors','applicabilityErrors'])for(const value of [undefined,null,NaN,Infinity,-Infinity,-1,0.5,'0']){
+  const candidate={...selectionReady(),[field]:value};if(value===undefined)delete candidate[field];
+  assert.throws(()=>selectNextVariants([candidate],[]),new RegExp(field));
+ }
+});
+test('selection validates identities enums coverage and full history at its runtime boundary',async()=>{
+ const {selectNextVariants}=await api();
+ for(const patch of [{id:''},{contentHash:'not-a-hash'},{quality:'maybe'},{validity:'maybe'},{duplicate:'maybe'},{coverage:null},{coverage:['']},{coverage:['new','new']},{unmetConditions:NaN},{reproducibleIssues:Infinity},{instability:-1},{instability:2}])assert.throws(()=>selectNextVariants([{...selectionReady(),...patch}],[]),/данные отбора/);
+ for(const history of [null,{},[{}],[{contentHash:'a'.repeat(64)}],[{contentHash:'a'.repeat(64),coverage:null}],[{contentHash:'broken',coverage:[]}],[{contentHash:'a'.repeat(64),coverage:[null]}]])assert.throws(()=>selectNextVariants([selectionReady()],history),/history/);
+ assert.deepEqual(selectNextVariants([selectionReady()],[{contentHash:'a'.repeat(64),coverage:['new']}]).selected,[]);
 });

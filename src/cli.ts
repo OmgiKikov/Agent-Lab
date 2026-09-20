@@ -93,7 +93,7 @@ async function main() {
   if(command==='generator') {
     const operation=values.operation??'inspect',lab=new ExperimentLab(directory),input=values.input?JSON.parse(await readFile(values.input,'utf8')):{};
     if(operation==='inspect'){if(!values.id)throw new Error('Укажите --id GEN.');const record=await lab.store.readGeneratorRecord(values.id);await writeStdout(JSON.stringify(values.json?record:generatorSummary(record),null,2)+'\n');return;}
-    if(operation==='select'){await writeStdout(JSON.stringify(selectNextVariants(input.candidates,input.history??[]),null,2)+'\n');return;}
+    if(operation==='select'){await writeStdout(JSON.stringify(selectNextVariants(input.candidates,input.history),null,2)+'\n');return;}
     if(!['evaluate','optimize'].includes(operation))throw new Error('Укажите generator --operation evaluate|select|optimize|inspect.');
     if(!values.yes)throw new Error('Модельные вызовы ограничены settings; укажите --yes для запуска.');
     await lab.init();try{const report=operation==='evaluate'?await lab.evaluateGenerator(input):await lab.optimizeGenerator(input);await writeStdout(JSON.stringify(generatorSummary(report),null,2)+'\n');}finally{await lab.close();}return;

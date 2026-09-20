@@ -173,29 +173,53 @@ export function compareGenerators(baseline: GeneratorReport, candidate: Generato
     const errorCount=(report:GeneratorReport,code:string)=>report.cases.filter(c=>c.errors.includes(code)).length;
     const newMandatoryError=[...new Set(candidate.cases.flatMap(c=>c.errors))].some(code=>errorCount(candidate,code)>errorCount(baseline,code));
     const regressed = newMandatoryError || values.some(key => candidate.dimensions[key].errors > baseline.dimensions[key].errors || candidate.dimensions[key].unknown > baseline.dimensions[key].unknown);
-    const controlBad = (r: GeneratorReport) => r.controls ? r.controls.missedDefects + r.controls.falsePositives + r.controls.invalid + r.controls.unknown + r.controls.calibration.missedDefects + r.controls.calibration.falsePositives + r.controls.calibration.unknown : 0;
+    if (baseline.controls && candidate.controls) {
+        const categories = [
+            ...(['missedDefects', 'falsePositives', 'invalid', 'unknown'] as const).map(key => ({
+                path: `controls.${key}`, before: baseline.controls![key], after: candidate.controls![key],
+            })),
+            ...(['missedDefects', 'falsePositives', 'unknown'] as const).map(key => ({
+                path: `controls.calibration.${key}`, before: baseline.controls!.calibration?.[key], after: candidate.controls!.calibration?.[key],
+            })),
+        ];
+        for (const { path, before, after } of categories) {
+            if (![before, after].every(value => Number.isSafeInteger(value) && value >= 0))
+                return { admitted: false, reason: `Неполные или некорректные данные ${path}.` };
+            if (after > before)
+                return { admitted: false, reason: `Регрессия ${path}: ${before} → ${after}.` };
+        }
+    }
     const improved = values.some(key => candidate.dimensions[key].errors < baseline.dimensions[key].errors);
-    return { admitted: !regressed && improved && controlBad(candidate) <= controlBad(baseline), reason: regressed ? 'Обязательная корректность ухудшилась.' : !improved ? 'Улучшение не подтверждено.' : 'Измеренные ошибки уменьшились без ухудшения обязательных измерений.' };
+    return { admitted: !regressed && improved, reason: regressed ? 'Обязательная корректность ухудшилась.' : !improved ? 'Улучшение не подтверждено.' : 'Измеренные ошибки уменьшились без ухудшения обязательных измерений.' };
 }
-export interface SelectionCandidate {
-    id: string;
-    contentHash: string;
-    quality: string;
-    provenanceErrors: number;
-    applicabilityErrors: number;
-    validity: string;
-    duplicate: string;
-    coverage: string[];
-    unmetConditions: number;
-    reproducibleIssues: number;
-    instability: number;
-    targetFailures?: number;
-}
-export function selectNextVariants(candidates: SelectionCandidate[], history: {
-    contentHash: string;
-    coverage?: string[];
-}[]) {
-    const seen = new Set(history.map(h => h.contentHash)), covered = new Set(history.flatMap(h => h.coverage ?? []));
+const selectionId = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
+const selectionHash = z.string().regex(/^[a-f0-9]{64}$/);
+const selectionCount = z.number().finite().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const selectionCoverage = z.array(z.string().trim().min(1).max(200)).max(200)
+    .refine(values => new Set(values).size === values.length, 'Покрытие содержит повторяющиеся условия.');
+export const selectionCandidateSchema = z.strictObject({
+    id: selectionId, contentHash: selectionHash,
+    quality: z.enum(['ready', 'needs_review', 'blocked']),
+    provenanceErrors: selectionCount, applicabilityErrors: selectionCount,
+    validity: z.enum(['valid', 'invalid', 'unknown']), duplicate: z.enum(['none', 'exact', 'unresolved']),
+    coverage: selectionCoverage, unmetConditions: selectionCount, reproducibleIssues: selectionCount,
+    instability: z.number().finite().min(0).max(1), targetFailures: selectionCount.optional(),
+});
+export const selectionHistorySchema = z.strictObject({ contentHash: selectionHash, coverage: selectionCoverage });
+export const generatorSelectionSchema = z.strictObject({
+    candidates: z.array(selectionCandidateSchema).max(200)
+        .refine(values => new Set(values.map(value => value.id)).size === values.length, 'Повтор идентификатора кандидата.'),
+    history: z.array(selectionHistorySchema).max(200)
+        .refine(values => new Set(values.map(value => value.contentHash)).size === values.length, 'Повтор идентичности в истории.'),
+});
+export type SelectionCandidate = z.infer<typeof selectionCandidateSchema>;
+export type SelectionHistory = z.infer<typeof selectionHistorySchema>;
+/** Unknown correctness or history is an input error, never evidence of zero errors. */
+export function selectNextVariants(rawCandidates: unknown, rawHistory: unknown) {
+    const parsed = generatorSelectionSchema.safeParse({ candidates: rawCandidates, history: rawHistory });
+    if (!parsed.success) throw new Error(`Неполные или некорректные данные отбора: ${parsed.error.issues.slice(0, 8).map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`);
+    const { candidates, history } = parsed.data;
+    const seen = new Set(history.map(h => h.contentHash)), covered = new Set(history.flatMap(h => h.coverage));
     const excluded: {
         id: string;
         reason: string;
@@ -211,8 +235,7 @@ export function selectNextVariants(candidates: SelectionCandidate[], history: {
             continue;
         }
         seen.add(c.contentHash);
-        const safe = (n: number) => Number.isFinite(n) ? Math.max(0, n) : 0;
-        const priority = [new Set(c.coverage.filter(x => !covered.has(x))).size, safe(c.unmetConditions), safe(c.reproducibleIssues), Math.min(1, safe(c.instability))];
+        const priority = [new Set(c.coverage.filter(x => !covered.has(x))).size, c.unmetConditions, c.reproducibleIssues, c.instability];
         selected.push({ id: c.id, priority, reason: 'Новое покрытие → незакрытое условие → воспроизводимость → нестабильность. Провал испытуемого не учитывается.' });
     }
     selected.sort((a, b) => { for (let i = 0; i < a.priority.length; i++) {
@@ -220,7 +243,7 @@ export function selectNextVariants(candidates: SelectionCandidate[], history: {
         if (delta)
             return delta;
     } return a.id.localeCompare(b.id); });
-    return { policy: 'generator-selection-v1', selected, excluded };
+    return { policy: 'generator-selection-v2', selected, excluded };
 }
 export async function optimizeGenerator(input: {
     corpus: GeneratorCorpus;

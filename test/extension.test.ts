@@ -1918,3 +1918,14 @@ test('generator tool inspection stays compact and read only while an existing wr
     assert.equal(result.id,'gen_inspect');assert.equal(result.dimensions.provenance.errors,1);assert.doesNotMatch(JSON.stringify(result),/RAW_OUTPUT_MUST_STAY_LOCAL/);
   }finally{await shutdown();await store.close();await rm(directory,{recursive:true,force:true});}
 });
+
+test('generator native selection validates mandatory counters and history instead of trusting tool arguments',async()=>{
+ const {tools,shutdown}=registered();const tool=tools.get('agent_lab_generator')!;
+ const ready={id:'candidate',contentHash:'a'.repeat(64),quality:'ready',provenanceErrors:0,applicabilityErrors:0,validity:'valid',duplicate:'none',coverage:['new'],unmetConditions:1,reproducibleIssues:0,instability:0};
+ try{
+  for(const [field,value] of [['provenanceErrors',undefined],['applicabilityErrors',null],['provenanceErrors',NaN],['applicabilityErrors',Infinity]] as const){
+   await assert.rejects(tool.execute('select',{operation:'select',candidates:[{...ready,[field]:value}],history:[]},undefined,undefined,{cwd:'.',hasUI:false} as ExtensionContext),new RegExp(field));
+  }
+  await assert.rejects(tool.execute('select',{operation:'select',candidates:[ready],history:null},undefined,undefined,{cwd:'.',hasUI:false} as ExtensionContext),/history/);
+ }finally{await shutdown();}
+});
