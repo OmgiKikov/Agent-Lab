@@ -101,9 +101,10 @@ export function decideIssueMerge(existing: Issue[], decision: IssueDecision): Is
   if (into.status === 'resolved' && recurrence) { into.status = 'reproduced'; into.history.push({ at: decision.at, status: 'reproduced', reason: 'При объединении обнаружена новая пригодная регрессия версии после закрытия.', evidenceIds: [recurrence.assessmentId] }); }
   into.evidence.push(...from.evidence.filter(e => !into.evidence.some(other => other.assessmentId === e.assessmentId)));
   // Older journals may already contain diagnostic evidence with no outer runKind.
-  // Keep those immutable assessments for inspection, never count them as independent executions.
+  // Keep those assessments for inspection without adding an occurrence or erasing an ordinary one.
   const diagnosticExecutions = new Set(into.evidence.filter(e => e.assessment.trial.diagnosticReceipt).map(e => e.executionId));
-  into.occurrences = [...new Set([...into.occurrences, ...from.occurrences])].filter(id => !diagnosticExecutions.has(id));
+  const ordinaryExecutions = new Set(into.evidence.filter(e => !e.assessment.trial.diagnosticReceipt).map(e => e.executionId));
+  into.occurrences = [...new Set([...into.occurrences, ...from.occurrences])].filter(id => !diagnosticExecutions.has(id) || ordinaryExecutions.has(id));
   into.businessScenarios = [...new Set([...into.businessScenarios, ...from.businessScenarios])];
   into.experiments = [...new Set([...into.experiments, ...from.experiments])];
   into.history.push({ at: decision.at, status: into.status, reason: `Решение владельца ${decision.id}: ${decision.reason}`, evidenceIds: from.evidence.map(e => e.assessmentId) });

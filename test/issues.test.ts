@@ -185,3 +185,40 @@ test('merging legacy embedded diagnostic evidence preserves it without independe
   assert.deepEqual(target.evidence.find(item => item.assessmentId === evidence.assessmentId), evidence);
   assert.equal(merged.find(issue => issue.id === validated.id)!.mergedInto, closed.id);
 });
+
+for (const ordinaryLocation of ['source', 'destination'] as const) {
+  test(`merge retains ordinary execution in ${ordinaryLocation} when a diagnostic reassessment shares its identity`, async () => {
+    const { resolutionTargetIdentity } = await import('../src/normalize.js');
+    const { decideIssueMerge, issueSchema } = await import('../src/issues.js');
+    const { fingerprint } = await import('../src/contracts.js');
+    const source = issueRecord(); delete source.failureModes;
+    const original = syncIssues(source, []).issues[0]!;
+    // Developer synthetic closure fixture; no owner verdict is claimed.
+    const closed = issueSchema.parse({ ...original, status: 'resolved', resolution: { policyId: 'fixture_policy', candidateIdentity: resolutionTargetIdentity(source), closedAt: '2026-09-21' } });
+    const late = structuredClone(source); late.id = 'ordinary_late'; late.reviewedAt = '2026-09-22'; late.updatedAt = '2026-09-22'; late.trials[0]!.id = 'ordinary_trial';
+    late.failureModes = [{ id: 'mode', name: 'Developer recurrence fixture', description: 'Another mechanism requiring explicit merge', trialIds: ['ordinary_trial'] }];
+    const incoming = syncIssues(experimentSchema.parse(late), []).issues[0]!;
+    const ordinary = structuredClone(incoming.evidence[0]!);
+    const diagnostic = structuredClone(ordinary);
+    diagnostic.runId = 'legacy_diagnostic_reassessment';
+    diagnostic.assessment.trial.diagnosticReceipt = { protocol: 'paired-intervention-v1', requestHash: 'a'.repeat(64), factorHash: 'b'.repeat(64), arm: 'intervention', appliedCount: 1 };
+    diagnostic.assessmentId = fingerprint({ runId: diagnostic.runId, criterionHash: diagnostic.criterionHash, assessment: diagnostic.assessment });
+    if (ordinaryLocation === 'destination') {
+      closed.evidence.push(ordinary); closed.occurrences.push(ordinary.executionId); closed.status = 'reproduced';
+      incoming.evidence = [diagnostic];
+    } else incoming.evidence.push(diagnostic);
+    const before = [closed, incoming].map(issue => issueSchema.parse(issue));
+    const untouched = structuredClone(before);
+    const decision = { id: 'developer_shared_execution_merge', fromIssueId: incoming.id, intoIssueId: closed.id, at: '2026-09-23', reason: 'Developer synthetic fixture: ordinary execution with legacy diagnostic reassessment' };
+    const merged = decideIssueMerge(before, decision);
+    const target = merged.find(issue => issue.id === closed.id)!;
+    assert.equal(target.status, 'reproduced');
+    assert.deepEqual(target.occurrences, [...original.occurrences, ordinary.executionId]);
+    assert.equal(target.evidence.filter(evidence => evidence.executionId === ordinary.executionId).length, 2);
+    assert.deepEqual(target.evidence.find(evidence => evidence.assessmentId === ordinary.assessmentId), ordinary);
+    assert.deepEqual(target.evidence.find(evidence => evidence.assessmentId === diagnostic.assessmentId), diagnostic);
+    assert.equal(merged.find(issue => issue.id === incoming.id)!.mergedInto, closed.id);
+    assert.deepEqual(before, untouched);
+    assert.deepEqual(decideIssueMerge(merged, decision), merged);
+  });
+}
