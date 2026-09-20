@@ -1,3 +1,5 @@
+import { prepareResolutionPolicy, verifyResolutionPolicy, resolutionDraftHash, evaluateResolution, applyResolution } from './resolution.js';
+import type { ResolutionPolicy } from './resolution-contracts.js';
 import { diagnosticFileSchema, verifyDiagnosticPlan, type DiagnosticFile, type DiagnosticPlan } from './diagnostics.js';
 import { atomicPrivateJson } from './issues.js';
 import { IssueFiles, syncIssues, decideIssueMerge, issueDecisionSchema, type Issue, type IssueDecision } from './issues.js';
@@ -76,6 +78,54 @@ export class ExperimentStore {
     await atomicPrivateJson(this.diagnosticPath(next.plan.id), next);
     const files = new IssueFiles(this.directory), current = await files.read(), issue = current.issues.find(i => i.id === next.plan.issueId);
     if (issue && !issue.experiments.includes(next.plan.id)) { issue.experiments.push(next.plan.id); if (!issue.hypotheses.includes(next.plan.intervention.hypothesis)) issue.hypotheses.push(next.plan.intervention.hypothesis); await files.write(current); }
+  }); }
+  async readResolution(id: string) {
+    const file = (await new IssueFiles(this.directory).read()).resolutions.find(f => f.policy.id === id);
+    if (!file) throw new Error('Политика закрытия не найдена.');
+    verifyResolutionPolicy(file.policy); return file;
+  }
+  declareResolution(policy: ResolutionPolicy): Promise<void> { return this.writeTransaction(async () => {
+    verifyResolutionPolicy(policy);
+    const files = new IssueFiles(this.directory), journal = await files.read();
+    const existing = journal.resolutions.find(f => f.policy.id === policy.id);
+    if (existing) { if (existing.policy.ruleHash !== policy.ruleHash) throw new Error('Политика неизменна; нужны свежие прогоны обеих версий.'); return; }
+    const issue = journal.issues.find(i => i.id === policy.issueId);
+    if (!issue) throw new Error('Проблема не найдена.');
+    const baseline = await this.get(policy.baselineRunId), candidate = await this.get(policy.candidateRunId);
+    const previous = journal.resolutions.filter(f => f.policy.issueId === issue.id);
+    if (previous.some(f => f.policy.baselineRunId === baseline.id || Date.parse(baseline.createdAt) <= Date.parse(f.policy.declaredAt))) throw new Error('Изменённая политика требует свежего сравнения ОБЕИХ версий, включая новую базу.');
+    const checked = prepareResolutionPolicy({issueId:policy.issueId,baselineRunId:policy.baselineRunId,candidateRunId:policy.candidateRunId,reproducerIds:policy.reproducerIds,regressionIds:policy.regressionIds,stability:policy.stability},issue,baseline,candidate);
+    if (checked.candidateDraftHash !== policy.candidateDraftHash || checked.baselineEvidenceHash !== policy.baselineEvidenceHash || checked.baselineIdentity !== policy.baselineIdentity || checked.candidateIdentity !== policy.candidateIdentity || JSON.stringify(checked.reproducer) !== JSON.stringify(policy.reproducer) || JSON.stringify(checked.regression) !== JSON.stringify(policy.regression)) throw new Error('Данные изменились до сохранения политики.');
+    // A caller-supplied timestamp never establishes predeclaration: this writer observation does.
+    journal.resolutions.push({policy}); issue.status = 'checking';
+    issue.history.push({at:new Date().toISOString(),status:'checking',reason:`До запуска сохранена неизменная политика ${policy.id}.`,evidenceIds:[]});
+    issue.experiments.push(policy.id); await files.write(journal);
+  }); }
+  /** Called from the normal start path, so CLI run cannot bypass an attached policy. */
+  beginResolutionForRun(record: Experiment): Promise<void> { return this.writeTransaction(async () => {
+    const files = new IssueFiles(this.directory), journal = await files.read();
+    const declared = journal.resolutions.filter(f => f.policy.candidateRunId === record.id);
+    for (const file of declared) {
+      verifyResolutionPolicy(file.policy);
+      if (file.startedAt || file.result || record.trials.length || record.phase !== 'review') throw new Error('Сравнение по политике уже запускалось.');
+      if (resolutionDraftHash(record) !== file.policy.candidateDraftHash) throw new Error('Кандидат, набор или протокол изменён после объявления политики.');
+      file.startedAt = new Date().toISOString();
+    }
+    if (declared.length) await files.write(journal);
+  }); }
+  finishResolution(id: string) { return this.writeTransaction(async () => {
+    const files = new IssueFiles(this.directory), journal = await files.read();
+    const file = journal.resolutions.find(f => f.policy.id === id);
+    if (!file) throw new Error('Сначала сохраните политику до исполнения.');
+    const index = journal.issues.findIndex(i => i.id === file.policy.issueId && !i.mergedInto);
+    if (index < 0) throw new Error('Исходная проблема объединена; подготовьте новое сравнение для действующей проблемы.');
+    if (file.result) return { ...file, issue: journal.issues[index]! };
+    if (!file.startedAt) throw new Error('Нет сохранённого запуска по предварительной политике.');
+    const before = await this.get(file.policy.baselineRunId), after = await this.get(file.policy.candidateRunId);
+    if (['preparing','review','evaluating','baseline','improving','control'].includes(after.phase)) throw new Error('Кандидат ещё выполняется или не завершён; решение остаётся ожидающим.');
+    const result = evaluateResolution(file.policy,before,after,{before,after});
+    file.result=result; file.completedAt=new Date().toISOString(); journal.issues[index]=applyResolution(journal.issues[index]!,file.policy,result,file.completedAt);
+    await files.write(journal); return {...file,issue:journal.issues[index]!};
   }); }
   async readIssues(): Promise<Issue[]> { return (await new IssueFiles(this.directory).read()).issues; }
   async readIssueJournal() { return new IssueFiles(this.directory).read(); }

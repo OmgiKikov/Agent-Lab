@@ -22,6 +22,8 @@ import { evidenceBundle, exportArtifacts, resolveVerified } from './artifacts.js
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
 import { libraryHash } from './scenario-library.js';
 import { libraryPatchSchema } from './scenario-contracts.js';
+import { resolutionRequestSchema } from './resolution.js';
+import { resolutionText } from './issue-view.js';
 import { diagnosticPreparationSchema } from './diagnostics.js';
 import { issueDecisionSchema } from './issues.js';
 import { semanticWorkStatus } from './scenario-work.js';
@@ -81,10 +83,30 @@ async function main() {
     process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab discover-resume --id RUN [--yes] [--json]\n  agent-lab discover-build --id RUN [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
     process.stdout.write('  agent-lab scenarios --id RUN --operation inspect [--json]\n  agent-lab scenarios --id RUN --operation edit|merge|split|variant|assess|accept --expected-hash HASH [--input action.json] [--yes]\n');
     process.stdout.write('  agent-lab issues --operation inspect|sync|merge|rebuild [--id RUN_OR_ISSUE] [--input decision.json]\n  agent-lab diagnostics --operation prepare --input request.json\n  agent-lab diagnostics --operation inspect|run --id PLAN [--yes]\n');
+    process.stdout.write('  agent-lab resolutions --operation bundle|candidate|prompt|prepare --input request.json\n  agent-lab resolutions --operation inspect|run|resolve --id POLICY [--yes] [--json]\n');
     process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID] · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
   const directory = values['data-dir'] ?? resolve('.agent-lab');
+  if (command === 'resolutions') {
+    const operation=values.operation ?? 'inspect',lab=new ExperimentLab(directory);
+    const input=values.input ? JSON.parse(await readFile(values.input,'utf8')) : {};
+    if (operation==='inspect') { if(!values.id) throw new Error('Укажите --id POLICY.'); const file=await lab.store.readResolution(values.id); await writeStdout(values.json?JSON.stringify(file,null,2)+'\n':resolutionText(file)+'\n'); return; }
+    if(operation==='bundle') { await writeStdout(JSON.stringify(await lab.createFixBundle(input.issueId,input.sourceRunId),null,2)+'\n'); return; }
+    if(operation==='run'&&!values.yes) throw new Error('Прочитайте неизменное правило и план; --yes разрешает запуск кандидата.');
+    await lab.init();
+    try {
+      let output:unknown;
+      if(operation==='candidate') output=await lab.registerCandidate(input.sourceRunId,input);
+      else if(operation==='prompt') output=await lab.proposeIssueFix(input.issueId,input.sourceRunId,input);
+      else if(operation==='prepare') output=await lab.prepareResolution(resolutionRequestSchema.parse(input));
+      else if(operation==='resolve'&&values.id) output=await lab.resolveIssue(values.id);
+      else if(operation==='run'&&values.id) { await lab.startResolution(values.id,{approved:true}); await lab.waitForIdle(); output=await lab.resolveIssue(values.id); }
+      else throw new Error('Укажите resolutions --operation bundle|candidate|prompt|prepare|inspect|run|resolve.');
+      await writeStdout(JSON.stringify(output,null,2)+'\n');
+    } finally { await lab.close(); }
+    return;
+  }
   if (command === 'issues' || command === 'diagnostics') {
     const operation = values.operation ?? 'inspect', lab = new ExperimentLab(directory);
     if (command === 'issues' && operation === 'inspect') {

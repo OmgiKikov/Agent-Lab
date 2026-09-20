@@ -509,7 +509,7 @@ function runCompleteness(record: Experiment, allowPartial = false): string[] {
       || trial.split !== scenario.split
       || measured(trial) && (trial.checks.length !== directChecks(scenario).length || new Set(trial.checks.map(c => c.id)).size !== directChecks(scenario).length
         || trial.checks.some(c => !directChecks(scenario).some(expected => expected.id === c.id)))
-      || trial.outcome === 'pass' && (!trial.checks.length || trial.checks.some(c => !c.passed))
+      || trial.outcome === 'pass' && (trial.checks.some(c => !c.passed) || !trial.checks.length && !scenario?.execution)
       || (record.manifestHash && trial.manifestHash !== record.manifestHash)) invalid = true;
     if (!measured(trial)) unmeasured = true;
     seen.add(key); ids.add(trial.id);
@@ -836,6 +836,7 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
       invalidBefore: before.trials.filter(t => !validBefore(t)).length, invalidAfter: after.trials.filter(t => !validAfter(t)).length },
   };
   const { notes } = result;
+  if (fingerprint(before.scenarios.map(s => [s.id,s.provenance])) !== fingerprint(after.scenarios.map(s => [s.id,s.provenance])) || before.librarySnapshot?.revision !== after.librarySnapshot?.revision) notes.push('Ревизия или состав принятого набора по происхождению изменились; нужна новая сопоставимая база.');
   const addIncomparable = (row: { scenarioId: string; userMode: UserMode; repeat: number }, reason: string, beforeTrialId?: string, afterTrialId?: string) => {
     const scenario = after.scenarios.find(s => s.id === row.scenarioId) ?? before.scenarios.find(s => s.id === row.scenarioId);
     if (!scenario || result.incomparable.some(item => item.scenarioId === row.scenarioId && item.userMode === row.userMode && item.repeat === row.repeat)) return;
@@ -844,7 +845,7 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   };
   const expectedRows = [...expectedAttemptRows(before), ...expectedAttemptRows(after)]
     .filter((row, index, rows) => rows.findIndex(value => value.scenarioId === row.scenarioId && value.userMode === row.userMode && value.repeat === row.repeat) === index);
-  if ([before, after].some(r => r.runKind === 'diagnostic' || r.runKind === 'generator')) notes.push('Служебный или диагностический прогон исключён из сравнения версий.');
+  if ([before, after].some(r => r.runKind === 'diagnostic' || r.runKind === 'generator' || r.trials.some(t => t.diagnosticReceipt))) notes.push('Служебный или диагностический прогон исключён из сравнения версий.');
   if (before.id === after.id) notes.push('Выбран один и тот же прогон.');
   if (before.workflow !== 'evaluate' || after.workflow !== 'evaluate') notes.push('Сравнение поддерживает отдельные оценочные прогоны.');
   if (before.mode !== after.mode) notes.push('Демо и живые прогоны несравнимы.');

@@ -35,9 +35,11 @@ export interface QualityCause {
 export interface QualityCardScore {
   passed: number; failed: number; unknown: number; invalid: number; notReached: number; total: number; accuracy: number | null;
 }
+export interface QualitySlice extends QualityCardScore { id: string; label: string; planned: number; measured: number }
 export interface QualitySummary {
   /** Primary business result over the counted (non-control) cards. Generated prompt/RAG runs use goal_attainment: the headline rule (goal and prompt rules); legacy runs fall back to all criteria. */
   cards: QualityCardScore;
+  slices: { revision: string; label: string; groups: QualitySlice[]; provenance: QualitySlice[] };
   /** Strict card result: every applicable code check and agent rubric must pass. */
   strict: QualityCardScore & { goalMetWithOtherFailures: number };
   primary: 'goal_attainment' | 'all_criteria';
@@ -590,6 +592,13 @@ export function qualitySummary(input: Experiment): QualitySummary {
     ? counted.map(scenario => ({ scenario, outcome: headlineCardOutcome(record, scenario).outcome })) : strictOutcomes;
   const countedRecord = { ...record, scenarios: counted };
   const cards = cardScore(countedRecord, cardOutcomes);
+  const slice = (id: string, rows: typeof cardOutcomes): QualitySlice => {
+    const score = cardScore({ ...countedRecord, scenarios: rows.map(r => r.scenario) }, rows);
+    return { id, label: ({production:'из логов',curated:'экспертные',synthetic:'синтетические'} as Record<string,string>)[id] ?? input.librarySnapshot?.businessScenarios.find(b=>b.id===id)?.title ?? rows[0]?.scenario.title ?? id, ...score, planned: rows.length, measured: score.passed + score.failed };
+  };
+  const slices = { revision: input.librarySnapshot ? String(input.librarySnapshot.revision) : fingerprint(counted), label: 'По принятому набору',
+    groups: [...new Set(counted.map(s => s.familyId))].map(id => slice(id, cardOutcomes.filter(r => r.scenario.familyId === id))),
+    provenance: ['production','curated','synthetic'].map(id => slice(id,cardOutcomes.filter(r => r.scenario.provenance === id))) };
   const strictBase = cardScore(countedRecord, strictOutcomes);
   const strict = { ...strictBase, goalMetWithOtherFailures: primary === 'goal_attainment'
     ? cardOutcomes.filter((item, index) => item.outcome === 'pass' && strictOutcomes[index]?.outcome !== 'pass').length : 0 };
@@ -649,7 +658,7 @@ export function qualitySummary(input: Experiment): QualitySummary {
     : `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)})${leftovers([[cards.unknown, `${cards.unknown} без решения`], [cards.invalid, `${cards.invalid} невалидны`], [cards.notReached, `${cards.notReached} не дошли`]]).map(part => `, ${part}`).join('')}; ${reviewText}.`;
   const exclusions = record.validationExclusions ?? [];
   const excluded = { total: exclusions.length, kinds: exclusionCounts(exclusions) };
-  return { cards, strict, primary, cardsLabel, metrics, rag, excluded, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
+  return { cards, slices, strict, primary, cardsLabel, metrics, rag, excluded, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
     human,
     scope: { cards: record.scenarios.length, dialogues: record.trials.length, modes: record.settings.userModes, provenance, target, ...(judgeModel ? { judgeModel } : {}) },
     cost: { usd: record.usage.costUsd, calls: record.usage.calls, elapsedMs: record.trials.reduce((n, t) => n + t.elapsedMs, 0) }, limits, headline };
@@ -672,7 +681,7 @@ export function qualityLines(q: QualitySummary): { headline: string; coverage: s
     judge: `Судья: ${q.judge.label}.`,
     queue: !q.humanQueue.total ? 'Ручная разметка не требуется: спорных диалогов нет.'
       : `Разметить человеку: ${q.humanQueue.total} (неясных ${q.humanQueue.unknownJudgments}, расхождений ${q.humanQueue.disagreements}, пометок симулятора ${q.humanQueue.simulatorFlags}). Попросите разобрать только спорный диалог в чате или откройте его на доске.`,
-    scope: `${cardsWord(q.scope.cards)} · ${dialogues(q.scope.dialogues)} · ${q.scope.modes.map(m => modeNames[m]).join(', ')} · ${q.scope.provenance} · версия ${q.scope.target}${q.scope.judgeModel ? ` · судья ${q.scope.judgeModel}` : ''} · ${q.cost.usd === null ? 'стоимость неизвестна' : `$${q.cost.usd.toFixed(2)}`} · ${Math.round(q.cost.elapsedMs / 60000)} мин`,
+    scope: `${q.slices.label} · ревизия ${q.slices.revision.slice(0,12)} · оценено ${q.cards.passed+q.cards.failed}/${q.cards.total}. ${q.slices.groups.slice(0,2).map(g=>`${g.label.slice(0,40)}: ${g.passed}/${g.measured}, план ${g.planned}`).join('; ')}${q.slices.groups.length>2?`; ещё групп: ${q.slices.groups.length-2} (полные срезы в отчёте)`:''}. Происхождение: ${q.slices.provenance.map(g=>`${g.label}: ${g.passed}/${g.measured}, план ${g.planned}`).join('; ')}. ${cardsWord(q.scope.cards)} · ${dialogues(q.scope.dialogues)} · ${q.scope.modes.map(m => modeNames[m]).join(', ')} · ${q.scope.provenance} · версия ${q.scope.target}${q.scope.judgeModel ? ` · судья ${q.scope.judgeModel}` : ''} · ${q.cost.usd === null ? 'стоимость неизвестна' : `$${q.cost.usd.toFixed(2)}`} · ${Math.round(q.cost.elapsedMs / 60000)} мин`,
     limits: q.limits,
   };
 }

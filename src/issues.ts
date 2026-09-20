@@ -1,3 +1,5 @@
+import { resolutionFileSchema } from './resolution-contracts.js';
+import { resolutionTargetIdentity } from './normalize.js';
 import { requiredCheckpointResult } from './checkpoints.js';
 import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,7 +12,7 @@ const id = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 export const issueEvidenceSchema = z.strictObject({
   runId: id, trialId: id, executionRunId: id, executionId: hash, eventSeq: z.array(z.number().int().nonnegative()), assessmentId: hash,
-  criterionId: z.string(), criterionHash: hash,
+  criterionId: z.string(), criterionHash: hash, targetIdentity: hash.optional(), executionCreatedAt: z.string().optional(),
   assessment: z.strictObject({ trial: trialSchema, scenario: scenarioSchema.extend({ split: z.enum(['dev', 'control']) }), humanReviews: z.array(humanReviewSchema), evaluatorVersion: z.string().optional() }),
 });
 export const issueSchema = z.strictObject({
@@ -21,6 +23,7 @@ export const issueSchema = z.strictObject({
   status: z.enum(['detected', 'reproduced', 'checking', 'resolved']),
   history: z.array(z.strictObject({ at: z.string(), status: z.enum(['detected', 'reproduced', 'checking', 'resolved']), reason: z.string(), evidenceIds: z.array(hash) })),
   mergedInto: id.optional(),
+  resolution: z.strictObject({ policyId: id, candidateIdentity: hash, closedAt: z.string() }).optional(),
 });
 export type Issue = z.infer<typeof issueSchema>;
 export type IssueEvidence = z.infer<typeof issueEvidenceSchema>;
@@ -67,7 +70,7 @@ export function syncIssues(record: Experiment, existing: Issue[]): { issues: Iss
       const executionId = fingerprint({ runId: executionRunId, trialId: trial.id });
       const assessment = { trial: structuredClone(trial), scenario: structuredClone(scenario), humanReviews: record.humanReviews.filter(r => r.trialId === trial.id), ...(record.evaluatorVersion ? { evaluatorVersion: record.evaluatorVersion } : {}) };
       const assessmentId = fingerprint({ runId: record.id, criterionHash, assessment });
-      const evidence: IssueEvidence = { runId: record.id, trialId: trial.id, executionRunId, executionId, eventSeq: criterion.events, assessmentId, criterionId: criterion.id, criterionHash, assessment };
+      const evidence: IssueEvidence = { runId: record.id, trialId: trial.id, executionRunId, executionId, eventSeq: criterion.events, assessmentId, criterionId: criterion.id, criterionHash, assessment, targetIdentity: resolutionTargetIdentity(record, trial.revisionId), executionCreatedAt: record.assessmentOf ? previousEvidence?.executionCreatedAt : record.reviewedAt ?? record.createdAt };
       if (!issue) {
         issue = { formatVersion: '1', id: issueId, kind: criterion.kind, observation: mode?.name ?? criterion.observation, identity, businessScenarios: [scenario.familyId], evidence: [], occurrences: [], hypotheses: [], experiments: [], status: 'detected', history: [{ at: record.updatedAt, status: 'detected', reason: 'Сохранено исходное наблюдение.', evidenceIds: [assessmentId] }] };
         for (const candidate of issues.filter(i => !i.mergedInto && i.kind === issue!.kind && i.identity.scenarioKey === identity.scenarioKey && i.identity.criterionHash === criterionHash && i.identity.mechanismHash !== identity.mechanismHash)) suggestions.push({ issueId, candidateId: candidate.id, reason: 'Критерий совпадает, механизм отличается. Объединение требует решения владельца.' });
@@ -76,7 +79,7 @@ export function syncIssues(record: Experiment, existing: Issue[]): { issues: Iss
       if (!issue.evidence.some(e => e.assessmentId === assessmentId)) issue.evidence.push(evidence);
       if (!issue.occurrences.includes(executionId)) {
         issue.occurrences.push(executionId);
-        if (issue.kind === 'defect' && (issue.occurrences.length > 1 && issue.status === 'detected' || issue.status === 'resolved')) {
+        if (issue.kind === 'defect' && (issue.occurrences.length > 1 && issue.status === 'detected' || issue.status === 'resolved' && eligibleRecurrence(issue, evidence))) {
           issue.status = 'reproduced'; issue.history.push({ at: record.updatedAt, status: issue.status, reason: 'Новая независимая пригодная попытка воспроизвела дефект.', evidenceIds: [assessmentId] });
         }
       }
@@ -85,11 +88,17 @@ export function syncIssues(record: Experiment, existing: Issue[]): { issues: Iss
   return { issues, suggestions };
 }
 
+function eligibleRecurrence(issue: Issue, evidence: IssueEvidence): boolean {
+  return !!issue.resolution && evidence.targetIdentity === issue.resolution.candidateIdentity && !!evidence.executionCreatedAt && Date.parse(evidence.executionCreatedAt) > Date.parse(issue.resolution.closedAt);
+}
+
 export function decideIssueMerge(existing: Issue[], decision: IssueDecision): Issue[] {
   const issues = structuredClone(existing), from = issues.find(i => i.id === decision.fromIssueId), into = issues.find(i => i.id === decision.intoIssueId);
   if (!from || !into || from.id === into.id || into.mergedInto || from.kind !== into.kind || from.identity.criterionHash !== into.identity.criterionHash) throw new Error('Объединение требует двух проблем одного вида и неизменного критерия.');
   if (from.mergedInto === into.id) return issues;
   if (from.mergedInto) throw new Error('Проблема уже связана с другой.');
+  const recurrence = from.evidence.find(e => !into.occurrences.includes(e.executionId) && eligibleRecurrence(into, e));
+  if (into.status === 'resolved' && recurrence) { into.status = 'reproduced'; into.history.push({ at: decision.at, status: 'reproduced', reason: 'При объединении обнаружена новая пригодная регрессия версии после закрытия.', evidenceIds: [recurrence.assessmentId] }); }
   into.evidence.push(...from.evidence.filter(e => !into.evidence.some(other => other.assessmentId === e.assessmentId)));
   into.occurrences = [...new Set([...into.occurrences, ...from.occurrences])];
   into.businessScenarios = [...new Set([...into.businessScenarios, ...from.businessScenarios])];
@@ -99,7 +108,7 @@ export function decideIssueMerge(existing: Issue[], decision: IssueDecision): Is
   return issues;
 }
 
-const journalSchema = z.strictObject({ formatVersion: z.literal('1'), issues: z.array(issueSchema), suggestions: z.array(z.strictObject({ issueId: id, candidateId: id, reason: z.string() })), decisions: z.array(issueDecisionSchema) });
+const journalSchema = z.strictObject({ formatVersion: z.literal('1'), issues: z.array(issueSchema), suggestions: z.array(z.strictObject({ issueId: id, candidateId: id, reason: z.string() })), decisions: z.array(issueDecisionSchema), resolutions: z.array(resolutionFileSchema).default([]) });
 export type IssueJournal = z.infer<typeof journalSchema>;
 /** File operations are called only inside ExperimentStore's writer transaction. Journal is authoritative, index expendable. */
 export class IssueFiles {
@@ -107,9 +116,9 @@ export class IssueFiles {
   async read(): Promise<IssueJournal> {
     const dir = join(this.directory, 'issues', 'journal');
     let names: string[];
-    try { names = (await readdir(dir)).filter(n => /^\d{12}\.json$/.test(n)).sort(); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { formatVersion: '1', issues: [], suggestions: [], decisions: [] }; throw error; }
+    try { names = (await readdir(dir)).filter(n => /^\d{12}\.json$/.test(n)).sort(); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { formatVersion: '1', issues: [], suggestions: [], decisions: [], resolutions: [] }; throw error; }
     const last = names.at(-1);
-    return last ? journalSchema.parse(JSON.parse(await readFile(join(dir, last), 'utf8'))) : { formatVersion: '1', issues: [], suggestions: [], decisions: [] };
+    return last ? journalSchema.parse(JSON.parse(await readFile(join(dir, last), 'utf8'))) : { formatVersion: '1', issues: [], suggestions: [], decisions: [], resolutions: [] };
   }
   async write(value: IssueJournal): Promise<void> {
     const validated = journalSchema.parse(value), dir = join(this.directory, 'issues'), journal = join(dir, 'journal');

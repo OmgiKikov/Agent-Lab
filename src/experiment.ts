@@ -1,3 +1,5 @@
+import { targetSchema } from './contracts.js';
+import { createFixBundle, prepareResolutionPolicy, type ResolutionRequest } from './resolution.js';
 import { prepareDiagnostic, runDiagnostic, verifyDiagnosticPlan, diagnosticRevision, type Intervention } from './diagnostics.js';
 import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
 import type { LibraryPatch, ScenarioLibrary } from './scenario-contracts.js';
@@ -920,6 +922,49 @@ export class ExperimentLab {
       return structuredClone(record);
     });
   }
+  async createFixBundle(issueId: string, sourceRunId: string) {
+    const issue = (await this.store.readIssues()).find(i => i.id === issueId && !i.mergedInto);
+    if (!issue) throw new Error('Проблема не найдена.');
+    return createFixBundle(issue, await this.get(sourceRunId));
+  }
+  async registerCandidate(sourceRunId: string, input: { target: Experiment['target']; targetVersion: string }) {
+    if (!input.targetVersion?.trim()) throw new Error('Укажите неизменную версию кандидата.');
+    return this.change(async () => {
+      const source = await this.get(sourceRunId);
+      if (source.workflow !== 'evaluate' || !source.reviewedAt || runningPhases.has(source.phase) || source.runKind === 'diagnostic' || source.runKind === 'generator') throw new Error('Нужен завершённый обычный исходный прогон.');
+      const ids = [...new Set(source.trials.map(t => t.revisionId))];
+      if (ids.length !== 1) throw new Error('Нужна одна точная версия исходного агента.');
+      const revision = source.revisions.find(r => r.id === ids[0]);
+      if (!revision) throw new Error('Исходная версия не найдена.');
+      const draft = freshDraft(source);
+      draft.revisions = [structuredClone(revision)]; draft.selectedRevisionId = revision.id;
+      draft.target = targetSchema.parse(input.target); draft.targetVersion = input.targetVersion;
+      await preflightTarget(draft.target); draft.targetFingerprint = await targetFingerprint(draft.target);
+      assertLibraryRun(draft); await this.store.save(draft); return structuredClone(draft);
+    });
+  }
+  async proposeIssueFix(issueId: string, sourceRunId: string, input: { candidate: string; hypothesis: string; trialIds: string[] }) {
+    const bundle = await this.createFixBundle(issueId,sourceRunId);
+    if (input.trialIds.some(id => !bundle.devTrials.some(t => t.id === id))) throw new Error('Выберите пригодные dev-доказательства этой проблемы.');
+    const { proposePrompt } = await import('./prompt-edit.js');
+    return proposePrompt(this.store.directory,await this.get(sourceRunId),input);
+  }
+  async promptCandidate(file: string, reviewHash: string) {
+    const { promptVersion } = await import('./prompt-edit.js'); return promptVersion(this,file,reviewHash);
+  }
+  async prepareResolution(request: ResolutionRequest) {
+    return this.change(async () => {
+      const issue = (await this.store.readIssues()).find(i => i.id === request.issueId && !i.mergedInto);
+      if (!issue) throw new Error('Проблема не найдена.');
+      const policy = prepareResolutionPolicy(request,issue,await this.get(request.baselineRunId),await this.get(request.candidateRunId));
+      await this.store.declareResolution(policy); return policy;
+    });
+  }
+  async startResolution(id: string, options: { approved: boolean }) {
+    const file = await this.store.readResolution(id), candidate = await this.get(file.policy.candidateRunId);
+    return this.start(candidate.id, { approved: options.approved, expectedHash: draftHash(candidate), reviewer: 'expectations' });
+  }
+  async resolveIssue(id: string) { return this.store.finishResolution(id); }
   async prepareDiagnostic(issueId: string, sourceRunId: string, intervention: Intervention, repeats: number) {
     return this.change(async () => {
       const issue = (await this.store.readIssues()).find(i => i.id === issueId && !i.mergedInto);
@@ -1193,6 +1238,7 @@ export class ExperimentLab {
       if (record.targetFingerprint && record.targetFingerprint !== await targetFingerprint(record.target)) {
         throw new Error('Код агента изменился после подготовки карточек. Обновите подключение в настройках и подтвердите новую версию.');
       }
+      await this.store.beginResolutionForRun(record);
       record.reviewedAt = new Date().toISOString();
       record.reviewMode = options.reviewer ?? 'human';
       if (record.reviewMode === 'automated') record.limitations.push('Generated scenario expectations were checked automatically, without human validation. Spot-check disputes; decisive automatic results remain usable as provisional evidence.');

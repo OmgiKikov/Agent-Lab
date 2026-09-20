@@ -1,10 +1,11 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { matchesKey, stripTerminalSequences, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import type { ExperimentLab } from '../dist/experiment.js';
 import { fingerprint, type Experiment } from '../dist/contracts.js';
 import { diagnosticCapability, type Intervention } from '../dist/diagnostics.js';
-import { diagnosticText, issueEvidenceText, trialText } from '../dist/issue-view.js';
+import { diagnosticText, issueEvidenceText, trialText, resolutionText, resolutionRunText } from '../dist/issue-view.js';
 const clean = (text: string) => stripTerminalSequences(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '');
 async function choose<T>(ctx: ExtensionContext, title: string, values: T[], label: (value: T) => string): Promise<T | undefined> {
   let offset = 0;
@@ -32,11 +33,73 @@ export async function showIssueWorkspace(ctx: ExtensionContext, record: Experime
   const issue = await choose(ctx, 'Постоянные проблемы', issues, i => `${i.observation} · ${i.kind === 'defect' ? 'дефект' : 'возможность'} · независимых попыток ${i.occurrences.length}`);
   if (!issue) return;
   while (true) {
-    const action = await ctx.ui.select(clean(issue.observation), ['Точная исходная оценка и трасса', 'Подготовить парную диагностику', 'Сохранённые диагностики', 'Объединить по решению владельца']);
+    const action = await ctx.ui.select(clean(issue.observation), ['Точная исходная оценка и трасса', 'Пакет исправления для билдера', 'Предложить исправление промпта', 'Зарегистрировать внешнего кандидата', 'Сохранить правило проверки исправления', 'Сохранённые проверки исправления', 'Подготовить парную диагностику', 'Сохранённые диагностики', 'Объединить по решению владельца']);
     if (!action) return;
     if (action === 'Точная исходная оценка и трасса') {
       const evidence = await choose(ctx, 'Выберите сохранённую оценку', issue.evidence, e => `${e.runId.slice(0, 8)} · ${e.trialId.slice(0, 8)} · ${e.assessmentId.slice(0, 12)}`);
       if (evidence) await showIssueText(ctx, `Оценка ${evidence.assessmentId}`, issueEvidenceText(evidence));
+    } else if (['Пакет исправления для билдера','Предложить исправление промпта','Зарегистрировать внешнего кандидата','Сохранить правило проверки исправления'].includes(action)) {
+      const sourceRuns=await Promise.all([...new Set(issue.evidence.map(e=>e.runId))].map(id=>reader.get(id)));
+      const sourceId=(await choose(ctx,'Исходный прогон',sourceRuns,r=>`${r.task} · ${r.targetVersion??'исходная версия'} · ${r.createdAt.slice(0,10)} · ${r.id.slice(0,8)}`))?.id; if(!sourceId) continue;
+      const source=await reader.get(sourceId);
+      if(action==='Пакет исправления для билдера') {
+        await showIssueText(ctx,'Dev-пакет для билдера',JSON.stringify(await reader.createFixBundle(issue.id,sourceId),null,2));
+      } else if(action==='Предложить исправление промпта') {
+        if(source.target.kind==='sandbox'||!source.target.promptFile) { await showIssueText(ctx,'Нужен промпт агента','Укажите promptFile в подключении внешнего агента с подтверждением promptHash.'); continue; }
+        const bundle=await reader.createFixBundle(issue.id,sourceId);
+        const proof=await choose(ctx,'Фактически подтверждённая человеком dev-ошибка',bundle.devTrials,t=>t.id); if(!proof) continue;
+        const hypothesis=await ctx.ui.editor('Гипотеза исправления',''); if(!hypothesis?.trim()) continue;
+        const candidate=await ctx.ui.editor('Отдельный кандидат промпта',await readFile(source.target.promptFile,'utf8')); if(!candidate?.trim()) continue;
+        try {
+          const lab=await writer(),proposal=await lab.proposeIssueFix(issue.id,sourceId,{candidate,hypothesis,trialIds:[proof.id]});
+          await showIssueText(ctx,'Изменение кандидата',proposal.diff);
+          if(await ctx.ui.confirm('Подготовить отдельную версию?', 'Промпт исходного агента сохранится. Затем нужно заранее сохранить правило проверки.')) { const draft=await lab.promptCandidate(proposal.file,proposal.reviewHash); await showIssueText(ctx,'Кандидат подготовлен',`Кандидат ${draft.id}. Выберите «Сохранить правило проверки исправления».`); }
+        } catch(error) { await showIssueText(ctx,'Предложение недоступно',(error as Error).message); }
+      } else if(action==='Зарегистрировать внешнего кандидата') {
+        const target=await ctx.ui.editor('Подключение отдельного кандидата (JSON)',JSON.stringify(source.target,null,2)); if(!target) continue;
+        const targetVersion=await ctx.ui.input('Неизменная версия кандидата (например, commit)'); if(!targetVersion?.trim()) continue;
+        const lab=await writer(),draft=await lab.registerCandidate(sourceId,{target:JSON.parse(target),targetVersion});
+        await showIssueText(ctx,'Кандидат подготовлен',`Кандидат ${draft.id}. Набор и оценщик сохранены. Выберите «Сохранить правило проверки исправления».`);
+      } else {
+        const candidate=await choose(ctx,'Неисполненный кандидат того же набора',(await reader.list()).filter(r=>r.phase==='review'&&r.parentRunId===sourceId&&!r.trials.length),r=>`${r.targetVersion??r.id} · ${r.id}`); if(!candidate) continue;
+        const defaults=[...new Set(issue.evidence.filter(e=>e.runId===sourceId).map(e=>e.assessment.scenario.id))];
+        const names=defaults.map(id=>source.scenarios.find(s=>s.id===id)?.title??id).join('; ');
+        const selection=await ctx.ui.select(`Воспроизводящие варианты: ${clean(names)}`,['Использовать варианты проблемы','Выбрать варианты']); if(!selection) continue;
+        let reproducerIds=[...defaults];
+        if(selection==='Выбрать варианты') {
+          const available=source.scenarios.filter(s=>!source.positiveControlScenarioIds?.includes(s.id));
+          while(true) {
+            const choice=await choose(ctx,'Воспроизводящий набор · отметьте варианты',[{id:'',title:'Готово'},...available],s=>s.id?`${reproducerIds.includes(s.id)?'✓ ':''}${s.title}`:s.title);
+            if(!choice) {reproducerIds=[];break;} if(!choice.id) break;
+            reproducerIds=reproducerIds.includes(choice.id)?reproducerIds.filter(id=>id!==choice.id):[...reproducerIds,choice.id];
+          }
+          if(!reproducerIds.length) continue;
+        }
+        const regressionIds=source.scenarios.filter(s=>!reproducerIds.includes(s.id)&&!source.positiveControlScenarioIds?.includes(s.id)).map(s=>s.id);
+        if(!await ctx.ui.confirm('Сохранить неизменное правило до запуска?',`${source.settings.repeats} повторов каждого варианта. Все обязательные критерии должны пройти.\nВоспроизведение: ${source.scenarios.filter(s=>reproducerIds.includes(s.id)).map(s=>s.title).join('; ')}\nОтдельные обязательные регрессии: ${source.scenarios.filter(s=>regressionIds.includes(s.id)).map(s=>s.title).join('; ')}\nИзменение правила потребует новых прогонов обеих версий.`)) continue;
+        const lab=await writer(),policy=await lab.prepareResolution({issueId:issue.id,baselineRunId:sourceId,candidateRunId:candidate.id,reproducerIds,regressionIds,stability:{kind:'all-pass',repeats:source.settings.repeats}});
+        await showIssueText(ctx,'Правило сохранено',resolutionText(await lab.store.readResolution(policy.id)));
+      }
+    } else if(action==='Сохранённые проверки исправления') {
+      const journal=await reader.store.readIssueJournal(),selected=await choose(ctx,'Проверки исправления',journal.resolutions.filter(f=>f.policy.issueId===issue.id),f=>`${f.policy.id} · ${f.result?.candidateAcceptable===true?'принят':f.result?'решение сохранено':'ожидает исполнения'}`); if(!selected) continue;
+      let file=selected;
+      while(true) {
+        const choice=await ctx.ui.select('Проверка исправления',['Правило и два решения','План и бюджет кандидата','Открыть кандидатный прогон',...(!file.result&&!file.startedAt?['Запустить по сохранённому правилу']:[]),...(!file.result&&file.startedAt?['Сохранить решение по результатам']:[])]); if(!choice) break;
+        if(choice==='Правило и два решения') await showIssueText(ctx,'Проверка исправления',resolutionText(file));
+        else if(choice==='План и бюджет кандидата') await showIssueText(ctx,'План кандидата',resolutionRunText(file,await reader.get(file.policy.candidateRunId)));
+        else if(choice==='Открыть кандидатный прогон') return file.policy.candidateRunId;
+        else {
+          const lab=await writer();
+          if(choice==='Запустить по сохранённому правилу') {
+            if(!await ctx.ui.confirm('Запустить кандидата?',resolutionRunText(file,await reader.get(file.policy.candidateRunId)))) continue;
+            const run=await lab.startResolution(file.policy.id,{approved:true}),cancel=()=>{void lab.cancel(run.id);};
+            ctx.signal?.addEventListener('abort',cancel,{once:true}); if(ctx.signal?.aborted) cancel();
+            try { await lab.waitForIdle(); } finally {ctx.signal?.removeEventListener('abort',cancel);}
+          }
+          await lab.resolveIssue(file.policy.id); file=await lab.store.readResolution(file.policy.id);
+          await showIssueText(ctx,'Два решения проверки',resolutionText(file));
+        }
+      }
     } else if (action === 'Объединить по решению владельца') {
       const candidate = await choose(ctx, 'Проблема с тем же критерием', all.filter(i => i.id !== issue.id && !i.mergedInto && i.kind === issue.kind && i.identity.criterionHash === issue.identity.criterionHash), i => `${i.observation} · ${i.identity.mechanism}`);
       if (!candidate) continue;
@@ -68,7 +131,7 @@ export async function showIssueWorkspace(ctx: ExtensionContext, record: Experime
         const lab = await writer(); planId = (await lab.prepareDiagnostic(issue.id, source.id, intervention, Number(repeats))).id;
       } else {
         const current = (await reader.store.readIssues()).find(i => i.id === issue.id)!;
-        planId = await choose(ctx, 'Сохранённые диагностики', current.experiments, id => id);
+        planId = await choose(ctx, 'Сохранённые диагностики', current.experiments.filter(id=>id.startsWith('diag_')), id => id);
       }
       if (!planId) continue;
       let file = await reader.store.readDiagnostic(planId);

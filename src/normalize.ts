@@ -70,3 +70,10 @@ export function scoreSettings(dialogueCount: number, supplied: Partial<Settings>
     userModes: ['scripted'],
   };
 }
+
+/** Exact target identity for scoped defect closure; never assume revision zero. */
+export function resolutionTargetIdentity(record: Experiment, revisionId = record.selectedRevisionId ?? record.revisions[0]?.id): string {
+  const revision = record.revisions.find(r => r.id === revisionId);
+  if (!revision) throw new Error('Не найдена точная версия агента.');
+  return fingerprint({ target: record.target, targetFingerprint: record.targetFingerprint, targetVersion: record.targetVersion, revision: revision.spec });
+}

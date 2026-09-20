@@ -54,3 +54,42 @@ export function diagnosticText(file: DiagnosticFile): string {
     ...(result?.pairs.map(p => `Попытка ${p.repeat + 1}: исходно ${verdictText(p.baseline)} → с вмешательством ${verdictText(p.intervention)}.\n  Диалоги: ${p.baselineTrialId ?? 'не выполнен'} → ${p.interventionTrialId ?? 'не выполнен'}`) ?? []),
     ...(result?.reasons ?? []), 'Диагностика не входит в общую точность, не доказывает единственную причину и не закрывает проблему.'].join('\n');
 }
+
+export function resolutionText(file: import('./resolution-contracts.js').ResolutionFile): string {
+  const { policy:p, result:r }=file;
+  const decision=(v:boolean|null|undefined)=>v===true?'да':v===false?'нет':'решение не принято';
+  return [`Правило проверки ${p.id}`,`Воспроизводящий набор: ${p.reproducer.ids.join(', ')} · ревизия ${p.reproducer.revision} · ${p.reproducer.repeats} повторов.`,
+    `Отдельный регрессионный набор: ${p.regression.ids.join(', ')} · ревизия ${p.regression.revision} · ${p.regression.repeats} повторов.`,
+    'Правило устойчивости: все обязательные критерии каждой запланированной попытки должны пройти; неопределённость или неполнота не дают закрыть дефект.',
+    `Исходный прогон: ${p.baselineRunId}. Кандидат: ${p.candidateRunId}.`,
+    `Исходный дефект больше не воспроизводится: ${decision(r?.defectNoLongerReproduced)}.`,
+    `Кандидат можно принять: ${decision(r?.candidateAcceptable)}.`,
+    ...(r?.reasons??[]),r?.scope??'Политика сохранена до исполнения. Изменение правила потребует новых прогонов обеих версий.'].join('\n');
+}
+
+export function resolutionRunText(file: import('./resolution-contracts.js').ResolutionFile, candidate: Experiment): string {
+  const attempts=candidate.scenarios.reduce((n,s)=>n+candidate.settings.userModes.filter(m=>m!=='scripted'||s.user.script!==undefined).length*candidate.settings.repeats,0);
+  const judge=candidate.settings.roles.judge??candidate.settings.judge??candidate.settings;
+  return [`Проверка исправления ${file.policy.id.slice(0,20)}.`, `Обязательные наборы: воспроизведение — ${file.policy.reproducer.ids.length}, регрессии — ${file.policy.regression.ids.length}.`, 'Устойчивость: все обязательные критерии каждой попытки должны пройти. Полное правило доступно в просмотре проверки.',`План кандидата: ${attempts} попыток · ${candidate.settings.repeats} повторов · режимы ${candidate.settings.userModes.join(', ')}.`,
+    `До ${candidate.settings.maxCalls} вызовов, ${Math.round(candidate.settings.maxDurationMs/1000)} секунд, ${candidate.settings.maxTurns} ходов.`,
+    candidate.mode==='demo'?'Учебный пример: без модели и оплаты.':`Модель: ${candidate.settings.provider}/${candidate.settings.model}. Судья: ${judge.provider}/${judge.model}. Стоимость заранее неизвестна; зависит от фактических вызовов.`,
+    ...candidate.scenarios.slice(0,3).map(s=>`${excerpt(s.title,80)}: ${excerpt(s.successCriteria??s.user.goal,140)}`),
+    ...(candidate.scenarios.length>3?[`Ещё ${candidate.scenarios.length-3} вариантов в неизменном принятом наборе; полные ожидания доступны в «Сценариях».`]:[]),
+    'Подтверждая запуск, вы подтверждаете эти ожидания. Это не человеческая проверка будущих оценок судьи.'].join('\n');
+}
+
+export function compactResolution(file: import('./resolution-contracts.js').ResolutionFile, options: PageInput = {}) {
+  const {policy,result}=file;
+  return {startedAt:file.startedAt,completedAt:file.completedAt,policy:{...policy,reproducerIds:page(policy.reproducerIds,options),regressionIds:page(policy.regressionIds,options),
+    reproducer:{...policy.reproducer,ids:page(policy.reproducer.ids,options)},regression:{...policy.regression,ids:page(policy.regression.ids,options)}},
+    ...(result?{result:{...result,reasons:page(result.reasons.map(r=>excerpt(r,500)),options),reproducer:page(result.reproducer,options),regression:page(result.regression,options),trialIds:page(result.trialIds,options)}}:{})};
+}
+export function compactFixBundle(bundle: ReturnType<typeof import('./resolution.js').createFixBundle>, options: PageInput & {trialId?:string} = {}) {
+  const trial=options.trialId?bundle.devTrials.find(t=>t.id===options.trialId):undefined;
+  if(options.trialId&&!trial) throw new Error('Dev-доказательство не найдено.');
+  return {format:bundle.format,issue:{...bundle.issue,observation:excerpt(bundle.issue.observation,500),hypotheses:page(bundle.issue.hypotheses.map(h=>excerpt(h,500)),options)},sourceRunId:bundle.sourceRunId,targetIdentity:bundle.targetIdentity,
+    devTrialCount:bundle.devTrials.length,controlTrials:[],devTrials:page(bundle.devTrials.map(t=>({id:t.id,scenarioId:t.scenarioId,outcome:t.outcome,eventCount:t.events.length})),options),
+    reproducer:page(bundle.reproducer.map(s=>({id:s.id,title:excerpt(s.title,200),expected:excerpt(s.successCriteria??s.user.goal,1000)})),options),instructions:bundle.instructions,
+    exportCommand:'agent-lab resolutions --operation bundle --input request.json --data-dir DATA_DIRECTORY',
+    ...(trial?{detail:trialDetail(trial,options)}:{})};
+}

@@ -1,4 +1,5 @@
-import { compactIssues, compactDiagnostic } from '../dist/issue-view.js';
+import { resolutionRequestSchema } from '../dist/resolution.js';
+import { compactIssues, compactDiagnostic, resolutionText, resolutionRunText, compactResolution, compactFixBundle } from '../dist/issue-view.js';
 import { showIssueWorkspace } from './issues.ts';
 import { diagnosticPreparationSchema } from '../dist/diagnostics.js';
 import { issueDecisionSchema } from '../dist/issues.js';
@@ -779,6 +780,38 @@ export default function agentLab(pi: ExtensionAPI) {
         const output = compactIssues(journal, params.operation === 'inspect' ? params : {});
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: {} };
       } finally { await close(); }
+    },
+  });
+  pi.registerTool({
+    ...toolDisplay, name: 'agent_lab_resolution', label: 'Проверка исправления',
+    description: 'Dev-пакет, отдельный кандидат, заранее сохранённое правило с воспроизводящим и регрессионным наборами и два раздельных решения. Промпт требует фактически подтверждённых человеком dev-ошибок.',
+    parameters: Type.Object({ operation: Type.Union(['bundle','candidate','prompt','prepare','inspect','run','resolve'].map(v=>Type.Literal(v))), id: Type.Optional(Type.String()), input: Type.Optional(Type.Any()), offset:Type.Optional(Type.Number({minimum:0})), limit:Type.Optional(Type.Number({minimum:1,maximum:20})), trialId:Type.Optional(Type.String()) }, {additionalProperties:false}),
+    executionMode: 'sequential',
+    async execute(_callId,params,signal,_onUpdate,ctx) {
+      signal?.throwIfAborted(); const {lab,close}=open(ctx.cwd);
+      try {
+        const input=params.input ?? {}; let output:unknown;
+        if(params.operation==='inspect') { if(!params.id) throw new Error('Укажите политику.'); const file=await lab.store.readResolution(params.id); output=compactResolution(file,params); }
+        else if(params.operation==='bundle') output=compactFixBundle(await lab.createFixBundle(input.issueId,input.sourceRunId),params);
+        else {
+          if(params.operation==='run') {
+            if(!params.id) throw new Error('Укажите политику.');
+            if(!ctx.hasUI||ctx.mode!=='tui') throw new Error('Запуск требует подтверждения в терминале; CLI resolutions --operation run --id POLICY --yes.');
+            if(!await ctx.ui.confirm('Запустить проверку исправления?',safeText(resolutionRunText(await lab.store.readResolution(params.id),await lab.get((await lab.store.readResolution(params.id)).policy.candidateRunId))))) return {content:[{type:'text',text:JSON.stringify({cancelled:true})}],details:{cancelled:true}};
+          }
+          await lab.init();
+          if(params.operation==='candidate') { const draft=await lab.registerCandidate(input.sourceRunId,input); output={id:draft.id,sourceRunId:draft.parentRunId,phase:draft.phase,targetVersion:draft.targetVersion,scenarioCount:draft.scenarios.length,repeats:draft.settings.repeats,plannedTrials:plannedTrials(draft)}; }
+          else if(params.operation==='prompt') output=await lab.proposeIssueFix(input.issueId,input.sourceRunId,input);
+          else if(params.operation==='prepare') { const policy=await lab.prepareResolution(resolutionRequestSchema.parse(input)); output=compactResolution({policy},params); }
+          else if(params.operation==='resolve'&&params.id) { const {issue,...file}=await lab.resolveIssue(params.id); output={...compactResolution(file,params),issue:{id:issue.id,status:issue.status}}; }
+          else if(params.operation==='run'&&params.id) {
+            const run=await lab.startResolution(params.id,{approved:true}),cancel=()=>{void lab.cancel(run.id);}; signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted) cancel();
+            try {await lab.waitForIdle();} finally {signal?.removeEventListener('abort',cancel);}
+            const file=await lab.resolveIssue(params.id); output=compactResolution(file,params);
+          } else throw new Error('Укажите действие и ID политики.');
+        }
+        return {content:[{type:'text',text:JSON.stringify(output,null,2)}],details:{}};
+      } finally {await close();}
     },
   });
   pi.registerTool({
