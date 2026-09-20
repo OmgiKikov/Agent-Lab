@@ -39,7 +39,7 @@ export function syncIssues(record: Experiment, existing: Issue[]): { issues: Iss
   const observed = observedRecord(record);
   for (const trial of observed.trials) {
     const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-    if (!scenario || !measurementUsable(scenario, trial, record.humanReviews) || record.positiveControlScenarioIds?.includes(scenario.id)) continue;
+    if (trial.diagnosticReceipt || !scenario || !measurementUsable(scenario, trial, record.humanReviews) || record.positiveControlScenarioIds?.includes(scenario.id)) continue;
     const criteria: { id: string; definition: unknown; kind: Issue['kind']; events: number[]; observation: string }[] = [];
     if (scenario.execution) for (const cp of trial.checkpoints ?? []) {
       if (cp.result !== 'fail' || cp.role === 'diagnostic' && (requiredCheckpointResult(scenario, trial) !== 'pass' || trial.outcome === 'fail')) continue;
@@ -89,7 +89,7 @@ export function syncIssues(record: Experiment, existing: Issue[]): { issues: Iss
 }
 
 function eligibleRecurrence(issue: Issue, evidence: IssueEvidence): boolean {
-  return !!issue.resolution && evidence.targetIdentity === issue.resolution.candidateIdentity && !!evidence.executionCreatedAt && Date.parse(evidence.executionCreatedAt) > Date.parse(issue.resolution.closedAt);
+  return !evidence.assessment.trial.diagnosticReceipt && !!issue.resolution && evidence.targetIdentity === issue.resolution.candidateIdentity && !!evidence.executionCreatedAt && Date.parse(evidence.executionCreatedAt) > Date.parse(issue.resolution.closedAt);
 }
 
 export function decideIssueMerge(existing: Issue[], decision: IssueDecision): Issue[] {
@@ -100,7 +100,10 @@ export function decideIssueMerge(existing: Issue[], decision: IssueDecision): Is
   const recurrence = from.evidence.find(e => !into.occurrences.includes(e.executionId) && eligibleRecurrence(into, e));
   if (into.status === 'resolved' && recurrence) { into.status = 'reproduced'; into.history.push({ at: decision.at, status: 'reproduced', reason: 'При объединении обнаружена новая пригодная регрессия версии после закрытия.', evidenceIds: [recurrence.assessmentId] }); }
   into.evidence.push(...from.evidence.filter(e => !into.evidence.some(other => other.assessmentId === e.assessmentId)));
-  into.occurrences = [...new Set([...into.occurrences, ...from.occurrences])];
+  // Older journals may already contain diagnostic evidence with no outer runKind.
+  // Keep those immutable assessments for inspection, never count them as independent executions.
+  const diagnosticExecutions = new Set(into.evidence.filter(e => e.assessment.trial.diagnosticReceipt).map(e => e.executionId));
+  into.occurrences = [...new Set([...into.occurrences, ...from.occurrences])].filter(id => !diagnosticExecutions.has(id));
   into.businessScenarios = [...new Set([...into.businessScenarios, ...from.businessScenarios])];
   into.experiments = [...new Set([...into.experiments, ...from.experiments])];
   into.history.push({ at: decision.at, status: into.status, reason: `Решение владельца ${decision.id}: ${decision.reason}`, evidenceIds: from.evidence.map(e => e.assessmentId) });

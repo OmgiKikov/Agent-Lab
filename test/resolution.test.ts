@@ -201,3 +201,31 @@ test('large group composition stays complete in data but bounded and readable in
  const q=qualitySummary(r),scope=qualityLines(q).scope;
  assert.equal(q.slices.groups.length,200);assert.ok(scope.length<1000,`Scope length ${scope.length}`);assert.doesNotMatch(scope,/internal_group_|production|curated|synthetic/);assert.match(scope,/Бизнес-ситуация/);
 });
+
+test('required dev defect remains exportable when headline goal passes and reaches the human prompt boundary', async t => {
+  const { ExperimentLab } = await import('../src/experiment.js');
+  const { createDemoRuntime } = await import('../src/demo.js');
+  const { cardOutcome } = await import('../src/comparison.js');
+  const dir = await mkdtemp(join(tmpdir(), 'required-defect-bundle-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const lab = new ExperimentLab(dir, createDemoRuntime()); await lab.init(); t.after(() => lab.close());
+  const source = issueRecord();
+  source.target = { kind: 'http', url: 'http://localhost:8000', headersEnv: {}, timeoutMs: 60000, promptFile: join(dir, 'original.md') };
+  source.scenarios[0]!.metrics = [{ id: 'goal_attainment', name: 'Цель', description: 'Developer synthetic fixture: goal succeeds despite required state failure', subject: 'agent', passCriteria: 'Запрос выполнен', failCriteria: 'Запрос не выполнен' }];
+  source.trials[0]!.assessments = [{ metricId: 'goal_attainment', result: 'pass', rationale: 'Developer synthetic fixture', evidence: [1] }];
+  const record = experimentSchema.parse(source);
+  await lab.store.save(record); await lab.store.syncIssues(record);
+  const issue = (await lab.store.readIssues())[0]!;
+  assert.equal(issue.identity.criterionId, 'done');
+  assert.equal(headlineCardOutcome(record, record.scenarios[0]!).outcome, 'pass');
+  assert.equal(cardOutcome(record, record.scenarios[0]!), 'fail');
+  const bundle = await lab.createFixBundle(issue.id, record.id);
+  assert.deepEqual(bundle.devTrials.map(trial => trial.id), [record.trials[0]!.id]);
+  assert.deepEqual(bundle.controlTrials, []);
+  await assert.rejects(lab.proposeIssueFix(issue.id, record.id, { candidate: 'Repair required state update', hypothesis: 'Retry the required operation', trialIds: [record.trials[0]!.id] }), /подтверждённые человеком/);
+  assert.deepEqual((await lab.get(record.id)).humanReviews, []);
+  const replaced = structuredClone(record); replaced.trials[0]!.events[1]!.text = 'Different execution';
+  assert.throws(() => resolution.createFixBundle(issue, replaced), /доказательств/);
+  const incomplete = structuredClone(record); incomplete.settings.repeats = 2;
+  assert.throws(() => resolution.createFixBundle(issue, incomplete), /полные пригодные/);
+});

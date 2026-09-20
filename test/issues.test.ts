@@ -138,3 +138,50 @@ test('analysis budget exhaustion preserves completed target measurements and rec
   const result = await lab.get(run.id); assert.equal(result.phase, 'results_review'); assert.equal(result.trials.length, 1); assert.equal(result.error, null); assert.equal(result.usage.calls, 5);
   assert.match(result.limitations.join(' '), /назвать типы провалов/); assert.equal((await lab.store.readIssues()).length, 1);
 });
+
+test('diagnostic receipts without runKind cannot add independent occurrences or reopen through sync and rebuild', async t => {
+  const { resolutionTargetIdentity } = await import('../src/normalize.js');
+  const { IssueFiles, issueSchema } = await import('../src/issues.js');
+  const source = issueRecord(); delete source.failureModes;
+  const original = syncIssues(source, []).issues[0]!;
+  const closed = issueSchema.parse({ ...original, status: 'resolved', resolution: { policyId: 'fixture_policy', candidateIdentity: resolutionTargetIdentity(source), closedAt: '2026-09-21' } });
+  const dir = await mkdtemp(join(tmpdir(), 'diagnostic-recurrence-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new ExperimentStore(dir); await store.init(); t.after(() => store.close());
+  await store.save(source);
+  // Explicit developer fixture for a previously persisted closure; no owner verdict is claimed.
+  await new IssueFiles(dir).write({ formatVersion: '1', issues: [closed], decisions: [], suggestions: [], resolutions: [] });
+  for (const arm of ['baseline', 'intervention'] as const) {
+    const late = structuredClone(source); late.id = `diagnostic_${arm}`; late.reviewedAt = '2026-09-22'; late.updatedAt = '2026-09-22'; late.trials[0]!.id = `diagnostic_trial_${arm}`;
+    late.trials[0]!.diagnosticReceipt = { protocol: 'paired-intervention-v1', requestHash: 'a'.repeat(64), factorHash: 'b'.repeat(64), arm, appliedCount: arm === 'baseline' ? 0 : 1 };
+    const record = experimentSchema.parse(late); assert.equal(record.runKind, undefined);
+    const indexed = syncIssues(record, [closed]).issues[0]!;
+    assert.equal(indexed.status, 'resolved'); assert.deepEqual(indexed.occurrences, closed.occurrences);
+    assert.equal(syncIssues(record, []).issues.length, 0);
+    await store.save(record);
+  }
+  const rebuilt = (await store.rebuildIssues())[0]!;
+  assert.equal(rebuilt.status, 'resolved'); assert.deepEqual(rebuilt.occurrences, closed.occurrences);
+  assert.equal((await store.get('diagnostic_intervention')).trials[0]!.diagnosticReceipt?.appliedCount, 1);
+});
+
+test('merging legacy embedded diagnostic evidence preserves it without independent recurrence or reopening', async () => {
+  const { resolutionTargetIdentity } = await import('../src/normalize.js');
+  const { decideIssueMerge, issueSchema } = await import('../src/issues.js');
+  const { fingerprint } = await import('../src/contracts.js');
+  const source = issueRecord(); delete source.failureModes;
+  const original = syncIssues(source, []).issues[0]!;
+  const closed = issueSchema.parse({ ...original, status: 'resolved', resolution: { policyId: 'fixture_policy', candidateIdentity: resolutionTargetIdentity(source), closedAt: '2026-09-21' } });
+  const late = structuredClone(source); late.id = 'legacy_diagnostic'; late.reviewedAt = '2026-09-22'; late.updatedAt = '2026-09-22'; late.trials[0]!.id = 'legacy_trial';
+  late.failureModes = [{ id: 'mode', name: 'Developer diagnostic fixture', description: 'Previously indexed diagnostic mechanism', trialIds: ['legacy_trial'] }];
+  const legacy = syncIssues(experimentSchema.parse(late), []).issues[0]!;
+  const evidence = legacy.evidence[0]!;
+  evidence.assessment.trial.diagnosticReceipt = { protocol: 'paired-intervention-v1', requestHash: 'a'.repeat(64), factorHash: 'b'.repeat(64), arm: 'intervention', appliedCount: 1 };
+  evidence.assessmentId = fingerprint({ runId: evidence.runId, criterionHash: evidence.criterionHash, assessment: evidence.assessment });
+  const validated = issueSchema.parse(legacy);
+  const merged = decideIssueMerge([closed, validated], { id: 'developer_fixture_merge', fromIssueId: validated.id, intoIssueId: closed.id, at: '2026-09-23', reason: 'Developer synthetic fixture: same criterion; diagnostic evidence must remain diagnostic' });
+  const target = merged.find(issue => issue.id === closed.id)!;
+  assert.equal(target.status, 'resolved'); assert.deepEqual(target.occurrences, closed.occurrences);
+  assert.deepEqual(target.evidence.find(item => item.assessmentId === evidence.assessmentId), evidence);
+  assert.equal(merged.find(issue => issue.id === validated.id)!.mergedInto, closed.id);
+});

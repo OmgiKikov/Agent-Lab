@@ -4,7 +4,7 @@ import type { Issue } from './issues.js';
 import { resolutionRequestSchema, resolutionPolicySchema, type ResolutionRequest, type ResolutionPolicy, type ResolutionResult } from './resolution-contracts.js';
 import { resolutionTargetIdentity } from './normalize.js';
 import { libraryHash } from './scenario-library.js';
-import { cardOutcome, compareRuns, headlineCardOutcome } from './comparison.js';
+import { cardOutcome, compareRuns } from './comparison.js';
 import { measurementUsable, trialAssessmentComplete } from './outcomes.js';
 export { resolutionRequestSchema, type ResolutionRequest, type ResolutionPolicy, type ResolutionResult } from './resolution-contracts.js';
 
@@ -97,10 +97,27 @@ export function applyResolution(issue:Issue,policy:ResolutionPolicy,result:Resol
 }
 /** Allowlisted dev fields only: never embed Experiment/library/import or unrelated review objects. */
 export function createFixBundle(issue:Issue,record:Experiment) {
-  if(!ordinary(record)) throw new Error('Пакет исправления доступен только для обычного dev-прогона.');
-  const ids=new Set(issue.evidence.filter(e=>e.runId===record.id&&e.assessment.scenario.split==='dev').map(e=>e.trialId));
-  const scenarios=record.scenarios.filter(s=>s.split==='dev'&&!record.positiveControlScenarioIds?.includes(s.id)&&record.trials.some(t=>ids.has(t.id)&&t.scenarioId===s.id)&&headlineCardOutcome(record,s).outcome==='fail');
-  const devTrials=record.trials.filter(t=>ids.has(t.id)&&scenarios.some(s=>s.id===t.scenarioId)&&measurementUsable(scenarios.find(s=>s.id===t.scenarioId),t,record.humanReviews)&&trialAssessmentComplete(scenarios.find(s=>s.id===t.scenarioId)!,t,record.humanReviews));
-  if(!devTrials.length) throw new Error('Нужны полные пригодные dev-доказательства этой проблемы.');
+  if (!ordinary(record) || issue.kind !== 'defect') throw new Error('Пакет исправления доступен только для обычного dev-дефекта.');
+  const proofs = issue.evidence.filter(evidence => {
+    if (evidence.runId !== record.id || evidence.assessment.scenario.split !== 'dev') return false;
+    const trial = record.trials.find(t => t.id === evidence.trialId);
+    const scenario = record.scenarios.find(s => s.id === evidence.assessment.scenario.id);
+    return trial !== undefined && scenario !== undefined
+      && fingerprint(trial) === fingerprint(evidence.assessment.trial)
+      && fingerprint(scenario) === fingerprint(evidence.assessment.scenario)
+      && record.evaluatorVersion === evidence.assessment.evaluatorVersion;
+  });
+  const ids = new Set(proofs.map(evidence => evidence.trialId));
+  const scenarios = record.scenarios.filter(scenario => {
+    if (scenario.split !== 'dev' || record.positiveControlScenarioIds?.includes(scenario.id)) return false;
+    const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
+    // The issue names a required failure; success of the narrower headline cannot hide it.
+    return trials.some(trial => ids.has(trial.id)) && cardOutcome(record, scenario) === 'fail'
+      && trials.every(trial => checkpointReceiptValid(scenario, trial)
+        && measurementUsable(scenario, trial, record.humanReviews)
+        && trialAssessmentComplete(scenario, trial, record.humanReviews));
+  });
+  const devTrials = record.trials.filter(trial => ids.has(trial.id) && scenarios.some(scenario => scenario.id === trial.scenarioId));
+  if (!devTrials.length) throw new Error('Нужны полные пригодные dev-доказательства этой проблемы.');
   return {format:'agent-lab-fix-1',issue:{id:issue.id,observation:issue.observation,hypotheses:issue.hypotheses},sourceRunId:record.id,targetIdentity:resolutionTargetIdentity(record,revisionId(record)),reproducer:structuredClone(scenarios),devTrials:structuredClone(devTrials),controlTrials:[],instructions:['Измените только агента; тесты, контрольные ответы и судья недоступны для изменения.','Перед сравнением сохраните ResolutionPolicy с повторными попытками и отдельным регрессионным набором.','Зарегистрируйте отдельный target и targetVersion; Lab повторит тот же снимок.','Для prompt-propose нужны фактические подтверждённые человеком ошибки dev. Применение к исходному агенту решает владелец.']};
 }
