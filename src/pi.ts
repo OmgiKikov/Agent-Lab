@@ -1,4 +1,4 @@
-import { checkpointDecisionSchema } from './checkpoints.js';
+import { checkpointResponseSchema } from './checkpoints.js';
 import { CHECKPOINT_ROLE } from './prompts.js';
 import { userDecisionSchema } from './user-controller.js';
 import { USER_CONTROLLER_ROLE } from './prompts.js';
@@ -757,7 +757,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       );
     },
     async assessCheckpoints(input, ctx) {
-      return (await ask('Контрольные точки', CHECKPOINT_ROLE, input, z.strictObject({ results: z.array(checkpointDecisionSchema).max(12) }), ctx)).results;
+      return (await ask('Контрольные точки', CHECKPOINT_ROLE, input, checkpointResponseSchema(input.checkpoints.map(item => item.checkpoint)), ctx)).results;
     },
     async selectUserAction(input, ctx) {
       return ask('Действие пользователя', USER_CONTROLLER_ROLE, input, userDecisionSchema, ctx);

@@ -12,7 +12,8 @@ export const checkpointDecisionSchema = z.strictObject({
 export const checkpointResultSchema = checkpointDecisionSchema.extend({ requirementId: z.string(), role: z.enum(['required', 'diagnostic']), observation: z.enum(['reply', 'tool', 'state']), contextEvidence: z.array(z.number().int().nonnegative()).max(30).optional() });
 export type CheckpointDecision = z.infer<typeof checkpointDecisionSchema>;
 export type CheckpointResult = z.infer<typeof checkpointResultSchema>;
-export const checkpointReceiptSchema = z.strictObject({ protocolHash: z.string(), inputHash: z.string(), resultHash: z.string(), decisionHash: z.string(), decisions: z.array(checkpointDecisionSchema).max(12) });
+export const checkpointRawDecisionsSchema = z.array(z.json()).max(48).refine(values => JSON.stringify(values).length <= 128000, 'Checkpoint response exceeds 128000 characters');
+export const checkpointReceiptSchema = z.strictObject({ protocolHash: z.string(), inputHash: z.string(), resultHash: z.string(), decisionHash: z.string(), decisions: checkpointRawDecisionsSchema });
 
 
 export const VERSION = '6';
@@ -993,7 +994,7 @@ export interface ScenarioAssessmentInput {
   })[];
 }
 export interface Runtime {
-  assessCheckpoints?(input: CheckpointInput, ctx: CallContext): Promise<CheckpointDecision[]>;
+  assessCheckpoints?(input: CheckpointInput, ctx: CallContext): Promise<unknown[]>;
   selectUserAction?(input: { user: UserView; state: string; actions: AllowedUserAction[]; messages: DialogueMessage[]; turn: number; repair?: string }, ctx: CallContext): Promise<UserDecision>;
   scenarioProposals?(input: ScenarioProposalsInput, ctx: CallContext): Promise<ScenarioProposal[]>;
   assessScenarioProposals?(input: ScenarioAssessmentInput, ctx: CallContext): Promise<SemanticFinding[]>;

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { checkpointDecisionSchema, type CheckpointDecision, type CheckpointResult, checkSchema, fingerprint, type CheckResult, type Scenario, type Trial, type TraceEvent } from './contracts.js';
+import { checkpointDecisionSchema, checkpointRawDecisionsSchema, type CheckpointResult, checkSchema, fingerprint, type CheckResult, type Scenario, type Trial, type TraceEvent } from './contracts.js';
 import type { Checkpoint } from './scenario-contracts.js';
 
 export const CHECKPOINT_PROTOCOL = 'checkpoints-v1';
@@ -30,12 +30,27 @@ export function checkpointInput(scenario: Scenario, trial: Trial) {
 }
 export type CheckpointInput = ReturnType<typeof checkpointInput>;
 
+export function checkpointResponseSchema(checkpoints: Checkpoint[]) {
+  const diagnosticIds = checkpoints.filter(cp => cp.role === 'diagnostic').map(cp => cp.id);
+  const candidate = diagnosticIds.length ? z.union([checkpointDecisionSchema,
+    z.object({ checkpointId: z.enum(diagnosticIds) }).catchall(z.json()),
+  ]) : checkpointDecisionSchema;
+  return z.strictObject({ results: z.array(candidate).max(48) })
+    .refine(value => JSON.stringify(value.results).length <= 128000, 'Checkpoint response exceeds 128000 characters');
+}
+
+
 export function evaluateCheckpoints(scenario: Scenario, trial: Trial, raw: unknown, grade: (scenario: Scenario, trial: Trial) => CheckResult[]): CheckpointResult[] {
-  const decisions = z.array(checkpointDecisionSchema).max(12).parse(raw);
+  const decisions = checkpointRawDecisionsSchema.parse(raw);
   const view = scenario.execution!.evaluatorView;
-  if (view.checkpoints.some(c => c.role === 'required' && !decisions.some(d => d.checkpointId === c.id)) || new Set(decisions.map(d => d.checkpointId)).size !== decisions.length || decisions.some(d => !view.checkpoints.some(c => c.id === d.checkpointId))) throw new Error('Нужен один результат для каждой контрольной точки');
+  const idOf = (decision: typeof decisions[number]) => decision && typeof decision === 'object' && !Array.isArray(decision) ? decision.checkpointId : undefined;
+  if (decisions.some(d => !view.checkpoints.some(cp => cp.id === idOf(d)))) throw new Error('Неизвестная контрольная точка');
   return view.checkpoints.map(cp => {
-    const d = decisions.find(d => d.checkpointId === cp.id) ?? { checkpointId: cp.id, result: 'unknown' as const, evidence: [], rationale: 'Диагностическая точка не оценена' };
+    const candidates = decisions.filter(d => idOf(d) === cp.id);
+    const parsed = candidates.length === 1 ? checkpointDecisionSchema.safeParse(candidates[0]) : undefined;
+    if (cp.role === 'required' && !parsed?.success) throw new Error('Нужен один корректный результат для каждой обязательной контрольной точки');
+    const d = parsed?.success ? parsed.data : { checkpointId: cp.id, result: 'unknown' as const, evidence: [],
+      rationale: candidates.length === 0 ? 'Диагностическая точка не оценена' : candidates.length > 1 ? 'Повторный результат диагностической точки' : 'Некорректный результат диагностической точки' };
     const base: CheckpointResult = { ...d, requirementId: cp.requirementId, role: cp.role, observation: cp.observation };
     const unknown = (reason: string): CheckpointResult => ({ ...base, result: 'unknown', evidence: [], rationale: reason });
     const requirement = view.requirements.find(r => r.id === cp.requirementId);
@@ -71,8 +86,11 @@ export function evaluateCheckpoints(scenario: Scenario, trial: Trial, raw: unkno
     return base;
   });
 }
-export function checkpointReceipt(scenario: Scenario, trial: Trial, results: CheckpointResult[], decisions: CheckpointDecision[]) {
-  const normalized = z.array(checkpointDecisionSchema).max(12).parse(decisions);
+export function checkpointReceipt(scenario: Scenario, trial: Trial, results: CheckpointResult[], decisions: unknown[]) {
+  const normalized = checkpointRawDecisionsSchema.parse(decisions).map(value => {
+    const parsed = checkpointDecisionSchema.safeParse(value);
+    return parsed.success ? parsed.data : value;
+  });
   return { protocolHash: scenario.execution!.checkpointHash, inputHash: fingerprint(checkpointInput(scenario, trial)), resultHash: fingerprint(results), decisionHash: fingerprint(normalized), decisions: normalized };
 }
 export function requiredCheckpointResult(scenario: Scenario | undefined, trial: Trial): 'pass' | 'fail' | 'unknown' | undefined {

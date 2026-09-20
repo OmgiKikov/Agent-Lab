@@ -1420,3 +1420,37 @@ test('real compiler, Pi transport and evaluator enforce repair, exact disclosure
     } finally { await f.close(); }
   }
 });
+
+test('checkpoint SDK boundary tolerates malformed known diagnostics while required decisions remain strict', async () => {
+  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { libraryFixture } = await import('./helpers/scenario-library.js');
+  const { checkpointInput } = await import('../src/checkpoints.js');
+  const { assessTrial } = await import('../src/evaluation.js');
+  const { headlineTrialResult } = await import('../src/outcomes.js');
+  const library = libraryFixture();
+  const scenario = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  delete scenario.metrics;
+  const required = scenario.execution!.evaluatorView.checkpoints[0]!;
+  required.check = { id: 'literal', kind: 'answer_contains', description: 'Уточнение', value: 'Назовите номер терминала' };
+  scenario.checks = [required.check as any];
+  scenario.execution!.evaluatorView.checkpoints.push({ ...required, id: 'diagnostic', role: 'diagnostic' });
+  const trial: Trial = { id: 't', scenarioId: scenario.id, familyId: scenario.familyId, revisionId: 'r', userMode: 'reactive', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1, events: [{ seq: 0, type: 'user', text: 'Возврат' }, { seq: 1, type: 'assistant', text: 'Назовите номер терминала' }] };
+  const valid = { checkpointId: 'ask_terminal', result: 'pass', evidence: [1], rationale: 'Уточнение есть' };
+  for (const diagnostics of [
+    [{ checkpointId: 'diagnostic', result: 4, evidence: 'wrong', rationale: null }],
+    [{ ...valid, checkpointId: 'diagnostic' }, { ...valid, checkpointId: 'diagnostic' }],
+  ]) {
+    const f = await fixture(() => JSON.stringify({ results: [valid, ...diagnostics] }));
+    try {
+      const { ctx, usage } = callContext();
+      await assessTrial(f.adapter, scenario, [], trial, ctx, []);
+      assert.equal(headlineTrialResult(scenario, trial), 'pass');
+      assert.equal(trial.checkpoints?.find(c => c.checkpointId === 'diagnostic')?.result, 'unknown');
+      assert.equal(usage.calls, 1, 'diagnostic defects must not trigger batch repair or erase required evidence');
+    } finally { await f.close(); }
+  }
+  const invalid = await fixture(() => JSON.stringify({ results: [{ ...valid, result: 4 }] }));
+  try {
+    await assert.rejects(invalid.adapter.assessCheckpoints!(checkpointInput(scenario, trial), callContext().ctx), /не проходит проверку/);
+  } finally { await invalid.close(); }
+});

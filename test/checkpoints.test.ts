@@ -167,3 +167,32 @@ test('missing required observations cannot become agent failure through the grou
   trial.assessments = [{ metricId: 'library_required', result: 'fail', rationale: 'Не выполнил действие', evidence: [1] }];
   assert.equal(headlineTrialResult(scenario, trial), 'unknown');
 });
+
+test('duplicate or malformed known diagnostics preserve exact required pass and headline through assessment and persistence', async () => {
+  const { checkpointReceiptValid } = await import('../src/checkpoints.js');
+  const diagnostic = { ...decision('unknown', [])[0]!, checkpointId: 'diagnostic' };
+  for (const diagnostics of [[diagnostic, diagnostic], Array.from({ length: 12 }, () => diagnostic), [{ checkpointId: 'diagnostic', result: 7, evidence: 'bad', rationale: null }]]) {
+    const { scenario, trial } = fixture(); delete scenario.metrics;
+    const required = scenario.execution!.evaluatorView.checkpoints[0]!;
+    required.check = { id: 'exact', kind: 'answer_contains', description: 'Корректный отказ', value: 'Без номера возврат невозможен' };
+    scenario.checks = [required.check as any];
+    scenario.execution!.evaluatorView.checkpoints.push({ ...required, id: 'diagnostic', role: 'diagnostic' });
+    const raw = [...decision('pass'), ...diagnostics];
+    await assessTrial({ async assessCheckpoints() { return raw; } } as any, scenario, [], trial, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, []);
+    assert.deepEqual(trial.checkpoints?.map(c => [c.checkpointId, c.result]), [['ask_terminal', 'pass'], ['diagnostic', 'unknown']]);
+    assert.equal(headlineTrialResult(scenario, trial), 'pass');
+    const persisted = trialSchema.parse(trial);
+    assert.equal(checkpointReceiptValid(scenario, persisted), true);
+    assert.equal(headlineTrialResult(scenario, persisted), 'pass');
+    assert.deepEqual(persisted.checkpointReceipt?.decisions, raw, 'retain malformed/duplicate diagnostic evidence rather than silently dropping it');
+  }
+});
+
+test('required malformed or duplicate results and unknown checkpoint IDs remain strict', () => {
+  const { scenario, trial } = fixture();
+  for (const raw of [
+    [...decision('pass'), ...decision('pass')],
+    [{ ...decision('pass')[0], result: 7 }],
+    [...decision('pass'), { ...decision('unknown')[0], checkpointId: 'undeclared' }],
+  ]) assert.throws(() => evaluateCheckpoints(scenario, trial, raw, grade));
+});
