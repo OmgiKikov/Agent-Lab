@@ -334,8 +334,8 @@ export class ExperimentLab {
       record.targetFingerprint = await targetFingerprint(record.target);
       const runtime = await this.runtime(record);
       if(input.generatorConfig&&!runtime.scenarioProposals)throw new Error('Среда не поддерживает настраиваемый генератор библиотеки.');
-      if (!input.confirmedHypothesis && (input.originalImport || record.dialogues.length) && runtime.scenarioProposals) {
-        await prepareScenarioLibrary(record, input, await this.store.readImport(record.originalImport!.id), runtime, ctx, this.store);
+      if (!input.confirmedHypothesis && runtime.scenarioProposals) {
+        await prepareScenarioLibrary(record, input, record.originalImport ? await this.store.readImport(record.originalImport.id) : undefined, runtime, ctx, this.store);
         await this.checkpoint(record, 'review', 'Библиотека подготовлена. Проверьте варианты и примите выбранные перед запуском.');
         return;
       }

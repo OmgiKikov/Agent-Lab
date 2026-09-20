@@ -10,7 +10,7 @@ import type { EvidenceBundle } from '../dist/artifacts.js';
 import { situationEvidence } from '../dist/explain.js';
 import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, pluralForm, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
 import { activeRunRows, preparationRows, progressLine } from './flow.ts';
-import { logsRows, runRows, scenarioEntries, scenarioRows } from './scenarios.ts';
+import { pendingLibrarySelection, logsRows, runRows, scenarioEntries, scenarioRows } from './scenarios.ts';
 
 /** All material, model and persisted text crosses this boundary before terminal rendering. */
 export function safeText(value: unknown): string {
@@ -570,7 +570,7 @@ export class LabBoard implements Component {
     private redraw: () => void, private rows: () => number = () => 32) {
     this.record = options.record;
     this.section = options.section ?? (this.record?.trials.length || this.record?.questions.length || this.record?.phase === 'error' || this.record && activePhases.has(this.record.phase) ? 'agent' : 'cards');
-    this.selectedVariantIds = options.selectedVariantIds ?? this.record?.librarySnapshot?.variants.filter(item => item.quality === 'ready').map(item => item.id) ?? [];
+    this.selectedVariantIds = options.selectedVariantIds ?? this.record?.librarySnapshot?.acceptance?.variantIds.slice() ?? this.record?.librarySnapshot?.variants.filter(item => item.quality === 'ready').map(item => item.id) ?? [];
     options.selectedVariantIds = this.selectedVariantIds;
     this.selected = options.selected ?? 0;
     this.query = options.query ?? '';
@@ -661,6 +661,7 @@ export class LabBoard implements Component {
   private draftHeadline(record: Experiment): { text: string; color?: ThemeColor } {
     if (record.librarySnapshot) {
       const accepted = record.librarySnapshot.acceptance;
+      if (pendingLibrarySelection(record, this.selectedVariantIds)) return { text: 'Выбор изменён: нужно принять заново. 2 — Сценарии, y — принять.', color: 'warning' };
       return accepted
         ? { text: `Принята ревизия ${accepted.revision}: ${accepted.variantIds.length} вариантов. 3 — план запуска.`, color: 'success' }
         : { text: `Выберите готовые варианты: ${this.selectedVariantIds.length}. y — принять без запуска.`, color: 'warning' };
@@ -686,7 +687,7 @@ export class LabBoard implements Component {
     if (record.librarySnapshot) return this.section === 'cards'
       ? 'Space Выбрать · y Принять выбранные · e Изменить · v Вариант · g Перепроверить'
       : this.section === 'logs' ? 'g Смысловая проверка · b Изменить бюджет · 2 Сценарии'
-      : record.librarySnapshot.acceptance ? 'r Открыть подтверждение запуска · 2 Сценарии' : '2 Сценарии · сначала принять выбранные';
+      : record.librarySnapshot.acceptance && !pendingLibrarySelection(record, this.selectedVariantIds) ? 'r Открыть подтверждение запуска · 2 Сценарии' : '2 Сценарии · сначала принять выбранные';
     const sheet = this.sheet();
     if (record.questions.length || !sheet?.count) return `a Правка словами · ${record.questions.length ? 'Ответьте на вопросы' : 'r Запустить'}`;
     const confirmed = record.acceptedDraftHash === sheet.draftHash;
@@ -704,13 +705,13 @@ export class LabBoard implements Component {
     const record = this.record;
     if (!record) return this.entries().length ? 'Enter — открыть выбранный прогон' : 'Enter — проверить своего агента';
     if (this.expanded) return 'd — свернуть технические подробности';
-    if (record.phase === 'review' && this.section === 'cards' && !record.questions.length && record.scenarios.length) {
+    if (record.phase === 'review' && !record.librarySnapshot && this.section === 'cards' && !record.questions.length && record.scenarios.length) {
       const confirmed = this.sheet()?.draftHash === record.acceptedDraftHash;
       return confirmed ? 'Enter — проверить план и запустить' : `Enter — подтвердить ожидания (${record.scenarios.length})`;
     }
     if (record.phase === 'review' && record.librarySnapshot) {
       if (this.section === 'cards') return this.selectedVariantIds.length ? `Enter — принять выбранные варианты (${this.selectedVariantIds.length})` : 'Space — выбрать готовый вариант';
-      if (this.section === 'agent') return record.librarySnapshot.acceptance ? 'Enter — проверить план и запустить' : '2 — выбрать и принять сценарии';
+      if (this.section === 'agent') return record.librarySnapshot.acceptance && !pendingLibrarySelection(record, this.selectedVariantIds) ? 'Enter — проверить план и запустить' : '2 — выбрать и принять сценарии';
       if (this.section === 'logs') return '2 — перейти к сценариям';
     }
     if (this.section === 'results' && record.trials.length) return this.dialogueOpen ? 'Enter — вернуться к объяснению' : 'Enter — открыть выбранный диалог';
@@ -818,7 +819,7 @@ export class LabBoard implements Component {
       }
       const finished = this.record.workflow === 'evaluate' && !!this.record.reviewedAt && !activePhases.has(this.record.phase);
       if (key('i') && (this.section === 'results' || this.section === 'agent') && this.record.trials.length) return this.finish({ type: 'issues', ...state });
-      const type = key('r') && editable && !this.record.questions.length && (!libraryPath || !!this.record.librarySnapshot?.acceptance) && (!libraryPath || this.section === 'agent') ? 'run'
+      const type = key('r') && editable && !this.record.questions.length && (!libraryPath || !!this.record.librarySnapshot?.acceptance && !pendingLibrarySelection(this.record, this.selectedVariantIds)) && (!libraryPath || this.section === 'agent') ? 'run'
         : key('r') && finished ? 'repeat'
         : key('v') && reviewable ? 'annotate'
         : key('f') && this.record.phase === 'results_review' ? 'finalize'
@@ -833,7 +834,7 @@ export class LabBoard implements Component {
       if (key('enter') && !this.expanded) {
         if (sheetScope) return this.finish({ type: this.sheet()?.draftHash === this.record.acceptedDraftHash ? 'run' : 'accept', ...state });
         if (libraryPath && editable && this.section === 'cards' && this.selectedVariantIds.length) return this.finish({ type: 'acceptLibrary', ...state, variantIds: [...this.selectedVariantIds] });
-        if (libraryPath && editable && this.section === 'agent' && this.record.librarySnapshot?.acceptance) return this.finish({ type: 'run', ...state });
+        if (libraryPath && editable && this.section === 'agent' && this.record.librarySnapshot?.acceptance && !pendingLibrarySelection(this.record, this.selectedVariantIds)) return this.finish({ type: 'run', ...state });
         if (this.section === 'agent' && this.record.trials.length) { this.section = 'results'; this.selected = 0; this.scroll = 0; this.redraw(); return; }
         if (this.section === 'agent' && editable) { this.section = 'cards'; this.selected = 0; this.scroll = 0; this.redraw(); return; }
         if (this.section === 'results' && entry) { this.dialogueOpen = !this.dialogueOpen; this.scroll = 0; this.redraw(); return; }
@@ -896,7 +897,7 @@ export class LabBoard implements Component {
     const from = Math.max(0, Math.min(this.selected - Math.floor(visibleItems / 2), items.length - visibleItems));
     if (items.length && !sidebar) for (let i = from; i < Math.min(items.length, from + visibleItems); i++) {
       const edited = record && !record.librarySnapshot && this.section === 'cards' && (record.ownerExpectationScenarioIds ?? []).includes(entries[i]!.id);
-      header.push(line(record ? `Выбрано: ${i+1} из ${items.length} · ↑↓ другая ситуация${edited ? ' · ожидание изменено' : ''}`
+      header.push(line(record ? `Карточка ${i+1} из ${items.length} · ↑↓ другая ситуация${edited ? ' · ожидание изменено' : ''}`
         : `${i === this.selected ? '▸' : ' '} ${i + 1}/${items.length}  ${items[i]}`, i === this.selected ? 'accent' : 'muted', i === this.selected));
     }
     if (this.searching || this.query || this.pendingOnly) header.push(line(`${this.pendingOnly ? '● Только неразобранные · ' : ''}Поиск: ${this.query}${this.searching ? '▎  Enter — применить' : ' · Esc — сбросить'}`, 'accent'));

@@ -1929,3 +1929,29 @@ test('generator native selection validates mandatory counters and history instea
   await assert.rejects(tool.execute('select',{operation:'select',candidates:[ready],history:null},undefined,undefined,{cwd:'.',hasUI:false} as ExtensionContext),/history/);
  }finally{await shutdown();}
 });
+
+test('native owner can add a fact to an empty curated card and creates a real owner receipt', async () => {
+  const library = libraryFixture();
+  library.variants = [library.variants[0]!];
+  Object.assign(library.variants[0]!, { provenance: 'curated', sourceDialogues: [] });
+  library.variants[0]!.userState.facts = [];
+  const fixture = await boardFixture('scenario-owner-add-', record => {
+    record.phase = 'review'; record.scenarios = []; record.trials = []; record.librarySnapshot = library;
+    record.sources = library.sources; record.requirements = library.requirements;
+  });
+  const { command, shutdown } = registered(), session = boardSession(fixture.cwd);
+  const values = ['Номер терминала: 4321', '4321', 'Я задаю данные примера'];
+  session.ctx.ui.select = async (title, choices) => title.includes('Когда') ? choices[0] : (assert.ok(choices.includes('Добавить факт владельца')), 'Добавить факт владельца');
+  session.ctx.ui.editor = async () => values.shift();
+  session.state.steps = [['2', 'e'], ['q']];
+  try {
+    await command(fixture.record.id, session.ctx);
+    const reader = new ExperimentLab(join(fixture.cwd, '.agent-lab'));
+    const saved = await reader.readLibrary(fixture.record.id), variant = saved.library.variants[0]!;
+    assert.equal(variant.userState.facts.length, 1);
+    assert.equal(variant.userState.facts[0]!.value, '4321');
+    assert.equal(variant.userState.facts[0]!.origin.kind, 'owner');
+    assert.equal(variant.history.at(-1)!.factEdit!.factId, variant.userState.facts[0]!.id);
+    assert.equal(variant.semanticReviewRequired, true);
+  } finally { await shutdown(); await fixture.cleanup(); }
+});

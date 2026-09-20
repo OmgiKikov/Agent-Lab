@@ -530,7 +530,7 @@ export const createInputSchema = z.strictObject({
   notes: z.string().trim().max(8000).default(''),
   profiles: z.array(ownerProfileSchema).max(6).default([]),
 }).superRefine((v, ctx) => {
-  if(v.generatorConfig && (v.confirmedHypothesis || !v.dialogues.length&&!v.originalImport?.dialogues.length))ctx.addIssue({code:'custom',message:'Настройка генератора применяется только при подготовке новой библиотеки из диалогов.',path:['generatorConfig']});
+  if(v.generatorConfig && v.confirmedHypothesis)ctx.addIssue({code:'custom',message:'Настройка генератора применяется только при подготовке новой библиотеки.',path:['generatorConfig']});
   if (v.materials.reduce((n, m) => n + m.content.length, 0) > 300000) ctx.addIssue({ code: 'custom', message: 'Materials exceed 300,000 characters', path: ['materials'] });
   if (v.dialogues.reduce((n, d) => n + d.messages.reduce((m, x) => m + x.content.length, 0), 0) > 2000000) ctx.addIssue({ code: 'custom', message: 'Dialogues exceed 2,000,000 characters', path: ['dialogues'] });
   if (!unique(v.dialogues.map(d => d.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate dialogue IDs', path: ['dialogues'] });
@@ -996,10 +996,12 @@ export interface ImproveInput {
 }
 export const proposalSchema = z.strictObject({ agent: agentSchema, hypothesis: text.max(3000) });
 export interface ScenarioProposalsInput {
+  preparationMode?: 'owner_requirements';
+  scenarioCount?: number;
   generatorConfig?: GeneratorConfig;
   businessCatalog?: Pick<ScenarioLibrary['businessScenarios'][number], 'key' | 'title' | 'goal' | 'conditions' | 'requirementIds'>[];
   feedback?: { proposals: ScenarioProposal[]; issues: { code: string; path: string; message: string }[] };
-  protocol: 'chronological-scenarios-v1'; task: string; sources: Source[]; requirements: Requirement[]; batchId: string;
+  protocol: 'chronological-scenarios-v1'; task: string; sources: Source[]; requirements: Requirement[]; batchId?: string;
   dialogues: { id: string; observation: ImportBatch['dialogues'][number]['observation']; events: ImportBatch['dialogues'][number]['events'];
     messages: { index: number; role: 'user' | 'assistant' | 'tool' | 'system'; content: string }[] }[];
 }

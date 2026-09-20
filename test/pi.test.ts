@@ -1477,3 +1477,16 @@ test('reasoning generator records unsupported temperature as provider default an
  assert.equal(optionsSeen.temperature,undefined);assert.equal(report.cases[0].transports[0].requestedTemperature,0);assert.equal(report.cases[0].transports[0].effectiveTemperature,'provider-default');
  }finally{await f.close();}
 });
+
+test('scenario proposal transport separates no-log owner requirements from real import identity before a model call', async () => {
+  const f = await fixture(() => JSON.stringify({ proposals: [] }));
+  try {
+    const base = { protocol: 'chronological-scenarios-v1' as const, task: 'Проверка', sources: [], requirements: [], dialogues: [] };
+    const { ctx } = callContext();
+    await assert.rejects(f.adapter.scenarioProposals!(base, ctx), /batchId|импорт/);
+    await assert.rejects(f.adapter.scenarioProposals!({ ...base, preparationMode: 'owner_requirements', batchId: 'imaginary' }, ctx), /лог|импорт/);
+    assert.equal(f.requests.length, 0);
+    assert.deepEqual(await f.adapter.scenarioProposals!({ ...base, preparationMode: 'owner_requirements' }, ctx), []);
+    assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});

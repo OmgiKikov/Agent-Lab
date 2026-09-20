@@ -1164,7 +1164,7 @@ export default function agentLab(pi: ExtensionAPI) {
                 ...variant.evaluationSpec.checkpoints.map(checkpoint => ({ label: `Правило проверки · ${checkpoint.id}`, field: 'checkpointRule' as const, value: checkpoint.rule, checkpointId: checkpoint.id })),
               ];
               const factOptions = variant.userState.facts.map(fact => safeText(`Факт · ${fact.statement} · ${fact.availability}`));
-              const options = [...textFields.map(item => item.label), ...factOptions];
+              const options = [...textFields.map(item => item.label), ...factOptions, 'Добавить факт владельца'];
               const picked = await ctx.ui.select('Что изменить своими словами?', options);
               if (!picked) continue;
               const textField = textFields.find(item => item.label === picked);
@@ -1178,17 +1178,18 @@ export default function agentLab(pi: ExtensionAPI) {
                   editId: `owner_${Date.now().toString(36)}`, reason: reason.trim() });
               } else {
                 const fact = variant.userState.facts[factOptions.indexOf(picked)];
-                if (!fact) continue;
-                const statement = await ctx.ui.editor('Факт пользователя · обычным текстом', fact.statement);
+                const adding = picked === 'Добавить факт владельца';
+                if (!fact && !adding) continue;
+                const statement = await ctx.ui.editor('Факт пользователя · обычным текстом', fact?.statement ?? '');
                 if (statement === undefined || !statement.trim()) continue;
-                const currentValue = fact.value === undefined ? '' : String(fact.value);
+                const currentValue = fact?.value === undefined ? '' : String(fact.value);
                 const valueText = await ctx.ui.editor('Точное значение · оставьте пустым, если отдельного значения нет', currentValue);
                 if (valueText === undefined) continue;
                 const availability = await ctx.ui.select('Когда пользователь знает этот факт?', ['initial · знает до разговора', 'learned_in_source · узнал только в старом разговоре', 'uncertain · нужно уточнить']);
                 if (!availability) continue;
                 const reason = await ctx.ui.editor('Почему вы исправляете факт?', 'Правка владельца в разделе «Сценарии»');
                 if (!reason?.trim()) continue;
-                await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'edit_fact', variantId: variant.id, factId: fact.id,
+                await lab.editLibrary(action.record.id, libraryHash(shown), { kind: adding ? 'add_fact' : 'edit_fact', variantId: variant.id, factId: fact?.id ?? `fact_${Date.now().toString(36)}`,
                   statement: statement.trim(), ...(valueText.trim() ? { value: valueText.trim() } : {}), availability: availability.split(' ')[0] as 'initial' | 'learned_in_source' | 'uncertain',
                   editId: `owner_${Date.now().toString(36)}`, reason: reason.trim() });
               }

@@ -28,5 +28,8 @@ test('normal new-library preparation saves and propagates generator config witho
 });
 
 test('generator configuration cannot silently enter a preparation flow that does not consume it',()=>{
- const parsed=createInputSchema.safeParse({task:'Новая проверка',mode:'demo',materials:[{name:'Правило',content:'Уточните запрос'}],generatorConfig:config});assert.equal(parsed.success,false);
+ const input={task:'Новая проверка',mode:'demo',materials:[{name:'Правило',content:'Уточните запрос'}],confirmedHypothesis:'Проверить подтверждённую гипотезу',scenarioCount:1,goalObservation:'reply'};
+ assert.equal(createInputSchema.safeParse(input).success,true);
+ const parsed=createInputSchema.safeParse({...input,generatorConfig:config});assert.equal(parsed.success,false);
+ assert.ok(parsed.error?.issues.some(issue=>issue.path[0]==='generatorConfig'));
 });

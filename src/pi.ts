@@ -445,6 +445,9 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       return ask('Настройка генератора',GENERATOR_PROPOSER_ROLE,input,generatorConfigSchema,ctx);
     },
     async scenarioProposals(input, ctx) {
+      if (input.preparationMode === 'owner_requirements') {
+        if (input.batchId !== undefined || input.dialogues.length) throw new Error('Подготовка без логов не может ссылаться на импорт или диалоги.');
+      } else if (!input.batchId?.trim() || !input.dialogues.length) throw new Error('Для извлечения из импорта нужны batchId и исходные диалоги.');
       return (await ask('Варианты из полной хронологии', SCENARIO_PROPOSALS_ROLE, input,
         z.strictObject({ proposals: z.array(scenarioProposalSchema.extend({ variant: scenarioProposalSchema.shape.variant.extend({
           environmentFixture: scenarioProposalSchema.shape.variant.shape.environmentFixture.extend({ initialState: worldSchema }),

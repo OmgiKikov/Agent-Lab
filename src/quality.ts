@@ -324,7 +324,7 @@ export function trialProofLines(record: Experiment, trialId: string): TrialProof
       ...(checks.length ? checks : ['—']),
       '',
       ...(trial.checkpoints?.length ? ['КОНТРОЛЬНЫЕ ТОЧКИ', ...trial.checkpoints.flatMap(cp => [
-        `${cp.result.toUpperCase()} [${cp.checkpointId}] · ${cp.role === 'required' ? 'обязательная' : 'диагностика'} · требование ${cp.requirementId} · события ${cp.evidence.map(seq => `#${seq}`).join(', ') || '—'}`,
+        `${({ pass: 'ВЫПОЛНЕНО', fail: 'НАРУШЕНО', unknown: 'НЕ ОПРЕДЕЛЕНО', not_applicable: 'НЕ ПРИМЕНИМО' })[cp.result]} [${cp.checkpointId}] · ${cp.role === 'required' ? 'обязательная' : 'диагностика'} · требование ${cp.requirementId} · события ${cp.evidence.map(seq => `#${seq}`).join(', ') || '—'}`,
         ...labelled('  Обоснование: ', cp.rationale),
       ]), ''] : []),
       'ОЦЕНКИ',

@@ -12,11 +12,12 @@ export function chronologicalInput(batch: ImportBatch, ids = batch.dialogues.map
 }
 
 /** Full imports are retained independently of the bounded model work and accepted run selection. */
-export async function prepareScenarioLibrary(record: Experiment, input: CreateInput, batch: ImportBatch, runtime: Runtime, ctx: CallContext, store: ExperimentStore): Promise<void> {
-  const original = await store.writeImport(importBatchSchema.parse(batch));
-  record.originalImport = { id: original.id, contentHash: original.contentHash };
-  record.preparationProgress = { protocol: SCENARIO_EXTRACTION_PROTOCOL, processed: [], pending: batch.dialogues.map(d => d.id),
-    excluded: batch.rejected.map(d => ({ dialogueId: d.id ?? `row_${d.index}`, reason: d.reasons.join('; ') })), status: 'preparing' };
+export async function prepareScenarioLibrary(record: Experiment, input: CreateInput, batch: ImportBatch | undefined, runtime: Runtime, ctx: CallContext, store: ExperimentStore): Promise<void> {
+  const original = batch ? await store.writeImport(importBatchSchema.parse(batch)) : undefined;
+  if (original) record.originalImport = { id: original.id, contentHash: original.contentHash };
+  const workIds = original ? original.dialogues.map(d => d.id) : ['owner_requirements'];
+  record.preparationProgress = { protocol: SCENARIO_EXTRACTION_PROTOCOL, processed: [], pending: [...workIds],
+    excluded: (batch?.rejected ?? []).map(d => ({ dialogueId: d.id ?? `row_${d.index}`, reason: d.reasons.join('; ') })), status: 'preparing' };
   let library = createLibrary({ id: `library_${record.id}`, batch: original, sources: record.sources, requirements: [], proposals: [], semanticRequired: true });
   let published: string | undefined;
   const publish = async () => {
@@ -31,7 +32,7 @@ export async function prepareScenarioLibrary(record: Experiment, input: CreateIn
       scenarioCount: 0, targetKind: record.target.kind, notes: record.notes, dialogues: [], userModes: record.settings.userModes };
     const groundingIssue = workInputIssue(groundingRequest);
     if (groundingIssue) {
-      record.preparationProgress.excluded.push(...batch.dialogues.map(d => ({ dialogueId: d.id, reason: groundingIssue })));
+      record.preparationProgress.excluded.push(...workIds.map(id => ({ dialogueId: id, reason: groundingIssue })));
       record.preparationProgress.status = 'partial'; await publish(); return;
     }
     const grounded = await runtime.prepare(groundingRequest, ctx);
@@ -40,18 +41,18 @@ export async function prepareScenarioLibrary(record: Experiment, input: CreateIn
     const baseline = { id: fingerprint(agent), parentId: null, spec: agent, hypothesis: 'Конфигурация агента для библиотеки сценариев.', createdAt: new Date().toISOString() };
     record.revisions = [baseline]; record.selectedRevisionId = baseline.id;
     const proposals: ScenarioProposal[] = [];
-    for (const dialogue of batch.dialogues) {
+    for (const workId of workIds) {
       ctx.signal.throwIfAborted();
       if (proposals.length >= 200) break;
       const request = { ...(record.generatorConfig?{generatorConfig:structuredClone(record.generatorConfig)}:{}), businessCatalog: library.businessScenarios.map(({ key, title, goal, conditions, requirementIds }) => ({ key, title, goal, conditions, requirementIds })), protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, sources: structuredClone(record.sources),
-        requirements: structuredClone(record.requirements), batchId: original.id, dialogues: chronologicalInput(original, [dialogue.id]) } as ScenarioProposalsInput;
+        requirements: structuredClone(record.requirements), ...(original ? { batchId: original.id } : { preparationMode: 'owner_requirements', scenarioCount: input.scenarioCount || 1 }), dialogues: original ? chronologicalInput(original, [workId]) : [] } as ScenarioProposalsInput;
       const oversize = workInputIssue(request);
-      if (oversize) { record.preparationProgress.excluded.push({ dialogueId: dialogue.id, reason: oversize }); continue; }
+      if (oversize) { record.preparationProgress.excluded.push({ dialogueId: workId, reason: oversize }); continue; }
       let extracted: ScenarioProposal[] = [], next: ScenarioLibrary | undefined;
       for (let attempt = 0; attempt < 3; attempt++) {
         ctx.signal.throwIfAborted();
         const issue = workInputIssue(request);
-        if (issue) { record.preparationProgress.excluded.push({ dialogueId: dialogue.id, reason: issue }); break; }
+        if (issue) { record.preparationProgress.excluded.push({ dialogueId: workId, reason: issue }); break; }
         extracted = await runtime.scenarioProposals!(request, ctx);
         if (serializedBytes({ proposals: extracted }) > SCENARIO_OUTPUT_BYTES) throw new Error('Предложение превышает допустимый объём ответа. Источник остаётся необработанным.');
         if (proposals.length + extracted.length > 200) break;
@@ -67,9 +68,9 @@ export async function prepareScenarioLibrary(record: Experiment, input: CreateIn
       // Invalid but structurally parseable final proposals remain visible and blocked; there is no model-owned acceptance.
       next.revision = library.revision + 1;
       library = next; proposals.push(...extracted);
-      record.preparationProgress.processed.push(dialogue.id);
-      record.preparationProgress.pending = record.preparationProgress.pending.filter(id => id !== dialogue.id);
-      if (!extracted.length) record.preparationProgress.excluded.push({ dialogueId: dialogue.id, reason: 'Нет применимого предложения из требований владельца.' });
+      record.preparationProgress.processed.push(workId);
+      record.preparationProgress.pending = record.preparationProgress.pending.filter(id => id !== workId);
+      if (!extracted.length) record.preparationProgress.excluded.push({ dialogueId: workId, reason: 'Нет применимого предложения из требований владельца.' });
       await publish();
     }
     if (library.variants.length && runtime.assessScenarioProposals) {

@@ -1,3 +1,4 @@
+import { requiredUserTurns } from './user-controller.js';
 import { USER_CONTROLLER_ROLE, CHECKPOINT_ROLE, LEGACY_CHECKPOINT_ROLE } from './prompts.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -129,9 +130,9 @@ function executionFingerprint(library: ScenarioLibrary, variant: ScenarioVariant
   });
 }
 
-export function createLibrary(input: { id?: string; batch: ImportBatch; sources: Source[]; requirements: Requirement[]; proposals: unknown[]; createdAt?: string; semanticRequired?: true }): ScenarioLibrary {
+export function createLibrary(input: { id?: string; batch?: ImportBatch; sources: Source[]; requirements: Requirement[]; proposals: unknown[]; createdAt?: string; semanticRequired?: true }): ScenarioLibrary {
   if (input.proposals.length > 200) throw new Error('Допустимо не больше 200 вариантов');
-  const batch = importBatchSchema.parse(input.batch);
+  const batch = input.batch ? importBatchSchema.parse(input.batch) : undefined;
   const groups = new Map<string, BusinessScenario>();
   const variants: ScenarioVariant[] = [];
   for (const raw of input.proposals) {
@@ -146,7 +147,7 @@ export function createLibrary(input: { id?: string; batch: ImportBatch; sources:
     variants.push({ ...variant, businessScenarioId, familyId: businessScenarioId, revision: 1, quality: 'needs_review', issues: [], ownerDecision: 'pending', history: [{ author: 'generator', reason: 'Структурированное предложение из источников', revision: 1 }] });
   }
   unifyFamilies(variants);
-  const library = scenarioLibrarySchema.parse({ checkpointContext:'observed-tools-v1', formatVersion: 1, id: input.id ?? `library_${digest({ batchId: batch.id, proposals: input.proposals }).slice(0, 24)}`, revision: 1, createdAt: input.createdAt ?? new Date().toISOString(), imports: [batch], ...(input.semanticRequired ? { semanticRequired: true } : {}), sources: input.sources, requirements: input.requirements, businessScenarios: [...groups.values()], variants });
+  const library = scenarioLibrarySchema.parse({ checkpointContext:'observed-tools-v1', formatVersion: 1, id: input.id ?? `library_${digest({ batchId: batch?.id, proposals: input.proposals }).slice(0, 24)}`, revision: 1, createdAt: input.createdAt ?? new Date().toISOString(), imports: batch ? [batch] : [], ...(input.semanticRequired ? { semanticRequired: true } : {}), sources: input.sources, requirements: input.requirements, businessScenarios: [...groups.values()], variants });
   return refreshQuality(library);
 }
 
@@ -249,6 +250,8 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
     if (persona && !ownerPersonaReceipt(library, variant, persona)) problem('unverified_owner_persona', 'userState.persona', 'Нет записанного выбора профиля владельцем');
     const initial = variant.userState.facts.filter(f => f.availability === 'initial');
     const policy = variant.behaviorPolicy;
+    try { requiredUserTurns(policy, initial); }
+    catch (error) { problem('controller_policy', 'behaviorPolicy', error instanceof Error ? error.message : String(error)); }
     const payloads = [variant.userState.goal, variant.userState.opening, variant.userState.persona?.text ?? '', ...variant.userState.missing, ...variant.userState.cannotKnow, ...policy.actions.flatMap(a => [a.payload ?? '', a.ifAsked ?? '']), ...policy.transitions.map(t => t.when)];
     for (const fact of variant.userState.facts.filter(f => f.availability !== 'initial')) {
       const excluded = normalize(String(fact.value ?? fact.statement));
@@ -384,9 +387,15 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
   } else if (patch.kind === 'remove_variant') {
     getVariant(patch.variantId);
     next.variants = next.variants.filter(v => v.id !== patch.variantId);
-  } else if (patch.kind === 'edit_fact') {
+  } else if (patch.kind === 'edit_fact' || patch.kind === 'add_fact') {
     const variant = getVariant(patch.variantId);
-    const fact = variant.userState.facts.find(f => f.id === patch.factId);
+    let fact = variant.userState.facts.find(f => f.id === patch.factId);
+    if (patch.kind === 'add_fact') {
+      if (fact) throw new Error('Факт с таким id уже существует');
+      if (variant.userState.facts.length >= 20) throw new Error('Допустимо не больше 20 фактов');
+      fact = { id: patch.factId, statement: patch.statement, availability: patch.availability, reason: patch.reason, origin: { kind: 'owner', editId: patch.editId, text: patch.reason } };
+      variant.userState.facts.push(fact);
+    }
     if (!fact) throw new Error('Факт не найден');
     Object.assign(fact, { statement: patch.statement, availability: patch.availability, reason: patch.reason, origin: { kind: 'owner', editId: patch.editId, text: patch.reason } });
     if (patch.value === undefined) delete fact.value; else fact.value = patch.value;
@@ -431,11 +440,11 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
     const previousHash = old.get(variant.id);
     if (previousHash !== digest(variant)) {
       if (previousHash) variant.revision++;
-      const fact = patch.kind === 'edit_fact' && patch.variantId === variant.id ? variant.userState.facts.find(f => f.id === patch.factId) : undefined;
+      const fact = (patch.kind === 'edit_fact' || patch.kind === 'add_fact') && patch.variantId === variant.id ? variant.userState.facts.find(f => f.id === patch.factId) : undefined;
       const persona = variant.userState.persona;
       variant.history.push({
         ...(previousHash ? { previousHash } : {}), author: 'owner', reason: patch.reason, revision: variant.revision,
-        ...(fact && patch.kind === 'edit_fact' ? { factEdit: { factId: fact.id, editId: patch.editId, factHash: digest(fact) } } : {}),
+        ...(fact && (patch.kind === 'edit_fact' || patch.kind === 'add_fact') ? { factEdit: { factId: fact.id, editId: patch.editId, factHash: digest(fact) } } : {}),
         ...(patch.kind === 'upsert_variant' && patch.variant.id === variant.id && persona && oldPersonas.get(variant.id) !== digest(persona) ? { personaEdit: { editId: persona.ownerEditId, personaHash: digest(persona) } } : {}),
         ...(patch.kind === 'edit_variant_text' && patch.variantId === variant.id ? { textEdit: { editId: patch.editId, field: patch.field, valueHash: digest(patch.value) } } : {}),
       });

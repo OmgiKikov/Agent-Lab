@@ -45,6 +45,11 @@ function factOrigin(library: ScenarioLibrary, fact: ScenarioVariant['userState']
     ...(event?.content && event.content !== origin.quote ? [`Полная реплика: «${event.content}»`] : [])];
 }
 
+export function pendingLibrarySelection(record: Experiment, selected: string[]): boolean {
+  const accepted = record.librarySnapshot?.acceptance?.variantIds;
+  return !!accepted && (accepted.length !== selected.length || selected.some(id => !accepted.includes(id)));
+}
+
 export function scenarioRows(record: Experiment, variantId?: string, selectedVariantIds: string[] = []): FlowRow[] {
   const library = libraryOf(record);
   if (!library) return [r('Сценарии из старой записи', 'accent', true), r('Эта запись использует прежние карточки; их можно читать и повторять без перезаписи.', 'muted')];
@@ -56,7 +61,7 @@ export function scenarioRows(record: Experiment, variantId?: string, selectedVar
     r('СЦЕНАРИИ', 'accent', true),
     r(`Ревизия ${library.revision} · вариантов ${library.variants.length} · выбрано для прогона: ${selectedVariantIds.length}`, 'muted'),
     r(''), r(`${selected ? '☑' : '☐'} ${variant.title}`, variant.quality === 'ready' ? 'success' : 'warning', true),
-    r(`Готовность: ${status(variant)} · происхождение: ${variant.provenance}${variant.parentVariantId ? ` · родитель ${variant.parentVariantId}` : ''}`),
+    r(`Готовность: ${status(variant)} · происхождение: ${({ production: 'из диалогов', curated: 'по требованиям владельца', synthetic: 'синтетический' })[variant.provenance]}${variant.parentVariantId ? ` · родитель ${variant.parentVariantId}` : ''}`),
   ];
   if (group) {
     rows.push(r(`Группа: ${group.title}`, 'accent', true), r(group.goal));
@@ -97,6 +102,7 @@ export function logsRows(record: Experiment): FlowRow[] {
   const rejected = library.imports.reduce((sum, batch) => sum + batch.rejected.length, 0);
   const rows = [r('ЛОГИ', 'accent', true), r(`Импортировано диалогов: ${accepted} · отклонено строк: ${rejected}`),
     r(progress ? `Обработано: ${progress.processed.length} · ожидают: ${progress.pending.length} · исключено: ${progress.excluded.length}` : 'Прогресс подготовки не записан.', progress?.pending.length ? 'warning' : 'muted')];
+  if (!library.imports.length) rows.push(r('Без логов: варианты основаны на требованиях владельца; импорт и личные факты не выдумываются.', 'muted'));
   if (progress?.status === 'partial') rows.push(r('Разбор частичный: смысловая перепроверка не обработает ожидающие источники.', 'warning'));
   for (const item of progress?.excluded ?? []) rows.push(r(`• ${item.dialogueId}: ${item.reason}`, 'muted'));
   rows.push(...budgetRows(record, library));
@@ -116,6 +122,7 @@ export function runRows(record: Experiment, selectedVariantIds: string[] = []): 
   const library = libraryOf(record);
   if (!library) return [r('ПРОГОН', 'accent', true), r(`${record.scenarios.length} карточек · бюджет ${record.usage.calls}/${record.settings.maxCalls}`)];
   const accepted = library.acceptance;
+  const pending = pendingLibrarySelection(record, selectedVariantIds);
   const selected = accepted?.variantIds ?? selectedVariantIds;
   const planned = selected.length * record.settings.repeats * record.settings.userModes.length;
   return [r('ПРОГОН', 'accent', true), r(`Ревизия ${library.revision} · выбрано: ${selected.length} · запланировано диалогов: ${planned}`, 'text', true),
@@ -123,7 +130,8 @@ export function runRows(record: Experiment, selectedVariantIds: string[] = []): 
     ...budgetRows(record, library), r(''),
     accepted ? r(`Принят снимок ${accepted.snapshotHash.slice(0, 12)} · свежий план ${record.acceptedDraftHash ? 'готов' : 'нужно подтвердить после изменений'}`, record.acceptedDraftHash ? 'success' : 'warning')
       : r('Сначала принять выбранные готовые варианты в разделе «Сценарии». Это действие не запускает агента.', 'warning'),
-    r(accepted ? 'r — открыть отдельное подтверждение запуска' : '2 — вернуться к сценариям', 'accent')];
+    ...(pending ? [r('Выбор изменён: нужно принять заново в разделе «Сценарии». До этого запуск недоступен.', 'warning')] : []),
+    r(accepted && !pending ? 'r — открыть отдельное подтверждение запуска' : '2 — вернуться к сценариям', 'accent')];
 }
 
 export function scenarioLibrarySummary(record: Experiment, selectedVariantIds: string[] = []) {
@@ -133,7 +141,7 @@ export function scenarioLibrarySummary(record: Experiment, selectedVariantIds: s
     needsReview: library.variants.filter(item => item.quality === 'needs_review').length,
     blocked: library.variants.filter(item => item.quality === 'blocked').length };
   return { libraryId: library.id, revision: library.revision, libraryHash: libraryHash(library), quality, selectedVariantIds,
-    acceptedVariantIds: library.acceptance?.variantIds ?? [], nextAction: library.acceptance ? 'run' : quality.ready ? 'accept' : 'review' };
+    acceptedVariantIds: library.acceptance?.variantIds ?? [], nextAction: library.acceptance && !pendingLibrarySelection(record, selectedVariantIds) ? 'run' : quality.ready ? 'accept' : 'review' };
 }
 
 export function scenarioErrorText(error: unknown): string {

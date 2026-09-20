@@ -84,3 +84,24 @@ test('run stage leads with accepted revision, selected count and real remaining 
     assert.match(text, /сначала принять/i);
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test('accepted library selection changes require reacceptance; Enter label matches native action', async () => {
+  const { lab, directory, record } = await recordFixture();
+  try {
+    const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
+    record.librarySnapshot = acceptLibrary(record.librarySnapshot!, libraryHash(record.librarySnapshot!), ['variant_1']);
+    record.scenarios = compileLibrary(record.librarySnapshot);
+    record.reviewedAt = null;
+    let action: BoardAction | undefined;
+    const board = new LabBoard({ record, section: 'cards', selectedVariantIds: ['variant_1'] }, theme, a => { action = a; }, () => {}, () => 45);
+    assert.match(stripTerminalSequences(board.render(120).join('\n')), /Enter — принять выбранные варианты/);
+    assert.match(stripTerminalSequences(board.render(72).join('\n')), /Карточка 1 из 2/);
+    board.handleInput('\r'); assert.equal(action?.type, 'acceptLibrary');
+    const pending = new LabBoard({ record, section: 'agent', selectedVariantIds: ['variant_1', 'variant_2'] }, theme, a => { action = a; }, () => {}, () => 45);
+    assert.match(stripTerminalSequences(pending.render(120).join('\n')), /выбор изменён.*принять заново/is);
+    action = undefined; pending.handleInput('r'); assert.equal(action, undefined);
+    pending.handleInput('\r'); assert.equal(action, undefined);
+    const rows = scenarioRows(record, 'variant_1', ['variant_1']).map(r => r.text).join('\n');
+    assert.match(rows, /происхождение: из диалогов/); assert.doesNotMatch(rows, /происхождение: production/);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
