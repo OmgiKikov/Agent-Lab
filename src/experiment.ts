@@ -1017,7 +1017,7 @@ export class ExperimentLab {
           ctx.signal.throwIfAborted();
           const trial = structuredClone(original);
           const scenario = record.scenarios.find(s => s.id === trial.scenarioId)!;
-          trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.judgeAudit; delete trial.judgeReceipt;
+          trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.judgeAudit; delete trial.judgeReceipt; delete trial.checkpoints; delete trial.checkpointReceipt;
           trial.manifestHash = record.manifestHash!;
           if (record.target.kind !== 'sandbox' && !trial.observation) trial.observation = { state: 'missing', tools: 'partial' };
           const started = performance.now();
@@ -1031,11 +1031,11 @@ export class ExperimentLab {
               const executionFailed = original.outcome === 'fail' && original.checks.every(c => c.passed);
               trial.outcome = executionFailed || trial.checks.some(c => !c.passed) ? 'fail' : trial.checks.length ? 'pass' : 'ungraded';
               trial.reason = executionFailed ? original.reason : 'Точные проверки пересчитаны по сохранённым фактам.';
-              if (assessmentRubrics(scenario, trial).length && runtime) trial.assessments = await assessTrial(runtime, scenario, record.sources, trial, { ...ctx,
+              if ((scenario.execution || assessmentRubrics(scenario, trial).length) && runtime) trial.assessments = await assessTrial(runtime, scenario, record.sources, trial, { ...ctx,
                 beforeCall() { ctx.beforeCall(); trial.usage.calls++; },
                 addUsage(usage) { ctx.addUsage(usage); trial.usage.inputTokens += usage.inputTokens; trial.usage.outputTokens += usage.outputTokens;
                   trial.usage.costUsd = usage.costUsd === null || trial.usage.costUsd === null ? null : trial.usage.costUsd + usage.costUsd; } }, record.requirements);
-              else if (scenario.metrics?.length) trial.assessmentError = 'Только точные проверки; рубрики не переоценивались.';
+              else if (scenario.execution || scenario.metrics?.length) trial.assessmentError = 'Только точные проверки; рубрики не переоценивались.';
             } catch (error) {
               trial.assessmentError = (error instanceof Error ? error.message : String(error)).slice(0, 4000);
               if (!trial.checks.length || ctx.signal.aborted) trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';

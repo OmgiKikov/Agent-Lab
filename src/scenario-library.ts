@@ -1,3 +1,4 @@
+import { USER_CONTROLLER_ROLE, CHECKPOINT_ROLE } from './prompts.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { checkSchema, scenarioSchema, worldSchema, valueTokens, type Requirement, type Scenario, type Source } from './contracts.js';
@@ -264,12 +265,14 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
       if (action.kind === 'change_intent' && !action.payload) problem('invalid_policy', 'behaviorPolicy.actions', 'Смена намерения должна быть объявлена');
     }
     for (const transition of policy.transitions) if (!states.has(transition.from) || !states.has(transition.to) || !actionIds.has(transition.actionId) || policy.terminalStates.includes(transition.from)) problem('invalid_policy', 'behaviorPolicy.transitions', 'Недопустимый переход');
-    let frontier = new Set([policy.initialState]);
-    let terminalReachable = policy.terminalStates.includes(policy.initialState);
-    for (let i = 0; i < policy.maxFollowUps && !terminalReachable; i++) {
-      frontier = new Set(policy.transitions.filter(t => frontier.has(t.from)).map(t => t.to));
-      terminalReachable = policy.terminalStates.some(s => frontier.has(s));
+    // An empty finish consumes no target reply; admission uses message cost, not edge count.
+    const distances = new Map<string, number>([[policy.initialState, 0]]);
+    for (let iteration = 0; iteration < policy.states.length; iteration++) for (const transition of policy.transitions) {
+      const action = policy.actions.find(a => a.id === transition.actionId);
+      const cost = (distances.get(transition.from) ?? Infinity) + (action?.kind === 'finish' ? 0 : 1);
+      if (cost < (distances.get(transition.to) ?? Infinity)) distances.set(transition.to, cost);
     }
+    const terminalReachable = policy.terminalStates.some(state => (distances.get(state) ?? Infinity) <= policy.maxFollowUps);
     if (!terminalReachable) problem('unreachable_stop', 'behaviorPolicy', 'Завершение недостижимо в пределах лимита продолжений');
     const environment = variant.environmentFixture;
     const world = worldSchema.safeParse(environment.initialState);
@@ -508,6 +511,11 @@ function compileVariant(library: ScenarioLibrary, variant: ScenarioVariant): Sce
       ...(variant.userState.persona ? { persona: variant.userState.persona.text } : {}),
     },
     initialState: worldSchema.parse(variant.environmentFixture.initialState), checks,
+    execution: { protocol: 'controlled-user-v1', checkpointProtocol: 'checkpoints-v1', controllerHash: digest({ protocol: 'controlled-user-v1', role: USER_CONTROLLER_ROLE }), checkpointHash: digest({ protocol: 'checkpoints-v1', role: CHECKPOINT_ROLE }),
+      userView: { goal: variant.userState.goal, opening: variant.userState.opening, facts: known.map(({ id, statement, value }) => ({ id, statement, ...(value !== undefined ? { value } : {}) })), policy: variant.behaviorPolicy, missing: variant.userState.missing, ...(variant.userState.persona ? { persona: variant.userState.persona.text } : {}) },
+      environmentView: { mode: variant.environmentFixture.mode, ...(variant.environmentFixture.contract ? { contract: variant.environmentFixture.contract } : {}) },
+      evaluatorView: { checkpoints: variant.evaluationSpec.checkpoints, requirements: library.requirements.filter(r => variant.evaluationSpec.checkpoints.some(c => c.requirementId === r.id)) },
+    },
     goalObservation: variant.evaluationSpec.goalObservation, successCriteria: variant.evaluationSpec.successCriteria,
     ...(observed.length ? { metrics: [{ id: 'library_required', name: 'Обязательные контрольные точки', subject: 'agent', description: observed.map(c => c.rule).join('\n'), passCriteria: observed.map(c => `${c.applicability}: ${c.rule}`).join('\n'), failCriteria: 'Наблюдаемые доказательства подтверждают нарушение хотя бы одной применимой обязательной контрольной точки.' }] } : {}),
   });

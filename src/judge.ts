@@ -1,3 +1,4 @@
+import { checkpointReceiptValid } from './checkpoints.js';
 import { z } from 'zod';
 import { assessmentEventContent, assessmentRubrics, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Source } from './contracts.js';
 import { ASSESS_ROLE, DATA_BOUNDARY } from './prompts.js';
@@ -49,7 +50,7 @@ export function judgeInput(input: Input) {
     ? 'Opening and first answer ONLY. Planned follow-ups were not delivered. Never penalize the agent for their absence.'
     : 'Evaluate only delivered requests, within the rubric stage.';
   return {
-    scenario: { metrics: input.scenario.metrics, successCriteria: input.scenario.successCriteria, checks: input.scenario.checks, goalObservation: input.scenario.goalObservation,
+    scenario: { ...(input.scenario.execution ? { execution: { protocol: input.scenario.execution.checkpointProtocol, checkpointHash: input.scenario.execution.checkpointHash, evaluatorView: input.scenario.execution.evaluatorView } } : {}), metrics: input.scenario.metrics, successCriteria: input.scenario.successCriteria, checks: input.scenario.checks, goalObservation: input.scenario.goalObservation,
       user: input.trial.userMode === 'static' ? { ...input.scenario.user, script: [], maxFollowUps: 0 } : input.scenario.user },
     evaluationScope: observationMissing
       ? `${scope} Agent prose proves only what was said. Without observed state, action-dependent pass conditions remain unclear; assess reply quality independently.`
@@ -160,7 +161,7 @@ function hasCompleteReceipt(input: Input, receipt: JudgeReceipt, metrics: NonNul
 
 /** Historical verdicts remain readable, but incomplete or stale receipts cannot support a comparison. */
 export function hasCompleteJudgment(input: Input): boolean {
-  if (!input.scenario) return false;
+  if (!input.scenario || !checkpointReceiptValid(input.scenario, input.trial)) return false;
   const metrics = assessmentRubrics(input.scenario, input.trial);
   if (!metrics.length) return true;
   const audit = input.trial.judgeAudit;

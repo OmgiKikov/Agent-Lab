@@ -1,6 +1,19 @@
+import type { CheckpointInput } from './checkpoints.js';
+import { userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
+import { checkpointSchema } from './scenario-contracts.js';
 import { importBatchSchema, preparationProgressSchema, scenarioLibrarySchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal, type SemanticFinding, type PreparationProgress } from './scenario-contracts.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+
+export const checkpointDecisionSchema = z.strictObject({
+  checkpointId: z.string().min(1).max(80), result: z.enum(['pass', 'fail', 'unknown', 'not_applicable']),
+  evidence: z.array(z.number().int().nonnegative()).max(30), rationale: z.string().trim().min(1).max(2000),
+});
+export const checkpointResultSchema = checkpointDecisionSchema.extend({ requirementId: z.string(), role: z.enum(['required', 'diagnostic']), observation: z.enum(['reply', 'tool', 'state']), contextEvidence: z.array(z.number().int().nonnegative()).max(30).optional() });
+export type CheckpointDecision = z.infer<typeof checkpointDecisionSchema>;
+export type CheckpointResult = z.infer<typeof checkpointResultSchema>;
+export const checkpointReceiptSchema = z.strictObject({ protocolHash: z.string(), inputHash: z.string(), resultHash: z.string(), decisionHash: z.string(), decisions: z.array(checkpointDecisionSchema).max(12) });
+
 
 export const VERSION = '6';
 export const DEFAULT_JUDGE = { provider: 'openrouter', model: 'openai/gpt-5.6-sol', upstream: 'openai' } as const;
@@ -289,6 +302,12 @@ export const goalObservationSchema = z.enum(['reply', 'tool', 'state']);
 export type GoalObservation = z.infer<typeof goalObservationSchema>;
 /** The evidence channel an external agent is judged on when the owner did not pick one. */
 export const DEFAULT_GOAL_OBSERVATION: GoalObservation = 'reply';
+export const executionSchema = z.strictObject({
+  protocol: z.literal('controlled-user-v1'), checkpointProtocol: z.literal('checkpoints-v1'), controllerHash: text, checkpointHash: text,
+  userView: userViewSchema,
+  environmentView: z.strictObject({ mode: z.enum(['prompt', 'managed']), contract: z.strictObject({ operations: z.array(z.string()), reset: z.boolean(), observations: z.array(z.enum(['reply', 'tool', 'state'])), confirmed: z.boolean() }).optional() }),
+  evaluatorView: z.strictObject({ checkpoints: z.array(checkpointSchema).max(12), requirements: z.array(requirementSchema).max(80) }),
+});
 export const scenarioSchema = z.strictObject({
   id: identifier, familyId: identifier, title: text.max(200),
   requirementIds: z.array(identifier).max(20),
@@ -296,6 +315,7 @@ export const scenarioSchema = z.strictObject({
   tier: tierSchema.default('regression'),
   profileId: identifier.optional(),
   user: userSchema, initialState: worldSchema,
+  execution: executionSchema.optional(),
   checks: z.array(checkSchema).max(12),
   /** Owner-selected evidence channel. Optional only for legacy/production records. */
   goalObservation: goalObservationSchema.optional(),
@@ -553,7 +573,7 @@ export type Outcome = 'pass' | 'fail' | 'ungraded' | 'invalid' | 'cancelled';
 export interface Usage { calls: number; inputTokens: number; outputTokens: number; costUsd: number | null }
 export const emptyUsage = (): Usage => ({ calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 });
 export interface TraceEvent {
-  seq: number; type: 'user' | 'assistant' | 'simulator' | 'retrieval' | 'tool_call' | 'tool_result' | 'error';
+  seq: number; type: 'user' | 'assistant' | 'simulator' | 'observation' | 'retrieval' | 'tool_call' | 'tool_result' | 'error';
   text?: string; tool?: string; args?: unknown; result?: unknown; state?: World;
 }
 export const assessmentEventContent = (event: TraceEvent): string =>
@@ -568,6 +588,7 @@ export interface SimulatorCheck { id: SimulatorCheckId; description: string; pas
 export interface Trial {
   id: string; revisionId: string; scenarioId: string; familyId: string; repeat: number; userMode: UserMode;
   split: 'dev' | 'control'; manifestHash: string; outcome: Outcome; reason: string;
+  checkpoints?: CheckpointResult[]; checkpointReceipt?: z.infer<typeof checkpointReceiptSchema>;
   checks: CheckResult[]; simulatorChecks?: SimulatorCheck[]; events: TraceEvent[]; initialState: World; finalState: World;
   usage: Usage; elapsedMs: number;
   assessments?: MetricAssessment[]; assessmentError?: string; judgeAudit?: JudgeAudit; judgeReceipt?: JudgeReceipt;
@@ -807,12 +828,13 @@ export interface Experiment {
 export const usageSchema = z.strictObject({ calls: z.number().int().nonnegative(), inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), costUsd: z.number().finite().nonnegative().nullable() });
 const revisionSchema = z.strictObject({ id: text, parentId: text.nullable(), spec: agentSchema, hypothesis: z.string(), createdAt: text });
 export const trialSchema = z.strictObject({
+  checkpoints: z.array(checkpointResultSchema).max(12).optional(), checkpointReceipt: checkpointReceiptSchema.optional(),
   id: identifier, revisionId: text, scenarioId: identifier, familyId: identifier, repeat: z.number().int().nonnegative(),
   userMode: userModeSchema.default('reactive'),
   split: z.enum(['dev', 'control']), manifestHash: text, outcome: z.enum(['pass', 'fail', 'ungraded', 'invalid', 'cancelled']), reason: z.string(),
   checks: z.array(z.strictObject({ id: identifier, description: z.string(), passed: z.boolean(), evidence: z.string() })),
   simulatorChecks: z.array(z.strictObject({ id: z.enum(SIMULATOR_CHECK_IDS), description: z.string(), passed: z.boolean(), evidence: z.string(), seq: z.number().int().nonnegative().optional(), heuristic: z.boolean() })).max(12).optional(),
-  events: z.array(z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'retrieval', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() })),
+  events: z.array(z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'observation', 'retrieval', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() })),
   initialState: worldSchema, finalState: worldSchema, usage: usageSchema, elapsedMs: z.number().finite().nonnegative(),
   assessments: z.array(metricAssessmentSchema).max(12).optional(), assessmentError: z.string().max(4000).optional(),
   observation: z.strictObject({ state: z.enum(['sandbox', 'reported', 'missing']), tools: z.enum(['sandbox', 'complete', 'partial']), resetConfirmed: z.boolean().optional(), version: text.max(200).optional(), toolScope: z.array(z.string().max(200)).max(50).optional() }).optional(),
@@ -971,6 +993,8 @@ export interface ScenarioAssessmentInput {
   })[];
 }
 export interface Runtime {
+  assessCheckpoints?(input: CheckpointInput, ctx: CallContext): Promise<CheckpointDecision[]>;
+  selectUserAction?(input: { user: UserView; state: string; actions: AllowedUserAction[]; messages: DialogueMessage[]; turn: number; repair?: string }, ctx: CallContext): Promise<UserDecision>;
   scenarioProposals?(input: ScenarioProposalsInput, ctx: CallContext): Promise<ScenarioProposal[]>;
   assessScenarioProposals?(input: ScenarioAssessmentInput, ctx: CallContext): Promise<SemanticFinding[]>;
   prepare(input: PrepareInput, ctx: CallContext): Promise<z.infer<typeof preparationSchema>>;

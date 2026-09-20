@@ -93,7 +93,16 @@ export function assertLibraryRun(record: Experiment): void {
   if (fingerprint(record.requirements) !== fingerprint(library.requirements) || fingerprint(record.sources) !== fingerprint(library.sources)) throw new Error('Требования библиотеки изменились; требуется новая подготовка и принятие.');
   const compiled = compiledLibraryScenarios(record, library);
   const ids = record.selectedScenarioIds ?? library.acceptance!.variantIds;
-  const expected = compiled.filter(s => ids.includes(s.id));
+  const expected = compiled.filter(s => ids.includes(s.id)).map(scenario => {
+    const recorded = record.scenarios.find(s => s.id === scenario.id);
+    // Pre-controller accepted cards retain their exact definition and simulator protocol.
+    // A matching historical acceptance receipt prevents dropping execution from a new card.
+    if (recorded && !recorded.execution && record.acceptedTests?.some(t => t.scenarioId === recorded.id && t.definitionHash === fingerprint(recorded))) {
+      const { execution, ...legacy } = scenario;
+      return legacy;
+    }
+    return scenario;
+  });
   if (!expected.length || ids.some(id => !compiled.some(s => s.id === id)) || fingerprint(expected) !== fingerprint(record.scenarios)) throw new Error('Карточки отличаются от принятой библиотеки; повторите принятие.');
 }
 export function compiledLibraryScenarios(record: Experiment, library: ScenarioLibrary) {

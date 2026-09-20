@@ -1,3 +1,4 @@
+import { requiredCheckpointResult } from './checkpoints.js';
 import { metricApplies, simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type Trial } from './contracts.js';
 
 /*
@@ -66,13 +67,13 @@ export function agentRubricResult(scenario: Scenario | undefined, trial: Trial, 
 }
 export function isAgentFailure(record: Experiment, trial: Trial): boolean {
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-  return measurementUsable(scenario, trial, record.humanReviews) && (trial.outcome === 'fail'
+  return requiredCheckpointResult(scenario, trial) !== 'unknown' && measurementUsable(scenario, trial, record.humanReviews) && (requiredCheckpointResult(scenario, trial) === 'fail' || trial.outcome === 'fail'
     || agentRubricResult(scenario, trial, record.humanReviews) === 'fail');
 }
 /** A candidate cannot be accepted on a partially scored agent rubric. A quick «не могу сказать» is skipped here too: the judge's recorded result still decides. */
 export function trialAssessmentComplete(scenario: Scenario, trial: Trial, reviews: HumanReview[] = []): boolean {
   const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
-  return measurementUsable(scenario, trial, reviews) && (scenario.metrics ?? []).filter(m => m.subject === 'agent')
+  return measurementUsable(scenario, trial, reviews) && requiredCheckpointResult(scenario, trial) !== 'unknown' && (scenario.metrics ?? []).filter(m => m.subject === 'agent')
     .every(m => { const human = latest.get(`${trial.id}|metric:${m.id}`);
       if (human && !(human.source === 'quick' && human.verdict === 'unknown')) return human.verdict !== 'unknown';
       const result = trial.assessments?.find(a => a.metricId === m.id)?.result;
@@ -100,9 +101,12 @@ export function measurementUsable(scenario: Scenario | undefined, trial: Trial, 
 /** Combined automatic result for triage, never a replacement for the separate code and rubric scores. */
 export function automaticTrialResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' {
   if (!scenario || !measurementUsable(scenario, trial, reviews)) return 'unknown';
+  const checkpoint = requiredCheckpointResult(scenario, trial);
+  if (checkpoint === 'fail') return 'fail';
+  if (checkpoint === 'unknown') return 'unknown';
   const rubric = agentRubricResult(scenario, trial, reviews);
   if (trial.outcome === 'fail' || rubric === 'fail') return 'fail';
-  return (!scenario.checks.length || trial.outcome === 'pass')
+  return (!scenario.checks.length || trial.outcome === 'pass' || checkpoint === 'pass')
     && (rubric === 'pass' || (rubric === undefined && scenario.checks.length > 0)) ? 'pass' : 'unknown';
 }
 
@@ -139,6 +143,9 @@ export function headlineMetricIds(scenario: Scenario | undefined): string[] {
  */
 export function headlineTrialResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' {
   if (!scenario || !measurementUsable(scenario, trial, reviews)) return 'unknown';
+  const checkpoint = requiredCheckpointResult(scenario, trial);
+  if (checkpoint === 'fail') return 'fail';
+  if (checkpoint === 'unknown') return 'unknown';
   const ids = headlineMetricIds(scenario);
   if (!ids.length) return automaticTrialResult(scenario, trial, reviews);
   const results = ids.map(id => agentMetricResult(trial, id, reviews) ?? 'unknown');

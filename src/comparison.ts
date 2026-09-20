@@ -1,3 +1,4 @@
+import { directChecks } from './checkpoints.js';
 import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
@@ -506,8 +507,8 @@ function runCompleteness(record: Experiment, allowPartial = false): string[] {
     if (!expected.has(key) || seen.has(key) || ids.has(trial.id) || !scenario
       || trial.familyId !== scenario.familyId || fingerprint(trial.initialState) !== fingerprint(scenario.initialState)
       || trial.split !== scenario.split
-      || measured(trial) && (trial.checks.length !== scenario.checks.length || new Set(trial.checks.map(c => c.id)).size !== scenario.checks.length
-        || trial.checks.some(c => !scenario.checks.some(expected => expected.id === c.id)))
+      || measured(trial) && (trial.checks.length !== directChecks(scenario).length || new Set(trial.checks.map(c => c.id)).size !== directChecks(scenario).length
+        || trial.checks.some(c => !directChecks(scenario).some(expected => expected.id === c.id)))
       || trial.outcome === 'pass' && (!trial.checks.length || trial.checks.some(c => !c.passed))
       || (record.manifestHash && trial.manifestHash !== record.manifestHash)) invalid = true;
     if (!measured(trial)) unmeasured = true;

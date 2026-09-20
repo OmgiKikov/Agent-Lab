@@ -437,7 +437,7 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean, 
     verdictSummary(record).review.status === 'complete' ? 'Разбор набора завершён; у этого диалога отдельного вердикта нет. v — оценить подробно.'
       : 'Вердикта человека нет. v — оценить критерий или весь диалог.', 'muted'));
   const transcript: Line[] = [line('ДИАЛОГ', 'accent', true)];
-  const roles = { user: 'ПОЛЬЗОВАТЕЛЬ', assistant: 'АГЕНТ', simulator: 'СИМУЛЯТОР', retrieval: 'RAG-КОНТЕКСТ', tool_call: 'ВЫЗОВ', tool_result: 'РЕЗУЛЬТАТ', error: 'ОШИБКА' };
+  const roles = { user: 'ПОЛЬЗОВАТЕЛЬ', assistant: 'АГЕНТ', simulator: 'СИМУЛЯТОР', observation: 'НАБЛЮДЕНИЕ', retrieval: 'RAG-КОНТЕКСТ', tool_call: 'ВЫЗОВ', tool_result: 'РЕЗУЛЬТАТ', error: 'ОШИБКА' };
   for (const event of trial.events) {
     if (!expanded && !['user', 'assistant', 'error'].includes(event.type)) continue;
     transcript.push(line(`#${event.seq}  ${roles[event.type]}${event.tool ? ` · ${event.tool}` : ''}`, event.type === 'user' ? 'accent' : event.type === 'error' ? 'error' : 'text', true));

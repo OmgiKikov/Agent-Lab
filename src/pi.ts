@@ -1,3 +1,7 @@
+import { checkpointDecisionSchema } from './checkpoints.js';
+import { CHECKPOINT_ROLE } from './prompts.js';
+import { userDecisionSchema } from './user-controller.js';
+import { USER_CONTROLLER_ROLE } from './prompts.js';
 import { SCENARIO_OUTPUT_BYTES, SEMANTIC_BATCH_FIELDS, SEMANTIC_REASON_CHARS, serializedBytes, workInputIssue } from './scenario-work.js';
 import { scenarioProposalSchema, semanticFindingSchema } from './scenario-contracts.js';
 import { SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE } from './prompts.js';
@@ -408,13 +412,17 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   if (!available.some(m => m.id === model.id)) throw new Error(authHelp);
   const ask = async <S extends z.ZodType>(label: string, role: string, input: unknown, schema: S, ctx: CallContext,
     review?: (value: z.infer<S>) => string | undefined): Promise<z.infer<S>> => {
-    const choice = settings.roles?.[role === ASSESS_ROLE ? 'judge' : role === SIMULATOR_ROLE ? 'simulator' : 'builder'];
+    const choice = settings.roles?.[(role === ASSESS_ROLE || role === CHECKPOINT_ROLE) ? 'judge' : (role === SIMULATOR_ROLE || role === USER_CONTROLLER_ROLE) ? 'simulator' : 'builder'] ?? (role === CHECKPOINT_ROLE ? settings.judge : undefined);
     let selected = model;
     if (choice) {
       const override = modelRuntime.getModel(choice.provider, choice.model);
       const models = await modelRuntime.getAvailable(choice.provider, { signal: ctx.signal });
       if (!override || !models.some(m => m.id === override.id)) throw new Error(`Модель роли недоступна: ${choice.provider}/${choice.model}. ${authHelp}`);
       selected = override;
+    }
+    if (role === CHECKPOINT_ROLE && selected.provider === 'openrouter') {
+      const upstream = settings.roles?.judge ? undefined : settings.judge?.upstream;
+      selected = { ...selected, api: 'openai-completions', baseUrl: 'https://openrouter.ai/api/v1', compat: { ...selected.compat, supportsDeveloperRole: false, maxTokensField: 'max_tokens', ...(upstream ? { openRouterRouting: { only: [upstream], allow_fallbacks: false } } : {}) } };
     }
     return jsonResponse(modelRuntime, selected, label, role, input, schema, ctx, review);
   };
@@ -747,6 +755,12 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
         `${agent.instructions}\n\n${DATA_BOUNDARY}\n${TOOL_GUIDE}\nAvailable material names: ${JSON.stringify(sources.map(s => s.name))}. Use search_materials when needed.`,
         allowed, ctx, 4096,
       );
+    },
+    async assessCheckpoints(input, ctx) {
+      return (await ask('Контрольные точки', CHECKPOINT_ROLE, input, z.strictObject({ results: z.array(checkpointDecisionSchema).max(12) }), ctx)).results;
+    },
+    async selectUserAction(input, ctx) {
+      return ask('Действие пользователя', USER_CONTROLLER_ROLE, input, userDecisionSchema, ctx);
     },
     async userTurn(input, ctx) {
       const reply = await ask(

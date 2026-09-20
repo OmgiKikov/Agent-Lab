@@ -1,3 +1,4 @@
+import { directChecks } from './checkpoints.js';
 import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, UserMode, ValidationExclusion } from './contracts.js';
 import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, MACHINE_FORMAT, metricApplies, ragEvidenceComplete, RAG_METRIC_IDS, verbatimSpan } from './contracts.js';
 import { agentMetricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
@@ -320,6 +321,10 @@ export function trialProofLines(record: Experiment, trialId: string): TrialProof
       'ПРОВЕРКИ',
       ...(checks.length ? checks : ['—']),
       '',
+      ...(trial.checkpoints?.length ? ['КОНТРОЛЬНЫЕ ТОЧКИ', ...trial.checkpoints.flatMap(cp => [
+        `${cp.result.toUpperCase()} [${cp.checkpointId}] · ${cp.role === 'required' ? 'обязательная' : 'диагностика'} · требование ${cp.requirementId} · события ${cp.evidence.map(seq => `#${seq}`).join(', ') || '—'}`,
+        ...labelled('  Обоснование: ', cp.rationale),
+      ]), ''] : []),
       'ОЦЕНКИ',
       ...(rubrics.length ? rubrics : ['—']),
     ],
@@ -437,7 +442,7 @@ export function scoreBrief(input: Experiment): ScoreBrief {
   const { requirement, source, quote, trial, assessment, event } = grounded;
   const reference = `диалог ${trial.id}, событие #${event.seq}`;
   const labels: Record<TraceEvent['type'], string> = {
-    user: 'Реплика пользователя', assistant: 'Ответ агента', simulator: 'Реплика симулятора', tool_call: 'Вызов инструмента',
+    user: 'Реплика пользователя', assistant: 'Ответ агента', simulator: 'Реплика симулятора', observation: 'Наблюдение окружения', tool_call: 'Вызов инструмента',
     tool_result: 'Результат инструмента', retrieval: 'RAG-контекст', error: 'Ошибка',
   };
   const status = { pass: 'ПРОЙДЕНО', fail: 'НЕ ПРОЙДЕНО', unknown: 'НЕЯСНО' } as const;
@@ -486,7 +491,7 @@ function metricRows(record: Experiment): QualityMetric[] {
   for (const trial of record.trials) {
     const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
     if (!scenario || !measured(trial)) continue;
-    if (scenario.checks.length) {
+    if (directChecks(scenario).length) {
       const row = rows.get('code') ?? { id: 'code', name: 'Точные проверки · код', kind: 'code', passed: 0, failed: 0, unknown: 0, total: 0, accuracy: null };
       rows.set('code', row);
       bump(row, !usable(scenario, trial) ? 'unknown' : trial.outcome === 'pass' ? 'pass' : trial.outcome === 'fail' ? 'fail' : 'unknown');

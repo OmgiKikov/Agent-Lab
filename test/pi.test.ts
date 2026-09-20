@@ -1359,3 +1359,64 @@ test('scenario proposal transport rejects a prose deterministic check and permit
     assert.match(f.requests[0]!.systemPrompt!, /omit.*check.*semantic/i);
   } finally { await f.close(); }
 });
+
+test('controlled user and checkpoint roles use actual simulator/judge models and isolated compiler payloads', async () => {
+  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { libraryFixture } = await import('./helpers/scenario-library.js');
+  const { createUserState, allowedUserActions } = await import('../src/user-controller.js');
+  const { checkpointInput } = await import('../src/checkpoints.js');
+  const library = libraryFixture();
+  const scenario = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  scenario.execution!.evaluatorView.checkpoints[0]!.rule += ' EVALUATOR_ONLY_MARKER';
+  const f = await fixture((_request, index) => JSON.stringify(index === 0 ? { actionId: 'finish', factIds: [] }
+    : { results: [{ checkpointId: 'ask_terminal', result: 'pass', evidence: [1], rationale: 'Уточнение соответствует правилу' }] }), true);
+  try {
+    const adapter = await createPiRuntime(settingsSchema.parse({ ...settings, roles: { simulator: { provider: settings.provider, model: 'role-model' } }, judge: { provider: settings.provider, model: 'test-model' } }), f.runtime);
+    const state = createUserState(scenario.execution!.userView.policy, scenario.execution!.userView.facts);
+    const { ctx, usage } = callContext();
+    await adapter.selectUserAction!({ user: scenario.execution!.userView, state: state.position, actions: allowedUserActions(state, 'Назовите терминал'), messages: [{ role: 'assistant', content: 'Назовите терминал' }], turn: 0 }, ctx);
+    const trial: Trial = { id: 't', scenarioId: scenario.id, familyId: scenario.familyId, revisionId: 'r', userMode: 'reactive', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1, events: [{ seq: 0, type: 'user', text: 'Возврат' }, { seq: 1, type: 'assistant', text: 'Назовите терминал' }] };
+    await adapter.assessCheckpoints!(checkpointInput(scenario, trial), ctx);
+    assert.deepEqual(f.modelsUsed, ['role-model', 'test-model']);
+    assert.equal(usage.calls, 2);
+    assert.doesNotMatch(JSON.stringify(f.requests[0]), /EVALUATOR_ONLY_MARKER|checkpoints|requirementId|environmentView|backend/);
+    assert.match(JSON.stringify(f.requests[1]), /EVALUATOR_ONLY_MARKER/);
+    assert.deepEqual(f.requests.map(r => r.tools), [[], []]);
+  } finally { await f.close(); }
+});
+
+test('real compiler, Pi transport and evaluator enforce repair, exact disclosure and correct-versus-wrong refusal', async () => {
+  const { evaluateTrial } = await import('../src/evaluation.js');
+  const { headlineTrialResult } = await import('../src/outcomes.js');
+  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { libraryFixture, sources, requirements } = await import('./helpers/scenario-library.js');
+  const { USER_CONTROLLER_ROLE, CHECKPOINT_ROLE, ASSESS_ROLE } = await import('../src/prompts.js');
+  for (const verdict of ['pass', 'fail'] as const) {
+    const library = libraryFixture();
+    library.variants[0]!.behaviorPolicy = { version: 1, initialState: 'ask', states: ['ask', 'answered', 'done'], terminalStates: ['done'], maxFollowUps: 1, repetitionLimit: 1,
+      actions: [{ id: 'number', kind: 'answer', factIds: ['terminal_number'], payload: 'Номер терминала: 1234', ifAsked: 'номер терминала' }, { id: 'finish', kind: 'finish', factIds: [] }],
+      transitions: [{ from: 'ask', to: 'answered', actionId: 'number', when: 'Уточнение номера' }, { from: 'answered', to: 'done', actionId: 'finish', when: 'Получен отказ или инструкция' }] };
+    const s = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+    s.execution!.evaluatorView.checkpoints[0]!.rule += ' EVALUATOR_ONLY_MARKER';
+    let selectorCalls = 0, targetCalls = 0;
+    const f = await fixture(request => {
+      const prompt = request.systemPrompt ?? '';
+      if (prompt.startsWith(USER_CONTROLLER_ROLE)) return JSON.stringify(++selectorCalls === 1 ? { actionId: 'number', factIds: ['hidden'] } : selectorCalls === 2 ? { actionId: 'number', factIds: ['terminal_number'] } : { actionId: 'finish', factIds: [] });
+      if (prompt.startsWith(CHECKPOINT_ROLE)) return JSON.stringify({ results: [{ checkpointId: 'ask_terminal', result: verdict, evidence: [0, 1, 4, 5], rationale: verdict === 'pass' ? 'Корректно объяснён отказ' : 'Отказ противоречит правилу' }] });
+      if (prompt.startsWith(ASSESS_ROLE)) return JSON.stringify({ assessments: [{ metricId: 'library_required', passCondition: 'met', failCondition: 'not_met', rationale: 'Уточнение дано', evidence: [1], citations: [{ seq: 1, quote: 'Назовите номер терминала' }] }] });
+      return ++targetCalls === 1 ? 'Назовите номер терминала' : verdict === 'pass' ? 'Без дополнительных данных возврат невозможен' : 'Возврат запрещён всем';
+    });
+    try {
+      const { ctx, usage } = callContext();
+      const trial = await evaluateTrial({ runtime: f.adapter, scenario: s, revision: { id: 'base', parentId: null, spec: { name: 'Агент', instructions: 'Помогать клиенту', tools: [] }, hypothesis: '', createdAt: '' }, repeat: 0, manifestHash: 'h', sources, requirements, settings: settingsSchema.parse({ ...settings, maxTurns: 2 }), ctx, userMode: 'reactive', target: { kind: 'sandbox' } });
+      assert.deepEqual(trial.events.filter(e => e.type === 'user').map(e => e.text), ['Помогите с возвратом', 'Номер терминала: 1234']);
+      assert.equal(trial.events.filter(e => e.type === 'assistant').length, 2);
+      assert.equal(trial.events.filter(e => e.type === 'simulator' && (e.result as any).accepted === false).length, 1);
+      assert.equal(headlineTrialResult(s, trial), verdict);
+      assert.equal(usage.calls, 8);
+      assert.equal(trial.usage.calls, 8);
+      assert.ok(trial.judgeReceipt?.complete);
+      for (const request of f.requests.filter(r => !(r.systemPrompt ?? '').startsWith(CHECKPOINT_ROLE) && !(r.systemPrompt ?? '').startsWith(ASSESS_ROLE))) assert.doesNotMatch(JSON.stringify(request), /EVALUATOR_ONLY_MARKER/);
+    } finally { await f.close(); }
+  }
+});

@@ -1,3 +1,5 @@
+import { checkpointInput, checkpointReceipt, directChecks, evaluateCheckpoints } from './checkpoints.js';
+import { createUserState, allowedUserActions, advanceUser, requiredUserTurns } from './user-controller.js';
 import { randomUUID } from 'node:crypto';
 import {
   assessmentRubrics, emptyUsage, judgeAuditSchema, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
@@ -67,6 +69,10 @@ const stages: Record<string, string> = {
 };
 
 export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
+  if (scenario.execution) {
+    if (scenario.execution.environmentView.mode === 'managed' && trial.observation?.state !== 'sandbox' && trial.observation?.resetConfirmed !== true) throw new Error('Сброс управляемого окружения не подтверждён адаптером.');
+    scenario = { ...scenario, checks: directChecks(scenario) };
+  }
   if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) {
     throw new Error('Внешнее состояние карточки не подтверждено адаптером (resetConfirmed). Измерение недействительно.');
   }
@@ -169,8 +175,17 @@ export async function evaluateTrial(input: {
   let stopped = false;
   let finalUserReply = false;
   let reportedState = false;
+  let controlled: ReturnType<typeof createUserState> | undefined;
   try {
     ctx.signal.throwIfAborted();
+    if (scenario.execution) {
+      stage = 'контроллер симулятора';
+      if (userMode !== 'reactive') throw new Error('Управляемая политика требует реактивного режима; статический и сценарный режимы её не исполняют.');
+      if (!runtime.selectUserAction) throw new Error('Среда не поддерживает контроллер пользователя.');
+      const { policy, facts } = scenario.execution.userView;
+      if (requiredUserTurns(policy, facts) > settings.maxTurns) throw new Error('Обязательный путь пользователя не помещается в лимит реплик.');
+      controlled = createUserState(policy, facts);
+    }
     if (userMode === 'scripted') {
       const issue = scriptIssue(scenario.user, settings.maxTurns);
       if (issue) { stage = 'сценарий теста'; throw new Error(issue); }
@@ -218,9 +233,13 @@ export async function evaluateTrial(input: {
       if (persistenceFailed) throw persistenceError;
       ctx.signal.throwIfAborted();
       if (typeof response !== 'string') throw new Error('Target returned a non-text response');
+      if (controlled && scenario.execution!.evaluatorView.checkpoints.some(cp => cp.observation !== 'reply')) {
+        emit({ type: 'observation', result: structuredClone(trial.observation), ...(trial.observation?.state !== 'missing' ? { state: structuredClone(state) } : {}) });
+      }
       append('assistant', response);
       if (!response.trim()) { trial.reason = 'Испытуемый вернул пустой ответ.'; break; }
-      if (userMode === 'static' || finalUserReply || (scenario.user.maxFollowUps !== undefined && turn >= scenario.user.maxFollowUps)) { stopped = true; break; }
+      if (controlled && (finalUserReply || controlled.policy.terminalStates.includes(controlled.position))) { stopped = true; break; }
+      if (!controlled && (userMode === 'static' || finalUserReply || (scenario.user.maxFollowUps !== undefined && turn >= scenario.user.maxFollowUps))) { stopped = true; break; }
       if (userMode === 'scripted') {
         const next = scenario.user.script?.[turn];
         if (next === undefined) { stopped = true; break; }
@@ -230,6 +249,30 @@ export async function evaluateTrial(input: {
       }
       stage = 'user simulation';
       onStage?.('user');
+      if (controlled) {
+        let repair: string | undefined;
+        let accepted: ReturnType<typeof advanceUser> | undefined;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          ctx.signal.throwIfAborted();
+          const decision = await runtime.selectUserAction!({ user: structuredClone(scenario.execution!.userView), state: controlled.position,
+            actions: allowedUserActions(controlled, response), messages: structuredClone(messages), turn, ...(repair ? { repair } : {}) }, userCtx);
+          ctx.signal.throwIfAborted();
+          try {
+            accepted = advanceUser(controlled, decision);
+            emit({ type: 'simulator', result: { protocol: scenario.execution!.protocol, attempt, decision, accepted: true, from: controlled.position, to: accepted.state.position } });
+            break;
+          } catch (error) {
+            repair = error instanceof Error ? error.message : 'Неразрешённое действие';
+            emit({ type: 'simulator', result: { protocol: scenario.execution!.protocol, attempt, decision, accepted: false, reason: repair } });
+          }
+        }
+        if (!accepted) throw new Error('Симулятор не выбрал допустимое действие после ограниченного исправления.');
+        controlled = accepted.state;
+        if (accepted.done && !accepted.message) { stopped = true; break; }
+        if (turn + 1 >= settings.maxTurns) throw new Error('Симулятор исчерпал лимит реплик до завершения обязательного пути.');
+        userMessage = accepted.message; finalUserReply = accepted.done;
+        continue;
+      }
       const decision = await runtime.userTurn({ user: structuredClone(scenario.user), messages: structuredClone(messages), turn }, userCtx);
       emit({ type: 'simulator', result: decision });
       const user = userTurnSchema.parse(decision);
@@ -269,9 +312,9 @@ export async function evaluateTrial(input: {
     trial.elapsedMs = Math.round(performance.now() - started);
     if (persistenceFailed) throw persistenceError;
   }
-  if (stopped && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && assessmentRubrics(scenario, trial).length) {
+  if (stopped && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && (scenario.execution || assessmentRubrics(scenario, trial).length)) {
     try {
-      if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');
+      if (!runtime.assess && !scenario.execution) throw new Error('Metric assessment is unavailable for this runtime');
       ctx.signal.throwIfAborted();
       onStage?.('assessment');
       trial.assessments = await assessTrial(runtime, scenario, sources, trial, { ...localCtx, onJudgment: (id, audit, final) => {
@@ -289,8 +332,17 @@ export async function evaluateTrial(input: {
 
 /** Shared by live evaluation and reassessment of immutable recorded evidence. The judge sees the agent prompt only as its observable rules. */
 export async function assessTrial(runtime: Runtime, scenario: Scenario, sources: Source[], trial: Trial, ctx: CallContext, requirements: Requirement[]) {
-  if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');
+  if (scenario.execution) {
+    delete trial.checkpoints; delete trial.checkpointReceipt;
+    if (!runtime.assessCheckpoints) throw new Error('Оценка контрольных точек недоступна в этой среде');
+    const raw = await runtime.assessCheckpoints(checkpointInput(scenario, trial), { ...ctx, onTargetEvent: undefined, onTrace: undefined });
+    ctx.signal.throwIfAborted();
+    trial.checkpoints = evaluateCheckpoints(scenario, trial, raw, grade);
+    trial.checkpointReceipt = checkpointReceipt(scenario, trial, trial.checkpoints, raw);
+  }
   const metrics = assessmentRubrics(scenario, trial);
+  if (!metrics.length) return [];
+  if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');
   let latest: JudgeAudit | undefined;
   let mapped: MetricAssessment[] | undefined;
   try {

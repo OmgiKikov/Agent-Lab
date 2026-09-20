@@ -421,3 +421,27 @@ test('changed state requires an explicitly supported mutation operation, not onl
   const unchanged = editLibrary(draft, libraryHash(draft), { kind: 'upsert_variant', variant, reason: 'Изменение состояния не требуется' });
   assert.equal(compileLibrary(acceptLibrary(unchanged, libraryHash(unchanged), ['variant_1']))[0]!.checks[0]!.kind, 'state_equals');
 });
+
+test('historical accepted library cards retain their legacy compiler identity and reject edited definitions', async () => {
+  const { assertLibraryRun } = await import('../src/scenario-preparation.js');
+  const { fingerprint } = await import('../src/contracts.js');
+  const draft = libraryFixture();
+  const library = acceptLibrary(draft, libraryHash(draft), ['variant_1']);
+  const { execution, ...legacy } = compileLibrary(library)[0]!;
+  const record = { librarySnapshot: library, scenarios: [legacy], sources, requirements, workflow: 'evaluate', questions: [], profiles: [],
+    revisions: [{ spec: { name: 'Агент', instructions: 'Помогать', tools: [] } }],
+    acceptedTests: [{ testId: 'historical_test', scenarioId: legacy.id, definitionHash: fingerprint(legacy), acceptedAt: '2026-09-19T00:00:00.000Z' }] } as any;
+  const before = JSON.stringify(record);
+  assert.doesNotThrow(() => assertLibraryRun(record));
+  assert.equal(JSON.stringify(record), before);
+  record.scenarios[0].user.opening = 'Изменённый вход';
+  assert.throws(() => assertLibraryRun(record), /Карточки отличаются/);
+});
+
+test('policy admission counts empty finish as zero follow-up messages', () => {
+  const library = libraryFixture();
+  library.variants[0]!.behaviorPolicy = { version: 1, initialState: 'ask', states: ['ask', 'answered', 'done'], terminalStates: ['done'], maxFollowUps: 1, repetitionLimit: 1,
+    actions: [{ id: 'answer', kind: 'answer', factIds: ['terminal_number'], payload: 'Номер терминала: 1234' }, { id: 'finish', kind: 'finish', factIds: [] }],
+    transitions: [{ from: 'ask', to: 'answered', actionId: 'answer', when: 'Агент уточнил номер' }, { from: 'answered', to: 'done', actionId: 'finish', when: 'Получен ответ' }] };
+  assert.doesNotThrow(() => acceptLibrary(library, libraryHash(library), ['variant_1']));
+});

@@ -811,3 +811,40 @@ test('a failed exact check is quoted with its own evidence, not with the explana
   assert.equal(q.causes[0]?.example?.quote, 'осталось 0');
   assert.equal(q.causes[0]?.example?.explanation, undefined);
 });
+
+test('required checkpoint decisions reach the existing accuracy while diagnostics remain explanatory', async () => {
+  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { libraryFixture } = await import('./helpers/scenario-library.js');
+  const library = libraryFixture();
+  const s = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  const t = trial('controlled', s.id, 'ungraded', 'pass'); t.familyId = s.familyId; t.checks = []; t.initialState = s.initialState; t.finalState = s.initialState;
+  t.assessments = [{ metricId: 'library_required', result: 'pass', rationale: 'Корректный отказ', evidence: [1] }];
+  t.checkpoints = [{ checkpointId: 'ask_terminal', requirementId: 'terminal_rule', observation: 'reply', role: 'required', result: 'fail', evidence: [1], rationale: 'Обязательное уточнение пропущено' },
+    { checkpointId: 'diagnostic', requirementId: 'terminal_rule', observation: 'reply', role: 'diagnostic', result: 'fail', evidence: [1], rationale: 'Диагностика' }];
+  const r = record({ scenarios: [s], trials: [t] });
+  assert.equal(qualitySummary(r).cards.accuracy, 0);
+  t.checkpoints[0]!.result = 'pass';
+  assert.equal(qualitySummary(r).cards.accuracy, 1);
+  t.checkpoints[0]!.result = 'unknown';
+  assert.equal(qualitySummary(r).cards.accuracy, null);
+  assert.match(trialProofLines(r, t.id).lines.join('\n'), /КОНТРОЛЬНЫЕ ТОЧКИ/);
+  assert.match(trialProofLines(r, t.id).lines.join('\n'), /terminal_rule/);
+});
+
+test('conditional deterministic checkpoints use checkpoint completeness rather than unconditional code-check counts', async () => {
+  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { libraryFixture } = await import('./helpers/scenario-library.js');
+  const { checkpointReceipt } = await import('../src/checkpoints.js');
+  const library = libraryFixture();
+  library.variants[0]!.evaluationSpec.checkpoints[0]!.check = { id: 'literal', kind: 'answer_equals', description: 'Точная инструкция', value: 'Инструкция' };
+  const s = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  const t = trial('controlled_exact', s.id, 'ungraded', 'pass'); t.familyId = s.familyId; t.initialState = s.initialState; t.finalState = s.initialState; t.checks = []; t.assessments = [];
+  const raw = [{ checkpointId: 'ask_terminal', result: 'not_applicable' as const, evidence: [0], rationale: 'Условие отсутствует' }];
+  t.checkpoints = raw.map(r => ({ ...r, requirementId: 'terminal_rule', observation: 'reply', role: 'required' }));
+  t.checkpointReceipt = checkpointReceipt(s, t, t.checkpoints, raw);
+  const r = record({ scenarios: [s], trials: [t] });
+  assert.equal(qualitySummary(r).cards.accuracy, 1);
+  assert.equal(qualitySummary(r).metrics.some(m => m.id === 'code'), false);
+  delete t.checkpoints; delete t.checkpointReceipt;
+  assert.equal(qualitySummary(r).cards.accuracy, null);
+});
