@@ -48,7 +48,7 @@ export function issueEvidenceText(evidence: import('./issues.js').IssueEvidence)
 }
 export function diagnosticText(file: DiagnosticFile): string {
   const { plan, result } = file;
-  const heading = !result ? 'Диагностика подготовлена; агент ещё не запускался.' : { supports: 'Гипотеза поддержана на проверенных парах.', refutes: 'Гипотеза не поддержана: дефект сохранился.', inconclusive: 'Недостаточно данных для решения по гипотезе.' }[result.conclusion];
+  const heading = !result ? (file.runId ? `Диагностика не завершена или была прервана; итог ещё не сохранён.\nСохранённые трассы: прогон ${file.runId}. Выберите «Открыть трассу пары» или «Открыть прогон».` : 'Диагностика подготовлена; агент ещё не запускался.') : { supports: 'Гипотеза поддержана на проверенных парах.', refutes: 'Гипотеза не поддержана: дефект сохранился.', inconclusive: 'Недостаточно данных для решения по гипотезе.' }[result.conclusion];
   return [heading, `Гипотеза: ${plan.intervention.hypothesis}`, `Изменён один фактор: ${plan.intervention.kind === 'tool-response' ? `ответ инструмента ${plan.intervention.tool}, вызов ${plan.intervention.call}` : 'проверенный фрагмент контекста'}.`,
     `Исходный прогон: ${plan.source.id}`, `Повторов каждой стороны: ${plan.repeats}. Общий бюджет: ${plan.budget.maxCalls} вызовов, ${Math.round(plan.budget.maxDurationMs / 1000)} секунд.`,
     ...(result?.pairs.map(p => `Попытка ${p.repeat + 1}: исходно ${verdictText(p.baseline)} → с вмешательством ${verdictText(p.intervention)}.\n  Диалоги: ${p.baselineTrialId ?? 'не выполнен'} → ${p.interventionTrialId ?? 'не выполнен'}`) ?? []),

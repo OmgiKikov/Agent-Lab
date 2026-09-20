@@ -148,3 +148,82 @@ test('identical fixture response does not attest a changed factor', async () => 
   await tools.find(t => t.name === 'update_record')!.execute({ recordId: 'item', changes: { status: 'done' } });
   assert.equal(receipt.appliedCount, 0);
 });
+
+test('diagnostic public path freezes and executes the exact candidate revision from comparison issue evidence', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'diagnostic-revision-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const seen: string[] = [];
+  const runtime: Runtime = { ...createDemoRuntime(), async openTarget(agent, _sources, tools) { seen.push(agent.name); return { async respond() { await tools.find(t => t.name === 'update_record')!.execute({ recordId: 'item', changes: { status: 'done' } }); return 'Не получилось'; }, async close() {} }; } };
+  const lab = new ExperimentLab(dir, runtime); await lab.init(); t.after(() => lab.close());
+  const source = issueRecord(); source.workflow = 'compare';
+  source.revisions.push({ ...structuredClone(source.revisions[0]!), id: 'candidate', parentId: 'base', spec: { ...source.revisions[0]!.spec, name: 'Кандидат из доказательства', instructions: 'Другая версия инструкций' } });
+  source.selectedRevisionId = 'candidate'; source.trials[0]!.revisionId = 'candidate';
+  await lab.store.save(source); await lab.store.syncIssues(source);
+  const issue = (await lab.store.readIssues())[0]!;
+  assert.equal(issue.evidence[0]!.assessment.trial.revisionId, 'candidate');
+  const plan = await lab.prepareDiagnostic(issue.id, source.id, intervention, 1);
+  const run = await lab.startDiagnostic(plan.id); await lab.waitForIdle();
+  const record = await lab.get(run.id);
+  assert.deepEqual(seen, ['Кандидат из доказательства', 'Кандидат из доказательства']);
+  assert.deepEqual(record.trials.map(t => t.revisionId), ['candidate', 'candidate']);
+  assert.deepEqual(record.revisions.map(r => r.id), ['candidate']); assert.equal(record.selectedRevisionId, 'candidate');
+  assert.equal(plan.sourceRevisionId, 'candidate'); assert.equal(plan.source.revisions.length, 2);
+  assert.deepEqual((await lab.store.readDiagnostic(plan.id)).plan.source, source);
+  assert.equal((await lab.store.readDiagnostic(plan.id)).result!.conclusion, 'refutes');
+});
+
+test('diagnostic projection filters unrelated control and owner-expectation references while preserving the full source', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'diagnostic-projection-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  let sessions = 0;
+  const runtime: Runtime = { ...createDemoRuntime(), async openTarget(_agent, _sources, tools) { sessions++; return { async respond() { await tools.find(t => t.name === 'update_record')!.execute({ recordId: 'item', changes: { status: 'done' } }); return 'Не получилось'; }, async close() {} }; } };
+  const lab = new ExperimentLab(dir, runtime); await lab.init(); t.after(() => lab.close());
+  const source = issueRecord(); source.scenarios.push({ ...structuredClone(source.scenarios[0]!), id: 'case_control', familyId: 'control_family' });
+  source.positiveControlScenarioIds = ['case_control']; source.ownerExpectationScenarioIds = ['case_a', 'case_control']; source.selectedScenarioIds = ['case_a', 'case_control'];
+  await lab.store.save(source); await lab.store.syncIssues(source);
+  const issue = (await lab.store.readIssues())[0]!, plan = await lab.prepareDiagnostic(issue.id, source.id, intervention, 1);
+  const run = await lab.startDiagnostic(plan.id); await lab.waitForIdle(); const saved = await lab.store.get(run.id);
+  assert.equal(sessions, 2); assert.equal(saved.phase, 'results_review');
+  assert.deepEqual(saved.scenarios.map(s => s.id), ['case_a']); assert.equal(saved.positiveControlScenarioIds, undefined);
+  assert.deepEqual(saved.ownerExpectationScenarioIds, ['case_a']); assert.deepEqual(saved.selectedScenarioIds, ['case_a']);
+  assert.deepEqual((await lab.store.readDiagnostic(plan.id)).plan.source, source);
+});
+
+test('linked unfinished diagnostic is described with its saved run trace reference rather than as unstarted', async t => {
+  const { diagnosticText } = await import('../src/issue-view.js');
+  const dir = await mkdtemp(join(tmpdir(), 'diagnostic-interrupted-view-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const lab = new ExperimentLab(dir); await lab.init(); t.after(() => lab.close());
+  const { source } = fixture(); await lab.store.save(source); await lab.store.syncIssues(source);
+  const issue = (await lab.store.readIssues())[0]!, plan = await lab.prepareDiagnostic(issue.id, source.id, intervention, 1);
+  assert.match(diagnosticText(await lab.store.readDiagnostic(plan.id)), /ещё не запускался/);
+  const interrupted = { ...structuredClone(source), id: 'saved_partial_pair', runKind: 'diagnostic' as const, phase: 'interrupted' as const };
+  await lab.store.save(interrupted); await lab.store.saveDiagnostic({ formatVersion: '1', plan, runId: interrupted.id });
+  const text = diagnosticText(await lab.store.readDiagnostic(plan.id));
+  assert.match(text, /не заверш|прерван/i); assert.match(text, /saved_partial_pair/); assert.match(text, /трасс/i); assert.doesNotMatch(text, /ещё не запускался/);
+  assert.equal((await lab.store.get(interrupted.id)).trials.length, 1);
+});
+
+
+test('legacy unstarted single-revision plans execute; ambiguous multi-revision plans reject before spending while linked results remain readable', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'diagnostic-legacy-revision-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  let sessions = 0;
+  const lab = new ExperimentLab(dir, { ...createDemoRuntime(), async openTarget(_agent, _sources, tools) { sessions++; return { async respond() { await tools.find(t => t.name === 'update_record')!.execute({ recordId: 'item', changes: { status: 'done' } }); return 'Не получилось'; }, async close() {} }; } });
+  await lab.init(); t.after(() => lab.close());
+  const { source, issue } = fixture(); await lab.store.save(source); await lab.store.syncIssues(source);
+  const legacy = (plan: ReturnType<typeof prepareDiagnostic>) => {
+    const { id: _, sourceRevisionId: __, ...content } = structuredClone(plan);
+    return { ...content, id: `diag_${fingerprint(content).slice(0, 40)}` };
+  };
+  const single = legacy(prepareDiagnostic(issue, source, intervention, 1));
+  await lab.store.saveDiagnostic({ formatVersion: '1', plan: single });
+  const started = await lab.startDiagnostic(single.id); await lab.waitForIdle(); assert.equal(sessions, 2);
+  source.revisions.push({ ...structuredClone(source.revisions[0]!), id: 'candidate' });
+  const multi = legacy(prepareDiagnostic(issue, source, intervention, 1));
+  await lab.store.saveDiagnostic({ formatVersion: '1', plan: multi });
+  await assert.rejects(lab.startDiagnostic(multi.id), /новый план.*ревизи|ревизи.*новый план/i);
+  let runnerCalls = 0;
+  await assert.rejects(runDiagnostic(multi, async () => { runnerCalls++; return []; }), /ревизи/i);
+  assert.equal(runnerCalls, 0); assert.equal(sessions, 2); assert.equal((await lab.store.readDiagnostic(multi.id)).runId, undefined);
+  const result = { ...(await lab.store.readDiagnostic(single.id)).result!, planId: multi.id };
+  await lab.store.saveDiagnostic({ formatVersion: '1', plan: multi, runId: started.id, result });
+  assert.equal((await lab.startDiagnostic(multi.id)).id, started.id);
+  assert.deepEqual((await lab.store.readDiagnostic(multi.id)).result, result); assert.equal(sessions, 2);
+});

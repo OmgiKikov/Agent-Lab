@@ -49,11 +49,16 @@ test('native issue workspace navigates immutable evidence, prepares and runs a p
   const { showIssueWorkspace } = await import('../extensions/issues.ts');
   const dir = await mkdtemp(join(tmpdir(), 'issue-workspace-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const lab = new ExperimentLab(dir, { ...createDemoRuntime(), async openTarget(_a, _s, tools, ctx) { return { async respond() { await tools.find(t => t.name === 'update_record')!.execute({ recordId: 'item', changes: { status: 'done' } }); return 'Не получилось'; }, async close() {} }; } });
-  await lab.init(); t.after(() => lab.close()); const source = issueRecord(); await lab.store.save(source); await lab.store.syncIssues(source);
+  await lab.init(); t.after(() => lab.close()); const source = issueRecord();
+  source.workflow = 'compare';
+  source.revisions.push({ ...structuredClone(source.revisions[0]!), id: 'candidate', spec: { ...source.revisions[0]!.spec, tools: ['update_record'] } });
+  source.revisions[0]!.spec.tools = ['search_materials']; source.selectedRevisionId = 'candidate'; source.trials[0]!.revisionId = 'candidate';
+  await lab.store.save(source); await lab.store.syncIssues(source);
   let issueActions = 0, planActions = 0, editorCalls = 0; const viewed: string[] = [];
   const ctx = { signal: new AbortController().signal, ui: {
     select: async (title: string, choices: string[]) => {
       if (title === 'Ошибка возврата') return issueActions++ === 0 ? 'Точная исходная оценка и трасса' : 'Подготовить парную диагностику';
+      if (title === 'Инструмент') assert.deepEqual(choices, ['1. update_record']);
       if (title === 'Парная диагностика') return ['План и результат', 'Запустить обе стороны', 'Открыть трассу пары', 'Открыть прогон'][planActions++];
       return choices[0];
     }, editor: async () => editorCalls++ === 0 ? 'Проверяем ошибку ответа' : '{"ok":true}', input: async () => '1', confirm: async () => true,

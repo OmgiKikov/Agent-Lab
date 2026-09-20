@@ -55,7 +55,7 @@ export async function showIssueWorkspace(ctx: ExtensionContext, record: Experime
         const hypothesis = await ctx.ui.editor('Какую гипотезу проверяем?', ''); if (!hypothesis?.trim()) continue;
         let intervention: Intervention;
         if (probe.kind === 'tool-response') {
-          const tool = await choose(ctx, 'Инструмент', source.revisions[0]?.spec.tools ?? [], t => t); if (!tool) continue;
+          const tool = await choose(ctx, 'Инструмент', source.revisions.find(r => r.id === evidence.assessment.trial.revisionId)?.spec.tools ?? [], t => t); if (!tool) continue;
           const nth = await ctx.ui.input('Номер вызова этого инструмента', '1'); if (nth === undefined) continue;
           const response = await ctx.ui.editor('Подставляемый ответ инструмента (JSON); реальная операция и её состояние сохраняются', '{"ok":false,"error":"Проверенная ошибка","retryable":true}'); if (response === undefined) continue;
           intervention = { kind: 'tool-response', tool, call: Number(nth), response: JSON.parse(response), hypothesis };

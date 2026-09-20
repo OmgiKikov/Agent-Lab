@@ -1,4 +1,4 @@
-import { prepareDiagnostic, runDiagnostic, verifyDiagnosticPlan, type Intervention } from './diagnostics.js';
+import { prepareDiagnostic, runDiagnostic, verifyDiagnosticPlan, diagnosticRevision, type Intervention } from './diagnostics.js';
 import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
 import type { LibraryPatch, ScenarioLibrary } from './scenario-contracts.js';
 import { assessScenarioLibrary, assertLibraryRun, compiledLibraryScenarios, prepareScenarioLibrary, SCENARIO_EXTRACTION_PROTOCOL } from './scenario-preparation.js';
@@ -934,13 +934,20 @@ export class ExperimentLab {
     return this.change(async () => {
       const file = await this.store.readDiagnostic(id), plan = file.plan; verifyDiagnosticPlan(plan);
       if (file.runId) return this.store.get(file.runId);
+      const sourceRevision = diagnosticRevision(plan);
       await preflightTarget(plan.source.target);
       if (plan.source.targetFingerprint && plan.source.targetFingerprint !== await targetFingerprint(plan.source.target)) throw new Error('Версия агента изменилась после исходного прогона.');
       // Preserve the source scenario byte-for-byte. The original accepted library remains in plan.source.
       const record = structuredClone(plan.source);
       Object.assign(record, { id: randomUUID(), runKind: 'diagnostic', parentRunId: plan.source.id, phase: 'evaluating', trials: [], comparisons: [], humanReviews: [], iterations: [], usage: emptyUsage(), error: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       delete record.assessmentOf; delete record.executionRunId; delete record.sourceEvidence; delete record.failureModes; delete record.resultsReviewedAt; delete record.resultsReviewHash;
+      record.revisions = [structuredClone(sourceRevision)]; record.selectedRevisionId = sourceRevision.id;
       record.scenarios = record.scenarios.filter(s => s.id === plan.scenarioId);
+      for (const key of ['positiveControlScenarioIds', 'ownerExpectationScenarioIds'] as const) {
+        const retained = record[key]?.filter(id => id === plan.scenarioId);
+        if (retained?.length) record[key] = retained;
+        else delete record[key];
+      }
       record.selectedScenarioIds = [plan.scenarioId]; record.acceptedTests = record.acceptedTests?.filter(t => t.scenarioId === plan.scenarioId);
       record.settings.repeats = plan.repeats;
       record.limitations.push('Диагностический прогон: исключён из общей точности и проверки исправления. Исходное состояние и вмешательство сравниваются попарно.');
