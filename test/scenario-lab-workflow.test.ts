@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -98,6 +98,14 @@ test('reproducible demo exercises persisted import, owner edit, accepted run, re
     assert.equal(report.defectNoLongerReproduced, true); assert.equal(report.candidateAcceptable, true);
     assert.equal(report.generatorCases, 2); assert.equal(report.generatorTransport, 'deterministic-test');
     assert.equal(report.persistedLinksResolve, true);
+    const candidate = JSON.parse(await readFile(join(directory, '.agent-lab', `${report.candidateRunId}.json`), 'utf8'));
+    const late = candidate.trials.filter((t: any) => t.scenarioId === 'late_number');
+    assert.equal(late.length, 2);
+    for (const trial of late) {
+      assert.deepEqual(trial.events.filter((e: any) => e.type === 'user').map((e: any) => e.text), ['Помогите с возвратом.', 'Номер терминала: 5678']);
+      assert.ok(trial.events.some((e: any) => e.type === 'assistant' && e.text.includes('Подайте заявление')));
+      assert.equal(trial.checkpoints.find((c: any) => c.checkpointId === 'refund_explanation')?.result, 'pass');
+    }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -145,7 +153,29 @@ test('demo direct invocation through a symlink path prints an isolated review dr
     const result = await promisify(execFile)(process.execPath, [join(directory, 'examples/scenario-lab-demo.mjs')]);
     assert.match(result.stdout, /developer-authored-synthetic-fixture/);
     const report = JSON.parse(result.stdout.slice(0, result.stdout.indexOf('\ncd ')));
-    seeded = report.directory; assert.equal(report.ready, 1); assert.equal(report.needsReview, 1);
+    seeded = report.directory; assert.equal(report.ready, 1); assert.equal(report.needsReview, 0); assert.equal(report.blocked, 1);
     assert.match(result.stdout, /--no-extensions.*--skill/);
   } finally { if (seeded) await rm(seeded, { recursive: true, force: true }); await rm(directory, { recursive: true, force: true }); }
+});
+
+
+test('teaching checkpoint assessor rejects alternative repeated questions and missing refund instructions', async () => {
+  const { demoScenarioRuntime } = await import('../examples/scenario-lab-demo.mjs');
+  const runtime = demoScenarioRuntime();
+  const assess = async (id: string, replies: string[]) => {
+    const dialogue = [{ seq: 0, type: 'user', text: 'Номер терминала: 1234. Помогите с возвратом.' }, ...replies.map((text, i) => ({ seq: i + 1, type: 'assistant', text }))];
+    return (await runtime.assessCheckpoints({ checkpoints: [{ checkpoint: { id }, dialogue, evidence: dialogue.slice(1), allowedEvidence: dialogue.slice(1).map(e => e.seq) }] }))[0].result;
+  };
+  assert.equal(await assess('ask_once', ['Какой у вас номер терминала?']), 'fail');
+  assert.equal(await assess('refund_explanation', ['Спасибо, номер записан.']), 'fail');
+  assert.equal(await assess('refund_explanation', ['Возврат возможен. Подайте заявление в поддержку.']), 'pass');
+});
+
+test('teaching baseline explains refund after finite disclosure while retaining the initial-number defect', async () => {
+  const { createSession } = await import('../examples/scenario-lab-target.mjs');
+  const late = createSession({ initialState: { records: {} } });
+  assert.match((await late.respond('Помогите с возвратом.')).reply, /Уточните/);
+  assert.match((await late.respond('Номер терминала: 5678')).reply, /Подайте заявление/);
+  const known = createSession({ initialState: { records: {} } });
+  assert.match((await known.respond('Номер терминала: 1234. Помогите с возвратом.')).reply, /Уточните/);
 });

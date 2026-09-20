@@ -20,23 +20,55 @@ function proposal(batchId, dialogue) {
   const known = dialogue.id === 'known', number = known ? '1234' : '5678';
   return {
     business: { key: 'refund', title: 'Возврат оплаты', goal: 'Получить инструкцию по возврату оплаты', conditions: [], requirementIds: ['refund_rule'], grouping: { status: 'confirmed', reason: 'Одинаковая цель и правило; номер отличается по способу раскрытия' } },
-    variant: { id: known ? 'known_number' : 'late_number', title: known ? 'Номер уже в первой реплике' : 'Номер раскрывается по просьбе', purpose: 'Проверить уместность запроса номера', provenance: 'production', sourceDialogues: [{ batchId, dialogueId: dialogue.id }],
+    variant: { id: known ? 'known_number' : 'late_number', title: known ? 'Номер уже в первой реплике' : 'Номер раскрывается по просьбе', purpose: 'Проверить уместность запроса номера и получение инструкции по возврату', provenance: 'production', sourceDialogues: [{ batchId, dialogueId: dialogue.id }],
       userState: { goal: 'Получить инструкцию по возврату', opening: dialogue.messages[0].content, facts: [{ id: 'terminal', statement: `Номер терминала: ${number}`, value: number, availability: known ? 'initial' : 'uncertain', reason: known ? 'Личные данные в первой реплике' : 'Учебный спорный факт: подтвердите, что личный номер был известен до разговора', origin: { kind: 'dialogue', batchId, dialogueId: dialogue.id, eventIndex: known ? 0 : 2, quote: `Номер терминала: ${number}` } }], cannotKnow: [], missing: [] },
-      behaviorPolicy: { version: 1, initialState: 'waiting', states: ['waiting', 'done'], terminalStates: ['done'], maxFollowUps: 1, repetitionLimit: 1, actions: [{ id: 'finish', kind: 'finish', factIds: [] }], transitions: [{ from: 'waiting', to: 'done', actionId: 'finish', when: 'Получена инструкция или уточняющий вопрос' }] },
+      behaviorPolicy: { version: 1, initialState: 'waiting', states: known ? ['waiting', 'done'] : ['waiting', 'disclosed', 'done'], terminalStates: ['done'], maxFollowUps: 1, repetitionLimit: 1,
+        actions: [...(known ? [] : [{ id: 'disclose', kind: 'answer', factIds: ['terminal'], ifAsked: 'Агент просит номер терминала' }]), { id: 'finish', kind: 'finish', factIds: [] }],
+        transitions: known
+          ? [{ from: 'waiting', to: 'done', actionId: 'finish', when: 'После первого ответа: если есть инструкция, цель достигнута; если агент повторно просит уже указанный номер или не помогает, пользователь прекращает попытку без достижения цели' }]
+          : [{ from: 'waiting', to: 'disclosed', actionId: 'disclose', when: 'Агент просит номер терминала, ещё не сообщённый в этом разговоре' },
+            { from: 'waiting', to: 'done', actionId: 'finish', when: 'Агент не просит номер: дал инструкцию либо ответил иначе; пользователь завершает попытку' },
+            { from: 'disclosed', to: 'done', actionId: 'finish', when: 'После ответа на сообщённый номер: есть инструкция либо пользователь прекращает неудачную попытку; повторять номер не будет' }] },
       environmentFixture: { mode: 'prompt', initialState: { records: {}, writableFields: [] } },
-      evaluationSpec: { goalObservation: 'reply', successCriteria: known ? 'Агент не запрашивает указанный номер повторно' : 'Агент уточняет номер, которого нет в первой реплике', checkpoints: [{ id: 'ask_once', requirementId: 'refund_rule', quote: policy, applicability: known ? 'Номер указан в первой реплике' : 'В первой реплике нет номера', observation: 'reply', role: 'required', rule: known ? 'Не запрашивать номер повторно' : 'Уточнить номер терминала', check: { id: 'number', kind: known ? 'answer_omits' : 'answer_contains', value: 'Уточните номер терминала', description: 'Уместность запроса номера' } }] },
+      evaluationSpec: { goalObservation: 'reply', successCriteria: 'Номер запрошен только до его раскрытия; после получения номера агент объяснил, как оформить возврат', checkpoints: [
+        { id: 'ask_once', requirementId: 'refund_rule', quote: policy, applicability: 'Вариант обращения за возвратом с номером в первой реплике или раскрываемым по просьбе', observation: 'reply', role: 'required', rule: 'Если номер уже сообщён, не запрашивать его повторно независимо от формулировки вопроса. Если в первой реплике номера нет, запросить его до инструкции.' },
+        { id: 'refund_explanation', requirementId: 'refund_rule', quote: policy, applicability: 'Пользователь обратился за возвратом и сообщил номер терминала', observation: 'reply', role: 'required', rule: 'Объяснить пользователю, как оформить возврат. Один запрос номера, подтверждение получения номера или обещание помочь без инструкции не выполняют требование.' },
+      ] },
     },
   };
 }
+const asksNumber = text => /(?:уточните|сообщите|назовите|укажите|какой|номер.*\?).*номер|номер.*терминал.*\?/i.test(text);
 /** Explicit deterministic teaching adapter. It is never evidence of model quality. */
 export function demoScenarioRuntime() {
   return { ...createDemoRuntime(),
     async prepare(input) { return { requirements: [{ id: 'refund_rule', sourceId: input.sources[0].id, text: policy, quote: policy, critical: true }], questions: [], agent: { name: 'Учебный агент возвратов', instructions: policy, tools: [] }, scenarios: [] }; },
     async scenarioProposals(input) { return input.dialogues.map(d => proposal(input.batchId, dialogues.find(source => source.id === d.id))); },
-    async assessScenarioProposals(input) { return input.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready', reason: 'Заранее разобранный разработчиком учебный пример; не модельная оценка' }))); },
-    async selectUserAction() { return { actionId: 'finish', factIds: [] }; },
-    async assessCheckpoints(input) { return input.checkpoints.map(c => ({ checkpointId: c.checkpoint.id, result: 'pass', evidence: c.allowedEvidence, rationale: 'В учебном наборе условие применимо; точная проверка вычисляется из ответа' })); },
-    async assess({ scenario, trial }) { return (scenario.metrics ?? []).map(metric => ({ metricId: metric.id, result: trial.checks.every(c => c.passed) ? 'pass' : 'fail', evidence: trial.events.filter(e => e.type === 'assistant').map(e => e.seq), rationale: 'Детерминированная учебная оценка по точным проверкам' })); },
+    async assessScenarioProposals(input) { return input.fields.flatMap(f => f.paths.map(path => {
+      const variant = input.library.variants.find(v => v.id === f.variantId);
+      const uncertain = path.startsWith('userState') && variant.userState.facts.some(fact => fact.availability === 'uncertain');
+      const noDisclosure = path === 'behaviorPolicy' && variant.id === 'late_number' && !variant.behaviorPolicy.actions.some(a => a.kind === 'answer' && a.factIds.includes('terminal'));
+      const noExplanation = path.startsWith('evaluationSpec') && !variant.evaluationSpec.checkpoints.some(c => c.id === 'refund_explanation');
+      return { variantId: f.variantId, path, status: uncertain || noDisclosure || noExplanation ? 'needs_review' : 'ready',
+        reason: uncertain ? 'Нужно явное уточнение исходного знания личного номера' : noDisclosure ? 'Нет действия раскрытия номера по просьбе' : noExplanation ? 'Нет проверки инструкции по возврату' : 'Проверка заранее заданного учебного примера; не модельная оценка' };
+    })); },
+    async selectUserAction(input) {
+      const reply = input.messages.filter(m => m.role === 'assistant').at(-1)?.content ?? '';
+      const disclose = input.actions.find(a => a.id === 'disclose');
+      return disclose && asksNumber(reply) ? { actionId: disclose.id, factIds: disclose.factIds } : { actionId: 'finish', factIds: [] };
+    },
+    async assessCheckpoints(input) { return input.checkpoints.map(c => {
+      let hasNumber = false, repeated = false, asked = false;
+      for (const event of c.dialogue) {
+        if (event.type === 'user' && /терминала:\s*\d+/i.test(event.text ?? '')) hasNumber = true;
+        if (event.type === 'assistant' && asksNumber(event.text ?? '')) { repeated ||= hasNumber; asked = true; }
+      }
+      const openingHasNumber = /терминала:\s*\d+/i.test(c.dialogue.find(e => e.type === 'user')?.text ?? '');
+      const explained = c.evidence.some(e => /Подайте заявление в поддержку/i.test(e.text ?? ''));
+      const pass = c.checkpoint.id === 'ask_once' ? !repeated && (openingHasNumber || asked) : c.checkpoint.id === 'refund_explanation' ? hasNumber && explained : undefined;
+      return { checkpointId: c.checkpoint.id, result: pass === undefined ? 'unknown' : pass ? 'pass' : 'fail', evidence: c.allowedEvidence,
+        rationale: c.checkpoint.id === 'ask_once' ? `Учебная проверка: номер запрошен=${asked}, повтор после раскрытия=${repeated}` : 'Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок' };
+    }); },
+    async assess({ scenario, trial }) { return (scenario.metrics ?? []).map(metric => ({ metricId: metric.id, result: trial.checkpoints?.filter(c => c.role === 'required').every(c => c.result === 'pass') ? 'pass' : 'fail', evidence: trial.events.filter(e => e.type === 'assistant').map(e => e.seq), rationale: 'Детерминированная учебная оценка по обязательным контрольным точкам' })); },
   };
 }
 export async function seedScenarioLab(directory, options = {}) {
@@ -48,7 +80,7 @@ export async function seedScenarioLab(directory, options = {}) {
     const seed = await lab.create(createInputSchema.parse({ task: 'Учебная проверка возвратов: два вымышленных диалога', mode: options.live ? 'live' : 'demo', target: target(), materials: [{ name: 'Учебное правило владельца', content: policy }], dialogues,
       scenarioCount: 0, settings: { repeats: 2, maxCalls: 60, maxTurns: 3, maxDurationMs: 300000, timeoutMs: 60000, userModes: ['reactive'], ...(options.provider ? { provider: options.provider } : {}), ...(options.model ? { model: options.model } : {}) } }));
     await lab.waitForIdle(); const draft = await lab.get(seed.id); assert.equal(draft.phase, 'review', draft.error ?? '');
-    return { directory, runId: draft.id, evidenceKind: 'developer-authored-synthetic-fixture', next: `В Pi: /agent-lab ${draft.id}`, ready: draft.librarySnapshot.variants.filter(v => v.quality === 'ready').length, needsReview: draft.librarySnapshot.variants.filter(v => v.quality === 'needs_review').length };
+    return { directory, runId: draft.id, evidenceKind: 'developer-authored-synthetic-fixture', next: `В Pi: /agent-lab ${draft.id}`, ready: draft.librarySnapshot.variants.filter(v => v.quality === 'ready').length, needsReview: draft.librarySnapshot.variants.filter(v => v.quality === 'needs_review').length, blocked: draft.librarySnapshot.variants.filter(v => v.quality === 'blocked').length };
   } finally { await lab.close(); }
 }
 export async function verifyScenarioLab(directory) {
