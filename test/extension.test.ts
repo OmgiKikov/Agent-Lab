@@ -22,7 +22,7 @@ import { COUNTING_RULES, markTargets, measurementUsable, primaryMetricId } from 
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 import { libraryFixture } from './helpers/scenario-library.js';
 import { assessScenarioLibrary } from '../src/scenario-work.js';
-import { libraryHash, recordSemanticAssessment, semanticPaths } from '../src/scenario-library.js';
+import { libraryHash } from '../src/scenario-library.js';
 
 function registered(onUserMessage?: (message: unknown) => void) {
   const tools = new Map<string, ToolDefinition>();
@@ -82,9 +82,13 @@ test('scenario tool paginates large libraries and expands only an explicitly sel
   let library = libraryFixture();
   const seed = library.variants[0]!;
   library.variants = Array.from({ length: 200 }, (_, index) => ({ ...structuredClone(seed), id: `bounded_${index}`, title: `Вариант ${index}` }));
-  library = recordSemanticAssessment(library, library.variants.flatMap(variant => semanticPaths(variant).map(path => ({
-    variantId: variant.id, path, status: 'ready' as const, reason: 'Проверено',
-  }))));
+  // Use the current assessment pipeline: an unversioned final assessment is historical,
+  // and correctly requires new calls after a semantic context change.
+  library = await assessScenarioLibrary(library, { async assessScenarioProposals(input) {
+    return input.fields.flatMap(field => field.paths.map(path => ({
+      variantId: field.variantId, path, status: 'ready' as const, reason: 'Проверено',
+    })));
+  } }, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => {});
   const fixture = await boardFixture('scenario-tool-large-', record => {
     record.phase = 'review'; record.scenarios = []; record.trials = [];
     record.librarySnapshot = library; record.sources = library.sources; record.requirements = library.requirements;
