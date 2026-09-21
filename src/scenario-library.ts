@@ -175,6 +175,15 @@ export function recordSemanticAssessment(library: ScenarioLibrary, findings: Sem
   return refreshQuality(next);
 }
 
+/**
+ * What an owner resolution is about: the remark, and the exact card, requirements and sources it was made on. The remark's words alone
+ * are not an identity — the same sentence about a rewritten rule is a new question for the owner.
+ */
+export function resolutionHash(library: ScenarioLibrary, variant: ScenarioVariant, path: string, reason: string): string {
+  const { quality, issues, ownerDecision, history, revision, semanticReviewRequired, ...content } = variant;
+  return digest({ path, reason, card: content, requirements: library.requirements, sources: library.sources.map(source => source.hash) });
+}
+
 export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] {
   const issues: LibraryQualityIssue[] = [];
   const add = (code: string, path: string, message: string, variantId?: string, severity: LibraryQualityIssue['severity'] = 'blocked') => issues.push({ code, path, message, ...(variantId ? { variantId } : {}), severity });
@@ -192,7 +201,7 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
         else if (findings[0]!.status !== 'ready') {
           // A question the owner settled in their own name stays settled for exactly that remark; a blocking remark is never the owner's to waive.
           const settled = findings[0]!.status === 'needs_review' && library.ownerResolutions?.some(item => item.variantId === variant.id && item.path === path
-            && item.findingHash === digest({ path, reason: findings[0]!.reason }));
+            && item.findingHash === resolutionHash(library, variant, path, findings[0]!.reason));
           if (!settled) add('semantic_finding', `variants.${variant.id}.${path}`, findings[0]!.reason, variant.id, findings[0]!.status as 'needs_review' | 'blocked');
         }
       }
@@ -419,7 +428,7 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
     if (!finding || finding.status === 'ready') throw new Error('По этому полю нет открытого вопроса проверяющего');
     if (finding.status === 'blocked') throw new Error('Это замечание блокирует запуск: его снимает исправление карточки, а не решение владельца');
     next.ownerResolutions = [...(next.ownerResolutions ?? []).filter(item => !(item.variantId === variant.id && item.path === patch.path)),
-      { variantId: variant.id, path: patch.path, findingHash: digest({ path: patch.path, reason: finding.reason }), editId: patch.editId, reason: patch.reason }];
+      { variantId: variant.id, path: patch.path, findingHash: resolutionHash(next, variant, patch.path, finding.reason), editId: patch.editId, reason: patch.reason }];
   } else if (patch.kind === 'edit_variant_text') {
     const variant = getVariant(patch.variantId);
     if (patch.field === 'opening') variant.userState.opening = patch.value;

@@ -124,6 +124,10 @@ test('authority: an instruction is more than the owner\'s words — values, word
   assert.equal(authorize({ messages: ['Убери вторую карточку', 'Нет, не надо, оставь как есть'], intent: 'remove', quote: 'Убери вторую карточку', summary: '' }).kind, 'confirm', 'an instruction the owner took back no longer stands');
   assert.equal(authorize({ messages: ['Убери вторую карточку', 'И покажи, что осталось'], intent: 'remove', quote: 'Убери вторую карточку', summary: '' }).kind, 'conversation');
   assert.equal(authorize({ messages: ['Поправь факт: клиент знал срок заранее'], intent: 'edit', provenance: true, summary: '' }).kind, 'confirm', 'what the client knew beforehand is never settled by matching words');
+  for (const text of ['Как остановить прогон?', 'Объясни, как удалить вторую карточку', 'Не надо ни при каких обстоятельствах останавливать прогон']) {
+    assert.equal(asksFor(text, 'stop'), false, text); assert.equal(asksFor(text, 'remove'), false, text);
+  }
+  assert.equal(asksFor('Первую карточку не трогай, а вторую удали', 'remove'), true, 'a negation in another clause does not cancel this one');
   assert.equal(asksFor('Не останавливай прогон', 'stop'), false); assert.equal(asksFor('Пока не надо останавливать', 'stop'), false); assert.equal(asksFor('Останови прогон', 'stop'), true);
 });
 
@@ -682,6 +686,18 @@ test('the owner settles a checker\'s question in their own name: the card become
     assert.equal(library.ownerResolutions![0]!.reason, `Владелец в разговоре: «${said[0]}»`);
     assert.match(drawn(tool, settled, false).join('\n'), /Вопрос по карточке «Возврат 1» закрыт вашим решением/);
     assert.equal(json(await tool.execute('blocked', { operation: 'resolve', variant: '2', verify: 'later' }, undefined, undefined, ctx)).status, 'needs_owner_input', 'a blocking remark is fixed in the card, never waived');
+    // Review 86bdf60 #2: the rule is rewritten, the checker repeats the very same sentence — it is a new question, the old decision does not carry over.
+    said.push('Поменяй правило первой карточки: агент уточнил номер терминала и срок возврата');
+    await tool.execute('rewrite', { operation: 'edit', variant: '1', verify: 'later', change: { field: 'rule', value: 'Агент уточнил номер терминала и срок возврата' } }, undefined, undefined, ctx);
+    const again = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime);
+    await again.init();
+    const edited = await again.readLibrary(fixture.id);
+    const repeated = recordSemanticAssessment(edited.library, findings);
+    await again.store.publishLibrary({ ...edited.experiment, librarySnapshot: repeated }, repeated, libraryHash(edited.library));
+    await again.close();
+    const reopened = (await fixture.read()).librarySnapshot!;
+    assert.equal(reopened.ownerResolutions!.length, 1, 'the old decision is kept as history');
+    assert.equal(reopened.variants[0]!.quality, 'needs_review', 'but it does not settle the question about the rewritten rule');
     assert.equal((await fixture.read()).librarySnapshot!.variants[1]!.quality, 'blocked');
   } finally { await shutdown(); await fixture.cleanup(); }
 });
@@ -709,4 +725,28 @@ test('the owner marks the judge\'s decision from the conversation: the answer co
     assert.ok(reviews.length >= 1); assert.ok(reviews.every(item => item.source === 'quick' && item.verdict === 'fail' && item.judgeVerdict === 'fail'));
     assert.match(drawn(agree, marked, false).join('\n'), /Отмечено вашим решением: согласен с судьёй/);
   } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); await rm(demo.directory, { recursive: true, force: true }); }
+});
+
+test('review 86bdf60: the owner\'s waiver has one door — a ready-made patch or request never gets rights the conversational form lacks', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-review-bypass-');
+  const { tools, shutdown } = registered();
+  try {
+    const lab = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime);
+    await lab.init();
+    const before = await lab.readLibrary(fixture.id);
+    const doubted = recordSemanticAssessment(before.library, before.library.variants.flatMap(variant => semanticPaths(variant).map(path => ({ variantId: variant.id, path,
+      status: variant.id === 'variant_1' && path.includes('checkpoints') ? 'needs_review' as const : 'ready' as const, reason: 'Источник этого не подтверждает.' }))));
+    await lab.store.publishLibrary({ ...before.experiment, librarySnapshot: doubted }, doubted, libraryHash(before.library));
+    await lab.close();
+    const { ctx, confirms } = terminal(fixture.cwd, ['Исправь первую реплику'], [false]);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const bypass = await tool.execute('bypass', { operation: 'edit', verify: 'later', patch: { kind: 'resolve_finding', variantId: 'variant_1', path: 'evaluationSpec.checkpoints.ask_terminal', editId: 'model_1', reason: 'x' } }, undefined, undefined, ctx).catch(error => error as Error);
+    assert.match(bypass instanceof Error ? bypass.message : '', /закрывает только владелец/);
+    assert.equal((await fixture.read()).librarySnapshot!.ownerResolutions, undefined, 'nothing was recorded in the owner\'s name');
+    // A legacy request with a ready input is checked like the conversational form: the owner asked to fix a line, not to add a card.
+    const legacy = json(await tool.execute('legacy', { operation: 'variant', verify: 'later', request: { parentId: 'variant_1', operation: 'ambiguous_opening', reason: 'model', input: { opening: 'Помогите' } } }, undefined, undefined, ctx));
+    assert.equal(legacy.status, 'declined'); assert.equal(confirms.length, 1, 'the native dialog decided, and the owner said no');
+    assert.equal((await fixture.read()).librarySnapshot!.variants.length, 2);
+  } finally { await shutdown(); await fixture.cleanup(); }
 });

@@ -107,11 +107,19 @@ const CANCELS = ['не надо', 'не нужно', 'отмена', 'отмен
 const ownWords = (message: string): string => message.replace(/«[^»]*»|"[^"]*"|“[^”]*”/g, ' ').split('\n')
   .filter(line => !/^\s*(>|\{|\[|(user|assistant|клиент|агент|пользователь)\s*:)/i.test(line)).join(' ');
 
-/** True when the message asks for this operation in the owner's own words and does not negate it. */
+const EXPLAIN = new Set(['как', 'почему', 'зачем', 'можно', 'объясни', 'расскажи', 'подскажи', 'что', 'когда', 'нужно']);
+/**
+ * True when the message asks for this operation in the owner's own words. A question («как остановить прогон?») or a request to
+ * explain is not an instruction, and a negation anywhere earlier in the same clause turns the verb into its opposite.
+ */
 export function asksFor(message: string, intent: Intent): boolean {
-  const tokens = words(ownWords(message));
-  return tokens.some((token, at) => INTENT_STEMS[intent].some(stem => token.startsWith(stem))
-    && !tokens.slice(Math.max(0, at - 3), at).some(before => NEGATIONS.has(before)));
+  // What follows a colon is the wording being dictated («пусть спрашивает: когда вернут деньги?»), not the request itself.
+  const sentences = ownWords(message).split(/(?<=[.!?\n])/).map(sentence => sentence.split(':')[0]!).filter(sentence => !sentence.trim().endsWith('?') && !EXPLAIN.has(words(sentence)[0] ?? ''));
+  return sentences.flatMap(sentence => sentence.split(/[,;:—]| но | а /)).some(clause => {
+    const tokens = words(clause);
+    const at = tokens.findIndex(token => INTENT_STEMS[intent].some(stem => token.startsWith(stem)));
+    return at >= 0 && !tokens.slice(0, at).some(before => NEGATIONS.has(before));
+  });
 }
 
 /** The instruction behind an operation: the basis message asks for it, and no later owner message took it back. */

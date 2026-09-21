@@ -1163,10 +1163,12 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
                 missingDescription: params.missingDescription, intent: params.intent, afterAction: params.afterAction, failures: params.failures });
               if (derived.kind === 'ask') throw needsOwner('needs_owner_input', derived.message);
               input = derived.input;
-              // The simulated client may only say values the owner or the parent card already hold.
-              await decide({ intent: 'variant', simulated: [params.opening, params.reply, params.intent].filter((text): text is string => !!text), known: knownTexts(parent),
-                summary: `Добавить к карточке «${parent.title}» синтетический вариант: ${kind}` });
             }
+            // The same authority whatever the form of the call: a ready-made request.input gets no rights the conversational form lacks.
+            // The simulated client may only say values the owner or the parent card already hold.
+            const spoken = Object.values(input && typeof input === 'object' ? input as Record<string, unknown> : {}).filter((value): value is string => typeof value === 'string');
+            await decide({ intent: 'variant', simulated: [...spoken, ...[params.opening, params.reply, params.intent].filter((text): text is string => !!text)], known: knownTexts(parent),
+              summary: `Добавить к карточке «${parent.title}» синтетический вариант: ${kind}` });
             const reason = legacy?.reason ?? ownerBasis(messages, params.ownerQuote)?.reason ?? 'Целевой вариант по запросу в разговоре';
             const proposed = await lab.proposeVariant(draftId, expected, { parentId: parent.id, operation: kind, reason, input });
             return await changed(`Добавлен синтетический вариант «${safeText(proposed.variant.title)}»`,
@@ -1250,6 +1252,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             const expectedKind = operation === 'merge' ? 'merge_business' : operation === 'split' ? 'split_business' : operation === 'remove' ? 'remove_variant' : undefined;
             if (expectedKind && patch.kind !== expectedKind) throw new Error(`Операция ${operation} требует patch.kind=${expectedKind}.`);
             if (patch.kind === 'upsert_variant') throw new Error('Целая карточка от модели не записывается. Меняйте одно поле через change или добавляйте вариант через operation:"variant".');
+            // The owner's waiver of a checker's question has one door: operation resolve with its native decision. A ready-made patch is not another one.
+            if (patch.kind === 'resolve_finding') throw new Error('Вопрос проверяющего закрывает только владелец: operation:"resolve" с его native-решением. Готовый patch для этого не принимается.');
             const patched = 'variantId' in patch ? patch.variantId : undefined;
             target = library.variants.find(item => item.id === patched);
             const attributed = patch.kind === 'edit_fact' || patch.kind === 'add_fact' ? [patch.statement, String(patch.value ?? '')]

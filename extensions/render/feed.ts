@@ -63,12 +63,14 @@ type Fallback = (result: AgentToolResult<unknown>, options: ToolRenderResultOpti
 let restorer: ((ref: FeedRef) => Promise<Feed | null>) | undefined;
 export function setFeedRestorer(restore: typeof restorer): void { restorer = restore; }
 const restoring = new Set<string>();
+const unrestorable = new Set<string>();
 function restore(details: FeedDetails, redraw?: () => void): boolean {
-  if (!details.ref || !restorer) return false;
+  if (!details.ref || !restorer || unrestorable.has(details.feedKey)) return false;
   if (restoring.has(details.feedKey)) return true;
   restoring.add(details.feedKey);
-  void restorer(details.ref).then(feed => { if (feed) { rememberFeed(details.feedKey, feed, details.note, details.ref); redraw?.(); } })
-    .catch(() => {}).finally(() => { restoring.delete(details.feedKey); });
+  // A revision that cannot be read ends the attempt: the row says so instead of «восстанавливаю» forever.
+  void restorer(details.ref).then(feed => { if (feed) rememberFeed(details.feedKey, feed, details.note, details.ref); else unrestorable.add(details.feedKey); })
+    .catch(() => { unrestorable.add(details.feedKey); }).finally(() => { restoring.delete(details.feedKey); redraw?.(); });
   return true;
 }
 
@@ -81,7 +83,7 @@ export function renderFeedResult(result: AgentToolResult<unknown>, options: Tool
     if (!feed) {
       // Rebuilt from the stored revision when the row points at one; otherwise the note and an honest hint.
       const coming = restore(details, redraw);
-      return new Text(theme.fg('muted', safeText(`${details.note} · ${coming ? 'восстанавливаю из сохранённой ревизии' : 'сессия открыта заново: попросите показать это ещё раз'}`)), 0, 0);
+      return new Text(theme.fg('muted', safeText(`${details.note} · ${coming ? 'восстанавливаю из сохранённой ревизии' : unrestorable.has(details.feedKey) ? 'сохранённая ревизия недоступна — попросите показать текущее состояние' : 'сессия открыта заново: попросите показать это ещё раз'}`)), 0, 0);
     }
     return new FeedBlock(feed, options.expanded, theme, expanded => keyHint('app.tools.expand', expanded ? 'свернуть' : 'подробнее'));
   } catch {
