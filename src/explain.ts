@@ -216,7 +216,13 @@ function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind:
     .sort((a, b) => Number(a.prompt) - Number(b.prompt) || a.number - b.number);
   const unverifiedRules = ids.length - rules.length;
   const listed: (RuleRef | null)[] = [...rules, ...Array<null>(unverifiedRules).fill(null)];
-  const shownRules = listed.slice(0, 2);
+  // Two requirements drawn from one sentence quote the same words: the owner reads that sentence once, the rest is counted.
+  const shownRules: (RuleRef | null)[] = [];
+  for (const rule of listed) {
+    if (shownRules.length === 2) break;
+    if (rule && shownRules.some(shown => shown?.sourceId === rule.sourceId && shown.quote === rule.quote)) continue;
+    shownRules.push(rule);
+  }
   const moreRules = listed.length - shownRules.length;
   const violated = kind === 'pass' ? undefined : violatedRule(record, chosen, register);
 

@@ -85,6 +85,7 @@ const texts = (rows: VerdictRow[]) => rows.map(row => row.text);
 const chat = (record: Experiment) => nextStep(view(record), { runId: HEX_ID, surface: 'chat' });
 const board = (record: Experiment) => nextStep(view(record), { runId: HEX_ID, surface: 'board' });
 const collapsed = (v: ResultView) => verdictBlockRows(v, { expanded: false, runId: HEX_ID, surface: 'chat' });
+const boardCollapsed = (v: ResultView) => verdictBlockRows(v, { expanded: false, runId: HEX_ID, surface: 'board' });
 const expanded = (v: ResultView) => verdictBlockRows(v, { expanded: true, runId: HEX_ID, surface: 'chat' });
 
 /** One passed and three failed situations with recorded clusters of 3, 1 and 1 failed situations. */
@@ -114,13 +115,13 @@ test('V1: the ten locked vectors read exactly as the UI-SPEC table, with the ton
   assert.equal(GOOD_FROM, 80);
   assert.equal(MIXED_FROM, 50);
   const vectors: [Experiment, string, 'good' | 'warn' | 'bad'][] = [
-    [scored(12, 3), 'Агент справляется хорошо: 12 из 15 ситуаций (мало данных)', 'good'],
-    [scored(39, 10), 'Агент справляется хорошо: 39 из 49 ситуаций', 'good'],
-    [scored(10, 10), 'Агент справляется с ошибками: 10 из 20 ситуаций', 'warn'],
-    [scored(9, 4), 'Агент справляется с ошибками: 9 из 13 ситуаций (мало данных)', 'warn'],
-    [scored(0, 9), 'Агент справляется плохо: 0 из 9 ситуаций (мало данных)', 'bad'],
-    [scored(1, 0), 'Агент справляется хорошо: 1 из 1 ситуации (мало данных)', 'good'],
-    [scored(21, 0), 'Агент справляется хорошо: 21 из 21 ситуации', 'good'],
+    [scored(12, 3), 'Точность 80% · агент справляется хорошо: 12 из 15 ситуаций (мало данных)', 'good'],
+    [scored(39, 10), 'Точность 80% · агент справляется хорошо: 39 из 49 ситуаций', 'good'],
+    [scored(10, 10), 'Точность 50% · агент справляется с ошибками: 10 из 20 ситуаций', 'warn'],
+    [scored(9, 4), 'Точность 69% · агент справляется с ошибками: 9 из 13 ситуаций (мало данных)', 'warn'],
+    [scored(0, 9), 'Точность 0% · агент справляется плохо: 0 из 9 ситуаций (мало данных)', 'bad'],
+    [scored(1, 0), 'Точность 100% · агент справляется хорошо: 1 из 1 ситуации (мало данных)', 'good'],
+    [scored(21, 0), 'Точность 100% · агент справляется хорошо: 21 из 21 ситуации', 'good'],
     [scored(0, 0, { unmeasured: 2 }), 'Проверенных ситуаций нет', 'warn'],
     [scored(0, 10, { control: 'unknown' }), 'Числу пока не верить: контроль не измерен', 'bad'],
     [scored(5, 2, { control: 'fail' }), 'Числу пока не верить: контроль не пройден', 'bad'],
@@ -134,7 +135,7 @@ test('V1: the ten locked vectors read exactly as the UI-SPEC table, with the ton
   assert.equal(view(scored(39, 10)).headline.text, 'Справился в 39 из 49 проверенных ситуаций — 80%.');
   // Both control words when one control failed and another was not measured.
   assert.equal(verdictLine(view(scored(5, 2, { control: ['fail', 'unknown'] }))), 'Числу пока не верить: контроль не пройден или не измерен');
-  assert.equal(verdictLine(view(scored(5, 2, { control: 'pass' }))), 'Агент справляется с ошибками: 5 из 7 ситуаций (мало данных)', 'a passing control changes nothing');
+  assert.equal(verdictLine(view(scored(5, 2, { control: 'pass' }))), 'Точность 71% · агент справляется с ошибками: 5 из 7 ситуаций (мало данных)', 'a passing control changes nothing');
   assert.ok(vectors.every(([, text]) => !text.endsWith('.')), 'a title row has no trailing period');
 });
 
@@ -203,14 +204,15 @@ test('V2 rule 2c: «не могу сказать» marks are counted in the dati
 
 // ---- B1 ----
 
-test('B1: the collapsed block is V1, the first block without «?» rows, the cause names, then «Дальше», with single blank rows', () => {
+test('B1: the collapsed chat block is V1 with the accuracy, the first block without «?» rows, every main cause with its explanation, then «Дальше»', () => {
   const record = marked(clustered(), { skip: ['t-f2'] });
   record.scenarios.push(card('u0', { title: 'Чек не пришёл' }));
   record.trials.push(attempt('u0', { goal: 'unknown', goalRationale: SPLIT }));
   const v = view(record);
   const rows = collapsed(v);
-  assert.deepEqual(texts(rows), [
-    'Агент справляется плохо: 1 из 4 ситуаций (мало данных)',
+  const heading = rows.findIndex(row => row.role === 'heading');
+  assert.deepEqual(texts(rows).slice(0, heading + 1), [
+    'Точность 25% · агент справляется плохо: 1 из 4 ситуаций (мало данных)',
     'Справился в 1 из 4 проверенных ситуаций — 25%.',
     'Правил промпта в наборе нет — считается только запрос.',
     'Мало данных: реальная доля где-то от 5% до 70%.',
@@ -220,27 +222,33 @@ test('B1: the collapsed block is V1, the first block without «?» rows, the cau
     'Цель — согласие в 9 случаях из 10.',
     '',
     'ГЛАВНЫЕ ПРИЧИНЫ ПРОВАЛОВ',
-    '1. Не называет срок возврата — 3 ситуации',
-    '2. Не уточняет модель терминала — 1 ситуация',
-    '3. Отвечает вне инструкций — 1 ситуация',
-    '',
-    `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`,
   ]);
-  assert.deepEqual(rows.map(row => row.role), ['verdict:bad', 'headline', 'line', 'line', 'line', 'line', 'agreement', 'agreement-tail', 'blank', 'heading', 'cause', 'cause', 'cause', 'blank', 'next']);
+  // The end of a run explains itself: every main cause carries what was expected, what the agent said and the owner rule.
+  const full = expanded(v);
+  const causesOf = (block: typeof rows) => { const from = block.findIndex(row => row.role === 'heading'); return block.slice(from, block.findIndex((row, i) => i > from && row.role !== 'blank' && !['cause', 'example', 'expected', 'said', 'rule', 'more', 'violated', 'unverified'].includes(row.role))); };
+  assert.deepEqual(causesOf(rows), causesOf(full), 'the chat block shows the same explained causes without a key press');
+  assert.deepEqual(texts(rows).filter(text => /^\d\. /.test(text)), ['1. Не называет срок возврата — 3 ситуации', '2. Не уточняет модель терминала — 1 ситуация', '3. Отвечает вне инструкций — 1 ситуация']);
+  assert.ok(rows.some(row => row.text.startsWith('Пример:')) && rows.some(row => row.text.startsWith('Должен был')), 'the explanation is in the block');
+  assert.equal(texts(rows).at(-1), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
   assert.equal(rows.find(row => row.role === 'agreement-tail')?.indent, 2, 'the tail row keeps its phase-3 indent');
   assert.ok(rows.every(row => !row.text.startsWith('? ')), 'no per-situation row in the collapsed block');
-  assert.ok(rows.every(row => !row.text.startsWith('Пример:')), 'no example in the collapsed block');
+  assert.ok(rows.every(row => row.role !== 'pointer'), 'the pointer waits for the expanded block');
+  // The board keeps the short form: names only.
+  assert.ok(boardCollapsed(v).every(row => !row.text.startsWith('Пример:')), 'no example in the collapsed board block');
   assert.equal(SECTION_TEXT.causes.board, 'ГЛАВНЫЕ ПРИЧИНЫ ПРОВАЛОВ');
 });
 
 test('B1 row 4 variants: the first three «✗» titles without clusters, the no-failures sentence, nothing when nothing was decided', () => {
-  const failures = collapsed(view(scored(0, 16)));
+  const failures = boardCollapsed(view(scored(0, 16)));
   const heading = failures.findIndex(row => row.text === 'ПРОВАЛЫ');
   assert.ok(heading > 0);
   assert.deepEqual(texts(failures).slice(heading, heading + 4), ['ПРОВАЛЫ', '✗ Провал 1', '✗ Провал 2', '✗ Провал 3']);
   assert.equal(failures[heading + 4]?.role, 'blank');
   assert.equal(failures.at(-1)?.role, 'next');
-  assert.ok(failures.every(row => !row.text.startsWith('Должен был')), 'title rows only');
+  assert.ok(failures.every(row => !row.text.startsWith('Должен был')), 'title rows only on the board');
+  const explained = collapsed(view(scored(0, 16)));
+  assert.deepEqual(texts(explained).filter(text => text.startsWith('✗ ')), ['✗ Провал 1', '✗ Провал 2', '✗ Провал 3'], 'the chat block explains the first three failures, not all sixteen');
+  assert.ok(explained.some(row => row.text.startsWith('Должен был')), 'each of them says what was expected');
 
   const clean = collapsed(view(marked(scored(3, 0))));
   assert.deepEqual(texts(clean).slice(-3), [NO_FAILURES, '', 'Дальше: выгрузите отчёт для заказчика.']);
@@ -275,7 +283,7 @@ test('B2: the expanded block adds the «?» rows, the full causes, the pointer, 
   const lines = texts(rows);
   const detail = (indent: number) => ['Должен был: ожидание не записано в ситуации.', 'Сказал (реплика #1): «Ответ агента»', 'Правило: у ситуации нет правила из ваших материалов.'].map(text => ({ indent, text }));
   assert.deepEqual(rows.map(row => ({ indent: row.indent, text: row.text })), [
-    { indent: 0, text: 'Агент справляется плохо: 1 из 4 ситуаций (мало данных)' },
+    { indent: 0, text: 'Точность 25% · агент справляется плохо: 1 из 4 ситуаций (мало данных)' },
     { indent: 0, text: 'Справился в 1 из 4 проверенных ситуаций — 25%.' },
     { indent: 0, text: 'Правил промпта в наборе нет — считается только запрос.' },
     { indent: 0, text: 'Мало данных: реальная доля где-то от 5% до 70%.' },

@@ -52,9 +52,11 @@ export function verdictLine(view: ResultView): string {
   if (percent === null) return 'Проверенных ситуаций нет';
   const { passed, decided } = view.headline;
   const count = `${passed} из ${decided} ${pluralForm(decided, SITUATIONS_OF)}${decided < SMALL_SAMPLE ? ' (мало данных)' : ''}`;
-  if (percent >= GOOD_FROM) return `Агент справляется хорошо: ${count}`;
-  if (percent >= MIXED_FROM) return `Агент справляется с ошибками: ${count}`;
-  return `Агент справляется плохо: ${count}`;
+  // The accuracy number leads: it is the first thing an owner or a customer looks for.
+  const lead = `Точность ${percent}% · агент справляется`;
+  if (percent >= GOOD_FROM) return `${lead} хорошо: ${count}`;
+  if (percent >= MIXED_FROM) return `${lead} с ошибками: ${count}`;
+  return `${lead} плохо: ${count}`;
 }
 
 /** The tone column of V1: a control warning and «плохо» are bad, «нет» and «с ошибками» warn, «хорошо» is good. */
@@ -154,7 +156,9 @@ function disagreements(view: ResultView): VerdictRow[] {
 export function verdictBlockRows(view: ResultView, options: { expanded: boolean; runId: string; surface: Surface }): VerdictRow[] {
   const verdict: VerdictRow = { role: `verdict:${verdictLevel(view)}`, indent: 0, text: verdictLine(view) };
   const next: VerdictRow = { role: 'next', indent: 0, text: nextStep(view, options) };
-  if (!options.expanded) return groups([[verdict, ...firstBlock(view, false)], causes(view, false), [next]]);
+  // In the conversation the block is the end of the run: each main cause comes with its human explanation —
+  // what was expected, what the agent said, which owner rule — without a key press. The board keeps the names only.
+  if (!options.expanded) return groups([[verdict, ...firstBlock(view, false)], causes(view, options.surface === 'chat'), [next]]);
   const pointer: VerdictRow[] = view.failures.length ? [{ role: 'pointer', indent: 0, text: options.surface === 'chat' ? allFailuresChat(options.runId) : allFailuresTab(options.runId) }] : [];
   return groups([[verdict, ...firstBlock(view, true)], causes(view, true), disagreements(view), pointer, [next]]);
 }

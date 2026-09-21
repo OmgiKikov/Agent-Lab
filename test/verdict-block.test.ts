@@ -20,7 +20,7 @@ import { verdictLine } from '../src/verdict.js';
  */
 
 const MARKER = 'QUOTE-MARKER-7f3a';
-const SHOWN_TO_OWNER = 'Блок-вердикт уже показан владельцу. Не пересказывайте число и причины; ответьте на вопрос или предложите следующий шаг.';
+const SHOWN_TO_OWNER = 'Блок с точностью и причинами уже показан владельцу. Не копируйте его строки. Назовите точность одной фразой и объясните по-человечески, где и почему агент хромает: что просили клиенты, что агент сделал вместо этого, какое правило владельца это нарушает; что он делает хорошо и насколько числу можно верить. Затем предложите следующий шаг.';
 
 function registered() {
   const tools = new Map<string, ToolDefinition>();
@@ -92,7 +92,7 @@ test('после agent_lab_run Pi рисует блок-вердикт из deta
   // The model-only text is never drawn.
   const shown = lines.join('\n');
   assert.doesNotMatch(shown, /shownToOwner/);
-  assert.doesNotMatch(shown, /Блок-вердикт уже показан/);
+  assert.doesNotMatch(shown, /уже показан владельцу/);
   assert.doesNotMatch(shown, /"viewLines"/);
 });
 
@@ -253,7 +253,7 @@ test('through Pi\'s real tool row in the dark and light themes, at 40–160 colu
         assert.ok(!lines.some(line => line.includes('…')), `${label}: an ellipsis was produced`);
         assert.equal(lines[0], 'Готовлю запуск', label);
         if (width >= 80) assert.equal(lines[1], verdictLine(view), label);
-        assert.ok(lines.join(' ').includes('Агент справляется плохо: 2 из 5 ситуаций'), `${label}: the verdict line is drawn`);
+        assert.ok(lines.join(' ').includes('Точность 40% · агент справляется плохо: 2 из 5 ситуаций'), `${label}: the verdict line is drawn`);
         assert.ok(!lines.some(line => line.includes('shownToOwner') || line.includes('скрытый текст')), `${label}: the model text stays hidden`);
         assert.ok(!raw.join('').includes('\x1b[31m'), `${label}: the escape sequence of the quote is gone`);
         const text = lines.join(' ');
@@ -286,7 +286,7 @@ test('VerdictBlock takes the hint as a function and paints the rows with the the
       const lines = new VerdictBlock(view, expanded, fake, hint).render(width);
       for (const line of lines) assert.ok(visibleWidth(plain(line)) <= width, `${width}: «${plain(line)}»`);
       assert.equal(lines.at(-1), expanded ? 'ПОДСКАЗКА-СВЕРНУТЬ' : 'ПОДСКАЗКА-ПОДРОБНЕЕ', 'the injected hint closes the block, unpainted and unescaped');
-      assert.ok(lines[0]!.startsWith('<error><b>Агент справляется плохо'), `${width}: V1 is bold error`);
+      assert.ok(lines[0]!.startsWith('<error><b>Точность 40% · агент справляется плохо'), `${width}: V1 is bold error`);
       assert.equal(lines.some(line => plain(line).startsWith('? ') || plain(line).startsWith('  ? ')), expanded, `${width}: «?» rows only when expanded`);
     }
   }

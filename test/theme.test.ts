@@ -42,7 +42,7 @@ const QUOTE = [
 test('renderRows keeps every word of a 600-character quote inside 40–160 columns on both fake themes, with only the eight tones', () => {
   assert.ok(QUOTE.length >= 600, `fixture is ${QUOTE.length} characters`);
   const rows: Row[] = [
-    { text: 'Агент справляется плохо: 0 из 9 ситуаций (мало данных)', role: 'verdict:bad' },
+    { text: 'Точность 0% · агент справляется плохо: 0 из 9 ситуаций (мало данных)', role: 'verdict:bad' },
     { text: `Сказал (реплика #7): «${QUOTE}»`, indent: 2, role: 'said' },
     { text: QUOTE, indent: 5, tone: 'muted' },
     { text: 'Дальше: выгрузите отчёт для заказчика.', role: 'next' },
@@ -55,7 +55,7 @@ test('renderRows keeps every word of a 600-character quote inside 40–160 colum
         assert.ok(!line.includes('…'), `${name} ${width}: an ellipsis was produced`);
         assert.ok(!plain(line).includes('\x1b'), `${name} ${width}: the escape sequence reached the output`);
       }
-      const expected = normalise(['Агент справляется плохо: 0 из 9 ситуаций (мало данных)', `Сказал (реплика #7): «${QUOTE}»`, QUOTE, 'Дальше: выгрузите отчёт для заказчика.'].join(' ')
+      const expected = normalise(['Точность 0% · агент справляется плохо: 0 из 9 ситуаций (мало данных)', `Сказал (реплика #7): «${QUOTE}»`, QUOTE, 'Дальше: выгрузите отчёт для заказчика.'].join(' ')
         .replace(/\x1b\[[0-9;]*m/g, '').replace(/\t/g, '  '));
       assert.equal(normalise(lines.map(plain).join(' ')), expected, `${name} ${width}: a word was lost or cut`);
       const used = new Set(tokens(lines));
