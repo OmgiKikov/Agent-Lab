@@ -1,7 +1,10 @@
-import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, UserMode } from './contracts.js';
-import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, metricApplies, ragEvidenceComplete, RAG_METRIC_IDS, verbatimSpan } from './contracts.js';
+import { directChecks } from './checkpoints.js';
+import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, UserMode, ValidationExclusion } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, MACHINE_FORMAT, metricApplies, ragEvidenceComplete, RAG_METRIC_IDS, verbatimSpan } from './contracts.js';
 import { agentMetricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
-import { cardOutcome, humanFindings, isAgentFailure, verdictSummary, type VerdictSummary } from './comparison.js';
+import { cardOutcome, headlineCardOutcome, humanFindings, isAgentFailure, judgeModel as runJudgeModel, verdictSummary, type VerdictSummary } from './comparison.js';
+import { exclusionCounts, pluralForm } from './result-view.js';
+import { failureExplanation, ruleRegister, ruleText, UNVERIFIED, UNVERIFIED_REPLY, type FailureExplanation } from './explain.js';
 import { draftHash } from './experiment.js';
 
 /*
@@ -21,23 +24,31 @@ export interface QualityMetric {
 }
 export interface QualityCause {
   name: string; description: string; stage?: string; dialogues: number;
-  /** The card title and one cited reason from the first dialogue of the cluster. */
-  example?: { trialId: string; card: string; quote: string; seq?: number };
+  /**
+   * The card title and one checked reason from the first dialogue of the cluster; never a clipped
+   * rationale. `verified: false` means the record could not show what the agent said, so `quote`
+   * holds a status line: a surface must print it plainly, never inside «…».
+   */
+  example?: { trialId: string; card: string; quote: string; seq?: number; verified: boolean; explanation?: FailureExplanation };
   promptQuotes: string[];
 }
 export interface QualityCardScore {
   passed: number; failed: number; unknown: number; invalid: number; notReached: number; total: number; accuracy: number | null;
 }
+export interface QualitySlice extends QualityCardScore { id: string; label: string; planned: number; measured: number }
 export interface QualitySummary {
-  /** Primary business result. Generated prompt/RAG runs use goal_attainment; legacy runs fall back to all criteria. */
+  /** Primary business result over the counted (non-control) cards. Generated prompt/RAG runs use goal_attainment: the headline rule (goal and prompt rules); legacy runs fall back to all criteria. */
   cards: QualityCardScore;
+  slices: { revision: string; label: string; groups: QualitySlice[]; provenance: QualitySlice[] };
   /** Strict card result: every applicable code check and agent rubric must pass. */
   strict: QualityCardScore & { goalMetWithOtherFailures: number };
   primary: 'goal_attainment' | 'all_criteria';
+  /** The label printed next to `cards`: which rule the number is counted by (C-310). */
+  cardsLabel: string;
   metrics: QualityMetric[];
   rag: { complete: number; partial: number; missing: number; signals: { trialId: string; explanation: string }[] };
   /** Recorded dialogues left out of the validation set; never part of the denominator. */
-  excluded: { total: number; customerData: number; masked: number; other: number };
+  excluded: { total: number; kinds: { kind: ValidationExclusion['kind']; label: string; count: number }[] };
   causes: QualityCause[];
   /** How sure the automatic verdict is: decided dialogues vs those the judge left unknown or a human disputes. */
   judge: { decided: number; unknown: number; disputed: number; label: string };
@@ -65,6 +76,30 @@ const insufficientScoreBrief = (): ScoreBrief => ({
 export interface TestPlanLines {
   lines: string[];
   draftHash: string;
+}
+
+/** `expected` — «Должен: …»; `rule` — a verified owner rule; `unverified` — a named gap; `more` — the compact tail; `marker` — «ожидание изменено владельцем». */
+export type ExpectationRole = 'expected' | 'rule' | 'unverified' | 'more' | 'marker';
+export interface ExpectationCard {
+  scenarioId: string;
+  title: string;
+  /** `1.`, `12.` — the situation's position in the draft. */
+  label: string;
+  goal: string;
+  details: { role: ExpectationRole; text: string }[];
+  ownerEdited: boolean;
+}
+export interface ExpectationSheet {
+  draftHash: string;
+  count: number;
+  /** `13 ситуаций` */
+  countText: string;
+  labelWidth: number;
+  boardHead: [string, string];
+  cards: ExpectationCard[];
+  lines: string[];
+  /** At most two rule rows per situation, then where to read all of them. */
+  compactLines(runId: string): string[];
 }
 
 export interface TrialProofLines {
@@ -96,6 +131,76 @@ const labelled = (label: string, value: string): string[] => {
   const [first = '', ...rest] = planText(value).split('\n');
   return [`${label}${first}`, ...rest.map(line => `  ${line}`)];
 };
+
+const SITUATION_FORMS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
+const SHEET_RULE_FORMS: [string, string, string] = ['правило', 'правила', 'правил'];
+const collapseText = (value: string): string => value.replace(/\s+/gu, ' ').trim();
+/** An internal machine-format prompt rule is not a rule the owner recognises, so the sheet leaves it out. */
+const machineFormatRule = (record: Experiment, requirement: Requirement): boolean =>
+  record.sources.find(source => source.id === requirement.sourceId)?.kind === 'prompt' && MACHINE_FORMAT.test(requirement.quote);
+
+/**
+ * What the agent must do in every situation of a draft, in the owner's words: the goal, the
+ * expectation that will be scored, and every owner rule the situation rests on. Built from the
+ * record only, with the same rule numbering and row shape as the failure explanations, so the
+ * owner sees the same `Правило N` before the run and after it.
+ */
+export function expectationSheet(record: Experiment): ExpectationSheet {
+  if (record.workflow !== 'evaluate') throw new Error('Показать ожидания можно только для теста workflow evaluate.');
+  if (record.phase !== 'review') throw new Error('Показать ожидания можно только для незапущенного черновика.');
+  const hash = draftHash(record);
+  const version = `Версия ожиданий: ${hash.slice(0, 12)}`;
+  const count = record.scenarios.length;
+  const countText = `${count} ${pluralForm(count, SITUATION_FORMS)}`;
+  const labelWidth = `${count}.`.length;
+  const boardHead: [string, string] = ['ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ', `${countText} · номер правила — порядок в ваших материалах`];
+  if (!count) {
+    const empty = ['Ситуаций пока нет.', 'Они появятся после подготовки. a — рассказать Pi, что проверить.'];
+    return { draftHash: hash, count, countText, labelWidth, boardHead, cards: [], lines: empty, compactLines: () => [...empty] };
+  }
+  const register = ruleRegister(record);
+  const requirements = new Map(record.requirements.map(item => [item.id, item]));
+  const edited = new Set(record.ownerExpectationScenarioIds ?? []);
+  const built = record.scenarios.map((scenario, index) => {
+    const ids = [...new Set(scenario.requirementIds)]
+      .filter(id => { const item = requirements.get(id); return !item || !machineFormatRule(record, item); });
+    const rules = ids.flatMap(id => requirements.has(id) ? register.get(id) ?? [] : [])
+      .sort((a, b) => Number(a.prompt) - Number(b.prompt) || a.number - b.number);
+    const criteria = collapseText(scenario.successCriteria ?? '');
+    const must: { role: ExpectationRole; text: string } = criteria
+      ? { role: 'expected', text: `Должен: ${criteria}` }
+      : { role: 'unverified', text: 'Должен: ожидание не записано.' };
+    const ruleRows: { role: ExpectationRole; text: string }[] = ids.length
+      ? [...rules.map(rule => ({ role: 'rule' as const, text: ruleText(rule) })),
+        ...Array.from({ length: ids.length - rules.length }, () => ({ role: 'unverified' as const, text: `Правило: ${UNVERIFIED}` }))]
+      : [{ role: 'unverified', text: 'Правило: у ситуации нет правила из ваших материалов.' }];
+    const ownerEdited = edited.has(scenario.id);
+    const markerRows: { role: ExpectationRole; text: string }[] = ownerEdited
+      ? [{ role: 'marker', text: 'Ожидание изменено владельцем — с прошлыми прогонами не сравнивается.' }] : [];
+    const card: ExpectationCard = {
+      scenarioId: scenario.id, title: collapseText(scenario.title), label: `${index + 1}.`,
+      goal: `Ситуация: ${collapseText(scenario.user.goal)}`,
+      details: [must, ...ruleRows, ...markerRows], ownerEdited,
+    };
+    return { card, must, ruleRows, markerRows };
+  });
+  const block = (card: ExpectationCard, details: { text: string }[]): string[] => [
+    `${card.label.padStart(labelWidth)} ${card.goal}`,
+    ...details.map(detail => `${' '.repeat(labelWidth + 1)}${detail.text}`),
+  ];
+  const head = `Что агент должен сделать: ${countText}. Номер правила — порядок в ваших материалах.`;
+  const lines = [head, '', ...built.flatMap(item => [...block(item.card, item.card.details), '']), version];
+  const compactLines = (runId: string): string[] => {
+    const blocks = built.flatMap(item => {
+      const shown = item.ruleRows.slice(0, 2);
+      const hidden = item.ruleRows.length - shown.length;
+      const more = hidden ? [{ text: `и ещё ${hidden} ${pluralForm(hidden, SHEET_RULE_FORMS)}` }] : [];
+      return [...block(item.card, [item.must, ...shown, ...more, ...item.markerRows]), ''];
+    });
+    return [head, '', ...blocks, `Все правила — /agent-lab ${runId.slice(0, 8)}, раздел 2.`, version];
+  };
+  return { draftHash: hash, count, countText, labelWidth, boardHead, cards: built.map(item => item.card), lines, compactLines };
+}
 
 /** The exact one-test proposal shown before the owner accepts its definition. */
 export function testPlanLines(record: Experiment): TestPlanLines {
@@ -218,6 +323,10 @@ export function trialProofLines(record: Experiment, trialId: string): TrialProof
       'ПРОВЕРКИ',
       ...(checks.length ? checks : ['—']),
       '',
+      ...(trial.checkpoints?.length ? ['КОНТРОЛЬНЫЕ ТОЧКИ', ...trial.checkpoints.flatMap(cp => [
+        `${({ pass: 'ВЫПОЛНЕНО', fail: 'НАРУШЕНО', unknown: 'НЕ ОПРЕДЕЛЕНО', not_applicable: 'НЕ ПРИМЕНИМО' })[cp.result]} [${cp.checkpointId}] · ${cp.role === 'required' ? 'обязательная' : 'диагностика'} · требование ${cp.requirementId} · события ${cp.evidence.map(seq => `#${seq}`).join(', ') || '—'}`,
+        ...labelled('  Обоснование: ', cp.rationale),
+      ]), ''] : []),
       'ОЦЕНКИ',
       ...(rubrics.length ? rubrics : ['—']),
     ],
@@ -335,7 +444,7 @@ export function scoreBrief(input: Experiment): ScoreBrief {
   const { requirement, source, quote, trial, assessment, event } = grounded;
   const reference = `диалог ${trial.id}, событие #${event.seq}`;
   const labels: Record<TraceEvent['type'], string> = {
-    user: 'Реплика пользователя', assistant: 'Ответ агента', simulator: 'Реплика симулятора', tool_call: 'Вызов инструмента',
+    user: 'Реплика пользователя', assistant: 'Ответ агента', simulator: 'Реплика симулятора', observation: 'Наблюдение окружения', tool_call: 'Вызов инструмента',
     tool_result: 'Результат инструмента', retrieval: 'RAG-контекст', error: 'Ошибка',
   };
   const status = { pass: 'ПРОЙДЕНО', fail: 'НЕ ПРОЙДЕНО', unknown: 'НЕЯСНО' } as const;
@@ -368,9 +477,7 @@ const rate = (passed: number, failed: number): number | null => passed + failed 
 export const percent = (value: number | null): string => value === null ? '—' : `${Math.round(value * 100)}%`;
 /** Russian plural: plural(2, ['диалог', 'диалога', 'диалогов']) → «2 диалога». */
 export function plural(n: number, forms: [string, string, string]): string {
-  const mod10 = n % 10, mod100 = n % 100;
-  const form = mod10 === 1 && mod100 !== 11 ? forms[0] : mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20) ? forms[1] : forms[2];
-  return `${n} ${form}`;
+  return `${n} ${pluralForm(n, forms)}`;
 }
 export const dialogues = (n: number) => plural(n, ['диалог', 'диалога', 'диалогов']);
 export const cardsWord = (n: number) => plural(n, ['карточка', 'карточки', 'карточек']);
@@ -386,7 +493,7 @@ function metricRows(record: Experiment): QualityMetric[] {
   for (const trial of record.trials) {
     const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
     if (!scenario || !measured(trial)) continue;
-    if (scenario.checks.length) {
+    if (directChecks(scenario).length) {
       const row = rows.get('code') ?? { id: 'code', name: 'Точные проверки · код', kind: 'code', passed: 0, failed: 0, unknown: 0, total: 0, accuracy: null };
       rows.set('code', row);
       bump(row, !usable(scenario, trial) ? 'unknown' : trial.outcome === 'pass' ? 'pass' : trial.outcome === 'fail' ? 'fail' : 'unknown');
@@ -403,21 +510,6 @@ function metricRows(record: Experiment): QualityMetric[] {
   }
   return [...rows.values()].map(row => ({ ...row, accuracy: rate(row.passed, row.failed) }))
     .sort((a, b) => Number(b.kind === 'code') - Number(a.kind === 'code'));
-}
-
-function goalCardOutcome(record: Experiment, scenario: Scenario): 'pass' | 'fail' | 'unknown' {
-  const metric = scenario.metrics?.find(item => item.subject === 'agent' && item.id === 'goal_attainment');
-  if (!metric) return cardOutcome(record, scenario);
-  const modes = record.settings.userModes.filter(mode => mode !== 'scripted' || scenario.user.script !== undefined);
-  const expected = new Set(modes.flatMap(mode => Array.from({ length: record.settings.repeats }, (_, repeat) => `${mode}:${repeat}`)));
-  const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
-  const seen = new Set(trials.map(trial => `${trial.userMode}:${trial.repeat}`));
-  if (!expected.size || trials.length !== expected.size || seen.size !== expected.size || [...expected].some(key => !seen.has(key))
-    || trials.some(trial => trial.familyId !== scenario.familyId || trial.split !== scenario.split
-      || record.manifestHash && trial.manifestHash !== record.manifestHash
-      || !measurementUsable(scenario, trial, record.humanReviews))) return 'unknown';
-  const results = trials.map(trial => agentMetricResult(trial, metric.id, record.humanReviews) ?? 'unknown');
-  return results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
 }
 
 function cardScore(record: Experiment, outcomes: Array<{ scenario: Scenario; outcome: 'pass' | 'fail' | 'unknown' }>): QualityCardScore {
@@ -443,17 +535,24 @@ export function shorten(text: string, limit = 220): string {
   const stop = Math.max(head.lastIndexOf('. '), head.lastIndexOf('; '), head.lastIndexOf(': '));
   return `${(stop > limit / 2 ? head.slice(0, stop + 1) : head.replace(/\s+\S*$/, '')).trim()}…`;
 }
-/** The reason a person would quote first: the failed exact check, otherwise the failed agent rubric's cited rationale. */
-function firstReason(record: Experiment, trial: Trial): { quote: string; seq?: number } {
-  const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
+/**
+ * The example a person can check: a failed exact check quotes its own harness-written evidence;
+ * otherwise the verified explanation of the failure — its reply quote, or the named «не подтверждено»
+ * when the record cannot show one. The judge's rationale is never quoted here (CTX-08).
+ */
+function causeExample(record: Experiment, trial: Trial): { quote: string; seq?: number; verified: boolean; explanation?: FailureExplanation } {
   const check = trial.checks.find(c => !c.passed);
-  if (check) return { quote: check.evidence || check.description };
-  const failed = (trial.assessments ?? []).filter(a => scenario?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent')
-    && agentMetricResult(trial, a.metricId, record.humanReviews) === 'fail');
-  const assessment = ['goal_attainment', 'reply_quality', 'prompt_compliance']
-    .flatMap(id => failed.find(item => item.metricId === id) ?? []).at(0) ?? failed[0];
-  if (assessment) return { quote: shorten(assessment.rationale.replace(/^Совпало \d\/\d оценок этой рубрики в свежих сессиях; это не проверка правильности\.\s*/, '').replace(/^Pass condition is not met:\s*/i, '')), seq: assessment.evidence[0] };
-  return { quote: trial.reason };
+  if (check) return { quote: check.evidence || check.description, verified: true };
+  const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
+  const explanation = scenario ? failureExplanation(record, scenario, trial) : null;
+  if (!explanation) return { quote: trial.reason, verified: true };
+  // The gap travels with the example instead of being smuggled inside `quote`: an exporter that
+  // wrapped the sentinel in «…» would state that the agent uttered it.
+  // The explanation keeps the whole reply for the board, which wraps it; the flattened quote is what
+  // the HTML and Markdown reports inline into the cause list, so only that copy is clamped.
+  return explanation.said
+    ? { quote: shorten(explanation.said.quote), seq: explanation.said.seq, verified: true, explanation }
+    : { quote: UNVERIFIED_REPLY, verified: false, explanation };
 }
 
 function causes(record: Experiment, v: VerdictSummary): QualityCause[] {
@@ -462,7 +561,7 @@ function causes(record: Experiment, v: VerdictSummary): QualityCause[] {
     const trials = mode.trialIds.map(id => record.trials.find(t => t.id === id)).filter((t): t is Trial => !!t && isAgentFailure(record, t));
     const first = trials[0];
     return first ? [{ name: mode.name, description: mode.description, stage: mode.stage, dialogues: trials.length, promptQuotes: mode.promptQuotes ?? [],
-      example: { trialId: first.id, card: title(first), ...firstReason(record, first) } }] : [];
+      example: { trialId: first.id, card: title(first), ...causeExample(record, first) } }] : [];
   }).sort((a, b) => b.dialogues - a.dialogues);
   if (clusters.length) return clusters;
   // Before clustering ran (or when it found nothing), the weakest criteria are the causes we can name.
@@ -470,7 +569,7 @@ function causes(record: Experiment, v: VerdictSummary): QualityCause[] {
     const failing = record.trials.find(t => spot.kind === 'check' ? t.checks.some(c => !c.passed && c.description === spot.description)
       : record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.some(m => m.name === spot.description && agentMetricResult(t, m.id, record.humanReviews) === 'fail'));
     return { name: spot.description, description: spot.kind === 'check' ? 'Точная проверка не пройдена.' : 'Рубрика агента не выполнена по оценке судьи.', stage: spot.stage, dialogues: spot.failures, promptQuotes: [],
-      ...(failing ? { example: { trialId: failing.id, card: title(failing), ...firstReason(record, failing) } } : {}) };
+      ...(failing ? { example: { trialId: failing.id, card: title(failing), ...causeExample(record, failing) } } : {}) };
   });
 }
 
@@ -483,15 +582,28 @@ const limitTexts: Record<string, string> = {
 export function qualitySummary(input: Experiment): QualitySummary {
   const record = observedRecord(input);
   const v = verdictSummary(record);
-  const primary = record.scenarios.length > 0 && record.scenarios.every(scenario => scenario.metrics?.some(metric => metric.subject === 'agent' && metric.id === 'goal_attainment'))
+  // Positive controls never enter the number (CTX-11): the report counts the same cards as the result view.
+  const controlIds = new Set(record.positiveControlScenarioIds ?? []);
+  const counted = record.scenarios.filter(scenario => !controlIds.has(scenario.id));
+  const primary = counted.length > 0 && counted.every(scenario => scenario.metrics?.some(metric => metric.subject === 'agent' && metric.id === 'goal_attainment'))
     ? 'goal_attainment' as const : 'all_criteria' as const;
-  const strictOutcomes = record.scenarios.map(scenario => ({ scenario, outcome: cardOutcome(record, scenario) }));
+  const strictOutcomes = counted.map(scenario => ({ scenario, outcome: cardOutcome(record, scenario) }));
   const cardOutcomes = primary === 'goal_attainment'
-    ? record.scenarios.map(scenario => ({ scenario, outcome: goalCardOutcome(record, scenario) })) : strictOutcomes;
-  const cards = cardScore(record, cardOutcomes);
-  const strictBase = cardScore(record, strictOutcomes);
+    ? counted.map(scenario => ({ scenario, outcome: headlineCardOutcome(record, scenario).outcome })) : strictOutcomes;
+  const countedRecord = { ...record, scenarios: counted };
+  const cards = cardScore(countedRecord, cardOutcomes);
+  const slice = (id: string, rows: typeof cardOutcomes): QualitySlice => {
+    const score = cardScore({ ...countedRecord, scenarios: rows.map(r => r.scenario) }, rows);
+    return { id, label: ({production:'из логов',curated:'экспертные',synthetic:'синтетические'} as Record<string,string>)[id] ?? input.librarySnapshot?.businessScenarios.find(b=>b.id===id)?.title ?? rows[0]?.scenario.title ?? id, ...score, planned: rows.length, measured: score.passed + score.failed };
+  };
+  const slices = { revision: input.librarySnapshot ? String(input.librarySnapshot.revision) : fingerprint(counted), label: 'По принятому набору',
+    groups: [...new Set(counted.map(s => s.familyId))].map(id => slice(id, cardOutcomes.filter(r => r.scenario.familyId === id))),
+    provenance: ['production','curated','synthetic'].map(id => slice(id,cardOutcomes.filter(r => r.scenario.provenance === id))) };
+  const strictBase = cardScore(countedRecord, strictOutcomes);
   const strict = { ...strictBase, goalMetWithOtherFailures: primary === 'goal_attainment'
     ? cardOutcomes.filter((item, index) => item.outcome === 'pass' && strictOutcomes[index]?.outcome !== 'pass').length : 0 };
+  const withRules = counted.some(scenario => scenario.metrics?.some(metric => metric.subject === 'agent' && metric.id === 'prompt_compliance'));
+  const cardsLabel = primary === 'all_criteria' ? 'Справился · карточки' : withRules ? 'Справился · запрос и правила промпта' : 'Справился · запрос';
   const metrics = metricRows(record);
   const rubricUnknown = metrics.filter(m => m.kind === 'rubric' && !RAG_METRIC_IDS.has(m.id)).reduce((n, m) => n + m.unknown, 0);
   const rag: QualitySummary['rag'] = { complete: 0, partial: 0, missing: 0, signals: [] };
@@ -532,20 +644,21 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const p = v.provenance;
   const provenance = [p.curated.cards ? `golden ${p.curated.cards}` : '', p.production.cards ? `из логов ${p.production.cards}` : '', p.synthetic.cards ? `синтетика ${p.synthetic.cards}` : ''].filter(Boolean).join(' · ') || 'карточек нет';
   const target = record.targetVersion ?? record.targetRelease ?? (record.target.kind === 'sandbox' ? 'песочница' : record.targetFingerprint?.slice(0, 12) ?? 'версия не названа');
-  const judgeModel = record.trials.find(t => t.judgeAudit)?.judgeAudit?.model ?? record.settings.roles?.judge?.model ?? record.settings.judge?.model;
+  const judgeModel = runJudgeModel(record);
   const limitCodes = v.confidenceReasons.map(r => r.code).filter(code => code in limitTexts);
   const limits = limitCodes.length ? `Границы: ${[...new Set(limitCodes.map(c => limitTexts[c]!))].slice(0, 4).join(' · ')}.` : 'Границы: см. статистику.';
   const reviewText = `разобрано человеком ${human.reviewed} из ${plural(human.total, ['диалога', 'диалогов', 'диалогов'])}`;
   // Only non-zero leftovers are named; the human-review count is always shown next to the automatic number.
   const leftovers = (items: [number, string][]) => items.filter(([n]) => n > 0).map(([, label]) => label);
   const sentence = (parts: string[]) => { const text = parts.join('; '); return text.charAt(0).toLocaleUpperCase() + text.slice(1); };
-  const headline = primary === 'goal_attainment'
-    ? `Бизнес-цель достигнута в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${plural(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} цель достигнута, но провален другой критерий.` : ''} ${sentence([...leftovers([[cards.unknown, `без решения по цели: ${cards.unknown}`], [cards.invalid, `невалидно: ${cards.invalid}`], [cards.notReached, `не дошли: ${cards.notReached}`]]), reviewText])}.`
+  // The rule the number is counted by is said in the sentence itself (C-309), so an old export is told apart by its wording.
+  const ruleWords = withRules ? 'Справился (запрос выполнен и правила промпта соблюдены)' : 'Справился (запрос выполнен)';
+  const headline = input.runKind === 'diagnostic' || input.runKind === 'generator' ? 'Служебный прогон исключён из общей точности и проверки исправлений; исходные трассы доступны отдельно.' : primary === 'goal_attainment'
+    ? `${ruleWords} в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${plural(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} справился, но провален другой критерий.` : ''} ${sentence([...leftovers([[cards.unknown, `без решения: ${cards.unknown}`], [cards.invalid, `невалидно: ${cards.invalid}`], [cards.notReached, `не дошли: ${cards.notReached}`]]), reviewText])}.`
     : `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)})${leftovers([[cards.unknown, `${cards.unknown} без решения`], [cards.invalid, `${cards.invalid} невалидны`], [cards.notReached, `${cards.notReached} не дошли`]]).map(part => `, ${part}`).join('')}; ${reviewText}.`;
   const exclusions = record.validationExclusions ?? [];
-  const excluded = { total: exclusions.length, customerData: exclusions.filter(item => item.kind === 'customer_data').length,
-    masked: exclusions.filter(item => item.kind === 'masked').length, other: exclusions.filter(item => item.kind === 'length' || item.kind === 'unconfirmed').length };
-  return { cards, strict, primary, metrics, rag, excluded, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
+  const excluded = { total: exclusions.length, kinds: exclusionCounts(exclusions) };
+  return { cards, slices, strict, primary, cardsLabel, metrics, rag, excluded, causes: causes(record, v), judge: { decided, unknown: rubricUnknown, disputed: disagreements, label: judgeLabel }, humanQueue,
     human,
     scope: { cards: record.scenarios.length, dialogues: record.trials.length, modes: record.settings.userModes, provenance, target, ...(judgeModel ? { judgeModel } : {}) },
     cost: { usd: record.usage.costUsd, calls: record.usage.calls, elapsedMs: record.trials.reduce((n, t) => n + t.elapsedMs, 0) }, limits, headline };
@@ -556,18 +669,19 @@ export function qualityLines(q: QualitySummary): { headline: string; coverage: s
   const bar = (value: number | null, width = 10) => value === null ? '·'.repeat(width) : `${'█'.repeat(Math.round(value * width))}${'░'.repeat(width - Math.round(value * width))}`;
   return {
     headline: q.headline,
-    coverage: !q.excluded.total ? '' : `${q.excluded.total === 1 ? 'Не вошёл' : 'Не вошли'} в набор ${plural(q.excluded.total, ['диалог', 'диалога', 'диалогов'])}: ${[
-      q.excluded.customerData ? `нужны данные клиента — ${q.excluded.customerData}` : '', q.excluded.masked ? `скрыты обезличиванием — ${q.excluded.masked}` : '',
-      q.excluded.other ? `прочее — ${q.excluded.other}` : ''].filter(Boolean).join(', ')}. В accuracy они не считаются.`,
+    coverage: !q.excluded.total ? '' : `${q.excluded.total === 1 ? 'Не вошёл' : 'Не вошли'} в набор ${plural(q.excluded.total, ['диалог', 'диалога', 'диалогов'])}: ${
+      q.excluded.kinds.map(item => `${item.label} — ${item.count}`).join(', ')}. В accuracy они не считаются.`,
     metrics: q.metrics.map(m => `${bar(m.accuracy)} ${percent(m.accuracy).padStart(4)}  ${m.name} · ${m.passed}/${m.passed + m.failed}${m.unknown ? ` · неясно ${m.unknown}` : ''}`),
     rag: !(q.rag.complete || q.rag.partial) ? [] : [
       `RAG-контекст: полный в ${q.rag.complete} из ${q.scope.dialogues} диалогов; частичный ${q.rag.partial}; отсутствует ${q.rag.missing}. Диагностика отдельно от accuracy; это указания для разбора, не доказанные первопричины.`,
       ...q.rag.signals.slice(0, 3).map(signal => `${signal.trialId}: ${signal.explanation}`)],
-    causes: q.causes.slice(0, 3).map((c, i) => `${i + 1}. ${c.name} — ${dialogues(c.dialogues)}${c.example ? `. ${c.example.card}: «${c.example.quote}»` : ''}${c.promptQuotes[0] ? ` · правило промпта: «${c.promptQuotes[0]}»` : ''}`),
+    // An unverified example is a status line about the record, not something the agent said, so it
+    // is printed plainly; only a checked quote goes inside «…».
+    causes: q.causes.slice(0, 3).map((c, i) => `${i + 1}. ${c.name} — ${dialogues(c.dialogues)}${c.example ? `. ${c.example.card}: ${c.example.verified ? `«${c.example.quote}»` : c.example.quote}` : ''}${c.promptQuotes[0] ? ` · правило промпта: «${c.promptQuotes[0]}»` : ''}`),
     judge: `Судья: ${q.judge.label}.`,
     queue: !q.humanQueue.total ? 'Ручная разметка не требуется: спорных диалогов нет.'
       : `Разметить человеку: ${q.humanQueue.total} (неясных ${q.humanQueue.unknownJudgments}, расхождений ${q.humanQueue.disagreements}, пометок симулятора ${q.humanQueue.simulatorFlags}). Попросите разобрать только спорный диалог в чате или откройте его на доске.`,
-    scope: `${cardsWord(q.scope.cards)} · ${dialogues(q.scope.dialogues)} · ${q.scope.modes.map(m => modeNames[m]).join(', ')} · ${q.scope.provenance} · версия ${q.scope.target}${q.scope.judgeModel ? ` · судья ${q.scope.judgeModel}` : ''} · ${q.cost.usd === null ? 'стоимость неизвестна' : `$${q.cost.usd.toFixed(2)}`} · ${Math.round(q.cost.elapsedMs / 60000)} мин`,
+    scope: `${q.slices.label} · ревизия ${q.slices.revision.slice(0,12)} · оценено ${q.cards.passed+q.cards.failed}/${q.cards.total}. ${q.slices.groups.slice(0,2).map(g=>`${g.label.slice(0,40)}: ${g.passed}/${g.measured}, план ${g.planned}`).join('; ')}${q.slices.groups.length>2?`; ещё групп: ${q.slices.groups.length-2} (полные срезы в отчёте)`:''}. Происхождение: ${q.slices.provenance.map(g=>`${g.label}: ${g.passed}/${g.measured}, план ${g.planned}`).join('; ')}. ${cardsWord(q.scope.cards)} · ${dialogues(q.scope.dialogues)} · ${q.scope.modes.map(m => modeNames[m]).join(', ')} · ${q.scope.provenance} · версия ${q.scope.target}${q.scope.judgeModel ? ` · судья ${q.scope.judgeModel}` : ''} · ${q.cost.usd === null ? 'стоимость неизвестна' : `$${q.cost.usd.toFixed(2)}`} · ${Math.round(q.cost.elapsedMs / 60000)} мин`,
     limits: q.limits,
   };
 }

@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { ExperimentStore } from '../src/store.js';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { assessTrial, evaluateTrial } from '../src/evaluation.js';
 import { compareTrials } from '../src/comparison.js';
+import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
-import { checkSchema, fingerprint, observedGoalSchema, validationScenario, validatePreparation, type CallContext, type MetricAssessment, type Revision, type Rubric, type Runtime, type Scenario, type Source, type Tool, type Trial } from '../src/contracts.js';
+import { checkSchema, fingerprint, observedGoalSchema, validationScenario, validatePreparation, type CallContext, type JudgeAudit, type MetricAssessment, type Revision, type Rubric, type Runtime, type Scenario, type Source, type Tool, type Trial } from '../src/contracts.js';
 
 function context(signal = new AbortController().signal): CallContext {
   return { signal, timeoutMs: 1000, beforeCall() { signal.throwIfAborted(); }, addUsage() {} };
@@ -636,6 +638,28 @@ test('demo cards carry knows and answers, and the demo simulator answers from th
   assert.deepEqual(time.user.answers, [{ ifAsked: 'desired time', reply: 'My desired time is 17:00.' }]);
 });
 
+test('a receipt hashes the audit exactly as the sidecar stores it, even with a whitespace-padded judge error', async t => {
+  const f = await fixture();
+  const scenario: Scenario = { ...structuredClone(f.preparation.scenarios[0]!), checks: [],
+    metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'Original task', passCriteria: 'Instruction supplied', failCriteria: 'A refusal is supplied' }] };
+  const trial: Trial = { id: 'trial', revisionId: 'baseline', scenarioId: scenario.id, familyId: scenario.familyId, repeat: 0, split: 'dev', userMode: 'static', manifestHash: 'frozen',
+    outcome: 'ungraded', reason: 'rubric only', checks: [], events: [{ seq: 0, type: 'user', text: scenario.user.opening }, { seq: 1, type: 'assistant', text: 'Сделайте так.' }],
+    initialState: scenario.initialState, finalState: scenario.initialState, usage: { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: null }, elapsedMs: 1 };
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-receipt-'));
+  const store = new ExperimentStore(directory);
+  await store.init();
+  t.after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }); });
+  const runtime: Runtime = { ...f.runtime, async assess(input, ctx) {
+    return assessRepeated(input, { provider: 'offline', id: 'judge' }, ctx, async () => { throw new Error('429 Too Many Requests\n'); });
+  } };
+  const ctx: CallContext = { ...context(), onJudgment: (id, audit) => store.writeJudgeAudit('run-1', id, audit) };
+  await assert.rejects(assessTrial(runtime, scenario, f.sources, trial, ctx, []), /429/);
+  assert.ok(trial.judgeReceipt);
+  const stored = await store.readJudgeAudit('run-1', trial.id);
+  assert.ok(stored?.attempts.some(attempt => attempt.error === '429 Too Many Requests'));
+  assert.equal(fingerprint(stored), trial.judgeReceipt.auditHash, 'an honest receipt matches its sidecar');
+});
+
 test('assessment hands the judge observable prompt rules in place of the raw prompt, with every other source intact', async () => {
   const f = await fixture();
   const scenario: Scenario = { ...structuredClone(f.preparation.scenarios[0]!), checks: [],
@@ -653,4 +677,51 @@ test('assessment hands the judge observable prompt rules in place of the raw pro
   assert.deepEqual(seen!.slice(0, f.sources.length), f.sources, 'policy sources reach the judge unchanged');
   assert.match(seen!.at(-1)!.content, /1\. «Отвечай на «вы»»/);
   assert.doesNotMatch(JSON.stringify(seen), /JSON|output/);
+});
+
+test('live evaluation seals a receipt, reports the final judgment once, and a rejected judgment keeps its raw replies and an incomplete receipt', async () => {
+  const f = await fixture();
+  const scenario = structuredClone(f.preparation.scenarios[0]!);
+  scenario.checks = [];
+  scenario.metrics = [structuredClone(testMetrics[0]!)];
+  for (const mode of ['agreeing', 'malformed'] as const) {
+    const reports: { audit: JudgeAudit; final: boolean }[] = [];
+    const actor: Runtime = { ...f.runtime,
+      async openTarget() { return { async respond() { return 'I cannot make that change.'; }, async close() {} }; },
+      async assess(input, ctx) {
+        return assessRepeated(input, { provider: 'offline', id: 'judge' }, ctx, async (_prompt, data) => {
+          if (mode === 'malformed') return `not json ${reports.length}`;
+          const parsed = JSON.parse(data) as { scenario: { metrics: { id: string }[] }; trial: { events: { seq: number; type: string; content: string }[] } };
+          const reply = parsed.trial.events.find(event => event.type === 'assistant')!;
+          return JSON.stringify({ assessments: parsed.scenario.metrics.map(metric => ({ metricId: metric.id, passCondition: 'not_met', failCondition: 'met',
+            rationale: 'The agent refused.', evidence: [reply.seq], citations: [{ seq: reply.seq, quote: reply.content }] })) });
+        });
+      },
+    };
+    const ctx: CallContext = { ...context(), onJudgment(_id, audit, final) { reports.push({ audit: structuredClone(audit), final: final === true }); } };
+    const trial = await f.evaluate(scenario, { ...f.candidate, spec: { ...f.candidate.spec, tools: [] } }, actor, ctx);
+    const finals = reports.filter(report => report.final);
+    assert.equal(finals.length, 1, `${mode}: the final judgment is reported exactly once`);
+    assert.ok(reports.length > 1, `${mode}: partial reports are still forwarded`);
+    assert.equal(trial.judgeAudit, undefined, `${mode}: the trial never carries the full audit`);
+    if (mode === 'agreeing') {
+      assert.equal(trial.assessmentError, undefined);
+      assert.equal(trial.assessments?.[0]!.result, 'fail');
+      assert.ok(trial.judgeReceipt);
+      assert.equal(trial.judgeReceipt.auditHash, fingerprint(finals[0]!.audit));
+      assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(f.sources, []), trial }), true);
+    } else {
+      assert.match(trial.assessmentError ?? '', /Judge response rejected/);
+      assert.ok(trial.judgeReceipt, 'a failed judgment still points to its sidecar');
+      assert.equal(trial.judgeReceipt.complete, false);
+      assert.equal(trial.judgeReceipt.auditHash, fingerprint(finals[0]!.audit));
+      assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(f.sources, []), trial }), false);
+      assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(f.sources, []), trial: { ...trial, assessmentError: undefined } }), false,
+        'the sealed receipt is incomplete even without the error flag');
+      assert.equal(trial.assessments, undefined);
+      const raws = finals[0]!.audit.attempts.map(attempt => attempt.raw);
+      assert.equal(raws.length, 2);
+      assert.ok(raws.every(raw => raw?.startsWith('not json')), 'both raw replies survive in the final audit');
+    }
+  }
 });

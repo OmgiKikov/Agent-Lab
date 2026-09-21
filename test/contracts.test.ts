@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import {
-  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, worldSchema,
+  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, verbatimSpanAt, worldSchema,
   type Profile,
 } from '../src/contracts.js';
 import { selectValidationDialogues } from '../src/imports.js';
@@ -102,6 +102,35 @@ test('old experiment files load with defaults for workflow, human reviews, targe
   assert.deepEqual(experimentSchema.parse({ ...legacy, acceptedTests: [accepted] }).acceptedTests, [accepted]);
   assert.equal(experimentSchema.safeParse({ ...legacy, acceptedTests: [{ ...accepted, definitionHash: 'not-a-hash' }] }).success, false);
   assert.equal(experimentSchema.safeParse({ ...legacy, acceptedTests: [accepted, { ...accepted, scenarioId: 'scenario_2' }] }).success, false);
+});
+
+test('a quick agreement mark extends the review schema and old reviews still parse unchanged', () => {
+  const legacy = { trialId: 't1', metricId: 'goal_attainment', verdict: 'fail' as const, note: 'разбор без новых полей' };
+  assert.deepEqual(humanReviewInputSchema.parse(legacy), legacy, 'an old review parses to an equal object');
+  const quick = { ...legacy, source: 'quick' as const, judgeVerdict: 'fail' as const, judge: { protocolHash: 'p', inputHash: 'i' } };
+  assert.deepEqual(humanReviewInputSchema.parse(quick), quick);
+  assert.ok(humanReviewInputSchema.safeParse({ ...quick, verdict: 'unknown' }).success, '«не могу сказать» is a quick answer');
+  const { metricId: _withoutMetric, ...noMetric } = quick;
+  assert.equal(humanReviewInputSchema.safeParse(noMetric).success, false, 'a quick mark always names one rubric');
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, verdict: 'invalid' }).success, false, '«ошибочный тест» is not an agreement answer');
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, checkId: 'state' }).success, false);
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, source: 'board' }).success, false);
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, judgeVerdict: 'invalid' }).success, false);
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, judge: { protocolHash: 'p', inputHash: 'i', model: 'm' } }).success, false);
+  assert.equal(humanReviewInputSchema.safeParse({ ...quick, mood: 'good' }).success, false, 'the object stays strict');
+});
+
+test('a quick mark carries the counting rule it was given under; an old review without it parses unchanged (03.1)', () => {
+  const legacy = { trialId: 't1', metricId: 'goal_attainment', verdict: 'fail' as const, note: 'разбор без новых полей' };
+  assert.deepEqual(humanReviewInputSchema.parse(legacy), legacy, 'a phase-3 review has no counting rule and parses to an equal object');
+  const quick = { ...legacy, source: 'quick' as const, judgeVerdict: 'fail' as const, judge: { protocolHash: 'p', inputHash: 'i' } };
+  assert.deepEqual(humanReviewInputSchema.parse(quick), quick, 'a phase-3 quick mark without the stamp still parses');
+  assert.equal('countingRules' in humanReviewInputSchema.parse(quick), false, 'no stamp is added by parsing');
+  const stamped = { ...quick, countingRules: 'goal-and-rules-v2' };
+  assert.deepEqual(humanReviewInputSchema.parse(stamped), stamped, 'a stamped quick mark round-trips');
+  assert.deepEqual(humanReviewInputSchema.parse({ ...legacy, countingRules: 'goal-v1' }), { ...legacy, countingRules: 'goal-v1' }, 'the schema accepts the field on any review; the lab decides what to keep');
+  assert.equal(humanReviewInputSchema.safeParse({ ...stamped, countingRules: '' }).success, false, 'an empty stamp is not a stamp');
+  assert.equal(humanReviewInputSchema.safeParse({ ...stamped, countingRule: 'goal-and-rules-v2' }).success, false, 'an unknown key still fails: the object stays strict');
 });
 
 test('only a whole-dialogue verdict can mark an explicit complete review', () => {
@@ -415,6 +444,26 @@ test('a quote that differs from its source only in typography is still that sour
   // A quote that starts mid-sentence is capitalised by the model; only its first letter may differ in case.
   assert.equal(verbatimSpan(content, 'Оператор этого сделать не может'), 'оператор этого сделать не может');
   assert.equal(verbatimSpan(content, 'оператор Этого сделать не может'), undefined);
+});
+
+test('a verbatim match reports the offset it was made at, so a place is never re-searched for', () => {
+  const content = 'Раздел «Эквайринг» → «Мои точки продаж» → карточка точки → «Тариф»: показана действующая ставка и дата начала её действия.\n\nИзменить тариф можно только через заявку — оператор этого сделать не может.';
+  // Whatever the typography of the quote, the offset points at the span in the source's own characters.
+  for (const quote of ['карточка точки → «Тариф»', 'Раздел "Эквайринг" -> "Мои точки продаж"',
+    ' дата начала ее действия.  Изменить тариф ', 'через заявку - оператор', 'Оператор этого сделать не может']) {
+    const found = verbatimSpanAt(content, quote);
+    assert.ok(found, quote);
+    assert.equal(found.span, verbatimSpan(content, quote), quote);
+    assert.equal(content.slice(found.offset, found.offset + found.span.length), found.span, quote);
+  }
+  assert.equal(verbatimSpanAt(content, 'Раздел Эквайринг показывает тариф'), undefined);
+
+  // A sentence that repeats in the source resolves to a place the match was actually made at, and
+  // the offset always belongs to the returned span rather than to some other copy of its text.
+  const repeated = 'Оплата картой разрешена.\nПрочее.\nОплата картой разрешена.';
+  const second = verbatimSpanAt(repeated, repeated.slice(repeated.lastIndexOf('Оплата')));
+  assert.ok(second);
+  assert.equal(repeated.slice(second.offset, second.offset + second.span.length), second.span);
 });
 
 test('a quote that skips the list markers of its source is still that source', () => {

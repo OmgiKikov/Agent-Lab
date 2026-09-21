@@ -1,0 +1,127 @@
+import assert from 'node:assert/strict';
+import { readdir, readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { visibleWidth } from '@earendil-works/pi-tui';
+import { GLYPH, paint, renderRows, ROLE_TONE, type PaintTheme, type Row, type Tone } from '../extensions/render/theme.ts';
+
+/*
+ * The theme module (04-UI-SPEC «Theme Module», «Render Matrix», CTX-19…CTX-21): one renderer for
+ * every host, checked at the five widths on a fake light and a fake dark theme whose markers make a
+ * wrong token or a missing reset visible in the output. The lint test keeps width out of our hands.
+ */
+
+const WIDTHS = [40, 60, 80, 100, 160];
+const TONES: Tone[] = ['text', 'muted', 'dim', 'accent', 'success', 'warning', 'error', 'borderMuted'];
+
+/** Angle-bracket markers for the dark fake, square brackets for the light one; every token is named in its marker. */
+const dark: PaintTheme = {
+  fg: (color, value) => `<fg:${color}>${value}</fg>`,
+  bold: value => `<b>${value}</b>`,
+  bg: (color, value) => `<bg:${color}>${value}</bg>`,
+} as PaintTheme;
+const light: PaintTheme = {
+  fg: (color, value) => `[fg:${color}]${value}[/fg]`,
+  bold: value => `[b]${value}[/b]`,
+  bg: (color, value) => `[bg:${color}]${value}[/bg]`,
+} as PaintTheme;
+const MARKER = /<\/?(?:fg|bg|b)(?::[a-zA-Z]+)?>|\[\/?(?:fg|bg|b)(?::[a-zA-Z]+)?\]/g;
+const plain = (line: string) => line.replace(MARKER, '');
+const tokens = (lines: string[]) => [...lines.join('').matchAll(/(?:<|\[)(?:fg|bg):([a-zA-Z]+)(?:>|\])/g)].map(match => match[1]!);
+const normalise = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+/** About 600 characters of Cyrillic with line breaks, a tab and an escape sequence in the middle. */
+const QUOTE = [
+  'Здравствуйте! Подскажите, пожалуйста, как оформить возврат средств покупателю по операции через терминал эквайринга, если чек уже закрыт, а смена ещё не завершена; клиент настаивает на возврате именно на карту, с которой платил.',
+  'Дополнительно: нужно ли отдельное заявление от клиента, и в какой срок деньги вернутся на счёт\tпокупателя, если банк-эмитент другой?',
+  '\x1b[31mМы также хотели бы понять,\x1b[0m применяется ли комиссия за возврат и как она отражается в отчёте по операциям за день.',
+  'Спасибо за подробный ответ, будем ждать инструкцию и ссылку на регламент, чтобы передать кассирам на всех точках продаж.',
+].join('\n');
+
+test('renderRows keeps every word of a 600-character quote inside 40–160 columns on both fake themes, with only the eight tones', () => {
+  assert.ok(QUOTE.length >= 600, `fixture is ${QUOTE.length} characters`);
+  const rows: Row[] = [
+    { text: 'Точность 0% · агент справляется плохо: 0 из 9 ситуаций (мало данных)', role: 'verdict:bad' },
+    { text: `Сказал (реплика #7): «${QUOTE}»`, indent: 2, role: 'said' },
+    { text: QUOTE, indent: 5, tone: 'muted' },
+    { text: 'Дальше: выгрузите отчёт для заказчика.', role: 'next' },
+  ];
+  for (const [name, theme] of [['dark', dark], ['light', light]] as const) {
+    for (const width of WIDTHS) {
+      const lines = renderRows(rows, theme, width);
+      for (const line of lines) {
+        assert.ok(visibleWidth(plain(line)) <= width, `${name} ${width}: «${plain(line)}» is wider than ${width}`);
+        assert.ok(!line.includes('…'), `${name} ${width}: an ellipsis was produced`);
+        assert.ok(!plain(line).includes('\x1b'), `${name} ${width}: the escape sequence reached the output`);
+      }
+      const expected = normalise(['Точность 0% · агент справляется плохо: 0 из 9 ситуаций (мало данных)', `Сказал (реплика #7): «${QUOTE}»`, QUOTE, 'Дальше: выгрузите отчёт для заказчика.'].join(' ')
+        .replace(/\x1b\[[0-9;]*m/g, '').replace(/\t/g, '  '));
+      assert.equal(normalise(lines.map(plain).join(' ')), expected, `${name} ${width}: a word was lost or cut`);
+      const used = new Set(tokens(lines));
+      for (const token of used) assert.ok((TONES as string[]).includes(token), `${name} ${width}: unknown token «${token}»`);
+      assert.ok(used.has('error') && used.has('accent') && used.has('muted') && used.has('text'), `${name} ${width}: the roles were painted`);
+    }
+  }
+});
+
+test('paint puts the weight inside the colour and takes both from the role when the row names none', () => {
+  assert.equal(paint({ text: 'Хорошо', role: 'verdict:good' }, dark), '<fg:success><b>Хорошо</b></fg>');
+  assert.equal(paint({ text: 'Хорошо', role: 'verdict:good' }, light), '[fg:success][b]Хорошо[/b][/fg]');
+  assert.equal(paint({ text: 'С ошибками', role: 'verdict:warn' }, dark), '<fg:warning><b>С ошибками</b></fg>');
+  assert.equal(paint({ text: 'Плохо', role: 'verdict:bad' }, dark), '<fg:error><b>Плохо</b></fg>');
+  assert.equal(paint({ text: 'Справился в 1 из 2', role: 'headline' }, dark), '<fg:text>Справился в 1 из 2</fg>');
+  assert.equal(paint({ text: 'Дальше: …', role: 'next' }, dark), '<fg:accent>Дальше: …</fg>');
+  assert.equal(paint({ text: 'ГЛАВНЫЕ ПРИЧИНЫ ПРОВАЛОВ', role: 'heading' }, dark), '<fg:accent><b>ГЛАВНЫЕ ПРИЧИНЫ ПРОВАЛОВ</b></fg>');
+  assert.equal(paint({ text: 'Все провалы — …', role: 'pointer' }, dark), '<fg:muted>Все провалы — …</fg>');
+  assert.equal(paint({ text: 'Провалов не зарегистрировано.', role: 'no-failures' }, dark), '<fg:success>Провалов не зарегистрировано.</fg>');
+  // An explicit tone wins over the role; a row without either is printed as it is.
+  assert.equal(paint({ text: 'x', role: 'next', tone: 'dim' }, dark), '<fg:dim>x</fg>');
+  assert.equal(paint({ text: 'пусто' }, dark), 'пусто');
+  assert.equal(paint({ text: '', role: 'blank' }, dark), '');
+  for (const role of ['lead', 'line', 'detail', 'situation', 'alarm', 'agreement', 'agreement-tail', 'cause', 'example', 'title', 'expected', 'said', 'rule', 'more', 'violated', 'unverified', 'dis-title', 'dis-verdicts', 'dis-reason']) {
+    assert.ok(ROLE_TONE[role], `phase 2–3 role «${role}» has a token`);
+    assert.ok(TONES.includes(ROLE_TONE[role]!.tone));
+  }
+});
+
+test('the glyph registry of phases 2–4 lives in one const', () => {
+  assert.deepEqual([GLYPH.fail, GLYPH.pass, GLYPH.unmeasured, GLYPH.selected, GLYPH.waiting, GLYPH.control], ['✗', '✓', '?', '▸', '●', '◆']);
+  assert.deepEqual([GLYPH.fixed, GLYPH.broken, GLYPH.unstable, GLYPH.same, GLYPH.incomparable], ['+', '-', '*', '.', '/']);
+  assert.deepEqual([GLYPH.barFill, GLYPH.barTrack, GLYPH.arrow], ['━', '─', '→']);
+  for (const glyph of Object.values(GLYPH)) assert.equal(visibleWidth(glyph), 1, `«${glyph}» is one column`);
+});
+
+// ---- Lint (SCREEN-07): width is never measured or cut by hand in the render code. ----
+
+const here = dirname(fileURLToPath(import.meta.url));
+const RENDER_DIR = join(here, '..', 'extensions', 'render');
+const VERDICT = join(here, '..', 'src', 'verdict.ts');
+const BANNED_CALLS = /\.slice\(|\.substring\(|padStart\(|padEnd\(/g;
+const BANNED_LENGTH = /\b(?:text|line|title|label|message|quote)\.length\b/g;
+const GLYPHS = /[✗✓▸●◆━─→]/g;
+
+async function renderFiles(): Promise<string[]> {
+  const walk = async (dir: string): Promise<string[]> => (await Promise.all((await readdir(dir, { withFileTypes: true })).map(entry =>
+    entry.isDirectory() ? walk(join(dir, entry.name)) : entry.name.endsWith('.ts') ? [join(dir, entry.name)] : []))).flat();
+  return walk(RENDER_DIR);
+}
+
+test('lint: extensions/render and src/verdict.ts never slice, pad or measure displayed text, and draw glyphs only from GLYPH', async () => {
+  const files = [...await renderFiles(), VERDICT];
+  assert.ok(files.some(file => file.endsWith('theme.ts')) && files.some(file => file.endsWith('verdict-block.ts')), 'both render modules are scanned');
+  for (const file of files) {
+    const source = await readFile(file, 'utf8');
+    const lines = source.split('\n');
+    lines.forEach((line, i) => {
+      assert.equal(line.match(BANNED_CALLS)?.[0], undefined, `${file}:${i + 1}: «${line.trim()}»`);
+      assert.equal(line.match(BANNED_LENGTH)?.[0], undefined, `${file}:${i + 1}: «${line.trim()}»`);
+    });
+    if (!file.startsWith(RENDER_DIR)) continue;
+    // The GLYPH const itself is the one place a glyph may be written.
+    const withoutRegistry = file.endsWith('theme.ts') ? source.replace(/export const GLYPH = \{[\s\S]*?\} as const;/, '') : source;
+    withoutRegistry.split('\n').forEach((line, i) => {
+      assert.equal(line.match(GLYPHS)?.[0], undefined, `${file}:${i + 1}: a literal glyph outside GLYPH in «${line.trim()}»`);
+    });
+  }
+});

@@ -1,5 +1,6 @@
+import { checkpointReceiptValid } from './checkpoints.js';
 import { z } from 'zod';
-import { assessmentEventContent, assessmentRubrics, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, type CallContext, type JudgeAudit, type MetricAssessment, type Requirement, type Runtime, type Source } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Source } from './contracts.js';
 import { ASSESS_ROLE, DATA_BOUNDARY } from './prompts.js';
 
 const condition = z.enum(['met', 'not_met', 'unclear']);
@@ -19,6 +20,10 @@ Return exactly one compact JSON object, without markdown fences, matching this s
 ${JSON.stringify(z.toJSONSchema(responseSchema))}`;
 export const JUDGE_PROTOCOL = fingerprint({ version: 11, promptSources: 'observable-rules', ragEvidence: 'adapter-reported-retrieval-events', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, evidence: 'empty list derived from verbatim citations', temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
+/** Rationale texts written into assessments. Reason detection matches these constants; their text is part of stored records. */
+export const GOAL_UNSUPPORTED_RATIONALE = 'Достижение цели не подтверждено цитированным доказательством выбранного владельцем типа; слова агента оцениваются отдельно.';
+export const AGREED_RATIONALE_PREFIX = 'Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности.';
+export const SPLIT_RATIONALE_PREFIX = 'Судья разошёлся на неизменном входе:';
 /** Votes of one dialogue sent at once; a full card set stays well under typical provider rate limits. */
 const JUDGE_CONCURRENCY = 8;
 
@@ -45,7 +50,7 @@ export function judgeInput(input: Input) {
     ? 'Opening and first answer ONLY. Planned follow-ups were not delivered. Never penalize the agent for their absence.'
     : 'Evaluate only delivered requests, within the rubric stage.';
   return {
-    scenario: { metrics: input.scenario.metrics, successCriteria: input.scenario.successCriteria, checks: input.scenario.checks, goalObservation: input.scenario.goalObservation,
+    scenario: { ...(input.scenario.execution ? { execution: { protocol: input.scenario.execution.checkpointProtocol, checkpointHash: input.scenario.execution.checkpointHash, evaluatorView: input.scenario.execution.evaluatorView } } : {}), metrics: input.scenario.metrics, successCriteria: input.scenario.successCriteria, checks: input.scenario.checks, goalObservation: input.scenario.goalObservation,
       user: input.trial.userMode === 'static' ? { ...input.scenario.user, script: [], maxFollowUps: 0 } : input.scenario.user },
     evaluationScope: observationMissing
       ? `${scope} Agent prose proves only what was said. Without observed state, action-dependent pass conditions remain unclear; assess reply quality independently.`
@@ -116,21 +121,69 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
     const unsupportedGoal = row.metricId === 'goal_attainment' && result !== 'unknown' && !goalConfirmed;
     if (unsupportedGoal) result = 'unknown';
     return validateAssessments(metrics.filter(m => m.id === row.metricId), input.trial.events, [{ ...row, result,
-      ...(unsupportedGoal ? { rationale: 'Достижение цели не подтверждено цитированным доказательством выбранного владельцем типа; слова агента оцениваются отдельно.' } : {}),
+      ...(unsupportedGoal ? { rationale: GOAL_UNSUPPORTED_RATIONALE } : {}),
     }])[0]!;
   });
 }
 
+const expectedProtocol = (configurationHash: string | undefined) => configurationHash
+  ? fingerprint({ protocol: JUDGE_PROTOCOL, configuration: configurationHash }) : JUDGE_PROTOCOL;
+
+/** Unanimous votes keep their result; any disagreement is unknown. Missing votes never aggregate. */
+function recordedAggregate(input: Input, metricId: string, votes: (string | undefined)[]): boolean {
+  if (votes.length !== 2 || votes.some(v => !v)) return false;
+  const result = votes.every(v => v === votes[0]) ? votes[0] : 'unknown';
+  return input.trial.assessments?.find(v => v.metricId === metricId)?.result === result;
+}
+
+/**
+ * The receipt a trial keeps when its full audit lives in the sidecar file. `complete` is the
+ * full-audit verdict at write time; a legacy attempt that failed can never seal as complete.
+ */
+export function sealJudgeReceipt(audit: JudgeAudit, complete: boolean): JudgeReceipt {
+  const votes: JudgeReceipt['votes'] = [];
+  for (const attempt of audit.attempts) {
+    if (attempt.metricId !== undefined) {
+      const result = attempt.assessments?.[0]?.result;
+      votes.push({ metricId: attempt.metricId, ...(result ? { result } : {}), ...(attempt.error ? { error: true } : {}) });
+      continue;
+    }
+    if (attempt.error) complete = false;
+    for (const assessment of attempt.assessments ?? []) votes.push({ metricId: assessment.metricId, result: assessment.result });
+  }
+  return judgeReceiptSchema.parse({
+    protocolHash: audit.protocolHash, inputHash: audit.inputHash, provider: audit.provider, model: audit.model,
+    ...(audit.configurationHash ? { configurationHash: audit.configurationHash } : {}),
+    ...(audit.transport ? { transport: audit.transport } : {}),
+    auditHash: fingerprint(audit), votes, notApplicable: audit.notApplicable, complete,
+  });
+}
+
+/**
+ * A receipt is trusted only as far as the record backs it: the input hash is re-derived from the
+ * current record and the votes must re-aggregate to the recorded assessments.
+ */
+function hasCompleteReceipt(input: Input, receipt: JudgeReceipt, metrics: NonNullable<Input['scenario']['metrics']>): boolean {
+  if (!receipt.complete || input.trial.assessmentError) return false;
+  if (receipt.protocolHash !== expectedProtocol(receipt.configurationHash)) return false;
+  const applicable = metrics.filter(m => metricApplies(m, input.trial));
+  const notApplicable = metrics.filter(m => !metricApplies(m, input.trial)).map(m => m.id);
+  if (fingerprint(receipt.notApplicable) !== fingerprint(notApplicable)) return false;
+  if (receipt.inputHash !== fingerprint(judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } }))) return false;
+  if (receipt.votes.some(v => v.error) || receipt.votes.length !== applicable.length * 2) return false;
+  return applicable.every(m => recordedAggregate(input, m.id, receipt.votes.filter(v => v.metricId === m.id).map(v => v.result)));
+}
+
 /** Historical verdicts remain readable, but incomplete or stale receipts cannot support a comparison. */
 export function hasCompleteJudgment(input: Input): boolean {
-  if (!input.scenario) return false;
+  if (!input.scenario || !checkpointReceiptValid(input.scenario, input.trial)) return false;
   const metrics = assessmentRubrics(input.scenario, input.trial);
   if (!metrics.length) return true;
   const audit = input.trial.judgeAudit;
+  // A record with the full audit is always judged by it; the receipt serves records without one.
+  if (!audit && input.trial.judgeReceipt) return hasCompleteReceipt(input, input.trial.judgeReceipt, metrics);
   if (!audit || input.trial.assessmentError || audit.prompt !== JUDGE_PROMPT) return false;
-  const expectedProtocol = audit.configurationHash
-    ? fingerprint({ protocol: JUDGE_PROTOCOL, configuration: audit.configurationHash }) : JUDGE_PROTOCOL;
-  if (audit.protocolHash !== expectedProtocol) return false;
+  if (audit.protocolHash !== expectedProtocol(audit.configurationHash)) return false;
   const applicable = metrics.filter(m => metricApplies(m, input.trial));
   const data = judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } });
   if (audit.inputHash !== fingerprint(data)) return false;
@@ -146,12 +199,8 @@ export function hasCompleteJudgment(input: Input): boolean {
       if (fingerprint(parseJudgment(attempt.raw, input, requested)) !== fingerprint(attempt.assessments)) return false;
     }
   } catch { return false; }
-  return applicable.every(m => {
-    const votes = audit.attempts.filter(a => !isolated || a.metricId === m.id).map(a => a.assessments?.find(v => v.metricId === m.id)?.result);
-    if (votes.length !== 2 || votes.some(v => !v)) return false;
-    const result = votes.every(v => v === votes[0]) ? votes[0] : 'unknown';
-    return input.trial.assessments?.find(v => v.metricId === m.id)?.result === result;
-  });
+  return applicable.every(m => recordedAggregate(input, m.id,
+    audit.attempts.filter(a => !isolated || a.metricId === m.id).map(a => a.assessments?.find(v => v.metricId === m.id)?.result)));
 }
 
 export async function assessRepeated(input: Input, model: { provider: string; id: string; configurationHash?: string; transport?: JudgeAudit['transport'] }, ctx: CallContext,
@@ -169,7 +218,7 @@ export async function assessRepeated(input: Input, model: { provider: string; id
     ...(model.transport ? { transport: model.transport } : {}),
     prompt: JUDGE_PROMPT, input: JSON.stringify(data), attempts: [], notApplicable,
   };
-  const save = () => ctx.onJudgment?.(input.trial.id, structuredClone(audit));
+  const save = (final = false) => ctx.onJudgment?.(input.trial.id, structuredClone(audit), final);
   save();
   // Every vote is an independent fresh request, so one dialogue's votes run together. They are
   // launched in rubric order, which keeps the audit order stable; after any failure nothing new starts.
@@ -205,8 +254,13 @@ export async function assessRepeated(input: Input, model: { provider: string; id
   const settled = await Promise.allSettled(Array.from({ length: Math.min(JUDGE_CONCURRENCY, jobs.length) },
     () => worker().catch(error => { failure ??= error; throw error; })));
   const rejected = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+  // Exactly one final report per judgment, whatever happened; it never masks the original error.
+  let saveFailure: unknown;
+  let saveFailed = false;
+  try { save(true); } catch (error) { saveFailed = true; saveFailure = error; }
   if (rejected) throw rejected.reason;
   if (failure !== undefined) throw failure;
+  if (saveFailed) throw saveFailure;
   if (audit.attempts.some(a => a.error && !RAG_METRIC_IDS.has(a.metricId ?? ''))) throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
   return metrics.map(metric => {
     if (notApplicable.includes(metric.id)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: RAG_METRIC_IDS.has(metric.id)
@@ -214,8 +268,8 @@ export async function assessRepeated(input: Input, model: { provider: string; id
     const attempts = audit.attempts.filter(a => a.metricId === metric.id);
     if (attempts.some(a => a.error)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: 'RAG-диагностика не завершена: ошибка судьи сохранена в judgeAudit. Основная оценка не изменена.' };
     const votes = attempts.map(a => a.assessments![0]!);
-    if (votes.every(v => v.result === votes[0]!.result)) return { ...votes[0]!, rationale: `Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. ${votes[0]!.rationale}`.slice(0, 4000) };
+    if (votes.every(v => v.result === votes[0]!.result)) return { ...votes[0]!, rationale: `${AGREED_RATIONALE_PREFIX} ${votes[0]!.rationale}`.slice(0, 4000) };
     return { metricId: metric.id, result: 'unknown', evidence: [...new Set(votes.flatMap(v => v.evidence))].slice(0, 30),
-      rationale: `Судья разошёлся на неизменном входе: ${votes.map(v => v.result).join(' / ')}. Основания каждой оценки сохранены в judgeAudit.` };
+      rationale: `${SPLIT_RATIONALE_PREFIX} ${votes.map(v => v.result).join(' / ')}. Основания каждой оценки сохранены в judgeAudit.` };
   });
 }

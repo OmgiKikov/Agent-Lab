@@ -1,8 +1,17 @@
+import { SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE } from './prompts.js';
+import { runGeneratorOperation, type GeneratorRequest } from './generator-service.js';
+import { targetSchema } from './contracts.js';
+import { createFixBundle, prepareResolutionPolicy, type ResolutionRequest } from './resolution.js';
+import { prepareDiagnostic, runDiagnostic, verifyDiagnosticPlan, diagnosticRevision, type Intervention } from './diagnostics.js';
+import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
+import type { LibraryPatch, ScenarioLibrary } from './scenario-contracts.js';
+import { assessScenarioLibrary, assertLibraryRun, compiledLibraryScenarios, prepareScenarioLibrary, SCENARIO_EXTRACTION_PROTOCOL } from './scenario-preparation.js';
+import { proposeVariant as proposeScenarioVariant, type VariantProposalResult, type VariantRequest } from './scenario-variants.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
-  DISCOVERY_PROTOCOL, VERSION, agentSchema, createInputSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, discoveryGroupSchema, discoveryObservationSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, promptCompliance, proposalSchema, requirementSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation, verbatimSpan,
+  DEFAULT_GOAL_OBSERVATION, DISCOVERY_PROTOCOL, VERSION, agentSchema, createInputSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, discoveryGroupSchema, discoveryObservationSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, goalToScenario, goldenToScenario, humanReviewInputSchema, promptCompliance, proposalSchema, requirementSchema, scriptIssue, settingsSchema, validateFailureModes, validateObservedGoals, validatePreparation, verbatimSpan,
   reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type Dialogue, type ValidationExclusion, type DiscoverInput, type DiscoveryDialogue, type DiscoveryGroup, type DiscoveryObservation, type DiscoveryPlan, type DiscoveryRecord, type DraftPatch, type Experiment, type HumanReviewInput, type ObservedGoal, type Requirement, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
 import { ExperimentStore } from './store.js';
 import { assessTrial, evaluateTrial, grade } from './evaluation.js';
@@ -10,12 +19,14 @@ import { automaticTrialResult, trialAssessmentComplete, awaitingVerdict, compare
 import { targetFingerprint } from './target-version.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from './connection.js';
 import { preflightTarget, readPrompt, runRelease } from './targets.js';
+import { COUNTING_RULES, markTargets, measurementUsable } from './outcomes.js';
 
 /** Recorded dialogues read by the goals role at once. */
 const GOAL_BATCH = 8;
 /** Dialogues a run may hold open against the target at once. */
 export const MAX_PARALLEL = 16;
 import { simulatorChecks } from './simulator.js';
+import { goalObservationDefault, withDefaultGoalObservation } from './normalize.js';
 import { validationDialogueIssue } from './imports.js';
 import { assessmentRubrics, validationScenario } from './contracts.js';
 import { createDemoRuntime } from './demo.js';
@@ -35,15 +46,28 @@ export function draftHash(record: Experiment): string {
   return fingerprint({ task: record.task, workflow: record.workflow, mode: record.mode, sources: record.sources,
     settings: record.settings, target: record.target, requirements: record.requirements, questions: record.questions,
     goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
-    scenarios: record.scenarios, agent: record.revisions[0]?.spec,
+    scenarios: record.scenarios, agent: record.revisions[0]?.spec, positiveControlScenarioIds: record.positiveControlScenarioIds,
+    ownerExpectationScenarioIds: record.ownerExpectationScenarioIds,
+    librarySnapshot: record.librarySnapshot, originalImport: record.originalImport, generatorConfig:record.generatorConfig,generatorIdentity:record.generatorIdentity,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
 }
 export function resultHash(record: Experiment): string {
   return fingerprint({ draft: draftHash(record), trials: record.trials, humanReviews: record.humanReviews ?? [] });
 }
+/**
+ * What the record claims two runs measured the same way. The control set belongs in it: a control
+ * card is excluded from the headline denominator, so two runs marking different controls measure
+ * different things even when every scenario is byte-identical. `ownerExpectationScenarioIds` does
+ * not: an owner edit rewrites `successCriteria` and the goal rubric, so the card fingerprint — and
+ * with it `scenarios` — already moves; the marker itself is only a label on that change.
+ * `undefined` drops out of `JSON.stringify`, so a record written before the field existed keeps its
+ * old hash.
+ */
 export function measurementHash(record: Experiment): string {
   return fingerprint({ version: VERSION, workflow: record.workflow, task: record.task, baseline: record.revisions[0], mode: record.mode, sources: record.sources, requirements: record.requirements, scenarios: record.scenarios, settings: record.settings,
     target: record.target, goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
+    positiveControlScenarioIds: record.positiveControlScenarioIds,
+    librarySnapshot: record.librarySnapshot, originalImport: record.originalImport, generatorConfig:record.generatorConfig,generatorIdentity:record.generatorIdentity,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
 }
 function revision(spec: Revision['spec'], parentId: string | null, hypothesis: string): Revision {
@@ -58,6 +82,20 @@ function retainAcceptedTests(record: Experiment): void {
   });
 }
 
+/** The agent rubric that scores the goal in the owner's words; without it the situation is decided by exact checks alone. */
+function judgeGoalRubric(scenario: Scenario) {
+  return (scenario.metrics ?? []).find(metric => metric.id === 'goal_attainment' && metric.subject === 'agent');
+}
+
+/** A control checks the judge and the connection, not the simulator: it runs as the opening and the agent's first reply. */
+function oneTurnControls(record: Experiment): void {
+  const controls = new Set(record.positiveControlScenarioIds ?? []);
+  if (!controls.size) return;
+  record.scenarios = record.scenarios.map(scenario => controls.has(scenario.id)
+    ? { ...scenario, user: { ...scenario.user, maxFollowUps: 0, ...(scenario.user.script !== undefined ? { script: [] } : {}) } }
+    : scenario);
+}
+
 function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
   const record = structuredClone(previous);
   if (scenarioIds) {
@@ -66,12 +104,18 @@ function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
     record.scenarios = record.scenarios.filter(s => scenarioIds.includes(s.id));
     record.selectedScenarioIds = [...scenarioIds];
   }
-  if (record.target.kind !== 'sandbox') record.scenarios = record.scenarios.map(scenario =>
-    scenario.goalObservation ? scenario : { ...scenario, goalObservation: 'reply' });
+  const keptControls = (record.positiveControlScenarioIds ?? []).filter(id => record.scenarios.some(s => s.id === id));
+  if (keptControls.length) record.positiveControlScenarioIds = keptControls;
+  else delete record.positiveControlScenarioIds;
+  const keptOwnerExpectations = (record.ownerExpectationScenarioIds ?? []).filter(id => record.scenarios.some(s => s.id === id));
+  if (keptOwnerExpectations.length) record.ownerExpectationScenarioIds = keptOwnerExpectations;
+  else delete record.ownerExpectationScenarioIds;
+  record.scenarios = record.scenarios.map(scenario => withDefaultGoalObservation(scenario, record.target.kind));
   Object.assign(record, { id: randomUUID(), parentRunId: previous.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     phase: 'review', message: 'Тесты готовы. Проверьте подключение и запустите проверку.',
     trials: [], comparisons: [], iterations: [], humanReviews: [], usage: emptyUsage(),
     reviewedAt: null, reviewMode: null, manifestHash: null, controlConsumedAt: null, error: null });
+  delete record.executionRunId;
   delete record.resultsReviewedAt; delete record.resultsReviewHash; delete record.failureModes;
   delete record.acceptedDraftHash;
   delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash; delete record.releaseLog;
@@ -254,6 +298,7 @@ export class ExperimentLab {
     return {
       schemaVersion: '1', id: randomUUID(), task: input.task, mode: input.mode, createdAt: now, updatedAt: now,
       phase: 'preparing', message: 'Подключаю агента и готовлю требования и первый тест.',
+      ...(input.generatorConfig?{generatorConfig:structuredClone(input.generatorConfig),generatorIdentity:{configHash:fingerprint(input.generatorConfig),protocol:SCENARIO_EXTRACTION_PROTOCOL,protocolHash:fingerprint({protocol:SCENARIO_EXTRACTION_PROTOCOL,extraction:SCENARIO_PROPOSALS_ROLE,semantic:SCENARIO_SEMANTIC_ROLE})}}:{}),
       sources: input.materials.map((m, i) => ({ id: `source-${i + 1}`, name: m.name, content: m.content, hash: fingerprint(m.content), ...(m.kind ? { kind: m.kind } : {}) })),
       settings: input.settings, requirements: [], questions: [], scenarios: [], revisions: [], selectedRevisionId: null,
       manifestHash: null, reviewedAt: null, reviewMode: null, controlConsumedAt: null, acceptedTests: [], trials: [], comparisons: [], iterations: [],
@@ -274,15 +319,27 @@ export class ExperimentLab {
   async create(raw: CreateInput): Promise<Experiment> { return this.createPrepared(raw); }
   private async createPrepared(raw: CreateInput, preparedRequirements?: Requirement[]): Promise<Experiment> {
     this.ensureIdle();
-    const input = createInputSchema.parse(raw);
+    const originalImport = raw.originalImport ?? (raw.dialogues?.length ? importBatch(raw.dialogues) : undefined);
+    const input = createInputSchema.parse({ ...raw, ...(originalImport ? { originalImport } : {}) });
     if (input.validationCount) input.settings.userModes = ['reactive'];
     if (input.workflow === 'compare' && input.settings.userModes.length !== 1) throw new Error('Сравнительный эксперимент идёт в одном режиме пользователя: выберите static, scripted или reactive.');
     if (input.workflow === 'compare' && input.target.kind !== 'sandbox') throw new Error('Для внешнего агента используйте evaluate и повтор набора; автоматический ремонт поддерживает только песочницу.');
     const record = this.newRecord(input);
     await this.launch(record, async ctx => {
+      if (input.originalImport || input.dialogues.length) {
+        const batch = await this.store.writeImport(input.originalImport ?? importBatch(input.dialogues));
+        record.originalImport = { id: batch.id, contentHash: batch.contentHash };
+      }
       await preflightTarget(record.target);
       record.targetFingerprint = await targetFingerprint(record.target);
       const runtime = await this.runtime(record);
+      if(input.generatorConfig&&!runtime.scenarioProposals)throw new Error('Среда не поддерживает настраиваемый генератор библиотеки.');
+      if (!input.confirmedHypothesis && runtime.scenarioProposals) {
+        await prepareScenarioLibrary(record, input, record.originalImport ? await this.store.readImport(record.originalImport.id) : undefined, runtime, ctx, this.store);
+        await this.checkpoint(record, 'review', 'Библиотека подготовлена. Проверьте варианты и примите выбранные перед запуском.');
+        return;
+      }
+      if (!input.confirmedHypothesis && record.dialogues.length) record.limitations.push('Legacy: происхождение и смысл фактов старого извлекателя не проверены; библиотека сценариев не подготовлена.');
       const confirmed = !!input.confirmedHypothesis;
       const replay = !confirmed && record.dialogues.length > 0 && input.scenarioCount === 0
         && (!!input.validationCount || input.settings.userModes.length === 1 && input.settings.userModes[0] === 'scripted');
@@ -305,13 +362,13 @@ export class ExperimentLab {
       // A validation replay first grounds owner requirements, then derives exactly one card per sampled dialogue.
       // Grounding is one long model call; identical task, materials and model settings give the same requirements, so it is reused.
       const groundingKey = fingerprint({ task: record.task, sources: record.sources.map(({ id, name, content, kind }) => ({ id, name, content, kind })),
-        provider: record.settings.provider, model: record.settings.model, roles: record.settings.roles, targetKind: record.target.kind, version: VERSION });
+        provider: record.settings.provider, model: record.settings.model, roles: record.settings.roles, targetKind: record.target.kind, version: VERSION, protocol: SCENARIO_EXTRACTION_PROTOCOL });
       const groundingFile = resolve(this.store.directory, 'grounding', `${groundingKey}.json`);
       const cachedGrounding = replay ? await readFile(groundingFile, 'utf8').then(text => JSON.parse(text) as Awaited<ReturnType<Runtime['prepare']>>, () => undefined) : undefined;
       if (cachedGrounding) record.limitations.push(`Требования взяты из кэша подготовки ${groundingKey.slice(0, 12)}: те же материалы, задача и модель.`);
       const grounding = replay ? cachedGrounding ?? await runtime.prepare(preparationInput(), ctx) : undefined;
       if (replay && grounding && !cachedGrounding) {
-        await mkdir(dirname(groundingFile), { recursive: true });
+        await mkdir(dirname(groundingFile), { recursive: true, mode: 0o700 });
         await writeFile(groundingFile, JSON.stringify({ ...grounding, scenarios: [] }), { mode: 0o600 });
       }
       let observedGoals: ObservedGoal[] = [];
@@ -326,9 +383,15 @@ export class ExperimentLab {
               return request();
             }
           };
+          // The harness owns card identity: each goal takes its dialogue's schema-checked id, whatever id the model chose.
+          const rawGoalIds: string[] = [];
           for (let index = 0; index < record.dialogues.length && observedGoals.length < (input.validationCount ?? Infinity); index += GOAL_BATCH) {
             const batch = record.dialogues.slice(index, index + GOAL_BATCH);
-            const extracted = (await Promise.all(batch.map(extract))).flat();
+            const extracted = (await Promise.all(batch.map(async dialogue => {
+              const goals = await extract(dialogue);
+              rawGoalIds.push(...goals.map(goal => goal.id));
+              return goals.map(goal => ({ ...goal, id: dialogue.id }));
+            }))).flat();
             if (input.validationCount) for (const dialogue of batch) {
               const goal = extracted.find(goal => goal.evidenceDialogueIds.includes(dialogue.id));
               if (goal?.testability !== 'knowledge') exclude({ dialogueId: dialogue.id, kind: goal?.testability === 'customer_data' ? 'customer_data' : 'unconfirmed',
@@ -336,6 +399,7 @@ export class ExperimentLab {
             }
             observedGoals.push(...extracted.filter(goal => !input.validationCount || goal.testability === 'knowledge'));
           }
+          if (new Set(rawGoalIds).size !== rawGoalIds.length) record.limitations.push('Модель выдала совпадающие id целей; каждой цели присвоен id её диалога.');
           if (input.validationCount) observedGoals = observedGoals.slice(0, input.validationCount);
         } else observedGoals = await runtime.goals({ task: record.task, sources: structuredClone(record.sources), dialogues: structuredClone(record.dialogues), profiles: structuredClone(record.profiles) }, ctx);
       }
@@ -355,7 +419,7 @@ export class ExperimentLab {
         const dialogue = record.dialogues.find(item => item.id === goal.evidenceDialogueIds[0]);
         if (!dialogue || goal.evidenceDialogueIds.length !== 1) throw new Error(`Validation goal ${goal.id} must cite exactly one sampled dialogue.`);
         const scenario = input.validationCount ? validationScenario(dialogue, goal) : dialogueToScenario(dialogue, { goal: goal.goal, successCriteria: goal.successCriteria,
-          requirementIds: goal.requirementIds, goalObservation: input.goalObservation ?? 'reply' });
+          requirementIds: goal.requirementIds, goalObservation: input.goalObservation ?? DEFAULT_GOAL_OBSERVATION });
         if (record.sources.some(source => source.kind === 'prompt')) scenario.metrics!.unshift({ ...promptCompliance });
         return scenario;
       });
@@ -366,7 +430,7 @@ export class ExperimentLab {
         record.dialogues = record.dialogues.filter(dialogue => selected.has(dialogue.id));
       }
       const scenarios = [...synthetic, ...production, ...golden].map(scenario => {
-        const goalObservation = input.goalObservation ?? scenario.goalObservation ?? (record.target.kind === 'sandbox' ? undefined : 'reply');
+        const goalObservation = input.goalObservation ?? scenario.goalObservation ?? goalObservationDefault(record.target.kind);
         return goalObservation ? { ...scenario, goalObservation } : scenario;
       });
       const prepared = validatePreparation({ ...generated, scenarios }, record.sources, input.workflow, record.profiles);
@@ -523,7 +587,7 @@ export class ExperimentLab {
     if (!dialogues.length || discovery.hypothesis.eventIds.some(citation => !dialogues.some(dialogue => dialogue.id === citation.dialogueId
       && dialogue.messages[citation.seq]))) throw new Error('Исходные события сохранённой гипотезы отсутствуют.');
     return this.createPrepared({
-      task: source.task, confirmedHypothesis, goalObservation: 'reply', mode: source.mode, workflow: 'evaluate', scenarioCount: 1,
+      task: source.task, confirmedHypothesis, goalObservation: DEFAULT_GOAL_OBSERVATION, mode: source.mode, workflow: 'evaluate', scenarioCount: 1,
       materials: source.sources.map(item => ({ name: item.name, content: item.content, ...(item.kind ? { kind: item.kind } : {}) })),
       settings: settingsSchema.parse({ ...source.settings, maxCalls: discovery.callPlan.baseMaxCalls,
         maxDurationMs: discovery.callPlan.baseMaxDurationMs }),
@@ -593,6 +657,12 @@ export class ExperimentLab {
         if (discovery.completedDeepIds.includes(dialogueId)) continue;
         discovery.deep = discovery.deep.filter(result => result.dialogueId !== dialogueId);
         const dialogue = record.dialogues.find(item => item.id === dialogueId)!;
+        // The deep judgment is not a trial of this record: its sidecar and journal entry get their own key,
+        // unique per attempt, so a retry or resume never overwrites an earlier audit, and the record names it.
+        const judgeTrialId = `deep-${randomUUID()}`;
+        // Named in the record only once a judgment was reported, so the key never points to an unwritten file.
+        let judged = false;
+        const judgeKey = () => (judged ? { judgeTrialId } : {});
         try {
           const deep = await modelCall(`deep ${dialogueId}`, async () => {
             const { outcome: _storedOutcome, ...dialogueEvidence } = dialogue;
@@ -602,17 +672,18 @@ export class ExperimentLab {
             validateObservedGoals([goal], [dialogue], []);
             if (goal.requirementIds?.length !== 1 || goal.requirementIds[0] !== focus.id) throw new Error(`Цель ${dialogueId} потеряла единый discovery focus.`);
             const base = dialogueToScenario(dialogue, { goal: goal.goal, successCriteria: goal.successCriteria, requirementIds: [focus.id] });
-            const scenario: Scenario = { ...base, goalObservation: 'reply', split: 'dev' };
+            const scenario: Scenario = { ...base, goalObservation: DEFAULT_GOAL_OBSERVATION, split: 'dev' };
             if (record.sources.some(source => source.kind === 'prompt')) scenario.metrics!.unshift({ ...promptCompliance });
-            const trial = dialogueToTrial(dialogue, scenario, record.revisions[0]!.id);
-            return { goal, assessments: await assessTrial(runtime, scenario, record.sources, trial, ctx, [focus]) };
+            const trial = { ...dialogueToTrial(dialogue, scenario, record.revisions[0]!.id), id: judgeTrialId };
+            return { goal, assessments: await assessTrial(runtime, scenario, record.sources, trial,
+              { ...ctx, onJudgment: (id, audit, final) => { ctx.onJudgment?.(id, audit, final); judged = true; } }, [focus]) };
           });
-          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', ...deep });
+          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', ...judgeKey(), ...deep });
           discovery.completedDeepIds.push(dialogueId); updateCalls();
           await this.checkpoint(record, 'preparing', `Подробно проверено ${discovery.completedDeepIds.length}/${discovery.selectedIds.length}; controls — false-negative probe.`);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', error: message });
+          discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', ...judgeKey(), error: message });
           if (message !== 'Judge response rejected; original responses and errors are preserved in judgeAudit') throw error;
           delete discovery.activeCall;
           discovery.completedDeepIds.push(dialogueId); updateCalls();
@@ -628,7 +699,8 @@ export class ExperimentLab {
       if (!discovery.hypothesis) {
         const evidence = discovery.observations.filter(observation => confirmedRepresentatives.has(observation.dialogueId)
           && observation.classification === 'candidate' && observation.requirementId === focus.id);
-        const deepEvidence = discovery.deep.filter(result => confirmedRepresentatives.has(result.dialogueId)).map(result => result.goal
+        // The sidecar key is bookkeeping, not evidence: the hypothesis model never sees it.
+        const deepEvidence = discovery.deep.filter(result => confirmedRepresentatives.has(result.dialogueId)).map(({ judgeTrialId: _key, ...result }) => result.goal
           ? { ...result, goal: Object.fromEntries(Object.entries(result.goal).filter(([key]) => key !== 'outcome')) as typeof result.goal }
           : result);
         const output = await modelCall('hypothesis', () => runtime.discover!({ kind: 'hypothesis', requirement: structuredClone(focus), observations: structuredClone(evidence), deep: structuredClone(deepEvidence) }, ctx));
@@ -650,19 +722,116 @@ export class ExperimentLab {
       throw error;
     }
   }
+  /** Detached library preview plus its current (empty until accepted) runnable draft. */
+  async readLibrary(id: string): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
+    const experiment = await this.get(id);
+    if (!experiment.librarySnapshot) throw new Error('У эксперимента нет библиотеки сценариев.');
+    return { library: structuredClone(experiment.librarySnapshot), experiment };
+  }
+  async editLibrary(id: string, expectedHash: string, patch: LibraryPatch): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
+    return this.change(async () => {
+      const { experiment, library } = await this.readLibrary(id);
+      if (experiment.phase !== 'review') throw new Error('Править библиотеку можно только в черновике.');
+      const next = editScenarioLibrary(library, expectedHash, patch);
+      experiment.librarySnapshot = next; experiment.scenarios = []; experiment.acceptedTests = [];
+      delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
+      experiment.reviewedAt = null; experiment.reviewMode = null; experiment.manifestHash = null;
+      await this.store.publishLibrary(experiment, next, expectedHash);
+      return { library: next, experiment };
+    });
+  }
+  evaluateGenerator(input:GeneratorRequest, options:{signal?:AbortSignal}={}) { return this.change(()=>runGeneratorOperation('evaluate',input,this.store,this.injectedRuntime,options.signal)); }
+  optimizeGenerator(input:GeneratorRequest, options:{signal?:AbortSignal}={}) { return this.change(()=>runGeneratorOperation('optimize',input,this.store,this.injectedRuntime,options.signal)); }
+  async proposeVariant(id: string, expectedHash: string, request: VariantRequest): Promise<VariantProposalResult & { experiment: Experiment }> {
+    return this.change(async () => {
+      const { experiment, library } = await this.readLibrary(id);
+      let result:VariantProposalResult;
+      try {
+        if (experiment.phase !== 'review') throw new Error('Добавить вариант можно только в черновике.');
+        result = proposeScenarioVariant(library, request, expectedHash);
+      }
+      catch(error) {
+        const attempted=JSON.stringify(request),rejection=error instanceof Error?error.message:String(error);
+        try { await this.store.saveGeneratorRecord({id:`gen_${randomUUID()}`,formatVersion:'1',kind:'rejected-targeted-proposal',runKind:'generator',createdAt:new Date().toISOString(),experimentId:id,
+          libraryHash:libraryHash(library),expectedHash,protocol:'targeted-proposal-v1',configHash:fingerprint({protocol:'targeted-proposal-v1',operation:request.operation}),requestHash:fingerprint(request),
+          attempt:attempted.length<=12000?structuredClone(request):{excerpt:attempted.slice(0,12000),truncated:true},rejection:rejection.slice(0,4000)}); }
+        catch(auditError) { if(error instanceof Error) error.message+=` Аудит отклонения не сохранён: ${String(auditError).slice(0,500)}`; }
+        throw error;
+      }
+      experiment.librarySnapshot = result.library; experiment.scenarios = []; experiment.acceptedTests = [];
+      delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
+      experiment.reviewedAt = null; experiment.reviewMode = null; experiment.manifestHash = null;
+      await this.store.publishLibrary(experiment, result.library, expectedHash);
+      return { ...result, experiment };
+    });
+  }
+  async acceptLibrary(id: string, expectedHash: string, variantIds: string[]): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
+    return this.change(async () => {
+      const { experiment, library } = await this.readLibrary(id);
+      if (experiment.phase !== 'review') throw new Error('Принять библиотеку можно только в черновике.');
+      if (fingerprint(experiment.requirements) !== fingerprint(library.requirements) || fingerprint(experiment.sources) !== fingerprint(library.sources)) throw new Error('Требования библиотеки изменились.');
+      const next = acceptScenarioLibrary(library, expectedHash, variantIds);
+      experiment.librarySnapshot = next; experiment.scenarios = compiledLibraryScenarios(experiment, next);
+      delete experiment.selectedScenarioIds;
+      const acceptedAt = new Date().toISOString();
+      experiment.acceptedTests = experiment.scenarios.map(s => ({ testId: randomUUID(), scenarioId: s.id, definitionHash: fingerprint(s), acceptedAt }));
+      experiment.acceptedDraftHash = draftHash(experiment);
+      await this.store.publishLibrary(experiment, next, expectedHash);
+      return { library: next, experiment };
+    });
+  }
+  /** Reassess edited facts/expectations under the same usage, timeout and cancellation budget. */
+  async assessLibrary(id: string, expectedHash: string): Promise<Experiment> {
+    return this.change(async () => {
+      const { experiment, library } = await this.readLibrary(id);
+      if (experiment.phase !== 'review' || libraryHash(library) !== expectedHash) throw new Error('Библиотека изменилась или уже запущена.');
+      experiment.phase = 'preparing'; experiment.error = null;
+      await this.launch(experiment, async ctx => {
+        const runtime = await this.runtime(experiment);
+        if (!runtime.assessScenarioProposals) throw new Error('Смысловая проверка недоступна.');
+        experiment.scenarios = []; experiment.acceptedTests = []; delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
+        let published = expectedHash;
+        const next = await assessScenarioLibrary(library, runtime, ctx, async partial => {
+          experiment.librarySnapshot = partial;
+          await this.store.publishLibrary(experiment, partial, published); published = libraryHash(partial);
+        });
+        next.revision++; experiment.librarySnapshot = next;
+        if (experiment.preparationProgress) experiment.preparationProgress.status = experiment.preparationProgress.pending.length ? 'partial' : 'complete';
+        await this.store.publishLibrary(experiment, next, published);
+        await this.checkpoint(experiment, 'review', 'Смысловая проверка завершена. Проверьте замечания и примите варианты.');
+      }, true);
+      return structuredClone(experiment);
+    });
+  }
   async updateDraft(id: string, expectedHash: string, raw: DraftPatch): Promise<Experiment> {
     return this.change(async () => {
       const record = await this.store.get(id);
       if (record.phase !== 'review') throw new Error('Править можно только незапущенный черновик. Готовые доказательства остаются как есть, для изменений создайте новый эксперимент.');
       if (draftHash(record) !== expectedHash) throw new Error('Черновик изменился. Откройте карточки заново, прежде чем править.');
       const patch = draftPatchSchema.parse(raw);
+      if (record.librarySnapshot) {
+        if (patch.scenarios || patch.removeScenarioIds || patch.profileEdits) throw new Error('Используйте правку библиотеки сценариев и повторное принятие.');
+        if (record.librarySnapshot.acceptance) assertLibraryRun(record);
+        record.settings = settingsSchema.parse({ ...record.settings, ...patch.settings,
+          roles: Object.fromEntries(Object.entries({ ...record.settings.roles, ...patch.settings?.roles }).filter(([, value]) => value !== null)) });
+        if (patch.target) record.target = patch.target;
+        if (patch.targetVersion) record.targetVersion = patch.targetVersion;
+        if (patch.agent) { record.revisions = [revision(patch.agent, null, 'Конфигурация агента обновлена владельцем.')]; record.selectedRevisionId = record.revisions[0]!.id; }
+        await preflightTarget(record.target); record.targetFingerprint = await targetFingerprint(record.target);
+        record.evaluatorVersion = evaluatorVersion(record.settings);
+        delete record.acceptedDraftHash;
+        record.reviewedAt = null; record.reviewMode = null; record.manifestHash = null;
+        await this.checkpoint(record, 'review', 'Настройки прогона обновлены. Подтвердите новую версию перед запуском.');
+        return structuredClone(record);
+      }
       const beforeCards = new Map(record.scenarios.map(s => [s.id, s]));
       const removed = new Set(patch.removeScenarioIds ?? []);
       for (const id of removed) if (!beforeCards.has(id)) throw new Error(`Нет карточки для удаления: ${id}`);
       for (const scenario of patch.scenarios ?? []) {
         const before = record.scenarios.find(s => s.id === scenario.id);
         if (scenario.provenance !== (before?.provenance ?? 'synthetic')) throw new Error('Происхождение карточки нельзя повысить правкой. Golden и production добавляются через импорт исходных данных.');
-        if (before && scenario.successCriteria !== before.successCriteria
+        // A judge-evaluated goal is scored by the words themselves, so changing them is a real change of the test (CTX-21).
+        if (before && scenario.successCriteria !== before.successCriteria && !judgeGoalRubric(before)
           && fingerprint([scenario.checks, scenario.metrics ?? []]) === fingerprint([before.checks, before.metrics ?? []])) {
           throw new Error(`Ожидание «${scenario.title}» изменилось, а исполняемые проверки остались прежними. Измените checks или metrics вместе с successCriteria; описание само по себе не меняет тест.`);
         }
@@ -681,52 +850,208 @@ export class ExperimentLab {
       const cards = new Map(record.scenarios.filter(s => !removed.has(s.id)).map(({ split: _split, ...s }) => [s.id, s]));
       for (const { split: _split, ...scenario } of patch.scenarios ?? []) cards.set(scenario.id, scenario);
       const scenarios = [...cards.values()];
-      const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions, agent, scenarios }, record.sources, record.workflow ?? 'compare', record.profiles);
-      record.scenarios = prepared.scenarios;
-      retainAcceptedTests(record);
-      if (patch.agent) record.revisions = [revision(patch.agent, null, 'Agent configuration reviewed in the draft.')];
-      record.settings = settingsSchema.parse({ ...record.settings, ...patch.settings,
-        roles: Object.fromEntries(Object.entries({ ...record.settings.roles, ...patch.settings?.roles }).filter(([, value]) => value !== null)) });
-      record.evaluatorVersion = evaluatorVersion(record.settings);
-      if (patch.target) record.target = patch.target;
-      if (patch.targetVersion) record.targetVersion = patch.targetVersion;
-      await preflightTarget(record.target);
-      record.targetFingerprint = await targetFingerprint(record.target);
-      record.selectedRevisionId = record.revisions[0]!.id;
-      record.reviewedAt = null; record.reviewMode = null; record.manifestHash = null;
-      const added = record.scenarios.filter(s => !beforeCards.has(s.id)).length;
-      const changed = record.scenarios.filter(s => beforeCards.has(s.id) && fingerprint(s) !== fingerprint(beforeCards.get(s.id))).length;
-      await this.checkpoint(record, 'review', `${patch.agent ? 'Агент обновлён. ' : ''}${patch.settings || patch.target || patch.targetVersion ? 'Настройки прогона обновлены. ' : ''}Карточки: изменено ${changed}, добавлено ${added}, удалено ${removed.size}. Проверьте черновик перед запуском.`);
+      await this.finishDraftEdit(record, scenarios, agent, current => {
+        const added = current.scenarios.filter(s => !beforeCards.has(s.id)).length;
+        const changed = current.scenarios.filter(s => beforeCards.has(s.id) && fingerprint(s) !== fingerprint(beforeCards.get(s.id))).length;
+        return `${patch.agent ? 'Агент обновлён. ' : ''}${patch.settings || patch.target || patch.targetVersion ? 'Настройки прогона обновлены. ' : ''}Карточки: изменено ${changed}, добавлено ${added}, удалено ${removed.size}. Проверьте черновик перед запуском.`;
+      }, async () => {
+        if (patch.agent) record.revisions = [revision(patch.agent, null, 'Agent configuration reviewed in the draft.')];
+        record.settings = settingsSchema.parse({ ...record.settings, ...patch.settings,
+          roles: Object.fromEntries(Object.entries({ ...record.settings.roles, ...patch.settings?.roles }).filter(([, value]) => value !== null)) });
+        if (patch.target) record.target = patch.target;
+        if (patch.targetVersion) record.targetVersion = patch.targetVersion;
+        await preflightTarget(record.target);
+        record.targetFingerprint = await targetFingerprint(record.target);
+        record.selectedRevisionId = record.revisions[0]!.id;
+      });
+      return structuredClone(record);
+    });
+  }
+  /**
+   * Every draft edit ends the same way: revalidate the cards, drop confirmations whose definition
+   * changed, restamp the evaluator and clear the review stamps, so no edit can keep an earlier approval.
+   */
+  private async finishDraftEdit(record: Experiment, scenarios: Omit<Scenario, 'split'>[], agent: Revision['spec'] | undefined,
+    message: (record: Experiment) => string, between?: () => Promise<void>): Promise<void> {
+    const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions, agent, scenarios },
+      record.sources, record.workflow ?? 'compare', record.profiles);
+    record.scenarios = prepared.scenarios;
+    retainAcceptedTests(record);
+    await between?.();
+    record.evaluatorVersion = evaluatorVersion(record.settings);
+    record.reviewedAt = null; record.reviewMode = null; record.manifestHash = null;
+    await this.checkpoint(record, 'review', message(record));
+  }
+  /**
+   * The owner's own words become what is scored: the situation's `successCriteria` and the pass
+   * criterion of its judge goal rubric, verbatim — nothing is rewritten, summarised or translated.
+   * The situation is marked as changed by the owner, so the sheet and the comparison both say it
+   * cannot be compared with earlier runs (CTX-20, CTX-21).
+   */
+  async setExpectation(id: string, expectedHash: string, scenarioId: string, text: string): Promise<Experiment> {
+    return this.change(async () => {
+      const record = await this.store.get(id);
+      if (record.librarySnapshot) throw new Error('Используйте правку библиотеки сценариев и повторное принятие.');
+      if (record.workflow !== 'evaluate') throw new Error('Поправить ожидание можно только в workflow evaluate.');
+      if (record.phase !== 'review') throw new Error('Поправить ожидание можно только в незапущенном черновике.');
+      if (draftHash(record) !== expectedHash) throw new Error('Черновик изменился, пока вы смотрели. Проверьте ожидания ещё раз.');
+      const expectation = text.trim();
+      if (!expectation) throw new Error('Ожидание пустое. Напишите, что агент должен сделать.');
+      if (expectation.length > 3000) throw new Error('Ожидание длиннее 3000 знаков. Сократите и попробуйте снова.');
+      const scenario = record.scenarios.find(item => item.id === scenarioId);
+      if (!scenario) throw new Error(`Нет такой ситуации в черновике: ${scenarioId}.`);
+      const goal = judgeGoalRubric(scenario);
+      if (!goal) throw new Error('Эту ситуацию проверяют точные проверки, а не судья. Поправьте её словами: a.');
+      if (scenario.successCriteria === expectation) return structuredClone(record);
+      // `split` is assigned by the preparation, exactly as in updateDraft.
+      const scenarios = record.scenarios.map(({ split: _split, ...item }) => item.id === scenarioId
+        ? { ...item, successCriteria: expectation,
+          metrics: (item.metrics ?? []).map(metric => metric === goal ? { ...metric, passCriteria: expectation } : metric) }
+        : item);
+      record.ownerExpectationScenarioIds = [...new Set([...(record.ownerExpectationScenarioIds ?? []), scenarioId])];
+      // The target did not change, so no preflight: only the words being scored moved.
+      await this.finishDraftEdit(record, scenarios, record.revisions[0]?.spec, () => `Ожидание изменено владельцем: «${scenario.title}».`);
       return structuredClone(record);
     });
   }
   async acceptDraft(id: string, expectedHash: string): Promise<Experiment> {
     return this.change(async () => {
       const record = await this.store.get(id);
+      assertLibraryRun(record);
       if (record.workflow !== 'evaluate') throw new Error('Принять тест можно только в workflow evaluate.');
       if (record.phase !== 'review') throw new Error('Принять можно только незапущенный черновик.');
-      if (record.scenarios.length !== 1) throw new Error('Принять можно ровно один тест.');
+      if (!record.scenarios.length) throw new Error('Подтверждать нечего: в черновике нет ситуаций.');
       const currentHash = draftHash(record);
-      if (expectedHash !== currentHash) throw new Error('Черновик изменился. Откройте тест заново, прежде чем принимать.');
-      const scenario = record.scenarios[0]!;
-      const definitionHash = fingerprint(scenario);
-      const existing = (record.acceptedTests ?? []).find(test => test.scenarioId === scenario.id && test.definitionHash === definitionHash);
-      if (record.acceptedDraftHash === currentHash && existing) return structuredClone(record);
-      record.acceptedTests = [existing ?? { testId: randomUUID(), scenarioId: scenario.id, definitionHash, acceptedAt: new Date().toISOString() }];
+      if (expectedHash !== currentHash) throw new Error('Черновик изменился, пока вы смотрели. Проверьте ожидания ещё раз.');
+      // One confirmation covers every situation of the draft; an entry whose definition did not change keeps its identity and date.
+      const previous = new Map((record.acceptedTests ?? []).map(test => [test.scenarioId, test]));
+      const acceptedAt = new Date().toISOString();
+      const accepted = record.scenarios.map(scenario => {
+        const definitionHash = fingerprint(scenario);
+        const kept = previous.get(scenario.id);
+        return kept?.definitionHash === definitionHash ? kept : { testId: randomUUID(), scenarioId: scenario.id, definitionHash, acceptedAt };
+      });
+      if (record.acceptedDraftHash === currentHash && previous.size === accepted.length
+        && accepted.every(test => previous.get(test.scenarioId) === test)) return structuredClone(record);
+      record.acceptedTests = accepted;
       record.acceptedDraftHash = currentHash;
       await this.store.save(record);
       return structuredClone(record);
     });
   }
+  async createFixBundle(issueId: string, sourceRunId: string) {
+    const issue = (await this.store.readIssues()).find(i => i.id === issueId && !i.mergedInto);
+    if (!issue) throw new Error('Проблема не найдена.');
+    return createFixBundle(issue, await this.get(sourceRunId));
+  }
+  async registerCandidate(sourceRunId: string, input: { target: Experiment['target']; targetVersion: string }) {
+    if (!input.targetVersion?.trim()) throw new Error('Укажите неизменную версию кандидата.');
+    return this.change(async () => {
+      const source = await this.get(sourceRunId);
+      if (source.workflow !== 'evaluate' || !source.reviewedAt || runningPhases.has(source.phase) || source.runKind === 'diagnostic' || source.runKind === 'generator') throw new Error('Нужен завершённый обычный исходный прогон.');
+      const ids = [...new Set(source.trials.map(t => t.revisionId))];
+      if (ids.length !== 1) throw new Error('Нужна одна точная версия исходного агента.');
+      const revision = source.revisions.find(r => r.id === ids[0]);
+      if (!revision) throw new Error('Исходная версия не найдена.');
+      const draft = freshDraft(source);
+      draft.revisions = [structuredClone(revision)]; draft.selectedRevisionId = revision.id;
+      draft.target = targetSchema.parse(input.target); draft.targetVersion = input.targetVersion;
+      await preflightTarget(draft.target); draft.targetFingerprint = await targetFingerprint(draft.target);
+      assertLibraryRun(draft); await this.store.save(draft); return structuredClone(draft);
+    });
+  }
+  async proposeIssueFix(issueId: string, sourceRunId: string, input: { candidate: string; hypothesis: string; trialIds: string[] }) {
+    const bundle = await this.createFixBundle(issueId,sourceRunId);
+    if (input.trialIds.some(id => !bundle.devTrials.some(t => t.id === id))) throw new Error('Выберите пригодные dev-доказательства этой проблемы.');
+    const { proposePrompt } = await import('./prompt-edit.js');
+    return proposePrompt(this.store.directory,await this.get(sourceRunId),input);
+  }
+  async promptCandidate(file: string, reviewHash: string) {
+    const { promptVersion } = await import('./prompt-edit.js'); return promptVersion(this,file,reviewHash);
+  }
+  async prepareResolution(request: ResolutionRequest) {
+    return this.change(async () => {
+      const issue = (await this.store.readIssues()).find(i => i.id === request.issueId && !i.mergedInto);
+      if (!issue) throw new Error('Проблема не найдена.');
+      const policy = prepareResolutionPolicy(request,issue,await this.get(request.baselineRunId),await this.get(request.candidateRunId));
+      await this.store.declareResolution(policy); return policy;
+    });
+  }
+  async startResolution(id: string, options: { approved: boolean }) {
+    const file = await this.store.readResolution(id), candidate = await this.get(file.policy.candidateRunId);
+    return this.start(candidate.id, { approved: options.approved, expectedHash: draftHash(candidate), reviewer: 'expectations' });
+  }
+  async resolveIssue(id: string) { return this.store.finishResolution(id); }
+  async prepareDiagnostic(issueId: string, sourceRunId: string, intervention: Intervention, repeats: number) {
+    return this.change(async () => {
+      const issue = (await this.store.readIssues()).find(i => i.id === issueId && !i.mergedInto);
+      if (!issue) throw new Error('Проблема не найдена.');
+      const plan = prepareDiagnostic(issue, await this.store.get(sourceRunId), intervention, repeats);
+      const existing = await this.store.readDiagnostic(plan.id).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
+      if (!existing) await this.store.saveDiagnostic({ formatVersion: '1', plan });
+      return plan;
+    });
+  }
+  async startDiagnostic(id: string): Promise<Experiment> {
+    return this.change(async () => {
+      const file = await this.store.readDiagnostic(id), plan = file.plan; verifyDiagnosticPlan(plan);
+      if (file.runId) return this.store.get(file.runId);
+      const sourceRevision = diagnosticRevision(plan);
+      await preflightTarget(plan.source.target);
+      if (plan.source.targetFingerprint && plan.source.targetFingerprint !== await targetFingerprint(plan.source.target)) throw new Error('Версия агента изменилась после исходного прогона.');
+      // Preserve the source scenario byte-for-byte. The original accepted library remains in plan.source.
+      const record = structuredClone(plan.source);
+      Object.assign(record, { id: randomUUID(), runKind: 'diagnostic', parentRunId: plan.source.id, phase: 'evaluating', trials: [], comparisons: [], humanReviews: [], iterations: [], usage: emptyUsage(), error: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      delete record.assessmentOf; delete record.executionRunId; delete record.sourceEvidence; delete record.failureModes; delete record.resultsReviewedAt; delete record.resultsReviewHash;
+      record.revisions = [structuredClone(sourceRevision)]; record.selectedRevisionId = sourceRevision.id;
+      record.scenarios = record.scenarios.filter(s => s.id === plan.scenarioId);
+      for (const key of ['positiveControlScenarioIds', 'ownerExpectationScenarioIds'] as const) {
+        const retained = record[key]?.filter(id => id === plan.scenarioId);
+        if (retained?.length) record[key] = retained;
+        else delete record[key];
+      }
+      record.selectedScenarioIds = [plan.scenarioId]; record.acceptedTests = record.acceptedTests?.filter(t => t.scenarioId === plan.scenarioId);
+      record.settings.repeats = plan.repeats;
+      record.limitations.push('Диагностический прогон: исключён из общей точности и проверки исправления. Исходное состояние и вмешательство сравниваются попарно.');
+      record.manifestHash = measurementHash(record);
+      await this.store.save(record);
+      await this.store.saveDiagnostic({ ...file, runId: record.id });
+      await this.launch(record, async ctx => {
+        const runtime = await this.runtime(record), revision = record.revisions[0];
+        if (!revision) throw new Error('Нет исходной версии агента.');
+        const result = await runDiagnostic(plan, async (arm, request) => {
+          const start = record.trials.length;
+          try { await this.runSuite(record, runtime, revision, record.scenarios[0]!.split, arm === 'baseline' ? 'Исходные условия · ' : 'Вмешательство · ', { ...ctx, diagnosticRequest: request }); }
+          catch (error) { const message = error instanceof Error ? error.message : String(error); record.limitations.push(message); return { trials: record.trials.slice(start), error: message }; }
+          return record.trials.slice(start);
+        });
+        await this.store.saveDiagnostic({ ...file, runId: record.id, result });
+        await this.checkpoint(record, 'results_review', result.reasons.join(' '));
+      }, true);
+      return structuredClone(record);
+    });
+  }
   /** Reuse the exact reviewed materials and cards; only evidence and approvals start afresh. */
-  async repeat(id: string, scenarioIds?: string[]): Promise<Experiment> {
+  async repeat(id: string, scenarioIds?: string[], controlScenarioIds?: string[]): Promise<Experiment> {
     return this.change(async () => {
       const previous = await this.store.get(id);
       if (previous.workflow !== 'evaluate' || !previous.reviewedAt || runningPhases.has(previous.phase)) {
         throw new Error('Повторить можно остановленный или завершённый прогон с утверждёнными карточками.');
       }
       const record = freshDraft(previous, scenarioIds);
+      if (controlScenarioIds) {
+        if (!controlScenarioIds.length || controlScenarioIds.length > 5 || new Set(controlScenarioIds).size !== controlScenarioIds.length) {
+          throw new Error('Контрольных ситуаций может быть от 1 до 5, без повторов.');
+        }
+        const missing = controlScenarioIds.find(controlId => !record.scenarios.some(s => s.id === controlId));
+        if (missing !== undefined) throw new Error(`Контрольная ситуация должна быть из этого набора: ${missing}.`);
+        record.positiveControlScenarioIds = [...controlScenarioIds];
+      }
+      // Explicit and inherited controls alike; an accepted control card changed, so its acceptance is dropped.
+      oneTurnControls(record);
+      retainAcceptedTests(record);
       record.targetFingerprint = await targetFingerprint(record.target);
+      assertLibraryRun(record);
       await this.store.save(record);
       return structuredClone(record);
     });
@@ -736,6 +1061,7 @@ export class ExperimentLab {
     const previous = await this.get(id);
     if (previous.workflow !== 'evaluate' || !previous.scenarios.length || runningPhases.has(previous.phase)) throw new Error('Сначала дождитесь готовых тестов.');
     const definition = freshDraft(previous, scenarioIds);
+    assertLibraryRun(definition);
     if (previous.trials.length) definition.sourceEvidence = suiteEvidence(previous, definition.scenarios.map(s => s.id));
     const path = resolve(file);
     await mkdir(dirname(path), { recursive: true });
@@ -752,12 +1078,14 @@ export class ExperimentLab {
       const record = freshDraft(previous, scenarioIds);
       // Keep the original run as the comparison source, not the exported draft's temporary ID.
       record.parentRunId = previous.parentRunId;
+      oneTurnControls(record);
       const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions,
         agent: record.revisions[0]?.spec, scenarios: record.scenarios.map(({ split: _split, ...s }) => s) }, record.sources, 'evaluate', record.profiles);
       record.scenarios = prepared.scenarios;
       retainAcceptedTests(record);
       await preflightTarget(record.target);
       record.targetFingerprint = await targetFingerprint(record.target);
+      assertLibraryRun(record);
       await this.store.save(record);
       return structuredClone(record);
     });
@@ -781,10 +1109,18 @@ export class ExperimentLab {
       const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions, agent: record.revisions[0]?.spec,
         scenarios: record.scenarios.map(({ split: _, ...s }) => s) }, record.sources, 'evaluate', record.profiles);
       record.scenarios = prepared.scenarios;
+      assertLibraryRun(record);
       retainAcceptedTests(record);
       if (input.judge) { record.settings.judge = input.judge; delete record.settings.roles.judge; }
       record.evaluatorVersion = evaluatorVersion(record.settings);
       record.assessmentOf = previous.id;
+      let execution = previous;
+      const ancestry = new Set<string>();
+      while (execution.assessmentOf && !execution.executionRunId) {
+        if (ancestry.has(execution.id)) throw new Error('Цикл переоценок.'); ancestry.add(execution.id);
+        execution = await this.store.get(execution.assessmentOf);
+      }
+      record.executionRunId = execution.executionRunId ?? execution.id;
       const trials = previous.trials.filter(t => !input.trialIds || input.trialIds.includes(t.id));
       record.assessmentTrialIds = trials.map(t => t.id);
       record.evidenceHash = fingerprint(trials.map(t => ({ id: t.id, events: t.events, initialState: t.initialState, finalState: t.finalState, observation: t.observation })));
@@ -801,7 +1137,7 @@ export class ExperimentLab {
           ctx.signal.throwIfAborted();
           const trial = structuredClone(original);
           const scenario = record.scenarios.find(s => s.id === trial.scenarioId)!;
-          trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.judgeAudit;
+          trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.judgeAudit; delete trial.judgeReceipt; delete trial.checkpoints; delete trial.checkpointReceipt;
           trial.manifestHash = record.manifestHash!;
           if (record.target.kind !== 'sandbox' && !trial.observation) trial.observation = { state: 'missing', tools: 'partial' };
           const started = performance.now();
@@ -815,11 +1151,11 @@ export class ExperimentLab {
               const executionFailed = original.outcome === 'fail' && original.checks.every(c => c.passed);
               trial.outcome = executionFailed || trial.checks.some(c => !c.passed) ? 'fail' : trial.checks.length ? 'pass' : 'ungraded';
               trial.reason = executionFailed ? original.reason : 'Точные проверки пересчитаны по сохранённым фактам.';
-              if (assessmentRubrics(scenario, trial).length && runtime) trial.assessments = await assessTrial(runtime, scenario, record.sources, trial, { ...ctx,
+              if ((scenario.execution || assessmentRubrics(scenario, trial).length) && runtime) trial.assessments = await assessTrial(runtime, scenario, record.sources, trial, { ...ctx,
                 beforeCall() { ctx.beforeCall(); trial.usage.calls++; },
                 addUsage(usage) { ctx.addUsage(usage); trial.usage.inputTokens += usage.inputTokens; trial.usage.outputTokens += usage.outputTokens;
                   trial.usage.costUsd = usage.costUsd === null || trial.usage.costUsd === null ? null : trial.usage.costUsd + usage.costUsd; } }, record.requirements);
-              else if (scenario.metrics?.length) trial.assessmentError = 'Только точные проверки; рубрики не переоценивались.';
+              else if (scenario.execution || scenario.metrics?.length) trial.assessmentError = 'Только точные проверки; рубрики не переоценивались.';
             } catch (error) {
               trial.assessmentError = (error instanceof Error ? error.message : String(error)).slice(0, 4000);
               if (!trial.checks.length || ctx.signal.aborted) trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';
@@ -851,6 +1187,29 @@ export class ExperimentLab {
       if (input.checkId && !objectiveCheck && !simulatorCheck) throw new Error('Такой объективной проверки или проверки симулятора в этом диалоге нет.');
       const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
       if (input.metricId && (!scenario || !assessmentRubrics(scenario, trial).some(m => m.id === input.metricId))) throw new Error('Такой рубрики в этой карточке нет.');
+      // The counting rule is stamped by the lab on quick marks only; a caller value is never kept.
+      if (input.source !== 'quick') delete input.countingRules;
+      if (input.metricId) {
+        const recorded = trial.assessments?.find(a => a.metricId === input.metricId)?.result;
+        const judged = trial.judgeReceipt ?? trial.judgeAudit;
+        // A one-key mark is an answer to one judgment, so it is refused where the number cannot
+        // move (a control, an unmeasured situation), when there is no recorded decision to answer,
+        // on a metric that did not decide the situation, and when the judgment moved while the
+        // person was looking at it.
+        if (input.source === 'quick') {
+          if (record.positiveControlScenarioIds?.includes(trial.scenarioId)) throw new Error('Контрольная ситуация — в согласие с судьёй не входит.');
+          if (!scenario || !measurementUsable(scenario, trial, record.humanReviews)) throw new Error('Эта ситуация не измерена — отметка согласия не нужна.');
+          const targets = markTargets(scenario, trial);
+          if (!targets) throw new Error('Судья не вынес решения по этой ситуации — соглашаться не с чем.');
+          if (!targets.metricIds.includes(input.metricId)) throw new Error('Отметку согласия можно поставить только на оценку, из-за которой ситуация решена.');
+          if (recorded !== 'pass' && recorded !== 'fail') throw new Error('Судья не вынес решения по этой ситуации — соглашаться не с чем.');
+          if (input.judgeVerdict !== undefined && input.judgeVerdict !== recorded) throw new Error('Оценка судьи изменилась, пока вы смотрели. Проверьте ситуацию ещё раз.');
+          input.countingRules = COUNTING_RULES;
+        }
+        // What the verdict argues with is read from the trial; a caller value is never kept.
+        if (recorded) input.judgeVerdict = recorded; else delete input.judgeVerdict;
+        if (judged) input.judge = { protocolHash: judged.protocolHash, inputHash: judged.inputHash }; else delete input.judge;
+      }
       (record.humanReviews ??= []).push({ ...input, id: randomUUID(), createdAt: new Date().toISOString() });
       delete record.resultsReviewedAt; delete record.resultsReviewHash;
       await this.checkpoint(record, 'results_review', 'Human annotation saved separately from the original assessment.');
@@ -870,16 +1229,21 @@ export class ExperimentLab {
     });
   }
   /** `parallel` is an execution knob, not a measurement setting: dialogues are independent, so several may run at once without changing what is measured. */
-  async start(id: string, options: { approved: boolean; reviewer?: 'human' | 'automated'; expectedHash?: string; parallel?: number }): Promise<Experiment> {
+  async start(id: string, options: { approved: boolean; reviewer?: 'human' | 'expectations' | 'automated'; expectedHash?: string; parallel?: number; requireAccepted?: boolean }): Promise<Experiment> {
     const parallel = options.parallel ?? 1;
     if (!Number.isInteger(parallel) || parallel < 1 || parallel > MAX_PARALLEL) throw new Error(`Параллельных диалогов может быть от 1 до ${MAX_PARALLEL}.`);
     return this.change(async () => {
       const record = await this.store.get(id);
+      assertLibraryRun(record);
       if (record.phase !== 'review') throw new Error('Запустить можно только эксперимент, ожидающий проверки. Чтобы поменять набор карточек, создайте новый.');
       if (record.workflow === 'compare' && (record.target.kind !== 'sandbox' || record.settings.userModes.length !== 1)) throw new Error('Автоматическое сравнение поддерживает только песочницу и один режим пользователя.');
       if (!options.approved) throw new Error('Набор карточек замораживается только после вашего подтверждения.');
       if (record.workflow === 'evaluate' && options.expectedHash !== draftHash(record)) {
         throw new Error('Нужно подтверждение именно этой версии черновика. Откройте свежие тесты и план запуска.');
+      }
+      // The Pi path asks for confirmed expectations; CLI `run` and `evaluate` keep today's behaviour (CTX-22).
+      if (options.requireAccepted && record.acceptedDraftHash !== draftHash(record)) {
+        throw new Error('Сначала подтвердите ожидания ситуаций: они изменились или ещё не подтверждены.');
       }
       if (record.questions.length) throw new Error('Сначала ответьте на бизнес-вопросы из черновика: добавьте ответы в материалы и подготовьте новый эксперимент.');
       if (record.settings.userModes.includes('scripted')) for (const scenario of record.scenarios) {
@@ -891,9 +1255,13 @@ export class ExperimentLab {
       if (record.targetFingerprint && record.targetFingerprint !== await targetFingerprint(record.target)) {
         throw new Error('Код агента изменился после подготовки карточек. Обновите подключение в настройках и подтвердите новую версию.');
       }
+      await this.store.beginResolutionForRun(record);
       record.reviewedAt = new Date().toISOString();
       record.reviewMode = options.reviewer ?? 'human';
       if (record.reviewMode === 'automated') record.limitations.push('Generated scenario expectations were checked automatically, without human validation. Spot-check disputes; decisive automatic results remain usable as provisional evidence.');
+      // The owner confirmed the expectations, and nothing else. The verdicts are produced after this
+      // point, so no confirmation here can mean a person checked them: say so instead of going quiet.
+      if (record.reviewMode === 'expectations') record.limitations.push('Владелец подтвердил ожидания ситуаций перед запуском. Определения карточек и оценки судьи человеком не проверялись.');
       record.manifestHash = measurementHash(record);
       record.phase = record.workflow === 'evaluate' ? 'evaluating' : 'baseline';
       record.message = record.workflow === 'evaluate' ? 'Выполняю согласованный план проверки.' : 'Starting the frozen development comparison.';
@@ -946,23 +1314,35 @@ export class ExperimentLab {
         record.usage.costUsd = usage.costUsd === null || record.usage.costUsd === null ? null : record.usage.costUsd + usage.costUsd;
       },
       onTrace: (trialId, event) => this.store.appendTrace(record.id, trialId, event),
-      onJudgment: (trialId, audit) => this.store.appendJudgment(record.id, trialId, audit),
+      // Every judgment report replaces the sidecar; only the finished one goes to the journal.
+      onJudgment: (trialId, audit, final) => {
+        this.store.writeJudgeAudit(record.id, trialId, audit);
+        if (final) this.store.appendJudgment(record.id, trialId, audit);
+      },
     };
     active.done = (async () => {
       try {
         await this.store.save(record); saved = true; ready();
         controller.signal.throwIfAborted();
-        await work(ctx); controller.signal.throwIfAborted();
+        await work(ctx);
+        if (record.phase !== 'results_review' || record.runKind === 'diagnostic') controller.signal.throwIfAborted();
       }
       catch (error) {
         if (!saved) { failed(error); throw error; }
         const reason = controller.signal.aborted ? controller.signal.reason : error;
         record.error = reason instanceof Error ? reason.message : String(reason);
-        record.phase = controller.signal.aborted && /user|closing/i.test(record.error) ? 'cancelled' : 'error';
+        record.phase = record.phase === 'preparing' && record.librarySnapshot ? 'review'
+          : controller.signal.aborted && /user|closing/i.test(record.error) ? 'cancelled' : 'error';
         record.message = record.error;
       } finally {
         clearTimeout(timer); this.updateDiscoveryElapsed(record); record.updatedAt = new Date().toISOString();
-        try { if (saved) await this.store.save(record); }
+        try { if (saved) {
+          await this.store.save(record);
+          if (record.trials.length && record.runKind !== 'diagnostic' && record.runKind !== 'generator') {
+            try { await this.store.syncIssues(record); }
+            catch (error) { record.limitations.push(`Не удалось обновить индекс проблем; исходные результаты сохранены: ${error instanceof Error ? error.message : String(error)}`); await this.store.save(record); }
+          }
+        } }
         finally { if (this.active === active) this.active = null; }
       }
     })();
@@ -1117,7 +1497,6 @@ export class ExperimentLab {
       validateFailureModes(modes, failed, prompt);
       record.failureModes = modes;
     } catch (error) {
-      if (ctx.signal.aborted) throw error;
       record.limitations.push(`Не удалось назвать типы провалов: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -1165,6 +1544,8 @@ export class ExperimentLab {
     if (best.id !== baseline.id) await evaluate(best, 'control');
     guard();
     const final = compareTrials({ baselineId: baseline.id, candidateId: best.id, manifestHash: hash, scenarios: record.scenarios, repeats: record.settings.repeats, trials: record.trials, split: 'control', mode: record.mode });
+    // `expectations` is not `human`: confirming the expectations in the run dialog says nothing about
+    // the results, so it must not lift a comparison that rests on a human having reviewed them.
     if (record.reviewMode !== 'human') {
       final.reasons.push('Scenario expectations have not been validated by a human; this comparison is provisional.');
       if (final.verdict === 'improved') final.verdict = 'insufficient';

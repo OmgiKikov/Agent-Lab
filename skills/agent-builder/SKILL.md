@@ -1,124 +1,154 @@
 ---
 name: agent-builder
-description: Inspect a local agent, build a repeatable validation set from owner requirements and real logs, run the real agent, and report accuracy with grounded failure causes.
+description: Use when the user wants to inspect or test an AI agent, build or review scenarios from owner requirements and logs, reproduce a failure, compare an isolated fix, or evaluate a scenario generator in Agent Lab.
 ---
 
-# Agent builder
+# Agent Lab
 
-Keep the whole Agent Lab flow in the current Pi conversation:
+Ведите работу в текущем разговоре Pi, на языке владельца. Владелец говорит, чего хочет добиться; вы делаете это инструментами Agent Lab, коротко показываете результат и продолжаете в том же разговоре. Логика продукта — **Логи → Сценарии → Прогон → Результаты**, но это не маршрут по экранам: выполняйте тот шаг, о котором попросили. Ожидания задают требования владельца; логи показывают только наблюдавшееся поведение. Старый ответ агента, код, поле outcome и мнение модели не становятся бизнес-правилом или решением владельца.
 
-`repository + owner requirements + real logs → up to 15 measurable cards → review expectations and run plan → real TargetSession + reactive user → estimated accuracy + separate metrics + grounded failure causes → optional human review → save/repeat/version diff`.
+Сначала прочитайте выбранный проект, точку входа агента, промпт, доступные инструменты и материалы. Не спрашивайте то, что уже есть в проекте или разговоре. Подключайте реального агента через module/command/http; детерминированный пример явно называйте учебным. Контракт адаптера см. в [контракте адаптера](../../examples/echo-agent.py). Сохраняйте состояние между репликами и сбрасывайте между диалогами. Секреты не включайте в материалы; HTTP-заголовки ссылаются на имена переменных окружения.
 
-Discovery is a supplemental loop for adding one new regression: `logs → one hypothesis → Проверим? → one editable test → explicit acceptance → run/save`.
+## Как вести разговор
 
-Use the current project unless the owner named another one. Preserve the selected model and budget. With real logs, default to 15 validation cards and one user mode; default to one test only in supplemental discovery. Do not turn the conversation into a tour of internal tools or reports.
+- **Делайте, а не объясняйте, куда нажать.** Не отвечайте «откройте раздел, нажмите клавишу». Доска `/agent-lab` — необязательный инструмент для массовой работы; для первого прохождения она не нужна.
+- **Результат уже на экране.** Каждый вызов инструмента владелец видит короткой карточкой, подробности раскрываются там же. Не пересказывайте её. Скажите главное, что изменилось и какой следующий шаг полезен. Без id, хешей и JSON.
+- **Называйте объекты как владелец:** по названию или номеру в списке. Инструменты принимают такие ссылки на прогон, карточку, группу, факт, провал. Если инструмент ответил, что ссылка неоднозначна или не найдена, спросите владельца; не выбирайте сами.
+- **Берите из запроса и карточки всё, что там уже есть.** Спрашивайте только настоящее бизнес-решение. Не выдумывайте правило, значение факта или ожидаемый результат ради завершения вызова.
+- Не знаете, что уже есть в проекте, — начните с `agent_lab_status`.
 
-## Product experience
+| Владелец говорит | Вы вызываете |
+| --- | --- |
+| «Посмотри агента в этой папке. Вот логи, собери сценарии» | чтение проекта → `agent_lab_build` `mode:"validate"` с задачей, материалами и `dialoguesFile` |
+| «Покажи, какие ситуации ты нашёл» | `agent_lab_scenarios` `operation:"show"` |
+| «Открой источник второй карточки» | `operation:"show", variant:"2", source:true` |
+| «В этом сценарии клиент знает номер, но сообщает его только по запросу» | `operation:"edit", variant:…, change:{field:"fact", fact:"номер", availability:"initial"}` |
+| «Добавь вариант, где он вообще не знает номер» | `operation:"variant", variant:…, kind:"missing_fact"` |
+| «Эти две группы про одно и то же, объедини» | `operation:"merge", groups:[…, …]` |
+| «Да, это моё правило, так и должно быть» (на вопрос проверяющего) | `operation:"resolve", variant:…` — native-решение владельца |
+| «Прими готовые сценарии, спорные пока оставь» | `operation:"accept", select:"ready"` |
+| «Запусти принятый набор» | `agent_lab_run` |
+| «Как там прогон?» / «Останови прогон» | `agent_lab_run` `action:"progress"` / `action:"stop"` |
+| «Согласен с судьёй по первому провалу» / «не согласен» | `agent_lab_agree` `failure:1` — ответ владелец даёт сам в native-диалоге |
+| «Покажи, где агент потерял контекст» | `agent_lab_inspect`, затем `failure:N` нужного провала |
+| «Повтори этот случай на новой версии и сравни» | `agent_lab_repeat` `scenarios:[…]` → `agent_lab_run` → `agent_lab_inspect` `compare:true` |
 
-- Read before asking: inspect the repository, its run configuration, entry point, prompts, tools and relevant tests. Ask only for information that cannot be found locally.
-- Treat owner materials as the source of expected behavior. Existing code, old agent answers and imported outcome labels may be wrong. Every requirement needs its source quote; unresolved policy stays unresolved.
-- Lead with one validation-set accuracy number, then repeated failure causes, cited dialogues and separate metrics. Separate an agent defect, a broken test and missing evidence.
-- Treat cards as an internal reproducibility contract. Show count, coverage and all expected results with their owner requirement in the existing run confirmation; no separate per-card acceptance ritual.
-- In one-test discovery, show the complete proposed test before acceptance: goal, user knowledge and behavior, opening, initial state, checks, rubrics with pass/fail criteria, source quote, observation channel and draft hash.
-- One-test acceptance approves only that definition. Multi-test validation uses its run-plan confirmation; execution and any human result verdict remain separate decisions.
-- After a change to the agent, repeat the exact accepted test. A changed test cannot prove an agent improvement.
+## Логи и сценарии
 
-## Real dialogues at the start
+Если решения ещё нет, один раз спросите: «Есть реальные диалоги с агентом? Можно указать файл JSON/JSONL или начать без них». Пустой ответ не означает отказ от логов. Используйте только указанные обезличенные выгрузки, не ищите чужие данные. До 300 исходных диалогов; полный импорт хранится отдельно от ограниченных порций модельного анализа. Показывайте processed/pending/excluded и причины. Неполная подготовка остаётся черновиком.
 
-Ask once, in the user's language: «Есть реальные диалоги с агентом? Можно указать файл JSON/JSONL или начать без них». Honor a path or decision already present in the conversation. Do not search unrelated files. `agent_lab_build` must return `needs_input` until it receives dialogues or the owner explicitly chooses `withoutDialogues=true`. Пустой ответ не означает согласие продолжить без них; оставь вопрос открытым до явного пути или решения начать без них. Invalid input needs correction, not a silent synthetic fallback.
+`agent_lab_scenarios` — один интерфейс с доской и CLI:
 
-Logs are offline, de-identified exports; no external logging service is connected. With logs, call `agent_lab_build` with `mode:"validate"`. It accepts up to 300 dialogues, chooses a stable outcome-blind candidate pool and builds up to 15 measurable cards. Stored outcome labels and old assistant replies never define the expected result. Extract the user's goal and facts; the reactive simulator answers the new agent's actual questions from those facts, without inventing unknown data or replaying old follow-ups in order. Owner requirements define `successCriteria`, and prompt/RAG tests use `goalObservation:"reply"` unless the owner chose another observable channel. Exclude masked-only utterances and cases requiring unavailable customer records before execution. Never replace a request for a personal rate or application status with a different, easier knowledge question. Record exclusion reasons; a smaller valid set is preferable to invented expectations.
+- `show` — весь черновик, одна карточка (`variant`) или её исходный диалог и цитаты (`source:true`). Покажите исходную цитату и номер события, цель, первую реплику, доступность фактов, поведение и правило с цитатой требования. `ready` — готов к выбору; `needs_review` — нужно решение; `blocked` — запуск недопустим. Не путайте точную цитату с доказанным смыслом.
+- `edit` с `change` — одна правка карточки: `opening`, `goal`, `expectation`, `rule` или `fact` (новый факт — без `fact`, с `statement`).
+- `variant` с `kind` — целевой синтетический вариант: `missing_fact`, `reveal_on_request`, `ambiguous_opening`, `changed_intent`, `tool_failure`. Факт, первую реплику без значения, условие раскрытия и название отсутствующих данных инструмент берёт из родительской карточки. Уточняйте `fact`, только если известных фактов несколько; `intent` и новую `opening` формулируйте словами владельца.
+- `merge` (`groups`), `split` (`variants`, `title`), `remove`, `assess`, `accept`, `budget` (`maxCalls`).
 
-Summarize the actual set, excluded cases and run plan. Building scenarios does not run the target. Use `agent_lab_run` for one native confirmation with expected results, their sources, the real target, planned dialogues and budget. After the run, report in this order:
+**Чьими словами записана правка.** Правка черновика записывается под сообщением владельца, которое инструмент сам читает из сессии; подставить его нельзя. Если о правке просили раньше, передайте `ownerQuote` с точными словами владельца. Операция выполняется без лишней остановки, только если сообщение владельца само просит именно её: упоминание, цитата из лога, запрет («не удаляй») или отменённая просьба поручением не считаются — тогда инструмент покажет владельцу native-подтверждение. Факт от имени владельца и то, что клиент знал заранее, — всегда его native-решение. Значения фактов и ожидания должны происходить из слов владельца или из самой карточки: на ответ `needs_owner_input` задайте владельцу этот вопрос, а не подбирайте значение. Формулировку ожидания или правила, которой владелец не произносил, инструмент покажет ему в native-подтверждении. Модель не может выдать выдуманный факт или профиль за решение владельца.
 
-1. estimated accuracy on this validation set: passed / (passed + failed);
-2. unknown, invalid and not-reached cards outside that denominator;
-3. separate `goal_attainment`, `prompt_compliance` and `reply_quality` rows;
-4. repeated failure causes with card, dialogue event and exact requirement/prompt evidence;
-5. judge and human-review limits;
-6. the saved suite path and repeat command when the set is useful.
+**Сначала первое число.** Сразу после разбора логов, если готова хотя бы одна карточка, предложите принять и запустить готовые, а спорные разобрать после: первая точность важнее идеального набора. Открытый вопрос проверяющего, на который владелец отвечает «да, это моё правило», закрывается `resolve` — его native-решением, а не переписыванием карточки; блокирующее замечание так не снимается.
 
-Never call this production accuracy or a calibrated guarantee. Selection and environment limitations stay visible. Legacy scripted suites do not become reactive automatically: rebuild them from logs before interpreting their multi-turn results as a new validation measurement.
+**Неприменимая проверка.** Замечания проверяющего приходят простыми словами (`issuesInPlainWords`), а правила, которые он считает неприменимыми к карточке, — списком `disputedChecks`. С согласия владельца уберите их: `change:{field:"rule", rule:"…", remove:true}` (или `rule:"disputed"` для всех сразу) — либо перепишите: `value` и `applicability` его словами. В карточке остаётся хотя бы одно правило. На карточку, ждущую решения, задайте владельцу один простой вопрос, который его снимает; не пересказывайте проверяющего.
 
-When the adapter exposes actual RAG fragments, preserve them as `retrievals` with `source`, verbatim `content` and optional `score`. Set `retrievalsComplete:true` only if the full context supplied for that reply is included; an explicit empty array means no chunks were supplied. With complete evidence Lab adds independent context coverage, relevance and faithfulness diagnostics (up to six judge calls per dialogue within the approved budget). They do not change the frozen card or accuracy. Without this evidence, say the search-versus-answer cause is unknown. The entire owner knowledge base is not retrieval evidence, and a statement unsupported by retrieved chunks is not automatically false.
+**Правка после прогона.** Выполненный прогон не меняется. Правка, о которой попросили после него, сама уходит в новый черновик того же набора; скажите об этом одной фразой и дальше работайте с черновиком.
 
-Use `mode:"discover"` only when the owner asks to find or add one particularly useful regression test. It accepts up to 300 dialogues. Its call plan is displayed through native confirmation before the first provider call and bounds calls and total duration for discovery only.
+**Проверка после правки.** Инструмент сам перепроверяет смысл изменённых карточек в пределах согласованного лимита вызовов и отвечает «было → стало». Быстрая перепроверка приходит в том же ответе; долгая идёт в фоне, разговор продолжается, итог приходит отдельным сообщением — не ждите и не опрашивайте. Новая правка перезапускает перепроверку, уже проверенное не пропадает. Несколько правок из одного сообщения делайте подряд с `verify:"later"` у всех, кроме последней. `verify:"later"` откладывает проверку до последней правки серии. Ответ `needs_budget` означает, что лимита не хватает: объясните это и только с согласия владельца вызывайте `budget` — там отдельное native-подтверждение. Смысловая перепроверка не импортирует ожидающие источники. Ответ `stale_library` означает, что сценарии изменились с тех пор, как вы их читали (доска, другая сессия): решите заново по свежему состоянию.
 
-Discovery must:
+**Принятие и запуск — два разных решения владельца.** `accept` показывает владельцу native-подтверждение со списком карточек и НЕ запускает агента. Не принимайте набор, которого владелец не видел в этом разговоре, и не запускайте прогон оттого, что открыли карточку. Всегда различайте черновик, принятый набор и выполняемый снимок: правка черновика снимает принятие и не меняет ни идущий, ни прошлый прогон.
 
-1. derive requirements from owner materials;
-2. scan bounded batches and save exact dialogue/event observations;
-3. find recurring candidate behavior;
-4. open full representative examples plus controls;
-5. verify the candidate against the owner requirement;
-6. return one saved hypothesis or honestly report insufficient evidence.
+## Прогон и результаты
 
-Counts are selection evidence, not production accuracy. Do not describe the batch as an accuracy measurement.
+`agent_lab_run` показывает компактный план — агент и версия, принятая ревизия и число вариантов, попытки, модели, лимиты — и подтверждение относится именно к нему. Короткий прогон завершается в той же строке. Длинный продолжается в фоне: разговор свободен, прогресс над полем ввода берётся из записи прогона, результат приходит отдельным сообщением. Не опрашивайте прогон сами. Esc прерывает ваше текущее действие, но не прогон; `action:"stop"` — только по просьбе владельца. После остановки скажите, что сохранено, и что повтор выполнит все попытки заново.
 
-Show the saved discovery brief exactly. A ready brief includes `НАБЛЮДЕНИЕ: ответ агента (reply)`, exact citations and literal `Проверим?`. Require an explicit owner answer. On «да», immediately call `agent_lab_build` again with `mode:"discover"`, the exact returned `fromRunId`, and the exact returned `hypothesis`. The core re-reads the saved run and builds exactly that one test; do not ask for source IDs, quotes, or another technical confirmation round. On refusal or correction, build nothing and continue from the owner's feedback. Never invent a hypothesis from an insufficient, partial, exhausted or failed discovery.
+Сначала покажите качество **по принятому набору** и главные проблемы, а не технический отчёт; число измеренных и не измеренных вариантов остаётся видимым. `agent_lab_inspect` с `failure:N` открывает провал: ожидание, реплику агента, правило владельца и диалог; `dialogue` — любой записанный диалог; `compare:true` — сравнение повтора с исходным прогоном; `export:true` — отчёт для пересылки. Исходные трассы и оценки остаются неизменными. Человеческая отметка необязательна; просите её для спорного результата, unknown, подозрения на симулятор или выборочного аудита (`agent_lab_review`). Не создавайте человеческий вердикт от имени модели.
 
-The built test is still a draft. Show it in full, then use `agent_lab_accept` for the owner's separate decision. Acceptance does not run the agent.
+Для старых записей без библиотеки остаются прежние карточки и `agent_lab_accept`; не объявляйте их автоматически обновлёнными.
 
-## Start from the local project
+## Точные операции и CLI
 
-- Reuse the agent's real callable entry point. Prefer a local `command` or compatible `module`; use `http` only when that is the actual available target. If a wrapper is required, write the smallest adapter around the real agent. The command adapter contract (JSON lines on stdin/stdout, `reply`, `events`, `records`, `retrievals`, `resetConfirmed`) is documented in the packaged `examples/echo-agent.py`; read it before writing a wrapper.
-- Preserve session state between turns and reset it between test dialogues. For a command target, keep protocol JSON on stdout and diagnostics on stderr.
-- Do not replace the owner's agent with a scripted echo. A deterministic built-in example may demonstrate mechanics only and must remain labelled as such.
-- Collect relevant policies and knowledge as materials with original names and exact contents. Pass the agent prompt as `kind:"prompt"` only so observable user-facing rules can become requirements. Never promote implementation behavior to business truth.
-- Profiles must be supplied explicitly by the owner; log evidence never creates persona fields.
-- Keep secrets out of materials. HTTP headers name environment variables; never persist their values.
-- Static preflight may check paths, executability and required environment variable names. Do not send a probe request before explicit execution consent.
+Разговорные параметры выше и точные ниже вызывают одни и те же операции Lab. Точные формы принимают `expectedLibraryHash` из свежего `show`; без него инструмент применяет правку к состоянию, которое вы видели последним, и отказывает, если оно устарело.
 
-## One editable test from discovery
+```json
+{"operation":"show","id":"RUN","variantId":"VARIANT"}
+{"operation":"assess","id":"RUN","expectedLibraryHash":"HASH"}
+{"operation":"accept","id":"RUN","expectedLibraryHash":"HASH","variantIds":["VARIANT_A","VARIANT_B"]}
+```
 
-Build exactly one test from the accepted discovery handoff. The test must be executable and internally consistent:
+`edit`, `merge`, `split`, `remove` принимают и готовый `patch`; `variant` — `request` с `parentId`, `operation`, `reason`, `input`. Те же правила происхождения действуют и для них.
 
-- the opening, known facts, forbidden knowledge and clarification answers agree;
-- `maxFollowUps` is sufficient for promised replies and no larger than needed;
-- exact checks assert only literal or observable conditions;
-- semantic rubrics each describe one failure mechanism and state clear pass and fail conditions;
-- action success uses trusted state or complete tool events; a textual claim is not proof;
-- missing observation yields `unknown`, never a forced pass or fail;
-- every business expectation points to a requirement quote.
+CLI использует тот же интерфейс:
 
-Let the owner correct the draft in ordinary language. After a correction, show the complete new definition and hash again. Never accept on the owner's behalf or treat «run it» as retroactive acceptance of an unseen test.
+```sh
+agent-lab scenarios --id RUN --operation inspect --json
+agent-lab scenarios --id RUN --operation edit --expected-hash HASH --input patch.json
+agent-lab scenarios --id RUN --operation assess --expected-hash HASH --yes
+agent-lab scenarios --id RUN --operation accept --expected-hash HASH --input selection.json --yes
+```
 
-## Real run and proof
+`selection.json`: `{"variantIds":["VARIANT_A","VARIANT_B"]}`. Файл правки факта содержит `kind` (`add_fact` или `edit_fact`), `variantId`, `factId`, `statement`, `value`, `availability`, `editId` и `reason`. Не формируйте такой файл из собственного предположения. После правки нужна смысловая проверка и новое принятие.
 
-For the one-test discovery flow, use `agent_lab_run` only after the owner explicitly accepted the displayed test and asked to execute it. Existing multi-test validation/regression suites use their separate run-plan confirmation; one-test acceptance metadata is not their execution gate. Show the exact target, version identity when available, one user mode, planned dialogue count and limits in native confirmation.
+Без логов используйте `agent_lab_build mode:"live", withoutDialogues:true` после явного выбора владельца. Новый путь создаёт ту же библиотеку: `curated`, `imports:[]`, без выдуманных диалогов, личных фактов, профиля и синтетического родителя. Модель предлагает случай по требованиям, владелец может явно добавить факты и принять набор. Root-вариант без родителя не выдаётся за целевую синту. Нет достаточно ясного правила — оставьте вариант на проверке.
 
-Open a real `TargetSession` for the test. Afterwards show, in this order:
+Личное знание, сообщённое позже, может быть `initial`: пользователь знал свой номер до разговора, но раскрывает его по запросу. Пересказ ответа старого агента — `learned_in_source`; в начальные знания не попадает. Неизвестные сведения нельзя заполнять выдуманными значениями. Контроллер разрешает только объявленные действия и факты, учитывает смену намерения и предел повторов. `finish` не содержит payload и имеет пустой factIds; сообщение при завершении не отправляется.
 
-1. the full user/agent dialogue;
-2. observable tool events and final state;
-3. each deterministic check and its evidence;
-4. each judge rubric with `pass`, `fail` or `unknown` and exact event citations;
-5. every `simulatorChecks` suspicion beside the dialogue event it cites;
-6. one bounded conclusion and its limitations.
+## Бюджет, качество и сравнение
 
-Never hide an invalid, cancelled, missing or unknown attempt inside an aggregate. An adapter's reported records are labelled reported state, not independently trusted observation. Without `resetConfirmed` or complete in-scope events, corresponding action claims remain unmeasured.
+Использованные вызовы не сбрасываются. `show` возвращает использовано/максимум/остаток и оценку оставшихся смысловых заданий. Лимит меняет `agent_lab_scenarios` `operation:"budget"` с native-подтверждением (для старых записей — `agent_lab_edit` с `patch:{settings:{maxCalls:NEW_LIMIT}}`). Не увеличивайте согласованный бюджет молча. Отмена и исчерпание сохраняют частичный результат.
 
-## Judge and optional human review
+Единица основной метрики — вариант с полным планом повторов. Все pass → pass; есть fail при полной пригодности → fail; unknown без fail → не определён. Любая invalid или невыполненная попытка делает вариант не измеренным; доказанный отдельный fail при этом сохраняется. Accuracy = pass / (pass + fail). Нулевой знаменатель означает отсутствие процента. Показывайте измеренные/запланированные варианты и отдельно происхождение: из диалогов (`production`), по требованиям владельца (`curated`), целевые синтетические (`synthetic`). Пример: группы 2/2 и 10/20 дают 12/22, а не среднее 100% и 50%.
 
-Objective predicates belong in code. A semantic judge sees one rubric at a time and must cite the unchanged trace. Two fresh calls must agree and be non-contradictory for a decisive result; otherwise return `unknown`.
+Изменение библиотеки создаёт новую ревизию; прошлый запуск хранит старый снимок. Добавление синты меняет состав и требует новой сопоставимой базы. `agent_lab_repeat id:RUN` создаёт новый черновик того же набора, `agent_lab_suite` сохраняет/загружает набор, CLI `agent-lab diff --before BEFORE --after AFTER` сравнивает. Изменённые тесты, требования, режим, настройки или оценщик делают сравнение несопоставимым. Это не production accuracy и не гарантия качества модели.
 
-Judge repeatability and reliability are not measured in the MVP. Two agreeing calls are a conservative decision rule, not validation. Do not claim judge quality from agreement, sample count or saved reviews.
+## Постоянная проблема → диагностика → исправление
 
-Human review is optional. Ask for it only for a disputed result, `unknown`, a simulator suspicion, or explicit spot-checking. A human note attaches to the concrete trial and criterion; it never rewrites the original trace or automatic assessment. Never invent a human verdict.
+Новый провал сначала ищите в `agent_lab_issues {operation:"inspect",id:RUN}`. Затем `id:ISSUE` и при необходимости `assessmentId:ASSESSMENT` показывают конкретный снимок оценки и события. `sync` обновляет индекс из прогона, `rebuild` восстанавливает его. Повторы связываются с той же проблемой, без подмены исходной оценки. Название само по себе не доказывает общий механизм; объединение требует решения владельца.
 
-## Save, repeat and compare
+Для проверки одной причины используйте `agent_lab_diagnostics`:
 
-Use `agent_lab_suite` to save a useful test or an existing multi-test validation/regression set as a versionable suite. Saving preserves tests, exact acceptance metadata where present, requirements, provenance, target definition and settings, but clears results and execution approval. Never overwrite an existing suite file.
+```json
+{"operation":"prepare","input":{"issueId":"ISSUE","sourceRunId":"RUN","repeats":2,"intervention":{"kind":"tool-response","tool":"update_record","call":1,"response":{"ok":true},"hypothesis":"Причина — ответ инструмента"}}}
+{"operation":"inspect","id":"PLAN"}
+{"operation":"run","id":"PLAN"}
+```
 
-Load or repeat the same test after an agent change, run it through the real target, then compare the two runs. Report per-test changes:
+Альтернатива — `rag-fragment` с `sourceId`, `sourceHash`, дословным `content` сохранённого источника и `hypothesis`. Адаптер должен поддерживать `paired-intervention-v1`, подтверждать применение и сброс. Неподдерживаемое вмешательство отклоняется без запуска. Парные baseline/intervention используют один снимок и общий бюджет; итог supports/refutes/inconclusive. Диагностика не входит в accuracy и не закрывает дефект.
 
-- `fixed`: decisive fail became decisive pass;
-- `regressed`: decisive pass became decisive fail;
-- unchanged: the decisive result stayed the same;
-- `incomparable`: tests, requirements, mode, settings, judge protocol or usable evidence differ.
+Для исправления используйте `agent_lab_resolution`, а не новый discovery:
 
-Missing, invalid and unknown pairs stay visible and never count as fixes. A model-judged improvement remains provisional. Do not change the test to make a candidate look better.
+- `operation:"bundle", input:{issueId,sourceRunId}` — минимальный пакет dev-доказательств; контрольные данные туда не входят.
+- `operation:"candidate", input:{sourceRunId,target,targetVersion}` — отдельная версия кода/сервиса с неизменным набором. Исходный агент не заменяется.
+- `operation:"prompt", input:{issueId,sourceRunId,candidate,hypothesis,trialIds}` — предложение промпта по фактически подтверждённым человеком dev-ошибкам. Ответ содержит `file` предложения. Вызовите `agent_lab_prompt {action:"inspect",file:FILE}`, затем `agent_lab_prompt {action:"apply",file:FILE}`: apply показывает diff в native-подтверждении, сам вычисляет reviewHash и возвращает summary с `id` нового черновика. Этот `id` передайте как `candidateRunId` в resolution prepare ДО запуска. Исходный target должен иметь promptFile, а адаптер — применять prompt и подтверждать promptHash. Не подделывайте reviewHash или человеческое подтверждение.
+- `operation:"prepare", input:{issueId,baselineRunId,candidateRunId,reproducerIds,regressionIds,stability:{kind:"all-pass",repeats:2}}` — заранее сохранить ResolutionPolicy. Число повторов совпадает у обоих наборов и не меньше двух; воспроизводящий и регрессионный наборы не пересекаются и вместе покрывают исходный набор.
+- `operation:"inspect", id:POLICY`, затем `operation:"run", id:POLICY` — проверить план и запустить кандидата после native-подтверждения. `operation:"resolve", id:POLICY` повторно вычисляет итог по сохранённым доказательствам.
 
-## Completion rule
+Всегда показывайте два решения: **дефект больше не воспроизводится** и **кандидат можно принять**. Исправленный reproducer при сломанной регрессии даёт да/нет; неполные измерения — null, проблема остаётся checking. Только оба да позволяют resolved. Изменение правила требует свежих прогонов обеих версий. Повторный дефект этой версии открывает проблему снова. CLI: `issues`, `diagnostics`, `resolutions` с теми же `--operation`, `--input`, `--id`; запуск требует `--yes`.
 
-Do not stop at generated cards. The primary useful outcome is a reviewed validation set, a real run, estimated card accuracy with unknowns kept separate, grounded causes, and a saved suite that can be repeated. For supplemental discovery, finish the traceable chain from requirement and log evidence to one accepted regression test and its real dialogue.
+## Генератор сценариев
+
+`agent_lab_generator` оценивает генератор отдельно от испытуемого агента:
+
+```json
+{"operation":"evaluate","request":{"config":{"instructions":"Сохраняйте происхождение фактов","temperature":0},"settings":{"maxCalls":60,"maxDurationMs":180000,"timeoutMs":30000},"controls":true,"caseIds":["p1","v1"]}}
+{"operation":"inspect","id":"GEN"}
+{"operation":"optimize","request":{"config":{"instructions":"Сохраняйте происхождение фактов","temperature":0},"settings":{"maxCalls":120,"maxDurationMs":600000,"timeoutMs":60000},"controls":true,"maxCandidates":1}}
+```
+
+Проверьте реальные ID в `test/fixtures/generator-corpus.json`; `caseIds` разрешён только для evaluate. Укажите выбранные provider/model в settings при необходимости. В CLI `config.json` содержит только внутренний `request`: `{"config":{"instructions":"...","temperature":0},"settings":{"maxCalls":60,"maxDurationMs":180000,"timeoutMs":30000},"controls":true}` — без обёрток operation/request. CLI: `agent-lab generator --operation evaluate|optimize --input config.json --yes`, `inspect --id GEN`, `select --input candidates.json`. Для inspect/select модельные вызовы не нужны. Select получает `candidates` и `history`: только quality ready, нулевые provenanceErrors/applicabilityErrors, validity valid и duplicate none допускаются до ранжирования по покрытию, проблемам и нестабильности. Один fail агента не повышает качество теста.
+
+Минимальная форма select (замените HASH_REAL на фактический 64-символьный hex-хеш содержимого; это не произвольный ID):
+
+```json
+{"operation":"select","candidates":[{"id":"variant_1","contentHash":"HASH_REAL","quality":"ready","provenanceErrors":0,"applicabilityErrors":0,"validity":"valid","duplicate":"none","coverage":["нет номера"],"unmetConditions":1,"reproducibleIssues":0,"instability":0}],"history":[]}
+```
+
+Все счётчики — целые неотрицательные, instability — число 0..1; необязательный targetFailures также счётчик. История уже выбранных случаев: `[{"contentHash":"HASH_PREVIOUS_REAL","coverage":["ранее покрытое условие"]}]`; не оставляйте её пустой при наличии прошлых выборов. Для CLI `candidates.json` содержит только candidates/history, без operation. Полная проверяемая схема: `selectionCandidateSchema`, `selectionHistorySchema`, `generatorSelectionSchema` в [описании типов генератора](../../dist/generator-evaluation.d.ts).
+
+Корпус: 24 вымышленных примера с **разметкой разработчика**, 16 dev и 8 holdout; это не экспертная сертификация. Оптимизатор меняет ограниченную текстовую конфигурацию, не веса модели и не промпт агента. Один вызов `optimize` сам выполняет весь порядок: dev-оценка → ограниченные предложения/отбор → заморозка финальной конфигурации → holdout. Не организуйте отдельный повторный evaluate уже использованного holdout. Предложения видят только dev; финальная конфигурация фиксируется до holdout, использованный holdout нельзя повторно выдавать за новый. Отчёт различает ошибки происхождения/применимости/дублей, unknown, контрольные дефекты и реальный transport. Успешный протокол не доказывает улучшение генератора; отсутствие измерения не означает успех.
+
+## Ограничения доказательств и дополнительный discovery
+
+Смысловой судья цитирует неизменную трассу; два согласованных решения не доказывают калибровку. Действие подтверждается наблюдаемым состоянием или полными событиями инструментов, не обещанием агента. Нет наблюдения — unknown. Фактический RAG-контекст передавайте как retrievals с дословным content; retrievalsComplete:true допустим только для полного контекста данного ответа. Вся база знаний не является свидетельством retrieval. RAG-диагностики отдельны от основного показателя.
+
+`agent_lab_build mode:"discover"` — дополнительный поиск одного полезного regression-теста по запросу владельца. После сохранённого brief с «Проверим?» и явного ответа «да» передайте точные `fromRunId`/`hypothesis` в тот же build mode; покажите целиком полученный тест, затем `agent_lab_accept` и отдельный `agent_lab_run`. Недостаточные данные, отказ или исчерпание бюджета не дают права выдумать гипотезу. Не заменяйте этим путём существующую постоянную проблему и проверку исправления.
+
+Полезный результат — проверенный принятый набор, исполнение через реальный TargetSession, понятные доказательства с не измеренными случаями и сохранённый повторяемый набор. Учебный запуск проверяет механику; модельный эксперимент, native-навигация и субъективная приёмка владельца — разные виды доказательств.

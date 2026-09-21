@@ -68,6 +68,25 @@ function originalChecks(record: Experiment, trial: Trial): string[] {
     ...(trial.assessments ?? []).map(a => `${modelLabel(record)} · ${outcomes[a.result]}: ${assessmentRubrics(scenario ?? {}, trial).find(m => m.id === a.metricId)?.name ?? a.metricId}. ${a.rationale}`),
   ];
 }
+/** Who judged and how many fresh calls; the full audit stays in the record (legacy) or the sidecar file (receipt). */
+function judgeSummary(trial: Trial) {
+  const judge = trial.judgeAudit ?? trial.judgeReceipt;
+  if (!judge) return;
+  const calls = trial.judgeAudit ? trial.judgeAudit.attempts.length : trial.judgeReceipt!.votes.length;
+  return { provider: judge.provider, model: judge.model, protocolHash: judge.protocolHash, calls, legacy: !!trial.judgeAudit };
+}
+const judgeFile = (record: Experiment, trial: Pick<Trial, 'id'>) => `${record.id}.judge/${trial.id}.json`;
+function judgeHTML(record: Experiment, trial: Trial): string {
+  const judge = judgeSummary(trial);
+  if (!judge) return '';
+  const raw = judge.legacy ? `<p>Исходные ответы судьи сохранены без исправлений в записи прогона <code>${escape(record.id)}.json</code> в локальной папке Agent Lab; в экспорт они не входят.</p>`
+    : `<p>Полный ответ судьи: <code>${escape(judgeFile(record, trial))}</code> рядом с записью прогона.</p>`;
+  return `<details><summary>Проверка судьи · ${escape(judge.provider)}/${escape(judge.model)} · ${judge.calls} вызовов в свежих сессиях</summary><p>Совпадение повторов не доказывает правильность. Протокол: <code>${escape(judge.protocolHash)}</code>.</p>${raw}</details>`;
+}
+/** The embedded source run without the heavy judge audits; receipts and verdicts stay. */
+function sourceEvidenceWithoutAudits(source: NonNullable<Experiment['sourceEvidence']>) {
+  return { ...source, trials: source.trials.map(({ judgeAudit: _audit, ...trial }) => trial) };
+}
 function trialHTML(record: Experiment, trial: Trial, findings: HumanFinding[]): string {
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
   const failure = isAgentFailure(record, trial);
@@ -86,7 +105,7 @@ ${findings.length ? `<div class="notice">${list(findings.map(humanFindingText))}
 <h3>Пройдено по точным проверкам</h3>${trial.checks.length ? list(trial.checks.map(c => `${c.passed ? 'Пройдено' : 'Не пройдено'} · ${c.description}: ${c.evidence}`)) : '<p class="muted">Не заданы. Оценки по рубрикам показаны отдельно.</p>'}
 ${trial.userMode === 'reactive' ? `<h3>Проверки симулятора · эвристики</h3>${trial.simulatorChecks?.length ? `<ul>${trial.simulatorChecks.map(c => `<li>${escape(c.id)} · ${c.passed ? 'Без пометки' : 'Подозрение'}: ${escape(c.evidence)} ${c.seq === undefined ? '' : `<a href="#${escape(eventId(record, trial, c.seq))}">#${c.seq}</a>`}</li>`).join('')}</ul>` : '<p class="muted">Не применялись: симулятор не отправил реплик после первой.</p>'}` : ''}
 <h3>${escape(modelLabel(record))} по рубрикам · предварительно</h3>${(trial.assessments ?? []).length ? `<ul>${trial.assessments!.map(a => `<li><b>${escape(outcomes[a.result])} · ${escape(scenario?.metrics?.find(m => m.id === a.metricId)?.name ?? a.metricId)}</b>: ${escape(a.rationale)} ${a.evidence.map(seq => trial.events.some(e => e.seq === seq) ? `<a class="event-link" href="#${escape(eventId(record, trial, seq))}">#${seq}</a>` : `<span class="warning">#${seq} отсутствует</span>`).join(' ')}</li>`).join('')}</ul>` : '<p class="muted">Оценок по рубрикам нет.</p>'}
-${trial.judgeAudit ? `<details><summary>Проверка судьи · ${escape(trial.judgeAudit.provider)}/${escape(trial.judgeAudit.model)} · ${trial.judgeAudit.attempts.length} вызовов в свежих сессиях</summary><p>Совпадение повторов не доказывает правильность. Протокол: <code>${escape(trial.judgeAudit.protocolHash)}</code>. Исходные ответы сохранены без исправлений.</p><pre>${escape(JSON.stringify(trial.judgeAudit, null, 2))}</pre></details>` : ''}
+${judgeHTML(record, trial)}
 ${trial.assessmentError ? `<p class="warning">${escape(trial.assessmentError)}</p>` : ''}
 <h3>История вердиктов человека</h3>${reviews.length ? list(reviews.map(r => `${outcomes[r.verdict]} · ${r.metricId ?? r.checkId ?? 'весь диалог'} · ${r.createdAt}: ${r.note}`)) : '<p class="muted">Вердикты не записаны.</p>'}
 <details><summary>Полная трасса и состояния</summary><pre>${escape(JSON.stringify({ trialId: trial.id, revisionId: trial.revisionId, events: trial.events, initialState: trial.initialState, finalState: trial.finalState }, null, 2))}</pre></details>
@@ -133,11 +152,11 @@ function qualityHTML(bundle: EvidenceBundle): { grid: string; why: string; basis
   ];
   const v = bundle.evidence.verdict;
   const strictCard = q.primary === 'goal_attainment' ? `<article class="metric"><h3>Полностью прошли все критерии</h3><strong>${q.strict.passed}<span class="muted"> / ${q.strict.passed + q.strict.failed}</span></strong>${bar(q.strict.accuracy)}<small>${pct(q.strict.accuracy)}${q.strict.goalMetWithOtherFailures ? ` · ${q.strict.goalMetWithOtherFailures} достигли цели, но нарушили другой критерий` : ''}</small></article>` : '';
-  const grid = `<div class="grid"><article class="metric"><h3>${q.primary === 'goal_attainment' ? 'Достижение бизнес-цели' : 'Справился · карточки'}</h3><strong>${q.cards.passed}<span class="muted"> / ${q.cards.passed + q.cards.failed}</span></strong>${bar(q.cards.accuracy)}<small>${pct(q.cards.accuracy)}${q.cards.unknown ? ` · ${q.cards.unknown} без решения` : ''} · ${dlg(q.scope.dialogues)}${v.execution.invalid ? ` · ${v.execution.invalid} не измерено` : ''}</small></article>
+  const grid = `<div class="grid"><article class="metric"><h3>${escape(q.cardsLabel)}</h3><strong>${q.cards.passed}<span class="muted"> / ${q.cards.passed + q.cards.failed}</span></strong>${bar(q.cards.accuracy)}<small>${pct(q.cards.accuracy)}${q.cards.unknown ? ` · ${q.cards.unknown} без решения` : ''} · ${dlg(q.scope.dialogues)}${v.execution.invalid ? ` · ${v.execution.invalid} не измерено` : ''}</small></article>
 ${strictCard}
 ${q.metrics.map(metricCard).join('\n')}${placeholders.join('\n')}
 <article class="metric"><h3>Разметить человеку</h3><strong>${q.humanQueue.total}</strong><small>${q.humanQueue.total ? `неясных ${q.humanQueue.unknownJudgments} · расхождений ${q.humanQueue.disagreements} · пометок симулятора ${q.humanQueue.simulatorFlags}` : 'Спорных оценок нет'}<br>Разобрано человеком: ${v.review.reviewed} / ${v.review.total} · только спорные случаи</small></article></div>`;
-  const why = q.causes.length ? `<section id="why"><h2>Почему не справился</h2><ol class="causes">${q.causes.slice(0, 5).map(c => `<li><b>${escape(c.name)}</b> · ${dlg(c.dialogues)}${c.stage ? ` · <span class="tag">${escape(c.stage)}</span>` : ''}<p>${escape(c.description)}</p>${c.example ? `<p class="muted">${record.trials.some(t => t.id === c.example!.trialId) ? `<a href="#${escape(trialId(record, { id: c.example.trialId }))}">${escape(c.example.card)}</a>` : escape(c.example.card)}: «${escape(c.example.quote)}»${c.example.seq === undefined ? '' : ` · реплика #${c.example.seq}`}</p>` : ''}${c.promptQuotes.map(quote => `<p class="muted">Правило промпта: «${escape(quote)}»</p>`).join('')}</li>`).join('')}</ol>${q.causes.length > 5 ? `<p class="muted">Ещё ${q.causes.length - 5} причин ниже, в диалогах.</p>` : ''}</section>` : '';
+  const why = q.causes.length ? `<section id="why"><h2>Почему не справился</h2><ol class="causes">${q.causes.slice(0, 5).map(c => `<li><b>${escape(c.name)}</b> · ${dlg(c.dialogues)}${c.stage ? ` · <span class="tag">${escape(c.stage)}</span>` : ''}<p>${escape(c.description)}</p>${c.example ? `<p class="muted">${record.trials.some(t => t.id === c.example!.trialId) ? `<a href="#${escape(trialId(record, { id: c.example.trialId }))}">${escape(c.example.card)}</a>` : escape(c.example.card)}: ${c.example.verified ? `«${escape(c.example.quote)}»` : escape(c.example.quote)}${c.example.seq === undefined ? '' : ` · реплика #${c.example.seq}`}</p>` : ''}${c.promptQuotes.map(quote => `<p class="muted">Правило промпта: «${escape(quote)}»</p>`).join('')}</li>`).join('')}</ol>${q.causes.length > 5 ? `<p class="muted">Ещё ${q.causes.length - 5} причин ниже, в диалогах.</p>` : ''}</section>` : '';
   const basis = measured ? `<p class="basis">${escape(text.judge)} ${escape(text.queue)}<br>${escape(text.scope)}<br>${escape(text.limits)} Подробности — в разделе «Границы результата».</p>` : '';
   const lead = measured ? `<p class="lead">${escape(q.headline)}</p>${text.coverage ? `<p class="warning">${escape(text.coverage)}</p>` : ''}<p class="muted">${escape(v.headline)}</p>` : `<p class="lead">${escape(v.headline)}</p>`;
   const rag = measured && text.rag.length ? `<section id="rag"><h2>RAG: что видно по контексту</h2><p>${escape(text.rag[0])}</p>${q.rag.signals.map(signal => `<p><a href="#${escape(trialId(record, { id: signal.trialId }))}">${escape(signal.trialId)}</a>: ${escape(signal.explanation)}</p>`).join('')}</section>` : '';
@@ -189,14 +208,36 @@ ${before && comparedBefore.length ? `<section id="before-dialogues"><h2>Диал
 <section id="cards"><h2>Карточки и критерии</h2><p class="muted">${record.reviewedAt ? 'Версия, использованная в прогоне.' : 'Черновик · карточки ещё не утверждены.'}</p>${visibleScenarios(record).map(s => `<details><summary>${escape(s.title)} <span class="tag">${escape({ synthetic: 'Синтетика', curated: 'Golden', production: 'Реальный диалог' }[s.provenance])}</span></summary><p>${escape(s.user.persona ?? 'Без персоны · по цели, фактам и поведению')}${s.profileId ? ` · профиль ${escape(s.profileId)}` : ''}</p>${list(s.user.characteristics ?? [])}${list([`Цель: ${s.user.goal}`, `Знает: ${s.user.facts}`, ...(s.user.knows ?? []).map(v => `Известно: ${v}`), ...(s.user.cannotKnow ?? []).map(v => `Не знает: ${v}`), ...(s.user.answers ?? []).map(a => `Если спросят ${a.ifAsked}: «${a.reply}»`), ...(s.initialState.external ? [`Внешний мир: ${JSON.stringify(s.initialState.external)}`] : []), `Поведение: ${s.user.behavior}`, `Первая реплика: ${s.user.opening}`, ...(s.user.script ?? []).map((message, i) => `Продолжение ${i + 1}: ${message}`), `Успех: ${s.successCriteria ?? 'По проверкам ниже'}`])}<h3>Правило и источник</h3>${s.requirementIds.map(id => record.requirements.find(r => r.id === id)).filter(r => !!r).map(r => `<blockquote>${escape(r!.quote)}<br><small>${escape(record.sources.find(source => source.id === r!.sourceId)?.name ?? r!.sourceId)} · ${escape(r!.id)}</small></blockquote>`).join('')}<h3>Проверки и рубрики</h3>${list([...s.checks.map(c => `Код: ${c.description}. Проверяется: ${describeCheck(c)}`), ...(s.metrics ?? []).map(m => `${m.subject === 'simulator' ? 'Симулятор' : 'Агент'} · ${m.name}. Прошёл: ${m.passCriteria} Не прошёл: ${m.failCriteria}`)])}${s.assumptions?.length ? `<h3>Допущения</h3>${list(s.assumptions)}` : ''}</details>`).join('')}
 ${record.profiles.length ? `<h3>Исходные профили и правки</h3>${record.profiles.map(p => `<details><summary>${escape(p.id)} · ${p.source === 'owner' ? 'Задан владельцем' : 'Выведен из логов'}${p.draftOverride ? ' · Правка черновика' : ''}</summary><p>${escape(p.persona ?? 'Без персоны')}</p>${list(p.characteristics)}${p.observedStyle ? `<p>${escape(p.observedStyle)}</p>` : ''}<p class="muted">Диалоги: ${escape(p.evidenceDialogueIds.join(', ') || 'не использовались')}</p>${p.draftOverride ? `<h3>Используется после правки</h3>${list([...(p.draftOverride.persona !== undefined ? [`Персона: ${p.draftOverride.persona ?? 'убрана'}`] : []), ...(p.draftOverride.characteristics !== undefined ? [`Характеристики: ${p.draftOverride.characteristics.join('; ') || 'убраны'}`] : [])])}` : ''}</details>`).join('')}` : ''}</section>
 <section id="limits"><details class="limits"><summary>Условия и границы результата · ${limits.length}</summary>${list(limits)}</details></section>
-<section><h2>Идентичность и источник доказательств</h2>${list(metadata(record))}${record.releaseLog ? `<details><summary>Выпуск версии</summary><pre>${escape(JSON.stringify(record.releaseLog, null, 2))}</pre></details>` : ''}${record.sourceEvidence ? `<details><summary>Исходные диалоги и вердикты · ${escape(record.sourceEvidence.runId)}</summary><pre>${escape(JSON.stringify(record.sourceEvidence, null, 2))}</pre></details>` : ''}</section>
-<footer><p>Локальный автономный отчёт · полные данные и сравнение доступны в JSON-снимке. ${escape(record.id)}</p></footer></main><script>${navigationScript}</script></body></html>`;
+<section><h2>Идентичность и источник доказательств</h2>${list(metadata(record))}${record.releaseLog ? `<details><summary>Выпуск версии</summary><pre>${escape(JSON.stringify(record.releaseLog, null, 2))}</pre></details>` : ''}${record.sourceEvidence ? `<details><summary>Исходные диалоги и вердикты · ${escape(record.sourceEvidence.runId)}</summary><pre>${escape(JSON.stringify(sourceEvidenceWithoutAudits(record.sourceEvidence), null, 2))}</pre></details>` : ''}</section>
+<footer><p>Локальный автономный отчёт · JSON-снимок содержит запись прогона и сравнение без полных ответов судьи; полные ответы судьи и журнал трасс остаются только в локальной папке Agent Lab рядом с записью прогона. ${escape(record.id)}</p></footer></main><script>${navigationScript}</script></body></html>`;
 }
 
-/** Preserve the CLI's `experiment` field while exporting the full shared snapshot. */
+/** A run for export: legacy full judge audits are left out, receipts and verdicts stay. */
+function runWithoutAudits(run: Experiment): Experiment {
+  return { ...run, trials: run.trials.map(({ judgeAudit: _audit, ...trial }) => trial),
+    ...(run.sourceEvidence ? { sourceEvidence: sourceEvidenceWithoutAudits(run.sourceEvidence) } : {}) };
+}
+
+/**
+ * Preserve the CLI's `experiment` field while exporting the shared snapshot.
+ * The trace journal and full judge audits stay next to the record; the export only names them.
+ */
 export function jsonReport(bundle: EvidenceBundle): string {
-  const { record, ...evidence } = bundle;
-  return JSON.stringify({ experiment: record, ...evidence }, null, 2);
+  const { record, traceJournal, before, ...evidence } = bundle;
+  // Counted over exactly what runWithoutAudits strips: each run's trials and its embedded source trials.
+  const legacyAudits = [record, ...(before ? [before] : [])].reduce((n, run) => n
+    + [...run.trials, ...run.sourceEvidence?.trials ?? []].filter(trial => trial.judgeAudit).length, 0);
+  return JSON.stringify({ experiment: runWithoutAudits(record), ...(before ? { before: runWithoutAudits(before) } : {}), ...evidence,
+    traceJournal: { file: `${record.id}.trace.jsonl`, bytes: Buffer.byteLength(traceJournal) },
+    judgeAudits: { included: false, omittedLegacyAudits: legacyAudits,
+      location: `Полные ответы судьи остаются в локальной папке Agent Lab: ${record.id}.judge/<trialId>.json или, для старых записей, в ${record.id}.json.` } }, null, 2);
+}
+
+function judgeLines(record: Experiment, trial: Trial): string[] {
+  const judge = judgeSummary(trial);
+  if (!judge) return [];
+  const raw = judge.legacy ? `Исходные ответы — в записи прогона ${md(`${record.id}.json`)} в локальной папке Agent Lab; в экспорт они не входят.` : `Полный ответ судьи — в файле ${md(judgeFile(record, trial))} рядом с записью прогона.`;
+  return [`- Судья: ${md(judge.provider)}/${md(judge.model)}, ${judge.calls} вызовов в свежих сессиях. Протокол: ${md(judge.protocolHash)}. ${raw}`];
 }
 
 export function markdownReport(bundle: EvidenceBundle): string {
@@ -206,13 +247,13 @@ export function markdownReport(bundle: EvidenceBundle): string {
   const rows = [
     `# Agent Lab · ${md(title(record))}`, '',
     '## Итог', '', ...(bundle.quality.scope.dialogues ? [md(bundle.quality.headline), '', ...(qualityLines(bundle.quality).coverage ? [md(qualityLines(bundle.quality).coverage), ''] : []), md(v.headline), '', ...qualityLines(bundle.quality).metrics.map(m => `- ${md(m)}`), ''] : [md(v.headline), '']),
-    ...(bundle.quality.causes.length ? ['### Почему не справился', '', ...bundle.quality.causes.slice(0, 5).map((c, i) => `${i + 1}. **${md(c.name)}** · ${dlg(c.dialogues)}${c.stage ? ` · ${md(c.stage)}` : ''}. ${md(c.description)}${c.example ? ` Пример — ${md(c.example.card)}: «${md(c.example.quote)}»` : ''}${c.promptQuotes.map(q => ` Правило промпта: «${md(q)}»`).join('')}`), ''] : []),
+    ...(bundle.quality.causes.length ? ['### Почему не справился', '', ...bundle.quality.causes.slice(0, 5).map((c, i) => `${i + 1}. **${md(c.name)}** · ${dlg(c.dialogues)}${c.stage ? ` · ${md(c.stage)}` : ''}. ${md(c.description)}${c.example ? ` Пример — ${md(c.example.card)}: ${c.example.verified ? `«${md(c.example.quote)}»` : md(c.example.quote)}` : ''}${c.promptQuotes.map(q => ` Правило промпта: «${md(q)}»`).join('')}`), ''] : []),
     ...(bundle.quality.scope.dialogues ? [...(qualityLines(bundle.quality).rag.length ? ['### RAG-контекст', '', ...qualityLines(bundle.quality).rag.map(md), ''] : []), md(qualityLines(bundle.quality).judge), md(qualityLines(bundle.quality).queue), '', md(qualityLines(bundle.quality).scope), md(qualityLines(bundle.quality).limits), ''] : []),
     `Выполнено: ${v.execution.completed}/${v.execution.planned}. Не измерено: ${v.execution.invalid}. Остановлено: ${v.execution.cancelled}. Не выполнено: ${v.execution.missing}.`,
     `Кодовые проверки: ${v.graded ? `${v.passed}/${v.graded} диалогов` : observedRecord(record).scenarios.some(s => s.checks.length) ? 'заданы, измерений нет' : 'не заданы'}. ${modelLabel(record)} по рубрикам: ${v.rubric.passed}/${v.rubric.assessed}; неясно ${v.rubric.unknown}.`,
     `Вердикт на весь диалог: ${v.review.reviewed}/${v.review.total}. Пройдено ${v.review.passed}, не пройдено ${v.review.failed}. Автоматических провалов без решения: ${v.review.pending}. ${reviewWord(bundle)}.`,
     `Карточки: синтетических ${v.provenance.synthetic.cards}, golden ${v.provenance.curated.cards}, из продакшна ${v.provenance.production.cards}.`, '',
-    `Проверка карточек: ${record.reviewMode === 'human' ? 'человеком' : record.reviewMode === 'automated' ? 'автоматическая' : 'ожидается'}.`,
+    `Проверка карточек: ${record.reviewMode === 'human' ? 'человеком' : record.reviewMode === 'expectations' ? 'ожидания подтверждены владельцем' : record.reviewMode === 'automated' ? 'автоматическая' : 'ожидается'}.`,
     `Испытуемый: ${md(target(record))}. Версия: ${md(version(record))}. Прогон: ${md(record.id)}.`, '',
     ...metadata(record).map(md), '',
     ...bundle.warnings.map(w => `- ${md(w)}`), '',
@@ -241,7 +282,7 @@ export function markdownReport(bundle: EvidenceBundle): string {
       `Результат кодовых проверок: ${t.outcome === 'ungraded' ? 'нет' : outcomes[t.outcome]}. ${md(t.reason)}`, '',
       ...t.events.flatMap(event => [`**#${event.seq} · ${eventLabel(event)}${event.tool ? ` · ${md(event.tool)}` : ''}**`, '', quote(eventText(event)), '']),
       ...originalChecks(record, t).map(c => `- ${md(c)}`),
-      ...(t.judgeAudit ? [`- Судья: ${md(t.judgeAudit.provider)}/${md(t.judgeAudit.model)}, ${t.judgeAudit.attempts.length} вызовов в свежих сессиях. Протокол: ${md(t.judgeAudit.protocolHash)}. Исходные ответы — в JSON-экспорте.`] : []),
+      ...judgeLines(record, t),
       ...(t.assessmentError ? [`- Ошибка оценщика: ${md(t.assessmentError)}`] : []),
       ...record.humanReviews.filter(r => r.trialId === t.id).map(r => `- Человек · ${outcomes[r.verdict]} · ${md(r.metricId ?? r.checkId ?? 'весь диалог')} · ${md(r.createdAt)}: ${md(r.note)}`), '',
     ]),

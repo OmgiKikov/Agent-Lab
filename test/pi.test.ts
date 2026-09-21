@@ -66,7 +66,7 @@ function callContext(options: { timeoutMs?: number; signal?: AbortSignal; limit?
   return { ctx, usage };
 }
 
-async function fixture(reply: (request: Request, index: number, options?: Options) => Reply | Promise<Reply>, roleModel = false) {
+async function fixture(reply: (request: Request, index: number, options?: Options) => Reply | Promise<Reply>, roleModel = false, reasoning = false) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-pi-'));
   const requests: Request[] = [];
   const modelsUsed: string[] = [];
@@ -77,7 +77,7 @@ async function fixture(reply: (request: Request, index: number, options?: Option
   runtime.registerProvider('agent-lab-test', {
     api: 'openai-completions', apiKey: 'fixture-only-not-a-real-key', baseUrl: 'http://127.0.0.1:1',
     models: (roleModel ? ['test-model', 'role-model'] : ['test-model']).map(id => ({
-      id, name: 'Offline SDK fixture', reasoning: false, input: ['text'],
+      id, name: 'Offline SDK fixture', reasoning, input: ['text'],
       cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }, contextWindow: 200000, maxTokens: 16384,
     })),
     streamSimple(model, request, options) {
@@ -1307,4 +1307,251 @@ test('a confirmed reply-only RAG test repairs invented backend and tool checks',
 test('goal extraction for a prompt/RAG validation treats a recorded lookup of the user account as customer data', async () => {
   const { GOALS_ROLE } = await import('../src/prompts.js');
   assert.match(GOALS_ROLE, /recorded agent asked for the user's merchant, point, terminal, contract, request number[^.]*testability=customer_data/);
+});
+
+test('Pi chronological proposals and separate semantic assessment pass every event through real transport', async () => {
+  const { importBatch, createLibrary } = await import('../src/scenario-library.js');
+  const { chronologicalInput } = await import('../src/scenario-preparation.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const batch = importBatch(rawDialogues);
+  const f = await fixture(scripted([{ proposals: proposals(batch.id).slice(1) }, { findings: [] }]));
+  try {
+    assert.equal(typeof f.adapter.scenarioProposals, 'function', 'real Pi exposes chronological extraction');
+    const { ctx, usage } = callContext();
+    const extracted = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка', batchId: batch.id, sources, requirements, dialogues: chronologicalInput(batch) }, ctx);
+    const library = createLibrary({ batch, sources, requirements, proposals: extracted });
+    await f.adapter.assessScenarioProposals!({ protocol: 'chronological-scenarios-v1', library, fields: [] }, ctx);
+    const first = JSON.stringify(f.requests[0]);
+    assert.match(first, /Возврат займёт три дня/);
+    assert.match(first, /assistant/);
+    assert.match(first, /eventIndex/);
+    assert.equal(usage.calls, 2, 'semantic review has its own model budget call');
+    assert.match(JSON.stringify(f.requests[1]), /learned_in_source/);
+  } finally { await f.close(); }
+});
+
+test('real Pi extraction, semantic admission and library store form one chronological preparation path', async () => {
+  const { createInputSchema } = await import('../src/contracts.js');
+  const { libraryHash } = await import('../src/scenario-library.js');
+  const { importDialogues } = await import('../src/imports.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const payloads: any[] = [];
+  const f = await fixture(request => {
+    const message = request.messages.find(message => message.role === 'user')!;
+    const content = message.content;
+    const text = typeof content === 'string' ? content : content.filter(block => block.type === 'text').map(block => block.text).join('');
+    const payload = JSON.parse(text); payloads.push(payload);
+    if (payload.batchId) return JSON.stringify({ proposals: proposals(payload.batchId).filter(p => payload.dialogues.some((d: any) => d.id === p.variant.sourceDialogues[0]!.dialogueId)) });
+    if (payload.library) return JSON.stringify({ findings: payload.fields.flatMap((field: any) => field.paths.map((path: string) => ({ variantId: field.variantId, path, status: 'ready', reason: 'Проверено по всей хронологии и требованиям' }))) });
+    if (payload.user) return JSON.stringify({ done: true, message: '' });
+    return JSON.stringify({ requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [] });
+  });
+  const lab = new ExperimentLab(join(f.directory, 'store'), f.adapter);
+  try {
+    await lab.init();
+    const original = importDialogues(rawDialogues);
+    const seed = await lab.create(createInputSchema.parse({ task: 'Проверка', materials: sources.map(s => ({ name: s.name, content: s.content })),
+      mode: 'live', scenarioCount: 0, validationCount: 1, settings,
+      existingAgent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] },
+      originalImport: original.originalImport, dialogues: original.dialogues.slice(0, 1) }));
+    await lab.waitForIdle();
+    const result = await lab.readLibrary(seed.id);
+    assert.equal(result.experiment.phase, 'review', result.experiment.error ?? '');
+    assert.deepEqual(payloads.find(p => p.dialogues?.[0]?.id === 'repeated').dialogues[0].messages.map((m: any) => m.role), ['user', 'assistant', 'user']);
+    assert.equal(result.library.businessScenarios.length, 1);
+    assert.equal(result.experiment.scenarios.length, 0);
+    const accepted = await lab.acceptLibrary(seed.id, libraryHash(result.library), ['variant_2']);
+    await f.adapter.userTurn({ user: accepted.experiment.scenarios[0]!.user, messages: [], turn: 0 }, callContext().ctx);
+    assert.doesNotMatch(JSON.stringify(payloads.find(p => p.user)), /три дня/);
+    assert.equal((await lab.store.readImport(original.originalImport.id)).dialogues.length, 2);
+  } finally { await lab.close(); await f.close(); }
+});
+
+test('scenario transport rejects malformed world arrays before library compilation and sends repair feedback', async () => {
+  const { importBatch } = await import('../src/scenario-library.js');
+  const { chronologicalInput } = await import('../src/scenario-preparation.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
+  const bad = structuredClone(valid); bad.variant.environmentFixture.initialState.records = [] as any;
+  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
+  try {
+    const { ctx, usage } = callContext();
+    const output = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка возврата', batchId: batch.id,
+      sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, ctx);
+    assert.equal(usage.calls, 2);
+    assert.deepEqual(output[0]!.variant.environmentFixture.initialState.records, {});
+    assert.match(JSON.stringify(f.requests[1]), /initialState.records/);
+    assert.match(f.requests[0]!.systemPrompt!, /5678/);
+    assert.match(f.requests[0]!.systemPrompt!, /not already disclosed/i);
+  } finally { await f.close(); }
+});
+
+test('scenario proposal transport rejects a prose deterministic check and permits semantic checkpoints without one', async () => {
+  const { importBatch } = await import('../src/scenario-library.js');
+  const { chronologicalInput } = await import('../src/scenario-preparation.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
+  delete valid.variant.evaluationSpec.checkpoints[0]!.check;
+  const bad = structuredClone(valid); bad.variant.evaluationSpec.checkpoints[0]!.check = 'Проверить смысл ответа';
+  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
+  try {
+    const { ctx, usage } = callContext();
+    const result = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка возврата', batchId: batch.id,
+      sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, ctx);
+    assert.equal(usage.calls, 2, 'prose check must fail SDK schema admission');
+    assert.equal(result[0]!.variant.evaluationSpec.checkpoints[0]!.check, undefined);
+    assert.match(JSON.stringify(f.requests[1]), /checkpoints.*check/);
+    assert.match(f.requests[0]!.systemPrompt!, /omit.*check.*semantic/i);
+  } finally { await f.close(); }
+});
+
+test('controlled user and checkpoint roles use actual simulator/judge models and isolated compiler payloads', async () => {
+  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { libraryFixture } = await import('./helpers/scenario-library.js');
+  const { createUserState, allowedUserActions } = await import('../src/user-controller.js');
+  const { checkpointInput } = await import('../src/checkpoints.js');
+  const library = libraryFixture();
+  const scenario = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  scenario.execution!.evaluatorView.checkpoints[0]!.rule += ' EVALUATOR_ONLY_MARKER';
+  const f = await fixture((_request, index) => JSON.stringify(index === 0 ? { actionId: 'finish', factIds: [] }
+    : { results: [{ checkpointId: 'ask_terminal', result: 'pass', evidence: [1], rationale: 'Уточнение соответствует правилу' }] }), true);
+  try {
+    const adapter = await createPiRuntime(settingsSchema.parse({ ...settings, roles: { simulator: { provider: settings.provider, model: 'role-model' } }, judge: { provider: settings.provider, model: 'test-model' } }), f.runtime);
+    const state = createUserState(scenario.execution!.userView.policy, scenario.execution!.userView.facts);
+    const { ctx, usage } = callContext();
+    await adapter.selectUserAction!({ user: scenario.execution!.userView, state: state.position, actions: allowedUserActions(state, 'Назовите терминал'), messages: [{ role: 'assistant', content: 'Назовите терминал' }], turn: 0 }, ctx);
+    const trial: Trial = { id: 't', scenarioId: scenario.id, familyId: scenario.familyId, revisionId: 'r', userMode: 'reactive', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1, events: [{ seq: 0, type: 'user', text: 'Возврат' }, { seq: 1, type: 'assistant', text: 'Назовите терминал' }] };
+    await adapter.assessCheckpoints!(checkpointInput(scenario, trial), ctx);
+    assert.deepEqual(f.modelsUsed, ['role-model', 'test-model']);
+    assert.equal(usage.calls, 2);
+    assert.doesNotMatch(JSON.stringify(f.requests[0]), /EVALUATOR_ONLY_MARKER|checkpoints|requirementId|environmentView|backend/);
+    assert.match(JSON.stringify(f.requests[1]), /EVALUATOR_ONLY_MARKER/);
+    assert.deepEqual(f.requests.map(r => r.tools), [[], []]);
+  } finally { await f.close(); }
+});
+
+test('real compiler, Pi transport and evaluator enforce repair, exact disclosure and correct-versus-wrong refusal', async () => {
+  const { evaluateTrial } = await import('../src/evaluation.js');
+  const { headlineTrialResult } = await import('../src/outcomes.js');
+  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { libraryFixture, sources, requirements } = await import('./helpers/scenario-library.js');
+  const { USER_CONTROLLER_ROLE, CHECKPOINT_ROLE, ASSESS_ROLE } = await import('../src/prompts.js');
+  for (const verdict of ['pass', 'fail'] as const) {
+    const library = libraryFixture();
+    library.variants[0]!.behaviorPolicy = { version: 1, initialState: 'ask', states: ['ask', 'answered', 'done'], terminalStates: ['done'], maxFollowUps: 1, repetitionLimit: 1,
+      actions: [{ id: 'number', kind: 'answer', factIds: ['terminal_number'], payload: 'Номер терминала: 1234', ifAsked: 'номер терминала' }, { id: 'finish', kind: 'finish', factIds: [] }],
+      transitions: [{ from: 'ask', to: 'answered', actionId: 'number', when: 'Уточнение номера' }, { from: 'answered', to: 'done', actionId: 'finish', when: 'Получен отказ или инструкция' }] };
+    const s = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+    s.execution!.evaluatorView.checkpoints[0]!.rule += ' EVALUATOR_ONLY_MARKER';
+    let selectorCalls = 0, targetCalls = 0;
+    const f = await fixture(request => {
+      const prompt = request.systemPrompt ?? '';
+      if (prompt.startsWith(USER_CONTROLLER_ROLE)) return JSON.stringify(++selectorCalls === 1 ? { actionId: 'number', factIds: ['hidden'] } : selectorCalls === 2 ? { actionId: 'number', factIds: ['terminal_number'] } : { actionId: 'finish', factIds: [] });
+      if (prompt.startsWith(CHECKPOINT_ROLE)) return JSON.stringify({ results: [{ checkpointId: 'ask_terminal', result: verdict, evidence: [0, 1, 4, 5], rationale: verdict === 'pass' ? 'Корректно объяснён отказ' : 'Отказ противоречит правилу' }] });
+      if (prompt.startsWith(ASSESS_ROLE)) return JSON.stringify({ assessments: [{ metricId: 'library_required', passCondition: 'met', failCondition: 'not_met', rationale: 'Уточнение дано', evidence: [1], citations: [{ seq: 1, quote: 'Назовите номер терминала' }] }] });
+      return ++targetCalls === 1 ? 'Назовите номер терминала' : verdict === 'pass' ? 'Без дополнительных данных возврат невозможен' : 'Возврат запрещён всем';
+    });
+    try {
+      const { ctx, usage } = callContext();
+      const trial = await evaluateTrial({ runtime: f.adapter, scenario: s, revision: { id: 'base', parentId: null, spec: { name: 'Агент', instructions: 'Помогать клиенту', tools: [] }, hypothesis: '', createdAt: '' }, repeat: 0, manifestHash: 'h', sources, requirements, settings: settingsSchema.parse({ ...settings, maxTurns: 2 }), ctx, userMode: 'reactive', target: { kind: 'sandbox' } });
+      assert.deepEqual(trial.events.filter(e => e.type === 'user').map(e => e.text), ['Помогите с возвратом', 'Номер терминала: 1234']);
+      assert.equal(trial.events.filter(e => e.type === 'assistant').length, 2);
+      assert.equal(trial.events.filter(e => e.type === 'simulator' && (e.result as any).accepted === false).length, 1);
+      assert.equal(headlineTrialResult(s, trial), verdict);
+      assert.equal(usage.calls, 8);
+      assert.equal(trial.usage.calls, 8);
+      assert.ok(trial.judgeReceipt?.complete);
+      for (const request of f.requests.filter(r => !(r.systemPrompt ?? '').startsWith(CHECKPOINT_ROLE) && !(r.systemPrompt ?? '').startsWith(ASSESS_ROLE))) assert.doesNotMatch(JSON.stringify(request), /EVALUATOR_ONLY_MARKER/);
+    } finally { await f.close(); }
+  }
+});
+
+test('checkpoint SDK boundary tolerates malformed known diagnostics while required decisions remain strict', async () => {
+  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { libraryFixture } = await import('./helpers/scenario-library.js');
+  const { checkpointInput } = await import('../src/checkpoints.js');
+  const { assessTrial } = await import('../src/evaluation.js');
+  const { headlineTrialResult } = await import('../src/outcomes.js');
+  const library = libraryFixture();
+  const scenario = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  delete scenario.metrics;
+  const required = scenario.execution!.evaluatorView.checkpoints[0]!;
+  required.check = { id: 'literal', kind: 'answer_contains', description: 'Уточнение', value: 'Назовите номер терминала' };
+  scenario.checks = [required.check as any];
+  scenario.execution!.evaluatorView.checkpoints.push({ ...required, id: 'diagnostic', role: 'diagnostic' });
+  const trial: Trial = { id: 't', scenarioId: scenario.id, familyId: scenario.familyId, revisionId: 'r', userMode: 'reactive', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1, events: [{ seq: 0, type: 'user', text: 'Возврат' }, { seq: 1, type: 'assistant', text: 'Назовите номер терминала' }] };
+  const valid = { checkpointId: 'ask_terminal', result: 'pass', evidence: [1], rationale: 'Уточнение есть' };
+  for (const diagnostics of [
+    [{ checkpointId: 'diagnostic', result: 4, evidence: 'wrong', rationale: null }],
+    [{ ...valid, checkpointId: 'diagnostic' }, { ...valid, checkpointId: 'diagnostic' }],
+  ]) {
+    const f = await fixture(() => JSON.stringify({ results: [valid, ...diagnostics] }));
+    try {
+      const { ctx, usage } = callContext();
+      await assessTrial(f.adapter, scenario, [], trial, ctx, []);
+      assert.equal(headlineTrialResult(scenario, trial), 'pass');
+      assert.equal(trial.checkpoints?.find(c => c.checkpointId === 'diagnostic')?.result, 'unknown');
+      assert.equal(usage.calls, 1, 'diagnostic defects must not trigger batch repair or erase required evidence');
+    } finally { await f.close(); }
+  }
+  const invalid = await fixture(() => JSON.stringify({ results: [{ ...valid, result: 4 }] }));
+  try {
+    await assert.rejects(invalid.adapter.assessCheckpoints!(checkpointInput(scenario, trial), callContext().ctx), /не проходит проверку/);
+  } finally { await invalid.close(); }
+});
+
+test('generator production applies separate configuration and retains malformed raw transport responses', async () => {
+  const {evaluateGenerator,loadGeneratorCorpus}=await import('../src/generator-evaluation.js');
+  let temperature: number | undefined;
+  const f=await fixture((_request,index,options)=>{temperature=options?.temperature;return index===0?'BROKEN_GENERATOR_JSON':JSON.stringify({proposals:[]});});
+  try {
+    const corpus=await loadGeneratorCorpus();corpus.cases=corpus.cases.slice(0,1);
+    const config={instructions:'GENERATOR_CONFIG_ONLY_SENTINEL',temperature:0.2};
+    const report=await evaluateGenerator(corpus,{config,transport:'deterministic-test',generate:(input,config,ctx)=>f.adapter.generateScenarioCase!({input,config},ctx)},false,callContext().ctx);
+    assert.match(f.requests[0]!.systemPrompt??'',/GENERATOR_CONFIG_ONLY_SENTINEL/);
+    assert.equal(temperature,0.2);assert.equal(report.cases[0]!.unknown,true);
+    assert.ok(report.cases[0]!.rawResponses?.some(r=>r.text==='BROKEN_GENERATOR_JSON'),'Malformed raw proposal response must survive for audit');
+  } finally {await f.close();}
+});
+
+test('reasoning generator records unsupported temperature as provider default and omits it from transport',async()=>{
+ const {evaluateGenerator,loadGeneratorCorpus}=await import('../src/generator-evaluation.js');let optionsSeen:any;
+ const f=await fixture((_request,_index,options)=>{optionsSeen=options;return JSON.stringify({proposals:[]});},false,true);
+ try{const corpus=await loadGeneratorCorpus();corpus.cases=corpus.cases.slice(0,1);const config={instructions:'Настройки только генератора',temperature:0};
+ const report=await evaluateGenerator(corpus,{config,transport:'deterministic-test',generate:(input,config,ctx)=>f.adapter.generateScenarioCase!({input,config},ctx)},false,callContext().ctx);
+ assert.equal(optionsSeen.temperature,undefined);assert.equal(report.cases[0].transports[0].requestedTemperature,0);assert.equal(report.cases[0].transports[0].effectiveTemperature,'provider-default');
+ }finally{await f.close();}
+});
+
+test('scenario proposal transport separates no-log owner requirements from real import identity before a model call', async () => {
+  const f = await fixture(() => JSON.stringify({ proposals: [] }));
+  try {
+    const base = { protocol: 'chronological-scenarios-v1' as const, task: 'Проверка', sources: [], requirements: [], dialogues: [] };
+    const { ctx } = callContext();
+    await assert.rejects(f.adapter.scenarioProposals!(base, ctx), /batchId|импорт/);
+    await assert.rejects(f.adapter.scenarioProposals!({ ...base, preparationMode: 'owner_requirements', batchId: 'imaginary' }, ctx), /лог|импорт/);
+    assert.equal(f.requests.length, 0);
+    assert.deepEqual(await f.adapter.scenarioProposals!({ ...base, preparationMode: 'owner_requirements' }, ctx), []);
+    assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});
+
+test('Pi semantic transport receives authenticated owner authority beside unchanged source chronology', async () => {
+  const { libraryFixture } = await import('./helpers/scenario-library.js');
+  const { editLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { planSemanticWork } = await import('../src/scenario-work.js');
+  const source = libraryFixture();
+  const edited = editLibrary(source, libraryHash(source), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number', statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'owner_transport', reason: 'Личные данные известны заранее' });
+  const job = planSemanticWork(edited).jobs.find(j => j.input.scope === 'fields' && j.input.fields[0]!.variantId === 'variant_1')!;
+  const expected = job.input.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready', reason: 'Тест передачи контекста, не модельная оценка' })));
+  const f = await fixture(scripted([{ findings: expected }]));
+  try {
+    await f.adapter.assessScenarioProposals!(job.input, callContext().ctx);
+    const request = JSON.stringify(f.requests[0]);
+    assert.match(request, /ownerFactEvidence/);
+    assert.match(request, /verified/);
+    assert.match(request, /owner_transport/);
+    assert.match(request, /1234/, 'old chronology is retained independently of edited 4321');
+    assert.match(request, /4321/);
+  } finally { await f.close(); }
 });

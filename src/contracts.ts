@@ -1,5 +1,25 @@
+import { generatorConfigSchema } from './generator-corpus.js';
+import type { GeneratedCaseAssessment } from './generator-production.js';
+import type { GeneratorCaseInput, GeneratorConfig } from './generator-corpus.js';
+import type { GeneratorAdapter } from './generator-evaluation.js';
+import { diagnosticCapabilitiesSchema, diagnosticReceiptSchema, type DiagnosticRequest, type DiagnosticReceipt } from './diagnostic-contracts.js';
+import type { CheckpointInput } from './checkpoints.js';
+import { userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
+import { checkpointSchema } from './scenario-contracts.js';
+import { importBatchSchema, preparationProgressSchema, scenarioLibrarySchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal, type SemanticFinding, type PreparationProgress } from './scenario-contracts.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+
+export const checkpointDecisionSchema = z.strictObject({
+  checkpointId: z.string().min(1).max(80), result: z.enum(['pass', 'fail', 'unknown', 'not_applicable']),
+  evidence: z.array(z.number().int().nonnegative()).max(30), rationale: z.string().trim().min(1).max(2000),
+});
+export const checkpointResultSchema = checkpointDecisionSchema.extend({ requirementId: z.string(), role: z.enum(['required', 'diagnostic']), observation: z.enum(['reply', 'tool', 'state']), contextEvidence: z.array(z.number().int().nonnegative()).max(30).optional() });
+export type CheckpointDecision = z.infer<typeof checkpointDecisionSchema>;
+export type CheckpointResult = z.infer<typeof checkpointResultSchema>;
+export const checkpointRawDecisionsSchema = z.array(z.json()).max(48).refine(values => JSON.stringify(values).length <= 128000, 'Checkpoint response exceeds 128000 characters');
+export const checkpointReceiptSchema = z.strictObject({ protocolHash: z.string(), inputHash: z.string(), resultHash: z.string(), decisionHash: z.string(), decisions: checkpointRawDecisionsSchema });
+
 
 export const VERSION = '6';
 export const DEFAULT_JUDGE = { provider: 'openrouter', model: 'openai/gpt-5.6-sol', upstream: 'openai' } as const;
@@ -88,20 +108,20 @@ const releaseSchema = z.strictObject({
 export const targetSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('sandbox') }),
   z.strictObject({
-    kind: z.literal('http'), promptFile, url: z.string().url().max(2000),
+    kind: z.literal('http'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, url: z.string().url().max(2000),
     headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/, 'Header values must name environment variables')).default({}),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),
     release: releaseSchema,
   }),
   z.strictObject({
-    kind: z.literal('module'), promptFile, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
+    kind: z.literal('module'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
     exportName: z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{0,99}$/).default('createSession'),
     timeoutMs: z.number().int().min(1000).max(600000).optional(),
     release: releaseSchema,
   }),
   /** A local process (for example `python3 agent.py`) speaking one JSON request/reply per line over stdin/stdout. */
   z.strictObject({
-    kind: z.literal('command'), promptFile, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
+    kind: z.literal('command'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
     cwd: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required').optional(),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),
     release: releaseSchema,
@@ -248,6 +268,21 @@ export const judgeAuditSchema = z.strictObject({
   notApplicable: z.array(identifier),
 });
 export type JudgeAudit = z.infer<typeof judgeAuditSchema>;
+/**
+ * The small trace a judgment leaves on the trial when the full audit lives in the sidecar
+ * `{runId}.judge/{trialId}.json`. It alone never proves a judgment: the verifier re-derives the
+ * input hash from the record and re-aggregates these votes against the recorded assessments.
+ */
+export const judgeReceiptSchema = z.strictObject({
+  protocolHash: text, inputHash: text, provider: text, model: text,
+  configurationHash: text.optional(),
+  transport: z.strictObject({ api: text, upstream: text.optional(), structured: z.boolean() }).optional(),
+  auditHash: text,
+  votes: z.array(z.strictObject({ metricId: identifier, result: z.enum(['pass', 'fail', 'unknown']).optional(), error: z.boolean().optional() })).max(48),
+  notApplicable: z.array(identifier),
+  complete: z.boolean(),
+});
+export type JudgeReceipt = z.infer<typeof judgeReceiptSchema>;
 export const userSchema = z.strictObject({
   goal: text.max(3000), facts: text.max(5000), behavior: text.max(2000), opening: text.max(3000),
   maxFollowUps: z.number().int().min(0).max(15).optional(),
@@ -271,6 +306,14 @@ export const tierSchema = z.enum(['smoke', 'regression', 'frontier']);
 export type Tier = z.infer<typeof tierSchema>;
 export const goalObservationSchema = z.enum(['reply', 'tool', 'state']);
 export type GoalObservation = z.infer<typeof goalObservationSchema>;
+/** The evidence channel an external agent is judged on when the owner did not pick one. */
+export const DEFAULT_GOAL_OBSERVATION: GoalObservation = 'reply';
+export const executionSchema = z.strictObject({
+  protocol: z.literal('controlled-user-v1'), checkpointContext:z.literal('observed-tools-v1').optional(), checkpointProtocol: z.literal('checkpoints-v1'), controllerHash: text, checkpointHash: text,
+  userView: userViewSchema,
+  environmentView: z.strictObject({ mode: z.enum(['prompt', 'managed']), contract: z.strictObject({ operations: z.array(z.string()), reset: z.boolean(), observations: z.array(z.enum(['reply', 'tool', 'state'])), confirmed: z.boolean() }).optional() }),
+  evaluatorView: z.strictObject({ checkpoints: z.array(checkpointSchema).max(12), requirements: z.array(requirementSchema).max(80) }),
+});
 export const scenarioSchema = z.strictObject({
   id: identifier, familyId: identifier, title: text.max(200),
   requirementIds: z.array(identifier).max(20),
@@ -278,6 +321,7 @@ export const scenarioSchema = z.strictObject({
   tier: tierSchema.default('regression'),
   profileId: identifier.optional(),
   user: userSchema, initialState: worldSchema,
+  execution: executionSchema.optional(),
   checks: z.array(checkSchema).max(12),
   /** Owner-selected evidence channel. Optional only for legacy/production records. */
   goalObservation: goalObservationSchema.optional(),
@@ -428,7 +472,7 @@ export function dialogueToScenario(dialogue: Dialogue, criteria: { goal: string;
         : 'Полный длинный диалог хранится как неизменяемое доказательство; отдельный тест строится после принятия гипотезы.',
       opening, maxFollowUps: replayable ? script.length : 0, ...(replayable ? { script } : {}),
     },
-    initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], goalObservation: criteria.goalObservation ?? 'reply',
+    initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], goalObservation: criteria.goalObservation ?? DEFAULT_GOAL_OBSERVATION,
     ...(criteria.successCriteria ? { successCriteria: criteria.successCriteria } : {}),
     assumptions: [`Recorded dialogue ${dialogue.id}; no target or simulator execution and no observed external state.`],
     metrics: [{ ...goalAttainment }, { ...replyQuality }],
@@ -463,7 +507,9 @@ export function validationScenario(dialogue: Dialogue, goal: ObservedGoal): Omit
 }
 
 export const createInputSchema = z.strictObject({
+  generatorConfig: generatorConfigSchema.optional(),
   task: text.max(8000),
+  originalImport: importBatchSchema.optional(),
   /** Owner-confirmed hypothesis that requests the strict one-test preparation path. */
   confirmedHypothesis: text.max(3000).optional(),
   goalObservation: goalObservationSchema.optional(),
@@ -484,18 +530,19 @@ export const createInputSchema = z.strictObject({
   notes: z.string().trim().max(8000).default(''),
   profiles: z.array(ownerProfileSchema).max(6).default([]),
 }).superRefine((v, ctx) => {
+  if(v.generatorConfig && v.confirmedHypothesis)ctx.addIssue({code:'custom',message:'Настройка генератора применяется только при подготовке новой библиотеки.',path:['generatorConfig']});
   if (v.materials.reduce((n, m) => n + m.content.length, 0) > 300000) ctx.addIssue({ code: 'custom', message: 'Materials exceed 300,000 characters', path: ['materials'] });
   if (v.dialogues.reduce((n, d) => n + d.messages.reduce((m, x) => m + x.content.length, 0), 0) > 2000000) ctx.addIssue({ code: 'custom', message: 'Dialogues exceed 2,000,000 characters', path: ['dialogues'] });
   if (!unique(v.dialogues.map(d => d.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate dialogue IDs', path: ['dialogues'] });
   if (!unique(v.goldenCases.map(g => g.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate golden case IDs', path: ['goldenCases'] });
-  if (v.scenarioCount === 0 && !v.goldenCases.length && !v.dialogues.length) {
+  if (v.scenarioCount === 0 && !v.goldenCases.length && !v.dialogues.length && !v.originalImport?.dialogues.length) {
     ctx.addIssue({ code: 'custom', message: 'scenarioCount 0 needs golden cases or production dialogues to have anything to run', path: ['scenarioCount'] });
   }
   if (!unique(v.profiles.map(p => p.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate profile IDs', path: ['profiles'] });
   if (v.confirmedHypothesis && (v.workflow !== 'evaluate' || v.scenarioCount !== 1 || v.goldenCases.length)) {
     ctx.addIssue({ code: 'custom', message: 'A confirmed hypothesis builds exactly one generated evaluate test without golden cases', path: ['confirmedHypothesis'] });
   }
-  if (v.validationCount && (v.workflow !== 'evaluate' || v.scenarioCount !== 0 || !v.dialogues.length)) {
+  if (v.validationCount && (v.workflow !== 'evaluate' || v.scenarioCount !== 0 || !v.dialogues.length && !v.originalImport?.dialogues.length)) {
     ctx.addIssue({ code: 'custom', message: 'validationCount needs evaluate, scenarioCount 0 and real dialogues', path: ['validationCount'] });
   }
   if (v.confirmedHypothesis && !v.goalObservation) {
@@ -534,7 +581,7 @@ export type Outcome = 'pass' | 'fail' | 'ungraded' | 'invalid' | 'cancelled';
 export interface Usage { calls: number; inputTokens: number; outputTokens: number; costUsd: number | null }
 export const emptyUsage = (): Usage => ({ calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 });
 export interface TraceEvent {
-  seq: number; type: 'user' | 'assistant' | 'simulator' | 'retrieval' | 'tool_call' | 'tool_result' | 'error';
+  seq: number; type: 'user' | 'assistant' | 'simulator' | 'observation' | 'retrieval' | 'tool_call' | 'tool_result' | 'error';
   text?: string; tool?: string; args?: unknown; result?: unknown; state?: World;
 }
 export const assessmentEventContent = (event: TraceEvent): string =>
@@ -547,11 +594,13 @@ export type SimulatorCheckId = typeof SIMULATOR_CHECK_IDS[number];
 /** A code predicate over the simulated user's own replies. Never an agent grade; never shown to the judge. */
 export interface SimulatorCheck { id: SimulatorCheckId; description: string; passed: boolean; evidence: string; seq?: number; heuristic: boolean }
 export interface Trial {
+  diagnosticReceipt?: DiagnosticReceipt;
   id: string; revisionId: string; scenarioId: string; familyId: string; repeat: number; userMode: UserMode;
   split: 'dev' | 'control'; manifestHash: string; outcome: Outcome; reason: string;
+  checkpoints?: CheckpointResult[]; checkpointReceipt?: z.infer<typeof checkpointReceiptSchema>;
   checks: CheckResult[]; simulatorChecks?: SimulatorCheck[]; events: TraceEvent[]; initialState: World; finalState: World;
   usage: Usage; elapsedMs: number;
-  assessments?: MetricAssessment[]; assessmentError?: string; judgeAudit?: JudgeAudit;
+  assessments?: MetricAssessment[]; assessmentError?: string; judgeAudit?: JudgeAudit; judgeReceipt?: JudgeReceipt;
   observation?: { state: 'sandbox' | 'reported' | 'missing'; tools: 'sandbox' | 'complete' | 'partial'; resetConfirmed?: boolean; version?: string; toolScope?: string[] };
   externalUsage?: Usage;
 }
@@ -623,15 +672,27 @@ export interface Comparison {
   verdict: 'improved' | 'regressed' | 'no_change' | 'insufficient' | 'incomparable';
   reasons: string[]; cases: { scenarioId: string; baselinePasses: number; candidatePasses: number; repeats: number }[];
 }
+/** The judgment a human verdict refers to: the judge protocol and the exact input it was asked about. */
+export const judgeSnapshotSchema = z.strictObject({ protocolHash: text, inputHash: text });
+export type JudgeSnapshot = z.infer<typeof judgeSnapshotSchema>;
 export const humanReviewInputSchema = z.strictObject({
   trialId: identifier, metricId: identifier.optional(), checkId: identifier.optional(),
   verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000), reviewedDialogue: z.literal(true).optional(),
   durationMs: z.number().int().nonnegative().max(3600000).optional(),
+  /** A one-key agreement mark on a metric that decided the situation (outcomes.ts markTargets). */
+  source: z.literal('quick').optional(),
+  /** The recorded judge result the person saw; filled and checked by the lab, never trusted from a caller. */
+  judgeVerdict: z.enum(['pass', 'fail', 'unknown']).optional(),
+  /** The judgment the person agreed or disagreed with; absent when the trial has neither receipt nor audit (demo). */
+  judge: judgeSnapshotSchema.optional(),
+  /** The counting rule a quick mark was given under (COUNTING_RULES); filled by the lab, never trusted from a caller. */
+  countingRules: text.optional(),
 }).refine(v => !(v.metricId && v.checkId), 'Review either one metric, one check, or the whole trial')
-  .refine(v => !v.reviewedDialogue || (!v.metricId && !v.checkId), 'Only a whole-dialogue verdict can mark a complete review');
+  .refine(v => !v.reviewedDialogue || (!v.metricId && !v.checkId), 'Only a whole-dialogue verdict can mark a complete review')
+  .refine(v => v.source !== 'quick' || (!!v.metricId && v.verdict !== 'invalid'), 'Быстрая отметка ставится на одну оценку судьи.');
 export type HumanReviewInput = z.infer<typeof humanReviewInputSchema>;
 export type HumanReview = HumanReviewInput & { id: string; createdAt: string };
-const humanReviewSchema = humanReviewInputSchema.safeExtend({ id: identifier, createdAt: text });
+export const humanReviewSchema = humanReviewInputSchema.safeExtend({ id: identifier, createdAt: text });
 export const draftPatchSchema = z.strictObject({
   /** Full cards to update or add by id. Omitted cards are always preserved. */
   scenarios: z.array(scenarioSchema.extend({ split: z.enum(['dev', 'control']).optional() })).min(1).max(40)
@@ -677,6 +738,8 @@ export interface DiscoveryPlan extends Omit<DiscoveryCallPlan, 'batches' | 'lega
 }
 export const discoveryDeepResultSchema = z.strictObject({
   dialogueId: identifier, role: z.enum(['representative', 'control']),
+  /** Key of this judgment's sidecar `{runId}.judge/{judgeTrialId}.json` and journal entries; absent in older records. */
+  judgeTrialId: identifier.optional(),
   goal: observedGoalSchema.optional(), assessments: z.array(metricAssessmentSchema).max(8).optional(), error: text.max(4000).optional(),
 });
 export const discoveryHypothesisSchema = z.strictObject({
@@ -712,13 +775,40 @@ export type Phase = 'preparing' | 'review' | 'evaluating' | 'results_review' | '
 export interface AcceptedTest {
   testId: string; scenarioId: string; definitionHash: string; acceptedAt: string;
 }
+/**
+ * What the source run was when its evidence was embedded: the agent, the evaluator, the judge and
+ * each card's comparison identity. A run rebuilt from embedded evidence has no other trustworthy
+ * copy of these fields. Absent in records written before it existed.
+ */
+export interface SourceIdentity {
+  libraryHash?: string; importHash?: string;
+  targetFingerprint?: string; targetVersion?: string; evaluatorVersion?: string; manifestHash: string | null;
+  /** Fingerprint of the baseline agent definition (the sandbox agent or the reviewed external spec). */
+  agent: string;
+  /** Fingerprint of the configured judge (provider, model, upstream). */
+  judge: string;
+  /** Scenario id → fingerprint of its normalized comparison identity. */
+  scenarios: Record<string, string>;
+}
 export interface Experiment {
+  generatorConfig?: GeneratorConfig;
+  generatorIdentity?: {configHash:string;protocol:string;protocolHash:string};
+  runKind?: 'evaluation' | 'diagnostic' | 'generator';
+  librarySnapshot?: ScenarioLibrary;
+  originalImport?: { id: string; contentHash: string };
+  preparationProgress?: PreparationProgress;
   schemaVersion: '1'; id: string; task: string; mode: 'demo' | 'live'; workflow: 'evaluate' | 'compare';
   createdAt: string; updatedAt: string; phase: Phase; message: string;
   sources: Source[]; settings: Settings; target: Target; requirements: Requirement[]; questions: string[];
   goldenCases: GoldenCase[]; dialogues: Dialogue[]; profiles: Profile[]; notes: string;
   scenarios: Scenario[]; revisions: Revision[]; selectedRevisionId: string | null;
-  manifestHash: string | null; reviewedAt: string | null; reviewMode: 'human' | 'automated' | null; controlConsumedAt: string | null;
+  manifestHash: string | null; reviewedAt: string | null;
+  /**
+   * Who checked what before the run. `expectations`: the owner confirmed the expectations of the
+   * situations in the run dialog — narrower than `human`, which also means a person reviewed the
+   * card definitions. Neither ever means a person checked the judge's verdicts.
+   */
+  reviewMode: 'human' | 'expectations' | 'automated' | null; controlConsumedAt: string | null;
   acceptedDraftHash?: string;
   /** Portable identity of explicitly accepted scenario definitions. Optional only for legacy in-memory fixtures. */
   acceptedTests?: AcceptedTest[];
@@ -732,12 +822,17 @@ export interface Experiment {
   validationExclusions?: ValidationExclusion[];
   parentRunId?: string;
   selectedScenarioIds?: string[];
+  /** Real situations the agent is known to handle. Shown apart from the headline number and never counted in it. */
+  positiveControlScenarioIds?: string[];
+  /** Situations whose expectation the owner wrote in their own words; they cannot be compared with runs before the change. */
+  ownerExpectationScenarioIds?: string[];
   targetVersion?: string;
   targetFingerprint?: string;
   evaluatorVersion?: string;
   targetRelease?: string;
-  sourceEvidence?: { runId: string; parentRunId?: string; trials: Trial[]; humanReviews: HumanReview[] };
+  sourceEvidence?: { runId: string; parentRunId?: string; trials: Trial[]; humanReviews: HumanReview[]; identity?: SourceIdentity };
   clarifications?: { question: string; answer: string }[];
+  executionRunId?: string;
   assessmentOf?: string;
   assessmentTrialIds?: string[];
   evidenceHash?: string;
@@ -746,17 +841,20 @@ export interface Experiment {
 export const usageSchema = z.strictObject({ calls: z.number().int().nonnegative(), inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), costUsd: z.number().finite().nonnegative().nullable() });
 const revisionSchema = z.strictObject({ id: text, parentId: text.nullable(), spec: agentSchema, hypothesis: z.string(), createdAt: text });
 export const trialSchema = z.strictObject({
+  diagnosticReceipt: diagnosticReceiptSchema.optional(),
+  checkpoints: z.array(checkpointResultSchema).max(12).optional(), checkpointReceipt: checkpointReceiptSchema.optional(),
   id: identifier, revisionId: text, scenarioId: identifier, familyId: identifier, repeat: z.number().int().nonnegative(),
   userMode: userModeSchema.default('reactive'),
   split: z.enum(['dev', 'control']), manifestHash: text, outcome: z.enum(['pass', 'fail', 'ungraded', 'invalid', 'cancelled']), reason: z.string(),
   checks: z.array(z.strictObject({ id: identifier, description: z.string(), passed: z.boolean(), evidence: z.string() })),
   simulatorChecks: z.array(z.strictObject({ id: z.enum(SIMULATOR_CHECK_IDS), description: z.string(), passed: z.boolean(), evidence: z.string(), seq: z.number().int().nonnegative().optional(), heuristic: z.boolean() })).max(12).optional(),
-  events: z.array(z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'retrieval', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() })),
+  events: z.array(z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'observation', 'retrieval', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() })),
   initialState: worldSchema, finalState: worldSchema, usage: usageSchema, elapsedMs: z.number().finite().nonnegative(),
   assessments: z.array(metricAssessmentSchema).max(12).optional(), assessmentError: z.string().max(4000).optional(),
   observation: z.strictObject({ state: z.enum(['sandbox', 'reported', 'missing']), tools: z.enum(['sandbox', 'complete', 'partial']), resetConfirmed: z.boolean().optional(), version: text.max(200).optional(), toolScope: z.array(z.string().max(200)).max(50).optional() }).optional(),
   externalUsage: usageSchema.optional(),
   judgeAudit: judgeAuditSchema.optional(),
+  judgeReceipt: judgeReceiptSchema.optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),
@@ -813,6 +911,11 @@ function validateReviewReferences(reviews: HumanReview[], trials: Trial[], path:
 }
 
 export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
+  generatorConfig:generatorConfigSchema.optional(),generatorIdentity:z.strictObject({configHash:z.string(),protocol:z.string(),protocolHash:z.string()}).optional(),
+  runKind: z.enum(['evaluation', 'diagnostic', 'generator']).optional(),
+  librarySnapshot: scenarioLibrarySchema.optional(),
+  originalImport: z.strictObject({ id: identifier, contentHash: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
+  preparationProgress: preparationProgressSchema.optional(),
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
   phase: z.enum(['preparing', 'review', 'evaluating', 'results_review', 'baseline', 'improving', 'control', 'complete', 'cancelled', 'error', 'interrupted']), message: z.string(),
@@ -821,7 +924,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   requirements: z.array(requirementSchema), questions: z.array(z.string()), scenarios: z.array(scenarioSchema.extend({ split: z.enum(['dev', 'control']) })),
   goldenCases: z.array(goldenCaseSchema).max(40).default([]), dialogues: z.array(dialogueSchema).max(300).default([]), profiles: z.array(profileSchema).max(12).default([]),
   notes: z.string().max(8000).default(''),
-  revisions: z.array(revisionSchema), selectedRevisionId: text.nullable(), manifestHash: text.nullable(), reviewedAt: text.nullable(), reviewMode: z.enum(['human', 'automated']).nullable().default(null), controlConsumedAt: text.nullable(),
+  revisions: z.array(revisionSchema), selectedRevisionId: text.nullable(), manifestHash: text.nullable(), reviewedAt: text.nullable(), reviewMode: z.enum(['human', 'expectations', 'automated']).nullable().default(null), controlConsumedAt: text.nullable(),
   acceptedDraftHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   acceptedTests: z.array(acceptedTestSchema).max(200)
     .refine(tests => unique(tests.map(test => test.testId)) && unique(tests.map(test => test.scenarioId)), 'Accepted test identities must be unique').default([]),
@@ -831,11 +934,16 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   failureModes: z.array(failureModeSchema).max(30).optional(),
   releaseLog: releaseLogSchema.optional(),
   validationExclusions: z.array(validationExclusionSchema).max(300).optional(),
-  parentRunId: identifier.optional(), selectedScenarioIds: z.array(identifier).min(1).max(200).optional(), targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),
+  parentRunId: identifier.optional(), selectedScenarioIds: z.array(identifier).min(1).max(200).optional(),
+  positiveControlScenarioIds: z.array(identifier).min(1).max(5).refine(unique, 'Duplicate control IDs').optional(),
+  ownerExpectationScenarioIds: z.array(identifier).min(1).max(40).refine(unique, 'Duplicate owner expectation IDs').optional(),
+  targetVersion: text.max(200).optional(), targetFingerprint: text.optional(),
   clarifications: z.array(z.strictObject({ question: text.max(3000), answer: text.max(5000) })).max(100).optional(),
-  assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
+  executionRunId: identifier.optional(), assessmentOf: identifier.optional(), assessmentTrialIds: z.array(identifier).max(3000).optional(), evidenceHash: text.optional(),
   evaluatorVersion: text.optional(), targetRelease: text.max(200).optional(),
-  sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(600), humanReviews: z.array(humanReviewSchema).max(1000) }).optional(),
+  sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(600), humanReviews: z.array(humanReviewSchema).max(1000),
+    identity: z.strictObject({ libraryHash: text.optional(), importHash: text.optional(), targetFingerprint: text.optional(), targetVersion: text.max(200).optional(), evaluatorVersion: text.optional(), manifestHash: text.nullable(),
+      agent: text, judge: text, scenarios: z.record(identifier, text).refine(value => Object.keys(value).length <= 200, 'Too many scenario identities') }).optional() }).optional(),
   discovery: discoveryRecordSchema.optional(),
 }).superRefine((record, ctx) => {
   record.scenarios.forEach((scenario, index) => {
@@ -843,16 +951,28 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
       ctx.addIssue({ code: 'custom', path: ['scenarios', index, 'checks'], message: 'ID объективной проверки зарезервирован для проверки симулятора.' });
     }
   });
+  const scenarioIds = new Set(record.scenarios.map(scenario => scenario.id));
+  record.positiveControlScenarioIds?.forEach((id, index) => {
+    if (!scenarioIds.has(id)) ctx.addIssue({ code: 'custom', path: ['positiveControlScenarioIds', index], message: 'Контрольная ситуация должна быть из этого набора.' });
+  });
+  record.ownerExpectationScenarioIds?.forEach((id, index) => {
+    if (!scenarioIds.has(id)) ctx.addIssue({ code: 'custom', path: ['ownerExpectationScenarioIds', index], message: 'Изменённое ожидание должно относиться к ситуации этого набора.' });
+  });
   validateReviewReferences(record.humanReviews, record.trials, ['humanReviews'], ctx);
   if (record.sourceEvidence) validateReviewReferences(record.sourceEvidence.humanReviews, record.sourceEvidence.trials, ['sourceEvidence', 'humanReviews'], ctx);
 });
 export interface CallContext {
+  onGeneratorTransport?(transport:{role:string;provider:string;model:string;api:string;requestedTemperature?:number;effectiveTemperature:number|'provider-default'}):void;
+  onGeneratorOutput?(response:{role:string;text:string}):void;
+  diagnosticRequest?: DiagnosticRequest;
+  onDiagnosticReceipt?(receipt: DiagnosticReceipt): void;
   signal: AbortSignal; timeoutMs: number;
   beforeCall(): void;
   addUsage(usage: Omit<Usage, 'calls'>): void;
   onTrace?(trialId: string, event: TraceEvent): void;
   onTargetEvent?(event: Omit<TraceEvent, 'seq'>): void;
-  onJudgment?(trialId: string, audit: JudgeAudit): void;
+  /** Called on every audit change; final is true exactly once, after the last vote of this judgment settled. */
+  onJudgment?(trialId: string, audit: JudgeAudit, final?: boolean): void;
 }
 export interface Tool {
   name: ToolName; description: string; parameters: Record<string, unknown>;
@@ -875,7 +995,36 @@ export interface ImproveInput {
   feedback: { scenario: Scenario; trials: Trial[] }[];
 }
 export const proposalSchema = z.strictObject({ agent: agentSchema, hypothesis: text.max(3000) });
+export interface ScenarioProposalsInput {
+  preparationMode?: 'owner_requirements';
+  scenarioCount?: number;
+  generatorConfig?: GeneratorConfig;
+  businessCatalog?: Pick<ScenarioLibrary['businessScenarios'][number], 'key' | 'title' | 'goal' | 'conditions' | 'requirementIds'>[];
+  feedback?: { proposals: ScenarioProposal[]; issues: { code: string; path: string; message: string }[] };
+  protocol: 'chronological-scenarios-v1'; task: string; sources: Source[]; requirements: Requirement[]; batchId?: string;
+  dialogues: { id: string; observation: ImportBatch['dialogues'][number]['observation']; events: ImportBatch['dialogues'][number]['events'];
+    messages: { index: number; role: 'user' | 'assistant' | 'tool' | 'system'; content: string }[] }[];
+}
+export interface ScenarioAssessmentInput {
+  protocol: 'chronological-scenarios-v1'; contentHash: string; scope: 'fields' | 'relations';
+  library: Pick<ScenarioLibrary, 'sources' | 'requirements' | 'businessScenarios' | 'variants'> & {
+    imports: { id: string; dialogues: Pick<ImportBatch['dialogues'][number], 'id' | 'events' | 'observation'>[] }[];
+  };
+  ownerFactEvidence: { variantId: string; factId: string; editId: string; status: 'verified' | 'unverified' }[];
+  fields: { variantId: string; paths: string[] }[];
+  comparisonCandidates: (Omit<ScenarioLibrary['variants'][number], 'quality' | 'issues' | 'ownerDecision'> & {
+    business: Pick<ScenarioLibrary['businessScenarios'][number], 'goal' | 'conditions' | 'requirementIds'>;
+  })[];
+}
 export interface Runtime {
+  generatorTransport?:'pi-model'|'deterministic-test';
+  assessGeneratedCase?(input:GeneratedCaseAssessment,ctx:CallContext):Promise<unknown>;
+  generateScenarioCase?(input: {input: GeneratorCaseInput; config: GeneratorConfig}, ctx: CallContext): Promise<unknown>;
+  proposeGeneratorConfig?(input: Parameters<NonNullable<GeneratorAdapter['propose']>>[0],ctx:CallContext):Promise<unknown>;
+  assessCheckpoints?(input: CheckpointInput, ctx: CallContext): Promise<unknown[]>;
+  selectUserAction?(input: { user: UserView; state: string; actions: AllowedUserAction[]; messages: DialogueMessage[]; turn: number; repair?: string }, ctx: CallContext): Promise<UserDecision>;
+  scenarioProposals?(input: ScenarioProposalsInput, ctx: CallContext): Promise<ScenarioProposal[]>;
+  assessScenarioProposals?(input: ScenarioAssessmentInput, ctx: CallContext): Promise<SemanticFinding[]>;
   prepare(input: PrepareInput, ctx: CallContext): Promise<z.infer<typeof preparationSchema>>;
   improve(input: ImproveInput, ctx: CallContext): Promise<z.infer<typeof proposalSchema>>;
   openTarget(agent: AgentSpec, sources: Source[], tools: Tool[], ctx: CallContext): Promise<TargetSession>;
@@ -917,8 +1066,15 @@ function foldTypography(text: string): { text: string; starts: number[]; ends: n
   }
   return { text: out.join(''), starts, ends };
 }
-export function verbatimSpan(content: string, quote: string): string | undefined {
-  if (content.includes(quote)) return quote;
+/**
+ * The source's own characters behind a quote, together with the offset the match was actually made
+ * at. Callers that need the place (a line number, a sort key) take `offset` from here instead of
+ * searching the source again for the returned text: a re-search answers «the first copy of these
+ * characters», which is a different question from «where this requirement's quote was found».
+ */
+export function verbatimSpanAt(content: string, quote: string): { span: string; offset: number } | undefined {
+  const direct = content.indexOf(quote);
+  if (direct >= 0) return { span: quote, offset: direct };
   const source = foldTypography(content);
   const needle = foldTypography(quote).text.trim();
   if (!needle) return undefined;
@@ -926,9 +1082,15 @@ export function verbatimSpan(content: string, quote: string): string | undefined
   const first = needle[0]!, swapped = first === first.toLowerCase() ? first.toUpperCase() : first.toLowerCase();
   for (const candidate of [needle, ...(swapped !== first ? [swapped + needle.slice(1)] : [])]) {
     const at = source.text.indexOf(candidate);
-    if (at >= 0) return content.slice(source.starts[at]!, source.ends[at + candidate.length - 1]!);
+    if (at >= 0) {
+      const start = source.starts[at]!;
+      return { span: content.slice(start, source.ends[at + candidate.length - 1]!), offset: start };
+    }
   }
   return undefined;
+}
+export function verbatimSpan(content: string, quote: string): string | undefined {
+  return verbatimSpanAt(content, quote)?.span;
 }
 export function fingerprint(value: unknown): string {
   const normalize = (v: unknown): unknown => Array.isArray(v) ? v.map(normalize)

@@ -1,6 +1,9 @@
-import { hasCompleteJudgment } from './judge.js';
-import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type Tier, type Trial, type UserMode } from './contracts.js';
-import { agentMetricResult, agentRubricResult, automaticTrialResult, graded, isAgentFailure, latestHumanReviews, measured, observedRecord, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { directChecks } from './checkpoints.js';
+import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
+import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
+import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, GOAL_METRIC_ID, graded, headlineMetricIds, headlineTrialResult, isAgentFailure, latestHumanReviews, markTargets, markUnderCurrentRule, measured, measurementUsable, observedRecord, RULES_METRIC_ID, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { judgeAgreement } from './agreement.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
 /*
@@ -182,6 +185,9 @@ export function humanFindings(record: Experiment): HumanFinding[] {
     const automatic = !measured(trial) ? 'unknown' : review.metricId ? trial.assessments?.find(a => a.metricId === review.metricId)?.result ?? 'unknown'
       : review.checkId ? check ? check.passed ? 'pass' : 'fail' : 'unknown' : automaticTrialResult(scenario, trial, record.humanReviews);
     const disagreement = automatic !== 'unknown' && review.verdict !== automatic;
+    // Confirming the judge is not a remark of the owner: a one-key «согласен» with a failure says
+    // the failure is real, so reporting it back as «замечание человека» would double-count it.
+    if (review.source === 'quick' && !disagreement) return [];
     if (review.verdict !== 'fail' && review.verdict !== 'invalid' && !disagreement) return [];
     return [{ trialId: trial.id, reviewId: review.id, target: metric?.name ?? check?.description ?? review.metricId ?? review.checkId ?? 'Весь диалог',
       subject: simulatorCheck ? 'simulator' : review.verdict === 'invalid' ? 'test' : review.checkId ? 'check' : metric?.subject ?? 'agent', verdict: review.verdict as 'pass' | 'fail' | 'invalid', automatic, disagreement, note: review.note }];
@@ -218,6 +224,25 @@ export function awaitingVerdict(record: Experiment): Set<string> {
           .filter(m => m.subject === 'simulator' && metricApplies(m, trial) && trial.assessments?.find(a => a.metricId === m.id)?.result !== 'pass').map(m => `metric:${m.id}`),
       ];
       if (pending.some(key => !['pass', 'fail', 'invalid'].includes(latest.get(`${trial.id}|${key}`)?.verdict ?? ''))) return true;
+    }
+    // Quick marks close a situation only when every metric that decided it is answered (CTX-18);
+    // on a goal card other rubrics and objective checks are not part of the headline. Doubt
+    // («не могу сказать») is not a decision, and a phase-3 mark on a two-target situation answered
+    // the previous rule, so either leaves the judge's own failure in the queue. The simulator is
+    // judged above, separately.
+    {
+      const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
+      const targets = markTargets(scenario, trial);
+      const quickClosed = !!targets && targets.metricIds.every(id => {
+        const mark = latest.get(`${trial.id}|metric:${id}`);
+        return mark?.source === 'quick' && ['pass', 'fail'].includes(mark.verdict) && markUnderCurrentRule(scenario, mark, targets.metricIds);
+      });
+      if (quickClosed) {
+        if (headlineMetricIds(scenario).length) return false;
+        // A legacy strict card: every other agent rubric the judge failed is part of its headline and still needs a decision.
+        return (scenario?.metrics ?? []).some(m => m.subject === 'agent' && !targets.metricIds.includes(m.id)
+          && trial.assessments?.some(a => a.metricId === m.id && a.result === 'fail') && !decided(`${trial.id}|metric:${m.id}`));
+      }
     }
     if (!isAgentFailure(record, trial) || decided(`${trial.id}|dialogue`) || latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid') return false;
     const failed = [
@@ -348,7 +373,7 @@ export function verdictSummary(record: Experiment): VerdictSummary {
   const unreviewed = failedTrials.filter(t => reviewsFor(t.id).length === 0).length;
   const undecided = failedTrials.filter(t => reviewsFor(t.id).length > 0 && pending.has(t.id)).length;
   const reasons: VerdictNote[] = [];
-  const unaudited = completed.filter(t => record.mode === 'live' && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length && !hasCompleteJudgment({ scenario: record.scenarios.find(s => s.id === t.scenarioId)!, sources: record.sources, trial: t })).length;
+  const unaudited = completed.filter(t => record.mode === 'live' && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length && !hasCompleteJudgment({ scenario: record.scenarios.find(s => s.id === t.scenarioId)!, sources: observableSources(record.sources, record.requirements), trial: t })).length;
   if (unaudited) reasons.push({ code: 'judge_unaudited', text: `${unaudited} диалог(ов) без сохранённых независимых оценок судьи. Воспроизводимость этих оценок неизвестна.`, count: unaudited });
   if (rubric.unknown) reasons.push({ code: 'judge_unknown', text: `${rubric.unknown} диалог(ов) с отсутствующей, противоречивой или неопределённой оценкой агента.`, count: rubric.unknown });
   if (review.disagreements) reasons.push({ code: 'human_disagreement', text: `Расхождений автоматической и ручной оценки: ${review.disagreements}. Проверьте основания каждого; это ещё не оценка точности судьи.`, count: review.disagreements });
@@ -440,7 +465,9 @@ export interface RunComparison {
   headline: string; comparable: boolean;
   pairs: { scenarioId: string; userMode: UserMode; repeat: number; beforeTrialId: string; afterTrialId: string;
     change: 'fixed' | 'regressed' | 'unchanged' | 'unknown'; reviewNote?: string }[];
-  coverage: { plannedPairs: number; validPairs: number; excludedPairs: number; missingBefore: number; missingAfter: number; invalidBefore: number; invalidAfter: number };
+  coverage: { plannedPairs: number; validPairs: number; excludedPairs: number; missingBefore: number; missingAfter: number; invalidBefore: number; invalidAfter: number;
+    /** Each excluded pair once, by its first reason; the parts add up to `excludedPairs`. Absent when nothing was paired. */
+    excludedBy?: ExcludedBy };
   cards: { shared: number; onlyBefore: string[]; onlyAfter: string[] };
   fixed: { scenarioId: string; title: string; tier: Tier }[];
   regressed: { scenarioId: string; title: string; tier: Tier }[];
@@ -454,6 +481,8 @@ export interface RunComparison {
 }
 
 /** Expected attempts, including all repeats. Missing/invalid attempts never disappear from a comparison. */
+export interface ExcludedBy { invalidBefore: number; missingBefore: number; invalidAfter: number; missingAfter: number; judgeIncomplete: number; other: number }
+
 export function plannedTrials(record: Experiment): number {
   if (record.assessmentTrialIds) return record.assessmentTrialIds.length;
   return record.scenarios.reduce((sum, s) => sum + record.settings.userModes.filter(m => m !== 'scripted' || s.user.script !== undefined).length * record.settings.repeats, 0);
@@ -478,9 +507,9 @@ function runCompleteness(record: Experiment, allowPartial = false): string[] {
     if (!expected.has(key) || seen.has(key) || ids.has(trial.id) || !scenario
       || trial.familyId !== scenario.familyId || fingerprint(trial.initialState) !== fingerprint(scenario.initialState)
       || trial.split !== scenario.split
-      || measured(trial) && (trial.checks.length !== scenario.checks.length || new Set(trial.checks.map(c => c.id)).size !== scenario.checks.length
-        || trial.checks.some(c => !scenario.checks.some(expected => expected.id === c.id)))
-      || trial.outcome === 'pass' && (!trial.checks.length || trial.checks.some(c => !c.passed))
+      || measured(trial) && (trial.checks.length !== directChecks(scenario).length || new Set(trial.checks.map(c => c.id)).size !== directChecks(scenario).length
+        || trial.checks.some(c => !directChecks(scenario).some(expected => expected.id === c.id)))
+      || trial.outcome === 'pass' && (trial.checks.some(c => !c.passed) || !trial.checks.length && !scenario?.execution)
       || (record.manifestHash && trial.manifestHash !== record.manifestHash)) invalid = true;
     if (!measured(trial)) unmeasured = true;
     seen.add(key); ids.add(trial.id);
@@ -499,13 +528,291 @@ export function cardOutcome(record: Experiment, scenario: Scenario, allowPartial
   return outcomes.includes('fail') ? 'fail' : outcomes.every(o => o === 'pass') ? 'pass' : 'unknown';
 }
 
+/**
+ * The attempt gate every headline metric passes through: the expected `mode:repeat` set equals the
+ * seen set and the counts (skipped when `partial`, which still requires at least one attempt), and
+ * every attempt belongs to this card's family, split and plan. Usability is not part of it.
+ */
+function attemptsMatch(record: Experiment, scenario: Scenario, trials: Trial[], partial = false): boolean {
+  if (!trials.length) return false;
+  const modes = record.settings.userModes.filter(mode => mode !== 'scripted' || scenario.user.script !== undefined);
+  const expected = new Set(modes.flatMap(mode => Array.from({ length: record.settings.repeats }, (_, repeat) => `${mode}:${repeat}`)));
+  const seen = new Set(trials.map(trial => `${trial.userMode}:${trial.repeat}`));
+  if (!partial && (!expected.size || trials.length !== expected.size || seen.size !== expected.size || [...expected].some(key => !seen.has(key)))) return false;
+  return !trials.some(trial => trial.familyId !== scenario.familyId || trial.split !== scenario.split
+    || record.manifestHash && trial.manifestHash !== record.manifestHash);
+}
+
+/**
+ * One headline metric over the card: unknown unless the attempts match and every one of them is a
+ * usable measurement, then fail-first over the attempts. Both headline metrics go through this
+ * same gate, so an unusable card is unknown before any fail is read.
+ */
+function metricCardOutcome(record: Experiment, scenario: Scenario, metricId: string, partial = false): 'pass' | 'fail' | 'unknown' {
+  const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
+  if (!attemptsMatch(record, scenario, trials, partial) || trials.some(trial => !measurementUsable(scenario, trial, record.humanReviews))) return 'unknown';
+  const results = trials.map(trial => agentMetricResult(trial, metricId, record.humanReviews) ?? 'unknown');
+  return results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
+}
+
+export type HeadlineOutcome = { outcome: 'pass' | 'fail' | 'unknown'; goal: 'pass' | 'fail' | 'unknown' | 'none'; rules: 'pass' | 'fail' | 'unknown' | 'none' };
+
+/**
+ * The headline card result (counting rule COUNTING_RULES): goal attainment and, when the card has
+ * it, prompt compliance; the card passes only when both pass in every attempt, fails when either
+ * fails in any attempt, and stays unknown otherwise. Both metrics pass the same attempt and
+ * usability gate before any fail is read, so an unusable card is «не измерено» whatever the rules
+ * say. A legacy card without the goal rubric keeps the strict card outcome, with no goal and no
+ * rules part. Reply quality and the RAG rubrics never enter.
+ */
+export function headlineCardOutcome(record: Experiment, scenario: Scenario, options: { partial?: boolean } = {}): HeadlineOutcome {
+  const partial = options.partial ?? false;
+  const ids = headlineMetricIds(scenario);
+  if (!ids.length) return { outcome: cardOutcome(record, scenario, partial), goal: 'none', rules: 'none' };
+  const goal = metricCardOutcome(record, scenario, GOAL_METRIC_ID, partial);
+  const rules = ids.includes(RULES_METRIC_ID) ? metricCardOutcome(record, scenario, RULES_METRIC_ID, partial) : 'none';
+  const parts = rules === 'none' ? [goal] : [goal, rules];
+  const outcome = parts.includes('fail') ? 'fail' : parts.every(part => part === 'pass') ? 'pass' : 'unknown';
+  return { outcome, goal, rules };
+}
+
+/**
+ * The goal-only card result, used for the positive control (decided by its goal alone) and the
+ * breakdown row; legacy cards without the goal rubric use the strict card outcome.
+ */
+export function goalCardOutcome(record: Experiment, scenario: Scenario): 'pass' | 'fail' | 'unknown' {
+  if (!headlineMetricIds(scenario).length) return cardOutcome(record, scenario);
+  return metricCardOutcome(record, scenario, GOAL_METRIC_ID);
+}
+
+/**
+ * Why a card has no verdict. The order is both the evaluation order of the code paths that
+ * leave a card `unknown` and the tie-break when two reasons are equally frequent.
+ */
+export const NOT_MEASURED_CODES = [
+  'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'attempts_mismatch',
+  'judge_error', 'judge_stopped', 'human_invalid', 'reset_unconfirmed', 'simulator_deviated', 'simulator_unclear',
+  'human_unknown', 'not_judged', 'judge_split', 'no_evidence', 'judge_unclear',
+] as const;
+export type NotMeasuredCode = typeof NOT_MEASURED_CODES[number];
+
+// Prefixes of reasons written by evaluation.ts and experiment.ts.
+const TURN_LIMIT_REASON = 'Разговор не завершился в отведённое число реплик.';
+const SIMULATOR_STAGE_REASON = 'реплика симулированного пользователя:';
+const CODE_ONLY_ASSESSMENT = 'Только точные проверки';
+
+/** Why one attempt leaves the card without a verdict; `ids` are the headline metrics whose undecided votes are explained. */
+function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids: string[]): NotMeasuredCode[] {
+  const codes: NotMeasuredCode[] = [];
+  const latest = latestHumanReviews({ trials: [trial], humanReviews: record.humanReviews });
+  if (trial.outcome === 'cancelled') codes.push('stopped');
+  else if (trial.outcome === 'invalid') codes.push(trial.reason.startsWith(TURN_LIMIT_REASON) ? 'turn_limit'
+    : trial.reason.startsWith(SIMULATOR_STAGE_REASON) ? 'simulator_error' : 'agent_error');
+  if (trial.assessmentError) codes.push(trial.assessmentError.startsWith(CODE_ONLY_ASSESSMENT) ? 'not_judged'
+    : /cancel|budget exhausted|time limit|closing/i.test(trial.assessmentError) ? 'judge_stopped' : 'judge_error');
+  if (latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid'
+    || ids.some(id => latest.get(`${trial.id}|metric:${id}`)?.verdict === 'invalid')) codes.push('human_invalid');
+  if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) codes.push('reset_unconfirmed');
+  // Mirrors simulatorUsable: a human verdict overrides the check or the fidelity vote.
+  const checksDeviate = (simulatorWasUsed(trial) ? trial.simulatorChecks ?? [] : []).some(c => {
+    const review = latest.get(`${trial.id}|check:${c.id}`);
+    return !(review?.verdict === 'invalid' || (review ? review.verdict === 'pass' : c.passed));
+  });
+  const fidelity = (scenario.metrics ?? []).filter(m => m.subject === 'simulator' && metricApplies(m, trial)).flatMap(m => {
+    const review = latest.get(`${trial.id}|metric:${m.id}`);
+    return review?.verdict === 'invalid' ? [] : [review?.verdict ?? trial.assessments?.find(a => a.metricId === m.id)?.result];
+  });
+  if (checksDeviate || fidelity.includes('fail')) codes.push('simulator_deviated');
+  // Without any judgment the vote is missing because the judge never ran: that is `not_judged`, not an unsure judge.
+  if (trial.assessments && fidelity.some(result => result !== 'pass' && result !== 'fail')) codes.push('simulator_unclear');
+  for (const id of ids) {
+    const result = agentMetricResult(trial, id, record.humanReviews);
+    if (result === 'pass' || result === 'fail') continue;
+    const assessment = trial.assessments?.find(a => a.metricId === id);
+    // A one-key «не могу сказать» leaves the judge's verdict in place, so it is never the reason a card has none.
+    const metricReview = latest.get(`${trial.id}|metric:${id}`);
+    if (metricReview?.verdict === 'unknown' && metricReview.source !== 'quick') codes.push('human_unknown');
+    else if (!assessment) codes.push('not_judged');
+    else if (assessment.rationale.startsWith(SPLIT_RATIONALE_PREFIX)) codes.push('judge_split');
+    // Agreed votes carry a prefix, so the unsupported-goal sentence is matched anywhere; it is a goal sentence only.
+    else if (id === GOAL_METRIC_ID && assessment.rationale.includes(GOAL_UNSUPPORTED_RATIONALE)) codes.push('no_evidence');
+    else codes.push('judge_unclear');
+  }
+  return codes;
+}
+
+/**
+ * One card decided by the counting rules, with the single reason when it has no verdict. `rule`
+ * picks the headline verdict (goal and prompt rules) or the goal-only one the positive control
+ * is decided by; the reasons cover every undecided metric of the chosen rule.
+ */
+export function cardVerdict(record: Experiment, scenario: Scenario, rule: 'headline' | 'goal' = 'headline'): { outcome: 'pass' | 'fail' | 'unknown'; reason?: NotMeasuredCode } {
+  const outcome = rule === 'goal' ? goalCardOutcome(record, scenario) : headlineCardOutcome(record, scenario).outcome;
+  if (outcome !== 'unknown') return { outcome };
+  const ids = rule === 'goal' ? headlineMetricIds(scenario).slice(0, 1) : headlineMetricIds(scenario);
+  const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
+  const codes = new Set<NotMeasuredCode>();
+  if (!trials.length) codes.add(runningPhases.has(record.phase) ? 'in_progress' : 'not_reached');
+  else if (!attemptsMatch(record, scenario, trials)) codes.add('attempts_mismatch');
+  for (const trial of trials) for (const code of trialReasons(record, scenario, trial, ids)) codes.add(code);
+  return { outcome, reason: NOT_MEASURED_CODES.find(code => codes.has(code)) ?? 'judge_unclear' };
+}
+
+/** The judge model named on result screens: the recorded audit first, then the configured role. */
+export function judgeModel(record: Experiment): string | undefined {
+  return record.trials.map(t => (t.judgeAudit ?? t.judgeReceipt)?.model).find(Boolean) ?? record.settings.roles?.judge?.model ?? record.settings.judge?.model;
+}
+
+/** One situation whose headline verdict flipped between two decided verdicts. */
+export interface StabilityRow { scenarioId: string; title: string; before: 'pass' | 'fail'; after: 'pass' | 'fail' }
+/**
+ * Found instability only: `checked` situations had a decided verdict on both sides, `unstable`
+ * lists the flips. `skipped` names why nothing was compared; it never means «stable».
+ */
+export interface Stability { basis: 'repeat' | 'reassess'; comparedWith: string; checked: number; unstable: StabilityRow[]; skipped: string | null }
+
+type Decided = 'pass' | 'fail';
+
+/*
+ * A source run rebuilt from embedded evidence (artifacts.ts embeddedBefore) is a copy of the
+ * current record with the source attempts swapped in: its agent, evaluator and card fields are
+ * the current ones. Stability must never compare the current record with itself, so a rebuilt
+ * source is registered here and checked against the identity the derived record embedded.
+ */
+const reconstructedSources = new WeakSet<Experiment>();
+const SOURCE_UNAVAILABLE = 'исходный прогон недоступен';
+/** Marks a run rebuilt from embedded evidence; stability then trusts only `sourceEvidence.identity`. */
+export function markReconstructedSource(run: Experiment): Experiment {
+  reconstructedSources.add(run);
+  return run;
+}
+/** undefined: `source` is a real run. null: rebuilt without a recorded identity, so nothing can be compared. */
+function reconstructedIdentity(source: Experiment, derived: Experiment): SourceIdentity | null | undefined {
+  if (!reconstructedSources.has(source)) return undefined;
+  const evidence = derived.sourceEvidence;
+  return evidence?.runId === source.id && evidence.identity ? evidence.identity : null;
+}
+/** The card the source attempts were judged against: from the embedded identity when the source was rebuilt. */
+function sourceCardIdentity(source: Experiment, card: Scenario, identity: SourceIdentity | undefined): string | undefined {
+  return identity ? identity.scenarios[card.id] : fingerprint(normalizeScenarioIdentity(card, source.target.kind));
+}
+const isDecided = (outcome: 'pass' | 'fail' | 'unknown'): outcome is Decided => outcome !== 'unknown';
+
+/**
+ * A repeat of the same set against its source run. Gated on comparability and on the same agent,
+ * so a change of the agent, the judge or the criteria is never called instability. Uses the headline
+ * verdict (goal and prompt rules, CTX-21), so «нестабильно» matches the number; reply quality and the
+ * RAG rubrics never flip a card here.
+ */
+export function stabilityBetweenRuns(before: Experiment, after: Experiment): Stability {
+  const result: Stability = { basis: 'repeat', comparedWith: before.id, checked: 0, unstable: [], skipped: null };
+  const identity = reconstructedIdentity(before, after);
+  if (identity === null) return { ...result, skipped: SOURCE_UNAVAILABLE };
+  if (!compareRuns(before, after).comparable) return { ...result, skipped: 'прогоны несравнимы' };
+  const agent = identity ?? { ...before, agent: agentIdentity(before) };
+  if (agent.targetFingerprint !== after.targetFingerprint || agent.targetVersion !== after.targetVersion
+    || agent.agent !== agentIdentity(after)) return { ...result, skipped: 'агент изменился между прогонами' };
+  const source = observedRecord(before), repeat = observedRecord(after);
+  for (const card of repeat.scenarios) {
+    const sourceCard = source.scenarios.find(item => item.id === card.id);
+    if (!sourceCard) continue;
+    // A card edited since the source attempts were judged is another question, not a repeat of it.
+    if (fingerprint(normalizeScenarioIdentity(card, after.target.kind)) !== sourceCardIdentity(before, sourceCard, identity)) continue;
+    const was = headlineCardOutcome(source, sourceCard).outcome, now = headlineCardOutcome(repeat, card).outcome;
+    if (!isDecided(was) || !isDecided(now)) continue;
+    result.checked++;
+    if (was !== now) result.unstable.push({ scenarioId: card.id, title: card.title, before: was, after: now });
+  }
+  return result;
+}
+
+/**
+ * A reassessment of saved answers against its source run: pass↔fail flips of the headline verdict
+ * (goal and prompt rules) on the same attempts, the same criteria and the same judge (model, routing
+ * and protocol). Null when the record is not a reassessment of `source`.
+ * compareRuns is not used here: it always marks a reassessment as incomparable.
+ */
+export function stabilityAfterReassess(record: Experiment, source: Experiment): Stability | null {
+  if (record.assessmentOf !== source.id || !record.evidenceHash) return null;
+  const result: Stability = { basis: 'reassess', comparedWith: source.id, checked: 0, unstable: [], skipped: null };
+  const identity = reconstructedIdentity(source, record);
+  if (identity === null) return { ...result, skipped: SOURCE_UNAVAILABLE };
+  // The judge, not the whole evaluator: an Agent Lab upgrade with the same judge still compares.
+  const protocols = (run: Experiment) => [...new Set(run.trials.flatMap(trial => {
+    const judge = trial.judgeAudit ?? trial.judgeReceipt;
+    return judge ? [judge.protocolHash] : [];
+  }))].sort();
+  const sourceProtocols = protocols(source), recordProtocols = protocols(record);
+  if (judgeSettingsIdentity(record.settings) !== (identity?.judge ?? judgeSettingsIdentity(source.settings))
+    || sourceProtocols.length && recordProtocols.length && fingerprint(sourceProtocols) !== fingerprint(recordProtocols)) {
+    return { ...result, skipped: 'судья или его настройки изменились' };
+  }
+  const sourceTrialIds = new Set(source.trials.map(trial => trial.id));
+  for (const card of record.scenarios) {
+    const sourceCard = source.scenarios.find(item => item.id === card.id);
+    if (!sourceCard) continue;
+    // A rebuilt source holds the current cards, so the source card identity comes from the embedded record of it.
+    if (fingerprint(normalizeScenarioIdentity(card, record.target.kind)) !== sourceCardIdentity(source, sourceCard, identity)) continue;
+    const trialIds = new Set(record.trials.filter(trial => trial.scenarioId === card.id).map(trial => trial.id));
+    // Only a card whose every source attempt was reassessed, and nothing else, compares the same answers.
+    if ([...trialIds].some(id => !sourceTrialIds.has(id))
+      || source.trials.some(trial => trial.scenarioId === card.id && !trialIds.has(trial.id))) continue;
+    const was = headlineCardOutcome(source, sourceCard).outcome, now = headlineCardOutcome(record, card).outcome;
+    if (!isDecided(was) || !isDecided(now)) continue;
+    result.checked++;
+    if (was !== now) result.unstable.push({ scenarioId: card.id, title: card.title, before: was, after: now });
+  }
+  return result;
+}
+
+const JUDGE_INCOMPLETE = 'Судья не завершил оценку этой попытки.';
+
+const CONTROL_NOTE = 'Контрольные ситуации не сравниваются: они не входят в главное число.';
+/** Named whenever a shared card carries the prompt-rule check, so a reader knows which rule the before/after counts by (CTX-22). */
+const RULE_NOTE = 'Сравнение считает «справился» как главное число: запрос выполнен и правила промпта соблюдены.';
+
 export function compareRuns(before: Experiment, after: Experiment): RunComparison {
+  // A rebuilt source carries the current cards; its embedded identity says what the source cards were.
+  // Taken from the original records: a stripped copy is not a registered rebuilt source.
+  const identity = reconstructedIdentity(before, after) ?? undefined;
+  const controls = new Set([...before.positiveControlScenarioIds ?? [], ...after.positiveControlScenarioIds ?? []]);
+  let result: RunComparison;
+  if (!controls.size) result = compareRunsAgainst(before, after, identity);
+  else {
+    // A control never enters the headline (CTX-11), and a repeat runs it as one turn, so it is not a pair either.
+    result = compareRunsAgainst(withoutControls(before, controls), withoutControls(after, controls), identity);
+    result.notes.push(CONTROL_NOTE);
+  }
+  // Marks given under the previous counting rule are named, never mixed in silently (CTX-21). Informational: `comparable` is untouched.
+  for (const run of [before, after]) {
+    const stale = judgeAgreement(run).staleRule;
+    if (stale > 0) result.notes.push(`В прогоне ${run.id.slice(0, 8)} есть отметки по прежнему правилу подсчёта: ${stale}.`);
+  }
+  return result;
+}
+
+/** A shallow copy of a run without its control situations: cards, attempts, selection and reassessed attempts. */
+function withoutControls(run: Experiment, controls: Set<string>): Experiment {
+  const trials = run.trials.filter(trial => !controls.has(trial.scenarioId));
+  const copy: Experiment = { ...run, scenarios: run.scenarios.filter(scenario => !controls.has(scenario.id)), trials };
+  delete copy.positiveControlScenarioIds;
+  const selected = run.selectedScenarioIds?.filter(id => !controls.has(id));
+  if (selected?.length) copy.selectedScenarioIds = selected;
+  else delete copy.selectedScenarioIds;
+  if (run.assessmentTrialIds) {
+    const kept = new Set(trials.map(trial => trial.id));
+    copy.assessmentTrialIds = run.assessmentTrialIds.filter(id => kept.has(id));
+  }
+  return copy;
+}
+
+function compareRunsAgainst(before: Experiment, after: Experiment, identity: SourceIdentity | undefined): RunComparison {
   if (after.parentRunId === before.id && after.selectedScenarioIds?.length
     && after.scenarios.length < before.scenarios.length
     && after.scenarios.length === after.selectedScenarioIds.length
     && after.scenarios.every(s => after.selectedScenarioIds!.includes(s.id) && before.scenarios.some(b => b.id === s.id))) {
     const selected = new Set(after.selectedScenarioIds);
-    const result = compareRuns({ ...before, scenarios: before.scenarios.filter(s => selected.has(s.id)), trials: before.trials.filter(t => selected.has(t.scenarioId)) }, after);
+    const result = compareRunsAgainst({ ...before, scenarios: before.scenarios.filter(s => selected.has(s.id)), trials: before.trials.filter(t => selected.has(t.scenarioId)) }, after, identity);
     result.cards.onlyBefore = before.scenarios.filter(s => !selected.has(s.id)).map(s => s.id);
     result.headline = `Выбранные тесты (${selected.size}/${before.scenarios.length}). ${result.headline}`;
     result.notes.push('Сравнение относится только к явно выбранным тестам. Остальной регрессионный набор не проверен.');
@@ -529,6 +836,7 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
       invalidBefore: before.trials.filter(t => !validBefore(t)).length, invalidAfter: after.trials.filter(t => !validAfter(t)).length },
   };
   const { notes } = result;
+  if (fingerprint(before.scenarios.map(s => [s.id,s.provenance])) !== fingerprint(after.scenarios.map(s => [s.id,s.provenance])) || before.librarySnapshot?.revision !== after.librarySnapshot?.revision) notes.push('Ревизия или состав принятого набора по происхождению изменились; нужна новая сопоставимая база.');
   const addIncomparable = (row: { scenarioId: string; userMode: UserMode; repeat: number }, reason: string, beforeTrialId?: string, afterTrialId?: string) => {
     const scenario = after.scenarios.find(s => s.id === row.scenarioId) ?? before.scenarios.find(s => s.id === row.scenarioId);
     if (!scenario || result.incomparable.some(item => item.scenarioId === row.scenarioId && item.userMode === row.userMode && item.repeat === row.repeat)) return;
@@ -537,6 +845,7 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   };
   const expectedRows = [...expectedAttemptRows(before), ...expectedAttemptRows(after)]
     .filter((row, index, rows) => rows.findIndex(value => value.scenarioId === row.scenarioId && value.userMode === row.userMode && value.repeat === row.repeat) === index);
+  if ([before, after].some(r => r.runKind === 'diagnostic' || r.runKind === 'generator' || r.trials.some(t => t.diagnosticReceipt))) notes.push('Служебный или диагностический прогон исключён из сравнения версий.');
   if (before.id === after.id) notes.push('Выбран один и тот же прогон.');
   if (before.workflow !== 'evaluate' || after.workflow !== 'evaluate') notes.push('Сравнение поддерживает отдельные оценочные прогоны.');
   if (before.mode !== after.mode) notes.push('Демо и живые прогоны несравнимы.');
@@ -548,16 +857,24 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   if (before.evaluatorVersion !== after.evaluatorVersion) notes.push('Версия оценщика или его инструкций отличается. Сначала переоцените сохранённые трассы в одинаковых условиях.');
   if (fingerprint(before.sources) !== fingerprint(after.sources) || fingerprint(before.requirements) !== fingerprint(after.requirements)) notes.push('Материалы или требования изменились.');
   if (result.cards.onlyBefore.length || result.cards.onlyAfter.length) notes.push('Набор карточек изменился.');
-  const changed = shared.filter(s => fingerprint(s) !== fingerprint(before.scenarios.find(b => b.id === s.id)));
+  // External agents: a legacy card without a channel is judged on the reply, so it equals the same card with `reply`.
+  const changed = shared.filter(s => {
+    const b = before.scenarios.find(item => item.id === s.id)!;
+    const now = fingerprint(normalizeScenarioIdentity(s, after.target.kind));
+    return now !== sourceCardIdentity(before, b, identity);
+  });
   if (changed.length) notes.push(`Содержимое карточек изменилось: ${changed.map(s => s.title).join(', ')}.`);
   for (const [name, record] of [['До', before], ['После', after]] as const) notes.push(...runCompleteness(record, true).map(n => `${name}: ${n}`));
-  const judgeIdentities = (record: Experiment) => [...new Set(record.trials.filter(t => measured(t)
-    && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length).map(t => t.judgeAudit
-      ? fingerprint({ protocol: t.judgeAudit.protocolHash, provider: t.judgeAudit.provider, model: t.judgeAudit.model }) : 'unrecorded'))].sort();
+  // A rejected judgment is a problem of its own pair, not a second protocol inside the run.
+  const judgeIdentities = (record: Experiment) => [...new Set(record.trials.filter(t => measured(t) && !t.assessmentError
+    && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length).map(t => {
+    // A legacy full audit and a receipt from the same judge are one identity.
+    const judge = t.judgeAudit ?? t.judgeReceipt;
+    return judge ? fingerprint({ protocol: judge.protocolHash, provider: judge.provider, model: judge.model }) : 'unrecorded';
+  }))].sort();
   const beforeJudges = judgeIdentities(before), afterJudges = judgeIdentities(after);
   if (beforeJudges.length > 1 || afterJudges.length > 1) notes.push('Внутри прогона смешаны разные протоколы судьи.');
   if (beforeJudges.length && afterJudges.length && fingerprint(beforeJudges) !== fingerprint(afterJudges)) notes.push('Протокол или модель судьи отличаются; оценки нельзя приписать изменению агента.');
-  if (before.mode === 'live' && result.includesRubrics && [before, after].some(run => run.trials.some(trial => measured(trial) && !hasCompleteJudgment({ scenario: run.scenarios.find(s => s.id === trial.scenarioId)!, sources: run.sources, trial })))) notes.push('Для сравнения оценок модели нужны сохранённые ответы из свежих сессий и версия протокола судьи.');
   if (notes.length) {
     for (const row of expectedRows) addIncomparable(row, notes.join(' '),
       before.trials.find(t => attemptKey(t) === `${row.scenarioId}|${row.userMode}|${row.repeat}`)?.id,
@@ -565,28 +882,45 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
     result.headline = `Прогоны несравнимы: ${result.incomparable.length} пар. Исправления и регрессии не подсчитываются.`;
     return result;
   }
+  // The judge saw observable sources (evaluation.ts), so its receipt is checked against the same input, one pair at a time.
+  const auditRequired = before.mode === 'live' && result.includesRubrics;
+  const judged = (run: Experiment, trial: Trial) => {
+    const scenario = run.scenarios.find(s => s.id === trial.scenarioId);
+    return !!scenario && hasCompleteJudgment({ scenario, sources: observableSources(run.sources, run.requirements), trial });
+  };
   const beforeAttempts = new Map<string, Trial[]>(), afterAttemptGroups = new Map<string, Trial[]>();
   for (const trial of before.trials) beforeAttempts.set(attemptKey(trial), [...beforeAttempts.get(attemptKey(trial)) ?? [], trial]);
   for (const trial of after.trials) afterAttemptGroups.set(attemptKey(trial), [...afterAttemptGroups.get(attemptKey(trial)) ?? [], trial]);
+  const excludedBy: ExcludedBy = { invalidBefore: 0, missingBefore: 0, invalidAfter: 0, missingAfter: 0, judgeIncomplete: 0, other: 0 };
   for (const row of expectedRows) {
     const key = `${row.scenarioId}|${row.userMode}|${row.repeat}`;
     const a = beforeAttempts.get(key) ?? [], b = afterAttemptGroups.get(key) ?? [];
-    if (a.length !== 1) addIncomparable(row, a.length ? 'Несколько попыток «до» с одним ключом.' : 'Нет попытки «до».', a[0]?.id, b[0]?.id);
-    else if (!validBefore(a[0]!)) addIncomparable(row, 'Попытка «до» невалидна или не измерена.', a[0]!.id, b[0]?.id);
-    else if (b.length !== 1) addIncomparable(row, b.length ? 'Несколько попыток «после» с одним ключом.' : 'Нет попытки «после».', a[0]!.id, b[0]?.id);
-    else if (!validAfter(b[0]!)) addIncomparable(row, 'Попытка «после» невалидна или не измерена.', a[0]!.id, b[0]!.id);
+    if (a.length !== 1) { if (!a.length) excludedBy.missingBefore++; addIncomparable(row, a.length ? 'Несколько попыток «до» с одним ключом.' : 'Нет попытки «до».', a[0]?.id, b[0]?.id); }
+    else if (!validBefore(a[0]!)) { excludedBy.invalidBefore++; addIncomparable(row, 'Попытка «до» невалидна или не измерена.', a[0]!.id, b[0]?.id); }
+    else if (b.length !== 1) { if (!b.length) excludedBy.missingAfter++; addIncomparable(row, b.length ? 'Несколько попыток «после» с одним ключом.' : 'Нет попытки «после».', a[0]!.id, b[0]?.id); }
+    else if (!validAfter(b[0]!)) { excludedBy.invalidAfter++; addIncomparable(row, 'Попытка «после» невалидна или не измерена.', a[0]!.id, b[0]!.id); }
+    else if (auditRequired && (!judged(before, a[0]!) || !judged(after, b[0]!))) { excludedBy.judgeIncomplete++; addIncomparable(row, JUDGE_INCOMPLETE, a[0]!.id, b[0]!.id); }
   }
   const afterAttempts = new Map([...afterAttemptGroups].flatMap(([key, trials]) => trials.length === 1 ? [[key, trials[0]!] as const] : []));
-  const pairs = before.trials.filter(t => validBefore(t) && afterAttempts.has(attemptKey(t)) && validAfter(afterAttempts.get(attemptKey(t))!));
+  const pairs = before.trials.filter(t => {
+    const following = afterAttempts.get(attemptKey(t));
+    return validBefore(t) && !!following && validAfter(following) && (!auditRequired || (judged(before, t) && judged(after, following)));
+  });
   result.coverage.validPairs = pairs.length;
   result.coverage.excludedPairs -= pairs.length;
-  if (result.coverage.excludedPairs) notes.push(`Сопоставлено ${pairs.length} из ${result.coverage.plannedPairs} пар попыток. Исключено ${result.coverage.excludedPairs}: до — ${result.coverage.invalidBefore} невалидных и ${result.coverage.missingBefore} пропущенных; после — ${result.coverage.invalidAfter} невалидных и ${result.coverage.missingAfter} пропущенных. Сбои могут скрывать регрессии; вывод относится только к сопоставленной части.`);
+  // Duplicated keys and attempts outside the plan are the remainder, so the parts always add up.
+  const named = excludedBy.invalidBefore + excludedBy.missingBefore + excludedBy.invalidAfter + excludedBy.missingAfter + excludedBy.judgeIncomplete;
+  excludedBy.other = Math.max(0, result.coverage.excludedPairs - named);
+  result.coverage.excludedBy = excludedBy;
+  if (result.coverage.excludedPairs) notes.push(`Сопоставлено ${pairs.length} из ${result.coverage.plannedPairs} пар попыток. Исключено ${result.coverage.excludedPairs}: до — ${excludedBy.invalidBefore} невалидных и ${excludedBy.missingBefore} пропущенных; после — ${excludedBy.invalidAfter} невалидных и ${excludedBy.missingAfter} пропущенных`
+    + `${excludedBy.judgeIncomplete ? `; без завершённой оценки судьи — ${excludedBy.judgeIncomplete}` : ''}${excludedBy.other ? `; повторённые или лишние попытки — ${excludedBy.other}` : ''}. Сбои могут скрывать регрессии; вывод относится только к сопоставленной части.`);
   if (!pairs.length) { result.headline = 'Нет совпадающих валидных попыток. Повторите неудавшиеся диалоги, чтобы получить сравнение.'; return result; }
   result.pairs = pairs.map(trial => {
     const scenario = shared.find(s => s.id === trial.scenarioId);
-    const was = automaticTrialResult(scenario, trial, before.humanReviews);
+    // The headline rule per attempt (goal and prompt rules); a legacy card falls back to the strict trial result.
+    const was = headlineTrialResult(scenario, trial, before.humanReviews);
     const following = afterAttempts.get(attemptKey(trial))!;
-    const now = automaticTrialResult(scenario, following, after.humanReviews);
+    const now = headlineTrialResult(scenario, following, after.humanReviews);
     let change: RunComparison['pairs'][number]['change'] = was === 'unknown' || now === 'unknown' ? 'unknown'
       : was === now ? 'unchanged' : now === 'pass' ? 'fixed' : 'regressed';
     const reviewNote = rubricReviewNote(scenario, trial, following);
@@ -605,8 +939,9 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   result.comparable = true;
   for (const scenario of shared) {
     if (result.pairs.some(p => p.scenarioId === scenario.id && p.reviewNote)) { result.ungraded++; continue; }
-    const was = cardOutcome(before, scenario, true);
-    const now = cardOutcome(after, scenario, true);
+    // The headline rule over the matched attempts (partial gate); a legacy card reaches the strict cardOutcome(…, true) through it.
+    const was = headlineCardOutcome(before, scenario, { partial: true }).outcome;
+    const now = headlineCardOutcome(after, scenario, { partial: true }).outcome;
     if (was === 'unknown' || now === 'unknown') { result.ungraded++; continue; }
     const row = { scenarioId: scenario.id, title: scenario.title, tier: scenario.tier ?? 'regression' };
     if (was === 'fail' && now === 'pass') result.fixed.push(row);
@@ -627,6 +962,7 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   if (disputed) result.headline += ` Пар с совпавшими ответами и разными оценками: ${disputed}. Нужна проверка.`;
   if (result.ungraded) notes.push(`${result.ungraded} карточек без решающей оценки; они не считаются пройденными.`);
   if (result.includesRubrics) notes.push('Сравнение включает предварительные оценки по рубрикам. Это не подтверждённое улучшение.');
+  if (shared.some(s => headlineMetricIds(s).includes(RULES_METRIC_ID))) notes.push(RULE_NOTE);
   const smoke = result.regressed.filter(r => r.tier === 'smoke').length;
   if (smoke) notes.push(`Сломано ${smoke} дымовых карточек: сначала восстановите базовое поведение.`);
   if (compared < TRUSTED_SAMPLE) notes.push(`Сравнение по ${compared} карточкам: разница может быть случайной. Повторы не создают новые ситуации.`);

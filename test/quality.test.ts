@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { rm } from 'node:fs/promises';
-import { discoveryBrief, qualityLines, qualitySummary, plural, scoreBrief, shorten, testPlanLines, trialProofLines } from '../src/quality.js';
+import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, plural, scoreBrief, shorten, testPlanLines, trialProofLines } from '../src/quality.js';
 import { emptyUsage, RAG_RUBRICS, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
 import { draftHash } from '../src/experiment.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 import { verdictSummary } from '../src/comparison.js';
+import { buildResultView } from '../src/result-view.js';
+import { htmlReport } from '../src/report.js';
 
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
 const goal = { id: 'goal', name: 'Цель выполнена', subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' };
@@ -97,6 +99,101 @@ test('acceptance projection rejects ambiguous drafts and names tool/state observ
   const state = testPlanLines(stateRecord);
   assert.match(state.lines.join('\n'), /Исходное состояние: \{"records":\{"A":\{"status":"new"\}\},"writableFields":\["status"\],"transientFailures":0\}/);
   assert.match(state.lines.join('\n'), /НАБЛЮДЕНИЕ\n  итоговое состояние \(state\)/);
+});
+
+const ruleSource = { id: 'src_rules', name: 'Правила возврата', content: 'Первая строка.\nВерните деньги через терминал.\nТретья строка.\nЧетвёртая строка.\nПятая строка.' };
+const promptSource = { id: 'src_prompt', name: 'Промпт агента', content: 'Отвечайте вежливо.\nresponse_format: json\nЕщё строка.\nИ ещё строка.', kind: 'prompt' as const };
+const rulesRecord = (overrides: Partial<Experiment> = {}): Experiment => record({
+  phase: 'review', reviewMode: null, sources: [ruleSource, promptSource],
+  requirements: [
+    { id: 'refund', text: 'Возврат через терминал', sourceId: ruleSource.id, quote: 'Верните деньги через терминал.', critical: true },
+    { id: 'polite', text: 'Вежливость', sourceId: promptSource.id, quote: 'Отвечайте вежливо.', critical: false },
+    { id: 'machine', text: 'Формат', sourceId: promptSource.id, quote: 'response_format: json', critical: false },
+  ],
+  ...overrides,
+});
+const sheetCard = (id: string, extra: Partial<Scenario> = {}): Scenario => ({ ...scenario(id), requirementIds: ['refund'], successCriteria: `Ожидание ${id}`, ...extra });
+
+test('the expectation sheet names every situation, its expectation and its owner rules', () => {
+  const draft = rulesRecord({ scenarios: [
+    sheetCard('a'),
+    sheetCard('b', { requirementIds: ['refund', 'polite', 'machine', 'unknown_rule'], successCriteria: '   ' }),
+    sheetCard('c', { requirementIds: [] }),
+  ] });
+  const sheet = expectationSheet(draft);
+  assert.equal(sheet.count, 3);
+  assert.equal(sheet.countText, '3 ситуации');
+  assert.equal(sheet.labelWidth, 2);
+  assert.deepEqual(sheet.boardHead, ['ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ', '3 ситуации · номер правила — порядок в ваших материалах']);
+  assert.equal(sheet.lines[0], 'Что агент должен сделать: 3 ситуации. Номер правила — порядок в ваших материалах.');
+  assert.equal(sheet.lines[1], '');
+  assert.equal(sheet.lines.at(-1), `Версия ожиданий: ${draftHash(draft).slice(0, 12)}`);
+  assert.equal(sheet.lines[2], '1. Ситуация: g');
+  assert.deepEqual(sheet.cards[0]!.details, [
+    { role: 'expected', text: 'Должен: Ожидание a' },
+    { role: 'rule', text: 'Правило 1 · Правила возврата, строка 2: «Верните деньги через терминал.»' },
+  ]);
+  assert.equal(sheet.lines[3], '   Должен: Ожидание a');
+  assert.equal(sheet.lines[4], '   Правило 1 · Правила возврата, строка 2: «Верните деньги через терминал.»');
+  assert.equal(sheet.lines[5], '');
+  // An empty expectation, an unknown rule and the internal machine-format prompt rule.
+  assert.deepEqual(sheet.cards[1]!.details, [
+    { role: 'unverified', text: 'Должен: ожидание не записано.' },
+    { role: 'rule', text: 'Правило 1 · Правила возврата, строка 2: «Верните деньги через терминал.»' },
+    { role: 'rule', text: 'Правило 2 · Промпт агента, строка 1: «Отвечайте вежливо.»' },
+    { role: 'unverified', text: 'Правило: объяснение не подтверждено цитатой' },
+  ]);
+  assert.deepEqual(sheet.cards[2]!.details, [
+    { role: 'expected', text: 'Должен: Ожидание c' },
+    { role: 'unverified', text: 'Правило: у ситуации нет правила из ваших материалов.' },
+  ]);
+  assert.equal(sheet.cards.every(item => item.ownerEdited === false), true);
+  assert.throws(() => expectationSheet({ ...draft, workflow: 'compare' }), /evaluate/);
+  assert.throws(() => expectationSheet({ ...draft, phase: 'results_review' }), /незапущенного/);
+});
+
+test('the sheet marks a situation the owner changed and the compact form points at the full list', () => {
+  const draft = rulesRecord({ id: 'run_1234567890', scenarios: [sheetCard('a'), sheetCard('b', { requirementIds: ['refund', 'polite', 'unknown_1', 'unknown_2'] })],
+    ownerExpectationScenarioIds: ['a'] });
+  const sheet = expectationSheet(draft);
+  assert.equal(sheet.cards[0]!.ownerEdited, true);
+  assert.deepEqual(sheet.cards[0]!.details.at(-1), { role: 'marker', text: 'Ожидание изменено владельцем — с прошлыми прогонами не сравнивается.' });
+  assert.equal(sheet.cards[1]!.ownerEdited, false);
+  assert.equal(sheet.cards[1]!.details.some(detail => detail.role === 'marker'), false);
+  assert.equal(sheet.lines.filter(line => line.includes('Ожидание изменено владельцем')).length, 1);
+
+  const compact = sheet.compactLines(draft.id);
+  assert.equal(compact.filter(line => line.trim().startsWith('Правило')).length, 3, 'at most two rule rows per situation');
+  assert.equal(compact.some(line => line.trim() === 'и ещё 2 правила'), true);
+  assert.equal(compact.some(line => line.includes('Ожидание изменено владельцем')), true);
+  assert.equal(compact.at(-2), `Все правила — /agent-lab ${draft.id.slice(0, 8)}, раздел 2.`);
+  assert.equal(compact.at(-1), sheet.lines.at(-1));
+});
+
+test('the sheet handles no situations, twelve situations and eleven rules in one situation', () => {
+  const empty = expectationSheet(rulesRecord({ scenarios: [] }));
+  assert.deepEqual(empty.lines, ['Ситуаций пока нет.', 'Они появятся после подготовки. a — рассказать Pi, что проверить.']);
+  assert.deepEqual(empty.cards, []);
+  assert.equal(empty.countText, '0 ситуаций');
+  assert.deepEqual(empty.compactLines('run_1234'), empty.lines);
+
+  const many = expectationSheet(rulesRecord({ scenarios: Array.from({ length: 12 }, (_, index) => sheetCard(`card_${index}`)) }));
+  assert.equal(many.labelWidth, 3);
+  assert.equal(many.countText, '12 ситуаций');
+  assert.equal(many.lines[2], ' 1. Ситуация: g');
+  assert.equal(many.lines[3], '    Должен: Ожидание card_0');
+  assert.equal(many.lines.find(line => line.includes('Ситуация') && line.startsWith('12.')), '12. Ситуация: g');
+
+  const eleven = rulesRecord({
+    sources: [{ ...ruleSource, content: Array.from({ length: 11 }, (_, index) => `Правило номер ${index} про возврат.`).join('\n') }],
+    requirements: Array.from({ length: 11 }, (_, index) => ({ id: `rule_${index}`, text: `Правило ${index}`, sourceId: ruleSource.id,
+      quote: `Правило номер ${index} про возврат.`, critical: false })),
+    scenarios: [sheetCard('a', { requirementIds: Array.from({ length: 11 }, (_, index) => `rule_${index}`) })],
+  });
+  const sheet = expectationSheet(eleven);
+  assert.equal(sheet.cards[0]!.details.filter(detail => detail.role === 'rule').length, 11);
+  assert.equal(sheet.cards[0]!.details.every(detail => detail.role !== 'unverified'), true);
+  assert.equal(sheet.compactLines(eleven.id).some(line => line.trim() === 'и ещё 9 правил'), true);
 });
 
 test('trial proof preserves passing and failing dialogue evidence with exact citation ids', () => {
@@ -198,7 +295,7 @@ test('the first screen counts cards, criteria and causes from the shared outcome
   assert.match(text.queue, /Разметить человеку: 1/);
 });
 
-test('business accuracy follows goal attainment while strict success and other rubric failures stay separate', () => {
+test('business accuracy follows the headline rule (request met and prompt rules kept) while strict success and other rubric failures stay separate', () => {
   const goalAttainment = { ...goal, id: 'goal_attainment', name: 'Достижение цели' };
   const promptCompliance = { ...format, id: 'prompt_compliance', name: 'Соблюдение промпта' };
   const scenarios = ['solved', 'failed', 'broken'].map(id => ({ ...scenario(id, false), metrics: [goalAttainment, promptCompliance] }));
@@ -212,12 +309,81 @@ test('business accuracy follows goal attainment while strict success and other r
   const q = qualitySummary(record({ scenarios, trials: [assessed('t1', 'solved', 'pass', 'fail'), assessed('t2', 'failed', 'fail', 'fail'), invalid],
     failureModes: [{ id: 'business', name: 'Бизнес-причина', description: 'd', trialIds: ['t2'] }] }));
   assert.equal(q.primary, 'goal_attainment');
-  assert.deepEqual(q.cards, { passed: 1, failed: 1, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0.5 });
-  assert.deepEqual(q.strict, { passed: 0, failed: 2, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0, goalMetWithOtherFailures: 1 });
-  assert.match(q.headline, /Бизнес-цель достигнута в 1 из 2 карточек \(50%\)/);
+  // Phase 03.1 (deliberate pin change): t1 met the request but broke a prompt rule, so it is no longer «справился».
+  assert.deepEqual(q.cards, { passed: 0, failed: 2, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0 });
+  assert.deepEqual(q.strict, { passed: 0, failed: 2, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0, goalMetWithOtherFailures: 0 });
+  assert.ok(q.headline.startsWith('Справился (запрос выполнен и правила промпта соблюдены) в 0 из 2 карточек (0%). '), q.headline);
   assert.match(q.headline, /Полностью прошли все критерии: 0 из 2 \(0%\)/);
-  assert.match(q.headline, /В 1 карточке цель достигнута, но провален другой критерий/);
-  assert.equal(q.causes[0]?.example?.quote, 'goal', 'a business failure explains the headline before secondary prompt/style failures');
+  assert.doesNotMatch(q.headline, /провален другой критерий/);
+  assert.doesNotMatch(q.headline, /Бизнес-цель|по цели/);
+  assert.match(q.headline, /\. Невалидно: 1; разобрано человеком 0 из 3 диалогов\.$/);
+  assert.equal(q.cardsLabel, 'Справился · запрос и правила промпта');
+  // The saved example is the verified agent reply of that dialogue, not the judge's rationale.
+  assert.equal(q.causes[0]?.example?.quote, 'ok');
+  assert.equal(q.causes[0]?.example?.seq, 1);
+  assert.equal(q.causes[0]?.example?.explanation?.trialId, 't2', 'a business failure explains the headline before secondary prompt/style failures');
+  assert.equal(q.causes[0]?.example?.explanation?.said?.judgeCited, true, 'the quote is the reply the judge pointed at');
+});
+
+// ---- Phase 03.1: the report number is the CLI number — same rule, same non-control cards. ----
+const GOAL_ATTAINMENT = { ...goal, id: 'goal_attainment', name: 'Достижение цели' };
+const PROMPT_COMPLIANCE = { ...format, id: 'prompt_compliance', name: 'Соблюдение правил промпта' };
+const REPLY_QUALITY = { ...format, id: 'reply_quality', name: 'Качество ответа' };
+type Verdict = 'pass' | 'fail' | 'unknown';
+/** One attempt judged on the given rubrics; `votes` are in the order of `metrics`. */
+function judgedCard(id: string, metrics: typeof goal[], votes: Verdict[]): { scenario: Scenario; trial: Trial } {
+  const card = { ...scenario(id, false), metrics };
+  const attempt: Trial = { ...trial(`t-${id}`, id, 'ungraded', 'pass'), checks: [],
+    assessments: metrics.map((metric, i) => ({ metricId: metric.id, result: votes[i]!, rationale: 'r', evidence: votes[i] === 'unknown' ? [] : [1] })) };
+  return { scenario: card, trial: attempt };
+}
+function judgedRecord(cards: ReturnType<typeof judgedCard>[], overrides: Partial<Experiment> = {}): Experiment {
+  return record({ scenarios: cards.map(c => c.scenario), trials: cards.map(c => c.trial), ...overrides });
+}
+
+test('the report counts the same non-control cards by the same rule as the CLI headline', () => {
+  const rubrics = [GOAL_ATTAINMENT, PROMPT_COMPLIANCE];
+  const r = judgedRecord([
+    judgedCard('met', rubrics, ['pass', 'pass']), judgedCard('broke', rubrics, ['pass', 'fail']), judgedCard('missed', rubrics, ['fail', 'pass']),
+    judgedCard('unsure', rubrics, ['pass', 'unknown']), judgedCard('ctl', rubrics, ['pass', 'fail']),
+  ], { positiveControlScenarioIds: ['ctl'] });
+  const q = qualitySummary(r);
+  const view = buildResultView(r);
+  assert.equal(q.cards.passed, view.headline.passed);
+  assert.equal(q.cards.passed + q.cards.failed, view.headline.decided);
+  assert.deepEqual(q.cards, { passed: 1, failed: 2, unknown: 1, invalid: 0, notReached: 0, total: 4, accuracy: 1 / 3 }, 'the control is not in the cards');
+  assert.equal(q.strict.total, 4, 'nor in the strict score');
+  assert.equal(view.headline.text, 'Справился в 1 из 3 проверенных ситуаций — 33%.');
+  assert.ok(q.headline.startsWith('Справился (запрос выполнен и правила промпта соблюдены) в 1 из 3 карточек (33%). '), q.headline);
+  assert.match(q.headline, /\. Без решения: 1; разобрано человеком 0 из 5 диалогов\.$/);
+  assert.equal(q.cardsLabel, 'Справился · запрос и правила промпта');
+  assert.ok(htmlReport(r).includes('<h3>Справился · запрос и правила промпта</h3>'), 'the HTML grid carries the same label');
+  assert.ok(!htmlReport(r).includes('Достижение бизнес-цели'));
+});
+
+test('reply quality never moves the report number: it is its own row, and a pass with a quality failure is counted and named', () => {
+  const rubrics = [GOAL_ATTAINMENT, PROMPT_COMPLIANCE, REPLY_QUALITY];
+  const q = qualitySummary(judgedRecord([judgedCard('a', rubrics, ['pass', 'pass', 'fail']), judgedCard('b', rubrics, ['fail', 'fail', 'pass'])]));
+  assert.deepEqual([q.cards.passed, q.cards.failed], [1, 1]);
+  assert.equal(q.strict.goalMetWithOtherFailures, 1);
+  assert.ok(q.headline.startsWith('Справился (запрос выполнен и правила промпта соблюдены) в 1 из 2 карточек (50%). Полностью прошли все критерии: 0 из 2 (0%). В 1 карточке справился, но провален другой критерий. '), q.headline);
+  const quality = q.metrics.find(m => m.id === 'reply_quality');
+  assert.ok(quality, 'reply quality keeps its own row');
+  assert.deepEqual([quality!.passed, quality!.failed], [1, 1]);
+});
+
+test('cardsLabel names the rule the number is counted by', () => {
+  assert.equal(qualitySummary(judgedRecord([judgedCard('a', [GOAL_ATTAINMENT, PROMPT_COMPLIANCE], ['pass', 'pass'])])).cardsLabel, 'Справился · запрос и правила промпта');
+  const goalOnly = qualitySummary(judgedRecord([judgedCard('a', [GOAL_ATTAINMENT, REPLY_QUALITY], ['pass', 'fail'])]));
+  assert.equal(goalOnly.cardsLabel, 'Справился · запрос');
+  assert.ok(goalOnly.headline.startsWith('Справился (запрос выполнен) в 1 из 1 карточки (100%). '), goalOnly.headline);
+  const legacy = qualitySummary(record({ scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] }));
+  assert.equal(legacy.primary, 'all_criteria');
+  assert.equal(legacy.cardsLabel, 'Справился · карточки');
+  assert.ok(htmlReport(record({ scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] })).includes('<h3>Справился · карточки</h3>'));
+  // A control whose rules were broken never turns a goal-only set into a ruled one.
+  const mixed = qualitySummary(judgedRecord([judgedCard('a', [GOAL_ATTAINMENT], ['pass']), judgedCard('ctl', [GOAL_ATTAINMENT, PROMPT_COMPLIANCE], ['pass', 'fail'])], { positiveControlScenarioIds: ['ctl'] }));
+  assert.equal(mixed.cardsLabel, 'Справился · запрос');
 });
 
 test('an unresolved simulator flag makes the card undecided on the first screen instead of counting as a failure, and clusters fall back to weak spots', () => {
@@ -236,8 +402,9 @@ test('an unresolved simulator flag makes the card undecided on the first screen 
   assert.deepEqual([cleared.cards.passed, cleared.cards.failed, cleared.cards.unknown], [0, 1, 0]);
   assert.equal(cleared.humanQueue.total, 0);
   assert.equal(cleared.causes[0]!.name, 'Цель выполнена');
-  assert.equal(cleared.causes[0]!.example?.quote, 'Агент не назвал путь в СберБизнес. Вместо этого он переспросил терминал.', 'the judge preamble is stripped from the quote');
+  assert.equal(cleared.causes[0]!.example?.quote, 'ok', 'the verified agent reply is quoted, never the judge rationale');
   assert.equal(cleared.causes[0]!.example?.seq, 1);
+  assert.ok(cleared.causes[0]!.example?.explanation, 'the full explanation is saved with the cause');
 });
 
 test('plural forms and sentence-bounded shortening', () => {
@@ -532,7 +699,8 @@ test('weak spots, stages and saved failure clusters use authoritative human rubr
   assert.deepEqual(verdict.weakSpots.filter(spot => spot.kind === 'metric').map(spot => [spot.description, spot.failures]), [['Формат ответа', 1]]);
   assert.deepEqual(verdict.stages.map(stage => [stage.stage, stage.passed, stage.evaluated]), [['формат', 1, 2], ['цель', 2, 2]]);
   const summary = qualitySummary(r);
-  assert.deepEqual([summary.causes[0]?.dialogues, summary.causes[0]?.example?.trialId, summary.causes[0]?.example?.quote], [1, 't2', 'r']);
+  // The weak-spot fallback follows the same rule: the verified reply of that dialogue.
+  assert.deepEqual([summary.causes[0]?.dialogues, summary.causes[0]?.example?.trialId, summary.causes[0]?.example?.quote], [1, 't2', 'ok']);
 });
 
 test('multiple disputed criteria count as one disputed dialogue', () => {
@@ -586,6 +754,97 @@ test('the headline names only non-zero leftovers, exclusions sit next to the num
       { dialogueId: 'b', kind: 'customer_data', reason: 'нужна заявка клиента' },
       { dialogueId: 'c', kind: 'length', reason: 'нужны 1–16 реплик клиента' },
     ] }));
-    assert.equal(excluded.coverage, 'Не вошли в набор 3 диалога: нужны данные клиента — 2, прочее — 1. В accuracy они не считаются.');
+    assert.equal(excluded.coverage, 'Не вошли в набор 3 диалога: нужны данные клиента — 2, слишком длинный диалог или нет реплик клиента — 1. В accuracy они не считаются.');
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('a cause example that cannot be quoted says so instead of showing a judge rationale', () => {
+  const failed = trial('t1', 'a', 'fail', 'fail');
+  // No exact check failed, and the judge cites words the stored reply does not contain.
+  failed.checks = [];
+  failed.assessments = [{ metricId: 'goal', result: 'fail', rationale: 'Агент ошибся.', evidence: [1], citations: [{ seq: 1, quote: 'этого в ответе нет' }] }];
+  const q = qualitySummary(record({ scenarios: [scenario('a')], trials: [failed],
+    failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
+  assert.equal(q.causes[0]?.example?.quote, 'реплика агента не подтверждена цитатой');
+  assert.equal(q.causes[0]?.example?.seq, undefined);
+  assert.equal(q.causes[0]?.example?.verified, false, 'the gap travels with the example, not inside the quote');
+  assert.ok(!JSON.stringify(q.causes[0]).includes('Агент ошибся'));
+
+  // No surface may wrap that status line in «…»: doing so states that the agent said it.
+  const causeLine = qualityLines(q).causes[0]!;
+  assert.match(causeLine, /Карточка a: реплика агента не подтверждена цитатой/);
+  assert.doesNotMatch(causeLine, /«реплика агента не подтверждена цитатой»/);
+});
+
+test('a verified reply is still quoted, and only a verified one', () => {
+  const failed = trial('t1', 'a', 'fail', 'fail');
+  failed.checks = [];
+  const q = qualitySummary(record({ scenarios: [scenario('a', false)], trials: [failed],
+    failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
+  assert.equal(q.causes[0]?.example?.verified, true);
+  assert.equal(q.causes[0]?.example?.quote, 'ok');
+  assert.match(qualityLines(q).causes[0]!, /Карточка a: «ok»/);
+});
+
+test('the flattened cause quote is clamped for the report while the board keeps the whole reply', () => {
+  const long = `Здравствуйте! ${'Разъясняю условия эквайринга по пунктам. '.repeat(40)}`.trim();
+  const failed = trial('t1', 'a', 'fail', 'fail');
+  failed.checks = [];
+  failed.events = [{ seq: 0, type: 'user', text: 'hi' }, { seq: 1, type: 'assistant', text: long }];
+  const q = qualitySummary(record({ scenarios: [scenario('a', false)], trials: [failed],
+    failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
+  const example = q.causes[0]?.example;
+  assert.ok(example, 'the cluster has an example');
+  // The exporters inline this string into one <li>; a multi-thousand-character reply destroys the
+  // cause list the customer reads first.
+  assert.ok(long.length > 1000);
+  assert.ok(example.quote.length <= 221, `the report quote is clamped, got ${example.quote.length}`);
+  assert.equal(example.quote, shorten(long));
+  // The board wraps and shows every word, so the explanation keeps the reply in full.
+  assert.equal(example.explanation?.said?.quote, long);
+});
+
+test('a failed exact check is quoted with its own evidence, not with the explanation', () => {
+  const failed = trial('t1', 'a', 'fail', 'fail');
+  const q = qualitySummary(record({ scenarios: [scenario('a')], trials: [failed],
+    failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
+  assert.equal(q.causes[0]?.example?.quote, 'осталось 0');
+  assert.equal(q.causes[0]?.example?.explanation, undefined);
+});
+
+test('required checkpoint decisions reach the existing accuracy while diagnostics remain explanatory', async () => {
+  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { libraryFixture } = await import('./helpers/scenario-library.js');
+  const library = libraryFixture();
+  const s = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  const t = trial('controlled', s.id, 'ungraded', 'pass'); t.familyId = s.familyId; t.checks = []; t.initialState = s.initialState; t.finalState = s.initialState;
+  t.assessments = [{ metricId: 'library_required', result: 'pass', rationale: 'Корректный отказ', evidence: [1] }];
+  t.checkpoints = [{ checkpointId: 'ask_terminal', requirementId: 'terminal_rule', observation: 'reply', role: 'required', result: 'fail', evidence: [1], rationale: 'Обязательное уточнение пропущено' },
+    { checkpointId: 'diagnostic', requirementId: 'terminal_rule', observation: 'reply', role: 'diagnostic', result: 'fail', evidence: [1], rationale: 'Диагностика' }];
+  const r = record({ scenarios: [s], trials: [t] });
+  assert.equal(qualitySummary(r).cards.accuracy, 0);
+  t.checkpoints[0]!.result = 'pass';
+  assert.equal(qualitySummary(r).cards.accuracy, 1);
+  t.checkpoints[0]!.result = 'unknown';
+  assert.equal(qualitySummary(r).cards.accuracy, null);
+  assert.match(trialProofLines(r, t.id).lines.join('\n'), /КОНТРОЛЬНЫЕ ТОЧКИ/);
+  assert.match(trialProofLines(r, t.id).lines.join('\n'), /terminal_rule/);
+});
+
+test('conditional deterministic checkpoints use checkpoint completeness rather than unconditional code-check counts', async () => {
+  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const { libraryFixture } = await import('./helpers/scenario-library.js');
+  const { checkpointReceipt } = await import('../src/checkpoints.js');
+  const library = libraryFixture();
+  library.variants[0]!.evaluationSpec.checkpoints[0]!.check = { id: 'literal', kind: 'answer_equals', description: 'Точная инструкция', value: 'Инструкция' };
+  const s = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  const t = trial('controlled_exact', s.id, 'ungraded', 'pass'); t.familyId = s.familyId; t.initialState = s.initialState; t.finalState = s.initialState; t.checks = []; t.assessments = [];
+  const raw = [{ checkpointId: 'ask_terminal', result: 'not_applicable' as const, evidence: [0], rationale: 'Условие отсутствует' }];
+  t.checkpoints = raw.map(r => ({ ...r, requirementId: 'terminal_rule', observation: 'reply', role: 'required' }));
+  t.checkpointReceipt = checkpointReceipt(s, t, t.checkpoints, raw);
+  const r = record({ scenarios: [s], trials: [t] });
+  assert.equal(qualitySummary(r).cards.accuracy, 1);
+  assert.equal(qualitySummary(r).metrics.some(m => m.id === 'code'), false);
+  delete t.checkpoints; delete t.checkpointReceipt;
+  assert.equal(qualitySummary(r).cards.accuracy, null);
 });

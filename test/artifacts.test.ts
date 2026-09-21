@@ -7,6 +7,8 @@ import { ExperimentLab, draftHash } from '../src/experiment.js';
 import { demoEvaluationInput, demoInput } from '../src/demo.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
 import { htmlReport, jsonReport, markdownReport } from '../src/report.js';
+import { sealJudgeReceipt } from '../src/judge.js';
+import type { Experiment, JudgeAudit } from '../src/contracts.js';
 
 async function setup(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-artifacts-'));
@@ -50,7 +52,14 @@ test('navigation-independent snapshots export matching comparisons and paired ev
   assert.deepEqual(snapshot.comparison, reopened.comparison);
   assert.deepEqual(snapshot.before, before);
   assert.equal(JSON.parse(await readFile(a.evidence, 'utf8')).id, after.id, 'canonical evidence remains a raw Experiment');
-  assert.ok(snapshot.traceJournal.includes(after.trials[0]!.id));
+  // The journal stays next to the record; the export only names it.
+  assert.deepEqual(Object.keys(snapshot.traceJournal).sort(), ['bytes', 'file']);
+  assert.equal(snapshot.traceJournal.file, `${after.id}.trace.jsonl`);
+  assert.equal(typeof snapshot.traceJournal.bytes, 'number');
+  assert.equal(snapshot.traceJournal.bytes, Buffer.byteLength(reopened.traceJournal));
+  const firstJournalLine = reopened.traceJournal.split('\n').find(Boolean);
+  assert.ok(firstJournalLine, 'the fixture run wrote a journal');
+  assert.equal((await readFile(a.snapshot, 'utf8')).includes(firstJournalLine), false);
   const html = await readFile(a.htmlReport, 'utf8');
   const markdown = await readFile(a.report, 'utf8');
   for (const text of [html, markdown]) {
@@ -91,6 +100,12 @@ test('missing parents and journals remain explicit without losing current eviden
   } };
   const recovered = await evidenceBundle(legacy, lab.store);
   assert.equal(recovered.comparisonSource?.kind, 'embedded');
+  assert.equal(recovered.view?.stability?.skipped, 'исходный прогон недоступен', 'a legacy suite has no source identity for stability');
+  // A source that exists but cannot be read is reported, not replaced by the embedded copy.
+  const unreadable = await evidenceBundle(legacy, { get: async () => { throw new Error('Experiment record exceeds 50 MB'); }, traceJournal: async () => '' });
+  assert.equal(unreadable.before, undefined);
+  assert.equal(unreadable.comparisonSource?.kind, 'parent');
+  assert.match(unreadable.warnings[0] ?? '', /не удалось прочитать.*встроенная копия не подставлялась.*50 MB/);
   assert.equal(recovered.comparison?.fixed.length, 1, 'legacy one-trial suite evidence remains readable');
 });
 
@@ -119,6 +134,8 @@ test('a saved suite carries every attempt and compares from embedded evidence in
   assert.equal(bundle.comparisonSource?.kind, 'embedded');
   assert.equal(bundle.before?.id, before.id);
   assert.equal(bundle.comparison?.fixed.length, 1);
+  assert.ok(loaded.sourceEvidence?.identity, 'a new suite embeds the source run identity');
+  assert.equal(bundle.view?.stability?.skipped, 'агент изменился между прогонами', 'a fix of the agent is not called instability');
   assert.equal(bundle.comparison?.regressed.length, 0);
   assert.equal(bundle.comparison?.pairs.length, 2);
   assert.match(bundle.warnings.join('\n'), /парный diff, не статистическая оценка/);
@@ -210,4 +227,84 @@ test('every export preserves simulator-check evidence without research scorecard
   assert.equal(json.experiment.trials[0].simulatorChecks[0].id, 'simulator_loop');
   assert.equal(json.evidence.simulator, undefined);
   assert.equal(json.evidence.modeValue, undefined);
+});
+
+test('a receipt-only trial names its judge and sidecar file without embedding any audit', async t => {
+  const { lab, after } = await twoRuns(t);
+  const audit: JudgeAudit = { protocolHash: 'protocol-<v1>', inputHash: 'input', provider: 'openrouter', model: 'judge-<model>', prompt: 'p', input: '{}',
+    attempts: [0, 1, 2].map(() => ({ startedAt: 'now', raw: 'RAW_JUDGE_REPLY', assessments: [{ metricId: 'demo_task_state', result: 'pass' as const, rationale: 'r', evidence: [0] }] })), notApplicable: [] };
+  const trial = after.trials[0]!;
+  delete trial.judgeAudit;
+  trial.judgeReceipt = sealJudgeReceipt(audit, true);
+  const legacy = structuredClone(trial);
+  delete legacy.judgeReceipt;
+  legacy.judgeAudit = audit;
+  after.sourceEvidence = { runId: 'legacy-source', trials: [legacy], humanReviews: [] };
+  const bundle = await evidenceBundle(after, lab.store);
+  const html = htmlReport(bundle);
+  assert.match(html, new RegExp(`${after.id}\\.judge/${trial.id}\\.json`));
+  assert.match(html, /openrouter\/judge-&lt;model&gt;/);
+  assert.match(html, /protocol-&lt;v1&gt;/);
+  assert.match(html, /3 вызовов в свежих сессиях/);
+  assert.doesNotMatch(html, /&quot;attempts&quot;|"attempts"/);
+  assert.doesNotMatch(html, /RAW_JUDGE_REPLY/, 'the embedded source run carries no serialized audit');
+  assert.doesNotMatch(html, /judge-<model>/);
+  const markdown = markdownReport(bundle);
+  assert.match(markdown, /Судья: openrouter\/judge-&lt;model&gt;, 3 вызовов в свежих сессиях/);
+  assert.match(markdown, /\.judge\/.*\.json/);
+  assert.doesNotMatch(markdown, /RAW_JUDGE_REPLY/);
+
+  // A legacy trial keeps its audit in the record, but the reports still only name it.
+  const old = structuredClone(after);
+  old.trials[0] = structuredClone(legacy);
+  const oldBundle = await evidenceBundle(old, lab.store);
+  const oldHtml = htmlReport(oldBundle);
+  assert.match(oldHtml, /3 вызовов в свежих сессиях/);
+  assert.doesNotMatch(oldHtml, /RAW_JUDGE_REPLY/);
+  assert.match(markdownReport(oldBundle), /Судья: openrouter\/judge-&lt;model&gt;, 3 вызовов.*в экспорт они не входят/);
+  assert.doesNotMatch(oldHtml, /полные данные и сравнение доступны в JSON-снимке/);
+  // No exported report embeds a full audit, legacy records included.
+  const oldJson = jsonReport(oldBundle);
+  assert.doesNotMatch(oldJson, /RAW_JUDGE_REPLY|"judgeAudit"/);
+  assert.equal(JSON.parse(oldJson).judgeAudits.omittedLegacyAudits, 2);
+  // Audits inside the source run's own embedded evidence are counted too.
+  const nested = { ...oldBundle, before: { ...oldBundle.before!, sourceEvidence: { runId: 'older-source', trials: [structuredClone(legacy)], humanReviews: [] } } };
+  assert.equal(JSON.parse(jsonReport(nested)).judgeAudits.omittedLegacyAudits, 3);
+  assert.doesNotMatch(jsonReport(nested), /RAW_JUDGE_REPLY/);
+  assert.match(JSON.parse(oldJson).judgeAudits.location, /\.judge\//);
+});
+
+test('receipts are checked against their sidecar files before a comparison trusts them', async t => {
+  const { lab, before, after } = await twoRuns(t);
+  const receiptRun = (run: Experiment) => {
+    const copy = structuredClone(run);
+    for (const trial of copy.trials) {
+      const audit: JudgeAudit = { protocolHash: 'p', inputHash: 'i', provider: 'offline', model: 'judge', prompt: 'p', input: '{}',
+        attempts: [{ startedAt: 'now', raw: `raw ${trial.id}` }], notApplicable: [] };
+      delete trial.judgeAudit;
+      trial.judgeReceipt = sealJudgeReceipt(audit, true);
+      lab.store.writeJudgeAudit(copy.id, trial.id, audit);
+    }
+    return copy;
+  };
+  const current = receiptRun(after);
+  const clean = await evidenceBundle(current, lab.store);
+  assert.ok(clean.warnings.every(warning => !/квитанция|полной оценки/.test(warning)), JSON.stringify(clean.warnings));
+  assert.ok(clean.record.trials.every(trial => trial.judgeReceipt?.complete));
+  // An edited sidecar no longer matches its sealed hash.
+  const tampered = current.trials[0]!;
+  lab.store.writeJudgeAudit(current.id, tampered.id, { protocolHash: 'p', inputHash: 'i', provider: 'offline', model: 'judge', prompt: 'p', input: '{}',
+    attempts: [{ startedAt: 'now', raw: 'edited' }], notApplicable: [] });
+  const edited = await evidenceBundle(current, lab.store);
+  assert.equal(edited.record.trials[0]!.judgeReceipt?.complete, false);
+  assert.equal(current.trials[0]!.judgeReceipt?.complete, true, 'the stored record is never changed');
+  assert.ok(edited.warnings.some(warning => warning.includes('не совпала') && warning.includes(tampered.id)), JSON.stringify(edited.warnings));
+  // A missing sidecar keeps the record-only check and says so.
+  const orphan = structuredClone(current);
+  orphan.id = 'receipt-without-sidecar';
+  delete orphan.parentRunId;
+  const missing = await evidenceBundle(orphan, lab.store);
+  assert.ok(missing.record.trials.every(trial => trial.judgeReceipt?.complete));
+  assert.ok(missing.warnings.some(warning => warning.includes('не найден') && warning.includes('только по самой записи')), JSON.stringify(missing.warnings));
+  assert.equal(before.id, current.parentRunId);
 });

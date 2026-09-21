@@ -3,8 +3,8 @@ import { test } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources, JUDGE_PROTOCOL } from '../src/judge.js';
-import { emptyUsage, goalAttainment, RAG_METRIC_IDS, ragEvidenceComplete, replyQuality, simulatorFidelity, type JudgeAudit, type Scenario, type Trial } from '../src/contracts.js';
+import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources, sealJudgeReceipt, JUDGE_PROTOCOL } from '../src/judge.js';
+import { emptyUsage, fingerprint, goalAttainment, RAG_METRIC_IDS, ragEvidenceComplete, replyQuality, simulatorFidelity, type JudgeAudit, type Scenario, type Trial } from '../src/contracts.js';
 import { ExperimentStore } from '../src/store.js';
 
 const scenario: Scenario = { id: 'card', familyId: 'family', title: 'A fixed input', split: 'dev', provenance: 'synthetic', requirementIds: [],
@@ -322,6 +322,111 @@ test('journal failure stops judgment before another request and original replies
   assert.equal(JSON.parse(journal.trim().split('\n').at(-1)!).judgeAudit.attempts[0].raw, row('met', 'not_met'));
 });
 
+test('a judgment lives in the private sidecar, the trial keeps a verifiable receipt and the journal gets it once', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'judge-sidecar-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ExperimentStore(directory); await store.init();
+  try {
+    let lastAudit: JudgeAudit | undefined;
+    const result = await assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(id, a, final) {
+      lastAudit = a;
+      store.writeJudgeAudit('run', id, a);
+      if (final) store.appendJudgment('run', id, a);
+    } }, async () => row('met', 'not_met'));
+    const complete = hasCompleteJudgment({ ...input, trial: { ...input.trial, assessments: result, judgeAudit: lastAudit } });
+    assert.equal(complete, true);
+    const judged: Trial = { ...input.trial, assessments: result, judgeReceipt: sealJudgeReceipt(lastAudit!, complete) };
+    assert.equal(judged.judgeAudit, undefined);
+    assert.equal(hasCompleteJudgment({ ...input, trial: judged }), true);
+    assert.equal(fingerprint(await store.readJudgeAudit('run', 'trial')), judged.judgeReceipt!.auditHash);
+    const lines = (await store.traceJournal('run')).trim().split('\n').filter(line => 'judgeAudit' in JSON.parse(line));
+    assert.equal(lines.length, 1, 'the journal gets the audit once per finished judgment');
+  } finally { await store.close(); }
+});
+
+test('a receipt verifies only against the record it came from and never outranks a full audit', async () => {
+  const judge = async (outputs: string[]) => {
+    let audit: JudgeAudit | undefined, calls = 0;
+    const result = await assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, a) { audit = a; } },
+      async () => outputs[calls++]!);
+    const complete = hasCompleteJudgment({ ...input, trial: { ...trial, assessments: result, judgeAudit: audit } });
+    return { audit: audit!, result, receipt: sealJudgeReceipt(audit!, complete) };
+  };
+  const { audit, result, receipt } = await judge([row('met', 'not_met'), row('met', 'not_met')]);
+  const base = { ...input, trial: { ...trial, assessments: result, judgeReceipt: receipt } };
+  assert.equal(hasCompleteJudgment(base), true);
+  const tampered: [string, (value: typeof base) => void][] = [
+    ['event text', value => { value.trial.events[1]!.text = 'Do something else.'; }],
+    ['scenario criterion', value => { value.scenario.successCriteria = 'A different outcome'; }],
+    ['recorded assessment', value => { value.trial.assessments![0]!.result = 'fail'; }],
+    ['receipt vote', value => { value.trial.judgeReceipt!.votes[0]!.result = 'fail'; }],
+    ['vote error', value => { value.trial.judgeReceipt!.votes[1]!.error = true; }],
+    ['incomplete receipt', value => { value.trial.judgeReceipt!.complete = false; }],
+    ['protocol', value => { value.trial.judgeReceipt!.protocolHash = 'another-protocol'; }],
+    ['missing vote', value => { value.trial.judgeReceipt!.votes.pop(); }],
+    ['assessment error', value => { value.trial.assessmentError = 'Judge failed'; }],
+    ['not applicable list', value => { value.trial.judgeReceipt!.notApplicable = []; }],
+  ];
+  for (const [name, mutate] of tampered) {
+    const value = structuredClone(base);
+    mutate(value);
+    assert.equal(hasCompleteJudgment(value), false, `receipt must fail after changing the ${name}`);
+  }
+  assert.equal(hasCompleteJudgment(structuredClone(base)), true, 'tampering never touched the original');
+  assert.equal(sealJudgeReceipt(audit, true).auditHash, fingerprint(audit));
+
+  const split = await judge([row('met', 'not_met'), row('not_met', 'met')]);
+  assert.equal(split.result[0]!.result, 'unknown');
+  const splitTrial = { ...input, trial: { ...trial, assessments: split.result, judgeReceipt: split.receipt } };
+  assert.equal(hasCompleteJudgment(splitTrial), true, 'a split vote set verifies only as unknown');
+  for (const forged of ['pass', 'fail'] as const) {
+    const value = structuredClone(splitTrial);
+    value.trial.assessments[0]!.result = forged;
+    assert.equal(hasCompleteJudgment(value), false, `a split vote set cannot back ${forged}`);
+  }
+
+  const both = structuredClone({ ...base, trial: { ...base.trial, judgeAudit: audit } });
+  assert.equal(hasCompleteJudgment(both), true);
+  both.trial.judgeAudit!.attempts[0]!.raw = 'not the saved model response';
+  assert.equal(hasCompleteJudgment(both), false, 'a full audit is always the judge, even beside a valid receipt');
+
+  const legacy = structuredClone(audit);
+  for (const attempt of legacy.attempts) { delete attempt.metricId; delete attempt.input; }
+  const legacyReceipt = sealJudgeReceipt(legacy, true);
+  assert.equal(legacyReceipt.votes.length, 2);
+  assert.equal(hasCompleteJudgment({ ...base, trial: { ...base.trial, judgeReceipt: legacyReceipt } }), true);
+  legacy.attempts[0]!.error = 'Invalid judgment';
+  assert.equal(sealJudgeReceipt(legacy, true).complete, false, 'a failed legacy attempt never seals as complete');
+});
+
+test('every judgment reports exactly one final audit, and a failing final save never hides the original error', async () => {
+  const cases: [string, () => Promise<string>, RegExp | null][] = [
+    ['two passing votes', async () => row('met', 'not_met'), null],
+    ['malformed response', async () => 'not json', /Judge response rejected/],
+    ['thrown request', async () => { throw new Error('network down'); }, /network down/],
+  ];
+  for (const [name, respond, rejection] of cases) {
+    const finals: boolean[] = [];
+    let last: JudgeAudit | undefined;
+    const run = assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, a, final) {
+      if (final) { finals.push(final); last = a; }
+    } }, respond);
+    if (rejection) await assert.rejects(run, rejection); else await run;
+    assert.equal(finals.length, 1, `${name}: one final judgment`);
+    assert.equal(last!.attempts.length, 2, `${name}: the final audit holds every settled vote`);
+  }
+  await assert.rejects(assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, _a, final) {
+    if (final) throw new Error('final save failed');
+  } }, async () => { throw new Error('network down'); }), /network down/);
+  await assert.rejects(assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, _a, final) {
+    if (final) throw new Error('final save failed');
+  } }, async () => row('met', 'not_met')), /final save failed/, 'a lost final save is never a silent success');
+  let finals = 0;
+  const none = await assessRepeated({ ...input, scenario: { ...scenario, metrics: [] } }, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {},
+    onJudgment() { finals++; } }, async () => row('met', 'not_met'));
+  assert.equal(none.length + finals, 0, 'no rubrics, no judgment, nothing to report');
+});
+
 test('reactive fidelity applies to actual simulator decisions, including a decision to stop, not to the fixed opening', async () => {
   for (const invoked of [false, true]) {
     let audit: JudgeAudit | undefined;
@@ -375,4 +480,17 @@ test('all votes of one dialogue are requested at once and the audit keeps a stab
   assert.equal(peak, 4, 'two rubrics times two votes run concurrently');
   assert.deepEqual(result.map(r => [r.metricId, r.result]), [['goal', 'pass'], ['tone', 'pass']]);
   assert.deepEqual(audit!.attempts.map(a => a.metricId), ['goal', 'goal', 'tone', 'tone']);
+});
+
+test('a judgment made on observable prompt rules is complete against the same sources, not the raw prompt', async () => {
+  const sources = [{ id: 'p', name: 'Prompt', content: 'Always cite the tariff page.', hash: 'h', kind: 'prompt' as const }];
+  const requirements = [{ id: 'cite', text: 'Cite the tariff page', sourceId: 'p', quote: 'Always cite the tariff page.', critical: false }];
+  const seen = observableSources(sources, requirements);
+  let audit: JudgeAudit | undefined;
+  const assessments = await assessRepeated({ ...input, sources: seen }, model,
+    { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, value) { audit = value; } },
+    async () => row('met', 'not_met'));
+  const recorded = { ...trial, assessments, judgeAudit: audit };
+  assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(sources, requirements), trial: recorded }), true);
+  assert.equal(hasCompleteJudgment({ scenario, sources, trial: recorded }), false, 'the raw prompt is not what the judge saw');
 });

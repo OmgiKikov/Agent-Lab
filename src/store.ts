@@ -1,8 +1,19 @@
+import type { GeneratorRecord } from './generator-evaluation.js';
+import { fingerprint } from './contracts.js';
+import { prepareResolutionPolicy, verifyResolutionPolicy, resolutionDraftHash, evaluateResolution, applyResolution } from './resolution.js';
+import type { ResolutionPolicy } from './resolution-contracts.js';
+import { diagnosticFileSchema, verifyDiagnosticPlan, type DiagnosticFile, type DiagnosticPlan } from './diagnostics.js';
+import { atomicPrivateJson } from './issues.js';
+import { IssueFiles, syncIssues, decideIssueMerge, issueDecisionSchema, type Issue, type IssueDecision } from './issues.js';
 import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { experimentSchema, judgeAuditSchema, type Experiment, type TraceEvent, type JudgeAudit } from './contracts.js';
+
+import { libraryHash } from './scenario-library.js';
+import { ScenarioFiles } from './scenario-store.js';
+import type { ImportBatch, ScenarioLibrary } from './scenario-contracts.js';
 
 const idPattern = /^[a-zA-Z0-9_-]{1,80}$/;
 type LockOwner = { pid: number; token: string };
@@ -19,6 +30,158 @@ export class ExperimentStore {
   readonly directory: string;
   diagnostics: { id: string; message: string }[] = [];
   private lockToken: string | null = null;
+  private writerQueue: Promise<unknown> = Promise.resolve();
+  private async writeTransaction<T>(work: () => Promise<T>): Promise<T> {
+    const pending = this.writerQueue.then(async () => {
+      if (!this.lockToken) throw new Error('Для изменения записи откройте лабораторию как писатель.');
+      await this.recoverPendingPublications();
+      return work();
+    });
+    this.writerQueue = pending.catch(() => {});
+    return pending;
+  }
+  readImport(id: string): Promise<ImportBatch> { return new ScenarioFiles(this.directory).readImport(id); }
+  writeImport(batch: ImportBatch): Promise<ImportBatch> { return this.writeTransaction(() => new ScenarioFiles(this.directory).writeImport(batch)); }
+  readLibrary(id: string, hash?: string): Promise<ScenarioLibrary> { return new ScenarioFiles(this.directory).readLibrary(id, hash); }
+  writeLibrary(library: ScenarioLibrary, expectedHash?: string): Promise<void> {
+    return this.writeTransaction(() => new ScenarioFiles(this.directory).writeLibrary(library, expectedHash));
+  }
+  /** Finish durable publication intents before accepting another mutation; readers remain lock-free. */
+  recoverPublications(): Promise<void> { return this.writeTransaction(async () => {}); }
+  private async recoverPendingPublications(): Promise<void> {
+    const files = new ScenarioFiles(this.directory);
+    for (const { record, expectedHash } of await files.pendingPublications()) {
+      const library = record.librarySnapshot!;
+      const current = await files.readLibrary(library.id).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
+      if (!current || libraryHash(current) !== libraryHash(library)) await files.writeLibrary(library, expectedHash);
+      await this.saveRecord(record);
+      await files.finishPublication(record.id);
+    }
+  }
+  publishLibrary(record: Experiment, library: ScenarioLibrary, expectedHash?: string): Promise<void> {
+    return this.writeTransaction(async () => {
+      const next = experimentSchema.parse({ ...record, librarySnapshot: library });
+      const files = new ScenarioFiles(this.directory);
+      await files.checkLibraryWrite(library, expectedHash);
+      await files.retainLibrary(library);
+      await files.writePublication(next, expectedHash);
+      await files.writeLibrary(library, expectedHash ?? libraryHash(library));
+      await this.saveRecord(next);
+      await files.finishPublication(next.id);
+    });
+  }
+  private generatorPath(id: string): string { if (!/^gen_[a-zA-Z0-9_-]{1,80}$/.test(id)) throw new Error('Неверный ID генератора.'); return join(this.directory,'generator-evals',`${id}.json`); }
+  async readGeneratorRecord(id:string):Promise<GeneratorRecord> {
+    const envelope=JSON.parse(await readFile(this.generatorPath(id),'utf8'));
+    if(envelope.hash!==fingerprint(envelope.record)||envelope.record.id!==id)throw new Error('Повреждена неизменяемая запись генератора.');
+    return envelope.record;
+  }
+  saveGeneratorRecord(record:GeneratorRecord):Promise<void> { const snapshot=structuredClone(record); return this.writeTransaction(async()=>{
+    const path=this.generatorPath(snapshot.id),old=await this.readGeneratorRecord(snapshot.id).catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;});
+    if(old&&fingerprint(old)!==fingerprint(snapshot))throw new Error('Запись генератора неизменяема.');
+    if(!old){await mkdir(join(this.directory,'generator-evals'),{recursive:true,mode:0o700});await atomicPrivateJson(path,{hash:fingerprint(snapshot),record:snapshot});}
+  }); }
+  private holdoutPath(hash:string):string {if(!/^[a-f0-9]{64}$/.test(hash))throw new Error('Неверный хеш holdout.');return join(this.directory,'generator-evals',`holdout_${hash}.json`);}
+  async assertGeneratorHoldoutFresh(hash:string,caseHashes:string[]=[]):Promise<void> {
+    for(const identity of [hash,...caseHashes]){
+    const existing=await readFile(this.holdoutPath(identity),'utf8').catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;});
+    if(existing)throw new Error('Holdout уже использован; нужна новая независимая скрытая выборка.');}
+    // Earlier audit versions consumed a whole-corpus hash. Read their immutable reports;
+    // changing the key recipe must never make already revealed inputs independent again.
+    if(caseHashes.length){
+      const names=await readdir(join(this.directory,'generator-evals')).catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;return [] as string[];});
+      for(const name of names.filter(name=>/^gen_[a-zA-Z0-9_-]+\.json$/.test(name))){
+        const record=await this.readGeneratorRecord(name.slice(0,-5));
+        if(record.kind!=='generator-evaluation'||record.holdoutConsumed===false)continue;
+        const cases=(record.corpus as {cases?:{split:string;input:unknown}[]}|undefined)?.cases;
+        if(cases?.some(c=>c.split==='holdout'&&caseHashes.includes(fingerprint(c.input))))throw new Error('Holdout уже использован в сохранённом аудите; новая версия протокола не скрывает прежние результаты.');
+      }
+    }
+  }
+  consumeGeneratorHoldout(hash:string,identity:Record<string,string>,caseHashes:string[]=[]):Promise<void> { return this.writeTransaction(async()=>{
+    await this.assertGeneratorHoldoutFresh(hash,caseHashes);await mkdir(join(this.directory,'generator-evals'),{recursive:true,mode:0o700});
+    for(const key of [hash,...caseHashes])await atomicPrivateJson(this.holdoutPath(key),{formatVersion:'1',hash,...identity,consumedAt:new Date().toISOString()});
+  }); }
+  private diagnosticPath(id: string): string { if (!/^diag_[a-f0-9]{40}$/.test(id)) throw new Error('Неверный ID диагностики.'); return join(this.directory, 'diagnostics', `${id}.json`); }
+  async readDiagnostic(id: string): Promise<DiagnosticFile> { const value = diagnosticFileSchema.parse(JSON.parse(await readFile(this.diagnosticPath(id), 'utf8'))); verifyDiagnosticPlan(value.plan); if (value.plan.id !== id) throw new Error('ID плана не совпадает.'); return value; }
+  saveDiagnostic(value: DiagnosticFile): Promise<void> { return this.writeTransaction(async () => {
+    const next = diagnosticFileSchema.parse(value); verifyDiagnosticPlan(next.plan);
+    const existing = await this.readDiagnostic(next.plan.id).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
+    if (existing?.runId && existing.runId !== next.runId || existing?.result && JSON.stringify(existing.result) !== JSON.stringify(next.result)) throw new Error('Диагностика уже выполнена; сохранённый результат неизменяем.');
+    await mkdir(join(this.directory, 'diagnostics'), { recursive: true, mode: 0o700 });
+    await atomicPrivateJson(this.diagnosticPath(next.plan.id), next);
+    const files = new IssueFiles(this.directory), current = await files.read(), issue = current.issues.find(i => i.id === next.plan.issueId);
+    if (issue && !issue.experiments.includes(next.plan.id)) { issue.experiments.push(next.plan.id); if (!issue.hypotheses.includes(next.plan.intervention.hypothesis)) issue.hypotheses.push(next.plan.intervention.hypothesis); await files.write(current); }
+  }); }
+  async readResolution(id: string) {
+    const file = (await new IssueFiles(this.directory).read()).resolutions.find(f => f.policy.id === id);
+    if (!file) throw new Error('Политика закрытия не найдена.');
+    verifyResolutionPolicy(file.policy); return file;
+  }
+  declareResolution(policy: ResolutionPolicy): Promise<void> { return this.writeTransaction(async () => {
+    verifyResolutionPolicy(policy);
+    const files = new IssueFiles(this.directory), journal = await files.read();
+    const existing = journal.resolutions.find(f => f.policy.id === policy.id);
+    if (existing) { if (existing.policy.ruleHash !== policy.ruleHash) throw new Error('Политика неизменна; нужны свежие прогоны обеих версий.'); return; }
+    const issue = journal.issues.find(i => i.id === policy.issueId);
+    if (!issue) throw new Error('Проблема не найдена.');
+    const baseline = await this.get(policy.baselineRunId), candidate = await this.get(policy.candidateRunId);
+    const previous = journal.resolutions.filter(f => f.policy.issueId === issue.id);
+    if (previous.some(f => f.policy.baselineRunId === baseline.id || Date.parse(baseline.createdAt) <= Date.parse(f.policy.declaredAt))) throw new Error('Изменённая политика требует свежего сравнения ОБЕИХ версий, включая новую базу.');
+    const checked = prepareResolutionPolicy({issueId:policy.issueId,baselineRunId:policy.baselineRunId,candidateRunId:policy.candidateRunId,reproducerIds:policy.reproducerIds,regressionIds:policy.regressionIds,stability:policy.stability},issue,baseline,candidate);
+    if (checked.candidateDraftHash !== policy.candidateDraftHash || checked.baselineEvidenceHash !== policy.baselineEvidenceHash || checked.baselineIdentity !== policy.baselineIdentity || checked.candidateIdentity !== policy.candidateIdentity || JSON.stringify(checked.reproducer) !== JSON.stringify(policy.reproducer) || JSON.stringify(checked.regression) !== JSON.stringify(policy.regression)) throw new Error('Данные изменились до сохранения политики.');
+    // A caller-supplied timestamp never establishes predeclaration: this writer observation does.
+    journal.resolutions.push({policy}); issue.status = 'checking';
+    issue.history.push({at:new Date().toISOString(),status:'checking',reason:`До запуска сохранена неизменная политика ${policy.id}.`,evidenceIds:[]});
+    issue.experiments.push(policy.id); await files.write(journal);
+  }); }
+  /** Called from the normal start path, so CLI run cannot bypass an attached policy. */
+  beginResolutionForRun(record: Experiment): Promise<void> { return this.writeTransaction(async () => {
+    const files = new IssueFiles(this.directory), journal = await files.read();
+    const declared = journal.resolutions.filter(f => f.policy.candidateRunId === record.id);
+    for (const file of declared) {
+      verifyResolutionPolicy(file.policy);
+      if (file.startedAt || file.result || record.trials.length || record.phase !== 'review') throw new Error('Сравнение по политике уже запускалось.');
+      if (resolutionDraftHash(record) !== file.policy.candidateDraftHash) throw new Error('Кандидат, набор или протокол изменён после объявления политики.');
+      file.startedAt = new Date().toISOString();
+    }
+    if (declared.length) await files.write(journal);
+  }); }
+  finishResolution(id: string) { return this.writeTransaction(async () => {
+    const files = new IssueFiles(this.directory), journal = await files.read();
+    const file = journal.resolutions.find(f => f.policy.id === id);
+    if (!file) throw new Error('Сначала сохраните политику до исполнения.');
+    const index = journal.issues.findIndex(i => i.id === file.policy.issueId && !i.mergedInto);
+    if (index < 0) throw new Error('Исходная проблема объединена; подготовьте новое сравнение для действующей проблемы.');
+    if (file.result) return { ...file, issue: journal.issues[index]! };
+    if (!file.startedAt) throw new Error('Нет сохранённого запуска по предварительной политике.');
+    const before = await this.get(file.policy.baselineRunId), after = await this.get(file.policy.candidateRunId);
+    if (['preparing','review','evaluating','baseline','improving','control'].includes(after.phase)) throw new Error('Кандидат ещё выполняется или не завершён; решение остаётся ожидающим.');
+    const result = evaluateResolution(file.policy,before,after,{before,after});
+    file.result=result; file.completedAt=new Date().toISOString(); journal.issues[index]=applyResolution(journal.issues[index]!,file.policy,result,file.completedAt);
+    await files.write(journal); return {...file,issue:journal.issues[index]!};
+  }); }
+  async readIssues(): Promise<Issue[]> { return (await new IssueFiles(this.directory).read()).issues; }
+  async readIssueJournal() { return new IssueFiles(this.directory).read(); }
+  syncIssues(record: Experiment): Promise<Issue[]> { return this.writeTransaction(async () => {
+    const files = new IssueFiles(this.directory), current = await files.read(), next = syncIssues(record, current.issues);
+    await files.write({ ...current, ...next, suggestions: [...current.suggestions, ...next.suggestions].filter((s, i, all) => all.findIndex(x => x.issueId === s.issueId && x.candidateId === s.candidateId) === i) });
+    return next.issues;
+  }); }
+  decideIssue(raw: IssueDecision): Promise<Issue[]> { return this.writeTransaction(async () => {
+    const decision = issueDecisionSchema.parse(raw), files = new IssueFiles(this.directory), current = await files.read();
+    const old = current.decisions.find(d => d.id === decision.id);
+    if (old) { if (JSON.stringify(old) !== JSON.stringify(decision)) throw new Error('ID решения уже использован.'); return current.issues; }
+    const issues = decideIssueMerge(current.issues, decision);
+    await files.write({ ...current, issues, decisions: [...current.decisions, decision], suggestions: current.suggestions.filter(s => s.issueId !== decision.fromIssueId && s.candidateId !== decision.fromIssueId) });
+    return issues;
+  }); }
+  rebuildIssues(): Promise<Issue[]> { return this.writeTransaction(async () => {
+    const files = new IssueFiles(this.directory), current = await files.read();
+    let issues = current.issues;
+    for (const record of await this.list()) if (!['preparing', 'review', 'evaluating', 'baseline', 'improving', 'control'].includes(record.phase)) issues = syncIssues(record, issues).issues;
+    await files.write({ ...current, issues }); return issues;
+  }); }
   constructor(directory: string) { this.directory = resolve(directory); }
   private path(id: string): string {
     if (!idPattern.test(id)) throw new Error('Invalid experiment ID');
@@ -52,7 +215,7 @@ export class ExperimentStore {
   async init(): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const observed = await this.owner();
-    if (!observed) { await this.acquire(); return; }
+    if (!observed) { await this.acquire(); try { await this.recoverPublications(); } catch (error) { await this.close(); throw error; } return; }
     if (alive(observed.pid)) throw busy();
     // ponytail: one recovery gate per local directory; ambiguous gates need manual inspection, not recursive lock recovery.
     const recoveryPath = join(this.directory, '.recovery');
@@ -70,11 +233,13 @@ export class ExperimentStore {
         await unlink(join(this.directory, '.lock'));
       }
       await this.acquire();
+      await this.recoverPublications();
     } finally {
       try { await recovery.close(); } finally { await unlink(recoveryPath); }
     }
   }
   async close(): Promise<void> {
+    await this.writerQueue;
     if (!this.lockToken) return;
     const token = this.lockToken;
     this.lockToken = null;
@@ -82,9 +247,11 @@ export class ExperimentStore {
     const owner = await this.owner();
     if (owner?.token === token) await unlink(lockPath);
   }
-  async save(record: Experiment): Promise<void> {
+  save(record: Experiment): Promise<void> { return this.writeTransaction(() => this.saveRecord(record)); }
+  private async saveRecord(record: Experiment): Promise<void> {
     if (!this.lockToken) throw new Error('Для изменения записи откройте лабораторию как писатель.');
     const validated = experimentSchema.parse(record);
+    if (validated.librarySnapshot) await new ScenarioFiles(this.directory).retainLibrary(validated.librarySnapshot);
     const target = this.path(validated.id);
     const temporary = `${target}.${randomUUID()}.tmp`;
     try {
@@ -135,5 +302,36 @@ export class ExperimentStore {
     if (!idPattern.test(trialId)) throw new Error('Invalid trial ID');
     // The existing evidence journal also survives interruption during assessment.
     appendFileSync(join(this.directory, `${id}.trace.jsonl`), `${JSON.stringify({ trialId, judgeAudit: judgeAuditSchema.parse(audit) })}\n`, { mode: 0o600, flush: true });
+  }
+  /** Full audit of one trial's judgment in `{id}.judge/{trialId}.json`, replaced atomically on every call. */
+  private judgeAuditPath(id: string, trialId: string): string {
+    this.path(id);
+    if (!idPattern.test(trialId)) throw new Error('Invalid trial ID');
+    return join(this.directory, `${id}.judge`, `${trialId}.json`);
+  }
+  // Synchronous on purpose: onJudgment is synchronous, and a crash must leave the last complete audit on disk.
+  writeJudgeAudit(id: string, trialId: string, audit: JudgeAudit): void {
+    if (!this.lockToken) throw new Error('Для записи оценки откройте лабораторию как писатель.');
+    const target = this.judgeAuditPath(id, trialId);
+    const content = JSON.stringify(judgeAuditSchema.parse(audit));
+    mkdirSync(join(this.directory, `${id}.judge`), { recursive: true, mode: 0o700 });
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, content, { mode: 0o600, flag: 'wx', flush: true });
+      renameSync(temporary, target);
+    } catch (error) {
+      try { unlinkSync(temporary); } catch { /* the temporary file was never created or already renamed */ }
+      throw error;
+    }
+  }
+  async readJudgeAudit(id: string, trialId: string): Promise<JudgeAudit | null> {
+    const target = this.judgeAuditPath(id, trialId);
+    let file;
+    try { file = await open(target, 'r'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
+    try {
+      if ((await file.stat()).size > 20_000_000) throw new Error('Judge audit exceeds 20 MB');
+      return judgeAuditSchema.parse(JSON.parse(await file.readFile('utf8')));
+    } finally { await file.close(); }
   }
 }

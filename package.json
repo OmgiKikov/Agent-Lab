@@ -15,7 +15,9 @@
     "extensions",
     "skills",
     "examples",
-    "README.md"
+    "README.md",
+    "test/fixtures/generator-corpus.json",
+    "docs/superpowers/scenario-lab-verification.md"
   ],
   "pi": {
     "extensions": [
