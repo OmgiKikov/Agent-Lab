@@ -93,7 +93,7 @@ export function nextStep(view: ResultView, options: { runId: string; surface: Su
   const { passed, decided } = view.headline;
   const chat = options.surface === 'chat';
   // In the conversation the next step is something to ask for; the board is only where the owner's own marks are made.
-  const marks = `Согласие с судьёй отмечается в /agent-lab ${shortId(options.runId)}.`;
+  const marks = 'Согласны ли вы с судьёй — скажите здесь же, отмечу.';
   if (view.control.warning !== null) return 'Дальше: проверьте судью и связь с агентом.';
   if (view.pending > 0) return 'Дальше: дождитесь конца прогона.';
   const queue = reviewQueue(view);

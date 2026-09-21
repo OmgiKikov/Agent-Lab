@@ -189,7 +189,12 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
       for (const path of semanticPaths(variant)) {
         const findings = assessment.findings.filter(f => f.variantId === variant.id && f.path === path);
         if (findings.length !== 1) add('semantic_missing', `variants.${variant.id}.${path}`, 'Нужна отдельная смысловая проверка поля', variant.id, 'needs_review');
-        else if (findings[0]!.status !== 'ready') add('semantic_finding', `variants.${variant.id}.${path}`, findings[0]!.reason, variant.id, findings[0]!.status as 'needs_review' | 'blocked');
+        else if (findings[0]!.status !== 'ready') {
+          // A question the owner settled in their own name stays settled for exactly that remark; a blocking remark is never the owner's to waive.
+          const settled = findings[0]!.status === 'needs_review' && library.ownerResolutions?.some(item => item.variantId === variant.id && item.path === path
+            && item.findingHash === digest({ path, reason: findings[0]!.reason }));
+          if (!settled) add('semantic_finding', `variants.${variant.id}.${path}`, findings[0]!.reason, variant.id, findings[0]!.status as 'needs_review' | 'blocked');
+        }
       }
       for (const finding of assessment.findings.filter(f => f.variantId === variant.id && !semanticPaths(variant).includes(f.path) && f.status !== 'ready')) {
         add('semantic_finding', `variants.${variant.id}.${finding.path}`, finding.reason, variant.id, finding.status as 'needs_review' | 'blocked');
@@ -408,6 +413,13 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
     Object.assign(fact, { statement: patch.statement, availability: patch.availability, reason: patch.reason, origin: { kind: 'owner', editId: patch.editId, text: patch.reason } });
     if (patch.value === undefined) delete fact.value; else fact.value = patch.value;
     variant.semanticReviewRequired = true;
+  } else if (patch.kind === 'resolve_finding') {
+    const variant = getVariant(patch.variantId);
+    const finding = next.semanticAssessment?.findings.find(item => item.variantId === variant.id && item.path === patch.path);
+    if (!finding || finding.status === 'ready') throw new Error('По этому полю нет открытого вопроса проверяющего');
+    if (finding.status === 'blocked') throw new Error('Это замечание блокирует запуск: его снимает исправление карточки, а не решение владельца');
+    next.ownerResolutions = [...(next.ownerResolutions ?? []).filter(item => !(item.variantId === variant.id && item.path === patch.path)),
+      { variantId: variant.id, path: patch.path, findingHash: digest({ path: patch.path, reason: finding.reason }), editId: patch.editId, reason: patch.reason }];
   } else if (patch.kind === 'edit_variant_text') {
     const variant = getVariant(patch.variantId);
     if (patch.field === 'opening') variant.userState.opening = patch.value;

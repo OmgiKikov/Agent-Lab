@@ -9,6 +9,7 @@ import agentLab from '../extensions/agent-lab.ts';
 import { asksFor, authorize, planLines, changeRows, deriveVariantInput, openingWithout, ownerBasis, ownerMessages, plainIssue, resolveVariant, variantDiff } from '../extensions/conversation.ts';
 import { callText, forgetFeeds } from '../extensions/render/feed.ts';
 import { ExperimentLab } from '../dist/experiment.js';
+import { recordSemanticAssessment, semanticPaths } from '../dist/scenario-library.js';
 import { createInputSchema, type Runtime } from '../dist/contracts.js';
 import { createDemoRuntime } from '../dist/demo.js';
 import { libraryHash, ownerFactEvidence } from '../dist/scenario-library.js';
@@ -651,4 +652,61 @@ test('review 92e30d3: «второй прогон» is the second row that was s
     const second = json(await tools.get('agent_lab_run')!.execute('progress', { action: 'progress', id: '2' }, undefined, undefined, ctx));
     assert.equal(second.id, status.runs[1].id, 'number 2 is the second row of the shown list');
   } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('the owner settles a checker\'s question in their own name: the card becomes ready, a blocking remark cannot be waived, an edit reopens the question', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-resolve-');
+  const { tools, shutdown } = registered();
+  try {
+    // The checker doubts one rule of the first card and blocks the second card.
+    const lab = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime);
+    await lab.init();
+    const before = await lab.readLibrary(fixture.id);
+    const findings = before.library.variants.flatMap(variant => semanticPaths(variant).map(path => ({ variantId: variant.id, path,
+      status: variant.id === 'variant_1' && path.includes('checkpoints') ? 'needs_review' as const : variant.id === 'variant_2' && path === 'behaviorPolicy' ? 'blocked' as const : 'ready' as const,
+      reason: variant.id === 'variant_1' ? 'Ожидание расширяет исходное правило: источник этого не подтверждает.' : 'Поведение противоречит фактам.' })));
+    const doubted = recordSemanticAssessment(before.library, findings);
+    await lab.store.publishLibrary({ ...before.experiment, librarySnapshot: doubted }, doubted, libraryHash(before.library));
+    await lab.close();
+    const said = ['Да, это моё правило, так и должно быть'];
+    const { ctx, confirms } = terminal(fixture.cwd, said, [false, true]);
+    const tool = tools.get('agent_lab_scenarios')!;
+    const shown = json(await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx));
+    assert.deepEqual(shown.variants.map((item: { quality: string }) => item.quality), ['needs_review', 'blocked']);
+    assert.equal(json(await tool.execute('no', { operation: 'resolve', variant: '1', verify: 'later' }, undefined, undefined, ctx)).status, 'declined', 'only the owner\'s native «да» settles it');
+    assert.match(confirms[0]!.body, /Проверка «Агент уточнил номер терминала»: Ожидание расширяет исходное правило/);
+    // The hand-made assessment has no work receipts, so the recheck is held back: the card must become ready by the owner's decision alone.
+    const settled = await tool.execute('yes', { operation: 'resolve', variant: '1', verify: 'later' }, undefined, undefined, ctx);
+    const library = (await fixture.read()).librarySnapshot!;
+    assert.equal(library.variants[0]!.quality, 'ready'); assert.equal(library.ownerResolutions!.length, 1);
+    assert.equal(library.ownerResolutions![0]!.reason, `Владелец в разговоре: «${said[0]}»`);
+    assert.match(drawn(tool, settled, false).join('\n'), /Вопрос по карточке «Возврат 1» закрыт вашим решением/);
+    assert.equal(json(await tool.execute('blocked', { operation: 'resolve', variant: '2', verify: 'later' }, undefined, undefined, ctx)).status, 'needs_owner_input', 'a blocking remark is fixed in the card, never waived');
+    assert.equal((await fixture.read()).librarySnapshot!.variants[1]!.quality, 'blocked');
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('the owner marks the judge\'s decision from the conversation: the answer comes only from the native dialog and is saved as a quick review', { timeout: 60000 }, async () => {
+  const demo = await demoEvaluateRecord('chat-agree-');
+  await demo.lab.close();
+  const cwd = await mkdtemp(join(tmpdir(), 'chat-agree-cwd-'));
+  const store = new ExperimentStore(join(cwd, '.agent-lab'));
+  await store.init();
+  try { await store.save(demo.record); } finally { await store.close(); }
+  runtime = createDemoRuntime();
+  const { tools, shutdown } = registered();
+  try {
+    const picks: (string | undefined)[] = [undefined, 'Согласен с судьёй'];
+    const asked: string[] = [];
+    const { ctx } = terminal(cwd, ['Покажи первый провал. Да, согласен с судьёй']);
+    (ctx.ui as unknown as { select: (title: string, options: string[]) => Promise<string | undefined> }).select = async title => { asked.push(title); return picks.shift(); };
+    const agree = tools.get('agent_lab_agree')!;
+    const skipped = json(await agree.execute('skip', { failure: 1 }, undefined, undefined, ctx));
+    assert.equal(skipped.cancelled, true); assert.equal((await new ExperimentStore(join(cwd, '.agent-lab')).get(demo.record.id)).humanReviews?.length ?? 0, 0, 'no answer in the dialog, no mark');
+    const marked = await agree.execute('mark', { failure: 1 }, undefined, undefined, ctx);
+    assert.match(asked[1]!, /судья решил: не справился\. Ваше мнение\?/);
+    const reviews = (await new ExperimentStore(join(cwd, '.agent-lab')).get(demo.record.id)).humanReviews ?? [];
+    assert.ok(reviews.length >= 1); assert.ok(reviews.every(item => item.source === 'quick' && item.verdict === 'fail' && item.judgeVerdict === 'fail'));
+    assert.match(drawn(agree, marked, false).join('\n'), /Отмечено вашим решением: согласен с судьёй/);
+  } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); await rm(demo.directory, { recursive: true, force: true }); }
 });

@@ -17,6 +17,7 @@ import { ExperimentLab, draftHash, planDiscovery, resultHash } from '../dist/exp
 import { agentSchema, createInputSchema, discoverInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, goldenCaseSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput } from '../dist/contracts.js';
 import { awaitingVerdict, cardVerdict, evidenceSummary, headlineCardOutcome, plannedTrials } from '../dist/comparison.js';
 import { judgeAgreement } from '../dist/agreement.js';
+import { markTargets } from '../dist/outcomes.js';
 import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from '../dist/quality.js';
 import { demoEvaluationInput, demoInput } from '../dist/demo.js';
 import { evidenceBundle, exportArtifacts } from '../dist/artifacts.js';
@@ -246,6 +247,7 @@ How to talk:
 - Every tool result is already shown to the owner as a short card whose details expand in place. Never re-list its cards, dialogue lines, numbers or plan. Your reply is the conclusion and the next useful step, one to three sentences in the owner's language, without ids, hashes or JSON.
 - Name runs, cards, groups and failures the way the owner does: by title or list number. The tools accept such references. When a tool answers that a reference is ambiguous or unknown, ask the owner which one they mean; never pick for them.
 - Use what the request and the card already contain. Ask only for a business decision you cannot find there; never invent a rule, a fact value or an expected result to complete a call.
+- The first accuracy number matters more than a perfect set. Right after preparation, when at least one card is ready, offer to accept and run the ready ones at once and to settle the disputed ones afterwards. A checker's open question the owner answers with «да, это моё правило» is settled with operation resolve (their native decision), not by rewriting the card.
 - When you do not know what exists in this project, call agent_lab_status first.
 - A card that waits for a decision needs one plain question to the owner that would settle it (the tool gives the checker's remarks in plain words as issuesInPlainWords); do not retell the checker.
 - Several changes asked for in one message: make them all, with verify:"later" on every edit but the last.
@@ -256,7 +258,7 @@ Acceptance and run are two separate owner decisions. The owner selects ready var
 
 A long run continues in the background: the conversation stays free, progress above the input comes from stored data, and the result arrives as a message. Esc interrupts your current action, not the run; stop a run only when the owner asks, with agent_lab_run action:"stop", then say what was saved and that a repeat runs every attempt again.
 
-Results: after separate native execution confirmation, lead with one estimated card accuracy number on the accepted set, grounded failure causes, separate metrics and limits, and keep measured and unmeasured counts visible; save the suite when useful. When a run ends, the block already shows the accuracy and each main cause with what was expected, what the agent said and the owner rule. Close the run yourself in three to five plain sentences: the accuracy number, where the agent limps and why (the pattern across failures: what clients asked, what the agent did instead, which owner rule that breaks), what it handles well, and how far the number can be trusted. Do not copy the block's rows. agent_lab_inspect failure:N opens a failure with its dialogue, expectation and owner rule; dialogue opens any recorded dialogue; compare:true compares a repeat with its source run. «Повтори этот случай на новой версии и сравни» is agent_lab_repeat with the cards by title or number, then agent_lab_run, then agent_lab_inspect compare:true. This is accuracy on the validation set, never a calibrated production guarantee.
+Results: after separate native execution confirmation, lead with one estimated card accuracy number on the accepted set, grounded failure causes, separate metrics and limits, and keep measured and unmeasured counts visible; save the suite when useful. When a run ends, the block already shows the accuracy and each main cause with what was expected, what the agent said and the owner rule. Close the run yourself in three to five plain sentences: the accuracy number, where the agent limps and why (the pattern across failures: what clients asked, what the agent did instead, which owner rule that breaks), what it handles well, and how far the number can be trusted. Do not copy the block's rows. agent_lab_agree records the owner's own agreement or disagreement with the judge about one situation (the owner answers in a native dialog; you never supply the answer) — offer it after showing a failure, because it is what makes the number trustworthy. agent_lab_inspect failure:N opens a failure with its dialogue, expectation and owner rule; dialogue opens any recorded dialogue; compare:true compares a repeat with its source run. «Повтори этот случай на новой версии и сравни» is agent_lab_repeat with the cards by title or number, then agent_lab_run, then agent_lab_inspect compare:true. This is accuracy on the validation set, never a calibrated production guarantee.
 
 To mine one new regression test, call agent_lab_build mode=discover. Discovery selects evidence, proposes one saved hypothesis and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If the owner answers yes, call mode=discover again with the exact fromRunId and hypothesis; it re-reads the saved evidence and builds exactly one editable test. A refusal or correction builds nothing. Use agent_lab_accept for this supplemental one-test flow: show what the agent must do, and let the owner confirm or correct it in their own words. agent_lab_run asks to confirm expectations first when they are not confirmed. Execution consent remains separate from accepting a test and from reviewing results. Preserve budgets and model, cite actual event IDs, never invent a human verdict, and do not modify an external agent unless the user asked to fix it.`;
 
@@ -808,7 +810,11 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const library = record.librarySnapshot;
           markSeen(`${lab.store.directory}|${id}`, libraryHash(library));
           const feed = libraryFeed(record);
-          feed.rows.unshift(row(signal.aborted ? 'Подготовка прервана; разобранное сохранено.' : library.imports.length ? 'Сценарии собраны из логов. Агент не запускался.' : 'Сценарии собраны по требованиям. Агент не запускался.', signal.aborted ? 'warning' : 'success', true));
+          const readyCount = library.variants.filter(variant => variant.quality === 'ready').length;
+          feed.rows.unshift(row(signal.aborted ? 'Подготовка прервана; разобранное сохранено.' : library.imports.length ? 'Сценарии собраны из логов. Агент не запускался.' : 'Сценарии собраны по требованиям. Агент не запускался.', signal.aborted ? 'warning' : 'success', true),
+            // The first number should not wait for every dispute: what is ready can run now.
+            row(readyCount ? `Готовые карточки (${readyCount}) можно принять и запустить прямо сейчас — первая точность будет по ним; спорные разберём после.`
+              : 'Готовых карточек пока нет. По каждой ниже сказано, что мешает: вопрос проверяющего можно закрыть вашим решением, и карточка станет готовой.', 'accent'));
           return feedResult(callId, { ...output, ...scenarioLibrarySummary(record, library.acceptance?.variantIds ?? []),
             groups: library.businessScenarios.map((group, index) => ({ number: index + 1, id: group.id, title: group.title })),
             variants: orderedVariants(library).map((variant, index) => ({ number: index + 1, id: variant.id, title: variant.title, quality: variant.quality, provenance: variant.provenance, issueCount: variant.issues.length })) },
@@ -927,9 +933,10 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   pi.registerTool({
     ...displayFor('agent_lab_scenarios'),
     name: 'agent_lab_scenarios', label: 'Show and revise scenarios',
-    description: 'The scenario library of one run, through the same versioned API as the board and the CLI. show: the draft, one card (variant) or its source dialogue (source:true). edit: change one card. variant: add a targeted synthetic card from a parent; the tool derives the fact, the opening and the conditions from the parent. merge/split: business groups. remove, assess (semantic recheck), accept (native confirmation; never runs the agent), budget (native confirmation). Cards, groups and facts are named by title, list number or id. Edits are recorded under the owner\'s own message read from the session; fact values and expectations the owner never said are refused with a question for the owner. Meaning is rechecked after a change within the agreed call limit.',
+    description: 'The scenario library of one run, through the same versioned API as the board and the CLI. show: the draft, one card (variant) or its source dialogue (source:true). edit: change one card. resolve: the owner settles a checker\'s open question about a card in their own name («да, это моё правило») — always their native decision; a blocking remark cannot be settled this way. variant: add a targeted synthetic card from a parent; the tool derives the fact, the opening and the conditions from the parent. merge/split: business groups. remove, assess (semantic recheck), accept (native confirmation; never runs the agent), budget (native confirmation). Cards, groups and facts are named by title, list number or id. Edits are recorded under the owner\'s own message read from the session; fact values and expectations the owner never said are refused with a question for the owner. Meaning is rechecked after a change within the agreed call limit.',
     parameters: Type.Object({
-      operation: Type.Union(['show', 'inspect', 'edit', 'variant', 'merge', 'split', 'remove', 'assess', 'accept', 'budget'].map(value => Type.Literal(value))),
+      operation: Type.Union(['show', 'inspect', 'edit', 'variant', 'resolve', 'merge', 'split', 'remove', 'assess', 'accept', 'budget'].map(value => Type.Literal(value))),
+      issue: Type.Optional(Type.Integer({ minimum: 1, maximum: 60, description: 'resolve: which remark of the card the owner settles, by its number in the card; omit for every open remark of the card.' })),
       id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Run: id, short id or words of its task. Omit for the run this conversation works on.' })),
       variant: Type.Optional(Type.String({ minLength: 1, maxLength: 300, description: 'One card: its title, its number in the shown list, or its id. For variant it is the parent card.' })),
       variants: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 300 }), { minItems: 1, maxItems: 200, description: 'Several cards, for accept and split.' })),
@@ -1215,6 +1222,26 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             return await changed(`Лимит вызовов модели: ${record.settings.maxCalls} → ${params.maxCalls}`, [], undefined, { maxCalls: params.maxCalls }, `Лимит вызовов · прогон ${shortRun(draftId)}`);
           }
 
+          if (operation === 'resolve') {
+            const card = pickVariant(library, params.variant ?? params.variantId);
+            const open = ownerRemarks(card.issues).filter(item => item.code === 'semantic_finding' && item.severity === 'needs_review');
+            const chosen = params.issue ? open.slice(params.issue - 1, params.issue) : open;
+            if (!chosen.length) throw needsOwner('needs_owner_input', card.issues.some(item => item.severity === 'blocked')
+              ? 'У этой карточки блокирующее замечание: его снимает исправление карточки, а не решение владельца.' : 'У этой карточки нет открытых вопросов, которые владелец может закрыть своим решением.');
+            if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Закрыть вопрос проверяющего может только владелец в интерактивном терминале.');
+            const plain = chosen.map(item => plainIssue(library, card, item));
+            if (!await ctx.ui.confirm('Закрыть вопрос своим решением?', safeText([`Карточка «${card.title}». Проверяющий сомневается:`, ...plain.map(text => `• ${text}`), '',
+              'Да — это ваше решение как владельца: карточка считается верной в этой части. Оно записывается от вашего имени и видно в карточке. Если карточку изменить, вопрос может открыться снова.'].join('\n')))) {
+              throw needsOwner('declined', 'Владелец не закрыл вопрос. Ничего не записано.');
+            }
+            const reason = ownerBasis(messages, params.ownerQuote)?.reason ?? 'Решение владельца в диалоге Pi.';
+            for (const item of chosen) {
+              const path = item.path.replace(`variants.${card.id}.`, '');
+              expected = libraryHash((await lab.editLibrary(draftId, expected, { kind: 'resolve_finding', variantId: card.id, path, editId: `owner_${Date.now().toString(36)}`, reason })).library);
+            }
+            return await changed(`Вопрос по карточке «${safeText(card.title)}» закрыт вашим решением`, plain.map(text => row(`было под вопросом: ${safeText(text)}`, 'muted', false, 1)), card.id,
+              { resolved: plain, recordedReason: reason }, `Решение владельца · прогон ${shortRun(draftId)}`);
+          }
           let patch: LibraryPatch;
           let target: ScenarioVariant | undefined;
           let headline: string;
@@ -1767,6 +1794,64 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         const output = { ...summary(record, lab.store.directory, bundle.view), artifacts: await exportArtifacts(bundle, lab.store.directory) };
         return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
       } finally { await close(); }
+    },
+  });
+  pi.registerTool({
+    ...displayFor('agent_lab_agree'), name: 'agent_lab_agree', label: 'Owner marks the judge\'s decision',
+    description: 'The owner\'s own mark on the judge\'s decision about one situation of a finished run: согласен, не согласен (with their reason) or не могу сказать. The answer is chosen by the owner in a native Pi dialog; you pass only which situation (failure: its number in the failure list, or dialogue: its title or number) and can never supply the answer. This is what tells how far the accuracy number can be trusted.',
+    parameters: Type.Object({ id: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), failure: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.String({ minLength: 1, maxLength: 300 })])),
+      dialogue: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })) }, { additionalProperties: false }),
+    executionMode: 'sequential',
+    async execute(callId, params, signal, _onUpdate, ctx) {
+      signal?.throwIfAborted();
+      if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Отметку о решении судьи ставит только владелец в интерактивном терминале.');
+      const directory = resolve(ctx.cwd, '.agent-lab');
+      try {
+        const record = await findRun(directory, params.id);
+        if (record.workflow !== 'evaluate' || !['results_review', 'complete'].includes(record.phase)) throw new Error('Отметить согласие с судьёй можно в завершённом прогоне.');
+        const view = buildResultView(record);
+        const titles = record.scenarios.map((item, index) => `${index + 1}. ${safeText(item.title)}`);
+        const wanted = String(params.failure ?? params.dialogue ?? '').trim();
+        if (!wanted) throw needsOwner('needs_owner_input', 'Не сказано, о какой ситуации речь. Спросите владельца.', titles.slice(0, 15));
+        const remembered = shownFailures.get(record.id) ?? view.failures.map(item => item.scenarioId);
+        const scenarioId = params.failure !== undefined && /^#?\d+$/.test(wanted) ? remembered[Number(wanted.replace('#', '')) - 1]
+          : /^#?\d+$/.test(wanted) ? record.scenarios[Number(wanted.replace('#', '')) - 1]?.id
+          : record.scenarios.filter(item => item.title.toLocaleLowerCase('ru').includes(wanted.toLocaleLowerCase('ru'))).map(item => item.id).find((_, index, all) => all.length === 1);
+        const scenario = record.scenarios.find(item => item.id === scenarioId);
+        if (!scenario) throw needsOwner('unknown_reference', `Ситуация «${wanted}» не найдена однозначно. Спросите владельца, какая нужна.`, titles.slice(0, 15));
+        const attempts = record.trials.filter(item => item.scenarioId === scenario.id);
+        const trial = attempts.find(item => item.id === view.failures.find(failure => failure.scenarioId === scenario.id)?.trialId) ?? attempts[0];
+        const targets = trial ? markTargets(scenario, trial) : undefined;
+        if (!trial || !targets) throw new Error(`У ситуации «${safeText(scenario.title)}» нет решения судьи, с которым можно согласиться или поспорить.`);
+        const failed = targets.verdict === 'fail';
+        const started = performance.now();
+        const options = ['Согласен с судьёй', 'Не согласен с судьёй', 'Не могу сказать'];
+        const picked = await ctx.ui.select(safeText(`«${scenario.title}» — судья решил: ${failed ? 'не справился' : 'справился'}. Ваше мнение?`), options);
+        if (!picked) return feedResult(callId, { cancelled: true, mutated: false }, { rows: [row('Отметка не поставлена.', 'muted')] }, 'Отметка не поставлена');
+        const answer = picked === options[0] ? 'agree' as const : picked === options[1] ? 'disagree' as const : 'unsure' as const;
+        let note = answer === 'agree' ? 'Быстрая отметка: согласен с судьёй.' : 'Быстрая отметка: не могу сказать.';
+        if (answer === 'disagree') {
+          const reason = await ctx.ui.editor(`Судья решил: ${failed ? 'не справился' : 'справился'}. Почему вы не согласны? Коротко, своими словами.`, '');
+          if (!reason?.trim()) return feedResult(callId, { cancelled: true, mutated: false }, { rows: [row('Несогласие не сохранено: нужна ваша причина.', 'warning')] }, 'Отметка не поставлена');
+          note = reason.trim().slice(0, 3000);
+        }
+        const { lab, close } = await open(ctx.cwd);
+        try {
+          await lab.init();
+          const verdict = answer === 'unsure' ? 'unknown' as const : answer === 'disagree' ? (failed ? 'pass' as const : 'fail' as const) : targets.verdict;
+          const durationMs = Math.min(3600000, Math.round(performance.now() - started));
+          for (const [index, metricId] of targets.metricIds.entries()) await lab.addHumanReview(record.id, { trialId: trial.id, metricId, source: 'quick', verdict, judgeVerdict: targets.verdict, note, ...(index === 0 ? { durationMs } : {}) });
+          const after = await lab.get(record.id);
+          const agreement = judgeAgreement(after);
+          const fresh = buildResultView(after);
+          const word = answer === 'agree' ? 'согласен с судьёй' : answer === 'disagree' ? 'не согласен с судьёй' : 'не могу сказать';
+          const feed: Feed = { rows: [row(`Отмечено вашим решением: ${word} · «${safeText(scenario.title)}»`, 'success', true),
+            row(agreement.queueFailures.length ? `Проверено провалов: ${agreement.failures.checked} из ${agreement.queueFailures.length}.` : `Проверено успехов: ${agreement.sampleChecked} из ${agreement.sampledPasses.length}.`, undefined, false, 1),
+            row(safeText(fresh.headline.text), answer === 'disagree' ? 'accent' : 'muted', false, 1)] };
+          return feedResult(callId, { id: record.id, scenarioId: scenario.id, trialId: trial.id, answer, headline: fresh.headline.text, checkedFailures: agreement.failures.checked, queueFailures: agreement.queueFailures.length }, feed,
+            `Отметка владельца · прогон ${shortRun(record.id)}`);
+        } finally { await close(); }
+      } catch (error) { return askOwner(callId, error); }
     },
   });
   pi.registerTool({

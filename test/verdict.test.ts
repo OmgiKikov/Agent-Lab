@@ -144,10 +144,10 @@ test('V1: the ten locked vectors read exactly as the UI-SPEC table, with the ton
 test('V2: the ten vectors pick the locked rule, in the order control → running → queue → number', () => {
   // 10/20, 3 failures unmarked → 2a.
   const three = scored(10, 10);
-  assert.equal(chat(marked(three, { skip: ['t-f0', 't-f1', 't-f2'] })), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
+  assert.equal(chat(marked(three, { skip: ['t-f0', 't-f1', 't-f2'] })), `Дальше: попросите показать первый провал. Согласны ли вы с судьёй — скажите здесь же, отмечу.`);
   assert.equal(board(marked(three, { skip: ['t-f0', 't-f1', 't-f2'] })), 'Дальше: откройте вкладку «Провалы» и отметьте согласие с провалами.');
   // 0/9, all 9 unmarked → 2a.
-  assert.equal(chat(scored(0, 9)), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
+  assert.equal(chat(scored(0, 9)), `Дальше: попросите показать первый провал. Согласны ли вы с судьёй — скажите здесь же, отмечу.`);
   // 3/4 with 11 dialogues still to come → 0.
   assert.equal(chat(scored(3, 1, { pending: 11 })), 'Дальше: дождитесь конца прогона.');
   assert.equal(view(scored(3, 1, { pending: 11 })).pending, 11);
@@ -174,32 +174,32 @@ test('V2 rule 2b: only sampled passes unmarked names the judge, not the failures
   assert.equal(sampled.length, 3, 'three passes are drawn for the double-check');
   const twoLeft = marked(record, { skip: sampled.slice(0, 2) });
   assert.deepEqual(view(twoLeft).agreement.unmarked, sampled.slice(0, 2));
-  assert.equal(chat(twoLeft), `Дальше: попросите показать успехи, выбранные для перепроверки. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
+  assert.equal(chat(twoLeft), `Дальше: попросите показать успехи, выбранные для перепроверки. Согласны ли вы с судьёй — скажите здесь же, отмечу.`);
   assert.equal(board(twoLeft), 'Дальше: откройте вкладку «Провалы» и отметьте согласие с судьёй.');
   // A failure left unmarked next to them makes it 2a again.
   const failures = scored(13, 1);
   const sampledToo = view(failures).agreement.sampledPasses;
-  assert.equal(chat(marked(failures, { skip: [...sampledToo.slice(0, 1), 't-f0'] })), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
+  assert.equal(chat(marked(failures, { skip: [...sampledToo.slice(0, 1), 't-f0'] })), `Дальше: попросите показать первый провал. Согласны ли вы с судьёй — скажите здесь же, отмечу.`);
 });
 
 test('V2 rule 2c: «не могу сказать» marks are counted in the dative and never treated as done', () => {
   const two = marked(scored(12, 3), { unsure: ['t-f0', 't-f1'] });
   assert.deepEqual(view(two).agreement.unmarked, [], 'an unsure mark is a current mark: nothing is unmarked');
   assert.equal(view(two).agreement.unsure, 2);
-  assert.equal(chat(two), `Дальше: решите по 2 ситуациям, согласны ли вы с судьёй: попросите показать их. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
+  assert.equal(chat(two), `Дальше: решите по 2 ситуациям, согласны ли вы с судьёй: попросите показать их. Согласны ли вы с судьёй — скажите здесь же, отмечу.`);
   assert.equal(board(two), 'Дальше: на вкладке «Провалы» решите по 2 ситуациям: y или n.');
   const one = marked(scored(12, 3), { unsure: ['t-f2'] });
-  assert.equal(chat(one), `Дальше: решите по 1 ситуации, согласны ли вы с судьёй: попросите показать их. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
+  assert.equal(chat(one), `Дальше: решите по 1 ситуации, согласны ли вы с судьёй: попросите показать их. Согласны ли вы с судьёй — скажите здесь же, отмечу.`);
   assert.equal(board(one), 'Дальше: на вкладке «Провалы» решите по 1 ситуации: y или n.');
   const five = marked(scored(12, 5), { unsure: ['t-f0', 't-f1', 't-f2', 't-f3', 't-f4'] });
-  assert.equal(chat(five), `Дальше: решите по 5 ситуациям, согласны ли вы с судьёй: попросите показать их. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
+  assert.equal(chat(five), `Дальше: решите по 5 ситуациям, согласны ли вы с судьёй: попросите показать их. Согласны ли вы с судьёй — скажите здесь же, отмечу.`);
   // An unmarked failure still comes first (2a before 2c).
-  assert.equal(chat(marked(scored(12, 3), { unsure: ['t-f0'], skip: ['t-f1'] })), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
+  assert.equal(chat(marked(scored(12, 3), { unsure: ['t-f0'], skip: ['t-f1'] })), `Дальше: попросите показать первый провал. Согласны ли вы с судьёй — скажите здесь же, отмечу.`);
   // A stale unsure mark (the judgment moved under it) is not K: the situation is unmarked again.
   const stale = marked(scored(12, 3), { unsure: ['t-f0'] });
   stale.humanReviews = stale.humanReviews.map(item => item.trialId === 't-f0' ? { ...item, judgeVerdict: 'pass' as const } : item);
   assert.equal(view(stale).agreement.stale, 1);
-  assert.equal(chat(stale), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
+  assert.equal(chat(stale), `Дальше: попросите показать первый провал. Согласны ли вы с судьёй — скажите здесь же, отмечу.`);
 });
 
 // ---- B1 ----
@@ -229,7 +229,7 @@ test('B1: the collapsed chat block is V1 with the accuracy, the first block with
   assert.deepEqual(causesOf(rows), causesOf(full), 'the chat block shows the same explained causes without a key press');
   assert.deepEqual(texts(rows).filter(text => /^\d\. /.test(text)), ['1. Не называет срок возврата — 3 ситуации', '2. Не уточняет модель терминала — 1 ситуация', '3. Отвечает вне инструкций — 1 ситуация']);
   assert.ok(rows.some(row => row.text.startsWith('Пример:')) && rows.some(row => row.text.startsWith('Должен был')), 'the explanation is in the block');
-  assert.equal(texts(rows).at(-1), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
+  assert.equal(texts(rows).at(-1), `Дальше: попросите показать первый провал. Согласны ли вы с судьёй — скажите здесь же, отмечу.`);
   assert.equal(rows.find(row => row.role === 'agreement-tail')?.indent, 2, 'the tail row keeps its phase-3 indent');
   assert.ok(rows.every(row => !row.text.startsWith('? ')), 'no per-situation row in the collapsed block');
   assert.ok(rows.every(row => row.role !== 'pointer'), 'the pointer waits for the expanded block');

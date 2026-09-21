@@ -116,6 +116,11 @@ export const scenarioLibrarySchema = z.strictObject({
     workReceipts: z.array(z.strictObject({ workHash: hash, findings: z.array(semanticFindingSchema).max(6) })).max(20000).optional(),
   }).optional(),
   acceptance: z.strictObject({ revision: z.number().int().positive(), libraryHash: hash, variantIds: ids(200).min(1), snapshotHash: hash }).optional(),
+  /**
+   * Disputes the owner settled in their own name: «да, это моё правило». Bound to the exact remark of the scenario checker, so a
+   * different remark on the same field opens the question again. Not part of the assessed content; a blocking remark cannot be settled.
+   */
+  ownerResolutions: z.array(z.strictObject({ variantId: id, path: text(400), findingHash: hash, editId: id, reason: text(1000) })).max(400).optional(),
 });
 export type ScenarioLibrary = z.infer<typeof scenarioLibrarySchema>;
 
@@ -127,6 +132,7 @@ export const libraryPatchSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('split_business'), businessScenarioId: id, newBusiness: businessProposalSchema, variantIds: ids(200).min(1), ...reason }),
   z.strictObject({ kind: z.literal('edit_fact'), variantId: id, factId: id, statement: text(300), value: userFactSchema.shape.value, availability: userFactSchema.shape.availability, editId: id, ...reason }),
   z.strictObject({ kind: z.literal('add_fact'), variantId: id, factId: id, statement: text(300), value: userFactSchema.shape.value, availability: userFactSchema.shape.availability, editId: id, ...reason }),
+  z.strictObject({ kind: z.literal('resolve_finding'), variantId: id, path: text(400), editId: id, ...reason }),
   z.strictObject({ kind: z.literal('edit_variant_text'), variantId: id, field: z.enum(['opening', 'goal', 'successCriteria', 'checkpointRule']),
     checkpointId: id.optional(), value: text(3000), editId: id, ...reason }),
 ]);
