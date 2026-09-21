@@ -27,7 +27,27 @@ const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(va
 const normalized = (value: string) => value.trim().toLocaleLowerCase().replace(/\s+/g, ' ');
 const changed = (diff: VariantFieldDiff[], path: string, before: unknown, after: unknown) => diff.push({ path, before: structuredClone(before), after: structuredClone(after) });
 
-function addPolicyAction(variant: ScenarioVariant, operation: VariantOperation, action: ScenarioVariant['behaviorPolicy']['actions'][number], when: string, diff: VariantFieldDiff[]): void {
+/**
+ * Removing a revealed fact removes the transitions that revealed it. States nothing reaches any more,
+ * their transitions and the actions only they used leave with it; an action that was never
+ * referenced stays for the quality gate to report.
+ */
+function pruneUnreachable(policy: ScenarioVariant['behaviorPolicy'], referencedBefore: Set<string>): void {
+  const reachable = new Set([policy.initialState]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const transition of policy.transitions) if (reachable.has(transition.from) && !reachable.has(transition.to)) { reachable.add(transition.to); grew = true; }
+  }
+  const terminal = policy.terminalStates.filter(state => reachable.has(state));
+  if (!terminal.length) return;
+  policy.states = policy.states.filter(state => reachable.has(state));
+  policy.terminalStates = terminal;
+  policy.transitions = policy.transitions.filter(transition => reachable.has(transition.from));
+  const used = new Set(policy.transitions.map(transition => transition.actionId));
+  policy.actions = policy.actions.filter(action => used.has(action.id) || !referencedBefore.has(action.id));
+}
+
+function addPolicyAction(variant: ScenarioVariant, operation: VariantOperation, action: ScenarioVariant['behaviorPolicy']['actions'][number], when: string, diff: VariantFieldDiff[], referencedBefore?: Set<string>): void {
   const policy = variant.behaviorPolicy;
   if (policy.terminalStates.includes(policy.initialState)) throw new Error('Нельзя добавить продолжение: исходное состояние уже завершает разговор');
   const target = policy.terminalStates[0];
@@ -39,6 +59,7 @@ function addPolicyAction(variant: ScenarioVariant, operation: VariantOperation, 
   policy.actions.push(action);
   policy.transitions.push({ from: policy.initialState, to: target, actionId: action.id, when });
   policy.maxFollowUps = Math.max(1, policy.maxFollowUps);
+  if (referencedBefore) pruneUnreachable(policy, referencedBefore);
   changed(diff, 'behaviorPolicy', before, policy);
 }
 
@@ -65,13 +86,14 @@ export function proposeVariant(library: ScenarioLibrary, request: VariantRequest
     }
     if (normalized(variant.userState.opening).includes(normalized(value))) throw new Error('Факт уже раскрыт в первой реплике');
     const policyBefore = structuredClone(variant.behaviorPolicy);
+    const referencedBefore = new Set(policyBefore.transitions.map(transition => transition.actionId));
     const factSecrets = [normalized(value), normalized(fact.statement)];
     const priorRevealActions = new Set(variant.behaviorPolicy.actions.filter(action => action.factIds.includes(fact.id)
       || factSecrets.some(secret => normalized(action.payload ?? '').includes(secret))).map(action => action.id));
     variant.behaviorPolicy.actions = variant.behaviorPolicy.actions.filter(action => !priorRevealActions.has(action.id));
     variant.behaviorPolicy.transitions = variant.behaviorPolicy.transitions.filter(transition => !priorRevealActions.has(transition.actionId));
     if (priorRevealActions.size) changed(diff, 'behaviorPolicy', policyBefore, variant.behaviorPolicy);
-    addPolicyAction(variant, request.operation, { id: 'pending', kind: 'answer', factIds: [fact.id], ifAsked: input.ifAsked, payload: input.reply ?? fact.statement }, input.ifAsked, diff);
+    addPolicyAction(variant, request.operation, { id: 'pending', kind: 'answer', factIds: [fact.id], ifAsked: input.ifAsked, payload: input.reply ?? fact.statement }, input.ifAsked, diff, referencedBefore);
   } else if (request.operation === 'missing_fact') {
     const fact = variant.userState.facts.find(item => item.id === input.factId && item.availability === 'initial');
     if (!fact) throw new Error('Для отсутствующего факта выберите существующий исходный факт');
@@ -90,6 +112,7 @@ export function proposeVariant(library: ScenarioLibrary, request: VariantRequest
     if (!variant.userState.missing.some(item => normalized(item) === normalized(missingLabel))) variant.userState.missing.push(missingLabel);
     changed(diff, 'userState.missing', before, variant.userState.missing);
     const policyBefore = structuredClone(variant.behaviorPolicy);
+    const referencedBefore = new Set(policyBefore.transitions.map(transition => transition.actionId));
     const removedSecrets = [fact.value === undefined ? undefined : normalized(String(fact.value)), normalized(fact.statement)].filter((value): value is string => !!value);
     const persona = variant.userState.persona;
     if (persona && removedSecrets.some(secret => normalized(persona.text).includes(secret))) {
@@ -102,7 +125,7 @@ export function proposeVariant(library: ScenarioLibrary, request: VariantRequest
     variant.behaviorPolicy.transitions = variant.behaviorPolicy.transitions.filter(transition => !removedActions.has(transition.actionId));
     if (removedActions.size) changed(diff, 'behaviorPolicy', policyBefore, variant.behaviorPolicy);
     addPolicyAction(variant, request.operation, { id: 'pending', kind: 'missing', factIds: [], ifAsked: input.ifAsked,
-      payload: input.reply ?? `У меня нет данных: ${missingLabel}.` }, input.ifAsked, diff);
+      payload: input.reply ?? `У меня нет данных: ${missingLabel}.` }, input.ifAsked, diff, referencedBefore);
     const retainedUserText = [variant.userState.goal, variant.userState.opening, variant.userState.persona?.text ?? '', ...variant.userState.missing, ...variant.userState.cannotKnow,
       ...variant.userState.facts.map(item => item.statement), ...variant.behaviorPolicy.actions.flatMap(action => [action.payload ?? '', action.ifAsked ?? '']),
       ...variant.behaviorPolicy.transitions.map(transition => transition.when)];

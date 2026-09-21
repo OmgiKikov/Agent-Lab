@@ -198,3 +198,22 @@ test('stale hashes and repeated targeted variants are rejected without changing 
   assert.throws(() => proposeVariant(first.library, request('variant_1', 'ambiguous_opening', { opening: 'Неясный запрос' }), libraryHash(first.library)), /дубл|существ/i);
   assert.equal(JSON.stringify(source), before);
 });
+
+test('a variant that loses a revealed fact also loses the states and actions only that reveal reached', () => {
+  const source = libraryFixture();
+  const policy = source.variants[0]!.behaviorPolicy;
+  // The parent reveals the number on request, then finishes from a state only that reveal reaches.
+  policy.states = ['waiting', 'disclosed', 'done'];
+  policy.actions = [{ id: 'disclose', kind: 'answer', factIds: ['terminal_number'], ifAsked: 'Агент просит номер' }, { id: 'finish', kind: 'finish', factIds: [] }, { id: 'finish_disclosed', kind: 'finish', factIds: [] }];
+  policy.transitions = [{ from: 'waiting', to: 'disclosed', actionId: 'disclose', when: 'Агент просит номер' },
+    { from: 'waiting', to: 'done', actionId: 'finish', when: 'Агент ответил по существу' },
+    { from: 'disclosed', to: 'done', actionId: 'finish_disclosed', when: 'После сообщённого номера' }];
+  const result = proposeVariant(source, request('variant_1', 'missing_fact', { factId: 'terminal_number', ifAsked: 'Агент просит номер' }), libraryHash(source));
+  const next = result.variant.behaviorPolicy;
+  assert.deepEqual(next.states, ['waiting', 'done'], 'the state nothing reaches any more is gone');
+  assert.ok(!next.actions.some(action => action.id === 'disclose' || action.id === 'finish_disclosed'), 'so are the actions only it used');
+  assert.ok(next.transitions.every(transition => next.states.includes(transition.from) && next.states.includes(transition.to)));
+  assert.ok(next.actions.some(action => action.kind === 'missing') && next.actions.some(action => action.id === 'finish'));
+  assert.ok(!result.variant.issues.some(issue => issue.code === 'controller_policy'), JSON.stringify(result.variant.issues));
+  assert.deepEqual(source.variants[0]!.behaviorPolicy.states, ['waiting', 'disclosed', 'done'], 'the parent card is untouched');
+});
