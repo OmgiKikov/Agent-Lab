@@ -23,6 +23,8 @@ const SITUATIONS_BY: [string, string, string] = ['ситуации', 'ситуа
 export const NO_FAILURES_TEXT = 'Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.';
 /** R-01: where every failure is read, by tab name (the phase-2 «раздел 1» pointer is never printed in the block). */
 export const allFailuresTab = (runId: string): string => `Все провалы — /agent-lab ${shortId(runId)}, вкладка «Провалы».`;
+/** The same pointer in the conversation: a failure is opened by asking for it; the board stays optional. */
+export const allFailuresChat = (runId: string): string => `Любой провал можно открыть здесь: попросите показать его по номеру. Доска со всеми провалами — /agent-lab ${shortId(runId)}.`;
 
 export type VerdictLevel = 'good' | 'warn' | 'bad';
 export type Surface = 'chat' | 'board';
@@ -88,17 +90,18 @@ function reviewQueue(view: ResultView): { unmarkedFailures: number; unmarkedPass
 export function nextStep(view: ResultView, options: { runId: string; surface: Surface }): string {
   const { passed, decided } = view.headline;
   const chat = options.surface === 'chat';
-  const open = `откройте /agent-lab ${shortId(options.runId)}`;
+  // In the conversation the next step is something to ask for; the board is only where the owner's own marks are made.
+  const marks = `Согласие с судьёй отмечается в /agent-lab ${shortId(options.runId)}.`;
   if (view.control.warning !== null) return 'Дальше: проверьте судью и связь с агентом.';
   if (view.pending > 0) return 'Дальше: дождитесь конца прогона.';
   const queue = reviewQueue(view);
-  if (queue.unmarkedFailures > 0) return chat ? `Дальше: ${open} и отметьте согласие с провалами.` : 'Дальше: откройте вкладку «Провалы» и отметьте согласие с провалами.';
-  if (queue.unmarkedPasses > 0) return chat ? `Дальше: ${open} и отметьте согласие с судьёй.` : 'Дальше: откройте вкладку «Провалы» и отметьте согласие с судьёй.';
+  if (queue.unmarkedFailures > 0) return chat ? `Дальше: попросите показать первый провал. ${marks}` : 'Дальше: откройте вкладку «Провалы» и отметьте согласие с провалами.';
+  if (queue.unmarkedPasses > 0) return chat ? `Дальше: попросите показать успехи, выбранные для перепроверки. ${marks}` : 'Дальше: откройте вкладку «Провалы» и отметьте согласие с судьёй.';
   if (queue.unsure > 0) {
     const k = `${queue.unsure} ${pluralForm(queue.unsure, SITUATIONS_BY)}`;
-    return chat ? `Дальше: ${open} и решите по ${k}: согласны ли вы с судьёй.` : `Дальше: на вкладке «Провалы» решите по ${k}: y или n.`;
+    return chat ? `Дальше: решите по ${k}, согласны ли вы с судьёй: попросите показать их. ${marks}` : `Дальше: на вкладке «Провалы» решите по ${k}: y или n.`;
   }
-  if (decided === 0) return chat ? `Дальше: ${open} и посмотрите, почему ситуации не измерены.` : 'Дальше: откройте вкладку «Диалоги» и посмотрите, почему ситуации не измерены.';
+  if (decided === 0) return chat ? 'Дальше: спросите, почему ситуации не измерены.' : 'Дальше: откройте вкладку «Диалоги» и посмотрите, почему ситуации не измерены.';
   if (decided - passed > 0) return 'Дальше: повторите прогон после исправления агента.';
   return 'Дальше: выгрузите отчёт для заказчика.';
 }
@@ -152,6 +155,6 @@ export function verdictBlockRows(view: ResultView, options: { expanded: boolean;
   const verdict: VerdictRow = { role: `verdict:${verdictLevel(view)}`, indent: 0, text: verdictLine(view) };
   const next: VerdictRow = { role: 'next', indent: 0, text: nextStep(view, options) };
   if (!options.expanded) return groups([[verdict, ...firstBlock(view, false)], causes(view, false), [next]]);
-  const pointer: VerdictRow[] = view.failures.length ? [{ role: 'pointer', indent: 0, text: allFailuresTab(options.runId) }] : [];
+  const pointer: VerdictRow[] = view.failures.length ? [{ role: 'pointer', indent: 0, text: options.surface === 'chat' ? allFailuresChat(options.runId) : allFailuresTab(options.runId) }] : [];
   return groups([[verdict, ...firstBlock(view, true)], causes(view, true), disagreements(view), pointer, [next]]);
 }

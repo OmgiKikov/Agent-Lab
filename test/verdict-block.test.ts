@@ -84,7 +84,7 @@ test('после agent_lab_run Pi рисует блок-вердикт из deta
   const view = viewFor(details);
   assert.ok(view, 'the view produced with the result is remembered for the block');
   const { raw, lines } = toolRow(tools.get('agent_lab_run')!, result, 80);
-  assert.equal(lines[0], 'Проверка агента');
+  assert.equal(lines[0], 'Готовлю запуск');
   assert.equal(lines[1], verdictLine(view));
   assert.ok(lines.some(line => line.startsWith('Дальше: ')), 'the block ends with the «Дальше» row');
   assert.ok(lines.some(line => line.endsWith('подробнее')), 'the expand hint is under the block');
@@ -126,7 +126,7 @@ test('без запомненного вида строка инструмент
   forgetViews();
   assert.equal(viewFor(result.details as VerdictDetails), null);
   const { raw, lines } = toolRow(tools.get('agent_lab_run')!, result, 80);
-  assert.deepEqual(lines, ['Проверка агента', `Прогон ${run.id.slice(0, 8)} не найден в .agent-lab — блок нельзя показать.`]);
+  assert.deepEqual(lines, ['Готовлю запуск', `Прогон ${run.id.slice(0, 8)} не найден в .agent-lab — блок нельзя показать.`]);
   for (const line of raw) assert.ok(visibleWidth(line) <= 80);
 });
 
@@ -251,7 +251,7 @@ test('through Pi\'s real tool row in the dark and light themes, at 40–160 colu
         const label = `${name} ${width} ${expanded ? 'развёрнуто' : 'свёрнуто'}`;
         for (const line of raw) assert.ok(visibleWidth(line) <= width, `${label}: «${stripTerminalSequences(line)}» is wider than ${width}`);
         assert.ok(!lines.some(line => line.includes('…')), `${label}: an ellipsis was produced`);
-        assert.equal(lines[0], 'Проверка агента', label);
+        assert.equal(lines[0], 'Готовлю запуск', label);
         if (width >= 80) assert.equal(lines[1], verdictLine(view), label);
         assert.ok(lines.join(' ').includes('Агент справляется плохо: 2 из 5 ситуаций'), `${label}: the verdict line is drawn`);
         assert.ok(!lines.some(line => line.includes('shownToOwner') || line.includes('скрытый текст')), `${label}: the model text stays hidden`);
@@ -259,7 +259,7 @@ test('through Pi\'s real tool row in the dark and light themes, at 40–160 colu
         const text = lines.join(' ');
         assert.ok(text.includes('Дальше: '), `${label}: the «Дальше» row is drawn`);
         assert.equal(text.includes('Тариф эквайринга — судья не уверен: голоса разошлись'), expanded, `${label}: the «?» rows only when expanded`);
-        assert.equal(text.includes('Все провалы — /agent-lab 0123abcd, вкладка «Провалы».'), expanded, `${label}: the pointer only when expanded`);
+        assert.equal(text.includes('Любой провал можно открыть здесь: попросите показать его по номеру. Доска со всеми провалами — /agent-lab 0123abcd.'), expanded, `${label}: the pointer only when expanded`);
         assert.ok(text.includes('выберите операцию в журнале') === expanded || !expanded, `${label}: the long quote is in the expanded block`);
         assert.ok(lines.at(-1)!.endsWith(expanded ? 'свернуть' : 'подробнее'), `${label}: the hint is the last row, got «${lines.at(-1)}»`);
         heights[label] = lines.length;

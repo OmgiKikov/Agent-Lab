@@ -143,10 +143,10 @@ test('V1: the ten locked vectors read exactly as the UI-SPEC table, with the ton
 test('V2: the ten vectors pick the locked rule, in the order control → running → queue → number', () => {
   // 10/20, 3 failures unmarked → 2a.
   const three = scored(10, 10);
-  assert.equal(chat(marked(three, { skip: ['t-f0', 't-f1', 't-f2'] })), `Дальше: откройте /agent-lab ${ID8} и отметьте согласие с провалами.`);
+  assert.equal(chat(marked(three, { skip: ['t-f0', 't-f1', 't-f2'] })), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
   assert.equal(board(marked(three, { skip: ['t-f0', 't-f1', 't-f2'] })), 'Дальше: откройте вкладку «Провалы» и отметьте согласие с провалами.');
   // 0/9, all 9 unmarked → 2a.
-  assert.equal(chat(scored(0, 9)), `Дальше: откройте /agent-lab ${ID8} и отметьте согласие с провалами.`);
+  assert.equal(chat(scored(0, 9)), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
   // 3/4 with 11 dialogues still to come → 0.
   assert.equal(chat(scored(3, 1, { pending: 11 })), 'Дальше: дождитесь конца прогона.');
   assert.equal(view(scored(3, 1, { pending: 11 })).pending, 11);
@@ -157,7 +157,7 @@ test('V2: the ten vectors pick the locked rule, in the order control → running
   assert.equal(chat(marked(unmeasuredControl, { skip: ['t-f0', 't-f1', 't-f2', 't-f3', 't-f4'] })), 'Дальше: проверьте судью и связь с агентом.');
   assert.equal(board(unmeasuredControl), 'Дальше: проверьте судью и связь с агентом.');
   // 0/0 → 3, with the board variant naming the tab.
-  assert.equal(chat(scored(0, 0, { unmeasured: 2 })), `Дальше: откройте /agent-lab ${ID8} и посмотрите, почему ситуации не измерены.`);
+  assert.equal(chat(scored(0, 0, { unmeasured: 2 })), 'Дальше: спросите, почему ситуации не измерены.');
   assert.equal(board(scored(0, 0, { unmeasured: 2 })), 'Дальше: откройте вкладку «Диалоги» и посмотрите, почему ситуации не измерены.');
   // 12/15, everything marked agree or disagree → 4.
   assert.equal(chat(marked(scored(12, 3), { disagree: ['t-f0'] })), 'Дальше: повторите прогон после исправления агента.');
@@ -173,32 +173,32 @@ test('V2 rule 2b: only sampled passes unmarked names the judge, not the failures
   assert.equal(sampled.length, 3, 'three passes are drawn for the double-check');
   const twoLeft = marked(record, { skip: sampled.slice(0, 2) });
   assert.deepEqual(view(twoLeft).agreement.unmarked, sampled.slice(0, 2));
-  assert.equal(chat(twoLeft), `Дальше: откройте /agent-lab ${ID8} и отметьте согласие с судьёй.`);
+  assert.equal(chat(twoLeft), `Дальше: попросите показать успехи, выбранные для перепроверки. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
   assert.equal(board(twoLeft), 'Дальше: откройте вкладку «Провалы» и отметьте согласие с судьёй.');
   // A failure left unmarked next to them makes it 2a again.
   const failures = scored(13, 1);
   const sampledToo = view(failures).agreement.sampledPasses;
-  assert.equal(chat(marked(failures, { skip: [...sampledToo.slice(0, 1), 't-f0'] })), `Дальше: откройте /agent-lab ${ID8} и отметьте согласие с провалами.`);
+  assert.equal(chat(marked(failures, { skip: [...sampledToo.slice(0, 1), 't-f0'] })), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
 });
 
 test('V2 rule 2c: «не могу сказать» marks are counted in the dative and never treated as done', () => {
   const two = marked(scored(12, 3), { unsure: ['t-f0', 't-f1'] });
   assert.deepEqual(view(two).agreement.unmarked, [], 'an unsure mark is a current mark: nothing is unmarked');
   assert.equal(view(two).agreement.unsure, 2);
-  assert.equal(chat(two), `Дальше: откройте /agent-lab ${ID8} и решите по 2 ситуациям: согласны ли вы с судьёй.`);
+  assert.equal(chat(two), `Дальше: решите по 2 ситуациям, согласны ли вы с судьёй: попросите показать их. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
   assert.equal(board(two), 'Дальше: на вкладке «Провалы» решите по 2 ситуациям: y или n.');
   const one = marked(scored(12, 3), { unsure: ['t-f2'] });
-  assert.equal(chat(one), `Дальше: откройте /agent-lab ${ID8} и решите по 1 ситуации: согласны ли вы с судьёй.`);
+  assert.equal(chat(one), `Дальше: решите по 1 ситуации, согласны ли вы с судьёй: попросите показать их. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
   assert.equal(board(one), 'Дальше: на вкладке «Провалы» решите по 1 ситуации: y или n.');
   const five = marked(scored(12, 5), { unsure: ['t-f0', 't-f1', 't-f2', 't-f3', 't-f4'] });
-  assert.equal(chat(five), `Дальше: откройте /agent-lab ${ID8} и решите по 5 ситуациям: согласны ли вы с судьёй.`);
+  assert.equal(chat(five), `Дальше: решите по 5 ситуациям, согласны ли вы с судьёй: попросите показать их. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
   // An unmarked failure still comes first (2a before 2c).
-  assert.equal(chat(marked(scored(12, 3), { unsure: ['t-f0'], skip: ['t-f1'] })), `Дальше: откройте /agent-lab ${ID8} и отметьте согласие с провалами.`);
+  assert.equal(chat(marked(scored(12, 3), { unsure: ['t-f0'], skip: ['t-f1'] })), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
   // A stale unsure mark (the judgment moved under it) is not K: the situation is unmarked again.
   const stale = marked(scored(12, 3), { unsure: ['t-f0'] });
   stale.humanReviews = stale.humanReviews.map(item => item.trialId === 't-f0' ? { ...item, judgeVerdict: 'pass' as const } : item);
   assert.equal(view(stale).agreement.stale, 1);
-  assert.equal(chat(stale), `Дальше: откройте /agent-lab ${ID8} и отметьте согласие с провалами.`);
+  assert.equal(chat(stale), `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`);
 });
 
 // ---- B1 ----
@@ -224,7 +224,7 @@ test('B1: the collapsed block is V1, the first block without «?» rows, the cau
     '2. Не уточняет модель терминала — 1 ситуация',
     '3. Отвечает вне инструкций — 1 ситуация',
     '',
-    `Дальше: откройте /agent-lab ${ID8} и отметьте согласие с провалами.`,
+    `Дальше: попросите показать первый провал. Согласие с судьёй отмечается в /agent-lab ${ID8}.`,
   ]);
   assert.deepEqual(rows.map(row => row.role), ['verdict:bad', 'headline', 'line', 'line', 'line', 'line', 'agreement', 'agreement-tail', 'blank', 'heading', 'cause', 'cause', 'cause', 'blank', 'next']);
   assert.equal(rows.find(row => row.role === 'agreement-tail')?.indent, 2, 'the tail row keeps its phase-3 indent');
@@ -256,7 +256,7 @@ test('B1 row 4 variants: the first three «✗» titles without clusters, the no
     'Не измерено: 2 — судья не уверен: голоса разошлись.',
     'Контроль: не задан.',
     '',
-    `Дальше: откройте /agent-lab ${ID8} и посмотрите, почему ситуации не измерены.`,
+    'Дальше: спросите, почему ситуации не измерены.',
   ]);
   for (const rows of [failures, clean, alarmed, nothing]) {
     for (let i = 1; i < rows.length; i++) assert.ok(!(rows[i]!.role === 'blank' && rows[i - 1]!.role === 'blank'), 'no double blank rows');
@@ -298,11 +298,11 @@ test('B2: the expanded block adds the «?» rows, the full causes, the pointer, 
     { indent: 3, text: 'Пример: Провал 3' },
     ...detail(5),
     { indent: 0, text: '' },
-    { indent: 0, text: `Все провалы — /agent-lab ${ID8}, вкладка «Провалы».` },
+    { indent: 0, text: `Любой провал можно открыть здесь: попросите показать его по номеру. Доска со всеми провалами — /agent-lab ${ID8}.` },
     { indent: 0, text: '' },
     { indent: 0, text: 'Дальше: повторите прогон после исправления агента.' },
   ]);
-  assert.equal(rows.find(row => row.text.startsWith('Все провалы'))?.role, 'pointer');
+  assert.equal(rows.find(row => row.text.startsWith('Любой провал'))?.role, 'pointer');
   assert.deepEqual(rows.filter(row => row.text.startsWith('Пример:')).map(row => row.role), ['example', 'example', 'example']);
   assert.ok(!lines.some(line => /раздел \d/.test(line)), 'the old «раздел 1» pointer is never printed in the block');
   for (let i = 1; i < rows.length; i++) assert.ok(!(rows[i]!.role === 'blank' && rows[i - 1]!.role === 'blank'), 'no double blank rows');
@@ -321,7 +321,7 @@ test('B2: the disagreements sit under their heading between the causes and the p
   const f7 = disagreementRows(v);
   assert.ok(f7.length === 3);
   assert.deepEqual(rows.slice(at + 1, at + 1 + f7.length).map(row => ({ role: row.role, indent: row.indent, text: row.text })), f7);
-  assert.deepEqual(lines.slice(at + 1 + f7.length), ['', `Все провалы — /agent-lab ${ID8}, вкладка «Провалы».`, '', 'Дальше: повторите прогон после исправления агента.']);
+  assert.deepEqual(lines.slice(at + 1 + f7.length), ['', `Любой провал можно открыть здесь: попросите показать его по номеру. Доска со всеми провалами — /agent-lab ${ID8}.`, '', 'Дальше: повторите прогон после исправления агента.']);
   // The causes come before the disagreements.
   assert.ok(lines.indexOf('ПРОВАЛЫ') < at);
   // The collapsed block never shows F7.
@@ -331,9 +331,9 @@ test('B2: the disagreements sit under their heading between the causes and the p
 test('B2 without disagreements or failures prints neither section, and the pointer only when something failed', () => {
   const noDisagreement = expanded(view(marked(clustered())));
   assert.ok(!texts(noDisagreement).includes(DISAGREEMENT_BOARD_TITLE));
-  assert.ok(texts(noDisagreement).includes(`Все провалы — /agent-lab ${ID8}, вкладка «Провалы».`));
+  assert.ok(texts(noDisagreement).includes(`Любой провал можно открыть здесь: попросите показать его по номеру. Доска со всеми провалами — /agent-lab ${ID8}.`));
   const clean = expanded(view(marked(scored(3, 0))));
-  assert.ok(!texts(clean).some(line => line.startsWith('Все провалы')));
+  assert.ok(!texts(clean).some(line => line.startsWith('Любой провал') || line.startsWith('Все провалы')));
   assert.ok(!texts(clean).includes(DISAGREEMENT_BOARD_TITLE));
   assert.deepEqual(texts(clean).slice(-3), [NO_FAILURES, '', 'Дальше: выгрузите отчёт для заказчика.']);
   // The unmeasured detail rows of the first block appear only when expanded.

@@ -202,7 +202,9 @@ test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-ca
   assert.equal(result.validation.sourceDialogues, 300);
   assert.equal(result.validation.candidateDialogues, 40);
   assert.equal(result.validation.sampledDialogues, 15);
-  assert.match(confirmations[0]!.body, /Исходных диалогов: 300; outcome-blind пул: 40; карточек: 15/);
+  assert.match(confirmations[0]!.body, /Диалогов в выгрузке: 300; к разбору подходят 40; карточек получится не больше 15/);
+  assert.match(confirmations[0]!.body, /не больше 385 вызовов/, 'the spending question names the limit the run will be saved with');
+  assert.doesNotMatch(confirmations[0]!.body, /validation set|outcome-blind/i, 'the owner is asked in plain words');
   await tools.get('agent_lab_run')!.execute('run-validation', { id: result.id, expectedHash: result.draftHash }, undefined, undefined, ctx);
   assert.equal(confirmations[1]!.title, 'Подтвердить ожидания и запустить?');
   assert.match(confirmations[1]!.body, /Что агент должен сделать: 15 ситуаций\. Номер правила — порядок в ваших материалах\./);
@@ -558,7 +560,7 @@ test('headless model tools prepare and edit only; approvals and human assessment
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
   const updates: string[] = [];
   try {
-    assert.deepEqual([...tools.keys()], ['agent_lab_generator', 'agent_lab_build', 'agent_lab_inspect', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
+    assert.deepEqual([...tools.keys()], ['agent_lab_generator', 'agent_lab_build', 'agent_lab_inspect', 'agent_lab_status', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
     const report = output(await tools.get('agent_lab_build')!.execute('build-1', { mode: 'demo', scenarioCount: 2 }, undefined,
       value => { updates.push(JSON.stringify(value)); }, ctx));
     assert.equal(report.phase, 'review'); assert.equal(report.workflow, 'evaluate');
@@ -673,7 +675,7 @@ test('actual Pi SDK loader imports native cards, preparation-only tools and embe
     await loader.reload();
     const loaded = loader.getExtensions();
     assert.deepEqual(loaded.errors, []); assert.equal(loaded.extensions.length, 1);
-    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_generator', 'agent_lab_build', 'agent_lab_inspect', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
+    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_generator', 'agent_lab_build', 'agent_lab_inspect', 'agent_lab_status', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_prompt']);
     assert.ok(loaded.extensions[0]!.commands.has('agent-lab'));
     assert.deepEqual(loader.getAgentsFiles().agentsFiles, []);
     const skills = loader.getSkills();
