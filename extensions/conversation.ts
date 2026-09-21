@@ -70,6 +70,9 @@ export interface OwnerBasis {
   reason: string;
   /** `quote`: the model pointed at a message fragment and it was found; `latest`: the message that started this turn. */
   source: 'quote' | 'latest';
+  /** The message itself and its place in the conversation, for the intent check. */
+  message: string;
+  index: number;
 }
 
 /**
@@ -81,12 +84,43 @@ export function ownerBasis(messages: string[], quote?: string): OwnerBasis | nul
   if (!messages.length) return null;
   const wanted = quote ? fold(quote) : '';
   if (wanted.length >= 6) {
-    const found = messages.findLast(message => fold(message).includes(wanted));
-    if (found) return { reason: reasonText(found), source: 'quote' };
+    const index = messages.findLastIndex(message => fold(message).includes(wanted));
+    if (index >= 0) return { reason: reasonText(messages[index]!), source: 'quote', message: messages[index]!, index };
   }
-  return { reason: reasonText(messages.at(-1)!), source: 'latest' };
+  return { reason: reasonText(messages.at(-1)!), source: 'latest', message: messages.at(-1)!, index: messages.length - 1 };
 }
 const reasonText = (message: string): string => `Владелец в разговоре: «${clip(message, 940)}»`;
+
+/** What the owner may ask for. Mentioning a thing is not asking for it, and «не удаляй» is the opposite of asking. */
+export type Intent = 'edit' | 'variant' | 'remove' | 'merge' | 'split' | 'stop';
+const INTENT_STEMS: Record<Intent, string[]> = {
+  edit: ['измен', 'помен', 'поправ', 'исправ', 'замен', 'перепи', 'переформ', 'пусть', 'сделай', 'постав', 'напиши', 'уточни', 'обнов'],
+  variant: ['добав', 'созда', 'сделай', 'нужен', 'нужна', 'заведи'],
+  remove: ['убер', 'убир', 'удал', 'исключ', 'выкин', 'снеси'],
+  merge: ['объедин', 'слей', 'склей', 'соедин'],
+  split: ['раздел', 'выдел', 'отдел', 'вынес'],
+  stop: ['остан', 'прерв', 'прекрат', 'стоп', 'хватит', 'stop', 'cancel'],
+};
+const NEGATIONS = new Set(['не', 'нельзя', 'незачем', 'никогда', 'ни', 'dont', 'not', 'never']);
+const CANCELS = ['не надо', 'не нужно', 'отмена', 'отмени', 'отменяю', 'передумал', 'оставь как', 'ничего не меняй', 'верни как'];
+/** Quoted speech and pasted log lines are material the owner shows, not an instruction the owner gives. */
+const ownWords = (message: string): string => message.replace(/«[^»]*»|"[^"]*"|“[^”]*”/g, ' ').split('\n')
+  .filter(line => !/^\s*(>|\{|\[|(user|assistant|клиент|агент|пользователь)\s*:)/i.test(line)).join(' ');
+
+/** True when the message asks for this operation in the owner's own words and does not negate it. */
+export function asksFor(message: string, intent: Intent): boolean {
+  const tokens = words(ownWords(message));
+  return tokens.some((token, at) => INTENT_STEMS[intent].some(stem => token.startsWith(stem))
+    && !tokens.slice(Math.max(0, at - 3), at).some(before => NEGATIONS.has(before)));
+}
+
+/** The instruction behind an operation: the basis message asks for it, and no later owner message took it back. */
+export function ownerAsked(messages: string[], intent: Intent, quote?: string): { basis: OwnerBasis | null; asked: boolean } {
+  const basis = ownerBasis(messages, quote);
+  if (!basis || !asksFor(basis.message, intent)) return { basis, asked: false };
+  const takenBack = messages.slice(basis.index + 1).some(later => CANCELS.some(phrase => fold(later).includes(phrase)));
+  return { basis, asked: !takenBack };
+}
 
 export type Authority =
   | { kind: 'conversation'; reason: string }
@@ -104,17 +138,20 @@ export type Authority =
  * user-simulation texts (opening, goal) where only invented values matter; `known` is what the card
  * already contains.
  */
-export function authorize(input: { messages: string[]; quote?: string; attributed?: string[]; simulated?: string[]; known?: string[]; summary: string }): Authority {
-  const basis = ownerBasis(input.messages, input.quote);
+export function authorize(input: { messages: string[]; quote?: string; intent: Intent; attributed?: string[]; simulated?: string[]; known?: string[]; summary: string; provenance?: boolean }): Authority {
+  const { basis, asked } = ownerAsked(input.messages, input.intent, input.quote);
   if (!basis) return { kind: 'confirm', reason: 'Подтверждено владельцем в диалоге Pi.', question: input.summary };
   const allowed = [...input.messages, ...(input.known ?? [])];
   const invented = [...new Set([...(input.attributed ?? []), ...(input.simulated ?? [])].flatMap(text => ungroundedValues(text, allowed)))];
   if (invented.length) return { kind: 'ask', message: `Владелец не называл: ${invented.join(', ')}. Спросите у него точное значение; ничего не записано.`,
     ownerMessage: `Значение ${invented.join(', ')} вы не называли, а от себя я значения не записываю. Назовите точное — и я внесу. Ничего не изменено.` };
+  // What the client knew and what the owner vouches for is a decision about provenance: matching words never settle it.
+  if (input.provenance) return { kind: 'confirm', reason: basis.reason, question: input.summary };
+  // Words of the owner are not yet an instruction of the owner: the message has to ask for this operation.
+  if (!asked) return { kind: 'confirm', reason: basis.reason, question: input.summary };
   const foreign = (input.attributed ?? []).some(text => wordingCoverage(text, allowed) < OWNER_WORDING_SHARE);
   return foreign ? { kind: 'confirm', reason: basis.reason, question: input.summary } : { kind: 'conversation', reason: basis.reason };
 }
-
 /* ───────────────────────────── references ───────────────────────────── */
 
 export type Resolved<T> = { kind: 'one'; item: T } | { kind: 'none' } | { kind: 'many'; items: T[] };
@@ -463,16 +500,28 @@ export function planLines(record: Experiment, cwd?: string): string[] {
   const part = acceptance && variants.length !== acceptance.variantIds.length ? ` из ${acceptance.variantIds.length}` : '';
   const origin = (['production', 'curated', 'synthetic'] as const).map(kind => ({ kind, n: acceptance ? variants.filter(variant => variant.provenance === kind).length : record.scenarios.filter(scenario => scenario.provenance === kind).length }))
     .filter(item => item.n).map(item => `${item.n} ${provenanceWord[item.kind]}`).join(', ');
-  const judge = record.settings.judge;
+  // The same precedence the runtime applies (pi.ts role choice, normalize.ts judge): a role override, then the judge setting, then the common model.
+  const common = { provider: record.settings.provider, model: record.settings.model };
+  const simulator = record.settings.roles?.simulator ?? common;
+  const judge = record.settings.roles?.judge ?? record.settings.judge ?? common;
   return [
     `Агент: ${projectPath(targetText(record), cwd)}${record.targetVersion ? ` · версия ${record.targetVersion}` : ''}`,
     acceptance ? `Набор: принятая ревизия ${acceptance.revision}, ${count(variants.length, VARIANTS)}${part}${origin ? ` (${origin})` : ''}`
       : `Набор: ${count(record.scenarios.length, ['ситуация', 'ситуации', 'ситуаций'])}${origin ? ` (${origin})` : ''}`,
     `Попыток: ${plannedTrials(record)} (повторов ${record.settings.repeats}, режим клиента: ${record.settings.userModes.join(', ')})`,
     record.mode === 'demo' ? 'Учебный пример: без модели и оплаты.'
-      : `Модели: клиент и подготовка — ${record.settings.provider}/${record.settings.model}; судья — ${judge?.provider ?? record.settings.provider}/${judge?.model ?? record.settings.model}`,
+      : `Модели: клиента играет ${simulator.provider}/${simulator.model}; судья — ${judge.provider}/${judge.model}`,
     `Лимиты: использовано ${record.usage.calls} из ${record.settings.maxCalls} вызовов, до ${Math.round(record.settings.maxDurationMs / 60_000)} мин, до ${record.settings.maxTurns} ходов в диалоге. Стоимость заранее неизвестна.`,
   ];
+}
+
+/** What the owner accepts: for every chosen card the client's first message and the expected result, not a list of titles. */
+export function acceptanceLines(library: ScenarioLibrary, chosen: ScenarioVariant[], limit = 8): string[] {
+  const lines = chosen.slice(0, limit).flatMap(variant => [`${variantNumber(library, variant)}. ${variant.title}`,
+    `   Клиент пишет: «${clip(variant.userState.opening, 200)}»`,
+    ...(variant.userState.missing.length ? [`   Клиент не знает: ${clip(variant.userState.missing.join('; '), 160)}`] : []),
+    `   Ожидается: ${clip(variant.evaluationSpec.successCriteria, 260)}`]);
+  return chosen.length > limit ? [...lines, `…и ещё ${chosen.length - limit}: ${chosen.slice(limit).map(variant => variant.title).join('; ')}. Их определения показаны в ленте выше.`] : lines;
 }
 
 /** Progress from the stored record only: finished, planned, unusable attempts and spending. Nothing is estimated. */

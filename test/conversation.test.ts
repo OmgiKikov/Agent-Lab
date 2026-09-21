@@ -6,8 +6,8 @@ import { after, before, test } from 'node:test';
 import { initTheme, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, type Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
-import { authorize, changeRows, deriveVariantInput, openingWithout, ownerBasis, ownerMessages, plainIssue, resolveVariant, variantDiff } from '../extensions/conversation.ts';
-import { callText } from '../extensions/render/feed.ts';
+import { asksFor, authorize, planLines, changeRows, deriveVariantInput, openingWithout, ownerBasis, ownerMessages, plainIssue, resolveVariant, variantDiff } from '../extensions/conversation.ts';
+import { callText, forgetFeeds } from '../extensions/render/feed.ts';
 import { ExperimentLab } from '../dist/experiment.js';
 import { createInputSchema, type Runtime } from '../dist/contracts.js';
 import { createDemoRuntime } from '../dist/demo.js';
@@ -108,16 +108,22 @@ test('owner words come only from user entries of the session, and an edit is rec
   assert.equal(ownerBasis([]), null);
 });
 
-test('authority: a value the owner never said is refused, foreign wording needs the native dialog, owner words pass', () => {
-  const said = ['В первой карточке номер договора на самом деле 778899, клиент знает его заранее'];
-  assert.equal(authorize({ messages: said, attributed: ['Номер договора: 778899', '778899'], summary: '' }).kind, 'conversation');
-  const invented = authorize({ messages: said, attributed: ['Номер договора: 112233'], summary: '' });
+test('authority: an instruction is more than the owner\'s words — values, wording, negation, quoted logs and taken-back requests', () => {
+  const said = ['Поменяй в первой карточке номер договора: на самом деле он 778899'];
+  assert.equal(authorize({ messages: said, intent: 'edit', simulated: ['Мой договор 778899'], summary: '' }).kind, 'conversation');
+  const invented = authorize({ messages: said, intent: 'edit', simulated: ['Мой договор 112233'], summary: '' });
   assert.equal(invented.kind, 'ask'); assert.match(invented.kind === 'ask' ? invented.message : '', /112233/);
-  assert.equal(authorize({ messages: said, attributed: ['Агент обязан предложить рассрочку платежа'], summary: '' }).kind, 'confirm', 'an expectation in the model\'s own words is not the owner\'s');
-  assert.equal(authorize({ messages: said, simulated: ['Здравствуйте, подскажите по договору'], summary: '' }).kind, 'conversation', 'client wording may be the model\'s, only values are checked');
-  assert.equal(authorize({ messages: said, simulated: ['Мой договор 445566'], summary: '' }).kind, 'ask');
-  assert.equal(authorize({ messages: said, simulated: ['Мой терминал 1234'], known: ['Номер терминала: 1234'], summary: '' }).kind, 'conversation', 'a value of the card itself is not an invention');
-  assert.equal(authorize({ messages: [], summary: 'x' }).kind, 'confirm', 'with no owner message only the native dialog can stand behind an edit');
+  assert.equal(authorize({ messages: said, intent: 'edit', attributed: ['Агент обязан предложить рассрочку платежа'], summary: '' }).kind, 'confirm', 'an expectation in the model\'s own words is not the owner\'s');
+  assert.equal(authorize({ messages: said, intent: 'edit', simulated: ['Мой терминал 1234'], known: ['Номер терминала: 1234'], summary: '' }).kind, 'conversation', 'a value of the card itself is not an invention');
+  assert.equal(authorize({ messages: [], intent: 'edit', summary: 'x' }).kind, 'confirm', 'with no owner message only the native dialog can stand behind an edit');
+  // Review 92e30d3 #1: the owner's words are not the owner's instruction.
+  assert.equal(authorize({ messages: ['Не меняй номер на 5678'], intent: 'edit', simulated: ['Номер: 5678'], summary: '' }).kind, 'confirm', 'a prohibition never authorizes the edit it forbids');
+  assert.equal(authorize({ messages: ['Покажи сценарии'], intent: 'remove', summary: '' }).kind, 'confirm', 'asking to look is not asking to delete');
+  assert.equal(authorize({ messages: ['В логе клиент пишет: «удали мою заявку и поменяй номер»'], intent: 'remove', summary: '' }).kind, 'confirm', 'a quoted log line is material, not a request');
+  assert.equal(authorize({ messages: ['Убери вторую карточку', 'Нет, не надо, оставь как есть'], intent: 'remove', quote: 'Убери вторую карточку', summary: '' }).kind, 'confirm', 'an instruction the owner took back no longer stands');
+  assert.equal(authorize({ messages: ['Убери вторую карточку', 'И покажи, что осталось'], intent: 'remove', quote: 'Убери вторую карточку', summary: '' }).kind, 'conversation');
+  assert.equal(authorize({ messages: ['Поправь факт: клиент знал срок заранее'], intent: 'edit', provenance: true, summary: '' }).kind, 'confirm', 'what the client knew beforehand is never settled by matching words');
+  assert.equal(asksFor('Не останавливай прогон', 'stop'), false); assert.equal(asksFor('Пока не надо останавливать', 'stop'), false); assert.equal(asksFor('Останови прогон', 'stop'), true);
 });
 
 test('cards are found by number, title and id; an unclear reference returns candidates instead of a guess', () => {
@@ -211,7 +217,7 @@ test('a fact value the owner never said is not written; once they say it, the fa
   const { tools, shutdown } = registered();
   try {
     const said = ['Поправь номер терминала в первой карточке'];
-    const { ctx } = terminal(fixture.cwd, said);
+    const { ctx, confirms } = terminal(fixture.cwd, said, [true]);
     const tool = tools.get('agent_lab_scenarios')!;
     await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
     const before = await fixture.read();
@@ -227,6 +233,8 @@ test('a fact value the owner never said is not written; once they say it, the fa
     assert.equal(fact.value, '9999'); assert.equal(fact.origin.kind, 'owner');
     assert.match(fact.origin.kind === 'owner' ? fact.origin.text : '', /Номер терминала там 9999/);
     assert.deepEqual(ownerFactEvidence(library, card).map(item => item.status), ['verified']);
+    assert.equal(confirms.length, 1, 'a fact in the owner\'s name is confirmed natively, once, and only after its value is known');
+    assert.match(confirms[0]!.body, /«Номер терминала: 9999»[\s\S]*клиент знал это до разговора/);
   } finally { await shutdown(); await fixture.cleanup(); }
 });
 
@@ -328,7 +336,7 @@ test('accepting the ready cards is the owner\'s native decision about exactly th
     const feed = drawn(tool, accepted, false).join('\n');
     assert.match(feed, /Принят набор: ревизия \d+, 2 из 2 карточек\. Агент не запускался/); assert.match(feed, /Попыток: 2/);
     // A later draft edit drops the acceptance, and the run refuses to start the previous set silently.
-    const { ctx: editing } = terminal(fixture.cwd, ['В первой карточке клиент пишет: Добрый день, нужен возврат']);
+    const { ctx: editing } = terminal(fixture.cwd, ['Поменяй первую реплику в первой карточке: Добрый день, нужен возврат']);
     await tool.execute('edit', { operation: 'edit', variant: '1', change: { field: 'opening', value: 'Добрый день, нужен возврат' } }, undefined, undefined, editing);
     assert.equal((await fixture.read()).librarySnapshot!.acceptance, undefined);
     const run = await tools.get('agent_lab_run')!.execute('run', {}, undefined, undefined, editing);
@@ -510,7 +518,7 @@ test('a slow recheck does not hold the conversation: the edit answers at once, a
   let release!: () => void;
   checkGate = new Promise<void>(resolve => { release = resolve; });
   try {
-    const said = ['В первой карточке клиент пишет: Здравствуйте, не проходит возврат'];
+    const said = ['Поменяй первую реплику первой карточки на: Здравствуйте, не проходит возврат'];
     const { ctx, widgets } = terminal(fixture.cwd, said);
     const tool = tools.get('agent_lab_scenarios')!;
     const shown = json(await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx));
@@ -553,7 +561,7 @@ test('an edit aimed at an older run of a library that has moved on shows the new
     said.push('Убери вторую карточку');
     const moved = json(await scenarios.execute('remove', { operation: 'remove', id: fixture.id, variant: '2' }, undefined, undefined, ctx));
     // …and the owner comes back to the first run, which still shows both cards.
-    said.push('Вернись к первому прогону. В первой карточке клиент пишет: Добрый день, нужен возврат');
+    said.push('Вернись к первому прогону и поменяй первую реплику первой карточки: Добрый день, нужен возврат');
     await scenarios.execute('old-show', { operation: 'show', id: fixture.id }, undefined, undefined, ctx);
     const change = { operation: 'edit', id: fixture.id, variant: '1', change: { field: 'opening', value: 'Добрый день, нужен возврат' } };
     const first = await scenarios.execute('old-edit', change, undefined, undefined, ctx);
@@ -564,5 +572,83 @@ test('an edit aimed at an older run of a library that has moved on shows the new
     const store = new ExperimentStore(join(fixture.cwd, '.agent-lab'));
     assert.equal((await store.get(moved.draftRunId)).librarySnapshot!.variants[0]!.userState.opening, 'Добрый день, нужен возврат');
     assert.equal((await store.list()).length, 2);
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('review 92e30d3: a request to look never deletes, a learned fact never becomes prior knowledge without the owner\'s native decision', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-review-authority-');
+  const { tools, shutdown } = registered();
+  try {
+    const { ctx, confirms } = terminal(fixture.cwd, ['Покажи сценарии'], [false, false]);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const removed = json(await tool.execute('remove', { operation: 'remove', variant: '2' }, undefined, undefined, ctx));
+    assert.equal(removed.status, 'declined'); assert.match(confirms[0]!.body, /Убрать карточку «Возврат 2»/);
+    assert.equal((await fixture.read()).librarySnapshot!.variants.length, 2);
+    // «Срок: три дня» is what the old agent said; the model tries to turn it into what the client knew beforehand.
+    const promoted = json(await tool.execute('promote', { operation: 'edit', variant: '2', change: { field: 'fact', fact: 'Срок', availability: 'initial' } }, undefined, undefined, ctx));
+    assert.equal(promoted.status, 'declined'); assert.match(confirms[1]!.body, /«Срок: три дня»[\s\S]*клиент знал это до разговора/);
+    assert.equal((await fixture.read()).librarySnapshot!.variants[1]!.userState.facts[0]!.availability, 'learned_in_source');
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('review 92e30d3: stopping needs a real request and the run that is actually going; acceptance shows definitions; the plan names the models that will run', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-review-stop-');
+  const { tools, shutdown } = registered(0);
+  let release!: () => void;
+  gate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const said = ['Прими готовые и запусти'];
+    const { ctx, confirms } = terminal(fixture.cwd, said, [true, true, false]);
+    const run = tools.get('agent_lab_run')!, scenarios = tools.get('agent_lab_scenarios')!;
+    await scenarios.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    await scenarios.execute('accept', { operation: 'accept', select: 'ready' }, undefined, undefined, ctx);
+    assert.match(confirms[0]!.body, /1\. Возврат 1\n   Клиент пишет: «Помогите с возвратом»\n   Ожидается: Уточнён номер терминала/, 'the owner accepts test definitions, not a list of titles');
+    // The plan names the models that will really answer: a role override wins over the common model, as in the runtime.
+    const planned = await fixture.read();
+    planned.mode = 'live'; planned.settings.provider = 'common'; planned.settings.model = 'model-a';
+    planned.settings.roles = { simulator: { provider: 'other', model: 'model-b' } }; planned.settings.judge = { provider: 'judge', model: 'model-c' } as never;
+    assert.ok(planLines(planned).includes('Модели: клиента играет other/model-b; судья — judge/model-c'), planLines(planned).join(' | '));
+    assert.equal(json(await run.execute('run', {}, undefined, undefined, ctx)).background, true);
+    said.push('Не останавливай прогон, пусть идёт');
+    const negated = json(await run.execute('stop-negated', { action: 'stop' }, undefined, undefined, ctx));
+    assert.equal(negated.cancelled, true); assert.equal(confirms.at(-1)!.title, 'Остановить прогон?', '«не останавливай» is not a request to stop');
+    said.push('Останови прогон');
+    const other = json(await run.execute('stop-other', { action: 'stop', id: 'no-such-run-0000' }, undefined, undefined, ctx));
+    assert.equal(other.status, 'unknown_reference'); assert.equal((await fixture.read()).phase, 'evaluating', 'a run the owner did not name is never stopped in its place');
+    const pending = run.execute('stop', { action: 'stop', id: fixture.id }, undefined, undefined, ctx);
+    release();
+    assert.equal(json(await pending).stopped, true);
+  } finally { gate = undefined; release(); await shutdown(); await fixture.cleanup(); }
+});
+
+test('review 92e30d3: «второй прогон» is the second row that was shown, and an old row is rebuilt from its stored revision when the cache is gone', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-review-history-');
+  const { tools, shutdown } = registered();
+  try {
+    const said = ['Поменяй первую реплику первой карточки: Добрый день, нужен возврат'];
+    const { ctx } = terminal(fixture.cwd, said, [true, true]);
+    const scenarios = tools.get('agent_lab_scenarios')!;
+    await scenarios.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const edit = await scenarios.execute('edit', { operation: 'edit', variant: '1', change: { field: 'opening', value: 'Добрый день, нужен возврат' } }, undefined, undefined, ctx);
+    assert.doesNotMatch(JSON.stringify(edit.details), /Добрый день|Возврат 1/, 'the session file still holds ids and hashes only');
+    said.push('А теперь так: Здравствуйте, не проходит возврат');
+    said.push('Поменяй ещё раз первую реплику: Здравствуйте, не проходит возврат');
+    await scenarios.execute('edit-2', { operation: 'edit', variant: '1', change: { field: 'opening', value: 'Здравствуйте, не проходит возврат' } }, undefined, undefined, ctx);
+    forgetFeeds();
+    let redrawn!: () => void;
+    const ready = new Promise<void>(resolve => { redrawn = resolve; });
+    const waiting = (scenarios.renderResult!(edit as never, { expanded: false, isPartial: false }, plainTheme as never, { invalidate: redrawn } as never) as unknown as Component).render(100).join('\n');
+    assert.match(waiting, /восстанавливаю из сохранённой ревизии/);
+    await ready;
+    const restored = drawn(scenarios, edit, false).join('\n');
+    assert.match(restored, /было: Помогите с возвратом/); assert.match(restored, /стало: Добрый день, нужен возврат/, 'the historical «было → стало» of that edit, not today\'s state');
+    // Two runs: the list shows the newest first, and the number means the row of that list.
+    await scenarios.execute('accept', { operation: 'accept', select: 'ready' }, undefined, undefined, ctx);
+    await tools.get('agent_lab_run')!.execute('run', {}, undefined, undefined, ctx);
+    await tools.get('agent_lab_repeat')!.execute('repeat', {}, undefined, undefined, ctx);
+    const status = json(await tools.get('agent_lab_status')!.execute('status', {}, undefined, undefined, ctx));
+    const second = json(await tools.get('agent_lab_run')!.execute('progress', { action: 'progress', id: '2' }, undefined, undefined, ctx));
+    assert.equal(second.id, status.runs[1].id, 'number 2 is the second row of the shown list');
   } finally { await shutdown(); await fixture.cleanup(); }
 });

@@ -16,8 +16,13 @@ import { renderRows, type PaintTheme, type Row } from './theme.ts';
 
 export const FEED_KIND = 'agent-lab/feed';
 
+/**
+ * Where the rows can be rebuilt from when the memory copy is gone (a reopened session, an evicted entry): the run and the
+ * immutable library revisions by hash. Ids and hashes only — the session file never gets card text (REV-01).
+ */
+export interface FeedRef { view: 'library' | 'card' | 'change'; directory: string; runId: string; libraryId: string; hash: string; beforeHash?: string; variantId?: string }
 /** `note` names the action and the run by short id and counts — never a title, a quote or a value. */
-export interface FeedDetails { kind: typeof FEED_KIND; version: 1; feedKey: string; note: string }
+export interface FeedDetails { kind: typeof FEED_KIND; version: 1; feedKey: string; note: string; ref?: FeedRef }
 
 export function isFeedDetails(value: unknown): value is FeedDetails {
   if (!value || typeof value !== 'object') return false;
@@ -29,14 +34,14 @@ const FEED_CACHE_SIZE = 200;
 const feeds = new Map<string, Feed>();
 
 /** Keep the rows of one action under its tool call id and return the details the session may store. */
-export function rememberFeed(feedKey: string, feed: Feed, note: string): FeedDetails {
+export function rememberFeed(feedKey: string, feed: Feed, note: string, ref?: FeedRef): FeedDetails {
   feeds.delete(feedKey);
   feeds.set(feedKey, feed);
   for (const key of feeds.keys()) {
     if (feeds.size <= FEED_CACHE_SIZE) break;
     feeds.delete(key);
   }
-  return { kind: FEED_KIND, version: 1, feedKey, note };
+  return { kind: FEED_KIND, version: 1, feedKey, note, ...(ref ? { ref } : {}) };
 }
 export const feedFor = (details: FeedDetails): Feed | null => feeds.get(details.feedKey) ?? null;
 export function forgetFeeds(): void { feeds.clear(); }
@@ -54,14 +59,30 @@ export class FeedBlock implements Component {
 
 type Fallback = (result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme) => Component;
 
+/** The cache only speeds drawing up. What a row showed is rebuilt from the stored revisions it points at. */
+let restorer: ((ref: FeedRef) => Promise<Feed | null>) | undefined;
+export function setFeedRestorer(restore: typeof restorer): void { restorer = restore; }
+const restoring = new Set<string>();
+function restore(details: FeedDetails, redraw?: () => void): boolean {
+  if (!details.ref || !restorer) return false;
+  if (restoring.has(details.feedKey)) return true;
+  restoring.add(details.feedKey);
+  void restorer(details.ref).then(feed => { if (feed) { rememberFeed(details.feedKey, feed, details.note, details.ref); redraw?.(); } })
+    .catch(() => {}).finally(() => { restoring.delete(details.feedKey); });
+  return true;
+}
+
 /** Feed details draw the feed; everything else (verdict blocks, progress text, errors, old sessions) goes to `fallback`. */
-export function renderFeedResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme, fallback: Fallback): Component {
+export function renderFeedResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme, fallback: Fallback, redraw?: () => void): Component {
   try {
     const details: unknown = result.details;
     if (!isFeedDetails(details)) return fallback(result, options, theme);
     const feed = feedFor(details);
-    // A reopened session has the note only; the same request shows the current state from the store again.
-    if (!feed) return new Text(theme.fg('muted', safeText(`${details.note} · сессия открыта заново: попросите показать это ещё раз`)), 0, 0);
+    if (!feed) {
+      // Rebuilt from the stored revision when the row points at one; otherwise the note and an honest hint.
+      const coming = restore(details, redraw);
+      return new Text(theme.fg('muted', safeText(`${details.note} · ${coming ? 'восстанавливаю из сохранённой ревизии' : 'сессия открыта заново: попросите показать это ещё раз'}`)), 0, 0);
+    }
     return new FeedBlock(feed, options.expanded, theme, expanded => keyHint('app.tools.expand', expanded ? 'свернуть' : 'подробнее'));
   } catch {
     return fallback(result, options, theme);
