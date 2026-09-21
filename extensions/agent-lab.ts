@@ -257,7 +257,7 @@ Logs and scenarios: use agent_lab_build mode=validate to import de-identified di
 
 Acceptance and run are two separate owner decisions. The owner selects ready variants and accepts one immutable accepted revision in a native confirmation; acceptance does not run the agent. Never accept a set the owner has not seen in this conversation, and never start a run because a card was opened. agent_lab_run shows a compact plan in its own native confirmation: agent and version, accepted revision and selected count, planned dialogues, models and remaining cumulative budget; full expectations remain in the cards. Always tell apart the draft, the accepted set and the running snapshot: a draft edit drops acceptance and never changes a running or a past run.
 
-A long run continues in the background: the conversation stays free, progress above the input comes from stored data, and the result arrives as a message. Esc interrupts your current action, not the run; stop a run only when the owner asks, with agent_lab_run action:"stop", then say what was saved and that a repeat runs every attempt again.
+A long run continues in the background: the conversation stays free, progress above the input comes from stored data, and the result arrives as a message. Esc interrupts your current action, not the run; stop a run only when the owner asks, with agent_lab_run action:"stop", then say what was saved and that a repeat runs every attempt again. A long preparation of scenarios (agent_lab_build) is handed over the same way: the scenarios arrive as a message, so never wait for it or poll; agent_lab_run action:"progress" and action:"stop" work for it too, and stopping it keeps the partial draft.
 
 Results: after separate native execution confirmation, lead with one estimated card accuracy number on the accepted set, grounded failure causes, separate metrics and limits, and keep measured and unmeasured counts visible; save the suite when useful. When a run ends, the block already shows the accuracy and each main cause with what was expected, what the agent said and the owner rule. Close the run yourself in three to five plain sentences: the accuracy number, where the agent limps and why (the pattern across failures: what clients asked, what the agent did instead, which owner rule that breaks), what it handles well, and how far the number can be trusted. Do not copy the block's rows. agent_lab_agree records the owner's own agreement or disagreement with the judge about one situation (the owner answers in a native dialog; you never supply the answer) — offer it after showing a failure, because it is what makes the number trustworthy. agent_lab_inspect failure:N opens a failure with its dialogue, expectation and owner rule; dialogue opens any recorded dialogue; compare:true compares a repeat with its source run. «Повтори этот случай на новой версии и сравни» is agent_lab_repeat with the cards by title or number, then agent_lab_run, then agent_lab_inspect compare:true. This is accuracy on the validation set, never a calibrated production guarantee.
 
@@ -282,9 +282,20 @@ export interface AgentLabOptions { inlineRunMs?: number; inlineCheckMs?: number;
 const DIFF_FIELD: Record<string, string> = { opening: 'первая реплика', goal: 'цель клиента', expectation: 'ожидаемый результат', rule: 'правило проверки', fact: 'факт' };
 const RUN_MESSAGE = 'agent-lab-run';
 const CHECK_MESSAGE = 'agent-lab-check';
+const BUILD_MESSAGE = 'agent-lab-build';
 /** Custom session entry that keeps a shown list (ids only) across a restart of Pi. */
 const SHOWN_ENTRY = 'agent-lab-shown';
-type Job = { directory: string; id: string; lab: ExperimentLab; done: Promise<void>; origin: 'board' | 'chat'; quiet?: boolean };
+/** The work this session owns after its row ended. One slot: a run and a preparation hold the same writer lock, so they never coexist. */
+type Job = { kind: 'run' | 'preparation'; directory: string; id: string; lab: ExperimentLab; done: Promise<void>; origin: 'board' | 'chat'; quiet?: boolean };
+/** What a finished preparation answers with: the model JSON and, for a prepared library, the feed of its scenarios. */
+type Prepared = { output: Record<string, unknown>; feed?: Feed; note?: string };
+/** After a stopped preparation: what the partial draft holds. Counts only — the same lines go into the session file. */
+const preparationStoppedLines = (record: Experiment): string[] => {
+  const variants = record.librarySnapshot?.variants ?? [];
+  return [`Подготовка ${record.id.slice(0, 8)} ${record.error ? 'остановлена' : 'успела завершиться до остановки'}.`, variants.length
+    ? `Сохранён черновик: карточек ${variants.length}, из них готовых ${variants.filter(variant => variant.quality === 'ready').length}. Их можно смотреть, править и принимать.`
+    : `Карточки собрать не успели. Запись сохранена: требований ${record.requirements.length}, вызовов модели ${record.usage.calls}.`];
+};
 /** A request the owner has to settle: nothing was written, and the feed shows the question instead of an error. */
 type OwnerQuestion = { status: 'ambiguous_reference' | 'unknown_reference' | 'needs_owner_input' | 'declined'; options: string[]; ownerText?: string };
 /** `message` instructs the model; `ownerText` is what the owner reads in the feed when the two differ. */
@@ -298,6 +309,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   const inlineRunMs = options.inlineRunMs ?? 20_000;
   /** A recheck that finishes this fast is reported in the row of the edit; a longer one reports back as a message. */
   const inlineCheckMs = options.inlineCheckMs ?? 3_000;
+  const inlineBuildMs = options.inlineBuildMs ?? 5_000;
   let activeClose: (() => Promise<void>) | undefined;
   let boardRun: Job | undefined;
   /** The run this conversation last worked on, per data directory. A default for «запусти», never a store of its own. */
@@ -352,7 +364,9 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   };
   const open = async (cwd: string, pendingCheck: 'cancel' | 'wait' = 'cancel') => {
     await settleCheck(resolve(cwd, '.agent-lab'), pendingCheck);
-    if (activeClose) throw new Error(boardRun
+    if (activeClose) throw new Error(boardRun?.kind === 'preparation'
+      ? `Сейчас идёт подготовка сценариев ${shortRun(boardRun.id)}. Готовые сценарии, диалоги и результаты можно смотреть; правки и новый запуск — после её завершения или остановки.`
+      : boardRun
       ? `Сейчас идёт прогон ${shortRun(boardRun.id)}. Сценарии, диалоги и результаты можно смотреть; правки и новый запуск — после его завершения или остановки.`
       : 'Уже идёт другая операция Agent Lab. Историю и готовые результаты можно открыть; новый запуск — после её завершения.');
     const lab = new ExperimentLab(resolve(cwd, '.agent-lab'));
@@ -431,10 +445,12 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   /**
    * A started run belongs to the Pi session, not to the row or the board that started it: the
    * conversation stays free, progress comes from the stored record, and the result of a chat run
-   * arrives as a message. Closing Pi still ends the work it owns.
+   * arrives as a message. Closing Pi still ends the work it owns. A preparation is handed over the same
+   * way: `prepared` builds its answer once it has ended, from the stored record.
    */
-  const detach = (ctx: ExtensionContext, directory: string, owned: Awaited<ReturnType<typeof open>>, id: string, origin: Job['origin']): Job => {
-    const job: Job = { directory, id, lab: owned.lab, done: Promise.resolve(), origin };
+  const detach = (ctx: ExtensionContext, directory: string, owned: Awaited<ReturnType<typeof open>>, id: string, origin: Job['origin'], prepared?: (finished: Experiment) => Promise<Prepared>): Job => {
+    const job: Job = { kind: prepared ? 'preparation' : 'run', directory, id, lab: owned.lab, done: Promise.resolve(), origin };
+    const widget = prepared ? BUILD_MESSAGE : RUN_MESSAGE;
     boardRun = job;
     let updates = Promise.resolve();
     let shown = '';
@@ -445,7 +461,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       if (lines.join('\n') === shown) return;
       shown = lines.join('\n');
       ctx.ui.setStatus?.('agent-lab-progress', safeText(progressLine(record)));
-      ctx.ui.setWidget?.(RUN_MESSAGE, [...lines, 'Разговор свободен. Остановить прогон — так и напишите; Esc его не останавливает.']);
+      ctx.ui.setWidget?.(widget, [...lines, prepared ? 'Разговор свободен. Остановить подготовку — так и напишите; Esc её не останавливает.'
+        : 'Разговор свободен. Остановить прогон — так и напишите; Esc его не останавливает.']);
     };
     const timer = setInterval(() => { updates = updates.then(update).catch(() => {}); }, 750);
     updates = updates.then(update).catch(() => {});
@@ -455,7 +472,18 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         const finished = await owned.lab.get(id);
         returnToBoard(ctx, id);
         const complete = finished.phase === 'results_review' || finished.phase === 'complete';
-        if (origin === 'board') ctx.ui.notify?.(complete ? `Проверка завершена: /agent-lab ${shortRun(id)} — открыть результат.`
+        if (prepared) {
+          // A stop the owner asked for is answered in its own row; every other ending reports back, a failed one as plainly as a finished one.
+          if (!job.quiet) {
+            const answer = await prepared(finished);
+            const failed = [`Подготовка ${shortRun(id)} не завершена${finished.phase === 'cancelled' ? ': она остановлена' : ''}.`, ...(finished.error ? [safeText(finished.error)] : [])];
+            pi.sendMessage({ customType: BUILD_MESSAGE, display: true, content: JSON.stringify(answer.output),
+              details: answer.feed ? rememberFeed(`build:${id}:${finished.updatedAt}`, answer.feed, answer.note ?? `Сценарии прогона ${shortRun(id)}`)
+                : rememberFeed(`build:${id}:${finished.updatedAt}`, { rows: finished.phase === 'review' && !finished.error ? [row('Подготовка завершена. Агент не запускался.', 'success', true), ...stateRows(finished)]
+                  : failed.map((line, index) => row(line, index ? 'error' : 'warning', !index)) }, `Подготовка ${shortRun(id)}`),
+            }, { deliverAs: 'followUp', triggerTurn: true });
+          }
+        } else if (origin === 'board') ctx.ui.notify?.(complete ? `Проверка завершена: /agent-lab ${shortRun(id)} — открыть результат.`
           : `Проверка ${shortRun(id)} остановлена. Записанные диалоги доступны в истории.`, 'info');
         else if (!job.quiet) {
           const announced = complete ? await verdictOutput(finished, owned.lab) : undefined;
@@ -466,10 +494,10 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
               : rememberFeed(`run:${id}:${finished.updatedAt}`, { rows: [...stopped.map(line => row(line, 'warning')), ...(finished.error ? [row(safeText(finished.error), 'error')] : [])] }, `Прогон ${shortRun(id)} остановлен`),
           }, { deliverAs: 'followUp', triggerTurn: true });
         }
-      } catch (error) { ctx.ui.notify?.(`Не удалось завершить проверку: ${inputError(error)}`, 'error'); }
+      } catch (error) { ctx.ui.notify?.(`Не удалось завершить ${prepared ? 'подготовку' : 'проверку'}: ${inputError(error)}`, 'error'); }
       finally {
         clearInterval(timer);
-        try { await updates; ctx.ui.setStatus?.('agent-lab-progress', undefined); ctx.ui.setWidget?.(RUN_MESSAGE, undefined); }
+        try { await updates; ctx.ui.setStatus?.('agent-lab-progress', undefined); ctx.ui.setWidget?.(widget, undefined); }
         finally { try { await owned.close(); } finally { if (boardRun === job) boardRun = undefined; } }
       }
     })();
@@ -482,8 +510,9 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   /**
    * A recheck too long for the row of its edit. The conversation goes on; the outcome arrives as a
    * message — silently when the card is ready, with a turn when the owner has something to decide.
+   * An assessment the owner asked for (`asked`) always ends with a turn: they are waiting for its answer.
    */
-  const backgroundCheck = (ctx: ExtensionContext, directory: string, id: string, owned: Awaited<ReturnType<typeof open>>, usedBefore: number, startHash: string, variantId?: string): void => {
+  const backgroundCheck = (ctx: ExtensionContext, directory: string, id: string, owned: Awaited<ReturnType<typeof open>>, usedBefore: number, startHash: string, variantId?: string, asked = false): void => {
     const check = { directory, id, lab: owned.lab, done: Promise.resolve(), cancelled: false };
     activeCheck = check;
     let updates = Promise.resolve();
@@ -519,9 +548,10 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         pi.sendMessage({ customType: CHECK_MESSAGE, display: true,
           content: JSON.stringify({ status: 'semantic_check_finished', runId: id, check: outcome, ...scenarioLibrarySummary(experiment, library.acceptance?.variantIds ?? []),
             ...(variant ? { variant: { id: variant.id, title: variant.title, quality: variant.quality, issues: variant.issues.map(item => plainIssue(library, variant, item)), disputedChecks: disputed.map(item => ({ id: item.id, rule: item.rule })) } } : {}),
-            instruction: 'The background recheck of the last edit finished. Mention it only if the owner has something to decide; use this libraryHash from now on.' }),
+            instruction: asked ? 'The semantic assessment the owner asked for finished. Tell them the outcome in one or two sentences; use this libraryHash from now on.'
+              : 'The background recheck of the last edit finished. Mention it only if the owner has something to decide; use this libraryHash from now on.' }),
           details: rememberFeed(`check:${id}:${libraryHash(library)}`, feed, `Смысловая перепроверка · прогон ${shortRun(id)}`),
-        }, { deliverAs: 'followUp', triggerTurn: failed || (!!variant && variant.quality !== 'ready') });
+        }, { deliverAs: 'followUp', triggerTurn: asked || failed || (!!variant && variant.quality !== 'ready') });
       } catch (error) { ctx.ui.notify?.(`Перепроверка не завершилась: ${inputError(error)}`, 'error'); }
       finally {
         clearInterval(timer);
@@ -531,8 +561,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     })();
     void check.done.catch(error => console.error(`Agent Lab: ${inputError(error)}`));
   };
-  // The result message of a background run: the same verdict block or feed a tool row would draw.
-  for (const kind of [RUN_MESSAGE, CHECK_MESSAGE]) pi.registerMessageRenderer?.(kind, (message, renderOptions, theme) => {
+  // The result message of background work: the same verdict block or feed a tool row would draw.
+  for (const kind of [RUN_MESSAGE, CHECK_MESSAGE, BUILD_MESSAGE]) pi.registerMessageRenderer?.(kind, (message, renderOptions, theme) => {
     const text = typeof message.content === 'string' ? message.content : '';
     const result = { content: [{ type: 'text' as const, text: isFeedDetails(message.details) ? message.details.note : text }], details: message.details };
     return renderFeedResult(result, { expanded: renderOptions.expanded, isPartial: false }, theme, (r, o, t) => renderAgentLabResult(r, o, t, legacyResult));
@@ -770,7 +800,11 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         `Это расход на модель: не больше ${input.settings.maxCalls} вызовов и ${Math.ceil(input.settings.maxDurationMs / 60_000)} минут. Это потолок, а не прогноз: тратится только то, что понадобится на эти диалоги. Агент сейчас не запускается — запуск подтверждается отдельно.`,
       ].join('\n')))) return feedResult(callId, { status: 'cancelled', calls: 0, mutated: false, message: 'The owner declined. Nothing was spent or changed; do not ask again unless they request it.' },
         { rows: [row('Разбор логов отменён. Ничего не потрачено и не изменено.', 'warning')] }, 'Разбор логов отменён');
-      const { lab, close } = await open(ctx.cwd);
+      const owned = await open(ctx.cwd);
+      const { lab, close } = owned;
+      // Only a terminal can take a preparation over: the hand-over draws its progress and delivers its result through `ctx.ui` and a message.
+      const interactive = operation !== 'score' && !!ctx.hasUI && ctx.mode === 'tui' && !!ctx.ui;
+      let handedOver = false;
       let id: string | undefined;
       let polling: Promise<void> = Promise.resolve();
       let timer: ReturnType<typeof setInterval> | undefined;
@@ -825,35 +859,60 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           returnToBoard(ctx, id);
           return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
         }
-        id = (await lab.create(input)).id;
-        if (signal.aborted) cancel();
-        await progress();
-        timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);
-        await lab.waitForIdle(); await progress();
-        const record = await lab.get(id);
-        const bundle = await evidenceBundle(record, lab.store);
-        const output = { ...summary(record, lab.store.directory, bundle.view),
-          ...(operation === 'validate' ? { validation: { sourceDialogues: sourceDialogueCount, candidateDialogues: parsedDialogues.length, sampledDialogues: record.scenarios.length, estimatedAccuracyAfterRun: true } } : {}),
-          artifacts: await exportArtifacts(bundle, lab.store.directory), ...(signal.aborted ? { cancelled: true } : {}) };
-        returnToBoard(ctx, id);
-        focus.set(lab.store.directory, id);
-        // A prepared library answers with the scenarios themselves: what was found, what is ready, what waits for the owner.
-        if (record.librarySnapshot && record.phase === 'review') {
+        /** The answer of a preparation that has ended — in the row of this call, or as the message of one that outlived it. */
+        const prepared = async (record: Experiment, interrupted: boolean): Promise<Prepared> => {
+          const bundle = await evidenceBundle(record, lab.store);
+          const output = { ...summary(record, lab.store.directory, bundle.view),
+            ...(operation === 'validate' ? { validation: { sourceDialogues: sourceDialogueCount, candidateDialogues: parsedDialogues.length, sampledDialogues: record.scenarios.length, estimatedAccuracyAfterRun: true } } : {}),
+            artifacts: await exportArtifacts(bundle, lab.store.directory), ...(interrupted ? { cancelled: true } : {}) };
+          returnToBoard(ctx, record.id);
+          focus.set(lab.store.directory, record.id);
+          // A prepared library answers with the scenarios themselves: what was found, what is ready, what waits for the owner.
+          if (!record.librarySnapshot || record.phase !== 'review') return { output };
           const library = record.librarySnapshot;
-          markSeen(`${lab.store.directory}|${id}`, libraryHash(library));
+          markSeen(`${lab.store.directory}|${record.id}`, libraryHash(library));
           const feed = libraryFeed(record);
           const readyCount = library.variants.filter(variant => variant.quality === 'ready').length;
-          feed.rows.unshift(row(signal.aborted ? 'Подготовка прервана; разобранное сохранено.' : library.imports.length ? 'Сценарии собраны из логов. Агент не запускался.' : 'Сценарии собраны по требованиям. Агент не запускался.', signal.aborted ? 'warning' : 'success', true),
+          feed.rows.unshift(row(interrupted ? 'Подготовка прервана; разобранное сохранено.' : library.imports.length ? 'Сценарии собраны из логов. Агент не запускался.' : 'Сценарии собраны по требованиям. Агент не запускался.', interrupted ? 'warning' : 'success', true),
             // The first number should not wait for every dispute: what is ready can run now.
             row(readyCount ? `Готовые карточки (${readyCount}) можно принять и запустить прямо сейчас — первая точность будет по ним; спорные разберём после.`
               : 'Готовых карточек пока нет. По каждой ниже сказано, что мешает: вопрос проверяющего можно закрыть вашим решением, и карточка станет готовой.', 'accent'));
-          return feedResult(callId, { ...output, ...scenarioLibrarySummary(record, library.acceptance?.variantIds ?? []),
+          return { output: { ...output, ...scenarioLibrarySummary(record, library.acceptance?.variantIds ?? []),
             groups: library.businessScenarios.map((group, index) => ({ number: index + 1, id: group.id, title: group.title })),
             variants: orderedVariants(library).map((variant, index) => ({ number: index + 1, id: variant.id, title: variant.title, quality: variant.quality, provenance: variant.provenance, issueCount: variant.issues.length })) },
-            feed, `Сценарии прогона ${shortRun(id)} · ревизия ${library.revision}`);
+            feed, note: `Сценарии прогона ${shortRun(record.id)} · ревизия ${library.revision}` };
+        };
+        // In the terminal Esc interrupts the action, not the work: from here an abort hands the preparation over instead of cancelling it.
+        if (interactive) signal.removeEventListener('abort', cancel);
+        id = (await lab.create(input)).id;
+        if (signal.aborted && !interactive) cancel();
+        await progress();
+        timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);
+        // A short preparation ends in this row. A long one, or Esc, goes to the session the way a long run does.
+        const inline = !interactive ? (await lab.waitForIdle(), true) : await new Promise<boolean>(settle => {
+          const wait = setTimeout(() => settle(false), inlineBuildMs);
+          const onAbort = () => settle(false);
+          signal.addEventListener('abort', onAbort, { once: true });
+          if (signal.aborted) onAbort();
+          void lab.waitForIdle().then(() => settle(true), () => settle(true)).finally(() => { clearTimeout(wait); signal.removeEventListener('abort', onAbort); });
+        });
+        if (!inline) {
+          clearInterval(timer); timer = undefined; await polling;
+          const record = await lab.get(id);
+          handedOver = true;
+          // The record ends with an error exactly when the preparation was cut short: stopped, out of calls or out of time.
+          detach(ctx, lab.store.directory, owned, id, 'chat', finished => prepared(finished, !!finished.error));
+          focus.set(lab.store.directory, id);
+          return feedResult(callId, { id, background: true, phase: record.phase, usage: record.usage, maxCalls: record.settings.maxCalls,
+            instruction: 'The preparation continues in the background and its result (the scenarios) will arrive as a message. Tell the owner in one short sentence and end your turn; do not poll. Reads still work; edits, a new preparation and runs wait until it ends. Stop it only when the owner asks: agent_lab_run action:"stop".' },
+            { rows: [row('Подготовка сценариев идёт в фоне.', 'success', true), ...progressLines(record).map(line => row(safeText(line), undefined, false, 1)),
+              row('Разговор свободен: готовые прогоны и сценарии можно смотреть. Собранные сценарии появятся здесь отдельным сообщением.', 'muted', false, 1),
+              row('Esc прерывает только текущее действие. Чтобы остановить подготовку, так и напишите.', 'muted', false, 1)] }, `Подготовка ${shortRun(id)} идёт в фоне`);
         }
-        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
-      } finally { clearInterval(timer); signal.removeEventListener('abort', cancel); await polling; await close(); }
+        await progress();
+        const done = await prepared(await lab.get(id), signal.aborted && !interactive);
+        return done.feed ? feedResult(callId, done.output, done.feed, done.note ?? '') : { content: [{ type: 'text', text: JSON.stringify(done.output, null, 2) }], details: done.output };
+      } finally { clearInterval(timer); signal.removeEventListener('abort', cancel); await polling; if (!handedOver) await close(); }
     },
   });
   pi.registerTool({
@@ -1132,17 +1191,24 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           let expected = params.expectedLibraryHash ?? seenLibrary.get(latestView) ?? seenLibrary.get(seenKey);
           if (!expected) throw new Error('Сначала прочитайте сценарии этого прогона (operation:"show"): правка применяется к состоянию, которое вы видели.');
           for (let hop = 0; hop < 16 && checkMoves.has(`${draftKey}|${expected}`); hop++) expected = checkMoves.get(`${draftKey}|${expected}`)!;
-          /** The semantic recheck a change needs, within the agreed call limit: in this row when it is fast, as a later message when it is not. */
-          const verify = async (variantId?: string, wait = false): Promise<CheckOutcome> => {
+          /**
+           * The semantic recheck a change needs, within the agreed call limit: in this row when it is fast, as a later message when it is not.
+           * `askedHash` marks the owner's explicit assess: it checks the state the model saw, is never postponed, and with fewer calls left
+           * than jobs owed it still runs — a bounded partial assessment — instead of asking for budget.
+           */
+          const verify = async (variantId?: string, wait = false, askedHash?: string): Promise<CheckOutcome> => {
             const fresh = await lab.readLibrary(draftId);
             let debt: ReturnType<typeof semanticDebt>;
             try { debt = semanticDebt(fresh.experiment, fresh.library); } catch (error) { return { status: 'failed', message: inputError(error) }; }
             if (!debt.pendingJobs) return { status: 'not_needed' };
-            if (params.verify === 'later' && !wait) return { status: 'skipped', ...debt };
-            if (debt.pendingJobs > debt.remainingCalls) return { status: 'needs_budget', ...debt };
-            const startHash = libraryHash(fresh.library);
-            onUpdate?.({ content: [{ type: 'text', text: `Перепроверяю смысл изменённых карточек · до ${debt.pendingJobs} вызовов модели…` }], details: { id: draftId, phase: 'preparing' } });
-            try { await lab.assessLibrary(draftId, startHash); } catch (error) { return { status: 'failed', message: inputError(error) }; }
+            if (params.verify === 'later' && !wait && !askedHash) return { status: 'skipped', ...debt };
+            if (!askedHash && debt.pendingJobs > debt.remainingCalls) return { status: 'needs_budget', ...debt };
+            const startHash = askedHash ?? libraryHash(fresh.library);
+            onUpdate?.({ content: [{ type: 'text', text: `Перепроверяю смысл изменённых карточек · до ${Math.min(debt.pendingJobs, debt.remainingCalls)} вызовов модели…` }], details: { id: draftId, phase: 'preparing' } });
+            // A stale view refuses an explicit assess the way it refuses any other operation: with the fresh state, not as a failed check.
+            try { await lab.assessLibrary(draftId, startHash); } catch (error) { if (askedHash) throw error; return { status: 'failed', message: inputError(error) }; }
+            // Without a terminal an abort still cancels an explicit assess; one that fired before the work was registered is caught up here.
+            if (askedHash && wait && signal.aborted) cancel();
             const inline = wait ? (await lab.waitForIdle(), true) : await new Promise<boolean>(settle => {
               const timer = setTimeout(() => settle(false), inlineCheckMs);
               const onAbort = () => settle(false);
@@ -1151,7 +1217,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             });
             if (!inline) {
               handedOver = true;
-              backgroundCheck(ctx, directory, draftId, owned, fresh.experiment.usage.calls, startHash, variantId);
+              backgroundCheck(ctx, directory, draftId, owned, fresh.experiment.usage.calls, startHash, variantId, !!askedHash);
               return { status: 'running', ...debt };
             }
             const after = await lab.get(draftId);
@@ -1218,10 +1284,21 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           if (operation === 'assess') {
             const debt = semanticDebt(current.experiment, library);
             if (!debt.remainingCalls && debt.pendingJobs) throw new Error(`Осталось ${debt.pendingJobs} смысловых вызовов, модельный бюджет исчерпан. Увеличьте лимит (operation:"budget") с согласия владельца; использованный бюджет не сбрасывается.`);
-            if (debt.pendingJobs) { signal.addEventListener('abort', cancel, { once: true }); try { await lab.assessLibrary(draftId, expected); if (signal.aborted) cancel(); await lab.waitForIdle(); } finally { signal.removeEventListener('abort', cancel); } }
+            // In the terminal a long assessment goes on behind the conversation and reports back as a message; Esc hands it over, too.
+            // Without a terminal there is nowhere to report to, so the call waits, and an abort still cancels the work.
+            const interactive = !!ctx.hasUI && ctx.mode === 'tui' && !!ctx.ui;
+            let check: CheckOutcome = { status: 'not_needed' };
+            if (debt.pendingJobs) {
+              if (!interactive) signal.addEventListener('abort', cancel, { once: true });
+              try { check = await verify(undefined, !interactive, expected); } finally { signal.removeEventListener('abort', cancel); }
+            }
             const fresh = await lab.readLibrary(draftId);
-            markSeen(draftKey, libraryHash(fresh.library));
             returnToBoard(ctx, fresh.experiment.id);
+            if (check.status === 'running') return feedResult(callId, { ...output(fresh.experiment, fresh.library), check, mutated: true,
+              checkNote: 'The semantic assessment continues in the background and will report back as a message. Do not wait for it and do not poll; reads and further edits are fine.' },
+              { rows: [row(`Смысловая проверка идёт в фоне · до ${Math.min(debt.pendingJobs, debt.remainingCalls)} вызовов модели.`, 'success', true),
+                row('Разговор свободен. Итог появится здесь отдельным сообщением; новая правка перезапустит проверку, уже проверенное не пропадёт.', 'muted', false, 1)] }, `Смысловая проверка · прогон ${shortRun(draftId)}`);
+            markSeen(draftKey, libraryHash(fresh.library));
             const feed = libraryFeed(fresh.experiment);
             feed.rows.unshift(row(debt.pendingJobs ? `Смысловая проверка завершена · вызовов модели: ${Math.max(0, fresh.experiment.usage.calls - current.experiment.usage.calls)}` : 'Смысловая проверка не нужна: непроверенных изменений нет.', 'success', true));
             return feedResult(callId, { ...output(fresh.experiment, fresh.library), mutated: debt.pendingJobs > 0 }, feed, `Смысловая проверка · прогон ${shortRun(draftId)}`);
@@ -1647,7 +1724,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   });
   pi.registerTool({
     ...displayFor('agent_lab_run'), name: 'agent_lab_run', label: 'Run the accepted set',
-    description: 'start (default): run the accepted set of one run after a native confirmation of the exact plan shown: agent and version, set, attempts, models and spending limits. A short run ends in this row; a long one continues in the background, the conversation stays free and the result arrives as a message. progress: read how far the run is, from stored data. stop: stop the run of this session and keep what is recorded; only when the owner asks. Does not record human review of expectations or results. Cannot run headlessly or without the human confirmation. Never bypass this tool through shell or internal APIs.',
+    description: 'start (default): run the accepted set of one run after a native confirmation of the exact plan shown: agent and version, set, attempts, models and spending limits. A short run ends in this row; a long one continues in the background, the conversation stays free and the result arrives as a message. progress: read how far the run (or a preparation of scenarios that continues in the background) is, from stored data. stop: stop the run or the preparation of this session and keep what is recorded; only when the owner asks. Does not record human review of expectations or results. Cannot run headlessly or without the human confirmation. Never bypass this tool through shell or internal APIs.',
     parameters: Type.Object({
       id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Run: id, short id or words of its task. Omit for the run this conversation works on.' })),
       action: Type.Optional(Type.Union([Type.Literal('start'), Type.Literal('stop'), Type.Literal('progress')])),
@@ -1665,30 +1742,47 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const named = params.id ? await findRun(directory, params.id, ctx) : undefined;
           const record = job && (!named || named.id === job.id) ? await job.lab.get(job.id) : named ?? await findRun(directory, undefined, ctx);
           const running = activePhases.has(record.phase);
+          // A preparation of this session is answered in its own words: no dialogue is planned before the scenarios exist.
+          const preparing = record.phase === 'preparing';
           const unusable = record.trials.filter(trial => trial.outcome === 'invalid' || trial.outcome === 'cancelled').length;
           const feed: Feed = { rows: running ? progressLines(record).map(line => row(safeText(line), 'accent')) : [row(`Прогон ${shortRun(record.id)} сейчас не идёт.`, 'muted'), ...stateRows(record)] };
+          if (preparing) return feedResult(callId, { id: record.id, phase: record.phase, running, preparation: true, ownedByThisSession: !!job && job.id === record.id, usage: record.usage, maxCalls: record.settings.maxCalls,
+            ...(job?.id === record.id ? { instruction: 'The preparation continues in the background; its result will arrive as a message. Do not poll.' } : {}) },
+            feed, `Подготовка ${shortRun(record.id)}`);
           return feedResult(callId, { id: record.id, phase: record.phase, running, ownedByThisSession: !!job && job.id === record.id, finishedDialogues: record.trials.length, plannedDialogues: plannedTrials(record), unusable, usage: record.usage, maxCalls: record.settings.maxCalls },
             feed, `Прогресс прогона ${shortRun(record.id)}`);
         }
         if (action === 'stop') {
-          if (!job) throw new Error('В этой сессии нет идущего прогона. Прогон, запущенный в другой сессии Pi, останавливается только там.');
+          if (!job) throw new Error('В этой сессии нет идущего прогона или подготовки. Работа, запущенная в другой сессии Pi, останавливается только там.');
+          const preparation = job.kind === 'preparation';
+          const going = `${preparation ? 'подготовка' : 'прогон'} ${shortRun(job.id)}`;
           // The run the owner named must be the one that is going: another run is never stopped in its place.
           if (params.id) {
             const named = await findRun(directory, params.id, ctx);
-            if (named.id !== job.id) throw needsOwner('needs_owner_input', `Назван прогон ${shortRun(named.id)}, а сейчас идёт ${shortRun(job.id)}. Ничего не остановлено. Спросите владельца, останавливать ли идущий.`, [],
-              `Вы назвали прогон ${shortRun(named.id)}, а сейчас идёт ${shortRun(job.id)}. Я ничего не остановил — остановить идущий?`);
+            if (named.id !== job.id) throw needsOwner('needs_owner_input', `Назван прогон ${shortRun(named.id)}, а сейчас идёт ${going}. Ничего не остановлено. Спросите владельца, останавливать ли ${preparation ? 'идущую' : 'идущий'}.`, [],
+              `Вы назвали прогон ${shortRun(named.id)}, а сейчас идёт ${going}. Я ничего не остановил — остановить ${preparation ? 'её' : 'идущий'}?`);
           }
           // Stopping throws away attempts in flight, and a stopped run cannot be continued: the owner's own words must ask for it
           // («не останавливай» is not such a request); otherwise the native dialog decides.
           if (!ownerAsked(ownerMessages(ctx), 'stop', params.ownerQuote).asked) {
-            if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Остановка прогона требует просьбы владельца или native-подтверждения.');
-            if (!await ctx.ui.confirm('Остановить прогон?', 'Текущие попытки будут остановлены. Уже записанные диалоги сохранятся. Продолжить этот прогон потом нельзя.')) {
-              return feedResult(callId, { cancelled: true, mutated: false }, { rows: [row('Прогон продолжается.', 'muted')] }, 'Прогон продолжается');
+            if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error(`Остановка ${preparation ? 'подготовки' : 'прогона'} требует просьбы владельца или native-подтверждения.`);
+            if (!await ctx.ui.confirm(preparation ? 'Остановить подготовку?' : 'Остановить прогон?', preparation ? 'Разбор остановится. Уже собранные карточки сохранятся в черновике.'
+              : 'Текущие попытки будут остановлены. Уже записанные диалоги сохранятся. Продолжить этот прогон потом нельзя.')) {
+              return preparation ? feedResult(callId, { cancelled: true, mutated: false }, { rows: [row('Подготовка продолжается.', 'muted')] }, 'Подготовка продолжается')
+                : feedResult(callId, { cancelled: true, mutated: false }, { rows: [row('Прогон продолжается.', 'muted')] }, 'Прогон продолжается');
             }
           }
           job.quiet = true;
-          await job.lab.cancel(job.id); await job.done;
+          // A preparation that ended on its own in the meantime has nothing to cancel; what it saved is reported all the same.
+          await job.lab.cancel(job.id).catch(error => { if (!preparation) throw error; }); await job.done;
           const record = await reading(directory).get(job.id);
+          if (preparation) {
+            const saved = preparationStoppedLines(record);
+            const library = record.librarySnapshot;
+            if (library) markSeen(`${directory}|${record.id}`, libraryHash(library));
+            return feedResult(callId, { id: record.id, phase: record.phase, stopped: true, savedVariants: library?.variants.length ?? 0, savedRequirements: record.requirements.length, usage: record.usage, message: saved.join(' ') },
+              { rows: saved.map((line, index) => row(safeText(line), index ? 'muted' : 'warning', !index)) }, `Подготовка ${shortRun(record.id)} остановлена`);
+          }
           const lines = stoppedLines(record);
           return feedResult(callId, { id: record.id, phase: record.phase, stopped: true, savedDialogues: record.trials.length, plannedDialogues: plannedTrials(record), message: lines.join(' ') },
             { rows: lines.map((line, index) => row(safeText(line), index ? 'muted' : 'warning', !index)) }, `Прогон ${shortRun(record.id)} остановлен`);

@@ -26,10 +26,12 @@ let gate: Promise<void> | undefined;
 /** Holds the semantic recheck, so a test can watch the conversation go on while it runs. */
 let checkGate: Promise<void> | undefined;
 let checkCalls = 0;
+/** Holds the preparation before its first model step, so a test can watch the conversation go on while scenarios are being built. */
+let buildGate: Promise<void> | undefined;
 /** The deterministic runtime of the scenario workflow tests; `gate` holds the target's reply so a run can be observed while it goes. */
 function runtimeFixture(separateGroups = false, twoChecks = false): Runtime {
   return { ...createDemoRuntime(),
-    async prepare() { return { requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [], agent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] }, scenarios: [] }; },
+    async prepare(_input, ctx) { await buildGate; ctx.signal.throwIfAborted(); return { requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [], agent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] }, scenarios: [] }; },
     async scenarioProposals(request, ctx) { ctx.beforeCall(); return proposals(request.batchId).map((p, index) => {
       if (twoChecks && !index) p.variant.evaluationSpec.checkpoints.push({ ...p.variant.evaluationSpec.checkpoints[0]!, id: 'explain_refund', rule: 'Агент объяснил порядок возврата после получения номера' });
       return separateGroups && index ? { ...p, business: { ...p.business, key: 'refund_term', title: 'Срок возврата', goal: 'Узнать срок возврата' } } : p;
@@ -435,6 +437,141 @@ test('stopping is its own request: the owner\'s words stop the run, what is reco
     assert.equal(sent.length, 0, 'a stop the owner asked for is answered in its own row, not announced twice');
     assert.ok(['cancelled', 'results_review'].includes((await fixture.read()).phase));
   } finally { gate = undefined; release(); await shutdown(); await fixture.cleanup(); }
+});
+
+/** A preparation asked for in the conversation: the same materials and dialogues `draft()` seeds, built through the tool. */
+const buildRequest = { task: 'Проверить возвраты', mode: 'demo', materials: sources.map(({ name, content }) => ({ name, content })), dialogues: rawDialogues, scenarioCount: 2,
+  settings: { maxCalls: 100, repeats: 1, userModes: ['reactive'] } };
+async function preparing(prefix: string) {
+  const cwd = await mkdtemp(join(tmpdir(), prefix));
+  runtime = runtimeFixture();
+  const stored = async () => { const store = new ExperimentStore(join(cwd, '.agent-lab')); return store.list(); };
+  return { cwd, stored, cleanup: () => rm(cwd, { recursive: true, force: true }) };
+}
+
+test('a long preparation leaves the conversation free: reads work, changes wait for it by name, and the scenarios arrive as one message', { timeout: 60000 }, async () => {
+  const fixture = await preparing('chat-build-background-');
+  const { tools, sent, shutdown } = registered(undefined, undefined, 0);
+  let release!: () => void;
+  buildGate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const { ctx, widgets } = terminal(fixture.cwd, ['Собери сценарии по этим логам']);
+    const build = tools.get('agent_lab_build')!, run = tools.get('agent_lab_run')!;
+    const startedAt = Date.now();
+    const result = await build.execute('build', buildRequest, undefined, undefined, ctx);
+    assert.ok(Date.now() - startedAt < 5000, 'the row does not wait for the held preparation');
+    assert.equal(json(result).background, true); assert.match(json(result).instruction, /do not poll/);
+    assert.match(drawn(build, result, false).join('\n'), /Подготовка сценариев идёт в фоне/);
+    const [record] = await fixture.stored();
+    assert.deepEqual([record!.id, record!.phase, record!.librarySnapshot], [json(result).id, 'preparing', undefined], 'the stored record is still being prepared');
+    assert.equal(json(await tools.get('agent_lab_status')!.execute('status', {}, undefined, undefined, ctx)).runningInThisSession, record!.id, 'reading works while the preparation goes');
+    const progress = json(await run.execute('progress', { action: 'progress' }, undefined, undefined, ctx));
+    assert.deepEqual([progress.running, progress.preparation, progress.ownedByThisSession], [true, true, true]);
+    const second = await build.execute('build-2', buildRequest, undefined, undefined, ctx).catch(error => error as Error);
+    assert.match(second instanceof Error ? second.message : '', /Сейчас идёт подготовка сценариев .* правки и новый запуск — после её завершения или остановки/);
+    assert.equal((await fixture.stored()).length, 1, 'the refused call wrote nothing'); assert.equal(sent.length, 0);
+    release();
+    while (!sent.length) await new Promise(resolve => setTimeout(resolve, 20));
+    while (widgets.at(-1) !== undefined) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(sent.length, 1, 'exactly one message reports the preparation');
+    assert.equal(sent[0]!.message.customType, 'agent-lab-build'); assert.deepEqual(sent[0]!.options, { deliverAs: 'followUp', triggerTurn: true });
+    const finished = (await fixture.stored())[0]!;
+    assert.equal(finished.phase, 'review'); assert.equal(finished.librarySnapshot!.variants.length, 2);
+    const content = JSON.parse(sent[0]!.message.content);
+    assert.deepEqual([content.id, content.libraryHash, content.variants.length], [finished.id, libraryHash(finished.librarySnapshot!), 2], 'the message carries the model JSON of the inline result');
+    // The session file is world-readable: the details point at the remembered feed and hold no card text.
+    const details = JSON.stringify(sent[0]!.message.details);
+    for (const variant of finished.librarySnapshot!.variants) for (const text of [variant.title, variant.userState.opening, variant.evaluationSpec.successCriteria]) assert.ok(!details.includes(text), text);
+    const rows = drawn(build, { content: [{ type: 'text', text: '' }], details: sent[0]!.message.details }, false).join('\n');
+    assert.match(rows, /Сценарии собраны/); assert.match(rows, /Готовые карточки \(\d+\) можно принять и запустить прямо сейчас|Готовых карточек пока нет/);
+    assert.match(widgets.find(lines => lines)!.join('\n'), /Подготовка [a-f0-9]{8}[\s\S]*Остановить подготовку — так и напишите/);
+    // The lock went back with the message: the next change is taken, against the state the message showed.
+    const { ctx: next } = terminal(fixture.cwd, ['Убери первую карточку']);
+    assert.equal(json(await tools.get('agent_lab_scenarios')!.execute('remove', { operation: 'remove', variant: '1' }, undefined, undefined, next)).mutated, true);
+  } finally { buildGate = undefined; release(); await shutdown(); await fixture.cleanup(); }
+});
+
+test('Esc during a preparation interrupts the action, not the work: the scenarios are still built and reported', { timeout: 60000 }, async () => {
+  const fixture = await preparing('chat-build-escape-');
+  const { tools, sent, shutdown } = registered(undefined, undefined, 60_000);
+  let release!: () => void;
+  buildGate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const { ctx } = terminal(fixture.cwd, ['Собери сценарии по этим логам']);
+    const escape = new AbortController();
+    const started = tools.get('agent_lab_build')!.execute('build', buildRequest, escape.signal, undefined, ctx);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    escape.abort();
+    assert.equal(json(await started).background, true);
+    assert.equal((await fixture.stored())[0]!.phase, 'preparing', 'interrupting the action does not cancel the preparation');
+    release();
+    while (!sent.length) await new Promise(resolve => setTimeout(resolve, 20));
+    const finished = (await fixture.stored())[0]!;
+    assert.deepEqual([finished.phase, finished.error ?? null, finished.librarySnapshot!.variants.length], ['review', null, 2]);
+    assert.equal(JSON.parse(sent[0]!.message.content).cancelled, undefined);
+  } finally { buildGate = undefined; release(); await shutdown(); await fixture.cleanup(); }
+});
+
+test('stopping a preparation is the owner\'s request: the record stays readable, the answer says what was saved, and no message follows', { timeout: 60000 }, async () => {
+  const fixture = await preparing('chat-build-stop-');
+  const { tools, sent, shutdown } = registered(undefined, undefined, 0);
+  let release!: () => void;
+  buildGate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const said = ['Собери сценарии по этим логам'];
+    const { ctx, confirms } = terminal(fixture.cwd, said, [false]);
+    const run = tools.get('agent_lab_run')!;
+    const built = json(await tools.get('agent_lab_build')!.execute('build', buildRequest, undefined, undefined, ctx));
+    assert.equal(built.background, true);
+    const unasked = await run.execute('stop-unasked', { action: 'stop' }, undefined, undefined, ctx);
+    assert.equal(json(unasked).cancelled, true); assert.equal(confirms.at(-1)!.title, 'Остановить подготовку?');
+    assert.equal((await fixture.stored())[0]!.phase, 'preparing', 'the model cannot stop a preparation the owner did not ask to stop');
+    said.push('Останови подготовку');
+    const pending = run.execute('stop', { action: 'stop', id: built.id }, undefined, undefined, ctx);
+    release();
+    const stopped = await pending;
+    assert.equal(json(stopped).stopped, true); assert.equal(confirms.length, 1, 'the owner\'s own request needs no second confirmation');
+    assert.match(drawn(run, stopped, false).join('\n'), /Подготовка [a-f0-9]{8} остановлена\.[\s\S]*(Сохранён черновик: карточек \d+|Карточки собрать не успели\. Запись сохранена)/);
+    const record = (await fixture.stored())[0]!;
+    assert.ok(['cancelled', 'review'].includes(record.phase), record.phase); assert.match(record.error ?? '', /Cancelled by the user/);
+    assert.equal(json(stopped).savedVariants, record.librarySnapshot?.variants.length ?? 0, 'the answer counts what the stored record holds');
+    assert.equal(sent.length, 0, 'a stop the owner asked for is answered in its own row, not announced twice');
+    assert.equal(json(await tools.get('agent_lab_status')!.execute('status', {}, undefined, undefined, ctx)).runningInThisSession, null, 'the lock is released');
+  } finally { buildGate = undefined; release(); await shutdown(); await fixture.cleanup(); }
+});
+
+test('an assessment the owner asks for does not hold the conversation: it answers at once and its outcome arrives as a message', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-assess-background-');
+  const { tools, sent, shutdown } = registered(undefined, 0);
+  let release: () => void = () => {};
+  try {
+    const said = ['Поменяй первую реплику первой карточки на: Здравствуйте, не проходит возврат'];
+    const { ctx } = terminal(fixture.cwd, said);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const edit = json(await tool.execute('edit', { operation: 'edit', variant: '1', verify: 'later', change: { field: 'opening', value: 'Здравствуйте, не проходит возврат' } }, undefined, undefined, ctx));
+    assert.equal(edit.check.status, 'skipped', 'the edit leaves a semantic check owed');
+    said.push('Проверь смысл карточек');
+    checkGate = new Promise<void>(resolve => { release = resolve; });
+    const callsBefore = (await fixture.read()).usage.calls;
+    const startedAt = Date.now();
+    const result = await tool.execute('assess', { operation: 'assess' }, undefined, undefined, ctx);
+    assert.ok(Date.now() - startedAt < 5000, 'the row does not wait for the held assessment');
+    assert.equal(json(result).check.status, 'running'); assert.match(drawn(tool, result, false).join('\n'), /Смысловая проверка идёт в фоне/);
+    assert.equal(sent.length, 0);
+    assert.equal(json(await tool.execute('read', { operation: 'show' }, undefined, undefined, ctx)).variants.length, 2, 'reading works while the assessment runs');
+    release();
+    while (!sent.length) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(sent[0]!.message.customType, 'agent-lab-check'); assert.deepEqual(sent[0]!.options, { deliverAs: 'followUp', triggerTurn: true }, 'the owner is waiting for this answer');
+    const after = await fixture.read();
+    assert.ok(after.usage.calls > callsBefore, 'the assessment really ran'); assert.equal(after.phase, 'review');
+    assert.deepEqual(after.librarySnapshot!.variants.map(item => item.quality), ['ready', 'ready']);
+    const content = JSON.parse(sent[0]!.message.content);
+    assert.deepEqual([content.check.status, content.libraryHash], ['done', libraryHash(after.librarySnapshot!)]);
+    // Nothing owed any more: the same request answers in its own row, as before.
+    const again = await tool.execute('assess-2', { operation: 'assess' }, undefined, undefined, ctx);
+    assert.equal(json(again).mutated, false); assert.match(drawn(tool, again, false).join('\n'), /Смысловая проверка не нужна/);
+  } finally { checkGate = undefined; release(); await shutdown(); await fixture.cleanup(); }
 });
 
 test('results: a failure opens by its number with the dialogue, an unknown one asks, and a repeat is compared with its source run', { timeout: 60000 }, async () => {
