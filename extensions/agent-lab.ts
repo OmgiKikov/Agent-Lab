@@ -35,7 +35,7 @@ import { scenarioErrorText, scenarioLibrarySummary } from './scenarios.ts';
 import { isVerdictDetails, rememberView, renderAgentLabResult, VERDICT_KIND, type VerdictDetails } from './render/verdict-block.ts';
 import { callText, isFeedDetails, rememberFeed, renderFeedResult, type FeedDetails } from './render/feed.ts';
 import { authorize, changeRows, checkRow, comparisonFeed, deriveVariantInput, dialogueFeed, disputedCheckpoints, ownerRemarks, plainIssue, failureFeed, libraryFeed, orderedVariants, ownerBasis, ownerMessages,
-  planLines, progressLines, referenceProblem, targetText, resolveFact, resolveGroup, resolveRun, resolveVariant, semanticDebt, stateRows, statusFeed, stoppedLines, variantDiff, variantFeed, variantNumber,
+  planLines, progressLines, referenceProblem, referenceQuestion, targetText, resolveFact, resolveGroup, resolveRun, resolveVariant, semanticDebt, stateRows, statusFeed, stoppedLines, variantDiff, variantFeed, variantNumber,
   type CheckOutcome, type Feed, type Resolved } from './conversation.ts';
 import type { LibraryPatch, ScenarioLibrary, ScenarioVariant } from '../dist/scenario-contracts.js';
 import type { VariantOperation } from '../dist/scenario-variants.js';
@@ -279,8 +279,9 @@ const RUN_MESSAGE = 'agent-lab-run';
 const CHECK_MESSAGE = 'agent-lab-check';
 type Job = { directory: string; id: string; lab: ExperimentLab; done: Promise<void>; origin: 'board' | 'chat'; quiet?: boolean };
 /** A request the owner has to settle: nothing was written, and the feed shows the question instead of an error. */
-type OwnerQuestion = { status: 'ambiguous_reference' | 'unknown_reference' | 'needs_owner_input' | 'declined'; options: string[] };
-const needsOwner = (status: OwnerQuestion['status'], message: string, options: string[] = []): Error => Object.assign(new Error(message), { needsOwner: { status, options } });
+type OwnerQuestion = { status: 'ambiguous_reference' | 'unknown_reference' | 'needs_owner_input' | 'declined'; options: string[]; ownerText?: string };
+/** `message` instructs the model; `ownerText` is what the owner reads in the feed when the two differ. */
+const needsOwner = (status: OwnerQuestion['status'], message: string, options: string[] = [], ownerText?: string): Error => Object.assign(new Error(message), { needsOwner: { status, options, ownerText } });
 const ownerQuestion = (error: unknown): OwnerQuestion | undefined => error instanceof Error ? (error as Error & { needsOwner?: OwnerQuestion }).needsOwner : undefined;
 const row = (text: string, tone?: Feed['rows'][number]['tone'], bold = false, indent = 0) => ({ text, ...(tone ? { tone } : {}), ...(bold ? { bold } : {}), ...(indent ? { indent } : {}) });
 const shortRun = (id: string): string => id.slice(0, 8);
@@ -296,6 +297,10 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   const focus = new Map<string, string>();
   /** The library hash the model was last shown, per run: a chat edit applies to the state the model saw (CAS), without the model carrying hashes. */
   const seenLibrary = new Map<string, string>();
+  /** When each of those states was shown: redirected to another record of the same library, an edit applies to whichever view is the newer one. */
+  const seenTick = new Map<string, number>();
+  let seenClock = 0;
+  const markSeen = (key: string, hash: string): void => { seenLibrary.set(key, hash); seenTick.set(key, ++seenClock); };
   /**
    * A semantic recheck that outlived its row. It holds the writer lock, so the next writer decides
    * its fate: a new edit cancels it (finished receipts stay, the recheck restarts after the edit),
@@ -351,7 +356,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     const message = safeText((error as Error).message);
     return feedResult(callId, { status: question.status, mutated: false, message, options: question.options,
       instruction: 'Nothing was written. Put this question to the owner in plain words; do not pick an option or invent a value yourself.' },
-      { rows: [row(message, 'warning'), ...question.options.map(option => row(`• ${safeText(option)}`, undefined, false, 1))] }, 'Agent Lab · нужно уточнение владельца');
+      { rows: [row(safeText(question.ownerText ?? message), 'warning'), ...question.options.map(option => row(`• ${safeText(option)}`, undefined, false, 1))] }, 'Agent Lab · нужно уточнение владельца');
   };
   /** The verdict of a finished run for the model and for the feed; `details` stay ids only (REV-01). */
   const verdictOutput = async (record: Experiment, lab: ExperimentLab) => {
@@ -441,7 +446,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         const { experiment, library } = await owned.lab.readLibrary(id);
         checkMoves.set(`${directory}|${id}|${startHash}`, libraryHash(library));
         if (check.cancelled) return;
-        seenLibrary.set(`${directory}|${id}`, libraryHash(library));
+        markSeen(`${directory}|${id}`, libraryHash(library));
         const variant = variantId ? library.variants.find(item => item.id === variantId) : undefined;
         const failed = experiment.phase !== 'review' || !!experiment.error;
         const outcome: CheckOutcome = failed ? { status: 'failed', message: safeText(experiment.error ?? experiment.message) }
@@ -778,7 +783,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         // A prepared library answers with the scenarios themselves: what was found, what is ready, what waits for the owner.
         if (record.librarySnapshot && record.phase === 'review') {
           const library = record.librarySnapshot;
-          seenLibrary.set(`${lab.store.directory}|${id}`, libraryHash(library));
+          markSeen(`${lab.store.directory}|${id}`, libraryHash(library));
           const feed = libraryFeed(record);
           feed.rows.unshift(row(signal.aborted ? 'Подготовка прервана; разобранное сохранено.' : library.imports.length ? 'Сценарии собраны из логов. Агент не запускался.' : 'Сценарии собраны по требованиям. Агент не запускался.', signal.aborted ? 'warning' : 'success', true));
           return feedResult(callId, { ...output, ...scenarioLibrarySummary(record, library.acceptance?.variantIds ?? []),
@@ -978,13 +983,13 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         const resolved = resolveVariant(library, ref);
         if (resolved.kind === 'one') return resolved.item;
         const candidates = titled(library, resolved.kind === 'many' ? resolved.items : orderedVariants(library));
-        throw needsOwner(resolved.kind === 'many' ? 'ambiguous_reference' : 'unknown_reference', referenceProblem('Карточка', ref, resolved, candidates), candidates.slice(0, 12));
+        throw needsOwner(resolved.kind === 'many' ? 'ambiguous_reference' : 'unknown_reference', referenceProblem('Карточка', ref, resolved, candidates), candidates.slice(0, 12), referenceQuestion(ref, resolved));
       };
       const pickGroup = (library: ScenarioLibrary, ref: string) => {
         const resolved = resolveGroup(library, ref);
         if (resolved.kind === 'one') return resolved.item;
         const candidates = (resolved.kind === 'many' ? resolved.items : library.businessScenarios).map(group => safeText(group.title));
-        throw needsOwner(resolved.kind === 'many' ? 'ambiguous_reference' : 'unknown_reference', referenceProblem('Группа', ref, resolved, candidates), candidates.slice(0, 12));
+        throw needsOwner(resolved.kind === 'many' ? 'ambiguous_reference' : 'unknown_reference', referenceProblem('Группа', ref, resolved, candidates), candidates.slice(0, 12), referenceQuestion(ref, resolved));
       };
       try {
         const found = await findRun(directory, params.id);
@@ -999,7 +1004,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const { experiment, library } = await reading(directory).readLibrary(found.id);
           const ref = params.variant ?? params.variantId;
           const shown = ref ? pickVariant(library, ref) : undefined;
-          seenLibrary.set(seenKey, libraryHash(library));
+          markSeen(seenKey, libraryHash(library));
           returnToBoard(ctx, experiment.id);
           return feedResult(callId, output(experiment, library, shown), shown ? variantFeed(experiment, shown, { source: params.source }) : libraryFeed(experiment),
             `Сценарии прогона ${shortRun(experiment.id)} · ревизия ${library.revision}`);
@@ -1008,7 +1013,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         /** Conversation authority first, the native dialog second, a question to the owner when a value was never said. */
         const decide = async (request: Omit<Parameters<typeof authorize>[0], 'messages' | 'quote'>): Promise<string> => {
           const authority = authorize({ ...request, messages, quote: params.ownerQuote });
-          if (authority.kind === 'ask') throw needsOwner('needs_owner_input', authority.message);
+          if (authority.kind === 'ask') throw needsOwner('needs_owner_input', authority.message, [], authority.ownerMessage);
           if (authority.kind === 'confirm') {
             if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Эта правка не подтверждена словами владельца в разговоре, а native-подтверждение недоступно без интерактивного терминала. В CLI: scenarios --operation edit --input patch.json.');
             if (!await ctx.ui.confirm('Записать это от вашего имени?', safeText(authority.question))) throw needsOwner('declined', 'Владелец не подтвердил правку. Ничего не записано.');
@@ -1020,6 +1025,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         const { lab, close } = owned;
         let handedOver = false;
         let draftId = found.id;
+        let newerRevision = false;
         const cancel = () => { void lab.cancel(draftId).catch(() => {}); };
         try {
           await lab.init();
@@ -1027,19 +1033,28 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           let movedFrom: Experiment | undefined;
           // Read again under the lock: a recheck of this session may have been going when the run was looked up.
           const settled = await lab.get(found.id);
-          if (settled.phase !== 'review') {
-            if (activePhases.has(settled.phase)) throw new Error(`Прогон ${shortRun(found.id)} сейчас выполняется. Сценарии можно смотреть; правки — после его завершения или остановки.`);
-            const drafts = (await lab.list()).filter(item => item.parentRunId === found.id && item.phase === 'review' && !item.trials.length && !!item.librarySnapshot)
+          if (activePhases.has(settled.phase)) throw new Error(`Прогон ${shortRun(found.id)} сейчас выполняется. Сценарии можно смотреть; правки — после его завершения или остановки.`);
+          // A library has one line of revisions. The record to edit is the draft that holds its newest revision;
+          // when only finished runs hold it, the newest of them is copied into a fresh draft.
+          const headHash = await lab.store.readLibrary(settled.librarySnapshot!.id).then(libraryHash, () => libraryHash(settled.librarySnapshot!));
+          if (settled.phase !== 'review' || libraryHash(settled.librarySnapshot!) !== headHash) {
+            const holders = (await lab.list()).filter(item => item.librarySnapshot?.id === settled.librarySnapshot!.id && libraryHash(item.librarySnapshot) === headHash)
               .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-            draftId = (drafts[0] ?? await lab.repeat(found.id)).id;
-            movedFrom = found;
+            const draft = holders.find(item => item.phase === 'review' && !item.trials.length);
+            const source = holders.find(item => !activePhases.has(item.phase) && !!item.reviewedAt) ?? settled;
+            draftId = (draft ?? await lab.repeat(source.id)).id;
+            movedFrom = settled;
+            newerRevision = libraryHash(settled.librarySnapshot!) !== headHash;
             focus.set(directory, draftId);
           }
           const draftKey = `${directory}|${draftId}`;
           const current = await lab.readLibrary(draftId);
           let library = current.library;
           // The state the model saw, plus nothing but this session's own semantic bookkeeping on top of it.
-          let expected = params.expectedLibraryHash ?? seenLibrary.get(draftKey) ?? seenLibrary.get(seenKey);
+          // Redirected to another record of the same library, the edit applies to the view the model saw last: after looking at an older run
+          // its card numbers may differ, so that edit is refused once and the newest revision is shown.
+          const latestView = (seenTick.get(seenKey) ?? 0) > (seenTick.get(draftKey) ?? 0) ? seenKey : draftKey;
+          let expected = params.expectedLibraryHash ?? seenLibrary.get(latestView) ?? seenLibrary.get(seenKey);
           if (!expected) throw new Error('Сначала прочитайте сценарии этого прогона (operation:"show"): правка применяется к состоянию, которое вы видели.');
           for (let hop = 0; hop < 16 && checkMoves.has(`${draftKey}|${expected}`); hop++) expected = checkMoves.get(`${draftKey}|${expected}`)!;
           /** The semantic recheck a change needs, within the agreed call limit: in this row when it is fast, as a later message when it is not. */
@@ -1073,10 +1088,11 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const changed = async (headline: string, extra: Feed['rows'], variantId: string | undefined, payload: Record<string, unknown>, note: string) => {
             const check = await verify(variantId);
             const fresh = await lab.readLibrary(draftId);
-            seenLibrary.set(draftKey, libraryHash(fresh.library));
+            markSeen(draftKey, libraryHash(fresh.library));
             const variant = variantId ? fresh.library.variants.find(item => item.id === variantId) : undefined;
             const card = variant ? variantFeed(fresh.experiment, variant) : undefined;
-            const moved = movedFrom ? [row(`Прогон ${shortRun(movedFrom.id)} уже выполнен и не меняется: правка сделана в новом черновике того же набора.`, 'accent', false, 1)] : [];
+            const moved = movedFrom ? [row(movedFrom.phase === 'review' ? 'Правка сделана в черновике последней ревизии этого набора.'
+              : `Прогон ${shortRun(movedFrom.id)} уже выполнен и не меняется: правка сделана в черновике того же набора.`, 'accent', false, 1)] : [];
             const disputed = variant && check.status !== 'running' ? disputedCheckpoints(variant) : [];
             const feed: Feed = { rows: [row(headline, 'success', true), ...moved, ...extra, checkRow(check, variant),
               ...(variant && check.status === 'done' ? ownerRemarks(variant.issues).slice(0, 3).map(item => row(`• ${safeText(plainIssue(fresh.library, variant, item))}`, 'warning', false, 1)) : []),
@@ -1107,7 +1123,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
               input = derived.input;
               // The simulated client may only say values the owner or the parent card already hold.
               const authority = authorize({ messages, quote: params.ownerQuote, simulated: [params.opening, params.reply, params.intent].filter((text): text is string => !!text), known: knownTexts(parent), summary: '' });
-              if (authority.kind === 'ask') throw needsOwner('needs_owner_input', authority.message);
+              if (authority.kind === 'ask') throw needsOwner('needs_owner_input', authority.message, [], authority.ownerMessage);
             }
             const reason = legacy?.reason ?? ownerBasis(messages, params.ownerQuote)?.reason ?? 'Целевой вариант по запросу в разговоре';
             const proposed = await lab.proposeVariant(draftId, expected, { parentId: parent.id, operation: kind, reason, input });
@@ -1120,7 +1136,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             if (!debt.remainingCalls && debt.pendingJobs) throw new Error(`Осталось ${debt.pendingJobs} смысловых вызовов, модельный бюджет исчерпан. Увеличьте лимит (operation:"budget") с согласия владельца; использованный бюджет не сбрасывается.`);
             if (debt.pendingJobs) { signal.addEventListener('abort', cancel, { once: true }); try { await lab.assessLibrary(draftId, expected); if (signal.aborted) cancel(); await lab.waitForIdle(); } finally { signal.removeEventListener('abort', cancel); } }
             const fresh = await lab.readLibrary(draftId);
-            seenLibrary.set(draftKey, libraryHash(fresh.library));
+            markSeen(draftKey, libraryHash(fresh.library));
             returnToBoard(ctx, fresh.experiment.id);
             const feed = libraryFeed(fresh.experiment);
             feed.rows.unshift(row(debt.pendingJobs ? `Смысловая проверка завершена · вызовов модели: ${Math.max(0, fresh.experiment.usage.calls - current.experiment.usage.calls)}` : 'Смысловая проверка не нужна: непроверенных изменений нет.', 'success', true));
@@ -1139,11 +1155,12 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             const body = [...titled(library, chosen).slice(0, 15), ...(chosen.length > 15 ? [`…и ещё ${chosen.length - 15}`] : []),
               ...(left.length ? ['', `Не входят (${left.length}): ${left.slice(0, 6).map(item => `${safeText(item.title)} — ${item.quality === 'ready' ? 'не выбрана' : item.quality === 'blocked' ? 'заблокирована' : 'ждёт решения'}`).join('; ')}${left.length > 6 ? '…' : ''}`] : []),
               '', 'Агент не запускается. Запуск подтверждается отдельно.'].join('\n');
-            if (!await ctx.ui.confirm(`Принять ${ids.length} ${ids.length === 1 ? 'карточку' : 'карточек'} как набор для проверки?`, safeText(body))) {
+            const cards = ids.length % 10 === 1 && ids.length % 100 !== 11 ? 'карточку' : [2, 3, 4].includes(ids.length % 10) && ![12, 13, 14].includes(ids.length % 100) ? 'карточки' : 'карточек';
+            if (!await ctx.ui.confirm(`Принять ${ids.length} ${cards} как набор для проверки?`, safeText(body))) {
               return feedResult(callId, { cancelled: true, mutated: false, message: 'Принятие отменено. Агент не запускался.' }, { rows: [row('Принятие отменено. Набор не изменился, агент не запускался.', 'warning')] }, 'Принятие отменено');
             }
             const accepted = await lab.acceptLibrary(draftId, expected, ids);
-            seenLibrary.set(draftKey, libraryHash(accepted.library));
+            markSeen(draftKey, libraryHash(accepted.library));
             returnToBoard(ctx, accepted.experiment.id);
             const feed: Feed = { rows: [row(`Принят набор: ревизия ${accepted.library.revision}, ${ids.length} из ${library.variants.length} карточек. Агент не запускался.`, 'success', true),
               ...(left.length ? [row(`Остались вне набора: ${left.length}.`, 'muted', false, 1)] : []), row('План запуска (подтверждается отдельно):', 'accent', false, 1),
@@ -1252,9 +1269,11 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         } catch (error) {
           if (/хеш устарел|библиотека изменилась/i.test(error instanceof Error ? error.message : '')) {
             const fresh = await reading(directory).readLibrary(draftId);
-            seenLibrary.set(`${directory}|${draftId}`, libraryHash(fresh.library));
+            markSeen(`${directory}|${draftId}`, libraryHash(fresh.library));
+            markSeen(seenKey, libraryHash(fresh.library));
             const feed = libraryFeed(fresh.experiment);
-            feed.rows.unshift(row('Сценарии изменились с тех пор, как я их читал (доска или другая сессия). Ничего не записано; ниже свежее состояние.', 'warning', true));
+            feed.rows.unshift(row(newerRevision ? `У этого набора есть ревизия новее, чем в прогоне ${shortRun(found.id)}: правки идут в неё. Ничего не записано; ниже она — решите по ней.`
+              : 'Сценарии изменились с тех пор, как я их читал (доска или другая сессия). Ничего не записано; ниже свежее состояние.', 'warning', true));
             return feedResult(callId, { status: 'stale_library', mutated: false, ...output(fresh.experiment, fresh.library),
               instruction: 'The library changed since you last saw it. Decide again on this fresh state and repeat the operation if it still applies.' }, feed, `Сценарии изменились · прогон ${shortRun(draftId)}`);
           }

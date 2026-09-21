@@ -91,7 +91,7 @@ const reasonText = (message: string): string => `Владелец в разго�
 export type Authority =
   | { kind: 'conversation'; reason: string }
   | { kind: 'confirm'; reason: string; question: string }
-  | { kind: 'ask'; message: string };
+  | { kind: 'ask'; message: string; ownerMessage: string };
 
 /**
  * Who may stand behind a draft edit.
@@ -109,7 +109,8 @@ export function authorize(input: { messages: string[]; quote?: string; attribute
   if (!basis) return { kind: 'confirm', reason: 'Подтверждено владельцем в диалоге Pi.', question: input.summary };
   const allowed = [...input.messages, ...(input.known ?? [])];
   const invented = [...new Set([...(input.attributed ?? []), ...(input.simulated ?? [])].flatMap(text => ungroundedValues(text, allowed)))];
-  if (invented.length) return { kind: 'ask', message: `Владелец не называл: ${invented.join(', ')}. Спросите у него точное значение; ничего не записано.` };
+  if (invented.length) return { kind: 'ask', message: `Владелец не называл: ${invented.join(', ')}. Спросите у него точное значение; ничего не записано.`,
+    ownerMessage: `Значение ${invented.join(', ')} вы не называли, а от себя я значения не записываю. Назовите точное — и я внесу. Ничего не изменено.` };
   const foreign = (input.attributed ?? []).some(text => wordingCoverage(text, allowed) < OWNER_WORDING_SHARE);
   return foreign ? { kind: 'confirm', reason: basis.reason, question: input.summary } : { kind: 'conversation', reason: basis.reason };
 }
@@ -164,6 +165,10 @@ export function referenceProblem(what: string, ref: string, resolved: { kind: 'n
     ? `${what} «${clip(ref, 80)}» не найдено. Есть: ${names.slice(0, 12).join('; ') || 'ничего'}. Уточните у владельца, что он имеет в виду.`
     : `${what} «${clip(ref, 80)}» подходит к нескольким: ${names.slice(0, 12).join('; ')}. Спросите владельца, какой из них нужен; не выбирайте сами.`;
 }
+/** The same problem as the owner reads it in the feed; the candidates follow as a list. */
+export function referenceQuestion(ref: string, resolved: { kind: 'none' } | { kind: 'many'; items: unknown[] }): string {
+  return resolved.kind === 'none' ? `«${clip(ref, 80)}» — такого здесь нет. Вот что есть:` : `«${clip(ref, 80)}» подходит к нескольким — какая нужна?`;
+}
 
 /* ───────────────────────────── one-sentence variants ───────────────────────────── */
 
@@ -172,9 +177,14 @@ const factLabel = (statement: string): string => { const at = statement.indexOf(
 /** The opening without the sentence that reveals `value`; a one-sentence opening loses only the «label: value» part. */
 export function openingWithout(opening: string, value: string): string {
   if (!value || !fold(opening).includes(fold(value))) return opening;
+  const mentions = (part: string): boolean => fold(part).includes(fold(value));
   const sentences = opening.match(/[^.!?\n]+[.!?]*\s*/g) ?? [opening];
-  const kept = sentences.filter(sentence => !fold(sentence).includes(fold(value))).join('').trim();
+  const kept = sentences.filter(sentence => !mentions(sentence)).join('').trim();
   if (kept) return kept;
+  // One sentence: drop the clause that carries the value, keep the rest of what the client says.
+  const clauses = opening.split(/([,;]\s*)/);
+  const rest = clauses.filter((part, index) => index % 2 === 0 && !mentions(part));
+  if (rest.length && rest.length < Math.ceil(clauses.length / 2)) return rest.map(part => part.trim()).filter(Boolean).join(', ');
   const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return opening.replace(new RegExp(`[,;]?\\s*[^,.;:!?]*:\\s*${escaped}`, 'i'), '').replace(new RegExp(escaped, 'gi'), '').replace(/\s{2,}/g, ' ').replace(/\s+([.,!?])/g, '$1').trim();
 }
@@ -304,7 +314,8 @@ export function libraryFeed(record: Experiment): Feed {
   }
   const ordered = orderedVariants(library);
   const tally = (quality: ScenarioVariant['quality']) => ordered.filter(variant => variant.quality === quality).length;
-  const head = [`${count(ordered.length, VARIANTS)}`, `${tally('ready')} готовы`, ...(tally('needs_review') ? [`${tally('needs_review')} ждут решения`] : []), ...(tally('blocked') ? [`${tally('blocked')} заблокированы`] : [])].join(' · ');
+  const head = [`${count(ordered.length, VARIANTS)}`, count(tally('ready'), ['готов', 'готовы', 'готовы']), ...(tally('needs_review') ? [count(tally('needs_review'), ['ждёт решения', 'ждут решения', 'ждут решения'])] : []),
+    ...(tally('blocked') ? [count(tally('blocked'), ['заблокирован', 'заблокированы', 'заблокированы'])] : [])].join(' · ');
   const rows: Row[] = [row(`Сценарии · ревизия ${library.revision} · ${head}`, 'text', true)];
   const more: Row[] = [];
   for (const group of library.businessScenarios) {
@@ -409,7 +420,7 @@ export function changeRows(diff: VariantFieldDiff[]): Row[] {
     const removed = before.filter(text => !after.includes(text)), added = after.filter(text => !before.includes(text));
     if (!removed.length && !added.length) return [];
     return [row(DIFF_LABEL[item.path] ?? item.path, 'accent', false, 1),
-      ...removed.map(text => row(`было: ${text}`, 'muted', false, 3)), ...added.map(text => row(`стало: ${text}`, 'text', false, 3))];
+      ...removed.filter(text => !['пусто', '—'].includes(text)).map(text => row(`было: ${text}`, 'muted', false, 3)), ...added.map(text => row(`стало: ${text}`, 'text', false, 3))];
   });
 }
 

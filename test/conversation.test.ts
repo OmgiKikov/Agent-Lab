@@ -136,6 +136,7 @@ test('a one-sentence variant takes the fact, the opening and the conditions from
   const derived = deriveVariantInput(parent, 'missing_fact', {});
   assert.deepEqual(derived, { kind: 'ready', input: { factId: 'terminal_number', opening: 'Помогите с возвратом.', ifAsked: 'Агент запросил: Номер терминала', missingDescription: 'Номер терминала' } });
   assert.equal(openingWithout('Нужна помощь, номер терминала: 1234', '1234'), 'Нужна помощь');
+  assert.equal(openingWithout('Добрый день, терминал 1234, нужен возврат покупателю', '1234'), 'Добрый день, нужен возврат покупателю', 'the clause that carries the value goes as a whole');
   assert.equal(deriveVariantInput(parent, 'changed_intent', {}).kind, 'ask', 'a new intention is a business decision of the owner');
   const twoFacts = structuredClone(parent);
   twoFacts.userState.facts.push({ ...parent.userState.facts[0]!, id: 'contract', statement: 'Номер договора: 5678', value: '5678' });
@@ -217,7 +218,7 @@ test('a fact value the owner never said is not written; once they say it, the fa
     const refused = await tool.execute('guess', { operation: 'edit', variant: 'Возврат 1', change: { field: 'fact', fact: 'номер терминала', value: '9999', statement: 'Номер терминала: 9999' } }, undefined, undefined, ctx);
     assert.equal(json(refused).status, 'needs_owner_input'); assert.equal(json(refused).mutated, false); assert.match(json(refused).message, /9999/);
     assert.equal(libraryHash((await fixture.read()).librarySnapshot!), libraryHash(before.librarySnapshot!), 'nothing was written');
-    assert.match(drawn(tool, refused, false).join('\n'), /Владелец не называл: 9999/);
+    assert.match(drawn(tool, refused, false).join('\n'), /Значение 9999 вы не называли, а от себя я значения не записываю/, 'the feed speaks to the owner, the instruction goes to the model');
     said.push('Номер терминала там 9999');
     await tool.execute('said', { operation: 'edit', variant: 'Возврат 1', change: { field: 'fact', fact: 'номер терминала', value: '9999', statement: 'Номер терминала: 9999' } }, undefined, undefined, ctx);
     const library = (await fixture.read()).librarySnapshot!;
@@ -475,7 +476,7 @@ test('an edit asked for after a run goes into a fresh draft of the same set; the
     const fresh = await store.get(payload.draftRunId);
     assert.equal(fresh.phase, 'review'); assert.equal(fresh.parentRunId, fixture.id); assert.equal(fresh.trials.length, 0);
     assert.deepEqual(fresh.librarySnapshot!.variants.map(item => item.id), ['variant_1']); assert.equal(fresh.librarySnapshot!.acceptance, undefined);
-    assert.match(drawn(scenarios, result, false).join('\n'), /уже выполнен и не меняется: правка сделана в новом черновике того же набора/);
+    assert.match(drawn(scenarios, result, false).join('\n'), /уже выполнен и не меняется: правка сделана в черновике того же набора/);
     // The conversation now works on the draft, and a second edit does not multiply drafts.
     said.push('И пусть в первой карточке клиент пишет: Добрый день, нужен возврат');
     const again = json(await scenarios.execute('edit', { operation: 'edit', id: fixture.id, variant: '1', change: { field: 'opening', value: 'Добрый день, нужен возврат' } }, undefined, undefined, ctx));
@@ -536,4 +537,32 @@ test('a slow recheck does not hold the conversation: the edit answers at once, a
     const { ctx: accepting } = terminal(fixture.cwd, ['Прими готовые'], [true]);
     assert.equal(json(await tool.execute('accept', { operation: 'accept', select: 'ready' }, undefined, undefined, accepting)).accepted, true);
   } finally { checkGate = undefined; release(); await shutdown(); await fixture.cleanup(); }
+});
+
+test('an edit aimed at an older run of a library that has moved on shows the newest revision instead of failing, and then lands in its draft', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-newer-revision-');
+  const { tools, shutdown } = registered();
+  try {
+    const said = ['Прими готовые и запусти'];
+    const { ctx } = terminal(fixture.cwd, said, [true, true]);
+    const scenarios = tools.get('agent_lab_scenarios')!;
+    await scenarios.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    await scenarios.execute('accept', { operation: 'accept', select: 'ready' }, undefined, undefined, ctx);
+    await tools.get('agent_lab_run')!.execute('run', {}, undefined, undefined, ctx);
+    // The library moves on in a draft of its own…
+    said.push('Убери вторую карточку');
+    const moved = json(await scenarios.execute('remove', { operation: 'remove', id: fixture.id, variant: '2' }, undefined, undefined, ctx));
+    // …and the owner comes back to the first run, which still shows both cards.
+    said.push('Вернись к первому прогону. В первой карточке клиент пишет: Добрый день, нужен возврат');
+    await scenarios.execute('old-show', { operation: 'show', id: fixture.id }, undefined, undefined, ctx);
+    const change = { operation: 'edit', id: fixture.id, variant: '1', change: { field: 'opening', value: 'Добрый день, нужен возврат' } };
+    const first = await scenarios.execute('old-edit', change, undefined, undefined, ctx);
+    assert.equal(json(first).status, 'stale_library'); assert.equal(json(first).variants.length, 1, 'the answer is the newest revision, where the second card is already gone');
+    assert.match(drawn(scenarios, first, false).join('\n'), /есть ревизия новее, чем в прогоне .*: правки идут в неё/);
+    const second = json(await scenarios.execute('old-edit-again', change, undefined, undefined, ctx));
+    assert.equal(second.mutated, true); assert.equal(second.draftRunId, moved.draftRunId, 'the library has one line of revisions and one draft');
+    const store = new ExperimentStore(join(fixture.cwd, '.agent-lab'));
+    assert.equal((await store.get(moved.draftRunId)).librarySnapshot!.variants[0]!.userState.opening, 'Добрый день, нужен возврат');
+    assert.equal((await store.list()).length, 2);
+  } finally { await shutdown(); await fixture.cleanup(); }
 });
