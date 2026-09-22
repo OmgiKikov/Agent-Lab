@@ -1,7 +1,4 @@
-import { generateProductionCase } from './generator-production.js';
 import { InvalidGeneratorResponse } from './generator-errors.js';
-import { GENERATOR_ROLE, GENERATOR_PROPOSER_ROLE } from './generator-evaluation.js';
-import { generatorOutputSchema, generatorConfigSchema } from './generator-corpus.js';
 import { checkpointResponseSchema } from './checkpoints.js';
 import { CHECKPOINT_ROLE, LEGACY_CHECKPOINT_ROLE } from './prompts.js';
 import { userDecisionSchema } from './user-controller.js';
@@ -20,11 +17,11 @@ import { Type } from 'typebox';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.js';
 import { z } from 'zod';
 import {
-  agentSchema, checkSchema, discoveryGroupSchema, discoveryObservationSchema, failureModeSchema, observedGoalSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema, worldSchema,
+  agentSchema, checkSchema, failureModeSchema, observedGoalSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema, worldSchema,
   MACHINE_FORMAT, REQUIREMENT_LIMIT, SCENARIO_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, sourceSelectionSchema, userTurnSchema, validateObservedGoals, valueTokens, verbatimSpan,
   type CallContext, type PrepareInput, type ScenarioProposalsInput, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
-import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, DISCOVERY_COARSE_ROLE, DISCOVERY_GROUP_ROLE, DISCOVERY_HYPOTHESIS_ROLE, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
+import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
 
 type Model = NonNullable<ReturnType<ModelRuntime['getModel']>>;
 const groundingSchemaFor = (limit: number) => z.strictObject({
@@ -303,18 +300,16 @@ async function jsonResponse<S extends z.ZodType>(
   modelRuntime: ModelRuntime, model: Model, label: string, role: string, input: unknown, schema: S, ctx: CallContext,
   review?: (value: z.infer<S>) => string | undefined,
 ): Promise<z.infer<S>> {
-  const bounded = role === SCENARIO_PROPOSALS_ROLE || role === SCENARIO_SEMANTIC_ROLE || role === GENERATOR_ROLE || role === GENERATOR_PROPOSER_ROLE;
+  const bounded = role === SCENARIO_PROPOSALS_ROLE || role === SCENARIO_SEMANTIC_ROLE;
   if (bounded && workInputIssue(input)) throw new Error(workInputIssue(input));
-  const generationConfig = role===SCENARIO_PROPOSALS_ROLE ? (input as {generatorConfig?:import('./generator-corpus.js').GeneratorConfig}).generatorConfig : undefined;
-  const prompt = `${role}${generationConfig ? `\nНастройка генератора (не меняет правила владельца): ${generationConfig.instructions}` : ''}\n${DATA_BOUNDARY}\nReturn exactly one compact JSON object, without markdown fences or pretty-printing whitespace, matching this JSON schema:\n${JSON.stringify(z.toJSONSchema(schema))}\nInside strings, escape double quotes as \\" and line breaks as \\n; when copying source text, «» may stand for its straight double quotes.`;
+  const prompt = `${role}\n${DATA_BOUNDARY}\nReturn exactly one compact JSON object, without markdown fences or pretty-printing whitespace, matching this JSON schema:\n${JSON.stringify(z.toJSONSchema(schema))}\nInside strings, escape double quotes as \\" and line breaks as \\n; when copying source text, «» may stand for its straight double quotes.`;
   // Only target sessions contribute target trace events; simulator/planner events cannot affect target grades.
-  const effectiveTemperature=model.reasoning?undefined:generationConfig?.temperature;
-  ctx.onGeneratorTransport?.({role:label,provider:model.provider,model:model.id,api:model.api,...(generationConfig?{requestedTemperature:generationConfig.temperature}:{}),effectiveTemperature:effectiveTemperature??'provider-default'});
+  ctx.onGeneratorTransport?.({ role: label, provider: model.provider, model: model.id, api: model.api, effectiveTemperature: 'provider-default' });
   let currentAttempt = 0;
   const open = () => controlledSession(modelRuntime, model, prompt, [], { ...ctx, onTargetEvent: event => {
     // Retain incomplete structured replies as evidence, without accepting or grading them.
     if (event.type === 'assistant' && event.text) ctx.onGeneratorOutput?.({ role, text: event.text, attempt: currentAttempt, incomplete: true });
-  } }, bounded ? SCENARIO_OUTPUT_BYTES : 16384, effectiveTemperature, model.provider === 'openrouter' ? { type: 'json_object' } : undefined, 'off', bounded ? 96000 : undefined);
+  } }, bounded ? SCENARIO_OUTPUT_BYTES : 16384, undefined, model.provider === 'openrouter' ? { type: 'json_object' } : undefined, 'off', bounded ? 96000 : undefined);
   let session = await open();
   try {
     let message = JSON.stringify(input);
@@ -417,7 +412,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   const ask = async <S extends z.ZodType>(label: string, role: string, input: unknown, schema: S, ctx: CallContext,
     review?: (value: z.infer<S>) => string | undefined): Promise<z.infer<S>> => {
     const semanticRepair = role === SCENARIO_PROPOSALS_ROLE && (input as ScenarioProposalsInput).feedback?.issues.some(i => i.code === 'semantic_finding');
-    const choice = settings.roles?.[(role === ASSESS_ROLE || role === CHECKPOINT_ROLE || role === LEGACY_CHECKPOINT_ROLE || role === GENERATOR_ROLE || role === SCENARIO_SEMANTIC_ROLE || semanticRepair) ? 'judge' : (role === SIMULATOR_ROLE || role === USER_CONTROLLER_ROLE) ? 'simulator' : 'builder'] ?? (role === CHECKPOINT_ROLE || role===LEGACY_CHECKPOINT_ROLE || role === SCENARIO_SEMANTIC_ROLE || semanticRepair ? settings.judge : undefined);
+    const choice = settings.roles?.[(role === ASSESS_ROLE || role === CHECKPOINT_ROLE || role === LEGACY_CHECKPOINT_ROLE || role === SCENARIO_SEMANTIC_ROLE || semanticRepair) ? 'judge' : (role === SIMULATOR_ROLE || role === USER_CONTROLLER_ROLE) ? 'simulator' : 'builder'] ?? (role === CHECKPOINT_ROLE || role===LEGACY_CHECKPOINT_ROLE || role === SCENARIO_SEMANTIC_ROLE || semanticRepair ? settings.judge : undefined);
     let selected = model;
     if (choice) {
       const override = modelRuntime.getModel(choice.provider, choice.model);
@@ -433,15 +428,6 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   };
   const runtime:Runtime = {
     generatorTransport:'pi-model',
-    async generateScenarioCase(input, ctx) {
-      return generateProductionCase(runtime,input.input,input.config,ctx);
-    },
-    async assessGeneratedCase(input,ctx) {
-      return ask('Разбор фактического предложения',GENERATOR_ROLE,input,generatorOutputSchema,ctx);
-    },
-    async proposeGeneratorConfig(input,ctx) {
-      return ask('Настройка генератора',GENERATOR_PROPOSER_ROLE,input,generatorConfigSchema,ctx);
-    },
     async selectSources(input, ctx) {
       const known = new Set(input.catalog.map(item => item.id));
       return ask('Выбор статей под диалог', SOURCE_SELECTION_ROLE, input, sourceSelectionSchema, ctx, value => {
@@ -642,38 +628,6 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           ? { name: 'External agent', instructions: 'The agent under evaluation runs outside Agent Lab and keeps its own instructions and tools.', tools: [] }
           : await ask('Сборка агента', AGENT_ROLE, evidence, agentSchema, ctx));
       return preparationSchema.parse({ ...grounding, scenarios, agent });
-    },
-    async discover(input, ctx) {
-      if (input.kind === 'requirements') {
-        const grounded = await ask(
-          'Требования для поиска теста', REQUIREMENTS_ROLE,
-          { task: input.task, sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, ...(kind ? { kind } : {}) })) },
-          groundingSchema, ctx, value => groundingProblem(value, input.sources),
-        );
-        return { kind: 'requirements', ...grounded };
-      }
-      if (input.kind === 'coarse') {
-        const result = await ask(
-          'Первичный разбор записанных диалогов', DISCOVERY_COARSE_ROLE,
-          { ownerRequirements: input.requirements, dialogues: input.dialogues },
-          z.strictObject({ observations: z.array(discoveryObservationSchema).max(300) }), ctx,
-        );
-        return { kind: 'coarse', observations: result.observations };
-      }
-      if (input.kind === 'group') {
-        const result = await ask(
-          'Повторяющиеся проблемы в диалогах', DISCOVERY_GROUP_ROLE,
-          { ownerRequirements: input.requirements.map(({ id, text }) => ({ id, text })), observations: input.observations },
-          z.strictObject({ groups: z.array(discoveryGroupSchema).max(80) }), ctx,
-        );
-        return { kind: 'group', groups: result.groups };
-      }
-      const result = await ask(
-        'Гипотеза для нового теста', DISCOVERY_HYPOTHESIS_ROLE,
-        { ownerRequirement: input.requirement, observations: input.observations, deepChecks: input.deep },
-        z.strictObject({ hypothesis: z.string().trim().min(1).max(3000) }), ctx,
-      );
-      return { kind: 'hypothesis', hypothesis: result.hypothesis };
     },
     async goals(input, ctx) {
       if (!input.sources.length) throw new Error('Observed goals: без материалов владельца ожидаемое поведение остаётся неизвестным.');

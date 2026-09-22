@@ -1,9 +1,9 @@
-import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
+import { mkdir, readFile, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { importBatchSchema, scenarioLibrarySchema, type ImportBatch, type ScenarioLibrary } from './scenario-contracts.js';
 import { experimentSchema, fingerprint, type Experiment } from './contracts.js';
 import { libraryHash, librarySnapshot } from './scenario-library.js';
+import { writeFileAtomic } from './fs-atomic.js';
 
 const identifier = (id: string) => {
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(id)) throw new Error('Некорректный идентификатор сценариев');
@@ -11,12 +11,7 @@ const identifier = (id: string) => {
 };
 async function atomicJson(directory: string, name: string, value: unknown): Promise<void> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const target = join(directory, name), temporary = `${target}.${randomUUID()}.tmp`;
-  try {
-    const file = await open(temporary, 'wx', 0o600);
-    try { await file.writeFile(JSON.stringify(value)); await file.sync(); } finally { await file.close(); }
-    await rename(temporary, target);
-  } finally { await unlink(temporary).catch(() => {}); }
+  await writeFileAtomic(join(directory, name), JSON.stringify(value));
 }
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 /** File operations are internal to the owning ExperimentStore transaction; no independent writer lock. */

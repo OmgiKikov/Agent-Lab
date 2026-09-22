@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
-import { ExperimentLab, draftHash, measurementHash, planDiscovery, resultHash } from '../src/experiment.js';
+import { ExperimentLab, draftHash, measurementHash, resultHash } from '../src/experiment.js';
 import { ExperimentStore } from '../src/store.js';
 import { createDemoRuntime, demoEvaluationInput, demoInput } from '../src/demo.js';
 import { createInputSchema, emptyUsage, experimentSchema, fingerprint, goalAttainment, metricApplies, validatePreparation, type Experiment, type Runtime, type Trial } from '../src/contracts.js';
@@ -16,264 +16,6 @@ import { COUNTING_RULES, simulatorUsable } from '../src/outcomes.js';
 import { judgeAgreement } from '../src/agreement.js';
 import { buildResultView, resultViewLines } from '../src/result-view.js';
 import { qualityLines, qualitySummary } from '../src/quality.js';
-
-test('staged discovery batches whole logs, selects one grounded focus, and persists one exact handoff', async t => {
-  const quote = 'Answer support questions only from the approved policy.';
-  const candidateIds = new Set(['log_0', 'log_1', 'log_25']);
-  const dialogues = Array.from({ length: 26 }, (_, index) => ({ id: `log_${index}`, outcome: index ? 'success' as const : 'failure' as const,
-    messages: [{ role: 'user' as const, content: `Question ${index}` }, { role: 'assistant' as const, content: candidateIds.has(`log_${index}`) ? 'Invented answer' : 'Approved answer' }] }));
-  const seen: unknown[] = [];
-  let delayCoarse = false;
-  const runtime: Runtime = {
-    async discover(input) {
-      seen.push(structuredClone(input));
-      if (input.kind === 'requirements') return { kind: 'requirements', requirements: [{ id: 'owner_rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [] };
-      if (input.kind === 'coarse') {
-        if (delayCoarse) await new Promise(resolve => setTimeout(resolve, 60));
-        return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({
-        dialogueId: dialogue.id, classification: candidateIds.has(dialogue.id) ? 'candidate' as const : 'clean' as const,
-        ...(candidateIds.has(dialogue.id) ? { requirementId: 'owner_rule' } : {}),
-        summary: 'Observed reply', citations: [{ seq: 1, quote: dialogue.messages[1]!.content }],
-        })) };
-      }
-      if (input.kind === 'group') return { kind: 'group', groups: [
-        { requirementId: 'foreign_rule', dialogueIds: ['log_0', 'log_25'], summary: 'Invalid advisory group' },
-        { requirementId: 'owner_rule', dialogueIds: [...candidateIds], summary: 'The reply gives an unapproved answer.' },
-      ] };
-      return { kind: 'hypothesis', hypothesis: 'The agent may answer outside the approved support policy.' };
-    },
-    async goals({ dialogues }) {
-      const dialogue = dialogues[0]!;
-      return [{ id: `goal_${dialogue.id}`, goal: 'Get an approved support answer', opening: dialogue.messages[0]!.content,
-        requirementIds: ['owner_rule'], evidenceDialogueIds: [dialogue.id], successCriteria: quote, facts: 'Only the recorded user request.', outcome: 'unknown' }];
-    },
-    async assess({ scenario, trial }) {
-      return scenario.metrics!.map(metric => ({ metricId: metric.id, result: scenario.id === 'log_1' ? 'pass' as const : 'fail' as const,
-        rationale: 'The recorded reply is evidence.', evidence: [1], citations: [{ seq: 1, quote: trial.events[1]!.text! }] }));
-    },
-    async prepare(input) {
-      if (!input.confirmedHypothesis) throw new Error('discovery must not prepare cards');
-      return { requirements: [{ id: 'owner_rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [],
-        agent: { name: 'Recorded agent', instructions: quote, tools: [] }, scenarios: [{
-          id: 'accepted_test', familyId: 'accepted_test', title: 'Approved support answer', requirementIds: ['owner_rule'], provenance: 'synthetic', tier: 'regression',
-          user: { goal: 'Get an approved support answer', facts: 'No additional facts.', behavior: 'Ask once.', opening: 'How can I get support?', maxFollowUps: 0 },
-          initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], successCriteria: quote, assumptions: ['Built from confirmed discovery evidence.'],
-          metrics: [{ ...goalAttainment, passCriteria: quote }],
-        }] };
-    }, async improve() { throw new Error('discovery must not improve'); },
-    async openTarget() { throw new Error('discovery must not open target'); }, async userTurn() { throw new Error('discovery must not simulate users'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const input = { task: 'Find a useful support test', mode: 'live' as const, materials: [{ name: 'policy', content: quote }], dialogues,
-    settings: { maxCalls: 20, maxDurationMs: 180_000 } };
-  const plan = planDiscovery(input);
-  assert.equal(plan.batchCount, 2); assert.ok(plan.batches.every(batch => batch.length <= 25 && JSON.stringify({ dialogues: batch }).length <= 60_000));
-  assert.equal(plan.nominalCalls, plan.batchCount + (2 * plan.metrics + 1) * plan.selectedCap + 3,
-    'requirements, grouping and hypothesis are three distinct fixed calls');
-  assert.deepEqual([plan.baseMaxCalls, plan.baseMaxDurationMs], [20, 180_000]);
-  assert.equal(plan.maxDurationMs, Math.ceil(180_000 * plan.maxCalls / 20));
-  const started = await lab.discover(input); await lab.waitForIdle();
-  const result = await lab.get(started.id);
-  assert.equal(result.discovery?.callPlan.nominalCalls, plan.nominalCalls); assert.equal(result.settings.maxCalls, plan.maxCalls); assert.ok(result.settings.maxCalls > 20);
-  assert.ok(result.discovery!.elapsedMs! > 0, 'discovery checkpoints persist elapsed wall time');
-  assert.equal(result.discovery?.phase, 'ready', result.discovery?.error ?? result.error ?? '');
-  assert.equal(result.discovery?.observations.length, dialogues.length);
-  assert.equal(result.discovery?.focusRequirementId, 'owner_rule');
-  assert.deepEqual(result.discovery?.groups, [{ requirementId: 'owner_rule', dialogueIds: [...candidateIds].sort(), summary: 'The reply gives an unapproved answer.' }]);
-  assert.deepEqual(new Set(result.discovery?.representativeIds), candidateIds);
-  assert.equal(result.discovery?.selectedIds.length, result.discovery!.representativeIds.length + result.discovery!.controlIds.length);
-  assert.ok(result.discovery?.controlIds.every(id => !result.discovery!.representativeIds.includes(id)));
-  assert.equal(result.discovery?.deep.filter(item => item.role === 'control').length, result.discovery?.controlIds.length);
-  assert.match(result.discovery!.hypothesis!.text, /НАБЛЮДЕНИЕ: ответ агента \(reply\)$/);
-  assert.equal(result.discovery?.hypothesis?.requirementId, 'owner_rule');
-  assert.deepEqual(new Set(result.discovery?.hypothesis?.eventIds.map(event => event.dialogueId)), new Set(['log_0', 'log_25']),
-    'a representative that passed deep goal attainment is not hypothesis evidence');
-  const hypothesisInput = (seen.find(item => !!item && typeof item === 'object' && 'kind' in item && item.kind === 'hypothesis') as
-    Extract<Parameters<NonNullable<Runtime['discover']>>[0], { kind: 'hypothesis' }> | undefined);
-  assert.deepEqual(new Set(hypothesisInput?.observations.map(item => item.dialogueId)), new Set(['log_0', 'log_25']));
-  assert.deepEqual(new Set(hypothesisInput?.deep.map(item => item.dialogueId)), new Set(['log_0', 'log_25']));
-  assert.equal(JSON.stringify(seen).includes('"outcome"'), false, 'stored outcome must never enter discovery Runtime payloads');
-  const built = await lab.buildFromDiscovery(result.id, result.discovery!.hypothesis!.text); await lab.waitForIdle();
-  const draft = await lab.get(built.id);
-  assert.equal(draft.phase, 'review', draft.error ?? ''); assert.equal(draft.scenarios.length, 1); assert.equal(draft.scenarios[0]!.goalObservation, 'reply');
-  assert.deepEqual([draft.settings.maxCalls, draft.settings.maxDurationMs], [20, 180_000], 'discovery budget must not leak into the accepted test');
-
-  const bypass = structuredClone(result); bypass.id = `${result.id}_bypass`;
-  const bypassAssessment = bypass.discovery!.deep.find(item => item.dialogueId === 'log_0')!.assessments!
-    .find(item => item.metricId === 'goal_attainment')!;
-  bypassAssessment.result = 'pass';
-  await lab.store.save(bypass);
-  await assert.rejects(lab.buildFromDiscovery(bypass.id, bypass.discovery!.hypothesis!.text), /минимум в двух representative-диалогах/);
-
-  const legacy = structuredClone(result); legacy.id = `${result.id}_legacy`;
-  const legacyPlan = legacy.discovery!.callPlan as unknown as Record<string, unknown>;
-  delete legacyPlan.baseMaxCalls; delete legacyPlan.baseMaxDurationMs; delete legacyPlan.maxDurationMs;
-  await lab.store.save(legacy);
-  const reloadedLegacy = await lab.store.get(legacy.id);
-  assert.deepEqual([reloadedLegacy.discovery!.callPlan.baseMaxCalls, reloadedLegacy.discovery!.callPlan.baseMaxDurationMs], [5, 5000]);
-  assert.equal(reloadedLegacy.discovery!.callPlan.legacyBudgetMissing, true);
-  await assert.rejects(lab.buildFromDiscovery(legacy.id, legacy.discovery!.hypothesis!.text), /не содержит исходный бюджет/);
-
-  const tampered = await lab.store.get(result.id);
-  tampered.discovery!.hypothesis!.eventIds[0]!.seq = 0;
-  await lab.store.save(tampered);
-  await assert.rejects(lab.buildFromDiscovery(result.id, tampered.discovery!.hypothesis!.text), /candidate-наблюдения/);
-  tampered.discovery!.phase = 'partial'; tampered.discovery!.activeCall = 'deep log_0';
-  await lab.store.save(tampered);
-  await assert.rejects(lab.resumeDiscovery(result.id), /стоимость неизвестна/);
-
-  delete tampered.discovery!.activeCall;
-  tampered.phase = 'interrupted'; tampered.discovery!.phase = 'partial'; tampered.discovery!.error = null;
-  tampered.discovery!.completedBatchCount = 0; tampered.discovery!.observations = []; tampered.discovery!.groupingComplete = false;
-  tampered.discovery!.groups = []; tampered.discovery!.elapsedMs = tampered.discovery!.callPlan.maxDurationMs - 20;
-  delayCoarse = true;
-  await lab.store.save(tampered);
-  await lab.resumeDiscovery(result.id); await lab.waitForIdle();
-  const timedOut = await lab.get(result.id);
-  assert.equal(timedOut.discovery!.elapsedMs, timedOut.discovery!.callPlan.maxDurationMs);
-  assert.match(timedOut.error!, /time limit/i, 'resume receives only the unspent discovery time budget');
-  timedOut.discovery!.phase = 'partial';
-  await lab.store.save(timedOut);
-  await assert.rejects(lab.resumeDiscovery(result.id), /Лимит времени discovery исчерпан/);
-});
-
-test('discovery requires assistant evidence and two repeated deep goal failures before proposing a test', async t => {
-  const quote = 'Use only the approved answer.';
-  const dialogues = ['a', 'b'].map(id => ({ id, messages: [
-    { role: 'user' as const, content: `Question ${id}` }, { role: 'assistant' as const, content: `Unsupported ${id}` },
-  ] }));
-  let citationSeq = 0;
-  let judgment: 'pass' | 'fail' = 'fail';
-  let hypothesisCalls = 0;
-  const runtime: Runtime = {
-    async discover(input) {
-      if (input.kind === 'requirements') return { kind: 'requirements', requirements: [{ id: 'rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [] };
-      if (input.kind === 'coarse') return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({ dialogueId: dialogue.id,
-        classification: 'candidate' as const, requirementId: 'rule', summary: 'Possible failure',
-        citations: [{ seq: citationSeq, quote: dialogue.messages[citationSeq]!.content }] })) };
-      if (input.kind === 'group') return { kind: 'group', groups: [{ requirementId: 'rule', dialogueIds: ['a', 'b'], summary: 'Same unsupported answer.' }] };
-      hypothesisCalls++; return { kind: 'hypothesis', hypothesis: 'Repeated unsupported answer.' };
-    },
-    async goals({ dialogues: [dialogue] }) { return [{ id: `goal_${dialogue!.id}`, goal: 'Get an approved answer', opening: dialogue!.messages[0]!.content,
-      requirementIds: ['rule'], evidenceDialogueIds: [dialogue!.id], successCriteria: quote }]; },
-    async assess({ scenario, trial }) { return scenario.metrics!.map(metric => ({ metricId: metric.id, result: judgment,
-      rationale: 'Deep check result.', evidence: [1], citations: [{ seq: 1, quote: trial.events[1]!.text! }] })); },
-    async prepare() { throw new Error('unused'); }, async improve() { throw new Error('unused'); },
-    async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const input = { task: 'Find a test', mode: 'live' as const, materials: [{ name: 'policy', content: quote }], dialogues };
-
-  const userOnly = await lab.discover(input); await lab.waitForIdle();
-  const rejectedEvidence = await lab.get(userOnly.id);
-  assert.equal(rejectedEvidence.discovery?.phase, 'insufficient');
-  assert.ok(rejectedEvidence.discovery?.observations.every(observation => observation.classification === 'unknown'));
-  assert.equal(hypothesisCalls, 0);
-
-  citationSeq = 1; judgment = 'pass';
-  const passing = await lab.discover(input); await lab.waitForIdle();
-  const rejectedJudge = await lab.get(passing.id);
-  assert.equal(rejectedJudge.discovery?.phase, 'insufficient');
-  assert.equal(rejectedJudge.discovery?.deep.length, 2);
-  assert.equal(rejectedJudge.discovery?.hypothesis, undefined);
-  assert.equal(hypothesisCalls, 0);
-});
-
-test('discovery keeps going when one deep judge response is rejected', async t => {
-  const quote = 'Use only the approved answer.';
-  const candidateIds = new Set(['bad_a', 'bad_b', 'bad_c']);
-  const dialogues = [...candidateIds, 'clean'].map(id => ({ id, messages: [
-    { role: 'user' as const, content: `Question ${id}` }, { role: 'assistant' as const, content: candidateIds.has(id) ? `Unsupported ${id}` : 'Approved answer' },
-  ] }));
-  const runtime: Runtime = {
-    async discover(input) {
-      if (input.kind === 'requirements') return { kind: 'requirements', requirements: [{ id: 'rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [] };
-      if (input.kind === 'coarse') return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({ dialogueId: dialogue.id,
-        classification: candidateIds.has(dialogue.id) ? 'candidate' as const : 'clean' as const,
-        ...(candidateIds.has(dialogue.id) ? { requirementId: 'rule' } : {}), summary: 'Observed reply',
-        citations: [{ seq: 1, quote: dialogue.messages[1]!.content }] })) };
-      if (input.kind === 'group') return { kind: 'group', groups: [{ requirementId: 'rule', dialogueIds: [...candidateIds], summary: 'Same unsupported answer.' }] };
-      return { kind: 'hypothesis', hypothesis: 'The agent may return an unsupported answer.' };
-    },
-    async goals({ dialogues: [dialogue] }) { return [{ id: `goal_${dialogue!.id}`, goal: 'Get an approved answer', opening: dialogue!.messages[0]!.content,
-      requirementIds: ['rule'], evidenceDialogueIds: [dialogue!.id], successCriteria: quote }]; },
-    async assess({ scenario, trial }, ctx) {
-      // 'clean' fails before any judgment is reported, so no sidecar exists for it.
-      if (scenario.id === 'clean') throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
-      ctx.onJudgment?.(trial.id, { protocolHash: 'p', inputHash: 'i', provider: 'offline', model: 'judge', prompt: 'p', input: '{}', attempts: [], notApplicable: [] }, true);
-      return scenario.metrics!.map(metric => ({ metricId: metric.id, result: 'fail' as const, rationale: 'Deep check result.', evidence: [1],
-        citations: [{ seq: 1, quote: trial.events[1]!.text! }] }));
-    },
-    async prepare() { throw new Error('unused'); }, async improve() { throw new Error('unused'); },
-    async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const started = await lab.discover({ task: 'Find a test', mode: 'live', materials: [{ name: 'policy', content: quote }], dialogues });
-  await lab.waitForIdle();
-  const result = await lab.get(started.id);
-  assert.equal(result.discovery?.phase, 'ready', result.discovery?.error ?? result.error ?? '');
-  assert.equal(result.discovery?.completedDeepIds.length, result.discovery?.selectedIds.length);
-  assert.match(result.discovery?.deep.find(item => item.dialogueId === 'clean')?.error ?? '', /Judge response rejected/);
-  assert.ok(result.discovery?.hypothesis);
-  // Deep judgments are keyed per attempt and named by the record, never by the dialogue id.
-  assert.equal(result.discovery!.deep.find(item => item.dialogueId === 'clean')?.judgeTrialId, undefined, 'no key for a judgment that was never written');
-  const keys = result.discovery!.deep.filter(item => item.dialogueId !== 'clean').map(item => item.judgeTrialId);
-  assert.ok(keys.every(key => key?.startsWith('deep-')), JSON.stringify(keys));
-  assert.equal(new Set(keys).size, keys.length);
-  for (const key of keys) assert.ok(await lab.store.readJudgeAudit(result.id, key!), `sidecar for ${key}`);
-  for (const id of [...candidateIds, 'clean']) assert.equal(await lab.store.readJudgeAudit(result.id, id), null);
-  const journalKeys = (await lab.store.traceJournal(result.id)).trim().split('\n').map(line => JSON.parse(line) as { trialId: string; judgeAudit?: unknown })
-    .filter(line => line.judgeAudit).map(line => line.trialId);
-  assert.deepEqual(new Set(journalKeys), new Set(keys));
-});
-
-test('discovery groups one repeated behavior before deep checks instead of merging a broad requirement', async t => {
-  const quote = 'Answers must follow the approved policy.';
-  const dialogues = ['invent_a', 'invent_b', 'omit_a', 'omit_b'].map(id => ({ id, messages: [
-    { role: 'user' as const, content: `Question ${id}` }, { role: 'assistant' as const, content: `Reply ${id}` },
-  ] }));
-  let groupedInput: unknown;
-  let hypothesisIds: string[] = [];
-  const runtime: Runtime = {
-    async discover(input) {
-      if (input.kind === 'requirements') return { kind: 'requirements', requirements: [{ id: 'policy', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [] };
-      if (input.kind === 'coarse') return { kind: 'coarse', observations: input.dialogues.map(dialogue => ({
-        dialogueId: dialogue.id, classification: 'candidate' as const, requirementId: 'policy',
-        summary: dialogue.id.startsWith('invent') ? 'Invents a policy answer.' : 'Omits the required answer.',
-        citations: [{ seq: 1, quote: dialogue.messages[1]!.content }],
-      })) };
-      if (input.kind === 'group') {
-        groupedInput = structuredClone(input);
-        return { kind: 'group', groups: [
-          { requirementId: 'policy', dialogueIds: ['invent_a', 'invent_b'], summary: 'Invents a policy answer.' },
-          { requirementId: 'policy', dialogueIds: ['omit_a', 'omit_b'], summary: 'Omits the required answer.' },
-          { requirementId: 'foreign', dialogueIds: ['invent_a', 'invent_b'], summary: 'Invalid group.' },
-        ] };
-      }
-      hypothesisIds = input.observations.map(observation => observation.dialogueId);
-      return { kind: 'hypothesis', hypothesis: 'The selected behavior repeats.' };
-    },
-    async goals({ dialogues: [dialogue] }) { return [{ id: `goal_${dialogue!.id}`, goal: 'Get a policy answer', opening: dialogue!.messages[0]!.content,
-      requirementIds: ['policy'], evidenceDialogueIds: [dialogue!.id], successCriteria: quote }]; },
-    async assess({ scenario, trial }) { return scenario.metrics!.map(metric => ({ metricId: metric.id, result: 'fail' as const,
-      rationale: 'The selected reply fails the policy.', evidence: [1], citations: [{ seq: 1, quote: trial.events[1]!.text! }] })); },
-    async prepare() { throw new Error('unused'); }, async improve() { throw new Error('unused'); },
-    async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const started = await lab.discover({ task: 'Find one repeated behavior', mode: 'live', materials: [{ name: 'policy', content: quote }], dialogues });
-  await lab.waitForIdle();
-  const result = await lab.get(started.id);
-  assert.equal(result.discovery?.phase, 'ready', result.discovery?.error ?? result.error ?? '');
-  assert.equal(result.discovery?.groups?.length, 2, 'foreign model groups are ignored');
-  const representatives = new Set(result.discovery?.representativeIds);
-  const invent = ['invent_a', 'invent_b'].every(id => representatives.has(id));
-  const omit = ['omit_a', 'omit_b'].every(id => representatives.has(id));
-  assert.notEqual(invent, omit, 'representatives must come from exactly one behavioral group');
-  assert.deepEqual(new Set(hypothesisIds), representatives, 'only deeply confirmed representatives become hypothesis evidence');
-  assert.deepEqual(Object.keys(groupedInput as object).sort(), ['kind', 'observations', 'requirements']);
-  assert.equal(JSON.stringify(groupedInput).includes('Question '), false, 'grouping sees short observations, not full dialogues');
-});
 
 test('ExperimentLab rejects backend checks from a custom Runtime for confirmed reply-only RAG tests, including sandbox targets', async t => {
   const quote = 'Support is available at support@example.com.';
@@ -1304,223 +1046,6 @@ test('real dialogues also yield production cards: observed goals with verbatim o
   assert.equal(result.trials.filter(tr => production.some(s => s.id === tr.scenarioId)).length, 2);
 });
 
-test('recorded scoring preserves 40, 41 and 200 dialogues through reassessment without truncation', async t => {
-  const runtime: Runtime = {
-    async prepare({ sources }) {
-      return { requirements: [{ id: 'owner_rule', text: 'Answer from the owner material', sourceId: sources[0]!.id,
-        quote: sources[0]!.content, critical: false }], questions: [],
-        agent: { name: 'Recorded agent', instructions: 'Recorded only', tools: [] }, scenarios: [] };
-    },
-    async goals({ dialogues }) {
-      const dialogue = dialogues[0]!;
-      return [{ id: `goal_${dialogue.id}`, goal: `Answer ${dialogue.id}`, opening: dialogue.messages.find(message => message.role === 'user')!.content,
-        evidenceDialogueIds: [dialogue.id], requirementIds: ['owner_rule'], successCriteria: 'Answer from the owner material', facts: 'User message only', outcome: 'unknown' }];
-    },
-    async improve() { throw new Error('score must not improve'); },
-    async openTarget() { throw new Error('score must not open the target'); },
-    async userTurn() { throw new Error('score must not run the simulator'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const makeInput = (count: number) => createInputSchema.parse({ task: 'Score recorded dialogues', mode: 'live',
-    materials: [{ name: 'policy', content: 'Answer from the owner material' }], scenarioCount: 0,
-    settings: { maxDurationMs: 14_400_000 },
-    dialogues: Array.from({ length: count }, (_, index) => ({ id: `d${index}`, goal: `Goal ${index}`,
-      messages: [{ role: 'user' as const, content: `Question ${index}` }, { role: 'assistant' as const, content: `Answer ${index}` }] })),
-  });
-  let largest;
-  for (const count of [40, 41, 200]) {
-    const seed = await lab.score(makeInput(count)); await lab.waitForIdle();
-    const record = await lab.get(seed.id);
-    assert.equal(record.phase, 'results_review', record.error ?? '');
-    assert.equal(record.scenarios.length, count);
-    assert.equal(record.trials.length, count);
-    assert.deepEqual(record.scenarios.map(scenario => scenario.id), record.dialogues.map(dialogue => dialogue.id));
-    assert.deepEqual(record.trials.map(trial => trial.id), record.dialogues.map(dialogue => dialogue.id));
-    if (count === 200) largest = record;
-  }
-  assert.ok(largest);
-  const reassessed = await lab.reassess(largest.id, { codeOnly: true }); await lab.waitForIdle();
-  const copied = await lab.get(reassessed.id);
-  assert.equal(copied.phase, 'results_review', copied.error ?? '');
-  assert.equal(copied.sourceEvidence!.trials.length, 200);
-  assert.deepEqual(copied.trials.map(trial => trial.events), largest.trials.map(trial => trial.events));
-  assert.deepEqual(await lab.get(largest.id), largest, 'reassessment must not mutate the imported seed');
-  assert.throws(() => makeInput(201));
-  assert.throws(() => createInputSchema.parse({ ...makeInput(1), settings: { maxDurationMs: 14_400_001 } }));
-
-  const repeated = await lab.score(makeInput(41)); await lab.waitForIdle();
-  const again = await lab.get(repeated.id);
-  assert.notEqual(again.id, largest.id);
-  assert.deepEqual(again.trials.map(trial => trial.events), largest.trials.slice(0, 41).map(trial => trial.events));
-});
-
-test('model-backed recorded scoring grounds criteria, regrades copied traces and rebuilds clusters from saved sources', async t => {
-  const calls = { prepare: 0, goals: 0, assess: 0, clusters: 0, target: 0, simulator: 0 };
-  const prompts: (string | undefined)[] = [];
-  let clusterError = false;
-  const runtime: Runtime = {
-    async prepare({ sources }, ctx) {
-      calls.prepare++;
-      ctx.beforeCall(); ctx.addUsage({ inputTokens: 1, outputTokens: 1, costUsd: null });
-      return { requirements: [{ id: 'owner_rule', text: 'Do not claim completion without evidence.', sourceId: sources[0]!.id,
-        quote: sources[0]!.content, critical: true }], questions: [], agent: { name: 'Recorded agent', instructions: 'Recorded only', tools: [] }, scenarios: [] };
-    },
-    async goals({ dialogues, requirements }, ctx) {
-      calls.goals++;
-      ctx.beforeCall(); ctx.addUsage({ inputTokens: 1, outputTokens: 1, costUsd: null });
-      assert.deepEqual(requirements?.map(requirement => requirement.id), ['owner_rule']);
-      const dialogue = dialogues[0]!;
-      return [{ id: `goal_${dialogue.id}`, goal: 'Create the request', opening: dialogue.messages[0]!.content,
-        evidenceDialogueIds: [dialogue.id], requirementIds: ['owner_rule'], successCriteria: 'The request exists in observable state.' }];
-    },
-    async assess({ scenario, trial }, ctx) {
-      calls.assess++;
-      ctx.beforeCall();
-      ctx.addUsage({ inputTokens: 7, outputTokens: 3, costUsd: null });
-      assert.deepEqual(trial.events.map(event => event.text), ['Создай заявку', 'Готово ✅, заявка создана']);
-      return scenario.metrics!.map(metric => ({ metricId: metric.id, result: metric.id === 'goal_attainment' ? 'fail' as const : 'pass' as const,
-        rationale: metric.id === 'goal_attainment' ? 'Нет наблюдаемого результата действия.' : 'Ответ можно оценить независимо.', evidence: [1] }));
-    },
-    async failureModes(input, ctx) {
-      calls.clusters++; prompts.push(input.prompt);
-      ctx.beforeCall(); ctx.addUsage({ inputTokens: 1, outputTokens: 1, costUsd: null });
-      if (clusterError) throw new Error('cluster unavailable');
-      return [{ id: `unsupported_action_${calls.clusters}`, name: `Заявил о создании без результата ${calls.clusters}`,
-        description: 'Ассистент подтвердил действие, которого нет в наблюдаемом состоянии.', trialIds: input.failures.map(failure => failure.trialId), promptQuotes: [] }];
-    },
-    async improve() { throw new Error('score must not improve'); },
-    async openTarget() { calls.target++; throw new Error('score must not open the target'); },
-    async userTurn() { calls.simulator++; throw new Error('score must not run the simulator'); },
-  };
-  const { lab, directory } = await setup(t, runtime);
-  const promptFile = join(directory, 'live-prompt.md');
-  await writeFile(promptFile, 'CHANGED_LIVE_PROMPT');
-  const savedPrompt = 'OWNER_SAVED_PROMPT: do not claim completion without observable evidence.';
-  const input = createInputSchema.parse({ task: 'Score recorded dialogue', mode: 'live',
-    materials: [{ name: 'prompt.md', content: savedPrompt, kind: 'prompt' }], scenarioCount: 0,
-    target: { kind: 'command', command: 'never-run', args: [], promptFile },
-    dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'Создай заявку' }, { role: 'assistant', content: 'Готово ✅, заявка создана' }] }],
-    settings: { maxCalls: 5 },
-  });
-  const seed = await lab.score(input); await lab.waitForIdle();
-  const imported = await lab.get(seed.id);
-  assert.equal(imported.phase, 'results_review', imported.error ?? '');
-  assert.equal(imported.usage.calls, 2);
-  assert.equal(imported.trials[0]!.assessments, undefined);
-  assert.equal(imported.failureModes, undefined);
-  assert.equal(imported.scenarios[0]!.goalObservation, 'reply');
-  assert.deepEqual(imported.scenarios[0]!.metrics!.map(metric => metric.id), ['prompt_compliance', 'goal_attainment', 'reply_quality']);
-  const legacy = structuredClone(imported);
-  delete legacy.scenarios[0]!.goalObservation;
-  await lab.store.save(legacy);
-  const repeatedLegacy = await lab.repeat(imported.id);
-  assert.equal(repeatedLegacy.scenarios[0]!.goalObservation, 'reply', 'repeating an external legacy run upgrades only its fresh draft');
-  assert.equal((await lab.get(imported.id)).scenarios[0]!.goalObservation, undefined, 'the legacy source remains immutable');
-  await writeFile(promptFile, 'A NEWER PROMPT THAT MUST NOT BE READ');
-
-  const first = await lab.reassess(imported.id, {}, { carryUsage: true }); await lab.waitForIdle();
-  const assessed = await lab.get(first.id);
-  assert.equal(assessed.phase, 'results_review', assessed.error ?? '');
-  assert.equal(assessed.scenarios[0]!.goalObservation, 'reply', 'reassessment upgrades an external legacy copy');
-  assert.equal((await lab.get(imported.id)).scenarios[0]!.goalObservation, undefined, 'reassessment also leaves the legacy source immutable');
-  assert.deepEqual(assessed.trials[0]!.assessments!.map(item => item.metricId), ['prompt_compliance', 'goal_attainment', 'reply_quality']);
-  assert.deepEqual(prompts, [savedPrompt]);
-  assert.match(assessed.failureModes![0]!.id, /_1$/);
-  assert.deepEqual([calls.target, calls.simulator], [0, 0]);
-  assert.equal(assessed.usage.costUsd, null);
-  assert.equal(assessed.usage.calls, 4, 'score and reassessment share the confirmed call ceiling');
-  assert.match(qualityLines(qualitySummary(assessed)).scope, /стоимость неизвестна/);
-
-  const second = await lab.reassess(assessed.id); await lab.waitForIdle();
-  const rebuilt = await lab.get(second.id);
-  assert.deepEqual(rebuilt.failureModes!.map(mode => mode.id), ['unsupported_action_2']);
-  assert.deepEqual(prompts, [savedPrompt, savedPrompt]);
-
-  clusterError = true;
-  const failedCluster = await lab.reassess(imported.id); await lab.waitForIdle();
-  const survived = await lab.get(failedCluster.id);
-  assert.equal(survived.phase, 'results_review');
-  assert.ok(survived.trials[0]!.assessments?.length);
-  assert.equal(survived.failureModes, undefined);
-  assert.ok(survived.limitations.some(note => /cluster unavailable/.test(note)));
-
-  const beforeCodeOnly = { ...calls };
-  const exactOnly = await lab.reassess(imported.id, { codeOnly: true }); await lab.waitForIdle();
-  const codeOnly = await lab.get(exactOnly.id);
-  assert.deepEqual(calls, beforeCodeOnly);
-  assert.equal(codeOnly.failureModes, undefined);
-  assert.ok(codeOnly.limitations.some(note => /code-only/i.test(note)));
-});
-
-test('model-backed score rejects missing, duplicate and unknown grounded goals before publishing criteria', async t => {
-  let goals: Awaited<ReturnType<NonNullable<Runtime['goals']>>> = [];
-  const runtime: Runtime = {
-    async prepare({ sources }) { return { requirements: [{ id: 'known', text: 'Known rule', sourceId: sources[0]!.id, quote: sources[0]!.content, critical: true }], questions: [], agent: { name: 'A', instructions: 'A', tools: [] }, scenarios: [] }; },
-    async goals() { return goals; }, async improve() { throw new Error('unused'); }, async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const input = createInputSchema.parse({ task: 'Score', mode: 'live', materials: [{ name: 'policy', content: 'Known rule' }], scenarioCount: 0,
-    dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'Question' }, { role: 'assistant', content: 'Answer' }] }] });
-  const valid = { id: 'g', goal: 'Get an answer', opening: 'Question', evidenceDialogueIds: ['d1'], requirementIds: ['known'], successCriteria: 'Known rule' };
-  for (const value of [[], [valid, { ...valid, id: 'g2' }], [{ ...valid, requirementIds: ['missing'] }]]) {
-    goals = value;
-    const pending = await lab.score(input); await lab.waitForIdle();
-    const record = await lab.get(pending.id);
-    assert.equal(record.phase, 'error');
-    assert.match(record.error ?? '', /ровно одну цель|неизвестн/i);
-    assert.equal(record.scenarios.length, 0);
-    assert.equal(record.trials.length, 0);
-  }
-});
-
-test('open owner questions preserve imported facts but stop goal extraction and reassessment', async t => {
-  const calls = { goals: 0, assess: 0 };
-  const runtime: Runtime = {
-    async prepare({ sources }) { return { requirements: [{ id: 'ambiguous', text: 'Follow the applicable policy', sourceId: sources[0]!.id,
-      quote: sources[0]!.content, critical: true }], questions: ['Which policy applies?'], agent: { name: 'Recorded', instructions: 'Recorded', tools: [] }, scenarios: [] }; },
-    async goals() { calls.goals++; throw new Error('unresolved questions must stop goals'); },
-    async assess() { calls.assess++; throw new Error('unresolved questions must stop judging'); },
-    async improve() { throw new Error('unused'); }, async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const input = createInputSchema.parse({ task: 'Score ambiguous dialogue', mode: 'live', scenarioCount: 0,
-    materials: [{ name: 'policy.md', content: 'Follow the applicable policy.' }],
-    dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'Сделай по правилам' }, { role: 'assistant', content: 'Готово' }] }],
-  });
-  const seed = await lab.score(input); await lab.waitForIdle();
-  const record = await lab.get(seed.id);
-  assert.equal(record.phase, 'results_review', record.error ?? '');
-  assert.deepEqual(record.questions, ['Which policy applies?']);
-  assert.equal(record.trials.length, 1);
-  assert.deepEqual(calls, { goals: 0, assess: 0 });
-  await assert.rejects(lab.reassess(record.id), /открытые вопросы владельца/);
-});
-
-test('recorded scoring keeps the existing one-writer rejection instead of interleaving mutations', async t => {
-  const entered = deferred(); const release = deferred();
-  const runtime: Runtime = {
-    async prepare({ sources }) {
-      entered.resolve(); await release.promise;
-      return { requirements: [{ id: 'owner_rule', text: 'Owner rule', sourceId: sources[0]!.id, quote: 'Owner rule', critical: false }],
-        questions: [], agent: { name: 'Recorded agent', instructions: 'Recorded only', tools: [] }, scenarios: [] };
-    },
-    async goals({ dialogues }) { const dialogue = dialogues[0]!; return [{ id: `goal_${dialogue.id}`, goal: 'Answer', opening: dialogue.messages[0]!.content,
-      evidenceDialogueIds: [dialogue.id], requirementIds: ['owner_rule'], successCriteria: 'Owner rule' }]; },
-    async improve() { throw new Error('unused'); }, async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const input = createInputSchema.parse({ task: 'Score', mode: 'live', materials: [{ name: 'policy', content: 'Owner rule' }], scenarioCount: 0,
-    dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'Question' }, { role: 'assistant', content: 'Answer' }] }] });
-  const first = lab.score(input);
-  await entered.promise;
-  try { await assert.rejects(lab.score(input), /другая операция/); }
-  finally { release.resolve(); }
-  const seed = await first; await lab.waitForIdle();
-  const record = await lab.get(seed.id);
-  assert.equal(record.phase, 'results_review', record.error ?? '');
-  assert.equal(record.trials.length, 1);
-});
-
 test('an observed goal whose opening is not a real user message fails preparation', async t => {
   const runtime = createDemoRuntime();
   runtime.goals = async () => [{ id: 'g', goal: 'x', opening: 'never said this', evidenceDialogueIds: ['d1'], successCriteria: 'y', facts: 'f', outcome: 'unknown' }];
@@ -1790,22 +1315,6 @@ test('human verdicts may target simulator checks, reassessment recomputes them, 
   assert.ok(!repeated.limitations.some(l => l.startsWith('Внешнее состояние карточек')));
 });
 
-test('a run may drive several dialogues at once: their trace events interleave, while the default keeps them one after another', async t => {
-  const { lab } = await setup(t);
-  const order = async (parallel: number | undefined) => {
-    const record = await lab.create(demoEvaluationInput()); await lab.waitForIdle();
-    await lab.start(record.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(record.id)), ...(parallel ? { parallel } : {}) }); await lab.waitForIdle();
-    const result = await lab.get(record.id);
-    assert.equal(result.phase, 'results_review', result.error ?? result.message); assert.equal(result.trials.length, 3);
-    const journal = (await lab.store.traceJournal(record.id)).trim().split('\n').map(line => JSON.parse(line).trialId as string);
-    // How many times the journal switches from one dialogue to another: 2 when dialogues run one after another, more when they overlap.
-    return journal.filter((id, i) => i > 0 && journal[i - 1] !== id).length;
-  };
-  assert.equal(await order(undefined), 2);
-  assert.ok(await order(3) > 2, 'three parallel dialogues must interleave their traces');
-});
-
-/** A judge that answers every requested rubric as met, citing the assistant reply (seq 1). */
 function agreeingJudgeRuntime(): Runtime {
   return {
     async prepare({ sources }) {
@@ -1827,21 +1336,17 @@ function agreeingJudgeRuntime(): Runtime {
           rationale: 'The reply is present in the trace.', evidence: [1], citations: [{ seq: 1, quote }] })) });
       });
     },
-    async improve() { throw new Error('score must not improve'); },
-    async openTarget() { throw new Error('score must not open the target'); },
-    async userTurn() { throw new Error('score must not run the simulator'); },
+    async improve() { throw new Error('reassessment must not improve'); },
+    async openTarget() { throw new Error('reassessment must not open the target'); },
+    async userTurn() { throw new Error('reassessment must not run the simulator'); },
   };
 }
 
+/** A recorded-dialogue run in the stored format of earlier releases, reassessed by the current judge: no migration step. */
 async function scoredAndReassessed(lab: ExperimentLab) {
-  const input = createInputSchema.parse({ task: 'Score recorded dialogues', mode: 'live',
-    materials: [{ name: 'policy', content: 'Answer from the owner material' }], scenarioCount: 0,
-    dialogues: ['d0', 'd1'].map(id => ({ id, messages: [{ role: 'user' as const, content: `Question ${id}` }, { role: 'assistant' as const, content: `Answer ${id}` }] })),
-  });
-  const seed = await lab.score(input); await lab.waitForIdle();
-  const scored = await lab.get(seed.id);
-  assert.equal(scored.phase, 'results_review', scored.error ?? '');
-  const pending = await lab.reassess(scored.id); await lab.waitForIdle();
+  const recorded = experimentSchema.parse(JSON.parse(await readFile(new URL('./fixtures/recorded-run.json', import.meta.url), 'utf8')));
+  await lab.store.save(recorded);
+  const pending = await lab.reassess(recorded.id); await lab.waitForIdle();
   const record = await lab.get(pending.id);
   assert.equal(record.phase, 'results_review', record.error ?? '');
   return record;
@@ -1862,6 +1367,7 @@ async function assertReceiptOnly(lab: ExperimentLab, directory: string, record: 
     assert.equal(journal.filter(line => line.trialId === trial.id && 'judgeAudit' in line).length, 1, 'one journal copy per finished judgment');
   }
 }
+
 
 test('reassessing a scored record writes sidecar audits, receipt-only trials and one journal line per judgment', async t => {
   const { lab, directory } = await setup(t, agreeingJudgeRuntime());
@@ -2175,4 +1681,18 @@ test('a changed judge verdict is still refused, and a full review never keeps a 
   assert.equal('countingRules' in review, false, 'the counting rule is a property of quick marks only');
   const dialogue = await lab.addHumanReview(record.id, { trialId: trial.id, verdict: 'pass', countingRules: 'goal-v1', note: 'весь диалог' });
   assert.equal('countingRules' in dialogue.humanReviews.at(-1)!, false);
+});
+test('a run may drive several dialogues at once: their trace events interleave, while the default keeps them one after another', async t => {
+  const { lab } = await setup(t);
+  const order = async (parallel: number | undefined) => {
+    const record = await lab.create(demoEvaluationInput()); await lab.waitForIdle();
+    await lab.start(record.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(record.id)), ...(parallel ? { parallel } : {}) }); await lab.waitForIdle();
+    const result = await lab.get(record.id);
+    assert.equal(result.phase, 'results_review', result.error ?? result.message); assert.equal(result.trials.length, 3);
+    const journal = (await lab.store.traceJournal(record.id)).trim().split('\n').map(line => JSON.parse(line).trialId as string);
+    // How many times the journal switches from one dialogue to another: 2 when dialogues run one after another, more when they overlap.
+    return journal.filter((id, i) => i > 0 && journal[i - 1] !== id).length;
+  };
+  assert.equal(await order(undefined), 2);
+  assert.ok(await order(3) > 2, 'three parallel dialogues must interleave their traces');
 });

@@ -37,7 +37,6 @@ const plan = { id: 'gen_' + randomUUID(), formatVersion: '1' as const, kind: 'ra
 const persist = () => writeFile(join(directory, 'report.json'), JSON.stringify({ plan, usage, trials }, null, 2), { mode: 0o600 });
 try {
   await store.init();
-  await store.saveGeneratorRecord(plan);
   await writeFile(join(directory, 'plan.json'), JSON.stringify(plan, null, 2), { mode: 0o600 });
   console.log(JSON.stringify({ directory, maxCalls, controls: controls.cases.length }));
   const runtime = await createPiRuntime(settings);
@@ -67,7 +66,7 @@ try {
     console.log(JSON.stringify({ caseId: control.id, error: trial.assessmentError, usage: trial.usage,
       grades: trial.assessments?.map(row => ({ metric: row.metricId, expected: control.expected[row.metricId], actual: row.result })) }));
   }
-  await store.saveGeneratorRecord({ id: 'gen_' + randomUUID(), formatVersion: '1', kind: 'rag-evidence-control-report', planId: plan.id, usage, trials });
+  await writeFile(join(directory, 'report.json'), JSON.stringify({ kind: 'rag-evidence-control-report', planId: plan.id, usage, trials }, null, 2), { mode: 0o600 });
   if (trials.some(row => row.trial.assessmentError || !row.trial.assessments?.length
     || Object.entries(row.expected).some(([metric, expected]) => row.trial.assessments?.find(a => a.metricId === metric)?.result !== expected))) process.exitCode = 1;
 } finally { await persist(); await store.close(); }

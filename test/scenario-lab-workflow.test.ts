@@ -55,7 +55,7 @@ test('generated finish payload gets repair feedback before acceptance and runs t
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('no-log preparation creates honest curated review/edit/accept/controller library with generator configuration', async () => {
+test('no-log preparation creates honest curated review/edit/accept/controller library', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'scenario-no-log-')), runtime = runtimeFixture(); let requestSeen: any;
   runtime.scenarioProposals = async request => {
     requestSeen = request;
@@ -66,13 +66,13 @@ test('no-log preparation creates honest curated review/edit/accept/controller li
   };
   const lab = new ExperimentLab(directory, runtime);
   try {
-    await lab.init(); const seed = await lab.create({ ...input(false), generatorConfig: { instructions: 'Только требования владельца', temperature: 0 } }); await lab.waitForIdle();
+    await lab.init(); const seed = await lab.create(input(false)); await lab.waitForIdle();
     const draft = await lab.readLibrary(seed.id);
     assert.equal(draft.experiment.phase, 'review', draft.experiment.error ?? '');
     assert.deepEqual(draft.library.imports, []); assert.equal(draft.experiment.originalImport, undefined);
     assert.equal(draft.library.variants[0]!.provenance, 'curated'); assert.equal(draft.library.variants[0]!.quality, 'ready');
     assert.equal(draft.experiment.scenarios.length, 0); assert.deepEqual(requestSeen.dialogues, []);
-    assert.equal(requestSeen.preparationMode, 'owner_requirements'); assert.equal(requestSeen.generatorConfig.instructions, 'Только требования владельца');
+    assert.equal(requestSeen.preparationMode, 'owner_requirements');
     const changed = await lab.editLibrary(seed.id, libraryHash(draft.library), { kind: 'add_fact', variantId: 'variant_1', factId: 'owner_number', statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'owner_added', reason: 'Владелец явно задал данные примера' } as any);
     const fact = changed.library.variants[0]!.userState.facts[0]!;
     assert.equal(fact.origin.kind, 'owner'); assert.ok(changed.library.variants[0]!.history.some(h => h.factEdit?.factId === fact.id));
@@ -84,7 +84,7 @@ test('no-log preparation creates honest curated review/edit/accept/controller li
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('reproducible demo exercises persisted import, owner edit, accepted run, recurring issue, diagnosis, candidate and generator report', async () => {
+test('reproducible demo exercises persisted import, owner edit, accepted run and a repeat on a fixed agent version', async () => {
   const demo = await import('../examples/scenario-lab-demo.mjs').catch(() => assert.fail('A reproducible isolated scenario-lab demo is required'));
   const directory = await mkdtemp(join(tmpdir(), 'scenario-workflow-'));
   try {
@@ -92,13 +92,10 @@ test('reproducible demo exercises persisted import, owner edit, accepted run, re
     assert.equal(report.evidenceKind, 'deterministic-integration');
     assert.deepEqual(report.library, { dialogues: 2, groups: 1, variants: 2 });
     assert.equal(report.ownerReceipt, true); assert.equal(report.sourceUnchanged, true);
-    assert.equal(report.issueId, report.repeatedIssueId); assert.equal(report.issueAssessmentLinks, 4);
-    assert.equal(report.diagnosis, 'supports'); assert.equal(report.diagnosticTrials, 4);
-    assert.equal(report.policyFrozenBeforeRun, true);
-    assert.equal(report.defectNoLongerReproduced, true); assert.equal(report.candidateAcceptable, true);
-    assert.equal(report.generatorCases, 2); assert.equal(report.generatorTransport, 'deterministic-test');
+    assert.deepEqual(report.baseline, { passed: 1, decided: 2 }, 'the deliberately broken agent asks again for a number it was already given');
+    assert.deepEqual(report.fixed, { passed: 2, decided: 2 });
     assert.equal(report.persistedLinksResolve, true);
-    const candidate = JSON.parse(await readFile(join(directory, '.agent-lab', `${report.candidateRunId}.json`), 'utf8'));
+    const candidate = JSON.parse(await readFile(join(directory, '.agent-lab', `${report.repeatRunId}.json`), 'utf8'));
     const late = candidate.trials.filter((t: any) => t.scenarioId === 'late_number');
     assert.equal(late.length, 2);
     for (const trial of late) {

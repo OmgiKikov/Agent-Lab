@@ -221,7 +221,7 @@ export type BoardAction =
   | { type: 'new' }
   | { type: 'demo' }
   | { type: 'open'; id: string }
-  | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat' | 'accept' | 'issues'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number; dialogueOpen?: boolean }
+  | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat' | 'accept'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number; dialogueOpen?: boolean }
   /** The owner rewrites one expectation in their own words; the text itself comes from the native editor, never from here. */
   | { type: 'expect'; scenarioId: string; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; dialogueOpen?: boolean }
   | { type: 'acceptLibrary'; variantIds: string[]; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
@@ -402,7 +402,6 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean, 
   // Demo 2026-09-18: under the agreement block the title and the outcome tag are already on screen.
   const rows = [
     ...(agreementShown && !expanded ? [] : [line(scenario?.title ?? trial.scenarioId, 'accent', true),
-      ...(trial.diagnosticReceipt ? [line(trial.diagnosticReceipt.arm === 'baseline' ? 'Диагностика · исходные условия' : 'Диагностика · вмешательство', 'warning')] : []),
       line(`${verdicts[trial.outcome]} · ${trial.userMode === 'reactive' ? 'клиента играл симулятор' : trial.userMode} · попытка ${trial.repeat + 1}`, outcomeColor(trial.outcome))]),
     ...findings.map(f => line(expanded ? humanFindingText(f) : humanFindingText(f).slice(0, 240), 'warning')),
     ...(record.workflow !== 'evaluate' ? [line(`Версия агента: ${trial.revisionId}`, 'muted')] : []),
@@ -819,7 +818,6 @@ export class LabBoard implements Component {
         if (answer) return this.finish({ type: 'agree', answer, ...state, trialId: entry.id, metricIds: target.metricIds, judgeVerdict: target.judgeVerdict });
       }
       const finished = this.record.workflow === 'evaluate' && !!this.record.reviewedAt && !activePhases.has(this.record.phase);
-      if (key('i') && (this.section === 'results' || this.section === 'agent') && this.record.trials.length) return this.finish({ type: 'issues', ...state });
       const type = key('r') && editable && !this.record.questions.length && (!libraryPath || !!this.record.librarySnapshot?.acceptance && !pendingLibrarySelection(this.record, this.selectedVariantIds)) && (!libraryPath || this.section === 'agent') ? 'run'
         : key('r') && finished ? 'repeat'
         : key('v') && reviewable ? 'annotate'

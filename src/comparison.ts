@@ -849,7 +849,6 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   };
   const expectedRows = [...expectedAttemptRows(before), ...expectedAttemptRows(after)]
     .filter((row, index, rows) => rows.findIndex(value => value.scenarioId === row.scenarioId && value.userMode === row.userMode && value.repeat === row.repeat) === index);
-  if ([before, after].some(r => r.runKind === 'diagnostic' || r.runKind === 'generator' || r.trials.some(t => t.diagnosticReceipt))) notes.push('Служебный или диагностический прогон исключён из сравнения версий.');
   if (before.id === after.id) notes.push('Выбран один и тот же прогон.');
   if (before.workflow !== 'evaluate' || after.workflow !== 'evaluate') notes.push('Сравнение поддерживает отдельные оценочные прогоны.');
   if (before.mode !== after.mode) notes.push('Демо и живые прогоны несравнимы.');

@@ -1,8 +1,3 @@
-import { generatorConfigSchema } from './generator-corpus.js';
-import type { GeneratedCaseAssessment } from './generator-production.js';
-import type { GeneratorCaseInput, GeneratorConfig } from './generator-corpus.js';
-import type { GeneratorAdapter } from './generator-evaluation.js';
-import { diagnosticCapabilitiesSchema, diagnosticReceiptSchema, type DiagnosticRequest, type DiagnosticReceipt } from './diagnostic-contracts.js';
 import type { CheckpointInput } from './checkpoints.js';
 import { userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
 import { checkpointSchema } from './scenario-contracts.js';
@@ -110,23 +105,25 @@ const releaseSchema = z.strictObject({
 }).optional();
 /** Substrings of a reply that mean the stand, not the agent, answered («нет ответа от смежной системы»): such a dialogue is not measured. */
 const serviceReplies = z.array(text.max(300)).max(20).optional();
+/** A field of a retired feature: old connections and records still parse, nothing reads it. */
+const retired = z.unknown().optional();
 export const targetSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('sandbox') }),
   z.strictObject({
-    kind: z.literal('http'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, serviceReplies, url: z.string().url().max(2000),
+    kind: z.literal('http'), diagnosticCapabilities: retired, promptFile, serviceReplies, url: z.string().url().max(2000),
     headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/, 'Header values must name environment variables')).default({}),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),
     release: releaseSchema,
   }),
   z.strictObject({
-    kind: z.literal('module'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, serviceReplies, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
+    kind: z.literal('module'), diagnosticCapabilities: retired, promptFile, serviceReplies, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
     exportName: z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{0,99}$/).default('createSession'),
     timeoutMs: z.number().int().min(1000).max(600000).optional(),
     release: releaseSchema,
   }),
   /** A local process (for example `python3 agent.py`) speaking one JSON request/reply per line over stdin/stdout. */
   z.strictObject({
-    kind: z.literal('command'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, serviceReplies, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
+    kind: z.literal('command'), diagnosticCapabilities: retired, promptFile, serviceReplies, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
     cwd: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required').optional(),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),
     release: releaseSchema,
@@ -358,26 +355,6 @@ export const dialogueSchema = z.strictObject({
   outcome: z.enum(['success', 'failure', 'abandoned', 'unknown']).default('unknown'),
 });
 export type Dialogue = z.infer<typeof dialogueSchema>;
-export const discoveryDialogueSchema = z.strictObject({
-  id: identifier,
-  messages: z.array(z.strictObject({ seq: z.number().int().nonnegative(), role: z.enum(['user', 'assistant']), content: dialogueContent })).min(1).max(60),
-});
-export type DiscoveryDialogue = z.infer<typeof discoveryDialogueSchema>;
-const discoveryCitationSchema = z.strictObject({ seq: z.number().int().nonnegative(), quote: z.string().min(1).max(2000) });
-export const discoveryObservationSchema = z.strictObject({
-  dialogueId: identifier, classification: z.enum(['candidate', 'clean', 'unknown']),
-  requirementId: identifier.optional(), summary: text.max(500), citations: z.array(discoveryCitationSchema).max(8).default([]),
-}).superRefine((value, ctx) => {
-  if (value.classification === 'candidate' && (!value.requirementId || !value.citations.length)) {
-    ctx.addIssue({ code: 'custom', message: 'A candidate needs an owner requirement and dialogue evidence.' });
-  }
-});
-export type DiscoveryObservation = z.infer<typeof discoveryObservationSchema>;
-export const discoveryGroupSchema = z.strictObject({
-  requirementId: identifier, dialogueIds: z.array(identifier).min(1).max(300).refine(unique, 'Duplicate dialogue IDs'),
-  summary: text.max(500),
-});
-export type DiscoveryGroup = z.infer<typeof discoveryGroupSchema>;
 const profileFields = {
   id: identifier, persona: text.max(2000).optional(), characteristics: z.array(text.max(300)).max(12).default([]),
   observedStyle: text.max(2000).optional(), evidenceDialogueIds: z.array(identifier).max(50).default([]),
@@ -515,7 +492,6 @@ export function validationScenario(dialogue: Dialogue, goal: ObservedGoal): Omit
 }
 
 export const createInputSchema = z.strictObject({
-  generatorConfig: generatorConfigSchema.optional(),
   task: text.max(8000),
   originalImport: importBatchSchema.optional(),
   /** Owner-confirmed hypothesis that requests the strict one-test preparation path. */
@@ -538,7 +514,6 @@ export const createInputSchema = z.strictObject({
   notes: z.string().trim().max(8000).default(''),
   profiles: z.array(ownerProfileSchema).max(6).default([]),
 }).superRefine((v, ctx) => {
-  if(v.generatorConfig && v.confirmedHypothesis)ctx.addIssue({code:'custom',message:'Настройка генератора применяется только при подготовке новой библиотеки.',path:['generatorConfig']});
   if (v.materials.reduce((n, m) => n + m.content.length, 0) > MATERIALS_TOTAL_CHARS) ctx.addIssue({ code: 'custom', message: `Materials exceed ${MATERIALS_TOTAL_CHARS.toLocaleString('en-US')} characters`, path: ['materials'] });
   if (v.dialogues.reduce((n, d) => n + d.messages.reduce((m, x) => m + x.content.length, 0), 0) > 2000000) ctx.addIssue({ code: 'custom', message: 'Dialogues exceed 2,000,000 characters', path: ['dialogues'] });
   if (!unique(v.dialogues.map(d => d.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate dialogue IDs', path: ['dialogues'] });
@@ -559,21 +534,6 @@ export const createInputSchema = z.strictObject({
 });
 export type CreateInput = z.infer<typeof createInputSchema>;
 
-export const discoverInputSchema = z.strictObject({
-  task: text.max(8000), materials: z.array(materialSchema).min(1).max(MATERIAL_LIMIT), mode: z.enum(['demo', 'live']),
-  settings: settingsSchema.default(() => settingsSchema.parse({})), existingAgent: agentSchema.optional(),
-  target: targetSchema.default({ kind: 'sandbox' }), targetVersion: text.max(200).optional(),
-  dialogues: z.array(dialogueSchema).min(1).max(300), notes: z.string().trim().max(8000).default(''),
-}).superRefine((value, ctx) => {
-  if (value.materials.reduce((sum, item) => sum + item.content.length, 0) > MATERIALS_TOTAL_CHARS) {
-    ctx.addIssue({ code: 'custom', message: `Materials exceed ${MATERIALS_TOTAL_CHARS.toLocaleString('en-US')} characters`, path: ['materials'] });
-  }
-  if (value.dialogues.reduce((sum, dialogue) => sum + dialogue.messages.reduce((n, message) => n + message.content.length, 0), 0) > 2000000) {
-    ctx.addIssue({ code: 'custom', message: 'Dialogues exceed 2,000,000 characters', path: ['dialogues'] });
-  }
-  if (!unique(value.dialogues.map(dialogue => dialogue.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate dialogue IDs', path: ['dialogues'] });
-});
-export type DiscoverInput = z.infer<typeof discoverInputSchema>;
 
 export const preparationSchema = z.strictObject({
   requirements: z.array(requirementSchema).min(1).max(REQUIREMENT_LIMIT),
@@ -602,7 +562,7 @@ export type SimulatorCheckId = typeof SIMULATOR_CHECK_IDS[number];
 /** A code predicate over the simulated user's own replies. Never an agent grade; never shown to the judge. */
 export interface SimulatorCheck { id: SimulatorCheckId; description: string; passed: boolean; evidence: string; seq?: number; heuristic: boolean }
 export interface Trial {
-  diagnosticReceipt?: DiagnosticReceipt;
+  diagnosticReceipt?: unknown;
   id: string; revisionId: string; scenarioId: string; familyId: string; repeat: number; userMode: UserMode;
   split: 'dev' | 'control'; manifestHash: string; outcome: Outcome; reason: string;
   checkpoints?: CheckpointResult[]; checkpointReceipt?: z.infer<typeof checkpointReceiptSchema>;
@@ -732,63 +692,6 @@ export const reassessmentSchema = z.strictObject({
 });
 export type ReassessmentInput = z.input<typeof reassessmentSchema>;
 export type DraftPatch = z.infer<typeof draftPatchSchema>;
-export const DISCOVERY_PROTOCOL = 'discovery-1';
-const discoveryCallPlanFields = z.strictObject({
-  batches: z.number().int().nonnegative(), selectedCap: z.number().int().min(0).max(5), metrics: z.number().int().min(1).max(8),
-  nominalCalls: z.number().int().nonnegative(), maxCalls: z.number().int().positive(),
-  baseMaxCalls: z.number().int().positive(),
-  baseMaxDurationMs: z.number().int().positive(),
-  maxDurationMs: z.number().int().positive(),
-  legacyBudgetMissing: z.boolean().optional(),
-});
-export const discoveryCallPlanSchema = z.preprocess(value => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
-  const plan = value as Record<string, unknown>;
-  if (plan.baseMaxCalls !== undefined && plan.baseMaxDurationMs !== undefined && plan.maxDurationMs !== undefined) return value;
-  return { ...plan, baseMaxCalls: 5, baseMaxDurationMs: 5000, maxDurationMs: 5000, legacyBudgetMissing: true };
-}, discoveryCallPlanFields);
-export type DiscoveryCallPlan = z.infer<typeof discoveryCallPlanSchema>;
-export interface DiscoveryPlan extends Omit<DiscoveryCallPlan, 'batches' | 'legacyBudgetMissing'> {
-  batches: DiscoveryDialogue[][];
-  batchCount: number;
-  oversizedIds: string[];
-  seed: string;
-}
-export const discoveryDeepResultSchema = z.strictObject({
-  dialogueId: identifier, role: z.enum(['representative', 'control']),
-  /** Key of this judgment's sidecar `{runId}.judge/{judgeTrialId}.json` and journal entries; absent in older records. */
-  judgeTrialId: identifier.optional(),
-  goal: observedGoalSchema.optional(), assessments: z.array(metricAssessmentSchema).max(8).optional(), error: text.max(4000).optional(),
-});
-export const discoveryHypothesisSchema = z.strictObject({
-  text: text.max(3000), proposedGoalObservation: z.literal('reply'), requirementId: identifier,
-  eventIds: z.array(z.strictObject({ dialogueId: identifier, seq: z.number().int().nonnegative() })).min(1).max(24),
-});
-export type DiscoveryHypothesis = z.infer<typeof discoveryHypothesisSchema>;
-export const discoveryRecordSchema = z.strictObject({
-  protocol: z.literal(DISCOVERY_PROTOCOL),
-  phase: z.enum(['running', 'ready', 'insufficient', 'partial', 'budget_exhausted', 'error']),
-  error: z.string().max(4000).nullable(), requirements: z.array(requirementSchema).max(RECORD_REQUIREMENT_LIMIT),
-  observations: z.array(discoveryObservationSchema).max(300), seed: text,
-  focusRequirementId: identifier.optional(), representativeIds: z.array(identifier).max(3), controlIds: z.array(identifier).max(2), selectedIds: z.array(identifier).max(5),
-  completedBatchCount: z.number().int().nonnegative(), groupingComplete: z.boolean(), completedDeepIds: z.array(identifier).max(5),
-  groups: z.array(discoveryGroupSchema).max(80).optional(),
-  activeCall: text.max(200).optional(),
-  deep: z.array(discoveryDeepResultSchema).max(5), hypothesis: discoveryHypothesisSchema.optional(),
-  callPlan: discoveryCallPlanSchema, callsUsed: z.number().int().nonnegative(), elapsedMs: z.number().int().nonnegative().optional(),
-  totalDialogues: z.number().int().min(1).max(300), oversizedIds: z.array(identifier).max(300),
-});
-export type DiscoveryRecord = z.infer<typeof discoveryRecordSchema>;
-export type DiscoveryRuntimeInput =
-  | { kind: 'requirements'; task: string; sources: Source[] }
-  | { kind: 'coarse'; requirements: Requirement[]; dialogues: DiscoveryDialogue[] }
-  | { kind: 'group'; requirements: Requirement[]; observations: DiscoveryObservation[] }
-  | { kind: 'hypothesis'; requirement: Requirement; observations: DiscoveryObservation[]; deep: z.infer<typeof discoveryDeepResultSchema>[] };
-export type DiscoveryRuntimeOutput =
-  | { kind: 'requirements'; requirements: Requirement[]; questions: string[] }
-  | { kind: 'coarse'; observations: DiscoveryObservation[] }
-  | { kind: 'group'; groups: DiscoveryGroup[] }
-  | { kind: 'hypothesis'; hypothesis: string };
 export type Phase = 'preparing' | 'review' | 'evaluating' | 'results_review' | 'baseline' | 'improving' | 'control' | 'complete' | 'cancelled' | 'error' | 'interrupted';
 export interface AcceptedTest {
   testId: string; scenarioId: string; definitionHash: string; acceptedAt: string;
@@ -809,8 +712,8 @@ export interface SourceIdentity {
   scenarios: Record<string, string>;
 }
 export interface Experiment {
-  generatorConfig?: GeneratorConfig;
-  generatorIdentity?: {configHash:string;protocol:string;protocolHash:string};
+  generatorConfig?: unknown;
+  generatorIdentity?: unknown;
   runKind?: 'evaluation' | 'diagnostic' | 'generator';
   librarySnapshot?: ScenarioLibrary;
   originalImport?: { id: string; contentHash: string };
@@ -854,12 +757,12 @@ export interface Experiment {
   assessmentOf?: string;
   assessmentTrialIds?: string[];
   evidenceHash?: string;
-  discovery?: DiscoveryRecord;
+  discovery?: unknown;
 }
 export const usageSchema = z.strictObject({ calls: z.number().int().nonnegative(), inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), costUsd: z.number().finite().nonnegative().nullable() });
 const revisionSchema = z.strictObject({ id: text, parentId: text.nullable(), spec: agentSchema, hypothesis: z.string(), createdAt: text });
 export const trialSchema = z.strictObject({
-  diagnosticReceipt: diagnosticReceiptSchema.optional(),
+  diagnosticReceipt: retired,
   checkpoints: z.array(checkpointResultSchema).max(12).optional(), checkpointReceipt: checkpointReceiptSchema.optional(),
   id: identifier, revisionId: text, scenarioId: identifier, familyId: identifier, repeat: z.number().int().nonnegative(),
   userMode: userModeSchema.default('reactive'),
@@ -929,7 +832,7 @@ function validateReviewReferences(reviews: HumanReview[], trials: Trial[], path:
 }
 
 export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
-  generatorConfig:generatorConfigSchema.optional(),generatorIdentity:z.strictObject({configHash:z.string(),protocol:z.string(),protocolHash:z.string()}).optional(),
+  generatorConfig: retired, generatorIdentity: retired,
   runKind: z.enum(['evaluation', 'diagnostic', 'generator']).optional(),
   librarySnapshot: scenarioLibrarySchema.optional(),
   originalImport: z.strictObject({ id: identifier, contentHash: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
@@ -962,7 +865,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   sourceEvidence: z.strictObject({ runId: identifier, parentRunId: identifier.optional(), trials: z.array(trialSchema).max(600), humanReviews: z.array(humanReviewSchema).max(1000),
     identity: z.strictObject({ libraryHash: text.optional(), importHash: text.optional(), targetFingerprint: text.optional(), targetVersion: text.max(200).optional(), evaluatorVersion: text.optional(), manifestHash: text.nullable(),
       agent: text, judge: text, scenarios: z.record(identifier, text).refine(value => Object.keys(value).length <= 200, 'Too many scenario identities') }).optional() }).optional(),
-  discovery: discoveryRecordSchema.optional(),
+  discovery: retired,
 }).superRefine((record, ctx) => {
   record.scenarios.forEach((scenario, index) => {
     if (scenario.checks.some(check => (SIMULATOR_CHECK_IDS as readonly string[]).includes(check.id))) {
@@ -983,8 +886,6 @@ export interface CallContext {
   onGeneratorTransport?(transport:{role:string;provider:string;model:string;api:string;requestedTemperature?:number;effectiveTemperature:number|'provider-default'}):void;
   onGeneratorOutput?(response:{role:string;text:string;attempt?:number;incomplete?:boolean}):void;
   onGeneratorValidation?(validation:{attempt:number;accepted:boolean;reason?:string;outcome?:'syntax'|'schema'|'domain'}):void;
-  diagnosticRequest?: DiagnosticRequest;
-  onDiagnosticReceipt?(receipt: DiagnosticReceipt): void;
   signal: AbortSignal; timeoutMs: number;
   beforeCall(): void;
   addUsage(usage: Omit<Usage, 'calls'>): void;
@@ -1030,7 +931,6 @@ export const proposalSchema = z.strictObject({ agent: agentSchema, hypothesis: t
 export interface ScenarioProposalsInput {
   preparationMode?: 'owner_requirements';
   scenarioCount?: number;
-  generatorConfig?: GeneratorConfig;
   businessCatalog?: Pick<ScenarioLibrary['businessScenarios'][number], 'key' | 'title' | 'goal' | 'conditions' | 'requirementIds'>[];
   feedback?: { proposals: ScenarioProposal[]; issues: { code: string; path: string; message: string }[] };
   protocol: 'chronological-scenarios-v1'; task: string; sources: Source[]; requirements: Requirement[]; batchId?: string;
@@ -1050,9 +950,6 @@ export interface ScenarioAssessmentInput {
 }
 export interface Runtime {
   generatorTransport?:'pi-model'|'deterministic-test';
-  assessGeneratedCase?(input:GeneratedCaseAssessment,ctx:CallContext):Promise<unknown>;
-  generateScenarioCase?(input: {input: GeneratorCaseInput; config: GeneratorConfig}, ctx: CallContext): Promise<unknown>;
-  proposeGeneratorConfig?(input: Parameters<NonNullable<GeneratorAdapter['propose']>>[0],ctx:CallContext):Promise<unknown>;
   assessCheckpoints?(input: CheckpointInput, ctx: CallContext): Promise<unknown[]>;
   selectUserAction?(input: { user: UserView; state: string; actions: AllowedUserAction[]; messages: DialogueMessage[]; turn: number; repair?: string }, ctx: CallContext): Promise<UserDecision>;
   scenarioProposals?(input: ScenarioProposalsInput, ctx: CallContext): Promise<ScenarioProposal[]>;
@@ -1066,7 +963,6 @@ export interface Runtime {
   /** Which articles of a large knowledge base one dialogue needs: the model reads the table of contents, never the bodies. */
   selectSources?(input: SourceSelectionInput, ctx: CallContext): Promise<SourceSelection>;
   failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
-  discover?(input: DiscoveryRuntimeInput, ctx: CallContext): Promise<DiscoveryRuntimeOutput>;
 }
 
 /** Stable JSON content identity; array order remains significant. */

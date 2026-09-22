@@ -7,7 +7,7 @@ import { ExperimentLab, draftHash } from '../dist/experiment.js';
 import { createInputSchema, fingerprint } from '../dist/contracts.js';
 import { createDemoRuntime } from '../dist/demo.js';
 import { libraryHash } from '../dist/scenario-library.js';
-import { evaluateGenerator, loadGeneratorCorpus } from '../dist/generator-evaluation.js';
+import { buildResultView } from '../dist/result-view.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 export const policy = 'Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.';
@@ -96,29 +96,21 @@ export async function verifyScenarioLab(directory) {
     const acceptedHash = libraryHash(accepted.library);
     await lab.start(seeded.runId, { approved: true, expectedHash: draftHash(accepted.experiment) }); await lab.waitForIdle();
     const source = await lab.get(seeded.runId), sourceBytes = await readFile(join(lab.store.directory, `${source.id}.json`), 'utf8');
-    const issue = (await lab.store.readIssues()).find(i => i.kind === 'defect'); assert.ok(issue, JSON.stringify(source.trials));
-    const repeat = await lab.repeat(source.id); await lab.start(repeat.id, { approved: true, expectedHash: draftHash(repeat) }); await lab.waitForIdle();
-    const repeatedIssue = (await lab.store.readIssues()).find(i => i.id === issue.id); assert.ok(repeatedIssue);
-    const plan = await lab.prepareDiagnostic(issue.id, source.id, { kind: 'rag-fragment', sourceId: source.sources[0].id, sourceHash: fingerprint(policy), content: policy, hypothesis: 'Проверить действие доступного правила на повторный запрос номера' }, 2);
-    const diagnostic = await lab.startDiagnostic(plan.id); await lab.waitForIdle(); const diagnosis = await lab.store.readDiagnostic(plan.id);
-    const candidate = await lab.registerCandidate(source.id, { target: target(true), targetVersion: 'demo-fixed-v1' });
-    const resolution = await lab.prepareResolution({ issueId: issue.id, baselineRunId: source.id, candidateRunId: candidate.id, reproducerIds: ['known_number'], regressionIds: ['late_number'], stability: { kind: 'all-pass', repeats: 2 } });
-    const frozen = await lab.store.readResolution(resolution.id); assert.equal(frozen.result, undefined); assert.equal((await lab.get(candidate.id)).trials.length, 0);
-    await lab.startResolution(resolution.id, { approved: true }); await lab.waitForIdle(); const resolved = await lab.resolveIssue(resolution.id);
-    const corpus = await loadGeneratorCorpus(); corpus.cases = corpus.cases.filter(c => c.split === 'dev').slice(0, 2);
-    const generator = await evaluateGenerator(corpus, { config: { instructions: 'Учебный заведомо неполный генератор', temperature: 0 }, transport: 'deterministic-test', async generate(input) { return { facts: input.factCandidates.map(f => ({ id: f.id, availability: 'unavailable' })), applicability: 'unknown', duplicate: 'none', validity: 'unknown', rationale: 'Учебная неполная оценка; улучшение не заявлено' }; } }, false, { store: lab.store, signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} });
-    for (const proof of repeatedIssue.evidence) { const record = await lab.get(proof.runId); assert.ok(record.trials.some(t => t.id === proof.trialId)); }
-    assert.equal((await lab.store.readGeneratorRecord(generator.id)).id, generator.id);
-    assert.equal((await lab.store.readDiagnostic(plan.id)).runId, diagnostic.id);
-    assert.equal((await lab.store.readResolution(resolution.id)).policy.candidateRunId, candidate.id);
+    // The same accepted set against a fixed version of the agent: a new draft; the finished run stays byte-identical.
+    const repeat = await lab.repeat(source.id);
+    const fixedDraft = await lab.updateDraft(repeat.id, draftHash(repeat), { target: target(true), targetVersion: 'demo-fixed-v1' });
+    await lab.start(fixedDraft.id, { approved: true, expectedHash: draftHash(fixedDraft) }); await lab.waitForIdle();
+    const fixed = await lab.get(fixedDraft.id);
+    assert.equal(fixed.phase, 'results_review', fixed.error ?? '');
     assert.equal(await readFile(join(lab.store.directory, `${source.id}.json`), 'utf8'), sourceBytes);
     assert.equal(await readFile(join(lab.store.directory, 'imports', `${source.originalImport.id}.json`), 'utf8'), imported);
     assert.equal(libraryHash(await lab.store.readLibrary(accepted.library.id, acceptedHash)), acceptedHash);
     assert.equal(await readFile(target().path, 'utf8'), adapterBytes);
-    return { evidenceKind: 'deterministic-integration', directory, runId: source.id, repeatRunId: repeat.id, candidateRunId: candidate.id, diagnosisId: plan.id, policyId: resolution.id, generatorId: generator.id,
-      library: { dialogues: draft.library.imports[0].dialogues.length, groups: draft.library.businessScenarios.length, variants: draft.library.variants.length }, ownerReceipt: changed.library.variants[1].history.some(h => h.factEdit?.editId === 'demo_owner_confirmed'), sourceUnchanged: true,
-      issueId: issue.id, repeatedIssueId: repeatedIssue.id, issueAssessmentLinks: repeatedIssue.evidence.length, diagnosis: diagnosis.result.conclusion, diagnosticTrials: (await lab.get(diagnostic.id)).trials.length,
-      policyFrozenBeforeRun: true, defectNoLongerReproduced: resolved.result.defectNoLongerReproduced, candidateAcceptable: resolved.result.candidateAcceptable, generatorCases: generator.cases.length, generatorTransport: generator.transport, persistedLinksResolve: true };
+    const passed = record => { const { headline } = buildResultView(record); return { passed: headline.passed, decided: headline.decided }; };
+    return { evidenceKind: 'deterministic-integration', directory, runId: source.id, repeatRunId: fixed.id,
+      library: { dialogues: draft.library.imports[0].dialogues.length, groups: draft.library.businessScenarios.length, variants: draft.library.variants.length },
+      ownerReceipt: changed.library.variants[1].history.some(h => h.factEdit?.editId === 'demo_owner_confirmed'), sourceUnchanged: true,
+      baseline: passed(source), fixed: passed(fixed), persistedLinksResolve: true };
   } finally { await lab.close(); }
 }
 if (process.argv[1] && await realpath(process.argv[1]) === await realpath(fileURLToPath(import.meta.url))) {

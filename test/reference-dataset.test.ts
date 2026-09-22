@@ -130,32 +130,3 @@ test('the Phase 2 reference corpus is versioned, exact, grounded and label-free'
   }
 });
 
-test('CLI score imports all reference evidence in code-only mode without running any model or agent', async t => {
-  const data = await mkdtemp(join(tmpdir(), 'agent-lab-reference-'));
-  t.after(() => rm(data, { recursive: true, force: true }));
-  const result = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score',
-    '--input', resolve(directory, 'reference.jsonl'), '--task', resolve(directory, 'task.json'),
-    '--code-only', '--json', '--data-dir', data,
-  ], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-
-  const output = JSON.parse(result.stdout);
-  const record = JSON.parse(await readFile(output.artifacts.evidence, 'utf8'));
-  const source = (await readFile(resolve(directory, 'reference.jsonl'), 'utf8')).trim().split(/\r?\n/).map(line => JSON.parse(line));
-  assert.equal(output.imported, 12);
-  assert.equal(record.dialogues.length, 12);
-  assert.equal(record.trials.length, 12);
-  assert.equal(record.usage.calls, 0);
-  assert.match(record.limitations.join('\n'), /агент и симулятор не запускались/i);
-  assert.ok(record.trials.every((trial: Record<string, unknown>) => trial.assessments === undefined
-    && trial.judgeAudit === undefined && trial.externalUsage === undefined));
-  assert.ok(record.trials.every((trial: { events: { type: string }[] }) => trial.events.every(event => event.type === 'user' || event.type === 'assistant')));
-  assert.ok(record.scenarios.every((scenario: { goalObservation?: string }) => scenario.goalObservation === 'reply'));
-  assert.deepEqual(record.scenarios.map((scenario: { metrics: { id: string }[] }) => scenario.metrics.map(metric => metric.id)),
-    Array(12).fill(['prompt_compliance', 'goal_attainment', 'reply_quality']));
-  assert.deepEqual(record.trials.map((trial: { events: unknown[] }) => trial.events), source.map(dialogue =>
-    dialogue.messages.map((message: { role: string; content: string }, seq: number) => ({ seq, type: message.role, text: message.content }))));
-  assert.ok((await stat(output.artifacts.evidence)).size > 0);
-  assert.ok((await stat(output.artifacts.traceJournal)).size > 0);
-  assert.ok((await stat(output.artifacts.snapshot)).size > 0);
-});

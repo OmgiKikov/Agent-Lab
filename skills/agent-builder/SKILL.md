@@ -110,56 +110,8 @@ agent-lab scenarios --id RUN --operation accept --expected-hash HASH --input sel
 
 Изменение библиотеки создаёт новую ревизию; прошлый запуск хранит старый снимок. Добавление синты меняет состав и требует новой сопоставимой базы. `agent_lab_repeat id:RUN` создаёт новый черновик того же набора, `agent_lab_suite` сохраняет/загружает набор, CLI `agent-lab diff --before BEFORE --after AFTER` сравнивает. Изменённые тесты, требования, режим, настройки или оценщик делают сравнение несопоставимым. Это не production accuracy и не гарантия качества модели.
 
-## Постоянная проблема → диагностика → исправление
-
-Новый провал сначала ищите в `agent_lab_issues {operation:"inspect",id:RUN}`. Затем `id:ISSUE` и при необходимости `assessmentId:ASSESSMENT` показывают конкретный снимок оценки и события. `sync` обновляет индекс из прогона, `rebuild` восстанавливает его. Повторы связываются с той же проблемой, без подмены исходной оценки. Название само по себе не доказывает общий механизм; объединение требует решения владельца.
-
-Для проверки одной причины используйте `agent_lab_diagnostics`:
-
-```json
-{"operation":"prepare","input":{"issueId":"ISSUE","sourceRunId":"RUN","repeats":2,"intervention":{"kind":"tool-response","tool":"update_record","call":1,"response":{"ok":true},"hypothesis":"Причина — ответ инструмента"}}}
-{"operation":"inspect","id":"PLAN"}
-{"operation":"run","id":"PLAN"}
-```
-
-Альтернатива — `rag-fragment` с `sourceId`, `sourceHash`, дословным `content` сохранённого источника и `hypothesis`. Адаптер должен поддерживать `paired-intervention-v1`, подтверждать применение и сброс. Неподдерживаемое вмешательство отклоняется без запуска. Парные baseline/intervention используют один снимок и общий бюджет; итог supports/refutes/inconclusive. Диагностика не входит в accuracy и не закрывает дефект.
-
-Для исправления используйте `agent_lab_resolution`, а не новый discovery:
-
-- `operation:"bundle", input:{issueId,sourceRunId}` — минимальный пакет dev-доказательств; контрольные данные туда не входят.
-- `operation:"candidate", input:{sourceRunId,target,targetVersion}` — отдельная версия кода/сервиса с неизменным набором. Исходный агент не заменяется.
-- `operation:"prompt", input:{issueId,sourceRunId,candidate,hypothesis,trialIds}` — предложение промпта по фактически подтверждённым человеком dev-ошибкам. Ответ содержит `file` предложения. Вызовите `agent_lab_prompt {action:"inspect",file:FILE}`, затем `agent_lab_prompt {action:"apply",file:FILE}`: apply показывает diff в native-подтверждении, сам вычисляет reviewHash и возвращает summary с `id` нового черновика. Этот `id` передайте как `candidateRunId` в resolution prepare ДО запуска. Исходный target должен иметь promptFile, а адаптер — применять prompt и подтверждать promptHash. Не подделывайте reviewHash или человеческое подтверждение.
-- `operation:"prepare", input:{issueId,baselineRunId,candidateRunId,reproducerIds,regressionIds,stability:{kind:"all-pass",repeats:2}}` — заранее сохранить ResolutionPolicy. Число повторов совпадает у обоих наборов и не меньше двух; воспроизводящий и регрессионный наборы не пересекаются и вместе покрывают исходный набор.
-- `operation:"inspect", id:POLICY`, затем `operation:"run", id:POLICY` — проверить план и запустить кандидата после native-подтверждения. `agent_lab_resolution {operation:"resolve", id:POLICY}` повторно вычисляет итог по сохранённым доказательствам.
-
-Всегда показывайте два решения: **дефект больше не воспроизводится** и **кандидат можно принять**. Исправленный reproducer при сломанной регрессии даёт да/нет; неполные измерения — null, проблема остаётся checking. Только оба да позволяют resolved. Изменение правила требует свежих прогонов обеих версий. Повторный дефект этой версии открывает проблему снова. CLI: `issues`, `diagnostics`, `resolutions` с теми же `--operation`, `--input`, `--id`; запуск требует `--yes`.
-
-## Генератор сценариев
-
-`agent_lab_generator` оценивает генератор отдельно от испытуемого агента:
-
-```json
-{"operation":"evaluate","request":{"config":{"instructions":"Сохраняйте происхождение фактов","temperature":0},"settings":{"maxCalls":60,"maxDurationMs":180000,"timeoutMs":30000},"controls":true,"caseIds":["p1","v1"]}}
-{"operation":"inspect","id":"GEN"}
-{"operation":"optimize","request":{"config":{"instructions":"Сохраняйте происхождение фактов","temperature":0},"settings":{"maxCalls":120,"maxDurationMs":600000,"timeoutMs":60000},"controls":true,"maxCandidates":1}}
-```
-
-Проверьте реальные ID в `test/fixtures/generator-corpus.json`; `caseIds` разрешён только для evaluate. Укажите выбранные provider/model в settings при необходимости. В CLI `config.json` содержит только внутренний `request`: `{"config":{"instructions":"...","temperature":0},"settings":{"maxCalls":60,"maxDurationMs":180000,"timeoutMs":30000},"controls":true}` — без обёрток operation/request. CLI: `agent-lab generator --operation evaluate|optimize --input config.json --yes`, `inspect --id GEN`, `select --input candidates.json`. Для inspect/select модельные вызовы не нужны. Select получает `candidates` и `history`: только quality ready, нулевые provenanceErrors/applicabilityErrors, validity valid и duplicate none допускаются до ранжирования по покрытию, проблемам и нестабильности. Один fail агента не повышает качество теста.
-
-Минимальная форма select (замените HASH_REAL на фактический 64-символьный hex-хеш содержимого; это не произвольный ID):
-
-```json
-{"operation":"select","candidates":[{"id":"variant_1","contentHash":"HASH_REAL","quality":"ready","provenanceErrors":0,"applicabilityErrors":0,"validity":"valid","duplicate":"none","coverage":["нет номера"],"unmetConditions":1,"reproducibleIssues":0,"instability":0}],"history":[]}
-```
-
-Все счётчики — целые неотрицательные, instability — число 0..1; необязательный targetFailures также счётчик. История уже выбранных случаев: `[{"contentHash":"HASH_PREVIOUS_REAL","coverage":["ранее покрытое условие"]}]`; не оставляйте её пустой при наличии прошлых выборов. Для CLI `candidates.json` содержит только candidates/history, без operation. Полная проверяемая схема: `selectionCandidateSchema`, `selectionHistorySchema`, `generatorSelectionSchema` в [описании типов генератора](../../dist/generator-evaluation.d.ts).
-
-Корпус: 24 вымышленных примера с **разметкой разработчика**, 16 dev и 8 holdout; это не экспертная сертификация. Оптимизатор меняет ограниченную текстовую конфигурацию, не веса модели и не промпт агента. Один вызов `optimize` сам выполняет весь порядок: dev-оценка → ограниченные предложения/отбор → заморозка финальной конфигурации → holdout. Не организуйте отдельный повторный evaluate уже использованного holdout. Предложения видят только dev; финальная конфигурация фиксируется до holdout, использованный holdout нельзя повторно выдавать за новый. Отчёт различает ошибки происхождения/применимости/дублей, unknown, контрольные дефекты и реальный transport. Успешный протокол не доказывает улучшение генератора; отсутствие измерения не означает успех.
-
-## Ограничения доказательств и дополнительный discovery
 
 Смысловой судья цитирует неизменную трассу; два согласованных решения не доказывают калибровку. Действие подтверждается наблюдаемым состоянием или полными событиями инструментов, не обещанием агента. Нет наблюдения — unknown. Фактический RAG-контекст передавайте как retrievals с дословным content; retrievalsComplete:true допустим только для полного контекста данного ответа. Вся база знаний не является свидетельством retrieval. RAG-диагностики отдельны от основного показателя.
 
-`agent_lab_build mode:"discover"` — дополнительный поиск одного полезного regression-теста по запросу владельца. После сохранённого brief с «Проверим?» и явного ответа «да» передайте точные `fromRunId`/`hypothesis` в тот же build mode; покажите целиком полученный тест, затем `agent_lab_accept` и отдельный `agent_lab_run`. Недостаточные данные, отказ или исчерпание бюджета не дают права выдумать гипотезу. Не заменяйте этим путём существующую постоянную проблему и проверку исправления.
 
 Полезный результат — проверенный принятый набор, исполнение через реальный TargetSession, понятные доказательства с не измеренными случаями и сохранённый повторяемый набор. Учебный запуск проверяет механику; модельный эксперимент, native-навигация и субъективная приёмка владельца — разные виды доказательств.

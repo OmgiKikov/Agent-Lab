@@ -1,4 +1,3 @@
-import { diagnosticReceiptSchema } from './diagnostic-contracts.js';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, readFile, stat } from 'node:fs/promises';
@@ -125,7 +124,6 @@ export const externalReplySchema = z.union([
   z.string().max(20000),
   z.strictObject({
     reply: z.string().max(20000),
-    diagnosticReceipt: diagnosticReceiptSchema.optional(),
     measurementError: z.string().trim().min(1).max(2000).optional(),
     /** Exact chunks supplied to the model for this reply; Agent Lab persists them as cited trace evidence. */
     retrievals: z.array(z.strictObject({
@@ -163,12 +161,6 @@ type SessionInput<K extends ExternalTargetInput['target']['kind']> = Omit<Extern
 function applyReply(raw: unknown, state: World, ctx: CallContext, onRecords?: () => void, onReply?: ExternalTargetInput['onReply']): string {
   const parsed = externalReplySchema.safeParse(raw);
   if (!parsed.success) throw new Error(`External agent reply does not match the contract: ${parsed.error.issues.map(i => i.path.join('.') || 'reply').join(', ')}`);
-  if (ctx.diagnosticRequest) {
-    const request = ctx.diagnosticRequest, receipt = typeof parsed.data === 'string' ? undefined : parsed.data.diagnosticReceipt;
-    if (!receipt || receipt.requestHash !== request.requestHash || receipt.arm !== request.arm || receipt.factorHash !== request.factorHash || request.arm === 'baseline' && receipt.appliedCount !== 0) throw new Error('Адаптер не подтвердил диагностическое вмешательство (diagnosticReceipt).');
-    ctx.onDiagnosticReceipt?.(receipt);
-    ctx.onTargetEvent?.({ type: 'observation', result: { diagnosticReceipt: receipt } });
-  }
   onReply?.(parsed.data);
   if (typeof parsed.data === 'string') return parsed.data;
   const { reply, retrievals, events, records, measurementError } = parsed.data;
@@ -200,7 +192,7 @@ async function httpSession(input: SessionInput<'http'>): Promise<TargetSession> 
       try {
         response = await fetch(target.url, {
           method: 'POST', headers, signal,
-          body: JSON.stringify({ sessionId, scenarioId, initialState, diagnosticRequest: ctx.diagnosticRequest, messages: history(), message, ...(input.prompt !== undefined ? { prompt: input.prompt, promptHash: fingerprint(input.prompt) } : {}) }),
+          body: JSON.stringify({ sessionId, scenarioId, initialState, messages: history(), message, ...(input.prompt !== undefined ? { prompt: input.prompt, promptHash: fingerprint(input.prompt) } : {}) }),
         });
       } catch (error) {
         if (ctx.signal.aborted) throw ctx.signal.reason;
@@ -297,7 +289,7 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
   };
   const session: TargetSession = {
     async respond(message) {
-      const body = await exchange({ type: 'respond', sessionId, scenarioId, initialState, diagnosticRequest: ctx.diagnosticRequest, messages: history(), message, ...(input.prompt !== undefined ? { prompt: input.prompt, promptHash: fingerprint(input.prompt) } : {}) });
+      const body = await exchange({ type: 'respond', sessionId, scenarioId, initialState, messages: history(), message, ...(input.prompt !== undefined ? { prompt: input.prompt, promptHash: fingerprint(input.prompt) } : {}) });
       return applyReply(body, state, ctx, input.onRecords, input.onReply);
     },
     async close() {
@@ -316,7 +308,7 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
     },
   };
   if (input.initialize) {
-    try { await exchange({ type: 'open', sessionId, scenarioId, initialState, diagnosticRequest: ctx.diagnosticRequest, prompt: input.prompt, promptHash: input.prompt === undefined ? undefined : fingerprint(input.prompt) }); }
+    try { await exchange({ type: 'open', sessionId, scenarioId, initialState, prompt: input.prompt, promptHash: input.prompt === undefined ? undefined : fingerprint(input.prompt) }); }
     catch (error) { kill(); await session.close(); throw error; }
   }
   return session;
@@ -330,11 +322,6 @@ export async function readPrompt(file: string): Promise<string> {
   return prompt;
 }
 export async function openExternalTarget(input: ExternalTargetInput): Promise<TargetSession> {
-  const request = input.ctx.diagnosticRequest;
-  if (request) {
-    const capabilities = input.target.diagnosticCapabilities;
-    if (capabilities?.protocol !== request.protocol || !(request.intervention.kind === 'tool-response' ? capabilities.toolResponse : capabilities.ragFragment)) throw new Error('Адаптер не объявил поддержку диагностического вмешательства.');
-  }
   if (input.target.promptFile) {
     const prompt = await readPrompt(input.target.promptFile);
     const original = input.onReply;

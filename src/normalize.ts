@@ -53,23 +53,6 @@ export function sourceIdentity(record: Experiment, scenarioIds: string[]): Sourc
   };
 }
 
-/**
- * Settings of a score run, shared by the CLI and Pi so the same dialogues get the same budget, judge and timeout.
- * The budget grows with the number of recorded dialogues; the owner's explicit values win.
- * `repeats: 1` and `userModes: ['scripted']` are forced last: they describe how imported recordings were made
- * (one scripted attempt each), not an owner choice, and `goalCardOutcome` needs them to count a judged card.
- */
-export function scoreSettings(dialogueCount: number, supplied: Partial<Settings>, mode: 'live' | 'demo'): Partial<Settings> {
-  return {
-    maxCalls: Math.min(3000, Math.max(20, 8 * dialogueCount)),
-    maxDurationMs: Math.min(14_400_000, Math.max(180_000, 120_000 * dialogueCount)),
-    timeoutMs: 600_000,
-    ...(mode === 'live' ? { judge: { ...DEFAULT_JUDGE } } : {}),
-    ...supplied,
-    repeats: 1,
-    userModes: ['scripted'],
-  };
-}
 
 /** Exact target identity for scoped defect closure; never assume revision zero. */
 export function resolutionTargetIdentity(record: Experiment, revisionId = record.selectedRevisionId ?? record.revisions[0]?.id): string {

@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { checkSchema, emptyUsage, experimentSchema, fingerprint, settingsSchema, targetSchema, worldSchema, type Experiment, type Runtime, type Scenario, type Target } from './contracts.js';
@@ -7,6 +6,7 @@ import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
 import { sourceIdentity } from './normalize.js';
 import { preflightTarget } from './targets.js';
+import { writeFileAtomic } from './fs-atomic.js';
 
 const step = z.strictObject({ message: z.string().trim().min(1).max(3000), reply: z.string().min(1).max(8000) });
 export const probeSchema = z.strictObject({
@@ -63,9 +63,7 @@ export async function rememberConnection(directory: string, connection: Connecti
   if (!connection.probe && previous?.probe && fingerprint(previous.target) === fingerprint(connection.target)) connection = { ...connection, probe: previous.probe };
   const path = resolve(directory, 'connection.local.json');
   await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(connectionSchema.parse({ ...connection, verifiedAt: new Date().toISOString() }), null, 2) + '\n', { mode: 0o600 });
-  await rename(temporary, path);
+  await writeFileAtomic(path, JSON.stringify(connectionSchema.parse({ ...connection, verifiedAt: new Date().toISOString() }), null, 2) + '\n');
 }
 
 export async function listSuites(directory: string) {

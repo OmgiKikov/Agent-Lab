@@ -1,11 +1,3 @@
-import {generatorConfigSchema} from '../src/generator-corpus.js';
-import {generatorSummary, selectNextVariants, generatorSelectionSchema} from '../src/generator-evaluation.js';
-import {generatorRequestSchema} from '../src/generator-service.js';
-import { resolutionRequestSchema } from '../src/resolution.js';
-import { compactIssues, compactDiagnostic, resolutionText, resolutionRunText, compactResolution, compactFixBundle } from '../src/issue-view.js';
-import { showIssueWorkspace } from './issues.ts';
-import { diagnosticPreparationSchema } from '../src/diagnostics.js';
-import { issueDecisionSchema } from '../src/issues.js';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -14,24 +6,22 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme, ToolDefini
 import { Text, type Component } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { z } from 'zod';
-import { ExperimentLab, draftHash, planDiscovery, resultHash } from '../src/experiment.js';
-import { agentSchema, createInputSchema, discoverInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, goldenCaseSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput } from '../src/contracts.js';
+import { ExperimentLab, draftHash, resultHash } from '../src/experiment.js';
+import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, goldenCaseSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput } from '../src/contracts.js';
 import { awaitingVerdict, cardVerdict, evidenceSummary, headlineCardOutcome, plannedTrials } from '../src/comparison.js';
 import { judgeAgreement } from '../src/agreement.js';
 import { markTargets } from '../src/outcomes.js';
-import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from '../src/quality.js';
+import { expectationSheet, qualityLines, qualitySummary, testPlanLines, trialProofLines } from '../src/quality.js';
 import { demoEvaluationInput, demoInput } from '../src/demo.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
 import { agreementSectionLines, allFailuresPointer, buildResultView, causeSection, resultViewLines, SECTION_TEXT, type ResultView } from '../src/result-view.js';
 import { rowsToLines } from '../src/explain.js';
-import { scoreSettings } from '../src/normalize.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../src/connection.js';
-import { inspectPrompt, promptVersion, proposePrompt } from '../src/prompt-edit.js';
 import { readData, selectValidationDialogues, readDialogueImport, importDialogues } from '../src/imports.js';
 import { expandMaterials } from '../src/materials.js';
 import { MATERIAL_CHARS, MATERIAL_LIMIT } from '../src/limits.js';
 import { ExperimentStore } from '../src/store.js';
-import { libraryHash, resolutionHash } from '../src/scenario-library.js';
+import { libraryHash } from '../src/scenario-library.js';
 import { semanticWorkStatus } from '../src/scenario-work.js';
 import { activePhases, reviewOrder, safeText, showBoard, trialLines, type BoardAction, type BoardOptions, type Section } from './cards.ts';
 import { scenarioErrorText, scenarioLibrarySummary } from './scenarios.ts';
@@ -142,15 +132,6 @@ function summary(record: Experiment, directory: string, view?: ResultView) {
   };
 }
 
-const renderScoreBrief = (brief: ScoreBrief): string => brief.status === 'insufficient'
-  ? `${brief.heading}\n${brief.body}`
-  : [
-    'ТРЕБОВАНИЯ', ...brief.requirements.map(item => `• ${safeText(item)}`), '',
-    'НАБЛЮДАЕМОЕ', ...brief.observations.map(item => `• ${safeText(item)}`), '',
-    'НЕИЗВЕСТНО', ...brief.unknowns.map(item => `• ${safeText(item)}`), '',
-    'ГИПОТЕЗА', safeText(brief.hypothesis), '', brief.question,
-  ].join('\n');
-
 async function humanAnnotation(ctx: ExtensionContext, record: Experiment, selected: number, readingMs = 0, reviewTimes?: Map<string, number>): Promise<HumanReviewInput[] | undefined> {
   const started = performance.now();
   const trial = reviewOrder(record)[selected];
@@ -211,8 +192,8 @@ Acceptance and run are two separate owner decisions. The owner selects ready var
 A long run continues in the background: the conversation stays free, progress above the input comes from stored data, and the result arrives as a message. Esc interrupts your current action, not the run; stop a run only when the owner asks, with agent_lab_run action:"stop", then say what was saved and that a repeat runs every attempt again. A long preparation of scenarios (agent_lab_build) is handed over the same way: the scenarios arrive as a message, so never wait for it or poll; agent_lab_run action:"progress" and action:"stop" work for it too, and stopping it keeps the partial draft.
 
 Results: after separate native execution confirmation, lead with one estimated card accuracy number on the accepted set, grounded failure causes, separate metrics and limits, and keep measured and unmeasured counts visible; save the suite when useful. When a run ends, the block already shows the accuracy and each main cause with what was expected, what the agent said and the owner rule. Close the run yourself in three to five plain sentences: the accuracy number, where the agent limps and why (the pattern across failures: what clients asked, what the agent did instead, which owner rule that breaks), what it handles well, and how far the number can be trusted. Do not copy the block's rows. agent_lab_agree records the owner's own agreement or disagreement with the judge about one situation (the owner answers in a native dialog; you never supply the answer) — offer it after showing a failure, because it is what makes the number trustworthy. agent_lab_inspect failure:N opens a failure with its dialogue, expectation and owner rule; dialogue opens any recorded dialogue; compare:true compares a repeat with its source run. «Повтори этот случай на новой версии и сравни» is agent_lab_repeat with the cards by title or number, then agent_lab_run, then agent_lab_inspect compare:true. This is accuracy on the validation set, never a calibrated production guarantee.
+Execution consent remains separate from accepting a test and from reviewing results. Preserve budgets and model, cite actual event IDs, never invent a human verdict, and do not modify an external agent unless the user asked to fix it.`;
 
-To mine one new regression test, call agent_lab_build mode=discover. Discovery selects evidence, proposes one saved hypothesis and ends with literal Проверим?. It is selection, not an accuracy estimate. Show that saved brief exactly; do not reconstruct or paraphrase it. If the owner answers yes, call mode=discover again with the exact fromRunId and hypothesis; it re-reads the saved evidence and builds exactly one editable test. A refusal or correction builds nothing. Use agent_lab_accept for this supplemental one-test flow: show what the agent must do, and let the owner confirm or correct it in their own words. agent_lab_run asks to confirm expectations first when they are not confirmed. Execution consent remains separate from accepting a test and from reviewing results. Preserve budgets and model, cite actual event IDs, never invent a human verdict, and do not modify an external agent unless the user asked to fix it.`;
 
 /** A schema error in the owner's language: which field and what is wrong, never a raw issue dump. */
 function plainInputError(error: unknown): Error {
@@ -466,16 +447,6 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     const result = { content: [{ type: 'text' as const, text: isFeedDetails(message.details) ? message.details.note : text }], details: message.details };
     return renderFeedResult(result, { expanded: renderOptions.expanded, isPartial: false }, theme, (r, o, t) => renderAgentLabResult(r, o, t, legacyResult));
   });
-  pi.registerTool({...displayFor('agent_lab_generator'),name:'agent_lab_generator',label:'Качество генератора',description:'Отдельная оценка/ограниченная оптимизация генератора. Не меняет принятые наборы и промпт агента. inspect/select не расходуют модельный бюджет.',
-    parameters:Type.Object({operation:Type.Union(['evaluate','optimize','select','inspect'].map(value=>Type.Literal(value))),id:Type.Optional(Type.String()),
-      request:Type.Optional(Type.Unsafe(z.toJSONSchema(generatorRequestSchema,{io:'input'}))),candidates:Type.Optional(Type.Unsafe<z.input<typeof generatorSelectionSchema.shape.candidates>>(z.toJSONSchema(generatorSelectionSchema.shape.candidates))),history:Type.Optional(Type.Unsafe<z.input<typeof generatorSelectionSchema.shape.history>>(z.toJSONSchema(generatorSelectionSchema.shape.history)))}),
-    async execute(_toolCallId,params,_signal,_onUpdate,ctx){
-      let result:unknown;
-      if(params.operation==='select')result=selectNextVariants(params.candidates,params.history);
-      else if(params.operation==='inspect'){if(!params.id)throw new Error('Укажите id записи генератора.');result=generatorSummary(await new ExperimentStore(resolve(ctx.cwd,'.agent-lab')).readGeneratorRecord(params.id));}
-      else {if(!params.request)throw new Error('Нужны config и ограниченные settings.');const {lab,close}=await open(ctx.cwd);try{await lab.init();result=generatorSummary(params.operation==='evaluate'?await lab.evaluateGenerator(generatorRequestSchema.parse(params.request),{signal:_signal}):await lab.optimizeGenerator(generatorRequestSchema.parse(params.request),{signal:_signal}));}finally{await close();}}
-      return {content:[{type:'text',text:JSON.stringify(result)}],details:result};
-    }});
   pi.on('session_start', async (_event, ctx) => {
     if (process.env.AGENT_LAB_SESSION !== '1' || !ctx.hasUI || ctx.mode !== 'tui') return;
     ctx.ui.setTitle(`Agent Lab · ${ctx.cwd.split('/').at(-1)}`);
@@ -492,34 +463,29 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   pi.registerTool({
     ...displayFor('agent_lab_build'),
     name: 'agent_lab_build', label: 'Prepare agent and business-scenario tests',
-    description: 'Prepare agent checks. mode=validate selects up to 15 measurable prompt/RAG cases from up to 300 de-identified dialogues, grounds expectations in owner requirements and gives user facts to a reactive simulator; unavailable customer data and masked-only utterances are excluded. It does not run the agent. mode=discover mines one regression hypothesis. mode=score evaluates recorded replies without running the agent. mode=demo is the built-in example.',
+    description: 'Prepare agent checks. mode=validate selects up to 15 measurable prompt/RAG cases from up to 300 de-identified dialogues, grounds expectations in owner requirements and gives user facts to a reactive simulator; unavailable customer data and masked-only utterances are excluded. It does not run the agent. mode=demo is the built-in example.',
     parameters: Type.Object({
       task: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
       materials: Type.Optional(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 180 }), content: Type.String({ minLength: 1, maxLength: MATERIAL_CHARS }), kind: Type.Optional(Type.Union([Type.Literal('knowledge'), Type.Literal('prompt')], { description: "'prompt' marks the agent's own system prompt: observable rules are extracted from it and every generated card gets the prompt_compliance rubric" })) }, { additionalProperties: false }), { minItems: 1, maxItems: MATERIAL_LIMIT, description: 'Short materials written inline. For files and folders use materialFiles/promptFiles instead of pasting their text: Lab reads them whole.' })),
       materialFiles: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), { maxItems: 50, description: 'Knowledge articles: paths of files (.docx, .md, .txt, .html) or folders, absolute or relative to the project. Lab reads every file itself, verbatim; pass the path the owner named, never a retyped excerpt. Hundreds of articles are fine: for each dialogue the model picks the relevant ones from the table of contents.' })),
       promptFiles: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), { maxItems: 20, description: "Files holding the agent's own system prompt(s) (kind 'prompt'), read whole by Lab." })),
-      generatorConfig:Type.Optional(Type.Unsafe(z.toJSONSchema(generatorConfigSchema,{io:'input'}))),
       existingAgent: Type.Optional(Type.Unsafe(z.toJSONSchema(agentSchema))),
       settings: Type.Optional(Type.Unsafe(z.toJSONSchema(settingsSchema, { io: 'input' }))),
       scenarioCount: Type.Optional(Type.Integer({ minimum: 0, maximum: SCENARIO_LIMIT })),
       validationCount: Type.Optional(Type.Integer({ minimum: 1, maximum: SCENARIO_LIMIT, description: 'Cards in mode=validate; defaults to 15.' })),
       connectionFile: Type.Optional(Type.String()), goldenFile: Type.Optional(Type.String()), dialoguesFile: Type.Optional(Type.String()),
       withoutDialogues: Type.Optional(Type.Boolean({ description: 'Set true only when the user explicitly chose to start without real dialogues. Otherwise ask for optional JSON/JSONL logs before building a live run.' })),
-      codeOnly: Type.Optional(Type.Boolean({ description: 'With mode=score, preserve recorded facts without any model calls.' })),
       target: Type.Optional(Type.Unsafe(z.toJSONSchema(targetSchema, { io: 'input' }))),
       targetVersion: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Agent release, commit or remote deployment version.' })),
       goldenCases: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(goldenCaseSchema).max(40), { io: 'input' }))),
       dialogues: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(z.json()).max(300), { io: 'input' }))),
       notes: Type.Optional(Type.String({ maxLength: 8000, description: "The owner's own hints about users, goals and situations, in their words. First-class input for synthetic cards; never treated as a business rule." })),
       profiles: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(ownerProfileSchema).max(6), { io: 'input' }))),
-      fromRunId: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$', description: 'Exact saved discovery run returned by the previous mode=discover call.' })),
-      resumeRunId: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$', description: 'Safely interrupted discovery run to continue after native budget confirmation. Do not combine with fromRunId or hypothesis.' })),
-      hypothesis: Type.Optional(Type.String({ minLength: 1, maxLength: 3000, description: 'Exact saved hypothesis returned by the previous mode=discover call.' })),
-      mode: Type.Optional(Type.Union([Type.Literal('live'), Type.Literal('demo'), Type.Literal('score'), Type.Literal('discover'), Type.Literal('validate')])),
+      mode: Type.Optional(Type.Union([Type.Literal('live'), Type.Literal('demo'), Type.Literal('validate')])),
     }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(callId, params, toolSignal, onUpdate, ctx) {
-      const { goldenFile, dialoguesFile, connectionFile, withoutDialogues, codeOnly, fromRunId, resumeRunId, hypothesis, materialFiles, promptFiles, ...rest } = params;
+      const { goldenFile, dialoguesFile, connectionFile, withoutDialogues, materialFiles, promptFiles, ...rest } = params;
       const operation = rest.mode ?? 'live';
       const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
       signal.throwIfAborted();
@@ -532,90 +498,19 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         for (const item of expanded.skipped.slice(0, 20)) materialNotes.push(`Пропущен ${item.file}: ${item.reason}.`);
         if (expanded.skipped.length > 20) materialNotes.push(`…и ещё ${expanded.skipped.length - 20} пропущенных файлов.`);
       }
-      if (operation !== 'discover' && (fromRunId || resumeRunId || hypothesis)) throw new Error('fromRunId, resumeRunId и hypothesis используются только с mode=discover.');
-      if (resumeRunId && (fromRunId || hypothesis)) throw new Error('resumeRunId нельзя совмещать с fromRunId или hypothesis.');
-      if (operation === 'discover' && fromRunId) {
-        if (!hypothesis) throw new Error('После ответа владельца передайте точную сохранённую hypothesis вместе с fromRunId.');
-        const { lab, close } = await open(ctx.cwd);
-        try {
-          await lab.init();
-          const started = await lab.buildFromDiscovery(fromRunId, hypothesis);
-          await lab.waitForIdle();
-          const record = await lab.get(started.id);
-          if (record.phase !== 'review') throw new Error(record.error ?? 'Не удалось собрать тест из сохранённого discovery.');
-          const testPlan = testPlanLines(record);
-          const output = { ...summary(record, lab.store.directory), fromRunId, confirmedHypothesis: hypothesis,
-            builtTests: record.scenarios.length, accepted: false, agentRun: false,
-            brief: testPlan.lines.join('\n'), testPlan,
-            nextStep: 'Покажите владельцу полный тест и используйте agent_lab_accept только для его явного принятия.' };
-          returnToBoard(ctx, record.id);
-          return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
-        } finally { await close(); }
-      }
-      if (operation === 'discover' && resumeRunId) {
-        if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для возобновления discovery нужен native Pi confirmation в интерактивном терминале. CLI: discover-resume --id RUN --yes.');
-        const source = await new ExperimentStore(resolve(ctx.cwd, '.agent-lab')).get(resumeRunId);
-        if (!source.discovery) throw new Error('Указанный run не является discovery.');
-        const callsUsed = Math.max(source.usage.calls, source.discovery.callsUsed);
-        const maxCalls = source.discovery.callPlan.maxCalls;
-        const maxDurationMs = source.discovery.callPlan.maxDurationMs;
-        if (source.discovery.callPlan.legacyBudgetMissing) throw new Error('Старая discovery-запись не содержит исходный бюджет; начните новый discovery run.');
-        if (source.discovery.activeCall) throw new Error(`Discovery остановился во время модельного вызова «${source.discovery.activeCall}»; безопасное возобновление невозможно.`);
-        if (['ready', 'insufficient'].includes(source.discovery.phase)) throw new Error('Этот discovery run не требует возобновления.');
-        if (callsUsed >= maxCalls) throw new Error('Бюджет discovery исчерпан; найденные доказательства сохранены.');
-        const planText = safeText([
-          `Статус: ${source.discovery.phase}.`,
-          `Вызовы: ${callsUsed}/${maxCalls}; осталось не более ${Math.max(0, maxCalls - callsUsed)}.`,
-          `Сохранённый общий лимит времени: до ${Math.ceil(maxDurationMs / 1000)} секунд (это не обещание оставшегося времени).`,
-          'Продолжить сохранённый отбор кандидатов? Агент и симулятор не запускаются.',
-        ].join('\n'));
-        if (!await ctx.ui.confirm('Возобновить discovery?', planText)) {
-          const output = { status: 'cancelled', calls: 0, mutated: false, resumeRunId,
-            discoveryStatus: source.discovery.phase, callsUsed, maxCalls, remainingCalls: Math.max(0, maxCalls - callsUsed), maxDurationMs };
-          return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
-        }
-        signal.throwIfAborted();
-        const { lab, close } = await open(ctx.cwd);
-        const cancel = () => { void lab.cancel(resumeRunId).catch(() => {}); };
-        try {
-          await lab.init(); signal.addEventListener('abort', cancel, { once: true }); signal.throwIfAborted();
-          onUpdate?.({ content: [{ type: 'text', text: 'Продолжаю поиск проверяемого сигнала…' }], details: { phase: 'discovery' } });
-          await lab.resumeDiscovery(resumeRunId);
-          if (signal.aborted) cancel();
-          await lab.waitForIdle();
-          const record = await lab.get(resumeRunId);
-          const projected = discoveryBrief(record);
-          const output = { id: record.id, phase: projected.status, resumed: true,
-            plan: { dialogueCount: source.discovery.totalDialogues, batches: source.discovery.callPlan.batches,
-              selectedCap: source.discovery.callPlan.selectedCap, nominalCalls: source.discovery.callPlan.nominalCalls,
-              maxCalls, maxDurationMs },
-            brief: projected.lines.join('\n'), discovery: projected,
-            ...(projected.fromRunId && projected.hypothesis ? { fromRunId: projected.fromRunId, hypothesis: projected.hypothesis } : {}),
-            agentRun: false, accepted: false };
-          returnToBoard(ctx, record.id);
-          return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
-        } finally { signal.removeEventListener('abort', cancel); await close(); }
-      }
-      if (operation === 'discover' && hypothesis) throw new Error('Для точной сборки из discovery нужны и fromRunId, и hypothesis.');
-      if (operation === 'score') onUpdate?.({ content: [{ type: 'text', text: 'Читаю требования и записи…' }], details: { phase: 'reading' } });
       let dialogues: unknown;
-      const libraryImport = !['score', 'discover', 'demo'].includes(operation) && (dialoguesFile || rest.dialogues)
+      const libraryImport = operation !== 'demo' && (dialoguesFile || rest.dialogues)
         ? dialoguesFile ? await readDialogueImport(resolve(ctx.cwd, dialoguesFile)) : importDialogues(rest.dialogues) : undefined;
-      try { dialogues = libraryImport ? libraryImport.dialogues.slice(0, ['discover', 'validate'].includes(operation) ? 300 : 200) : (dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues', { maxItems: ['discover', 'validate'].includes(operation) ? 300 : 200 }) : rest.dialogues); }
+      try { dialogues = libraryImport ? libraryImport.dialogues.slice(0, operation === 'validate' ? 300 : 200) : (dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues', { maxItems: operation === 'validate' ? 300 : 200 }) : rest.dialogues); }
       catch (error) {
-        if (!['score', 'discover', 'validate'].includes(operation)) throw error;
+        if (operation !== 'validate') throw error;
         throw new Error(safeText(`Не удалось прочитать записи: ${error instanceof Error ? error.message : String(error)}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`));
       }
       let parsedDialogues: z.infer<typeof dialogueSchema>[];
-      try { parsedDialogues = z.array(dialogueSchema).max(['discover', 'validate'].includes(operation) ? 300 : 200).parse(dialogues ?? []); }
+      try { parsedDialogues = z.array(dialogueSchema).max(operation === 'validate' ? 300 : 200).parse(dialogues ?? []); }
       catch (error) {
-        if (!['score', 'discover', 'validate'].includes(operation)) throw error;
+        if (operation !== 'validate') throw error;
         throw new Error(safeText(`Не удалось прочитать записи: ${error instanceof Error ? error.message : String(error)}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`));
-      }
-      if (operation === 'discover' && !parsedDialogues.length) {
-        const output = { status: 'needs_input', message: 'Для discovery укажите JSON/JSONL с обезличенными реальными диалогами.',
-          nextStep: 'Ask for dialoguesFile or dialogues, then call mode=discover again.' };
-        return { content: [{ type: 'text', text: JSON.stringify(output) }], details: output };
       }
       if (operation === 'validate' && !parsedDialogues.length && !libraryImport?.originalImport.dialogues.length) throw new Error('Для validation set укажите JSON/JSONL с обезличенными реальными диалогами.');
       if (operation !== 'demo' && !parsedDialogues.length && !libraryImport?.originalImport.dialogues.length && withoutDialogues !== true) {
@@ -623,12 +518,6 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           nextStep: 'Ask the user in ordinary language. Import their supplied dialoguesFile/dialogues, or set withoutDialogues=true after their explicit choice to skip. Do not silently skip or search unrelated logs.' };
         return { content: [{ type: 'text', text: JSON.stringify(output) }], details: output };
       }
-      if (operation === 'score' && !parsedDialogues.length) {
-        const output = { status: 'insufficient', dialogueCount: 0,
-          brief: 'Недостаточно данных для гипотезы\nДобавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.' };
-        return { content: [{ type: 'text', text: JSON.stringify(output) }], details: output };
-      }
-      if (operation === 'score' && !codeOnly && (!ctx.hasUI || ctx.mode !== 'tui')) throw new Error('Для модельной оценки нужен native Pi confirmation в интерактивном терминале.');
       const supplied = (rest.settings ?? {}) as Partial<z.infer<typeof settingsSchema>>;
       const sourceDialogueCount = libraryImport?.originalImport.dialogues.length ?? parsedDialogues.length;
       const validationCount = operation === 'validate' ? rest.validationCount ?? 15 : 0;
@@ -637,63 +526,17 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         if (!parsedDialogues.length && !libraryImport?.originalImport.dialogues.length) throw new Error('В логах нет пригодных диалогов с 1–16 репликами пользователя без полностью замаскированных реплик.');
         if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для сборки validation set нужен native Pi confirmation в интерактивном терминале.');
       }
-      if (operation === 'discover') {
-        if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для discovery нужен native Pi confirmation в интерактивном терминале.');
-        const connection = connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
-        const input = discoverInputSchema.parse({ task: rest.task, materials: rest.materials, existingAgent: rest.existingAgent,
-          target: connection?.target ?? projectTarget(rest.target, ctx.cwd), targetVersion: connection?.targetVersion ?? rest.targetVersion,
-          dialogues: parsedDialogues, notes: rest.notes, mode: 'live',
-          settings: { repeats: 1, maxCalls: 20, maxDurationMs: 180000, judge: DEFAULT_JUDGE, ...supplied,
-            provider: supplied.provider || ctx.model?.provider || '', model: supplied.model || ctx.model?.id || '' } });
-        const plan = planDiscovery(input);
-        const planText = safeText([
-          `${input.dialogues.length} диалогов · ${plan.batchCount} партий первичного разбора.`,
-          `Подробно проверить: до ${plan.selectedCap}.`,
-          `План: ${plan.nominalCalls} модельных вызовов; потолок: ${plan.maxCalls}; время: до ${Math.ceil(plan.maxDurationMs / 1000)} секунд.`,
-          'Это отбор кандидатов, не оценка accuracy. Агент и симулятор не запускаются.',
-        ].join('\n'));
-        if (!await ctx.ui.confirm('Найти полезный тест в записанных диалогах?', planText)) {
-          const output = { status: 'cancelled', calls: 0, mutated: false,
-            plan: { dialogueCount: input.dialogues.length, batches: plan.batchCount, selectedCap: plan.selectedCap, nominalCalls: plan.nominalCalls,
-              maxCalls: plan.maxCalls, maxDurationMs: plan.maxDurationMs } };
-          return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
-        }
-        signal.throwIfAborted();
-        const { lab, close } = await open(ctx.cwd);
-        let id: string | undefined;
-        const cancel = () => { if (id) void lab.cancel(id).catch(() => {}); };
-        try {
-          await lab.init(); signal.addEventListener('abort', cancel, { once: true }); signal.throwIfAborted();
-          onUpdate?.({ content: [{ type: 'text', text: 'Ищу повторяющийся проверяемый сигнал…' }], details: { phase: 'discovery' } });
-          id = (await lab.discover(input)).id;
-          if (signal.aborted) cancel();
-          await lab.waitForIdle();
-          const record = await lab.get(id);
-          const projected = discoveryBrief(record);
-          const output = { id: record.id, phase: projected.status,
-            plan: { dialogueCount: input.dialogues.length, batches: plan.batchCount, selectedCap: plan.selectedCap, nominalCalls: plan.nominalCalls,
-              maxCalls: plan.maxCalls, maxDurationMs: plan.maxDurationMs },
-            brief: projected.lines.join('\n'), discovery: projected,
-            ...(projected.fromRunId && projected.hypothesis ? { fromRunId: projected.fromRunId, hypothesis: projected.hypothesis } : {}),
-            agentRun: false, accepted: false };
-          returnToBoard(ctx, record.id);
-          return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
-        } finally { signal.removeEventListener('abort', cancel); await close(); }
-      }
       const mode = operation === 'demo' ? 'demo' : 'live';
       const connection = mode === 'demo' ? undefined : connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
       let input: z.infer<typeof createInputSchema>;
       try { input = createInputSchema.parse({
-        ...(mode === 'demo' ? demoEvaluationInput() : {}), ...rest, ...(rest.target ? { target: projectTarget(rest.target, ctx.cwd) } : {}), scenarioCount: ['score', 'validate'].includes(operation) ? 0 : rest.scenarioCount ?? (mode === 'demo' ? 3 : 1),
+        ...(mode === 'demo' ? demoEvaluationInput() : {}), ...rest, ...(rest.target ? { target: projectTarget(rest.target, ctx.cwd) } : {}), scenarioCount: operation === 'validate' ? 0 : rest.scenarioCount ?? (mode === 'demo' ? 3 : 1),
         ...(operation === 'validate' ? { validationCount } : {}), mode, workflow: 'evaluate',
         ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
         ...(goldenFile ? { goldenCases: await readData(resolve(ctx.cwd, goldenFile), 'golden') } : {}),
         ...(dialogues !== undefined ? { dialogues: parsedDialogues.slice(0, 200) } : {}),
         ...(libraryImport ? { originalImport: libraryImport.originalImport } : {}),
-        // Score settings come from the helper the CLI uses, so both paths save the same budget, judge and timeout.
-        settings: operation === 'score' ? { ...scoreSettings(parsedDialogues.length, supplied, mode),
-          provider: supplied.provider || ctx.model?.provider || '', model: supplied.model || ctx.model?.id || '' }
-          : { ...(mode === 'demo' ? demoInput().settings : {}), repeats: 1,
+        settings: { ...(mode === 'demo' ? demoInput().settings : {}), repeats: 1,
           maxCalls: operation === 'validate' ? Math.max(140, 2 * parsedDialogues.length + 19 * validationCount + 20) : 20,
           maxDurationMs: operation === 'validate' ? Math.max(180_000, 180_000 * parsedDialogues.length) : 180_000,
           ...(mode === 'live' ? { judge: DEFAULT_JUDGE } : {}),
@@ -713,62 +556,21 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       const owned = await open(ctx.cwd);
       const { lab, close } = owned;
       // Only a terminal can take a preparation over: the hand-over draws its progress and delivers its result through `ctx.ui` and a message.
-      const interactive = operation !== 'score' && !!ctx.hasUI && ctx.mode === 'tui' && !!ctx.ui;
+      const interactive = !!ctx.hasUI && ctx.mode === 'tui' && !!ctx.ui;
       let handedOver = false;
       let id: string | undefined;
       let polling: Promise<void> = Promise.resolve();
       let timer: ReturnType<typeof setInterval> | undefined;
       let lastProgress = '';
-      let scoreStage: 'import' | 'judge' = 'import';
       const progress = async () => {
         if (!id || !onUpdate) return;
         const record = await lab.get(id);
-        if (operation === 'score' && !record.trials.length) return;
-        const text = operation === 'score' ? safeText(`${scoreStage === 'import' ? 'Импортировано' : 'Оценено'} ${record.trials.length} из ${parsedDialogues.length} диалогов · вызовов ${record.usage.calls}`)
-          : safeText(`${record.phase === 'preparing' ? 'Готовлю требования и тест' : 'Тест готов'}: ${record.message} · вызовов ${record.usage.calls}`);
+        const text = safeText(`${record.phase === 'preparing' ? 'Готовлю требования и тест' : 'Тест готов'}: ${record.message} · вызовов ${record.usage.calls}`);
         if (text !== lastProgress) { lastProgress = text; onUpdate({ content: [{ type: 'text', text }], details: { id, phase: record.phase } }); }
       };
       const cancel = () => { if (id) void lab.cancel(id).catch(() => {}); };
       try {
         await lab.init(); signal.addEventListener('abort', cancel, { once: true }); signal.throwIfAborted();
-        if (operation === 'score') {
-          id = (await lab.score(input, { codeOnly: true })).id;
-          if (signal.aborted) cancel();
-          await progress(); timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);
-          await lab.waitForIdle(); await progress();
-          let record = await lab.get(id);
-          if (!codeOnly) {
-            signal.throwIfAborted();
-            const nominalMinCalls = parsedDialogues.length * 5 + 2;
-            const nominalMaxCalls = parsedDialogues.length * 7 + 2;
-            const confirmed = await ctx.ui.confirm('Оценить записанные диалоги?', safeText([
-              `Агент и симулятор не запускаются. ${parsedDialogues.length} ${parsedDialogues.length === 1 ? 'диалог' : 'диалогов'}.`,
-              `План: ${nominalMinCalls}–${nominalMaxCalls} модельных вызовов; потолок: ${input.settings.maxCalls}.`,
-              `Время: до ${Math.ceil(input.settings.maxDurationMs / 60_000)} минут.`,
-            ].join('\n')));
-            if (!confirmed) {
-              const bundle = await evidenceBundle(record, lab.store);
-              const output = { ...summary(record, lab.store.directory, bundle.view), cancelled: true, brief: renderScoreBrief(scoreBrief(record)),
-                artifacts: await exportArtifacts(bundle, lab.store.directory) };
-              return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
-            }
-            signal.throwIfAborted(); lastProgress = ''; id = undefined;
-            id = (await lab.score(input)).id; if (signal.aborted) cancel();
-            await lab.waitForIdle(); await progress();
-            record = await lab.get(id);
-            if (record.phase === 'results_review' && !record.error && !record.questions.length) {
-              signal.throwIfAborted(); scoreStage = 'judge'; lastProgress = ''; const scoredId = record.id; id = undefined;
-              id = (await lab.reassess(scoredId, {}, { carryUsage: true })).id; if (signal.aborted) cancel();
-              await lab.waitForIdle(); await progress(); record = await lab.get(id);
-            }
-          }
-          const bundle = await evidenceBundle(record, lab.store);
-          const output = { ...summary(record, lab.store.directory, bundle.view), ...(codeOnly ? { scoreState: 'Оценено по коду без вызовов модели; кластеры провалов не строились.' } : {}),
-            brief: renderScoreBrief(scoreBrief(record)),
-            artifacts: await exportArtifacts(bundle, lab.store.directory), ...(signal.aborted ? { cancelled: true } : {}) };
-          returnToBoard(ctx, id);
-          return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
-        }
         /** The answer of a preparation that has ended — in the row of this call, or as the message of one that outlived it. */
         const prepared = async (record: Experiment, interrupted: boolean): Promise<Prepared> => {
           const bundle = await evidenceBundle(record, lab.store);
@@ -1070,97 +872,6 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           return feedResult(callId, { ...summary(record, lab.store.directory), sourceRunId: source.id, agentCodeChanged: moved }, feed, `Повтор прогона ${shortRun(source.id)} → ${shortRun(record.id)}`);
         } finally { await close(); }
       } catch (error) { return askOwner(callId, error); }
-    },
-  });
-  pi.registerTool({
-    ...displayFor('agent_lab_issues'), name: 'agent_lab_issues', label: 'Постоянные проблемы',
-    description: 'Прочитать постоянные проблемы и точные исходные оценки, обновить индекс из прогона, восстановить индекс или сохранить подтверждённое владельцем объединение. Название само по себе не доказывает общий механизм. inspect id принимает проблему или прогон.',
-    parameters: Type.Object({ operation: Type.Union(['inspect', 'sync', 'rebuild', 'merge'].map(value => Type.Literal(value))), id: Type.Optional(Type.String()), assessmentId: Type.Optional(Type.String()), offset: Type.Optional(Type.Number({ minimum: 0 })), eventOffset: Type.Optional(Type.Number({ minimum: 0 })), limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })), decision: Type.Optional(Type.Unsafe(z.toJSONSchema(issueDecisionSchema))) }, { additionalProperties: false }),
-    executionMode: 'sequential',
-    async execute(_callId, params, signal, _onUpdate, ctx) {
-      signal?.throwIfAborted(); const { lab, close } = await open(ctx.cwd);
-      try {
-        if (params.operation !== 'inspect') {
-          if (params.operation === 'merge') {
-            const decision = issueDecisionSchema.parse(params.decision);
-            if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Объединение требует решения владельца в интерактивном терминале.');
-            if (!await ctx.ui.confirm('Объединить проблемы?', safeText(`${decision.fromIssueId} → ${decision.intoIssueId}\n${decision.reason}`))) return { content: [{ type: 'text', text: JSON.stringify({ cancelled: true }) }], details: { cancelled: true } };
-          }
-          await lab.init();
-          if (params.operation === 'sync') { if (!params.id) throw new Error('Укажите исходный прогон.'); await lab.store.syncIssues(await lab.get(params.id)); }
-          else if (params.operation === 'merge') await lab.store.decideIssue(issueDecisionSchema.parse(params.decision));
-          else await lab.store.rebuildIssues();
-        }
-        const journal = await lab.store.readIssueJournal();
-        const output = compactIssues(journal, params.operation === 'inspect' ? params : {});
-        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: {} };
-      } finally { await close(); }
-    },
-  });
-  pi.registerTool({
-    ...displayFor('agent_lab_resolution'), name: 'agent_lab_resolution', label: 'Проверка исправления',
-    description: 'Dev-пакет, отдельный кандидат, заранее сохранённое правило с воспроизводящим и регрессионным наборами и два раздельных решения. Промпт требует фактически подтверждённых человеком dev-ошибок.',
-    parameters: Type.Object({ operation: Type.Union(['bundle','candidate','prompt','prepare','inspect','run','resolve'].map(v=>Type.Literal(v))), id: Type.Optional(Type.String()), input: Type.Optional(Type.Any()), offset:Type.Optional(Type.Number({minimum:0})), limit:Type.Optional(Type.Number({minimum:1,maximum:20})), trialId:Type.Optional(Type.String()) }, {additionalProperties:false}),
-    executionMode: 'sequential',
-    async execute(_callId,params,signal,_onUpdate,ctx) {
-      signal?.throwIfAborted(); const {lab,close}=await open(ctx.cwd);
-      try {
-        const input=params.input ?? {}; let output:unknown;
-        if(params.operation==='inspect') { if(!params.id) throw new Error('Укажите политику.'); const file=await lab.store.readResolution(params.id); output=compactResolution(file,params); }
-        else if(params.operation==='bundle') output=compactFixBundle(await lab.createFixBundle(input.issueId,input.sourceRunId),params);
-        else {
-          if(params.operation==='run') {
-            if(!params.id) throw new Error('Укажите политику.');
-            if(!ctx.hasUI||ctx.mode!=='tui') throw new Error('Запуск требует подтверждения в терминале; CLI resolutions --operation run --id POLICY --yes.');
-            if(!await ctx.ui.confirm('Запустить проверку исправления?',safeText(resolutionRunText(await lab.store.readResolution(params.id),await lab.get((await lab.store.readResolution(params.id)).policy.candidateRunId))))) return {content:[{type:'text',text:JSON.stringify({cancelled:true})}],details:{cancelled:true}};
-          }
-          await lab.init();
-          if(params.operation==='candidate') { const draft=await lab.registerCandidate(input.sourceRunId,input); output={id:draft.id,sourceRunId:draft.parentRunId,phase:draft.phase,targetVersion:draft.targetVersion,scenarioCount:draft.scenarios.length,repeats:draft.settings.repeats,plannedTrials:plannedTrials(draft)}; }
-          else if(params.operation==='prompt') output=await lab.proposeIssueFix(input.issueId,input.sourceRunId,input);
-          else if(params.operation==='prepare') { const policy=await lab.prepareResolution(resolutionRequestSchema.parse(input)); output=compactResolution({policy},params); }
-          else if(params.operation==='resolve'&&params.id) { const {issue,...file}=await lab.resolveIssue(params.id); output={...compactResolution(file,params),issue:{id:issue.id,status:issue.status}}; }
-          else if(params.operation==='run'&&params.id) {
-            const run=await lab.startResolution(params.id,{approved:true}),cancel=()=>{void lab.cancel(run.id);}; signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted) cancel();
-            try {await lab.waitForIdle();} finally {signal?.removeEventListener('abort',cancel);}
-            const file=await lab.resolveIssue(params.id); output=compactResolution(file,params);
-          } else throw new Error('Укажите действие и ID политики.');
-        }
-        return {content:[{type:'text',text:JSON.stringify(output,null,2)}],details:{}};
-      } finally {await close();}
-    },
-  });
-  pi.registerTool({
-    ...displayFor('agent_lab_diagnostics'), name: 'agent_lab_diagnostics', label: 'Парная диагностика',
-    description: 'prepare сохраняет неизменный план одной гипотезы без вызовов агента, inspect читает план, парный результат и исходные трассы, run запускает оба плеча через общий исполнитель после native подтверждения бюджета. Диагностика исключена из точности и не закрывает дефекты. Неподдерживаемое вмешательство отклоняется до расхода.',
-    parameters: Type.Object({ operation: Type.Union(['prepare', 'inspect', 'run'].map(value => Type.Literal(value))), id: Type.Optional(Type.String()), trialId: Type.Optional(Type.String()), offset: Type.Optional(Type.Number({ minimum: 0 })), limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })), input: Type.Optional(Type.Unsafe(z.toJSONSchema(diagnosticPreparationSchema))) }, { additionalProperties: false }),
-    executionMode: 'sequential',
-    async execute(_callId, params, toolSignal, _onUpdate, ctx) {
-      const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s)); signal.throwIfAborted();
-      const { lab, close } = await open(ctx.cwd); let runId: string | undefined;
-      const cancel = () => { if (runId) void lab.cancel(runId).catch(() => {}); };
-      try {
-        let output: unknown;
-        if (params.operation === 'prepare') {
-          const request = diagnosticPreparationSchema.parse(params.input); await lab.init();
-          const plan = await lab.prepareDiagnostic(request.issueId, request.sourceRunId, request.intervention, request.repeats);
-          output = compactDiagnostic(await lab.store.readDiagnostic(plan.id));
-        } else {
-          if (!params.id) throw new Error('Укажите ID сохранённого плана.');
-          let file = await lab.store.readDiagnostic(params.id);
-          if (params.operation === 'run' && !file.runId) {
-            if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Запуск диагностики требует интерактивного подтверждения. В CLI используйте diagnostics --operation run --id PLAN --yes.');
-            const plan = file.plan;
-            const text = `${plan.intervention.hypothesis}\nОдин фактор: ${plan.intervention.kind}\nИсходный снимок: ${plan.sourceHash.slice(0, 12)}\nПар: ${plan.repeats * plan.source.settings.userModes.length}; общий лимит ${plan.budget.maxCalls} вызовов, ${Math.round(plan.budget.maxDurationMs / 1000)} секунд.\nДиагностика не закрывает проблему и не входит в общую точность.`;
-            if (!await ctx.ui.confirm('Запустить парную диагностику?', safeText(text))) return { content: [{ type: 'text', text: JSON.stringify({ cancelled: true }) }], details: { cancelled: true } };
-            signal.throwIfAborted(); await lab.init();
-            runId = (await lab.startDiagnostic(params.id)).id; signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) cancel();
-            await lab.waitForIdle(); file = await lab.store.readDiagnostic(params.id);
-          }
-          output = compactDiagnostic(file, file.runId ? await lab.get(file.runId) : undefined, params);
-          if (file.runId) returnToBoard(ctx, file.runId);
-        }
-        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: {} };
-      } finally { signal.removeEventListener('abort', cancel); await close(); }
     },
   });
   pi.registerTool({
@@ -1466,37 +1177,6 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       } catch (error) { return askOwner(callId, error); }
     },
   });
-  pi.registerTool({
-    ...displayFor('agent_lab_prompt'), name: 'agent_lab_prompt', label: 'Review one prompt change',
-    description: 'propose saves an isolated candidate prompt and diff, citing human-confirmed dev failures. Never use control feedback. apply requires native diff review and creates a draft with the EXACT same capability/regression cards and a candidate promptFile; then use agent_lab_run. Adapter must attest promptHash. Original prompt file is preserved.',
-    parameters: Type.Object({ action: Type.Union([Type.Literal('propose'), Type.Literal('inspect'), Type.Literal('apply')]),
-      id: Type.Optional(Type.String()), file: Type.Optional(Type.String()), candidate: Type.Optional(Type.String({ maxLength: 96000 })),
-      hypothesis: Type.Optional(Type.String({ maxLength: 3000 })), trialIds: Type.Optional(Type.Array(Type.String(), { maxItems: 40 })) }, { additionalProperties: false }),
-    executionMode: 'sequential',
-    async execute(_callId, params, signal, _onUpdate, ctx) {
-      signal?.throwIfAborted();
-      const { lab, close } = await open(ctx.cwd);
-      try {
-        await lab.init();
-        let output: unknown;
-        if (params.action === 'propose') {
-          if (!params.id || !params.candidate || !params.hypothesis || !params.trialIds) throw new Error('Нужны id, candidate, hypothesis и trialIds подтверждённых ошибок.');
-          output = await proposePrompt(lab.store.directory, await lab.get(params.id), { candidate: params.candidate, hypothesis: params.hypothesis, trialIds: params.trialIds });
-        } else {
-          if (!params.file) throw new Error('Укажите file предложения.');
-          const file = resolve(ctx.cwd, params.file);
-          const inspected = await inspectPrompt(file);
-          if (params.action === 'inspect') output = inspected;
-          else {
-            if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Выбор версии промпта требует native Pi review.');
-            if (!await ctx.ui.confirm('Проверить эту версию промпта?', safeText(inspected.proposal.hypothesis + '\n' + inspected.diff))) return { content: [{ type: 'text', text: 'Изменение отменено.' }], details: {} };
-            output = summary(await promptVersion(lab, file, inspected.reviewHash), lab.store.directory);
-          }
-        }
-        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: {} };
-      } finally { await close(); }
-    },
-  });
   pi.registerCommand('agent-lab', {
     description: 'Проверить агента: /agent-lab, /agent-lab demo или /agent-lab /путь/к/проекту',
     async handler(args, ctx) {
@@ -1588,11 +1268,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           query = 'query' in action ? action.query ?? '' : ''; pendingOnly = 'pendingOnly' in action ? action.pendingOnly ?? false : false;
           dialogueOpen = 'dialogueOpen' in action ? action.dialogueOpen ?? false : false;
           try {
-            if (!['discuss', 'export', 'openReport', 'cancel', 'issues'].includes(action.type)) await writing(action.type === 'acceptLibrary' ? 'wait' : 'cancel');
-            if (action.type === 'issues') {
-              const next = await showIssueWorkspace(ctx, action.record, reading(), async () => { await writing(); return lab; });
-              if (next) { id = next; section = 'results'; selected = 0; }
-            } else if (action.type === 'acceptLibrary') {
+            if (!['discuss', 'export', 'openReport', 'cancel'].includes(action.type)) await writing(action.type === 'acceptLibrary' ? 'wait' : 'cancel');
+            if (action.type === 'acceptLibrary') {
               const shown = action.record.librarySnapshot;
               if (!shown) throw new Error('Библиотека сценариев отсутствует.');
               const accepted = await lab.acceptLibrary(action.record.id, libraryHash(shown), action.variantIds);

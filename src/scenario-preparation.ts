@@ -14,7 +14,7 @@ export const SOURCE_GENERATION_ATTEMPTS = 5;
 function preparationInputHash(record: Experiment): string {
   const { maxCalls: _calls, maxDurationMs: _duration, timeoutMs: _timeout, ...settings } = record.settings;
   return fingerprint({ protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, mode: record.mode, sources: record.sources,
-    target: record.target, notes: record.notes, generatorConfig: record.generatorConfig, originalImport: record.originalImport, settings });
+    target: record.target, notes: record.notes, originalImport: record.originalImport, settings });
 }
 export function chronologicalInput(batch: ImportBatch, ids = batch.dialogues.map(d => d.id)): ScenarioProposalsInput['dialogues'] {
   return batch.dialogues.filter(d => ids.includes(d.id)).map(d => ({ id: d.id, observation: d.observation, events: structuredClone(d.events),
@@ -177,7 +177,7 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
         record.questions = [...new Set([...record.questions, ...grounded.questions])].slice(0, 12);
         requirements = mergeRequirements(record, grounded.requirements, sources);
       }
-      const request = { ...(record.generatorConfig?{generatorConfig:structuredClone(record.generatorConfig)}:{}), businessCatalog: library.businessScenarios.map(({ key, title, goal, conditions, requirementIds }) => ({ key, title, goal, conditions, requirementIds })), protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, sources: structuredClone(sources),
+      const request = { businessCatalog: library.businessScenarios.map(({ key, title, goal, conditions, requirementIds }) => ({ key, title, goal, conditions, requirementIds })), protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, sources: structuredClone(sources),
         requirements: structuredClone(requirements), ...(original ? { batchId: original.id } : { preparationMode: 'owner_requirements', scenarioCount: input.scenarioCount || 1 }), dialogues: original ? chronologicalInput(original, [workId]) : [] } as ScenarioProposalsInput;
       const oversize = workInputIssue(request);
       if (oversize) { record.preparationProgress.excluded.push({ dialogueId: workId, reason: oversize }); continue; }

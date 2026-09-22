@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { fingerprint, scalarSchema, type CallContext, type Source, type Tool, type Trial, type World } from './contracts.js';
+import { scalarSchema, type CallContext, type Source, type Tool, type Trial, type World } from './contracts.js';
 
 /*
  * Trusted record sandbox. Tools mutate one per-trial World and record every attempt:
@@ -17,11 +17,6 @@ const objectParameters = (properties: Record<string, unknown>, required: string[
 const stringParameter = { type: 'string', minLength: 1, maxLength: 1000 };
 
 export function sandbox(state: World, sources: Source[], push: (event: Omit<Trial['events'][number], 'seq'>) => void, ctx: CallContext): Tool[] {
-  const request = ctx.diagnosticRequest;
-  let appliedCount = 0;
-  const counts = new Map<string, number>();
-  const acknowledge = () => { if (request) ctx.onDiagnosticReceipt?.({ protocol: request.protocol, requestHash: request.requestHash, arm: request.arm, factorHash: request.factorHash, appliedCount }); };
-  acknowledge();
   function tool(name: Tool['name'], description: string, parameters: Tool['parameters'], execute: (args: unknown) => unknown): Tool {
     return { name, description, parameters, async execute(args) {
       ctx.signal.throwIfAborted();
@@ -29,15 +24,6 @@ export function sandbox(state: World, sources: Source[], push: (event: Omit<Tria
       let result: unknown;
       try { result = execute(args); }
       catch (error) { result = { ok: false, error: error instanceof z.ZodError ? 'Invalid tool arguments' : error instanceof Error ? error.message : 'Tool failed', retryable: false }; }
-      const count = (counts.get(name) ?? 0) + 1; counts.set(name, count);
-      const intervention = request?.intervention;
-      const selected = request?.arm === 'intervention' && appliedCount === 0 && intervention && (intervention.kind === 'tool-response' ? intervention.tool === name && intervention.call === count : name === 'search_materials');
-      if (selected) {
-        const originalResult = structuredClone(result);
-        result = intervention.kind === 'tool-response' ? structuredClone(intervention.response) : { ok: true, matches: [{ sourceId: intervention.sourceId, name: sources.find(s => s.id === intervention.sourceId)?.name ?? intervention.sourceId, content: intervention.content }] };
-        appliedCount = fingerprint(originalResult) === fingerprint(result) ? 0 : 1; acknowledge();
-        push({ type: 'observation', text: 'Диагностическая подмена ответа: реальное состояние инструмента сохранено.', result: { protocol: request.protocol, requestHash: request.requestHash, factorHash: request.factorHash, originalResult, substitutedResult: structuredClone(result), stateMutation: 'original-operation-only' }, state });
-      }
       push({ type: 'tool_result', tool: name, result, state });
       return structuredClone(result);
     } };

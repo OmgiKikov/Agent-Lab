@@ -1,22 +1,19 @@
 #!/usr/bin/env node
-import { generatorSummary, selectNextVariants } from './generator-evaluation.js';
 import { parseArgs } from 'node:util';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
-import { ExperimentLab, draftHash, planDiscovery } from './experiment.js';
+import { ExperimentLab, draftHash } from './experiment.js';
 import { demoInput } from './demo.js';
-import { createInputSchema, discoverInputSchema, type Settings } from './contracts.js';
-import { scoreSettings } from './normalize.js';
+import { createInputSchema, type Settings } from './contracts.js';
 import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
-import { inspectPrompt, promptVersion, proposePrompt } from './prompt-edit.js';
 import { readData, readDialogueImport, importDialogues } from './imports.js';
 import { expandMaterials } from './materials.js';
 import { getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
-import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
+import { expectationSheet, qualityLines, qualitySummary, testPlanLines, trialProofLines } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { agreementSectionLines, allFailuresTitle, buildResultView, causeSection, failureListRows, resultViewLines, SECTION_TEXT } from './result-view.js';
 import { rowsToLines } from './explain.js';
@@ -25,25 +22,12 @@ import { stripTerminalSequences } from '@earendil-works/pi-tui';
 import { libraryHash } from './scenario-library.js';
 import { chooseEditableDraft, draftIsBusy } from './scenario-draft.js';
 import { libraryPatchSchema } from './scenario-contracts.js';
-import { resolutionRequestSchema } from './resolution.js';
-import { resolutionText } from './issue-view.js';
-import { diagnosticPreparationSchema } from './diagnostics.js';
-import { issueDecisionSchema } from './issues.js';
 import { semanticWorkStatus } from './scenario-work.js';
 
 const percent = (value: number | null) => value === null ? 'нет данных' : `${Math.round(value * 100)}%`;
 const safeText = (value: unknown) => stripTerminalSequences(String(value ?? '')).replace(/\r\n?/g, '\n').replace(/\t/g, '  ')
   .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '');
 const safeLine = (value: unknown) => safeText(value).replace(/\n+/g, ' ');
-const scoreInputError = (error: unknown) => new Error(`Не удалось прочитать записи: ${safeLine(error instanceof Error ? error.message : String(error))}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`);
-const renderScoreBrief = (brief: ScoreBrief): string => brief.status === 'insufficient'
-  ? `${brief.heading}\n${brief.body}`
-  : [
-    'ТРЕБОВАНИЯ', ...brief.requirements.map(item => `• ${safeText(item)}`), '',
-    'НАБЛЮДАЕМОЕ', ...brief.observations.map(item => `• ${safeText(item)}`), '',
-    'НЕИЗВЕСТНО', ...brief.unknowns.map(item => `• ${safeText(item)}`), '',
-    'ГИПОТЕЗА', safeText(brief.hypothesis), '', brief.question,
-  ].join('\n');
 const writeStdout = (value: string): Promise<void> => new Promise((resolve, reject) => {
   let settled = false;
   const finish = (error?: Error | null) => {
@@ -83,74 +67,12 @@ async function main() {
     process.stdout.write('  agent-lab summary --id RUN [--json]     Сколько ситуаций агент прошёл, что не измерено и почему\n');
     process.stdout.write('  agent-lab accept --id RUN [--yes]      Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания\n');
     process.stdout.write('Agent Lab — validation set, accuracy и причины провалов вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
-    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab discover-resume --id RUN [--yes] [--json]\n  agent-lab discover-build --id RUN [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
+    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
     process.stdout.write('  agent-lab scenarios --id RUN --operation inspect [--json]\n  agent-lab scenarios --id RUN --operation edit|merge|split|variant|assess|resume|accept --expected-hash HASH [--input action.json] [--yes]\n');
-    process.stdout.write('  agent-lab issues --operation inspect|sync|merge|rebuild [--id RUN_OR_ISSUE] [--input decision.json]\n  agent-lab diagnostics --operation prepare --input request.json\n  agent-lab diagnostics --operation inspect|run --id PLAN [--yes]\n');
-    process.stdout.write('  agent-lab resolutions --operation bundle|candidate|prompt|prepare --input request.json\n  agent-lab resolutions --operation inspect|run|resolve --id POLICY [--yes] [--json]\n');
-    process.stdout.write('  agent-lab generator --operation evaluate|optimize --input config.json --yes\n  agent-lab generator --operation select --input candidates.json\n  agent-lab generator --operation inspect --id GEN [--json]\n');
     process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID] · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
   const directory = values['data-dir'] ?? resolve('.agent-lab');
-  if(command==='generator') {
-    const operation=values.operation??'inspect',lab=new ExperimentLab(directory),input=values.input?JSON.parse(await readFile(values.input,'utf8')):{};
-    if(operation==='inspect'){if(!values.id)throw new Error('Укажите --id GEN.');const record=await lab.store.readGeneratorRecord(values.id);await writeStdout(JSON.stringify(values.json?record:generatorSummary(record),null,2)+'\n');return;}
-    if(operation==='select'){await writeStdout(JSON.stringify(selectNextVariants(input.candidates,input.history),null,2)+'\n');return;}
-    if(!['evaluate','optimize'].includes(operation))throw new Error('Укажите generator --operation evaluate|select|optimize|inspect.');
-    if(!values.yes)throw new Error('Модельные вызовы ограничены settings; укажите --yes для запуска.');
-    await lab.init();try{const report=operation==='evaluate'?await lab.evaluateGenerator(input):await lab.optimizeGenerator(input);await writeStdout(JSON.stringify(generatorSummary(report),null,2)+'\n');}finally{await lab.close();}return;
-  }
-  if (command === 'resolutions') {
-    const operation=values.operation ?? 'inspect',lab=new ExperimentLab(directory);
-    const input=values.input ? JSON.parse(await readFile(values.input,'utf8')) : {};
-    if (operation==='inspect') { if(!values.id) throw new Error('Укажите --id POLICY.'); const file=await lab.store.readResolution(values.id); await writeStdout(values.json?JSON.stringify(file,null,2)+'\n':resolutionText(file)+'\n'); return; }
-    if(operation==='bundle') { await writeStdout(JSON.stringify(await lab.createFixBundle(input.issueId,input.sourceRunId),null,2)+'\n'); return; }
-    if(operation==='run'&&!values.yes) throw new Error('Прочитайте неизменное правило и план; --yes разрешает запуск кандидата.');
-    await lab.init();
-    try {
-      let output:unknown;
-      if(operation==='candidate') output=await lab.registerCandidate(input.sourceRunId,input);
-      else if(operation==='prompt') output=await lab.proposeIssueFix(input.issueId,input.sourceRunId,input);
-      else if(operation==='prepare') output=await lab.prepareResolution(resolutionRequestSchema.parse(input));
-      else if(operation==='resolve'&&values.id) output=await lab.resolveIssue(values.id);
-      else if(operation==='run'&&values.id) { await lab.startResolution(values.id,{approved:true}); await lab.waitForIdle(); output=await lab.resolveIssue(values.id); }
-      else throw new Error('Укажите resolutions --operation bundle|candidate|prompt|prepare|inspect|run|resolve.');
-      await writeStdout(JSON.stringify(output,null,2)+'\n');
-    } finally { await lab.close(); }
-    return;
-  }
-  if (command === 'issues' || command === 'diagnostics') {
-    const operation = values.operation ?? 'inspect', lab = new ExperimentLab(directory);
-    if (command === 'issues' && operation === 'inspect') {
-      const journal = await lab.store.readIssueJournal();
-      await writeStdout(JSON.stringify({ ...journal, issues: values.id ? journal.issues.filter(i => i.id === values.id || i.evidence.some(e => e.runId === values.id)) : journal.issues }, null, 2) + '\n'); return;
-    }
-    if (command === 'diagnostics' && operation === 'inspect') {
-      if (!values.id) throw new Error('Укажите --id PLAN.');
-      const file = await lab.store.readDiagnostic(values.id);
-      await writeStdout(JSON.stringify({ ...file, ...(file.runId ? { run: await lab.get(file.runId) } : {}) }, null, 2) + '\n'); return;
-    }
-    if (command === 'diagnostics' && operation === 'run' && !values.yes) throw new Error('Прочитайте сохранённый план; --yes разрешает расход его общего бюджета на обе стороны.');
-    await lab.init();
-    try {
-      const input = values.input ? JSON.parse(await readFile(values.input, 'utf8')) : {};
-      let result: unknown;
-      if (command === 'issues') {
-        if (operation === 'rebuild') result = { issues: await lab.store.rebuildIssues() };
-        else if (operation === 'sync' && values.id) result = { issues: await lab.store.syncIssues(await lab.get(values.id)) };
-        else if (operation === 'merge') result = { issues: await lab.store.decideIssue(issueDecisionSchema.parse(input)) };
-        else throw new Error('Укажите issues --operation inspect|sync|merge|rebuild.');
-      } else if (operation === 'prepare') {
-        const request = diagnosticPreparationSchema.parse(input);
-        result = { plan: await lab.prepareDiagnostic(request.issueId, request.sourceRunId, request.intervention, request.repeats) };
-      } else if (operation === 'run' && values.id) {
-        const run = await lab.startDiagnostic(values.id); await lab.waitForIdle();
-        result = { ...await lab.store.readDiagnostic(values.id), run: await lab.get(run.id) };
-      } else throw new Error('Укажите diagnostics --operation prepare|inspect|run.');
-      await writeStdout(JSON.stringify(result, null, 2) + '\n');
-    } finally { await lab.close(); }
-    return;
-  }
   if (command === 'suites') { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); return; }
   if (command === 'scenarios') {
     if (!values.id || !values.operation) throw new Error('Укажите --id RUN и --operation inspect|edit|merge|split|variant|assess|resume|accept.');
@@ -269,121 +191,7 @@ async function main() {
     }
     return;
   }
-  if (command === 'discover') {
-    if (!values.input || !values.task) throw new Error('Укажите --input dialogues.jsonl --task task.json. Без --yes будет показан только план и бюджет.');
-    let input;
-    try {
-      const raw: Record<string, unknown> = JSON.parse(await readFile(values.task, 'utf8'));
-      const dialogues = await readData(values.input, 'dialogues', { maxItems: 300 });
-      const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
-      input = discoverInputSchema.parse({ ...raw, mode: raw.mode ?? 'live',
-        ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}), dialogues });
-    } catch (error) {
-      throw scoreInputError(error);
-    }
-    const plan = planDiscovery(input);
-    const shownPlan = { type: 'discovery_plan', dialogueCount: input.dialogues.length, batches: plan.batchCount,
-      selectedCap: plan.selectedCap, nominalCalls: plan.nominalCalls, maxCalls: plan.maxCalls,
-      maxDurationMs: plan.maxDurationMs, oversizedDialogueIds: plan.oversizedIds };
-    await writeStdout(values.json
-      ? `${JSON.stringify(shownPlan)}\n`
-      : ['ПЛАН DISCOVERY', `Диалогов: ${shownPlan.dialogueCount}.`, `Партий первичного разбора: ${shownPlan.batches}.`,
-        `Подробно проверить: до ${shownPlan.selectedCap}.`, `План: ${shownPlan.nominalCalls} модельных вызовов; потолок: ${shownPlan.maxCalls}; время: до ${Math.ceil(shownPlan.maxDurationMs / 1000)} секунд.`,
-        ...(shownPlan.oversizedDialogueIds.length ? [`Не войдут целиком: ${shownPlan.oversizedDialogueIds.join(', ')}.`] : []), ''].join('\n'));
-    if (!values.yes) {
-      await writeStdout(values.json
-        ? `${JSON.stringify({ type: 'next_step', command: `agent-lab discover --input ${values.input} --task ${values.task} --yes${values.json ? ' --json' : ''}` })}\n`
-        : 'Для запуска discovery повторите команду с --yes. До подтверждения модель не вызывается.\n');
-      return;
-    }
-    const discoveryLab = new ExperimentLab(directory);
-    const closeDiscovery = () => { void discoveryLab.close().catch(error => { process.stderr.write(`${safeLine(error.message)}\n`); process.exitCode = 2; }); };
-    process.once('SIGINT', closeDiscovery); process.once('SIGTERM', closeDiscovery);
-    try {
-      await discoveryLab.init();
-      const started = await discoveryLab.discover(input);
-      await discoveryLab.waitForIdle();
-      const record = await discoveryLab.get(started.id);
-      const brief = discoveryBrief(record);
-      await writeStdout(values.json
-        ? `${JSON.stringify({ type: 'discovery_result', id: record.id, phase: brief.status, plan: shownPlan, brief, text: brief.lines.join('\n') })}\n`
-        : `${brief.lines.join('\n')}\n`);
-      process.exitCode = brief.status === 'ready' ? 0 : 2;
-    } finally {
-      process.removeListener('SIGINT', closeDiscovery); process.removeListener('SIGTERM', closeDiscovery);
-      await discoveryLab.close();
-    }
-    return;
-  }
-  if (command === 'discover-resume') {
-    if (!values.id) throw new Error('Укажите --id RUN незавершённого discovery.');
-    const source = await new ExperimentStore(directory).get(values.id);
-    if (!source.discovery) throw new Error('Указанный run не является discovery.');
-    const callsUsed = Math.max(source.usage.calls, source.discovery.callsUsed);
-    const maxCalls = source.discovery.callPlan.maxCalls;
-    const maxDurationMs = source.discovery.callPlan.maxDurationMs;
-    const elapsedMs = source.discovery.elapsedMs ?? 0;
-    if (source.discovery.callPlan.legacyBudgetMissing) throw new Error('Старая discovery-запись не содержит исходный бюджет; начните новый discovery run.');
-    if (source.discovery.activeCall) throw new Error(`Discovery остановился во время модельного вызова «${source.discovery.activeCall}»; безопасное возобновление невозможно.`);
-    if (['ready', 'insufficient'].includes(source.discovery.phase)) throw new Error('Этот discovery run не требует возобновления.');
-    if (callsUsed >= maxCalls) throw new Error('Бюджет discovery исчерпан; найденные доказательства сохранены.');
-    if (elapsedMs >= maxDurationMs) throw new Error('Лимит времени discovery исчерпан; найденные доказательства сохранены.');
-    const commandLine = `agent-lab discover-resume --id ${source.id} --yes --data-dir ${JSON.stringify(directory)}${values.json ? ' --json' : ''}`;
-    const status = { type: 'discovery_resume', id: source.id, status: source.discovery.phase,
-      callsUsed, maxCalls, remainingCalls: Math.max(0, maxCalls - callsUsed), elapsedMs,
-      maxDurationMs, remainingDurationMs: Math.max(0, maxDurationMs - elapsedMs), command: commandLine };
-    if (!values.yes) {
-      await writeStdout(values.json ? `${JSON.stringify(status)}\n` : [
-        'DISCOVERY RESUME', `Статус: ${status.status}.`, `Вызовы: ${callsUsed}/${maxCalls} (осталось не более ${status.remainingCalls}).`,
-        `Время: ${Math.ceil(elapsedMs / 1000)}/${Math.ceil(maxDurationMs / 1000)} секунд (осталось до ${Math.ceil(status.remainingDurationMs / 1000)}).`, `Для возобновления: ${commandLine}`, '',
-      ].join('\n'));
-      return;
-    }
-    const resumeLab = new ExperimentLab(directory);
-    await resumeLab.init();
-    try {
-      const started = await resumeLab.resumeDiscovery(source.id);
-      await resumeLab.waitForIdle();
-      const record = await resumeLab.get(started.id);
-      const brief = discoveryBrief(record);
-      await writeStdout(values.json
-        ? `${JSON.stringify({ type: 'discovery_result', id: record.id, phase: brief.status, resumed: true, brief, text: brief.lines.join('\n') })}\n`
-        : `${brief.lines.join('\n')}\n`);
-      process.exitCode = brief.status === 'ready' ? 0 : 2;
-    } finally {
-      await resumeLab.close();
-    }
-    return;
-  }
-  if (command === 'discover-build') {
-    if (!values.id) throw new Error('Укажите --id RUN готового discovery.');
-    const source = await new ExperimentStore(directory).get(values.id);
-    const brief = discoveryBrief(source);
-    if (brief.status !== 'ready' || !brief.hypothesis) throw new Error('В discovery нет готовой сохранённой гипотезы.');
-    if (!values.yes) {
-      await writeStdout(values.json
-        ? `${JSON.stringify({ type: 'hypothesis_confirmation', id: source.id, hypothesis: brief.hypothesis,
-          command: `agent-lab discover-build --id ${source.id} --yes${values.json ? ' --json' : ''}` })}\n`
-        : `${brief.lines.join('\n')}\n\nЧтобы собрать черновик теста: agent-lab discover-build --id ${source.id} --yes\n`);
-      return;
-    }
-    const buildLab = new ExperimentLab(directory);
-    await buildLab.init();
-    try {
-      const started = await buildLab.buildFromDiscovery(source.id, brief.hypothesis);
-      await buildLab.waitForIdle();
-      const record = await buildLab.get(started.id);
-      const projection = testPlanLines(record);
-      await writeStdout(values.json
-        ? `${JSON.stringify({ type: 'test_proposal', id: record.id, fromRunId: source.id, hypothesis: brief.hypothesis,
-          text: projection.lines.join('\n'), lines: projection.lines, draftHash: projection.draftHash })}\n`
-        : `${projection.lines.join('\n')}\n\nЧерновик собран: ${record.id}. Агент не запускался.\n`);
-    } finally {
-      await buildLab.close();
-    }
-    return;
-  }
-  if (!['demo', 'prepare', 'build', 'score', 'repeat', 'run', 'accept', 'save-suite', 'evaluate', 'reassess', 'prompt-propose', 'prompt-apply'].includes(command)) throw new Error(`Unknown command: ${command}`);
+  if (!['demo', 'prepare', 'build', 'repeat', 'run', 'accept', 'save-suite', 'evaluate', 'reassess'].includes(command)) throw new Error(`Unknown command: ${command}`);
   if (command === 'evaluate' && (!values.input || !values.yes)) throw new Error('Для запуска сохранённых тестов укажите --input suite.json --yes. Лимиты и подключение берутся из файла.');
   const lab = new ExperimentLab(directory);
   await lab.init();
@@ -391,20 +199,6 @@ async function main() {
   process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
   try {
     let id = values.id;
-    if (command === 'prompt-propose') {
-      if (!id || !values.candidate || !values.hypothesis || !values.trial?.length) throw new Error('Укажите --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL.');
-      const result = await proposePrompt(directory, await lab.get(id), { candidate: await readFile(values.candidate, 'utf8'), hypothesis: values.hypothesis, trialIds: values.trial });
-      process.stdout.write(JSON.stringify(result, null, 2) + '\n'); return;
-    }
-    if (command === 'prompt-apply') {
-      if (!values.input) throw new Error('Укажите --input proposal.json.');
-      const proposal = await inspectPrompt(values.input);
-      process.stdout.write(proposal.diff + '\n');
-      if (!values.yes) throw new Error('Для подготовки отдельной версии укажите --yes после просмотра diff.');
-      const draft = await promptVersion(lab, values.input, proposal.reviewHash);
-      process.stdout.write(JSON.stringify({ id: draft.id, phase: draft.phase, target: draft.target,
-        nextStep: `agent-lab run --id ${draft.id} --yes` }, null, 2) + '\n'); return;
-    }
     if (command === 'accept') {
       if (!id) throw new Error('Укажите --id RUN.');
       const record = await lab.get(id);
@@ -439,49 +233,6 @@ async function main() {
       await writeStdout(values.json
         ? `${JSON.stringify({ type: 'accepted', id: accepted.id, acceptedDraftHash: accepted.acceptedDraftHash, agentRun: false })}\n`
         : `\nТест принят: ${accepted.acceptedDraftHash}. Агент не запускался.\n`);
-      return;
-    }
-    if (command === 'score') {
-      if (!values.input || !values.task || (!values.yes && !values['code-only'])) {
-        throw new Error('Укажите --input dialogues.jsonl --task task.json и --yes (модель) или --code-only. Агент не запускается.');
-      }
-      let input;
-      try {
-        const raw: Record<string, unknown> = JSON.parse(await readFile(values.task, 'utf8'));
-        const dialogues = await readData(values.input, 'dialogues');
-        const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
-        const mode = raw.mode ?? 'live';
-        input = createInputSchema.parse({ ...raw, mode, settings: scoreSettings(dialogues.length, (raw.settings ?? {}) as Partial<Settings>, mode === 'demo' ? 'demo' : 'live'),
-          ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
-          dialogues, scenarioCount: 0 });
-      } catch (error) {
-        throw scoreInputError(error);
-      }
-      const seed = await lab.score(input, { codeOnly: values['code-only'] });
-      await lab.waitForIdle();
-      const imported = await lab.get(seed.id);
-      if (imported.phase !== 'results_review') throw new Error(imported.error ?? 'Импорт диалогов не удался; агент не запускался.');
-      let record = imported;
-      if (!values['code-only'] && !imported.questions.length) {
-        const pending = await lab.reassess(seed.id, {}, { carryUsage: true });
-        await lab.waitForIdle();
-        record = await lab.get(pending.id);
-      }
-      const bundle = await evidenceBundle(record, lab.store);
-      const artifacts = await exportArtifacts(bundle, directory);
-      const quality = qualityLines(qualitySummary(record));
-      const output = { id: record.id, phase: record.phase, imported: imported.trials.length, questions: record.questions,
-        ...(record.assessmentOf ? { assessmentOf: record.assessmentOf } : {}),
-        ...(values['code-only'] ? { scoreState: 'Оценено по коду без вызовов модели; кластеры провалов не строились.' } : {}),
-        brief: renderScoreBrief(scoreBrief(record)), quality, view: bundle.view, artifacts, evidence: bundle.evidence };
-      if (values.json) process.stdout.write(JSON.stringify(output, null, 2) + '\n');
-      else process.stdout.write([
-        ...('scoreState' in output ? [output.scoreState, ''] : []), output.brief,
-        ...(record.questions.length ? ['', 'ВОПРОСЫ ВЛАДЕЛЬЦУ', ...record.questions.map(question => `• ${safeText(question)}`)] : []),
-        '', 'АРТЕФАКТЫ', ...Object.entries(artifacts).map(([name, path]) => `• ${name}: ${safeText(path)}`), '',
-      ].join('\n'));
-      process.exitCode = record.phase === 'results_review' && !record.questions.length
-        && !record.trials.some(trial => trial.assessmentError || ['invalid', 'cancelled'].includes(trial.outcome)) ? 0 : 2;
       return;
     }
     if (command === 'reassess') {
@@ -562,4 +313,4 @@ async function main() {
     await lab.close();
   }
 }
-void main().catch(error => { process.stderr.write(`Agent Lab: ${safeLine(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = ['evaluate', 'score', 'discover', 'discover-resume', 'discover-build'].includes(process.argv[2] ?? '') ? 2 : 1; });
+void main().catch(error => { process.stderr.write(`Agent Lab: ${safeLine(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = process.argv[2] === 'evaluate' ? 2 : 1; });

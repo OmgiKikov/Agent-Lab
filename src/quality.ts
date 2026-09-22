@@ -63,16 +63,6 @@ export interface QualitySummary {
   headline: string;
 }
 
-export type ScoreBrief =
-  | { status: 'insufficient'; heading: 'Недостаточно данных для гипотезы'; body: 'Добавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.' }
-  | { status: 'ready'; requirements: string[]; observations: string[]; unknowns: string[]; hypothesis: string; question: 'Проверим?' };
-
-const insufficientScoreBrief = (): ScoreBrief => ({
-  status: 'insufficient',
-  heading: 'Недостаточно данных для гипотезы',
-  body: 'Добавьте требования владельца и хотя бы одно наблюдение из репозитория или записанного диалога.',
-});
-
 export interface TestPlanLines {
   lines: string[];
   draftHash: string;
@@ -111,18 +101,6 @@ export interface TrialProofLines {
   lines: string[];
 }
 
-export interface DiscoveryBrief {
-  status: 'error' | 'budget_exhausted' | 'partial' | 'ready' | 'insufficient';
-  runId: string;
-  total: number;
-  coarse: number;
-  selected: number;
-  representatives: number;
-  controls: number;
-  lines: string[];
-  fromRunId?: string;
-  hypothesis?: string;
-}
 
 const planText = (value: string): string => value.replace(/\r\n?/g, '\n').replace(/\t/g, '  ')
   .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '');
@@ -333,145 +311,6 @@ export function trialProofLines(record: Experiment, trialId: string): TrialProof
   };
 }
 
-/** Persisted exploratory selection summary. It never turns selection counts into quality metrics. */
-export function discoveryBrief(record: Experiment): DiscoveryBrief {
-  const discovery = record.discovery;
-  const counts = {
-    runId: record.id,
-    total: discovery?.totalDialogues ?? record.dialogues.length,
-    coarse: discovery?.observations.length ?? 0,
-    selected: discovery?.selectedIds.length ?? 0,
-    representatives: discovery?.representativeIds.length ?? 0,
-    controls: discovery?.controlIds.length ?? 0,
-  };
-  const countLines = discovery ? [
-    `Всего диалогов: ${counts.total}.`,
-    `Первичный разбор: ${counts.coarse} из ${counts.total}; партии ${discovery.completedBatchCount} из ${discovery.callPlan.batches}.`,
-    `Выбрано для подробной проверки: ${counts.selected}.`,
-    `Примеры сигнала: ${counts.representatives}.`,
-    `Контроли: ${counts.controls} — false-negative probe, а не оценка production accuracy.`,
-    'Это отбор, не accuracy.',
-  ] : [
-    `Всего диалогов: ${counts.total}.`,
-    'Первичный разбор: 0.',
-    'Выбрано для подробной проверки: 0.',
-    'Примеры сигнала: 0.',
-    'Контроли: 0 — false-negative probe.',
-    'Это отбор, не accuracy.',
-  ];
-  const citationIds = discovery?.hypothesis?.eventIds ?? discovery?.observations.flatMap(observation =>
-    observation.citations.map(citation => ({ dialogueId: observation.dialogueId, seq: citation.seq }))
-  ) ?? [];
-  const seen = new Set<string>();
-  const citations = citationIds.flatMap(citation => {
-    const key = `${citation.dialogueId}:${citation.seq}`;
-    if (seen.has(key)) return [];
-    seen.add(key);
-    const message = record.dialogues.find(dialogue => dialogue.id === citation.dialogueId)?.messages[citation.seq];
-    return message ? [`• диалог ${planText(citation.dialogueId)}, событие #${citation.seq}: «${planText(message.content)}»`] : [];
-  });
-  const evidenceLines = citations.length ? ['', 'ДОКАЗАТЕЛЬСТВА', ...citations] : [];
-  if (!discovery) return { status: 'insufficient', ...counts,
-    lines: ['НЕДОСТАТОЧНО ДАННЫХ', ...countLines, 'Сохранённого discovery-разбора нет.'] };
-  if (discovery.phase === 'error') return { status: 'error', ...counts,
-    lines: ['ОШИБКА DISCOVERY', planText(discovery.error ?? record.error ?? 'Discovery не завершён.'), ...countLines, ...evidenceLines] };
-  if (discovery.phase === 'budget_exhausted') return { status: 'budget_exhausted', ...counts,
-    lines: ['БЮДЖЕТ DISCOVERY ИСЧЕРПАН', planText(discovery.error ?? 'Лимит модельных вызовов исчерпан.'), ...countLines, ...evidenceLines] };
-  if (discovery.phase === 'partial' || discovery.phase === 'running') return { status: 'partial', ...counts,
-    lines: ['ЧАСТИЧНЫЙ РЕЗУЛЬТАТ DISCOVERY', planText(discovery.error ?? 'Discovery ещё не завершён.'), ...countLines, ...evidenceLines] };
-  if (discovery.phase === 'ready' && discovery.hypothesis) {
-    const focusSupport = new Set(discovery.hypothesis.eventIds.map(event => event.dialogueId)).size;
-    const hypothesis = discovery.hypothesis.text.replace(/\nНАБЛЮДЕНИЕ: ответ агента \(reply\)\s*$/u, '').trim();
-    return { status: 'ready', ...counts, fromRunId: record.id, hypothesis: discovery.hypothesis.text,
-      lines: [
-        `ПОВТОРЯЮЩИЙСЯ СИГНАЛ: ${focusSupport} из ${counts.total} — это отбор, не accuracy.`,
-        ...countLines.slice(0, -1),
-        ...evidenceLines,
-        '',
-        'ГИПОТЕЗА',
-        ...planText(hypothesis).split('\n'),
-        '',
-        'НАБЛЮДЕНИЕ: ответ агента (reply)',
-        '',
-        'Проверим?',
-      ] };
-  }
-  return { status: 'insufficient', ...counts,
-    lines: ['НЕДОСТАТОЧНО ДАННЫХ', ...countLines, ...evidenceLines, 'Повторяющийся сигнал минимум в двух диалогах не подтверждён.'] };
-}
-
-type GroundedScore = {
-  requirement: Requirement; source: Source; quote: string; trial: Trial;
-  assessment: NonNullable<Trial['assessments']>[number]; event: TraceEvent;
-};
-const preview = (text: string): string => shorten(text.replace(/\s+/gu, ' ').trim(), 240);
-const missingEvidence = (text: string): boolean => /наблюд|неяс|неизвест|отсутств|нет (?:данных|подтверждения|результата)|observable|observed|missing|state|tool|unclear|insufficient evidence/i.test(text);
-
-function groundedScore(record: Experiment): GroundedScore | undefined {
-  // Saved failure modes identify only a trial, not its metric/evidence/requirement chain.
-  const resolve = (trial: Trial, result: 'fail' | 'unknown'): GroundedScore | undefined => {
-    const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
-    if (!scenario || scenario.requirementIds.length !== 1) return;
-    const requirement = record.requirements.find(item => item.id === scenario.requirementIds[0]);
-    const source = requirement && record.sources.find(item => item.id === requirement.sourceId);
-    const quote = source && requirement ? verbatimSpan(source.content, requirement.quote) : undefined;
-    if (!requirement || !source || !quote) return;
-    for (const assessment of trial.assessments ?? []) {
-      const supportedMetric = ['goal_attainment', 'reply_quality'].includes(assessment.metricId)
-        || assessment.metricId === 'prompt_compliance' && source.kind === 'prompt';
-      if (!supportedMetric || assessment.result !== result || !assessment.rationale.trim()
-        || !scenario.metrics?.some(metric => metric.id === assessment.metricId && metric.subject === 'agent')) continue;
-      // ponytail: lexical missing-evidence gate; replace it with a reason code if assessments gain one.
-      if (result === 'unknown' && !missingEvidence(assessment.rationale)) continue;
-      const event = assessment.evidence.map(seq => trial.events.find(item => item.seq === seq))
-        .find((item): item is TraceEvent => !!item && item.type !== 'user' && item.type !== 'simulator' && !!assessmentEventContent(item).trim());
-      if (!event) continue;
-      return { requirement, source, quote, trial, assessment, event };
-    }
-  };
-  for (const result of ['fail', 'unknown'] as const) for (const trial of record.trials) {
-    const grounded = resolve(trial, result);
-    if (grounded) return grounded;
-  }
-}
-
-/** Compact evidence proposal; renderers escape external text at their terminal boundary. */
-export function scoreBrief(input: Experiment): ScoreBrief {
-  const record = observedRecord(input);
-  if (record.questions.length) return insufficientScoreBrief();
-  const grounded = groundedScore(record);
-  if (!grounded) return insufficientScoreBrief();
-  const { requirement, source, quote, trial, assessment, event } = grounded;
-  const reference = `диалог ${trial.id}, событие #${event.seq}`;
-  const labels: Record<TraceEvent['type'], string> = {
-    user: 'Реплика пользователя', assistant: 'Ответ агента', simulator: 'Реплика симулятора', observation: 'Наблюдение окружения', tool_call: 'Вызов инструмента',
-    tool_result: 'Результат инструмента', retrieval: 'RAG-контекст', error: 'Ошибка',
-  };
-  const status = { pass: 'ПРОЙДЕНО', fail: 'НЕ ПРОЙДЕНО', unknown: 'НЕЯСНО' } as const;
-  const observations = [
-    `${labels[event.type]} · ${reference}: «${preview(assessmentEventContent(event))}»`,
-    `${assessment.metricId} — ${status[assessment.result]}: ${preview(assessment.rationale)} · ${reference}`,
-  ].slice(0, 3);
-  const missingGoal = trial.assessments?.find(item => item.metricId === 'goal_attainment' && item.result !== 'pass' && missingEvidence(item.rationale));
-  const unknownSeq = missingGoal?.evidence.find(seq => trial.events.some(item => item.seq === seq));
-  const unknowns = [
-    ...(missingGoal && (trial.observation?.state === 'missing' || trial.observation?.tools === 'partial')
-      ? [`НЕЯСНО · результат действия: ${trial.observation?.state === 'missing' ? 'состояние не наблюдалось' : 'состояние наблюдалось'}; ${trial.observation?.tools === 'partial' ? 'события инструментов наблюдались частично' : 'события инструментов наблюдались полностью'} · диалог ${trial.id}`]
-      : []),
-    ...(missingGoal?.result === 'unknown' ? [`goal_attainment — НЕЯСНО: ${preview(missingGoal.rationale)} · диалог ${trial.id}${unknownSeq === undefined ? '' : `, событие #${unknownSeq}`}`]
-      : assessment.result === 'unknown' ? [`${assessment.metricId} — НЕЯСНО: ${preview(assessment.rationale)} · ${reference}`] : []),
-  ].slice(0, 3);
-  const mechanism = `${assessment.result === 'unknown' ? 'НЕЯСНО: ' : ''}${preview(assessment.rationale)}`;
-  return {
-    status: 'ready',
-    requirements: [`${requirement.id} · источник ${source.id} (${preview(source.name)}): ${preview(requirement.text)} · точная цитата «${preview(quote)}»`],
-    observations,
-    unknowns,
-    hypothesis: `Похоже, ${mechanism} Это может нарушать требование ${requirement.id} (источник ${source.id}); наблюдение — ${reference}.`,
-    question: 'Проверим?',
-  };
-}
-
 const modeNames: Record<UserMode, string> = { static: 'одна реплика', scripted: 'по сценарию', reactive: 'реактивный симулятор' };
 const rate = (passed: number, failed: number): number | null => passed + failed ? passed / (passed + failed) : null;
 export const percent = (value: number | null): string => value === null ? '—' : `${Math.round(value * 100)}%`;
@@ -657,7 +496,7 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const sentence = (parts: string[]) => { const text = parts.join('; '); return text.charAt(0).toLocaleUpperCase() + text.slice(1); };
   // The rule the number is counted by is said in the sentence itself (C-309), so an old export is told apart by its wording.
   const ruleWords = withRules ? 'Справился (запрос выполнен и правила промпта соблюдены)' : 'Справился (запрос выполнен)';
-  const headline = input.runKind === 'diagnostic' || input.runKind === 'generator' ? 'Служебный прогон исключён из общей точности и проверки исправлений; исходные трассы доступны отдельно.' : primary === 'goal_attainment'
+  const headline = primary === 'goal_attainment'
     ? `${ruleWords} в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${plural(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} справился, но провален другой критерий.` : ''} ${sentence([...leftovers([[cards.unknown, `без решения: ${cards.unknown}`], [cards.invalid, `невалидно: ${cards.invalid}`], [cards.notReached, `не дошли: ${cards.notReached}`]]), reviewText])}.`
     : `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)})${leftovers([[cards.unknown, `${cards.unknown} без решения`], [cards.invalid, `${cards.invalid} невалидны`], [cards.notReached, `${cards.notReached} не дошли`]]).map(part => `, ${part}`).join('')}; ${reviewText}.`;
   const exclusions = record.validationExclusions ?? [];
