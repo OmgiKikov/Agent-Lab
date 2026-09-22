@@ -227,7 +227,7 @@ export type BoardAction =
   | { type: 'acceptLibrary'; variantIds: string[]; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
   | { type: 'editScenario' | 'variant' | 'removeVariant'; variantId: string; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
   | { type: 'mergeScenarios' | 'splitScenario'; businessScenarioId: string; variantId: string; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
-  | { type: 'assessLibrary' | 'editBudget'; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
+  | { type: 'assessLibrary' | 'resumePreparation' | 'editBudget'; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
   /**
    * CTX-01/CTX-18: the owner answered the judge with one key. The answer carries the judgment it
    * refers to, so a verdict that moved while the situation was on screen is refused by the lab.
@@ -805,6 +805,7 @@ export class LabBoard implements Component {
         if (this.section === 'cards' && variant && key('delete')) return this.finish({ type: 'removeVariant', ...state, variantId: variant.id });
         if (this.section === 'cards' && variant && groupId && key('m')) return this.finish({ type: 'mergeScenarios', ...state, variantId: variant.id, businessScenarioId: groupId });
         if (this.section === 'cards' && variant && groupId && key('s')) return this.finish({ type: 'splitScenario', ...state, variantId: variant.id, businessScenarioId: groupId });
+        if (this.section === 'cards' && key('u') && this.record.preparationProgress?.pending.length) return this.finish({ type: 'resumePreparation', ...state });
         if (key('g')) return this.finish({ type: 'assessLibrary', ...state });
         if (key('b')) return this.finish({ type: 'editBudget', ...state });
       }
@@ -913,7 +914,7 @@ export class LabBoard implements Component {
         : [line('НАСКОЛЬКО ХОРОШ ВАШ АГЕНТ', 'accent', true), line(''),
           line('1  Подключение', 'text', true), line('   Agent Lab читает папку агента: промпт, точку входа, базу знаний.', 'muted'),
           line('2  Карточки', 'text', true), line('   Ситуации пользователей — из правил промпта, статей или ваших логов.', 'muted'),
-          line('3  Диалоги', 'text', true), line('   Каждая карточка проигрывается с агентом: одна реплика, по сценарию, живой пользователь.', 'muted'),
+          line('3  Диалоги', 'text', true), line('   Каждая карточка проигрывается с агентом: одна реплика, по сценарию, реактивный симулятор.', 'muted'),
           line('4  Качество', 'text', true), line('   Справился / не справился по карточкам, причины с цитатами, что разметить человеку.', 'muted'), line(''),
           line('n  Проверить своего агента · укажите папку и что проверить', 'accent'),
           line('d  Учебный пример за минуту · без модели и ключей', 'accent'), line(''),

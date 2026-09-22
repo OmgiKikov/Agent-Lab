@@ -445,3 +445,165 @@ test('policy admission counts empty finish as zero follow-up messages', () => {
     transitions: [{ from: 'ask', to: 'answered', actionId: 'answer', when: 'Агент уточнил номер' }, { from: 'answered', to: 'done', actionId: 'finish', when: 'Получен ответ' }] };
   assert.doesNotThrow(() => acceptLibrary(library, libraryHash(library), ['variant_1']));
 });
+
+function coveredContinuation() {
+  const dialogues = structuredClone(rawDialogues);
+  dialogues[0]!.messages.push({ role: 'assistant', content: 'Откройте страницу терминала' }, { role: 'user', content: 'На этой странице нет терминала' });
+  const batch = importBatch(dialogues);
+  const library = createLibrary({ batch, sources, requirements, proposals: proposals(batch.id), semanticRequired: true });
+  const variant = library.variants[0]!;
+  variant.sourceCoverageRequired = true;
+  variant.sourceCoverageBasis = [{ batchId: batch.id, dialogueId: 'terminal', eventIndex: 2 }];
+  variant.sourceCoverage = [{ batchId: batch.id, dialogueId: 'terminal', eventIndex: 2, disposition: 'conditional_action', actionIds: ['missing_terminal'], factIds: [], reason: 'Реальное наблюдение после инструкции перейти к терминалу' }];
+  variant.behaviorPolicy.actions.push({ id: 'missing_terminal', kind: 'missing', factIds: [], payload: 'На этой странице нет терминала' });
+  variant.behaviorPolicy.transitions.push({ from: 'waiting', to: 'done', actionId: 'missing_terminal', when: 'Агент направил клиента на страницу терминала' });
+  return library;
+}
+function assessedCoverage(library: ReturnType<typeof libraryFixture>) {
+  return recordSemanticAssessment(library, library.variants.flatMap(variant => semanticPaths(variant).map(path => ({ variantId: variant.id, path, status: 'ready' as const, reason: 'Контрольная оценка' }))));
+}
+
+test('new multi-turn admission cannot omit a source turn even when all returned semantic findings say ready', () => {
+  const library = coveredContinuation();
+  delete library.variants[0]!.sourceCoverage;
+  const assessed = assessedCoverage(library);
+  assert.ok(libraryQuality(assessed).some(issue => issue.code === 'source_coverage_missing'));
+  assert.throws(() => acceptLibrary(assessed, libraryHash(assessed), ['variant_1']), /готов/);
+  const legacy = libraryFixture();
+  assert.doesNotThrow(() => acceptLibrary(legacy, libraryHash(legacy), ['variant_1', 'variant_2']), 'historical cards do not acquire a new coverage requirement');
+});
+
+test('coverage preserves a reachable conditional source reply and allows a valid alternative to finish', () => {
+  const library = assessedCoverage(coveredContinuation());
+  assert.ok(!libraryQuality(library).some(issue => issue.code.startsWith('source_coverage')), JSON.stringify(libraryQuality(library)));
+  const [compiled] = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']));
+  assert.ok(compiled!.execution!.userView.policy.actions.some(action => action.id === 'missing_terminal'));
+  assert.ok(compiled!.execution!.userView.policy.actions.some(action => action.kind === 'finish'));
+  assert.ok(!compiled!.execution!.userView.facts.some(fact => fact.statement.includes('нет терминала')));
+});
+
+test('coverage rejects nonexistent, unreachable and budget-exhausted source actions', () => {
+  for (const change of ['missing', 'unreachable', 'budget'] as const) {
+    const library = coveredContinuation();
+    const variant = library.variants[0]!;
+    if (change === 'missing') variant.sourceCoverage![0]!.actionIds = ['does_not_exist'];
+    if (change === 'unreachable') {
+      variant.behaviorPolicy.states.push('unreached');
+      variant.behaviorPolicy.transitions.find(transition => transition.actionId === 'missing_terminal')!.from = 'unreached';
+    }
+    if (change === 'budget') variant.behaviorPolicy.maxFollowUps = 0;
+    assert.ok(libraryQuality(assessedCoverage(library)).some(issue => issue.code === 'source_coverage_action'), change);
+  }
+});
+
+test('source-turn accounting rejects duplicate references and fake initial-fact grounding', () => {
+  const library = coveredContinuation();
+  const entry = library.variants[0]!.sourceCoverage![0]!;
+  library.variants[0]!.sourceCoverage!.push(structuredClone(entry));
+  assert.ok(libraryQuality(library).some(issue => issue.code === 'source_coverage_missing'));
+  library.variants[0]!.sourceCoverage = [{ ...entry, disposition: 'initial_fact', actionIds: [], factIds: ['terminal_number'] }];
+  assert.ok(libraryQuality(library).some(issue => issue.code === 'source_coverage_fact'), 'a fact from the opening cannot account for a later induced observation');
+  library.variants[0]!.sourceCoverage![0]!.factIds = [];
+  assert.ok(libraryQuality(library).some(issue => issue.code === 'source_coverage_fact'));
+});
+
+test('omission requires explicit semantic disposition and an edit cannot remove its harness requirement', () => {
+  let library = coveredContinuation();
+  const variant = library.variants[0]!;
+  variant.sourceCoverage![0] = { ...variant.sourceCoverage![0]!, disposition: 'omitted', actionIds: [], reason: 'Предложено исключить реальное препятствие' };
+  library = recordSemanticAssessment(library, library.variants.flatMap(v => semanticPaths(v).map(path => ({ variantId: v.id, path,
+    status: v.id === variant.id && path === 'sourceCoverage' ? 'blocked' as const : 'ready' as const, reason: 'Наблюдавшееся препятствие исходной цели нельзя исключать' }))));
+  assert.throws(() => acceptLibrary(library, libraryHash(library), [variant.id]), /готов/);
+  const replacement = structuredClone(library.variants[0]!);
+  delete replacement.sourceCoverageRequired; delete replacement.sourceCoverageBasis; delete replacement.sourceCoverage;
+  const edited = editLibrary(library, libraryHash(library), { kind: 'upsert_variant', variant: replacement, reason: 'Проверка удаления метаданных' });
+  assert.equal(edited.variants[0]!.sourceCoverageRequired, true);
+  assert.deepEqual(edited.variants[0]!.sourceCoverageBasis, variant.sourceCoverageBasis);
+  assert.ok(libraryQuality(edited).some(issue => issue.code === 'source_coverage_missing'));
+});
+
+test('coverage basis survives removed or substituted source references and remains in semantic context', async () => {
+  const { planSemanticWork } = await import('../src/scenario-work.js');
+  const original = coveredContinuation();
+  const single = importBatch([{ id: 'single', messages: [{ role: 'user', content: 'Другой однократный запрос' }] }]);
+  original.imports.push(single);
+  const basis = structuredClone(original.variants[0]!.sourceCoverageBasis!);
+  for (const substitute of [false, true]) {
+    const replacement = structuredClone(original.variants[0]!);
+    replacement.sourceDialogues = substitute ? [{ batchId: single.id, dialogueId: 'single' }] : [];
+    replacement.sourceCoverage = [];
+    delete replacement.sourceCoverageRequired;
+    if (substitute) replacement.sourceCoverageBasis = [{ batchId: single.id, dialogueId: 'single', eventIndex: 0 }];
+    else delete replacement.sourceCoverageBasis;
+    const edited = editLibrary(original, libraryHash(original), { kind: 'upsert_variant', variant: replacement, reason: 'Попытка заменить исходную хронологию' });
+    assert.deepEqual(edited.variants[0]!.sourceCoverageBasis, basis);
+    const assessed = assessedCoverage(edited);
+    assert.ok(libraryQuality(assessed).some(issue => issue.code === 'source_coverage_reference'));
+    assert.ok(libraryQuality(assessed).some(issue => issue.code === 'source_coverage_missing'));
+    assert.throws(() => acceptLibrary(assessed, libraryHash(assessed), ['variant_1']), /готов/);
+    const coverageJob = planSemanticWork(edited).jobs.find(job => job.input.scope === 'fields' && job.input.fields.some(field => field.variantId === 'variant_1' && field.paths.includes('sourceCoverage')))!;
+    assert.ok(coverageJob.input.library.imports.some(batch => batch.id === basis[0]!.batchId
+      && batch.dialogues.some(dialogue => dialogue.id === 'terminal'
+        && dialogue.events.some(event => event.index === 2 && event.content === 'На этой странице нет терминала'))),
+    'the checker still receives original chronology');
+  }
+});
+
+test('a verified owner edit can correct a mapped initial fact while preserving source coverage and requiring review', () => {
+  const dialogues = structuredClone(rawDialogues);
+  dialogues[0]!.messages.push({ role: 'assistant', content: 'Подтвердите номер терминала' }, { role: 'user', content: 'Номер терминала: 1234' });
+  const batch = importBatch(dialogues);
+  let library = createLibrary({ batch, sources, requirements, proposals: proposals(batch.id), semanticRequired: true });
+  const variant = library.variants[0]!;
+  variant.sourceCoverageRequired = true;
+  variant.sourceCoverageBasis = [{ batchId: batch.id, dialogueId: 'terminal', eventIndex: 2 }];
+  variant.sourceCoverage = [{ ...variant.sourceCoverageBasis[0]!, disposition: 'initial_fact', actionIds: [], factIds: ['terminal_number'], reason: 'Повтор личного номера по запросу' }];
+  variant.userState.facts[0]!.origin = { kind: 'dialogue', batchId: batch.id, dialogueId: 'terminal', eventIndex: 2, quote: 'Номер терминала: 1234' };
+  library = assessedCoverage(library);
+  const basis = structuredClone(variant.sourceCoverageBasis);
+  const edited = editLibrary(library, libraryHash(library), { kind: 'edit_fact', variantId: variant.id, factId: 'terminal_number', statement: 'Номер терминала: 5678', value: '5678', availability: 'initial', editId: 'owner_number_correction', reason: 'Владелец уточнил личный номер' });
+  assert.deepEqual(edited.variants[0]!.sourceCoverageBasis, basis);
+  assert.ok(!libraryQuality(edited).some(issue => issue.code === 'source_coverage_fact'));
+  assert.ok(libraryQuality(edited).some(issue => issue.code === 'semantic_variant_pending'));
+  assert.throws(() => acceptLibrary(edited, libraryHash(edited), [variant.id]), /готов/);
+  const reviewed = assessedCoverage(edited);
+  assert.doesNotThrow(() => acceptLibrary(reviewed, libraryHash(reviewed), [variant.id]));
+  reviewed.variants[0]!.userState.facts[0]!.value = '9999';
+  reviewed.variants[0]!.userState.facts[0]!.statement = 'Номер терминала: 9999';
+  assert.ok(libraryQuality(reviewed).some(issue => issue.code === 'source_coverage_fact'), 'an owner label cannot authenticate a changed fact without its exact edit receipt');
+});
+
+test('editing group context reconciles checkpoint requirement references without inventing requirements', () => {
+  const library = libraryFixture();
+  const extra = { ...requirements[0]!, id: 'second_rule' };
+  library.requirements.push(extra);
+  library.variants[1]!.evaluationSpec.checkpoints[0]!.requirementId = extra.id;
+  assert.ok(libraryQuality(library).some(issue => issue.code === 'invalid_checkpoint_citation'));
+  const repaired = editLibrary(library, libraryHash(library), { kind: 'edit_business', businessScenarioId: library.businessScenarios[0]!.id,
+    goal: 'Получить помощь с возвратом', reason: 'Общая цель вариантов' }, 'assistant');
+  assert.deepEqual(repaired.businessScenarios[0]!.requirementIds, ['terminal_rule', 'second_rule']);
+  assert.ok(!libraryQuality(repaired).some(issue => issue.code === 'invalid_checkpoint_citation'));
+  assert.deepEqual(repaired.requirements, library.requirements, 'requirements themselves are never invented or altered');
+  assert.equal(repaired.variants[1]!.semanticReviewRequired, true, 'applicability of the new context must still be assessed');
+});
+
+test('behavior repair preserves immutable evidence and facts and owes semantic review', () => {
+  const library = coveredContinuation();
+  library.readingManifest = [{ batchId: library.imports[0]!.id, dialogueId: 'terminal', variantIds: ['variant_1'], sourceIds: ['policy'] }];
+  const original = structuredClone(library), card = library.variants[0]!;
+  card.sourceCoverage![0]!.factIds = ['terminal_number'];
+  assert.ok(libraryQuality(library).some(issue => issue.code === 'source_coverage_action' && issue.message.includes('пустой factIds')));
+  const repaired = editLibrary(library, libraryHash(library), { kind: 'edit_behavior', variantId: card.id,
+    sourceCoverage: original.variants[0]!.sourceCoverage, reason: 'Факт указан в действии, в покрытии нужна ссылка на действие' }, 'assistant');
+  assert.ok(!libraryQuality(repaired).some(issue => issue.code === 'source_coverage_action'));
+  assert.deepEqual(repaired.imports, original.imports);
+  assert.deepEqual(repaired.readingManifest, original.readingManifest);
+  assert.deepEqual(repaired.variants[0]!.sourceCoverageBasis, original.variants[0]!.sourceCoverageBasis);
+  assert.deepEqual(repaired.variants[0]!.userState, original.variants[0]!.userState);
+  assert.deepEqual(repaired.variants[1]!, original.variants[1]!);
+  assert.equal(repaired.variants[0]!.history.at(-1)!.author, 'assistant');
+  assert.equal(repaired.variants[0]!.semanticReviewRequired, true);
+  assert.throws(() => acceptLibrary(repaired, libraryHash(repaired), [card.id]), /готов|ready/i);
+  const forged = { kind: 'edit_behavior', variantId: card.id, sourceCoverage: [], sourceCoverageBasis: [], reason: 'Не учитывать источник' };
+  assert.throws(() => editLibrary(library, libraryHash(library), forged as never, 'assistant'));
+});

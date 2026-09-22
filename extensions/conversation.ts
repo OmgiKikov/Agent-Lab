@@ -2,6 +2,7 @@ import type { Experiment, Trial } from '../dist/contracts.js';
 import { valueTokens } from '../dist/contracts.js';
 import { plannedTrials, type RunComparison } from '../dist/comparison.js';
 import type { ScenarioLibrary, ScenarioVariant } from '../dist/scenario-contracts.js';
+import { resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../dist/scenario-library.js';
 import type { VariantFieldDiff, VariantOperation } from '../dist/scenario-variants.js';
 import { semanticWorkStatus } from '../dist/scenario-work.js';
 import { shortId, type ResultView } from '../dist/result-view.js';
@@ -18,11 +19,12 @@ import { GLYPH, type Row } from './render/theme.ts';
  * Nothing in this file writes state or keeps its own copy of it.
  */
 
-const fold = (value: string): string => value.toLocaleLowerCase('ru').replaceAll('ё', 'е')
-  .replace(/[«»"'`.,;:!?()[\]{}<>—–-]+/g, ' ').replace(/\s+/g, ' ').trim();
-const words = (value: string): string[] => fold(value).split(' ').filter(Boolean);
-/** Russian inflection changes word endings, so wording is compared on the first five letters of each longer word. */
-const stems = (value: string): Set<string> => new Set(words(value).filter(word => word.length >= 4).map(word => word.slice(0, 5)));
+const SPACED = new Set('«»"\'`.,;:!?()[]{}<>—–-'.split(''));
+const fold = (value: string): string => {
+  let out = '';
+  for (const ch of value.toLocaleLowerCase('ru').replaceAll('ё', 'е')) out += SPACED.has(ch) || /\s/u.test(ch) ? ' ' : ch;
+  return out.trim().split(' ').filter(Boolean).join(' ');
+};
 const oneLine = (value: unknown): string => String(value ?? '').replace(/\s+/g, ' ').trim();
 const clip = (value: unknown, limit: number): string => { const text = oneLine(value); return text.length <= limit ? text : `${text.slice(0, limit - 1).trimEnd()}…`; };
 
@@ -54,16 +56,21 @@ export function ungroundedValues(text: string, allowed: string[]): string[] {
   return [...valueTokens(text)].filter(token => !known.has(token));
 }
 
-/** Share of the longer words of `text` whose stem occurs in `sources`; 1 for a text without such words. */
-export function wordingCoverage(text: string, sources: string[]): number {
-  const wanted = [...stems(text)];
-  if (!wanted.length) return 1;
-  const known = stems(sources.join('\n'));
-  return wanted.filter(stem => known.has(stem)).length / wanted.length;
+/**
+ * True when `text` is a contiguous phrase inside one source, after the same folding as quotes.
+ * This locates text, never proves intent or authorizes an owner receipt.
+ */
+export function verbatimSpan(text: string, sources: string[]): boolean {
+  const folded = fold(text);
+  if (!folded) return true;
+  return sources.some(source => {
+    const normalized = fold(source);
+    const index = normalized.indexOf(folded);
+    return index >= 0 && (index === 0 || normalized[index - 1] === ' ')
+      && (index + folded.length === normalized.length || normalized[index + folded.length] === ' ')
+      && !normalized.slice(0, index).trimEnd().endsWith('не');
+  });
 }
-
-/** Below this share the wording is treated as the model's own and needs the owner's native confirmation. */
-export const OWNER_WORDING_SHARE = 0.6;
 
 export interface OwnerBasis {
   /** The reason stored with the edit: the owner's message, verbatim. */
@@ -91,134 +98,46 @@ export function ownerBasis(messages: string[], quote?: string): OwnerBasis | nul
 }
 const reasonText = (message: string): string => `Владелец в разговоре: «${clip(message, 940)}»`;
 
-/** What the owner may ask for. Mentioning a thing is not asking for it, and «не удаляй» is the opposite of asking. */
+/** The tool the model called. The harness does not decide this by reading the sentence. */
 export type Intent = 'edit' | 'variant' | 'remove' | 'merge' | 'split' | 'stop';
-const INTENT_STEMS: Record<Intent, string[]> = {
-  edit: ['измен', 'помен', 'поправ', 'исправ', 'замен', 'перепи', 'переформ', 'пусть', 'сделай', 'постав', 'напиши', 'уточни', 'обнов'],
-  variant: ['добав', 'созда', 'сделай', 'нужен', 'нужна', 'заведи'],
-  remove: ['убер', 'убир', 'удал', 'исключ', 'выкин', 'снеси'],
-  merge: ['объедин', 'слей', 'склей', 'соедин'],
-  split: ['раздел', 'выдел', 'отдел', 'вынес'],
-  stop: ['остан', 'прерв', 'прекрат', 'стоп', 'хватит', 'stop', 'cancel'],
-};
-const NEGATIONS = new Set(['не', 'нельзя', 'незачем', 'никогда', 'ни', 'dont', 'not', 'never']);
-const CANCELS = ['не надо', 'не нужно', 'отмена', 'отмени', 'отменяю', 'передумал', 'оставь как', 'ничего не меняй', 'верни как'];
-/** Quoted speech and pasted log lines are material the owner shows, not an instruction the owner gives. */
-const ownWords = (message: string): string => message.replace(/«[^»]*»|"[^"]*"|“[^”]*”/g, ' ').split('\n')
-  .filter(line => !/^\s*(>|\{|\[|(user|assistant|клиент|агент|пользователь)\s*:)/i.test(line)).join(' ');
-
-const EXPLAIN = new Set(['как', 'почему', 'зачем', 'можно', 'объясни', 'расскажи', 'подскажи', 'что', 'когда', 'нужно']);
-/**
- * True when the message asks for this operation in the owner's own words. A question («как остановить прогон?») or a request to
- * explain is not an instruction, and a negation anywhere earlier in the same clause turns the verb into its opposite.
- */
-export function asksFor(message: string, intent: Intent): boolean {
-  // What follows a colon is the wording being dictated («пусть спрашивает: когда вернут деньги?»), not the request itself.
-  const sentences = ownWords(message).split(/(?<=[.!?\n])/).map(sentence => sentence.split(':')[0]!).filter(sentence => !sentence.trim().endsWith('?') && !EXPLAIN.has(words(sentence)[0] ?? ''));
-  return sentences.flatMap(sentence => sentence.split(/[,;:—]| но | а /)).some(clause => {
-    const tokens = words(clause);
-    const at = tokens.findIndex(token => INTENT_STEMS[intent].some(stem => token.startsWith(stem)));
-    return at >= 0 && !tokens.slice(0, at).some(before => NEGATIONS.has(before));
-  });
-}
-
-/** The instruction behind an operation: the basis message asks for it, and no later owner message took it back. */
-export function ownerAsked(messages: string[], intent: Intent, quote?: string): { basis: OwnerBasis | null; asked: boolean } {
-  const basis = ownerBasis(messages, quote);
-  if (!basis || !asksFor(basis.message, intent)) return { basis, asked: false };
-  const takenBack = messages.slice(basis.index + 1).some(later => CANCELS.some(phrase => fold(later).includes(phrase)));
-  return { basis, asked: !takenBack };
-}
-
 export type Authority =
   | { kind: 'conversation'; reason: string }
   | { kind: 'confirm'; reason: string; question: string }
   | { kind: 'ask'; message: string; ownerMessage: string };
 
 /**
- * Who may stand behind a draft edit.
- *
- *   values the owner never said            ──► ask   (nothing is written; the model gets a concrete question)
- *   owner-attributed wording not the owner's ──► confirm (native dialog shows the exact text)
- *   everything traceable to owner words    ──► conversation (no extra stop)
- *
- * `attributed` are texts stored as the owner's own (facts, expectations, rules); `simulated` are
- * user-simulation texts (opening, goal) where only invented values matter; `known` is what the card
- * already contains.
+ * The model already chose the tool. This only checks that a value was said and that owner-attributed
+ * wording is a verbatim span. Simulated wording is a draft proposal, not an owner receipt.
+ * Intent and reference selection belong to the model; this function does not certify them.
  */
 export function authorize(input: { messages: string[]; quote?: string; intent: Intent; attributed?: string[]; simulated?: string[]; known?: string[]; summary: string; provenance?: boolean; objects?: InstructionObjects }): Authority {
-  const { basis, asked } = ownerAsked(input.messages, input.intent, input.quote);
+  const basis = ownerBasis(input.messages, input.quote);
   if (!basis) return { kind: 'confirm', reason: 'Подтверждено владельцем в диалоге Pi.', question: input.summary };
   const allowed = [...input.messages, ...(input.known ?? [])];
-  const invented = [...new Set([...(input.attributed ?? []), ...(input.simulated ?? [])].flatMap(text => ungroundedValues(text, allowed)))];
+  const spoken = [...(input.attributed ?? []), ...(input.simulated ?? [])];
+  const invented = [...new Set(spoken.flatMap(text => ungroundedValues(text, allowed)))];
   if (invented.length) return { kind: 'ask', message: `Владелец не называл: ${invented.join(', ')}. Спросите у него точное значение; ничего не записано.`,
     ownerMessage: `Значение ${invented.join(', ')} вы не называли, а от себя я значения не записываю. Назовите точное — и я внесу. Ничего не изменено.` };
-  // What the client knew and what the owner vouches for is a decision about provenance: matching words never settle it.
   if (input.provenance) return { kind: 'confirm', reason: basis.reason, question: input.summary };
-  // Words of the owner are not yet an instruction of the owner: the message has to ask for this operation.
-  if (!asked) return { kind: 'confirm', reason: basis.reason, question: input.summary };
-  // An instruction is about something: «исправь первую реплику» does not let the model pick the card it is applied to.
-  if (input.objects && !input.objects.exhaustive && !input.objects.targets.every(target => refersTo(basis.message, target, input.objects!.kind))) return { kind: 'confirm', reason: basis.reason, question: input.summary };
-  const foreign = (input.attributed ?? []).some(text => wordingCoverage(text, allowed) < OWNER_WORDING_SHARE);
-  return foreign ? { kind: 'confirm', reason: basis.reason, question: input.summary } : { kind: 'conversation', reason: basis.reason };
+  const foreign = (input.attributed ?? []).some(text => !verbatimSpan(text, [basis.message]));
+  if (foreign) return { kind: 'confirm', reason: basis.reason, question: input.summary };
+  return { kind: 'conversation', reason: basis.reason };
 }
-
-/* ───────────────────────────── the object of an instruction ───────────────────────────── */
 
 export interface InstructionTarget {
-  /** The number the object has in the list the owner sees. */
   number?: number;
   title: string;
-  /** Titles of the other candidates: a word they share with the target does not name the target. */
   otherTitles: string[];
-  /** The card last shown or changed in this session: only then «её», «там», «эту» can mean it. */
   lastTouched?: boolean;
 }
-/** `exhaustive`: the targets are all the candidates there are (one card in the library, both of two groups), so nothing else could be meant. */
 export interface InstructionObjects { kind: 'card' | 'group'; targets: InstructionTarget[]; exhaustive?: boolean }
-
-const OBJECT_NOUNS = { card: ['карточ', 'сценари', 'вариант', 'ситуаци', 'случа', 'кейс'], group: ['групп'] };
-/** Things an ordinal may count instead of the object: «первую реплику» is about a line of some card, not about the first card. */
-const OTHER_NOUNS = ['реплик', 'сообщен', 'фраз', 'правил', 'проверк', 'факт', 'строк', 'пункт', 'вопрос', 'ожидан', 'услов', 'замечан', 'шаг', 'предложен', 'провал', 'прогон', 'диалог', 'очеред', 'раз', 'попытк', 'верси', 'ревизи'];
-const ORDINAL_STEMS = ['перв', 'втор', 'трет', 'четверт', 'пят', 'шест', 'седьм', 'восьм', 'девят', 'десят'];
-const ORDINAL_ENDING = /^(ый|ой|ая|ое|ую|ого|ому|ым|ом|ые|ых|ыми)$/;
-const THIRD_ENDING = /^(ий|ья|ье|ью|ьего|ьему|ьим|ьем|ьей|ьи|ьих|ьими)$/;
-const DEICTIC = new Set(['эту', 'эта', 'этот', 'этой', 'этом', 'этого', 'ней', 'нее', 'него', 'нем', 'ее', 'здесь', 'там', 'туда', 'тут']);
-/** 1–10 for an ordinal adjective in any case form («первой», «третью»); 0 for anything else, cardinals («пять») and «вторник» included. */
-function ordinalValue(token: string): number {
-  const at = ORDINAL_STEMS.findIndex(stem => token.startsWith(stem) && (stem === 'трет' ? THIRD_ENDING : ORDINAL_ENDING).test(token.slice(stem.length)));
-  return at + 1;
-}
-
-/**
- * True when the owner's message names this object: by its list number (an ordinal, or digits next to «карточка»/«№»), by its whole title
- * or a title word no other candidate shares, or by «её»/«там» when it is the card last shown or changed. Only the instruction counts: what
- * follows a colon is wording being dictated. Every doubt answers false — the native dialog then decides, which costs the owner one key.
- */
-export function refersTo(message: string, target: InstructionTarget, kind: InstructionObjects['kind'] = 'card'): boolean {
-  const tokens = words(message.split('\n').map(line => line.split(':')[0]!).join(' ').replace(/[#№]\s*(?=\d)/g, ' № '));
-  const own = (token?: string): boolean => !!token && OBJECT_NOUNS[kind].some(stem => token.startsWith(stem));
-  const other = (token?: string): boolean => !!token && [...OTHER_NOUNS, ...OBJECT_NOUNS[kind === 'card' ? 'group' : 'card']].some(stem => token.startsWith(stem));
-  if (target.number !== undefined) for (const [index, token] of tokens.entries()) {
-    // «2-й», «2 й»: the letters after the digits are an ending, the noun follows them.
-    const next = /^[а-я]{1,3}$/.test(tokens[index + 1] ?? '') && /^\d+$/.test(token) ? tokens[index + 2] : tokens[index + 1];
-    if (/^\d+$/.test(token) ? Number(token) === target.number && (tokens[index - 1] === '№' || own(tokens[index - 1]) || own(next))
-      : ordinalValue(token) === target.number && !other(next) && !(tokens[index - 1] === 'во' && token.endsWith('ых'))) return true;
-  }
-  const title = words(target.title);
-  const others = target.otherTitles.map(item => words(item).join(' '));
-  if (title.length && !others.includes(title.join(' ')) && tokens.some((_, index) => title.every((word, offset) => tokens[index + offset] === word))) return true;
-  const shared = stems(target.otherTitles.join(' ')), said = stems(tokens.join(' '));
-  if ([...stems(target.title)].some(stem => !shared.has(stem) && said.has(stem))) return true;
-  return !!target.lastTouched && tokens.some(token => DEICTIC.has(token));
-}
 
 /* ───────────────────────────── references ───────────────────────────── */
 
 export type Resolved<T> = { kind: 'one'; item: T } | { kind: 'none' } | { kind: 'many'; items: T[] };
 const pick = <T>(items: T[]): Resolved<T> => items.length === 1 ? { kind: 'one', item: items[0]! } : items.length ? { kind: 'many', items } : { kind: 'none' };
 
-/** Match by exact id, id prefix, 1-based position, exact name, name fragment, then word stems — the first rule that matches anything decides. */
+/** Match by exact id, id prefix, 1-based position, exact name, then a name fragment. */
 function resolveBy<T>(items: T[], ref: string, id: (item: T) => string, name: (item: T) => string): Resolved<T> {
   const raw = ref.trim();
   if (!raw) return { kind: 'none' };
@@ -231,10 +150,7 @@ function resolveBy<T>(items: T[], ref: string, id: (item: T) => string, name: (i
   const same = items.filter(item => fold(name(item)) === wanted);
   if (same.length) return pick(same);
   const part = items.filter(item => fold(name(item)).includes(wanted));
-  if (part.length) return pick(part);
-  const wantedStems = [...stems(raw)];
-  if (!wantedStems.length) return { kind: 'none' };
-  return pick(items.filter(item => { const known = stems(name(item)); return wantedStems.every(stem => known.has(stem)); }));
+  return pick(part);
 }
 
 /** Variants in the order every list shows them: group by group, so «третья карточка» means the third row on screen. */
@@ -272,19 +188,25 @@ export function referenceQuestion(ref: string, resolved: { kind: 'none' } | { ki
 
 const factLabel = (statement: string): string => { const at = statement.indexOf(':'); return (at > 0 ? statement.slice(0, at) : statement).trim(); };
 
-/** The opening without the sentence that reveals `value`; a one-sentence opening loses only the «label: value» part. */
+const splitMarks = (text: string, marks: string): string[] => {
+  const parts: string[] = [];
+  let buf = '';
+  for (const ch of text) {
+    buf += ch;
+    if (marks.includes(ch)) { parts.push(buf); buf = ''; }
+  }
+  if (buf) parts.push(buf);
+  return parts;
+};
+
+/** The opening without the piece that reveals `value`. */
 export function openingWithout(opening: string, value: string): string {
   if (!value || !fold(opening).includes(fold(value))) return opening;
   const mentions = (part: string): boolean => fold(part).includes(fold(value));
-  const sentences = opening.match(/[^.!?\n]+[.!?]*\s*/g) ?? [opening];
-  const kept = sentences.filter(sentence => !mentions(sentence)).join('').trim();
+  const kept = splitMarks(opening, '.!?\n').filter(sentence => !mentions(sentence)).join('').trim();
   if (kept) return kept;
-  // One sentence: drop the clause that carries the value, keep the rest of what the client says.
-  const clauses = opening.split(/([,;]\s*)/);
-  const rest = clauses.filter((part, index) => index % 2 === 0 && !mentions(part));
-  if (rest.length && rest.length < Math.ceil(clauses.length / 2)) return rest.map(part => part.trim()).filter(Boolean).join(', ');
-  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return opening.replace(new RegExp(`[,;]?\\s*[^,.;:!?]*:\\s*${escaped}`, 'i'), '').replace(new RegExp(escaped, 'gi'), '').replace(/\s{2,}/g, ' ').replace(/\s+([.,!?])/g, '$1').trim();
+  const rest = splitMarks(opening, ',;').filter(part => !mentions(part)).map(part => part.replace(/[,;\s]+$/, '').trim()).filter(Boolean);
+  return rest.join(', ');
 }
 
 export interface VariantHints { fact?: string; opening?: string; ifAsked?: string; reply?: string; missingDescription?: string; intent?: string; afterAction?: string; failures?: number }
@@ -346,27 +268,21 @@ const phaseWord: Record<string, string> = {
   cancelled: 'остановлен', error: 'ошибка', interrupted: 'прерван', baseline: 'идёт прогон', improving: 'идёт прогон', control: 'идёт прогон',
 };
 
-/** Words of the scenario checker that mean nothing to an owner, and what they mean. */
-const CHECKER_WORDS: [RegExp, string][] = [
-  [/ownerFactEvidence\s+отсутствует/gi, 'владелец этого не подтверждал'], [/ownerFactEvidence/g, 'подтверждение владельца'],
-  [/\bcheckpoints?\b/gi, 'проверка'], [/\blearned_in_source\b/g, 'узнал только в старом разговоре'], [/\binitial\b/g, 'знал заранее'],
-  [/\buncertain\b/g, 'неясно'], [/ответом missing/g, 'ответом «данных нет»'], [/\bmissing\b/g, '«данных нет»'],
+const CHECKER_WORDS: [string, string][] = [
+  ['ownerFactEvidence отсутствует', 'владелец этого не подтверждал'], ['ownerFactEvidence', 'подтверждение владельца'],
+  ['checkpoints', 'проверки'], ['checkpoint', 'проверка'], ['learned_in_source', 'узнал только в старом разговоре'], ['initial', 'знал заранее'],
+  ['uncertain', 'неясно'], ['ответом missing', 'ответом «данных нет»'], ['missing', '«данных нет»'],
 ];
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/**
- * A checker remark as the owner can act on it: which part of the card it is about, internal ids
- * replaced by the titles the owner sees, checker vocabulary replaced by plain words. The stored
- * remark is not changed.
- */
+/** A checker remark as the owner can act on it. The stored remark is not changed. */
 export function plainIssue(library: ScenarioLibrary, variant: ScenarioVariant, issue: { path: string; message: string }): string {
   let text = issue.message;
-  for (const other of library.variants) if (other.id.length >= 6) text = text.replace(new RegExp(`(?<![\\wа-яё-])${escapeRegExp(other.id)}(?![\\wа-яё-])`, 'gi'), `«${other.title}»`);
-  for (const fact of variant.userState.facts) if (fact.id.length >= 6) text = text.replace(new RegExp(`(?<![\\wа-яё-])${escapeRegExp(fact.id)}(?![\\wа-яё-])`, 'g'), `«${fact.statement}»`);
-  for (const [pattern, word] of CHECKER_WORDS) text = text.replace(pattern, word);
-  const checkpointId = /\.checkpoints\.([A-Za-z0-9_-]+)/.exec(issue.path)?.[1];
+  for (const other of library.variants) if (other.id.length >= 6) text = text.split(other.id).join(`«${other.title}»`);
+  for (const fact of variant.userState.facts) if (fact.id.length >= 6) text = text.split(fact.id).join(`«${fact.statement}»`);
+  for (const [from, word] of CHECKER_WORDS) text = text.split(from).join(word);
+  const checkpointId = issue.path.split('.checkpoints.')[1]?.split('.')[0];
   const checkpoint = checkpointId ? variant.evaluationSpec.checkpoints.find(item => item.id === checkpointId) : undefined;
-  const factId = /\.facts\.([A-Za-z0-9_-]+)/.exec(issue.path)?.[1];
+  const factId = issue.path.split('.facts.')[1]?.split('.')[0];
   const fact = factId ? variant.userState.facts.find(item => item.id === factId) : undefined;
   const about = checkpoint ? `Проверка «${checkpoint.rule}»` : fact ? `Факт «${fact.statement}»` : issue.path.endsWith('.duplicates') ? 'Похоже на дубль'
     : issue.path.includes('behaviorPolicy') ? 'Поведение клиента' : issue.path.includes('successCriteria') ? 'Ожидаемый результат' : issue.path.includes('opening') ? 'Первая реплика' : '';
@@ -375,6 +291,24 @@ export function plainIssue(library: ScenarioLibrary, variant: ScenarioVariant, i
 
 /** Remarks the owner can act on: «the recheck has not run yet» is the tool's own bookkeeping and is said once, by the recheck row. */
 export const ownerRemarks = <T extends { code: string }>(issues: T[]): T[] => issues.filter(issue => issue.code !== 'semantic_pending' && issue.code !== 'semantic_variant_pending');
+
+export const ownerQuestions = (variant: ScenarioVariant) => ownerRemarks(variant.issues).filter(issue => issue.code === 'semantic_finding' && issue.severity === 'needs_review');
+
+/** Only an identical checkpoint uncertainty across every explicitly selected card is offered as one owner decision. */
+export function sharedOwnerQuestions(library: ScenarioLibrary, cards: ScenarioVariant[]) {
+  return (cards[0] ? ownerQuestions(cards[0]) : []).flatMap((anchor, index) => {
+    const path = anchor.path.replace(`variants.${cards[0]!.id}.`, '');
+    const scope = resolutionQuestionHash(library, cards[0]!, path, anchor.message);
+    if (!scope) return [];
+    const members = cards.flatMap(card => {
+      const matching = ownerQuestions(card).filter(issue => resolutionQuestionHash(library, card, issue.path.replace(`variants.${card.id}.`, ''), issue.message) === scope);
+      if (matching.length !== 1) return [];
+      const issue = matching[0]!, memberPath = issue.path.replace(`variants.${card.id}.`, '');
+      return [{ card, issue, path: memberPath, findingHash: resolutionHash(library, card, memberPath, issue.message) }];
+    });
+    return members.length === cards.length ? [{ questionNumber: index + 1, members }] : [];
+  });
+}
 
 /** The checks of a card the scenario checker calls inapplicable or undefined, by their ids in the remark paths. */
 export function disputedCheckpoints(variant: ScenarioVariant): ScenarioVariant['evaluationSpec']['checkpoints'] {
@@ -441,7 +375,7 @@ export function libraryFeed(record: Experiment): Feed {
 
 const availabilityWord = { initial: 'Знает', learned_in_source: 'Узнал только в старом разговоре (в стартовые знания не входит)', uncertain: 'Неясно, знал ли заранее' } as const;
 const originWord = { dialogue: 'прочитано из диалога', owner: 'подтверждено владельцем', synthetic: 'синтетическое допущение' } as const;
-const actionWord = { answer: 'отвечает', missing: 'говорит, что данных нет', clarify: 'уточняет', correct: 'исправляет ответ', change_intent: 'меняет намерение', finish: 'завершает разговор' } as const;
+const actionWord = { answer: 'отвечает', missing: 'говорит, что данных нет', clarify: 'уточняет', correct: 'исправляет ответ', change_intent: 'меняет намерение', finish: 'завершает разговор', observe: 'сообщает, что видит' } as const;
 
 function factOriginText(library: ScenarioLibrary, fact: ScenarioVariant['userState']['facts'][number]): string {
   if (fact.origin.kind === 'owner') return `слова владельца: «${fact.origin.text}»`;
@@ -480,6 +414,14 @@ export function variantFeed(record: Experiment, variant: ScenarioVariant, option
     blank(), row('Что проверяется', 'accent', true),
     ...variant.evaluationSpec.checkpoints.flatMap(item => [row(`${item.role === 'required' ? 'Обязательно' : 'Диагностика'}: ${item.rule}`, undefined, false, 1), row(`Требование владельца: «${item.quote}»`, 'muted', false, 3)]),
     ...(variant.issues.length > 3 ? [blank(), row('Все замечания', 'accent', true), ...variant.issues.map(item => row(`• ${plainIssue(library, variant, item)}`, 'warning', false, 1))] : []),
+    ...(library.ownerResolutions?.some(item => item.variantId === variant.id) ? [blank(), row('Решения владельца', 'accent', true),
+      ...library.ownerResolutions.filter(item => item.variantId === variant.id).map(item => {
+        const finding = library.semanticAssessment?.findings.find(finding => finding.variantId === variant.id && finding.path === item.path);
+        const current = finding && item.findingHash === resolutionHash(library, variant, item.path, finding.reason)
+          && (!item.businessHash || item.businessHash === resolutionBusinessHash(library, variant));
+        const scopeCount = new Set(library.ownerResolutions!.filter(receipt => receipt.editId === item.editId).map(receipt => receipt.variantId)).size;
+        return row(`${item.reason}${scopeCount > 1 ? ` · общее решение для ${scopeCount} карточек` : ''}${current ? '' : ' · относится к прежнему содержимому'}`, 'muted', false, 1);
+      })] : []),
   ];
   if (options.source) {
     for (const ref of variant.sourceDialogues) {
@@ -497,11 +439,12 @@ export function variantFeed(record: Experiment, variant: ScenarioVariant, option
 
 const DIFF_LABEL: Record<string, string> = {
   'userState.opening': 'Первая реплика', 'userState.goal': 'Цель клиента', 'userState.facts': 'Что клиент знает', 'userState.missing': 'Каких данных нет',
-  'userState.persona': 'Портрет клиента', behaviorPolicy: 'Поведение клиента', environmentFixture: 'Среда', 'evaluationSpec.successCriteria': 'Ожидаемый результат',
+  'userState.persona': 'Портрет клиента', behaviorPolicy: 'Поведение клиента', sourceCoverage: 'Учёт исходных реплик', environmentFixture: 'Среда', 'evaluationSpec.successCriteria': 'Ожидаемый результат',
 };
 function diffValue(path: string, value: unknown): string[] {
   if (value === undefined || value === null) return ['—'];
   if (path === 'userState.facts' && Array.isArray(value)) return value.length ? value.map(fact => String((fact as { statement?: unknown }).statement ?? '')) : ['фактов нет'];
+  if (path === 'sourceCoverage' && Array.isArray(value)) return (value as NonNullable<ScenarioVariant['sourceCoverage']>).map(item => `${item.dialogueId}, реплика ${item.eventIndex + 1}: ${item.disposition === 'conditional_action' ? 'ответ по условию' : item.disposition === 'initial_fact' ? 'личный факт' : 'исключена'}; действия: ${item.actionIds.join(', ') || '—'}; факты: ${item.factIds.join(', ') || '—'}; ${item.reason}`);
   if (path === 'behaviorPolicy') return behaviorLines({ behaviorPolicy: value as ScenarioVariant['behaviorPolicy'] });
   if (path === 'environmentFixture') { const failures = (value as { initialState?: { transientFailures?: unknown } }).initialState?.transientFailures; return [failures ? `первые ${failures} записи завершатся временной ошибкой` : 'без сбоев']; }
   if (Array.isArray(value)) return value.length ? value.map(item => String(item)) : ['пусто'];
@@ -527,7 +470,7 @@ export function variantDiff(before: ScenarioVariant, after: ScenarioVariant): Va
   const fields: [string, (variant: ScenarioVariant) => unknown][] = [
     ['userState.opening', v => v.userState.opening], ['userState.goal', v => v.userState.goal],
     ['userState.facts', v => v.userState.facts.map(fact => ({ statement: `${fact.statement} (${availabilityWord[fact.availability].toLocaleLowerCase('ru')}; ${originWord[fact.origin.kind]})` }))],
-    ['userState.missing', v => v.userState.missing], ['behaviorPolicy', v => v.behaviorPolicy],
+    ['userState.missing', v => v.userState.missing], ['behaviorPolicy', v => v.behaviorPolicy], ['sourceCoverage', v => v.sourceCoverage],
     ['evaluationSpec.successCriteria', v => v.evaluationSpec.successCriteria],
     ['Правила проверки', v => v.evaluationSpec.checkpoints.map(item => item.rule)],
   ];
@@ -673,6 +616,7 @@ export function comparisonFeed(comparison: RunComparison, beforeId: string): Fee
 }
 
 /** Semantic work still owed by a library and whether the agreed budget covers it. */
-export function semanticDebt(record: Experiment, library: ScenarioLibrary): { pendingJobs: number; remainingCalls: number } {
-  return { pendingJobs: semanticWorkStatus(library).pendingJobs, remainingCalls: Math.max(0, record.settings.maxCalls - record.usage.calls) };
+export function semanticDebt(record: Experiment, library: ScenarioLibrary): { pendingJobs: number; remainingCalls: number; needsFinalization: boolean } {
+  const { pendingJobs, needsFinalization } = semanticWorkStatus(library);
+  return { pendingJobs, needsFinalization, remainingCalls: Math.max(0, record.settings.maxCalls - record.usage.calls) };
 }

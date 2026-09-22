@@ -8,7 +8,7 @@ import { createInputSchema, type Runtime } from '../src/contracts.js';
 import { createDemoRuntime } from '../src/demo.js';
 import { scenarioLibrarySchema } from '../src/scenario-contracts.js';
 import { acceptLibrary, libraryHash, libraryQuality } from '../src/scenario-library.js';
-import { libraryFixture, proposals, rawDialogues, sources, requirements } from './helpers/scenario-library.js';
+import { libraryFixture, coverageProposals as proposals, rawDialogues, sources, requirements } from './helpers/scenario-library.js';
 
 const input = (logs = true) => createInputSchema.parse({ task: 'Проверить возвраты', mode: 'demo', materials: sources.map(({ name, content }) => ({ name, content })), dialogues: logs ? rawDialogues : [], scenarioCount: 2, settings: { maxCalls: 100, repeats: 1, userModes: ['reactive'] } });
 function runtimeFixture(): Runtime {

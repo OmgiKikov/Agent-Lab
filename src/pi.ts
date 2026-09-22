@@ -1,4 +1,5 @@
 import { generateProductionCase } from './generator-production.js';
+import { InvalidGeneratorResponse } from './generator-errors.js';
 import { GENERATOR_ROLE, GENERATOR_PROPOSER_ROLE } from './generator-evaluation.js';
 import { generatorOutputSchema, generatorConfigSchema } from './generator-corpus.js';
 import { checkpointResponseSchema } from './checkpoints.js';
@@ -8,6 +9,7 @@ import { USER_CONTROLLER_ROLE } from './prompts.js';
 import { SCENARIO_OUTPUT_BYTES, SEMANTIC_BATCH_FIELDS, SEMANTIC_REASON_CHARS, serializedBytes, workInputIssue } from './scenario-work.js';
 import { scenarioProposalSchema, semanticFindingSchema } from './scenario-contracts.js';
 import { SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE, SOURCE_SELECTION_ROLE } from './prompts.js';
+import { FOCUSED_REQUIREMENT_LIMIT } from './limits.js';
 import {
   createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager,
   type ResourceLoader, type ToolDefinition,
@@ -20,15 +22,32 @@ import { z } from 'zod';
 import {
   agentSchema, checkSchema, discoveryGroupSchema, discoveryObservationSchema, failureModeSchema, observedGoalSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema, worldSchema,
   MACHINE_FORMAT, REQUIREMENT_LIMIT, SCENARIO_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, sourceSelectionSchema, userTurnSchema, validateObservedGoals, valueTokens, verbatimSpan,
-  type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
+  type CallContext, type PrepareInput, type ScenarioProposalsInput, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
 import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, DISCOVERY_COARSE_ROLE, DISCOVERY_GROUP_ROLE, DISCOVERY_HYPOTHESIS_ROLE, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
 
 type Model = NonNullable<ReturnType<ModelRuntime['getModel']>>;
-const groundingSchema = z.strictObject({
-  requirements: z.array(requirementSchema).min(1).max(REQUIREMENT_LIMIT, { error: `Return at most ${REQUIREMENT_LIMIT} requirements: merge closely related rules into one requirement with one exact quote, and keep the rules a user can see violated in a reply` }),
+const groundingSchemaFor = (limit: number) => z.strictObject({
+  requirements: z.array(requirementSchema).min(1).max(limit, { error: `Return at most ${limit} requirements: merge closely related rules into one requirement with one exact quote, and keep the rules a user can see violated in a reply` }),
   questions: z.array(z.string().trim().min(1).max(2000)).max(12),
 });
+const groundingSchema = groundingSchemaFor(REQUIREMENT_LIMIT);
+const FOCUS_CLAUSE = `customerMessages holds what one real customer wrote in a dialogue these requirements must decide (the old agent's replies are withheld: they are not rules). Extract only the rules that determine the correct agent behaviour for that customer (the answer, the mandatory steps, what must not be said); skip rules the dialogue never touches. Start with the original request; later reactions to an instruction do not prove the service already exists. Preserve unknown product/channel/prerequisites as conditions and allow appropriate clarification or qualified alternatives. Do not require every channel or an unrequested follow-on operation. Return at most ${FOCUSED_REQUIREMENT_LIMIT} requirements.`;
+
+/** One grounding call: the whole policy of the supplied sources, or, with a focus, only the rules that decide one customer's dialogue. */
+export function groundingRequest(input: Pick<PrepareInput, 'task' | 'sources' | 'focus'>) {
+  const focused = !!input.focus;
+  return {
+    limit: focused ? FOCUSED_REQUIREMENT_LIMIT : REQUIREMENT_LIMIT,
+    role: focused ? `${REQUIREMENTS_ROLE}\n${FOCUS_CLAUSE}` : REQUIREMENTS_ROLE,
+    schema: groundingSchemaFor(focused ? FOCUSED_REQUIREMENT_LIMIT : REQUIREMENT_LIMIT),
+    payload: {
+      task: input.task,
+      sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, ...(kind ? { kind } : {}) })),
+      ...(input.focus ? { customerMessages: [...input.focus.customerMessages] } : {}),
+    },
+  };
+}
 const familyPlanSchema = z.strictObject({ families: z.array(z.strictObject({
   familyId: scenarioSchema.shape.familyId,
   mechanism: z.string().trim().min(1).max(300),
@@ -107,7 +126,7 @@ function resources(systemPrompt: string): ResourceLoader {
 
 async function controlledSession(
   modelRuntime: ModelRuntime, model: Model, systemPrompt: string, tools: Tool[],
-  ctx: CallContext, maxTokens = 16384, temperature?: number, structuredJudge = false, thinkingLevel: 'off' | 'medium' = 'off', maxInputBytes?: number,
+  ctx: CallContext, maxTokens = 16384, temperature?: number, responseFormat?: Record<string, unknown>, thinkingLevel: 'off' | 'medium' = 'off', maxInputBytes?: number,
 ): Promise<TargetSession> {
   ctx.signal.throwIfAborted();
   if (new Set(tools.map(t => t.name)).size !== tools.length
@@ -144,7 +163,8 @@ async function controlledSession(
   session.agent.streamFunction = async (m, context, options) => {
     try {
       activeSignal.throwIfAborted();
-      if (maxInputBytes && serializedBytes({ ...context, systemPrompt }) > Math.min(maxInputBytes, model.contextWindow - Math.min(maxTokens, model.maxTokens))) {
+      // Bytes and the provider token window are different units. This gate is the byte cap only; the provider rejects a prompt that does not fit its window.
+      if (maxInputBytes && serializedBytes({ ...context, systemPrompt }) > maxInputBytes) {
         boundaryError = new Error('Запрос превышает безопасный контекст модели; полная хронология сохранена для меньшего пакета.');
         throw boundaryError;
       }
@@ -154,7 +174,7 @@ async function controlledSession(
       return await stream(m, { ...context, systemPrompt }, {
         ...options, signal: AbortSignal.any([activeSignal, ...(options?.signal ? [options.signal] : [])]),
         timeoutMs: ctx.timeoutMs, maxRetries: 0, maxTokens: Math.min(maxTokens, model.maxTokens), ...(temperature === undefined ? {} : { temperature }),
-        ...(structuredJudge ? { onPayload: (payload: unknown) => ({ ...(payload as Record<string, unknown>), response_format: JUDGE_RESPONSE_FORMAT }) } : {}),
+        ...(responseFormat ? { onPayload: (payload: unknown) => ({ ...(payload as Record<string, unknown>), response_format: responseFormat }) } : {}),
       });
     } catch (error) {
       // Preserve our own budget/cancellation error; provider errors are sanitized at the response boundary.
@@ -262,84 +282,18 @@ async function controlledSession(
 }
 
 /**
- * Models routinely wrap the object in a markdown fence, often after a sentence of
- * preamble, despite the instruction. A fence is an explicit delimiter, so the first
- * fenced block is taken as the answer. Bare JSON buried in prose stays a failure:
- * guessing where an object starts is not the same as reading a delimiter. The schema
- * still decides what is valid.
+ * The response must be exactly JSON, as requested from the provider. The text is parsed as written: broken quotes,
+ * raw line breaks and a missing brace are a failed attempt, not a local rewrite.
  */
-/** Models put raw line breaks and tabs inside JSON strings, which JSON forbids. Escape control characters inside string literals only. */
-function escapeControlCharacters(text: string): string {
-  let out = '', inString = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    if (inString) {
-      if (ch === '\\') { out += ch + (text[i + 1] ?? ''); i++; continue; }
-      if (ch === '"') inString = false;
-      else if (ch < ' ') { out += ch === '\n' ? '\\n' : ch === '\r' ? '\\r' : ch === '\t' ? '\\t' : `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`; continue; }
-    } else if (ch === '"') inString = true;
-    out += ch;
-  }
-  return out;
-}
-/**
- * Models copy source text with straight double quotes into JSON strings without escaping them.
- * A quote can close a string only where the container allows: a key is followed by ':', an
- * object value by '}' or by ',' and another key, an array item by ',' or ']'. Every other
- * double quote inside a string is escaped. Runs only after a plain parse has failed.
- */
-function repairUnescapedQuotes(text: string): string {
-  const out: string[] = [], stack: Array<'{' | '['> = [];
-  let expectKey = false;
-  const skipSpace = (j: number) => { while (j < text.length && /\s/.test(text[j]!)) j++; return j; };
-  const keyFollows = (j: number) => {
-    if (text[j] !== '"') return false;
-    const end = text.indexOf('"', j + 1);
-    return end > 0 && text[skipSpace(end + 1)] === ':';
-  };
-  for (let i = 0; i < text.length;) {
-    const ch = text[i]!;
-    if (ch === '{' || ch === '[') { stack.push(ch); expectKey = ch === '{'; out.push(ch); i++; continue; }
-    if (ch === '}' || ch === ']') { stack.pop(); expectKey = false; out.push(ch); i++; continue; }
-    if (ch === ',') { expectKey = stack[stack.length - 1] === '{'; out.push(ch); i++; continue; }
-    if (ch === ':') { expectKey = false; out.push(ch); i++; continue; }
-    if (ch !== '"') { out.push(ch); i++; continue; }
-    const isKey = expectKey, container = stack[stack.length - 1];
-    out.push('"'); i++;
-    while (i < text.length) {
-      const c = text[i]!;
-      if (c === '\\') { out.push(c, text[i + 1] ?? ''); i += 2; continue; }
-      if (c !== '"') { out.push(c); i++; continue; }
-      const next = text[skipSpace(i + 1)] ?? '';
-      const closes = isKey ? next === ':'
-        : container === '{' ? next === '}' || (next === ',' && keyFollows(skipSpace(skipSpace(i + 1) + 1)))
-        : next === ',' || next === ']' || next === '';
-      if (closes) { out.push('"'); i++; break; }
-      out.push('\\"'); i++;
-    }
-    expectKey = false;
-  }
-  return out.join('');
-}
-/** The raw reply, then its fenced form, each as written and with control characters and quotes repaired. The first parse error is the one worth showing the model. */
 function parseJsonOutput(output: string): unknown {
-  const candidates = [output];
-  const fenced = /```[a-zA-Z]*\s*\n?([\s\S]*?)\n?```/.exec(output);
-  if (fenced?.[1]) candidates.push(fenced[1].trim());
-  let failure: unknown;
-  for (const candidate of candidates) {
-    const escaped = escapeControlCharacters(candidate);
-    for (const text of [candidate, escaped, repairUnescapedQuotes(escaped)]) {
-      try { return JSON.parse(text); } catch (error) { failure ??= error; }
-    }
-  }
-  throw new Error(`Output is not JSON: ${failure instanceof Error ? failure.message : 'unreadable'}`);
+  try { return JSON.parse(output.trim()); }
+  catch (error) { throw new Error(`Output is not JSON: ${error instanceof Error ? error.message : 'unreadable'}`); }
 }
 
 /**
  * Repairing a nearly correct object is a much easier task for a model than writing one
  * from scratch, so a rejected answer goes back into the same session with the exact
- * reason. Attempts are bounded: after the third the run fails out loud instead of
+ * reason. Attempts are bounded: after the last the run fails out loud instead of
  * spinning and spending the owner's budget. Rejection text is model-facing and stays
  * English, like the roles; what the owner reads is translated at the throw site.
  */
@@ -355,38 +309,59 @@ async function jsonResponse<S extends z.ZodType>(
   const prompt = `${role}${generationConfig ? `\nНастройка генератора (не меняет правила владельца): ${generationConfig.instructions}` : ''}\n${DATA_BOUNDARY}\nReturn exactly one compact JSON object, without markdown fences or pretty-printing whitespace, matching this JSON schema:\n${JSON.stringify(z.toJSONSchema(schema))}\nInside strings, escape double quotes as \\" and line breaks as \\n; when copying source text, «» may stand for its straight double quotes.`;
   // Only target sessions contribute target trace events; simulator/planner events cannot affect target grades.
   const effectiveTemperature=model.reasoning?undefined:generationConfig?.temperature;
-  if(bounded)ctx.onGeneratorTransport?.({role:label,provider:model.provider,model:model.id,api:model.api,...(generationConfig?{requestedTemperature:generationConfig.temperature}:{}),effectiveTemperature:effectiveTemperature??'provider-default'});
-  const session = await controlledSession(modelRuntime, model, prompt, [], { ...ctx, onTargetEvent: undefined }, bounded ? SCENARIO_OUTPUT_BYTES : 16384, effectiveTemperature, false, 'off', bounded ? 96000 : undefined);
+  ctx.onGeneratorTransport?.({role:label,provider:model.provider,model:model.id,api:model.api,...(generationConfig?{requestedTemperature:generationConfig.temperature}:{}),effectiveTemperature:effectiveTemperature??'provider-default'});
+  let currentAttempt = 0;
+  const open = () => controlledSession(modelRuntime, model, prompt, [], { ...ctx, onTargetEvent: event => {
+    // Retain incomplete structured replies as evidence, without accepting or grading them.
+    if (event.type === 'assistant' && event.text) ctx.onGeneratorOutput?.({ role, text: event.text, attempt: currentAttempt, incomplete: true });
+  } }, bounded ? SCENARIO_OUTPUT_BYTES : 16384, effectiveTemperature, model.provider === 'openrouter' ? { type: 'json_object' } : undefined, 'off', bounded ? 96000 : undefined);
+  let session = await open();
   try {
     let message = JSON.stringify(input);
     let rejection = '';
     for (let attempt = 1; attempt <= REPAIR_ATTEMPTS; attempt++) {
+      currentAttempt = attempt;
       const output = await session.respond(message);
-      if(bounded)ctx.onGeneratorOutput?.({role,text:output});
+      ctx.onGeneratorOutput?.({role,text:output,attempt});
       let parsed: unknown;
+      let outcome: 'syntax' | 'schema' | 'domain' = 'domain';
       try {
         if (bounded && Buffer.byteLength(output, 'utf8') > SCENARIO_OUTPUT_BYTES) throw new Error('Ответ превышает 12000 байт; сократите его без потери обязательных полей');
         parsed = parseJsonOutput(output); rejection = ''; }
-      catch (error) { rejection = `The reply was not a single JSON object (${error instanceof Error ? error.message : 'unreadable'}). Return one JSON object and nothing else; escape line breaks inside strings as \\n.`; }
+      catch (error) { rejection = `The reply was not a single JSON object (${error instanceof Error ? error.message : 'unreadable'}). Return one JSON object and nothing else; escape line breaks inside strings as \\n.`; outcome = 'syntax'; }
       if (!rejection) {
         const validated = schema.safeParse(parsed);
         if (!validated.success) {
           rejection = `These fields do not match the schema: ${validated.error.issues.map(i => `${i.path.join('.') || 'root'} (${i.message})`).join('; ')}.`;
+          outcome = 'schema';
         } else {
           const problem = review?.(validated.data);
-          if (!problem) return validated.data;
+          if (!problem) {
+            ctx.onGeneratorValidation?.({ attempt, accepted: true });
+            return validated.data;
+          }
           rejection = problem;
+          outcome = 'domain';
         }
       }
+      ctx.onGeneratorValidation?.({ attempt, accepted: false, reason: rejection, outcome });
       if (process.env['AGENT_LAB_DEBUG_DIR']) {
         await mkdir(process.env['AGENT_LAB_DEBUG_DIR'], { recursive: true });
         await writeFile(join(process.env['AGENT_LAB_DEBUG_DIR'], `${label.replace(/[^\p{L}\p{N}]+/gu, '_')}-${Date.now()}-${attempt}.txt`), `${rejection}\n\n${output}`, { mode: 0o600 });
       }
       message = `Your previous answer was rejected. ${rejection}\nReturn the corrected object in full, as one compact JSON object and nothing else.`;
+      if (bounded && attempt < REPAIR_ATTEMPTS) {
+        // Keep the original evidence and only the latest failure; accumulating invalid full drafts can exhaust the context.
+        await session.close();
+        session = await open();
+        message = JSON.stringify({ input, repair: message,
+          ...(Buffer.byteLength(output, 'utf8') <= SCENARIO_OUTPUT_BYTES ? { previousReply: output } : { previousReplyOmitted: 'Rejected reply exceeds the output limit; regenerate compactly from the original evidence.' }) });
+      }
     }
-    throw new Error(`модель ${REPAIR_ATTEMPTS} раза подряд вернула ответ, который не проходит проверку. Последняя причина: ${rejection}`);
+    throw new InvalidGeneratorResponse(`модель ${REPAIR_ATTEMPTS} раза подряд вернула ответ, который не проходит проверку. Последняя причина: ${rejection}`);
   } catch (error) {
-    throw new Error(`${label}: ${error instanceof Error ? error.message : 'шаг не удался'}`);
+    const message = `${label}: ${error instanceof Error ? error.message : 'шаг не удался'}`;
+    throw error instanceof InvalidGeneratorResponse ? new InvalidGeneratorResponse(message, { cause: error }) : new Error(message, { cause: error });
   } finally { await session.close(); }
 }
 
@@ -411,15 +386,38 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   let modelRuntime: ModelRuntime;
   try { modelRuntime = injectedRuntime ?? await ModelRuntime.create({ allowModelNetwork: false, signal }); }
   catch { throw new Error(`Не удалось инициализировать Pi. ${authHelp}`); }
-  const model = modelRuntime.getModel(settings.provider, settings.model);
-  if (!model) throw new Error(`Выбранная модель недоступна: ${settings.provider}/${settings.model}. ${authHelp}`);
+  const configuredModel = (choice: { provider: string; model: string }) => {
+    const model = modelRuntime.getModel(choice.provider, choice.model);
+    if (model) return model;
+    const joined = `${choice.provider}/${choice.model}`;
+    const suggested = modelRuntime.getModels().find(candidate => `${candidate.provider}/${candidate.id}` === joined || `${candidate.provider}/${candidate.id}` === choice.provider);
+    throw new Error(`Модель не найдена в конфигурации Pi: provider=${choice.provider}, model=${choice.model}.${suggested
+      ? ` Укажите provider="${suggested.provider}", model="${suggested.id}"; это разные поля.`
+      : ' Прочитайте доступные модели через agent-lab status и выберите точную пару provider/model.'}`);
+  };
+  const model = configuredModel(settings);
   let available: Awaited<ReturnType<ModelRuntime['getAvailable']>>;
   try { available = await modelRuntime.getAvailable(settings.provider, { signal }); }
   catch { throw new Error(`Не удалось проверить доступ к моделям. ${authHelp}`); }
   if (!available.some(m => m.id === model.id)) throw new Error(authHelp);
+  // Validate every requested role before the first paid builder call, not only when the judge is eventually reached.
+  const roles = [...Object.values(settings.roles ?? {}), ...(!settings.roles?.judge && settings.judge ? [settings.judge] : [])];
+  const checkedProviders = new Map([[settings.provider, available]]);
+  for (const choice of roles) {
+    if (!choice) continue;
+    const selected = configuredModel(choice);
+    let models = checkedProviders.get(choice.provider);
+    if (!models) {
+      try { models = await modelRuntime.getAvailable(choice.provider, { signal }); }
+      catch { throw new Error(`Не удалось проверить доступ к модели роли ${choice.provider}/${choice.model}. ${authHelp}`); }
+      checkedProviders.set(choice.provider, models);
+    }
+    if (!models.some(m => m.id === selected.id)) throw new Error(`Модель роли недоступна: ${choice.provider}/${choice.model}. ${authHelp}`);
+  }
   const ask = async <S extends z.ZodType>(label: string, role: string, input: unknown, schema: S, ctx: CallContext,
     review?: (value: z.infer<S>) => string | undefined): Promise<z.infer<S>> => {
-    const choice = settings.roles?.[(role === ASSESS_ROLE || role === CHECKPOINT_ROLE || role === LEGACY_CHECKPOINT_ROLE || role === GENERATOR_ROLE) ? 'judge' : (role === SIMULATOR_ROLE || role === USER_CONTROLLER_ROLE) ? 'simulator' : 'builder'] ?? (role === CHECKPOINT_ROLE || role===LEGACY_CHECKPOINT_ROLE ? settings.judge : undefined);
+    const semanticRepair = role === SCENARIO_PROPOSALS_ROLE && (input as ScenarioProposalsInput).feedback?.issues.some(i => i.code === 'semantic_finding');
+    const choice = settings.roles?.[(role === ASSESS_ROLE || role === CHECKPOINT_ROLE || role === LEGACY_CHECKPOINT_ROLE || role === GENERATOR_ROLE || role === SCENARIO_SEMANTIC_ROLE || semanticRepair) ? 'judge' : (role === SIMULATOR_ROLE || role === USER_CONTROLLER_ROLE) ? 'simulator' : 'builder'] ?? (role === CHECKPOINT_ROLE || role===LEGACY_CHECKPOINT_ROLE || role === SCENARIO_SEMANTIC_ROLE || semanticRepair ? settings.judge : undefined);
     let selected = model;
     if (choice) {
       const override = modelRuntime.getModel(choice.provider, choice.model);
@@ -458,12 +456,26 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
         if (input.batchId !== undefined || input.dialogues.length) throw new Error('Подготовка без логов не может ссылаться на импорт или диалоги.');
       } else if (!input.batchId?.trim() || !input.dialogues.length) throw new Error('Для извлечения из импорта нужны batchId и исходные диалоги.');
       return (await ask('Варианты из полной хронологии', SCENARIO_PROPOSALS_ROLE, input,
-        z.strictObject({ proposals: z.array(scenarioProposalSchema.extend({ variant: scenarioProposalSchema.shape.variant.extend({
+        z.strictObject({ proposals: z.array(scenarioProposalSchema.extend({ variant: scenarioProposalSchema.shape.variant.omit({ sourceCoverageRequired: true, sourceCoverageBasis: true }).extend({
           environmentFixture: scenarioProposalSchema.shape.variant.shape.environmentFixture.extend({ initialState: worldSchema }),
           evaluationSpec: scenarioProposalSchema.shape.variant.shape.evaluationSpec.extend({
             checkpoints: z.array(scenarioProposalSchema.shape.variant.shape.evaluationSpec.shape.checkpoints.element.extend({ check: checkSchema.optional() })).min(1).max(12),
           }),
-        }) })).max(1) }), ctx)).proposals;
+        }) })).max(1) }), ctx, value => {
+          for (const proposal of value.proposals) {
+            const variant = proposal.variant;
+            const logs = input.dialogues.filter(d => variant.sourceDialogues.some(ref => ref.dialogueId === d.id));
+            if (logs.length === 1 && logs[0]!.messages.filter(m => m.role === 'user').length === 1 && variant.sourceCoverage?.length) {
+              return 'sourceCoverage accounts only for customer turns AFTER the first customer message. This source has one customer message: omit sourceCoverage or return an empty array. The opening is not a continuation.';
+            }
+            if (variant.provenance !== 'production' || variant.userState.facts.length) continue;
+            if (logs.length === 1 && logs[0]!.messages.filter(m => m.role === 'user').length === 1
+              && (variant.behaviorPolicy.maxFollowUps !== 0 || variant.behaviorPolicy.actions.some(a => a.kind !== 'finish'))) {
+              return 'This observed dialogue has one customer request and no grounded personal facts. Preserve that one-turn scope: maxFollowUps:0 and finish-only policy after the first agent reply. Do not invent an obstacle, a factual answer or customer inability to extend the observed test. Additional conditions belong in a separately proposed variant.';
+            }
+          }
+          return undefined;
+        })).proposals;
     },
     async assessScenarioProposals(input, ctx) {
       return (await ask('Смысловая проверка вариантов', SCENARIO_SEMANTIC_ROLE, input,
@@ -474,11 +486,9 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
         })).findings;
     },
     async prepare(input, ctx) {
-      const grounding = input.requirements ? groundingSchema.parse({ requirements: structuredClone(input.requirements), questions: [] }) : await ask(
-        'Требования', REQUIREMENTS_ROLE,
-        { task: input.task, sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, ...(kind ? { kind } : {}) })) },
-        groundingSchema, ctx, value => groundingProblem(value, input.sources),
-      );
+      const request = groundingRequest(input);
+      const grounding = input.requirements ? groundingSchema.parse({ requirements: structuredClone(input.requirements), questions: [] })
+        : await ask('Требования', request.role, request.payload, request.schema, ctx, value => groundingProblem(value, input.sources));
       const suppliedProblem = groundingProblem(grounding, input.sources);
       if (suppliedProblem) throw new Error(`Требования: ${suppliedProblem}`);
       const evidence = { task: input.task, requirements: grounding.requirements, questions: grounding.questions };
@@ -772,7 +782,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       }, ctx, async (prompt, data, recordPartial) => {
         const session = await controlledSession(modelRuntime, judgeModel, prompt, [], { ...ctx, onTargetEvent: event => {
           if (event.type === 'assistant' && event.text) recordPartial(event.text);
-        } }, 16384, judgeModel.reasoning ? undefined : 0, judge.provider === 'openrouter', judgeModel.reasoning ? 'medium' : 'off');
+        } }, 16384, judgeModel.reasoning ? undefined : 0, judge.provider === 'openrouter' ? JUDGE_RESPONSE_FORMAT : undefined, judgeModel.reasoning ? 'medium' : 'off');
         try { return await session.respond(data); } finally { await session.close(); }
       });
     },

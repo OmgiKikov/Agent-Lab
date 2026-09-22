@@ -7,8 +7,8 @@ import { emptyUsage, settingsSchema, simulatorFidelity, type CallContext, type S
 
 const [provider, model] = process.argv.slice(2);
 assert(provider && model, 'Usage: node --import tsx test/live/simulator-stop.ts PROVIDER MODEL');
-const sample = JSON.parse(await readFile(new URL('./aigw-stop.json', import.meta.url), 'utf8')) as {
-  user: Scenario['user']; events: TraceEvent[]; sourceTrialId: string;
+const sample = JSON.parse(await readFile(new URL('./simulator-stop.synthetic.json', import.meta.url), 'utf8')) as {
+  user: Scenario['user']; events: TraceEvent[]; sampleId: string;
 };
 const settings = settingsSchema.parse({ provider, model, maxCalls: 16, timeoutMs: 120000 });
 const runtime = await createPiRuntime(settings);
@@ -20,14 +20,14 @@ const ctx: CallContext = {
 };
 const cases = [
   { name: 'instruction already sufficient', user: sample.user, reply: sample.events[1]!.text!, expect: '' },
-  { name: 'necessary clarification', user: sample.user, reply: 'Какой номер вашего терминала?', expect: '87654321' },
+  { name: 'necessary clarification', user: sample.user, reply: 'Какой номер вашей учётной записи?', expect: '87654321' },
   { name: 'required change after first success',
     user: { goal: 'Перенести запись', facts: 'Номер записи A. Сначала хочу 10:00, затем передумаю и попрошу 11:00.',
       behavior: 'После первого подтверждения обязательно один раз попросить перенести на 11:00. Затем закончить.',
       opening: 'Перенесите запись A на 10:00.', maxFollowUps: 1 },
     reply: 'Запись A перенесена на 10:00.', expect: '11:00' },
   { name: 'stop on refusal', user: { ...sample.user, behavior: 'Если агент отказывает, закончить без дальнейших реплик, в том числе благодарности.' },
-    reply: 'Я не могу помочь с разблокировкой терминала.', expect: '' },
+    reply: 'Я не могу помочь с восстановлением доступа.', expect: '' },
 ];
 const results: unknown[] = [];
 for (let repeat = 0; repeat < 2; repeat++) {
@@ -58,4 +58,4 @@ for (let repeat = 0; repeat < 2; repeat++) {
     assert(assessments[0]!.evidence.every(seq => events.some(e => e.seq === seq)));
   }
 }
-console.log(JSON.stringify({ passed: results.length, usage, provider, model, sourceTrialId: sample.sourceTrialId }));
+console.log(JSON.stringify({ passed: results.length, usage, provider, model, sampleId: sample.sampleId }));

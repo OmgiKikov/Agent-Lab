@@ -15,7 +15,7 @@ last_mapped_at: 2026-09-16
 
 **Secondary:**
 
-- Python - Example target agents (`examples/aigw-observed.py`, `examples/stateful-agent.py`, `examples/echo-agent.py`)
+- Python - Example target agents (`examples/stateful-agent.py`, `examples/echo-agent.py`)
 - Shell - CI/CD pipeline examples (`examples/regression-ci.yml`)
 
 ## Runtime

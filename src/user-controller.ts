@@ -20,7 +20,8 @@ export function createUserState(policy: BehaviorPolicy, facts: UserView['facts']
   for (const a of parsed.actions) {
     if (a.factIds.some(id => !facts.some(f => f.id === id))) throw new Error('Симулятор: действие ссылается на неразрешённый факт');
     if (a.kind === 'finish' && (a.payload || a.factIds.length)) throw new Error('Симулятор: finish не должен содержать сообщение');
-    if (a.kind !== 'finish' && !a.payload && !a.factIds.length && a.kind !== 'missing') throw new Error('Симулятор: нет разрешённого сообщения');
+    if (a.kind === 'observe' && (a.factIds.length || !a.payload)) throw new Error('Симулятор: наблюдение — это реплика клиента, без ссылки на исходный факт');
+    if (a.kind !== 'finish' && a.kind !== 'observe' && !a.payload && !a.factIds.length && a.kind !== 'missing') throw new Error('Симулятор: нет разрешённого сообщения');
   }
   const edges = new Set<string>();
   for (const t of parsed.transitions) {

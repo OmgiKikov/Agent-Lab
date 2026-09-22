@@ -23,6 +23,7 @@ import { rowsToLines } from './explain.js';
 import { evidenceBundle, exportArtifacts, resolveVerified } from './artifacts.js';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
 import { libraryHash } from './scenario-library.js';
+import { chooseEditableDraft, draftIsBusy } from './scenario-draft.js';
 import { libraryPatchSchema } from './scenario-contracts.js';
 import { resolutionRequestSchema } from './resolution.js';
 import { resolutionText } from './issue-view.js';
@@ -75,7 +76,7 @@ async function main() {
     connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
     'golden-file': { type: 'string' }, 'dialogues-file': { type: 'string' }, candidate: { type: 'string' },
     hypothesis: { type: 'string' }, trial: { type: 'string', multiple: true },
-    yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
+    yes: { type: 'boolean' }, verify: { type: 'string' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
   } });
   const command = positionals[0];
   if (values.help || !command) {
@@ -83,7 +84,7 @@ async function main() {
     process.stdout.write('  agent-lab accept --id RUN [--yes]      Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания\n');
     process.stdout.write('Agent Lab — validation set, accuracy и причины провалов вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
     process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab discover --input dialogues.jsonl --task task.json [--yes] [--json]\n  agent-lab discover-resume --id RUN [--yes] [--json]\n  agent-lab discover-build --id RUN [--yes] [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --yes [--json]\n  agent-lab score --input dialogues.jsonl --task task.json --code-only [--json]\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  agent-lab prompt-propose --id RUN --candidate prompt.md --hypothesis TEXT --trial TRIAL\n  agent-lab prompt-apply --input proposal.json --yes\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
-    process.stdout.write('  agent-lab scenarios --id RUN --operation inspect [--json]\n  agent-lab scenarios --id RUN --operation edit|merge|split|variant|assess|accept --expected-hash HASH [--input action.json] [--yes]\n');
+    process.stdout.write('  agent-lab scenarios --id RUN --operation inspect [--json]\n  agent-lab scenarios --id RUN --operation edit|merge|split|variant|assess|resume|accept --expected-hash HASH [--input action.json] [--yes]\n');
     process.stdout.write('  agent-lab issues --operation inspect|sync|merge|rebuild [--id RUN_OR_ISSUE] [--input decision.json]\n  agent-lab diagnostics --operation prepare --input request.json\n  agent-lab diagnostics --operation inspect|run --id PLAN [--yes]\n');
     process.stdout.write('  agent-lab resolutions --operation bundle|candidate|prompt|prepare --input request.json\n  agent-lab resolutions --operation inspect|run|resolve --id POLICY [--yes] [--json]\n');
     process.stdout.write('  agent-lab generator --operation evaluate|optimize --input config.json --yes\n  agent-lab generator --operation select --input candidates.json\n  agent-lab generator --operation inspect --id GEN [--json]\n');
@@ -152,8 +153,8 @@ async function main() {
   }
   if (command === 'suites') { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); return; }
   if (command === 'scenarios') {
-    if (!values.id || !values.operation) throw new Error('Укажите --id RUN и --operation inspect|edit|merge|split|variant|assess|accept.');
-    if (!['inspect', 'edit', 'merge', 'split', 'variant', 'assess', 'accept'].includes(values.operation)) throw new Error('Неизвестная операция scenarios.');
+    if (!values.id || !values.operation) throw new Error('Укажите --id RUN и --operation inspect|edit|merge|split|variant|assess|resume|accept.');
+    if (!['inspect', 'edit', 'merge', 'split', 'variant', 'assess', 'resume', 'accept'].includes(values.operation)) throw new Error('Неизвестная операция scenarios.');
     const lab = new ExperimentLab(directory);
     const present = async () => {
       const { library, experiment } = await lab.readLibrary(values.id!);
@@ -168,16 +169,28 @@ async function main() {
     };
     if (values.operation === 'inspect') { await writeStdout(`${JSON.stringify(await present(), null, 2)}\n`); return; }
     if (!values['expected-hash']) throw new Error('Укажите --expected-hash из свежего scenarios inspect.');
+    if (values.verify && !['auto', 'later'].includes(values.verify)) throw new Error('--verify должен быть auto или later.');
     const payload = values.input ? JSON.parse(await readFile(values.input, 'utf8')) : {};
     await lab.init();
     try {
+    const settled = await lab.get(values.id);
+    if (settled.librarySnapshot && values.operation !== 'resume') {
+      const headHash = await lab.store.readLibrary(settled.librarySnapshot.id).then(libraryHash, () => libraryHash(settled.librarySnapshot!));
+      const choice = chooseEditableDraft({ settled, holders: await lab.list(), headHash, busy: draftIsBusy });
+      if (choice.action === 'busy') throw new Error(`Прогон ${values.id.slice(0, 8)} выполняется. Правки — после остановки.`);
+      if (choice.action === 'use') throw new Error(`Актуальный черновик — ${choice.id.slice(0, 8)}. Укажите его в --id.`);
+      if (choice.action === 'copy') throw new Error(`Прогон ${values.id.slice(0, 8)} уже выполнен и не меняется. Создайте черновик того же набора и правьте его.`);
+    }
       if (values.operation === 'variant') await lab.proposeVariant(values.id, values['expected-hash'], payload);
-      else if (values.operation === 'assess') {
+      else if (values.operation === 'resume') {
+        if (!values.yes) throw new Error('Продолжение расходует оставшийся модельный бюджет; укажите --yes после проверки плана.');
+        await lab.resumePreparation(values.id, values['expected-hash']); await lab.waitForIdle();
+      } else if (values.operation === 'assess') {
         if (!values.yes) throw new Error('Смысловая проверка расходует модельный бюджет; укажите --yes после проверки плана.');
         const current = await lab.readLibrary(values.id); const plan = semanticWorkStatus(current.library);
         const remaining = Math.max(0, current.experiment.settings.maxCalls - current.experiment.usage.calls);
         if (!remaining && plan.pendingJobs) throw new Error(`Осталось ${plan.pendingJobs} смысловых вызовов, бюджет исчерпан; увеличьте settings.maxCalls через edit. Использованный бюджет не сбрасывается.`);
-        await lab.assessLibrary(values.id, values['expected-hash']); await lab.waitForIdle();
+        await lab.recheckLibrary(values.id, { expectedHash: values['expected-hash'], explicit: true }); await lab.waitForIdle();
       } else if (values.operation === 'accept') {
         if (!values.yes) throw new Error('Принятие фиксирует выбранную ревизию; укажите --yes. Агент запускаться не будет.');
         if (!Array.isArray(payload.variantIds)) throw new Error('В --input нужен объект {"variantIds":[...]}.');
@@ -186,7 +199,10 @@ async function main() {
         const patch = libraryPatchSchema.parse(payload.patch ?? payload);
         const expectedKind = values.operation === 'merge' ? 'merge_business' : values.operation === 'split' ? 'split_business' : undefined;
         if (expectedKind && patch.kind !== expectedKind) throw new Error(`${values.operation} требует patch.kind=${expectedKind}.`);
-        await lab.editLibrary(values.id, values['expected-hash'], patch);
+        await lab.editLibrary(values.id, values['expected-hash'], patch, values.yes ? 'owner' : 'assistant');
+      }
+      if (values.verify === 'auto' && ['edit', 'merge', 'split', 'variant'].includes(values.operation)) {
+        await lab.recheckLibrary(values.id); await lab.waitForIdle();
       }
       await writeStdout(`${JSON.stringify(await present(), null, 2)}\n`); return;
     } finally { await lab.close(); }

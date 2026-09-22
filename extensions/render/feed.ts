@@ -111,6 +111,9 @@ export function callText(tool: string, args: Record<string, unknown> | undefined
     const card = named(a.variant);
     switch (a.operation) {
       case 'edit': return `Правлю карточку${card}`;
+      case 'edit_group': return `Правлю группу сценариев${named(a.group)}`;
+      case 'behavior': return `Правлю поведение клиента${card}`;
+      case 'resume': return 'Продолжаю подготовку сценариев';
       case 'variant': return `Добавляю вариант к карточке${card}`;
       case 'remove': return `Убираю карточку${card}`;
       case 'resolve': return `Записываю ваше решение по карточке${card}`;

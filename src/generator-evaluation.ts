@@ -1,12 +1,43 @@
 import { SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE, CHECKPOINT_ROLE, USER_CONTROLLER_ROLE } from './prompts.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { fingerprint, emptyUsage, type CallContext, type Runtime } from './contracts.js';
+import { fingerprint, emptyUsage, type CallContext, type CreateInput, type Runtime } from './contracts.js';
+import type { ExperimentLab } from './experiment.js';
 import { generatorCorpusSchema, generatorConfigSchema, generatorOutputSchema, type GeneratorCorpus, type GeneratorConfig, type GeneratorCaseInput } from './generator-corpus.js';
 import type { ExperimentStore } from './store.js';
 import { runGeneratorControls, CONTROL_PROTOCOL } from './generator-controls.js';
 export { loadGeneratorCorpus } from './generator-corpus.js';
 export { runGeneratorControls } from './generator-controls.js';
+
+/** Product audit: observe the same public preparation used by Pi/CLI, including grounding and repairs.
+ * Readiness is reported as a product decision, never as an independent quality label.
+ */
+export async function evaluateProductPreparation(lab: ExperimentLab, input: CreateInput, manifest: Record<string, unknown> = {}) {
+    const id = `gen_${randomUUID()}`, started = Date.now();
+    const plan = { id: `gen_${randomUUID()}`, formatVersion: '1' as const, kind: 'generator-product-plan', evaluationId: id,
+        protocol: 'generator-product-preparation-v1', input: structuredClone(input), inputHash: fingerprint(input), manifest,
+        roleHashes: { extraction: fingerprint(SCENARIO_PROPOSALS_ROLE), semantic: fingerprint(SCENARIO_SEMANTIC_ROLE) } };
+    await lab.store.saveGeneratorRecord(plan);
+    const seed = await lab.create(input);
+    await lab.waitForIdle();
+    const record = await lab.get(seed.id), evidence = await lab.store.generatorEvidence(seed.id);
+    const extractions = evidence.filter(e => e.method === 'scenarioProposals' && e.kind === 'request');
+    const firstProposal = evidence.find(e => e.method === 'scenarioProposals' && e.kind === 'result' && Array.isArray(e.output) && e.output.length);
+    const variants = record.librarySnapshot?.variants ?? [];
+    const report = { id, formatVersion: '1' as const, kind: 'generator-product-evaluation', planId: plan.id, experimentId: record.id,
+        protocol: plan.protocol, inputHash: plan.inputHash, manifest, transport: evidence.some(e => e.transport === 'pi-model') ? 'pi-model' : 'deterministic-test',
+        elapsedMs: Date.now() - started, timeToFirstProposalMs: firstProposal ? Date.parse(firstProposal.at) - started : null,
+        usage: record.usage, error: record.error, preparation: record.preparationProgress,
+        attempts: { extraction: extractions.length, rejectedStructuredResponses: evidence.filter(e => e.kind === 'validation' && !e.validation.accepted).length,
+            incompleteResponses: evidence.filter(e => e.kind === 'response' && e.response.incomplete).length },
+        readiness: { ready: variants.filter(v => v.quality === 'ready').length, needsReview: variants.filter(v => v.quality === 'needs_review').length,
+            blocked: variants.filter(v => v.quality === 'blocked').length, total: variants.length },
+        library: record.librarySnapshot, evidence,
+        limitations: ['Готовность назначена продуктом; независимой разметки качества в этом отчёте нет.',
+            'Время и количество правок человека не измерены. Прохождение интерфейса и контрольные исполнения учитываются отдельно.'] };
+    await lab.store.saveGeneratorRecord(report);
+    return report;
+}
 export const GENERATOR_PROTOCOL = 'generator-evaluation-v1';
 export const GENERATOR_ROLE = 'Оцените ФАКТИЧЕСКИ созданные proposals, а не идеальный сценарий: проверьте допустимость с опорой на findings и issues реальной библиотеки. Классифицируйте применимость ожидаемого действия по требованию и условиям, дубли относительно comparisonVariants. Если доказательств недостаточно, unknown. Проверьте структуру сценария по полной хронологии. Для каждого factCandidate верните доступность: initial — личное знание до ответа агента, learned_in_source — узнал из ответа агента, unavailable — скрытое знание. Ожидание задаёт только ownerRequirement; applicability applicable/not_applicable/unknown. duplicate exact при одинаковых нормализованных условиях, unresolved при семантическом сходстве, none иначе. validity invalid при утечке скрытого знания, точном дубле или недействительном мире; unknown при неразрешённом дубле; valid для допустимой проверки. Верните все факты и короткое обоснование. Конфигурация меняет только эти инструкции генератора, не правила владельца.';
 export const GENERATOR_PROPOSER_ROLE = 'Предложите одну короткую текстовую конфигурацию генератора по dev-примерам и обратной связи. Не меняйте источник, правила владельца, корпус, разметку, инструменты, контрольные дефекты или промпт испытуемого. Возвращайте instructions и temperature.';
@@ -307,6 +338,9 @@ export async function optimizeGenerator(input: {
 }
 function holdoutIdentity(cases: GeneratorCorpus['cases']) { const identities = [...new Set(cases.map(c => fingerprint(c.input)))].sort(); return { hash: fingerprint(identities), cases: [...identities, fingerprint(cases)] }; }
 export function generatorSummary(record: GeneratorRecord) {
+    if (record.kind === 'generator-product-evaluation') return { id: record.id, kind: record.kind, experimentId: record.experimentId,
+        transport: record.transport, readiness: record.readiness, attempts: record.attempts, usage: record.usage,
+        elapsedMs: record.elapsedMs, timeToFirstProposalMs: record.timeToFirstProposalMs, error: record.error, limitations: record.limitations };
     const report = (record.kind === 'generator-optimization' ? record.holdout : record) as GeneratorReport;
     return { id: record.id, kind: record.kind, runKind: 'generator', transport: report.transport, cases: report.cases?.length, dimensions: report.dimensions, usage: record.usage, holdoutConsumed: record.holdoutConsumed ?? false,
         controls: report.controls ? { missedDefects: report.controls.missedDefects, falsePositives: report.controls.falsePositives, invalid: report.controls.invalid, unknown: report.controls.unknown, calibration: { missedDefects: report.controls.calibration.missedDefects, falsePositives: report.controls.calibration.falsePositives, unknown: report.controls.calibration.unknown } } : null,

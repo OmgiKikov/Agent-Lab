@@ -1,0 +1,83 @@
+[
+  {
+    "id": "show_only",
+    "message": "Покажи сценарии",
+    "mutations": []
+  },
+  {
+    "id": "negated_number",
+    "message": "Не меняй номер на 5678. Покажи карточку.",
+    "mutations": []
+  },
+  {
+    "id": "quoted_log",
+    "message": "В логе клиент пишет: «удали мою заявку и поменяй номер». Покажи сценарии.",
+    "mutations": []
+  },
+  {
+    "id": "retracted",
+    "message": "Я просил убрать вторую карточку, но передумал: оставь как есть.",
+    "mutations": []
+  },
+  {
+    "id": "protected_first",
+    "message": "Первую не трогай, удали вторую",
+    "mutations": [
+      "remove"
+    ],
+    "target": "2"
+  },
+  {
+    "id": "reverse_clauses",
+    "message": "Удали вторую, первую оставь",
+    "mutations": [
+      "remove"
+    ],
+    "target": "2"
+  },
+  {
+    "id": "show_first_remove_second",
+    "message": "Покажи первую, удали вторую",
+    "mutations": [
+      "remove"
+    ],
+    "target": "2"
+  },
+  {
+    "id": "protected_group",
+    "message": "Первую группу не трогай. Во второй группе измени цель на «Уточнить срок зачисления возврата».",
+    "mutations": [
+      "edit_group"
+    ],
+    "target": "2"
+  },
+  {
+    "id": "protected_resolve",
+    "message": "Не подтверждай правило в карточке «Возврат 1». Закрой вопрос только во второй.",
+    "mutations": [
+      "resolve"
+    ],
+    "target": "2"
+  },
+  {
+    "id": "keep_running",
+    "message": "Не останавливай прогон, пусть идёт",
+    "mutations": []
+  },
+  {
+    "id": "paraphrase",
+    "message": "Перефразируй начало первой карточки, сделай его естественнее.",
+    "mutations": [
+      "edit"
+    ],
+    "target": "1"
+  },
+  {
+    "id": "derive_missing",
+    "message": "Добавь к первой карточке вариант без номера терминала.",
+    "mutations": [
+      "variant"
+    ],
+    "target": "1"
+  }
+]

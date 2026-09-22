@@ -4,7 +4,7 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { checkSchema, emptyUsage, experimentSchema, fingerprint, settingsSchema, targetSchema, worldSchema, type Experiment, type Runtime, type Scenario, type Target } from './contracts.js';
 import { evaluateTrial } from './evaluation.js';
-import { hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
+import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
 import { sourceIdentity } from './normalize.js';
 import { preflightTarget } from './targets.js';
 
@@ -133,12 +133,11 @@ export async function doctor(connection: Connection, signal = new AbortControlle
  */
 export function suiteEvidence(record: Experiment, scenarioIds: string[]) {
   const selected = new Set(scenarioIds);
-  const sources = observableSources(record.sources, record.requirements);
   const trials = record.trials.filter(trial => selected.has(trial.scenarioId)).map(trial => {
     const copy = structuredClone(trial);
     if (copy.judgeAudit) {
       const scenario = record.scenarios.find(s => s.id === copy.scenarioId);
-      const complete = !!scenario && hasCompleteJudgment({ scenario, sources, trial: copy });
+      const complete = !!scenario && hasCompleteJudgment({ scenario, sources: observableSources(scenarioSources(record, scenario), record.requirements), trial: copy });
       copy.judgeReceipt ??= sealJudgeReceipt(copy.judgeAudit, complete);
       delete copy.judgeAudit;
     }

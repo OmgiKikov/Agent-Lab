@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { ModelRuntime, type ProviderConfig } from '@earendil-works/pi-coding-agent';
-import { createPiRuntime, getPiStatus, REPAIR_ATTEMPTS } from '../src/pi.js';
+import { createPiRuntime, getPiStatus, groundingRequest, REPAIR_ATTEMPTS } from '../src/pi.js';
+import { FOCUSED_REQUIREMENT_LIMIT } from '../src/limits.js';
+import { REQUIREMENTS_ROLE } from '../src/prompts.js';
 import { judgeInput } from '../src/judge.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { DEFAULT_JUDGE, emptyUsage, goalAttainment, REQUIREMENT_LIMIT, settingsSchema, type CallContext, type Scenario, type Tool, type Trial } from '../src/contracts.js';
@@ -14,6 +16,19 @@ type Options = Parameters<NonNullable<ProviderConfig['streamSimple']>>[2];
 type Message = Awaited<ReturnType<ReturnType<ModelRuntime['streamSimple']>['result']>>;
 type Reply = string | Message['content'];
 const settings = settingsSchema.parse({ provider: 'agent-lab-test', model: 'test-model', timeoutMs: 1000 });
+
+test('invalid role configuration fails before any paid builder request and names configuration separately from authentication', async () => {
+  const f = await fixture(() => '{}');
+  try {
+    await assert.rejects(createPiRuntime(settingsSchema.parse({ ...settings, judge: { provider: settings.provider, model: 'missing-judge' } }), f.runtime), /Модель не найдена в конфигурации Pi/);
+    assert.equal(f.requests.length, 0);
+    await assert.rejects(createPiRuntime(settingsSchema.parse({ ...settings, provider: `${settings.provider}/${settings.model}` }), f.runtime), error => {
+      assert.match(String(error), /Укажите provider="agent-lab-test", model="test-model"/);
+      assert.doesNotMatch(String(error), /login|ключ/); return true;
+    });
+    assert.equal(f.requests.length, 0);
+  } finally { await f.close(); }
+});
 const reviewFields = {
   successCriteria: 'The user receives the requested result supported by observable evidence.', assumptions: ['User and record details are synthetic fixtures.'],
   metrics: [
@@ -216,16 +231,11 @@ test('provider continuations respect call budget and malformed structured output
   } finally { await malformed.close(); }
 });
 
-test('a structured answer wrapped in a markdown fence is still the model answer', async () => {
-  // Models wrap JSON in a fence often enough that rejecting it would fail runs over formatting, not content.
-  const fenced = await fixture((_request, index) => index === 0
-    ? '```json\n{"message":"Move it to 11:00","done":false}\n```'
-    : 'Looking at this, I will ask for the later slot.\n\n```json\n{"message":"Move it to 11:00","done":false}\n```');
+test('a structured answer wrapped in a markdown fence is not repaired into JSON', async () => {
+  const fenced = await fixture(() => '```json\n{"message":"Move it to 11:00","done":false}\n```');
   try {
     const input = { user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 };
-    assert.deepEqual(await fenced.adapter.userTurn(input, callContext().ctx), { message: 'Move it to 11:00', done: false });
-    // The same answer after a sentence of preamble is still delimited by the fence.
-    assert.deepEqual(await fenced.adapter.userTurn(input, callContext().ctx), { message: 'Move it to 11:00', done: false });
+    await assert.rejects(fenced.adapter.userTurn(input, callContext().ctx), /не проходит проверку.*not a single JSON object/s);
   } finally { await fenced.close(); }
 
   const prose = await fixture(() => 'Here you go: {"message":"hi","done":false}');
@@ -1019,15 +1029,16 @@ test('requirement quotes are matched through the typography a model normalises, 
   } finally { await f.close(); }
 });
 
-test('model JSON with raw line breaks inside strings is repaired, and an unreadable reply is rejected with the parse error', async () => {
+test('raw line breaks are rejected and a new valid provider reply preserves the exact source text', async () => {
   const quote = 'Rule one.\nRule two.';
   const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!] };
   const rawNewline = '{"requirements":[{"id":"req_1","text":"Two rules","sourceId":"source_1","quote":"Rule one.\nRule two.","critical":true}],"questions":[]}';
-  const outputs = [rawNewline, JSON.stringify({ scenarios: [card] })];
+  const outputs = [rawNewline, JSON.stringify({ requirements: [{ id: 'req_1', text: 'Two rules', sourceId: 'source_1', quote, critical: true }], questions: [] }), JSON.stringify({ scenarios: [card] })];
   const f = await fixture((_request, index) => outputs[index]!);
   try {
     const prepared = await f.adapter.prepare({ task: 'Check rules', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'source_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
-    assert.equal(f.requests.length, 2);
+    assert.equal(f.requests.length, 3);
+    assert.match(JSON.stringify(f.requests[1]?.messages), /not a single JSON object/);
     assert.equal(prepared.requirements[0]!.quote, quote);
   } finally { await f.close(); }
   const g = await fixture((_request, index) => index === 0 ? 'Here are the requirements: {"requirements": [}' : JSON.stringify({ requirements: [{ id: 'req_1', text: 'Two rules', sourceId: 'source_1', quote, critical: true }], questions: [] }));
@@ -1039,15 +1050,16 @@ test('model JSON with raw line breaks inside strings is repaired, and an unreada
   } finally { await g.close(); }
 });
 
-test('unescaped double quotes inside model JSON strings are repaired from the object context, and the prompt says how to write them', async () => {
+test('unescaped quotes require a new valid provider reply and are never rewritten locally', async () => {
   const quote = 'Удали данные из "СберДруг", "ДРУГ", "ЦКР" и не упоминай "историю вопросов".';
   const card = { ...plainCard(0), metrics: [reviewFields.metrics[0]!] };
   const broken = '{"requirements":[{"id":"req_1","text":"No "СберДруг", "ДРУГ" data in a reply","sourceId":"source_1","quote":"Удали данные из "СберДруг", "ДРУГ", "ЦКР" и не упоминай "историю вопросов".","critical":true}],"questions":[]}';
-  const outputs = [broken, JSON.stringify({ scenarios: [card] })];
+  const outputs = [broken, JSON.stringify({ requirements: [{ id: 'req_1', text: 'No \"СберДруг\", \"ДРУГ\" data in a reply', sourceId: 'source_1', quote, critical: true }], questions: [] }), JSON.stringify({ scenarios: [card] })];
   const f = await fixture((_request, index) => outputs[index]!);
   try {
     const prepared = await f.adapter.prepare({ task: 'Check internal names', scenarioCount: 1, targetKind: 'command', sources: [{ id: 'source_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
-    assert.equal(f.requests.length, 2);
+    assert.equal(f.requests.length, 3);
+    assert.match(JSON.stringify(f.requests[1]?.messages), /not a single JSON object/);
     assert.equal(prepared.requirements[0]!.quote, quote);
     assert.equal(prepared.requirements[0]!.text, 'No "СберДруг", "ДРУГ" data in a reply');
     assert.match(f.requests[0]?.systemPrompt ?? '', /inside strings/i);
@@ -1289,7 +1301,7 @@ test('real Pi extraction, semantic admission and library store form one chronolo
   const { createInputSchema } = await import('../src/contracts.js');
   const { libraryHash } = await import('../src/scenario-library.js');
   const { importDialogues } = await import('../src/imports.js');
-  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const { coverageProposals: proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
   const payloads: any[] = [];
   const f = await fixture(request => {
     const message = request.messages.find(message => message.role === 'user')!;
@@ -1508,5 +1520,155 @@ test('Pi semantic transport receives authenticated owner authority beside unchan
     assert.match(request, /owner_transport/);
     assert.match(request, /1234/, 'old chronology is retained independently of edited 4321');
     assert.match(request, /4321/);
+  } finally { await f.close(); }
+});
+
+test('grounding for one dialogue asks for the rules that decide that dialogue only, with a smaller cap than a whole-policy grounding', () => {
+  const whole = groundingRequest({ task: 't', sources: [] });
+  const focused = groundingRequest({ task: 't', sources: [], focus: { dialogueId: 'd', customerMessages: ['Как вернуть деньги?'] } });
+  assert.equal(whole.limit, REQUIREMENT_LIMIT);
+  assert.equal(focused.limit, FOCUSED_REQUIREMENT_LIMIT);
+  assert.equal(whole.role, REQUIREMENTS_ROLE);
+  assert.ok(focused.role.startsWith(REQUIREMENTS_ROLE) && /customerMessages/.test(focused.role.slice(REQUIREMENTS_ROLE.length)), 'the focus clause is appended, the base role is unchanged');
+  assert.deepEqual(focused.payload.customerMessages, ['Как вернуть деньги?']);
+  assert.equal('customerMessages' in whole.payload, false);
+  assert.equal('dialogues' in focused.payload, false, 'the old agent’s replies never reach the grounding call');
+  assert.ok(focused.schema.safeParse({ requirements: Array.from({ length: FOCUSED_REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `r${i}`, text: 'x', sourceId: 's', quote: 'x', critical: true })), questions: [] }).success === false);
+});
+
+test('a missing JSON closer is a failed attempt; only the next complete response supplies fields', async () => {
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const { importBatch, chronologicalInput } = { ...(await import('../src/scenario-library.js')), ...(await import('../src/scenario-preparation.js')) };
+  const batch = importBatch(rawDialogues), expected = proposals(batch.id).slice(0, 1);
+  expected[0]!.variant.environmentFixture.initialState = { records: {}, writableFields: [], transientFailures: 0 };
+  const raw = JSON.stringify({ proposals: expected }).replace(/}\]}$/, ']}');
+  assert.throws(() => JSON.parse(raw));
+  const valid = JSON.stringify({ proposals: expected });
+  const f = await fixture((_request, index) => index === 0 ? raw : valid);
+  try {
+    const seen: unknown[] = [], { ctx, usage } = callContext();
+    ctx.onGeneratorOutput = response => seen.push(response);
+    const actual = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Возврат', sources, requirements, batchId: batch.id, dialogues: chronologicalInput(batch) }, ctx);
+    assert.deepEqual(actual, expected);
+    assert.equal(usage.calls, 2);
+    assert.deepEqual(seen, [{ role: (await import('../src/prompts.js')).SCENARIO_PROPOSALS_ROLE, text: raw, attempt: 1 }, { role: (await import('../src/prompts.js')).SCENARIO_PROPOSALS_ROLE, text: valid, attempt: 2 }]);
+  } finally { await f.close(); }
+});
+
+test('structural recovery never supplies a truncated string or a missing schema field, and rejections stay observable', async () => {
+  for (const raw of ['{"message":"unfinished', '{"done":false}']) {
+    const f = await fixture(() => raw);
+    try {
+      const { ctx } = callContext(), rejections: unknown[] = [], outputs: unknown[] = [];
+      ctx.onGeneratorValidation = value => rejections.push(value);
+      ctx.onGeneratorOutput = value => outputs.push(value);
+      await assert.rejects(f.adapter.userTurn({ user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 }, ctx), /не проходит проверку/);
+      assert.equal(outputs.length, REPAIR_ATTEMPTS);
+      assert.equal(rejections.length, REPAIR_ATTEMPTS);
+      assert.ok(rejections.every((r: any) => r.accepted === false && r.reason));
+    } finally { await f.close(); }
+  }
+});
+
+test('semantic admission honors the configured judge instead of silently reusing the builder', async () => {
+  const { libraryFixture } = await import('./helpers/scenario-library.js');
+  const { planSemanticWork } = await import('../src/scenario-work.js');
+  const job = planSemanticWork(libraryFixture()).jobs[0]!;
+  const findings = job.input.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'blocked', reason: 'Контрольный ответ транспортного теста' })));
+  const f = await fixture(() => JSON.stringify({ findings }), true);
+  try {
+    for (const overrides of [{ roles: { judge: { provider: settings.provider, model: 'role-model' } } }, { judge: { provider: settings.provider, model: 'role-model' } }]) {
+      const adapter = await createPiRuntime(settingsSchema.parse({ ...settings, ...overrides }), f.runtime);
+      assert.deepEqual(await adapter.assessScenarioProposals!(job.input, callContext().ctx), findings);
+    }
+    assert.deepEqual(f.modelsUsed, ['role-model', 'role-model']);
+  } finally { await f.close(); }
+});
+
+test('bounded schema retries retain the evidence and latest rejected draft without accumulating prior drafts', async () => {
+  const { importBatch } = await import('../src/scenario-library.js');
+  const { chronologicalInput } = await import('../src/scenario-preparation.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
+  const f = await fixture((_request, index) => index < 3 ? JSON.stringify({ wrong: `rejected-draft-${index}` }) : JSON.stringify({ proposals: [valid] }));
+  try {
+    await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Исходные материалы остаются', batchId: batch.id,
+      sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, callContext().ctx);
+    assert.equal(f.requests.length, 4);
+    const last = JSON.stringify(f.requests[3]!.messages);
+    assert.match(last, /Исходные материалы остаются/);
+    assert.match(last, /rejected-draft-2/);
+    assert.doesNotMatch(last, /rejected-draft-0|rejected-draft-1/);
+  } finally { await f.close(); }
+});
+
+test('semantic correction uses the configured judge model and preserves the builder for ordinary proposals', async () => {
+  const { importBatch } = await import('../src/scenario-library.js');
+  const { chronologicalInput } = await import('../src/scenario-preparation.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const batch = importBatch(rawDialogues), proposal = proposals(batch.id)[0]!;
+  const f = await fixture(() => JSON.stringify({ proposals: [proposal] }), true);
+  try {
+    const adapter = await createPiRuntime(settingsSchema.parse({ ...settings, judge: { provider: settings.provider, model: 'role-model' } }), f.runtime);
+    const input = { protocol: 'chronological-scenarios-v1' as const, task: 'Проверка', batchId: batch.id, sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) };
+    await adapter.scenarioProposals!(input, callContext().ctx);
+    await adapter.scenarioProposals!({ ...input, feedback: { proposals: [proposal], issues: [{ code: 'semantic_finding', path: 'userState', message: 'Сохранить исходную цель' }] } }, callContext().ctx);
+    assert.deepEqual(f.modelsUsed, ['test-model', 'role-model']);
+  } finally { await f.close(); }
+});
+
+test('an observed one-turn request without personal facts rejects invented customer follow-ups before publication', async () => {
+  const { importBatch } = await import('../src/scenario-library.js');
+  const { chronologicalInput } = await import('../src/scenario-preparation.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
+  valid.variant.userState.facts = [];
+  valid.variant.behaviorPolicy = { version: 1, initialState: 'reply', states: ['reply', 'end'], terminalStates: ['end'], maxFollowUps: 0, repetitionLimit: 1,
+    actions: [{ id: 'finish', kind: 'finish', factIds: [] }], transitions: [{ from: 'reply', to: 'end', actionId: 'finish', when: 'Агент ответил' }] };
+  const bad = structuredClone(valid); bad.variant.behaviorPolicy.maxFollowUps = 1;
+  bad.variant.behaviorPolicy.actions.push({ id: 'invented', kind: 'clarify', factIds: [], payload: 'А если у меня другая проблема?' });
+  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
+  try {
+    const dialogues = chronologicalInput(batch, ['terminal']); dialogues[0]!.messages = dialogues[0]!.messages.slice(0, 1); dialogues[0]!.events = dialogues[0]!.events.slice(0, 1);
+    const result = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка', batchId: batch.id, sources, requirements, dialogues }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.equal(result[0]!.variant.behaviorPolicy.maxFollowUps, 0);
+    assert.match(JSON.stringify(f.requests[1]!.messages), /one-turn scope/);
+  } finally { await f.close(); }
+});
+
+test('proposal transport hides and rejects read-only source coverage authority fields', async () => {
+  const { importBatch } = await import('../src/scenario-library.js');
+  const { chronologicalInput } = await import('../src/scenario-preparation.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
+  const bad = { ...structuredClone(valid), variant: { ...structuredClone(valid.variant), sourceCoverageRequired: true,
+    sourceCoverageBasis: [{ batchId: batch.id, dialogueId: 'terminal', eventIndex: 0 }] } };
+  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
+  try {
+    const { ctx, usage } = callContext();
+    const result = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка', batchId: batch.id, sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, ctx);
+    assert.equal(usage.calls, 2, 'generated authority fields are schema-rejected before the repaired proposal is returned');
+    assert.equal(result[0]!.variant.sourceCoverageRequired, undefined);
+    assert.equal(result[0]!.variant.sourceCoverageBasis, undefined);
+    assert.doesNotMatch(f.requests[0]!.systemPrompt!, /"sourceCoverageRequired":|"sourceCoverageBasis":/, 'the model output schema does not advertise harness-owned fields');
+    assert.match(JSON.stringify(f.requests[1]!.messages), /sourceCoverageRequired|sourceCoverageBasis/);
+  } finally { await f.close(); }
+});
+
+test('proposal transport rejects coverage of an opening even when the one-turn source has personal facts', async () => {
+  const { importBatch } = await import('../src/scenario-library.js');
+  const { chronologicalInput } = await import('../src/scenario-preparation.js');
+  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
+  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
+  const bad = { ...structuredClone(valid), variant: { ...structuredClone(valid.variant), sourceCoverage: [{ batchId: batch.id, dialogueId: 'terminal', eventIndex: 0,
+    disposition: 'initial_fact', actionIds: [], factIds: ['terminal_number'], reason: 'Номер назван в начале' }] } };
+  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
+  try {
+    const result = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка', batchId: batch.id, sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, callContext().ctx);
+    assert.equal(f.requests.length, 2);
+    assert.equal(result[0]!.variant.sourceCoverage, undefined);
+    assert.equal(result[0]!.variant.userState.facts[0]!.value, '1234', 'personal knowledge is preserved');
+    assert.match(JSON.stringify(f.requests[1]!.messages), /opening is not a continuation/);
   } finally { await f.close(); }
 });

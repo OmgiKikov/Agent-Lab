@@ -1,4 +1,4 @@
-import { requiredUserTurns } from './user-controller.js';
+import { requiredUserTurns, createUserState, allowedUserActions, advanceUser } from './user-controller.js';
 import { USER_CONTROLLER_ROLE, CHECKPOINT_ROLE, LEGACY_CHECKPOINT_ROLE } from './prompts.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -151,6 +151,30 @@ export function createLibrary(input: { id?: string; batch?: ImportBatch; sources
   return refreshQuality(library);
 }
 
+/** Add generated cases to a draft without re-generating the history or authority of existing cards. */
+export function appendScenarioProposals(library: ScenarioLibrary, proposals: unknown[], requirements: Requirement[]): ScenarioLibrary {
+  if (library.acceptance) throw new Error('Принятый набор нельзя дополнять подготовкой. Сначала создайте новый черновик.');
+  const next = scenarioLibrarySchema.parse(library);
+  const added = createLibrary({ id: next.id, batch: next.imports[0], sources: next.sources, requirements, proposals, semanticRequired: true });
+  if (next.variants.length + added.variants.length > 200) throw new Error('Допустимо не больше 200 вариантов');
+  if (added.variants.some(variant => next.variants.some(existing => existing.id === variant.id))) throw new Error('Новое предложение использует ID существующей карточки.');
+  for (const group of added.businessScenarios) {
+    const existing = next.businessScenarios.find(item => businessIdentity(item) === businessIdentity(group));
+    if (existing) {
+      existing.sourceDialogues = uniqueRefs([...existing.sourceDialogues, ...group.sourceDialogues]);
+      for (const variant of added.variants.filter(item => item.businessScenarioId === group.id)) {
+        variant.businessScenarioId = existing.id;
+        variant.familyId = next.variants.find(item => item.businessScenarioId === existing.id)?.familyId ?? existing.id;
+      }
+    } else next.businessScenarios.push(group);
+  }
+  next.requirements = structuredClone(requirements);
+  next.variants.push(...added.variants);
+  unifyFamilies(next.variants);
+  next.revision++;
+  return refreshQuality(next);
+}
+
 /** Includes all source evidence and drafts; acceptance is a receipt over this document. */
 export function libraryHash(library: ScenarioLibrary): string {
   const { acceptance: _acceptance, ...body } = library;
@@ -160,18 +184,39 @@ export function libraryHash(library: ScenarioLibrary): string {
 /** Findings bind to all evidence and editable content, not derived quality or acceptance badges. */
 export function semanticContentHash(library: ScenarioLibrary): string {
   return digest({ imports: library.imports, sources: library.sources, requirements: library.requirements,
+    ...(library.readingManifest ? { readingManifest: library.readingManifest } : {}),
     businessScenarios: library.businessScenarios, variants: library.variants.map(({ quality, issues, ownerDecision, ...content }) => content) });
 }
-export function semanticPaths(variant: ScenarioVariant): string[] {
+export function semanticPaths(variant: ScenarioVariant, options: { includeOutcome?: boolean } = {}): string[] {
   return ['userState', ...variant.userState.facts.map(f => `userState.facts.${f.id}`), 'behaviorPolicy', 'environmentFixture',
+    ...(variant.sourceCoverageRequired || variant.sourceCoverageBasis?.length || variant.sourceCoverage?.length ? ['sourceCoverage'] : []),
+    ...(options.includeOutcome === false ? [] : ['evaluationSpec.successCriteria']),
     'businessScenarioId', 'duplicates', ...variant.evaluationSpec.checkpoints.map(c => `evaluationSpec.checkpoints.${c.id}`)];
 }
-export function recordSemanticAssessment(library: ScenarioLibrary, findings: SemanticFinding[]): ScenarioLibrary {
+
+/** Only actions on a bounded, completable controller path count as preserved source behavior. */
+function reachableSourceActions(variant: ScenarioVariant): Set<string> {
+  const queue = [createUserState(variant.behaviorPolicy, variant.userState.facts.filter(f => f.availability === 'initial'))];
+  const seen = new Set<string>(), reached = new Set<string>();
+  for (let index = 0; index < queue.length; index++) {
+    if (index >= 2000) throw new Error('Покрытие исходных реплик требует слишком сложного пути политики');
+    const state = queue[index]!;
+    const key = canonical([state.position, state.counts, state.followUps, state.changed]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    for (const action of allowedUserActions(state, '')) {
+      reached.add(action.id);
+      queue.push(advanceUser(state, { actionId: action.id, factIds: action.factIds }).state);
+    }
+  }
+  return reached;
+}
+export function recordSemanticAssessment(library: ScenarioLibrary, findings: SemanticFinding[], contextVersion?: number): ScenarioLibrary {
   const next = scenarioLibrarySchema.parse(library);
   delete next.acceptance;
   next.semanticRequired = true;
   for (const variant of next.variants) { variant.ownerDecision = 'pending'; delete variant.semanticReviewRequired; }
-  next.semanticAssessment = { contentHash: semanticContentHash(next), findings };
+  next.semanticAssessment = { ...(contextVersion ? { contextVersion } : {}), contentHash: semanticContentHash(next), findings };
   return refreshQuality(next);
 }
 
@@ -182,6 +227,22 @@ export function recordSemanticAssessment(library: ScenarioLibrary, findings: Sem
 export function resolutionHash(library: ScenarioLibrary, variant: ScenarioVariant, path: string, reason: string): string {
   const { quality, issues, ownerDecision, history, revision, semanticReviewRequired, ...content } = variant;
   return digest({ path, reason, card: content, requirements: library.requirements, sources: library.sources.map(source => source.hash) });
+}
+
+/** Additive binding on new receipts; old accepted snapshots keep their original hash and remain executable. */
+export function resolutionBusinessHash(library: ScenarioLibrary, variant: ScenarioVariant): string {
+  const group = library.businessScenarios.find(item => item.id === variant.businessScenarioId);
+  return digest(group ? { goal: group.goal, conditions: group.conditions, requirementIds: group.requirementIds } : null);
+}
+
+/** Conservative shared question identity: the same rule, applicability, source version and exact checker uncertainty. */
+export function resolutionQuestionHash(library: ScenarioLibrary, variant: ScenarioVariant, path: string, reason: string): string | undefined {
+  const checkpoint = variant.evaluationSpec.checkpoints.find(item => path === `evaluationSpec.checkpoints.${item.id}`);
+  const requirement = checkpoint && library.requirements.find(item => item.id === checkpoint.requirementId);
+  const source = requirement && library.sources.find(item => item.id === requirement.sourceId);
+  if (!checkpoint || !requirement || !source) return undefined;
+  const { id: _id, ...rule } = checkpoint;
+  return digest({ rule, requirement, source: { id: source.id, hash: source.hash }, business: resolutionBusinessHash(library, variant), reason });
 }
 
 export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] {
@@ -195,17 +256,22 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
         add('semantic_pending', `variants.${variant.id}`, 'Смысловая проверка отсутствует или устарела', variant.id, 'needs_review');
         continue;
       }
-      for (const path of semanticPaths(variant)) {
+      // Before v11 the outcome had no separate obligation. Historical accepted snapshots remain readable;
+      // a new assessment explicitly checks it and cannot become ready on checkpoint findings alone.
+      const paths = semanticPaths(variant, { includeOutcome: (assessment.contextVersion ?? 0) >= 11
+        || assessment.findings.some(finding => finding.variantId === variant.id && finding.path === 'evaluationSpec.successCriteria') });
+      for (const path of paths) {
         const findings = assessment.findings.filter(f => f.variantId === variant.id && f.path === path);
         if (findings.length !== 1) add('semantic_missing', `variants.${variant.id}.${path}`, 'Нужна отдельная смысловая проверка поля', variant.id, 'needs_review');
         else if (findings[0]!.status !== 'ready') {
           // A question the owner settled in their own name stays settled for exactly that remark; a blocking remark is never the owner's to waive.
           const settled = findings[0]!.status === 'needs_review' && library.ownerResolutions?.some(item => item.variantId === variant.id && item.path === path
-            && item.findingHash === resolutionHash(library, variant, path, findings[0]!.reason));
+            && item.findingHash === resolutionHash(library, variant, path, findings[0]!.reason)
+            && (!item.businessHash || item.businessHash === resolutionBusinessHash(library, variant)));
           if (!settled) add('semantic_finding', `variants.${variant.id}.${path}`, findings[0]!.reason, variant.id, findings[0]!.status as 'needs_review' | 'blocked');
         }
       }
-      for (const finding of assessment.findings.filter(f => f.variantId === variant.id && !semanticPaths(variant).includes(f.path) && f.status !== 'ready')) {
+      for (const finding of assessment.findings.filter(f => f.variantId === variant.id && !paths.includes(f.path) && f.status !== 'ready')) {
         add('semantic_finding', `variants.${variant.id}.${finding.path}`, finding.reason, variant.id, finding.status as 'needs_review' | 'blocked');
       }
     }
@@ -231,6 +297,45 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
     if (group?.requirementIds.some(id => !library.requirements.some(r => r.id === id))) problem('missing_requirement', 'businessScenarioId', 'Ссылка на неизвестное требование');
     if (variant.provenance === 'production' && !variant.sourceDialogues.length) problem('missing_source', 'sourceDialogues', 'Для production нужны исходные диалоги');
     for (const ref of variant.sourceDialogues) if (!validRef(ref)) problem('missing_source', 'sourceDialogues', 'Исходный диалог не найден');
+    if (variant.sourceCoverageRequired || variant.sourceCoverageBasis?.length || variant.sourceCoverage?.length) {
+      const coverage = variant.sourceCoverage ?? [];
+      if (variant.sourceCoverageRequired && !variant.sourceCoverageBasis?.length) problem('source_coverage_basis', 'sourceCoverage', 'Отсутствует сохранённое основание обязательного покрытия исходных реплик');
+      const basis = variant.sourceCoverageBasis ?? variant.sourceDialogues.flatMap(ref => (validRef(ref)?.events.filter(e => e.type === 'message' && e.role === 'user').slice(1) ?? [])
+        .map(event => ({ ...ref, eventIndex: event.index })));
+      const later = basis.flatMap(ref => {
+        const event = validRef(ref)?.events.filter(e => e.type === 'message' && e.role === 'user').slice(1).find(e => e.index === ref.eventIndex);
+        if (!event) problem('source_coverage_basis', 'sourceCoverage', 'Обязательная исходная реплика не найдена в сохранённом импорте');
+        if (!variant.sourceDialogues.some(source => source.batchId === ref.batchId && source.dialogueId === ref.dialogueId)) {
+          problem('source_coverage_reference', 'sourceCoverage', 'Нельзя заменить или удалить исходный диалог обязательного покрытия');
+        }
+        return event ? [{ ...ref, event }] : [];
+      });
+      const sameTurn = (entry: (typeof coverage)[number], turn: (typeof later)[number]) => entry.batchId === turn.batchId && entry.dialogueId === turn.dialogueId && entry.eventIndex === turn.event.index;
+      if (variant.sourceCoverageRequired && !variant.sourceDialogues.length) problem('source_coverage_missing', 'sourceCoverage', 'Для проверки покрытия нужны исходные диалоги');
+      if (!library.semanticRequired) problem('source_coverage_review', 'sourceCoverage', 'Покрытие исходных реплик требует смысловой проверки', 'needs_review');
+      for (const turn of later) if (coverage.filter(entry => sameTurn(entry, turn)).length !== 1) {
+        problem('source_coverage_missing', 'sourceCoverage', `Нужен ровно один разбор исходной реплики ${turn.dialogueId} #${turn.event.index}`);
+      }
+      let reachable: Set<string> | undefined;
+      for (const entry of coverage) {
+        if (!later.some(turn => sameTurn(entry, turn))) problem('source_coverage_reference', 'sourceCoverage', 'Разбор ссылается не на последующую реплику клиента из источника');
+        if (entry.disposition === 'conditional_action') {
+          try { reachable ??= reachableSourceActions(variant); }
+          catch { problem('source_coverage_action', 'sourceCoverage', 'Нельзя подтвердить достижимость исходного продолжения в политике'); }
+          if (entry.factIds.length) problem('source_coverage_action', 'sourceCoverage', 'conditional_action требует пустой factIds; факты указываются внутри behaviorPolicy.actions, а в sourceCoverage — только actionIds');
+          if (!entry.actionIds.length || entry.actionIds.some(id => !reachable?.has(id) || variant.behaviorPolicy.actions.find(a => a.id === id)?.kind === 'finish')) {
+            problem('source_coverage_action', 'sourceCoverage', 'Исходное продолжение должно ссылаться на достижимое действие клиента с сообщением');
+          }
+        } else if (entry.disposition === 'initial_fact') {
+          if (!entry.factIds.length || entry.actionIds.length || entry.factIds.some(id => {
+            const fact = variant.userState.facts.find(f => f.id === id);
+            if (!fact || fact.availability !== 'initial') return true;
+            if (fact.origin.kind === 'owner') return !ownerFactReceipt(library, variant, fact) || !variant.sourceCoverageBasis?.some(turn => turn.batchId === entry.batchId && turn.dialogueId === entry.dialogueId && turn.eventIndex === entry.eventIndex);
+            return fact.origin.kind !== 'dialogue' || fact.origin.batchId !== entry.batchId || fact.origin.dialogueId !== entry.dialogueId || fact.origin.eventIndex !== entry.eventIndex;
+          })) problem('source_coverage_fact', 'sourceCoverage', 'Исходное знание должно ссылаться на исходный факт с происхождением в этой реплике; наблюдение после инструкции проверяется отдельно');
+        } else if (entry.actionIds.length || entry.factIds.length) problem('source_coverage_reference', 'sourceCoverage', 'Исключение реплики содержит только обоснование, без ссылок на действия или факты');
+      }
+    }
     if (variant.provenance === 'synthetic' && (!variant.parentVariantId || !variant.mutationReason || !library.variants.some(p => p.id === variant.parentVariantId && p.id !== v))) problem('synthetic_provenance', 'parentVariantId', 'Нужны родительский вариант и причина изменения');
     const factIds = new Set<string>();
     const values = new Map<string, string>();
@@ -277,6 +382,10 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
     const actionIds = new Set(policy.actions.map(a => a.id));
     if (!states.has(policy.initialState) || policy.terminalStates.some(s => !states.has(s)) || actionIds.size !== policy.actions.length) problem('invalid_policy', 'behaviorPolicy', 'Неизвестное состояние или повторяющееся действие');
     for (const action of policy.actions) {
+      if (action.kind === 'observe') {
+        if (action.factIds.length || !action.payload) problem('invalid_policy', 'behaviorPolicy.actions', 'Наблюдение после действия агента записывается репликой, без исходного факта');
+        continue;
+      }
       if (action.factIds.some(id => !initial.some(f => f.id === id))) problem('excluded_fact_action', 'behaviorPolicy.actions', 'Действие ссылается на недоступный факт');
       if ((action.kind === 'answer' || action.kind === 'correct') && !action.factIds.length) problem('invalid_policy', 'behaviorPolicy.actions', 'Ответ должен ссылаться на исходные факты');
       if (action.kind === 'change_intent' && !action.payload) problem('invalid_policy', 'behaviorPolicy.actions', 'Смена намерения должна быть объявлена');
@@ -393,10 +502,17 @@ function unifyFamilies(variants: ScenarioVariant[]): void {
   }
 }
 
-export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawPatch: LibraryPatch): ScenarioLibrary {
+/** The adapter supplies authorship separately from model-owned patch data. */
+export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawPatch: LibraryPatch, author: 'owner' | 'assistant' = 'owner'): ScenarioLibrary {
   checkHash(library, expectedHash);
   const patch = libraryPatchSchema.parse(rawPatch);
+  if (author !== 'owner' && ['edit_fact', 'add_fact', 'resolve_finding', 'resolve_findings'].includes(patch.kind)) throw new Error('Для факта или решения от имени владельца нужно его подтверждение.');
   const next = scenarioLibrarySchema.parse(library);
+  // Bind legacy decisions only when editing a new draft. Reading/compiling an accepted historical snapshot stays byte-identical.
+  if (next.ownerResolutions) next.ownerResolutions = next.ownerResolutions.map(receipt => {
+    const variant = next.variants.find(item => item.id === receipt.variantId);
+    return receipt.businessHash || !variant ? receipt : { ...receipt, businessHash: resolutionBusinessHash(next, variant) };
+  });
   const old = new Map(next.variants.map(v => [v.id, digest(v)]));
   const oldPersonas = new Map(next.variants.map(v => [v.id, digest(v.userState.persona ?? null)]));
   const getVariant = (id: string) => { const v = next.variants.find(v => v.id === id); if (!v) throw new Error(`Вариант ${id} не найден`); return v; };
@@ -405,7 +521,10 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
     getBusiness(patch.variant.businessScenarioId);
     const index = next.variants.findIndex(v => v.id === patch.variant.id);
     if (index < 0) next.variants.push({ ...patch.variant, revision: 1, history: [] });
-    else next.variants[index] = { ...patch.variant, revision: next.variants[index]!.revision, history: next.variants[index]!.history, familyId: next.variants[index]!.familyId };
+    else next.variants[index] = { ...patch.variant,
+      ...(next.variants[index]!.sourceCoverageRequired ? { sourceCoverageRequired: true as const } : {}),
+      ...(next.variants[index]!.sourceCoverageBasis ? { sourceCoverageBasis: structuredClone(next.variants[index]!.sourceCoverageBasis) } : {}),
+      revision: next.variants[index]!.revision, history: next.variants[index]!.history, familyId: next.variants[index]!.familyId };
   } else if (patch.kind === 'remove_variant') {
     getVariant(patch.variantId);
     next.variants = next.variants.filter(v => v.id !== patch.variantId);
@@ -422,6 +541,27 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
     Object.assign(fact, { statement: patch.statement, availability: patch.availability, reason: patch.reason, origin: { kind: 'owner', editId: patch.editId, text: patch.reason } });
     if (patch.value === undefined) delete fact.value; else fact.value = patch.value;
     variant.semanticReviewRequired = true;
+  } else if (patch.kind === 'resolve_findings') {
+    if (!next.semanticAssessment || next.semanticAssessment.contentHash !== semanticContentHash(next)) throw new Error('Библиотека изменилась: смысловая проверка устарела');
+    // Validate the complete scope before recording any receipt. The owning store publishes this one library revision atomically.
+    const resolutions = patch.findings.map(item => {
+      const variant = getVariant(item.variantId);
+      const findings = next.semanticAssessment!.findings.filter(finding => finding.variantId === variant.id && finding.path === item.path);
+      const finding = findings[0];
+      if (!semanticPaths(variant).includes(item.path) || findings.length !== 1 || !finding || finding.status === 'ready') throw new Error('По выбранному полю нет единственного открытого вопроса проверяющего');
+      if (finding.status === 'blocked') throw new Error('Это замечание блокирует запуск: его снимает исправление карточки, а не решение владельца');
+      const findingHash = resolutionHash(next, variant, item.path, finding.reason);
+      if (item.findingHash !== findingHash) throw new Error('Библиотека изменилась: вопрос или его основание устарели');
+      const businessHash = resolutionBusinessHash(next, variant);
+      if (next.ownerResolutions?.some(old => old.variantId === item.variantId && old.path === item.path && old.findingHash === findingHash && (!old.businessHash || old.businessHash === businessHash))) throw new Error('Выбранный вопрос уже закрыт решением владельца');
+      return { ...item, businessHash, editId: patch.editId, reason: patch.reason, questionHash: resolutionQuestionHash(next, variant, item.path, finding.reason) };
+    });
+    if (new Set(resolutions.map(item => item.variantId)).size > 1
+      && (!resolutions[0]!.questionHash || resolutions.some(item => item.questionHash !== resolutions[0]!.questionHash))) {
+      throw new Error('Выбранные карточки не имеют одного общего вопроса по тому же правилу и условиям. Ничего не записано.');
+    }
+    next.ownerResolutions = [...(next.ownerResolutions ?? []).filter(old => !resolutions.some(item => item.variantId === old.variantId && item.path === old.path)),
+      ...resolutions.map(({ questionHash: _questionHash, ...receipt }) => receipt)];
   } else if (patch.kind === 'resolve_finding') {
     const variant = getVariant(patch.variantId);
     const finding = next.semanticAssessment?.findings.find(item => item.variantId === variant.id && item.path === patch.path);
@@ -429,6 +569,11 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
     if (finding.status === 'blocked') throw new Error('Это замечание блокирует запуск: его снимает исправление карточки, а не решение владельца');
     next.ownerResolutions = [...(next.ownerResolutions ?? []).filter(item => !(item.variantId === variant.id && item.path === patch.path)),
       { variantId: variant.id, path: patch.path, findingHash: resolutionHash(next, variant, patch.path, finding.reason), editId: patch.editId, reason: patch.reason }];
+  } else if (patch.kind === 'edit_behavior') {
+    const variant = getVariant(patch.variantId);
+    if (patch.behaviorPolicy) variant.behaviorPolicy = structuredClone(patch.behaviorPolicy);
+    if (patch.sourceCoverage) variant.sourceCoverage = structuredClone(patch.sourceCoverage);
+    variant.semanticReviewRequired = true;
   } else if (patch.kind === 'edit_variant_text') {
     const variant = getVariant(patch.variantId);
     if (patch.field === 'opening') variant.userState.opening = patch.value;
@@ -441,6 +586,15 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
       checkpoint.rule = patch.value;
     }
     variant.semanticReviewRequired = true;
+  } else if (patch.kind === 'edit_business') {
+    const group = getBusiness(patch.businessScenarioId);
+    if (patch.title !== undefined) group.title = patch.title;
+    if (patch.goal !== undefined) group.goal = patch.goal;
+    if (patch.conditions !== undefined) group.conditions = [...patch.conditions];
+    // Repair legacy grouping metadata from the card definitions, never from model claims about readiness.
+    group.requirementIds = [...new Set([...group.requirementIds, ...next.variants.filter(v => v.businessScenarioId === group.id).flatMap(v => v.evaluationSpec.checkpoints.map(c => c.requirementId))])];
+    group.grouping = { status: 'confirmed', reason: patch.reason };
+    for (const variant of next.variants.filter(item => item.businessScenarioId === group.id)) variant.semanticReviewRequired = true;
   } else if (patch.kind === 'merge_business') {
     const target = getBusiness(patch.targetId);
     if (patch.sourceIds.includes(target.id)) throw new Error('Нельзя объединить бизнес-сценарий с самим собой');
@@ -472,7 +626,7 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
       const fact = (patch.kind === 'edit_fact' || patch.kind === 'add_fact') && patch.variantId === variant.id ? variant.userState.facts.find(f => f.id === patch.factId) : undefined;
       const persona = variant.userState.persona;
       variant.history.push({
-        ...(previousHash ? { previousHash } : {}), author: 'owner', reason: patch.reason, revision: variant.revision,
+        ...(previousHash ? { previousHash } : {}), author, reason: patch.reason, revision: variant.revision,
         ...(fact && (patch.kind === 'edit_fact' || patch.kind === 'add_fact') ? { factEdit: { factId: fact.id, editId: patch.editId, factHash: digest(fact) } } : {}),
         ...(patch.kind === 'upsert_variant' && patch.variant.id === variant.id && persona && oldPersonas.get(variant.id) !== digest(persona) ? { personaEdit: { editId: persona.ownerEditId, personaHash: digest(persona) } } : {}),
         ...(patch.kind === 'edit_variant_text' && patch.variantId === variant.id ? { textEdit: { editId: patch.editId, field: patch.field, valueHash: digest(patch.value) } } : {}),
@@ -495,6 +649,8 @@ export function addGeneratedVariant(library: ScenarioLibrary, expectedHash: stri
   if (!parent || candidate.provenance !== 'synthetic' || !candidate.mutationReason) throw new Error('Целевой вариант должен быть синтетическим потомком существующего варианта');
   if (candidate.businessScenarioId !== parent.businessScenarioId || candidate.familyId !== parent.familyId) throw new Error('Целевой вариант должен сохранить бизнес-группу и семейство родителя');
   if (canonical(candidate.sourceDialogues) !== canonical(parent.sourceDialogues)) throw new Error('Целевой вариант должен сохранить источники родителя');
+  if (parent.sourceCoverageRequired) candidate.sourceCoverageRequired = true;
+  if (parent.sourceCoverageBasis) candidate.sourceCoverageBasis = structuredClone(parent.sourceCoverageBasis);
   candidate.revision = 1;
   candidate.quality = 'needs_review'; candidate.issues = []; candidate.ownerDecision = 'pending'; candidate.semanticReviewRequired = true;
   candidate.history = [{ author: 'generator', reason, revision: 1 }];
@@ -530,7 +686,7 @@ function compileVariant(library: ScenarioLibrary, variant: ScenarioVariant): Sce
   const checks = required.filter(c => c.check !== undefined).map(c => checkSchema.parse(c.check));
   const observed = required.filter(c => c.check === undefined);
   const answers = variant.behaviorPolicy.actions.filter(a => a.ifAsked && a.payload).map(a => ({ ifAsked: a.ifAsked!, reply: a.payload! }));
-  const actionNames = { answer: 'Ответить известными фактами', missing: 'Сообщить отсутствие данных', clarify: 'Уточнить запрос', correct: 'Исправить личный факт', change_intent: 'Сменить намерение', finish: 'Завершить разговор' };
+  const actionNames = { answer: 'Ответить известными фактами', missing: 'Сообщить отсутствие данных', clarify: 'Уточнить запрос', correct: 'Исправить личный факт', change_intent: 'Сменить намерение', finish: 'Завершить разговор', observe: 'Сообщить наблюдение' };
   const behavior = variant.behaviorPolicy.transitions.map(transition => {
     const action = variant.behaviorPolicy.actions.find(a => a.id === transition.actionId);
     if (!action) return transition.when;

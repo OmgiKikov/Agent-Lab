@@ -47,7 +47,7 @@ function pruneUnreachable(policy: ScenarioVariant['behaviorPolicy'], referencedB
   policy.actions = policy.actions.filter(action => used.has(action.id) || !referencedBefore.has(action.id));
 }
 
-function addPolicyAction(variant: ScenarioVariant, operation: VariantOperation, action: ScenarioVariant['behaviorPolicy']['actions'][number], when: string, diff: VariantFieldDiff[], referencedBefore?: Set<string>): void {
+function addPolicyAction(variant: ScenarioVariant, operation: VariantOperation, action: ScenarioVariant['behaviorPolicy']['actions'][number], when: string, diff: VariantFieldDiff[], referencedBefore?: Set<string>): string {
   const policy = variant.behaviorPolicy;
   if (policy.terminalStates.includes(policy.initialState)) throw new Error('Нельзя добавить продолжение: исходное состояние уже завершает разговор');
   const target = policy.terminalStates[0];
@@ -61,6 +61,30 @@ function addPolicyAction(variant: ScenarioVariant, operation: VariantOperation, 
   policy.maxFollowUps = Math.max(1, policy.maxFollowUps);
   if (referencedBefore) pruneUnreachable(policy, referencedBefore);
   changed(diff, 'behaviorPolicy', before, policy);
+  return action.id;
+}
+
+function assertSeparateDisclosure(policy: ScenarioVariant['behaviorPolicy'], removedActions: Set<string>, factId: string): void {
+  const combined = policy.actions.find(action => removedActions.has(action.id) && action.factIds.some(id => id !== factId));
+  if (combined) throw new Error(`Действие «${combined.id}» раскрывает и другие факты. Сначала разделите раскрытие выбранного факта и остальных данных на отдельные действия, сохранив покрытие исходных реплик.`);
+}
+
+/** Keep source accounting when the selected disclosure is intentionally changed in a synthetic child. */
+function replaceCoveredDisclosure(variant: ScenarioVariant, removedActions: Set<string>, replacement: string, missingFactId: string | undefined, diff: VariantFieldDiff[]): void {
+  if (!variant.sourceCoverage) return;
+  const before = structuredClone(variant.sourceCoverage);
+  for (const entry of variant.sourceCoverage) {
+    if (entry.disposition === 'conditional_action' && entry.actionIds.some(id => removedActions.has(id))) {
+      entry.actionIds = [...new Set(entry.actionIds.map(id => removedActions.has(id) ? replacement : id))];
+      entry.reason = `Целевой синтетический вариант: раскрытие заменено действием ${replacement}. Основание: ${variant.mutationReason}`.slice(0, 1000);
+    } else if (missingFactId && entry.disposition === 'initial_fact' && entry.factIds.includes(missingFactId)) {
+      // A combined mapping cannot silently discard the other source facts.
+      if (entry.factIds.length !== 1) continue;
+      entry.disposition = 'conditional_action'; entry.factIds = []; entry.actionIds = [replacement];
+      entry.reason = `Целевой синтетический вариант: вместо исходного знания клиент сообщает отсутствие данных. Основание: ${variant.mutationReason}`.slice(0, 1000);
+    }
+  }
+  if (JSON.stringify(before) !== JSON.stringify(variant.sourceCoverage)) changed(diff, 'sourceCoverage', before, variant.sourceCoverage);
 }
 
 /** Pure deterministic proposal. Persistence belongs to ExperimentLab so CAS and writer ownership stay intact. */
@@ -90,10 +114,12 @@ export function proposeVariant(library: ScenarioLibrary, request: VariantRequest
     const factSecrets = [normalized(value), normalized(fact.statement)];
     const priorRevealActions = new Set(variant.behaviorPolicy.actions.filter(action => action.factIds.includes(fact.id)
       || factSecrets.some(secret => normalized(action.payload ?? '').includes(secret))).map(action => action.id));
+    assertSeparateDisclosure(variant.behaviorPolicy, priorRevealActions, fact.id);
     variant.behaviorPolicy.actions = variant.behaviorPolicy.actions.filter(action => !priorRevealActions.has(action.id));
     variant.behaviorPolicy.transitions = variant.behaviorPolicy.transitions.filter(transition => !priorRevealActions.has(transition.actionId));
     if (priorRevealActions.size) changed(diff, 'behaviorPolicy', policyBefore, variant.behaviorPolicy);
-    addPolicyAction(variant, request.operation, { id: 'pending', kind: 'answer', factIds: [fact.id], ifAsked: input.ifAsked, payload: input.reply ?? fact.statement }, input.ifAsked, diff, referencedBefore);
+    const replacement = addPolicyAction(variant, request.operation, { id: 'pending', kind: 'answer', factIds: [fact.id], ifAsked: input.ifAsked, payload: input.reply ?? fact.statement }, input.ifAsked, diff, referencedBefore);
+    replaceCoveredDisclosure(variant, priorRevealActions, replacement, undefined, diff);
   } else if (request.operation === 'missing_fact') {
     const fact = variant.userState.facts.find(item => item.id === input.factId && item.availability === 'initial');
     if (!fact) throw new Error('Для отсутствующего факта выберите существующий исходный факт');
@@ -121,11 +147,13 @@ export function proposeVariant(library: ScenarioLibrary, request: VariantRequest
     }
     const removedActions = new Set(variant.behaviorPolicy.actions.filter(action => action.factIds.includes(fact.id)
       || (action.kind === 'answer' || action.kind === 'correct') && removedSecrets.some(secret => normalized(action.payload ?? '').includes(secret))).map(action => action.id));
+    assertSeparateDisclosure(variant.behaviorPolicy, removedActions, fact.id);
     variant.behaviorPolicy.actions = variant.behaviorPolicy.actions.filter(action => !removedActions.has(action.id));
     variant.behaviorPolicy.transitions = variant.behaviorPolicy.transitions.filter(transition => !removedActions.has(transition.actionId));
     if (removedActions.size) changed(diff, 'behaviorPolicy', policyBefore, variant.behaviorPolicy);
-    addPolicyAction(variant, request.operation, { id: 'pending', kind: 'missing', factIds: [], ifAsked: input.ifAsked,
+    const replacement = addPolicyAction(variant, request.operation, { id: 'pending', kind: 'missing', factIds: [], ifAsked: input.ifAsked,
       payload: input.reply ?? `У меня нет данных: ${missingLabel}.` }, input.ifAsked, diff, referencedBefore);
+    replaceCoveredDisclosure(variant, removedActions, replacement, fact.id, diff);
     const retainedUserText = [variant.userState.goal, variant.userState.opening, variant.userState.persona?.text ?? '', ...variant.userState.missing, ...variant.userState.cannotKnow,
       ...variant.userState.facts.map(item => item.statement), ...variant.behaviorPolicy.actions.flatMap(action => [action.payload ?? '', action.ifAsked ?? '']),
       ...variant.behaviorPolicy.transitions.map(transition => transition.when)];

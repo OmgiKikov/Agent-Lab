@@ -1,7 +1,8 @@
 import { checkpointReceiptValid } from './checkpoints.js';
 import { z } from 'zod';
-import { assessmentEventContent, assessmentRubrics, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Source } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Scenario, type Source } from './contracts.js';
 import { ASSESS_ROLE, DATA_BOUNDARY } from './prompts.js';
+import { ragFaithfulnessEvidence, ragJudgeEvents, ragJudgeInput } from './rag-evidence.js';
 
 const condition = z.enum(['met', 'not_met', 'unclear']);
 const responseSchema = z.strictObject({ assessments: z.array(metricAssessmentSchema.omit({ result: true, findings: true }).required({ citations: true }).extend({
@@ -15,10 +16,14 @@ export const JUDGE_RESPONSE_FORMAT = { type: 'json_schema', json_schema: { name:
 } };
 export const JUDGE_PROMPT = `${ASSESS_ROLE}\n${DATA_BOUNDARY}
 Evaluate passCriteria and failCriteria INDEPENDENTLY against the same evidence. Report met, not_met or unclear for EACH condition. Do not choose which condition takes precedence. If both apply, preserve both as met. An unspecified scope or priority is unclear; never invent one. Explain both conditions in rationale. A condition that is not exercised is unclear, not automatically met or not_met.
-Events of type retrieval are the exact RAG fragments the target adapter says were supplied for that reply. For rag_context_* rubrics, compare those events with the delivered user request and the applicable owner requirements. Never treat the full owner sources as retrieved context. Cite retrieval events and assistant events that support the decision; if the trace cannot establish the condition, return unclear.
+Events of type retrieval contain exact fragments observed by the adapter. stage=retrieved means the search service response only; stage=model_context (also the legacy default) means the actual answering-model context. Sufficiency and relevance assess the recorded stage; faithfulness requires model_context and stays unknown for search-only evidence. replyContexts binds each answerSeq to its own retrievalSeq and preceding userSeqs. Never use a later context to justify an earlier answer or combine contexts into a fictional context that no reply received.
+For rag_context_faithfulness, assess business claims only against the context bound to that answer; do not use model memory, earlier assistant claims or an assumed reference answer. A pass needs citations to EVERY answer and its own retrieval event; a fail needs the offending answer and its own retrieval event, including an empty context. Quote actual content, not just event IDs. No reference sources, expected answer, planned user facts or fixture state are supplied to this check.
+In this RAG-only check, business claims mean rules, terms and procedures from knowledge documents. A report of a tool action or a specific customer's current account/request status is outside this metric: those observations are deliberately withheld. If the reply only reports such a status or asks for clarification and makes no knowledge claim, both conditions are unclear; do not invent a RAG failure or a vacuous pass.
+For rag_context_relevance, compare the context with delivered user requests only; the tested answers and reference materials are withheld. Cite user and retrieval events. If the delivered messages do not establish the information need, return unclear.
+For rag_context_recall, compare each supplied context with applicable reference materials for the delivered requests. Never treat reference sources as retrieved context. This is a sufficiency check against those supplied materials, not proof of recall over the entire knowledge base. Cite retrieval events and delivered user messages; the tested answer is withheld.
 Return exactly one compact JSON object, without markdown fences, matching this schema:
 ${JSON.stringify(z.toJSONSchema(responseSchema))}`;
-export const JUDGE_PROTOCOL = fingerprint({ version: 10, promptSources: 'observable-rules', ragEvidence: 'adapter-reported-retrieval-events', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
+export const JUDGE_PROTOCOL = fingerprint({ version: 13, promptSources: 'observable-rules', ragEvidence: 'metric-isolated-reply-context-with-stage-v1', citations: 'verbatim-decoded-chunks', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
 /** Rationale texts written into assessments. Reason detection matches these constants; their text is part of stored records. */
 export const GOAL_UNSUPPORTED_RATIONALE = 'Достижение цели не подтверждено цитированным доказательством выбранного владельцем типа; слова агента оцениваются отдельно.';
@@ -43,8 +48,22 @@ export function observableSources(sources: Source[], requirements: Requirement[]
   });
 }
 
+/**
+ * Which sources one card's judge reads. A record prepared from a few materials keeps them all (its judgments were verified
+ * with that input); a record prepared from a large knowledge base (per-dialogue article selection) gives the judge the prompt
+ * sources plus the articles its requirements cite, so a vote never carries hundreds of articles.
+ */
+export function scenarioSources(record: { sources: Source[]; requirements: Requirement[]; preparationProgress?: { sourceSelection?: unknown } }, scenario: Pick<Scenario, 'requirementIds' | 'execution'>): Source[] {
+  if (!record.preparationProgress?.sourceSelection) return record.sources;
+  const cited = new Set([...scenario.requirementIds, ...(scenario.execution?.evaluatorView.requirements ?? []).map(r => r.id)]);
+  const sourceIds = new Set(record.requirements.filter(r => cited.has(r.id)).map(r => r.sourceId));
+  return record.sources.filter(source => source.kind === 'prompt' || sourceIds.has(source.id));
+}
+
 /** This is the complete, frozen judge input. Prior verdicts, usage and run identity are deliberately absent. */
 export function judgeInput(input: Input) {
+  const metric = input.scenario.metrics?.length === 1 ? input.scenario.metrics[0] : undefined;
+  if (metric && RAG_METRIC_IDS.has(metric.id)) return ragJudgeInput(input, metric);
   const observationMissing = !input.trial.observation || input.trial.observation.state === 'missing';
   const scope = input.trial.userMode === 'static'
     ? 'Opening and first answer ONLY. Planned follow-ups were not delivered. Never penalize the agent for their absence.'
@@ -55,7 +74,7 @@ export function judgeInput(input: Input) {
     evaluationScope: observationMissing
       ? `${scope} Agent prose proves only what was said. Without observed state, action-dependent pass conditions remain unclear; assess reply quality independently.`
       : scope,
-    sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })),
+    sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, hash: fingerprint(content) })),
     trial: { userMode: input.trial.userMode,
       events: input.trial.events.map(event => ({ seq: event.seq, type: event.type, content: assessmentEventContent(event) })),
       observation: input.trial.observation ?? { state: 'missing', tools: 'partial' }, initialState: input.trial.initialState,
@@ -71,15 +90,17 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
   }
   const events = new Set(input.trial.events.map(e => e.seq));
   return rows.map(({ passCondition, failCondition, ...row }) => {
-    let result = passCondition === 'met' && failCondition === 'not_met' ? 'pass'
+    let result: MetricAssessment['result'] = passCondition === 'met' && failCondition === 'not_met' ? 'pass'
       : failCondition === 'met' && passCondition === 'not_met' ? 'fail' : 'unknown';
     if (row.evidence.some(seq => !events.has(seq))) throw new Error(`Assessment ${row.metricId} cites a nonexistent trace event`);
     if (result !== 'unknown' && !row.evidence.length) throw new Error(`Assessment ${row.metricId} needs trace evidence for pass/fail`);
-    const citedEvents = row.evidence.map(seq => input.trial.events.find(event => event.seq === seq)!);
+    const availableEvents = RAG_METRIC_IDS.has(row.metricId) ? ragJudgeEvents(input, row.metricId) : input.trial.events;
+    if (row.evidence.some(seq => !availableEvents.some(event => event.seq === seq))) throw new Error('Assessment cites evidence withheld from this metric');
+    const citedEvents = row.evidence.map(seq => availableEvents.find(event => event.seq === seq)!);
     const replyConfirms = citedEvents.some(event => event.type === 'assistant');
     if (RAG_METRIC_IDS.has(row.metricId) && result !== 'unknown') {
       if (!citedEvents.some(event => event.type === 'retrieval') || !metricApplies(metrics.find(metric => metric.id === row.metricId)!, input.trial)
-        || row.metricId === 'rag_context_faithfulness' && !replyConfirms
+        || row.metricId === 'rag_context_faithfulness' && !ragFaithfulnessEvidence(input.trial, row.evidence, result)
         || row.metricId === 'rag_context_recall' && !input.sources.some(source => source.kind !== 'prompt')) {
         result = 'unknown';
         row.rationale = 'Для RAG-вывода нужны полный контекст каждого ответа, цитаты найденного и, для полноты знания, требования из базы знаний владельца.';
@@ -105,7 +126,7 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
       : input.scenario.goalObservation === 'state' ? stateConfirms : false;
     const unsupportedGoal = row.metricId === 'goal_attainment' && result !== 'unknown' && !goalConfirmed;
     if (unsupportedGoal) result = 'unknown';
-    return validateAssessments(metrics.filter(m => m.id === row.metricId), input.trial.events, [{ ...row, result,
+    return validateAssessments(metrics.filter(m => m.id === row.metricId), availableEvents, [{ ...row, result,
       ...(unsupportedGoal ? { rationale: GOAL_UNSUPPORTED_RATIONALE } : {}),
     }])[0]!;
   });

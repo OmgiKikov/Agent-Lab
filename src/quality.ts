@@ -472,7 +472,7 @@ export function scoreBrief(input: Experiment): ScoreBrief {
   };
 }
 
-const modeNames: Record<UserMode, string> = { static: 'одна реплика', scripted: 'по сценарию', reactive: 'живой пользователь' };
+const modeNames: Record<UserMode, string> = { static: 'одна реплика', scripted: 'по сценарию', reactive: 'реактивный симулятор' };
 const rate = (passed: number, failed: number): number | null => passed + failed ? passed / (passed + failed) : null;
 export const percent = (value: number | null): string => value === null ? '—' : `${Math.round(value * 100)}%`;
 /** Russian plural: plural(2, ['диалог', 'диалога', 'диалогов']) → «2 диалога». */
@@ -508,7 +508,11 @@ function metricRows(record: Experiment): QualityMetric[] {
       bump(row, !usable(scenario, trial) || !metricApplies(metric, trial) || !result ? 'unknown' : result);
     }
   }
-  return [...rows.values()].map(row => ({ ...row, accuracy: rate(row.passed, row.failed) }))
+  return [...rows.entries()].map(([key, row]) => ({ ...row,
+    // Different card-specific rubric definitions must stay separate and visibly distinguishable.
+    name: [...rows.values()].filter(other => other.name === row.name).length > 1
+      ? `${row.name} · ${record.scenarios.filter(s => s.metrics?.some(m => `rubric:${stableMetricIds.has(m.id) ? m.id : fingerprint(m)}` === key)).map(s => s.title).join('; ')}` : row.name,
+    accuracy: rate(row.passed, row.failed) }))
     .sort((a, b) => Number(b.kind === 'code') - Number(a.kind === 'code'));
 }
 

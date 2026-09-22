@@ -1,11 +1,14 @@
 import { SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE } from './prompts.js';
+import { recheckDecision } from './scenario-draft.js';
+import { semanticWorkStatus } from './scenario-work.js';
 import { runGeneratorOperation, type GeneratorRequest } from './generator-service.js';
+import { captureGeneratorEvidence } from './generator-evidence.js';
 import { targetSchema } from './contracts.js';
 import { createFixBundle, prepareResolutionPolicy, type ResolutionRequest } from './resolution.js';
 import { prepareDiagnostic, runDiagnostic, verifyDiagnosticPlan, diagnosticRevision, type Intervention } from './diagnostics.js';
 import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
 import type { LibraryPatch, ScenarioLibrary } from './scenario-contracts.js';
-import { assessScenarioLibrary, assertLibraryRun, compiledLibraryScenarios, prepareScenarioLibrary, SCENARIO_EXTRACTION_PROTOCOL } from './scenario-preparation.js';
+import { assessScenarioLibrary, assertLibraryRun, compiledLibraryScenarios, prepareScenarioLibrary, resumeScenarioLibrary, SCENARIO_EXTRACTION_PROTOCOL } from './scenario-preparation.js';
 import { proposeVariant as proposeScenarioVariant, type VariantProposalResult, type VariantRequest } from './scenario-variants.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -15,6 +18,7 @@ import {
   reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type Dialogue, type ValidationExclusion, type DiscoverInput, type DiscoveryDialogue, type DiscoveryGroup, type DiscoveryObservation, type DiscoveryPlan, type DiscoveryRecord, type DraftPatch, type Experiment, type HumanReviewInput, type ObservedGoal, type Requirement, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
 import { ExperimentStore } from './store.js';
 import { assessTrial, evaluateTrial, grade } from './evaluation.js';
+import { scenarioSources } from './judge.js';
 import { automaticTrialResult, trialAssessmentComplete, awaitingVerdict, compareTrials, isAgentFailure, plannedTrials } from './comparison.js';
 import { targetFingerprint } from './target-version.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from './connection.js';
@@ -252,7 +256,7 @@ function confirmedDiscoveryRepresentativeIds(discovery: DiscoveryRecord, require
 
 export class ExperimentLab {
   readonly store: ExperimentStore;
-  private active: { record: Experiment; controller: AbortController; done: Promise<void>; startedAtMs: number; discoveryElapsedBeforeMs: number } | null = null;
+  private active: { record: Experiment; controller: AbortController; done: Promise<void>; startedAtMs: number; discoveryElapsedBeforeMs: number; preparationElapsedBeforeMs?: number } | null = null;
   private lastTask: Promise<void> = Promise.resolve();
   private closed = true;
   private closing = false;
@@ -675,7 +679,7 @@ export class ExperimentLab {
             const scenario: Scenario = { ...base, goalObservation: DEFAULT_GOAL_OBSERVATION, split: 'dev' };
             if (record.sources.some(source => source.kind === 'prompt')) scenario.metrics!.unshift({ ...promptCompliance });
             const trial = { ...dialogueToTrial(dialogue, scenario, record.revisions[0]!.id), id: judgeTrialId };
-            return { goal, assessments: await assessTrial(runtime, scenario, record.sources, trial,
+            return { goal, assessments: await assessTrial(runtime, scenario, scenarioSources(record, scenario), trial,
               { ...ctx, onJudgment: (id, audit, final) => { ctx.onJudgment?.(id, audit, final); judged = true; } }, [focus]) };
           });
           discovery.deep.push({ dialogueId, role: discovery.representativeIds.includes(dialogueId) ? 'representative' : 'control', ...judgeKey(), ...deep });
@@ -728,11 +732,11 @@ export class ExperimentLab {
     if (!experiment.librarySnapshot) throw new Error('У эксперимента нет библиотеки сценариев.');
     return { library: structuredClone(experiment.librarySnapshot), experiment };
   }
-  async editLibrary(id: string, expectedHash: string, patch: LibraryPatch): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
+  async editLibrary(id: string, expectedHash: string, patch: LibraryPatch, author: 'owner' | 'assistant' = 'owner'): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
     return this.change(async () => {
       const { experiment, library } = await this.readLibrary(id);
       if (experiment.phase !== 'review') throw new Error('Править библиотеку можно только в черновике.');
-      const next = editScenarioLibrary(library, expectedHash, patch);
+      const next = editScenarioLibrary(library, expectedHash, patch, author);
       experiment.librarySnapshot = next; experiment.scenarios = []; experiment.acceptedTests = [];
       delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
       experiment.reviewedAt = null; experiment.reviewMode = null; experiment.manifestHash = null;
@@ -779,6 +783,47 @@ export class ExperimentLab {
       await this.store.publishLibrary(experiment, next, expectedHash);
       return { library: next, experiment };
     });
+  }
+  /** Continue a preparation from saved pending sources. A call that died in flight is not repeated. */
+  async resumePreparation(id: string, expectedHash: string): Promise<Experiment> {
+    return this.change(async () => {
+      const experiment = await this.get(id);
+      const progress = experiment.preparationProgress;
+      if (!progress?.pending.length) throw new Error('Необработанных источников нет.');
+      if (progress.activeDialogueId) throw new Error(`Подготовка остановилась во время разбора «${progress.activeDialogueId}». Его стоимость неизвестна; этот источник не повторяется молча.`);
+      if (!experiment.librarySnapshot) throw new Error('Черновик библиотеки не сохранён; продолжить нельзя.');
+      if (libraryHash(experiment.librarySnapshot) !== expectedHash || libraryHash(await this.store.readLibrary(experiment.librarySnapshot.id)) !== expectedHash) throw new Error('Библиотека изменилась: хеш устарел.');
+      if (experiment.phase !== 'review' && experiment.phase !== 'interrupted') throw new Error('Продолжить можно только незавершённую подготовку.');
+      if (experiment.librarySnapshot.acceptance || experiment.trials.length || experiment.acceptedTests?.length) throw new Error('Принятый или выполненный набор не меняется. Создайте новый черновик.');
+      if ((progress.elapsedMs ?? 0) >= experiment.settings.maxDurationMs) throw new Error('Общий лимит времени подготовки исчерпан; сохранённый результат не меняется.');
+      const batch = experiment.originalImport ? await this.store.readImport(experiment.originalImport.id) : undefined;
+      const input = createInputSchema.parse({
+        task: experiment.task, mode: experiment.mode, materials: experiment.sources.map(source => ({ name: source.name, content: source.content, ...(source.kind ? { kind: source.kind } : {}) })),
+        settings: experiment.settings, workflow: experiment.workflow, scenarioCount: batch ? 0 : progress.requestedCount ?? 1, target: experiment.target,
+        ...(batch ? { originalImport: batch } : {}),
+        dialogues: [], goldenCases: experiment.goldenCases, profiles: experiment.profiles, notes: experiment.notes,
+        ...(experiment.revisions[0] ? { existingAgent: experiment.revisions[0].spec } : {}),
+      });
+      experiment.phase = 'preparing'; experiment.error = null;
+      await this.launch(experiment, async ctx => {
+        const runtime = await this.runtime(experiment);
+        await resumeScenarioLibrary(experiment, input, batch, runtime, ctx, this.store);
+        await this.checkpoint(experiment, 'review', 'Подготовка продолжена с сохранённых источников. Проверьте варианты перед принятием.');
+      }, true);
+      return structuredClone(experiment);
+    });
+  }
+  /** Shared edit follow-up: defer, require more budget, or start the exact remaining semantic work. */
+  async recheckLibrary(id: string, options: { expectedHash?: string; defer?: boolean; explicit?: boolean } = {}) {
+    const { library, experiment } = await this.readLibrary(id);
+    const hash = libraryHash(library);
+    if (options.expectedHash && options.expectedHash !== hash) throw new Error('Библиотека изменилась: хеш устарел.');
+    const work = semanticWorkStatus(library), remainingCalls = Math.max(0, experiment.settings.maxCalls - experiment.usage.calls);
+    if (options.explicit && work.pendingJobs && !remainingCalls) throw new Error('Модельный бюджет исчерпан. Увеличьте общий лимит; использованные вызовы не сбрасываются.');
+    const decision = recheckDecision({ ...work, remainingCalls, defer: !!options.defer,
+      askedHash: options.explicit ? hash : undefined, libraryHash: hash });
+    if (decision.action === 'run') await this.assessLibrary(id, decision.startHash);
+    return { decision, before: experiment };
   }
   /** Reassess edited facts/expectations under the same usage, timeout and cancellation budget. */
   async assessLibrary(id: string, expectedHash: string): Promise<Experiment> {
@@ -1151,7 +1196,7 @@ export class ExperimentLab {
               const executionFailed = original.outcome === 'fail' && original.checks.every(c => c.passed);
               trial.outcome = executionFailed || trial.checks.some(c => !c.passed) ? 'fail' : trial.checks.length ? 'pass' : 'ungraded';
               trial.reason = executionFailed ? original.reason : 'Точные проверки пересчитаны по сохранённым фактам.';
-              if ((scenario.execution || assessmentRubrics(scenario, trial).length) && runtime) trial.assessments = await assessTrial(runtime, scenario, record.sources, trial, { ...ctx,
+              if ((scenario.execution || assessmentRubrics(scenario, trial).length) && runtime) trial.assessments = await assessTrial(runtime, scenario, scenarioSources(record, scenario), trial, { ...ctx,
                 beforeCall() { ctx.beforeCall(); trial.usage.calls++; },
                 addUsage(usage) { ctx.addUsage(usage); trial.usage.inputTokens += usage.inputTokens; trial.usage.outputTokens += usage.outputTokens;
                   trial.usage.costUsd = usage.costUsd === null || trial.usage.costUsd === null ? null : trial.usage.costUsd + usage.costUsd; } }, record.requirements);
@@ -1282,14 +1327,15 @@ export class ExperimentLab {
     try { await this.initializing; await this.waitForIdle(); await this.mutation; } finally { await this.store.close(); }
   }
   private async runtime(record: Experiment): Promise<Runtime> {
-    if (this.injectedRuntime) return this.injectedRuntime;
-    return record.mode === 'demo' ? createDemoRuntime() : createPiRuntime(record.settings);
+    const runtime = this.injectedRuntime ?? (record.mode === 'demo' ? createDemoRuntime() : await createPiRuntime(record.settings));
+    return captureGeneratorEvidence(runtime, event => this.store.appendGeneratorEvidence(record.id, event));
   }
   private async launch(record: Experiment, work: (ctx: CallContext) => Promise<void>, ownsMutation = false): Promise<void> {
     this.ensureIdle(ownsMutation);
     const controller = new AbortController();
     const discoveryElapsedBeforeMs = record.discovery?.elapsedMs ?? 0;
-    const active = { record, controller, done: Promise.resolve(), startedAtMs: performance.now(), discoveryElapsedBeforeMs };
+    const preparationElapsedBeforeMs = record.phase === 'preparing' && !record.discovery ? record.preparationProgress?.elapsedMs ?? 0 : undefined;
+    const active = { record, controller, done: Promise.resolve(), startedAtMs: performance.now(), discoveryElapsedBeforeMs, preparationElapsedBeforeMs };
     this.active = active; // Reserve before the first await, including the initial checkpoint.
     let saved = false;
     let ready!: () => void;
@@ -1297,7 +1343,8 @@ export class ExperimentLab {
     const initialCheckpoint = new Promise<void>((resolve, reject) => { ready = resolve; failed = reject; });
     const remainingDurationMs = record.discovery
       ? Math.max(0, record.discovery.callPlan.maxDurationMs - discoveryElapsedBeforeMs)
-      : record.settings.maxDurationMs;
+      : Math.max(0, record.settings.maxDurationMs - (preparationElapsedBeforeMs ?? 0));
+    if (!remainingDurationMs) controller.abort(new Error('Experiment time limit reached.'));
     const timer = setTimeout(() => controller.abort(new Error('Experiment time limit reached.')), remainingDurationMs);
     const ctx: CallContext = {
       signal: controller.signal, timeoutMs: record.settings.timeoutMs,
@@ -1358,6 +1405,9 @@ export class ExperimentLab {
     await this.store.save(record);
   }
   private updateDiscoveryElapsed(record: Experiment): void {
+    if (record.preparationProgress && this.active?.record === record && this.active.preparationElapsedBeforeMs !== undefined) {
+      record.preparationProgress.elapsedMs = this.active.preparationElapsedBeforeMs + Math.max(0, Math.round(performance.now() - this.active.startedAtMs));
+    }
     if (!record.discovery || this.active?.record !== record) return;
     record.discovery.elapsedMs = Math.min(record.discovery.callPlan.maxDurationMs,
       this.active.discoveryElapsedBeforeMs + Math.max(0, Math.round(performance.now() - this.active.startedAtMs)));
@@ -1408,7 +1458,7 @@ export class ExperimentLab {
         await fingerprintCheck('Код внешнего агента изменился во время прогона. Создайте повтор с новой версией.');
         const progress = () => `${label}${prefix}${scenario.title} · диалог ${completed + 1}/${planned}${running()}`;
         record.message = `${progress()} · открываем сессию`;
-        const trial = await evaluateTrial({ runtime, revision, scenario, repeat, manifestHash: hash, sources: record.sources, requirements: record.requirements, settings: record.settings,
+        const trial = await evaluateTrial({ runtime, revision, scenario, repeat, manifestHash: hash, sources: record.sources, judgeSources: scenarioSources(record, scenario), requirements: record.requirements, settings: record.settings,
           onStage: stage => { record.message = `${progress()} · ${{ target: 'ответ агента', user: 'реплика пользователя', assessment: 'оценка критериев' }[stage]}`; },
           ctx: { ...ctx, onTrace: (trialId, event) => {
             ctx.onTrace?.(trialId, event);

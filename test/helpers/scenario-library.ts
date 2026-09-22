@@ -33,6 +33,14 @@ export function proposals(batchId: string) {
   }));
 }
 
+/** New-generation fixture accounting; the historical proposals/libraryFixture deliberately keep their old shape. */
+export function coverageProposals(batchId: string) {
+  return proposals(batchId).map(proposal => ({ ...proposal, variant: { ...proposal.variant,
+    ...(proposal.variant.sourceDialogues[0]?.dialogueId === 'repeated' ? { sourceCoverage: [{ batchId, dialogueId: 'repeated', eventIndex: 2,
+      disposition: 'omitted' as const, actionIds: [], factIds: [], reason: 'Переспрос неподтверждённого срока старого агента не становится исходным знанием клиента.' }] } : {}),
+  } }));
+}
+
 export function libraryFixture() {
   const batch = importBatch(rawDialogues);
   return createLibrary({ id: 'library', batch, sources, requirements, proposals: proposals(batch.id), createdAt: '2026-09-20T00:00:00.000Z' });

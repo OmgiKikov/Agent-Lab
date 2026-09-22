@@ -82,13 +82,11 @@ test('scenario tool paginates large libraries and expands only an explicitly sel
   let library = libraryFixture();
   const seed = library.variants[0]!;
   library.variants = Array.from({ length: 200 }, (_, index) => ({ ...structuredClone(seed), id: `bounded_${index}`, title: `Вариант ${index}` }));
-  // Use the current assessment pipeline: an unversioned final assessment is historical,
-  // and correctly requires new calls after a semantic context change.
-  library = await assessScenarioLibrary(library, { async assessScenarioProposals(input) {
-    return input.fields.flatMap(field => field.paths.map(path => ({
-      variantId: field.variantId, path, status: 'ready' as const, reason: 'Проверено',
-    })));
-  } }, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => {});
+  // This is a pagination fixture, not a thousands-of-calls semantic benchmark.
+  const { recordSemanticAssessment, semanticPaths } = await import('../src/scenario-library.js');
+  const { SEMANTIC_CONTEXT_VERSION } = await import('../src/scenario-work.js');
+  library = recordSemanticAssessment(library, library.variants.flatMap(variant => semanticPaths(variant).map(path => ({ variantId: variant.id, path, status: 'ready' as const, reason: 'Pagination fixture' }))));
+  library.semanticAssessment!.contextVersion = SEMANTIC_CONTEXT_VERSION;
   const fixture = await boardFixture('scenario-tool-large-', record => {
     record.phase = 'review'; record.scenarios = []; record.trials = [];
     record.librarySnapshot = library; record.sources = library.sources; record.requirements = library.requirements;
@@ -560,7 +558,7 @@ test('headless model tools prepare and edit only; approvals and human assessment
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
   const updates: string[] = [];
   try {
-    assert.deepEqual([...tools.keys()], ['agent_lab_generator', 'agent_lab_build', 'agent_lab_inspect', 'agent_lab_status', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_agree', 'agent_lab_prompt']);
+    assert.deepEqual([...tools.keys()], ['agent_lab_generator', 'agent_lab_build', 'agent_lab_inspect', 'agent_lab_status', 'agent_lab_scenarios', 'agent_lab_edit_card', 'agent_lab_edit_behavior', 'agent_lab_edit_group', 'agent_lab_add_variant', 'agent_lab_resolve', 'agent_lab_merge_groups', 'agent_lab_split_group', 'agent_lab_remove_card', 'agent_lab_assess_cards', 'agent_lab_resume_preparation', 'agent_lab_accept_set', 'agent_lab_set_budget', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_agree', 'agent_lab_prompt']);
     const report = output(await tools.get('agent_lab_build')!.execute('build-1', { mode: 'demo', scenarioCount: 2 }, undefined,
       value => { updates.push(JSON.stringify(value)); }, ctx));
     assert.equal(report.phase, 'review'); assert.equal(report.workflow, 'evaluate');
@@ -675,7 +673,7 @@ test('actual Pi SDK loader imports native cards, preparation-only tools and embe
     await loader.reload();
     const loaded = loader.getExtensions();
     assert.deepEqual(loaded.errors, []); assert.equal(loaded.extensions.length, 1);
-    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_generator', 'agent_lab_build', 'agent_lab_inspect', 'agent_lab_status', 'agent_lab_scenarios', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_agree', 'agent_lab_prompt']);
+    assert.deepEqual([...loaded.extensions[0]!.tools.keys()], ['agent_lab_generator', 'agent_lab_build', 'agent_lab_inspect', 'agent_lab_status', 'agent_lab_scenarios', 'agent_lab_edit_card', 'agent_lab_edit_behavior', 'agent_lab_edit_group', 'agent_lab_add_variant', 'agent_lab_resolve', 'agent_lab_merge_groups', 'agent_lab_split_group', 'agent_lab_remove_card', 'agent_lab_assess_cards', 'agent_lab_resume_preparation', 'agent_lab_accept_set', 'agent_lab_set_budget', 'agent_lab_edit', 'agent_lab_accept', 'agent_lab_repeat', 'agent_lab_issues', 'agent_lab_resolution', 'agent_lab_diagnostics', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_agree', 'agent_lab_prompt']);
     assert.ok(loaded.extensions[0]!.commands.has('agent-lab'));
     assert.deepEqual(loader.getAgentsFiles().agentsFiles, []);
     const skills = loader.getSkills();

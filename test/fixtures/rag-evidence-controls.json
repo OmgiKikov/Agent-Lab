@@ -1,0 +1,47 @@
+{
+  "evidenceKind": "developer-authored fictional controls; not a generated-card or production-search audit",
+  "reference": {
+    "id": "kb-refund",
+    "name": "Учебная статья KB-17, версия 4",
+    "content": "Общую инструкцию по возврату оплаты можно дать без номера терминала. Инструкция: подать заявление в поддержку. Если клиент не помнит номер терминала, это не основание для отказа в консультации."
+  },
+  "question": "Как оформить возврат оплаты? Номер терминала не помню.",
+  "cases": [
+    {
+      "id": "reference-only-answer",
+      "reply": "Для возврата оплаты подайте заявление в поддержку. Для этой общей инструкции номер терминала не нужен.",
+      "retrievals": [
+        {
+          "source": "kb-colors#design",
+          "documentId": "KB-90",
+          "version": "1",
+          "section": "Дизайн",
+          "content": "Пластиковые карты выпускаются в синем и зелёном цветах."
+        }
+      ],
+      "expected": {
+        "rag_context_recall": "fail",
+        "rag_context_relevance": "fail",
+        "rag_context_faithfulness": "fail"
+      }
+    },
+    {
+      "id": "outdated-context",
+      "reply": "Без номера терминала консультацию по возврату дать нельзя. Назовите номер терминала.",
+      "retrievals": [
+        {
+          "source": "kb-refund#consultation",
+          "documentId": "KB-17",
+          "version": "2",
+          "section": "Консультация",
+          "content": "Для консультации по возврату обязательно требуется номер терминала. Без номера терминала консультацию дать нельзя."
+        }
+      ],
+      "expected": {
+        "rag_context_recall": "fail",
+        "rag_context_relevance": "pass",
+        "rag_context_faithfulness": "pass"
+      }
+    }
+  ]
+}

@@ -134,7 +134,7 @@ export function previewAnswer(scenario: Scenario, answer: string) {
 
 export async function evaluateTrial(input: {
   runtime: Runtime; revision: Revision; scenario: Scenario; repeat: number; manifestHash: string;
-  sources: Source[]; requirements: Requirement[]; settings: Settings; ctx: CallContext; userMode: UserMode; target: Target;
+  sources: Source[]; judgeSources?: Source[]; requirements: Requirement[]; settings: Settings; ctx: CallContext; userMode: UserMode; target: Target;
   onStage?(stage: 'target' | 'user' | 'assessment'): void;
 }): Promise<Trial> {
   const { runtime, revision, scenario, repeat, manifestHash, sources, requirements, settings, ctx, userMode, target, onStage } = input;
@@ -321,7 +321,7 @@ export async function evaluateTrial(input: {
       if (!runtime.assess && !scenario.execution) throw new Error('Metric assessment is unavailable for this runtime');
       ctx.signal.throwIfAborted();
       onStage?.('assessment');
-      trial.assessments = await assessTrial(runtime, scenario, sources, trial, { ...localCtx, onJudgment: (id, audit, final) => {
+      trial.assessments = await assessTrial(runtime, scenario, input.judgeSources ?? sources, trial, { ...localCtx, onJudgment: (id, audit, final) => {
         try { ctx.onJudgment?.(id, audit, final); }
         catch (error) { persistenceFailed = true; persistenceError = error; throw error; }
       } }, requirements);

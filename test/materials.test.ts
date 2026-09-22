@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { docxText } from '../src/docx.js';
 import { expandMaterials, readMaterialFiles } from '../src/materials.js';
+import { MATERIAL_PART_CHARS } from '../src/limits.js';
 import { docxFile, docxHtmlChunk } from './helpers/zip.js';
 
 test('docxText returns the paragraphs of a Word document, one per line, with runs joined', () => {
@@ -88,5 +89,19 @@ test('expandMaterials merges inline materials with files read from paths relativ
     assert.deepEqual(expanded.materials.map(m => [m.name, m.kind ?? 'knowledge']), [['Заметка', 'knowledge'], ['Возврат', 'knowledge'], ['prompt', 'prompt']]);
     assert.deepEqual(expanded.skipped, []);
     assert.equal(expanded.read, 2);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('readMaterialFiles splits a long article into parts at paragraph boundaries so every part fits one model call and nothing is cut', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'materials-'));
+  try {
+    const paragraphs = Array.from({ length: 40 }, (_, i) => `Раздел ${i + 1}. ${'Порядок действий описан подробно. '.repeat(25)}`.trim());
+    await writeFile(join(directory, 'Большая статья.md'), paragraphs.join('\n\n'));
+    const { materials } = await readMaterialFiles([directory], 'knowledge');
+    assert.ok(materials.length >= 3, `expected several parts, got ${materials.length}`);
+    assert.deepEqual(materials.map(m => m.name), materials.map((_, i) => `Большая статья · часть ${i + 1}/${materials.length}`));
+    assert.ok(materials.every(m => m.content.length <= MATERIAL_PART_CHARS && m.content.length > 0));
+    assert.equal(materials.map(m => m.content).join('\n\n'), paragraphs.join('\n\n'), 'the parts are the article, verbatim');
+    assert.ok(materials.every(m => m.file === join(directory, 'Большая статья.md')));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

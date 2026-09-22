@@ -132,8 +132,13 @@ export const externalReplySchema = z.union([
       source: z.string().trim().min(1).max(500),
       content: z.string().min(1).max(12000).refine(value => !!value.trim(), 'Empty retrieval chunk'),
       score: z.number().finite().optional(),
+      documentId: z.string().trim().min(1).max(500).optional(),
+      version: z.string().trim().min(1).max(200).optional(),
+      section: z.string().trim().min(1).max(500).optional(),
     })).max(20).refine(chunks => chunks.reduce((n, chunk) => n + chunk.content.length, 0) <= 60000, 'Retrieval context exceeds 60000 characters').optional(),
     retrievalsComplete: z.boolean().optional(),
+    /** A search response is observable before we know which text reaches the answering model. */
+    retrievalStage: z.enum(['retrieved', 'model_context']).optional(),
     events: z.array(z.strictObject({ tool: z.string().min(1).max(200), args: z.unknown().optional(), result: z.unknown().optional() })).max(50).default([]),
     records: z.record(identifier, z.record(identifier, scalarSchema)).refine(v => Object.keys(v).length <= 30, 'Too many records').optional(),
     promptHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -168,7 +173,8 @@ function applyReply(raw: unknown, state: World, ctx: CallContext, onRecords?: ()
   if (typeof parsed.data === 'string') return parsed.data;
   const { reply, retrievals, events, records, measurementError } = parsed.data;
   if (records) { state.records = structuredClone(records); onRecords?.(); }
-  if (retrievals !== undefined) ctx.onTargetEvent?.({ type: 'retrieval', result: { chunks: retrievals, complete: parsed.data.retrievalsComplete === true } });
+  if (retrievals !== undefined) ctx.onTargetEvent?.({ type: 'retrieval', result: { chunks: retrievals, complete: parsed.data.retrievalsComplete === true,
+    ...(parsed.data.retrievalStage ? { stage: parsed.data.retrievalStage } : {}) } });
   for (const event of events) {
     ctx.onTargetEvent?.({ type: 'tool_call', tool: event.tool, args: event.args });
     ctx.onTargetEvent?.({ type: 'tool_result', tool: event.tool, result: event.result, state });

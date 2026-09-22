@@ -1,14 +1,89 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptLibrary, compileLibrary, editLibrary, libraryHash, libraryQuality, recordSemanticAssessment, semanticPaths } from '../src/scenario-library.js';
+import { acceptLibrary, compileLibrary, createLibrary, editLibrary, importBatch, libraryHash, libraryQuality, recordSemanticAssessment, semanticPaths } from '../src/scenario-library.js';
 import { proposeVariant } from '../src/scenario-variants.js';
-import { libraryFixture } from './helpers/scenario-library.js';
+import { libraryFixture, proposals, requirements, sources } from './helpers/scenario-library.js';
 
 const request = (parentId: string, operation: Parameters<typeof proposeVariant>[1]['operation'], input: Record<string, unknown>) => ({
   parentId, operation, reason: `Проверить ${operation}`, input,
 });
 const admit = (library: ReturnType<typeof libraryFixture>) => recordSemanticAssessment(library,
   library.variants.flatMap(variant => semanticPaths(variant).map(path => ({ variantId: variant.id, path, status: 'ready' as const, reason: 'Проверено' }))));
+
+test('targeted fact mutations reconcile source coverage while preserving the parent and requiring semantic review', () => {
+  for (const disposition of ['initial_fact', 'conditional_action'] as const) {
+    for (const operation of ['missing_fact', 'reveal_on_request'] as const) {
+      const batch = importBatch([{ id: 'terminal', messages: [
+        { role: 'user', content: 'Помогите с возвратом' },
+        { role: 'assistant', content: 'Какой номер терминала?' },
+        { role: 'user', content: 'Номер терминала: 1234' },
+      ] }]);
+      const proposal = proposals(batch.id)[0]!;
+      proposal.variant.userState.facts[0]!.origin.eventIndex = 2;
+      const source = createLibrary({ batch, sources, requirements, proposals: [proposal], semanticRequired: true });
+      const parent = source.variants[0]!;
+      parent.behaviorPolicy.actions.push({ id: 'old_reveal', kind: 'answer', factIds: ['terminal_number'] });
+      parent.behaviorPolicy.transitions.push({ from: 'waiting', to: 'done', actionId: 'old_reveal', when: 'Агент запросил номер терминала' });
+      parent.sourceCoverageRequired = true;
+      parent.sourceCoverageBasis = [{ batchId: batch.id, dialogueId: 'terminal', eventIndex: 2 }];
+      parent.sourceCoverage = [{ batchId: batch.id, dialogueId: 'terminal', eventIndex: 2, disposition,
+        actionIds: disposition === 'conditional_action' ? ['old_reveal'] : [], factIds: disposition === 'initial_fact' ? ['terminal_number'] : [], reason: 'Личный номер раскрыт после вопроса' }];
+      const before = structuredClone(parent);
+      const result = proposeVariant(source, request(parent.id, operation, { factId: 'terminal_number', ifAsked: 'Агент запросил номер терминала' }), libraryHash(source));
+      assert.deepEqual(source.variants[0], before);
+      assert.deepEqual(result.library.variants[0], { ...before, ownerDecision: 'pending' });
+      assert.ok(!libraryQuality(result.library).some(issue => issue.variantId === result.variant.id && issue.code.startsWith('source_coverage_')));
+      assert.ok(libraryQuality(result.library).some(issue => issue.variantId === result.variant.id && issue.code === 'semantic_variant_pending'));
+      const mapping = result.variant.sourceCoverage![0]!;
+      if (operation === 'missing_fact' || disposition === 'conditional_action') {
+        assert.equal(mapping.disposition, 'conditional_action');
+        assert.deepEqual(mapping.factIds, []);
+        const action = result.variant.behaviorPolicy.actions.find(action => action.id === mapping.actionIds[0])!;
+        assert.equal(action.kind, operation === 'missing_fact' ? 'missing' : 'answer');
+        assert.match(mapping.reason, /синтетический вариант/);
+        assert.ok(result.diff.some(change => change.path === 'sourceCoverage'));
+      } else assert.deepEqual(mapping, before.sourceCoverage![0]);
+    }
+  }
+});
+
+test('fact mutations reject combined disclosures without changing the library or source coverage', () => {
+  for (const operation of ['missing_fact', 'reveal_on_request'] as const) {
+    for (const selectedBy of ['factIds', 'payload'] as const) {
+      const batch = importBatch([{ id: 'terminal', messages: [
+        { role: 'user', content: 'Помогите с возвратом' },
+        { role: 'assistant', content: 'Назовите номер терминала и отделения' },
+        { role: 'user', content: 'Номер терминала: 1234. Номер отделения: 5678' },
+      ] }]);
+      const proposal = proposals(batch.id)[0]!;
+      proposal.variant.userState.facts[0]!.origin.eventIndex = 2;
+      const source = createLibrary({ batch, sources, requirements, proposals: [proposal], semanticRequired: true });
+      const parent = source.variants[0]!;
+      parent.userState.facts.push({ ...structuredClone(parent.userState.facts[0]!), id: 'branch_number', statement: 'Номер отделения: 5678', value: '5678',
+        origin: { kind: 'dialogue', batchId: batch.id, dialogueId: 'terminal', eventIndex: 2, quote: 'Номер отделения: 5678' } });
+      parent.behaviorPolicy.actions.push({ id: 'combined_reveal', kind: 'answer',
+        factIds: selectedBy === 'factIds' ? ['terminal_number', 'branch_number'] : ['branch_number'],
+        payload: 'Номер терминала: 1234. Номер отделения: 5678' });
+      parent.behaviorPolicy.transitions.push({ from: 'waiting', to: 'done', actionId: 'combined_reveal', when: 'Агент запросил данные терминала и отделения' });
+      parent.sourceCoverageRequired = true;
+      parent.sourceCoverageBasis = [{ batchId: batch.id, dialogueId: 'terminal', eventIndex: 2 }];
+      parent.sourceCoverage = [{ batchId: batch.id, dialogueId: 'terminal', eventIndex: 2, disposition: 'conditional_action',
+        actionIds: ['combined_reveal'], factIds: [], reason: 'Клиент раскрывает оба личных номера после вопроса' }];
+      const libraryBefore = JSON.stringify(source);
+      const parentBefore = JSON.stringify(parent);
+      const hashBefore = libraryHash(source);
+
+      assert.throws(() => proposeVariant(source, request(parent.id, operation, {
+        factId: 'terminal_number', ifAsked: 'Агент запросил номер терминала',
+      }), hashBefore), /combined_reveal.*другие факты.*разделите раскрытие.*сохранив покрытие/i);
+
+      assert.equal(JSON.stringify(source), libraryBefore, `${operation}/${selectedBy} сохраняет библиотеку побайтово`);
+      assert.equal(JSON.stringify(parent), parentBefore, `${operation}/${selectedBy} сохраняет родителя побайтово`);
+      assert.equal(libraryHash(source), hashBefore);
+      assert.deepEqual(parent.sourceCoverage[0]!.actionIds, ['combined_reveal'], 'Покрытие всей реплики не переназначено действию с одним фактом');
+    }
+  }
+});
 
 test('targeted variants cover disclosure, missing data, ambiguity, changed intent and supported tool failure', () => {
   const cases = [

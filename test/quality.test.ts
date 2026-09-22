@@ -671,6 +671,9 @@ test('reserved rubric ids share stable rows while owner rubrics require identica
     assert.deepEqual(metrics.filter(metric => metric.id === id).map(metric => [metric.passed, metric.failed, metric.total]), [[1, 1, 2]]);
   }
   assert.deepEqual(metrics.filter(metric => metric.id === 'owner_rule').map(metric => [metric.passed, metric.failed, metric.total]), [[2, 0, 2], [0, 1, 1]]);
+  assert.deepEqual(metrics.filter(metric => metric.id === 'owner_rule').map(metric => metric.name), [
+    'Критерий владельца · Карточка a; Карточка c', 'Критерий владельца · Карточка b',
+  ], 'equal labels must identify the cards whose different criteria they measure');
 });
 
 test('metric rows use the same human criterion verdict as card outcomes', () => {

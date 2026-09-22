@@ -8,10 +8,17 @@ import { ExperimentLab, draftHash, measurementHash } from '../src/experiment.js'
 import { createInputSchema, type Runtime } from '../src/contracts.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { acceptLibrary, importBatch, compileLibrary, editLibrary, libraryHash, libraryQuality } from '../src/scenario-library.js';
-import { libraryFixture, proposals, rawDialogues, sources, requirements } from './helpers/scenario-library.js';
+import { libraryFixture, proposals as legacyProposals, rawDialogues, sources, requirements } from './helpers/scenario-library.js';
+
+function proposals(batchId: string) {
+  return legacyProposals(batchId).map(proposal => ({ ...proposal, variant: { ...proposal.variant,
+    ...(proposal.variant.sourceDialogues[0]?.dialogueId === 'repeated' ? { sourceCoverage: [{ batchId, dialogueId: 'repeated', eventIndex: 2,
+      disposition: 'omitted' as const, actionIds: [], factIds: [], reason: 'Переспрос неподтверждённого срока старого агента не становится исходным знанием клиента.' }] } : {}),
+  } }));
+}
 
 function semanticFindings(library: ReturnType<typeof libraryFixture>) {
-  return library.variants.flatMap(variant => ['userState', ...variant.userState.facts.map(fact => `userState.facts.${fact.id}`), 'behaviorPolicy', 'environmentFixture', 'businessScenarioId', 'duplicates', ...variant.evaluationSpec.checkpoints.map(cp => `evaluationSpec.checkpoints.${cp.id}`)].map(path => ({ variantId: variant.id, path, status: 'ready', reason: 'Проверены смысл, хронология и применимость' })));
+  return library.variants.flatMap(variant => ['userState', ...variant.userState.facts.map(fact => `userState.facts.${fact.id}`), 'behaviorPolicy', 'environmentFixture', ...(variant.sourceCoverageRequired || variant.sourceCoverage?.length ? ['sourceCoverage'] : []), 'businessScenarioId', 'duplicates', ...variant.evaluationSpec.checkpoints.map(cp => `evaluationSpec.checkpoints.${cp.id}`)].map(path => ({ variantId: variant.id, path, status: 'ready', reason: 'Проверены смысл, хронология и применимость' })));
 }
 function runtimeFixture(payloads: any[]): Runtime {
   return {
@@ -29,6 +36,210 @@ function runtimeFixture(payloads: any[]): Runtime {
 const input = () => createInputSchema.parse({ task: 'Проверить возвраты', mode: 'demo', materials: sources.map(({ name, content }) => ({ name, content })), dialogues: rawDialogues, originalImport: importBatch(rawDialogues),
   scenarioCount: 0, validationCount: 1, settings: { maxCalls: 30 } });
 
+test('a preparation that died during a paid call is not silently repeated', async () => {
+  const { resumeScenarioLibrary } = await import('../src/scenario-preparation.js');
+  const library = libraryFixture();
+  const record = { id: 'run', preparationProgress: { protocol: 'chronological-scenarios-v1', processed: ['terminal'], pending: ['repeated'], excluded: [], status: 'partial', activeDialogueId: 'repeated' }, librarySnapshot: library } as never;
+  await assert.rejects(() => resumeScenarioLibrary(record, input(), undefined, runtimeFixture([]), { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, {} as never), /стоимость неизвестна/);
+});
+
+test('transport corrections and domain repair share a persisted per-source attempt allowance', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-shared-attempts-'));
+  const runtime = runtimeFixture([]), generate = runtime.scenarioProposals!;
+  let spent = 0;
+  runtime.scenarioProposals = async (request, context) => {
+    if (request.dialogues[0]!.id !== 'terminal') return generate(request, context);
+    // Simulate three completed provider attempts inside the structured-response runtime.
+    for (let i = 0; i < 3; i++) { context.beforeCall(); spent++; }
+    const proposal = proposals(request.batchId)[0]!;
+    proposal.variant.evaluationSpec.checkpoints[0]!.requirementId = 'absent_requirement';
+    return [proposal];
+  };
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle();
+    const partial = await lab.readLibrary(seed.id);
+    assert.equal(spent, 5, 'a domain retry cannot grant another five transport retries');
+    assert.equal(partial.experiment.preparationProgress!.activeDialogueId, undefined, 'allowance exhaustion did not dispatch an ambiguous call');
+    assert.ok(partial.experiment.preparationProgress!.pending.includes('terminal'));
+    assert.ok(partial.library.variants.some(card => card.id === 'variant_2'), 'unrelated sources still finish');
+    assert.deepEqual(partial.experiment.preparationProgress!.generationAttempts?.find(item => item.dialogueId === 'terminal'), { dialogueId: 'terminal', calls: 5 });
+    await lab.resumePreparation(seed.id, libraryHash(partial.library)); await lab.waitForIdle();
+    assert.equal(spent, 5, 'resuming cannot reset the per-source allowance');
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('public preparation resume uses CAS, preserves owner edits and histories, and only extracts pending dialogues', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-preparation-resume-'));
+  const runtime = runtimeFixture([]), generate = runtime.scenarioProposals!;
+  let unavailable = true;
+  const requested: string[] = [];
+  runtime.scenarioProposals = async (request, context) => {
+    const id = request.dialogues[0]!.id; requested.push(id);
+    if (id === 'repeated' && unavailable) throw new Error('No provider call was started');
+    return generate(request, context);
+  };
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle();
+    const partial = await lab.readLibrary(seed.id);
+    assert.deepEqual(partial.experiment.preparationProgress!.pending, ['repeated']);
+    const accepted = await lab.acceptLibrary(seed.id, libraryHash(partial.library), ['variant_1']);
+    await assert.rejects(lab.resumePreparation(seed.id, libraryHash(accepted.library)), /Принятый/);
+    const edited = await lab.editLibrary(seed.id, libraryHash(accepted.library), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number',
+      statement: 'Номер терминала: 5678', value: '5678', availability: 'initial', editId: 'owner_resume', reason: 'Владелец уточнил номер' });
+    const before = structuredClone(edited.library.variants[0]!);
+    const calls = edited.experiment.usage.calls;
+    await assert.rejects(lab.resumePreparation(seed.id, libraryHash(partial.library)), /хеш устарел/);
+    unavailable = false; requested.length = 0;
+    await lab.resumePreparation(seed.id, libraryHash(edited.library)); await lab.waitForIdle();
+    const result = await lab.get(seed.id);
+    assert.equal(result.error, null);
+    assert.deepEqual(requested, ['repeated']);
+    assert.deepEqual(result.preparationProgress!.pending, []);
+    assert.equal(result.librarySnapshot!.variants.length, 2);
+    const original = result.librarySnapshot!.variants.find(variant => variant.id === before.id)!;
+    assert.deepEqual(original.history, before.history);
+    assert.deepEqual(original.userState, before.userState);
+    assert.equal(original.businessScenarioId, before.businessScenarioId);
+    assert.equal(original.revision, before.revision);
+    assert.equal(original.familyId, before.familyId);
+    assert.equal(original.userState.facts[0]!.origin.kind, 'owner');
+    assert.ok(result.usage.calls > calls);
+    assert.equal(result.librarySnapshot!.acceptance, undefined);
+    assert.equal(result.trials.length, 0);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('a failed paid extraction keeps its active marker and cannot be repeated by resume', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-preparation-unknown-call-'));
+  const runtime = runtimeFixture([]), generate = runtime.scenarioProposals!;
+  let calls = 0;
+  runtime.scenarioProposals = async (request, context) => {
+    if (request.dialogues[0]!.id !== 'repeated') return generate(request, context);
+    context.beforeCall(); calls++; throw new Error('Provider disconnected after accepting the request');
+  };
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle();
+    const partial = await lab.readLibrary(seed.id);
+    assert.equal(partial.experiment.preparationProgress!.activeDialogueId, 'repeated');
+    assert.equal(partial.experiment.preparationProgress!.activeStage, 'extract');
+    await assert.rejects(lab.resumePreparation(seed.id, libraryHash(partial.library)), /стоимость неизвестна/);
+    assert.equal(calls, 1);
+    assert.equal(partial.library.variants.length, 1, 'the previously generated case remains reviewable');
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('an observe action is a customer sentence and does not need an initial fact', async () => {
+  const { libraryQuality } = await import('../src/scenario-library.js');
+  const { requiredUserTurns } = await import('../src/user-controller.js');
+  const library = libraryFixture();
+  const variant = library.variants[0]!;
+  variant.behaviorPolicy.actions.push({ id: 'screen', kind: 'observe', factIds: [], payload: 'Не вижу терминал на экране' });
+  variant.behaviorPolicy.transitions.push({ from: 'waiting', to: 'waiting', actionId: 'screen', when: 'Агент отправил клиента к экрану терминала' });
+  assert.equal(libraryQuality(library).some(issue => issue.code === 'invalid_policy' && issue.message.includes('Наблюдение')), false);
+  assert.ok(requiredUserTurns(variant.behaviorPolicy, variant.userState.facts.filter(fact => fact.availability === 'initial')) >= 1);
+  variant.behaviorPolicy.actions.find(action => action.id === 'screen')!.factIds = ['terminal_number'];
+  assert.ok(libraryQuality(library).some(issue => issue.message.includes('Наблюдение')));
+});
+
+test('semantic findings get one automatic repair with the same variant identities, followed by fresh assessment', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-semantic-repair-'));
+  const runtime = runtimeFixture([]), seen: any[] = [];
+  runtime.scenarioProposals = async request => {
+    seen.push(structuredClone(request));
+    return proposals(request.batchId).filter(p => request.dialogues.some(d => d.id === p.variant.sourceDialogues[0]!.dialogueId)).map(p => {
+      if (!request.feedback) p.variant.userState.goal = 'Неподтверждённая цель';
+      return p;
+    });
+  };
+  runtime.assessScenarioProposals = async request => request.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path,
+    status: path === 'userState' && request.library.variants.find(v => v.id === f.variantId)?.userState.goal === 'Неподтверждённая цель' ? 'blocked' as const : 'ready' as const,
+    reason: 'Цель должна соответствовать исходному запросу' })));
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle(); const result = await lab.get(seed.id);
+    assert.equal(result.error, null);
+    assert.equal(seen.filter(r => r.feedback?.issues.some((i: any) => i.code === 'semantic_finding')).length, 2);
+    assert.deepEqual(result.librarySnapshot!.variants.map(v => v.id), ['variant_1', 'variant_2']);
+    assert.ok(result.librarySnapshot!.variants.every(v => v.quality === 'ready'));
+    assert.equal(result.librarySnapshot!.acceptance, undefined);
+    assert.equal(result.scenarios.length, 0);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('an empty semantic repair cannot delete a blocked case or restart an unbounded repair loop', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-empty-repair-'));
+  const runtime = runtimeFixture([]), generate = runtime.scenarioProposals!;
+  let repairs = 0;
+  runtime.scenarioProposals = async (request, ctx) => {
+    if (request.feedback?.issues.some(i => i.code === 'semantic_finding')) { repairs++; return []; }
+    return generate(request, ctx);
+  };
+  runtime.assessScenarioProposals = async request => request.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path,
+    status: path === 'userState' ? 'blocked' as const : 'ready' as const, reason: 'Недостаточно оснований для цели' })));
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle(); const result = await lab.get(seed.id);
+    assert.equal(result.error, null);
+    assert.equal(repairs, 2);
+    assert.equal(result.librarySnapshot!.variants.length, 2);
+    assert.ok(result.librarySnapshot!.variants.every(v => v.quality === 'blocked'));
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('large Russian articles fit the byte budget and the same article is grounded separately for each customer question', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-real-kb-budget-'));
+  const runtime = runtimeFixture([]), groundings: any[] = [], requests: any[] = [];
+  const quotes = ['Уточните номер терминала.', 'Уточните причину возврата.'];
+  runtime.selectSources = async () => ({ sourceIds: ['source-2', 'source-3'] });
+  runtime.prepare = async request => {
+    groundings.push(structuredClone(request));
+    const index = groundings.length - 1;
+    return { requirements: [{ id: `rule_${index}`, sourceId: 'source-2', quote: quotes[index]!, text: quotes[index]!, critical: false }],
+      questions: [], agent: { name: 'Агент', instructions: 'Консультировать по статье', tools: [] }, scenarios: [] };
+  };
+  runtime.scenarioProposals = async request => { requests.push(structuredClone(request)); return []; };
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init();
+    const seed = await lab.create({ ...input(), materials: [
+      { name: 'Другая статья', content: 'Описание '.repeat(2500) },
+      { name: 'Терминал и возврат', content: quotes.join('\n') + '\n' + 'я'.repeat(11900) },
+      { name: 'Дополнительная статья', content: 'ю'.repeat(12000) },
+    ] });
+    await lab.waitForIdle(); const result = await lab.get(seed.id);
+    assert.equal(result.error, null);
+    assert.equal(groundings.length, 2, 'each focus needs its own grounding even when source ids match');
+    assert.deepEqual(groundings.map(r => r.focus.dialogueId), ['terminal', 'repeated']);
+    assert.deepEqual(result.preparationProgress!.sourceSelection!.map(s => s.sourceIds), [['source-2'], ['source-2']]);
+    assert.deepEqual(requests.map(r => r.requirements.map((v: any) => v.id)), [['rule_0'], ['rule_1']], 'rules from another focus stay out of this request');
+    for (const request of [...groundings, ...requests]) assert.ok(Buffer.byteLength(JSON.stringify(request)) <= 64000);
+    assert.equal(result.requirements.length, 2, 'the record retains both grounded rules');
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('the same quote with a different focused meaning does not reuse an earlier requirement', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-rule-meaning-'));
+  const runtime = runtimeFixture([]), focused: string[][] = [];
+  const quote = 'Перед изменением уточните данные; при консультации номер не обязателен.';
+  let count = 0;
+  runtime.selectSources = async () => ({ sourceIds: ['source-1'] });
+  runtime.prepare = async () => ({ requirements: [{ id: 'rule', sourceId: 'source-1', quote,
+    text: ++count === 1 ? 'Перед изменением уточните данные.' : 'При консультации номер не обязателен.', critical: true }], questions: [],
+    agent: { name: 'Агент', instructions: 'Консультировать', tools: [] }, scenarios: [] });
+  runtime.scenarioProposals = async request => { focused.push(request.requirements.map(r => r.id)); return []; };
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create({ ...input(), materials: [{ name: 'Правило', content: quote }, { name: 'Большая база', content: 'я'.repeat(40000) }] });
+    await lab.waitForIdle(); const result = await lab.get(seed.id);
+    assert.equal(result.error, null);
+    assert.deepEqual(focused, [['rule'], ['rule_2']]);
+    assert.equal(result.requirements.length, 2);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test('full chronological preparation keeps original import, awaits real acceptance and compiles only initial facts', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'scenario-preparation-'));
   const payloads: any[] = [], lab = new ExperimentLab(directory, runtimeFixture(payloads));
@@ -38,6 +249,7 @@ test('full chronological preparation keeps original import, awaits real acceptan
     const draft = await lab.get(seed.id);
     assert.ok(draft.librarySnapshot, 'new runtime prepares a library');
     assert.equal(draft.phase, 'review', draft.error ?? '');
+    assert.equal(draft.error, null, draft.error ?? '');
     assert.deepEqual(payloads[1].dialogues[0].messages.map((m: any) => m.role), ['user', 'assistant', 'user']);
     assert.deepEqual(payloads[1].dialogues[0].events.map((m: any) => m.index), [0, 1, 2]);
     assert.equal(draft.librarySnapshot.businessScenarios.length, 1);
@@ -376,6 +588,7 @@ test('late independent personal disclosure is repaired as initial knowledge with
       p.variant.id = 'late_variant'; p.variant.sourceDialogues[0]!.dialogueId = 'late';
       Object.assign(p.variant.userState.facts[0]!, { statement: 'Номер терминала: 5678', value: '5678', availability: request.feedback ? 'initial' : 'learned_in_source',
         origin: { kind: 'dialogue', batchId: batch.id, dialogueId: 'late', eventIndex: 2, quote: 'Номер терминала: 5678' } });
+      p.variant.sourceCoverage = [{ batchId: batch.id, dialogueId: 'late', eventIndex: 2, disposition: 'initial_fact', actionIds: [], factIds: ['terminal_number'], reason: 'Личный номер известен заранее и сообщается после вопроса агента.' }] as any;
       p.variant.behaviorPolicy.actions.push({ id: 'give_id', kind: 'answer', factIds: ['terminal_number'], payload: '5678', ifAsked: 'Номер терминала?' } as any);
       p.variant.behaviorPolicy.transitions.unshift({ from: 'waiting', to: 'waiting', actionId: 'give_id', when: 'Агент запросил номер терминала' });
       if (request.feedback) { repaired = true; assert.ok(request.feedback.issues.some(i => i.code === 'excluded_fact_action')); }
@@ -454,10 +667,14 @@ test('a knowledge base too large for one call is read per dialogue: the model pi
     const seed = await lab.create({ ...input(), materials: bigKnowledgeBase() }); await lab.waitForIdle();
     const draft = await lab.get(seed.id);
     assert.equal(draft.phase, 'review', draft.error ?? '');
+    assert.equal(draft.error, null, draft.error ?? '');
     assert.equal(draft.preparationProgress!.excluded.length, 0, JSON.stringify(draft.preparationProgress!.excluded));
-    assert.equal(catalogs.length, 2, 'one choice per dialogue');
+    assert.equal(catalogs.length, 4, 'title selection and bounded article review per dialogue');
+    assert.ok(catalogs.every(c => c.dialogue.messages.every((m: any) => m.role === 'user')));
+    assert.ok(catalogs[1].reading.sources.length);
+    assert.ok(catalogs[3].reading.sources.length);
     assert.equal(catalogs[0].catalog.length, 30, 'the table of contents lists knowledge articles only');
-    assert.deepEqual(Object.keys(catalogs[0].catalog[0]).sort(), ['chars', 'id', 'name'], 'the model sees titles, never article bodies');
+    assert.deepEqual(Object.keys(catalogs[0].catalog[0]).sort(), ['chars', 'id', 'name'], 'the initial catalog carries titles; the second pass receives a separate bounded reading');
     assert.deepEqual(groundings, [['source-1', 'source-4'], ['source-1', 'source-2']], 'grounding runs per dialogue on the prompt plus the chosen article');
     assert.deepEqual(proposalSources, groundings, 'proposals see exactly what grounding saw');
     assert.deepEqual(proposalRequirements, [['terminal_rule', 'rule_source-4'], ['terminal_rule', 'rule_source-2']]);
@@ -477,8 +694,136 @@ test('when the model finds no article for a dialogue in a large knowledge base, 
     const seed = await lab.create({ ...input(), materials: bigKnowledgeBase() }); await lab.waitForIdle();
     const draft = await lab.get(seed.id);
     assert.equal(draft.phase, 'review', draft.error ?? '');
+    assert.equal(draft.error, null, draft.error ?? '');
     assert.deepEqual(draft.preparationProgress!.excluded.map(e => e.dialogueId), ['terminal', 'repeated']);
     assert.match(draft.preparationProgress!.excluded[0]!.reason, /статьи/);
     assert.equal(draft.librarySnapshot!.variants.length, 0);
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('the articles chosen for one dialogue are kept within the call budget, in the model’s order of importance, and the kept list is what gets recorded', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-preparation-'));
+  const groundings: string[][] = [];
+  const runtime: Runtime = {
+    ...runtimeFixture([]),
+    async selectSources(input, ctx) { ctx.beforeCall(); return { sourceIds: input.catalog.slice(0, 5).map(item => item.id) }; },
+    async prepare(input) {
+      groundings.push(input.sources.map(source => source.id));
+      const dialogue = rawDialogues.find(d => d.id === input.focus?.dialogueId)!;
+      assert.deepEqual(input.focus, { dialogueId: dialogue.id, customerMessages: dialogue.messages.filter(m => m.role === 'user').map(m => m.content) }, 'grounding carries this customer’s words only');
+      return { questions: [], agent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] }, scenarios: [],
+        requirements: input.sources.map(source => ({ id: source.kind === 'prompt' ? 'terminal_rule' : `rule_${source.id}`, sourceId: source.id, critical: true,
+          text: 'Уточните номер терминала', quote: 'Уточните номер терминала' })) };
+    },
+  } as Runtime;
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init();
+    const materials = [{ name: 'prompt.md', kind: 'prompt' as const, content: 'Уточните номер терминала. Отвечайте клиенту вежливо.' },
+      ...Array.from({ length: 8 }, (_, i) => ({ name: `Статья ${i + 1}`, content: `Уточните номер терминала. ${'Порядок действий описан в личном кабинете. '.repeat(270)}`.slice(0, 12000) }))];
+    const seed = await lab.create({ ...input(), materials }); await lab.waitForIdle();
+    const draft = await lab.get(seed.id);
+    assert.equal(draft.phase, 'review', draft.error ?? '');
+    assert.equal(draft.error, null, draft.error ?? '');
+    assert.deepEqual(groundings, [['source-1', 'source-2'], ['source-1', 'source-2']], 'one Russian article fits the byte budget per focus');
+    assert.deepEqual(draft.preparationProgress!.sourceSelection![0], { dialogueId: 'terminal', sourceIds: ['source-2'] });
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('a failed source remains pending with its error while unrelated cards finish, and real role evidence survives reopening', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-evidence-'));
+  const runtime = runtimeFixture([]), extract = runtime.scenarioProposals!;
+  runtime.scenarioProposals = async (request, ctx) => {
+    if (request.dialogues[0]!.id === 'terminal') {
+      ctx.beforeCall();
+      ctx.onGeneratorOutput?.({ role: 'extraction', text: '{broken', attempt: 1 });
+      ctx.onGeneratorValidation?.({ attempt: 1, accepted: false, reason: 'Malformed JSON' });
+      throw new (await import('../src/generator-errors.js')).InvalidGeneratorResponse('Malformed JSON');
+    }
+    return extract(request, ctx);
+  };
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle();
+    const draft = await lab.get(seed.id);
+    assert.equal(draft.error, null);
+    assert.deepEqual(draft.preparationProgress!.pending, ['terminal']);
+    assert.deepEqual(draft.preparationProgress!.processed, ['repeated']);
+    assert.match(draft.preparationProgress!.excluded[0]!.reason, /Malformed JSON/);
+    assert.equal(draft.preparationProgress!.status, 'partial');
+    assert.equal(draft.librarySnapshot!.variants.length, 1);
+    const evidence = await lab.store.generatorEvidence(seed.id);
+    assert.ok(evidence.some(e => e.kind === 'response' && e.response.text === '{broken'));
+    assert.ok(evidence.some(e => e.kind === 'error' && e.error === 'Malformed JSON' && e.usage.calls === 1));
+    assert.ok(evidence.some(e => e.kind === 'result' && e.method === 'scenarioProposals'));
+    const request = evidence.find(e => e.kind === 'request' && e.method === 'scenarioProposals');
+    assert.ok(request?.kind === 'request' && request.inputHash);
+    const { stat } = await import('node:fs/promises');
+    assert.equal((await stat(join(directory, `${seed.id}.generator.jsonl`))).mode & 0o777, 0o600);
+    await lab.close();
+    const reader = new ExperimentLab(directory);
+    assert.deepEqual(await reader.store.generatorEvidence(seed.id), evidence);
+    assert.throws(() => reader.store.appendGeneratorEvidence(seed.id, evidence[0]!), /писател/);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('new preparation requires coverage after a repair silently deletes later customer evidence', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-coverage-repair-'));
+  const runtime = runtimeFixture([]), generate = runtime.scenarioProposals!;
+  runtime.scenarioProposals = async (request, ctx) => {
+    const result = await generate(request, ctx);
+    if (request.feedback?.issues.some(issue => issue.code === 'semantic_finding')) for (const proposal of result) {
+      delete proposal.variant.sourceCoverage;
+      delete proposal.variant.sourceCoverageRequired;
+      delete proposal.variant.sourceCoverageBasis;
+    }
+    return result;
+  };
+  runtime.assessScenarioProposals = async request => request.fields.flatMap(field => field.paths.map(path => ({ variantId: field.variantId, path,
+    status: field.variantId === 'variant_2' && path === 'userState' && request.library.variants.find(v => v.id === field.variantId)?.sourceCoverage?.length ? 'needs_review' as const : 'ready' as const,
+    reason: 'Проверить источник и исходную цель' })));
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle(); const record = await lab.get(seed.id);
+    const variant = record.librarySnapshot!.variants.find(v => v.id === 'variant_2')!;
+    assert.equal(variant.sourceCoverageRequired, true, 'the generator cannot remove the harness requirement');
+    assert.deepEqual(variant.sourceCoverageBasis, [{ batchId: record.librarySnapshot!.imports[0]!.id, dialogueId: 'repeated', eventIndex: 2 }]);
+    assert.equal(variant.quality, 'blocked');
+    assert.ok(variant.issues.some(issue => issue.code === 'source_coverage_missing'));
+    assert.equal(record.librarySnapshot!.variants.length, 2, 'the difficult source is retained');
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('coverage authority is derived from every preparation request, never retained from generated metadata', async () => {
+  for (const claimOpening of [false, true]) {
+    const directory = await mkdtemp(join(tmpdir(), 'scenario-coverage-authority-'));
+    const runtime = runtimeFixture([]), generate = runtime.scenarioProposals!;
+    runtime.scenarioProposals = async (request, ctx) => {
+      const result = await generate(request, ctx);
+      for (const proposal of result) {
+        const ref = proposal.variant.sourceDialogues[0]!;
+        proposal.variant.sourceCoverageRequired = true;
+        proposal.variant.sourceCoverageBasis = [{ ...ref, eventIndex: 0 }];
+        if (claimOpening && ref.dialogueId === 'terminal') proposal.variant.sourceCoverage = [{ ...ref, eventIndex: 0,
+          disposition: 'initial_fact', actionIds: [], factIds: ['terminal_number'], reason: 'Модель ошибочно объявила начало продолжением' }];
+      }
+      return result;
+    };
+    const lab = new ExperimentLab(directory, runtime);
+    try {
+      await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle(); const record = await lab.get(seed.id);
+      const single = record.librarySnapshot!.variants.find(variant => variant.id === 'variant_1')!;
+      assert.equal(single.sourceCoverageRequired, undefined);
+      assert.equal(single.sourceCoverageBasis, undefined, 'even an empty basis overwrites fabricated harness authority');
+      if (claimOpening) {
+        assert.equal(single.sourceCoverage?.[0]?.eventIndex, 0, 'substantive generated claims remain visible for rejection');
+        assert.equal(single.quality, 'blocked');
+        assert.ok(single.issues.some(issue => issue.code === 'source_coverage_reference'));
+      } else assert.equal(single.quality, 'ready');
+      const multi = record.librarySnapshot!.variants.find(variant => variant.id === 'variant_2')!;
+      assert.equal(multi.sourceCoverageRequired, true);
+      assert.deepEqual(multi.sourceCoverageBasis, [{ batchId: record.librarySnapshot!.imports[0]!.id, dialogueId: 'repeated', eventIndex: 2 }]);
+      assert.equal(multi.sourceCoverage?.[0]?.eventIndex, 2, 'the real source accounting is retained separately from harness metadata');
+    } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+  }
 });

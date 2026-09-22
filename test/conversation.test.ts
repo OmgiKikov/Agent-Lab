@@ -2,20 +2,22 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, test } from 'node:test';
+import { before, test } from 'node:test';
 import { initTheme, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, type Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
-import { asksFor, authorize, refersTo, planLines, changeRows, deriveVariantInput, openingWithout, ownerBasis, ownerMessages, plainIssue, resolveVariant, variantDiff } from '../extensions/conversation.ts';
+import { authorize, planLines, changeRows, deriveVariantInput, openingWithout, ownerBasis, ownerMessages, plainIssue, resolveVariant, variantDiff } from '../extensions/conversation.ts';
 import { callText, forgetFeeds } from '../extensions/render/feed.ts';
 import { ExperimentLab } from '../dist/experiment.js';
 import { recordSemanticAssessment, semanticPaths } from '../dist/scenario-library.js';
 import { createInputSchema, type Runtime } from '../dist/contracts.js';
 import { createDemoRuntime } from '../dist/demo.js';
-import { libraryHash, ownerFactEvidence } from '../dist/scenario-library.js';
+import { acceptLibrary, compileLibrary, editLibrary, libraryHash, librarySnapshot, ownerFactEvidence, resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../dist/scenario-library.js';
+import { scenarioLibrarySchema } from '../dist/scenario-contracts.js';
+import { assertLibraryRun } from '../dist/scenario-preparation.js';
 import { ExperimentStore } from '../dist/store.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
-import { libraryFixture, proposals, rawDialogues, requirements, sources } from './helpers/scenario-library.js';
+import { libraryFixture, coverageProposals as proposals, rawDialogues, requirements, sources } from './helpers/scenario-library.js';
 
 /*
  * The conversational path: the owner's sentence ──► one Agent Lab tool call ──► the stored library.
@@ -44,12 +46,9 @@ function runtimeFixture(separateGroups = false, twoChecks = false): Runtime {
   } as Runtime;
 }
 
-// The extension builds its own ExperimentLab; the tests give every one of them the deterministic runtime.
+// Each extension session receives its runtime through the public factory.
 let runtime = runtimeFixture();
-const prototype = ExperimentLab.prototype as unknown as { runtime: () => Promise<Runtime> };
-const originalRuntime = prototype.runtime;
-before(() => { prototype.runtime = async () => runtime; initTheme('dark', false); });
-after(() => { prototype.runtime = originalRuntime; });
+before(() => { initTheme('dark', false); });
 
 interface Sent { message: { customType: string; content: string; display: boolean; details: unknown }; options: { deliverAs?: string; triggerTurn?: boolean } }
 function registered(inlineRunMs?: number, inlineCheckMs?: number, inlineBuildMs?: number) {
@@ -63,7 +62,7 @@ function registered(inlineRunMs?: number, inlineCheckMs?: number, inlineBuildMs?
     on: (name: string, handler: () => Promise<void>) => { if (name === 'session_shutdown') shutdown = handler; },
     sendMessage: (message: Sent['message'], options: Sent['options']) => { sent.push({ message, options }); }, sendUserMessage() {},
     appendEntry: (customType: string, data: unknown) => { entries.push({ type: 'custom', customType, data }); },
-  } as unknown as ExtensionAPI, { ...(inlineRunMs === undefined ? {} : { inlineRunMs }), ...(inlineCheckMs === undefined ? {} : { inlineCheckMs }), ...(inlineBuildMs === undefined ? {} : { inlineBuildMs }) });
+  } as unknown as ExtensionAPI, { createLab: directory => new ExperimentLab(directory, runtime), ...(inlineRunMs === undefined ? {} : { inlineRunMs }), ...(inlineCheckMs === undefined ? {} : { inlineCheckMs }), ...(inlineBuildMs === undefined ? {} : { inlineBuildMs }) });
   return { tools, sent, shutdown, entries };
 }
 
@@ -96,6 +95,26 @@ async function draft(prefix: string, separateGroups = false, twoChecks = false) 
   const read = async () => { const store = new ExperimentStore(join(cwd, '.agent-lab')); return store.get(seed.id); };
   return { cwd, id: seed.id, read, cleanup: () => rm(cwd, { recursive: true, force: true }) };
 }
+/** Two explicitly disputed instances of the same rule; the first card also has an unrelated policy question. */
+async function sharedQuestionDraft(prefix: string, second: 'shared' | 'different' | 'blocked' = 'shared') {
+  const fixture = await draft(prefix);
+  const lab = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime);
+  await lab.init();
+  try {
+    const before = await lab.readLibrary(fixture.id);
+    const findings = before.library.variants.flatMap(variant => semanticPaths(variant).map(path => {
+      const checkpoint = path.startsWith('evaluationSpec.checkpoints.');
+      return { variantId: variant.id, path,
+        status: checkpoint ? variant.id === 'variant_2' && second === 'blocked' ? 'blocked' as const : 'needs_review' as const
+          : variant.id === 'variant_1' && path === 'behaviorPolicy' ? 'needs_review' as const : 'ready' as const,
+        reason: checkpoint ? variant.id === 'variant_2' && second === 'different' ? 'Не определено, применимо ли правило после отмены запроса.'
+          : 'Владелец ещё не подтвердил применимость правила в этой ситуации.' : 'Отдельный вопрос о поведении клиента.' };
+    }));
+    const questioned = recordSemanticAssessment(before.library, findings);
+    await lab.store.publishLibrary({ ...before.experiment, librarySnapshot: questioned }, questioned, libraryHash(before.library));
+  } finally { await lab.close(); }
+  return fixture;
+}
 const json = (result: Awaited<ReturnType<ToolDefinition['execute']>>) => JSON.parse(result.content.filter(part => part.type === 'text').map(part => part.text).join('\n'));
 const plainTheme = { fg: (_tone: string, text: string) => text, bold: (text: string) => text, bg: (_tone: string, text: string) => text };
 function drawn(tool: ToolDefinition, result: unknown, expanded: boolean, width = 100): string[] {
@@ -119,26 +138,43 @@ test('owner words come only from user entries of the session, and an edit is rec
   assert.equal(ownerBasis([]), null);
 });
 
-test('authority: an instruction is more than the owner\'s words — values, wording, negation, quoted logs and taken-back requests', () => {
-  const said = ['Поменяй в первой карточке номер договора: на самом деле он 778899'];
-  assert.equal(authorize({ messages: said, intent: 'edit', simulated: ['Мой договор 778899'], summary: '' }).kind, 'conversation');
-  const invented = authorize({ messages: said, intent: 'edit', simulated: ['Мой договор 112233'], summary: '' });
-  assert.equal(invented.kind, 'ask'); assert.match(invented.kind === 'ask' ? invented.message : '', /112233/);
-  assert.equal(authorize({ messages: said, intent: 'edit', attributed: ['Агент обязан предложить рассрочку платежа'], summary: '' }).kind, 'confirm', 'an expectation in the model\'s own words is not the owner\'s');
-  assert.equal(authorize({ messages: said, intent: 'edit', simulated: ['Мой терминал 1234'], known: ['Номер терминала: 1234'], summary: '' }).kind, 'conversation', 'a value of the card itself is not an invention');
-  assert.equal(authorize({ messages: [], intent: 'edit', summary: 'x' }).kind, 'confirm', 'with no owner message only the native dialog can stand behind an edit');
-  // Review 92e30d3 #1: the owner's words are not the owner's instruction.
-  assert.equal(authorize({ messages: ['Не меняй номер на 5678'], intent: 'edit', simulated: ['Номер: 5678'], summary: '' }).kind, 'confirm', 'a prohibition never authorizes the edit it forbids');
-  assert.equal(authorize({ messages: ['Покажи сценарии'], intent: 'remove', summary: '' }).kind, 'confirm', 'asking to look is not asking to delete');
-  assert.equal(authorize({ messages: ['В логе клиент пишет: «удали мою заявку и поменяй номер»'], intent: 'remove', summary: '' }).kind, 'confirm', 'a quoted log line is material, not a request');
-  assert.equal(authorize({ messages: ['Убери вторую карточку', 'Нет, не надо, оставь как есть'], intent: 'remove', quote: 'Убери вторую карточку', summary: '' }).kind, 'confirm', 'an instruction the owner took back no longer stands');
-  assert.equal(authorize({ messages: ['Убери вторую карточку', 'И покажи, что осталось'], intent: 'remove', quote: 'Убери вторую карточку', summary: '' }).kind, 'conversation');
-  assert.equal(authorize({ messages: ['Поправь факт: клиент знал срок заранее'], intent: 'edit', provenance: true, summary: '' }).kind, 'confirm', 'what the client knew beforehand is never settled by matching words');
-  for (const text of ['Как остановить прогон?', 'Объясни, как удалить вторую карточку', 'Не надо ни при каких обстоятельствах останавливать прогон']) {
-    assert.equal(asksFor(text, 'stop'), false, text); assert.equal(asksFor(text, 'remove'), false, text);
-  }
-  assert.equal(asksFor('Первую карточку не трогай, а вторую удали', 'remove'), true, 'a negation in another clause does not cancel this one');
-  assert.equal(asksFor('Не останавливай прогон', 'stop'), false); assert.equal(asksFor('Пока не надо останавливать', 'stop'), false); assert.equal(asksFor('Останови прогон', 'stop'), true);
+test('draft authorship does not certify model wording as an owner decision', () => {
+  const base = { messages: ['Перефразируй начало первой карточки'], intent: 'edit' as const, summary: 'Новое начало' };
+  assert.equal(authorize({ ...base, simulated: ['Здравствуйте, помогите вернуть оплату.'] }).kind, 'conversation');
+  assert.equal(authorize({ ...base, simulated: ['Номер 1234'], known: ['Номер: 1234'] }).kind, 'conversation');
+  assert.equal(authorize({ ...base, simulated: ['Номер 9999'] }).kind, 'ask');
+  assert.equal(authorize({ ...base, attributed: ['Агент обязан предложить рассрочку'] }).kind, 'confirm');
+  assert.equal(authorize({ ...base, provenance: true }).kind, 'confirm');
+  assert.equal(authorize({ ...base, messages: [] }).kind, 'confirm');
+  assert.equal(authorize({ ...base, messages: ['Поправь: клиент не знает номер'], attributed: ['клиент знает номер'] }).kind, 'confirm');
+});
+
+// Natural-language operation and scope selection are exercised by test/live/conversation-routing.ts.
+// These adapter tests choose calls explicitly, so they cannot establish whether the outer model follows a prohibition.
+
+test('natural edit requests persist model-written openings without owner retyping or a native confirmation', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-natural-edit-');
+  const { tools, shutdown } = registered();
+  try {
+    const said = ['Покажи сценарии'];
+    const { ctx, confirms } = terminal(fixture.cwd, said);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const requests = [
+      ['Перефразируй начало первой карточки', 'Здравствуйте, помогите, пожалуйста, вернуть оплату.'],
+      ['Можешь сделать начало первой карточки естественнее?', 'Подскажите, пожалуйста, как вернуть оплату?'],
+      ['Можете сделать начало первой карточки естественнее?', 'Добрый день! Нужна помощь с возвратом оплаты.'],
+    ];
+    for (const [index, [message, value]] of requests.entries()) {
+      said.push(message!);
+      const result = json(await tool.execute(`natural-edit-${index}`, { operation: 'edit', variant: '1', verify: 'later', change: { field: 'opening', value } }, undefined, undefined, ctx));
+      assert.equal(result.mutated, true, message);
+      const card = (await fixture.read()).librarySnapshot!.variants.find(item => item.id === 'variant_1')!;
+      assert.equal(card.userState.opening, value);
+      assert.equal(card.history.at(-1)!.reason, `Владелец в разговоре: «${message}»`);
+    }
+    assert.equal(confirms.length, 0);
+  } finally { await shutdown(); await fixture.cleanup(); }
 });
 
 test('cards are found by number, title and id; an unclear reference returns candidates instead of a guess', () => {
@@ -216,7 +252,7 @@ test('an edit asked for in plain words is saved under the owner\'s message, rech
     const after = await fixture.read();
     const card = after.librarySnapshot!.variants.find(item => item.id === 'variant_1')!;
     assert.equal(card.userState.opening, 'Здравствуйте, не проходит возврат');
-    assert.equal(card.history.at(-1)!.author, 'owner'); assert.equal(card.history.at(-1)!.reason, `Владелец в разговоре: «${said[1]}»`);
+    assert.equal(card.history.at(-1)!.author, 'assistant'); assert.equal(card.history.at(-1)!.reason, `Владелец в разговоре: «${said[1]}»`);
     assert.equal(confirms.length, 0, 'a draft edit the owner asked for needs no extra confirmation');
     assert.equal(after.librarySnapshot!.revision > before.librarySnapshot!.revision, true);
     assert.equal(json(result).check.status, 'done'); assert.equal(card.quality, 'ready', 'the semantic recheck ran inside the agreed call limit');
@@ -295,6 +331,49 @@ test('«добавь случай, где клиент не знает номе�
   } finally { await shutdown(); await fixture.cleanup(); }
 });
 
+test('Q19: a numeric fact id is a reference, while an invented customer value still needs the owner', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-variant-numeric-id-');
+  const { tools, shutdown } = registered();
+  try {
+    const lab = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime);
+    await lab.init();
+    try {
+      const before = await lab.readLibrary(fixture.id);
+      const parent = structuredClone(before.library.variants.find(item => item.id === 'variant_1')!);
+      const previousId = parent.userState.facts[0]!.id;
+      parent.userState.facts[0]!.id = 'fact_123';
+      for (const action of parent.behaviorPolicy.actions) action.factIds = action.factIds.map(id => id === previousId ? 'fact_123' : id);
+      const edited = await lab.editLibrary(fixture.id, libraryHash(before.library), { kind: 'upsert_variant', variant: parent, reason: 'Regression fixture: rename an internal fact reference' });
+      await lab.assessLibrary(fixture.id, libraryHash(edited.library));
+      await lab.waitForIdle();
+    } finally { await lab.close(); }
+
+    const said = ['Добавь к первой карточке случай, где клиент не знает номер терминала'];
+    const { ctx, confirms } = terminal(fixture.cwd, said);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const added = json(await tool.execute('variant', { operation: 'variant', variant: '1', kind: 'missing_fact' }, undefined, undefined, ctx));
+    assert.equal(added.mutated, true, 'fact_123 must not become a question about an unknown customer value');
+    const library = (await fixture.read()).librarySnapshot!;
+    assert.equal(library.variants.find(item => item.id === 'variant_1')!.userState.facts[0]!.id, 'fact_123');
+    const child = library.variants.find(item => item.parentVariantId === 'variant_1')!;
+    assert.deepEqual(child.userState.facts, []);
+    assert.deepEqual(child.userState.missing, ['Номер терминала']);
+    assert.equal(confirms.length, 0);
+
+    said.push('Добавь к первой карточке случай, где клиент сообщает номер по запросу');
+    const refused = json(await tool.execute('invented', { operation: 'variant', variant: '1', kind: 'reveal_on_request', reply: 'Номер терминала: 9999' }, undefined, undefined, ctx));
+    assert.equal(refused.status, 'needs_owner_input');
+    assert.equal(refused.mutated, false);
+    assert.match(refused.message, /9999/);
+    assert.doesNotMatch(refused.message, /fact_123|\b123\b/);
+    assert.equal(libraryHash((await fixture.read()).librarySnapshot!), libraryHash(library), 'the refused proposal must not change the library');
+    const raw = await tool.execute('raw', { operation: 'variant', request: { parentId: 'variant_1', operation: 'reveal_on_request', input: { factId: 'fact_123', reply: 'Номер терминала: 9999' } } }, undefined, undefined, ctx).catch(error => error as Error);
+    assert.match(raw instanceof Error ? raw.message : '', /не принимается/);
+    assert.equal(confirms.length, 0);
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
 test('an unclear card reference asks the owner and writes nothing; a stale view is refused with the fresh state', { timeout: 60000 }, async () => {
   const fixture = await draft('chat-reference-');
   const { tools, shutdown } = registered();
@@ -334,6 +413,142 @@ test('«эти две группы про одно и то же» merges the nam
     const library = (await fixture.read()).librarySnapshot!;
     assert.equal(library.businessScenarios.length, 1); assert.equal(library.businessScenarios[0]!.grouping.reason, `Владелец в разговоре: «${said[0]}»`);
     assert.equal(confirms.length, 0); assert.match(drawn(tool, result, false).join('\n'), /Группы объединены: «Возврат» \+ «Срок возврата» → «Возврат»/);
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('split applies the explicitly requested group goal and conditions in one change, leaving the sibling content intact', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-split-conditions-');
+  const { tools, shutdown } = registered();
+  try {
+    const goal = 'Узнать порядок возврата';
+    const conditions = ['Клиент спрашивает о порядке возврата'];
+    const said = [`Выдели первую карточку в группу Общий вопрос о возврате. Цель: ${goal}. Условия: ${conditions[0]}`];
+    const { ctx, confirms } = terminal(fixture.cwd, said);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const before = (await fixture.read()).librarySnapshot!;
+    const result = await tool.execute('split', { operation: 'split', variants: ['1'], title: 'Общий вопрос о возврате', goal, conditions, verify: 'later' }, undefined, undefined, ctx);
+    const library = (await fixture.read()).librarySnapshot!;
+    const moved = library.variants.find(card => card.id === 'variant_1')!;
+    const group = library.businessScenarios.find(group => group.id === moved.businessScenarioId)!;
+    assert.equal(json(result).mutated, true);
+    assert.equal(library.revision, before.revision + 1);
+    assert.equal(group.goal, goal); assert.deepEqual(group.conditions, conditions);
+    assert.deepEqual(moved.userState, before.variants[0]!.userState, 'group goal is not a client goal edit');
+    const sibling = library.variants.find(card => card.id === 'variant_2')!;
+    for (const field of ['businessScenarioId', 'userState', 'behaviorPolicy', 'evaluationSpec', 'revision', 'history'] as const) assert.deepEqual(sibling[field], before.variants[1]![field], field);
+    const original = library.businessScenarios.find(group => group.id === before.businessScenarios[0]!.id)!;
+    assert.equal(original.goal, before.businessScenarios[0]!.goal); assert.deepEqual(original.conditions, before.businessScenarios[0]!.conditions);
+    assert.deepEqual(json(result).groups.find((item: { id: string }) => item.id === group.id).conditions, conditions);
+    assert.match(drawn(tool, result, false).join('\n'), /Цель группы: Узнать порядок возврата[\s\S]*Условия группы: Клиент спрашивает о порядке возврата/);
+    assert.equal(confirms.length, 0, 'the owner already gave the selected card, goal and conditions');
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('split cannot silently add or erase business conditions through convenience parameters or a raw patch', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-split-authorization-');
+  const setup = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime);
+  await setup.init();
+  try {
+    const current = await setup.readLibrary(fixture.id);
+    await setup.editLibrary(fixture.id, libraryHash(current.library), { kind: 'edit_business', businessScenarioId: current.library.businessScenarios[0]!.id,
+      conditions: ['При запросе возврата'], reason: 'Fixture needs nonempty conditions to test their removal' });
+  } finally { await setup.close(); }
+  const { tools, shutdown } = registered();
+  try {
+    const { ctx, confirms } = terminal(fixture.cwd, ['Выдели первую карточку в отдельную группу'], [false, false, false]);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const before = (await fixture.read()).librarySnapshot!;
+    const source = before.businessScenarios[0]!;
+    const conditions = ['Покупатель подключил платную подписку и требует автоматическое продление'];
+    for (const params of [
+      { variants: ['1'], title: 'Другая группа', conditions },
+      { variants: ['1'], title: 'Другая группа', conditions: [] },
+    ]) {
+      const result = json(await tool.execute('split', { operation: 'split', ...params, verify: 'later' }, undefined, undefined, ctx));
+      assert.equal(result.status, 'declined'); assert.equal(result.mutated, false);
+      assert.deepEqual((await fixture.read()).librarySnapshot, before);
+    }
+    const rawPatch = await tool.execute('split-patch', { operation: 'split', verify: 'later', patch: { kind: 'split_business', businessScenarioId: source.id, variantIds: ['variant_1'], reason: 'model reason', newBusiness: {
+      key: 'split_test', title: 'Другая группа', goal: source.goal, conditions, requirementIds: source.requirementIds, grouping: { status: 'confirmed', reason: 'model reason' } } } }, undefined, undefined, ctx).catch(error => error as Error);
+    assert.match(rawPatch instanceof Error ? rawPatch.message : '', /не принимается/);
+    assert.deepEqual((await fixture.read()).librarySnapshot, before);
+    assert.equal(confirms.length, 2);
+    assert.match(confirms[0]!.body, /Цель группы:[\s\S]*Условия группы: Покупатель подключил платную подписку/);
+    assert.match(confirms[1]!.body, /Условия группы: нет/);
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('edit_group changes the existing group goal and conditions directly, marks its cards for recheck and leaves other group content unchanged', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-edit-group-', true);
+  const { tools, shutdown } = registered();
+  try {
+    const goal = 'Узнать порядок возврата';
+    const conditions = ['Клиент спрашивает о порядке возврата'];
+    const { ctx, confirms } = terminal(fixture.cwd, [`Измени первую группу. Цель: ${goal}. Условия: ${conditions[0]}`]);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const before = (await fixture.read()).librarySnapshot!;
+    const calls = checkCalls;
+    const result = await tool.execute('edit-group', { operation: 'edit_group', group: '1', goal, conditions, verify: 'later' }, undefined, undefined, ctx);
+    const library = (await fixture.read()).librarySnapshot!;
+    assert.equal(json(result).mutated, true); assert.equal(library.revision, before.revision + 1);
+    assert.equal(library.businessScenarios.length, before.businessScenarios.length, 'editing context does not create or split a group');
+    assert.equal(library.businessScenarios[0]!.id, before.businessScenarios[0]!.id);
+    assert.equal(library.businessScenarios[0]!.goal, goal); assert.deepEqual(library.businessScenarios[0]!.conditions, conditions);
+    assert.deepEqual(library.businessScenarios[1], before.businessScenarios[1]);
+    const affected = library.variants[0]!;
+    assert.equal(affected.semanticReviewRequired, true); assert.equal(affected.quality, 'needs_review');
+    assert.deepEqual(affected.userState, before.variants[0]!.userState); assert.deepEqual(affected.evaluationSpec, before.variants[0]!.evaluationSpec);
+    for (const field of ['businessScenarioId', 'userState', 'behaviorPolicy', 'evaluationSpec', 'revision', 'history', 'semanticReviewRequired'] as const) assert.deepEqual(library.variants[1]![field], before.variants[1]![field], field);
+    assert.deepEqual(json(result).groupScope.variantIds, ['variant_1']);
+    assert.match(drawn(tool, result, false).join('\n'), /Возврат 1[\s\S]*Цель группы:.*→ Узнать порядок возврата[\s\S]*Условия группы:.*→ Клиент спрашивает о порядке возврата/);
+    assert.equal(confirms.length, 0); assert.equal(checkCalls, calls);
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('edit_group refuses stale scope before any write or owner request', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-edit-group-protected-', true);
+  const setup = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime); await setup.init();
+  try {
+    const current = await setup.readLibrary(fixture.id);
+    await setup.editLibrary(fixture.id, libraryHash(current.library), { kind: 'edit_business', businessScenarioId: current.library.businessScenarios[0]!.id,
+      conditions: ['При запросе возврата'], reason: 'Fixture for protected condition removal' });
+  } finally { await setup.close(); }
+  const { tools, shutdown } = registered();
+  try {
+    const said = ['Первую группу не трогай, измени цель второй группы'];
+    const { ctx, confirms } = terminal(fixture.cwd, said, [true]);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const before = (await fixture.read()).librarySnapshot!;
+    const lab = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime); await lab.init();
+    try { await lab.editLibrary(fixture.id, libraryHash(before), { kind: 'edit_business', businessScenarioId: before.businessScenarios[1]!.id, title: 'Новая группа', reason: 'Concurrent fixture' }); }
+    finally { await lab.close(); }
+    said[0] = 'Измени цель первой группы';
+    const current = (await fixture.read()).librarySnapshot!;
+    const stale = json(await tool.execute('stale', { operation: 'edit_group', group: '1', goal: before.businessScenarios[0]!.goal, verify: 'later' }, undefined, undefined, ctx));
+    assert.equal(stale.status, 'stale_library'); assert.deepEqual((await fixture.read()).librarySnapshot, current); assert.equal(confirms.length, 0);
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('edit_group raw patch uses the same native scope authorization for owner-attributed business changes', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-edit-group-patch-', true);
+  const { tools, shutdown } = registered();
+  try {
+    const { ctx, confirms } = terminal(fixture.cwd, ['Измени первую группу'], [true]);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const before = (await fixture.read()).librarySnapshot!;
+    const patch = { kind: 'edit_business', businessScenarioId: before.businessScenarios[0]!.id, conditions: ['Покупатель подключил платную подписку и требует автоматическое продление'], reason: 'model reason' };
+    const declined = await tool.execute('no', { operation: 'edit_group', patch, verify: 'later' }, undefined, undefined, ctx).catch(error => error as Error);
+    assert.match(declined instanceof Error ? declined.message : '', /не принимается/); assert.deepEqual((await fixture.read()).librarySnapshot, before);
+    const accepted = json(await tool.execute('yes', { operation: 'edit_group', group: '1', conditions: patch.conditions, verify: 'later' }, undefined, undefined, ctx));
+    assert.equal(accepted.mutated, true); assert.equal(confirms.length, 1);
+    assert.match(confirms[0]!.body, /Возврат 1[\s\S]*Условия группы:.*→ Покупатель подключил платную подписку/);
+    assert.deepEqual((await fixture.read()).librarySnapshot!.businessScenarios[0]!.conditions, patch.conditions);
+    assert.match((await fixture.read()).librarySnapshot!.businessScenarios[0]!.grouping.reason, /Владелец в разговоре/);
   } finally { await shutdown(); await fixture.cleanup(); }
 });
 
@@ -425,14 +640,11 @@ test('stopping is its own request: the owner\'s words stop the run, what is reco
     await tools.get('agent_lab_scenarios')!.execute('show', { operation: 'show' }, undefined, undefined, ctx);
     await tools.get('agent_lab_scenarios')!.execute('accept', { operation: 'accept', select: 'ready' }, undefined, undefined, ctx);
     assert.equal(json(await run.execute('run', {}, undefined, undefined, ctx)).background, true);
-    const unasked = await run.execute('stop-unasked', { action: 'stop' }, undefined, undefined, ctx);
-    assert.equal(json(unasked).cancelled, true); assert.equal(confirms.at(-1)!.title, 'Остановить прогон?');
-    assert.equal((await fixture.read()).phase, 'evaluating', 'the model cannot stop a run the owner did not ask to stop');
     said.push('Останови прогон');
     const pending = run.execute('stop', { action: 'stop' }, undefined, undefined, ctx);
     release();
     const stopped = await pending;
-    assert.equal(json(stopped).stopped, true); assert.equal(confirms.length, 3, 'the owner\'s own request needs no second confirmation');
+    assert.equal(json(stopped).stopped, true); assert.equal(confirms.length, 2, 'the owner\'s own request needs no second confirmation');
     assert.match(drawn(run, stopped, false).join('\n'), /остановлен: сохранено \d из 2 диалогов[\s\S]*Продолжить этот прогон с места остановки нельзя/);
     assert.equal(sent.length, 0, 'a stop the owner asked for is answered in its own row, not announced twice');
     assert.ok(['cancelled', 'results_review'].includes((await fixture.read()).phase));
@@ -523,14 +735,11 @@ test('stopping a preparation is the owner\'s request: the record stays readable,
     const run = tools.get('agent_lab_run')!;
     const built = json(await tools.get('agent_lab_build')!.execute('build', buildRequest, undefined, undefined, ctx));
     assert.equal(built.background, true);
-    const unasked = await run.execute('stop-unasked', { action: 'stop' }, undefined, undefined, ctx);
-    assert.equal(json(unasked).cancelled, true); assert.equal(confirms.at(-1)!.title, 'Остановить подготовку?');
-    assert.equal((await fixture.stored())[0]!.phase, 'preparing', 'the model cannot stop a preparation the owner did not ask to stop');
     said.push('Останови подготовку');
     const pending = run.execute('stop', { action: 'stop', id: built.id }, undefined, undefined, ctx);
     release();
     const stopped = await pending;
-    assert.equal(json(stopped).stopped, true); assert.equal(confirms.length, 1, 'the owner\'s own request needs no second confirmation');
+    assert.equal(json(stopped).stopped, true); assert.equal(confirms.length, 0, 'the owner\'s own request needs no second confirmation');
     assert.match(drawn(run, stopped, false).join('\n'), /Подготовка [a-f0-9]{8} остановлена\.[\s\S]*(Сохранён черновик: карточек \d+|Карточки собрать не успели\. Запись сохранена)/);
     const record = (await fixture.stored())[0]!;
     assert.ok(['cancelled', 'review'].includes(record.phase), record.phase); assert.match(record.error ?? '', /Cancelled by the user/);
@@ -665,6 +874,51 @@ test('an inapplicable check is taken out in plain words, and the last check of a
   } finally { await shutdown(); await fixture.cleanup(); }
 });
 
+test('status and stop address a semantic assessment across the same session; the saved draft can be checked again', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-assessment-stop-');
+  const { tools, sent, shutdown } = registered(undefined, 0);
+  let release: () => void = () => {};
+  try {
+    const said = ['Поменяй первую реплику первой карточки на: Здравствуйте, не проходит возврат'];
+    const { ctx, confirms } = terminal(fixture.cwd, said);
+    const scenarios = tools.get('agent_lab_scenarios')!, run = tools.get('agent_lab_run')!, status = tools.get('agent_lab_status')!;
+    await scenarios.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    await scenarios.execute('edit', { operation: 'edit', variant: '1', verify: 'later', change: { field: 'opening', value: 'Здравствуйте, не проходит возврат' } }, undefined, undefined, ctx);
+    const before = await fixture.read();
+    checkGate = new Promise<void>(resolve => { release = resolve; });
+    said.push('Проверь смысл карточек');
+    const callsAtStart = checkCalls;
+    assert.equal(json(await scenarios.execute('assess', { operation: 'assess' }, undefined, undefined, ctx)).check.status, 'running');
+    const deadline = Date.now() + 5000;
+    while (checkCalls === callsAtStart && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(checkCalls > callsAtStart, 'the assessment reached the held model call');
+    const current = json(await status.execute('status', {}, undefined, undefined, ctx));
+    assert.equal(current.runningInThisSession, fixture.id);
+    assert.equal(current.activeOperation.kind, 'assessment');
+    const progress = json(await run.execute('progress', { action: 'progress' }, undefined, undefined, ctx));
+    assert.deepEqual([progress.assessment, progress.preparation, progress.ownedByThisSession], [true, false, true]);
+    assert.equal(progress.operationId, current.activeOperation.id);
+    assert.ok(progress.usage.calls > before.usage.calls, 'status reads in-flight usage from the same live executor');
+    said.push('Останови смысловую проверку');
+    const pending = run.execute('stop', { action: 'stop', id: fixture.id }, undefined, undefined, ctx);
+    release();
+    const stopped = json(await pending);
+    assert.equal(stopped.stopped, true); assert.equal(stopped.operationKind, 'assessment');
+    assert.equal(stopped.operationId, progress.operationId);
+    assert.equal(confirms.length, 0, 'an explicit stop request does not need a second approval');
+    assert.equal(sent.length, 0, 'the stop row is the single completion answer');
+    const saved = await fixture.read();
+    assert.equal(saved.phase, 'review');
+    assert.equal(saved.librarySnapshot!.variants[0]!.userState.opening, 'Здравствуйте, не проходит возврат');
+    assert.equal(json(await status.execute('stopped-status', {}, undefined, undefined, ctx)).activeOperation, null);
+    checkGate = undefined;
+    said.push('Продолжи смысловую проверку');
+    await scenarios.execute('resume-check', { operation: 'assess' }, undefined, undefined, ctx);
+    while (!(await fixture.read()).librarySnapshot!.variants.every(v => v.quality === 'ready')) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok((await fixture.read()).usage.calls >= stopped.usage.calls, 'resuming does not reset the cumulative budget');
+  } finally { checkGate = undefined; release(); await shutdown(); await fixture.cleanup(); }
+});
+
 test('a slow recheck does not hold the conversation: the edit answers at once, a new edit restarts the check, the outcome arrives as a message', { timeout: 60000 }, async () => {
   const fixture = await draft('chat-background-check-');
   const { tools, sent, shutdown } = registered(undefined, 0);
@@ -728,19 +982,16 @@ test('an edit aimed at an older run of a library that has moved on shows the new
   } finally { await shutdown(); await fixture.cleanup(); }
 });
 
-test('review 92e30d3: a request to look never deletes, a learned fact never becomes prior knowledge without the owner\'s native decision', { timeout: 60000 }, async () => {
+test('review 92e30d3: a learned fact never becomes prior knowledge without the owner\'s native decision', { timeout: 60000 }, async () => {
   const fixture = await draft('chat-review-authority-');
   const { tools, shutdown } = registered();
   try {
     const { ctx, confirms } = terminal(fixture.cwd, ['Покажи сценарии'], [false, false]);
     const tool = tools.get('agent_lab_scenarios')!;
     await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
-    const removed = json(await tool.execute('remove', { operation: 'remove', variant: '2' }, undefined, undefined, ctx));
-    assert.equal(removed.status, 'declined'); assert.match(confirms[0]!.body, /Убрать карточку «Возврат 2»/);
-    assert.equal((await fixture.read()).librarySnapshot!.variants.length, 2);
     // «Срок: три дня» is what the old agent said; the model tries to turn it into what the client knew beforehand.
     const promoted = json(await tool.execute('promote', { operation: 'edit', variant: '2', change: { field: 'fact', fact: 'Срок', availability: 'initial' } }, undefined, undefined, ctx));
-    assert.equal(promoted.status, 'declined'); assert.match(confirms[1]!.body, /«Срок: три дня»[\s\S]*клиент знал это до разговора/);
+    assert.equal(promoted.status, 'declined'); assert.match(confirms[0]!.body, /«Срок: три дня»[\s\S]*клиент знал это до разговора/);
     assert.equal((await fixture.read()).librarySnapshot!.variants[1]!.userState.facts[0]!.availability, 'learned_in_source');
   } finally { await shutdown(); await fixture.cleanup(); }
 });
@@ -763,9 +1014,6 @@ test('review 92e30d3: stopping needs a real request and the run that is actually
     planned.settings.roles = { simulator: { provider: 'other', model: 'model-b' } }; planned.settings.judge = { provider: 'judge', model: 'model-c' } as never;
     assert.ok(planLines(planned).includes('Модели: клиента играет other/model-b; судья — judge/model-c'), planLines(planned).join(' | '));
     assert.equal(json(await run.execute('run', {}, undefined, undefined, ctx)).background, true);
-    said.push('Не останавливай прогон, пусть идёт');
-    const negated = json(await run.execute('stop-negated', { action: 'stop' }, undefined, undefined, ctx));
-    assert.equal(negated.cancelled, true); assert.equal(confirms.at(-1)!.title, 'Остановить прогон?', '«не останавливай» is not a request to stop');
     said.push('Останови прогон');
     const other = json(await run.execute('stop-other', { action: 'stop', id: 'no-such-run-0000' }, undefined, undefined, ctx));
     assert.equal(other.status, 'unknown_reference'); assert.equal((await fixture.read()).phase, 'evaluating', 'a run the owner did not name is never stopped in its place');
@@ -850,6 +1098,192 @@ test('the owner settles a checker\'s question in their own name: the card become
   } finally { await shutdown(); await fixture.cleanup(); }
 });
 
+test('grouped resolve previews an explicit shared rule scope, then publishes one revision without settling unrelated questions', { timeout: 60000 }, async () => {
+  const fixture = await sharedQuestionDraft('chat-grouped-resolve-');
+  const { tools, shutdown } = registered();
+  const edit = ExperimentLab.prototype.editLibrary;
+  let publications = 0;
+  ExperimentLab.prototype.editLibrary = function(id, hash, patch) { if (patch.kind === 'resolve_findings') publications++; return edit.call(this, id, hash, patch); };
+  try {
+    const said = ['Для первой и второй карточки подтверждаю применимость правила про номер терминала.'];
+    const { ctx, confirms } = terminal(fixture.cwd, said, [false, true]);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const before = await fixture.read(), beforeLibrary = before.librarySnapshot!;
+    const declined = json(await tool.execute('decline', { operation: 'resolve', variants: ['1', '2'], verify: 'later' }, undefined, undefined, ctx));
+    assert.equal(declined.status, 'declined');
+    assert.deepEqual((await fixture.read()).librarySnapshot, beforeLibrary);
+    assert.equal(publications, 0);
+    assert.match(confirms[0]!.body, /Одно решение для 2 карточек · ревизия/);
+    assert.match(confirms[0]!.body, /1\. Возврат 1[\s\S]*2\. Возврат 2[\s\S]*Правило:[\s\S]*Когда применимо:[\s\S]*Основание:[\s\S]*Источник:/);
+
+    const result = await tool.execute('agree', { operation: 'resolve', variants: ['1', '2'], verify: 'later' }, undefined, undefined, ctx);
+    const after = await fixture.read(), library = after.librarySnapshot!;
+    assert.equal(json(result).mutated, true);
+    assert.equal(publications, 1, 'all receipts go through one ExperimentLab edit and one store publication');
+    assert.equal(confirms.length, 2, 'one native scope decision per attempt, not per card');
+    assert.equal(library.revision, beforeLibrary.revision + 1);
+    assert.deepEqual(json(result).decisionScope.variantIds, ['variant_1', 'variant_2']);
+    assert.equal(json(result).decisionScope.libraryHash, libraryHash(beforeLibrary));
+    assert.equal(library.ownerResolutions!.length, 2);
+    assert.equal(new Set(library.ownerResolutions!.map(item => item.editId)).size, 1);
+    assert.ok(library.ownerResolutions!.every(item => item.reason === `Владелец в разговоре: «${said[0]}»`));
+    assert.deepEqual(library.variants.map(item => item.quality), ['needs_review', 'ready'], 'the unrelated policy question remains open');
+    assert.equal(after.usage.calls, before.usage.calls);
+    assert.deepEqual(await new ExperimentStore(join(fixture.cwd, '.agent-lab')).readLibrary(beforeLibrary.id, libraryHash(beforeLibrary)), beforeLibrary);
+    const shown = await tool.execute('card', { operation: 'show', variant: '2' }, undefined, undefined, ctx);
+    assert.match(drawn(tool, shown, true).join('\n'), /Решения владельца[\s\S]*общее решение для 2 карточек/);
+    said.push('Добавь к первой карточке случай, где клиент не знает номер терминала');
+    await tool.execute('child', { operation: 'variant', variant: '1', kind: 'missing_fact', verify: 'later' }, undefined, undefined, ctx);
+    const extended = (await fixture.read()).librarySnapshot!;
+    const child = extended.variants.find(item => item.parentVariantId === 'variant_1')!;
+    assert.ok(child);
+    assert.equal(extended.ownerResolutions!.some(item => item.variantId === child.id), false, 'new descendants do not inherit the owner decision');
+  } finally { ExperimentLab.prototype.editLibrary = edit; await shutdown(); await fixture.cleanup(); }
+});
+
+test('grouped resolve refuses partial scope matches and blocked members without confirmations or writes', { timeout: 60000 }, async () => {
+  for (const second of ['different', 'blocked'] as const) {
+    const fixture = await sharedQuestionDraft(`chat-grouped-${second}-`, second);
+    const { tools, shutdown } = registered();
+    try {
+      const { ctx, confirms } = terminal(fixture.cwd, ['Подтверждаю правило для первой и второй карточки'], [true]);
+      const tool = tools.get('agent_lab_scenarios')!;
+      await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+      const before = (await fixture.read()).librarySnapshot!;
+      const result = json(await tool.execute('resolve', { operation: 'resolve', variants: ['1', '2'], verify: 'later' }, undefined, undefined, ctx));
+      assert.equal(result.status, 'needs_owner_input');
+      assert.equal(result.mutated, false);
+      assert.equal(confirms.length, 0);
+      assert.deepEqual((await fixture.read()).librarySnapshot, before);
+    } finally { await shutdown(); await fixture.cleanup(); }
+  }
+});
+
+test('grouped resolve records only a native decision on the preview and refuses stale scope', { timeout: 60000 }, async () => {
+  const fixture = await sharedQuestionDraft('chat-grouped-protected-');
+  const { tools, shutdown } = registered();
+  try {
+    const said = ['Закрой общий вопрос в первой и второй карточках', 'Первую не трогай, решение относится только ко второй'];
+    const { ctx, confirms } = terminal(fixture.cwd, said, [false]);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    const before = (await fixture.read()).librarySnapshot!;
+    const protectedResult = json(await tool.execute('wrong', { operation: 'resolve', variants: ['1', '2'], ownerQuote: said[0], verify: 'later' }, undefined, undefined, ctx));
+    assert.equal(protectedResult.status, 'declined');
+    assert.match(confirms[0]!.body, /Возврат 1[\s\S]*Возврат 2/);
+    assert.equal(confirms.length, 1);
+    assert.deepEqual((await fixture.read()).librarySnapshot, before);
+    said.push('Теперь решение относится к первой и второй карточкам');
+    const lab = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime);
+    await lab.init();
+    try { await lab.editLibrary(fixture.id, libraryHash(before), { kind: 'edit_variant_text', variantId: 'variant_2', field: 'opening', value: 'Добрый день, когда будет возврат?', editId: 'concurrent_edit', reason: 'Concurrent revision fixture' }); }
+    finally { await lab.close(); }
+    const changed = (await fixture.read()).librarySnapshot!;
+    const stale = json(await tool.execute('stale', { operation: 'resolve', variants: ['1', '2'], verify: 'later' }, undefined, undefined, ctx));
+    assert.equal(stale.status, 'stale_library');
+    assert.equal(confirms.length, 1);
+    assert.deepEqual((await fixture.read()).librarySnapshot, changed);
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('a resolve with no new owner sentence still stops for the diff', () => {
+  assert.equal(authorize({ messages: ['Закрой вопрос по первой карточке'], intent: 'edit', provenance: true, summary: 'Закрыть вопрос' }).kind, 'confirm');
+});
+
+test('grouped resolve cannot turn user message fragments into a native owner receipt', { timeout: 60000 }, async () => {
+  const fixture = await sharedQuestionDraft('chat-grouped-protection-forms-');
+  const { tools, shutdown } = registered();
+  try {
+    const tool = tools.get('agent_lab_scenarios')!;
+    const before = (await fixture.read()).librarySnapshot!;
+    for (const protection of ['Карточку «Возврат 1» не трогай, закрой вопрос во второй',
+      'В первой карточке вопрос не закрывай, закрой только во второй',
+      'Первую не трогай, можно закрыть вопрос во второй?',
+      'Не подтверждай правило в карточке "Возврат 1", решение касается второй']) {
+      const said = ['Закрой общий вопрос в первой и второй карточках', protection];
+      const { ctx, confirms } = terminal(fixture.cwd, said, [false]);
+      await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+      const result = json(await tool.execute('protected', { operation: 'resolve', variants: ['1', '2'], ownerQuote: said[0], verify: 'later' }, undefined, undefined, ctx));
+      assert.equal(result.status, 'declined', protection);
+      assert.match(confirms[0]!.body, /Возврат 1[\s\S]*Возврат 2/);
+      assert.equal(confirms.length, 1, protection);
+      assert.deepEqual((await fixture.read()).librarySnapshot, before);
+    }
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('legacy accepted owner decisions keep their snapshot and run identity; draft group changes reopen their question', { timeout: 60000 }, async () => {
+  const fixture = await sharedQuestionDraft('chat-legacy-resolution-');
+  const lab = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime);
+  await lab.init();
+  try {
+    const before = await lab.readLibrary(fixture.id);
+    const settled = await lab.editLibrary(fixture.id, libraryHash(before.library), { kind: 'resolve_finding', variantId: 'variant_2',
+      path: 'evaluationSpec.checkpoints.ask_terminal', editId: 'legacy_owner', reason: 'Historical owner resolution' });
+    assert.equal(settled.library.ownerResolutions![0]!.businessHash, undefined, 'legacy receipt has its original shape');
+    const accepted = await lab.acceptLibrary(fixture.id, libraryHash(settled.library), ['variant_2']);
+    const encoded = JSON.stringify(accepted.library);
+    const restored = scenarioLibrarySchema.parse(JSON.parse(encoded));
+    assert.equal(libraryHash(restored), libraryHash(accepted.library));
+    assert.deepEqual(librarySnapshot(restored), librarySnapshot(accepted.library));
+    assert.deepEqual(compileLibrary(restored), compileLibrary(accepted.library));
+    assertLibraryRun(JSON.parse(JSON.stringify(accepted.experiment)));
+    const original = restored.businessScenarios[0]!;
+    const split = editLibrary(restored, libraryHash(restored), { kind: 'split_business', businessScenarioId: original.id, variantIds: ['variant_1'], reason: 'New draft context',
+      newBusiness: { key: 'other_context', title: 'Иные условия', goal: original.goal, conditions: ['Клиент отменил запрос'], requirementIds: original.requirementIds, grouping: { status: 'confirmed', reason: 'Owner requested context' } } });
+    const newGroup = split.businessScenarios.find(group => group.id !== original.id)!;
+    const merged = editLibrary(split, libraryHash(split), { kind: 'merge_business', targetId: original.id, sourceIds: [newGroup.id], reason: 'Owner changes context of the original group' });
+    const checked = recordSemanticAssessment(merged, restored.semanticAssessment!.findings);
+    assert.equal(checked.variants.find(card => card.id === 'variant_2')!.quality, 'needs_review', 'same card, rule and checker words with different group conditions need a new decision');
+    assert.equal(JSON.stringify(accepted.library), encoded, 'accepted historical snapshot was not upgraded in place');
+    assertLibraryRun(accepted.experiment);
+  } finally { await lab.close(); await fixture.cleanup(); }
+});
+
+test('owner resolution hashes bind business conditions as well as the rule, so changed context reopens the question', () => {
+  const library = libraryFixture();
+  const card = library.variants[0]!;
+  const path = `evaluationSpec.checkpoints.${card.evaluationSpec.checkpoints[0]!.id}`;
+  const reason = 'Не определена применимость';
+  const hash = resolutionBusinessHash(library, card);
+  const shared = resolutionQuestionHash(library, card, path, reason);
+  library.businessScenarios.find(group => group.id === card.businessScenarioId)!.conditions.push('Клиент отменил запрос');
+  assert.notEqual(resolutionBusinessHash(library, card), hash);
+  assert.notEqual(resolutionQuestionHash(library, card, path, reason), shared);
+});
+
+test('grouped resolution API validates all member hashes and rule scopes atomically, with no raw-patch native bypass', { timeout: 60000 }, async () => {
+  const fixture = await sharedQuestionDraft('chat-grouped-api-');
+  const { tools, shutdown } = registered();
+  try {
+    const lab = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime);
+    await lab.init();
+    let patch!: Extract<Parameters<ExperimentLab['editLibrary']>[2], { kind: 'resolve_findings' }>;
+    try {
+      const before = await lab.readLibrary(fixture.id);
+      const path = 'evaluationSpec.checkpoints.ask_terminal';
+      patch = { kind: 'resolve_findings', editId: 'owner_group', reason: 'Owner scope fixture', findings: before.library.variants.map(card => {
+        const finding = before.library.semanticAssessment!.findings.find(item => item.variantId === card.id && item.path === path)!;
+        return { variantId: card.id, path, findingHash: resolutionHash(before.library, card, path, finding.reason) };
+      }) };
+      await assert.rejects(lab.editLibrary(fixture.id, libraryHash(before.library), { ...patch, findings: [patch.findings[0]!, { ...patch.findings[1]!, findingHash: '0'.repeat(64) }] }), /устарели/);
+      assert.deepEqual((await lab.readLibrary(fixture.id)).library, before.library, 'valid first member was not published before invalid second member');
+      const mixedPath = 'behaviorPolicy';
+      const mixedFinding = before.library.semanticAssessment!.findings.find(item => item.variantId === 'variant_1' && item.path === mixedPath)!;
+      const mixed = { variantId: 'variant_1', path: mixedPath, findingHash: resolutionHash(before.library, before.library.variants[0]!, mixedPath, mixedFinding.reason) };
+      await assert.rejects(lab.editLibrary(fixture.id, libraryHash(before.library), { ...patch, findings: [mixed, patch.findings[1]!] }), /общего вопроса/);
+      assert.deepEqual((await lab.readLibrary(fixture.id)).library, before.library);
+    } finally { await lab.close(); }
+    const { ctx, confirms } = terminal(fixture.cwd, ['Закрой общий вопрос'], [true]);
+    const tool = tools.get('agent_lab_scenarios')!;
+    await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
+    await assert.rejects(tool.execute('bypass', { operation: 'edit', patch, verify: 'later' }, undefined, undefined, ctx), /не принимается/);
+    assert.equal(confirms.length, 0);
+    assert.equal((await fixture.read()).librarySnapshot!.ownerResolutions, undefined);
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
 test('the owner marks the judge\'s decision from the conversation: the answer comes only from the native dialog and is saved as a quick review', { timeout: 60000 }, async () => {
   const demo = await demoEvaluateRecord('chat-agree-');
   await demo.lab.close();
@@ -890,11 +1324,11 @@ test('review 86bdf60: the owner\'s waiver has one door — a ready-made patch or
     const tool = tools.get('agent_lab_scenarios')!;
     await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
     const bypass = await tool.execute('bypass', { operation: 'edit', verify: 'later', patch: { kind: 'resolve_finding', variantId: 'variant_1', path: 'evaluationSpec.checkpoints.ask_terminal', editId: 'model_1', reason: 'x' } }, undefined, undefined, ctx).catch(error => error as Error);
-    assert.match(bypass instanceof Error ? bypass.message : '', /закрывает только владелец/);
+    assert.match(bypass instanceof Error ? bypass.message : '', /не принимается/);
     assert.equal((await fixture.read()).librarySnapshot!.ownerResolutions, undefined, 'nothing was recorded in the owner\'s name');
-    // A legacy request with a ready input is checked like the conversational form: the owner asked to fix a line, not to add a card.
-    const legacy = json(await tool.execute('legacy', { operation: 'variant', verify: 'later', request: { parentId: 'variant_1', operation: 'ambiguous_opening', reason: 'model', input: { opening: 'Помогите' } } }, undefined, undefined, ctx));
-    assert.equal(legacy.status, 'declined'); assert.equal(confirms.length, 1, 'the native dialog decided, and the owner said no');
+    const legacy = await tool.execute('legacy', { operation: 'variant', verify: 'later', request: { parentId: 'variant_1', operation: 'ambiguous_opening', reason: 'model', input: { opening: 'Помогите' } } }, undefined, undefined, ctx).catch(error => error as Error);
+    assert.match(legacy instanceof Error ? legacy.message : '', /не принимается/);
+    assert.equal(confirms.length, 0, 'a raw request never reaches the native dialog');
     assert.equal((await fixture.read()).librarySnapshot!.variants.length, 2);
   } finally { await shutdown(); await fixture.cleanup(); }
 });
@@ -989,48 +1423,56 @@ test('more than eight cards are accepted page by page inside the native dialog: 
   } finally { await shutdown(); await fixture.cleanup(); }
 });
 
-test('an instruction names its object: number, ordinal, title or «её» for the card just shown — anything less is not a reference', () => {
-  const second = { number: 2, title: 'Возврат 2', otherTitles: ['Возврат 1'] };
-  for (const text of ['Убери вторую карточку', 'Во второй карточке поменяй цель', 'А во второй пусть спрашивает: Когда вернут деньги?', 'Исправь первую реплику во второй карточке: Добрый день',
-    'Поправь карточку 2', 'Поправь во 2-й карточке цель', 'Убери №2', 'Убери карточку «Возврат 2»']) assert.equal(refersTo(text, second), true, text);
-  for (const text of ['Исправь первую реплику', 'Исправь вторую реплику', 'Поменяй второе правило', 'Поставь срок 2 дня', 'Пусть пишет: во второй карточке', 'Убери карточку про возврат',
-    'Во-вторых, исправь реплику', 'Во вторник поправь реплику', 'Убери вторую группу', 'Поправь её первую реплику']) assert.equal(refersTo(text, second), false, text);
-  assert.equal(refersTo('Поправь её первую реплику: Добрый день', { ...second, lastTouched: true }), true, 'a pronoun means the card that was just shown or changed');
-  assert.equal(refersTo('Убери третью', { number: 3, title: 'x', otherTitles: [] }), true); assert.equal(refersTo('Убери пять карточек', { number: 5, title: 'x', otherTitles: [] }), false, 'a cardinal is not an ordinal');
-  const instalment = { number: 1, title: 'Рассрочка платежа', otherTitles: ['Возврат платежа'] };
-  assert.equal(refersTo('Поправь карточку про рассрочку', instalment), true, 'a title word no other card shares'); assert.equal(refersTo('Поправь карточку про платежи', instalment), false, 'a word every title shares names nothing');
-  assert.equal(refersTo('Объедини вторую группу с первой', second, 'group'), true); assert.equal(refersTo('Объедини вторую карточку', second, 'group'), false);
-  const said = ['Исправь первую реплику'];
-  assert.equal(authorize({ messages: said, intent: 'edit', summary: '', objects: { kind: 'card', targets: [second] } }).kind, 'confirm');
-  assert.equal(authorize({ messages: said, intent: 'edit', summary: '', objects: { kind: 'card', targets: [second], exhaustive: true } }).kind, 'conversation', 'with one card in the library nothing else can be meant');
-});
-
-test('an edit reaches only the card the owner named: another card waits for the native dialog, which shows its title and the change', { timeout: 60000 }, async () => {
-  const fixture = await draft('chat-object-');
-  const { tools, shutdown } = registered();
+test('a draft tool edits only its explicit reference and records assistant authorship', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-object-'); const { tools, shutdown } = registered();
   try {
-    const said = ['Исправь первую реплику'];
-    const { ctx, confirms } = terminal(fixture.cwd, said, [false, false]);
+    const { ctx, confirms } = terminal(fixture.cwd, ['Во второй карточке сделай начало естественнее']);
     const tool = tools.get('agent_lab_scenarios')!;
     await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
-    const before = libraryHash((await fixture.read()).librarySnapshot!);
-    const change = { field: 'opening', value: 'Добрый день, когда вернут деньги?' };
-    const guessed = json(await tool.execute('guess', { operation: 'edit', variant: '2', verify: 'later', change }, undefined, undefined, ctx));
-    assert.equal(guessed.status, 'declined'); assert.equal(confirms.length, 1); assert.match(confirms[0]!.body, /Карточка «Возврат 2» · первая реплика: «Добрый день, когда вернут деньги\?»/);
-    assert.equal(libraryHash((await fixture.read()).librarySnapshot!), before, 'a «no» writes nothing');
-    said.push('Исправь первую реплику во второй карточке: Добрый день, когда вернут деньги?');
-    assert.equal(json(await tool.execute('named', { operation: 'edit', variant: '2', verify: 'later', change }, undefined, undefined, ctx)).mutated, true);
-    assert.equal(confirms.length, 1, 'the card is named: no extra stop');
-    assert.equal((await fixture.read()).librarySnapshot!.variants.find(item => item.id === 'variant_2')!.userState.opening, change.value);
-    // «её» is the card that was just shown — and no other.
-    await tool.execute('show-2', { operation: 'show', variant: '2' }, undefined, undefined, ctx);
-    said.push('Поправь её первую реплику: Здравствуйте, когда вернут деньги?');
-    const pronoun = { field: 'opening', value: 'Здравствуйте, когда вернут деньги?' };
-    assert.equal(json(await tool.execute('other', { operation: 'edit', variant: '1', verify: 'later', change: pronoun }, undefined, undefined, ctx)).status, 'declined');
-    assert.equal(confirms.length, 2); assert.match(confirms[1]!.body, /Карточка «Возврат 1»/);
-    assert.equal(json(await tool.execute('shown', { operation: 'edit', variant: '2', verify: 'later', change: pronoun }, undefined, undefined, ctx)).mutated, true);
-    assert.equal(confirms.length, 2);
-    const library = (await fixture.read()).librarySnapshot!;
-    assert.deepEqual(library.variants.map(item => item.userState.opening), ['Помогите с возвратом', pronoun.value]);
+    const before = (await fixture.read()).librarySnapshot!;
+    const value = 'Добрый день, когда вернут деньги?';
+    const result = json(await tool.execute('edit', { operation: 'edit', variant: '2', verify: 'later', change: { field: 'opening', value } }, undefined, undefined, ctx));
+    assert.equal(result.mutated, true); assert.equal(confirms.length, 0);
+    const after = (await fixture.read()).librarySnapshot!;
+    const definition = ({ quality: _q, issues: _i, ownerDecision: _d, ...value }: (typeof after.variants)[number]) => value;
+    assert.deepEqual(definition(after.variants[0]!), definition(before.variants[0]!));
+    assert.equal(after.variants[1]!.userState.opening, value);
+    assert.equal(after.variants[1]!.history.at(-1)!.author, 'assistant');
+    assert.equal(after.acceptance, undefined);
   } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('dedicated behavior tool updates the same draft with a visible diff and shared deferred recheck', async () => {
+  const f = await draft('lab-behavior-tool-');
+  const session = registered();
+  try {
+    const { ctx, confirms } = terminal(f.cwd, ['Поправь поведение первой карточки: заканчивать после ответа на вопрос.']);
+    const view = session.tools.get('agent_lab_scenarios')!;
+    const shown = json(await view.execute('read', { id: f.id, variant: '1', source: true }, new AbortController().signal, undefined, ctx));
+    const policy = shown.detail[0].behaviorPolicy;
+    policy.transitions[0].when = 'Получен ответ на вопрос клиента';
+    const result = json(await session.tools.get('agent_lab_edit_behavior')!.execute('repair', { id: f.id, variant: '1', behaviorPolicy: policy, verify: 'later' }, new AbortController().signal, undefined, ctx));
+    assert.equal(result.mutated, true);
+    assert.equal(result.check.status, 'skipped');
+    assert.ok(result.diff.some((item: { path: string }) => item.path === 'behaviorPolicy'));
+    const saved = await f.read();
+    assert.equal(saved.librarySnapshot!.variants[0]!.behaviorPolicy.transitions[0]!.when, 'Получен ответ на вопрос клиента');
+    assert.equal(saved.librarySnapshot!.variants[0]!.history.at(-1)!.author, 'assistant');
+    assert.equal(confirms.length, 0);
+  } finally { await session.shutdown(); await f.cleanup(); }
+});
+
+test('board handoff identifies an unaccepted selected card and routes correction to library tools', async () => {
+  const { boardDiscussionContext } = await import('../extensions/lab-ui.ts');
+  const f = await draft('lab-board-selection-');
+  try {
+    const record = await f.read();
+    assert.equal(record.scenarios.length, 0, 'runnable scenarios do not exist before acceptance');
+    const context = boardDiscussionContext(record, 'cards', 1);
+    assert.equal(context.variantId, record.librarySnapshot!.variants[1]!.id);
+    assert.equal(context.expectedLibraryHash, libraryHash(record.librarySnapshot!));
+    assert.match(context.task, /agent_lab_scenarios/);
+    assert.match(context.task, /agent_lab_resume_preparation/);
+    assert.doesNotMatch(context.task, /prepare a new draft/);
+  } finally { await f.cleanup(); }
 });

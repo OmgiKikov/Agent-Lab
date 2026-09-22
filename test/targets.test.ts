@@ -16,7 +16,8 @@ function context(signal = new AbortController().signal) {
 const world = (): World => ({ records: { A101: { time: '09:00', owner: 'Sample' } }, writableFields: ['time'], transientFailures: 0 });
 
 test('adapter preserves exact retrieval evidence and distinguishes empty, partial and missing context', async t => {
-  const chunks = [{ source: 'knowledge.md#refund', content: '  Refund instructions.\n', score: 0.9 }];
+  const chunks = [{ source: 'knowledge.md#refund', content: '  Refund instructions.\n', score: 0.9,
+    documentId: 'KB-17', version: '4', section: 'refund' }];
   let response: unknown = { reply: 'Answer', retrievals: chunks, retrievalsComplete: true };
   const api = await server(() => response); t.after(api.close);
   const { ctx, events } = context();
@@ -31,6 +32,9 @@ test('adapter preserves exact retrieval evidence and distinguishes empty, partia
   response = { reply: 'Partial', retrievals: chunks };
   await session.respond('Question');
   assert.deepEqual(events.pop(), { type: 'retrieval', result: { chunks, complete: false } });
+  response = { reply: 'Search response', retrievals: chunks, retrievalsComplete: true, retrievalStage: 'retrieved' };
+  await session.respond('Question');
+  assert.deepEqual(events.pop(), { type: 'retrieval', result: { chunks, complete: true, stage: 'retrieved' } });
   response = 'Plain legacy answer';
   await session.respond('Question'); assert.equal(events.length, 0);
   for (const retrievals of [[{ source: 'x', content: '   ' }], [{ source: 'x', content: 'x'.repeat(12001) }],

@@ -679,6 +679,29 @@ test('assessment hands the judge observable prompt rules in place of the raw pro
   assert.doesNotMatch(JSON.stringify(seen), /JSON|output/);
 });
 
+test('a bounded judge reference set does not restrict the target knowledge base and seals the same receipt input', async () => {
+  const f = await fixture(), selected = [f.sources[0]!];
+  const scenario: Scenario = { ...structuredClone(f.preparation.scenarios[0]!), checks: [], metrics: [structuredClone(testMetrics[0]!)] };
+  const actor: Runtime = { ...f.runtime,
+    async openTarget(_agent, sources) {
+      assert.deepEqual(sources, f.sources, 'target sees the complete knowledge base');
+      return { async respond() { return 'I cannot make that change.'; }, async close() {} };
+    },
+    async assess(input, ctx) {
+      assert.deepEqual(input.sources, selected, 'judge sees the case references');
+      return assessRepeated(input, { provider: 'offline', id: 'judge' }, ctx, async (_prompt, data) => {
+        const parsed = JSON.parse(data), reply = parsed.trial.events.find((e: any) => e.type === 'assistant');
+        return JSON.stringify({ assessments: parsed.scenario.metrics.map((m: any) => ({ metricId: m.id,
+          passCondition: 'not_met', failCondition: 'met', rationale: 'The agent refused.', evidence: [reply.seq], citations: [{ seq: reply.seq, quote: reply.content }] })) });
+      });
+    },
+  };
+  const trial = await evaluateTrial({ runtime: actor, revision: f.baseline, scenario, sources: f.sources, judgeSources: selected,
+    requirements: [], settings: f.input.settings, repeat: 0, manifestHash: 'frozen', userMode: 'static', target: { kind: 'sandbox' }, ctx: context() });
+  assert.equal(trial.assessmentError, undefined);
+  assert.equal(hasCompleteJudgment({ scenario, sources: selected, trial }), true);
+});
+
 test('live evaluation seals a receipt, reports the final judgment once, and a rejected judgment keeps its raw replies and an incomplete receipt', async () => {
   const f = await fixture();
   const scenario = structuredClone(f.preparation.scenarios[0]!);

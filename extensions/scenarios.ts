@@ -21,7 +21,7 @@ function cachedSemanticWork(library: ScenarioLibrary) {
 
 const actionLabel = (action: ScenarioVariant['behaviorPolicy']['actions'][number]) => ({
   answer: 'ответить', missing: 'сообщить, что данных нет', clarify: 'уточнить', correct: 'исправить ответ',
-  change_intent: 'сменить намерение', finish: 'завершить разговор',
+  change_intent: 'сменить намерение', finish: 'завершить разговор', observe: 'сообщить, что видит',
 })[action.kind];
 
 export interface ScenarioEntry { id: string; index: number; text: string; businessScenarioId: string }
@@ -103,6 +103,7 @@ export function logsRows(record: Experiment): FlowRow[] {
   const rows = [r('ЛОГИ', 'accent', true), r(`Импортировано диалогов: ${accepted} · отклонено строк: ${rejected}`),
     r(progress ? `Обработано: ${progress.processed.length} · ожидают: ${progress.pending.length} · исключено: ${progress.excluded.length}` : 'Прогресс подготовки не записан.', progress?.pending.length ? 'warning' : 'muted')];
   if (!library.imports.length) rows.push(r('Без логов: варианты основаны на требованиях владельца; импорт и личные факты не выдумываются.', 'muted'));
+  if (progress?.pending.length && !library.acceptance) rows.push(r(progress.activeDialogueId ? 'Вызов оборвался в процессе: его стоимость неизвестна; автоматическое повторение недоступно.' : 'u — продолжить разбор оставшихся источников в текущем бюджете', 'accent'));
   if (progress?.status === 'partial') rows.push(r('Разбор частичный: смысловая перепроверка не обработает ожидающие источники.', 'warning'));
   for (const item of progress?.excluded ?? []) rows.push(r(`• ${item.dialogueId}: ${item.reason}`, 'muted'));
   rows.push(...budgetRows(record, library));

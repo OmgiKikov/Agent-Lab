@@ -1,5 +1,5 @@
 import { directChecks } from './checkpoints.js';
-import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
+import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, scenarioSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
 import { agentMetricResult, agentRubricResult, automaticTrialResult, GOAL_METRIC_ID, graded, headlineMetricIds, headlineTrialResult, isAgentFailure, latestHumanReviews, markTargets, markUnderCurrentRule, measured, measurementUsable, observedRecord, RULES_METRIC_ID, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
@@ -373,7 +373,10 @@ export function verdictSummary(record: Experiment): VerdictSummary {
   const unreviewed = failedTrials.filter(t => reviewsFor(t.id).length === 0).length;
   const undecided = failedTrials.filter(t => reviewsFor(t.id).length > 0 && pending.has(t.id)).length;
   const reasons: VerdictNote[] = [];
-  const unaudited = completed.filter(t => record.mode === 'live' && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.length && !hasCompleteJudgment({ scenario: record.scenarios.find(s => s.id === t.scenarioId)!, sources: observableSources(record.sources, record.requirements), trial: t })).length;
+  const unaudited = completed.filter(t => {
+    const scenario = record.scenarios.find(s => s.id === t.scenarioId);
+    return record.mode === 'live' && scenario?.metrics?.length && !hasCompleteJudgment({ scenario, sources: observableSources(scenarioSources(record, scenario), record.requirements), trial: t });
+  }).length;
   if (unaudited) reasons.push({ code: 'judge_unaudited', text: `${unaudited} диалог(ов) без сохранённых независимых оценок судьи. Воспроизводимость этих оценок неизвестна.`, count: unaudited });
   if (rubric.unknown) reasons.push({ code: 'judge_unknown', text: `${rubric.unknown} диалог(ов) с отсутствующей, противоречивой или неопределённой оценкой агента.`, count: rubric.unknown });
   if (review.disagreements) reasons.push({ code: 'human_disagreement', text: `Расхождений автоматической и ручной оценки: ${review.disagreements}. Проверьте основания каждого; это ещё не оценка точности судьи.`, count: review.disagreements });
@@ -887,7 +890,7 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   const auditRequired = before.mode === 'live' && result.includesRubrics;
   const judged = (run: Experiment, trial: Trial) => {
     const scenario = run.scenarios.find(s => s.id === trial.scenarioId);
-    return !!scenario && hasCompleteJudgment({ scenario, sources: observableSources(run.sources, run.requirements), trial });
+    return !!scenario && hasCompleteJudgment({ scenario, sources: observableSources(scenarioSources(run, scenario), run.requirements), trial });
   };
   const beforeAttempts = new Map<string, Trial[]>(), afterAttemptGroups = new Map<string, Trial[]>();
   for (const trial of before.trials) beforeAttempts.set(attemptKey(trial), [...beforeAttempts.get(attemptKey(trial)) ?? [], trial]);

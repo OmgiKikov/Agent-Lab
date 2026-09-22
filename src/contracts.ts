@@ -66,11 +66,13 @@ export const materialSchema = z.strictObject({ name: text.max(180), content: tex
  */
 export const userModeSchema = z.enum(['reactive', 'scripted', 'static']);
 export type UserMode = z.infer<typeof userModeSchema>;
-export const modelChoiceSchema = z.strictObject({ provider: text.max(120), model: text.max(200) });
+const providerName = z.string().max(120).describe('Provider key, e.g. openrouter. Never include the model or vendor path here.');
+const modelName = z.string().max(200).describe('Exact model ID within that provider, e.g. z-ai/glm-5.3-flash or openai/gpt-5.6-sol for openrouter.');
+export const modelChoiceSchema = z.strictObject({ provider: providerName.min(1), model: modelName.min(1) });
 export const settingsSchema = z.strictObject({
-  provider: z.string().max(120).default(''),
-  model: z.string().max(200).default(''),
-  judge: z.strictObject({ provider: z.string().min(1).max(120), model: z.string().min(1).max(200), upstream: z.string().min(1).max(120).optional() })
+  provider: providerName.default(''),
+  model: modelName.default(''),
+  judge: z.strictObject({ provider: providerName.min(1), model: modelName.min(1), upstream: z.string().min(1).max(120).optional() })
     .refine(v => !v.upstream || v.provider === 'openrouter', 'Judge upstream routing requires OpenRouter').optional(),
   repeats: z.number().int().min(1).max(5).default(2),
   maxIterations: z.number().int().min(1).max(5).default(2),
@@ -219,7 +221,7 @@ export const replyQuality: Rubric = {
 /** Diagnostic-only RAG rubrics. They are added to a judge run only when the adapter reports retrieval events. */
 export const ragContextRecall: Rubric = {
   id: 'rag_context_recall', name: 'RAG · нужное знание найдено', subject: 'agent',
-  description: 'Содержат ли найденные RAG-фрагменты достаточно информации для ответа по применимым требованиям владельца.',
+  description: 'Достаточно ли переданного агенту контекста по приложенным требованиям владельца; это не полнота поиска по всей базе знаний.',
   passCriteria: 'Найденные RAG-фрагменты содержат все существенные факты и правила, необходимые для корректного ответа на доставленный запрос пользователя.',
   failCriteria: 'В найденных RAG-фрагментах отсутствует хотя бы один существенный факт или правило, без которого нельзя корректно выполнить доставленный запрос пользователя.',
 };
@@ -231,9 +233,9 @@ export const ragContextRelevance: Rubric = {
 };
 export const ragContextFaithfulness: Rubric = {
   id: 'rag_context_faithfulness', name: 'RAG · ответ подтверждён найденным', subject: 'agent',
-  description: 'Подтверждаются ли фактические и бизнес-утверждения ответа именно найденными RAG-фрагментами.',
-  passCriteria: 'Каждое проверяемое фактическое и бизнес-утверждение ответа подтверждается найденными RAG-фрагментами и не противоречит им.',
-  failCriteria: 'Ответ содержит хотя бы одно проверяемое фактическое или бизнес-утверждение, которое не подтверждается найденными RAG-фрагментами или противоречит им.',
+  description: 'Подтверждаются ли утверждения ответа о правилах, условиях и процедурах найденными RAG-фрагментами. Результаты инструментов и текущее состояние конкретной заявки эта метрика не проверяет.',
+  passCriteria: 'Ответ содержит проверяемые утверждения о правилах, условиях или процедурах; каждое из них подтверждается найденными RAG-фрагментами и не противоречит им.',
+  failCriteria: 'Ответ содержит хотя бы одно утверждение о правилах, условиях или процедурах, которое не подтверждается найденными RAG-фрагментами или противоречит им.',
 };
 export const validationExclusionSchema = z.strictObject({
   dialogueId: identifier, kind: z.enum(['customer_data', 'masked', 'length', 'unconfirmed']), reason: text.max(1000),
@@ -247,14 +249,15 @@ export const assessmentFindingSchema = z.strictObject({
 });
 export const metricAssessmentSchema = z.strictObject({
   metricId: identifier, result: z.enum(['pass', 'fail', 'unknown']),
-  rationale: text.max(4000), evidence: z.array(z.number().int().nonnegative()).max(30),
+  // Up to 16 delivered replies, each with its own user request, retrieval and answer citation.
+  rationale: text.max(4000), evidence: z.array(z.number().int().nonnegative()).max(48),
   findings: z.array(assessmentFindingSchema).min(1).max(12).optional(),
-  citations: z.array(z.strictObject({ seq: z.number().int().nonnegative(), quote: z.string().min(1).max(2000) })).max(30).optional(),
+  citations: z.array(z.strictObject({ seq: z.number().int().nonnegative(), quote: z.string().min(1).max(2000) })).max(48).optional(),
 });
 export type MetricAssessment = z.infer<typeof metricAssessmentSchema>;
 /** The fixed opening belongs to the card, not to the reactive actor. */
 export function metricApplies(metric: Rubric, trial: Pick<Trial, 'userMode' | 'events'>): boolean {
-  if (RAG_METRIC_IDS.has(metric.id)) return ragEvidenceComplete(trial);
+  if (RAG_METRIC_IDS.has(metric.id)) return ragEvidenceComplete(trial, metric.id === 'rag_context_faithfulness' ? 'model_context' : 'retrieval');
   return metric.id !== 'user_fidelity' || metric.subject !== 'simulator'
     || trial.userMode === 'reactive' && trial.events.some(event => event.type === 'simulator');
 }
@@ -611,25 +614,35 @@ export interface Trial {
 }
 /** Keep RAG diagnosis outside the frozen card: it appears only when the target exposes retrieval evidence. */
 export function assessmentRubrics(scenario: Pick<Scenario, 'metrics'>, trial: Pick<Trial, 'events'>): Rubric[] {
-  const metrics = [...(scenario.metrics ?? [])];
+  // These IDs are harness-owned diagnostics; a card cannot replace their criteria with a reference answer.
+  const metrics = (scenario.metrics ?? []).map(metric => RAG_RUBRICS.find(rubric => rubric.id === metric.id) ?? metric);
   if (!trial.events.some(event => event.type === 'retrieval')) return metrics;
   for (const rubric of RAG_RUBRICS) if (!metrics.some(metric => metric.id === rubric.id)) metrics.push(rubric);
   return metrics;
 }
 /** Absence of a chunk is evidence only when the adapter confirms the full context for every delivered reply. */
-export function ragEvidenceComplete(trial: Pick<Trial, 'events'>): boolean {
+export function ragEvidenceComplete(trial: Pick<Trial, 'events'>, scope: 'retrieval' | 'model_context' = 'model_context'): boolean {
   let complete = false, replies = 0;
   for (const event of trial.events) {
     if (event.type === 'user') complete = false;
     if (event.type === 'retrieval') {
-      const value = event.result as { complete?: unknown; chunks?: unknown } | undefined;
-      complete = value?.complete === true && Array.isArray(value.chunks);
+      const value = event.result as { complete?: unknown; chunks?: unknown; stage?: unknown } | undefined;
+      const stage = value?.stage ?? 'model_context';
+      complete = value?.complete === true && Array.isArray(value.chunks)
+        && (stage === 'model_context' || scope === 'retrieval' && stage === 'retrieved');
     }
-    if (event.type === 'assistant') { if (!complete) return false; replies++; }
+    if (event.type === 'assistant') { if (!complete) return false; replies++; complete = false; }
   }
   return replies > 0;
 }
 export const simulatorWasUsed = (trial: Trial) => trial.userMode === 'reactive' && trial.events.some(e => e.type === 'simulator');
+/** Quotes may refer to decoded chunk text, including line breaks escaped by the JSON event envelope. */
+function eventContainsQuote(event: TraceEvent, quote: string): boolean {
+  if (assessmentEventContent(event).includes(quote)) return true;
+  if (event.type !== 'retrieval') return false;
+  const chunks = (event.result as { chunks?: unknown } | undefined)?.chunks;
+  return Array.isArray(chunks) && chunks.some(chunk => typeof chunk?.content === 'string' && chunk.content.includes(quote));
+}
 export function validateAssessments(metrics: Rubric[], events: TraceEvent[], raw: unknown): MetricAssessment[] {
   const assessments = z.array(metricAssessmentSchema).parse(raw);
   const metricIds = new Set(metrics.map(metric => metric.id));
@@ -646,7 +659,7 @@ export function validateAssessments(metrics: Rubric[], events: TraceEvent[], raw
       if (cited.size !== assessment.evidence.length || assessment.evidence.some(seq => !cited.has(seq))) throw new Error('Evidence must match quoted citations.');
       for (const citation of assessment.citations) {
         const event = events.find(e => e.seq === citation.seq);
-        if (!event || !assessmentEventContent(event).includes(citation.quote)) throw new Error(`Citation #${citation.seq} is not a verbatim quote from that event's content.`);
+        if (!event || !eventContainsQuote(event, citation.quote)) throw new Error(`Citation #${citation.seq} is not a verbatim quote from that event's content.`);
       }
     }
     if (!assessment.findings) continue; // Historical assessments retain their original evidence format.
@@ -658,7 +671,7 @@ export function validateAssessments(metrics: Rubric[], events: TraceEvent[], raw
       if (finding.result !== 'unknown' && !finding.citations.length) throw new Error('Every pass/fail finding needs a quoted trace event.');
       for (const citation of finding.citations) {
         const event = events.find(e => e.seq === citation.seq);
-        if (!event || !assessmentEventContent(event).includes(citation.quote)) throw new Error(`Citation #${citation.seq} is not a verbatim quote from that event's content.`);
+        if (!event || !eventContainsQuote(event, citation.quote)) throw new Error(`Citation #${citation.seq} is not a verbatim quote from that event's content.`);
       }
     }
     const expected = assessment.findings.some(f => f.result === 'fail') ? 'fail' : assessment.findings.some(f => f.result === 'unknown') ? 'unknown' : 'pass';
@@ -968,7 +981,8 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
 });
 export interface CallContext {
   onGeneratorTransport?(transport:{role:string;provider:string;model:string;api:string;requestedTemperature?:number;effectiveTemperature:number|'provider-default'}):void;
-  onGeneratorOutput?(response:{role:string;text:string}):void;
+  onGeneratorOutput?(response:{role:string;text:string;attempt?:number;incomplete?:boolean}):void;
+  onGeneratorValidation?(validation:{attempt:number;accepted:boolean;reason?:string;outcome?:'syntax'|'schema'|'domain'}):void;
   diagnosticRequest?: DiagnosticRequest;
   onDiagnosticReceipt?(receipt: DiagnosticReceipt): void;
   signal: AbortSignal; timeoutMs: number;
@@ -994,6 +1008,8 @@ export interface PrepareInput {
   requirements?: Requirement[];
   /** The sandbox agent is only built when the sandbox answers; an external target has its own. */
   targetKind?: Target['kind'];
+  /** Ground only the rules that decide one dialogue: the customer's own messages, never the old agent's replies. */
+  focus?: { dialogueId: string; customerMessages: string[] };
 }
 export interface SourceSelectionInput {
   task: string;
@@ -1001,6 +1017,8 @@ export interface SourceSelectionInput {
   catalog: Array<{ id: string; name: string; chars: number }>;
   dialogue: { id: string; messages: DialogueMessage[] };
   limit: number;
+  /** A bounded second reading can revise the title-based shortlist. Unread articles are not certified as checked. */
+  reading?: { sources: Source[]; selectedSourceIds: string[]; unreadSourceIds: string[] };
 }
 export const sourceSelectionSchema = z.strictObject({ sourceIds: z.array(identifier).max(40) });
 export type SourceSelection = z.infer<typeof sourceSelectionSchema>;

@@ -6,6 +6,22 @@ import { emptyUsage, type CallContext } from '../src/contracts.js';
 
 const ctx: CallContext = { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} };
 
+test('a card cannot hide its reading evidence by removing editable source references', async () => {
+  const { checkerSourceIds, planSemanticWork } = await import('../src/scenario-work.js');
+  const library = libraryFixture(), card = library.variants[0]!;
+  const batchId = library.imports[0]!.id, dialogueId = card.sourceDialogues[0]!.dialogueId;
+  library.sources.push({ id: 'uncited', name: 'Исключение', content: 'Отдельное исключение из общего правила', hash: 'fixture' });
+  library.readingManifest = [{ batchId, dialogueId, sourceIds: ['policy', 'uncited'], variantIds: [card.id], requestHash: 'a'.repeat(64) }];
+  card.sourceDialogues = []; card.userState.facts = []; delete card.sourceCoverageBasis;
+  assert.ok(checkerSourceIds(library, [card.id]).includes('uncited'));
+  const job = planSemanticWork(library).jobs.find(job => job.input.scope === 'fields' && job.input.fields[0]?.variantId === card.id)!;
+  assert.ok(job.input.library.imports.some(batch => batch.id === batchId && batch.dialogues.some(d => d.id === dialogueId)));
+  const child = structuredClone(card); child.id = 'derived'; child.parentVariantId = card.id;
+  library.variants.push(child);
+  assert.ok(checkerSourceIds(library, [child.id]).includes('uncited'));
+  assert.ok(!checkerSourceIds(library, [library.variants[1]!.id]).includes('uncited'), 'immutable binding does not expand unrelated jobs');
+});
+
 test('200 variants with 20 facts and 12 checkpoints use bounded requests and complete separate relation findings', async () => {
   const planner = await import('../src/scenario-preparation.js');
   assert.equal(typeof planner.assessScenarioLibrary, 'function', 'initial preparation and reassessment share bounded work');
@@ -29,7 +45,7 @@ test('200 variants with 20 facts and 12 checkpoints use bounded requests and com
     partials++; assert.equal(partial.semanticAssessment!.contentHash, expectedHash);
   });
   assert.ok(calls > 200); assert.ok(partials > 1); assert.ok(relations > 0); assert.equal(relationCandidates.size, 200);
-  assert.equal(result.semanticAssessment!.findings.length, 7400);
+  assert.equal(result.semanticAssessment!.findings.length, 7600);
   for (const variant of result.variants) for (const path of semanticPaths(variant)) assert.equal(result.semanticAssessment!.findings.filter(f => f.variantId === variant.id && f.path === path && f.status === 'ready').length, 1);
 });
 
@@ -70,7 +86,8 @@ test('resuming a split relation pass reuses completed calls and retains conserva
   const status = semanticWorkStatus(partial);
   assert.equal(status.completedJobs, finished.size);
   assert.equal(status.pendingJobs, status.totalJobs - finished.size, 'resume estimate excludes persisted same-content receipts');
-  assert.equal(partial.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'duplicates')!.status, 'needs_review');
+  assert.equal(partial.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'duplicates')!.status, 'blocked', 'an observed blocking finding stays blocked while other comparisons remain pending');
+  assert.equal(partial.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'businessScenarioId')!.status, 'needs_review', 'local grounding and a partial set of comparisons cannot establish readiness');
   const complete = await assessScenarioLibrary(partial, runtime, ctx, async () => {});
   assert.equal(complete.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'duplicates')!.status, 'blocked');
   assert.equal(complete.semanticAssessment!.findings.find(f => f.variantId === 'relation_0' && f.path === 'businessScenarioId')!.status, 'ready');
@@ -171,4 +188,160 @@ test('new owner evidence context does not reuse old semantic findings while hist
   assert.equal(calls, plan.jobs.length);
   assert.equal(semanticWorkStatus(complete).pendingJobs, 0);
   assert.throws(() => acceptLibrary(complete, libraryHash(complete), ['variant_1']), /готов/, 'verified evidence never forces semantic approval');
+});
+
+test('business membership has a source-grounded local job as well as bounded relation comparisons', async () => {
+  const { planSemanticWork } = await import('../src/scenario-work.js');
+  const library = libraryFixture();
+  library.businessScenarios[0]!.goal = 'Клиент хочет использовать неподтверждённый продукт';
+  const plan = planSemanticWork(library);
+  for (const variant of library.variants) {
+    const local = plan.jobs.find(job => job.input.scope === 'fields' && job.input.fields.some(field => field.variantId === variant.id && field.paths.includes('businessScenarioId')))!.input;
+    assert.equal(local.library.businessScenarios[0]!.goal, library.businessScenarios[0]!.goal);
+    assert.deepEqual(local.library.sources, library.sources, 'the original policy is present, not only extracted requirements');
+    const ref = variant.sourceDialogues[0]!;
+    const original = library.imports.find(batch => batch.id === ref.batchId)!.dialogues.find(dialogue => dialogue.id === ref.dialogueId)!;
+    assert.deepEqual(local.library.imports[0]!.dialogues[0]!.events, original.events, 'the entire chronology grounds asserted business conditions');
+    assert.equal(local.comparisonCandidates.length, 0, 'source evidence does not compete with duplicate comparison payloads');
+    assert.ok(plan.jobs.some(job => job.input.scope === 'relations' && job.input.fields.some(field => field.variantId === variant.id && field.paths.includes('businessScenarioId'))));
+  }
+  assert.ok(plan.jobs.every(job => Buffer.byteLength(JSON.stringify(job.input)) <= 64000));
+});
+
+test('business admission conservatively combines local grounding and relational grouping', async () => {
+  const { assessScenarioLibrary } = await import('../src/scenario-work.js');
+  const { acceptLibrary, libraryHash } = await import('../src/scenario-library.js');
+  for (const blockingScope of ['fields', 'relations'] as const) {
+    const library = libraryFixture();
+    const reason = blockingScope === 'fields' ? 'Источник не устанавливает приписанный продукт' : 'Одинаковый бизнес необоснованно разделён';
+    const checked = await assessScenarioLibrary(library, { async assessScenarioProposals(input) {
+      return input.fields.flatMap(field => field.paths.map(path => ({ variantId: field.variantId, path,
+        status: field.variantId === 'variant_1' && path === 'businessScenarioId' && input.scope === blockingScope ? 'blocked' as const : 'ready' as const,
+        reason: input.scope === blockingScope ? reason : 'Другая проверка не обнаружила проблемы' })));
+    } }, ctx, async () => {});
+    const finding = checked.semanticAssessment!.findings.find(item => item.variantId === 'variant_1' && item.path === 'businessScenarioId')!;
+    assert.equal(finding.status, 'blocked', `${blockingScope} cannot be overwritten by ready in the other scope`);
+    assert.equal(finding.reason, reason);
+    assert.throws(() => acceptLibrary(checked, libraryHash(checked), ['variant_1']), /готов/);
+  }
+});
+
+test('business grounding stays pending until relation jobs complete and resumes without repeating grounded work', async () => {
+  const { assessScenarioLibrary } = await import('../src/scenario-work.js');
+  const { fingerprint } = await import('../src/contracts.js');
+  const library = libraryFixture(), completed = new Set<string>();
+  let interrupt = true, partial = library;
+  const runtime = { async assessScenarioProposals(input: Parameters<NonNullable<import('../src/contracts.js').Runtime['assessScenarioProposals']>>[0]) {
+    if (input.scope === 'relations' && interrupt) { interrupt = false; throw new Error('stop before grouping'); }
+    const hash = fingerprint(input);
+    assert.ok(!completed.has(hash), 'resume reuses completed local receipts');
+    completed.add(hash);
+    return input.fields.flatMap(field => field.paths.map(path => ({ variantId: field.variantId, path, status: 'ready' as const, reason: 'Проверено' })));
+  } };
+  await assert.rejects(() => assessScenarioLibrary(library, runtime, ctx, async value => { partial = structuredClone(value); }), /stop before grouping/);
+  for (const variant of library.variants) assert.equal(partial.semanticAssessment!.findings.find(finding => finding.variantId === variant.id && finding.path === 'businessScenarioId')!.status, 'needs_review');
+  const complete = await assessScenarioLibrary(partial, runtime, ctx, async () => {});
+  for (const variant of library.variants) assert.equal(complete.semanticAssessment!.findings.find(finding => finding.variantId === variant.id && finding.path === 'businessScenarioId')!.status, 'ready');
+});
+
+test('a skipped source-grounding job cannot be made ready by evidence-free relations', async () => {
+  const { assessScenarioLibrary, planSemanticWork } = await import('../src/scenario-work.js');
+  const library = libraryFixture();
+  library.sources[0]!.content += '\n' + 'x'.repeat(70000);
+  const plan = planSemanticWork(library);
+  assert.ok(plan.skipped.some(finding => finding.variantId === 'variant_1' && finding.path === 'businessScenarioId'));
+  assert.ok(plan.jobs.some(job => job.input.scope === 'relations'));
+  const complete = await assessScenarioLibrary(library, { async assessScenarioProposals(input) {
+    assert.equal(input.scope, 'relations');
+    return input.fields.flatMap(field => field.paths.map(path => ({ variantId: field.variantId, path, status: 'ready' as const, reason: 'Сгенерированные условия выглядят согласованно' })));
+  } }, ctx, async () => {});
+  const finding = complete.semanticAssessment!.findings.find(item => item.variantId === 'variant_1' && item.path === 'businessScenarioId')!;
+  assert.equal(finding.status, 'needs_review');
+  assert.match(finding.reason, /байт|предел/);
+});
+
+test('editing one card keeps the other card\'s field receipts, and the reading manifest stays visible to the checker', async () => {
+  const { assessScenarioLibrary, checkerSourceIds, planSemanticWork, semanticWorkStatus } = await import('../src/scenario-work.js');
+  const { editLibrary, libraryHash } = await import('../src/scenario-library.js');
+  const library = libraryFixture();
+  library.sources.push({ id: 'unread', name: 'Непроцитированная', content: 'Срок возврата зависит от канала', hash: 'unread-hash' });
+  library.readingManifest = [{ dialogueId: 'terminal', sourceIds: ['policy', 'unread'] }];
+  const checked = await assessScenarioLibrary(library, { async assessScenarioProposals(input) {
+    if (input.scope === 'fields' && input.fields.some(field => field.variantId === 'variant_1')) assert.ok(input.library.sources.some(source => source.id === 'unread'));
+    return input.fields.flatMap(field => field.paths.map(path => ({ variantId: field.variantId, path, status: 'ready' as const, reason: 'Проверено' })));
+  } }, ctx, async () => {});
+  assert.deepEqual(checkerSourceIds(checked, ['variant_1']), ['policy', 'unread']);
+  const edited = editLibrary(checked, libraryHash(checked), { kind: 'edit_variant_text', variantId: 'variant_2', field: 'opening', value: 'Когда вернут оплату?', editId: 'owner_1', reason: 'Владелец в разговоре: «Когда вернут оплату?»' });
+  const status = semanticWorkStatus(edited);
+  assert.ok(status.completedJobs > 0, 'the untouched card still has receipts');
+  assert.ok(status.pendingJobs > 0, 'the edited card and its comparisons run again');
+  assert.ok(status.completedJobs < status.totalJobs);
+  const plan = planSemanticWork(edited);
+  assert.equal(plan.contentHash, status.contentHash);
+});
+
+test('semantic receipts bind the complete evidence request, including business meaning and chronology', async () => {
+  const { assessScenarioLibrary, semanticWorkStatus } = await import('../src/scenario-work.js');
+  const checked = await assessScenarioLibrary(libraryFixture(), { async assessScenarioProposals(input) {
+    return input.fields.flatMap(field => field.paths.map(path => ({ variantId: field.variantId, path, status: 'ready' as const, reason: 'Проверено' })));
+  } }, ctx, async () => {});
+  assert.equal(semanticWorkStatus(checked).pendingJobs, 0);
+  for (const mutate of [
+    (library: typeof checked) => { library.businessScenarios[0]!.conditions.push('Только для другого продукта'); },
+    (library: typeof checked) => { library.requirements[0]!.text = 'Противоположное бизнес-правило'; },
+    (library: typeof checked) => { library.imports[0]!.dialogues[0]!.events[0]!.content = 'Другой исходный запрос'; },
+    (library: typeof checked) => { library.sources[0]!.content += '\nУ этого правила есть исключение.'; },
+  ]) {
+    const changed = structuredClone(checked); mutate(changed);
+    assert.ok(semanticWorkStatus(changed).pendingJobs > 0, 'every changed input invalidates dependent receipts');
+  }
+});
+
+test('complete work receipts still reduce admission after interruption before the final publication', async () => {
+  const { assessScenarioLibrary, semanticWorkStatus } = await import('../src/scenario-work.js');
+  let last = libraryFixture();
+  await assessScenarioLibrary(last, { async assessScenarioProposals(input) {
+    return input.fields.flatMap(field => field.paths.map(path => ({ variantId: field.variantId, path, status: 'ready' as const, reason: 'Проверено' })));
+  } }, ctx, async partial => { last = structuredClone(partial); });
+  assert.equal(semanticWorkStatus(last).pendingJobs, 0, 'all calls were durably saved before the final reducer');
+  const reduced = await assessScenarioLibrary(last, { async assessScenarioProposals() { throw new Error('A saved call must not repeat'); } }, ctx, async () => {});
+  assert.equal(reduced.semanticAssessment!.contentHash, semanticContentHash(reduced));
+  assert.ok(reduced.variants.every(variant => variant.quality === 'ready'), 'cached evidence is reduced into ready cards');
+});
+
+test('overall expected result has its own required source-grounded assessment and cannot hide behind valid checkpoints', async () => {
+  const { assessScenarioLibrary, planSemanticWork, semanticWorkStatus } = await import('../src/scenario-work.js');
+  const { acceptLibrary, libraryHash, libraryQuality, recordSemanticAssessment, compileLibrary } = await import('../src/scenario-library.js');
+  const library = libraryFixture();
+  const card = library.variants[0]!;
+  card.evaluationSpec.successCriteria = 'Агент уточнил номер терминала и гарантировал возврат за три дня.';
+  const plan = planSemanticWork(library);
+  assert.equal(plan.jobs.flatMap(job => job.input.fields.flatMap(field => field.paths.filter(path => field.variantId === card.id && path === 'evaluationSpec.successCriteria'))).length, 1);
+  const checked = await assessScenarioLibrary(library, { async assessScenarioProposals(input) {
+    return input.fields.flatMap(field => field.paths.map(path => ({ variantId: field.variantId, path,
+      status: field.variantId === card.id && path === 'evaluationSpec.successCriteria' ? 'blocked' as const : 'ready' as const,
+      reason: path === 'evaluationSpec.successCriteria' ? 'В источнике нет гарантии срока.' : 'Основание проверено.' })));
+  } }, ctx, async () => {});
+  assert.ok(libraryQuality(checked).some(issue => issue.path.endsWith('evaluationSpec.successCriteria') && issue.severity === 'blocked'));
+  assert.throws(() => acceptLibrary(checked, libraryHash(checked), [card.id]), /готов/);
+  checked.semanticAssessment!.findings = checked.semanticAssessment!.findings.filter(f => f.path !== 'evaluationSpec.successCriteria');
+  assert.ok(libraryQuality(checked).some(issue => issue.code === 'semantic_missing' && issue.path.endsWith('evaluationSpec.successCriteria')));
+  assert.equal(semanticWorkStatus(checked).needsFinalization, true, 'complete receipts cannot bypass missing final obligation');
+  const historical = recordSemanticAssessment(library, library.variants.flatMap(v => semanticPaths(v, { includeOutcome: false }).map(path => ({ variantId: v.id, path, status: 'ready' as const, reason: 'Historical v10 result' }))), 10);
+  const accepted = acceptLibrary(historical, libraryHash(historical), [card.id]), bytes = JSON.stringify(accepted);
+  assert.equal(compileLibrary(accepted).length, 1, 'old acceptance remains executable, not silently regraded');
+  assert.equal(JSON.stringify(accepted), bytes);
+  assert.ok(semanticWorkStatus(accepted).pendingJobs > 0, 'an explicit new assessment must use the new obligation');
+});
+
+test('semantic requests exclude historical edit chatter and badges while retaining authenticated fact evidence', async () => {
+  const { planSemanticWork } = await import('../src/scenario-work.js');
+  const library = libraryFixture();
+  library.variants[0]!.history.push({ author: 'assistant', reason: 'Старое предложение: ВЫДУМАННОЕ ПРАВИЛО, больше не актуально', revision: 2 });
+  const plan = planSemanticWork(library);
+  assert.ok(!JSON.stringify(plan.jobs).includes('ВЫДУМАННОЕ ПРАВИЛО'));
+  for (const job of plan.jobs) {
+    assert.ok(job.input.library.variants.every(v => !v.history.length && !v.issues.length));
+    assert.ok(job.input.comparisonCandidates.every(v => !v.history.length));
+  }
 });

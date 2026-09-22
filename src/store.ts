@@ -1,4 +1,5 @@
 import type { GeneratorRecord } from './generator-evaluation.js';
+import type { GeneratorEvidence } from './generator-evidence.js';
 import { fingerprint } from './contracts.js';
 import { prepareResolutionPolicy, verifyResolutionPolicy, resolutionDraftHash, evaluateResolution, applyResolution } from './resolution.js';
 import type { ResolutionPolicy } from './resolution-contracts.js';
@@ -290,6 +291,24 @@ export class ExperimentStore {
     this.path(id);
     if (!idPattern.test(trialId)) throw new Error('Invalid trial ID');
     appendFileSync(join(this.directory, `${id}.trace.jsonl`), `${JSON.stringify({ trialId, event })}\n`, { mode: 0o600 });
+  }
+  /** Same writer as the library; each raw attempt is durable before parsing or another call. */
+  appendGeneratorEvidence(id: string, event: GeneratorEvidence): void {
+    if (!this.lockToken) throw new Error('Для записи генерации откройте лабораторию как писатель.');
+    this.path(id);
+    appendFileSync(join(this.directory, `${id}.generator.jsonl`), `${JSON.stringify({ hash: fingerprint(event), event })}\n`, { mode: 0o600, flush: true });
+  }
+  async generatorEvidence(id: string): Promise<GeneratorEvidence[]> {
+    this.path(id);
+    const text = await readFile(join(this.directory, `${id}.generator.jsonl`), 'utf8').catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+      throw error;
+    });
+    return text.split('\n').filter(Boolean).map(line => {
+      const row = JSON.parse(line);
+      if (!row.event || row.hash !== fingerprint(row.event)) throw new Error('Повреждено доказательство генерации.');
+      return row.event as GeneratorEvidence;
+    });
   }
   async traceJournal(id: string): Promise<string> {
     this.path(id);

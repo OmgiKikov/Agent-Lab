@@ -36,7 +36,7 @@ export const behaviorPolicySchema = z.strictObject({
   version: z.literal(1), initialState: id, states: ids(30).min(1), terminalStates: ids(30).min(1),
   maxFollowUps: z.number().int().min(0).max(15), repetitionLimit: z.number().int().min(1).max(15),
   actions: z.array(z.strictObject({
-    id, kind: z.enum(['answer', 'missing', 'clarify', 'correct', 'change_intent', 'finish']), factIds: ids(20),
+    id, kind: z.enum(['answer', 'missing', 'clarify', 'correct', 'change_intent', 'finish', 'observe']), factIds: ids(20),
     payload: text(1000).optional(), ifAsked: text(300).optional(),
   })).min(1).max(30),
   transitions: z.array(z.strictObject({ from: id, to: id, actionId: id, when: text(300) })).max(60),
@@ -64,6 +64,15 @@ export type LibraryQualityIssue = z.infer<typeof libraryQualityIssueSchema>;
 export const variantProposalSchema = z.strictObject({
   id, title: text(200), purpose: text(1000), provenance: z.enum(['production', 'curated', 'synthetic']),
   sourceDialogues: z.array(sourceDialogueSchema).max(300), parentVariantId: id.optional(), mutationReason: text(1000).optional(),
+  // Optional for historical snapshots. New multi-turn extraction requires a disposition for every later customer turn.
+  sourceCoverageRequired: z.literal(true).optional(),
+  // Stamped from the preparation request, never inferred from the model's editable sourceDialogues.
+  sourceCoverageBasis: z.array(z.strictObject({ batchId: id, dialogueId: id, eventIndex: z.number().int().nonnegative() })).min(1).max(120).optional(),
+  sourceCoverage: z.array(z.strictObject({
+    batchId: id, dialogueId: id, eventIndex: z.number().int().nonnegative(),
+    disposition: z.enum(['conditional_action', 'initial_fact', 'omitted']),
+    actionIds: ids(30), factIds: ids(20), reason: text(1000),
+  })).max(120).optional(),
   userState: z.strictObject({
     goal: text(3000), opening: text(3000), facts: z.array(userFactSchema).max(20),
     cannotKnow: z.array(text(300)).max(20), missing: z.array(text(300)).max(20),
@@ -86,7 +95,7 @@ export const scenarioVariantSchema = variantProposalSchema.extend({
   ownerDecision: z.enum(['pending', 'accepted', 'excluded']),
   semanticReviewRequired: z.literal(true).optional(),
   history: z.array(z.strictObject({
-    previousHash: hash.optional(), author: z.enum(['owner', 'generator']), reason: text(1000), revision: z.number().int().positive(),
+    previousHash: hash.optional(), author: z.enum(['owner', 'generator', 'assistant']), reason: text(1000), revision: z.number().int().positive(),
     factEdit: z.strictObject({ factId: id, editId: id, factHash: hash }).optional(),
     personaEdit: z.strictObject({ editId: id, personaHash: hash }).optional(),
     textEdit: z.strictObject({ editId: id, field: z.enum(['opening', 'goal', 'successCriteria', 'checkpointRule']), valueHash: hash }).optional(),
@@ -103,6 +112,15 @@ export const preparationProgressSchema = z.strictObject({
   processed: ids(300), pending: ids(300),
   excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000) })).max(300),
   status: z.enum(['preparing', 'complete', 'partial', 'cancelled']),
+  /** Set before a paid call and cleared when that call returns. A crash leaves it, so resume will not repeat an unknown charge. */
+  activeDialogueId: id.optional(),
+  activeStage: z.enum(['select', 'ground', 'extract', 'repair']).optional(),
+  checkpointVersion: z.literal(1).optional(),
+  requestedCount: z.number().int().min(0).max(200).optional(),
+  inputHash: hash.optional(),
+  groundingComplete: z.boolean().optional(),
+  elapsedMs: z.number().int().nonnegative().optional(),
+  generationAttempts: z.array(z.strictObject({ dialogueId: text(200), calls: z.number().int().nonnegative() })).max(300).optional(),
   /** Large knowledge base: which articles the model chose for each dialogue from the table of contents. */
   sourceSelection: z.array(z.strictObject({ dialogueId: text(200), sourceIds: ids(40) })).max(300).optional(),
 });
@@ -114,8 +132,11 @@ export const scenarioLibrarySchema = z.strictObject({
   sources: z.array(z.strictObject({ id, name: text(180), content: text(MATERIAL_CHARS), hash: text(200), kind: z.enum(['knowledge', 'prompt']).optional() })).max(MATERIAL_LIMIT),
   requirements: z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean() })).max(RECORD_REQUIREMENT_LIMIT),
   businessScenarios: z.array(businessScenarioSchema).max(200), variants: z.array(scenarioVariantSchema).max(200),
+  /** Articles chosen for a dialogue before the model wrote the card. Edits of the card do not shrink this list. */
+  readingManifest: z.array(z.strictObject({ dialogueId: text(200), batchId: id.optional(), sourceIds: ids(MATERIAL_LIMIT),
+    variantIds: ids(200).optional(), requestHash: hash.optional() })).max(300).optional(),
   semanticRequired: z.literal(true).optional(),
-  semanticAssessment: z.strictObject({ contextVersion: z.number().int().positive().optional(), contentHash: hash, findings: z.array(semanticFindingSchema).max(10000),
+  semanticAssessment: z.strictObject({ contextVersion: z.number().int().positive().optional(), contentHash: hash, findings: z.array(semanticFindingSchema).max(10000), complete: z.literal(true).optional(),
     workReceipts: z.array(z.strictObject({ workHash: hash, findings: z.array(semanticFindingSchema).max(6) })).max(20000).optional(),
   }).optional(),
   acceptance: z.strictObject({ revision: z.number().int().positive(), libraryHash: hash, variantIds: ids(200).min(1), snapshotHash: hash }).optional(),
@@ -123,19 +144,27 @@ export const scenarioLibrarySchema = z.strictObject({
    * Disputes the owner settled in their own name: «да, это моё правило». Bound to the exact remark of the scenario checker, so a
    * different remark on the same field opens the question again. Not part of the assessed content; a blocking remark cannot be settled.
    */
-  ownerResolutions: z.array(z.strictObject({ variantId: id, path: text(400), findingHash: hash, editId: id, reason: text(1000) })).max(400).optional(),
+  ownerResolutions: z.array(z.strictObject({ variantId: id, path: text(400), findingHash: hash, businessHash: hash.optional(), editId: id, reason: text(1000) })).max(400).optional(),
 });
 export type ScenarioLibrary = z.infer<typeof scenarioLibrarySchema>;
 
 const reason = { reason: text(1000) };
 export const libraryPatchSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('edit_behavior'), variantId: id, behaviorPolicy: scenarioVariantSchema.shape.behaviorPolicy.optional(),
+    sourceCoverage: scenarioVariantSchema.shape.sourceCoverage, ...reason })
+    .refine(patch => patch.behaviorPolicy !== undefined || patch.sourceCoverage !== undefined, 'Choose behaviorPolicy or sourceCoverage'),
   z.strictObject({ kind: z.literal('upsert_variant'), variant: scenarioVariantSchema, ...reason }),
   z.strictObject({ kind: z.literal('remove_variant'), variantId: id, ...reason }),
+  z.strictObject({ kind: z.literal('edit_business'), businessScenarioId: id, title: text(200).optional(), goal: text(3000).optional(),
+    conditions: z.array(text(1000)).max(20).optional(), ...reason })
+    .refine(patch => patch.title !== undefined || patch.goal !== undefined || patch.conditions !== undefined, 'Choose a group field to edit'),
   z.strictObject({ kind: z.literal('merge_business'), targetId: id, sourceIds: ids(200).min(1), ...reason }),
   z.strictObject({ kind: z.literal('split_business'), businessScenarioId: id, newBusiness: businessProposalSchema, variantIds: ids(200).min(1), ...reason }),
   z.strictObject({ kind: z.literal('edit_fact'), variantId: id, factId: id, statement: text(300), value: userFactSchema.shape.value, availability: userFactSchema.shape.availability, editId: id, ...reason }),
   z.strictObject({ kind: z.literal('add_fact'), variantId: id, factId: id, statement: text(300), value: userFactSchema.shape.value, availability: userFactSchema.shape.availability, editId: id, ...reason }),
   z.strictObject({ kind: z.literal('resolve_finding'), variantId: id, path: text(400), editId: id, ...reason }),
+  z.strictObject({ kind: z.literal('resolve_findings'), findings: z.array(z.strictObject({ variantId: id, path: text(400), findingHash: hash })).min(1).max(200)
+    .refine(items => new Set(items.map(item => `${item.variantId}/${item.path}`)).size === items.length, 'Duplicate findings'), editId: id, ...reason }),
   z.strictObject({ kind: z.literal('edit_variant_text'), variantId: id, field: z.enum(['opening', 'goal', 'successCriteria', 'checkpointRule']),
     checkpointId: id.optional(), value: text(3000), editId: id, ...reason }),
 ]);

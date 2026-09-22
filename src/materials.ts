@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, extname, join, resolve } from 'node:path';
 import type { SourceKind } from './contracts.js';
 import { docxText, htmlText } from './docx.js';
-import { MATERIAL_CHARS, MATERIAL_LIMIT } from './limits.js';
+import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIAL_PART_CHARS } from './limits.js';
 
 export interface FileMaterial { name: string; content: string; kind: SourceKind; file: string }
 export interface MaterialsReport { materials: FileMaterial[]; skipped: Array<{ file: string; reason: string }> }
@@ -40,9 +40,29 @@ export async function readMaterialFiles(paths: string[], kind: SourceKind): Prom
     if (duplicate) { skipped.push({ file, reason: `дубликат «${duplicate}»` }); continue; }
     if (materials.length >= MATERIAL_LIMIT) { skipped.push({ file, reason: `больше ${MATERIAL_LIMIT} материалов` }); continue; }
     seen.set(content, name);
-    materials.push({ name, content, kind, file });
+    const parts = splitParts(content, MATERIAL_PART_CHARS);
+    if (parts.length === 1) materials.push({ name, content, kind, file });
+    else parts.forEach((part, index) => materials.push({ name: `${name} · часть ${index + 1}/${parts.length}`, content: part, kind, file }));
   }
   return { materials, skipped };
+}
+
+/** Cuts a text into parts of at most `limit` characters at paragraph breaks (then line breaks); the parts joined by the break are the text. */
+export function splitParts(text: string, limit: number): string[] {
+  if (text.length <= limit) return [text];
+  const parts: string[] = [];
+  let rest = text;
+  while (rest.length > limit) {
+    const window = rest.slice(0, limit);
+    let cut = window.lastIndexOf('\n\n');
+    if (cut < limit / 4) cut = window.lastIndexOf('\n');
+    if (cut < limit / 4) cut = window.lastIndexOf(' ');
+    if (cut < limit / 4) cut = limit;
+    parts.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).trimStart();
+  }
+  if (rest) parts.push(rest);
+  return parts;
 }
 
 async function listFiles(path: string): Promise<string[]> {
