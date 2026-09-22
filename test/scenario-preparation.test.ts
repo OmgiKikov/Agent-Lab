@@ -417,3 +417,68 @@ test('public assessment resumes interrupted same-content work from a reviewable 
     assert.equal(accepted.experiment.scenarios.length, 2);
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+/** Thirty articles of four thousand characters each: far beyond one model call, the size of a real knowledge base. */
+function bigKnowledgeBase() {
+  const titles = ['Как оформить возврат покупателю', 'Как посмотреть тариф', 'Заблокирован терминал', 'Подключение интернет-эквайринга'];
+  return [
+    { name: 'prompt.md', kind: 'prompt' as const, content: 'Уточните номер терминала. Отвечайте клиенту вежливо.' },
+    ...Array.from({ length: 30 }, (_, i) => ({ name: titles[i] ?? `Статья ${i + 1}`, content: `Статья ${i + 1}. ${'Порядок действий описан в личном кабинете. '.repeat(90)}` })),
+  ];
+}
+
+test('a knowledge base too large for one call is read per dialogue: the model picks articles from the table of contents, grounding and proposals see only those, and the choice is recorded', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-preparation-'));
+  const catalogs: any[] = [], groundings: string[][] = [], proposalSources: string[][] = [], proposalRequirements: string[][] = [];
+  const runtime: Runtime = {
+    ...runtimeFixture([]),
+    async selectSources(input, ctx) {
+      ctx.beforeCall(); catalogs.push(structuredClone(input));
+      const wanted = input.dialogue.messages[0]!.content.includes('терминала') ? 'Заблокирован терминал' : 'Как оформить возврат покупателю';
+      return { sourceIds: [input.catalog.find(item => item.name === wanted)!.id] };
+    },
+    async prepare(input) {
+      groundings.push(input.sources.map(source => source.id));
+      return { questions: [], agent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] }, scenarios: [],
+        requirements: input.sources.map(source => ({ id: source.kind === 'prompt' ? 'terminal_rule' : `rule_${source.id}`, sourceId: source.id, critical: true,
+          text: source.kind === 'prompt' ? 'Уточните номер терминала' : 'Порядок действий описан в личном кабинете', quote: source.kind === 'prompt' ? 'Уточните номер терминала' : 'Порядок действий описан в личном кабинете.' })) };
+    },
+    async scenarioProposals(input, ctx) {
+      ctx.beforeCall(); proposalSources.push(input.sources.map(source => source.id)); proposalRequirements.push(input.requirements.map(requirement => requirement.id));
+      return proposals(input.batchId!).filter(p => input.dialogues.some(d => d.id === p.variant.sourceDialogues[0]!.dialogueId));
+    },
+  } as Runtime;
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init();
+    const seed = await lab.create({ ...input(), materials: bigKnowledgeBase() }); await lab.waitForIdle();
+    const draft = await lab.get(seed.id);
+    assert.equal(draft.phase, 'review', draft.error ?? '');
+    assert.equal(draft.preparationProgress!.excluded.length, 0, JSON.stringify(draft.preparationProgress!.excluded));
+    assert.equal(catalogs.length, 2, 'one choice per dialogue');
+    assert.equal(catalogs[0].catalog.length, 30, 'the table of contents lists knowledge articles only');
+    assert.deepEqual(Object.keys(catalogs[0].catalog[0]).sort(), ['chars', 'id', 'name'], 'the model sees titles, never article bodies');
+    assert.deepEqual(groundings, [['source-1', 'source-4'], ['source-1', 'source-2']], 'grounding runs per dialogue on the prompt plus the chosen article');
+    assert.deepEqual(proposalSources, groundings, 'proposals see exactly what grounding saw');
+    assert.deepEqual(proposalRequirements, [['terminal_rule', 'rule_source-4'], ['terminal_rule', 'rule_source-2']]);
+    assert.deepEqual(draft.requirements.map(r => r.id), ['terminal_rule', 'rule_source-4', 'rule_source-2'], 'the record keeps the union, each rule once');
+    assert.deepEqual(draft.preparationProgress!.sourceSelection, [{ dialogueId: 'terminal', sourceIds: ['source-4'] }, { dialogueId: 'repeated', sourceIds: ['source-2'] }]);
+    assert.equal(draft.sources.length, 31, 'the record keeps every article');
+    assert.equal(draft.librarySnapshot!.variants.length, 2);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('when the model finds no article for a dialogue in a large knowledge base, the dialogue is set aside with that reason instead of being graded against nothing', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scenario-preparation-'));
+  const runtime: Runtime = { ...runtimeFixture([]), async selectSources() { return { sourceIds: [] }; } } as Runtime;
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init();
+    const seed = await lab.create({ ...input(), materials: bigKnowledgeBase() }); await lab.waitForIdle();
+    const draft = await lab.get(seed.id);
+    assert.equal(draft.phase, 'review', draft.error ?? '');
+    assert.deepEqual(draft.preparationProgress!.excluded.map(e => e.dialogueId), ['terminal', 'repeated']);
+    assert.match(draft.preparationProgress!.excluded[0]!.reason, /статьи/);
+    assert.equal(draft.librarySnapshot!.variants.length, 0);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});

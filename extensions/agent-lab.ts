@@ -27,6 +27,8 @@ import { scoreSettings } from '../dist/normalize.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit.js';
 import { readData, selectValidationDialogues, readDialogueImport, importDialogues } from '../dist/imports.js';
+import { expandMaterials } from '../dist/materials.js';
+import { MATERIAL_CHARS, MATERIAL_LIMIT } from '../dist/limits.js';
 import { ExperimentStore } from '../dist/store.js';
 import { libraryHash } from '../dist/scenario-library.js';
 import { semanticWorkStatus } from '../dist/scenario-work.js';
@@ -596,7 +598,9 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     description: 'Prepare agent checks. mode=validate selects up to 15 measurable prompt/RAG cases from up to 300 de-identified dialogues, grounds expectations in owner requirements and gives user facts to a reactive simulator; unavailable customer data and masked-only utterances are excluded. It does not run the agent. mode=discover mines one regression hypothesis. mode=score evaluates recorded replies without running the agent. mode=demo is the built-in example.',
     parameters: Type.Object({
       task: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
-      materials: Type.Optional(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 180 }), content: Type.String({ minLength: 1, maxLength: 120000 }), kind: Type.Optional(Type.Union([Type.Literal('knowledge'), Type.Literal('prompt')], { description: "'prompt' marks the agent's own system prompt: observable rules are extracted from it and every generated card gets the prompt_compliance rubric" })) }, { additionalProperties: false }), { minItems: 1, maxItems: 12 })),
+      materials: Type.Optional(Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 180 }), content: Type.String({ minLength: 1, maxLength: MATERIAL_CHARS }), kind: Type.Optional(Type.Union([Type.Literal('knowledge'), Type.Literal('prompt')], { description: "'prompt' marks the agent's own system prompt: observable rules are extracted from it and every generated card gets the prompt_compliance rubric" })) }, { additionalProperties: false }), { minItems: 1, maxItems: MATERIAL_LIMIT, description: 'Short materials written inline. For files and folders use materialFiles/promptFiles instead of pasting their text: Lab reads them whole.' })),
+      materialFiles: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), { maxItems: 50, description: 'Knowledge articles: paths of files (.docx, .md, .txt, .html) or folders, absolute or relative to the project. Lab reads every file itself, verbatim; pass the path the owner named, never a retyped excerpt. Hundreds of articles are fine: for each dialogue the model picks the relevant ones from the table of contents.' })),
+      promptFiles: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), { maxItems: 20, description: "Files holding the agent's own system prompt(s) (kind 'prompt'), read whole by Lab." })),
       generatorConfig:Type.Optional(Type.Unsafe(z.toJSONSchema(generatorConfigSchema,{io:'input'}))),
       existingAgent: Type.Optional(Type.Unsafe(z.toJSONSchema(agentSchema))),
       settings: Type.Optional(Type.Unsafe(z.toJSONSchema(settingsSchema, { io: 'input' }))),
@@ -618,10 +622,19 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(callId, params, toolSignal, onUpdate, ctx) {
-      const { goldenFile, dialoguesFile, connectionFile, withoutDialogues, codeOnly, fromRunId, resumeRunId, hypothesis, ...rest } = params;
+      const { goldenFile, dialoguesFile, connectionFile, withoutDialogues, codeOnly, fromRunId, resumeRunId, hypothesis, materialFiles, promptFiles, ...rest } = params;
       const operation = rest.mode ?? 'live';
       const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
       signal.throwIfAborted();
+      const materialNotes: string[] = [];
+      if (materialFiles?.length || promptFiles?.length) {
+        // Lab reads the owner's files itself: whole articles, no retyping by the model, no per-call item limit.
+        const expanded = await expandMaterials({ materials: rest.materials, materialFiles, promptFiles }, ctx.cwd);
+        rest.materials = expanded.materials;
+        materialNotes.push(`Прочитано из файлов: ${expanded.read}.`);
+        for (const item of expanded.skipped.slice(0, 20)) materialNotes.push(`Пропущен ${item.file}: ${item.reason}.`);
+        if (expanded.skipped.length > 20) materialNotes.push(`…и ещё ${expanded.skipped.length - 20} пропущенных файлов.`);
+      }
       if (operation !== 'discover' && (fromRunId || resumeRunId || hypothesis)) throw new Error('fromRunId, resumeRunId и hypothesis используются только с mode=discover.');
       if (resumeRunId && (fromRunId || hypothesis)) throw new Error('resumeRunId нельзя совмещать с fromRunId или hypothesis.');
       if (operation === 'discover' && fromRunId) {
@@ -864,6 +877,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const bundle = await evidenceBundle(record, lab.store);
           const output = { ...summary(record, lab.store.directory, bundle.view),
             ...(operation === 'validate' ? { validation: { sourceDialogues: sourceDialogueCount, candidateDialogues: parsedDialogues.length, sampledDialogues: record.scenarios.length, estimatedAccuracyAfterRun: true } } : {}),
+            ...(materialNotes.length ? { materialsFromFiles: materialNotes } : {}),
             artifacts: await exportArtifacts(bundle, lab.store.directory), ...(interrupted ? { cancelled: true } : {}) };
           returnToBoard(ctx, record.id);
           focus.set(lab.store.directory, record.id);

@@ -7,7 +7,7 @@ import { userDecisionSchema } from './user-controller.js';
 import { USER_CONTROLLER_ROLE } from './prompts.js';
 import { SCENARIO_OUTPUT_BYTES, SEMANTIC_BATCH_FIELDS, SEMANTIC_REASON_CHARS, serializedBytes, workInputIssue } from './scenario-work.js';
 import { scenarioProposalSchema, semanticFindingSchema } from './scenario-contracts.js';
-import { SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE } from './prompts.js';
+import { SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE, SOURCE_SELECTION_ROLE } from './prompts.js';
 import {
   createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager,
   type ResourceLoader, type ToolDefinition,
@@ -19,7 +19,7 @@ import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.j
 import { z } from 'zod';
 import {
   agentSchema, checkSchema, discoveryGroupSchema, discoveryObservationSchema, failureModeSchema, observedGoalSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema, worldSchema,
-  MACHINE_FORMAT, REQUIREMENT_LIMIT, SCENARIO_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, userTurnSchema, validateObservedGoals, valueTokens, verbatimSpan,
+  MACHINE_FORMAT, REQUIREMENT_LIMIT, SCENARIO_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, sourceSelectionSchema, userTurnSchema, validateObservedGoals, valueTokens, verbatimSpan,
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
 import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, DISCOVERY_COARSE_ROLE, DISCOVERY_GROUP_ROLE, DISCOVERY_HYPOTHESIS_ROLE, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
@@ -443,6 +443,15 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
     },
     async proposeGeneratorConfig(input,ctx) {
       return ask('Настройка генератора',GENERATOR_PROPOSER_ROLE,input,generatorConfigSchema,ctx);
+    },
+    async selectSources(input, ctx) {
+      const known = new Set(input.catalog.map(item => item.id));
+      return ask('Выбор статей под диалог', SOURCE_SELECTION_ROLE, input, sourceSelectionSchema, ctx, value => {
+        const unknown = value.sourceIds.filter(id => !known.has(id));
+        if (unknown.length) return `Unknown source ids: ${unknown.join(', ')}. Return only ids from the catalog.`;
+        if (value.sourceIds.length > input.limit) return `Return at most ${input.limit} ids, the most important first.`;
+        return undefined;
+      });
     },
     async scenarioProposals(input, ctx) {
       if (input.preparationMode === 'owner_requirements') {

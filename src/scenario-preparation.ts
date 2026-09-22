@@ -2,7 +2,8 @@ import { assessScenarioLibrary, workInputIssue, serializedBytes, SCENARIO_OUTPUT
 export { assessScenarioLibrary } from './scenario-work.js';
 import { createLibrary, compileLibrary, libraryHash, libraryQuality, librarySnapshot, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
 import { importBatchSchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal } from './scenario-contracts.js';
-import { fingerprint, validatePreparation, type CallContext, type CreateInput, type Experiment, type Runtime, type ScenarioProposalsInput } from './contracts.js';
+import { fingerprint, validatePreparation, type CallContext, type CreateInput, type Experiment, type Requirement, type Runtime, type ScenarioProposalsInput, type Source } from './contracts.js';
+import { SOURCES_PER_DIALOGUE } from './limits.js';
 import type { ExperimentStore } from './store.js';
 
 export const SCENARIO_EXTRACTION_PROTOCOL = 'chronological-scenarios-v1' as const;
@@ -31,21 +32,53 @@ export async function prepareScenarioLibrary(record: Experiment, input: CreateIn
     const groundingRequest = { task: record.task, sources: record.sources, existingAgent: input.existingAgent, workflow: record.workflow,
       scenarioCount: 0, targetKind: record.target.kind, notes: record.notes, dialogues: [], userModes: record.settings.userModes };
     const groundingIssue = workInputIssue(groundingRequest);
-    if (groundingIssue) {
+    // A knowledge base too large for one call is read per dialogue: the model picks articles from the table of contents.
+    const perDialogue = !!groundingIssue && !!original && !!runtime.selectSources;
+    if (groundingIssue && !perDialogue) {
       record.preparationProgress.excluded.push(...workIds.map(id => ({ dialogueId: id, reason: groundingIssue })));
       record.preparationProgress.status = 'partial'; await publish(); return;
     }
-    const grounded = await runtime.prepare(groundingRequest, ctx);
-    record.requirements = grounded.requirements; record.questions = grounded.questions;
-    const agent = input.existingAgent ?? grounded.agent;
-    const baseline = { id: fingerprint(agent), parentId: null, spec: agent, hypothesis: 'Конфигурация агента для библиотеки сценариев.', createdAt: new Date().toISOString() };
-    record.revisions = [baseline]; record.selectedRevisionId = baseline.id;
+    const setBaseline = (agent: Experiment['revisions'][number]['spec']) => {
+      const baseline = { id: fingerprint(agent), parentId: null, spec: agent, hypothesis: 'Конфигурация агента для библиотеки сценариев.', createdAt: new Date().toISOString() };
+      record.revisions = [baseline]; record.selectedRevisionId = baseline.id;
+    };
+    if (!perDialogue) {
+      const grounded = await runtime.prepare(groundingRequest, ctx);
+      record.requirements = grounded.requirements; record.questions = grounded.questions;
+      setBaseline(input.existingAgent ?? grounded.agent);
+    } else record.preparationProgress.sourceSelection = [];
+    const knowledge = record.sources.filter(source => source.kind !== 'prompt');
+    const groundings = new Map<string, Awaited<ReturnType<Runtime['prepare']>>>();
     const proposals: ScenarioProposal[] = [];
     for (const workId of workIds) {
       ctx.signal.throwIfAborted();
       if (proposals.length >= 200) break;
-      const request = { ...(record.generatorConfig?{generatorConfig:structuredClone(record.generatorConfig)}:{}), businessCatalog: library.businessScenarios.map(({ key, title, goal, conditions, requirementIds }) => ({ key, title, goal, conditions, requirementIds })), protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, sources: structuredClone(record.sources),
-        requirements: structuredClone(record.requirements), ...(original ? { batchId: original.id } : { preparationMode: 'owner_requirements', scenarioCount: input.scenarioCount || 1 }), dialogues: original ? chronologicalInput(original, [workId]) : [] } as ScenarioProposalsInput;
+      let sources = record.sources, requirements = record.requirements;
+      if (perDialogue) {
+        const dialogue = chronologicalInput(original!, [workId])[0]!;
+        const selection = await runtime.selectSources!({ task: record.task, catalog: knowledge.map(({ id, name, content }) => ({ id, name, chars: content.length })),
+          dialogue: { id: workId, messages: dialogue.messages.flatMap(({ role, content }) => role === 'user' || role === 'assistant' ? [{ role, content }] : []) }, limit: SOURCES_PER_DIALOGUE }, ctx);
+        const chosen = [...new Set(selection.sourceIds)].filter(id => knowledge.some(source => source.id === id)).slice(0, SOURCES_PER_DIALOGUE);
+        record.preparationProgress.sourceSelection!.push({ dialogueId: workId, sourceIds: chosen });
+        const settle = (reason: string) => {
+          record.preparationProgress!.excluded.push({ dialogueId: workId, reason });
+          record.preparationProgress!.processed.push(workId);
+          record.preparationProgress!.pending = record.preparationProgress!.pending.filter(id => id !== workId);
+        };
+        if (!chosen.length) { settle('В материалах владельца нет статьи под этот вопрос: модель не выбрала ни одной из оглавления.'); await publish(); continue; }
+        // The model lists articles by importance; the least important go first when the call would not fit.
+        while (chosen.length && workInputIssue({ ...groundingRequest, sources: record.sources.filter(source => source.kind === 'prompt' || chosen.includes(source.id)) })) chosen.pop();
+        if (!chosen.length) { settle('Выбранные статьи не помещаются в один запрос модели даже по одной.'); await publish(); continue; }
+        sources = record.sources.filter(source => source.kind === 'prompt' || chosen.includes(source.id));
+        const key = fingerprint(sources.map(source => source.id));
+        let grounded = groundings.get(key);
+        if (!grounded) { grounded = await runtime.prepare({ ...groundingRequest, sources }, ctx); groundings.set(key, grounded); }
+        if (!record.revisions.length) setBaseline(input.existingAgent ?? grounded.agent);
+        record.questions = [...new Set([...record.questions, ...grounded.questions])].slice(0, 12);
+        requirements = mergeRequirements(record, grounded.requirements, sources);
+      }
+      const request = { ...(record.generatorConfig?{generatorConfig:structuredClone(record.generatorConfig)}:{}), businessCatalog: library.businessScenarios.map(({ key, title, goal, conditions, requirementIds }) => ({ key, title, goal, conditions, requirementIds })), protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, sources: structuredClone(sources),
+        requirements: structuredClone(requirements), ...(original ? { batchId: original.id } : { preparationMode: 'owner_requirements', scenarioCount: input.scenarioCount || 1 }), dialogues: original ? chronologicalInput(original, [workId]) : [] } as ScenarioProposalsInput;
       const oversize = workInputIssue(request);
       if (oversize) { record.preparationProgress.excluded.push({ dialogueId: workId, reason: oversize }); continue; }
       let extracted: ScenarioProposal[] = [], next: ScenarioLibrary | undefined;
@@ -73,6 +106,11 @@ export async function prepareScenarioLibrary(record: Experiment, input: CreateIn
       if (!extracted.length) record.preparationProgress.excluded.push({ dialogueId: workId, reason: 'Нет применимого предложения из требований владельца.' });
       await publish();
     }
+    if (fingerprint(library.requirements) !== fingerprint(record.requirements)) {
+      // Requirements merged after the last accepted proposal still belong to the library the run will be checked against.
+      library = createLibrary({ id: library.id, batch: original, sources: record.sources, requirements: record.requirements, proposals, createdAt: library.createdAt, semanticRequired: true });
+      library.revision++;
+    }
     if (library.variants.length && runtime.assessScenarioProposals) {
       library = await assessScenarioLibrary(library, runtime, ctx, async partial => { library = partial; await publish(); });
       library.revision++;
@@ -84,6 +122,20 @@ export async function prepareScenarioLibrary(record: Experiment, input: CreateIn
     await publish();
     throw error;
   }
+}
+
+/**
+ * Adds one dialogue's requirements to the record: a rule already known by its source and exact quote keeps its id,
+ * a new rule whose id is taken gets a numbered one. Returns the record's requirements for the given sources, with the ids the proposals must cite.
+ */
+function mergeRequirements(record: Experiment, extracted: Requirement[], sources: Source[]): Requirement[] {
+  for (const requirement of extracted) {
+    if (record.requirements.some(known => known.sourceId === requirement.sourceId && known.quote === requirement.quote)) continue;
+    let id = requirement.id;
+    for (let n = 2; record.requirements.some(known => known.id === id); n++) id = `${requirement.id}_${n}`;
+    record.requirements.push({ ...requirement, id });
+  }
+  return record.requirements.filter(requirement => sources.some(source => source.id === requirement.sourceId));
 }
 
 /** No run or legacy editor can launder a draft or change a compiled card after library acceptance. */

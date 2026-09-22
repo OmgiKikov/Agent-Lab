@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MATERIAL_CHARS, MATERIAL_LIMIT, RECORD_REQUIREMENT_LIMIT } from './limits.js';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,80}$/).refine(v => !['__proto__', 'prototype', 'constructor'].includes(v), 'Reserved identifier');
 const text = (max: number) => z.string().trim().min(1).max(max);
@@ -102,14 +103,16 @@ export const preparationProgressSchema = z.strictObject({
   processed: ids(300), pending: ids(300),
   excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000) })).max(300),
   status: z.enum(['preparing', 'complete', 'partial', 'cancelled']),
+  /** Large knowledge base: which articles the model chose for each dialogue from the table of contents. */
+  sourceSelection: z.array(z.strictObject({ dialogueId: text(200), sourceIds: ids(40) })).max(300).optional(),
 });
 export type PreparationProgress = z.infer<typeof preparationProgressSchema>;
 export const scenarioLibrarySchema = z.strictObject({
   checkpointContext:z.literal('observed-tools-v1').optional(),
   formatVersion: z.literal(1), id, revision: z.number().int().positive(), createdAt: timestamp,
   imports: z.array(importBatchSchema).max(30),
-  sources: z.array(z.strictObject({ id, name: text(180), content: text(120000), hash: text(200), kind: z.enum(['knowledge', 'prompt']).optional() })).max(12),
-  requirements: z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean() })).max(80),
+  sources: z.array(z.strictObject({ id, name: text(180), content: text(MATERIAL_CHARS), hash: text(200), kind: z.enum(['knowledge', 'prompt']).optional() })).max(MATERIAL_LIMIT),
+  requirements: z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean() })).max(RECORD_REQUIREMENT_LIMIT),
   businessScenarios: z.array(businessScenarioSchema).max(200), variants: z.array(scenarioVariantSchema).max(200),
   semanticRequired: z.literal(true).optional(),
   semanticAssessment: z.strictObject({ contextVersion: z.number().int().positive().optional(), contentHash: hash, findings: z.array(semanticFindingSchema).max(10000),

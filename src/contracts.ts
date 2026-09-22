@@ -8,6 +8,7 @@ import { userViewSchema, type UserDecision, type UserView, type AllowedUserActio
 import { checkpointSchema } from './scenario-contracts.js';
 import { importBatchSchema, preparationProgressSchema, scenarioLibrarySchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal, type SemanticFinding, type PreparationProgress } from './scenario-contracts.js';
 import { createHash } from 'node:crypto';
+import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS, RECORD_REQUIREMENT_LIMIT } from './limits.js';
 import { z } from 'zod';
 
 export const checkpointDecisionSchema = z.strictObject({
@@ -54,7 +55,7 @@ export type AgentSpec = z.infer<typeof agentSchema>;
 /** `kind: 'prompt'` marks the agent's own instructions: rules the user can observe are extracted from it, and the harness grades compliance with them. */
 export const sourceKindSchema = z.enum(['knowledge', 'prompt']);
 export type SourceKind = z.infer<typeof sourceKindSchema>;
-export const materialSchema = z.strictObject({ name: text.max(180), content: text.max(120000), kind: sourceKindSchema.optional() });
+export const materialSchema = z.strictObject({ name: text.max(180), content: text.max(MATERIAL_CHARS), kind: sourceKindSchema.optional() });
 
 /*
  * How the simulated user's side of a dialogue is produced:
@@ -513,7 +514,7 @@ export const createInputSchema = z.strictObject({
   /** Owner-confirmed hypothesis that requests the strict one-test preparation path. */
   confirmedHypothesis: text.max(3000).optional(),
   goalObservation: goalObservationSchema.optional(),
-  materials: z.array(materialSchema).min(1).max(12),
+  materials: z.array(materialSchema).min(1).max(MATERIAL_LIMIT),
   mode: z.enum(['demo', 'live']),
   settings: settingsSchema.default(() => settingsSchema.parse({})),
   existingAgent: agentSchema.optional(),
@@ -531,7 +532,7 @@ export const createInputSchema = z.strictObject({
   profiles: z.array(ownerProfileSchema).max(6).default([]),
 }).superRefine((v, ctx) => {
   if(v.generatorConfig && v.confirmedHypothesis)ctx.addIssue({code:'custom',message:'Настройка генератора применяется только при подготовке новой библиотеки.',path:['generatorConfig']});
-  if (v.materials.reduce((n, m) => n + m.content.length, 0) > 300000) ctx.addIssue({ code: 'custom', message: 'Materials exceed 300,000 characters', path: ['materials'] });
+  if (v.materials.reduce((n, m) => n + m.content.length, 0) > MATERIALS_TOTAL_CHARS) ctx.addIssue({ code: 'custom', message: `Materials exceed ${MATERIALS_TOTAL_CHARS.toLocaleString('en-US')} characters`, path: ['materials'] });
   if (v.dialogues.reduce((n, d) => n + d.messages.reduce((m, x) => m + x.content.length, 0), 0) > 2000000) ctx.addIssue({ code: 'custom', message: 'Dialogues exceed 2,000,000 characters', path: ['dialogues'] });
   if (!unique(v.dialogues.map(d => d.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate dialogue IDs', path: ['dialogues'] });
   if (!unique(v.goldenCases.map(g => g.id))) ctx.addIssue({ code: 'custom', message: 'Duplicate golden case IDs', path: ['goldenCases'] });
@@ -552,13 +553,13 @@ export const createInputSchema = z.strictObject({
 export type CreateInput = z.infer<typeof createInputSchema>;
 
 export const discoverInputSchema = z.strictObject({
-  task: text.max(8000), materials: z.array(materialSchema).min(1).max(12), mode: z.enum(['demo', 'live']),
+  task: text.max(8000), materials: z.array(materialSchema).min(1).max(MATERIAL_LIMIT), mode: z.enum(['demo', 'live']),
   settings: settingsSchema.default(() => settingsSchema.parse({})), existingAgent: agentSchema.optional(),
   target: targetSchema.default({ kind: 'sandbox' }), targetVersion: text.max(200).optional(),
   dialogues: z.array(dialogueSchema).min(1).max(300), notes: z.string().trim().max(8000).default(''),
 }).superRefine((value, ctx) => {
-  if (value.materials.reduce((sum, item) => sum + item.content.length, 0) > 300000) {
-    ctx.addIssue({ code: 'custom', message: 'Materials exceed 300,000 characters', path: ['materials'] });
+  if (value.materials.reduce((sum, item) => sum + item.content.length, 0) > MATERIALS_TOTAL_CHARS) {
+    ctx.addIssue({ code: 'custom', message: `Materials exceed ${MATERIALS_TOTAL_CHARS.toLocaleString('en-US')} characters`, path: ['materials'] });
   }
   if (value.dialogues.reduce((sum, dialogue) => sum + dialogue.messages.reduce((n, message) => n + message.content.length, 0), 0) > 2000000) {
     ctx.addIssue({ code: 'custom', message: 'Dialogues exceed 2,000,000 characters', path: ['dialogues'] });
@@ -750,7 +751,7 @@ export type DiscoveryHypothesis = z.infer<typeof discoveryHypothesisSchema>;
 export const discoveryRecordSchema = z.strictObject({
   protocol: z.literal(DISCOVERY_PROTOCOL),
   phase: z.enum(['running', 'ready', 'insufficient', 'partial', 'budget_exhausted', 'error']),
-  error: z.string().max(4000).nullable(), requirements: z.array(requirementSchema).max(REQUIREMENT_LIMIT),
+  error: z.string().max(4000).nullable(), requirements: z.array(requirementSchema).max(RECORD_REQUIREMENT_LIMIT),
   observations: z.array(discoveryObservationSchema).max(300), seed: text,
   focusRequirementId: identifier.optional(), representativeIds: z.array(identifier).max(3), controlIds: z.array(identifier).max(2), selectedIds: z.array(identifier).max(5),
   completedBatchCount: z.number().int().nonnegative(), groupingComplete: z.boolean(), completedDeepIds: z.array(identifier).max(5),
@@ -919,7 +920,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
   phase: z.enum(['preparing', 'review', 'evaluating', 'results_review', 'baseline', 'improving', 'control', 'complete', 'cancelled', 'error', 'interrupted']), message: z.string(),
-  sources: z.array(z.strictObject({ id: identifier, name: text, content: text, hash: text, kind: sourceKindSchema.optional() })).max(12), settings: settingsSchema,
+  sources: z.array(z.strictObject({ id: identifier, name: text, content: text, hash: text, kind: sourceKindSchema.optional() })).max(MATERIAL_LIMIT), settings: settingsSchema,
   target: targetSchema.default({ kind: 'sandbox' }),
   requirements: z.array(requirementSchema), questions: z.array(z.string()), scenarios: z.array(scenarioSchema.extend({ split: z.enum(['dev', 'control']) })),
   goldenCases: z.array(goldenCaseSchema).max(40).default([]), dialogues: z.array(dialogueSchema).max(300).default([]), profiles: z.array(profileSchema).max(12).default([]),
@@ -990,6 +991,15 @@ export interface PrepareInput {
   /** The sandbox agent is only built when the sandbox answers; an external target has its own. */
   targetKind?: Target['kind'];
 }
+export interface SourceSelectionInput {
+  task: string;
+  /** Knowledge articles only, titles and sizes; prompt sources are always included and are not offered. */
+  catalog: Array<{ id: string; name: string; chars: number }>;
+  dialogue: { id: string; messages: DialogueMessage[] };
+  limit: number;
+}
+export const sourceSelectionSchema = z.strictObject({ sourceIds: z.array(identifier).max(40) });
+export type SourceSelection = z.infer<typeof sourceSelectionSchema>;
 export interface ImproveInput {
   task: string; sources: Source[]; requirements: Requirement[]; agent: AgentSpec;
   feedback: { scenario: Scenario; trials: Trial[] }[];
@@ -1031,6 +1041,8 @@ export interface Runtime {
   userTurn(input: { user: Scenario['user']; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserTurn>;
   assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial }, ctx: CallContext): Promise<MetricAssessment[]>;
   goals?(input: { task: string; sources: Source[]; dialogues: Dialogue[]; profiles: Profile[]; requirements?: Requirement[]; requireApplicable?: boolean }, ctx: CallContext): Promise<ObservedGoal[]>;
+  /** Which articles of a large knowledge base one dialogue needs: the model reads the table of contents, never the bodies. */
+  selectSources?(input: SourceSelectionInput, ctx: CallContext): Promise<SourceSelection>;
   failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
   discover?(input: DiscoveryRuntimeInput, ctx: CallContext): Promise<DiscoveryRuntimeOutput>;
 }

@@ -13,6 +13,7 @@ import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.j
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from './prompt-edit.js';
 import { readData, readDialogueImport, importDialogues } from './imports.js';
+import { expandMaterials } from './materials.js';
 import { getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { discoveryBrief, expectationSheet, qualityLines, qualitySummary, scoreBrief, testPlanLines, trialProofLines, type ScoreBrief } from './quality.js';
@@ -499,7 +500,15 @@ async function main() {
     }
     if (command === 'demo' || command === 'prepare' || command === 'build') {
       if (command !== 'demo' && !values.input) throw new Error('Provide --input task.json');
-      const raw = command === 'demo' ? demoInput() : JSON.parse(await readFile(values.input!, 'utf8'));
+      let raw = command === 'demo' ? demoInput() : JSON.parse(await readFile(values.input!, 'utf8'));
+      if (command !== 'demo' && (raw.materialFiles || raw.promptFiles)) {
+        // Articles and prompts named by path are read by Lab itself: whole files, no model in between, no item limit of a tool call.
+        const { materialFiles, promptFiles, ...task } = raw;
+        const expanded = await expandMaterials({ materials: task.materials, materialFiles, promptFiles }, dirname(resolve(values.input!)));
+        for (const item of expanded.skipped) process.stderr.write(`Пропущен ${item.file}: ${item.reason}\n`);
+        process.stderr.write(`Прочитано материалов из файлов: ${expanded.read}.\n`);
+        raw = { ...task, materials: expanded.materials };
+      }
       const connection = command === 'demo' ? undefined : values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
       const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file']) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
       const input = createInputSchema.parse({ ...raw, ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
