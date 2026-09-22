@@ -7,7 +7,7 @@ import agentLab from '../../extensions/agent-lab.ts';
 import { scenarioToolSurfaces } from '../../extensions/scenario-parameters.ts';
 import { ExperimentLab } from '../../src/experiment.js';
 import { createInputSchema, type Runtime } from '../../src/contracts.js';
-import { createDemoRuntime } from '../../src/demo.js';
+import { createDemoRuntime, demoTarget } from '../../src/demo.js';
 import { coverageProposals, rawDialogues, requirements, sources } from '../helpers/scenario-library.js';
 
 if (!process.argv.includes('--run')) throw new Error('This uses provider credits. Run deliberately with --run.');
@@ -23,7 +23,7 @@ let calls = 0, knownCostUsd = 0, unknownCostCalls = 0, replies = 0, pendingUsage
 const results: unknown[] = [];
 const runtime: Runtime = {
   ...createDemoRuntime(),
-  async prepare() { return { requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [], agent: { name: 'Учебный агент', instructions: 'Уточните номер терминала', tools: [] }, scenarios: [] }; },
+  async groundRequirements() { return { requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [] }; },
   async scenarioProposals(request, ctx) { ctx.beforeCall(); return coverageProposals(request.batchId).map((p, index) => index ? { ...p, business: { ...p.business, key: 'refund_term', title: 'Срок возврата', goal: 'Узнать срок возврата' } } : p)
     .filter(p => request.dialogues.some(d => d.id === p.variant.sourceDialogues[0]!.dialogueId)) as never; },
   async assessScenarioProposals(request, ctx) { ctx.beforeCall(); return request.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready' as const, reason: 'Deterministic routing fixture, not a semantic quality result' }))); },
@@ -33,7 +33,7 @@ for (const item of cases.filter(item => !selected || selected.includes(item.id))
   if (calls >= limit) break;
   const cwd = join(directory, item.id), lab = new ExperimentLab(join(cwd, '.agent-lab'), runtime);
   await lab.init();
-  const seed = await lab.create(createInputSchema.parse({ task: 'Проверить возвраты', mode: 'demo', materials: sources.map(({ name, content }) => ({ name, content })),
+  const seed = await lab.create(createInputSchema.parse({ task: 'Проверить возвраты', mode: 'demo', target: demoTarget(), materials: sources.map(({ name, content }) => ({ name, content })),
     dialogues: rawDialogues, scenarioCount: 2, settings: { maxCalls: 100, repeats: 1, userModes: ['reactive'] } }));
   await lab.waitForIdle(); const before = await lab.get(seed.id); await lab.close();
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false, provider: { maxRetries: 0 } }, enableAnalytics: false, enableInstallTelemetry: false, transport: 'sse' });

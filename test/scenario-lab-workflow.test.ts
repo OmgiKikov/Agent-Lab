@@ -5,18 +5,17 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { ExperimentLab, draftHash } from '../src/experiment.js';
 import { createInputSchema, type Runtime } from '../src/contracts.js';
-import { createDemoRuntime } from '../src/demo.js';
+import { createDemoRuntime, demoTarget } from '../src/demo.js';
 import { scenarioLibrarySchema } from '../src/scenario-contracts.js';
 import { acceptLibrary, libraryHash, libraryQuality } from '../src/scenario-library.js';
 import { libraryFixture, coverageProposals as proposals, rawDialogues, sources, requirements } from './helpers/scenario-library.js';
 
-const input = (logs = true) => createInputSchema.parse({ task: 'Проверить возвраты', mode: 'demo', materials: sources.map(({ name, content }) => ({ name, content })), dialogues: logs ? rawDialogues : [], scenarioCount: 2, settings: { maxCalls: 100, repeats: 1, userModes: ['reactive'] } });
+const input = (logs = true) => createInputSchema.parse({ task: 'Проверить возвраты', mode: 'demo', materials: sources.map(({ name, content }) => ({ name, content })), dialogues: logs ? rawDialogues : [], scenarioCount: 2, target: demoTarget(), settings: { maxCalls: 100, repeats: 1, userModes: ['reactive'] } });
 function runtimeFixture(): Runtime {
   return { ...createDemoRuntime(),
-    async prepare() { return { requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [], agent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] }, scenarios: [] }; },
+    async groundRequirements() { return { requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [] }; },
     async scenarioProposals(request, ctx) { ctx.beforeCall(); return proposals(request.batchId).filter(p => request.dialogues.some(d => d.id === p.variant.sourceDialogues[0]!.dialogueId)) as any; },
     async assessScenarioProposals(request, ctx) { ctx.beforeCall(); return request.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready' as const, reason: 'Детерминированная проверка синтетического примера' }))); },
-    async openTarget() { return { async respond() { return 'Уточните номер терминала'; }, async close() {} }; },
     async selectUserAction() { return { actionId: 'finish', factIds: [] }; },
     async assessCheckpoints({ checkpoints, events }) { return checkpoints.map(cp => ({ checkpointId: cp.id, result: 'pass' as const, rationale: 'Номер запрошен', evidence: [events.find(e => e.type === 'assistant')!.index] })); },
   } as Runtime;

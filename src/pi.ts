@@ -9,19 +9,18 @@ import { SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE, SOURCE_SELECTION_ROLE 
 import { FOCUSED_REQUIREMENT_LIMIT } from './limits.js';
 import {
   createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager,
-  type ResourceLoader, type ToolDefinition,
+  type ResourceLoader,
 } from '@earendil-works/pi-coding-agent';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Type } from 'typebox';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.js';
 import { z } from 'zod';
 import {
-  agentSchema, checkSchema, failureModeSchema, observedGoalSchema, preparationSchema, proposalSchema, requirementSchema, scenarioSchema, worldSchema,
-  MACHINE_FORMAT, REQUIREMENT_LIMIT, SCENARIO_LIMIT, TOOL_NAMES, VERSION, SIMULATOR_PROTOCOL, fingerprint, promptCompliance, simulatorFidelity, sourceSelectionSchema, userTurnSchema, validateObservedGoals, valueTokens, verbatimSpan,
-  type CallContext, type PrepareInput, type ScenarioProposalsInput, type Runtime, type Settings, type TargetSession, type Tool,
+  checkSchema, failureModeSchema, requirementSchema, worldSchema,
+  MACHINE_FORMAT, REQUIREMENT_LIMIT, VERSION, SIMULATOR_PROTOCOL, fingerprint, sourceSelectionSchema, userTurnSchema, verbatimSpan,
+  type CallContext, type GroundingInput, type ScenarioProposalsInput, type Runtime, type Settings, type TargetSession,
 } from './contracts.js';
-import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
+import { ASSESS_ROLE, DATA_BOUNDARY, FAILURE_MODES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE } from './prompts.js';
 
 type Model = NonNullable<ReturnType<ModelRuntime['getModel']>>;
 const groundingSchemaFor = (limit: number) => z.strictObject({
@@ -32,7 +31,7 @@ const groundingSchema = groundingSchemaFor(REQUIREMENT_LIMIT);
 const FOCUS_CLAUSE = `customerMessages holds what one real customer wrote in a dialogue these requirements must decide (the old agent's replies are withheld: they are not rules). Extract only the rules that determine the correct agent behaviour for that customer (the answer, the mandatory steps, what must not be said); skip rules the dialogue never touches. Start with the original request; later reactions to an instruction do not prove the service already exists. Preserve unknown product/channel/prerequisites as conditions and allow appropriate clarification or qualified alternatives. Do not require every channel or an unrequested follow-on operation. Return at most ${FOCUSED_REQUIREMENT_LIMIT} requirements.`;
 
 /** One grounding call: the whole policy of the supplied sources, or, with a focus, only the rules that decide one customer's dialogue. */
-export function groundingRequest(input: Pick<PrepareInput, 'task' | 'sources' | 'focus'>) {
+export function groundingRequest(input: GroundingInput) {
   const focused = !!input.focus;
   return {
     limit: focused ? FOCUSED_REQUIREMENT_LIMIT : REQUIREMENT_LIMIT,
@@ -45,11 +44,6 @@ export function groundingRequest(input: Pick<PrepareInput, 'task' | 'sources' | 
     },
   };
 }
-const familyPlanSchema = z.strictObject({ families: z.array(z.strictObject({
-  familyId: scenarioSchema.shape.familyId,
-  mechanism: z.string().trim().min(1).max(300),
-  requirementIds: scenarioSchema.shape.requirementIds,
-})).min(4).max(16) });
 function groundingProblem(value: z.infer<typeof groundingSchema>, sources: { id: string; name: string; content: string; kind?: 'knowledge' | 'prompt' }[]): string | undefined {
   const missing: string[] = [];
   for (const requirement of value.requirements) {
@@ -72,29 +66,6 @@ function groundingProblem(value: z.infer<typeof groundingSchema>, sources: { id:
     ? `These quotes are not verbatim substrings of their sources: ${missing.join('; ')}. Copy the exact characters from the source instead of paraphrasing; a shorter contiguous fragment is safer than a long one. Keep every other requirement as it is.`
     : undefined;
 }
-// New generated cards require an explicit interaction budget; older saved cards keep their original semantics.
-// With owner profiles the model may only choose a profileId; persona text is copied from the profile later.
-const RUBRIC_LIMIT = 8;
-const CONFIRMED_TEST_CLAUSE = `CONFIRMED HYPOTHESIS: return exactly one generated agent rubric with id "goal_attainment" and subject "agent". Its passCriteria must equal successCriteria verbatim. Generate no other rubric: the harness adds prompt_compliance when a prompt source exists and user_fidelity only for a reactive simulator mode. goalObservation is owner-owned metadata: you must not return, infer, or replace it. This overrides the general and external-target rubric instructions above.`;
-// ponytail: conservative serialized-input cap; derive it from model token metadata if legitimate score inputs regularly hit it.
-const GOALS_INPUT_LIMIT = 120_000;
-const scoredGoalSchema = observedGoalSchema.extend({ requirementIds: observedGoalSchema.shape.requirementIds.unwrap().min(1) });
-/** Instructions about the shape of a machine reply: an envelope the user never sees. */
-/** external cards get harness rubrics after generation (fidelity, and prompt compliance when a prompt source exists); the model may use only what is left. */
-const generatedScenarioSchema = (external: boolean, harnessRubrics = 0, confirmed = false) => scenarioSchema.omit({ goalObservation: true }).required({ successCriteria: true, assumptions: true, metrics: true })
-  // Models like to label the whole card with a stage; stages belong to criteria, so the label is accepted here and dropped in the review.
-  .extend({ user: scenarioSchema.shape.user.required({ maxFollowUps: true }), stage: z.string().max(80).optional() })
-  .refine(s => confirmed || (external ? s.checks.length > 0 || s.metrics.some(m => m.subject === 'agent')
-    : s.metrics.some(m => m.subject === 'agent') && s.metrics.some(m => m.subject === 'simulator')),
-    'Provide an agent-goal rubric, or literal answer checks for an external goal; sandbox cards also need simulator fidelity')
-  .refine(s => !external || confirmed || s.checks.every(c => ['answer_equals', 'answer_contains', 'answer_omits'].includes(c.kind))
-    && !Object.keys(s.initialState.records).length && !s.initialState.writableFields.length && !s.initialState.transientFailures,
-    'Without an external state/tool contract use only source-grounded answer checks and an empty initialState; assess semantic answers with agent rubrics')
-  .refine(s => !external || s.metrics.length <= RUBRIC_LIMIT - harnessRubrics && s.metrics.every(m => m.subject === 'agent' && m.id !== simulatorFidelity.id && m.id !== promptCompliance.id),
-    `External generation uses at most ${RUBRIC_LIMIT - harnessRubrics} agent rubrics only; the harness adds user_fidelity for the simulator${harnessRubrics > 1 ? ' and prompt_compliance for the supplied prompt source' : ' and prompt_compliance when a prompt source is supplied'}`)
-  .refine(s => !confirmed || s.metrics.length === 1 && s.metrics[0]?.id === 'goal_attainment' && s.metrics[0].subject === 'agent'
-    && s.metrics[0].passCriteria === s.successCriteria,
-    'A confirmed test must contain exactly one generated agent rubric: goal_attainment, with passCriteria equal to successCriteria verbatim');
 const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, message: userTurnSchema.shape.message.optional() })
   .refine(v => v.done || !!v.message?.trim(), 'A continuing user turn needs a message')
   .describe('To stop immediately, return done:true and omit message. A nonempty message is always delivered to the target. done:true with a nonempty message means deliver this final user message, receive the target response, then end. done:true with an empty message means stop now without another target response.');
@@ -121,29 +92,15 @@ function resources(systemPrompt: string): ResourceLoader {
   };
 }
 
+/** One tool-less Pi session: a structured-output role, the judge or the free user simulator. */
 async function controlledSession(
-  modelRuntime: ModelRuntime, model: Model, systemPrompt: string, tools: Tool[],
+  modelRuntime: ModelRuntime, model: Model, systemPrompt: string,
   ctx: CallContext, maxTokens = 16384, temperature?: number, responseFormat?: Record<string, unknown>, thinkingLevel: 'off' | 'medium' = 'off', maxInputBytes?: number,
 ): Promise<TargetSession> {
   ctx.signal.throwIfAborted();
-  if (new Set(tools.map(t => t.name)).size !== tools.length
-    || tools.some(t => !TOOL_NAMES.includes(t.name))) throw new Error('Unapproved or duplicate target tool');
-  const executedCalls = new Set<string>();
-  const pendingCalls = new Map<string, { tool: string; args: unknown }>();
-  const customTools: ToolDefinition[] = tools.map(tool => ({
-    name: tool.name, label: tool.name, description: tool.description,
-    parameters: Type.Unsafe(tool.parameters), executionMode: 'sequential',
-    async execute(id, args, signal) {
-      ctx.signal.throwIfAborted();
-      signal?.throwIfAborted();
-      executedCalls.add(id);
-      const result = await tool.execute(args);
-      return { content: [{ type: 'text', text: JSON.stringify(result) ?? 'null' }], details: {} };
-    },
-  }));
   const { session } = await createAgentSession({
     modelRuntime, model, thinkingLevel, resourceLoader: resources(systemPrompt),
-    tools: tools.map(t => t.name), noTools: 'builtin', customTools,
+    tools: [], noTools: 'builtin', customTools: [],
     sessionManager: SessionManager.inMemory(),
     settingsManager: SettingsManager.inMemory({
       compaction: { enabled: false }, retry: { enabled: false, provider: { maxRetries: 0 } },
@@ -156,7 +113,7 @@ async function controlledSession(
   let responding = false;
   let pendingUsage = 0;
   const stream = session.agent.streamFunction;
-  // Count every provider request, including continuations after tool calls. SDK/provider retries are disabled.
+  // Count every provider request. SDK/provider retries are disabled.
   session.agent.streamFunction = async (m, context, options) => {
     try {
       activeSignal.throwIfAborted();
@@ -184,19 +141,6 @@ async function controlledSession(
       try { ctx.onTargetEvent?.(value); }
       catch (error) { boundaryError = error; session.agent.abort(); throw error; }
     };
-    if (event.type === 'tool_execution_start') {
-      pendingCalls.set(event.toolCallId, { tool: event.toolName, args: event.args });
-    }
-    if (event.type === 'tool_execution_end') {
-      const call = pendingCalls.get(event.toolCallId);
-      // Trusted tools record their own state snapshots. Record only attempts rejected before execution here.
-      if (call && !executedCalls.has(event.toolCallId)) {
-        emit({ type: 'tool_call', ...call });
-        emit({ type: 'tool_result', tool: call.tool, result: { ok: false, rejected: true, detail: event.result } });
-      }
-      pendingCalls.delete(event.toolCallId);
-      executedCalls.delete(event.toolCallId);
-    }
     if (event.type !== 'message_end' || event.message.role !== 'assistant') return;
     if (event.message.stopReason !== 'stop' || event.message.content.some(c => c.type === 'toolCall')) {
       const text = event.message.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
@@ -306,7 +250,7 @@ async function jsonResponse<S extends z.ZodType>(
   // Only target sessions contribute target trace events; simulator/planner events cannot affect target grades.
   ctx.onGeneratorTransport?.({ role: label, provider: model.provider, model: model.id, api: model.api, effectiveTemperature: 'provider-default' });
   let currentAttempt = 0;
-  const open = () => controlledSession(modelRuntime, model, prompt, [], { ...ctx, onTargetEvent: event => {
+  const open = () => controlledSession(modelRuntime, model, prompt, { ...ctx, onTargetEvent: event => {
     // Retain incomplete structured replies as evidence, without accepting or grading them.
     if (event.type === 'assistant' && event.text) ctx.onGeneratorOutput?.({ role, text: event.text, attempt: currentAttempt, incomplete: true });
   } }, bounded ? SCENARIO_OUTPUT_BYTES : 16384, undefined, model.provider === 'openrouter' ? { type: 'json_object' } : undefined, 'off', bounded ? 96000 : undefined);
@@ -471,212 +415,11 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           return expected.length !== actual.length || expected.some(id => actual.filter(value => value === id).length !== 1) ? 'Return exactly one finding for each requested field, and no other fields.' : undefined;
         })).findings;
     },
-    async prepare(input, ctx) {
+    async groundRequirements(input, ctx) {
       const request = groundingRequest(input);
-      const grounding = input.requirements ? groundingSchema.parse({ requirements: structuredClone(input.requirements), questions: [] })
-        : await ask('Требования', request.role, request.payload, request.schema, ctx, value => groundingProblem(value, input.sources));
-      const suppliedProblem = groundingProblem(grounding, input.sources);
-      if (suppliedProblem) throw new Error(`Требования: ${suppliedProblem}`);
-      const evidence = { task: input.task, requirements: grounding.requirements, questions: grounding.questions };
-      const requirementIds = new Set(grounding.requirements.map(r => r.id));
-      if (requirementIds.size !== grounding.requirements.length) throw new Error('Requirements: duplicate requirement IDs');
-      const compare = input.workflow === 'compare';
-      const confirmed = !!input.confirmedHypothesis;
-      const groundedValues = confirmed ? valueTokens([
-        ...input.sources.map(source => source.content),
-        ...(input.dialogues ?? []).flatMap(dialogue => dialogue.messages.filter(message => message.role === 'user').map(message => message.content)),
-      ].join('\n')) : undefined;
-      const external = !!input.targetKind && input.targetKind !== 'sandbox';
-      const hasPrompt = input.sources.some(s => s.kind === 'prompt');
-      const simulatorCapable = (input.userModes ?? ['reactive']).includes('reactive');
-      const harnessRubrics = confirmed ? Number(hasPrompt) + Number(simulatorCapable)
-        : external ? 1 + Number(hasPrompt) : 0;
-      const plan = compare ? await ask(
-        'План семейств сценариев',
-        FAMILY_PLAN_ROLE,
-        evidence, familyPlanSchema, ctx,
-        value => {
-          if (new Set(value.families.map(f => f.familyId)).size !== value.families.length) return 'Two families share the same familyId; each family must be distinct.';
-          for (const family of value.families) {
-            if (new Set(family.requirementIds).size !== family.requirementIds.length) return `Family "${family.familyId}" lists the same requirement twice.`;
-            const unknown = family.requirementIds.filter(id => !requirementIds.has(id));
-            if (unknown.length) return `Family "${family.familyId}" references requirements that do not exist: ${unknown.join(', ')}.`;
-          }
-          return undefined;
-        },
-      ) : undefined;
-      const scenarios: z.infer<typeof scenarioSchema>[] = [];
-      const scenarioIds = new Set<string>();
-      const total = plan?.families.length ?? input.scenarioCount ?? 5;
-      const batchLimit = compare ? 4 : 3;
-      // Evaluation needs only the requested goals; a separate family plan is reserved for version comparison.
-      for (let offset = 0; offset < total;) {
-        const requestedFamilies = plan?.families.slice(offset, offset + batchLimit);
-        const batchSize = Math.min(batchLimit, total - offset);
-        // A reply may carry more than its batch: without a family plan the surplus fills the suite, with one it is cut to the requested families.
-        const keep = plan ? batchSize : total - offset;
-        const batchLabel = `Карточки, партия ${Math.floor(offset / batchLimit) + 1}${requestedFamilies ? ` (${requestedFamilies.map(f => f.familyId).join(', ')})` : ''}`;
-        const profiles = input.profiles ?? [];
-        const observedGoals = input.observedGoals ?? [];
-        const cards = await ask(
-          batchLabel,
-          cardsRole(compare, profiles.length > 0, observedGoals.length > 0)
-            + (external ? `\n${EXTERNAL_CARDS_CLAUSE}` : '')
-            + (confirmed ? `\n${CONFIRMED_TEST_CLAUSE}` : ''),
-          {
-            ...evidence,
-            ...(confirmed ? {
-              confirmedHypothesis: input.confirmedHypothesis,
-              dialogueEvidence: (input.dialogues ?? []).map(dialogue => ({
-                id: dialogue.id,
-                userMessages: dialogue.messages.filter(message => message.role === 'user').map(message => message.content),
-              })),
-            } : {}),
-            ...(input.notes ? { ownerNotes: input.notes } : {}),
-            ...(profiles.length ? { ownerProfiles: profiles } : {}),
-            ...(observedGoals.length ? { observedGoals: observedGoals.map(g => ({ id: g.id, goal: g.goal, profileId: g.profileId })) } : {}),
-            ...(plan ? { familyPlan: plan.families, requestedFamilies } : {
-              requestedCount: batchSize, plannedTotal: total,
-              earlierGoals: scenarios.map(s => ({ id: s.id, familyId: s.familyId, goal: s.user.goal })),
-            }),
-          },
-          z.strictObject({ scenarios: confirmed
-            ? z.tuple([generatedScenarioSchema(external, harnessRubrics, true)])
-            : z.array(generatedScenarioSchema(external, harnessRubrics)).min(batchSize).max(SCENARIO_LIMIT) }), ctx,
-          // Pure review: attribution problems are a reason for the model to rewrite the
-          // batch, not a reason to lose the whole run. Nothing is recorded until it passes.
-          value => {
-            // Surplus cards are the model overshooting a count, not a defect worth an attempt.
-            if (!confirmed && value.scenarios.length > keep) value.scenarios.splice(keep);
-            const seen = new Set<string>();
-            for (const scenario of value.scenarios) {
-              // A profile invented where none were supplied carries nothing; the card keeps its own persona.
-              if (scenario.profileId !== undefined && !profiles.length) delete scenario.profileId;
-              delete (scenario as { stage?: string }).stage;
-              const family = requestedFamilies?.find(f => f.familyId === scenario.familyId);
-              if (requestedFamilies && !family) return `Card ${scenario.id} claims family "${scenario.familyId}", which was not requested in this batch.`;
-              if (requestedFamilies && seen.has(scenario.familyId)) return `Family "${scenario.familyId}" is used by two cards in this batch; each requested family needs exactly one card.`;
-              if (scenarioIds.has(scenario.id)) return `Card id "${scenario.id}" was already used by an earlier card; ids must be unique across the suite.`;
-              if (scenario.profileId !== undefined && !profiles.some(p => p.id === scenario.profileId)) {
-                return `Card ${scenario.id} references profile "${scenario.profileId}", which does not exist. Choose one of: ${profiles.map(p => p.id).join(', ') || 'none supplied'}.`;
-              }
-              if (new Set(scenario.requirementIds).size !== scenario.requirementIds.length) return `Card ${scenario.id} lists the same requirement twice.`;
-              const unknown = scenario.requirementIds.filter(id => !requirementIds.has(id));
-              if (unknown.length) return `Card ${scenario.id} references requirements that do not exist: ${unknown.join(', ')}.`;
-              const missing = family?.requirementIds.filter(id => !scenario.requirementIds.includes(id)) ?? [];
-              if (missing.length) return `Card ${scenario.id} must cover the requirements of its family: ${missing.join(', ')}.`;
-              if (external) {
-                if (input.sources.some(s => s.kind === 'prompt')) {
-                  // The agent's JSON envelope or a named field is an interface between its components: a criterion that pins it measures the adapter, not the agent. Dropping it is deterministic and costs no attempt.
-                  scenario.checks = scenario.checks.filter(c => !MACHINE_FORMAT.test(`${(c as { value?: unknown }).value ?? ''}`) && !MACHINE_FORMAT.test(c.description));
-                  scenario.metrics = scenario.metrics?.filter(m => m.subject !== 'agent' || !MACHINE_FORMAT.test(`${m.name}\n${m.description}\n${m.passCriteria}\n${m.failCriteria}`));
-                }
-                // A literal check on an external agent may only pin wording the source itself mandates or the user literally asked for; everything else is a rubric's job.
-                const literal = scenario.checks.filter(c => c.kind === 'answer_equals' || c.kind === 'answer_contains' || c.kind === 'answer_omits');
-                // Wording a source mandates or forbids appears in that source; the user's own opening may also be echoed.
-                const grounds = [...input.sources.map(s => s.content), scenario.user.opening];
-                for (const check of literal) {
-                  if (!grounds.some(ground => verbatimSpan(ground, check.value))) {
-                    return `Card ${scenario.id}: check ${check.id} requires the wording "${check.value.slice(0, 80)}", which is not a verbatim fragment of any supplied source or the user's opening. Literal checks only pin wording a source mandates or forbids; assess everything else with an agent rubric and drop this check.`;
-                  }
-                }
-                if (literal.length > 2) return `Card ${scenario.id} has ${literal.length} literal checks; keep at most two literal checks per card and express the rest as agent rubrics.`;
-              }
-              if (confirmed) {
-                const stateChecks = scenario.checks.filter(check => check.kind === 'state_equals');
-                const seeded = Object.keys(scenario.initialState.records).length > 0
-                  || scenario.initialState.writableFields.length > 0
-                  || scenario.initialState.transientFailures > 0
-                  || Object.keys(scenario.initialState.external ?? {}).length > 0;
-                if (input.goalObservation === 'reply' && (seeded || scenario.checks.some(check => !['answer_equals', 'answer_contains', 'answer_omits'].includes(check.kind)))) {
-                  return `Card ${scenario.id}: reply-observed prompt/RAG tests cannot seed backend state or require tool/state checks. Keep initialState empty and use only source-grounded answer checks or the goal rubric.`;
-                }
-                if (seeded && !stateChecks.length) return `Card ${scenario.id}: non-empty seeded state needs at least one exact state_equals check.`;
-                const unresolved = stateChecks.filter(check => !Object.hasOwn(scenario.initialState.records, check.recordId)
-                  || !Object.hasOwn(scenario.initialState.records[check.recordId]!, check.field));
-                if (unresolved.length) return `Card ${scenario.id}: state_equals paths do not resolve in the seeded state: ${unresolved.map(check => `${check.recordId}.${check.field}`).join(', ')}.`;
-              }
-              const known = valueTokens([scenario.user.opening, scenario.user.facts, ...(scenario.user.knows ?? [])].join('\n'));
-              if (groundedValues) {
-                const answerValues = new Set((scenario.user.answers ?? []).flatMap(answer => [...valueTokens(answer.reply)]));
-                const unsupported = [...answerValues].filter(token => !groundedValues.has(token)).sort();
-                if (unsupported.length) return `Card ${scenario.id}: answer values are not grounded in owner sources or user-authored dialogue evidence: ${unsupported.join(', ')}.`;
-                const additions = [...answerValues].filter(token => !known.has(token)).sort();
-                const next = [...(scenario.user.knows ?? []), ...additions];
-                if (next.length > 20) return `Card ${scenario.id}: answer enrichment produces ${next.length} known values; maximum is 20. Nothing was truncated.`;
-                if (additions.length) scenario.user.knows = next;
-              } else for (const answer of scenario.user.answers ?? []) {
-                const unknown = [...valueTokens(answer.reply)].find(token => !known.has(token));
-                if (unknown) return `Card ${scenario.id}: the reply to "${answer.ifAsked}" contains "${unknown}", which is not in knows, facts or opening. Either add that value to user.knows when the user really knows it, or answer with a value already in knows, facts or opening; a reply must never contradict the card's facts.`;
-              }
-              seen.add(scenario.familyId);
-            }
-            return undefined;
-          },
-        );
-        for (const scenario of cards.scenarios) {
-          if (confirmed ? simulatorCapable : external) scenario.metrics.push({ ...simulatorFidelity });
-          if ((confirmed || external) && hasPrompt) scenario.metrics.unshift({ ...promptCompliance });
-          scenarioIds.add(scenario.id); scenarios.push(scenario);
-        }
-        offset += cards.scenarios.length;
-      }
-      // An external target answers with its own agent, so a sandbox AgentSpec would be
-      // built, paid for and never used.
-      const agent = input.existingAgent
-        ?? (input.targetKind && input.targetKind !== 'sandbox'
-          ? { name: 'External agent', instructions: 'The agent under evaluation runs outside Agent Lab and keeps its own instructions and tools.', tools: [] }
-          : await ask('Сборка агента', AGENT_ROLE, evidence, agentSchema, ctx));
-      return preparationSchema.parse({ ...grounding, scenarios, agent });
-    },
-    async goals(input, ctx) {
-      if (!input.sources.length) throw new Error('Observed goals: без материалов владельца ожидаемое поведение остаётся неизвестным.');
-      const sources = input.sources.map(({ id, name, content, kind }) => ({ id, name, content, ...(kind ? { kind } : {}) }));
-      const profiles = input.profiles.map(({ id, persona, characteristics }) => ({ id, persona, characteristics }));
-      if (!input.requirements) {
-        const result = await ask(
-          'Цели из реальных диалогов', GOALS_ROLE,
-          { task: input.task, sources, profiles, dialogues: input.dialogues.map(dialogue => ({ id: dialogue.id, userMessages: dialogue.messages.filter(message => message.role === 'user').map(message => message.content) })) },
-          z.strictObject({ goals: z.array(observedGoalSchema).min(1).max(20) }), ctx,
-        );
-        try { validateObservedGoals(result.goals, input.dialogues, input.profiles); }
-        catch (error) { throw new Error(`Observed goals: ${error instanceof Error ? error.message : String(error)}`); }
-        return result.goals;
-      }
-      if (!input.requirements.length) throw new Error('Observed goals: нет требований владельца, на которые можно сослаться.');
-      const knownRequirements = new Set(input.requirements.map(requirement => requirement.id));
-      const goals = [];
-      for (const dialogue of input.dialogues) {
-        const payload = {
-          task: input.task,
-          sources, ownerRequirements: input.requirements.map(({ id, text, sourceId, quote, critical }) => ({ id, text, sourceId, quote, critical })), profiles,
-          dialogues: [{ id: dialogue.id, userMessages: dialogue.messages.filter(message => message.role === 'user').map(message => message.content) }],
-          ...(input.requireApplicable ? { requireApplicable: true } : {}),
-        };
-        if (JSON.stringify(payload).length > GOALS_INPUT_LIMIT) {
-          throw new Error(`Неизвестно: полный диалог ${dialogue.id} и материалы владельца не помещаются в контекст; критерий не опубликован.`);
-        }
-        const result = await ask(
-          `Цель из реального диалога ${dialogue.id}`,
-          GOALS_ROLE,
-          payload,
-          z.strictObject({ goals: input.requireApplicable ? z.array(scoredGoalSchema.extend({ facts: observedGoalSchema.shape.facts.removeDefault() }).required({ testability: true, testabilityReason: true })).max(1) : z.array(scoredGoalSchema).length(1) }), ctx,
-          value => {
-            const goal = value.goals[0];
-            if (!goal) return undefined;
-            if (goal.evidenceDialogueIds.length !== 1 || goal.evidenceDialogueIds[0] !== dialogue.id) return `Goal ${goal.id} must cite only dialogue ${dialogue.id}.`;
-            const unknown = goal.requirementIds.filter(id => !knownRequirements.has(id));
-            if (unknown.length) return `Goal ${goal.id} cites unknown owner requirements: ${unknown.join(', ')}.`;
-            try { validateObservedGoals([goal], [dialogue], input.profiles); }
-            catch (error) { return error instanceof Error ? error.message : String(error); }
-            return undefined;
-          },
-        );
-        if (result.goals[0]) goals.push(result.goals[0]);
-      }
-      try { validateObservedGoals(goals, input.dialogues, input.profiles); }
-      catch (error) { throw new Error(`Observed goals: ${error instanceof Error ? error.message : String(error)}`); }
-      return goals;
+      return ask('Требования', request.role, request.payload, request.schema, ctx, value =>
+        new Set(value.requirements.map(r => r.id)).size !== value.requirements.length
+          ? 'Two requirements share an id; give every requirement a unique id.' : groundingProblem(value, input.sources));
     },
     async failureModes(input, ctx) {
       const known = new Set(input.failures.map(f => f.trialId));
@@ -704,17 +447,6 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       );
       return result.modes;
     },
-    async improve(input, ctx) {
-      if (input.feedback.some(f => f.scenario.split !== 'dev' || f.trials.some(t => t.split !== 'dev'))) {
-        throw new Error('Builder input must contain development evidence only');
-      }
-      return ask(
-        'Улучшение агента',
-        IMPROVE_ROLE,
-        { task: input.task, requirements: input.requirements, agent: input.agent, feedback: input.feedback },
-        proposalSchema, ctx,
-      );
-    },
     async assess(input, ctx) {
       const judge = settings.roles?.judge ?? settings.judge ?? { provider: settings.provider, model: settings.model };
       const upstream = settings.roles?.judge ? undefined : settings.judge?.upstream;
@@ -734,20 +466,11 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           temperature: judgeModel.reasoning ? 'default' : 0, thinking: judgeModel.reasoning ? 'medium' : 'off' }),
         transport: { api: judgeModel.api, upstream, structured: judge.provider === 'openrouter' },
       }, ctx, async (prompt, data, recordPartial) => {
-        const session = await controlledSession(modelRuntime, judgeModel, prompt, [], { ...ctx, onTargetEvent: event => {
+        const session = await controlledSession(modelRuntime, judgeModel, prompt, { ...ctx, onTargetEvent: event => {
           if (event.type === 'assistant' && event.text) recordPartial(event.text);
         } }, 16384, judgeModel.reasoning ? undefined : 0, judge.provider === 'openrouter' ? JUDGE_RESPONSE_FORMAT : undefined, judgeModel.reasoning ? 'medium' : 'off');
         try { return await session.respond(data); } finally { await session.close(); }
       });
-    },
-    async openTarget(agent, sources, tools, ctx) {
-      agentSchema.parse(agent);
-      const allowed = tools.filter(t => agent.tools.includes(t.name));
-      if (agent.tools.some(name => !allowed.some(t => t.name === name))) throw new Error('Target requested an unregistered tool');
-      return controlledSession(modelRuntime, model,
-        `${agent.instructions}\n\n${DATA_BOUNDARY}\n${TOOL_GUIDE}\nAvailable material names: ${JSON.stringify(sources.map(s => s.name))}. Use search_materials when needed.`,
-        allowed, ctx, 4096,
-      );
     },
     async assessCheckpoints(input, ctx) {
       return (await ask('Контрольные точки', input.checkpoints.some(c=>Object.hasOwn(c,'context'))?CHECKPOINT_ROLE:LEGACY_CHECKPOINT_ROLE, input, checkpointResponseSchema(input.checkpoints.map(item => item.checkpoint)), ctx)).results;

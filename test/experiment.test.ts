@@ -6,50 +6,19 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { ExperimentLab, draftHash, measurementHash, resultHash } from '../src/experiment.js';
 import { ExperimentStore } from '../src/store.js';
-import { createDemoRuntime, demoEvaluationInput, demoInput } from '../src/demo.js';
-import { createInputSchema, emptyUsage, experimentSchema, fingerprint, goalAttainment, metricApplies, validatePreparation, type Experiment, type Runtime, type Trial } from '../src/contracts.js';
-import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources } from '../src/judge.js';
+import { createDemoRuntime, demoInput } from '../src/demo.js';
+import { SANDBOX_RETIRED, createInputSchema, experimentSchema, fingerprint, metricApplies, runnableTarget, validatePreparation, type Experiment, type Runtime, type Target } from '../src/contracts.js';
+import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
 import { awaitingVerdict, compareRuns } from '../src/comparison.js';
 import { COUNTING_RULES, simulatorUsable } from '../src/outcomes.js';
 import { judgeAgreement } from '../src/agreement.js';
 import { buildResultView, resultViewLines } from '../src/result-view.js';
 import { qualityLines, qualitySummary } from '../src/quality.js';
-
-test('ExperimentLab rejects backend checks from a custom Runtime for confirmed reply-only RAG tests, including sandbox targets', async t => {
-  const quote = 'Support is available at support@example.com.';
-  let invalid = true, targetCalls = 0;
-  const runtime: Runtime = {
-    async prepare() {
-      const successCriteria = 'The reply contains support@example.com.';
-      return { requirements: [{ id: 'support_rule', text: quote, sourceId: 'source-1', quote, critical: true }], questions: [],
-        agent: { name: 'External agent', instructions: quote, tools: [] }, scenarios: [{
-          id: 'support_test', familyId: 'support_test', title: 'Support reply', requirementIds: ['support_rule'], provenance: 'synthetic', tier: 'regression',
-          user: { goal: 'Get support', facts: 'No additional facts.', behavior: 'Ask once.', opening: 'How do I get support?', maxFollowUps: 0 },
-          initialState: invalid ? { records: { account: { status: 'active' } }, writableFields: ['status'], transientFailures: 0 }
-            : { records: {}, writableFields: [], transientFailures: 0 },
-          checks: invalid ? [{ id: 'lookup', kind: 'tool_called' as const, description: 'Invented backend lookup.', tool: 'lookup_record' }]
-            : [{ id: 'reply', kind: 'answer_contains' as const, description: 'Reply contains the approved address.', value: 'support@example.com' }],
-          successCriteria, assumptions: ['Confirmed reply-only RAG hypothesis.'], metrics: [{ ...goalAttainment, passCriteria: successCriteria }],
-        }] };
-    },
-    async improve() { throw new Error('unused'); },
-    async openTarget() { targetCalls++; throw new Error('target must not open while building a draft'); },
-    async userTurn() { throw new Error('unused'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const input = { task: 'Check support reply', confirmedHypothesis: 'The agent may omit the support address.', goalObservation: 'reply' as const,
-    mode: 'live' as const, workflow: 'evaluate' as const, scenarioCount: 1, materials: [{ name: 'Policy', content: quote }],
-    target: { kind: 'sandbox' as const } };
-  const rejected = await lab.create(input); await lab.waitForIdle();
-  const failed = await lab.get(rejected.id);
-  assert.equal(failed.phase, 'error'); assert.match(failed.error ?? '', /reply-only RAG.*backend state.*tool\/state/); assert.equal(targetCalls, 0);
-  invalid = false;
-  const accepted = await lab.create(input); await lab.waitForIdle();
-  const draft = await lab.get(accepted.id);
-  assert.equal(draft.phase, 'review', draft.error ?? ''); assert.equal(draft.scenarios.length, 1); assert.equal(targetCalls, 0);
-});
+import { acceptedDemoDraft, appointmentAgent, demoEvaluateRecord, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 
 async function setup(t: TestContext, runtime?: Runtime) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-experiment-'));
@@ -63,129 +32,69 @@ function deferred() {
   const promise = new Promise<void>(r => { resolve = r; });
   return { promise, resolve };
 }
+/**
+ * An old-format draft (cards without an `execution` block, run by the free user simulator) against the
+ * external appointment agent. Real records of external agents carry each card's evidence channel.
+ */
+async function externalDraft(lab: ExperimentLab, options: Parameters<typeof legacyDraft>[1] = {}, adjust?: (draft: Experiment) => void): Promise<Experiment> {
+  const draft = await legacyDraft(lab, options);
+  draft.scenarios = draft.scenarios.map(scenario => ({ ...scenario, goalObservation: scenario.goalObservation ?? 'reply' }));
+  adjust?.(draft);
+  await lab.store.save(draft);
+  return lab.get(draft.id);
+}
+async function runDraft(lab: ExperimentLab, draft: Experiment, reviewer: 'human' | 'expectations' | 'automated' = 'automated', parallel?: number): Promise<Experiment> {
+  await lab.start(draft.id, { approved: true, reviewer, expectedHash: draftHash(draft), ...(parallel ? { parallel } : {}) });
+  await lab.waitForIdle();
+  return lab.get(draft.id);
+}
 
-test('complete experiment freezes measurement, restricts builder feedback, persists actual evidence and exports the selected agent', async t => {
-  const runtime = createDemoRuntime();
-  const improve = runtime.improve;
-  let feedbackSeen = false;
-  runtime.improve = async (input, ctx) => {
-    assert.ok(input.feedback.length > 0);
-    assert.ok(input.feedback.every(f => f.scenario.split === 'dev' && f.trials.every(trial => trial.split === 'dev')));
-    feedbackSeen = true;
-    const proposal = await improve(input, ctx);
-    // A proposal must never acquire a mutable reference to frozen source/check data.
-    input.sources[0]!.content = 'mutated by builder';
-    input.feedback[0]!.scenario.checks = [];
-    return proposal;
-  };
-  const { lab } = await setup(t, runtime);
-  const created = await lab.create(demoInput());
-  await lab.waitForIdle();
-  const ready = await lab.get(created.id);
+test('a completed evaluation freezes the measurement, persists the observed evidence and never starts again', async t => {
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const ready = await externalDraft(lab);
   assert.equal(ready.phase, 'review');
-  await assert.rejects(lab.start(ready.id, { approved: false }), /после вашего подтверждения/);
-  await lab.start(ready.id, { approved: true });
-  await lab.waitForIdle();
-  const result = await lab.get(ready.id);
-  assert.equal(result.phase, 'complete', result.error ?? '');
-  assert.equal(feedbackSeen, true);
+  await assert.rejects(lab.start(ready.id, { approved: false, expectedHash: draftHash(ready) }), /после вашего подтверждения/);
+  const result = await runDraft(lab, ready);
+  assert.equal(result.phase, 'results_review', result.error ?? '');
   assert.equal(result.manifestHash, measurementHash(result));
   assert.equal(result.sources[0]!.hash, fingerprint(result.sources[0]!.content));
   assert.deepEqual(result.scenarios, ready.scenarios);
-  assert.ok(result.reviewedAt && result.controlConsumedAt);
-  assert.ok(result.revisions.find(r => r.id === result.selectedRevisionId)!.spec.tools.includes('update_record'));
-  const final = result.comparisons.at(-1)!;
-  assert.equal(final.split, 'control');
-  assert.deepEqual([final.baselinePasses, final.candidatePasses, final.fixed, final.regressed, final.validPairs, final.families], [4, 8, 4, 0, 8, 2]);
-  assert.equal(final.verdict, 'insufficient');
+  assert.ok(result.reviewedAt);
+  assert.deepEqual(result.comparisons, []);
   const journal = (await lab.store.traceJournal(result.id)).trim().split('\n').map(line => JSON.parse(line));
   assert.equal(journal.length, result.trials.reduce((sum, trial) => sum + trial.events.length, 0));
-  assert.ok(journal.some(row => row.event.type === 'tool_result' && row.event.tool === 'update_record'));
+  assert.ok(journal.some(row => row.event.type === 'tool_result' && row.event.tool === 'lookup_record'), 'tool events reported by the agent are evidence');
   assert.deepEqual(await lab.store.get(result.id), result);
   assert.notEqual(measurementHash({ ...result, task: 'different task' }), result.manifestHash);
   const changed = structuredClone(result);
   changed.revisions[0]!.spec.instructions += ' changed';
   assert.notEqual(measurementHash(changed), result.manifestHash);
-  await assert.rejects(lab.start(result.id, { approved: true }), /только эксперимент, ожидающий проверки/);
-});
-
-test('compare improvement accepts a decisive human review for an unknown agent metric', async t => {
-  const runtime = createDemoRuntime(); let improvements = 0;
-  const improve = runtime.improve;
-  runtime.improve = async (...args) => { improvements++; return improve(...args); };
-  const { lab } = await setup(t, runtime);
-  const created = await lab.create({ ...demoInput(), settings: { ...demoInput().settings, repeats: 1 } }); await lab.waitForIdle();
-  let draft = await lab.get(created.id);
-  const scenario = draft.scenarios.find(card => card.split === 'dev')!;
-  draft = await lab.updateDraft(draft.id, draftHash(draft), { scenarios: [{ ...scenario, metrics: [{
-    id: 'human_only', name: 'Human-only criterion', subject: 'agent', description: 'Requires human judgment.',
-    passCriteria: 'A human accepts the dialogue.', failCriteria: 'A human rejects the dialogue.',
-  }] }] });
-  const save = lab.store.save.bind(lab.store); let reviews = 0;
-  lab.store.save = async record => {
-    for (const trial of record.trials) for (const assessment of trial.assessments?.filter(item => item.result === 'unknown') ?? []) {
-      if (record.humanReviews.some(review => review.trialId === trial.id && review.metricId === assessment.metricId)) continue;
-      record.humanReviews.push({ id: `review_${trial.id}`, trialId: trial.id, metricId: assessment.metricId,
-        verdict: 'pass', note: 'Accepted from the recorded dialogue.', createdAt: record.updatedAt });
-      reviews++;
-    }
-    await save(record);
-  };
-  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-  const result = await lab.get(draft.id);
-  assert.equal(result.phase, 'complete', result.error ?? '');
-  assert.equal(improvements, 1); assert.ok(reviews > 0);
-});
-
-test('candidate infrastructure failures retain the baseline and remain visible rather than becoming improvement', async t => {
-  const runtime = createDemoRuntime();
-  const openTarget = runtime.openTarget;
-  runtime.openTarget = async (agent, ...args) => {
-    if (agent.tools.includes('update_record')) throw new Error('Candidate provider unavailable');
-    return openTarget(agent, ...args);
-  };
-  const { lab } = await setup(t, runtime);
-  const input = demoInput(); input.settings.repeats = 1;
-  const record = await lab.create(input); await lab.waitForIdle();
-  await lab.start(record.id, { approved: true }); await lab.waitForIdle();
-  const result = await lab.get(record.id);
-  assert.equal(result.phase, 'complete');
-  assert.equal(result.selectedRevisionId, result.revisions[0]!.id);
-  assert.equal(result.iterations[0]!.accepted, false);
-  assert.ok(result.trials.some(trial => trial.outcome === 'invalid'));
-  assert.equal(result.comparisons.at(-1)!.verdict, 'no_change');
+  await assert.rejects(lab.start(result.id, { approved: true, expectedHash: draftHash(result) }), /только эксперимент, ожидающий проверки/);
 });
 
 test('call budget stops the run, preserving partial trials without a final success claim', async t => {
-  const { lab } = await setup(t);
-  const input = demoInput(); input.settings.maxCalls = 5;
-  const record = await lab.create(input); await lab.waitForIdle();
-  await lab.start(record.id, { approved: true }); await lab.waitForIdle();
-  const result = await lab.get(record.id);
+  const { lab } = await setup(t, legacyDemoRuntime());
+  // The external agent spends no model calls of the lab: the budget goes to the simulated user and the judge.
+  const result = await runDraft(lab, await externalDraft(lab, { count: 10, settings: { maxCalls: 5 } }));
   assert.equal(result.phase, 'error');
   assert.match(result.error!, /call budget/);
   assert.equal(result.usage.calls, 5);
-  assert.ok(result.trials.length > 0);
-  assert.equal(result.controlConsumedAt, null);
-  assert.equal(result.comparisons.length, 0);
+  assert.ok(result.trials.length > 0 && result.trials.length < 10, `${result.trials.length} trials`);
+  assert.equal(result.resultsReviewedAt, undefined);
 });
 
 test('task-only execution records automated review and labels expectations provisional', async t => {
-  const { lab } = await setup(t);
-  const record = await lab.create(demoInput()); await lab.waitForIdle();
-  await lab.start(record.id, { approved: true, reviewer: 'automated' }); await lab.waitForIdle();
-  const result = await lab.get(record.id);
-  assert.equal(result.phase, 'complete');
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const result = await runDraft(lab, await externalDraft(lab), 'automated');
+  assert.equal(result.phase, 'results_review', result.error ?? '');
   assert.equal(result.reviewMode, 'automated');
   assert.match(result.limitations.join(' '), /without human validation/);
-  assert.match(result.comparisons.at(-1)!.reasons.join(' '), /provisional/);
-  assert.notEqual(result.comparisons.at(-1)!.verdict, 'improved');
 });
 
 test('shutdown during the initial checkpoint waits, keeps the lock, and never starts model work', async t => {
   const runtime = createDemoRuntime(); let calls = 0;
-  const prepare = runtime.prepare;
-  runtime.prepare = async (...args) => { calls++; return prepare(...args); };
+  const ground = runtime.groundRequirements!;
+  runtime.groundRequirements = async (...args) => { calls++; return ground(...args); };
   const { lab, directory } = await setup(t, runtime);
   const entered = deferred(); const release = deferred();
   const save = lab.store.save.bind(lab.store); let first = true;
@@ -260,17 +169,17 @@ test('shutdown waits for in-flight initialization and cannot reopen a closed lab
   await assert.rejects(readFile(join(directory, '.lock')), { code: 'ENOENT' });
 });
 
-test('preparation rejects invented sources, uncovered critical requirements, and contradictory or unreachable checks', async () => {
-  const input = demoInput();
-  const sources = input.materials.map((m, i) => ({ ...m, id: `source-${i}`, hash: fingerprint(m.content) }));
-  const raw = await createDemoRuntime().prepare({ task: input.task, sources }, {
-    signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {},
-  });
+test('preparation rejects invented sources, cards without an expectation, and contradictory or unreachable checks', async () => {
+  const recorded = experimentSchema.parse(JSON.parse(await readFile(new URL('./fixtures/legacy-demo-draft.json', import.meta.url), 'utf8')));
+  const sources = recorded.sources;
+  const raw = { requirements: recorded.requirements, questions: [] as string[], scenarios: recorded.scenarios.map(({ split: _split, ...scenario }) => scenario) };
+  assert.deepEqual(validatePreparation(raw, sources).scenarios.map(s => s.split), raw.scenarios.map(() => 'dev'), 'recorded cards stay valid and all run');
   const check = (mutate: (p: typeof raw) => void, message: RegExp) => {
     const p = structuredClone(raw); mutate(p); assert.throws(() => validatePreparation(p, sources), message);
   };
+  check(p => { p.scenarios = []; }, /No cards to run/);
   check(p => { p.requirements[0]!.quote = 'Fabricated source fact'; }, /ungrounded/);
-  check(p => { p.requirements.push({ ...p.requirements[0]!, id: 'uncovered' }); }, /no test coverage/);
+  check(p => { delete p.scenarios[0]!.successCriteria; }, /success criteria and an explicit follow-up limit/);
   check(p => { p.scenarios[0]!.checks.push({ id: 'opposite', kind: 'state_equals', description: 'conflict', recordId: 'A101', field: 'time', value: '20:00' }); }, /Contradictory state/);
   check(p => { p.scenarios[0]!.checks.push({ id: 'no_lookup', kind: 'tool_not_called', description: 'conflict', tool: 'lookup_record' }); }, /Contradictory tool/);
   check(p => { p.scenarios[0]!.checks.push({ id: 'no_update', kind: 'tool_not_called', description: 'conflict', tool: 'update_record' }); }, /Contradictory update/);
@@ -281,104 +190,79 @@ test('preparation rejects invented sources, uncovered critical requirements, and
     p.scenarios[0]!.checks.push({ id: 'forbids_time', kind: 'answer_omits', description: 'conflict', value: '14:00' });
   }, /Contradictory answer/);
   check(p => { p.scenarios[0]!.checks.push({ id: 'forbidden', kind: 'state_equals', description: 'unreachable', recordId: 'A101', field: 'owner', value: 'Other' }); p.scenarios[0]!.checks = p.scenarios[0]!.checks.filter(c => c.id !== 'owner'); }, /Unreachable/);
-  check(p => { p.scenarios.forEach(s => { s.familyId = 'same'; }); }, /four distinct/);
 });
 
 test('провалы прогона получают имена, а сорванная кластеризация не теряет прогон', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-modes-'));
-  // Агент, который только обещает: состояние не меняется, значит проверки падают и есть что кластеризовать.
-  const base = { ...createDemoRuntime(), async openTarget() { return { respond: async () => 'Готово, перенёс.', close: async () => {} }; } };
+  // Агент без инструмента изменения: запись не меняется, значит проверки падают и есть что кластеризовать.
   const seen: unknown[] = [];
-  const named = {
-    ...base,
-    async failureModes(input: { task: string; failures: { trialId: string }[] }) {
+  const named: Runtime = {
+    ...legacyDemoRuntime(),
+    async failureModes(input) {
       seen.push(input);
       return [{ id: 'no_action', name: 'Пообещал перенос и не сделал его', description: 'Ответ утверждает изменение, которого нет в состоянии.', stage: 'действие', trialIds: input.failures.map(f => f.trialId) }];
     },
   };
-  const lab = new ExperimentLab(directory, named as never);
-  t.after(async () => { await lab.close(); await rm(directory, { recursive: true, force: true }); });
-  await lab.init();
-  const draft = await lab.create({ ...demoInput(), workflow: 'evaluate' as const });
-  await lab.waitForIdle();
-  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(await lab.get(draft.id)) });
-  await lab.waitForIdle();
-  const done = await lab.get(draft.id);
+  const { lab } = await setup(t, named);
+  const done = await runDraft(lab, await externalDraft(lab), 'human');
   assert.ok(done.trials.filter(t => t.outcome === 'fail').length >= 2, 'в демо-прогоне есть что кластеризовать');
   assert.equal(done.failureModes?.length, 1);
   assert.match(done.failureModes![0]!.name, /Пообещал/);
   assert.deepEqual(done.failureModes![0]!.trialIds.sort(), done.trials.filter(t => t.outcome === 'fail').map(t => t.id).sort());
   // Кластеризатору дают только провалившиеся диалоги и их трассы.
   const passed = new Set(done.trials.filter(t => t.outcome !== 'fail').map(t => t.id));
+  assert.ok(passed.size > 0, 'прочитанная без изменения запись проходит');
   assert.equal((seen[0] as { failures: { trialId: string }[] }).failures.some(f => passed.has(f.trialId)), false);
 
   // Сорванный разбор — это оговорка в записи, а не потерянный прогон.
-  const brokenDir = await mkdtemp(join(tmpdir(), 'agent-lab-modes-broken-'));
-  const broken = new ExperimentLab(brokenDir, { ...base, async failureModes() { throw new Error('судья недоступен'); } } as never);
-  t.after(async () => { await broken.close(); await rm(brokenDir, { recursive: true, force: true }); });
-  await broken.init();
-  const second = await broken.create({ ...demoInput(), workflow: 'evaluate' as const });
-  await broken.waitForIdle();
-  await broken.start(second.id, { approved: true, reviewer: 'human', expectedHash: draftHash(await broken.get(second.id)) });
-  await broken.waitForIdle();
-  const survived = await broken.get(second.id);
+  const { lab: broken } = await setup(t, { ...legacyDemoRuntime(), async failureModes() { throw new Error('судья недоступен'); } });
+  const survived = await runDraft(broken, await externalDraft(broken), 'human');
   assert.equal(survived.phase, 'results_review');
   assert.equal(survived.failureModes, undefined);
   assert.ok(survived.limitations.some(l => /Не удалось назвать типы провалов.*судья недоступен/.test(l)));
 });
 
 test('unresolved business questions block approval until new materials produce a new experiment', async t => {
-  const runtime = createDemoRuntime(); const prepare = runtime.prepare;
-  runtime.prepare = async (...args) => ({ ...await prepare(...args), questions: ['Which timezone applies?'] });
+  const runtime = createDemoRuntime(); const ground = runtime.groundRequirements!;
+  runtime.groundRequirements = async (...args) => ({ ...await ground(...args), questions: ['Which timezone applies?'] });
   const { lab } = await setup(t, runtime);
-  const record = await lab.create(demoInput()); await lab.waitForIdle();
-  await assert.rejects(lab.start(record.id, { approved: true }), /ответьте на бизнес-вопросы/);
-  assert.equal((await lab.get(record.id)).phase, 'review');
+  const accepted = await acceptedDemoDraft(lab);
+  const draft = await lab.get(accepted.id);
+  assert.deepEqual(draft.questions, ['Which timezone applies?']);
+  await assert.rejects(lab.start(draft.id, { approved: true, expectedHash: draftHash(draft) }), /ответьте на бизнес-вопросы/);
+  assert.equal((await lab.get(draft.id)).phase, 'review');
 });
 
 test('goal observation is part of the existing full draft hash while legacy drafts stay stable', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
-  const input = demoInput(); input.workflow = 'evaluate'; input.scenarioCount = 1;
-  const created = await lab.create(input); await lab.waitForIdle();
-  const legacy = await lab.get(created.id);
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const legacy = await legacyDraft(lab, { count: 1 });
+  assert.equal(legacy.scenarios[0]!.goalObservation, undefined, 'a card written before the field existed');
   const legacyHash = draftHash(legacy);
   assert.equal(draftHash(structuredClone(legacy)), legacyHash);
-
-  const card = { ...legacy.scenarios[0]!, goalObservation: 'reply' as const };
-  const edited = await lab.updateDraft(legacy.id, legacyHash, { scenarios: [card] });
-  assert.notEqual(draftHash(edited), legacyHash);
-  const toolDraft = structuredClone(edited);
-  toolDraft.scenarios[0]!.goalObservation = 'tool';
-  assert.notEqual(draftHash(toolDraft), draftHash(edited));
+  const reply = structuredClone(legacy);
+  reply.scenarios[0]!.goalObservation = 'reply';
+  assert.notEqual(draftHash(reply), legacyHash);
+  const tool = structuredClone(reply);
+  tool.scenarios[0]!.goalObservation = 'tool';
+  assert.notEqual(draftHash(tool), draftHash(reply));
 });
 
-test('confirming the expectations is recorded as exactly that, and never upgrades a comparison', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
-  const created = await lab.create(demoInput()); await lab.waitForIdle();
-  const ready = await lab.get(created.id);
-  await lab.start(ready.id, { approved: true, reviewer: 'expectations' });
-  await lab.waitForIdle();
-  const result = await lab.get(ready.id);
-  assert.equal(result.phase, 'complete', result.error ?? '');
+test('confirming the expectations is recorded as exactly that, never as a human check of the cards or verdicts', async t => {
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const result = await runDraft(lab, await externalDraft(lab), 'expectations');
+  assert.equal(result.phase, 'results_review', result.error ?? '');
   assert.equal(result.reviewMode, 'expectations');
   // The run dialog confirms expectations; the verdicts do not exist yet, so nothing here says a
   // person checked them. The limitation must say so instead of disappearing.
   assert.match(result.limitations.join(' '), /Владелец подтвердил ожидания ситуаций перед запуском\. Определения карточек и оценки судьи человеком не проверялись\./);
   assert.doesNotMatch(result.limitations.join(' '), /without human validation/);
-  const final = result.comparisons.at(-1)!;
-  assert.equal(final.split, 'control');
-  assert.notEqual(final.verdict, 'improved', 'a confirmed draft does not lift a provisional comparison');
-  assert.ok(final.reasons.includes('Scenario expectations have not been validated by a human; this comparison is provisional.'));
   // An old record parses and keeps the two modes it could already hold.
   assert.equal(experimentSchema.parse({ ...result, reviewMode: 'human' }).reviewMode, 'human');
   assert.equal(experimentSchema.parse({ ...result, reviewMode: 'automated' }).reviewMode, 'automated');
 });
 
 test('the manifest covers the control set but not the owner-expectation label, and old records keep their hash', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
-  const input = demoInput(); input.workflow = 'evaluate'; input.scenarioCount = 2;
-  const created = await lab.create(input); await lab.waitForIdle();
-  const record = await lab.get(created.id);
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const record = await externalDraft(lab, { count: 2 });
   const base = measurementHash(record);
   const [first, second] = record.scenarios.map(scenario => scenario.id) as [string, string];
 
@@ -397,20 +281,19 @@ test('the manifest covers the control set but not the owner-expectation label, a
   assert.equal(measurementHash(legacy), base);
 });
 
-test('accepting a draft records exact one-test review metadata without granting execution authority', async t => {
-  const runtime = createDemoRuntime();
+test('accepting a draft records exact review metadata without granting execution authority', async t => {
+  const base = legacyDemoRuntime();
   let runtimeCalls = 0;
-  const prepare = runtime.prepare;
-  runtime.prepare = async (...args) => { runtimeCalls++; return prepare(...args); };
+  const runtime: Runtime = { ...base,
+    async assess(...args) { runtimeCalls++; return base.assess!(...args); },
+    async userTurn(...args) { runtimeCalls++; return base.userTurn!(...args); } };
   const { lab } = await setup(t, runtime);
-  const created = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 });
-  await lab.waitForIdle();
-  const draft = await lab.get(created.id);
+  const draft = await externalDraft(lab, { count: 1 });
   const currentHash = draftHash(draft);
-  runtimeCalls = 0;
 
   await assert.rejects(lab.acceptDraft(draft.id, '0'.repeat(64)), /изменился/i);
   assert.deepEqual(await lab.get(draft.id), draft);
+  await assert.rejects(lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: currentHash, requireAccepted: true }), /Сначала подтвердите ожидания ситуаций/);
   const accepted = await lab.acceptDraft(draft.id, currentHash);
   assert.equal(accepted.acceptedDraftHash, currentHash);
   assert.equal(accepted.acceptedTests?.length, 1);
@@ -422,47 +305,44 @@ test('accepting a draft records exact one-test review metadata without granting 
   assert.equal(runtimeCalls, 0);
   assert.deepEqual(await lab.acceptDraft(draft.id, currentHash), accepted, 'accepting the current hash twice is idempotent');
 
-  const changedCard = { ...accepted.scenarios[0]!, title: 'Уточнённый тест' };
-  const edited = await lab.updateDraft(draft.id, currentHash, { scenarios: [changedCard] });
-  assert.equal(edited.acceptedDraftHash, currentHash);
-  assert.deepEqual(edited.acceptedTests, [], 'an edited definition is not presented as the accepted test');
-  assert.notEqual(draftHash(edited), edited.acceptedDraftHash, 'a semantic edit exposes stale acceptance');
+  // A new run setting is a new draft version: the confirmation is withdrawn, the unchanged situation keeps its entry.
+  const edited = await lab.updateDraft(draft.id, currentHash, { settings: { maxTurns: 5 } });
+  assert.equal(edited.acceptedDraftHash, undefined);
+  assert.deepEqual(edited.acceptedTests, accepted.acceptedTests);
+  assert.notEqual(draftHash(edited), currentHash);
+  await assert.rejects(lab.start(edited.id, { approved: true, reviewer: 'human', expectedHash: draftHash(edited), requireAccepted: true }), /Сначала подтвердите ожидания ситуаций/);
+  const reconfirmed = await lab.acceptDraft(edited.id, draftHash(edited));
+  assert.deepEqual(reconfirmed.acceptedTests, accepted.acceptedTests, 'an unchanged situation keeps its identity and date');
 
-  await lab.start(edited.id, { approved: true, reviewer: 'human', expectedHash: draftHash(edited) });
+  await lab.start(reconfirmed.id, { approved: true, reviewer: 'human', expectedHash: draftHash(reconfirmed), requireAccepted: true });
   await lab.waitForIdle();
-  const result = await lab.get(edited.id);
-  assert.equal(result.acceptedDraftHash, currentHash, 'running does not rewrite or clear acceptance metadata');
-  assert.deepEqual(result.acceptedTests, []);
+  const result = await lab.get(reconfirmed.id);
+  assert.equal(result.phase, 'results_review', result.error ?? '');
+  assert.equal(result.acceptedDraftHash, draftHash(reconfirmed), 'running does not rewrite or clear acceptance metadata');
+  assert.deepEqual(result.acceptedTests, accepted.acceptedTests);
   const repeated = await lab.repeat(result.id);
   assert.equal(repeated.acceptedDraftHash, undefined, 'a fresh draft starts without review metadata');
-  assert.deepEqual(repeated.acceptedTests, []);
+  assert.deepEqual(repeated.acceptedTests, accepted.acceptedTests, 'an unchanged situation stays accepted in the repeat');
 });
 
 test('accepting rejects an empty draft, a compare record and a started run without mutation', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
-  const one = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 }); await lab.waitForIdle();
-  const emptyRecord = await lab.get(one.id); emptyRecord.scenarios = []; await lab.store.save(emptyRecord);
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const emptyRecord = await externalDraft(lab, { count: 1 }, draft => { draft.scenarios = []; });
   await assert.rejects(lab.acceptDraft(emptyRecord.id, draftHash(emptyRecord)), /нечего/i);
   assert.deepEqual(await lab.get(emptyRecord.id), emptyRecord);
 
-  const many = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2 }); await lab.waitForIdle();
-  const manyRecord = await lab.get(many.id);
-
-  const compare = await lab.create(demoInput()); await lab.waitForIdle();
-  const compareRecord = await lab.get(compare.id);
+  const compareRecord = await externalDraft(lab, { count: 1 }, draft => { draft.workflow = 'compare'; });
   await assert.rejects(lab.acceptDraft(compareRecord.id, draftHash(compareRecord)), /evaluate/i);
   assert.deepEqual(await lab.get(compareRecord.id), compareRecord);
 
-  await lab.start(manyRecord.id, { approved: true, reviewer: 'human', expectedHash: draftHash(manyRecord) }); await lab.waitForIdle();
-  const completed = await lab.get(manyRecord.id);
+  const completed = await runDraft(lab, await externalDraft(lab, { count: 2 }), 'human');
   await assert.rejects(lab.acceptDraft(completed.id, draftHash(completed)), /черновик/i);
   assert.deepEqual(await lab.get(completed.id), completed);
 });
 
 test('one confirmation covers every situation of the draft and keeps unchanged entries', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
-  const created = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2 }); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const draft = await externalDraft(lab, { count: 2 });
   assert.equal(draft.scenarios.length, 2, draft.error ?? '');
   const hash = draftHash(draft);
 
@@ -476,285 +356,56 @@ test('one confirmation covers every situation of the draft and keeps unchanged e
   assert.deepEqual(await lab.acceptDraft(draft.id, hash), accepted, 'confirming the same draft twice writes nothing');
   assert.equal((await lab.get(draft.id)).updatedAt, accepted.updatedAt);
 
-  const kept = accepted.scenarios[1]!.id;
-  const keptEntry = accepted.acceptedTests!.find(test => test.scenarioId === kept)!;
-  const edited = await lab.updateDraft(draft.id, hash, { scenarios: [{ ...accepted.scenarios[0]!, title: 'Другая ситуация' }] });
-  assert.deepEqual(edited.acceptedTests!.map(test => test.scenarioId), [kept], 'only the untouched situation stays confirmed');
+  // A new agent version needs a fresh confirmation; the situations themselves did not change, so they keep their entries.
+  const edited = await lab.updateDraft(draft.id, hash, { targetVersion: 'v2' });
+  assert.equal(edited.acceptedDraftHash, undefined);
+  assert.deepEqual(edited.acceptedTests, accepted.acceptedTests);
   const again = await lab.acceptDraft(edited.id, draftHash(edited));
-  assert.equal(again.acceptedTests!.length, 2);
-  assert.deepEqual(again.acceptedTests!.find(test => test.scenarioId === kept), keptEntry, 'an unchanged situation keeps its entry');
+  assert.equal(again.acceptedDraftHash, draftHash(edited));
+  assert.deepEqual(again.acceptedTests, accepted.acceptedTests, 'an unchanged situation keeps its entry');
 });
 
-const REFUND_RULE = 'Верните деньги через терминал в течение трёх дней.';
-/** Two judge-evaluated situations: their goal is scored by the `goal_attainment` rubric, not by exact checks. */
-function judgeGoalRuntime(): Runtime {
-  const situation = (index: number) => ({
-    id: `case_${index}`, familyId: `case_${index}`, title: `Ситуация ${index}`, requirementIds: ['refund_rule'],
-    provenance: 'synthetic' as const, tier: 'regression' as const,
-    user: { goal: `Вернуть деньги по операции ${index}`, facts: 'Оплата картой.', behavior: 'Спрашивает один раз.',
-      opening: 'Как вернуть деньги?', maxFollowUps: 0 },
-    initialState: { records: {}, writableFields: [], transientFailures: 0 },
-    checks: [{ id: 'mentions_terminal', kind: 'answer_contains' as const, description: 'Ответ называет терминал.', value: 'терминал' }],
-    metrics: [{ ...goalAttainment, passCriteria: `Ожидание ${index}` }],
-    successCriteria: `Ожидание ${index}`, goalObservation: 'reply' as const,
-  });
-  return {
-    async prepare({ sources }) {
-      return { requirements: [{ id: 'refund_rule', text: REFUND_RULE, sourceId: sources[0]!.id, quote: REFUND_RULE, critical: true }],
-        questions: [], agent: { name: 'Агент эквайринга', instructions: REFUND_RULE, tools: [] }, scenarios: [situation(1), situation(2)] };
-    },
-    async assess({ scenario }) { return (scenario.metrics ?? []).map(metric => ({ metricId: metric.id, result: 'pass' as const, rationale: 'Фикстура.', evidence: [1] })); },
-    async improve() { throw new Error('unused'); },
-    async openTarget() { return { async respond() { return 'Верните через терминал.'; }, async close() {} }; },
-    async userTurn() { throw new Error('unused'); },
-  };
-}
-const judgeGoalInput = () => ({ task: 'Проверить возвраты', goalObservation: 'reply' as const,
-  mode: 'live' as const, workflow: 'evaluate' as const, scenarioCount: 2, materials: [{ name: 'Правила возврата', content: REFUND_RULE }],
-  target: { kind: 'sandbox' as const }, settings: { repeats: 1, maxIterations: 1, userModes: ['static' as const] } });
-
-test('the owner rewrites one expectation in their own words; it becomes the criterion and the old confirmation goes stale', async t => {
-  const { lab } = await setup(t, judgeGoalRuntime());
-  const created = await lab.create(judgeGoalInput()); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  assert.equal(draft.phase, 'review', draft.error ?? '');
-  assert.equal(draft.scenarios.length, 2);
-  const hash = draftHash(draft);
-  const accepted = await lab.acceptDraft(draft.id, hash);
-  const card = accepted.scenarios[0]!;
-  const other = accepted.scenarios[1]!;
-
-  const before = await lab.get(draft.id);
-  await assert.rejects(lab.setExpectation(draft.id, '0'.repeat(64), card.id, 'Текст'), /Черновик изменился, пока вы смотрели/);
-  await assert.rejects(lab.setExpectation(draft.id, hash, card.id, '   \n  '), /Ожидание пустое/);
-  await assert.rejects(lab.setExpectation(draft.id, hash, card.id, 'я'.repeat(3001)), /Ожидание длиннее 3000 знаков/);
-  await assert.rejects(lab.setExpectation(draft.id, hash, 'no_such_card', 'Текст'), /Нет такой ситуации в черновике: no_such_card\./);
-  assert.deepEqual(await lab.get(draft.id), before, 'a rejected expectation writes nothing');
-
-  const text = 'Объяснить порядок возврата через терминал.';
-  const edited = await lab.setExpectation(draft.id, hash, card.id, `  ${text}  `);
-  const changed = edited.scenarios.find(item => item.id === card.id)!;
-  assert.equal(changed.successCriteria, text, 'the owner text is stored verbatim');
-  const goal = changed.metrics!.find(metric => metric.id === 'goal_attainment')!;
-  assert.equal(goal.passCriteria, text);
-  assert.equal(goal.failCriteria, goalAttainment.failCriteria);
-  assert.equal(goal.description, goalAttainment.description);
-  assert.deepEqual(changed.checks, card.checks);
-  assert.deepEqual(edited.scenarios.find(item => item.id === other.id), other, 'the other situation is untouched');
-  assert.deepEqual(edited.ownerExpectationScenarioIds, [card.id]);
-  assert.notEqual(draftHash(edited), hash);
-  assert.equal(edited.acceptedDraftHash, hash, 'the earlier confirmation stays visibly stale');
-  assert.deepEqual(edited.acceptedTests!.map(entry => entry.scenarioId), [other.id]);
-  assert.equal(edited.reviewedAt, null); assert.equal(edited.reviewMode, null); assert.equal(edited.manifestHash, null);
-
-  const again = await lab.setExpectation(draft.id, draftHash(edited), card.id, text);
-  assert.equal(again.updatedAt, edited.updatedAt, 'the same text writes nothing');
-
-  const stub: Trial = { id: 'trial', revisionId: 'rev', scenarioId: changed.id, familyId: changed.familyId, repeat: 0, userMode: 'static',
-    split: 'dev', manifestHash: 'h', outcome: 'fail', reason: 'r', checks: [],
-    events: [{ seq: 0, type: 'user', text: 'Как вернуть деньги?' }, { seq: 1, type: 'assistant', text: 'Не знаю.' }],
-    initialState: changed.initialState, finalState: changed.initialState, usage: emptyUsage(), elapsedMs: 1 };
-  const judged = judgeInput({ scenario: changed, sources: edited.sources, trial: stub });
-  assert.equal(judged.scenario.successCriteria, text);
-  assert.equal(judged.scenario.metrics!.find(metric => metric.id === 'goal_attainment')!.passCriteria, text);
-
-  const notes = compareRuns({ ...accepted, id: 'before-run', phase: 'results_review' },
-    { ...edited, id: 'after-run', phase: 'results_review' }).notes;
-  assert.ok(notes.some(note => note.startsWith('Содержимое карточек изменилось')), notes.join(' | '));
-
-  await assert.rejects(lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(edited), requireAccepted: true }),
-    /Сначала подтвердите ожидания ситуаций/);
-  assert.equal((await lab.get(draft.id)).phase, 'review', 'a refused start writes nothing');
-  const reconfirmed = await lab.acceptDraft(draft.id, draftHash(edited));
-  await lab.start(reconfirmed.id, { approved: true, reviewer: 'human', expectedHash: draftHash(reconfirmed), requireAccepted: true });
-  await lab.waitForIdle();
-  assert.notEqual((await lab.get(draft.id)).phase, 'review', 'a confirmed draft starts');
-});
-
-test('an exact-check situation keeps the old refusal; the owner marker survives hashes, schema, repeat and case selection', async t => {
-  const { lab } = await setup(t, judgeGoalRuntime());
-  const created = await lab.create(judgeGoalInput()); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  const hash = draftHash(draft);
-  const card = draft.scenarios[0]!;
-
-  // A situation the judge does not score keeps today's refusal, in setExpectation and in updateDraft.
-  const { lab: demoLab } = await setup(t, createDemoRuntime());
-  const demo = await demoLab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 }); await demoLab.waitForIdle();
-  const demoDraft = await demoLab.get(demo.id);
-  const demoCard = demoDraft.scenarios[0]!;
-  assert.equal((demoCard.metrics ?? []).some(metric => metric.id === 'goal_attainment'), false);
-  await assert.rejects(demoLab.setExpectation(demoDraft.id, draftHash(demoDraft), demoCard.id, 'Своими словами.'),
-    /Эту ситуацию проверяют точные проверки, а не судья\. Поправьте её словами: a\./);
-  assert.deepEqual(await demoLab.get(demoDraft.id), demoDraft);
-  await assert.rejects(demoLab.updateDraft(demoDraft.id, draftHash(demoDraft), { scenarios: [{ ...demoCard, successCriteria: 'Другое ожидание' }] }),
-    /изменилось, а исполняемые проверки остались прежними/);
-  // The same edit of a judge-evaluated situation now goes through.
-  const relaxed = await lab.updateDraft(draft.id, hash, { scenarios: [{ ...card, successCriteria: 'Другое ожидание' }] });
-  assert.equal(relaxed.scenarios.find(item => item.id === card.id)!.successCriteria, 'Другое ожидание');
-
-  const edited = await lab.setExpectation(draft.id, draftHash(relaxed), card.id, 'Ожидание владельца.');
-  assert.deepEqual(edited.ownerExpectationScenarioIds, [card.id]);
+test("an old record's owner-expectation marker survives hashes, schema, repeat and case selection", async t => {
+  // Owner-written expectations are no longer edited in a draft, but records that carry the marker keep it.
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const marked = await externalDraft(lab, { count: 2 }, draft => { draft.ownerExpectationScenarioIds = [draft.scenarios[0]!.id]; });
+  const card = marked.scenarios[0]!;
+  assert.deepEqual(marked.ownerExpectationScenarioIds, [card.id]);
 
   // Old records keep their exact hash and the field never enters the measurement hash.
-  const legacy = structuredClone(edited); delete legacy.ownerExpectationScenarioIds;
+  const legacy = structuredClone(marked); delete legacy.ownerExpectationScenarioIds;
   assert.equal(draftHash(legacy), draftHash({ ...legacy, ownerExpectationScenarioIds: undefined }));
-  assert.notEqual(draftHash(edited), draftHash(legacy), 'the marker is part of the draft version');
-  // The edit itself already moved the measurement: it rewrote successCriteria and the goal rubric,
-  // so the card fingerprint changed. The marker is only a label on that change.
-  assert.equal(measurementHash(edited), measurementHash(legacy), 'the marker never changes what is measured');
+  assert.notEqual(draftHash(marked), draftHash(legacy), 'the marker is part of the draft version');
+  assert.equal(measurementHash(marked), measurementHash(legacy), 'the marker never changes what is measured');
 
   experimentSchema.parse(legacy);
-  assert.throws(() => experimentSchema.parse({ ...edited, ownerExpectationScenarioIds: ['not_a_card'] }), /ситуации этого набора/);
-  assert.throws(() => experimentSchema.parse({ ...edited, ownerExpectationScenarioIds: [card.id, card.id] }), /Duplicate owner expectation IDs/);
+  assert.throws(() => experimentSchema.parse({ ...marked, ownerExpectationScenarioIds: ['not_a_card'] }), /ситуации этого набора/);
+  assert.throws(() => experimentSchema.parse({ ...marked, ownerExpectationScenarioIds: [card.id, card.id] }), /Duplicate owner expectation IDs/);
 
-  await lab.acceptDraft(edited.id, draftHash(edited));
-  const confirmed = await lab.get(edited.id);
-  await lab.start(confirmed.id, { approved: true, reviewer: 'human', expectedHash: draftHash(confirmed) });
-  await lab.waitForIdle();
-  const done = await lab.get(edited.id);
+  const done = await runDraft(lab, marked, 'human');
+  assert.equal(done.phase, 'results_review', done.error ?? '');
   const repeated = await lab.repeat(done.id);
   assert.deepEqual(repeated.ownerExpectationScenarioIds, [card.id], 'a repeat keeps the marker');
   const narrowed = await lab.repeat(done.id, [done.scenarios[1]!.id]);
   assert.equal(narrowed.ownerExpectationScenarioIds, undefined, 'a --case selection drops markers of situations left out');
 });
 
-test('validation grounds expectations and user facts, uses reactive turns, excludes missing customer data and masked dialogues', async t => {
-  const policy = 'Отвечайте по базе знаний и не отправляйте клиента в поддержку.';
-  const dialogues = Array.from({ length: 3 }, (_, index) => ({ id: `real_${index}`, outcome: index === 0 ? 'failure' as const : 'success' as const,
-    messages: [
-      { role: 'user' as const, content: `Вопрос ${index}` }, { role: 'assistant' as const, content: 'Уточните деталь.' },
-      { role: 'user' as const, content: `Деталь ${index}` }, { role: 'assistant' as const, content: 'Ответ из базы.' },
-    ] }));
-  let grounded = false;
-  let prepareCalls = 0, activeGoals = 0, maxActiveGoals = 0;
-  const attempts = new Map<string, number>();
-  const runtime: Runtime = {
-    async prepare(input) {
-      assert.equal(input.scenarioCount, 0);
-      grounded = true; prepareCalls++;
-      return { requirements: [{ id: 'reply_rule', text: policy, sourceId: 'source-1', quote: policy, critical: true }], questions: [],
-        agent: { name: 'Real agent', instructions: policy, tools: [] }, scenarios: [] };
-    },
-    async goals(input) {
-      assert.equal(grounded, true);
-      assert.equal(input.requireApplicable, true);
-      assert.deepEqual(input.requirements?.map(requirement => requirement.id), ['reply_rule']);
-      assert.equal(input.dialogues.length, 1);
-      const dialogue = input.dialogues[0]!;
-      attempts.set(dialogue.id, (attempts.get(dialogue.id) ?? 0) + 1);
-      activeGoals++; maxActiveGoals = Math.max(maxActiveGoals, activeGoals);
-      await new Promise(resolve => setTimeout(resolve, 5)); activeGoals--;
-      if (dialogue.id === 'real_1' && attempts.get(dialogue.id) === 1) throw new Error('Pi provider response incomplete: connection failure');
-      return [{ id: `goal_${dialogue.id}`, goal: `Ответить на ${dialogue.id}`, opening: dialogue.messages[0]!.content,
-        facts: `Пользователь сообщил: ${dialogue.messages.filter(m => m.role === 'user').map(m => m.content).join('; ')}`,
-        testability: dialogue.id === 'customer' ? 'customer_data' : 'knowledge', testabilityReason: dialogue.id === 'customer' ? 'Нужна персональная ставка клиента.' : 'Достаточно базы знаний.',
-        requirementIds: ['reply_rule'], evidenceDialogueIds: [dialogue.id], successCriteria: policy }];
-    },
-    async improve() { throw new Error('unused'); }, async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const created = await lab.create(createInputSchema.parse({ task: 'Проверить ответы', mode: 'live', scenarioCount: 0, validationCount: 4, dialogues: [...dialogues,
-    { id: 'customer', messages: [{ role: 'user', content: 'Какая у меня ставка?' }] },
-    { id: 'masked', messages: [{ role: 'user', content: '*** ###' }] }],
-    materials: [{ name: 'prompt', kind: 'prompt', content: policy }], settings: { userModes: ['scripted'], maxTurns: 16 } }));
-  await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  assert.equal(draft.phase, 'review', draft.error ?? '');
-  assert.deepEqual(draft.scenarios.map(card => card.id), dialogues.map(dialogue => dialogue.id));
-  assert.ok(draft.scenarios.every(card => card.goalObservation === 'reply'));
-  assert.deepEqual(draft.settings.userModes, ['reactive']);
-  assert.ok(draft.scenarios.every(card => card.user.script === undefined && card.user.facts.includes('Деталь')));
-  assert.ok(draft.scenarios.every(card => /передал вопрос оператору/.test(card.user.behavior) && /Каждый раз, когда агент называет другую организацию/.test(card.user.behavior)), 'the simulator stops after a handoff and corrects every wrong object');
-  assert.ok(draft.scenarios.every(card => card.metrics?.map(metric => metric.id).join(',') === 'prompt_compliance,goal_attainment,reply_quality,user_fidelity'));
-  assert.match(draft.limitations.join('\n'), /Исключён customer: Нужна персональная ставка/);
-  assert.match(draft.limitations.join('\n'), /Исключён masked:/);
-  assert.match(draft.limitations.join('\n'), /Измеримы 3 из запрошенных 4/);
-  assert.deepEqual(draft.validationExclusions, [
-    { dialogueId: 'masked', kind: 'masked', reason: 'реплика клиента целиком скрыта обезличиванием' },
-    { dialogueId: 'customer', kind: 'customer_data', reason: 'Нужна персональная ставка клиента.' },
-  ]);
-  assert.equal(qualityLines(qualitySummary(draft)).coverage, 'Не вошли в набор 2 диалога: нужны данные клиента — 1, реплика клиента скрыта — 1. В accuracy они не считаются.');
-  assert.equal(attempts.has('masked'), false, 'masked-only turns never reach the model');
-  assert.equal(attempts.get('real_1'), 2, 'one transient transport failure is retried once');
-  assert.ok(maxActiveGoals >= 4, `recorded dialogues are read in wide parallel batches, saw ${maxActiveGoals}`);
-  const again = await lab.create(createInputSchema.parse({ task: 'Проверить ответы', mode: 'live', scenarioCount: 0, validationCount: 4, dialogues,
-    materials: [{ name: 'prompt', kind: 'prompt', content: policy }], settings: { userModes: ['scripted'], maxTurns: 16 } }));
-  await lab.waitForIdle();
-  const repeated = await lab.get(again.id);
-  assert.equal(repeated.phase, 'review', repeated.error ?? '');
-  assert.equal(prepareCalls, 1, 'identical materials, task and model reuse the grounded requirements');
-  assert.deepEqual(repeated.requirements, draft.requirements);
-  assert.match(repeated.limitations.join('\n'), /Требования взяты из кэша подготовки/);
-});
-
 /** A validation build whose model goal ids are chosen by `goalId`; `null` means the model found no goal. */
-async function validationBuild(t: TestContext, goalId: (dialogueId: string) => string | null) {
-  const policy = 'Отвечайте по базе знаний.';
-  const dialogues = ['real_a', 'real_b', 'real_c'].map(id => ({ id, messages: [
-    { role: 'user' as const, content: `Вопрос ${id}` }, { role: 'assistant' as const, content: 'Ответ из базы.' },
-  ] }));
-  const runtime: Runtime = {
-    async prepare() {
-      return { requirements: [{ id: 'reply_rule', text: policy, sourceId: 'source-1', quote: policy, critical: true }], questions: [],
-        agent: { name: 'Real agent', instructions: policy, tools: [] }, scenarios: [] };
-    },
-    async goals(input) {
-      const dialogue = input.dialogues[0]!;
-      const id = goalId(dialogue.id);
-      if (id === null) return [];
-      return [{ id, goal: `Ответить на ${dialogue.id}`, opening: dialogue.messages[0]!.content, facts: 'Только вопрос.',
-        testability: 'knowledge', testabilityReason: 'Достаточно базы знаний.', requirementIds: ['reply_rule'],
-        evidenceDialogueIds: [dialogue.id], successCriteria: policy }];
-    },
-    async improve() { throw new Error('unused'); }, async openTarget() { throw new Error('unused'); }, async userTurn() { throw new Error('unused'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const created = await lab.create(createInputSchema.parse({ task: 'Проверить ответы', mode: 'live', scenarioCount: 0, validationCount: 3, dialogues,
-    materials: [{ name: 'prompt', kind: 'prompt', content: policy }], settings: { userModes: ['scripted'], maxTurns: 16 } }));
-  await lab.waitForIdle();
-  return { draft: await lab.get(created.id), dialogues };
-}
-const GOAL_ID_COLLISION = 'Модель выдала совпадающие id целей; каждой цели присвоен id её диалога.';
-
-test('a validation build with colliding model goal ids keeps one card per dialogue and names the collision', async t => {
-  const { draft, dialogues } = await validationBuild(t, () => 'same');
-  assert.equal(draft.phase, 'review', draft.error ?? '');
-  assert.deepEqual(draft.scenarios.map(card => card.id), dialogues.map(dialogue => dialogue.id));
-  assert.ok(draft.limitations.includes(GOAL_ID_COLLISION));
-});
-
-test('distinct model goal ids leave no collision note and cards still carry dialogue ids', async t => {
-  const { draft, dialogues } = await validationBuild(t, id => `goal_${id}`);
-  assert.equal(draft.phase, 'review', draft.error ?? '');
-  assert.deepEqual(draft.scenarios.map(card => card.id), dialogues.map(dialogue => dialogue.id));
-  assert.equal(draft.limitations.includes(GOAL_ID_COLLISION), false);
-});
-
-test('a dialogue without a model goal is an unconfirmed exclusion, not a duplicate-id failure', async t => {
-  const { draft } = await validationBuild(t, id => id === 'real_b' ? null : 'same');
-  assert.equal(draft.phase, 'review', draft.error ?? '');
-  assert.deepEqual(draft.scenarios.map(card => card.id), ['real_a', 'real_c']);
-  assert.deepEqual(draft.validationExclusions?.map(item => [item.dialogueId, item.kind]), [['real_b', 'unconfirmed']]);
-});
-
 test('fifteen unaccepted cards still run, report accuracy, save, load and rerun intact', async t => {
-  const { lab, directory } = await setup(t, createDemoRuntime());
-  const input = demoEvaluationInput(); input.scenarioCount = 10;
-  const created = await lab.create(input); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  const additions = Array.from({ length: 5 }, (_, index) => ({
-    ...structuredClone(draft.scenarios[0]!), id: `batch_extra_${index + 1}`, title: `Batch sentinel ${index + 1}`,
-  }));
-  const batch = await lab.updateDraft(draft.id, draftHash(draft), { scenarios: additions });
+  const { lab, directory } = await setup(t, legacyDemoRuntime());
+  const batch = await externalDraft(lab, { count: 10 }, draft => {
+    draft.scenarios.push(...Array.from({ length: 5 }, (_, index) => ({
+      ...structuredClone(draft.scenarios[0]!), id: `batch_extra_${index + 1}`, title: `Batch sentinel ${index + 1}`,
+    })));
+  });
   assert.equal(batch.scenarios.length, 15);
   assert.equal(batch.acceptedDraftHash, undefined);
   assert.deepEqual(batch.acceptedTests, []);
 
-  await lab.start(batch.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(batch) }); await lab.waitForIdle();
-  const first = await lab.get(batch.id);
+  const first = await runDraft(lab, batch, 'automated');
   assert.equal(first.phase, 'results_review', first.error ?? '');
   assert.equal(first.trials.length, 15);
+  // Only the two read-only questions pass: the agent cannot move an appointment.
   assert.deepEqual(qualitySummary(first).cards, { passed: 2, failed: 13, unknown: 0, invalid: 0, notReached: 0, total: 15, accuracy: 2 / 15 });
   assert.equal(first.acceptedDraftHash, undefined);
 
@@ -763,42 +414,32 @@ test('fifteen unaccepted cards still run, report accuracy, save, load and rerun 
   assert.equal(loaded.scenarios.length, 15);
   assert.equal(loaded.acceptedDraftHash, undefined);
   assert.deepEqual(loaded.acceptedTests, []);
-  await lab.start(loaded.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(loaded) }); await lab.waitForIdle();
-  const rerun = await lab.get(loaded.id);
+  const rerun = await runDraft(lab, loaded, 'automated');
   assert.equal(rerun.trials.length, 15);
   assert.deepEqual(rerun.scenarios.map(scenario => scenario.id), first.scenarios.map(scenario => scenario.id));
   assert.deepEqual(qualitySummary(rerun).cards, qualitySummary(first).cards);
   assert.equal(rerun.acceptedDraftHash, undefined);
 });
 
-test('one user card requires exact human approval, runs one unchanged agent, then preserves separate human result review', async t => {
-  const runtime = createDemoRuntime();
-  let targets = 0; let improvements = 0;
-  const openTarget = runtime.openTarget;
-  runtime.openTarget = async (...args) => { targets++; return openTarget(...args); };
-  runtime.improve = async () => { improvements++; throw new Error('Evaluation must not optimize'); };
-  const { lab } = await setup(t, runtime);
-  const input = demoInput(); input.workflow = 'evaluate'; input.scenarioCount = 1; input.settings.repeats = 1;
-  const created = await lab.create(input); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  assert.equal(draft.phase, 'review'); assert.equal(draft.scenarios.length, 1); assert.equal(targets, 0);
+test('one user card requires exact human approval, runs the agent once, then preserves separate human result review', async t => {
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const draft = await externalDraft(lab, { count: 1, settings: { repeats: 1 }, target: appointmentAgent('createRepairedSession') });
+  assert.equal(draft.phase, 'review'); assert.equal(draft.scenarios.length, 1);
   assert.ok(draft.scenarios[0]!.user.persona); assert.ok(draft.scenarios[0]!.metrics?.length);
   const originalHash = draftHash(draft);
   await assert.rejects(lab.start(draft.id, { approved: false, reviewer: 'automated', expectedHash: originalHash }), /подтверждения/);
   await assert.rejects(lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: 'stale' }), /подтверждение.*версии/);
-  const cards = structuredClone(draft.scenarios);
-  cards[0]!.user.persona = 'A busy customer with one appointment';
-  const edited = await lab.updateDraft(draft.id, originalHash, { scenarios: cards });
+  const edited = await lab.updateDraft(draft.id, originalHash, { settings: { maxTurns: 5 } });
   assert.notEqual(draftHash(edited), originalHash); assert.equal(edited.reviewedAt, null);
-  await assert.rejects(lab.updateDraft(draft.id, originalHash, { scenarios: cards }), /Черновик изменился/);
+  await assert.rejects(lab.updateDraft(draft.id, originalHash, { settings: { maxTurns: 4 } }), /Черновик изменился/);
   await assert.rejects(lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: originalHash }), /подтверждение.*версии/);
   await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(edited) }); await lab.waitForIdle();
   const result = await lab.get(draft.id);
   assert.equal(result.phase, 'results_review', result.error ?? ''); assert.equal(result.reviewMode, 'human');
-  assert.equal(result.revisions.length, 1); assert.equal(result.comparisons.length, 0); assert.equal(improvements, 0);
-  assert.equal(targets, 1); assert.equal(result.trials.length, 1); assert.ok(result.trials[0]!.assessments?.length);
+  assert.equal(result.revisions.length, 1); assert.equal(result.comparisons.length, 0);
+  assert.equal(result.trials.length, 1); assert.ok(result.trials[0]!.assessments?.length);
   assert.equal(result.manifestHash, measurementHash(result));
-  await assert.rejects(lab.updateDraft(draft.id, draftHash(result), { scenarios: cards }), /незапущенный черновик/);
+  await assert.rejects(lab.updateDraft(draft.id, draftHash(result), { settings: { maxTurns: 4 } }), /незапущенный черновик/);
   const originalTrial = structuredClone(result.trials[0]!);
   const priorResultHash = resultHash(result);
   await assert.rejects(lab.addHumanReview(result.id, { trialId: 'missing', verdict: 'invalid', note: 'Wrong user.' }), /Такого диалога/);
@@ -835,10 +476,8 @@ test('closing during a draft edit keeps the writer lock until the edit checkpoin
 });
 
 test('approval reserves its draft while reading so a concurrent edit cannot be overwritten by a stale start snapshot', async t => {
-  const { lab } = await setup(t);
-  const input = demoInput(); input.workflow = 'evaluate'; input.scenarioCount = 1; input.settings.repeats = 1;
-  const created = await lab.create(input); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const draft = await externalDraft(lab, { count: 1, settings: { repeats: 1 } });
   const entered = deferred(); const release = deferred();
   const get = lab.store.get.bind(lab.store); let first = true;
   lab.store.get = async id => {
@@ -848,27 +487,22 @@ test('approval reserves its draft while reading so a concurrent edit cannot be o
   };
   const starting = lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) });
   await entered.promise;
-  const scenarios = structuredClone(draft.scenarios);
-  scenarios[0]!.user.persona = 'A newer draft that has not been approved';
   try {
-    await assert.rejects(lab.updateDraft(draft.id, draftHash(draft), { scenarios }), /другая операция/);
+    await assert.rejects(lab.updateDraft(draft.id, draftHash(draft), { settings: { maxTurns: 5 } }), /другая операция/);
   } finally { release.resolve(); }
   await starting; await lab.waitForIdle();
   const result = await lab.get(draft.id);
   assert.equal(result.phase, 'results_review', result.error ?? '');
   assert.deepEqual(result.scenarios, draft.scenarios);
+  assert.deepEqual(result.settings, draft.settings);
   assert.equal(result.trials.length, 1);
 });
 
 test('a large malformed assessor response preserves the completed trial with a persistable assessment error', async t => {
-  const runtime = createDemoRuntime();
-  runtime.assess = async () => Array.from({ length: 8 }, () => ({})) as never;
+  const runtime: Runtime = { ...legacyDemoRuntime(), assess: async () => Array.from({ length: 8 }, () => ({})) as never };
   const { lab } = await setup(t, runtime);
-  const input = demoInput(); input.workflow = 'evaluate'; input.scenarioCount = 1; input.settings.repeats = 1;
-  const created = await lab.create(input); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) });
-  await lab.waitForIdle();
+  const draft = await externalDraft(lab, { count: 1, settings: { repeats: 1 }, target: appointmentAgent('createRepairedSession') });
+  await runDraft(lab, draft, 'human');
   const saved = await lab.store.get(draft.id);
   assert.equal(saved.phase, 'results_review', saved.error ?? '');
   assert.equal(saved.trials.length, 1);
@@ -879,52 +513,17 @@ test('a large malformed assessor response preserves the completed trial with a p
   assert.ok(saved.trials[0]!.assessmentError!.length <= 4000);
 });
 
-test('evaluation runs every user mode, skips scripted cards without a script, and rejects multi-mode comparison', async t => {
-  const { lab } = await setup(t);
-  const input = demoInput(); input.workflow = 'evaluate'; input.scenarioCount = 3; input.settings.repeats = 1; input.settings.userModes = ['static', 'scripted', 'reactive'];
-  const created = await lab.create(input); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
+test('evaluation runs every user mode and skips scripted cards without a script', async t => {
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const draft = await externalDraft(lab, { count: 3, settings: { repeats: 1, userModes: ['static', 'scripted', 'reactive'] } });
   const withScript = draft.scenarios.filter(s => s.user.script?.length).length;
   assert.ok(withScript >= 1 && withScript < draft.scenarios.length, `scripted cards: ${withScript}`);
-  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-  const result = await lab.get(draft.id);
+  const result = await runDraft(lab, draft, 'human');
   assert.equal(result.phase, 'results_review', result.error ?? '');
   const byMode = (mode: string) => result.trials.filter(tr => tr.userMode === mode).length;
   assert.deepEqual([byMode('static'), byMode('scripted'), byMode('reactive')], [3, withScript, 3]);
   assert.ok(result.limitations.some(l => /Scripted mode skipped/.test(l)));
   assert.ok(result.trials.filter(tr => tr.userMode === 'static').every(tr => tr.events.filter(e => e.type === 'user').length === 1));
-  const compare = demoInput(); compare.settings.userModes = ['static', 'reactive'];
-  await assert.rejects(lab.create(compare), /в одном режиме пользователя/);
-  await assert.rejects(lab.create(createInputSchema.parse({ ...demoInput(), target: { kind: 'http', url: 'http://localhost:1' } })), /внешнего агента/);
-});
-
-test('golden cases and real dialogues enter the draft without inventing user profiles', async t => {
-  const { lab } = await setup(t);
-  const input = createInputSchema.parse({
-    ...demoInput(), workflow: 'evaluate', scenarioCount: 2, settings: { ...demoInput().settings, repeats: 1 },
-    goldenCases: [{ id: 'gold_move', goal: 'Move appointment A101 to 14:00', opening: 'Please move appointment A101 to 14:00.', successCriteria: 'A101 is at 14:00',
-      initialState: { records: { A101: { time: '09:00', owner: 'Sample customer', status: 'booked' } }, writableFields: ['time'], transientFailures: 0 },
-      checks: [{ id: 'time', kind: 'state_equals', description: 'moved', recordId: 'A101', field: 'time', value: '14:00' }] }],
-    dialogues: [
-      { id: 'd1', messages: [{ role: 'user', content: 'move A101 to 14:00 pls' }, { role: 'assistant', content: 'Done.' }], outcome: 'success' },
-      { id: 'd2', messages: [{ role: 'user', content: 'can you move my appt? not sure of the id' }, { role: 'assistant', content: 'Which appointment?' }], outcome: 'abandoned' },
-    ],
-  });
-  const created = await lab.create(input); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  assert.equal(draft.phase, 'review', draft.error ?? '');
-  assert.deepEqual(draft.profiles, []);
-  const golden = draft.scenarios.find(s => s.id === 'gold_move')!;
-  assert.equal(golden.provenance, 'curated'); assert.equal(golden.checks.length, 1); assert.deepEqual(golden.requirementIds, []);
-  const synthetic = draft.scenarios.filter(s => s.provenance === 'synthetic');
-  assert.equal(synthetic.length, 2);
-  assert.ok(synthetic.every(s => !s.profileId));
-  assert.notEqual(measurementHash(draft), measurementHash({ ...draft, dialogues: [] }));
-  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-  const result = await lab.get(draft.id);
-  assert.equal(result.phase, 'results_review', result.error ?? '');
-  const goldenTrial = result.trials.find(tr => tr.scenarioId === 'gold_move')!;
-  assert.equal(goldenTrial.outcome, 'pass', goldenTrial.reason);
 });
 
 test('a missing target yields a recoverable explanation and a rejected connection edit leaves the draft intact', async t => {
@@ -940,138 +539,17 @@ test('a missing target yields a recoverable explanation and a rejected connectio
   assert.equal(draftHash(await lab.get(draft.id)), draftHash(draft));
 });
 
-test('owner profile edits update linked cards, invalidate approval and survive a run and repeat', async t => {
-  const runtime = createDemoRuntime();
-  const users: unknown[] = []; const userTurn = runtime.userTurn;
-  runtime.userTurn = async (input, ctx) => { users.push(structuredClone(input.user)); return userTurn(input, ctx); };
-  const { lab } = await setup(t, runtime);
-  const created = await lab.create(createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2, settings: { repeats: 1 },
-    profiles: [{ id: 'hurried_owner', persona: 'A customer in a hurry', characteristics: ['Terse'] }],
-    dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'move A101 to 14:00 pls' }] }],
-  }));
-  await lab.waitForIdle();
-  const draft = await lab.get(created.id); assert.equal(draft.phase, 'review', draft.error ?? '');
-  const original = structuredClone(draft.profiles[0]!);
-  const id = original.id;
-  const edit = { id, override: { persona: null, characteristics: ['Answers only the question asked'] } };
-  const edited = await lab.updateDraft(draft.id, draftHash(draft), { profileEdits: [edit] });
-  assert.deepEqual(edited.profiles[0], { ...original, draftOverride: edit.override });
-  assert.ok(edited.scenarios.some(s => s.provenance === 'production'));
-  assert.ok(edited.scenarios.every(s => s.profileId === id && !s.user.persona));
-  assert.ok(edited.scenarios.every(s => s.user.characteristics?.[0] === edit.override.characteristics[0]));
-  assert.notEqual(draftHash(edited), draftHash(draft)); assert.notEqual(measurementHash(edited), measurementHash(draft));
-  await assert.rejects(lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }), /подтверждение.*версии/);
-  for (const profileEdits of [[{ id: 'unknown', override: null }], [edit, edit], [{ id, override: { source: 'owner' } }]]) {
-    await assert.rejects(lab.updateDraft(draft.id, draftHash(edited), { profileEdits } as never));
-    assert.deepEqual(await lab.get(draft.id), JSON.parse(JSON.stringify(edited)), 'a rejected edit must leave the saved draft intact');
-  }
-  const silentEdit = structuredClone(edited.scenarios); silentEdit[0]!.user.persona = 'Would be overwritten';
-  await assert.rejects(lab.updateDraft(draft.id, draftHash(edited), { scenarios: silentEdit }), /profileEdits/);
-  const restored = await lab.updateDraft(draft.id, draftHash(edited), { profileEdits: [{ id, override: null }] });
-  assert.deepEqual(restored.profiles[0], original); assert.deepEqual(restored.scenarios, draft.scenarios);
-  const cleared = await lab.updateDraft(draft.id, draftHash(restored), { profileEdits: [{ id, override: { persona: null, characteristics: [] } }] });
-  // Scripted fixture consent: exercise the same freeze/run boundary used by the human Pi UI.
-  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(cleared) }); await lab.waitForIdle();
-  const result = await lab.get(draft.id); assert.equal(result.phase, 'results_review', result.error ?? '');
-  assert.ok(users.length); assert.ok(users.every(u => !(u as { persona?: string }).persona));
-  await assert.rejects(lab.updateDraft(draft.id, draftHash(result), { profileEdits: [{ id, override: null }] }), /незапущенный черновик/);
-  const repeated = await lab.repeat(result.id);
-  assert.deepEqual(repeated.profiles, cleared.profiles); assert.deepEqual(repeated.scenarios, cleared.scenarios);
-  assert.equal(repeated.phase, 'review'); assert.equal(repeated.reviewMode, null); assert.equal(repeated.trials.length, 0);
-});
-
-test('logs yield production goals without requiring a user profile', async t => {
-  const runtime = createDemoRuntime();
-  const prepare = runtime.prepare;
-  runtime.prepare = async (input, ctx) => {
-    const result = await prepare(input, ctx);
-    for (const scenario of result.scenarios) { delete scenario.user.persona; delete scenario.user.characteristics; }
-    return result;
-  };
-  const { lab } = await setup(t, runtime);
-  const created = await lab.create(createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1,
-    dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'move A101 to 14:00 pls' }] }],
-  }));
-  await lab.waitForIdle(); const draft = await lab.get(created.id);
-  assert.equal(draft.phase, 'review', draft.error ?? ''); assert.deepEqual(draft.profiles, []);
-  assert.equal(draft.scenarios.length, 2); assert.ok(draft.scenarios.every(s => !s.profileId && !s.user.persona));
-  assert.equal(draft.scenarios.find(s => s.provenance === 'production')!.user.opening, 'move A101 to 14:00 pls');
-});
-
-test('owner notes and owner profiles are first-class inputs: cards may cite an owner profile and the runtime sees the notes', async t => {
-  const runtime = createDemoRuntime();
-  const prepare = runtime.prepare;
-  let seen: { notes?: string; profiles?: { id: string; source: string }[] } = {};
-  runtime.prepare = async (input, ctx) => { seen = { notes: input.notes, profiles: input.profiles?.map(p => ({ id: p.id, source: p.source })) }; return prepare(input, ctx); };
-  const { lab } = await setup(t, runtime);
-  const input = createInputSchema.parse({
-    ...demoInput(), workflow: 'evaluate', scenarioCount: 1, notes: 'Most users are in a hurry and do not know their appointment ID.',
-    profiles: [{ id: 'hurried_owner', persona: 'A customer in a hurry', characteristics: ['Terse', 'Impatient'] }],
-    dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'move A101 to 14:00' }], outcome: 'success' }],
-  });
-  const created = await lab.create(input); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  assert.equal(draft.phase, 'review', draft.error ?? '');
-  assert.equal(seen.notes, input.notes);
-  assert.deepEqual(seen.profiles, [{ id: 'hurried_owner', source: 'owner' }]);
-  assert.equal(draft.notes, input.notes);
-  assert.deepEqual(draft.profiles.map(p => p.source), ['owner']);
-  assert.equal(draft.scenarios[0]!.profileId, 'hurried_owner');
-  assert.equal(draft.scenarios[0]!.user.persona, 'A customer in a hurry');
-  const edited = await lab.updateDraft(draft.id, draftHash(draft), { settings: { repeats: 2 } });
-  assert.equal(edited.scenarios[0]!.profileId, 'hurried_owner');
-  assert.equal(edited.settings.repeats, 2);
-});
-
-test('real dialogues also yield production cards: observed goals with verbatim openings that cite supplied dialogues', async t => {
-  const { lab } = await setup(t);
-  const input = createInputSchema.parse({
-    ...demoInput(), workflow: 'evaluate', scenarioCount: 1, settings: { ...demoInput().settings, repeats: 1 },
-    dialogues: [
-      { id: 'd1', messages: [{ role: 'user', content: 'move A101 to 14:00 pls' }, { role: 'assistant', content: 'Done.' }], outcome: 'success' },
-      { id: 'd2', messages: [{ role: 'user', content: 'hi, what time is my appointment A102?' }, { role: 'assistant', content: '09:00.' }], outcome: 'success' },
-    ],
-  });
-  const created = await lab.create(input); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  assert.equal(draft.phase, 'review', draft.error ?? '');
-  const production = draft.scenarios.filter(s => s.provenance === 'production');
-  assert.equal(production.length, 2);
-  assert.deepEqual(production.map(s => s.user.opening).sort(), ['hi, what time is my appointment A102?', 'move A101 to 14:00 pls']);
-  assert.ok(production.every(s => !s.profileId && !s.user.persona));
-  assert.equal(draft.scenarios.filter(s => s.provenance === 'synthetic').length, 1);
-  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-  const result = await lab.get(draft.id);
-  assert.equal(result.phase, 'results_review', result.error ?? '');
-  assert.equal(result.trials.filter(tr => production.some(s => s.id === tr.scenarioId)).length, 2);
-});
-
-test('an observed goal whose opening is not a real user message fails preparation', async t => {
-  const runtime = createDemoRuntime();
-  runtime.goals = async () => [{ id: 'g', goal: 'x', opening: 'never said this', evidenceDialogueIds: ['d1'], successCriteria: 'y', facts: 'f', outcome: 'unknown' }];
-  const { lab } = await setup(t, runtime);
-  const input = createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1, dialogues: [{ id: 'd1', messages: [{ role: 'user', content: 'hello' }] }] });
-  const created = await lab.create(input); await lab.waitForIdle();
-  const failed = await lab.get(created.id);
-  assert.equal(failed.phase, 'error');
-  assert.match(failed.error ?? '', /opening/i);
-});
-
 test('repeat keeps the approved suite, discards results and requires fresh approval; target drift blocks execution', async t => {
-  const { lab, directory } = await setup(t);
+  const { lab, directory } = await setup(t, legacyDemoRuntime());
   const path = join(directory, 'target.mjs');
   await writeFile(path, 'export function createSession() { return { respond: () => "hello" }; }');
-  const input = createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1,
-    target: { kind: 'module', path }, targetVersion: 'v1', settings: { ...demoInput().settings, repeats: 1, userModes: ['static'] } });
-  const created = await lab.create(input); await lab.waitForIdle();
-  let draft = await lab.get(created.id);
-  assert.equal(draft.scenarios[0]!.goalObservation, 'reply', 'external cards default to reply evidence');
+  let draft = await externalDraft(lab, { count: 1, target: { kind: 'module', path, exportName: 'createSession' }, settings: { repeats: 1, userModes: ['static'] } },
+    record => { record.targetVersion = 'v1'; });
   await assert.rejects(lab.repeat(draft.id), /утверждёнными/);
   await writeFile(path, 'export function createSession() { return { respond: () => "new answer" }; }');
   await assert.rejects(lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }), /изменил/);
   draft = await lab.updateDraft(draft.id, draftHash(draft), { targetVersion: 'v2' });
-  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-  const before = await lab.get(draft.id);
+  const before = await runDraft(lab, draft, 'human');
   assert.equal(before.phase, 'results_review', before.error ?? '');
   const after = await lab.repeat(before.id);
   assert.notEqual(after.id, before.id); assert.equal(after.parentRunId, before.id);
@@ -1080,66 +558,49 @@ test('repeat keeps the approved suite, discards results and requires fresh appro
   assert.equal(after.targetVersion, 'v2'); assert.equal(after.phase, 'review');
   assert.deepEqual((await lab.get(before.id)).trials, before.trials);
   await assert.rejects(lab.start(after.id, { approved: false, reviewer: 'automated', expectedHash: draftHash(after) }), /подтверждения/);
-
-  const explicit = await lab.create({ ...input, goalObservation: 'state' }); await lab.waitForIdle();
-  assert.equal((await lab.get(explicit.id)).scenarios[0]!.goalObservation, 'state', 'the owner-selected channel wins over the external default');
 });
 
 test('rubric-only agent failures reach clustering', async t => {
-  const runtime = createDemoRuntime();
-  const prepare = runtime.prepare;
-  runtime.prepare = async (...args) => { const p = await prepare(...args); p.scenarios.forEach(s => { s.checks = []; }); return p; };
-  runtime.assess = async ({ scenario }) => scenario.metrics!.map(m => ({ metricId: m.id, result: m.subject === 'agent' ? 'fail' : 'pass', rationale: 'evidence', evidence: [0] }));
-  runtime.failureModes = async ({ failures }) => [{ id: 'goal_failed', name: 'Цель не достигнута', description: 'Рубрика зафиксировала провал цели.', trialIds: failures.map(f => f.trialId) }];
+  const runtime: Runtime = { ...legacyDemoRuntime(),
+    async assess({ scenario }) { return scenario.metrics!.map(m => ({ metricId: m.id, result: m.subject === 'agent' ? 'fail' as const : 'pass' as const, rationale: 'evidence', evidence: [0] })); },
+    async failureModes({ failures }) { return [{ id: 'goal_failed', name: 'Цель не достигнута', description: 'Рубрика зафиксировала провал цели.', trialIds: failures.map(f => f.trialId) }]; },
+  };
   const { lab } = await setup(t, runtime);
-  const created = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 }); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-  const result = await lab.get(draft.id);
+  const result = await runDraft(lab, await externalDraft(lab, { count: 1 }, draft => { draft.scenarios.forEach(s => { s.checks = []; }); }), 'human');
+  assert.ok(result.trials.length > 0);
   assert.ok(result.trials.every(t => t.outcome === 'ungraded'));
   assert.deepEqual(result.failureModes?.[0]?.trialIds, result.trials.map(t => t.id));
 });
 
-test('one-card edits preserve neighbours; only explicit removals delete and invalid changes save nothing', async t => {
-  const { lab } = await setup(t);
-  const created = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 5 }); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  const changed = { ...draft.scenarios[1]!, title: 'Только вторая карточка' };
-  const edited = await lab.updateDraft(draft.id, draftHash(draft), { scenarios: [changed] });
-  assert.equal(edited.scenarios.length, 5);
-  assert.deepEqual(edited.scenarios.map(s => s.id), draft.scenarios.map(s => s.id));
-  assert.deepEqual(edited.scenarios.filter(s => s.id !== changed.id), draft.scenarios.filter(s => s.id !== changed.id));
-  assert.match(edited.message, /изменено 1, добавлено 0, удалено 0/);
-  const extra = { ...changed, id: 'new_card', title: 'Новая карточка' };
-  const updated = await lab.updateDraft(draft.id, draftHash(edited), { scenarios: [extra], removeScenarioIds: [draft.scenarios[0]!.id] });
-  assert.equal(updated.scenarios.length, 5);
-  assert.equal(updated.scenarios.at(-1)!.id, extra.id);
-  assert.equal(updated.scenarios.some(s => s.id === draft.scenarios[0]!.id), false);
-  assert.match(updated.message, /изменено 0, добавлено 1, удалено 1/);
-  const hash = draftHash(updated);
+test('a draft edit changes only run settings, the connection, its version or the agent label; anything else saves nothing', async t => {
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const draft = await externalDraft(lab, { count: 2 });
+  const hash = draftHash(draft);
   const saved = await lab.get(draft.id);
   for (const patch of [
-    { removeScenarioIds: ['missing'] }, { removeScenarioIds: updated.scenarios.map(s => s.id) },
-    { scenarios: [{ ...changed, user: { ...changed.user, maxFollowUps: -1 } }] },
-    { scenarios: [{ ...changed, profileId: 'missing_profile' }] },
-    { scenarios: [changed], settings: { repeats: 0 } },
+    { scenarios: [{ ...draft.scenarios[0]!, title: 'Другая карточка' }] }, { removeScenarioIds: [draft.scenarios[0]!.id] },
+    { profileEdits: [{ id: 'owner', override: null }] }, { settings: { repeats: 0 } }, { target: { kind: 'sandbox' } }, {},
   ]) {
-    await assert.rejects(lab.updateDraft(draft.id, hash, patch));
-    assert.deepEqual(await lab.get(draft.id), saved);
+    await assert.rejects(lab.updateDraft(draft.id, hash, patch as never));
+    assert.deepEqual(await lab.get(draft.id), saved, 'a rejected edit saves nothing');
   }
-  await assert.rejects(lab.updateDraft(draft.id, draftHash(draft), { scenarios: [changed] }), /Черновик изменился/);
-  assert.deepEqual(await lab.get(draft.id), saved);
+  await assert.rejects(lab.updateDraft(draft.id, hash, { target: { kind: 'sandbox' } } as never), /Встроенная учебная песочница больше не запускается/);
+  const agent = { name: 'Appointment assistant v2', instructions: 'Updated instructions.', tools: [] };
+  const edited = await lab.updateDraft(draft.id, hash, { settings: { repeats: 2 }, targetVersion: 'v2', agent });
+  assert.deepEqual(edited.scenarios, draft.scenarios, 'the situations are untouched');
+  assert.equal(edited.settings.repeats, 2); assert.equal(edited.targetVersion, 'v2');
+  assert.deepEqual(edited.revisions.map(revision => revision.spec), [agent]); assert.equal(edited.selectedRevisionId, edited.revisions[0]!.id);
+  assert.equal(edited.reviewedAt, null); assert.equal(edited.manifestHash, null);
+  await assert.rejects(lab.updateDraft(draft.id, hash, { settings: { repeats: 1 } }), /Черновик изменился/);
+  assert.deepEqual(await lab.get(draft.id), edited);
 });
 
 test('finalizing requires decisive failure review and preserves original evidence', async t => {
-  const { lab } = await setup(t);
-  const input = createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2, settings: { repeats: 1 } });
-  const created = await lab.create(input); await lab.waitForIdle();
-  let draft = await lab.get(created.id);
+  const { lab } = await setup(t, legacyDemoRuntime());
+  let draft = await externalDraft(lab, { count: 2, settings: { repeats: 1 } });
   draft = await lab.updateDraft(draft.id, draftHash(draft), { agent: { ...draft.revisions[0]!.spec, tools: ['search_materials', 'lookup_record'] } });
-  assert.match(draft.message, /Агент обновлён/);
-  await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-  let result = await lab.get(draft.id);
+  assert.deepEqual(draft.revisions[0]!.spec.tools, ['search_materials', 'lookup_record']);
+  let result = await runDraft(lab, draft, 'human');
   const original = structuredClone(result.trials);
   assert.equal(awaitingVerdict(result).size, 2);
   await assert.rejects(lab.reviewResults(result.id, resultHash(result)), /2.*без решения/);
@@ -1159,12 +620,8 @@ test('finalizing requires decisive failure review and preserves original evidenc
 });
 
 test('invalid excludes partial simulator criteria and allows finalizing the audit', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
-  const base = demoEvaluationInput();
-  const created = await lab.create(createInputSchema.parse({ ...base, scenarioCount: 1, settings: { ...base.settings, userModes: ['reactive'], repeats: 1 } }));
-  await lab.waitForIdle();
-  await lab.start(created.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(created.id)) }); await lab.waitForIdle();
-  const record = await lab.get(created.id);
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const record = await runDraft(lab, await externalDraft(lab, { count: 1, settings: { userModes: ['reactive'], repeats: 1 } }));
   const trial = record.trials[0]!;
   const scenario = record.scenarios.find(candidate => candidate.id === trial.scenarioId)!;
   record.scenarios = [scenario]; record.trials = [trial]; record.humanReviews = [];
@@ -1183,15 +640,26 @@ test('invalid excludes partial simulator criteria and allows finalizing the audi
 });
 
 test('the active snapshot names the current card and target wait before a trial finishes', async t => {
-  const runtime = createDemoRuntime();
   const entered = deferred(); const release = deferred();
   const grading = deferred(); const releaseGrading = deferred();
-  const assess = runtime.assess!;
-  runtime.openTarget = async () => ({ async respond() { entered.resolve(); await release.promise; return 'Ответ'; }, async close() {} });
-  runtime.assess = async (...args) => { grading.resolve(); await releaseGrading.promise; return assess(...args); };
+  const base = legacyDemoRuntime();
+  const runtime: Runtime = { ...base, async assess(...args) { grading.resolve(); await releaseGrading.promise; return base.assess!(...args); } };
   const { lab } = await setup(t, runtime);
-  const created = await lab.create(createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1, settings: { repeats: 1 } })); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
+  // An HTTP agent that answers only when the test lets it: the run is caught while it waits for the reply.
+  const server = createServer((request, response) => {
+    let body = '';
+    request.on('data', chunk => { body += chunk; });
+    request.on('end', async () => {
+      const { initialState } = JSON.parse(body) as { initialState: { records: unknown } };
+      entered.resolve(); await release.promise;
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ reply: 'Ответ', records: initialState.records, resetConfirmed: true, eventsComplete: true }));
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>(resolve => { server.close(() => resolve()); }));
+  const { port } = server.address() as AddressInfo;
+  const draft = await externalDraft(lab, { count: 1, settings: { repeats: 1 }, target: { kind: 'http', url: `http://127.0.0.1:${port}/agent`, headersEnv: {}, timeoutMs: 60000 } });
   await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) });
   await entered.promise;
   try {
@@ -1207,71 +675,61 @@ test('the active snapshot names the current card and target wait before a trial 
 });
 
 test('static connection failures precede model work and a vanished target cannot receive approval', async t => {
-  const { lab, directory } = await setup(t);
+  const { lab, directory } = await setup(t, createDemoRuntime());
   const entry = join(directory, 'agent.mjs'); await writeFile(entry, '// local target fixture');
-  const input = createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1,
-    target: { kind: 'command', command: 'agent-lab-no-such-executable-fixture', args: [entry] } });
+  const input = createInputSchema.parse({ ...demoInput(), target: { kind: 'command', command: 'agent-lab-no-such-executable-fixture', args: [entry] } });
   const created = await lab.create(input); await lab.waitForIdle();
   const failed = await lab.get(created.id);
   assert.equal(failed.phase, 'error'); assert.equal(failed.usage.calls, 0); assert.equal(failed.trials.length, 0);
-  const next = await lab.create({ ...input, target: { kind: 'command', command: process.execPath, args: [entry], timeoutMs: 1000 } }); await lab.waitForIdle();
-  const draft = await lab.get(next.id); assert.equal(draft.phase, 'review');
+  const accepted = await acceptedDemoDraft(lab, createInputSchema.parse({ ...input, target: { kind: 'command', command: process.execPath, args: [entry], timeoutMs: 1000 } }));
+  const draft = await lab.get(accepted.id); assert.equal(draft.phase, 'review');
   await rm(entry);
   await assert.rejects(lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }), /Не найден файл агента/);
   assert.deepEqual(await lab.get(draft.id), draft);
 });
 
 const stdioFixture = fileURLToPath(new URL('./fixtures/stdio-agent.mjs', import.meta.url));
-function externalInput(release?: { command: string; args: string[] }, mode: 'ok' | 'external' = 'ok') {
-  const base = demoEvaluationInput();
-  return createInputSchema.parse({ ...base, scenarioCount: 1, settings: { ...base.settings, userModes: ['static'], repeats: 1 },
-    target: { kind: 'command', command: process.execPath, args: [stdioFixture, mode], timeoutMs: 5000, ...(release ? { release } : {}) } });
+function stdioTarget(release?: { command: string; args: string[] }, mode: 'ok' | 'external' = 'ok'): Target {
+  return { kind: 'command', command: process.execPath, args: [stdioFixture, mode], timeoutMs: 5000, ...(release ? { release: { ...release, timeoutMs: 120000 } } : {}) };
 }
+const oneStaticCard = { count: 1, settings: { userModes: ['static' as const], repeats: 1 } };
 
 test('the release hook runs once before the first dialogue with the run identity, and a failing hook stops the run', async t => {
-  const { lab, directory } = await setup(t, createDemoRuntime());
+  const { lab, directory } = await setup(t, legacyDemoRuntime());
   const marker = join(directory, 'deployed.txt');
   process.env.AGENT_LAB_MARKER = marker;
   t.after(() => { delete process.env.AGENT_LAB_MARKER; });
-  const created = await lab.create(externalInput({ command: process.execPath, args: ['-e', 'require("node:fs").writeFileSync(process.env.AGENT_LAB_MARKER, process.env.AGENT_LAB_RUN_ID)'] }));
-  await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  assert.equal(existsSync(marker), false, 'preparation and preflight never run the hook');
-  await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-  const record = await lab.get(draft.id);
+  const draft = await externalDraft(lab, { ...oneStaticCard, target: stdioTarget({ command: process.execPath, args: ['-e', 'require("node:fs").writeFileSync(process.env.AGENT_LAB_MARKER, process.env.AGENT_LAB_RUN_ID)'] }) });
+  assert.equal(existsSync(marker), false, 'a draft and its preflight never run the hook');
+  const record = await runDraft(lab, draft);
   assert.equal(record.phase, 'results_review', record.error ?? '');
   assert.equal(readFileSync(marker, 'utf8'), record.id);
   assert.equal(record.releaseLog?.exitCode, 0);
-  const broken = await lab.create(externalInput({ command: process.execPath, args: ['-e', 'console.error("deploy failed"); process.exit(2)'] }));
-  await lab.waitForIdle();
-  const draft2 = await lab.get(broken.id);
-  await lab.start(draft2.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft2) }); await lab.waitForIdle();
-  const failed = await lab.get(draft2.id);
+  const failed = await runDraft(lab, await externalDraft(lab, { ...oneStaticCard, target: stdioTarget({ command: process.execPath, args: ['-e', 'console.error("deploy failed"); process.exit(2)'] }) }));
   assert.equal(failed.phase, 'error');
   assert.match(failed.error ?? '', /Хук выпуска завершился с кодом 2/); assert.match(failed.error ?? '', /deploy failed/);
   assert.equal(failed.trials.length, 0, 'no dialogue runs against an undeployed version');
   assert.equal(failed.releaseLog?.exitCode, 2);
 });
 
-test('a single failed dialogue is clustered, and a cluster may quote only the agent instructions it was given', async t => {
-  const runtime = createDemoRuntime();
+test('a single failed dialogue is clustered, and a cluster may quote only the agent prompt it was given', async t => {
   const prompts: (string | undefined)[] = [];
   let quotes = ['Read the appointment before changing it.'];
-  runtime.failureModes = async input => { prompts.push(input.prompt); return [{ id: 'no_update', name: 'Прочитал запись, но не изменил её', description: 'd', trialIds: [input.failures[0]!.trialId], promptQuotes: quotes }]; };
+  const runtime: Runtime = { ...legacyDemoRuntime(), async failureModes(input) {
+    prompts.push(input.prompt);
+    return [{ id: 'no_update', name: 'Прочитал запись, но не изменил её', description: 'd', trialIds: [input.failures[0]!.trialId], promptQuotes: quotes }];
+  } };
   const { lab } = await setup(t, runtime);
-  const run = async () => {
-    const base = demoEvaluationInput();
-    const created = await lab.create(createInputSchema.parse({ ...base, scenarioCount: 1, settings: { ...base.settings, userModes: ['static'], repeats: 1 } }));
-    await lab.waitForIdle();
-    const draft = await lab.get(created.id);
-    await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-    return lab.get(draft.id);
-  };
+  // The agent's own prompt arrives as a material marked «промпт агента».
+  const prompt = 'Consult appointment policy. Read the appointment before changing it. Update only the time field.';
+  const run = async () => runDraft(lab, await externalDraft(lab, oneStaticCard, draft => {
+    draft.sources.push({ id: 'source-2', name: 'Промпт агента', content: prompt, hash: fingerprint(prompt), kind: 'prompt' });
+  }));
   const named = await run();
-  assert.equal(named.trials.length, 1); assert.equal(named.trials[0]!.outcome, 'fail');
+  assert.equal(named.trials.length, 1); assert.equal(named.trials[0]!.outcome, 'fail', named.trials[0]!.reason);
   assert.deepEqual(named.failureModes?.map(m => [m.name, m.promptQuotes]), [['Прочитал запись, но не изменил её', ['Read the appointment before changing it.']]]);
-  assert.equal(prompts[0], named.revisions[0]!.spec.instructions, 'sandbox clusters see the agent instructions as the prompt');
-  quotes = ['this sentence is not in the instructions'];
+  assert.equal(prompts[0], prompt, 'an external agent is clustered against its own prompt');
+  quotes = ['this sentence is not in the prompt'];
   const rejected = await run();
   assert.equal(rejected.phase, 'results_review');
   assert.equal(rejected.failureModes, undefined);
@@ -1279,13 +737,8 @@ test('a single failed dialogue is clustered, and a cluster may quote only the ag
 });
 
 test('human verdicts may target simulator checks, reassessment recomputes them, and an unconfirmed external world is a run limitation', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
-  const base = demoEvaluationInput();
-  const created = await lab.create(createInputSchema.parse({ ...base, scenarioCount: 3, settings: { ...base.settings, userModes: ['reactive'], repeats: 1 } }));
-  await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-  const record = await lab.get(draft.id);
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const record = await runDraft(lab, await externalDraft(lab, { count: 3, settings: { userModes: ['reactive'], repeats: 1 } }));
   const clarified = record.trials.find(t => t.events.filter(e => e.type === 'user').length > 1)!;
   assert.ok(clarified.simulatorChecks!.length >= 2);
   await lab.addHumanReview(record.id, { trialId: clarified.id, checkId: 'simulator_loop', verdict: 'fail', note: 'looked like a loop to me' });
@@ -1301,14 +754,13 @@ test('human verdicts may target simulator checks, reassessment recomputes them, 
   const reassessed = await lab.reassess(record.id, { codeOnly: true }); await lab.waitForIdle();
   const again = (await lab.get(reassessed.id)).trials.find(t => t.id === clarified.id)!;
   assert.deepEqual(again.simulatorChecks, clarified.simulatorChecks);
-  // The demo runtime refuses scenarioCount 0, so one demo card rides along; the golden card is the one under test.
-  const external = await lab.create(createInputSchema.parse({ ...externalInput(undefined, 'ok'), scenarioCount: 1,
-    goldenCases: [{ id: 'gold_cards', goal: 'List my cards', opening: 'Which cards do I have?', successCriteria: 'Two cards are listed', maxFollowUps: 0, metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'd', passCriteria: 'p', failCriteria: 'f' }],
-      initialState: { records: {}, writableFields: [], transientFailures: 0, external: { cards: [{ id: 'c1' }, { id: 'c2' }] } } }] }));
-  await lab.waitForIdle();
-  const draft2 = await lab.get(external.id);
-  await lab.start(draft2.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft2) }); await lab.waitForIdle();
-  const unconfirmed = await lab.get(draft2.id);
+  // A card that seeds the agent's own test environment: an adapter that does not confirm the reset leaves it unmeasured.
+  const unconfirmed = await runDraft(lab, await externalDraft(lab, { ...oneStaticCard, target: stdioTarget(undefined, 'ok') }, draft => {
+    draft.scenarios = [{ ...draft.scenarios[0]!, id: 'gold_cards', familyId: 'gold_cards', title: 'List my cards', requirementIds: [], provenance: 'curated',
+      user: { goal: 'List my cards', facts: 'No additional facts beyond the opening request.', behavior: 'Ask once; finish when the request is answered.', opening: 'Which cards do I have?', maxFollowUps: 0 },
+      initialState: { records: {}, writableFields: [], transientFailures: 0, external: { cards: [{ id: 'c1' }, { id: 'c2' }] } },
+      checks: [], successCriteria: 'Two cards are listed', assumptions: [], metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'd', passCriteria: 'p', failCriteria: 'f' }] }];
+  }));
   assert.ok(unconfirmed.limitations.includes('Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.'), unconfirmed.limitations.join('\n'));
   assert.match(unconfirmed.trials.find(t => t.scenarioId === 'gold_cards')!.reason, /не подтверждено адаптером/);
   const repeated = await lab.repeat(unconfirmed.id);
@@ -1317,16 +769,6 @@ test('human verdicts may target simulator checks, reassessment recomputes them, 
 
 function agreeingJudgeRuntime(): Runtime {
   return {
-    async prepare({ sources }) {
-      return { requirements: [{ id: 'owner_rule', text: 'Answer from the owner material', sourceId: sources[0]!.id,
-        quote: sources[0]!.content, critical: false }], questions: [],
-        agent: { name: 'Recorded agent', instructions: 'Recorded only', tools: [] }, scenarios: [] };
-    },
-    async goals({ dialogues }) {
-      const dialogue = dialogues[0]!;
-      return [{ id: `goal_${dialogue.id}`, goal: `Answer ${dialogue.id}`, opening: dialogue.messages[0]!.content,
-        evidenceDialogueIds: [dialogue.id], requirementIds: ['owner_rule'], successCriteria: 'Answer from the owner material' }];
-    },
     async assess(input, ctx) {
       return assessRepeated(input, { provider: 'offline', id: 'judge' }, ctx, async (_prompt, data) => {
         ctx.beforeCall();
@@ -1336,8 +778,6 @@ function agreeingJudgeRuntime(): Runtime {
           rationale: 'The reply is present in the trace.', evidence: [1], citations: [{ seq: 1, quote }] })) });
       });
     },
-    async improve() { throw new Error('reassessment must not improve'); },
-    async openTarget() { throw new Error('reassessment must not open the target'); },
     async userTurn() { throw new Error('reassessment must not run the simulator'); },
   };
 }
@@ -1401,11 +841,8 @@ test('a record whose trials carry the legacy full audit reassesses without migra
 });
 
 test('a positive control rides on the record: hashes and card identity unchanged, inherited, and bad ids rejected before saving', async t => {
-  const { lab, directory } = await setup(t, createDemoRuntime());
-  const created = await lab.create({ ...demoInput(), workflow: 'evaluate', scenarioCount: 2 }); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
-  const source = await lab.get(draft.id);
+  const { lab, directory } = await setup(t, legacyDemoRuntime());
+  const source = await runDraft(lab, await externalDraft(lab, { count: 2 }));
   assert.equal(source.phase, 'results_review', source.error ?? '');
   const [a, b] = source.scenarios.map(scenario => scenario.id) as [string, string];
 
@@ -1504,11 +941,7 @@ test('a positive control rides on the record: hashes and card identity unchanged
  * result: with `goal` it decides which metrics a quick mark may land on (03.1 markTargets).
  */
 async function agreementRecord(lab: ExperimentLab, goal: 'pass' | 'fail' | 'unknown' = 'fail', judge: 'receipt' | 'audit' | 'none' = 'receipt', rules: 'pass' | 'fail' | 'unknown' = 'pass') {
-  const base = demoEvaluationInput();
-  const created = await lab.create(createInputSchema.parse({ ...base, scenarioCount: 1, settings: { ...base.settings, userModes: ['reactive'], repeats: 1 } }));
-  await lab.waitForIdle();
-  await lab.start(created.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(created.id)) }); await lab.waitForIdle();
-  const record = await lab.get(created.id);
+  const record = await runDraft(lab, await externalDraft(lab, { count: 1, settings: { userModes: ['reactive'], repeats: 1 } }));
   const trial = record.trials[0]!;
   const scenario = record.scenarios.find(candidate => candidate.id === trial.scenarioId)!;
   record.scenarios = [scenario]; record.trials = [trial]; record.humanReviews = [];
@@ -1534,7 +967,7 @@ async function agreementRecord(lab: ExperimentLab, goal: 'pass' | 'fail' | 'unkn
 }
 
 test('the lab, not the caller, records which judgment a quick mark refers to', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
+  const { lab } = await setup(t, legacyDemoRuntime());
   const { record, trial } = await agreementRecord(lab, 'fail');
   const before = await lab.get(record.id);
   const measured = measurementHash(before);
@@ -1564,7 +997,7 @@ test('the lab, not the caller, records which judgment a quick mark refers to', a
 });
 
 test('a mark takes its judge version from the legacy audit, and none when the trial was never judged', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
+  const { lab } = await setup(t, legacyDemoRuntime());
   const audited = await agreementRecord(lab, 'fail', 'audit');
   const withAudit = await lab.addHumanReview(audited.record.id, { trialId: audited.trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'pass', note: 'Не согласен.' });
   assert.deepEqual(withAudit.humanReviews.at(-1)!.judge, { protocolHash: 'protocol-10', inputHash: 'input-1' });
@@ -1578,7 +1011,7 @@ test('a mark takes its judge version from the legacy audit, and none when the tr
 });
 
 test('a quick mark on a judgment the judge never made is refused', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
+  const { lab } = await setup(t, legacyDemoRuntime());
   const { record, trial } = await agreementRecord(lab, 'unknown');
   await assert.rejects(lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail', note: 'соглашаться не с чем' }),
     /^Error: Судья не вынес решения по этой ситуации — соглашаться не с чем\.$/);
@@ -1588,7 +1021,7 @@ test('a quick mark on a judgment the judge never made is refused', async t => {
 });
 
 test('a double failure needs a stamped mark on both metrics before it counts once in «Согласие с судьёй»', async t => {
-  const { lab, directory } = await setup(t, createDemoRuntime());
+  const { lab, directory } = await setup(t, legacyDemoRuntime());
   const { record, trial } = await agreementRecord(lab, 'fail', 'receipt', 'fail');
 
   // The lab stamps the counting rule; a caller value is overwritten, never trusted (CTX-20, CTX-23).
@@ -1613,7 +1046,7 @@ test('a double failure needs a stamped mark on both metrics before it counts onc
 
   // The stamps survive a reload through the strict schema in a fresh lab on the same directory.
   await lab.close();
-  const reopened = new ExperimentLab(directory, createDemoRuntime());
+  const reopened = new ExperimentLab(directory, legacyDemoRuntime());
   await reopened.init();
   try {
     const loaded = await reopened.get(record.id);
@@ -1623,7 +1056,7 @@ test('a double failure needs a stamped mark on both metrics before it counts onc
 });
 
 test('a quick mark lands only on a metric that decided the situation: one failed metric is one target, a pass has two', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
+  const { lab } = await setup(t, legacyDemoRuntime());
   // Goal fail + rules pass: the rules did not fail the situation, so they take no mark; the goal does.
   const goalOnly = await agreementRecord(lab, 'fail', 'receipt', 'pass');
   await assert.rejects(lab.addHumanReview(goalOnly.record.id, { trialId: goalOnly.trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'pass', note: 'не та оценка' }),
@@ -1646,7 +1079,7 @@ test('a quick mark lands only on a metric that decided the situation: one failed
 });
 
 test('the lab refuses a quick mark where the number cannot move: an unmeasured situation or a control', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
+  const { lab } = await setup(t, legacyDemoRuntime());
   const unmeasured = /^Error: Эта ситуация не измерена — отметка согласия не нужна\.$/;
   // A judge error leaves the situation «не измерено» whatever the recorded rubric says (CR-01).
   const errored = await agreementRecord(lab, 'fail', 'receipt', 'fail');
@@ -1671,7 +1104,7 @@ test('the lab refuses a quick mark where the number cannot move: an unmeasured s
 });
 
 test('a changed judge verdict is still refused, and a full review never keeps a caller counting rule', async t => {
-  const { lab } = await setup(t, createDemoRuntime());
+  const { lab } = await setup(t, legacyDemoRuntime());
   const { record, trial } = await agreementRecord(lab, 'fail', 'receipt', 'fail');
   await assert.rejects(lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'pass', judgeVerdict: 'pass', note: 'судья менялся' }),
     /^Error: Оценка судьи изменилась, пока вы смотрели\. Проверьте ситуацию ещё раз\.$/);
@@ -1683,16 +1116,75 @@ test('a changed judge verdict is still refused, and a full review never keeps a 
   assert.equal('countingRules' in dialogue.humanReviews.at(-1)!, false);
 });
 test('a run may drive several dialogues at once: their trace events interleave, while the default keeps them one after another', async t => {
-  const { lab } = await setup(t);
+  const { lab } = await setup(t, legacyDemoRuntime());
   const order = async (parallel: number | undefined) => {
-    const record = await lab.create(demoEvaluationInput()); await lab.waitForIdle();
-    await lab.start(record.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(record.id)), ...(parallel ? { parallel } : {}) }); await lab.waitForIdle();
-    const result = await lab.get(record.id);
+    const result = await runDraft(lab, await externalDraft(lab), 'automated', parallel);
     assert.equal(result.phase, 'results_review', result.error ?? result.message); assert.equal(result.trials.length, 3);
-    const journal = (await lab.store.traceJournal(record.id)).trim().split('\n').map(line => JSON.parse(line).trialId as string);
+    const journal = (await lab.store.traceJournal(result.id)).trim().split('\n').map(line => JSON.parse(line).trialId as string);
     // How many times the journal switches from one dialogue to another: 2 when dialogues run one after another, more when they overlap.
     return journal.filter((id, i) => i > 0 && journal[i - 1] !== id).length;
   };
   assert.equal(await order(undefined), 2);
   assert.ok(await order(3) > 2, 'three parallel dialogues must interleave their traces');
+});
+
+test('a stored run of old-format cards repeats on a new agent version through the free user simulator', async t => {
+  const users: string[] = [];
+  const base = legacyDemoRuntime();
+  const runtime: Runtime = { ...base, async userTurn(input, ctx) { users.push(input.user.goal); return base.userTurn!(input, ctx); } };
+  const { lab } = await setup(t, runtime);
+  // A finished run recorded before the scenario library, stored like the owner's real runs: cards without an
+  // `execution` block, the free LLM user, an external agent.
+  const stored = experimentSchema.parse({ ...JSON.parse(await readFile(new URL('./fixtures/legacy-demo-run.json', import.meta.url), 'utf8')), target: appointmentAgent() });
+  assert.equal(stored.phase, 'results_review');
+  assert.ok(stored.scenarios.length >= 2 && stored.scenarios.every(scenario => !scenario.execution));
+  await lab.store.save(stored);
+  const storedBytes = JSON.stringify(await lab.get(stored.id));
+
+  const draft = await lab.repeat(stored.id);
+  assert.equal(draft.parentRunId, stored.id); assert.equal(draft.phase, 'review');
+  assert.deepEqual(draft.scenarios.map(scenario => scenario.id), stored.scenarios.map(scenario => scenario.id));
+  assert.ok(draft.scenarios.every(scenario => !scenario.execution && scenario.goalObservation === 'reply'), 'an external agent is judged on its replies by default');
+  const baseline = await runDraft(lab, draft, 'human');
+  assert.equal(baseline.phase, 'results_review', baseline.error ?? '');
+  assert.equal(baseline.trials.length, stored.trials.length);
+  assert.deepEqual(baseline.trials.map(trial => trial.outcome), ['fail', 'fail'], 'the recorded agent still cannot move an appointment');
+  assert.ok(baseline.trials.every(trial => trial.assessments?.length && !trial.assessmentError), 'every dialogue is judged');
+  const followUp = baseline.trials.find(trial => trial.events.some(event => event.type === 'simulator'));
+  assert.ok(followUp, 'the free user simulator answered the agent');
+  assert.ok(users.length > 0);
+  assert.ok(followUp.events.filter(event => event.type === 'user').length > 1);
+  assert.equal(JSON.stringify(await lab.get(stored.id)), storedBytes, 'the stored run stays as it was');
+
+  // The same cards against the repaired version of the agent.
+  const next = await lab.repeat(baseline.id);
+  const repaired = await lab.updateDraft(next.id, draftHash(next), { target: runnableTarget(appointmentAgent('createRepairedSession')), targetVersion: 'repaired-v2' });
+  const fixed = await runDraft(lab, repaired, 'human');
+  assert.equal(fixed.phase, 'results_review', fixed.error ?? '');
+  assert.equal(fixed.targetVersion, 'repaired-v2');
+  assert.deepEqual(fixed.trials.map(trial => trial.outcome), ['pass', 'pass']);
+  assert.ok(fixed.trials.every(trial => trial.checks.every(check => check.passed)));
+  assert.equal(qualitySummary(fixed).cards.passed, 2);
+});
+
+test('a retired sandbox or compare record opens and reassesses but never runs again, and a new draft cannot name the sandbox', async t => {
+  const parsed = createInputSchema.safeParse({ ...demoInput(), target: { kind: 'sandbox' } });
+  assert.equal(parsed.success, false);
+  assert.ok(parsed.error?.issues.some(issue => issue.message === SANDBOX_RETIRED), JSON.stringify(parsed.error?.issues));
+  const { lab, directory, record } = await demoEvaluateRecord('agent-lab-retired-');
+  t.after(async () => { await lab.close(); await rm(directory, { recursive: true, force: true }); });
+  assert.equal(record.target.kind, 'sandbox'); assert.equal(record.phase, 'results_review');
+  await assert.rejects(lab.repeat(record.id), { message: SANDBOX_RETIRED });
+  // A sandbox draft saved before the retirement stays readable; starting it explains why it cannot run.
+  const sandboxDraft = await externalDraft(lab, { count: 1 }, draft => { draft.target = { kind: 'sandbox' }; delete draft.targetFingerprint; });
+  await assert.rejects(lab.start(sandboxDraft.id, { approved: true, expectedHash: draftHash(sandboxDraft) }), { message: SANDBOX_RETIRED });
+  assert.deepEqual(await lab.get(sandboxDraft.id), sandboxDraft);
+  const compareDraft = await externalDraft(lab, { count: 1 }, draft => { draft.workflow = 'compare'; });
+  await assert.rejects(lab.start(compareDraft.id, { approved: true, expectedHash: draftHash(compareDraft) }), /Сравнение с автоматическим улучшением агента больше не запускается/);
+  assert.deepEqual(await lab.get(compareDraft.id), compareDraft);
+  // The recorded sandbox evidence is still judged again: nothing runs, the judge reads the stored dialogues.
+  const reassessed = await lab.reassess(record.id); await lab.waitForIdle();
+  const result = await lab.get(reassessed.id);
+  assert.equal(result.phase, 'results_review', result.error ?? '');
+  assert.deepEqual(result.trials.map(trial => trial.events), record.trials.map(trial => trial.events));
 });

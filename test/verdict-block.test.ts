@@ -19,7 +19,6 @@ import { verdictLine } from '../src/verdict.js';
  * in extension.test.ts; nothing is imported across test files.
  */
 
-const MARKER = 'QUOTE-MARKER-7f3a';
 const SHOWN_TO_OWNER = 'Блок с точностью и причинами уже показан владельцу. Не копируйте его строки. Назовите точность одной фразой и объясните по-человечески, где и почему агент хромает: что просили клиенты, что агент сделал вместо этого, какое правило владельца это нарушает; что он делает хорошо и насколько числу можно верить. Затем предложите следующий шаг.';
 
 function registered() {
@@ -38,18 +37,17 @@ function registered() {
 type ToolResult = Awaited<ReturnType<ToolDefinition['execute']>>;
 const output = (result: ToolResult) => JSON.parse(result.content.filter(c => c.type === 'text').map(c => c.text).join('\n'));
 
-/** A finished demo run through the chat path: build one situation, confirm, run. `edit` changes the draft before the run. */
-async function demoRun(directory: string, tools: Map<string, ToolDefinition>, edit?: (draft: any) => any) {
+/** A finished demo run through the chat path: build the library, accept its ready situation, run. */
+async function demoRun(directory: string, tools: Map<string, ToolDefinition>) {
   const ctx = { cwd: directory, mode: 'tui', hasUI: true, ui: { confirm: async () => true } } as unknown as ExtensionContext;
   const call = async (name: string, params: unknown) => tools.get(name)!.execute('fixture', params, undefined, undefined, ctx);
-  const built = output(await call('agent_lab_build', { mode: 'demo', scenarioCount: 1 }));
-  let draft = output(await call('agent_lab_inspect', { id: built.id }));
-  if (edit) {
-    const scenarios = edit(draft.scenarios);
-    draft = output(await call('agent_lab_edit', { id: built.id, expectedHash: draft.draftHash, patch: { scenarios } }));
-  }
+  const built = output(await call('agent_lab_build', { mode: 'demo' }));
+  // The demo's disputed fact waits for the owner; the situation that is already ready becomes the set.
+  await call('agent_lab_accept_set', { id: built.id, select: 'ready' });
+  const draft = output(await call('agent_lab_inspect', { id: built.id }));
   const result = await call('agent_lab_run', { id: built.id, expectedHash: draft.draftHash });
-  return { result, run: output(result), scenarios: output(await call('agent_lab_inspect', { id: built.id })).scenarios as { title: string }[] };
+  const scenarios = output(await call('agent_lab_inspect', { id: built.id })).scenarios as { title: string; user: { opening: string } }[];
+  return { result, run: output(result), scenarios };
 }
 
 /** Pi's own tool row for the registered tool, with the result applied; the stripped, trimmed, non-empty lines. */
@@ -96,25 +94,22 @@ test('после agent_lab_run Pi рисует блок-вердикт из deta
   assert.doesNotMatch(shown, /"viewLines"/);
 });
 
-test('ни маркер из текста ситуаций, ни их названия не попадают в details', async t => {
+test('ни текст ситуаций, ни их названия не попадают в details', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-verdict-marker-'));
   const { tools, shutdown } = registered();
   t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
-  // The expectation itself stays as it is: a changed `successCriteria` without a changed check is refused (02-07).
-  // The marker rides on what reaches the view and the transcript — the title, the opening and the facts.
-  const { result, scenarios } = await demoRun(directory, tools, cards => cards.map((card: any, i: number) => ({
-    ...card,
-    title: `Ситуация ${MARKER} ${i + 1}`,
-    user: { ...card.user, opening: `${card.user.opening} ${MARKER}`, facts: `${card.user.facts ?? ''} ${MARKER}`.trim() },
-  })));
+  // What reaches the view and the transcript — the titles and the customer's words — never reaches the session.
+  const { result, scenarios } = await demoRun(directory, tools);
   const stored = JSON.stringify(result.details);
-  assert.ok(scenarios.length > 0 && scenarios.every(card => card.title.includes(MARKER)), 'the fixture titles carry the marker');
-  assert.doesNotMatch(stored, new RegExp(MARKER));
-  for (const card of scenarios) assert.ok(!stored.includes(card.title), `title «${card.title}» reached details`);
+  assert.ok(scenarios.length > 0, 'the run has situations');
+  for (const card of scenarios) {
+    assert.ok(!stored.includes(card.title), `title «${card.title}» reached details`);
+    assert.ok(!stored.includes(card.user.opening), `opening «${card.user.opening}» reached details`);
+  }
   assert.deepEqual(Object.keys(result.details as object).sort(), ['kind', 'resultKey', 'runId', 'version']);
   // The remembered view does carry the titles: they are drawn, not stored.
   const view = viewFor(result.details as VerdictDetails);
-  assert.ok(view && view.cards.some(card => card.title.includes(MARKER)));
+  assert.ok(view && scenarios.every(card => view.cards.some(shown => shown.title === card.title)));
 });
 
 test('без запомненного вида строка инструмента честно говорит, что блок нельзя показать', async t => {

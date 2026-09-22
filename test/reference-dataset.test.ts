@@ -7,12 +7,47 @@ import { test } from 'node:test';
 import {
   createInputSchema,
   dialogueSchema,
-  dialogueToScenario,
-  dialogueToTrial,
+  emptyUsage,
+  goalAttainment,
+  replyQuality,
   scenarioSchema,
   verbatimSpan,
+  type Dialogue,
+  type Scenario,
+  type Trial,
 } from '../src/contracts.js';
 import { judgeInput } from '../src/judge.js';
+
+/*
+ * How the corpus becomes a judge input: a recorded dialogue is a production card (its later user turns
+ * are a script only when they fit one) and an immutable trial whose events are the messages themselves.
+ * The converters left the product with the retired offline scoring; the corpus keeps being checked with them.
+ */
+function dialogueToScenario(dialogue: Dialogue, goal: string): Omit<Scenario, 'split'> {
+  const userMessages = dialogue.messages.filter(message => message.role === 'user');
+  const opening = userMessages[0]!.content;
+  const script = userMessages.slice(1).map(message => message.content);
+  const replayable = script.length <= 15;
+  return {
+    id: dialogue.id, familyId: dialogue.id, title: goal.slice(0, 200), requirementIds: [], provenance: 'production', tier: 'regression',
+    user: { goal, facts: 'Только факты, сообщённые пользователем в записанном диалоге.',
+      behavior: replayable ? 'Воспроизводить реплики пользователя из записи в исходном порядке.' : 'Полный длинный диалог хранится как неизменяемое доказательство.',
+      opening, maxFollowUps: replayable ? script.length : 0, ...(replayable ? { script } : {}) },
+    initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], goalObservation: 'reply',
+    assumptions: [`Recorded dialogue ${dialogue.id}; no target or simulator execution and no observed external state.`],
+    metrics: [{ ...goalAttainment }, { ...replyQuality }],
+  };
+}
+function dialogueToTrial(dialogue: Dialogue, scenario: Scenario, revisionId: string): Trial {
+  const initialState = { records: {}, writableFields: [], transientFailures: 0 };
+  return {
+    id: dialogue.id, revisionId, scenarioId: scenario.id, familyId: scenario.familyId, repeat: 0, userMode: 'scripted',
+    split: scenario.split, manifestHash: 'unreviewed', outcome: 'ungraded', reason: 'Записанный диалог без повторного запуска агента.',
+    checks: [], events: dialogue.messages.map((message, seq) => ({ seq, type: message.role, text: message.content })),
+    initialState, finalState: structuredClone(initialState), usage: emptyUsage(), elapsedMs: 0,
+    observation: { state: 'missing', tools: 'partial' },
+  };
+}
 
 const directory = resolve('test/fixtures/score');
 const expectedComposition = {
@@ -56,7 +91,8 @@ test('the Phase 2 reference corpus is versioned, exact, grounded and label-free'
   };
   const rawDialogues = (await readFile(resolve(directory, 'reference.jsonl'), 'utf8'))
     .split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
-  const input = createInputSchema.parse({ ...task, dialogues: rawDialogues, scenarioCount: 0 });
+  // The corpus is a valid import for a new draft; the agent address is never contacted here.
+  const input = createInputSchema.parse({ ...task, dialogues: rawDialogues, scenarioCount: 0, target: { kind: 'http', url: 'http://127.0.0.1:1/agent' } });
 
   assert.equal(manifest.schemaVersion, '1');
   assert.equal(manifest.datasetVersion, 'phase2-reference-v1');
@@ -80,11 +116,11 @@ test('the Phase 2 reference corpus is versioned, exact, grounded and label-free'
     manifest.cases.filter(entry => entry.category === category).length,
   ])), expectedComposition);
 
-  const materials = createInputSchema.parse({ ...task, dialogues: rawDialogues, scenarioCount: 0 }).materials;
+  const materials = input.materials;
   for (const [index, raw] of rawDialogues.entries()) {
     const dialogue = dialogueSchema.parse(raw);
     const entry = manifest.cases[index]!;
-    const parsedScenario = scenarioSchema.safeParse(dialogueToScenario(dialogue, { goal: dialogue.goal ?? `Review ${dialogue.id}` }));
+    const parsedScenario = scenarioSchema.safeParse(dialogueToScenario(dialogue, dialogue.goal ?? `Review ${dialogue.id}`));
     assert.ok(parsedScenario.success, `${entry.id}: ${parsedScenario.error?.message}`);
     const scenario = { ...parsedScenario.data, split: 'dev' as const };
     const trial = dialogueToTrial(dialogue, scenario, 'reference-v1');

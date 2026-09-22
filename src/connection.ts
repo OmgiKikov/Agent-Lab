@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import { checkSchema, emptyUsage, experimentSchema, fingerprint, settingsSchema, targetSchema, worldSchema, type Experiment, type Runtime, type Scenario, type Target } from './contracts.js';
+import { checkSchema, emptyUsage, experimentSchema, fingerprint, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type Runtime, type Scenario, type Target } from './contracts.js';
 import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
 import { sourceIdentity } from './normalize.js';
@@ -13,7 +13,7 @@ export const probeSchema = z.strictObject({
   initialState: worldSchema, write: step, read: step, reset: step,
   checks: z.array(checkSchema).max(10).default([]),
 }).refine(p => p.read.reply !== p.reset.reply, 'Проверка должна различать сохранённую историю и новую сессию.');
-const connectionSchema = z.strictObject({ format: z.literal('agent-lab-connection-1'), target: targetSchema,
+const connectionSchema = z.strictObject({ format: z.literal('agent-lab-connection-1'), target: runnableTargetSchema,
   targetVersion: z.string().trim().min(1).max(200).optional(), probe: probeSchema.optional(), verifiedAt: z.string().optional() });
 export type Connection = z.infer<typeof connectionSchema>;
 
@@ -58,7 +58,6 @@ export async function rememberedConnection(directory: string): Promise<Connectio
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
 }
 export async function rememberConnection(directory: string, connection: Connection): Promise<void> {
-  if (connection.target.kind === 'sandbox') return;
   const previous = await rememberedConnection(directory);
   if (!connection.probe && previous?.probe && fingerprint(previous.target) === fingerprint(connection.target)) connection = { ...connection, probe: previous.probe };
   const path = resolve(directory, 'connection.local.json');
@@ -88,14 +87,13 @@ export async function listSuites(directory: string) {
 /** An explicit three-request probe exercises history and reset, using the real adapter path. */
 export async function doctor(connection: Connection, signal = new AbortController().signal) {
   const probe = probeSchema.parse(connection.probe);
-  if (connection.target.kind === 'sandbox') throw new Error('Doctor проверяет внешнее подключение.');
   await preflightTarget(connection.target);
   const controller = new AbortController();
   const combined = AbortSignal.any([signal, controller.signal]);
   const timer = setTimeout(() => controller.abort(new Error('Connection probe exceeded 180 seconds')), 180000);
   const usage = emptyUsage();
-  const unused = async (): Promise<never> => { throw new Error('Doctor never calls a model or generates a user'); };
-  const runtime: Runtime = { prepare: unused, improve: unused, openTarget: unused, userTurn: unused };
+  // Scripted probe cards without rubrics: nothing here calls a model or generates a user.
+  const runtime: Runtime = {};
   const settings = settingsSchema.parse({ repeats: 1, maxTurns: 2, maxCalls: 5, userModes: ['scripted'], maxDurationMs: 180000 });
   const spec = { name: 'Connection probe', instructions: 'Use the external connection.', tools: [] };
   const revision = { id: fingerprint(spec), spec, parentId: null, hypothesis: 'Connection probe', createdAt: new Date().toISOString() };

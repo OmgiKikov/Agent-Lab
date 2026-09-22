@@ -5,11 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab, draftHash } from './experiment.js';
-import { demoInput } from './demo.js';
+import { DEMO_OWNER_EDIT, demoInput } from './demo.js';
 import { createInputSchema, type Settings } from './contracts.js';
 import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
-import { readData, readDialogueImport, importDialogues } from './imports.js';
+import { readDialogueImport, importDialogues } from './imports.js';
 import { expandMaterials } from './materials.js';
 import { getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
@@ -58,8 +58,7 @@ async function main() {
     before: { type: 'string' }, after: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     format: { type: 'string', default: 'json' }, json: { type: 'boolean' },
     connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
-    'golden-file': { type: 'string' }, 'dialogues-file': { type: 'string' }, candidate: { type: 'string' },
-    hypothesis: { type: 'string' }, trial: { type: 'string', multiple: true },
+    'dialogues-file': { type: 'string' }, trial: { type: 'string', multiple: true },
     yes: { type: 'boolean' }, verify: { type: 'string' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
   } });
   const command = positionals[0];
@@ -67,7 +66,7 @@ async function main() {
     process.stdout.write('  agent-lab summary --id RUN [--json]     Сколько ситуаций агент прошёл, что не измерено и почему\n');
     process.stdout.write('  agent-lab accept --id RUN [--yes]      Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания\n');
     process.stdout.write('Agent Lab — validation set, accuracy и причины провалов вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
-    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  evaluate принимает --connection; build — --golden-file и --dialogues-file (JSON/JSONL).\n\n');
+    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  evaluate принимает --connection; build — --dialogues-file (JSON/JSONL).\n\n');
     process.stdout.write('  agent-lab scenarios --id RUN --operation inspect [--json]\n  agent-lab scenarios --id RUN --operation edit|merge|split|variant|assess|resume|accept --expected-hash HASH [--input action.json] [--yes]\n');
     process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID] · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
   }
@@ -279,12 +278,16 @@ async function main() {
       const connection = command === 'demo' ? undefined : values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
       const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file']) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
       const input = createInputSchema.parse({ ...raw, ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
-        ...(values['golden-file'] ? { goldenCases: await readData(values['golden-file'], 'golden') } : {}),
         ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}) });
       const prepared = await lab.create(input); id = prepared.id; await lab.waitForIdle();
       const current = await lab.get(id);
       if (current.phase !== 'review') throw new Error(current.error ?? 'Preparation failed');
       if (command === 'prepare' || command === 'build') { process.stdout.write(`${JSON.stringify(current, null, 2)}\n`); return; }
+      // The teaching example takes the owner's path: confirm its one disputed fact, let the checker look again, accept every ready variant.
+      const edited = await lab.editLibrary(id, libraryHash(current.librarySnapshot!), DEMO_OWNER_EDIT);
+      await lab.assessLibrary(id, libraryHash(edited.library)); await lab.waitForIdle();
+      const reviewed = await lab.readLibrary(id);
+      await lab.acceptLibrary(id, libraryHash(reviewed.library), reviewed.library.variants.filter(v => v.quality === 'ready').map(v => v.id));
     }
     if (!id) throw new Error('Укажите прогон: --id EXPERIMENT_ID');
     if (command === 'repeat') {

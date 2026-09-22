@@ -32,7 +32,7 @@ const cases = [
 const results: unknown[] = [];
 for (let repeat = 0; repeat < 2; repeat++) {
   for (const c of cases) {
-    const answer = await runtime.userTurn({ user: c.user,
+    const answer = await runtime.userTurn!({ user: c.user,
       messages: [{ role: 'user', content: c.user.opening }, { role: 'assistant', content: c.reply }], turn: 0 }, ctx);
     results.push({ name: c.name, repeat, answer });
     console.log(JSON.stringify(results.at(-1)));

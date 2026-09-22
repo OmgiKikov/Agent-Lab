@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { sourceIdentity } from '../src/normalize.js';
 import { ExperimentLab, draftHash, measurementHash } from '../src/experiment.js';
 import { createInputSchema, type Runtime } from '../src/contracts.js';
-import { createDemoRuntime, demoInput } from '../src/demo.js';
+import { createDemoRuntime, demoInput, demoTarget } from '../src/demo.js';
 import { acceptLibrary, importBatch, compileLibrary, editLibrary, libraryHash, libraryQuality } from '../src/scenario-library.js';
 import { libraryFixture, proposals as legacyProposals, rawDialogues, sources, requirements } from './helpers/scenario-library.js';
 
@@ -23,9 +23,8 @@ function semanticFindings(library: ReturnType<typeof libraryFixture>) {
 function runtimeFixture(payloads: any[]): Runtime {
   return {
     ...createDemoRuntime(),
-    async openTarget() { return { async respond() { return 'Уточните номер терминала'; }, async close() {} }; },
     async userTurn({ user }) { payloads.push({ simulator: user }); return { done: true, message: '' }; },
-    async prepare() { return { requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [], agent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] }, scenarios: [] }; },
+    async groundRequirements() { return { requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [] }; },
     async scenarioProposals(input, ctx) {
       ctx.beforeCall(); payloads.push(structuredClone(input));
       return proposals(input.batchId).filter(p => input.dialogues.some(d => d.id === p.variant.sourceDialogues[0]!.dialogueId));
@@ -34,7 +33,7 @@ function runtimeFixture(payloads: any[]): Runtime {
   } as Runtime;
 }
 const input = () => createInputSchema.parse({ task: 'Проверить возвраты', mode: 'demo', materials: sources.map(({ name, content }) => ({ name, content })), dialogues: rawDialogues, originalImport: importBatch(rawDialogues),
-  scenarioCount: 0, validationCount: 1, settings: { maxCalls: 30 } });
+  scenarioCount: 0, target: demoTarget(), settings: { maxCalls: 30 } });
 
 test('a preparation that died during a paid call is not silently repeated', async () => {
   const { resumeScenarioLibrary } = await import('../src/scenario-preparation.js');
@@ -194,11 +193,10 @@ test('large Russian articles fit the byte budget and the same article is grounde
   const runtime = runtimeFixture([]), groundings: any[] = [], requests: any[] = [];
   const quotes = ['Уточните номер терминала.', 'Уточните причину возврата.'];
   runtime.selectSources = async () => ({ sourceIds: ['source-2', 'source-3'] });
-  runtime.prepare = async request => {
+  runtime.groundRequirements = async request => {
     groundings.push(structuredClone(request));
     const index = groundings.length - 1;
-    return { requirements: [{ id: `rule_${index}`, sourceId: 'source-2', quote: quotes[index]!, text: quotes[index]!, critical: false }],
-      questions: [], agent: { name: 'Агент', instructions: 'Консультировать по статье', tools: [] }, scenarios: [] };
+    return { requirements: [{ id: `rule_${index}`, sourceId: 'source-2', quote: quotes[index]!, text: quotes[index]!, critical: false }], questions: [] };
   };
   runtime.scenarioProposals = async request => { requests.push(structuredClone(request)); return []; };
   const lab = new ExperimentLab(directory, runtime);
@@ -226,9 +224,8 @@ test('the same quote with a different focused meaning does not reuse an earlier 
   const quote = 'Перед изменением уточните данные; при консультации номер не обязателен.';
   let count = 0;
   runtime.selectSources = async () => ({ sourceIds: ['source-1'] });
-  runtime.prepare = async () => ({ requirements: [{ id: 'rule', sourceId: 'source-1', quote,
-    text: ++count === 1 ? 'Перед изменением уточните данные.' : 'При консультации номер не обязателен.', critical: true }], questions: [],
-    agent: { name: 'Агент', instructions: 'Консультировать', tools: [] }, scenarios: [] });
+  runtime.groundRequirements = async () => ({ requirements: [{ id: 'rule', sourceId: 'source-1', quote,
+    text: ++count === 1 ? 'Перед изменением уточните данные.' : 'При консультации номер не обязателен.', critical: true }], questions: [] });
   runtime.scenarioProposals = async request => { focused.push(request.requirements.map(r => r.id)); return []; };
   const lab = new ExperimentLab(directory, runtime);
   try {
@@ -268,7 +265,7 @@ test('full chronological preparation keeps original import, awaits real acceptan
     const identity = sourceIdentity(accepted.experiment, ['variant_2']);
     assert.equal(identity.libraryHash, libraryHash(accepted.library));
     assert.equal(identity.importHash, accepted.experiment.originalImport!.contentHash);
-    await assert.rejects(() => lab.updateDraft(seed.id, draftHash(accepted.experiment), { removeScenarioIds: ['variant_2'] }), /библиотек/i);
+    await assert.rejects(() => lab.updateDraft(seed.id, draftHash(accepted.experiment), { removeScenarioIds: ['variant_2'] } as never), /removeScenarioIds/, 'a draft patch cannot carry cards: they change only in the library');
     await lab.start(seed.id, { approved: true, expectedHash: draftHash(accepted.experiment) }); await lab.waitForIdle();
     assert.doesNotMatch(JSON.stringify(payloads.filter(p => p.simulator)), /три дня/);
     const repeated = await lab.repeat(seed.id, ['variant_2']);
@@ -424,7 +421,7 @@ test('budget exhaustion persists the exact unprocessed set', async () => {
   const lab = new ExperimentLab(directory, runtime);
   try {
     await lab.init();
-    const prepare = runtime.prepare; runtime.prepare = async (value, ctx) => { for (let i = 0; i < 4; i++) ctx.beforeCall(); return prepare(value, ctx); };
+    const ground = runtime.groundRequirements!; runtime.groundRequirements = async (value, ctx) => { for (let i = 0; i < 4; i++) ctx.beforeCall(); return ground(value, ctx); };
     const preparedInput = input(); preparedInput.settings.maxCalls = 5;
     const seed = await lab.create(preparedInput); await lab.waitForIdle();
     const result = await lab.get(seed.id);
@@ -449,7 +446,7 @@ test('library run settings can change without using the legacy card editor or re
     const updated = await lab.updateDraft(seed.id, draftHash(accepted.experiment), { settings: { repeats: 3 } });
     assert.equal(updated.acceptedDraftHash, undefined);
     assert.equal(updated.librarySnapshot!.acceptance!.snapshotHash, accepted.library.acceptance!.snapshotHash);
-    await assert.rejects(() => lab.setExpectation(seed.id, draftHash(updated), 'variant_1', 'Изменение'), /библиотек/);
+    await assert.rejects(() => lab.updateDraft(seed.id, draftHash(updated), { scenarios: [] } as never), /scenarios/, 'expectations change only in the library, never through the draft');
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -650,9 +647,9 @@ test('a knowledge base too large for one call is read per dialogue: the model pi
       const wanted = input.dialogue.messages[0]!.content.includes('терминала') ? 'Заблокирован терминал' : 'Как оформить возврат покупателю';
       return { sourceIds: [input.catalog.find(item => item.name === wanted)!.id] };
     },
-    async prepare(input) {
+    async groundRequirements(input) {
       groundings.push(input.sources.map(source => source.id));
-      return { questions: [], agent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] }, scenarios: [],
+      return { questions: [],
         requirements: input.sources.map(source => ({ id: source.kind === 'prompt' ? 'terminal_rule' : `rule_${source.id}`, sourceId: source.id, critical: true,
           text: source.kind === 'prompt' ? 'Уточните номер терминала' : 'Порядок действий описан в личном кабинете', quote: source.kind === 'prompt' ? 'Уточните номер терминала' : 'Порядок действий описан в личном кабинете.' })) };
     },
@@ -707,11 +704,11 @@ test('the articles chosen for one dialogue are kept within the call budget, in t
   const runtime: Runtime = {
     ...runtimeFixture([]),
     async selectSources(input, ctx) { ctx.beforeCall(); return { sourceIds: input.catalog.slice(0, 5).map(item => item.id) }; },
-    async prepare(input) {
+    async groundRequirements(input) {
       groundings.push(input.sources.map(source => source.id));
       const dialogue = rawDialogues.find(d => d.id === input.focus?.dialogueId)!;
       assert.deepEqual(input.focus, { dialogueId: dialogue.id, customerMessages: dialogue.messages.filter(m => m.role === 'user').map(m => m.content) }, 'grounding carries this customer’s words only');
-      return { questions: [], agent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] }, scenarios: [],
+      return { questions: [],
         requirements: input.sources.map(source => ({ id: source.kind === 'prompt' ? 'terminal_rule' : `rule_${source.id}`, sourceId: source.id, critical: true,
           text: 'Уточните номер терминала', quote: 'Уточните номер терминала' })) };
     },

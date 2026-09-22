@@ -7,12 +7,12 @@ import { Text, type Component } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { z } from 'zod';
 import { ExperimentLab, draftHash, resultHash } from '../src/experiment.js';
-import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, goldenCaseSchema, reassessmentSchema, ownerProfileSchema, SCENARIO_LIMIT, settingsSchema, targetSchema, type Experiment, type HumanReviewInput } from '../src/contracts.js';
+import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, reassessmentSchema, runnableTargetSchema, SCENARIO_LIMIT, settingsSchema, type Experiment, type HumanReviewInput } from '../src/contracts.js';
 import { awaitingVerdict, cardVerdict, evidenceSummary, headlineCardOutcome, plannedTrials } from '../src/comparison.js';
 import { judgeAgreement } from '../src/agreement.js';
 import { markTargets } from '../src/outcomes.js';
 import { expectationSheet, qualityLines, qualitySummary, testPlanLines, trialProofLines } from '../src/quality.js';
-import { demoEvaluationInput, demoInput } from '../src/demo.js';
+import { demoInput } from '../src/demo.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
 import { agreementSectionLines, allFailuresPointer, buildResultView, causeSection, resultViewLines, SECTION_TEXT, type ResultView } from '../src/result-view.js';
 import { rowsToLines } from '../src/explain.js';
@@ -114,7 +114,7 @@ function summary(record: Experiment, directory: string, view?: ResultView) {
     draftHash: draftHash(record), acceptedDraftHash: record.acceptedDraftHash, resultHash: record.trials.length ? resultHash(record) : undefined,
     message: record.message, error: record.error, questions: record.questions,
     scenarioCount: record.scenarios.length, revisionCount: record.revisions.length,
-    target: record.target, dialogueCount: record.dialogues.length, profileCount: record.profiles.length, evidence,
+    target: record.target, dialogueCount: record.dialogues.length, evidence,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, parentRunId: record.parentRunId,
     positiveControlScenarioIds: record.positiveControlScenarioIds,
     trialCount: record.trials.length, humanReviews: record.humanReviews ?? [], usage: record.usage, failureModes: record.failureModes ?? [],
@@ -162,9 +162,9 @@ async function humanAnnotation(ctx: ExtensionContext, record: Experiment, select
     durationMs: Math.min(3600000, Math.round(performance.now() - started + (reviewTimes?.get(`${record.id}|${trial.id}`) ?? readingMs))) }];
 }
 
-/** A real agent is independent per dialogue, so several run at once; the scripted sandbox keeps its deterministic order. */
+/** A real agent is independent per dialogue, so several run at once. */
 function runParallel(record: Experiment): number {
-  return record.target.kind === 'sandbox' ? 1 : Math.max(1, Math.min(8, record.scenarios.length * record.settings.userModes.length * record.settings.repeats));
+  return Math.max(1, Math.min(8, record.scenarios.length * record.settings.userModes.length * record.settings.repeats));
 }
 
 /**
@@ -473,19 +473,16 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       settings: Type.Optional(Type.Unsafe(z.toJSONSchema(settingsSchema, { io: 'input' }))),
       scenarioCount: Type.Optional(Type.Integer({ minimum: 0, maximum: SCENARIO_LIMIT })),
       validationCount: Type.Optional(Type.Integer({ minimum: 1, maximum: SCENARIO_LIMIT, description: 'Cards in mode=validate; defaults to 15.' })),
-      connectionFile: Type.Optional(Type.String()), goldenFile: Type.Optional(Type.String()), dialoguesFile: Type.Optional(Type.String()),
+      connectionFile: Type.Optional(Type.String()), dialoguesFile: Type.Optional(Type.String()),
       withoutDialogues: Type.Optional(Type.Boolean({ description: 'Set true only when the user explicitly chose to start without real dialogues. Otherwise ask for optional JSON/JSONL logs before building a live run.' })),
-      target: Type.Optional(Type.Unsafe(z.toJSONSchema(targetSchema, { io: 'input' }))),
+      target: Type.Optional(Type.Unsafe(z.toJSONSchema(runnableTargetSchema, { io: 'input' }))),
       targetVersion: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Agent release, commit or remote deployment version.' })),
-      goldenCases: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(goldenCaseSchema).max(40), { io: 'input' }))),
       dialogues: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(z.json()).max(300), { io: 'input' }))),
-      notes: Type.Optional(Type.String({ maxLength: 8000, description: "The owner's own hints about users, goals and situations, in their words. First-class input for synthetic cards; never treated as a business rule." })),
-      profiles: Type.Optional(Type.Unsafe(z.toJSONSchema(z.array(ownerProfileSchema).max(6), { io: 'input' }))),
       mode: Type.Optional(Type.Union([Type.Literal('live'), Type.Literal('demo'), Type.Literal('validate')])),
     }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(callId, params, toolSignal, onUpdate, ctx) {
-      const { goldenFile, dialoguesFile, connectionFile, withoutDialogues, materialFiles, promptFiles, ...rest } = params;
+      const { dialoguesFile, connectionFile, withoutDialogues, materialFiles, promptFiles, validationCount: requestedValidation, ...rest } = params;
       const operation = rest.mode ?? 'live';
       const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
       signal.throwIfAborted();
@@ -501,7 +498,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       let dialogues: unknown;
       const libraryImport = operation !== 'demo' && (dialoguesFile || rest.dialogues)
         ? dialoguesFile ? await readDialogueImport(resolve(ctx.cwd, dialoguesFile)) : importDialogues(rest.dialogues) : undefined;
-      try { dialogues = libraryImport ? libraryImport.dialogues.slice(0, operation === 'validate' ? 300 : 200) : (dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), 'dialogues', { maxItems: operation === 'validate' ? 300 : 200 }) : rest.dialogues); }
+      try { dialogues = libraryImport ? libraryImport.dialogues.slice(0, operation === 'validate' ? 300 : 200) : (dialoguesFile ? await readData(resolve(ctx.cwd, dialoguesFile), { maxItems: operation === 'validate' ? 300 : 200 }) : rest.dialogues); }
       catch (error) {
         if (operation !== 'validate') throw error;
         throw new Error(safeText(`Не удалось прочитать записи: ${error instanceof Error ? error.message : String(error)}. Исправьте JSON/JSONL и повторите команду; агент не запускался.`));
@@ -520,7 +517,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       }
       const supplied = (rest.settings ?? {}) as Partial<z.infer<typeof settingsSchema>>;
       const sourceDialogueCount = libraryImport?.originalImport.dialogues.length ?? parsedDialogues.length;
-      const validationCount = operation === 'validate' ? rest.validationCount ?? 15 : 0;
+      const validationCount = operation === 'validate' ? requestedValidation ?? 15 : 0;
       if (operation === 'validate') {
         parsedDialogues = selectValidationDialogues(parsedDialogues, Math.min(40, validationCount * 3));
         if (!parsedDialogues.length && !libraryImport?.originalImport.dialogues.length) throw new Error('В логах нет пригодных диалогов с 1–16 репликами пользователя без полностью замаскированных реплик.');
@@ -529,17 +526,17 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       const mode = operation === 'demo' ? 'demo' : 'live';
       const connection = mode === 'demo' ? undefined : connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
       let input: z.infer<typeof createInputSchema>;
-      try { input = createInputSchema.parse({
-        ...(mode === 'demo' ? demoEvaluationInput() : {}), ...rest, ...(rest.target ? { target: projectTarget(rest.target, ctx.cwd) } : {}), scenarioCount: operation === 'validate' ? 0 : rest.scenarioCount ?? (mode === 'demo' ? 3 : 1),
-        ...(operation === 'validate' ? { validationCount } : {}), mode, workflow: 'evaluate',
+      // The built-in example is fixed: its own materials, dialogues and teaching agent.
+      try { input = mode === 'demo' ? demoInput() : createInputSchema.parse({
+        ...rest, ...(rest.target ? { target: projectTarget(rest.target, ctx.cwd) } : {}), scenarioCount: operation === 'validate' ? 0 : rest.scenarioCount ?? 1,
+        mode, workflow: 'evaluate',
         ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
-        ...(goldenFile ? { goldenCases: await readData(resolve(ctx.cwd, goldenFile), 'golden') } : {}),
         ...(dialogues !== undefined ? { dialogues: parsedDialogues.slice(0, 200) } : {}),
         ...(libraryImport ? { originalImport: libraryImport.originalImport } : {}),
-        settings: { ...(mode === 'demo' ? demoInput().settings : {}), repeats: 1,
+        settings: { repeats: 1,
           maxCalls: operation === 'validate' ? Math.max(140, 2 * parsedDialogues.length + 19 * validationCount + 20) : 20,
           maxDurationMs: operation === 'validate' ? Math.max(180_000, 180_000 * parsedDialogues.length) : 180_000,
-          ...(mode === 'live' ? { judge: DEFAULT_JUDGE } : {}),
+          judge: DEFAULT_JUDGE,
           // Grounding many materials with a small model routinely exceeds the two-minute default per call.
           ...(operation === 'validate' ? { timeoutMs: 600_000 } : {}),
           ...supplied,
@@ -739,8 +736,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   pi.registerTool({
     ...displayFor('agent_lab_edit'),
     name: 'agent_lab_edit', label: 'Edit an unapproved agent draft',
-    description: 'Edit a draft after inspecting its current draftHash. scenarios upserts full cards by id and preserves omitted cards. Delete only explicitly with removeScenarioIds. AgentSpec, settings, target and targetVersion may also change. Human approval stays pending. Cannot change started experiments, run dialogues, record human verdicts, or approve results. Expectations of situations are changed by the owner through agent_lab_accept, not by this tool.',
-    parameters: Type.Object({ id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), expectedHash: Type.String({ pattern: '^[a-f0-9]{64}$' }), patch: Type.Unsafe({ ...z.toJSONSchema(draftPatchSchema, { io: 'input' }), description: 'profileEdits replaces draft overrides on existing profiles and updates all linked cards. Original profiles and evidence stay intact. override:null restores original; persona:null clears persona; characteristics:[] clears traits. Omitted override fields use the original. Use scenarios to link/unlink profileId.' }) }, { additionalProperties: false }),
+    description: 'Edit the run settings, the agent connection (target), targetVersion or the agent label of a draft after inspecting its current draftHash. Situations and their expectations change only in the scenario library (agent_lab_scenarios). Human approval stays pending. Cannot change started experiments, run dialogues, record human verdicts, or approve results.',
+    parameters: Type.Object({ id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), expectedHash: Type.String({ pattern: '^[a-f0-9]{64}$' }), patch: Type.Unsafe(z.toJSONSchema(draftPatchSchema, { io: 'input' })) }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(callId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
@@ -760,7 +757,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         focus.set(lab.store.directory, record.id);
         // What changed, in one row; the whole expectation sheet waits behind the expand key.
         const parts = [patch.target ? 'подключение к агенту' : '', patch.targetVersion ? `версия агента — ${patch.targetVersion}` : '', patch.settings ? 'настройки и лимиты' : '',
-          patch.scenarios?.length || patch.removeScenarioIds?.length ? 'карточки' : '', patch.agent ? 'описание агента' : '', patch.profileEdits?.length ? 'профили клиентов' : ''].filter(Boolean);
+          patch.agent ? 'описание агента' : ''].filter(Boolean);
         const feed: Feed = { rows: [row(`Черновик обновлён: ${safeText(parts.join(', ') || 'без видимых изменений')}.`, 'success', true),
           row(`Агент: ${safeText(targetText(record).replaceAll(`${ctx.cwd}/`, ''))}${record.targetVersion ? ` · версия ${safeText(record.targetVersion)}` : ''}`, undefined, false, 1),
           row('После изменения запуск подтверждается заново.', 'muted', false, 1), ...stateRows(record)],
@@ -772,7 +769,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   pi.registerTool({
     ...displayFor('agent_lab_accept'),
     name: 'agent_lab_accept', label: 'Confirm what the agent must do',
-    description: "Show the owner what the agent must do in each situation of the set (or the complete one-test definition) and record their confirmation, or their own-words correction of one expectation. The text and the consent come from native Pi dialogs only; the model supplies neither. It never runs the agent, calls a model, or saves a suite.",
+    description: "Show the owner what the agent must do in each situation of the set (or the complete one-test definition) and record their confirmation. The consent comes from a native Pi dialog only; the model never supplies it. It never runs the agent, calls a model, or saves a suite.",
     parameters: Type.Object({ id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }) }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(_callId, params, signal, _onUpdate, ctx) {
@@ -781,43 +778,24 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       const { lab, close } = await open(ctx.cwd);
       try {
         await lab.init();
-        let record = await lab.get(params.id);
+        const record = await lab.get(params.id);
         // A set of more than one situation is confirmed as one sheet (UI-D-03); one test keeps its own definition.
         if (record.workflow === 'evaluate' && record.phase === 'review' && record.scenarios.length > 1) {
           const answer = (output: Record<string, unknown>) => {
             returnToBoard(ctx, record.id);
             return { content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details: output };
           };
-          while (true) {
+          signal?.throwIfAborted();
+          const sheet = expectationSheet(record);
+          const body = `${sheet.compactLines(record.id).map(item => safeText(item)).join('\n')}\n\nДа — подтвердить все. Нет — не подтверждать сейчас.`;
+          if (await ctx.ui.confirm(`Подтвердить ожидания: ${sheet.countText}?`, body)) {
             signal?.throwIfAborted();
-            const sheet = expectationSheet(record);
-            const body = `${sheet.compactLines(record.id).map(item => safeText(item)).join('\n')}\n\nДа — подтвердить все. Нет — поправить одну ситуацию или отменить.`;
-            if (await ctx.ui.confirm(`Подтвердить ожидания: ${sheet.countText}?`, body)) {
-              signal?.throwIfAborted();
-              const accepted = await lab.acceptDraft(record.id, sheet.draftHash);
-              return answer({ id: accepted.id, accepted: true, draftHash: sheet.draftHash, acceptedDraftHash: accepted.acceptedDraftHash,
-                message: `Ожидания подтверждены: ${sheet.countText}. Можно запускать.`, sheetLines: expectationSheet(accepted).lines });
-            }
-            signal?.throwIfAborted();
-            if (await ctx.ui.select('Что сделать с ожиданиями?', ['Поправить ожидание одной ситуации', 'Не подтверждать сейчас'])
-              !== 'Поправить ожидание одной ситуации') {
-              return answer({ id: record.id, accepted: false, draftHash: sheet.draftHash,
-                message: 'Ожидания не подтверждены. Прогон не начнётся, пока они не подтверждены.', sheetLines: sheet.lines });
-            }
-            signal?.throwIfAborted();
-            const options = sheet.cards.map(card => safeText(`${card.label} ${card.title}`));
-            const card = sheet.cards[options.indexOf(await ctx.ui.select('Какую ситуацию поправить?', options) ?? '')];
-            if (!card) continue;
-            const scenario = record.scenarios.find(item => item.id === card.scenarioId);
-            const current = scenario?.successCriteria ?? '';
-            const written = await ctx.ui.editor('Что агент должен сделать в этой ситуации? Своими словами.', current);
-            if (written === undefined) continue;
-            const text = written.trim();
-            if (!text || text === current.trim()) { ctx.ui.notify?.('Ожидание не изменено.', 'info'); continue; }
-            if (text.length > 3000) { ctx.ui.notify?.('Ожидание длиннее 3000 знаков. Сократите и попробуйте снова.', 'error'); continue; }
-            try { record = await lab.setExpectation(record.id, sheet.draftHash, card.scenarioId, written); }
-            catch (error) { ctx.ui.notify?.(inputError(error), 'error'); record = await lab.get(record.id); }
+            const accepted = await lab.acceptDraft(record.id, sheet.draftHash);
+            return answer({ id: accepted.id, accepted: true, draftHash: sheet.draftHash, acceptedDraftHash: accepted.acceptedDraftHash,
+              message: `Ожидания подтверждены: ${sheet.countText}. Можно запускать.`, sheetLines: expectationSheet(accepted).lines });
           }
+          return answer({ id: record.id, accepted: false, draftHash: sheet.draftHash,
+            message: 'Ожидания не подтверждены. Прогон не начнётся, пока они не подтверждены. Ожидание ситуации меняется правкой библиотеки сценариев.', sheetLines: sheet.lines });
         }
         const projection = testPlanLines(record);
         const question = projection.lines.at(-1)!;
@@ -1240,10 +1218,10 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             demoRequested = false;
             try {
               await writing();
-              const draft = await lab.create(demoEvaluationInput());
+              const draft = await lab.create(demoInput());
               await lab.waitForIdle();
               id = draft.id; section = 'cards'; selected = 0; query = ''; pendingOnly = false; beforeId = undefined; reportPath = undefined;
-              inform('Учебный пример: агенту не хватает инструмента изменения записи. r — найти провал. Модель и провайдер не нужны.');
+              inform('Учебный пример: агент переспрашивает уже названный номер терминала. Подтвердите спорный факт, примите варианты и запустите. Модель и провайдер не нужны.');
             } catch (error) { inform(inputError(error), 'error'); }
             finally { await release(); }
             continue;
@@ -1458,19 +1436,6 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
                 section = 'results'; selected = 0;
                 reportPath = undefined;
               }
-            } else if (action.type === 'expect') {
-              // TRUST-11 (CTX-20): the expectation text exists only if the owner typed it into the native editor.
-              const r = await lab.get(action.record.id);
-              const scenario = r.scenarios.find(item => item.id === action.scenarioId);
-              if (!scenario) throw new Error('Такой ситуации в черновике уже нет. Проверьте ожидания ещё раз.');
-              section = 'cards';
-              const written = await ctx.ui.editor('Что агент должен сделать в этой ситуации? Своими словами.', scenario.successCriteria ?? '');
-              if (written === undefined) continue;
-              const text = written.trim();
-              if (!text || text === (scenario.successCriteria ?? '').trim()) { inform('Ожидание не изменено.', 'info'); continue; }
-              if (text.length > 3000) { inform('Ожидание длиннее 3000 знаков. Сократите и попробуйте снова.', 'error'); continue; }
-              await lab.setExpectation(r.id, draftHash(r), action.scenarioId, written);
-              inform(`Ожидание изменено: «${safeText(scenario.title)}». Подтвердите ожидания снова: y.`);
             } else if (action.type === 'accept') {
               // TRUST-10: one key confirms every expectation of the shown draft version, and only that version.
               const r = await lab.get(action.record.id);

@@ -8,8 +8,9 @@ import { createInterface } from 'node:readline';
 import test, { type TestContext } from 'node:test';
 import { ExperimentStore } from '../src/store.js';
 import { ExperimentLab, draftHash } from '../src/experiment.js';
-import { createDemoRuntime, demoEvaluationInput } from '../src/demo.js';
-import { createInputSchema, type JudgeAudit } from '../src/contracts.js';
+import { demoInput } from '../src/demo.js';
+import { type JudgeAudit } from '../src/contracts.js';
+import { acceptedDemoDraft, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 
 async function directory(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'agent-lab-store-'));
@@ -28,7 +29,7 @@ test('readers see valid records and diagnostics while the writer owns the direct
   const lab = new ExperimentLab(dir);
   await lab.init();
   t.after(() => lab.close());
-  const draft = await lab.create(demoEvaluationInput()); await lab.waitForIdle();
+  const draft = await lab.create(demoInput()); await lab.waitForIdle();
   const lock = await readFile(join(dir, '.lock'), 'utf8');
   await writeFile(join(dir, 'damaged.json'), '{broken');
   const reader = new ExperimentStore(dir);
@@ -100,7 +101,7 @@ test('simultaneous real processes recover a dead writer without stealing the win
 test('CLI export and diff read snapshots without interrupting a live writer', { timeout: 15000 }, async t => {
   const dir = await directory(t);
   const lab = new ExperimentLab(dir); await lab.init(); t.after(() => lab.close());
-  const draft = await lab.create(demoEvaluationInput()); await lab.waitForIdle();
+  const draft = await acceptedDemoDraft(lab);
   const before = await lab.get(draft.id);
   const lock = await readFile(join(dir, '.lock'), 'utf8');
   const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
@@ -164,11 +165,9 @@ test('judge audit sidecar rejects unsafe ids before touching the disk and oversi
 
 test('a quick agreement mark survives a reload with its judge verdict and judge version', async t => {
   const dir = await directory(t);
-  const lab = new ExperimentLab(dir, createDemoRuntime());
+  const lab = new ExperimentLab(dir, legacyDemoRuntime());
   await lab.init();
-  const base = demoEvaluationInput();
-  const created = await lab.create(createInputSchema.parse({ ...base, scenarioCount: 1, settings: { ...base.settings, repeats: 1 } }));
-  await lab.waitForIdle();
+  const created = await legacyDraft(lab, { count: 1, settings: { repeats: 1 } });
   await lab.start(created.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(await lab.get(created.id)) });
   await lab.waitForIdle();
   const record = await lab.get(created.id);

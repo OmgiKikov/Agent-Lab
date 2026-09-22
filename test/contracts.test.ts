@@ -1,14 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, verbatimSpanAt, worldSchema,
-  type Profile,
+  SANDBOX_RETIRED, runnableTargetSchema, createInputSchema, dialogueSchema, draftPatchSchema, emptyUsage, fingerprint, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, verbatimSpan, verbatimSpanAt, worldSchema,
 } from '../src/contracts.js';
 import { selectValidationDialogues } from '../src/imports.js';
 
 const source = { id: 'source-1', name: 'policy', content: 'Rule one: read before update.', hash: 'h' };
 const requirement = { id: 'req_1', text: 'Read before update', sourceId: 'source-1', quote: 'read before update', critical: true };
-const agent = { name: 'A', instructions: 'Do the thing.', tools: ['lookup_record' as const] };
 const metric = { id: 'm', name: 'M', subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' };
 const user = { goal: 'g', facts: 'f', behavior: 'b', opening: 'o', maxFollowUps: 0, persona: 'P', characteristics: ['c'] };
 
@@ -22,9 +20,8 @@ test('validation sampling is stable, outcome-blind and keeps only replayable dia
   assert.deepEqual(selectValidationDialogues([...dialogues].reverse()).map(dialogue => dialogue.id), first);
   const tooLong = dialogueSchema.parse({ id: 'too_long', messages: Array.from({ length: 17 }, (_, index) => ({ role: 'user' as const, content: `m${index}` })) });
   assert.deepEqual(selectValidationDialogues([tooLong]), []);
-  const base = { task: 'validate', materials: [{ name: 'policy', content: 'Rule.' }], mode: 'live' as const, dialogues: dialogues.slice(0, 15), scenarioCount: 0 };
-  assert.equal(createInputSchema.safeParse({ ...base, validationCount: 15, settings: { userModes: ['scripted'] } }).success, true);
-  assert.equal(createInputSchema.safeParse({ ...base, validationCount: 15, settings: { userModes: ['reactive'] } }).success, true);
+  const base = { task: 'validate', materials: [{ name: 'policy', content: 'Rule.' }], mode: 'live' as const, dialogues: dialogues.slice(0, 15), scenarioCount: 0, target };
+  assert.equal(createInputSchema.safeParse({ ...base, settings: { userModes: ['reactive'] } }).success, true);
   const masked = (content: string) => dialogueSchema.parse({ id: 'masked', messages: [{ role: 'user', content }] });
   assert.deepEqual(selectValidationDialogues([masked('*** # # ...')]), []);
   assert.equal(selectValidationDialogues([masked('Терминал **** не работает')]).length, 1);
@@ -35,35 +32,23 @@ function card(overrides: Record<string, unknown> = {}) {
     user, initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], metrics: [metric], ...overrides,
   };
 }
-const preparation = (scenarios: unknown[]) => ({ requirements: [requirement], questions: [], agent, scenarios });
+const preparation = (scenarios: unknown[]) => ({ requirements: [requirement], questions: [], scenarios });
+/** Where a new draft's agent answers: never contacted by schema tests. */
+const target = { kind: 'http' as const, url: 'http://127.0.0.1:1/agent' };
 
-test('target schema accepts sandbox, absolute module paths and env-var header names only', () => {
-  assert.ok(targetSchema.safeParse({ kind: 'sandbox' }).success);
+test('target schema keeps the retired sandbox readable, a runnable target refuses it, and paths and header names are checked', () => {
+  assert.ok(targetSchema.safeParse({ kind: 'sandbox' }).success, 'old sandbox records still parse');
+  const sandbox = runnableTargetSchema.safeParse({ kind: 'sandbox' });
+  assert.equal(sandbox.success, false);
+  assert.equal(sandbox.error?.issues[0]?.message, SANDBOX_RETIRED);
+  assert.match(runnableTargetSchema.safeParse(undefined).error?.issues[0]?.message ?? '', /Укажите подключение агента/);
+  assert.ok(runnableTargetSchema.safeParse({ kind: 'module', path: '/abs/agent.mjs' }).success);
   assert.equal(targetSchema.safeParse({ kind: 'module', path: 'relative/agent.mjs' }).success, false);
   assert.ok(targetSchema.safeParse({ kind: 'module', path: '/abs/agent.mjs' }).success);
   assert.equal(targetSchema.safeParse({ kind: 'http', url: 'http://127.0.0.1:1/agent', headersEnv: { Authorization: 'not a var' } }).success, false);
   const http = targetSchema.parse({ kind: 'http', url: 'http://127.0.0.1:1/agent', headersEnv: { Authorization: 'AGENT_TOKEN' } });
   assert.equal(http.kind === 'http' ? http.timeoutMs : 0, 60000);
   assert.equal(targetSchema.safeParse({ kind: 'http', url: 'http://127.0.0.1:1/agent', headers: { Authorization: 'secret' } }).success, false);
-});
-
-test('golden cases become curated scenarios that keep their checks, metrics and script', () => {
-  const golden = goldenCaseSchema.parse({
-    id: 'gold_1', goal: 'Block a lost card', opening: 'I lost my card', successCriteria: 'The card is blocked',
-    script: ['The last four digits are 1234.'],
-    initialState: { records: { card_1: { status: 'active' } }, writableFields: ['status'], transientFailures: 0 },
-    checks: [{ id: 'blocked', kind: 'state_equals', description: 'Card blocked', recordId: 'card_1', field: 'status', value: 'blocked' }],
-  });
-  const scenario = goldenToScenario(golden);
-  assert.equal(scenario.provenance, 'curated');
-  assert.equal(scenario.id, 'gold_1');
-  assert.equal(scenario.title, 'Block a lost card');
-  assert.deepEqual(scenario.requirementIds, []);
-  assert.equal(scenario.checks.length, 1);
-  assert.deepEqual(scenario.user.script, ['The last four digits are 1234.']);
-  assert.equal(scenario.user.maxFollowUps, 1);
-  assert.equal(scenario.successCriteria, 'The card is blocked');
-  assert.equal(golden.behavior.length > 0, true);
 });
 
 test('old experiment files load with defaults for workflow, human reviews, target, imports and trial user mode', () => {
@@ -91,6 +76,24 @@ test('old experiment files load with defaults for workflow, human reviews, targe
   assert.deepEqual(experimentSchema.parse({ ...legacy, acceptedTests: [accepted] }).acceptedTests, [accepted]);
   assert.equal(experimentSchema.safeParse({ ...legacy, acceptedTests: [{ ...accepted, definitionHash: 'not-a-hash' }] }).success, false);
   assert.equal(experimentSchema.safeParse({ ...legacy, acceptedTests: [accepted, { ...accepted, scenarioId: 'scenario_2' }] }).success, false);
+});
+
+test('records of retired features still parse and keep those fields verbatim: golden cases, profiles, notes, a comparison run', () => {
+  const golden = { id: 'gold_1', goal: 'Block a lost card', opening: 'I lost my card', successCriteria: 'The card is blocked', tier: 'regression', facts: 'Card ends with 4321.',
+    characteristics: [], behavior: 'Ask once.', maxFollowUps: 1, initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], metrics: [] };
+  const profile = { id: 'observed_1', persona: 'Observed customer', characteristics: ['Short messages'], evidenceDialogueIds: ['d1'], source: 'observed', draftOverride: { persona: null } };
+  const comparison = { baselineId: 'r1', candidateId: 'r2', manifestHash: 'h', split: 'control', plannedPairs: 2, validPairs: 2, invalidPairs: 0, families: 1,
+    baselinePasses: 1, candidatePasses: 2, fixed: 1, regressed: 0, tied: 1, delta: 0.5, interval: null, verdict: 'insufficient', reasons: [], cases: [] };
+  const old = { ...legacyRecord(), workflow: 'compare', target: { kind: 'sandbox' }, goldenCases: [golden], profiles: [profile], notes: 'Users rarely know their ID.',
+    scenarios: [{ ...card({ profileId: 'observed_1' }), split: 'control' }], comparisons: [comparison] };
+  const parsed = experimentSchema.parse(structuredClone(old));
+  assert.equal(parsed.workflow, 'compare');
+  assert.deepEqual(parsed.target, { kind: 'sandbox' });
+  assert.deepEqual([parsed.goldenCases, parsed.profiles, parsed.notes], [[golden], [profile], 'Users rarely know their ID.'], 'retired fields keep their stored values');
+  assert.deepEqual([parsed.scenarios[0]!.profileId, parsed.scenarios[0]!.split], ['observed_1', 'control']);
+  assert.deepEqual(parsed.comparisons, [comparison]);
+  for (const phase of ['baseline', 'improving', 'control']) assert.ok(experimentSchema.safeParse({ ...old, phase }).success, `phase ${phase}`);
+  assert.ok(scenarioSchema.safeParse(card()).success, 'scenarios without goalObservation stay readable');
 });
 
 test('a quick agreement mark extends the review schema and old reviews still parse unchanged', () => {
@@ -158,64 +161,34 @@ test('input and persisted human review schemas both reject two targets', () => {
 });
 
 test('synthetic cards need grounded requirements; curated and production cards do not', () => {
-  assert.throws(() => validatePreparation(preparation([card({ requirementIds: [] })]), [source], 'evaluate'), /requirement/i);
-  const curated = validatePreparation(preparation([card({ requirementIds: [], provenance: 'curated', user: { ...user, persona: undefined, characteristics: undefined } })]), [source], 'evaluate');
+  assert.throws(() => validatePreparation(preparation([card({ requirementIds: [] })]), [source]), /requirement/i);
+  const curated = validatePreparation(preparation([card({ requirementIds: [], provenance: 'curated', user: { ...user, persona: undefined, characteristics: undefined } })]), [source]);
   assert.equal(curated.scenarios[0]!.provenance, 'curated');
-  const production = validatePreparation(preparation([card({ requirementIds: [], provenance: 'production' })]), [source], 'evaluate');
+  const production = validatePreparation(preparation([card({ requirementIds: [], provenance: 'production' })]), [source]);
   assert.equal(production.scenarios[0]!.provenance, 'production');
-});
-
-test('linked profiles supply persona text while unlinked cards need no persona', () => {
-  const profiles: Profile[] = [{ id: 'observed_1', persona: 'Observed customer', characteristics: ['Short messages'], observedStyle: '12 chars avg', evidenceDialogueIds: ['d1'] }];
-  const plain = validatePreparation(preparation([card({ user: { ...user, persona: undefined, characteristics: undefined } })]), [source], 'evaluate', profiles);
-  assert.equal(plain.scenarios[0]!.user.persona, undefined);
-  assert.throws(() => validatePreparation(preparation([card({ profileId: 'missing' })]), [source], 'evaluate', profiles), /profileId/);
-  const prepared = validatePreparation(preparation([card({ profileId: 'observed_1', user: { ...user, persona: 'Invented dramatic persona', characteristics: ['Shouts'] } })]), [source], 'evaluate', profiles);
-  assert.equal(prepared.scenarios[0]!.user.persona, 'Observed customer');
-  assert.deepEqual(prepared.scenarios[0]!.user.characteristics, ['Short messages']);
-  const curated = validatePreparation(preparation([card({ provenance: 'curated', requirementIds: [] })]), [source], 'evaluate', profiles);
-  assert.equal(curated.scenarios[0]!.user.persona, 'P');
 });
 
 test('user modes default to reactive and reject duplicates; imports reject duplicate ids and oversized dialogues', () => {
   assert.deepEqual(settingsSchema.parse({}).userModes, ['reactive']);
   assert.equal(settingsSchema.safeParse({ userModes: ['static', 'static'] }).success, false);
   assert.deepEqual(settingsSchema.parse({ userModes: ['static', 'scripted', 'reactive'] }).userModes, ['static', 'scripted', 'reactive']);
-  const base = { task: 'task', materials: [{ name: 'm', content: 'c' }], mode: 'demo' as const };
+  const base = { task: 'task', materials: [{ name: 'm', content: 'c' }], mode: 'demo' as const, target };
   const dialogue = (id: string, content = 'hello') => ({ id, messages: [{ role: 'user' as const, content }] });
   assert.equal(createInputSchema.safeParse({ ...base, dialogues: [dialogue('d1'), dialogue('d1')] }).success, false);
-  assert.equal(createInputSchema.safeParse({ ...base, goldenCases: [{ id: 'g', goal: 'x', opening: 'y', successCriteria: 'z' }, { id: 'g', goal: 'x', opening: 'y', successCriteria: 'z' }] }).success, false);
-  const parsed = createInputSchema.parse({ ...base, dialogues: [dialogue('d1')], goldenCases: [{ id: 'g', goal: 'x', opening: 'y', successCriteria: 'z' }] });
+  const parsed = createInputSchema.parse({ ...base, dialogues: [dialogue('d1')] });
   assert.equal(parsed.dialogues[0]!.outcome, 'unknown');
-  assert.deepEqual(parsed.target, { kind: 'sandbox' });
+  assert.equal(parsed.workflow, 'evaluate');
+  assert.deepEqual(parsed.target, { ...target, headersEnv: {}, timeoutMs: 60000 }, 'a new draft names its agent; there is no built-in default');
+  const { target: _missing, ...withoutTarget } = base;
+  assert.match(createInputSchema.safeParse(withoutTarget).error?.issues.map(issue => issue.message).join('\n') ?? '', /Укажите подключение агента/);
+  assert.equal(createInputSchema.safeParse({ ...base, target: { kind: 'sandbox' } }).error?.issues[0]?.message, SANDBOX_RETIRED);
+  // Inputs of the retired authoring and comparison paths are no longer accepted.
+  for (const retired of [{ goldenCases: [] }, { profiles: [] }, { notes: 'hint' }, { confirmedHypothesis: 'h' }, { validationCount: 3 }, { workflow: 'compare' }]) {
+    assert.equal(createInputSchema.safeParse({ ...base, ...retired }).success, false, JSON.stringify(retired));
+  }
+  assert.throws(() => dialogueSchema.parse({ id: 'blank', messages: [{ role: 'user', content: ' \n ' }] }), /Empty dialogue content/);
   const huge = Array.from({ length: 200 }, (_, i) => ({ id: `d${i}`, messages: Array.from({ length: 2 }, () => ({ role: 'user' as const, content: 'x'.repeat(8000) })) }));
   assert.equal(createInputSchema.safeParse({ ...base, dialogues: huge }).success, false);
-});
-
-test('confirmed hypotheses require an owner-selected goal observation while legacy scenarios remain readable', () => {
-  const base = {
-    task: 'Check the accepted hypothesis', materials: [{ name: 'Policy', content: 'Known rule.' }], mode: 'live' as const,
-    workflow: 'evaluate' as const, scenarioCount: 1, confirmedHypothesis: 'The agent may omit the answer.',
-  };
-  assert.equal(createInputSchema.safeParse(base).success, false);
-  for (const goalObservation of ['reply', 'tool', 'state'] as const) {
-    assert.equal(createInputSchema.parse({ ...base, goalObservation }).goalObservation, goalObservation);
-  }
-  assert.ok(scenarioSchema.safeParse(card()).success, 'legacy scenarios without goalObservation stay readable');
-});
-
-test('owner-supplied profiles need no evidence, legacy observed ones do, and owner notes travel with the input', () => {
-  assert.equal(profileSchema.safeParse({ id: 'p', persona: 'Busy parent', characteristics: ['Terse'] }).success, false);
-  const owner = profileSchema.parse({ id: 'p', persona: 'Busy parent', characteristics: ['Terse'], source: 'owner' });
-  assert.deepEqual([owner.source, owner.evidenceDialogueIds, owner.observedStyle], ['owner', [], undefined]);
-  const observed = profileSchema.parse({ id: 'o', persona: 'Observed', characteristics: ['Short'], evidenceDialogueIds: ['d1'] });
-  assert.equal(observed.source, 'observed');
-  const base = { task: 'task', materials: [{ name: 'm', content: 'c' }], mode: 'demo' as const };
-  const parsed = createInputSchema.parse({ ...base, notes: 'Users are often angry and rarely know their appointment ID.', profiles: [{ id: 'p', persona: 'Busy parent', characteristics: ['Terse'] }] });
-  assert.equal(parsed.notes, 'Users are often angry and rarely know their appointment ID.');
-  assert.equal(parsed.profiles[0]!.source, 'owner');
-  assert.equal(createInputSchema.safeParse({ ...base, profiles: [{ id: 'p', persona: 'A', characteristics: ['x'] }, { id: 'p', persona: 'B', characteristics: ['y'] }] }).success, false);
-  assert.equal(experimentSchema.parse({ ...legacyRecord(), profiles: [{ id: 'p', persona: 'Busy parent', characteristics: ['Terse'], source: 'owner' }] }).notes, '');
 });
 
 function legacyRecord() {
@@ -234,90 +207,6 @@ test('command targets run a local process: executable plus arguments, optional a
   assert.ok(targetSchema.safeParse({ kind: 'command', command: 'python3', cwd: '/abs/dir' }).success);
 });
 
-test('observed goals become production cards with a verbatim real opening and the matching profile', () => {
-  const profile: Profile = { id: 'observed_1', persona: 'Observed customer', characteristics: ['Short messages'], observedStyle: 's', evidenceDialogueIds: ['d1'], source: 'observed' };
-  const goal = observedGoalSchema.parse({ id: 'goal_move', goal: 'Move appointment A101 to 14:00', opening: 'move A101 to 14:00 pls', profileId: 'observed_1', evidenceDialogueIds: ['d1'], successCriteria: 'The appointment is moved to 14:00 or the user is told why not' });
-  const scenario = goalToScenario(goal, profile);
-  assert.equal(scenario.provenance, 'production');
-  assert.equal(scenario.profileId, 'observed_1');
-  assert.equal(scenario.user.opening, 'move A101 to 14:00 pls');
-  assert.equal(scenario.user.persona, 'Observed customer');
-  assert.deepEqual(scenario.user.characteristics, ['Short messages']);
-  assert.equal(scenario.user.maxFollowUps, 2);
-  assert.deepEqual(scenario.requirementIds, []);
-  assert.ok(scenario.metrics!.some(m => m.subject === 'agent') && scenario.metrics!.some(m => m.subject === 'simulator'));
-  assert.ok(scenario.assumptions!.some(a => /real dialogue/i.test(a)));
-  assert.equal(goal.outcome, 'unknown');
-});
-
-test('recorded dialogues map one-to-one to grounded production cards and immutable scripted evidence', () => {
-  const dialogue = {
-    id: 'dialogue_1', goal: 'Получить точную инструкцию', outcome: 'failure' as const,
-    messages: [
-      { role: 'user' as const, content: 'Где посмотреть тариф «Бизнес»?' },
-      { role: 'assistant' as const, content: 'Уточните терминал.' },
-      { role: 'user' as const, content: 'Терминал 4321.' },
-      { role: 'user' as const, content: 'И без звонка в поддержку.' },
-      { role: 'assistant' as const, content: 'Откройте Эквайринг → Мои точки продаж.' },
-    ],
-  };
-  const scenario = dialogueToScenario(dialogue, {
-    goal: 'Найти тариф терминала', successCriteria: 'Путь к тарифу указан по материалам владельца.', requirementIds: ['tariff_rule'],
-  });
-  assert.equal(scenario.provenance, 'production');
-  assert.equal(scenario.user.opening, dialogue.messages[0]!.content);
-  assert.deepEqual(scenario.user.script, ['Терминал 4321.', 'И без звонка в поддержку.']);
-  assert.equal(scenario.user.maxFollowUps, 2);
-  assert.deepEqual(scenario.requirementIds, ['tariff_rule']);
-  assert.equal(scenario.goalObservation, 'reply');
-  assert.deepEqual(scenario.metrics, [goalAttainment, replyQuality]);
-
-  const stateScenario = dialogueToScenario(dialogue, { goal: 'Найти тариф терминала', goalObservation: 'state' });
-  assert.equal(stateScenario.goalObservation, 'state', 'an explicit owner channel is preserved');
-
-  const trial = dialogueToTrial(dialogue, { ...scenario, split: 'dev' }, 'revision_1');
-  assert.deepEqual(trial.events, dialogue.messages.map((message, seq) => ({ seq, type: message.role, text: message.content })));
-  assert.equal(trial.id, dialogue.id);
-  assert.equal(trial.userMode, 'scripted');
-  assert.equal(trial.outcome, 'ungraded');
-  assert.deepEqual(trial.observation, { state: 'missing', tools: 'partial' });
-  assert.deepEqual(trial.initialState, { records: {}, writableFields: [], transientFailures: 0 });
-  assert.deepEqual(trial.finalState, trial.initialState);
-  assert.deepEqual(trial.usage, emptyUsage());
-  assert.equal(trial.simulatorChecks, undefined);
-  assert.throws(() => dialogueToScenario({ ...dialogue, messages: [{ role: 'assistant', content: 'Готово.' }] }, {
-    goal: 'g', successCriteria: 'c',
-  }), /нет реплики пользователя/i);
-
-  const spaced = dialogueSchema.parse({ id: 'exact_reply', messages: [
-    { role: 'user', content: '  reply exactly READY\n' }, { role: 'assistant', content: ' READY ' },
-  ] });
-  assert.deepEqual(dialogueToTrial(spaced, { ...scenario, id: 'exact_reply', split: 'dev' }, 'revision_1').events.map(event => event.text),
-    ['  reply exactly READY\n', ' READY '], 'score preserves original message whitespace as evidence');
-  assert.deepEqual(dialogueToScenario({ id: 'opening_only', messages: [{ role: 'user', content: 'Один вопрос' }] }, {
-    goal: 'Получить ответ', successCriteria: 'Ответ соответствует требованиям.',
-  }).user.script, [], 'opening-only production cards are runnable scripted conversations');
-  assert.throws(() => dialogueSchema.parse({ id: 'blank', messages: [{ role: 'user', content: ' \n ' }] }), /Empty dialogue content/);
-
-  const long = dialogueSchema.parse({ id: 'long', messages: Array.from({ length: 33 }, (_, index) => ({
-    role: index % 2 ? 'assistant' as const : 'user' as const, content: `message ${index}`,
-  })) });
-  const longScenario = dialogueToScenario(long, { goal: 'Разобрать длинный диалог', successCriteria: 'Ответ соответствует требованиям.' });
-  assert.doesNotThrow(() => scenarioSchema.parse(longScenario));
-  assert.equal(longScenario.user.script, undefined, 'long evidence is not truncated into a runnable script');
-  assert.equal(dialogueToTrial(long, { ...longScenario, split: 'dev' }, 'revision_1').events.length, 33, 'the full evidence remains one-to-one');
-});
-
-test('observed goal requirement ids are optional, unique and preserved by production cards', () => {
-  const dialogue = { id: 'd_req', messages: [{ role: 'user' as const, content: 'Покажите тариф' }] };
-  const goal = observedGoalSchema.parse({ id: 'g_req', goal: 'Показать тариф', opening: 'Покажите тариф', evidenceDialogueIds: ['d_req'],
-    successCriteria: 'Путь указан', requirementIds: ['tariff_rule'] });
-  validateObservedGoals([goal], [dialogue], []);
-  assert.deepEqual(goalToScenario(goal).requirementIds, ['tariff_rule']);
-  assert.equal(observedGoalSchema.safeParse({ ...goal, requirementIds: ['tariff_rule', 'tariff_rule'] }).success, false);
-  assert.equal(observedGoalSchema.parse({ ...goal, requirementIds: undefined }).requirementIds, undefined);
-});
-
 test('кластер провалов обязан ссылаться на диалоги, которые действительно провалились', () => {
   const trial = (id: string, outcome: 'fail' | 'pass') => ({ id, outcome } as unknown as Parameters<typeof validateFailureModes>[1][number]);
   const trials = [trial('t1', 'fail'), trial('t2', 'fail'), trial('t3', 'pass')];
@@ -329,18 +218,19 @@ test('кластер провалов обязан ссылаться на ди�
   assert.throws(() => validateFailureModes([mode, mode], trials), /повторяются/);
 });
 
-test('draft card operations name removals and reject duplicate or conflicting ids', () => {
-  assert.ok(draftPatchSchema.safeParse({ scenarios: [card()] }).success);
-  assert.deepEqual(draftPatchSchema.parse({ removeScenarioIds: ['c1'] }), { removeScenarioIds: ['c1'] });
-  for (const patch of [
-    { scenarios: [card(), card()] }, { removeScenarioIds: ['c1', 'c1'] },
-    { scenarios: [card()], removeScenarioIds: ['c1'] }, { removeScenarioIds: ['../c1'] }, {},
-  ]) assert.equal(draftPatchSchema.safeParse(patch).success, false);
+test('a draft patch changes only run settings, the connection and the agent label; situations and a sandbox are refused', () => {
+  assert.deepEqual(draftPatchSchema.parse({ targetVersion: 'v2' }), { targetVersion: 'v2' });
+  assert.ok(draftPatchSchema.safeParse({ settings: { repeats: 3 }, target: { kind: 'module', path: '/abs/agent.mjs' } }).success);
+  assert.ok(draftPatchSchema.safeParse({ agent: { name: 'A', instructions: 'Do the thing.', tools: [] } }).success);
+  assert.equal(draftPatchSchema.safeParse({ target: { kind: 'sandbox' } }).error?.issues[0]?.message, SANDBOX_RETIRED);
+  for (const patch of [{ scenarios: [card()] }, { removeScenarioIds: ['c1'] }, { profileEdits: [{ id: 'p', override: null }] }, {}]) {
+    assert.equal(draftPatchSchema.safeParse(patch).success, false, JSON.stringify(patch));
+  }
 });
 
 test('exact final-answer checks reject impossible combinations without constraining earlier replies', () => {
   const exact = { id: 'exact', kind: 'answer_equals', description: 'Final answer', value: 'Thank you.' };
-  const validate = (checks: unknown[]) => validatePreparation(preparation([card({ checks })]), [source], 'evaluate');
+  const validate = (checks: unknown[]) => validatePreparation(preparation([card({ checks })]), [source]);
   assert.throws(() => validate([exact, { ...exact, id: 'different', value: 'thank you.' }]), /Contradictory exact answer/);
   const forbidden = { id: 'forbidden', kind: 'answer_omits', description: 'Forbidden wording', value: 'THANK' };
   assert.throws(() => validate([exact, forbidden]), /Exact answer contains forbidden/);
@@ -348,25 +238,21 @@ test('exact final-answer checks reject impossible combinations without constrain
   assert.doesNotThrow(() => validate([exact, { ...exact, id: 'same' }, { id: 'earlier', kind: 'answer_contains', description: 'Earlier clarification', value: 'What is your name?' }]));
 });
 
-test('user state fields are optional, unique and travel through golden cases', () => {
+test('user state fields are optional and unique', () => {
   const parsed = validatePreparation(preparation([card({ user: { ...user, knows: ['Card ends with 4321', 'Two cards'], cannotKnow: ['Backend error reason'],
-    answers: [{ ifAsked: 'last four digits', reply: 'It ends with 4321.' }] } })]), [source], 'evaluate').scenarios[0]!;
+    answers: [{ ifAsked: 'last four digits', reply: 'It ends with 4321.' }] } })]), [source]).scenarios[0]!;
   assert.deepEqual(parsed.user.knows, ['Card ends with 4321', 'Two cards']);
   assert.deepEqual(parsed.user.answers, [{ ifAsked: 'last four digits', reply: 'It ends with 4321.' }]);
-  assert.throws(() => validatePreparation(preparation([card({ user: { ...user, knows: ['A101', 'a101'] } })]), [source], 'evaluate'), /Duplicate known facts/);
-  const golden = goldenCaseSchema.parse({ id: 'g', goal: 'Block a lost card', opening: 'I lost my card', successCriteria: 'blocked',
-    knows: ['Last four digits 4321'], cannotKnow: ['Why the backend refused'], answers: [{ ifAsked: 'digits', reply: '4321' }] });
-  const scenario = goldenToScenario(golden);
-  assert.deepEqual([scenario.user.knows, scenario.user.cannotKnow, scenario.user.answers], [['Last four digits 4321'], ['Why the backend refused'], [{ ifAsked: 'digits', reply: '4321' }]]);
+  assert.throws(() => validatePreparation(preparation([card({ user: { ...user, knows: ['A101', 'a101'] } })]), [source]), /Duplicate known facts/);
 });
 
 test('synthetic answers may only reveal values the user already knows', () => {
   const known = card({ user: { ...user, opening: 'Move my appointment', facts: 'Appointment A103', answers: [{ ifAsked: 'ID', reply: 'It is A103.' }] } });
-  assert.doesNotThrow(() => validatePreparation(preparation([known]), [source], 'evaluate'));
+  assert.doesNotThrow(() => validatePreparation(preparation([known]), [source]));
   const invented = card({ user: { ...user, answers: [{ ifAsked: 'ID', reply: 'It is A999.' }] } });
-  assert.throws(() => validatePreparation(preparation([invented]), [source], 'evaluate'), /a999/);
+  assert.throws(() => validatePreparation(preparation([invented]), [source]), /a999/);
   const curated = card({ provenance: 'curated', requirementIds: [], user: { ...user, answers: [{ ifAsked: 'ID', reply: 'It is A999.' }] } });
-  assert.doesNotThrow(() => validatePreparation(preparation([curated]), [source], 'evaluate'));
+  assert.doesNotThrow(() => validatePreparation(preparation([curated]), [source]));
   assert.deepEqual([...valueTokens('Card 4321, time 14:00. Code 202-7 and A103.')].sort(), ['14:00', '202-7', '4321', 'a103']);
   assert.deepEqual([...valueTokens('E-2047 e-2047 E-20470 A103 103 СЧЁТ-77 счёт-77')].sort(), ['103', 'a103', 'e-2047', 'e-20470', 'счёт-77']);
   assert.deepEqual([...valueTokens('two cards, no digits here')], []);
@@ -382,7 +268,7 @@ test('external world state is opaque, size-bounded and never part of the sandbox
 test('simulator checks, release hooks, release logs and prompt quotes have schemas', () => {
   assert.deepEqual([...SIMULATOR_CHECK_IDS], ['simulator_leak', 'simulator_fabrication', 'simulator_loop']);
   const reserved = { id: 'simulator_leak', kind: 'answer_contains', description: 'collision', value: 'ok' };
-  assert.throws(() => validatePreparation(preparation([card({ checks: [reserved] })]), [source], 'evaluate'), /reserved for simulator checks/);
+  assert.throws(() => validatePreparation(preparation([card({ checks: [reserved] })]), [source]), /reserved for simulator checks/);
   assert.equal(experimentSchema.safeParse({ ...legacyRecord(), scenarios: [{ ...card({ checks: [reserved] }), split: 'dev' }] }).success, false);
   const trial = trialSchema.parse({ id: 't', revisionId: 'r', scenarioId: 's', familyId: 'f', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], events: [],
     initialState: { records: {}, writableFields: [], transientFailures: 0 }, finalState: { records: {}, writableFields: [], transientFailures: 0 }, usage: emptyUsage(), elapsedMs: 1,
@@ -403,7 +289,7 @@ test('simulator checks, release hooks, release logs and prompt quotes have schem
 });
 
 test('an evaluation may ask for up to twenty generated cards', () => {
-  const base = { task: 'Check the agent', materials: [{ name: 'policy.md', content: 'Rule one.' }], mode: 'live' as const };
+  const base = { task: 'Check the agent', materials: [{ name: 'policy.md', content: 'Rule one.' }], mode: 'live' as const, target };
   assert.equal(createInputSchema.parse({ ...base, scenarioCount: 20 }).scenarioCount, 20);
   assert.throws(() => createInputSchema.parse({ ...base, scenarioCount: 21 }), /scenarioCount/);
 });

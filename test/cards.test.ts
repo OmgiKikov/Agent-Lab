@@ -8,10 +8,9 @@ import { agreementSample, judgeAgreement } from '../src/agreement.js';
 import { COUNTING_RULES, markTargets, measurementUsable } from '../src/outcomes.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 import { assertPlainCopy } from './helpers/copy-check.js';
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { htmlReport } from '../src/report.js';
-import { createDemoRuntime, demoInput } from '../src/demo.js';
-import { emptyUsage, fingerprint, type Experiment } from '../src/contracts.js';
+import { emptyUsage, experimentSchema, fingerprint, type Experiment } from '../src/contracts.js';
 import { compareRuns } from '../src/comparison.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { markdownReport } from '../src/report.js';
@@ -117,18 +116,16 @@ test('an unverified reply is a status line in the exported report, never a quota
   }
 });
 
+/** Two cards of the retired built-in demo (a stored draft of old-format cards), with its policy and requirements. */
 async function fixture(): Promise<Experiment> {
-  const input = demoInput();
-  const sources = input.materials.map((m, i) => ({ ...m, id: `source-${i + 1}`, hash: fingerprint(m.content) }));
-  const prepared = await createDemoRuntime().prepare({ task: input.task, sources, workflow: 'evaluate', scenarioCount: 2 }, {
-    signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {},
-  });
+  const draft = experimentSchema.parse(JSON.parse(await readFile(new URL('./fixtures/legacy-demo-draft.json', import.meta.url), 'utf8')));
+  const agent = draft.revisions[0]!.spec;
   return {
-    schemaVersion: '1', id: 'cards-test', task: input.task, mode: 'demo', workflow: 'evaluate',
+    schemaVersion: '1', id: 'cards-test', task: draft.task, mode: 'demo', workflow: 'evaluate',
     createdAt: '2026-09-08T00:00:00.000Z', updatedAt: '2026-09-08T00:00:00.000Z', phase: 'review', message: 'Карточки готовы.',
-    sources, settings: input.settings, requirements: prepared.requirements, questions: [],
-    scenarios: prepared.scenarios.map(s => ({ ...s, split: 'dev' })),
-    revisions: [{ id: 'revision-1', spec: prepared.agent, parentId: null, hypothesis: '', createdAt: '2026-09-08' }],
+    sources: draft.sources, settings: { ...draft.settings, repeats: 2 }, requirements: draft.requirements, questions: [],
+    scenarios: draft.scenarios.slice(0, 2),
+    revisions: [{ id: 'revision-1', spec: { ...agent, tools: [...agent.tools, 'update_record'] }, parentId: null, hypothesis: '', createdAt: '2026-09-08' }],
     selectedRevisionId: 'revision-1', manifestHash: null, reviewedAt: null, reviewMode: null, controlConsumedAt: null,
     trials: [], comparisons: [], iterations: [], usage: emptyUsage(), error: null, limitations: [], humanReviews: [], target: { kind: 'sandbox' }, goldenCases: [], dialogues: [], profiles: [],
   };
@@ -836,12 +833,10 @@ test('HTML reports escape untrusted text and remain self-contained with explicit
   assert.match(html, /lang="ru"/);
   assert.match(html, /Аудит не завершён/);
   assert.match(html, /Сценарное демо/);
-  record.profiles = [{ id: 'p', source: 'observed', persona: '<img src=x>', characteristics: ['Original trait'], evidenceDialogueIds: ['d1'], draftOverride: { persona: null, characteristics: ['<script>override</script>'] } }];
-  record.scenarios[0]!.profileId = 'p'; delete record.scenarios[0]!.user.persona;
-  const profiles = htmlReport(record);
-  assert.match(profiles, /&lt;img src=x&gt;/); assert.match(profiles, /&lt;script&gt;override&lt;\/script&gt;/);
-  assert.match(profiles, /Правка черновика/); assert.match(profiles, /Персона: убрана/);
-  assert.doesNotMatch(profiles, /<img/i);
+  record.scenarios[0]!.user.persona = '<img src=x>';
+  const persona = htmlReport(record);
+  assert.match(persona, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(persona, /<img/i);
   record.workflow = 'compare'; record.scenarios[1]!.split = 'control'; record.scenarios[1]!.title = 'CONTROL_CARD_SENTINEL';
   assert.doesNotMatch(htmlReport(record), /CONTROL_CARD_SENTINEL/);
   record.controlConsumedAt = 'now'; record.phase = 'control';
@@ -1086,7 +1081,7 @@ test('every board row keeps one color by its role and fits widths 40 to 160', as
   wide.dispose();
 });
 
-test('раздел 2 черновика показывает лист ожиданий, а y и e работают только в его границах', async () => {
+test('раздел 2 черновика показывает лист ожиданий, y работает только в его границах, а e больше не правит ожидание', async () => {
   const record = await fixture();
   const recording = { fg: (color: string, value: string) => `<${color}>${value}</${color}>`, bold: (value: string) => value };
   const actions: BoardAction[] = [];
@@ -1098,13 +1093,13 @@ test('раздел 2 черновика показывает лист ожида
   assert.match(text, /▸\s+1\. Ситуация:/, 'выбранная ситуация помечена гаттером');
   assert.match(text, /\s{2}2\. Ситуация:/, 'невыбранная — двумя пробелами');
   assert.match(text, new RegExp(`Версия ожиданий: ${expectationSheet(record).draftHash.slice(0, 12)}`));
-  assert.match(text, /Проверьте ожидания: 2 ситуации\. y — подтвердить все · e — поправить выбранную\./);
+  assert.match(text, /Проверьте ожидания: 2 ситуации\. y — подтвердить все\./);
   assert.match(text, /\[2 Ожидания 2\]/);
-  // Первая строка подвала — четыре ступени по ширине (UI-SPEC «Footer, first line»).
-  assert.match(text, /y Подтвердить всё · e Поправить ожидание · r Запустить прогон/, 'inner 81 → средняя ступень');
-  assert.match(stripTerminalSequences(board.render(160).join('\n')), /a Правка словами · y Подтвердить ожидания · e Поправить ожидание · r Запустить прогон/);
-  assert.match(stripTerminalSequences(board.render(60).join('\n')), /y Подтвердить всё · e Поправить ожидание/);
-  assert.match(stripTerminalSequences(board.render(40).join('\n')), /y Подтвердить всё · e Изменить одно/);
+  // Первая строка подвала — три ступени по ширине (UI-SPEC «Footer, first line»). Ожидание меняется только в библиотеке сценариев.
+  assert.match(text, /y Подтвердить всё · r Запустить прогон/, 'inner 81 → средняя ступень');
+  assert.match(stripTerminalSequences(board.render(160).join('\n')), /a Правка словами · y Подтвердить ожидания · r Запустить прогон/);
+  assert.match(stripTerminalSequences(board.render(60).join('\n')), /y Подтвердить всё/);
+  assert.match(stripTerminalSequences(board.render(40).join('\n')), /y Подтвердить всё/);
   const colored = new LabBoard({ record, section: 'cards' }, recording, () => {}, () => {}, () => 3000);
   const painted = colored.render(300).join('\n');
   assert.match(painted, /<accent>ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ<\/accent>/, 'заголовок листа — accent');
@@ -1124,8 +1119,7 @@ test('раздел 2 черновика показывает лист ожида
   second.render(120);
   second.handleInput('j');
   second.handleInput('e');
-  assert.equal(actions[1]?.type, 'expect');
-  if (actions[1]?.type === 'expect') assert.equal(actions[1].scenarioId, record.scenarios[1]!.id);
+  assert.equal(actions.length, 1, 'своими словами ожидание на доске больше не правится: e ничего не отправляет');
 
   // Вне границ листа обе клавиши молчат: другой раздел, сравнение, вопросы, завершённый прогон, поиск, помощь.
   const outside: { record: Experiment; section?: 'agent' | 'cards' | 'results'; keys: string[] }[] = [
@@ -1153,7 +1147,7 @@ test('раздел 2 черновика показывает лист ожида
   const helpBoard = new LabBoard({ record, section: 'cards' }, theme, a => helped.push(a), () => {}, () => 120);
   helpBoard.handleInput('?'); helpBoard.handleInput('y'); helpBoard.handleInput('e');
   assert.equal(helped.length, 0);
-  assert.match(stripTerminalSequences(helpBoard.render(120).join('\n')), /y — подтвердить все ожидания · e — поправить ожидание выбранной ситуации/);
+  assert.match(stripTerminalSequences(helpBoard.render(120).join('\n')), /y — подтвердить все ожидания/);
   helpBoard.dispose();
   board.dispose(); second.dispose();
 });

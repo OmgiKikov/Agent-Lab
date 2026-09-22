@@ -1,218 +1,114 @@
-import {
-  createInputSchema, agentSchema, preparationSchema, proposalSchema, fingerprint,
-  type AgentSpec, type CallContext, type CreateInput, type MetricAssessment, type Rubric, type Runtime, type Tool,
-} from './contracts.js';
+import { fileURLToPath } from 'node:url';
+import { createInputSchema, type CreateInput, type MetricAssessment, type RunnableTarget, type Runtime } from './contracts.js';
+import type { LibraryPatch, ScenarioProposal } from './scenario-contracts.js';
 
-const task = 'Build an appointment assistant that consults policy, reads appointments, and reliably changes the requested time without altering unrelated fields.';
-const policy = [
-  'Appointment policy',
-  'Before changing an appointment, read its current record and update only its time field to the user’s requested time.',
-  'Read-only requests must leave every record unchanged.',
-  'If the appointment ID or desired time is missing, ask the user to provide it before making a change.',
-  'If an update returns a retryable error, retry it up to two more times and confirm success only after a successful tool result.',
-  'If the user changes their preferred time during the conversation, the final record must reflect their last request.',
-].join('\n');
-const baseline: AgentSpec = {
-  name: 'Appointment assistant',
-  instructions: 'Consult appointment policy. Read the appointment before changing it. Ask for missing appointment IDs or desired times. Update only the time field. Retry retryable errors up to two times. Never claim an update succeeded without its successful tool result. Handle changed user preferences and read-only questions.',
-  tools: ['search_materials', 'lookup_record'],
-};
-
-export function demoInput(): CreateInput {
-  return createInputSchema.parse({ task, materials: [{ name: 'Appointment policy', content: policy }], mode: 'demo', workflow: 'compare', settings: { maxIterations: 1 } });
-}
-
-/** The normal review workflow, with a deliberately missing tool to make failure analysis tangible. */
-export function demoEvaluationInput(): CreateInput {
-  return createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 3,
-    existingAgent: baseline, settings: { ...demoInput().settings, repeats: 1 } });
-}
-
-const demoMetrics: Rubric[] = [
-  { id: 'demo_task_state', name: 'Task outcome (scripted estimate)', subject: 'agent',
-    description: 'A deterministic demo estimate from the objective checks, not a semantic model judgment.',
-    passCriteria: 'Every approved objective check passes in the completed dialogue.', failCriteria: 'At least one approved objective check fails.' },
-  { id: 'demo_follow_ups', name: 'Interaction budget (scripted estimate)', subject: 'simulator',
-    description: 'A narrow count and delivery check, not an assessment of human realism or full role fidelity.',
-    passCriteria: 'The assigned follow-up budget is respected, and every nonempty terminal simulator message is delivered to the agent.',
-    failCriteria: 'The assigned follow-up budget is exceeded or a nonempty terminal simulator message is discarded.' },
+/*
+ * The built-in teaching example: two invented refund dialogues, one owner rule and a small module
+ * agent with a deliberate defect (it asks again for a terminal number it was already given).
+ * Preparation, the user controller and the judge are deterministic stand-ins, so the example goes
+ * through the real library path — review, owner edit, acceptance, run — without a model. It is
+ * never evidence of model quality.
+ */
+export const demoPolicy = 'Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.';
+export const demoDialogues = [
+  { id: 'known', messages: [{ role: 'user' as const, content: 'Номер терминала: 1234. Помогите с возвратом.' }, { role: 'assistant' as const, content: 'Уточните номер терминала.' }] },
+  { id: 'late', messages: [{ role: 'user' as const, content: 'Помогите с возвратом.' }, { role: 'assistant' as const, content: 'Уточните номер терминала.' }, { role: 'user' as const, content: 'Номер терминала: 5678' }] },
 ];
 
-function call(ctx: CallContext) {
-  ctx.signal.throwIfAborted();
-  ctx.beforeCall();
-  ctx.addUsage({ inputTokens: 0, outputTokens: 0, costUsd: 0 });
+/** The teaching agent; `fixed` is the corrected version that no longer asks for a number it already has. Resolved from src and from dist alike. */
+export function demoTarget(fixed = false): RunnableTarget {
+  return { kind: 'module', path: fileURLToPath(new URL('../examples/scenario-lab-target.mjs', import.meta.url)), exportName: fixed ? 'createFixedSession' : 'createSession' };
 }
 
-function sampleScenarios(): ReturnType<typeof preparationSchema.parse>['scenarios'] {
-  const variants = [
-    { familyId: 'a_direct', title: 'Move an appointment', opening: 'Please move appointment A101 to 14:00.', time: '14:00', id: 'A101', behavior: 'Finish when the assistant answers the request.', failures: 0, requirementIds: ['change'] },
-    { familyId: 'b_direct_control', title: 'Move a different appointment', opening: 'Move appointment A102 to 16:30.', time: '16:30', id: 'A102', behavior: 'Finish when the assistant answers the request.', failures: 0, requirementIds: ['change'] },
-    { familyId: 'c_clarify', title: 'Clarify missing appointment ID', opening: 'Please move my appointment to 11:30.', time: '11:30', id: 'A103', behavior: 'Provide the appointment ID only if asked.', failures: 0, requirementIds: ['change', 'clarify'] },
-    { familyId: 'd_clarify_control', title: 'Clarify missing desired time', opening: 'I need to move appointment A104.', time: '17:00', id: 'A104', behavior: 'Provide the desired time only if asked.', failures: 0, requirementIds: ['change', 'clarify'] },
-    { familyId: 'e_retry', title: 'Recover from a transient failure', opening: 'Move appointment A105 to 12:00.', time: '12:00', id: 'A105', behavior: 'Finish when the assistant answers the request.', failures: 1, requirementIds: ['change', 'retry'] },
-    { familyId: 'f_retry_control', title: 'Recover from two transient failures', opening: 'Move appointment A106 to 15:30.', time: '15:30', id: 'A106', behavior: 'Finish when the assistant answers the request.', failures: 2, requirementIds: ['change', 'retry'] },
-    { familyId: 'g_read', title: 'Keep a record unchanged on a question', opening: 'What time is appointment A107? Do not change it.', time: '09:00', id: 'A107', behavior: 'Read-only question; finish after the answer.', failures: 0, requirementIds: ['read'] },
-    { familyId: 'h_read_control', title: 'Answer another read-only question', opening: 'Tell me the current time of appointment A108. Do not change it.', time: '09:00', id: 'A108', behavior: 'Read-only question; finish after the answer.', failures: 0, requirementIds: ['read'] },
-    { familyId: 'i_preference', title: 'Change preference after the first response', opening: 'Move appointment A109 to 10:00.', time: '18:00', id: 'A109', behavior: 'After the first complete response, change preference once to 18:00.', failures: 0, requirementIds: ['change', 'preference'] },
-    { familyId: 'j_preference_control', title: 'Revise a different requested time', opening: 'Move appointment A110 to 13:00.', time: '19:00', id: 'A110', behavior: 'After the first complete response, change preference once to 19:00.', failures: 0, requirementIds: ['change', 'preference'] },
-  ];
-  return variants.map((v, index) => ({
-    id: v.familyId, familyId: ['a_direct', 'b_clarification', 'c_retry', 'd_read_only', 'e_preference'][Math.floor(index / 2)]!, title: v.title, requirementIds: v.requirementIds, provenance: 'curated' as const, tier: 'regression' as const,
-    user: { goal: v.requirementIds.includes('read') ? `Learn the time of appointment ${v.id} without changing it.` : `Move appointment ${v.id} to ${v.time}.`, facts: `Your appointment ID is ${v.id}. Your desired time is ${v.time}.`, behavior: v.behavior, opening: v.opening,
-      maxFollowUps: v.requirementIds.includes('clarify') || v.requirementIds.includes('preference') ? 1 : 0,
-      knows: [`Appointment ID ${v.id}`, `Desired time ${v.time}`],
-      cannotKnow: ['Whether the backend will accept the change before it answers'],
-      ...(v.requirementIds.includes('clarify') ? { answers: [v.opening.includes('my appointment') ? { ifAsked: 'appointment ID', reply: `My appointment ID is ${v.id}.` } : { ifAsked: 'desired time', reply: `My desired time is ${v.time}.` }] } : {}),
-      // Scripted-mode lines mirror what the reactive simulator would say; direct and read-only cards have no follow-up to script.
-      ...(v.requirementIds.includes('clarify') ? { script: [v.opening.includes('my appointment') ? `My appointment ID is ${v.id}.` : `My desired time is ${v.time}.`] }
-        : v.requirementIds.includes('preference') ? { script: [`Actually, please move it to ${v.time} instead.`] } : {}) },
-    initialState: { records: { [v.id]: { time: '09:00', owner: 'Sample customer', status: 'booked' } }, writableFields: ['time'], transientFailures: v.failures },
-    checks: [
-      { id: 'time', kind: 'state_equals' as const, description: 'The final appointment time matches the user request', recordId: v.id, field: 'time', value: v.time },
-      { id: 'owner', kind: 'state_equals' as const, description: 'The appointment owner is preserved', recordId: v.id, field: 'owner', value: 'Sample customer' },
-      { id: 'status', kind: 'state_equals' as const, description: 'The booking remains active', recordId: v.id, field: 'status', value: 'booked' },
-      { id: 'lookup', kind: 'tool_called' as const, description: 'The assistant looked up the actual record', tool: 'lookup_record' as const },
-      ...(v.requirementIds.includes('read') ? [
-        { id: 'no_write', kind: 'tool_not_called' as const, description: 'The read-only request caused no update attempt', tool: 'update_record' as const },
-        { id: 'answer_time', kind: 'answer_contains' as const, description: 'The answer gives the recorded appointment time', value: '09:00' },
-      ] : []),
-    ],
-  }));
+/** A two-dialogue library prepared by the deterministic demo runtime against the teaching agent. */
+export function demoInput(): CreateInput {
+  return createInputSchema.parse({
+    task: 'Учебная проверка возвратов: два вымышленных диалога', mode: 'demo', target: demoTarget(),
+    materials: [{ name: 'Учебное правило владельца', content: demoPolicy }], dialogues: demoDialogues, scenarioCount: 0,
+    existingAgent: { name: 'Учебный агент возвратов', instructions: demoPolicy, tools: [] },
+    settings: { repeats: 2, maxCalls: 60, maxTurns: 3, maxDurationMs: 300000, timeoutMs: 60000, userModes: ['reactive'] },
+  });
 }
 
-const resultSchema = (value: unknown): { ok: boolean; retryable?: boolean; record?: Record<string, unknown> } => {
-  if (!value || typeof value !== 'object' || !('ok' in value) || typeof value.ok !== 'boolean') throw new Error('Malformed demo tool response');
-  return value as { ok: boolean; retryable?: boolean; record?: Record<string, unknown> };
-};
+/** The owner's answer to the example's one disputed fact: the customer knew the terminal number before the conversation. */
+export const DEMO_OWNER_EDIT: LibraryPatch = { kind: 'edit_fact', variantId: 'late_number', factId: 'terminal', statement: 'Номер терминала: 5678', value: '5678', availability: 'initial',
+  editId: 'demo_owner_confirmed', reason: 'Учебная явная правка: личный номер был известен до разговора' };
 
+function proposal(batchId: string, dialogue: typeof demoDialogues[number]): ScenarioProposal {
+  const known = dialogue.id === 'known', number = known ? '1234' : '5678';
+  return {
+    business: { key: 'refund', title: 'Возврат оплаты', goal: 'Получить инструкцию по возврату оплаты', conditions: [], requirementIds: ['refund_rule'], grouping: { status: 'confirmed', reason: 'Одинаковая цель и правило; номер отличается по способу раскрытия' } },
+    variant: { id: known ? 'known_number' : 'late_number', title: known ? 'Номер уже в первой реплике' : 'Номер раскрывается по просьбе', purpose: 'Проверить уместность запроса номера и получение инструкции по возврату', provenance: 'production', sourceDialogues: [{ batchId, dialogueId: dialogue.id }],
+      ...(known ? {} : { sourceCoverage: [{ batchId, dialogueId: dialogue.id, eventIndex: 2, disposition: 'initial_fact' as const, actionIds: [], factIds: ['terminal'], reason: 'Личный номер раскрыт по просьбе; его исходная доступность в этом учебном примере требует подтверждения владельца.' }] }),
+      userState: { goal: 'Получить инструкцию по возврату', opening: dialogue.messages[0]!.content, facts: [{ id: 'terminal', statement: `Номер терминала: ${number}`, value: number, availability: known ? 'initial' : 'uncertain', reason: known ? 'Личные данные в первой реплике' : 'Учебный спорный факт: подтвердите, что личный номер был известен до разговора', origin: { kind: 'dialogue', batchId, dialogueId: dialogue.id, eventIndex: known ? 0 : 2, quote: `Номер терминала: ${number}` } }], cannotKnow: [], missing: [] },
+      behaviorPolicy: { version: 1, initialState: 'waiting', states: known ? ['waiting', 'done'] : ['waiting', 'disclosed', 'done'], terminalStates: ['done'], maxFollowUps: 1, repetitionLimit: 1,
+        actions: [...(known ? [] : [{ id: 'disclose', kind: 'answer' as const, factIds: ['terminal'], ifAsked: 'Агент просит номер терминала' }]), { id: 'finish', kind: 'finish' as const, factIds: [] }],
+        transitions: known
+          ? [{ from: 'waiting', to: 'done', actionId: 'finish', when: 'После первого ответа: если есть инструкция, цель достигнута; если агент повторно просит уже указанный номер или не помогает, пользователь прекращает попытку без достижения цели' }]
+          : [{ from: 'waiting', to: 'disclosed', actionId: 'disclose', when: 'Агент просит номер терминала, ещё не сообщённый в этом разговоре' },
+            { from: 'waiting', to: 'done', actionId: 'finish', when: 'Агент не просит номер: дал инструкцию либо ответил иначе; пользователь завершает попытку' },
+            { from: 'disclosed', to: 'done', actionId: 'finish', when: 'После ответа на сообщённый номер: есть инструкция либо пользователь прекращает неудачную попытку; повторять номер не будет' }] },
+      environmentFixture: { mode: 'prompt', initialState: { records: {}, writableFields: [], transientFailures: 0 } },
+      evaluationSpec: { goalObservation: 'reply', successCriteria: 'Номер запрошен только до его раскрытия; после получения номера агент объяснил, как оформить возврат', checkpoints: [
+        { id: 'ask_once', requirementId: 'refund_rule', quote: demoPolicy, applicability: 'Вариант обращения за возвратом с номером в первой реплике или раскрываемым по просьбе', observation: 'reply', role: 'required', rule: 'Если номер уже сообщён, не запрашивать его повторно независимо от формулировки вопроса. Если в первой реплике номера нет, запросить его до инструкции.' },
+        { id: 'refund_explanation', requirementId: 'refund_rule', quote: demoPolicy, applicability: 'Пользователь обратился за возвратом и сообщил номер терминала', observation: 'reply', role: 'required', rule: 'Объяснить пользователю, как оформить возврат. Один запрос номера, подтверждение получения номера или обещание помочь без инструкции не выполняют требование.' },
+      ] },
+    },
+  };
+}
+
+const asksNumber = (text: string) => /(?:уточните|сообщите|назовите|укажите|какой|номер.*\?).*номер|номер.*терминал.*\?/i.test(text);
+const DEMO_ONLY = 'Учебный пример поддерживает только свои два диалога и правило владельца. Для своих материалов выберите живой режим с моделью.';
+
+/** Explicit deterministic teaching runtime: no model is called, and nothing here is evidence of model quality. */
 export function createDemoRuntime(): Runtime {
   return {
-    async prepare(input, ctx) {
-      call(ctx);
-      const working = { ...structuredClone(baseline), tools: [...baseline.tools, 'update_record' as const] };
-      if (input.task !== task || input.sources.length !== 1 || input.sources[0]?.content !== policy || input.sources[0]?.name !== 'Appointment policy'
-        || (input.existingAgent && fingerprint(input.existingAgent) !== fingerprint(baseline)
-          && !(input.workflow === 'evaluate' && fingerprint(input.existingAgent) === fingerprint(working)))) {
-        throw new Error('The scripted demo supports only its supplied appointment sample. Reset the sample or choose live Pi mode for custom tasks and materials.');
-      }
-      const sourceId = input.sources[0]!.id;
-      const lines = policy.split('\n');
-      let scenarios = sampleScenarios();
-      if (input.workflow === 'evaluate') {
-        const count = input.scenarioCount ?? 5;
-        if (!Number.isInteger(count) || count < 1 || count > 10) throw new Error('The demo scenario count must be an integer from 1 to 10');
-        // First show an action, a changed request across turns, and a read-only regression guard.
-        scenarios = [0, 8, 6, 2, 4, 1, 3, 5, 7, 9].map(i => scenarios[i]!).slice(0, count).map(scenario => ({
-          ...scenario, provenance: 'synthetic' as const,
-          ...(input.profiles?.[0] ? { profileId: input.profiles[0].id } : {}),
-          user: { ...scenario.user, persona: 'An appointment holder arranging their own visit.',
-            characteristics: ['Uses concise requests', scenario.requirementIds.includes('clarify') ? 'Provides an omitted detail when asked'
-              : scenario.requirementIds.includes('preference') ? 'Revises the desired time once' : 'Ends after the assigned request is answered'] },
-          successCriteria: `${scenario.user.goal} Preserve the appointment owner and booking status, and report only actions supported by tool results.`,
-          assumptions: ['This is a curated, scripted appointment demo.', 'The user is authorized to access their fixture appointment.'],
-          metrics: structuredClone(demoMetrics.filter(m => m.subject === 'agent' || scenario.user.maxFollowUps !== 0)),
-        }));
-      }
-      return preparationSchema.parse({
-        requirements: ['change', 'read', 'clarify', 'retry', 'preference'].map((id, i) => ({ id, text: lines[i + 1], sourceId, quote: lines[i + 1], critical: true })),
-        questions: [], agent: structuredClone(input.existingAgent ?? (input.workflow === 'evaluate' ? working : baseline)), scenarios,
+    async groundRequirements(input) {
+      const source = input.sources[0];
+      if (!source || source.content !== demoPolicy) throw new Error(DEMO_ONLY);
+      return { requirements: [{ id: 'refund_rule', sourceId: source.id, text: demoPolicy, quote: demoPolicy, critical: true }], questions: [] };
+    },
+    async scenarioProposals(input) {
+      return input.dialogues.map(d => {
+        const dialogue = demoDialogues.find(source => source.id === d.id);
+        if (!dialogue || !input.batchId) throw new Error(DEMO_ONLY);
+        return proposal(input.batchId, dialogue);
       });
     },
-    async goals({ dialogues, profiles }, ctx) {
-      call(ctx);
-      // Deterministic stand-in for the model role: a goal per dialogue that names an appointment, opening copied verbatim.
-      const profileId = profiles[0]?.id;
-      return dialogues.flatMap(dialogue => {
-        const opening = dialogue.messages.find(m => m.role === 'user')?.content;
-        const id = opening?.match(/\bA\d{3}\b/)?.[0];
-        if (!opening || !id) return [];
-        const time = opening.match(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/)?.[0];
-        return [{
-          id: `goal_${dialogue.id}`, goal: time ? `Move appointment ${id} to ${time}` : `Learn the current time of appointment ${id}`, opening, profileId,
-          evidenceDialogueIds: [dialogue.id], facts: `Appointment ID ${id}${time ? `, desired time ${time}` : ''}.`, outcome: dialogue.outcome,
-          successCriteria: time ? `Appointment ${id} ends at ${time}, or the user learns clearly why it cannot be moved.` : `The user learns the current time of appointment ${id}.`,
-        }];
-      });
+    async assessScenarioProposals(input) {
+      return input.fields.flatMap(f => f.paths.map(path => {
+        const variant = input.library.variants.find(v => v.id === f.variantId);
+        const uncertain = path.startsWith('userState') && !!variant?.userState.facts.some(fact => fact.availability === 'uncertain');
+        const noDisclosure = path === 'behaviorPolicy' && variant?.id === 'late_number' && !variant.behaviorPolicy.actions.some(a => a.kind === 'answer' && a.factIds.includes('terminal'));
+        const noExplanation = path.startsWith('evaluationSpec') && !variant?.evaluationSpec.checkpoints.some(c => c.id === 'refund_explanation');
+        return { variantId: f.variantId, path, status: uncertain || noDisclosure || noExplanation ? 'needs_review' as const : 'ready' as const,
+          reason: uncertain ? 'Нужно явное уточнение исходного знания личного номера' : noDisclosure ? 'Нет действия раскрытия номера по просьбе' : noExplanation ? 'Нет проверки инструкции по возврату' : 'Проверка заранее заданного учебного примера; не модельная оценка' };
+      }));
     },
-    async assess({ scenario, trial }, ctx) {
-      call(ctx);
-      return (scenario.metrics ?? []).map((metric): MetricAssessment => {
-        const supported = demoMetrics.find(sample => fingerprint(sample) === fingerprint(metric));
-        if (!supported) return { metricId: metric.id, result: 'unknown', rationale: 'The scripted demo cannot assess custom or edited rubrics. Use live mode or human review.', evidence: [] };
-        if (metric.id === 'demo_task_state') {
-          const evidence = trial.events.filter(event => event.type === 'tool_result' || event.type === 'assistant').slice(-30).map(event => event.seq);
-          return { metricId: metric.id, result: !trial.checks.length || !evidence.length ? 'unknown' : trial.checks.every(check => check.passed) ? 'pass' : 'fail',
-            rationale: 'Scripted estimate from the recorded objective checks. It does not independently assess meaning, truthfulness, or user satisfaction.', evidence };
+    async selectUserAction(input) {
+      const reply = input.messages.filter(m => m.role === 'assistant').at(-1)?.content ?? '';
+      const disclose = input.actions.find(a => a.id === 'disclose');
+      return disclose && asksNumber(reply) ? { actionId: disclose.id, factIds: disclose.factIds } : { actionId: 'finish', factIds: [] };
+    },
+    async assessCheckpoints(input) {
+      return input.checkpoints.map(c => {
+        let hasNumber = false, repeated = false, asked = false;
+        for (const event of c.dialogue) {
+          if (event.type === 'user' && /терминала:\s*\d+/i.test(event.text ?? '')) hasNumber = true;
+          if (event.type === 'assistant' && asksNumber(event.text ?? '')) { repeated ||= hasNumber; asked = true; }
         }
-        const decisions = trial.events.filter(event => event.type === 'simulator');
-        if (!decisions.length) return { metricId: metric.id, result: 'unknown', rationale: 'No simulator follow-up was requested; dynamic delivery was not exercised.', evidence: [] };
-        const followUps = trial.events.filter(event => event.type === 'user').slice(1);
-        const dropped = decisions.some(event => {
-          const decision = event.result as { done: boolean; message: string };
-          return decision.done && decision.message.trim() && !followUps.some(reply => reply.seq > event.seq && reply.text === decision.message);
-        });
-        const exceeded = scenario.user.maxFollowUps !== undefined && followUps.length > scenario.user.maxFollowUps;
-        return { metricId: metric.id, result: dropped || exceeded ? 'fail' : 'pass',
-          rationale: `Scripted delivery check: ${followUps.length} follow-up(s), ${dropped ? 'a discarded terminal message' : 'no discarded terminal message'}. This does not establish realistic user behavior.`,
-          evidence: [...decisions, ...followUps].map(event => event.seq).sort((a, b) => a - b).slice(-30) };
+        const openingHasNumber = /терминала:\s*\d+/i.test(c.dialogue.find(e => e.type === 'user')?.text ?? '');
+        const explained = c.evidence.some(e => /Подайте заявление в поддержку/i.test(e.text ?? ''));
+        const pass = c.checkpoint.id === 'ask_once' ? !repeated && (openingHasNumber || asked) : c.checkpoint.id === 'refund_explanation' ? hasNumber && explained : undefined;
+        return { checkpointId: c.checkpoint.id, result: pass === undefined ? 'unknown' : pass ? 'pass' : 'fail', evidence: c.allowedEvidence,
+          rationale: c.checkpoint.id === 'ask_once' ? `Учебная проверка: номер запрошен=${asked}, повтор после раскрытия=${repeated}` : 'Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок' };
       });
     },
-    async improve(input, ctx) {
-      call(ctx);
-      const hasFailedChange = input.feedback.some(f => f.trials.some(t => t.outcome === 'fail' && t.checks.some(c => c.id === 'time' && !c.passed)));
-      const agent = structuredClone(input.agent);
-      if (hasFailedChange && !agent.tools.includes('update_record')) agent.tools.push('update_record');
-      return proposalSchema.parse({ agent, hypothesis: hasFailedChange
-        ? 'Scripted demonstration repair: development traces show unchanged appointment times. Add the missing update_record capability and rerun the same checks.'
-        : 'Scripted demonstration: no additional supported repair was identified.' });
-    },
-    async openTarget(agent, _sources, tools, ctx) {
-      agentSchema.parse(agent);
-      const available = new Map(tools.map(tool => [tool.name, tool]));
-      let recordId: string | undefined;
-      let time: string | undefined;
-      let closed = false;
-      const execute = async (name: Tool['name'], args: unknown) => {
-        const tool = available.get(name);
-        if (!tool) return { ok: false };
-        return resultSchema(await tool.execute(args));
-      };
-      return {
-        async respond(message) {
-          if (closed) throw new Error('Target session is closed');
-          call(ctx);
-          recordId = message.match(/\bA\d{3}\b/)?.[0] ?? recordId;
-          const times = message.match(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/g);
-          time = times?.at(-1) ?? time;
-          const readOnly = /do not change|current time|what time/i.test(message);
-          if (!recordId) return 'What is your appointment ID?';
-          await execute('search_materials', { query: 'appointment policy' });
-          const lookup = await execute('lookup_record', { recordId });
-          if (!lookup.ok) return 'I could not find your appointment.';
-          if (readOnly) return `Appointment ${recordId} is at ${String(lookup.record?.time)}. I have not changed it.`;
-          if (!time) return 'What is your desired time?';
-          if (!available.has('update_record')) return 'I cannot update this appointment because the update tool is unavailable.';
-          for (let attempt = 0; attempt < 3; attempt += 1) {
-            const update = await execute('update_record', { recordId, changes: { time } });
-            if (update.ok) return `Appointment ${recordId} has been moved to ${time}.`;
-            if (!update.retryable) return 'I could not update this appointment; it remains unchanged.';
-          }
-          return 'The appointment update is temporarily unavailable; I cannot confirm a change.';
-        },
-        async close() { closed = true; },
-      };
-    },
-    async userTurn({ user, messages, turn }, ctx) {
-      call(ctx);
-      const answer = messages.at(-1)?.content ?? '';
-      const reply = (topic: RegExp, fallback: string) => user.answers?.find(a => topic.test(a.ifAsked))?.reply ?? fallback;
-      if (/what is your appointment id/i.test(answer)) return { message: reply(/appointment id/i, `My appointment ID is ${user.facts.match(/\bA\d{3}\b/)?.[0] ?? 'unknown'}.`), done: false };
-      if (/what is your desired time/i.test(answer)) return { message: reply(/desired time/i, `My desired time is ${user.facts.match(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/)?.[0] ?? 'unknown'}.`), done: false };
-      if (turn === 0 && /change preference once/i.test(user.behavior)) {
-        return { message: `Actually, please move it to ${user.behavior.match(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/)?.[0]} instead.`, done: false };
-      }
-      return { message: '', done: true };
+    async assess({ scenario, trial }) {
+      return (scenario.metrics ?? []).map((metric): MetricAssessment => scenario.execution
+        ? { metricId: metric.id, result: trial.checkpoints?.filter(c => c.role === 'required').every(c => c.result === 'pass') ? 'pass' : 'fail',
+          evidence: trial.events.filter(e => e.type === 'assistant').map(e => e.seq), rationale: 'Детерминированная учебная оценка по обязательным контрольным точкам' }
+        : { metricId: metric.id, result: 'unknown', evidence: [], rationale: 'Учебный судья оценивает только карточки учебной библиотеки.' });
     },
   };
 }

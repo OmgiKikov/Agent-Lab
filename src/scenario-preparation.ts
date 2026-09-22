@@ -2,13 +2,15 @@ import { assessScenarioLibrary, workInputIssue, serializedBytes, SCENARIO_OUTPUT
 export { assessScenarioLibrary } from './scenario-work.js';
 import { appendScenarioProposals, createLibrary, compileLibrary, libraryHash, libraryQuality, librarySnapshot, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
 import { importBatchSchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal } from './scenario-contracts.js';
-import { fingerprint, validatePreparation, type CallContext, type CreateInput, type Experiment, type Requirement, type Runtime, type ScenarioProposalsInput, type Source } from './contracts.js';
+import { fingerprint, validatePreparation, type AgentSpec, type CallContext, type CreateInput, type Experiment, type GroundingInput, type Requirement, type Runtime, type ScenarioProposalsInput, type Source } from './contracts.js';
 import { SOURCES_PER_DIALOGUE } from './limits.js';
 import { selectScenarioSources } from './scenario-sources.js';
 import { InvalidGeneratorResponse } from './generator-errors.js';
 import type { ExperimentStore } from './store.js';
 
 export const SCENARIO_EXTRACTION_PROTOCOL = 'chronological-scenarios-v1' as const;
+/** The agent label of a library run when the owner names none: the agent under test runs outside Lab with its own instructions and tools. */
+export const EXTERNAL_AGENT: AgentSpec = { name: 'External agent', instructions: 'The agent under evaluation runs outside Agent Lab and keeps its own instructions and tools.', tools: [] };
 /** Extraction, JSON correction and later semantic repair share one per-source call allowance. */
 export const SOURCE_GENERATION_ATTEMPTS = 5;
 function preparationInputHash(record: Experiment): string {
@@ -124,8 +126,7 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
   await publish();
   try {
     ctx.signal.throwIfAborted();
-    const groundingRequest = { task: record.task, sources: record.sources, existingAgent: input.existingAgent, workflow: record.workflow,
-      scenarioCount: 0, targetKind: record.target.kind, notes: record.notes, dialogues: [], userModes: record.settings.userModes };
+    const groundingRequest: GroundingInput = { task: record.task, sources: record.sources };
     const groundingIssue = workInputIssue(groundingRequest);
     // A knowledge base too large for one call is read per dialogue: the model picks articles from the table of contents.
     const perDialogue = !!groundingIssue && !!original && !!runtime.selectSources;
@@ -133,14 +134,18 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
       record.preparationProgress.excluded.push(...workIds.map(id => ({ dialogueId: id, reason: groundingIssue })));
       record.preparationProgress.status = 'partial'; await publish(); return;
     }
-    const setBaseline = (agent: Experiment['revisions'][number]['spec']) => {
+    if (!record.revisions.length) {
+      const agent = input.existingAgent ?? EXTERNAL_AGENT;
       const baseline = { id: fingerprint(agent), parentId: null, spec: agent, hypothesis: 'Конфигурация агента для библиотеки сценариев.', createdAt: new Date().toISOString() };
       record.revisions = [baseline]; record.selectedRevisionId = baseline.id;
+    }
+    const ground = (request: GroundingInput) => {
+      if (!runtime.groundRequirements) throw new Error('Эта среда не умеет извлекать требования из материалов владельца.');
+      return runtime.groundRequirements(request, ctx);
     };
     if (start.groundOnce && !perDialogue) {
-      const grounded = await call(workIds[0] ?? 'owner_requirements', 'ground', () => runtime.prepare(groundingRequest, ctx));
+      const grounded = await call(workIds[0] ?? 'owner_requirements', 'ground', () => ground(groundingRequest));
       record.requirements = grounded.requirements; record.questions = grounded.questions;
-      setBaseline(input.existingAgent ?? grounded.agent);
     } else if (start.groundOnce) record.preparationProgress.sourceSelection = [];
     record.preparationProgress.groundingComplete = true;
     const knowledge = record.sources.filter(source => source.kind !== 'prompt');
@@ -172,8 +177,7 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
         sources = [...record.sources.filter(source => source.kind === 'prompt'), ...selected];
         const focus = { dialogueId: workId, customerMessages: messages.filter(m => m.role === 'user').map(m => m.content) };
         // The same article can answer different questions; grounding is specific to this dialogue.
-        const grounded = await call(workId, 'ground', () => runtime.prepare({ ...groundingRequest, sources, focus }, ctx));
-        if (!record.revisions.length) setBaseline(input.existingAgent ?? grounded.agent);
+        const grounded = await call(workId, 'ground', () => ground({ ...groundingRequest, sources, focus }));
         record.questions = [...new Set([...record.questions, ...grounded.questions])].slice(0, 12);
         requirements = mergeRequirements(record, grounded.requirements, sources);
       }
@@ -313,6 +317,6 @@ export function assertLibraryRun(record: Experiment): void {
   if (!expected.length || ids.some(id => !compiled.some(s => s.id === id)) || fingerprint(expected) !== fingerprint(record.scenarios)) throw new Error('Карточки отличаются от принятой библиотеки; повторите принятие.');
 }
 export function compiledLibraryScenarios(record: Experiment, library: ScenarioLibrary) {
-  return validatePreparation({ requirements: library.requirements, questions: record.questions, agent: record.revisions[0]?.spec,
-    scenarios: compileLibrary(library).map(({ split, ...scenario }) => scenario) }, library.sources, record.workflow, record.profiles).scenarios;
+  return validatePreparation({ requirements: library.requirements, questions: record.questions,
+    scenarios: compileLibrary(library).map(({ split, ...scenario }) => scenario) }, library.sources).scenarios;
 }

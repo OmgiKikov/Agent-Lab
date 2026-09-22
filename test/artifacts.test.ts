@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { ExperimentLab, draftHash } from '../src/experiment.js';
-import { demoEvaluationInput, demoInput } from '../src/demo.js';
+import { appointmentAgent, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
 import { htmlReport, jsonReport, markdownReport } from '../src/report.js';
 import { sealJudgeReceipt } from '../src/judge.js';
@@ -12,22 +12,20 @@ import type { Experiment, JudgeAudit } from '../src/contracts.js';
 
 async function setup(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-artifacts-'));
-  const lab = new ExperimentLab(directory); await lab.init();
+  const lab = new ExperimentLab(directory, legacyDemoRuntime()); await lab.init();
   t.after(async () => { await lab.close(); await rm(directory, { recursive: true, force: true }); });
   return { lab, directory };
 }
+/** One old-format card against the appointment agent without its update tool, then the same card after the fix. */
 async function twoRuns(t: TestContext) {
   const { lab, directory } = await setup(t);
-  const input = demoEvaluationInput(); input.scenarioCount = 1; input.targetVersion = 'before-v1';
-  const created = await lab.create(input); await lab.waitForIdle();
-  const ready = await lab.get(created.id);
+  const draft = await legacyDraft(lab, { count: 1 });
+  const ready = await lab.updateDraft(draft.id, draftHash(draft), { targetVersion: 'before-v1' });
   await lab.start(ready.id, { approved: true, reviewer: 'human', expectedHash: draftHash(ready) }); await lab.waitForIdle();
   const before = await lab.get(ready.id);
   assert.equal(before.trials[0]?.outcome, 'fail');
   const repeated = await lab.repeat(before.id);
-  const edited = await lab.updateDraft(repeated.id, draftHash(repeated), {
-    agent: { ...repeated.revisions[0]!.spec, tools: [...repeated.revisions[0]!.spec.tools, 'update_record'] }, targetVersion: 'after-v2',
-  });
+  const edited = await lab.updateDraft(repeated.id, draftHash(repeated), { target: appointmentAgent('createRepairedSession'), targetVersion: 'after-v2' });
   await lab.start(edited.id, { approved: true, reviewer: 'human', expectedHash: draftHash(edited) }); await lab.waitForIdle();
   const after = await lab.get(edited.id);
   assert.equal(after.trials[0]?.outcome, 'pass');
@@ -111,23 +109,19 @@ test('missing parents and journals remain explicit without losing current eviden
 
 test('a saved suite carries every attempt and compares from embedded evidence in a fresh data directory', async t => {
   const { lab, directory } = await setup(t);
-  const input = demoEvaluationInput(); input.scenarioCount = 1;
-  input.settings = { ...input.settings, repeats: 2, userModes: ['static'] };
-  const created = await lab.create(input); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
+  const draft = await legacyDraft(lab, { count: 1, settings: { repeats: 2, userModes: ['static'] } });
   await lab.start(draft.id, { approved: true, reviewer: 'human', expectedHash: draftHash(draft) }); await lab.waitForIdle();
   const before = await lab.get(draft.id);
   assert.deepEqual(before.trials.map(trial => trial.outcome), ['fail', 'fail']);
   const suite = await lab.saveSuite(before.id, join(directory, 'portable-suite.json'));
 
   const portableDirectory = await mkdtemp(join(tmpdir(), 'agent-lab-portable-'));
-  const portable = new ExperimentLab(portableDirectory); await portable.init();
+  const portable = new ExperimentLab(portableDirectory, legacyDemoRuntime()); await portable.init();
   t.after(async () => { await portable.close(); await rm(portableDirectory, { recursive: true, force: true }); });
   const loaded = await portable.loadSuite(suite);
   assert.equal(loaded.sourceEvidence?.trials.length, 2);
-  const changed = await portable.updateDraft(loaded.id, draftHash(loaded), {
-    agent: { ...loaded.revisions[0]!.spec, tools: [...loaded.revisions[0]!.spec.tools, 'update_record'] },
-  });
+  // The fix lives in the same adapter file, so its release label is what names the new version.
+  const changed = await portable.updateDraft(loaded.id, draftHash(loaded), { target: appointmentAgent('createRepairedSession'), targetVersion: 'fixed-v2' });
   await portable.start(changed.id, { approved: true, reviewer: 'human', expectedHash: draftHash(changed) }); await portable.waitForIdle();
   const after = await portable.get(changed.id);
   const bundle = await evidenceBundle(after, portable.store);
@@ -170,21 +164,6 @@ test('unmeasured code checks and simulator criticism cannot masquerade as absent
   const html = htmlReport(rubric);
   const attention = html.match(/<section id="attention">([\s\S]*?)<\/section>/)?.[1] ?? '';
   assert.match(attention, /AGENT_FAILURE/); assert.doesNotMatch(attention, /SIMULATOR_CRITICISM/);
-});
-
-test('legacy reports lead with selected control evidence and retain explicit revision and split labels', async t => {
-  const { lab } = await setup(t);
-  const created = await lab.create(demoInput()); await lab.waitForIdle();
-  await lab.start(created.id, { approved: true, reviewer: 'automated' }); await lab.waitForIdle();
-  const record = await lab.get(created.id);
-  assert.equal(record.phase, 'complete', record.error ?? '');
-  const bundle = await evidenceBundle(record, lab.store);
-  assert.equal(bundle.evidence.verdict.passed, 8); assert.equal(bundle.evidence.verdict.graded, 8);
-  const html = htmlReport(bundle);
-  assert.match(html, /Итог по контрольным карточкам выбранной версии/);
-  assert.match(html, /Исходная версия: 4\/8 → выбранная версия: 8\/8/);
-  assert.match(html, /Исходная версия/); assert.match(html, /Выбранная версия/); assert.match(html, /Карточки разработки/);
-  assert.doesNotMatch(html, /Пройдено 24 из 40/);
 });
 
 test('a human failure on a green dialogue reaches every export and keeps original results', async t => {

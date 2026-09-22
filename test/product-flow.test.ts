@@ -8,10 +8,11 @@ import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { ExperimentLab, draftHash, resultHash } from '../src/experiment.js';
-import { createDemoRuntime, demoEvaluationInput } from '../src/demo.js';
-import { draftPatchSchema, fingerprint, goalAttainment, scriptIssue, type Runtime } from '../src/contracts.js';
+import { createDemoRuntime, demoInput, demoTarget } from '../src/demo.js';
+import { createInputSchema, draftPatchSchema, fingerprint, goalAttainment, scriptIssue, type Experiment, type Runtime } from '../src/contracts.js';
 import { listSuites } from '../src/connection.js';
-import { awaitingVerdict, compareRuns, verdictSummary } from '../src/comparison.js';
+import { automaticTrialResult, awaitingVerdict, compareRuns, verdictSummary } from '../src/comparison.js';
+import { acceptedDemoDraft } from './helpers/demo-record.js';
 import { evaluateTrial } from '../src/evaluation.js';
 import { htmlReport } from '../src/report.js';
 import { trialProofLines } from '../src/quality.js';
@@ -21,16 +22,21 @@ test('a failed case becomes a reusable regression test without changing provenan
   const lab = new ExperimentLab(join(directory, 'runs'), createDemoRuntime());
   t.after(async () => { await lab.close(); await rm(directory, { recursive: true, force: true }); });
   await lab.init();
-  let draft = await lab.create(demoEvaluationInput()); await lab.waitForIdle(); draft = await lab.get(draft.id);
+  const base = demoInput();
+  let draft = await acceptedDemoDraft(lab, createInputSchema.parse({ ...base, settings: { ...base.settings, repeats: 1 } }));
   const originalSettings = { ...draft.settings, provider: 'fixture', model: 'fixture', maxCalls: 20, maxDurationMs: 180000 };
   draft = await lab.updateDraft(draft.id, draftHash(draft), { settings: originalSettings });
   const patch = draftPatchSchema.parse({ settings: { userModes: ['reactive'] } });
   assert.deepEqual(patch.settings, { userModes: ['reactive'] });
   draft = await lab.updateDraft(draft.id, draftHash(draft), patch);
   assert.deepEqual(draft.settings, originalSettings);
-  const scenario = draft.scenarios[0]!;
-  await assert.rejects(lab.updateDraft(draft.id, draftHash(draft), { scenarios: [{ ...scenario, successCriteria: 'Now require 18:00' }] }), /исполняемые проверки остались прежними/);
-  const malformed = { ...scenario, user: { ...scenario.user, maxFollowUps: 1, script: [scenario.user.opening, 'Now 18:00'] } };
+  // The teaching agent asks again for a number it was already given: this situation is the failed case.
+  const scenario = draft.scenarios.find(item => item.id === 'known_number')!;
+  // A situation changes only in the library; a draft edit cannot carry cards.
+  await assert.rejects(lab.updateDraft(draft.id, draftHash(draft), { scenarios: [{ ...scenario, successCriteria: 'Now require 18:00' }] } as never), /scenarios/);
+  // A script is checked before any call, whatever the card: an old-format card with the opening repeated in its script.
+  const { execution: _execution, ...oldFormat } = scenario;
+  const malformed = { ...oldFormat, user: { ...oldFormat.user, maxFollowUps: 1, script: [oldFormat.user.opening, 'Now 18:00'] } };
   assert.match(scriptIssue(malformed.user, 4)!, /только реплики после opening/);
   let calls = 0;
   const invalid = await evaluateTrial({ requirements: [], runtime: createDemoRuntime(), revision: draft.revisions[0]!, scenario: malformed, repeat: 0, userMode: 'scripted',
@@ -40,16 +46,18 @@ test('a failed case becomes a reusable regression test without changing provenan
   assert.deepEqual(invalid.events.filter(e => e.type === 'user'), []);
   await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
   const before = await lab.get(draft.id);
-  assert.equal(before.trials.length, 3);
-  assert.equal(before.trials.filter(t => t.outcome === 'pass').length, 1, 'demo includes a passing read-only regression guard');
+  const verdict = (record: Experiment, trial: Experiment['trials'][number]) => automaticTrialResult(record.scenarios.find(s => s.id === trial.scenarioId), trial, record.humanReviews);
+  assert.equal(before.trials.length, 2);
+  assert.equal(before.trials.filter(t => verdict(before, t) === 'pass').length, 1, 'the number disclosed on request is handled');
   assert.equal(before.reviewMode, 'automated'); assert.deepEqual(before.humanReviews, []);
-  const failure = before.trials.find(t => t.outcome === 'fail')!;
+  const failure = before.trials.find(t => verdict(before, t) === 'fail')!;
+  assert.equal(failure.scenarioId, scenario.id);
   let reviewed = await lab.addHumanReview(before.id, { trialId: failure.id, verdict: 'invalid', note: 'Synthetic test of invalid classification; not owner review.' });
   assert.equal(awaitingVerdict(reviewed).has(failure.id), false);
   assert.equal(verdictSummary(reviewed).review.invalid, 1);
   assert.equal(verdictSummary(reviewed).review.reviewed, 1);
   assert.match(verdictSummary(reviewed).headline, /Качество агента по ним не установлено/);
-  for (const id of awaitingVerdict(reviewed)) reviewed = await lab.addHumanReview(before.id, { trialId: id, verdict: 'fail', note: 'Synthetic fixture: missing update tool.' });
+  for (const id of awaitingVerdict(reviewed)) reviewed = await lab.addHumanReview(before.id, { trialId: id, verdict: 'fail', note: 'Synthetic fixture: the number is asked again.' });
   reviewed = await lab.reviewResults(before.id, resultHash(reviewed));
   assert.deepEqual(reviewed.trials, before.trials, 'classification never rewrites original evidence');
 
@@ -60,12 +68,13 @@ test('a failed case becomes a reusable regression test without changing provenan
   let loaded = await lab.loadSuite(file, [scenario.id]);
   assert.equal(loaded.scenarios.length, 1); assert.equal(loaded.scenarios[0]!.provenance, scenario.provenance);
   assert.equal(loaded.usage.calls, 0, 'loading a test does not call a model');
-  loaded = await lab.updateDraft(loaded.id, draftHash(loaded), { agent: { ...loaded.revisions[0]!.spec, tools: ['search_materials', 'lookup_record', 'update_record'] } });
+  // The fix is a new version of the agent: the same accepted situation runs against the corrected module.
+  loaded = await lab.updateDraft(loaded.id, draftHash(loaded), { target: demoTarget(true), targetVersion: 'demo-fixed-v1' });
   await lab.start(loaded.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(loaded) }); await lab.waitForIdle();
   const after = await lab.get(loaded.id);
   const comparison = compareRuns(before, after);
   assert.equal(comparison.comparable, true); assert.equal(comparison.fixed.length, 1);
-  assert.match(comparison.headline, /Выбранные тесты \(1\/3\)/);
+  assert.match(comparison.headline, /Выбранные тесты \(1\/2\)/);
   assert.ok(comparison.notes.some(note => /Остальной.*не проверен/.test(note)));
   const rejectedTest = compareRuns(reviewed, after);
   assert.equal(rejectedTest.comparable, false, 'a human-invalidated test cannot establish an agent fix');
@@ -74,7 +83,6 @@ test('a failed case becomes a reusable regression test without changing provenan
   assert.equal(compareRuns(before, invalidAfter).coverage.invalidAfter, 1);
   assert.deepEqual(compareRuns(before, invalidAfter).fixed, []);
   assert.equal(verdictSummary({ ...reviewed, trials: reviewed.trials.filter(t => t.id !== failure.id) }).review.invalid, 0, 'a selected subset ignores reviews of other attempts');
-  const missingBaseline = { ...after, settings: { ...after.settings, userModes: ['static', 'reactive'] as const as ['static', 'reactive'] }, trials: [{ ...failure, userMode: 'reactive' as const }] };
 
   const failedCLI = spawnSync(process.execPath, [resolve('dist/cli.js'), 'evaluate', '--input', file, '--yes', '--case', scenario.id, '--data-dir', join(directory, 'ci-fail')], { encoding: 'utf8' });
   assert.equal(failedCLI.status, 1, failedCLI.stderr);
@@ -101,7 +109,7 @@ test('report links reveal their dialogue and event with only the fixed CSP-autho
   const lab = new ExperimentLab(directory, createDemoRuntime());
   t.after(async () => { await lab.close(); await rm(directory, { recursive: true, force: true }); });
   await lab.init();
-  const created = await lab.create(demoEvaluationInput()); await lab.waitForIdle();
+  const created = await lab.create(demoInput()); await lab.waitForIdle();
   const record = await lab.get(created.id);
   record.task = '<script>evil()</script>';
   const html = htmlReport(record);

@@ -2,7 +2,7 @@ import { importBatch } from './scenario-library.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import { readFile, stat } from 'node:fs/promises';
 import { z } from 'zod';
-import { dialogueSchema, fingerprint, goldenCaseSchema, type Dialogue, type ValidationExclusion } from './contracts.js';
+import { dialogueSchema, fingerprint, type Dialogue, type ValidationExclusion } from './contracts.js';
 
 /** Drop the whole dialogue: removing one masked turn would silently change its meaning. */
 export function validationDialogueIssue(dialogue: Dialogue): Omit<ValidationExclusion, 'dialogueId'> | undefined {
@@ -43,9 +43,7 @@ export async function readDialogueImport(file: string): Promise<ReturnType<typeo
   return importDialogues(await readRawData(file));
 }
 
-/** Legacy consumers retain strict schema behavior; library consumers use readDialogueImport. */
-export async function readData(file: string, kind: 'golden' | 'dialogues', options: { maxItems?: number } = {}) {
-  const data = await readRawData(file);
-  return kind === 'golden' ? z.array(goldenCaseSchema).min(1).max(40).parse(data)
-    : z.array(dialogueSchema).min(1).max(options.maxItems ?? 200).parse(data);
+/** Strict dialogue rows; library consumers use readDialogueImport. */
+export async function readData(file: string, options: { maxItems?: number } = {}) {
+  return z.array(dialogueSchema).min(1).max(options.maxItems ?? 200).parse(await readRawData(file));
 }

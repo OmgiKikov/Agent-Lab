@@ -12,7 +12,9 @@ import { evaluateTrial } from '../src/evaluation.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { createInputSchema, DEFAULT_JUDGE, fingerprint, settingsSchema } from '../src/contracts.js';
 import { buildResultView } from '../src/result-view.js';
-import { demoEvaluationInput } from '../src/demo.js';
+import { demoInput } from '../src/demo.js';
+import { libraryHash } from '../src/scenario-library.js';
+import { legacyDraft } from './helpers/demo-record.js';
 
 const spec = { name: 'Review fixture', instructions: 'Answer correctly without revealing internal_key.', tools: [] };
 const material = { name: 'policy', content: 'Answer the question correctly. Never reveal internal_key.' };
@@ -26,14 +28,9 @@ const card = (index = 0) => ({
   metrics: [{ id: 'correctness', name: 'Correct answer', subject: 'agent', description: 'Answer is correct', passCriteria: 'Correct answer', failCriteria: 'Wrong answer' }],
   successCriteria: 'Correct answer without secret disclosure',
 });
-const runtime = (cards, onImprove = () => {}) => ({
-  async prepare({ sources }) {
-    return { requirements: [{ id: 'answer', text: material.content, sourceId: sources[0].id, quote: material.content, critical: false }],
-      questions: [], agent: spec, scenarios: cards };
-  },
-  async openTarget() { return { async respond() { return 'An incorrect answer'; }, async close() {} }; },
+/** The judge of this file fails every rubric; one-reply probes need no user simulator. */
+const runtime = () => ({
   async assess({ scenario }) { return scenario.metrics.map(metric => ({ metricId: metric.id, result: 'fail', rationale: 'Fixture: this answer is wrong', evidence: [1] })); },
-  async improve() { onImprove(); return { agent: { ...spec, instructions: 'Correct the answer.' }, hypothesis: 'Fix the observed semantic failure' }; },
   async userTurn() { throw new Error('Static probes do not need a simulator'); },
 });
 async function labFixture(t, adapter) {
@@ -43,21 +40,33 @@ async function labFixture(t, adapter) {
   await lab.init();
   return lab;
 }
-const input = workflow => createInputSchema.parse({ task: 'Review fixture', mode: 'demo', materials: [material], workflow,
-  settings: { repeats: 1, maxIterations: 1, userModes: ['static'] } });
+/** An external agent that always answers wrong. It runs in its own process, so every session it opens is appended to a file next to it. */
+async function wrongAgent(directory) {
+  const path = join(directory, 'wrong-agent.mjs');
+  await writeFile(path, `import { appendFileSync } from 'node:fs';\nexport function createSession() { appendFileSync(${JSON.stringify(join(directory, 'wrong-agent.opens'))}, 'open\\n'); return { async respond() { return 'An incorrect answer'; } }; }\n`);
+  return { kind: 'module', path, exportName: 'createSession' };
+}
+const agentOpens = async lab => (await readFile(join(lab.store.directory, 'wrong-agent.opens'), 'utf8').catch(() => '')).split('\n').filter(Boolean).length;
+/** A draft of this file's own old-format cards (no execution block) against the wrong agent, as the retired card generator used to leave them. */
+async function draftFixture(lab, cards) {
+  const draft = await legacyDraft(lab, { count: 1, target: await wrongAgent(lab.store.directory), settings: { repeats: 1, maxIterations: 1, userModes: ['static'] } });
+  const revision = { id: fingerprint(spec), parentId: null, spec, hypothesis: 'Agent configuration selected for dialogue evaluation.', createdAt: draft.createdAt };
+  await lab.store.save({ ...draft, task: 'Review fixture', questions: [],
+    sources: [{ id: 'source-1', name: material.name, content: material.content, hash: fingerprint(material.content) }],
+    requirements: [{ id: 'answer', text: material.content, sourceId: 'source-1', quote: material.content, critical: false }],
+    scenarios: cards.map(card => ({ ...card, split: 'dev' })), revisions: [revision], selectedRevisionId: revision.id });
+  return lab.get(draft.id);
+}
 
 test('CLI accept prints the complete current test before recording its exact hash', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-cli-accept-'));
   const data = join(directory, 'data');
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const lab = new ExperimentLab(data, runtime([card()]));
+  const lab = new ExperimentLab(data, runtime());
   await lab.init();
-  const created = await lab.create(input('evaluate')); await lab.waitForIdle();
-  const current = await lab.get(created.id);
   const opening = `Что делать?\n${'полный вход '.repeat(180)}`;
-  const successCriteria = current.scenarios[0]!.successCriteria!;
-  const prepared = await lab.updateDraft(current.id, draftHash(current), { scenarios: [{ ...current.scenarios[0]!, goalObservation: 'reply',
-    user: { ...current.scenarios[0]!.user, opening } }] });
+  const prepared = await draftFixture(lab, [{ ...card(), goalObservation: 'reply', user: { ...card().user, opening } }]);
+  const successCriteria = prepared.scenarios[0]!.successCriteria!;
   await lab.close();
 
   const preview = spawnSync(process.execPath, [resolve('dist/cli.js'), 'accept', '--id', prepared.id, '--data-dir', data], { encoding: 'utf8' });
@@ -86,10 +95,9 @@ test('CLI accept shows what the agent must do in every situation and confirms th
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-cli-sheet-'));
   const data = join(directory, 'data');
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const lab = new ExperimentLab(data, runtime([card(0), card(1)]));
+  const lab = new ExperimentLab(data, runtime());
   await lab.init();
-  const created = await lab.create(input('evaluate')); await lab.waitForIdle();
-  const draft = await lab.get(created.id);
+  const draft = await draftFixture(lab, [card(0), card(1)]);
   assert.equal(draft.scenarios.length, 2, draft.error ?? '');
   await lab.close();
   const hash = draftHash(draft);
@@ -122,10 +130,11 @@ test('CLI run returns the full persisted dialogue, automatic verdict and cited p
   t.after(() => rm(directory, { recursive: true, force: true }));
   const lab = new ExperimentLab(data);
   await lab.init();
-  const created = await lab.create(createInputSchema.parse({ ...demoEvaluationInput(), scenarioCount: 1 }));
+  const base = demoInput();
+  const created = await lab.create(createInputSchema.parse({ ...base, settings: { ...base.settings, repeats: 1 } }));
   await lab.waitForIdle();
-  const draft = await lab.get(created.id);
-  const accepted = await lab.acceptDraft(draft.id, draftHash(draft));
+  const { library } = await lab.readLibrary(created.id);
+  const { experiment: accepted } = await lab.acceptLibrary(created.id, libraryHash(library), ['known_number']);
   await lab.close();
 
   const cli = spawnSync(process.execPath, [resolve('dist/cli.js'), 'run', '--id', accepted.id, '--yes', '--json', '--data-dir', data], { encoding: 'utf8' });
@@ -136,38 +145,8 @@ test('CLI run returns the full persisted dialogue, automatic verdict and cited p
   assert.match(proof.automaticVerdict, /^(?:pass|fail|unknown)$/);
   assert.match(proof.lines.join('\n'), /РЕПЛИКИ\n#0 ПОЛЬЗОВАТЕЛЬ: [^\n]+\n#\d+ АГЕНТ:/);
   assert.match(proof.lines.join('\n'), /Автоматический вердикт: (?:pass|fail|unknown)/);
-  assert.match(proof.lines.join('\n'), /ПРОВЕРКИ\n(?:PASS|FAIL) \[[^\]]+\].*\n  Доказательство:/);
+  assert.match(proof.lines.join('\n'), /КОНТРОЛЬНЫЕ ТОЧКИ\n(?:ВЫПОЛНЕНО|НАРУШЕНО) \[ask_once\] · обязательная · требование refund_rule · события #\d+\n  Обоснование:/);
   assert.match(proof.lines.join('\n'), /ОЦЕНКИ\n(?:PASS|FAIL|UNKNOWN) \[[^\]]+\].*события: #\d+/);
-});
-
-test('external LLM adapter commits tools in SQLite, isolates history, attests prompt and accounts calls', async t => {
-  const { createSession } = await import('../examples/llm-stateful-agent.mjs');
-  const initialState = { records: { A: { time: '09:00', owner: 'Alex' } }, writableFields: ['time'], transientFailures: 0 };
-  const prompt = 'Manage appointments.';
-  const fake = { async openTarget(_spec, _sources, tools, ctx) {
-    let selected;
-    return { async respond(message) {
-      ctx.beforeCall(); ctx.addUsage({ inputTokens: 7, outputTokens: 3, costUsd: 0.01 });
-      if (message === 'remember A') { selected = 'A'; return 'Remembered'; }
-      if (!selected) return 'Which record?';
-      const read = await tools.find(t => t.name === 'lookup_record').execute({ recordId: selected });
-      if (message === 'move') await tools.find(t => t.name === 'update_record').execute({ recordId: selected, changes: { time: '11:00' } });
-      return read.record.time;
-    }, async close() {} };
-  } };
-  const a = await createSession({ initialState, sessionId: 'first', prompt, promptHash: fingerprint(prompt) }, fake);
-  const b = await createSession({ initialState, sessionId: 'second', prompt, promptHash: fingerprint(prompt) }, fake);
-  t.after(async () => { await a.close(); await b.close(); });
-  await a.respond('remember A');
-  const changed = await a.respond('move');
-  assert.equal(changed.records.A.time, '11:00'); assert.equal(changed.records.A.owner, 'Alex');
-  assert.equal(changed.promptHash, fingerprint(prompt)); assert.equal(changed.resetConfirmed, true);
-  assert.equal(changed.events.length, 2); assert.equal(changed.usage.calls, 1); assert.equal(changed.usage.costUsd, 0.01);
-  const reset = await b.respond('move');
-  assert.equal(reset.reply, 'Which record?'); assert.equal(reset.records.A.time, '09:00');
-  assert.equal((await a.respond('read')).reply, '11:00'); assert.equal(changed.version, reset.version);
-  assert.equal(initialState.records.A.time, '09:00');
-  await assert.rejects(createSession({ initialState, sessionId: 'bad', prompt, promptHash: 'wrong' }, fake), /verified prompt/);
 });
 
 test('external state must not pass when the adapter never reported it', async t => {
@@ -181,36 +160,12 @@ test('external state must not pass when the adapter never reported it', async t 
   const scenario = { ...card(), split: 'dev', metrics: [],
     initialState: { records: { A: { time: '09:00' } }, writableFields: [], transientFailures: 0 },
     checks: [{ id: 'state', kind: 'state_equals', description: 'The backend record is unchanged', recordId: 'A', field: 'time', value: '09:00' }] };
-  const trial = await evaluateTrial({ requirements: [], runtime: runtime([]), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'Fixture', createdAt: new Date().toISOString() },
+  const trial = await evaluateTrial({ requirements: [], runtime: runtime(), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'Fixture', createdAt: new Date().toISOString() },
     scenario, repeat: 0, manifestHash: 'review', sources: [], settings: settingsSchema.parse({}), userMode: 'static',
     target: { kind: 'http', url: `http://127.0.0.1:${server.address().port}`, headersEnv: {}, timeoutMs: 1000 },
     ctx: { signal: AbortSignal.timeout(5000), timeoutMs: 1000, beforeCall() {}, addUsage() {} } });
   t.diagnostic(JSON.stringify({ outcome: trial.outcome, reason: trial.reason, checks: trial.checks }));
   assert.notEqual(trial.outcome, 'pass', 'Absent backend evidence must not become a passing state check');
-});
-
-test('sandbox optimizer must consider semantic agent failures', async t => {
-  let improvements = 0;
-  const lab = await labFixture(t, runtime(Array.from({ length: 4 }, (_, i) => card(i)), () => improvements++));
-  const draft = await lab.create(input('compare')); await lab.waitForIdle();
-  await lab.start(draft.id, { approved: true, reviewer: 'automated' }); await lab.waitForIdle();
-  const record = await lab.get(draft.id);
-  assert.equal(record.phase, 'complete', record.error ?? 'Run failed');
-  assert(record.trials.every(trial => trial.outcome === 'pass'));
-  assert(record.trials.every(trial => trial.assessments.some(assessment => assessment.result === 'fail')));
-  t.diagnostic(JSON.stringify({ trials: record.trials.length, semanticFailures: record.trials.length, improvements, finalVerdict: record.comparisons.at(-1)?.verdict }));
-  assert(improvements > 0, 'Every semantic rubric failed, but the optimizer never requested a candidate');
-});
-
-test('generated cards cannot claim owner-curated provenance', async t => {
-  const generated = { ...card(), provenance: 'curated', requirementIds: [] };
-  const lab = await labFixture(t, runtime([generated]));
-  // Exercise the live preparation boundary with deterministic generated output; no provider is called.
-  const draft = await lab.create({ ...input('evaluate'), mode: 'live' }); await lab.waitForIdle();
-  const record = await lab.get(draft.id);
-  t.diagnostic(JSON.stringify({ phase: record.phase, provenance: record.scenarios[0]?.provenance, suppliedGoldenCases: record.goldenCases.length, suppliedDialogues: record.dialogues.length }));
-  assert(record.phase === 'error' || record.scenarios.every(scenario => scenario.provenance === 'synthetic'),
-    'The preparation boundary accepted a generated card as curated without any owner golden cases');
 });
 
 import { doctor, readConnection, listSuites, rememberedConnection } from '../src/connection.js';
@@ -219,13 +174,9 @@ import { previewAnswer } from '../src/evaluation.js';
 import { readData } from '../src/imports.js';
 
 test('reassessment never opens the target, preserves original evidence, versions criteria and validates citations', async t => {
-  let opens = 0;
-  const adapter = runtime([card()]);
-  const originalOpen = adapter.openTarget;
-  adapter.openTarget = async (...args) => { opens++; return originalOpen(...args); };
+  const adapter = runtime();
   const lab = await labFixture(t, adapter);
-  const draft = await lab.create(input('evaluate')); await lab.waitForIdle();
-  const prepared = await lab.get(draft.id);
+  const prepared = await draftFixture(lab, [card()]);
   await lab.start(prepared.id, { approved: true, expectedHash: draftHash(prepared) }); await lab.waitForIdle();
   const original = await lab.get(prepared.id);
   adapter.assess = async ({ scenario }) => scenario.metrics.map(m => ({ metricId: m.id, result: 'pass', rationale: 'Changed rubric fixture', evidence: [1] }));
@@ -233,7 +184,7 @@ test('reassessment never opens the target, preserves original evidence, versions
   await lab.waitForIdle();
   const revised = await lab.get(scoring.id);
   assert.equal(revised.phase, 'results_review', revised.error);
-  assert.equal(opens, 1, 'Only the original run opened a target session');
+  assert.equal(await agentOpens(lab), 1, 'Only the original run opened a target session');
   assert.deepEqual(await lab.get(original.id), original, 'No original facts or scores are overwritten');
   assert.equal(revised.assessmentOf, original.id);
   assert.deepEqual(revised.trials[0].events, original.trials[0].events);
@@ -245,7 +196,7 @@ test('reassessment never opens the target, preserves original evidence, versions
   adapter.assess = async () => [{ metricId: 'correctness', result: 'pass', rationale: 'Bad citation', evidence: [999] }];
   const invalid = await lab.reassess(original.id); await lab.waitForIdle();
   assert.match((await lab.get(invalid.id)).trials[0].assessmentError, /nonexistent/);
-  assert.equal(opens, 1);
+  assert.equal(await agentOpens(lab), 1);
   const judge = { provider: 'openrouter', model: 'other-judge', upstream: 'openai' };
   const judged = await lab.reassess(original.id, { judge }); await lab.waitForIdle();
   const judgedResult = await lab.get(judged.id);
@@ -255,10 +206,10 @@ test('reassessment never opens the target, preserves original evidence, versions
 });
 
 test('rejudged version pairs remain comparable without copying original human labels', async t => {
-  const adapter = runtime([card()]);
+  const adapter = runtime();
   const lab = await labFixture(t, adapter);
-  const created = await lab.create(input('evaluate')); await lab.waitForIdle();
-  await lab.start(created.id, { approved: true, expectedHash: draftHash(await lab.get(created.id)) }); await lab.waitForIdle();
+  const created = await draftFixture(lab, [card()]);
+  await lab.start(created.id, { approved: true, expectedHash: draftHash(created) }); await lab.waitForIdle();
   let original = await lab.get(created.id);
   await lab.addHumanReview(original.id, { trialId: original.trials[0].id, metricId: 'correctness', verdict: 'pass', note: 'Explicit test fixture label, not a real human verdict.' });
   original = await lab.get(original.id);
@@ -277,24 +228,24 @@ test('rejudged version pairs remain comparable without copying original human la
 });
 
 test('good/bad previews and local JSONL imports validate actual criteria without fabricating state or provenance', async t => {
-  const lab = await labFixture(t, runtime([card()]));
+  const lab = await labFixture(t, runtime());
   const good = previewAnswer({ ...card(), split: 'dev' }, 'Answer');
   const bad = previewAnswer({ ...card(), split: 'dev' }, 'internal_key');
   assert.equal(good.checks[0].passed, true); assert.equal(bad.checks[0].passed, false);
   assert.deepEqual(good.unmeasured, ['Correct answer']);
   const file = join(lab.store.directory, 'dialogues.jsonl');
   await writeFile(file, JSON.stringify({ id: 'real', messages: [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' }] }) + '\n');
-  const imported = await readData(file, 'dialogues'); assert.equal(imported[0].id, 'real');
-  await writeFile(file, '{bad}\n'); await assert.rejects(readData(file, 'dialogues'), /строке 1/);
+  const imported = await readData(file); assert.equal(imported[0].id, 'real');
+  await writeFile(file, '{bad}\n'); await assert.rejects(readData(file), /строке 1/);
 });
 
-test('draft edits cannot launder provenance', async t => {
-  const lab = await labFixture(t, runtime([card()]));
-  const created = await lab.create(input('evaluate')); await lab.waitForIdle();
-  const original = await lab.get(created.id);
+test('draft edits cannot touch cards or launder their provenance: situations change only in the library', async t => {
+  const lab = await labFixture(t, runtime());
+  const original = await draftFixture(lab, [card()]);
   await assert.rejects(lab.updateDraft(original.id, draftHash(original), {
     scenarios: [{ ...original.scenarios[0], provenance: 'curated' }],
-  }), /Происхождение/);
+  }), /scenarios/);
+  assert.deepEqual(await lab.get(original.id), original, 'a refused edit saves nothing');
 });
 
 test('partial external observations, unreported costs and out-of-scope tools cannot look like complete measurements', async t => {
@@ -311,7 +262,7 @@ test('partial external observations, unreported costs and out-of-scope tools can
   const scenario = { ...card(), metrics: [], split: 'dev', user: { ...card().user, opening: 'Read', script: ['Read again'], maxFollowUps: 1 },
     initialState: { records: { A: { time: '09:00' } }, writableFields: [], transientFailures: 0 },
     checks: [{ id: 'state', kind: 'state_equals', recordId: 'A', field: 'time', value: '09:00', description: 'Unchanged' }] };
-  const run = (s = scenario) => evaluateTrial({ requirements: [], runtime: runtime([]), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'fixture', createdAt: new Date().toISOString() },
+  const run = (s = scenario) => evaluateTrial({ requirements: [], runtime: runtime(), revision: { id: fingerprint(spec), parentId: null, spec, hypothesis: 'fixture', createdAt: new Date().toISOString() },
     scenario: s, repeat: 0, manifestHash: 'fixture', sources: [], settings: settingsSchema.parse({}), userMode: 'scripted',
     target: { kind: 'http', url: `http://127.0.0.1:${server.address().port}`, headersEnv: {}, timeoutMs: 1000 },
     ctx: { signal: AbortSignal.timeout(5000), timeoutMs: 1000, beforeCall() {}, addUsage() {} } });
@@ -330,11 +281,3 @@ test('partial external observations, unreported costs and out-of-scope tools can
   result = await run(); assert.equal(result.outcome, 'invalid'); assert.match(result.reason, /Версия.*изменилась/);
 });
 
-test('a partially scored candidate cannot be accepted', async t => {
-  const adapter = runtime(Array.from({ length: 4 }, (_, i) => card(i)));
-  adapter.assess = async ({ scenario }) => [{ metricId: scenario.metrics[0].id, result: 'unknown', rationale: 'Insufficient evidence', evidence: [] }];
-  const lab = await labFixture(t, adapter);
-  const created = await lab.create(input('compare')); await lab.waitForIdle();
-  await lab.start(created.id, { approved: true }); await lab.waitForIdle();
-  const incomplete = await lab.get(created.id); assert.equal(incomplete.phase, 'error'); assert.match(incomplete.error, /assessment is incomplete/);
-});

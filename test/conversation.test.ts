@@ -1,22 +1,23 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { before, test } from 'node:test';
 import { initTheme, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, type Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { authorize, planLines, changeRows, deriveVariantInput, ownerBasis, ownerMessages, plainIssue, verbatimSpan, resolveVariant, variantDiff } from '../extensions/conversation.ts';
 import { callText, forgetFeeds } from '../extensions/render/feed.ts';
-import { ExperimentLab } from '../src/experiment.js';
+import { draftHash, ExperimentLab } from '../src/experiment.js';
 import { recordSemanticAssessment, semanticPaths } from '../src/scenario-library.js';
-import { createInputSchema, type Runtime } from '../src/contracts.js';
+import { createInputSchema, type Experiment, type Runtime } from '../src/contracts.js';
 import { createDemoRuntime } from '../src/demo.js';
 import { acceptLibrary, compileLibrary, editLibrary, libraryHash, librarySnapshot, ownerFactEvidence, resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../src/scenario-library.js';
 import { scenarioLibrarySchema } from '../src/scenario-contracts.js';
 import { assertLibraryRun } from '../src/scenario-preparation.js';
 import { ExperimentStore } from '../src/store.js';
-import { demoEvaluateRecord } from './helpers/demo-record.js';
+import { demoEvaluateRecord, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 import { libraryFixture, coverageProposals as proposals, rawDialogues, requirements, sources } from './helpers/scenario-library.js';
 
 /*
@@ -24,23 +25,35 @@ import { libraryFixture, coverageProposals as proposals, rawDialogues, requireme
  * Every test reads the 0600 store after the call; a message on screen alone proves nothing.
  */
 
-let gate: Promise<void> | undefined;
+/** The agent under test: a module that always asks for the terminal number. */
+const chatAgent = { kind: 'module' as const, path: fileURLToPath(new URL('./fixtures/board-chat-agent.mjs', import.meta.url)), exportName: 'createSession' };
+const existingAgent = { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] };
+/**
+ * Holds every reply of the chat agent until released, so a run can be observed while it goes. The agent
+ * runs in its own process (a module target), so the hold is a file it watches, named through the environment.
+ */
+async function holdReplies(): Promise<() => Promise<void>> {
+  const directory = await mkdtemp(join(tmpdir(), 'chat-hold-'));
+  const file = join(directory, 'hold');
+  await writeFile(file, '');
+  process.env.AGENT_LAB_TEST_HOLD = file;
+  return async () => { delete process.env.AGENT_LAB_TEST_HOLD; await rm(directory, { recursive: true, force: true }); };
+}
 /** Holds the semantic recheck, so a test can watch the conversation go on while it runs. */
 let checkGate: Promise<void> | undefined;
 let checkCalls = 0;
 /** Holds the preparation before its first model step, so a test can watch the conversation go on while scenarios are being built. */
 let buildGate: Promise<void> | undefined;
-/** The deterministic runtime of the scenario workflow tests; `gate` holds the target's reply so a run can be observed while it goes. */
+/** The deterministic runtime of the scenario workflow tests. */
 function runtimeFixture(separateGroups = false, twoChecks = false): Runtime {
   return { ...createDemoRuntime(),
-    async prepare(_input, ctx) { await buildGate; ctx.signal.throwIfAborted(); return { requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [], agent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] }, scenarios: [] }; },
+    async groundRequirements(_input, ctx) { await buildGate; ctx.signal.throwIfAborted(); return { requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [] }; },
     async scenarioProposals(request, ctx) { ctx.beforeCall(); return proposals(request.batchId).map((p, index) => {
       if (twoChecks && !index) p.variant.evaluationSpec.checkpoints.push({ ...p.variant.evaluationSpec.checkpoints[0]!, id: 'explain_refund', rule: 'Агент объяснил порядок возврата после получения номера' });
       return separateGroups && index ? { ...p, business: { ...p.business, key: 'refund_term', title: 'Срок возврата', goal: 'Узнать срок возврата' } } : p;
     }).filter(p => request.dialogues.some(d => d.id === p.variant.sourceDialogues[0]!.dialogueId)) as never; },
     async assessScenarioProposals(request, ctx) { ctx.beforeCall(); checkCalls++; await checkGate; ctx.signal.throwIfAborted();
       return request.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready' as const, reason: 'Детерминированная проверка учебного примера' }))); },
-    async openTarget() { return { async respond() { await gate; return 'Уточните номер терминала'; }, async close() {} }; },
     async selectUserAction() { return { actionId: 'finish', factIds: [] }; },
     async assessCheckpoints({ checkpoints, events }) { return checkpoints.map(cp => ({ checkpointId: cp.id, result: 'pass' as const, rationale: 'Номер запрошен', evidence: [events.find(e => e.type === 'assistant')!.index] })); },
   } as Runtime;
@@ -89,7 +102,7 @@ async function draft(prefix: string, separateGroups = false, twoChecks = false) 
   const lab = new ExperimentLab(join(cwd, '.agent-lab'), runtime);
   await lab.init();
   const seed = await lab.create(createInputSchema.parse({ task: 'Проверить возвраты', mode: 'demo', materials: sources.map(({ name, content }) => ({ name, content })),
-    dialogues: rawDialogues, scenarioCount: 2, settings: { maxCalls: 100, repeats: 1, userModes: ['reactive'] } }));
+    dialogues: rawDialogues, scenarioCount: 2, target: chatAgent, existingAgent, settings: { maxCalls: 100, repeats: 1, userModes: ['reactive'] } }));
   await lab.waitForIdle();
   await lab.close();
   const read = async () => { const store = new ExperimentStore(join(cwd, '.agent-lab')); return store.get(seed.id); };
@@ -603,8 +616,7 @@ test('a short run ends in its own row; the confirmation shows the agent, the set
 test('a long run leaves the conversation free: Esc does not stop it, progress is real, edits wait, and the result arrives as a message', { timeout: 60000 }, async () => {
   const fixture = await draft('chat-run-background-');
   const { tools, sent, shutdown } = registered(60_000);
-  let release!: () => void;
-  gate = new Promise<void>(resolve => { release = resolve; });
+  const release = await holdReplies();
   try {
     const { ctx, widgets } = terminal(fixture.cwd, ['Прими готовые и запусти'], [true, true]);
     const scenarios = tools.get('agent_lab_scenarios')!, run = tools.get('agent_lab_run')!;
@@ -622,21 +634,20 @@ test('a long run leaves the conversation free: Esc does not stop it, progress is
     assert.match(json(await scenarios.execute('read', { operation: 'show' }, undefined, undefined, ctx)).libraryHash, /^[a-f0-9]{64}$/, 'reading works while the run goes');
     const edit = await scenarios.execute('edit', { operation: 'remove', variant: '1' }, undefined, undefined, ctx).catch(error => error as Error);
     assert.match(edit instanceof Error ? edit.message : '', /Сейчас идёт прогон .* правки и новый запуск — после его завершения или остановки/);
-    release();
+    await release();
     while (!sent.length) await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(sent[0]!.message.customType, 'agent-lab-run'); assert.deepEqual(sent[0]!.options, { deliverAs: 'followUp', triggerTurn: true });
     assert.equal((sent[0]!.message.details as { kind: string }).kind, 'agent-lab/verdict'); assert.equal(JSON.parse(sent[0]!.message.content).trialCount, 2);
     assert.match(widgets.find(lines => lines)!.join('\n'), /0 из 2 диалогов завершено/);
     while (widgets.at(-1) !== undefined) await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal((await fixture.read()).phase, 'results_review');
-  } finally { gate = undefined; release(); await shutdown(); await fixture.cleanup(); }
+  } finally { await release(); await shutdown(); await fixture.cleanup(); }
 });
 
 test('stopping is its own request: the owner\'s words stop the run, what is recorded stays, and the answer says what must be rerun', { timeout: 60000 }, async () => {
   const fixture = await draft('chat-run-stop-');
   const { tools, sent, shutdown } = registered(0);
-  let release!: () => void;
-  gate = new Promise<void>(resolve => { release = resolve; });
+  const release = await holdReplies();
   try {
     const said = ['Прими готовые и запусти'];
     const { ctx, confirms } = terminal(fixture.cwd, said, [true, true, false]);
@@ -646,17 +657,17 @@ test('stopping is its own request: the owner\'s words stop the run, what is reco
     assert.equal(json(await run.execute('run', {}, undefined, undefined, ctx)).background, true);
     said.push('Останови прогон');
     const pending = run.execute('stop', { action: 'stop' }, undefined, undefined, ctx);
-    release();
+    await release();
     const stopped = await pending;
     assert.equal(json(stopped).stopped, true); assert.equal(confirms.length, 2, 'the owner\'s own request needs no second confirmation');
     assert.match(drawn(run, stopped, false).join('\n'), /остановлен: сохранено \d из 2 диалогов[\s\S]*Продолжить этот прогон с места остановки нельзя/);
     assert.equal(sent.length, 0, 'a stop the owner asked for is answered in its own row, not announced twice');
     assert.ok(['cancelled', 'results_review'].includes((await fixture.read()).phase));
-  } finally { gate = undefined; release(); await shutdown(); await fixture.cleanup(); }
+  } finally { await release(); await shutdown(); await fixture.cleanup(); }
 });
 
 /** A preparation asked for in the conversation: the same materials and dialogues `draft()` seeds, built through the tool. */
-const buildRequest = { task: 'Проверить возвраты', mode: 'demo', materials: sources.map(({ name, content }) => ({ name, content })), dialogues: rawDialogues, scenarioCount: 2,
+const buildRequest = { task: 'Проверить возвраты', target: chatAgent, existingAgent, materials: sources.map(({ name, content }) => ({ name, content })), dialogues: rawDialogues, scenarioCount: 2,
   settings: { maxCalls: 100, repeats: 1, userModes: ['reactive'] } };
 async function preparing(prefix: string) {
   const cwd = await mkdtemp(join(tmpdir(), prefix));
@@ -788,35 +799,40 @@ test('an assessment the owner asks for does not hold the conversation: it answer
 });
 
 test('results: a failure opens by its number with the dialogue, an unknown one asks, and a repeat is compared with its source run', { timeout: 60000 }, async () => {
-  const demo = await demoEvaluateRecord('chat-results-');
-  await demo.lab.close();
   const cwd = await mkdtemp(join(tmpdir(), 'chat-results-cwd-'));
-  const store = new ExperimentStore(join(cwd, '.agent-lab'));
-  await store.init();
-  try { await store.save(demo.record); } finally { await store.close(); }
-  runtime = createDemoRuntime();
+  // A finished run of old-format cards (free user simulator, no controller) on an external agent: it can still be repeated.
+  const seed = new ExperimentLab(join(cwd, '.agent-lab'), legacyDemoRuntime());
+  let source: Experiment;
+  try {
+    await seed.init();
+    const draft = await legacyDraft(seed, { count: 2 });
+    await seed.start(draft.id, { approved: true, expectedHash: draftHash(draft) }); await seed.waitForIdle();
+    source = await seed.get(draft.id);
+  } finally { await seed.close(); }
+  assert.equal(source.phase, 'results_review', source.error ?? '');
+  runtime = legacyDemoRuntime();
   const { tools, shutdown } = registered();
   try {
     const { ctx } = terminal(cwd, ['Покажи первый провал'], [true]);
     const inspect = tools.get('agent_lab_inspect')!;
     const status = await tools.get('agent_lab_status')!.execute('status', {}, undefined, undefined, ctx);
-    assert.equal(json(status).runs[0].id, demo.record.id); assert.match(drawn(tools.get('agent_lab_status')!, status, false).join('\n'), /есть результат/);
+    assert.equal(json(status).runs[0].id, source.id); assert.match(drawn(tools.get('agent_lab_status')!, status, false).join('\n'), /есть результат/);
     const failure = await inspect.execute('failure', { failure: 1 }, undefined, undefined, ctx);
     const payload = json(failure);
-    assert.equal(payload.failure.number, 1); assert.equal(payload.trial.id, demo.record.trials.find(trial => trial.id === payload.trial.id)!.id);
+    assert.equal(payload.failure.number, 1); assert.equal(payload.trial.id, source.trials.find(trial => trial.id === payload.trial.id)!.id);
     const collapsed = drawn(inspect, failure, false).join('\n');
     assert.match(collapsed, new RegExp(`Провал 1 из ${payload.failure.of}`)); assert.match(collapsed, /#\d+ Клиент: /); assert.match(collapsed, /#\d+ Агент: /);
     assert.doesNotMatch(collapsed, /Решение судьи/); assert.match(drawn(inspect, failure, true).join('\n'), /Решение судьи/);
     assert.equal(json(await inspect.execute('missing', { failure: 99 }, undefined, undefined, ctx)).status, 'unknown_reference');
-    const title = demo.record.scenarios[0]!.title;
+    const title = source.scenarios[0]!.title;
     const repeated = json(await tools.get('agent_lab_repeat')!.execute('repeat', { scenarios: [title] }, undefined, undefined, ctx));
-    assert.equal(repeated.scenarioCount, 1); assert.equal(repeated.parentRunId, demo.record.id);
+    assert.equal(repeated.scenarioCount, 1); assert.equal(repeated.parentRunId, source.id);
     assert.equal(json(await tools.get('agent_lab_run')!.execute('rerun', {}, undefined, undefined, ctx)).trialCount, 1, 'the repeat is the run the conversation now works on');
     const comparison = await inspect.execute('compare', { compare: true }, undefined, undefined, ctx);
-    assert.equal(json(comparison).comparisonSource.beforeId, demo.record.id);
-    assert.match(drawn(inspect, comparison, false).join('\n'), new RegExp(`Сравнение с прогоном ${demo.record.id.slice(0, 8)}`));
-    assert.equal((await new ExperimentStore(join(cwd, '.agent-lab')).get(demo.record.id)).trials.length, demo.record.trials.length, 'the source run is untouched');
-  } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); await rm(demo.directory, { recursive: true, force: true }); }
+    assert.equal(json(comparison).comparisonSource.beforeId, source.id);
+    assert.match(drawn(inspect, comparison, false).join('\n'), new RegExp(`Сравнение с прогоном ${source.id.slice(0, 8)}`));
+    assert.equal((await new ExperimentStore(join(cwd, '.agent-lab')).get(source.id)).trials.length, source.trials.length, 'the source run is untouched');
+  } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); }
 });
 
 test('checker remarks reach the owner in plain words: titles instead of ids, the part of the card they are about', () => {
@@ -1005,8 +1021,7 @@ test('review 92e30d3: a learned fact never becomes prior knowledge without the o
 test('review 92e30d3: stopping needs a real request and the run that is actually going; acceptance shows definitions; the plan names the models that will run', { timeout: 60000 }, async () => {
   const fixture = await draft('chat-review-stop-');
   const { tools, shutdown } = registered(0);
-  let release!: () => void;
-  gate = new Promise<void>(resolve => { release = resolve; });
+  const release = await holdReplies();
   try {
     const said = ['Прими готовые и запусти'];
     const { ctx, confirms } = terminal(fixture.cwd, said, [true, true, false]);
@@ -1024,9 +1039,9 @@ test('review 92e30d3: stopping needs a real request and the run that is actually
     const other = json(await run.execute('stop-other', { action: 'stop', id: 'no-such-run-0000' }, undefined, undefined, ctx));
     assert.equal(other.status, 'unknown_reference'); assert.equal((await fixture.read()).phase, 'evaluating', 'a run the owner did not name is never stopped in its place');
     const pending = run.execute('stop', { action: 'stop', id: fixture.id }, undefined, undefined, ctx);
-    release();
+    await release();
     assert.equal(json(await pending).stopped, true);
-  } finally { gate = undefined; release(); await shutdown(); await fixture.cleanup(); }
+  } finally { await release(); await shutdown(); await fixture.cleanup(); }
 });
 
 test('review 92e30d3: «второй прогон» is the second row that was shown, and an old row is rebuilt from its stored revision when the cache is gone', { timeout: 60000 }, async () => {

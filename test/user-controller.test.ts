@@ -5,7 +5,27 @@ import { behaviorPolicySchema } from '../src/scenario-contracts.js';
 import { acceptLibrary, compileLibrary, libraryHash } from '../src/scenario-library.js';
 import { libraryFixture, sources, requirements } from './helpers/scenario-library.js';
 import { evaluateTrial } from '../src/evaluation.js';
-import { settingsSchema, type Runtime, type Scenario } from '../src/contracts.js';
+import { settingsSchema, targetSchema, type Runtime, type Scenario } from '../src/contracts.js';
+
+/** An external agent over HTTP inside the test process: `reply` answers each delivered message; `sent` is what reached the agent. */
+async function httpAgent(reply: (body: { message: string; initialState: unknown }) => unknown) {
+  const { createServer } = await import('node:http');
+  const sent: string[] = [];
+  const server = createServer((request, response) => {
+    let body = '';
+    request.on('data', chunk => { body += chunk; });
+    request.on('end', () => {
+      const parsed = JSON.parse(body) as { message: string; initialState: unknown };
+      sent.push(parsed.message);
+      response.writeHead(200, { 'content-type': 'application/json', connection: 'close' });
+      response.end(JSON.stringify(reply(parsed)));
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()));
+  const { port } = server.address() as import('node:net').AddressInfo;
+  return { sent, target: targetSchema.parse({ kind: 'http', url: `http://127.0.0.1:${port}/` }),
+    close: () => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }) };
+}
 
 const policy = () => behaviorPolicySchema.parse({ version: 1, initialState: 'start', states: ['start', 'answered', 'done'], terminalStates: ['done'], maxFollowUps: 3, repetitionLimit: 1,
   actions: [{ id: 'answer', kind: 'answer', factIds: ['number'], payload: 'Номер терминала: 1234', ifAsked: 'номер терминала' }, { id: 'change', kind: 'change_intent', factIds: [], payload: 'Теперь хочу отменить возврат' }, { id: 'finish', kind: 'finish', factIds: [] }],
@@ -42,17 +62,18 @@ function compiled(): Scenario {
   return compileLibrary(acceptLibrary(l, libraryHash(l), ['variant_1']))[0]!;
 }
 async function evaluate(scenario: Scenario, decisions: unknown[], options: { mode?: 'reactive' | 'static' | 'scripted'; maxTurns?: number; abort?: boolean } = {}) {
-  const sent: string[] = [], inputs: unknown[] = []; let calls = 0, closed = false;
+  const inputs: unknown[] = []; let calls = 0;
   const controller = new AbortController();
-  const runtime = { async openTarget() { return { async respond(message: string) { sent.push(message); return 'Назовите номер терминала'; }, async close() { closed = true; } }; },
+  const agent = await httpAgent(() => 'Назовите номер терминала');
+  const runtime = {
     async selectUserAction(input: unknown, ctx: { beforeCall(): void }) { inputs.push(input); ctx.beforeCall(); if (options.abort) controller.abort(); return decisions.shift(); },
     async userTurn() { throw new Error('Legacy simulator must not receive controlled cards'); },
     async assess() { return []; },
   } as unknown as Runtime;
   const result = await evaluateTrial({ scenario, runtime, revision: { id: 'base', parentId: null, spec: { name: 'Агент', instructions: 'Помогать', tools: [] }, hypothesis: '', createdAt: '' }, repeat: 0, manifestHash: 'frozen', sources, requirements,
-    settings: settingsSchema.parse({ maxTurns: options.maxTurns ?? 3 }), userMode: options.mode ?? 'reactive', target: { kind: 'sandbox' },
-    ctx: { signal: controller.signal, timeoutMs: 1000, beforeCall() { calls++; }, addUsage() {} } });
-  return { result, sent, inputs, calls, closed };
+    settings: settingsSchema.parse({ maxTurns: options.maxTurns ?? 3 }), userMode: options.mode ?? 'reactive', target: agent.target,
+    ctx: { signal: controller.signal, timeoutMs: 1000, beforeCall() { calls++; }, addUsage() {} } }).finally(agent.close);
+  return { result, sent: agent.sent, inputs, calls };
 }
 
 test('compiled accepted card freezes separated execution views and rejects illegal output without target delivery', async () => {
@@ -61,7 +82,7 @@ test('compiled accepted card freezes separated execution views and rejects illeg
   scenario.execution!.userView.policy = policy(); scenario.execution!.userView.facts = facts;
   const result = await evaluate(scenario, [{ actionId: 'answer', factIds: ['hidden'] }, { actionId: 'answer', factIds: ['hidden'] }]);
   assert.equal(result.result.outcome, 'invalid'); assert.match(result.result.reason, /симулятор/i);
-  assert.deepEqual(result.sent, ['Помогите с возвратом']); assert.equal(result.calls, 2); assert.equal(result.closed, true);
+  assert.deepEqual(result.sent, ['Помогите с возвратом']); assert.equal(result.calls, 2);
   assert.equal(result.result.events.filter(e => e.type === 'simulator').length, 2);
   assert.doesNotMatch(JSON.stringify(result.inputs), /evaluatorView|requirementId|environmentView|checkpoint/);
 });
@@ -81,7 +102,7 @@ test('controlled execution preflights finite path and rejects bypass modes witho
     const got = await evaluate(s, [], options); assert.equal(got.result.outcome, 'invalid'); assert.deepEqual(got.sent, []);
   }
   const cancelled = await evaluate(s, [{ actionId: 'answer', factIds: ['number'] }], { abort: true });
-  assert.equal(cancelled.result.outcome, 'cancelled'); assert.deepEqual(cancelled.sent, ['Помогите с возвратом']); assert.equal(cancelled.closed, true);
+  assert.equal(cancelled.result.outcome, 'cancelled'); assert.deepEqual(cancelled.sent, ['Помогите с возвратом']);
 });
 
 test('trusted observation event supports correct refusal without tool calls and state snapshots without prose proof', async () => {
@@ -92,9 +113,11 @@ test('trusted observation event supports correct refusal without tool calls and 
     { ...s.execution!.evaluatorView.checkpoints[0]!, observation: 'tool', check: { id: 'no_mutation', kind: 'tool_not_called', tool: 'update_record', description: 'При корректном отказе изменений нет' } },
     { ...s.execution!.evaluatorView.checkpoints[0]!, id: 'state_unchanged', observation: 'state', check: { id: 'same_state', kind: 'state_equals', recordId: 'item', field: 'status', value: 'pending', description: 'Состояние не изменилось' } },
   ];
-  const runtime = { async openTarget() { return { async respond() { return 'Нет данных для изменения'; }, async close() {} }; }, async selectUserAction() { return { actionId: 'finish', factIds: [] }; },
+  // The agent reports its records, a confirmed reset and complete tool events: the trusted observation the checkpoints need.
+  const agent = await httpAgent(body => ({ reply: 'Нет данных для изменения', records: (body.initialState as { records: unknown }).records, resetConfirmed: true, eventsComplete: true }));
+  const runtime = { async selectUserAction() { return { actionId: 'finish', factIds: [] }; },
     async assessCheckpoints(input: any) { return input.checkpoints.map((c: any) => ({ checkpointId: c.checkpoint.id, result: 'pass', evidence: c.allowedEvidence, rationale: 'Полные наблюдения подтверждают отсутствие изменений' })); } } as Runtime;
-  const trial = await evaluateTrial({ scenario: s, runtime, revision: { id: 'base', parentId: null, spec: { name: 'Агент', instructions: 'Помогать', tools: [] }, hypothesis: '', createdAt: '' }, repeat: 0, manifestHash: 'frozen', sources, requirements, settings: settingsSchema.parse({}), userMode: 'reactive', target: { kind: 'sandbox' }, ctx: { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} } });
+  const trial = await evaluateTrial({ scenario: s, runtime, revision: { id: 'base', parentId: null, spec: { name: 'Агент', instructions: 'Помогать', tools: [] }, hypothesis: '', createdAt: '' }, repeat: 0, manifestHash: 'frozen', sources, requirements, settings: settingsSchema.parse({}), userMode: 'reactive', target: agent.target, ctx: { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} } }).finally(agent.close);
   assert.deepEqual(trial.checkpoints?.map(c => c.result), ['pass', 'pass']);
   assert.ok(trial.events.some(e => e.type === 'observation'));
 });

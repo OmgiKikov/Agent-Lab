@@ -3,12 +3,11 @@ import { checkpointInput, checkpointReceipt, directChecks, evaluateCheckpoints }
 import { createUserState, allowedUserActions, advanceUser, requiredUserTurns } from './user-controller.js';
 import { randomUUID } from 'node:crypto';
 import {
-  assessmentRubrics, emptyUsage, judgeAuditSchema, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
+  assessmentRubrics, emptyUsage, judgeAuditSchema, runnableTarget, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
   type CallContext, type CheckResult, type DialogueMessage, type JudgeAudit, type MetricAssessment, type Requirement, type Revision,
   type Runtime, type Scenario, type Settings, type Source, type Target, type TargetSession, type TraceEvent, type Trial, type UserMode,
 } from './contracts.js';
 import { hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
-import { sandbox } from './sandbox.js';
 import { openExternalTarget } from './targets.js';
 import { simulatorChecks } from './simulator.js';
 
@@ -16,13 +15,13 @@ import { simulatorChecks } from './simulator.js';
  * One trial = one fresh world, one target session, one user side.
  *
  *   opening ──► target.respond ──► [static? budget? done?] ──► next user message ──► target.respond ──► ...
- *      │                                   │ reactive: runtime.userTurn                            │
+ *      │                                   │ library card (execution): runtime.selectUserAction    │
+ *      │                                   │ older card, reactive: runtime.userTurn (free LLM user) │
  *      │                                   │ scripted: user.script[turn]                            │
  *      └────────── every message, tool call/result and user decision → trial.events ◄──────────────┘
  *   end ──► grade(checks) over finalState + events ──► outcome ──► optional rubric assessment
  *
- * Target: sandbox = nested model session with trusted tools mutating the world;
- *         http/module = external agent whose reported events/records feed the same grading.
+ * Target: an external agent (http/module/command) whose reported events/records feed the grading.
  * Invalid = the harness could not measure the agent. Fail = the agent was measured and fell short.
  */
 function freshReadEvidence(events: TraceEvent[]): { passed: boolean; evidence: string } {
@@ -137,14 +136,15 @@ export async function evaluateTrial(input: {
   sources: Source[]; judgeSources?: Source[]; requirements: Requirement[]; settings: Settings; ctx: CallContext; userMode: UserMode; target: Target;
   onStage?(stage: 'target' | 'user' | 'assessment'): void;
 }): Promise<Trial> {
-  const { runtime, revision, scenario, repeat, manifestHash, sources, requirements, settings, ctx, userMode, target, onStage } = input;
+  const { runtime, revision, scenario, repeat, manifestHash, sources, requirements, settings, ctx, userMode, onStage } = input;
+  const target = runnableTarget(input.target);
   const started = performance.now();
   const state = structuredClone(scenario.initialState);
   const trial: Trial = {
     id: randomUUID(), revisionId: revision.id, scenarioId: scenario.id, familyId: scenario.familyId, userMode,
     repeat, split: scenario.split, manifestHash, outcome: 'invalid', reason: '', checks: [], events: [],
     initialState: structuredClone(state), finalState: structuredClone(state), usage: emptyUsage(), elapsedMs: 0,
-    observation: { state: target.kind === 'sandbox' ? 'sandbox' : 'missing', tools: target.kind === 'sandbox' ? 'sandbox' : 'complete' },
+    observation: { state: 'missing', tools: 'complete' },
   };
   const localCtx: CallContext = {
     ...ctx,
@@ -192,38 +192,33 @@ export async function evaluateTrial(input: {
       if (issue) { stage = 'сценарий теста'; throw new Error(issue); }
     }
     onStage?.('target');
-    if (target.kind === 'sandbox') {
-      const tools = sandbox(state, sources, emit, localCtx).filter(tool => revision.spec.tools.includes(tool.name));
-      session = await runtime.openTarget(structuredClone(revision.spec), structuredClone(sources), tools, localCtx);
-    } else {
-      let responseCount = 0;
-      let usageComplete = true;
-      session = await openExternalTarget({ target, sessionId: trial.id, scenarioId: scenario.id, state, history: () => structuredClone(messages), ctx: localCtx,
-        onRecords: () => { reportedState = true; },
-        onReply(reply) {
-          responseCount++;
-          const observation = trial.observation!;
-          observation.state = typeof reply !== 'string' && reply.records !== undefined ? 'reported' : 'missing';
-          if (typeof reply === 'string' || reply.eventsComplete !== true) observation.tools = 'partial';
-          if (typeof reply === 'string' || !reply.usage) {
-            usageComplete = false;
-            if (trial.externalUsage) trial.externalUsage.costUsd = null;
-          }
-          if (typeof reply === 'string') return;
-          if (reply.eventScope) observation.toolScope = observation.toolScope ? observation.toolScope.filter(tool => reply.eventScope!.includes(tool)) : [...reply.eventScope];
-          if (reply.sessionId !== undefined && reply.sessionId !== trial.id || reply.turn !== undefined && reply.turn !== responseCount) throw new Error('Адаптер вернул неверный идентификатор сессии или номер хода.');
-          if (responseCount === 1) observation.resetConfirmed = reply.resetConfirmed;
-          if (reply.version) {
-            if (observation.version && observation.version !== reply.version) throw new Error('Версия внешнего агента изменилась внутри диалога.');
-            observation.version = reply.version;
-          }
-          if (reply.usage) {
-            const usage = trial.externalUsage ??= emptyUsage();
-            usage.calls += reply.usage.calls; usage.inputTokens += reply.usage.inputTokens; usage.outputTokens += reply.usage.outputTokens;
-            usage.costUsd = !usageComplete || usage.costUsd === null || reply.usage.costUsd === null ? null : usage.costUsd + reply.usage.costUsd;
-          }
-        } });
-    }
+    let responseCount = 0;
+    let usageComplete = true;
+    session = await openExternalTarget({ target, sessionId: trial.id, scenarioId: scenario.id, state, history: () => structuredClone(messages), ctx: localCtx,
+      onRecords: () => { reportedState = true; },
+      onReply(reply) {
+        responseCount++;
+        const observation = trial.observation!;
+        observation.state = typeof reply !== 'string' && reply.records !== undefined ? 'reported' : 'missing';
+        if (typeof reply === 'string' || reply.eventsComplete !== true) observation.tools = 'partial';
+        if (typeof reply === 'string' || !reply.usage) {
+          usageComplete = false;
+          if (trial.externalUsage) trial.externalUsage.costUsd = null;
+        }
+        if (typeof reply === 'string') return;
+        if (reply.eventScope) observation.toolScope = observation.toolScope ? observation.toolScope.filter(tool => reply.eventScope!.includes(tool)) : [...reply.eventScope];
+        if (reply.sessionId !== undefined && reply.sessionId !== trial.id || reply.turn !== undefined && reply.turn !== responseCount) throw new Error('Адаптер вернул неверный идентификатор сессии или номер хода.');
+        if (responseCount === 1) observation.resetConfirmed = reply.resetConfirmed;
+        if (reply.version) {
+          if (observation.version && observation.version !== reply.version) throw new Error('Версия внешнего агента изменилась внутри диалога.');
+          observation.version = reply.version;
+        }
+        if (reply.usage) {
+          const usage = trial.externalUsage ??= emptyUsage();
+          usage.calls += reply.usage.calls; usage.inputTokens += reply.usage.inputTokens; usage.outputTokens += reply.usage.outputTokens;
+          usage.costUsd = !usageComplete || usage.costUsd === null || reply.usage.costUsd === null ? null : usage.costUsd + reply.usage.costUsd;
+        }
+      } });
     let userMessage = scenario.user.opening;
     for (let turn = 0; turn < settings.maxTurns; turn += 1) {
       ctx.signal.throwIfAborted();
@@ -239,7 +234,7 @@ export async function evaluateTrial(input: {
       }
       append('assistant', response);
       if (!response.trim()) { trial.reason = 'Испытуемый вернул пустой ответ.'; break; }
-      const serviceMarker = target.kind !== 'sandbox' ? target.serviceReplies?.find(marker => response.includes(marker)) : undefined;
+      const serviceMarker = target.serviceReplies?.find(marker => response.includes(marker));
       if (serviceMarker !== undefined) { trial.reason = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента, ситуация не измерена.`; break; }
       if (controlled && (finalUserReply || controlled.policy.terminalStates.includes(controlled.position))) { stopped = true; break; }
       if (!controlled && (userMode === 'static' || finalUserReply || (scenario.user.maxFollowUps !== undefined && turn >= scenario.user.maxFollowUps))) { stopped = true; break; }
@@ -276,6 +271,7 @@ export async function evaluateTrial(input: {
         userMessage = accepted.message; finalUserReply = accepted.done;
         continue;
       }
+      if (!runtime.userTurn) throw new Error('Среда не поддерживает свободного симулятора пользователя для карточек без управляемой политики.');
       const decision = await runtime.userTurn({ user: structuredClone(scenario.user), messages: structuredClone(messages), turn }, userCtx);
       emit({ type: 'simulator', result: decision });
       const user = userTurnSchema.parse(decision);
@@ -294,11 +290,9 @@ export async function evaluateTrial(input: {
     trial.reason ||= !stopped ? 'Разговор не завершился в отведённое число реплик.' : trial.checks.length === 0
       ? 'Диалог дошёл до конца, но объективных проверок в карточке нет: оценки по рубрикам считаются отдельно.'
       : allPassed ? 'Все объективные проверки пройдены.' : 'Часть объективных проверок провалена.';
-    if (target.kind !== 'sandbox') {
-      trial.reason += reportedState
-        ? ' Состояние сообщил сам агент, доверенный код его не наблюдал.'
-        : ' Состояние внешний агент не сообщил.';
-    }
+    trial.reason += reportedState
+      ? ' Состояние сообщил сам агент, доверенный код его не наблюдал.'
+      : ' Состояние внешний агент не сообщил.';
   } catch (error) {
     if (persistenceFailed) throw persistenceError;
     trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';

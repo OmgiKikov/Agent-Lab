@@ -1,6 +1,6 @@
 ---
 name: agent-builder
-description: Use when the user wants to inspect or test an AI agent, build or review scenarios from owner requirements and logs, reproduce a failure, compare an isolated fix, or evaluate a scenario generator in Agent Lab.
+description: Use when the user wants to inspect or test an AI agent, build or review scenarios from owner requirements and logs, run them against the agent, reproduce a failure, or repeat a set on a new agent version and compare, in Agent Lab.
 ---
 
 # Agent Lab

@@ -222,8 +222,6 @@ export type BoardAction =
   | { type: 'demo' }
   | { type: 'open'; id: string }
   | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat' | 'accept'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number; dialogueOpen?: boolean }
-  /** The owner rewrites one expectation in their own words; the text itself comes from the native editor, never from here. */
-  | { type: 'expect'; scenarioId: string; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; dialogueOpen?: boolean }
   | { type: 'acceptLibrary'; variantIds: string[]; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
   | { type: 'editScenario' | 'variant' | 'removeVariant'; variantId: string; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
   | { type: 'mergeScenarios' | 'splitScenario'; businessScenarioId: string; variantId: string; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
@@ -337,7 +335,6 @@ const viewRow = (row: ResultRow): Line => line(row.text, VIEW_ROLE[row.role].col
 const sectionRow = (row: SectionRow): Line => line(row.text, SECTION_ROLE[row.role].color, SECTION_ROLE[row.role].bold, row.indent);
 
 function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean): Line[] {
-  const profile = record.profiles.find(p => p.id === scenario.profileId);
   const origin = scenario.provenance === 'synthetic' ? 'Синтетическая карточка' : scenario.provenance === 'production' ? 'Из реального диалога' : 'Golden-карточка';
   if (!expanded) return [
     line(scenario.title, 'accent', true),
@@ -347,7 +344,6 @@ function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean
     line(`Успех: ${scenario.successCriteria || scenario.checks.map(c => c.description).join('; ') || 'По рубрикам ниже.'}`),
     ...scenario.checks.map(c => line(`Проверяется: ${describeCheck(c)}`)),
     line(''), line(`${origin} · ${tierLabels[scenario.tier]} · ${scenario.checks.length} точных проверок · ${scenario.metrics?.length ?? 0} рубрик`, 'muted'),
-    ...(profile ? [line(`Профиль ${profile.id}${profile.draftOverride ? ' · правка черновика' : ''}`, 'muted')] : []),
     line('d — пользователь, факты, поведение и все критерии', 'muted'),
   ];
   const rows = [
@@ -355,7 +351,6 @@ function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean
     line(`${scenario.id} · ${tierLabels[scenario.tier] ?? scenario.tier} · ${scenario.provenance === 'synthetic' ? 'Синтетическая карточка' : scenario.provenance === 'production' ? 'Из реального диалога' : 'Golden-карточка'}${record.workflow !== 'evaluate' ? ` · ${scenario.split === 'control' ? 'Контроль: скрыт от билдера' : 'Разработка'}` : ''}`, 'muted'),
     line(''), line('ПОЛЬЗОВАТЕЛЬ', 'accent'),
     line(scenario.user.persona || 'Без персоны · по цели, фактам и поведению'),
-    ...(profile ? [line(`Профиль ${profile.id} · ${profile.source === 'owner' ? 'задан владельцем' : 'legacy-данные'}${profile.draftOverride ? ' · правка черновика' : ''}`, 'muted')] : []),
     ...(scenario.user.characteristics ?? []).map(v => line(`• ${v}`)),
     line(`Цель: ${scenario.user.goal}`), line(`Поведение: ${scenario.user.behavior}`),
     ...(scenario.user.knows ?? []).map(v => line(`Известно: ${v}`)),
@@ -376,11 +371,6 @@ function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean
     ...(scenario.assumptions?.length ? scenario.assumptions.map(v => line(`• ${v}`)) : [line('Не указаны', 'muted')]),
   ];
   if (expanded) rows.push(
-    ...(profile ? [line(''), line('ИСХОДНЫЙ ПРОФИЛЬ', 'accent'), line(profile.persona ?? 'Без персоны'),
-      ...profile.characteristics.map(v => line(`• ${v}`)), ...(profile.observedStyle ? [line(profile.observedStyle, 'muted')] : []),
-      ...profile.evidenceDialogueIds.flatMap(id => [line(`Диалог ${id}`, 'muted'),
-        ...record.dialogues.find(d => d.id === id)?.messages.filter(m => m.role === 'user').map(m => line(`«${m.content}»`)) ?? []]),
-    ] : []),
     line(''), line('ОСНОВАНИЯ В МАТЕРИАЛАХ', 'accent'),
     ...record.requirements.filter(r => scenario.requirementIds.includes(r.id)).flatMap(r => [
       line(`${r.id} · ${r.text}`, 'text', true),
@@ -676,7 +666,7 @@ export class LabBoard implements Component {
         ? { text: 'Ожидание изменено после подтверждения. y — подтвердить снова.', color: 'warning' }
         : { text: 'Черновик изменился после подтверждения. y — подтвердить снова.', color: 'warning' };
     }
-    return { text: `Проверьте ожидания: ${sheet.countText}. y — подтвердить все · e — поправить выбранную.`, color: 'warning' };
+    return { text: `Проверьте ожидания: ${sheet.countText}. y — подтвердить все.`, color: 'warning' };
   }
   /**
    * The draft's key hints, cut to the terminal (UI-SPEC «Footer, first line»): every label is a verb
@@ -690,10 +680,9 @@ export class LabBoard implements Component {
     const sheet = this.sheet();
     if (record.questions.length || !sheet?.count) return `a Правка словами · ${record.questions.length ? 'Ответьте на вопросы' : 'r Запустить'}`;
     const confirmed = record.acceptedDraftHash === sheet.draftHash;
-    if (inner >= 85) return 'a Правка словами · y Подтвердить ожидания · e Поправить ожидание · r Запустить прогон';
-    if (inner >= 61) return 'y Подтвердить всё · e Поправить ожидание · r Запустить прогон';
-    if (inner >= 41) return confirmed ? 'r Запустить прогон · e Поправить ожидание' : 'y Подтвердить всё · e Поправить ожидание';
-    return confirmed ? 'r Запустить прогон · e Изменить одно' : 'y Подтвердить всё · e Изменить одно';
+    if (inner >= 85) return 'a Правка словами · y Подтвердить ожидания · r Запустить прогон';
+    if (inner >= 61) return 'y Подтвердить всё · r Запустить прогон';
+    return confirmed ? 'r Запустить прогон' : 'y Подтвердить всё';
   }
   /** The supplied view when it describes the shown run; otherwise a fresh one, so a stale view is never shown. */
   private viewFor(record: Experiment): ResultView {
@@ -826,10 +815,9 @@ export class LabBoard implements Component {
         : key('o') && this.options.reportPath ? 'openReport'
         : key('c') && activePhases.has(this.record.phase) ? 'cancel' : undefined;
       if (type) return this.finish({ type, ...state });
-      // TRUST-10/11 (UI-D-01): the expectation sheet is the only scope of `y` and `e`; outside it they do nothing.
+      // TRUST-10 (UI-D-01): the expectation sheet is the only scope of `y`; outside it it does nothing.
       const sheetScope = !libraryPath && editable && this.section === 'cards' && !this.record.questions.length && this.record.scenarios.length > 0;
       if (sheetScope && key('y')) return this.finish({ type: 'accept', ...state });
-      if (sheetScope && key('e') && entry) return this.finish({ type: 'expect', ...state, scenarioId: entry.id });
       if (key('enter') && !this.expanded) {
         if (sheetScope) return this.finish({ type: this.sheet()?.draftHash === this.record.acceptedDraftHash ? 'run' : 'accept', ...state });
         if (libraryPath && editable && this.section === 'cards' && this.selectedVariantIds.length) return this.finish({ type: 'acceptLibrary', ...state, variantIds: [...this.selectedVariantIds] });
@@ -972,7 +960,7 @@ export class LabBoard implements Component {
       detail = runRows(record, this.selectedVariantIds).map(row => line(row.text, row.color, row.bold));
     }
     if (this.options.warnings?.length) detail.push(line(''), line('ДИАГНОСТИКА', 'warning'), ...this.options.warnings.map(w => line(w, 'warning')));
-    if (this.help) { detail = [line('КЛАВИШИ', 'accent', true), line(record?.librarySnapshot ? '1 Логи · 2 Сценарии · 3 Прогон · 4 Результаты · Tab — следующий раздел' : '1 Итог · 2 Ожидания · 3 Разбор · Tab — следующий раздел'), line('Enter — следующее действие, написанное внизу экрана'), line('d — раскрыть источники, инструменты и состояния'), line('a — правка или разбор словами с Pi · n в истории — новая проверка'), line('↑ ↓ или j k — выбрать ситуацию или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), ...(record?.librarySnapshot ? [line('Space — выбрать вариант · y — принять выбранные без запуска'), line('e — изменить текст или факт · v — целевой вариант · m/s — объединить/разделить'), line('g — смысловая проверка · b — увеличить бюджет · r — запуск после принятия')] : [line('y / n / s — согласен с судьёй / не согласен / не могу сказать'), line('n — спросит причину · v — оценить критерий или весь диалог'), line('r — запустить черновик или создать повтор готового прогона'), line('y — подтвердить все ожидания · e — поправить ожидание выбранной ситуации')]), line('x — экспортировать · c — остановить запуск с подтверждением'), line('Esc — назад · q — закрыть доску; прогон продолжится, пока открыт Pi'), line(''), line('Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.', 'muted'), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')]; this.sheetAnchor = undefined; }
+    if (this.help) { detail = [line('КЛАВИШИ', 'accent', true), line(record?.librarySnapshot ? '1 Логи · 2 Сценарии · 3 Прогон · 4 Результаты · Tab — следующий раздел' : '1 Итог · 2 Ожидания · 3 Разбор · Tab — следующий раздел'), line('Enter — следующее действие, написанное внизу экрана'), line('d — раскрыть источники, инструменты и состояния'), line('a — правка или разбор словами с Pi · n в истории — новая проверка'), line('↑ ↓ или j k — выбрать ситуацию или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), ...(record?.librarySnapshot ? [line('Space — выбрать вариант · y — принять выбранные без запуска'), line('e — изменить текст или факт · v — целевой вариант · m/s — объединить/разделить'), line('g — смысловая проверка · b — увеличить бюджет · r — запуск после принятия')] : [line('y / n / s — согласен с судьёй / не согласен / не могу сказать'), line('n — спросит причину · v — оценить критерий или весь диалог'), line('r — запустить черновик или создать повтор готового прогона'), line('y — подтвердить все ожидания')]), line('x — экспортировать · c — остановить запуск с подтверждением'), line('Esc — назад · q — закрыть доску; прогон продолжится, пока открыт Pi'), line(''), line('Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.', 'muted'), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')]; this.sheetAnchor = undefined; }
     const content = wrapRows(detail, inner).map(paint);
     // The selected situation starts the body, so its expectation and rules are read without scrolling.
     if (this.followSelection && this.sheetAnchor !== undefined) this.scroll = wrapRows(detail.slice(0, this.sheetAnchor), inner).length;
