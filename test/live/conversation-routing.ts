@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { createAgentSession, getAgentDir, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import agentLab from '../../extensions/agent-lab.ts';
 import { scenarioToolSurfaces } from '../../extensions/scenario-parameters.ts';
-import { ExperimentLab } from '../../dist/experiment.js';
-import { createInputSchema, type Runtime } from '../../dist/contracts.js';
-import { createDemoRuntime } from '../../dist/demo.js';
+import { ExperimentLab } from '../../src/experiment.js';
+import { createInputSchema, type Runtime } from '../../src/contracts.js';
+import { createDemoRuntime } from '../../src/demo.js';
 import { coverageProposals, rawDialogues, requirements, sources } from '../helpers/scenario-library.js';
 
 if (!process.argv.includes('--run')) throw new Error('This uses provider credits. Run deliberately with --run.');

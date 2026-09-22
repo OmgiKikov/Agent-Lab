@@ -1,14 +1,14 @@
 import type { ExtensionContext, Theme, ThemeColor } from '@earendil-works/pi-coding-agent';
 import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
-import type { Experiment, Scenario, Trial } from '../dist/contracts.js';
-import { describeCheck, fingerprint } from '../dist/contracts.js';
-import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../dist/comparison.js';
-import { expectationSheet, qualitySummary, qualityLines, type ExpectationRole, type ExpectationSheet } from '../dist/quality.js';
-import { agreementSample, judgeAgreement, type JudgeAgreement } from '../dist/agreement.js';
-import { GOAL_METRIC_ID, headlineMetricIds, markTargets, measurementUsable, recordedResult, RULES_METRIC_ID } from '../dist/outcomes.js';
-import type { EvidenceBundle } from '../dist/artifacts.js';
-import { situationEvidence } from '../dist/explain.js';
-import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, pluralForm, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../dist/result-view.js';
+import type { Experiment, Scenario, Trial } from '../src/contracts.js';
+import { describeCheck, fingerprint } from '../src/contracts.js';
+import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../src/comparison.js';
+import { expectationSheet, qualitySummary, qualityLines, type ExpectationRole, type ExpectationSheet } from '../src/quality.js';
+import { agreementSample, judgeAgreement, type JudgeAgreement } from '../src/agreement.js';
+import { GOAL_METRIC_ID, headlineMetricIds, markTargets, measurementUsable, recordedResult, RULES_METRIC_ID } from '../src/outcomes.js';
+import type { EvidenceBundle } from '../src/artifacts.js';
+import { situationEvidence } from '../src/explain.js';
+import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, pluralForm, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../src/result-view.js';
 import { activeRunRows, preparationRows, progressLine } from './flow.ts';
 import { pendingLibrarySelection, logsRows, runRows, scenarioEntries, scenarioRows } from './scenarios.ts';
 

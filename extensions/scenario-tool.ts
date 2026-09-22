@@ -2,23 +2,23 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { scenarioParameters, scenarioToolSurfaces } from './scenario-parameters.ts';
-import { ExperimentLab, draftHash } from '../dist/experiment.js';
+import { ExperimentLab, draftHash } from '../src/experiment.js';
 import type { AgentToolResult, ToolDefinition } from '@earendil-works/pi-coding-agent';
-import type { ResultView } from '../dist/result-view.js';
+import type { ResultView } from '../src/result-view.js';
 import type { FeedRef } from './render/feed.ts';
 import type { LabLease } from './operations.ts';
-import type { Experiment } from '../dist/contracts.js';
-import { libraryHash, resolutionHash } from '../dist/scenario-library.js';
-import { chooseEditableDraft, draftIsBusy } from '../dist/scenario-draft.js';
-import { semanticWorkStatus } from '../dist/scenario-work.js';
+import type { Experiment } from '../src/contracts.js';
+import { libraryHash, resolutionHash } from '../src/scenario-library.js';
+import { chooseEditableDraft, draftIsBusy } from '../src/scenario-draft.js';
+import { semanticWorkStatus } from '../src/scenario-work.js';
 import { activePhases, safeText } from './cards.ts';
 import { scenarioLibrarySummary } from './scenarios.ts';
 import { ACCEPTANCE_PAGE, acceptanceLines, authorize, changeRows, checkRow, deriveVariantInput, disputedCheckpoints, ownerRemarks, ownerQuestions, sharedOwnerQuestions, plainIssue, libraryFeed, orderedVariants, ownerBasis, ownerMessages,
   planLines, referenceProblem, referenceQuestion, resolveFact, resolveGroup, resolveVariant, semanticDebt, stateRows, variantDiff, variantFeed, variantNumber,
   type CheckOutcome, type Feed } from './conversation.ts';
 import type { InstructionObjects } from './conversation.ts';
-import type { LibraryPatch, ScenarioLibrary, ScenarioVariant } from '../dist/scenario-contracts.js';
-import type { VariantOperation } from '../dist/scenario-variants.js';
+import type { LibraryPatch, ScenarioLibrary, ScenarioVariant } from '../src/scenario-contracts.js';
+import type { VariantOperation } from '../src/scenario-variants.js';
 import type { SessionOperations, SessionOperation as Job } from './operations.ts';
 import { DIFF_FIELD, displayFor, inputError, needsOwner, returnToBoard, row, shortRun } from './lab-ui.ts';
 

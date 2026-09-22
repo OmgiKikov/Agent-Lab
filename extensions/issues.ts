@@ -2,10 +2,10 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { matchesKey, stripTerminalSequences, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import type { ExperimentLab } from '../dist/experiment.js';
-import { fingerprint, type Experiment } from '../dist/contracts.js';
-import { diagnosticCapability, type Intervention } from '../dist/diagnostics.js';
-import { diagnosticText, issueEvidenceText, trialText, resolutionText, resolutionRunText } from '../dist/issue-view.js';
+import type { ExperimentLab } from '../src/experiment.js';
+import { fingerprint, type Experiment } from '../src/contracts.js';
+import { diagnosticCapability, type Intervention } from '../src/diagnostics.js';
+import { diagnosticText, issueEvidenceText, trialText, resolutionText, resolutionRunText } from '../src/issue-view.js';
 const clean = (text: string) => stripTerminalSequences(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '');
 async function choose<T>(ctx: ExtensionContext, title: string, values: T[], label: (value: T) => string): Promise<T | undefined> {
   let offset = 0;

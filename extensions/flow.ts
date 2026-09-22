@@ -1,5 +1,5 @@
-import type { Experiment } from '../dist/contracts.js';
-import { plannedTrials } from '../dist/comparison.js';
+import type { Experiment } from '../src/contracts.js';
+import { plannedTrials } from '../src/comparison.js';
 
 /** Presentation only: all counts and states come from the current record. */
 export interface FlowRow { text: string; color?: 'accent' | 'text' | 'muted' | 'warning' | 'success'; bold?: boolean }

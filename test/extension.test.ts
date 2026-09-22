@@ -9,7 +9,7 @@ import { DefaultResourceLoader, SettingsManager, type ExtensionAPI, type Extensi
 import { stripTerminalSequences, type Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
-import { ExperimentLab, draftHash, planDiscovery } from '../dist/experiment.js';
+import { ExperimentLab, draftHash, planDiscovery } from '../src/experiment.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { createInputSchema, goalAttainment, promptCompliance, type Experiment } from '../src/contracts.js';
 import { resultHash } from '../src/experiment.js';

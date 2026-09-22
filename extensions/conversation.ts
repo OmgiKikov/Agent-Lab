@@ -1,11 +1,11 @@
-import type { Experiment, Trial } from '../dist/contracts.js';
-import { valueTokens } from '../dist/contracts.js';
-import { plannedTrials, type RunComparison } from '../dist/comparison.js';
-import type { ScenarioLibrary, ScenarioVariant } from '../dist/scenario-contracts.js';
-import { resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../dist/scenario-library.js';
-import type { VariantFieldDiff, VariantOperation } from '../dist/scenario-variants.js';
-import { semanticWorkStatus } from '../dist/scenario-work.js';
-import { shortId, type ResultView } from '../dist/result-view.js';
+import type { Experiment, Trial } from '../src/contracts.js';
+import { valueTokens } from '../src/contracts.js';
+import { plannedTrials, type RunComparison } from '../src/comparison.js';
+import type { ScenarioLibrary, ScenarioVariant } from '../src/scenario-contracts.js';
+import { resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../src/scenario-library.js';
+import type { VariantFieldDiff, VariantOperation } from '../src/scenario-variants.js';
+import { semanticWorkStatus } from '../src/scenario-work.js';
+import { shortId, type ResultView } from '../src/result-view.js';
 import { GLYPH, type Row } from './render/theme.ts';
 
 /*
@@ -57,8 +57,8 @@ export function ungroundedValues(text: string, allowed: string[]): string[] {
 }
 
 /**
- * True when `text` is a contiguous phrase inside one source, after the same folding as quotes.
- * This locates text, never proves intent or authorizes an owner receipt.
+ * True when `text` is a run of whole words inside one source, after the same folding as quotes, and
+ * the owner did not say it right after a standalone «не». This locates text, never proves intent.
  */
 export function verbatimSpan(text: string, sources: string[]): boolean {
   const folded = fold(text);
@@ -68,7 +68,7 @@ export function verbatimSpan(text: string, sources: string[]): boolean {
     const index = normalized.indexOf(folded);
     return index >= 0 && (index === 0 || normalized[index - 1] === ' ')
       && (index + folded.length === normalized.length || normalized[index + folded.length] === ' ')
-      && !normalized.slice(0, index).trimEnd().endsWith('не');
+      && normalized.slice(0, index).trimEnd().split(' ').at(-1) !== 'не';
   });
 }
 
@@ -187,35 +187,17 @@ export function referenceQuestion(ref: string, resolved: { kind: 'none' } | { ki
 /* ───────────────────────────── one-sentence variants ───────────────────────────── */
 
 const factLabel = (statement: string): string => { const at = statement.indexOf(':'); return (at > 0 ? statement.slice(0, at) : statement).trim(); };
-
-const splitMarks = (text: string, marks: string): string[] => {
-  const parts: string[] = [];
-  let buf = '';
-  for (const ch of text) {
-    buf += ch;
-    if (marks.includes(ch)) { parts.push(buf); buf = ''; }
-  }
-  if (buf) parts.push(buf);
-  return parts;
-};
-
-/** The opening without the piece that reveals `value`. */
-export function openingWithout(opening: string, value: string): string {
-  if (!value || !fold(opening).includes(fold(value))) return opening;
-  const mentions = (part: string): boolean => fold(part).includes(fold(value));
-  const kept = splitMarks(opening, '.!?\n').filter(sentence => !mentions(sentence)).join('').trim();
-  if (kept) return kept;
-  const rest = splitMarks(opening, ',;').filter(part => !mentions(part)).map(part => part.replace(/[,;\s]+$/, '').trim()).filter(Boolean);
-  return rest.join(', ');
-}
+const withoutFinalDots = (text: string): string => { let out = text.trim(); while (out.endsWith('.')) out = out.slice(0, -1).trimEnd(); return out; };
+const mentions = (text: string, value: string): boolean => !!value && fold(text).includes(fold(value));
 
 export interface VariantHints { fact?: string; opening?: string; ifAsked?: string; reply?: string; missingDescription?: string; intent?: string; afterAction?: string; failures?: number }
 export type DerivedVariant = { kind: 'ready'; input: Record<string, unknown> } | { kind: 'ask'; message: string };
 
 /**
  * The `input` of a targeted variant, taken from the parent card wherever the card already answers:
- * which fact, the opening without its value, how the agent's request is recognised and what the
- * missing data is called. The owner is asked only for what neither the request nor the card holds.
+ * which fact, how the agent's request is recognised and what the missing data is called. The opening
+ * is never cut apart here: when the parent's opening says the value, the model proposes a new opening
+ * that keeps the request, and this only checks the value is gone.
  */
 export function deriveVariantInput(parent: ScenarioVariant, operation: VariantOperation, hints: VariantHints): DerivedVariant {
   if (operation === 'reveal_on_request' || operation === 'missing_fact') {
@@ -226,9 +208,13 @@ export function deriveVariantInput(parent: ScenarioVariant, operation: VariantOp
     const fact = chosen.item;
     const label = factLabel(fact.statement);
     const value = fact.value === undefined ? '' : String(fact.value);
-    const missingDescription = (hints.missingDescription ?? (value ? openingWithout(label, value) || label : label)).replace(/[.\s]+$/, '');
+    const opening = hints.opening ?? parent.userState.opening;
+    if (mentions(opening, value)) return { kind: 'ask', message: hints.opening
+      ? `Предложенная первая реплика всё ещё называет «${value}». Передайте в opening реплику без этого значения, сохранив сам запрос клиента.`
+      : `Первая реплика карточки называет «${value}». Передайте в opening ту же просьбу клиента без этого значения, например покажите владельцу вариант формулировки.` };
+    const missingDescription = withoutFinalDots(hints.missingDescription ?? label);
     return { kind: 'ready', input: {
-      factId: fact.id, opening: hints.opening ?? openingWithout(parent.userState.opening, value),
+      factId: fact.id, opening,
       ifAsked: hints.ifAsked ?? `Агент запросил: ${label}`,
       ...(hints.reply ? { reply: hints.reply } : {}),
       ...(operation === 'missing_fact' ? { missingDescription } : {}),
@@ -268,18 +254,20 @@ const phaseWord: Record<string, string> = {
   cancelled: 'остановлен', error: 'ошибка', interrupted: 'прерван', baseline: 'идёт прогон', improving: 'идёт прогон', control: 'идёт прогон',
 };
 
-const CHECKER_WORDS: [string, string][] = [
-  ['ownerFactEvidence отсутствует', 'владелец этого не подтверждал'], ['ownerFactEvidence', 'подтверждение владельца'],
-  ['checkpoints', 'проверки'], ['checkpoint', 'проверка'], ['learned_in_source', 'узнал только в старом разговоре'], ['initial', 'знал заранее'],
-  ['uncertain', 'неясно'], ['ответом missing', 'ответом «данных нет»'], ['missing', '«данных нет»'],
-];
+/** Internal field and enum names the checker sometimes writes into a remark, as the owner says them. Whole words only. */
+const CHECKER_WORDS = new Map([
+  ['ownerFactEvidence', 'подтверждение владельца'], ['checkpoints', 'проверки'], ['checkpoint', 'проверка'],
+  ['learned_in_source', 'узнал только в старом разговоре'], ['initial', 'знал заранее'], ['uncertain', 'неясно'], ['missing', '«данных нет»'],
+]);
+const WORDS = new Intl.Segmenter('ru', { granularity: 'word' });
+const ownerWords = (text: string): string => Array.from(WORDS.segment(text), ({ segment, isWordLike }) => isWordLike ? CHECKER_WORDS.get(segment) ?? segment : segment).join('');
 
 /** A checker remark as the owner can act on it. The stored remark is not changed. */
 export function plainIssue(library: ScenarioLibrary, variant: ScenarioVariant, issue: { path: string; message: string }): string {
   let text = issue.message;
   for (const other of library.variants) if (other.id.length >= 6) text = text.split(other.id).join(`«${other.title}»`);
   for (const fact of variant.userState.facts) if (fact.id.length >= 6) text = text.split(fact.id).join(`«${fact.statement}»`);
-  for (const [from, word] of CHECKER_WORDS) text = text.split(from).join(word);
+  text = ownerWords(text);
   const checkpointId = issue.path.split('.checkpoints.')[1]?.split('.')[0];
   const checkpoint = checkpointId ? variant.evaluationSpec.checkpoints.find(item => item.id === checkpointId) : undefined;
   const factId = issue.path.split('.facts.')[1]?.split('.')[0];

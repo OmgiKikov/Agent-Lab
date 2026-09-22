@@ -6,16 +6,16 @@ import { before, test } from 'node:test';
 import { initTheme, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, type Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
-import { authorize, planLines, changeRows, deriveVariantInput, openingWithout, ownerBasis, ownerMessages, plainIssue, resolveVariant, variantDiff } from '../extensions/conversation.ts';
+import { authorize, planLines, changeRows, deriveVariantInput, ownerBasis, ownerMessages, plainIssue, verbatimSpan, resolveVariant, variantDiff } from '../extensions/conversation.ts';
 import { callText, forgetFeeds } from '../extensions/render/feed.ts';
-import { ExperimentLab } from '../dist/experiment.js';
-import { recordSemanticAssessment, semanticPaths } from '../dist/scenario-library.js';
-import { createInputSchema, type Runtime } from '../dist/contracts.js';
-import { createDemoRuntime } from '../dist/demo.js';
-import { acceptLibrary, compileLibrary, editLibrary, libraryHash, librarySnapshot, ownerFactEvidence, resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../dist/scenario-library.js';
-import { scenarioLibrarySchema } from '../dist/scenario-contracts.js';
-import { assertLibraryRun } from '../dist/scenario-preparation.js';
-import { ExperimentStore } from '../dist/store.js';
+import { ExperimentLab } from '../src/experiment.js';
+import { recordSemanticAssessment, semanticPaths } from '../src/scenario-library.js';
+import { createInputSchema, type Runtime } from '../src/contracts.js';
+import { createDemoRuntime } from '../src/demo.js';
+import { acceptLibrary, compileLibrary, editLibrary, libraryHash, librarySnapshot, ownerFactEvidence, resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../src/scenario-library.js';
+import { scenarioLibrarySchema } from '../src/scenario-contracts.js';
+import { assertLibraryRun } from '../src/scenario-preparation.js';
+import { ExperimentStore } from '../src/store.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 import { libraryFixture, coverageProposals as proposals, rawDialogues, requirements, sources } from './helpers/scenario-library.js';
 
@@ -136,6 +136,8 @@ test('owner words come only from user entries of the session, and an edit is rec
   assert.equal(ownerBasis(said, 'собери   СЦЕНАРИИ')?.source, 'quote', 'a quote is matched without case and spacing');
   assert.equal(ownerBasis(said, 'номер 9999')?.source, 'latest', 'model text is never found as an owner quote');
   assert.equal(ownerBasis([]), null);
+  assert.equal(verbatimSpan('кнопка Оплатить', ['на экране кнопка Оплатить']), true, 'a word that merely ends in «не» is not a negation');
+  assert.equal(verbatimSpan('меняй номер', ['Не меняй номер на 5678']), false, 'a phrase right after a standalone «не» is not the owner asking for it');
 });
 
 test('draft authorship does not certify model wording as an owner decision', () => {
@@ -190,10 +192,12 @@ test('cards are found by number, title and id; an unclear reference returns cand
 test('a one-sentence variant takes the fact, the opening and the conditions from the parent card', () => {
   const parent = libraryFixture().variants[0]!;
   parent.userState.opening = 'Помогите с возвратом. Номер терминала: 1234';
-  const derived = deriveVariantInput(parent, 'missing_fact', {});
+  assert.equal(deriveVariantInput(parent, 'missing_fact', {}).kind, 'ask', 'an opening that says the value is not cut apart: the model proposes a new one');
+  assert.equal(deriveVariantInput(parent, 'missing_fact', { opening: 'Помогите с возвратом, терминал 1234' }).kind, 'ask', 'a proposed opening that still says the value is refused');
+  const derived = deriveVariantInput(parent, 'missing_fact', { opening: 'Помогите с возвратом.' });
   assert.deepEqual(derived, { kind: 'ready', input: { factId: 'terminal_number', opening: 'Помогите с возвратом.', ifAsked: 'Агент запросил: Номер терминала', missingDescription: 'Номер терминала' } });
-  assert.equal(openingWithout('Нужна помощь, номер терминала: 1234', '1234'), 'Нужна помощь');
-  assert.equal(openingWithout('Добрый день, терминал 1234, нужен возврат покупателю', '1234'), 'Добрый день, нужен возврат покупателю', 'the clause that carries the value goes as a whole');
+  const quiet = structuredClone(parent); quiet.userState.opening = 'Здравствуйте! Мой терминал не печатает чеки';
+  assert.equal((deriveVariantInput(quiet, 'reveal_on_request', {}) as { input: { opening: string } }).input.opening, 'Здравствуйте! Мой терминал не печатает чеки', 'the request itself is kept whole');
   assert.equal(deriveVariantInput(parent, 'changed_intent', {}).kind, 'ask', 'a new intention is a business decision of the owner');
   const twoFacts = structuredClone(parent);
   twoFacts.userState.facts.push({ ...parent.userState.facts[0]!, id: 'contract', statement: 'Номер договора: 5678', value: '5678' });
@@ -821,7 +825,9 @@ test('checker remarks reach the owner in plain words: titles instead of ids, the
   assert.equal(plainIssue(library, card, { path: 'variants.variant_1.duplicates', message: 'Среди кандидатов variant_2 семантически эквивалентен.' }),
     'Похоже на дубль: Среди кандидатов «Возврат 2» семантически эквивалентен.');
   assert.equal(plainIssue(library, card, { path: 'variants.variant_1.evaluationSpec.checkpoints.ask_terminal', message: 'Неприменим: checkpoint предполагает номер; ownerFactEvidence отсутствует.' }),
-    'Проверка «Агент уточнил номер терминала»: Неприменим: проверка предполагает номер; владелец этого не подтверждал.');
+    'Проверка «Агент уточнил номер терминала»: Неприменим: проверка предполагает номер; подтверждение владельца отсутствует.');
+  assert.equal(plainIssue(library, card, { path: 'variants.variant_1.userState', message: 'initialState содержит missingDescription и checkpointHash' }),
+    'initialState содержит missingDescription и checkpointHash', 'identifiers that merely contain a glossary word stay intact');
   assert.equal(plainIssue(library, card, { path: 'variants.variant_1.userState.facts.terminal_number', message: 'Классификация initial требует подтверждения.' }),
     'Факт «Номер терминала: 1234»: Классификация знал заранее требует подтверждения.');
 });

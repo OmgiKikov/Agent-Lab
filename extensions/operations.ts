@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ExperimentLab } from '../dist/experiment.js';
+import { ExperimentLab } from '../src/experiment.js';
 
 export type OperationKind = 'run' | 'preparation' | 'assessment';
 export interface LabLease { directory: string; lab: ExperimentLab; close(): Promise<void> }

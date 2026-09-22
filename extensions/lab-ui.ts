@@ -1,8 +1,8 @@
 import type { AgentToolResult, ExtensionContext, Theme, ToolDefinition, ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
 import { Text, type Component } from '@earendil-works/pi-tui';
 import { safeText, type Section } from './cards.ts';
-import type { Experiment } from '../dist/contracts.js';
-import { libraryHash } from '../dist/scenario-library.js';
+import type { Experiment } from '../src/contracts.js';
+import { libraryHash } from '../src/scenario-library.js';
 import { callText, renderFeedResult } from './render/feed.ts';
 import type { Feed } from './conversation.ts';
 import { renderAgentLabResult } from './render/verdict-block.ts';

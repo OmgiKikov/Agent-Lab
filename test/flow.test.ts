@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { rm } from 'node:fs/promises';
 import { activeRunRows, preparationRows, progressLine } from '../extensions/flow.ts';
 import { LabBoard, type BoardAction } from '../extensions/cards.ts';
-import { draftHash } from '../dist/experiment.js';
+import { draftHash } from '../src/experiment.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 
 const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };

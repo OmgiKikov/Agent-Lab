@@ -1,7 +1,7 @@
-import type { Experiment } from '../dist/contracts.js';
-import type { ScenarioLibrary, ScenarioVariant } from '../dist/scenario-contracts.js';
-import { libraryHash } from '../dist/scenario-library.js';
-import { semanticWorkStatus } from '../dist/scenario-work.js';
+import type { Experiment } from '../src/contracts.js';
+import type { ScenarioLibrary, ScenarioVariant } from '../src/scenario-contracts.js';
+import { libraryHash } from '../src/scenario-library.js';
+import { semanticWorkStatus } from '../src/scenario-work.js';
 import type { FlowRow } from './flow.ts';
 
 const r = (text: string, color?: FlowRow['color'], bold = false): FlowRow => ({ text, color, bold });

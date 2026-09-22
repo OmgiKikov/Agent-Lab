@@ -12,6 +12,7 @@
   },
   "files": [
     "dist",
+    "src",
     "extensions",
     "skills",
     "examples",

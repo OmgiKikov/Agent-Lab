@@ -1,8 +1,8 @@
 import { keyHint, type Theme } from '@earendil-works/pi-coding-agent';
 import { Text, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 import type { AgentToolResult, ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
-import { verdictBlockRows } from '../../dist/verdict.js';
-import { shortId, type ResultView } from '../../dist/result-view.js';
+import { verdictBlockRows } from '../../src/verdict.js';
+import { shortId, type ResultView } from '../../src/result-view.js';
 import { safeText } from '../cards.ts';
 import { renderRows, type PaintTheme, type Row } from './theme.ts';
 

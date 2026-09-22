@@ -1,6 +1,6 @@
 import { Type } from 'typebox';
 import { z } from 'zod';
-import { behaviorPolicySchema, variantProposalSchema, type BehaviorPolicy, type ScenarioVariant } from '../dist/scenario-contracts.js';
+import { behaviorPolicySchema, variantProposalSchema, type BehaviorPolicy, type ScenarioVariant } from '../src/scenario-contracts.js';
 
 // Internal superset for the dispatcher. The model receives only the matching operation branch.
 export const scenarioParameters = Type.Object({
