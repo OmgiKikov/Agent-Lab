@@ -41,6 +41,7 @@ export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
   turn_limit: 'разговор не уложился в лимит реплик',
   simulator_error: 'сбой симулятора',
   agent_error: 'сбой агента или связи',
+  service_reply: 'стенд ответил служебным текстом, не агент',
   attempts_mismatch: 'запись ситуации неполная',
   judge_error: 'судья ответил не по формату',
   judge_stopped: 'оценка прервана: кончились время или бюджет',

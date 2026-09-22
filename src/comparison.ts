@@ -590,7 +590,7 @@ export function goalCardOutcome(record: Experiment, scenario: Scenario): 'pass' 
  * leave a card `unknown` and the tie-break when two reasons are equally frequent.
  */
 export const NOT_MEASURED_CODES = [
-  'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'attempts_mismatch',
+  'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'service_reply', 'attempts_mismatch',
   'judge_error', 'judge_stopped', 'human_invalid', 'reset_unconfirmed', 'simulator_deviated', 'simulator_unclear',
   'human_unknown', 'not_judged', 'judge_split', 'no_evidence', 'judge_unclear',
 ] as const;
@@ -599,6 +599,7 @@ export type NotMeasuredCode = typeof NOT_MEASURED_CODES[number];
 // Prefixes of reasons written by evaluation.ts and experiment.ts.
 const TURN_LIMIT_REASON = 'Разговор не завершился в отведённое число реплик.';
 const SIMULATOR_STAGE_REASON = 'реплика симулированного пользователя:';
+export const SERVICE_REPLY_REASON = 'Стенд ответил служебным текстом';
 const CODE_ONLY_ASSESSMENT = 'Только точные проверки';
 
 /** Why one attempt leaves the card without a verdict; `ids` are the headline metrics whose undecided votes are explained. */
@@ -607,7 +608,7 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids:
   const latest = latestHumanReviews({ trials: [trial], humanReviews: record.humanReviews });
   if (trial.outcome === 'cancelled') codes.push('stopped');
   else if (trial.outcome === 'invalid') codes.push(trial.reason.startsWith(TURN_LIMIT_REASON) ? 'turn_limit'
-    : trial.reason.startsWith(SIMULATOR_STAGE_REASON) ? 'simulator_error' : 'agent_error');
+    : trial.reason.startsWith(SIMULATOR_STAGE_REASON) ? 'simulator_error' : trial.reason.startsWith(SERVICE_REPLY_REASON) ? 'service_reply' : 'agent_error');
   if (trial.assessmentError) codes.push(trial.assessmentError.startsWith(CODE_ONLY_ASSESSMENT) ? 'not_judged'
     : /cancel|budget exhausted|time limit|closing/i.test(trial.assessmentError) ? 'judge_stopped' : 'judge_error');
   if (latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid'

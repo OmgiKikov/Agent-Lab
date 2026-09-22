@@ -94,8 +94,27 @@ test('malformed, unsupported and invented judgments cannot escape validation or 
     let audit: JudgeAudit | undefined;
     let calls = 0;
     await assert.rejects(assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, a) { audit = a; } }, async () => { calls++; return raw; }), /Judge response rejected/);
-    assert.equal(calls, 2); assert.equal(audit!.attempts[0]!.raw, raw); assert.ok(audit!.attempts.every(a => a.error));
+    assert.equal(calls, 4, 'each malformed vote is asked once more, then given up'); assert.equal(audit!.attempts[0]!.raw, raw); assert.ok(audit!.attempts.every(a => a.error));
+    assert.equal(audit!.attempts.filter(a => a.superseded).length, 2);
   }
+});
+
+test('a vote the model returned malformed is asked once more; the original answer stays in the audit as superseded and the judgment still verifies', async () => {
+  let audit: JudgeAudit | undefined;
+  let calls = 0;
+  const outputs = ['not json', row('met', 'not_met'), row('met', 'not_met')];
+  const result = await assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, a) { audit = a; } }, async () => outputs[calls++]!);
+  assert.equal(result[0]!.result, 'pass');
+  assert.equal(calls, 3);
+  assert.equal(audit!.attempts.length, 3);
+  const superseded = audit!.attempts.filter(a => a.superseded);
+  assert.equal(superseded.length, 1); assert.equal(superseded[0]!.raw, 'not json'); assert.ok(superseded[0]!.error, 'the malformed answer keeps its error');
+  assert.ok(audit!.attempts.filter(a => !a.superseded).every(a => !a.error && a.assessments?.length === 1));
+  const recorded = { ...input, trial: { ...trial, assessments: result, judgeAudit: audit } };
+  assert.equal(hasCompleteJudgment(recorded), true, 'a superseded attempt is not a missing vote');
+  const receipt = sealJudgeReceipt(audit!, true);
+  assert.deepEqual(receipt.votes, [{ metricId: 'goal', result: 'pass' }, { metricId: 'goal', result: 'pass' }], 'the receipt carries the counted votes only');
+  assert.equal(hasCompleteJudgment({ ...input, trial: { ...trial, assessments: result, judgeReceipt: receipt } }), true);
 });
 
 test('judge input withholds case labels, prior grades, unobserved state and undelivered static follow-ups', () => {
@@ -377,12 +396,12 @@ test('a receipt verifies only against the record it came from and never outranks
 });
 
 test('every judgment reports exactly one final audit, and a failing final save never hides the original error', async () => {
-  const cases: [string, () => Promise<string>, RegExp | null][] = [
-    ['two passing votes', async () => row('met', 'not_met'), null],
-    ['malformed response', async () => 'not json', /Judge response rejected/],
-    ['thrown request', async () => { throw new Error('network down'); }, /network down/],
+  const cases: [string, () => Promise<string>, RegExp | null, number][] = [
+    ['two passing votes', async () => row('met', 'not_met'), null, 2],
+    ['malformed response', async () => 'not json', /Judge response rejected/, 4],
+    ['thrown request', async () => { throw new Error('network down'); }, /network down/, 2],
   ];
-  for (const [name, respond, rejection] of cases) {
+  for (const [name, respond, rejection, attempts] of cases) {
     const finals: boolean[] = [];
     let last: JudgeAudit | undefined;
     const run = assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, a, final) {
@@ -390,7 +409,7 @@ test('every judgment reports exactly one final audit, and a failing final save n
     } }, respond);
     if (rejection) await assert.rejects(run, rejection); else await run;
     assert.equal(finals.length, 1, `${name}: one final judgment`);
-    assert.equal(last!.attempts.length, 2, `${name}: the final audit holds every settled vote`);
+    assert.equal(last!.attempts.length, attempts, `${name}: the final audit holds every settled vote, including the ones asked again`);
   }
   await assert.rejects(assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, _a, final) {
     if (final) throw new Error('final save failed');

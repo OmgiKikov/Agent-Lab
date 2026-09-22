@@ -291,7 +291,7 @@ function expectReason(code: NotMeasuredCode, subject: Card, trials: Trial[], ove
 }
 
 test('every reason code has a Russian label and the list keeps its fixed order', () => {
-  assert.equal(NOT_MEASURED_CODES.length, 18);
+  assert.equal(NOT_MEASURED_CODES.length, 19);
   assert.deepEqual(Object.keys(NOT_MEASURED_TEXT), [...NOT_MEASURED_CODES]);
   assert.ok(Object.values(NOT_MEASURED_TEXT).every(label => /^[а-яё]/u.test(label)));
 });
@@ -387,6 +387,11 @@ test('reason no_evidence: an agreed unsupported goal is not an unclear rule', ()
 
 test('reason judge_unclear: the goal stayed unknown for any other reason', () => {
   expectReason('judge_unclear', card('c'), [attempt('c', { goal: 'unknown', goalRationale: `${AGREED_RATIONALE_PREFIX} Условие не проверялось.` })]);
+});
+
+test('reason service_reply: the stand answered with a service text instead of the agent', () => {
+  expectReason('service_reply', card('c'), [attempt('c', { outcome: 'invalid', reason: 'Стенд ответил служебным текстом «не получен ответ»: это не ответ агента, ситуация не измерена.', assessments: undefined })]);
+  assert.equal(NOT_MEASURED_TEXT.service_reply, 'стенд ответил служебным текстом, не агент');
 });
 
 test('reason agent_error also names a legacy card without the goal rubric', () => {

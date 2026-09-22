@@ -1,3 +1,4 @@
+import { SERVICE_REPLY_REASON } from './comparison.js';
 import { checkpointInput, checkpointReceipt, directChecks, evaluateCheckpoints } from './checkpoints.js';
 import { createUserState, allowedUserActions, advanceUser, requiredUserTurns } from './user-controller.js';
 import { randomUUID } from 'node:crypto';
@@ -239,6 +240,8 @@ export async function evaluateTrial(input: {
       }
       append('assistant', response);
       if (!response.trim()) { trial.reason = 'Испытуемый вернул пустой ответ.'; break; }
+      const serviceMarker = target.kind !== 'sandbox' ? target.serviceReplies?.find(marker => response.includes(marker)) : undefined;
+      if (serviceMarker !== undefined) { trial.reason = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента, ситуация не измерена.`; break; }
       if (controlled && (finalUserReply || controlled.policy.terminalStates.includes(controlled.position))) { stopped = true; break; }
       if (!controlled && (userMode === 'static' || finalUserReply || (scenario.user.maxFollowUps !== undefined && turn >= scenario.user.maxFollowUps))) { stopped = true; break; }
       if (userMode === 'scripted') {

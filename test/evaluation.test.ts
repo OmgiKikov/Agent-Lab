@@ -720,8 +720,26 @@ test('live evaluation seals a receipt, reports the final judgment once, and a re
         'the sealed receipt is incomplete even without the error flag');
       assert.equal(trial.assessments, undefined);
       const raws = finals[0]!.audit.attempts.map(attempt => attempt.raw);
-      assert.equal(raws.length, 2);
-      assert.ok(raws.every(raw => raw?.startsWith('not json')), 'both raw replies survive in the final audit');
+      assert.equal(raws.length, 4, 'each malformed vote was asked once more; all four replies stay on record');
+      assert.ok(raws.every(raw => raw?.startsWith('not json')), 'every raw reply survives in the final audit');
     }
   }
+});
+
+test('a reply that carries a stand service marker leaves the situation unmeasured as «стенд ответил служебным текстом», never as an agent failure', async t => {
+  const f = await fixture();
+  const scenario = structuredClone(f.preparation.scenarios[0]!);
+  scenario.checks = [];
+  scenario.metrics = structuredClone(testMetrics);
+  const actor: Runtime = { ...f.runtime, async assess() { throw new Error('the judge must not grade a stand failure'); } };
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-evaluation-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const stand = join(directory, 'stand.mjs');
+  await writeFile(stand, 'export function createSession() { return { async respond() { return "К сожалению, от смежной системы IDP.VALIDATION не получен ответ. Попробуйте позже."; } }; }\n');
+  const target = { kind: 'module' as const, path: stand, exportName: 'createSession', serviceReplies: ['не получен ответ', 'Некорректная маршрутизация'] };
+  const trial = await evaluateTrial({ requirements: [], runtime: actor, revision: f.baseline, scenario, repeat: 0, manifestHash: 'frozen', sources: f.sources, settings: f.input.settings, ctx: context(), userMode: 'static', target });
+  assert.equal(trial.outcome, 'invalid');
+  assert.match(trial.reason, /^Стенд ответил служебным текстом «не получен ответ»/);
+  assert.equal(trial.assessments, undefined, 'nothing was judged');
+  assert.equal(trial.events.filter(e => e.type === 'assistant').length, 1, 'the reply itself stays on record');
 });

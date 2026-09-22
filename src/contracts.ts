@@ -106,23 +106,25 @@ const releaseSchema = z.strictObject({
   command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
   cwd: absolutePath.optional(), timeoutMs: z.number().int().min(1000).max(600000).default(120000),
 }).optional();
+/** Substrings of a reply that mean the stand, not the agent, answered («нет ответа от смежной системы»): such a dialogue is not measured. */
+const serviceReplies = z.array(text.max(300)).max(20).optional();
 export const targetSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('sandbox') }),
   z.strictObject({
-    kind: z.literal('http'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, url: z.string().url().max(2000),
+    kind: z.literal('http'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, serviceReplies, url: z.string().url().max(2000),
     headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/, 'Header values must name environment variables')).default({}),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),
     release: releaseSchema,
   }),
   z.strictObject({
-    kind: z.literal('module'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
+    kind: z.literal('module'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, serviceReplies, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
     exportName: z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{0,99}$/).default('createSession'),
     timeoutMs: z.number().int().min(1000).max(600000).optional(),
     release: releaseSchema,
   }),
   /** A local process (for example `python3 agent.py`) speaking one JSON request/reply per line over stdin/stdout. */
   z.strictObject({
-    kind: z.literal('command'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
+    kind: z.literal('command'), diagnosticCapabilities: diagnosticCapabilitiesSchema.optional(), promptFile, serviceReplies, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
     cwd: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required').optional(),
     timeoutMs: z.number().int().min(1000).max(600000).default(60000),
     release: releaseSchema,
@@ -265,7 +267,9 @@ export const judgeAuditSchema = z.strictObject({
     metricId: identifier.optional(), input: text.optional(),
     startedAt: text, raw: z.string().optional(), error: text.optional(),
     assessments: z.array(metricAssessmentSchema).optional(),
-  })).max(24),
+    /** A malformed answer the judge was asked to give again: kept for the record, not counted as a vote. */
+    superseded: z.literal(true).optional(),
+  })).max(48),
   notApplicable: z.array(identifier),
 });
 export type JudgeAudit = z.infer<typeof judgeAuditSchema>;

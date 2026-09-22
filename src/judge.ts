@@ -128,6 +128,7 @@ function recordedAggregate(input: Input, metricId: string, votes: (string | unde
 export function sealJudgeReceipt(audit: JudgeAudit, complete: boolean): JudgeReceipt {
   const votes: JudgeReceipt['votes'] = [];
   for (const attempt of audit.attempts) {
+    if (attempt.superseded) continue;
     if (attempt.metricId !== undefined) {
       const result = attempt.assessments?.[0]?.result;
       votes.push({ metricId: attempt.metricId, ...(result ? { result } : {}), ...(attempt.error ? { error: true } : {}) });
@@ -173,10 +174,11 @@ export function hasCompleteJudgment(input: Input): boolean {
   const data = judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } });
   if (audit.inputHash !== fingerprint(data)) return false;
   try { if (fingerprint(JSON.parse(audit.input)) !== audit.inputHash) return false; } catch { return false; }
-  const isolated = audit.attempts.some(a => a.metricId !== undefined);
-  if (audit.attempts.length !== (isolated ? applicable.length * 2 : applicable.length ? 2 : 0)) return false;
+  const counted = audit.attempts.filter(a => !a.superseded);
+  const isolated = counted.some(a => a.metricId !== undefined);
+  if (counted.length !== (isolated ? applicable.length * 2 : applicable.length ? 2 : 0)) return false;
   try {
-    for (const attempt of audit.attempts) {
+    for (const attempt of counted) {
       if (attempt.error || !attempt.raw?.trim()) return false;
       const requested = isolated ? applicable.filter(m => m.id === attempt.metricId) : applicable;
       if (isolated && (requested.length !== 1 || !attempt.input
@@ -185,7 +187,7 @@ export function hasCompleteJudgment(input: Input): boolean {
     }
   } catch { return false; }
   return applicable.every(m => recordedAggregate(input, m.id,
-    audit.attempts.filter(a => !isolated || a.metricId === m.id).map(a => a.assessments?.find(v => v.metricId === m.id)?.result)));
+    counted.filter(a => !isolated || a.metricId === m.id).map(a => a.assessments?.find(v => v.metricId === m.id)?.result)));
 }
 
 export async function assessRepeated(input: Input, model: { provider: string; id: string; configurationHash?: string; transport?: JudgeAudit['transport'] }, ctx: CallContext,
@@ -207,12 +209,12 @@ export async function assessRepeated(input: Input, model: { provider: string; id
   save();
   // Every vote is an independent fresh request, so one dialogue's votes run together. They are
   // launched in rubric order, which keeps the audit order stable; after any failure nothing new starts.
-  const jobs = applicable.flatMap(metric => [metric, metric]);
+  const jobs = applicable.flatMap(metric => [{ metric, retry: false }, { metric, retry: false }]);
   let next = 0;
   let failure: unknown;
   const worker = async (): Promise<void> => {
     while (next < jobs.length && failure === undefined) {
-      const metric = jobs[next++]!;
+      const { metric, retry } = jobs[next++]!;
       ctx.signal.throwIfAborted();
       const attempt: JudgeAudit['attempts'][number] = { metricId: metric.id, startedAt: new Date().toISOString(),
         input: JSON.stringify(judgeInput({ ...input, scenario: { ...input.scenario, metrics: [metric] } })),
@@ -232,6 +234,8 @@ export async function assessRepeated(input: Input, model: { provider: string; id
         attempt.assessments = parseJudgment(attempt.raw, input, [metric]);
       } catch (error) {
         attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Invalid judgment';
+        // A malformed answer is asked once more as a fresh request; the original stays on record and is not a vote.
+        if (!retry) { attempt.superseded = true; jobs.push({ metric, retry: true }); }
       }
       save();
     }
@@ -246,11 +250,11 @@ export async function assessRepeated(input: Input, model: { provider: string; id
   if (rejected) throw rejected.reason;
   if (failure !== undefined) throw failure;
   if (saveFailed) throw saveFailure;
-  if (audit.attempts.some(a => a.error && !RAG_METRIC_IDS.has(a.metricId ?? ''))) throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
+  if (audit.attempts.some(a => a.error && !a.superseded && !RAG_METRIC_IDS.has(a.metricId ?? ''))) throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
   return metrics.map(metric => {
     if (notApplicable.includes(metric.id)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: RAG_METRIC_IDS.has(metric.id)
       ? 'Полный RAG-контекст каждого ответа не подтверждён адаптером; причина не установлена.' : 'Не применяется: реактивный симулятор не вызывался.' };
-    const attempts = audit.attempts.filter(a => a.metricId === metric.id);
+    const attempts = audit.attempts.filter(a => a.metricId === metric.id && !a.superseded);
     if (attempts.some(a => a.error)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: 'RAG-диагностика не завершена: ошибка судьи сохранена в judgeAudit. Основная оценка не изменена.' };
     const votes = attempts.map(a => a.assessments![0]!);
     if (votes.every(v => v.result === votes[0]!.result)) return { ...votes[0]!, rationale: `${AGREED_RATIONALE_PREFIX} ${votes[0]!.rationale}`.slice(0, 4000) };
