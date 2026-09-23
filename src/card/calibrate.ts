@@ -155,7 +155,10 @@ async function judgeAll(record: Experiment, pending: readonly Job[], judge: LogJ
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(CALIBRATION_CONCURRENCY, pending.length) }, worker));
+  // Every worker settles before the step returns: none may save the record once the run has moved on.
+  const settled = await Promise.allSettled(Array.from({ length: Math.min(CALIBRATION_CONCURRENCY, pending.length) }, worker));
+  const failed = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+  if (failed) throw failed.reason;
 }
 
 /**
