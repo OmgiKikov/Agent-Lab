@@ -10,12 +10,16 @@ import { addCard } from '../src/card/library.js';
 import { cardSchema, libraryV2Schema, type Card, type CardPreparation } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { demoTarget } from '../src/demo.js';
-import { ExperimentLab } from '../src/experiment.js';
+import { draftHash, ExperimentLab } from '../src/experiment.js';
 import { importDialogues } from '../src/imports.js';
 import { StructuredTaskError } from '../src/llm/structured.js';
 import { cardTrafficTopic, situationCoverage } from '../src/miner/cards.js';
+import { coverageLine, uncoveredLine } from '../src/miner/coverage.js';
 import { preparationConsent } from '../src/miner/plan.js';
 import { buildTopicMap, OTHER, TOPIC_MAP_PROMPT_VERSION } from '../src/miner/topic-map.js';
+import { markdownReport } from '../src/report.js';
+import { realityParts, topicRows } from '../src/result-text.js';
+import { buildResultView } from '../src/result-view.js';
 import { libraryHash } from '../src/scenario-library.js';
 import { BUILDER, scriptedRunner, type Logged } from './helpers/miner.js';
 
@@ -280,5 +284,45 @@ test('topics on cards: a dialogue card takes its conversation\'s, a similar card
     const naming = (trafficTopic: unknown) => libraryV2Schema.safeParse({ ...library, cards: library.cards.map(card => card.id === parent.id ? { ...card, trafficTopic } : card) }).success;
     assert.deepEqual([naming({ batchId: batch.id, id: 't4' }), naming({ batchId: 'import_other', id: 't1' }), naming(parent.trafficTopic)], [false, false, true],
       'a card names only a topic its library has the traffic of');
+  });
+});
+
+test('a card run reads its topics from the record alone: rows by traffic share, the weighted estimate, the coverage in the report', async () => {
+  const logged = logs([['Возврат оплаты', 5], ['Статус заявки', 3], ['Смена тарифа', 2], [OTHER, 1]]);
+  const batch = batchOf(logged, [MASKED_ROW]);
+  const { runtime } = minerRuntime(logged, { fails: title => title.startsWith('Статус заявки') });
+  await withLab(runtime, async (lab, directory) => {
+    // Three seats for four topics: the three largest get one each, «Другое» none.
+    const draft = await lab.create(createInput(batch), { cards: true, situations: 3 });
+    await lab.waitForIdle();
+    const { library } = await lab.readCards(draft.id);
+    const accepted = await lab.acceptCards(draft.id, libraryHash(library), library.cards.map(card => card.id));
+    await lab.start(draft.id, { approved: true, expectedHash: draftHash(accepted.experiment), requireAccepted: true });
+    await lab.waitForIdle();
+    assert.equal((await lab.get(draft.id)).phase, 'results_review');
+    // Nothing but the record: the logs and their map leave the store.
+    await rm(join(directory, 'imports'), { recursive: true });
+    const finished = await lab.get(draft.id);
+    const view = buildResultView(finished);
+    assert.deepEqual([view.headline.passed, view.headline.decided], [2, 3]);
+    assert.deepEqual(view.topics!.rows.map(row => [row.title, row.passed, row.decided, row.share]),
+      [['Возврат оплаты', 1, 1, 5 / 11], ['Статус заявки', 0, 1, 3 / 11], ['Смена тарифа', 1, 1, 2 / 11]], 'shares of the whole import, largest first');
+    // (5/11 · 1 + 3/11 · 0 + 2/11 · 1) / (10/11) = 0.7: the uncovered «Другое» weighs nothing.
+    assert.ok(Math.abs(view.topics!.weighted! - 0.7) < 1e-9, String(view.topics!.weighted));
+    assert.deepEqual([view.topics!.uncovered, view.topics!.labeled, view.topics!.logged], [{ topics: 1, share: 1 / 11 }, 11, 12]);
+    assert.deepEqual(realityParts(view), ['С учётом частоты тем — около 70% (темы известны у 11 из 12 разговоров)'], 'the masked conversation has no topic');
+    assert.deepEqual([coverageLine(view.topicCoverage!), uncoveredLine(view.topicCoverage!)], ['3 ситуации покрывают 3 из 4 тем — 91% диалогов', 'Не покрыта: Другое (9% диалогов)']);
+    assert.deepEqual(topicRows(view).map(row => [row.text, row.right?.trim().split(/\s{3,}/)]), [
+      ['По темам', ['справился', 'доля диалогов']], ['Возврат оплаты', ['1 из 1', '45%']], ['Статус заявки', ['0 из 1', '27%']], ['Смена тарифа', ['1 из 1', '18%']],
+      ['Не покрыто ситуациями', ['—', '9%']]]);
+
+    const report = markdownReport(finished);
+    const method = report.slice(report.indexOf('## Как считали'));
+    assert.ok(method.includes('- 3 ситуации покрывают 3 из 4 тем — 91% диалогов. Не покрыта: Другое \\(9% диалогов\\).'), method);
+    const table = report.slice(report.indexOf('## По темам'), report.indexOf('## Почему ошибается'));
+    for (const row of ['| Возврат оплаты | 1 из 1 | 45% |', '| Статус заявки | 0 из 1 | 27% |', '| Смена тарифа | 1 из 1 | 18% |', '| Не покрыто ситуациями | — | 9% |']) assert.ok(table.includes(row), table);
+
+    const repeat = await lab.repeat(draft.id);
+    assert.deepEqual(buildResultView(repeat).topicCoverage, view.topicCoverage, 'a repeat stands for the same topics, with no map at hand');
   });
 });
