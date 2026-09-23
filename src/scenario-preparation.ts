@@ -3,22 +3,16 @@ export { assessScenarioLibrary } from './scenario-work.js';
 import { appendScenarioProposals, createLibrary, compileLibrary, libraryHash, libraryQuality } from './scenario-library.js';
 import { requireLibraryV1 } from './card/legacy-v1.js';
 import { importBatchSchema, type ImportBatch, type LibraryV1, type ScenarioProposal } from './scenario-contracts.js';
-import { fingerprint, internalPromptRule, validatePreparation, type AgentSpec, type CallContext, type CreateInput, type Experiment, type GroundingInput, type Requirement, type Runtime, type ScenarioProposalsInput, type Source } from './contracts.js';
+import { fingerprint, internalPromptRule, validatePreparation, type CallContext, type CreateInput, type Experiment, type GroundingInput, type Runtime, type ScenarioProposalsInput } from './contracts.js';
+import { ensureAgentRevision, mergeRequirements, preparationInputHash } from './card/prepare.js';
 import { SOURCES_PER_DIALOGUE } from './limits.js';
 import { selectScenarioSources } from './scenario-sources.js';
 import { StructuredTaskError } from './llm/structured.js';
 import type { ExperimentStore } from './store.js';
 
 const SCENARIO_EXTRACTION_PROTOCOL = 'chronological-scenarios-v1' as const;
-/** The agent label of a library run when the owner names none: the agent under test runs outside Lab with its own instructions and tools. */
-const EXTERNAL_AGENT: AgentSpec = { name: 'External agent', instructions: 'The agent under evaluation runs outside Agent Lab and keeps its own instructions and tools.', tools: [] };
 /** Extraction, JSON correction and later semantic repair share one per-source call allowance. */
 const SOURCE_GENERATION_ATTEMPTS = 5;
-function preparationInputHash(record: Experiment): string {
-  const { maxCalls: _calls, maxDurationMs: _duration, timeoutMs: _timeout, ...settings } = record.settings;
-  return fingerprint({ protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, mode: record.mode, sources: record.sources,
-    target: record.target, notes: record.notes, originalImport: record.originalImport, settings });
-}
 export function chronologicalInput(batch: ImportBatch, ids = batch.dialogues.map(d => d.id)): ScenarioProposalsInput['dialogues'] {
   return batch.dialogues.filter(d => ids.includes(d.id)).map(d => ({ id: d.id, observation: d.observation, events: structuredClone(d.events),
     messages: d.events.flatMap(e => e.type === 'message' && e.role && e.content ? [{ index: e.index, role: e.role, content: e.content }] : []) }));
@@ -60,7 +54,7 @@ export async function prepareScenarioLibrary(record: Experiment, input: CreateIn
   const original = batch ? await store.writeImport(importBatchSchema.parse(batch)) : undefined;
   if (original) record.originalImport = { id: original.id, contentHash: original.contentHash };
   const workIds = original ? original.dialogues.map(d => d.id) : ['owner_requirements'];
-  record.preparationProgress = { protocol: SCENARIO_EXTRACTION_PROTOCOL, checkpointVersion: 1, requestedCount: input.scenarioCount, inputHash: preparationInputHash(record), groundingComplete: false, processed: [], pending: [...workIds],
+  record.preparationProgress = { protocol: SCENARIO_EXTRACTION_PROTOCOL, checkpointVersion: 1, requestedCount: input.scenarioCount, inputHash: preparationInputHash(record, SCENARIO_EXTRACTION_PROTOCOL), groundingComplete: false, processed: [], pending: [...workIds],
     excluded: (batch?.rejected ?? []).map(d => ({ dialogueId: d.id ?? `row_${d.index}`, reason: d.reasons.join('; ') })), status: 'preparing' };
   const library = createLibrary({ id: `library_${record.id}`, batch: original, sources: record.sources, requirements: [], proposals: [], semanticRequired: true });
   await runPreparation(record, input, runtime, ctx, store, { original, workIds, library, proposals: [], previousAssessment: undefined, groundOnce: true });
@@ -72,7 +66,7 @@ export async function resumeScenarioLibrary(record: Experiment, input: CreateInp
   if (!progress || progress.protocol !== SCENARIO_EXTRACTION_PROTOCOL) throw new Error('Эту подготовку нельзя продолжить: нет сохранённого плана.');
   if (progress.activeDialogueId) throw new Error(`Подготовка остановилась во время разбора «${progress.activeDialogueId}». Его стоимость неизвестна; этот источник не повторяется молча.`);
   if (progress.checkpointVersion !== 1) throw new Error('Старая подготовка не содержит достаточного checkpoint для продолжения. Создайте новый черновик.');
-  if (progress.inputHash !== preparationInputHash(record)) throw new Error('Входы или модель подготовки изменились. Создайте новый черновик.');
+  if (progress.inputHash !== preparationInputHash(record, SCENARIO_EXTRACTION_PROTOCOL)) throw new Error('Входы или модель подготовки изменились. Создайте новый черновик.');
   if (record.originalImport && (!batch || batch.id !== record.originalImport.id || batch.contentHash !== record.originalImport.contentHash)) throw new Error('Исходный импорт подготовки изменился или отсутствует.');
   if (batch && progress.pending.some(id => !batch.dialogues.some(dialogue => dialogue.id === id))) throw new Error('План подготовки ссылается на отсутствующий исходный диалог.');
   if (!progress.pending.length) throw new Error('Необработанных источников нет.');
@@ -135,11 +129,7 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
       record.preparationProgress.excluded.push(...workIds.map(id => ({ dialogueId: id, reason: groundingIssue })));
       record.preparationProgress.status = 'partial'; await publish(); return;
     }
-    if (!record.revisions.length) {
-      const agent = input.existingAgent ?? EXTERNAL_AGENT;
-      const baseline = { id: fingerprint(agent), parentId: null, spec: agent, hypothesis: 'Конфигурация агента для библиотеки сценариев.', createdAt: new Date().toISOString() };
-      record.revisions = [baseline]; record.selectedRevisionId = baseline.id;
-    }
+    ensureAgentRevision(record, input.existingAgent);
     const ground = (request: GroundingInput) => {
       if (!runtime.groundRequirements) throw new Error('Эта среда не умеет извлекать требования из материалов владельца.');
       return runtime.groundRequirements(request, ctx);
@@ -277,25 +267,6 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
     await publish();
     throw error;
   }
-}
-
-/**
- * Adds one dialogue's requirements to the record: a rule already known by its source, exact quote and meaning keeps its id,
- * a new rule whose id is taken gets a numbered one. Returns only this dialogue's requirements, with the ids the proposals must cite.
- */
-function mergeRequirements(record: Experiment, extracted: Requirement[], sources: Source[]): Requirement[] {
-  const focused: Requirement[] = [];
-  for (const requirement of extracted) {
-    if (!sources.some(source => source.id === requirement.sourceId)) throw new Error('Требование ссылается на статью вне выбранных материалов.');
-    const known = record.requirements.find(known => known.sourceId === requirement.sourceId && known.quote === requirement.quote
-      && known.text === requirement.text && known.critical === requirement.critical);
-    if (known) { focused.push(known); continue; }
-    let id = requirement.id;
-    for (let n = 2; record.requirements.some(known => known.id === id); n++) id = `${requirement.id}_${n}`;
-    const merged = { ...requirement, id };
-    record.requirements.push(merged); focused.push(merged);
-  }
-  return focused;
 }
 
 /** The runnable cards of a library at the moment of its acceptance: compiled once, then fixed by their definition hashes. */

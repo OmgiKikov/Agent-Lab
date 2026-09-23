@@ -10,9 +10,11 @@ import { callModel, type Model } from './llm/model-call.js';
 import { AUTH_HELP, resolveModels } from './llm/models.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
 import {
-  FAILURE_MODES_ROLE, REQUIREMENTS_ROLE, SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE,
+  CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, REQUIREMENTS_ROLE, SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE,
   SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
 } from './prompts.js';
+import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
+import { cardReviewSchema } from './card/review.js';
 import { scenarioProposalSchema, semanticFindingSchema } from './scenario-contracts.js';
 import { SCENARIO_OUTPUT_BYTES, SCENARIO_REQUEST_BYTES, SEMANTIC_BATCH_FIELDS, SEMANTIC_REASON_CHARS, workInputIssue } from './scenario-work.js';
 import { USER_CONTROLLER_PROTOCOL, userDecisionSchema } from './user-controller.js';
@@ -110,6 +112,9 @@ const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, m
   .refine(v => v.done || !!v.message?.trim(), 'A continuing user turn needs a message')
   .describe('To stop immediately, return done:true and omit message. A nonempty message is always delivered to the target. done:true with a nonempty message means deliver this final user message, receive the target response, then end. done:true with an empty message means stop now without another target response.');
 
+/** A review answer is one short verdict per claim; its repair starts afresh, like every task that carries a whole dialogue. */
+const reviewBounds = (claims: number) => ({ outputBytes: 1_000 + 700 * claims, requestBytes: 96_000 + 700 * claims });
+
 /** A catalog up to this many articles is an enum of the answer's schema; a larger one would outweigh the request, so its ids are checked instead. */
 const CATALOG_ENUM_LIMIT = 500;
 
@@ -192,6 +197,23 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           return expected.length !== actual.length || expected.some(id => actual.filter(other => other === id).length !== 1) ? 'Return exactly one finding for each requested field, and no other fields.' : undefined;
         },
       }, input, ctx)).findings;
+    },
+    async proposeCard(input, ctx) {
+      const payload = proposalPayload(input);
+      const oversize = workInputIssue(payload);
+      if (oversize) throw new Error(oversize);
+      // A binding slip goes back with its exact reason; the answer's references are enums of this call.
+      return run<CardProposal>({
+        id: 'card-proposal', label: input.call.source.kind === 'rules' ? 'Ситуация по правилам владельца' : 'Ситуация из диалога', role: 'builder', instructions: CARD_ROLE,
+        output: cardProposalSchema(input.call), check: value => cardProposalProblem(value, input.call), bounded: proposalBounds(input.call),
+      }, payload, ctx);
+    },
+    async reviewCard(input, ctx) {
+      const oversize = workInputIssue(input.payload);
+      if (oversize) throw new Error(oversize);
+      const reviewed = await run({ id: 'card-review', label: 'Проверка ситуации', role: 'judge', instructions: CARD_REVIEW_ROLE,
+        output: cardReviewSchema(input.aliases), bounded: reviewBounds(input.aliases.length) }, input.payload, ctx);
+      return { verdicts: reviewed.claims, model: `${models.judge.provider}/${models.judge.id}` };
     },
     async groundRequirements(input, ctx) {
       const { task, payload } = groundingRequest(input);

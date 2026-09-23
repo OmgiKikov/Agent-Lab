@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from '../ids.js';
-import { MATERIAL_LIMIT } from '../limits.js';
-import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema } from '../scenario-contracts.js';
+import { FOCUSED_REQUIREMENT_LIMIT, MATERIAL_LIMIT } from '../limits.js';
+import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema, preparationProgressSchema as variantPreparationSchema } from '../scenario-contracts.js';
 
 /*
  * The card: a brief of what the customer wants, writes, knows and when they leave, and what the agent
@@ -13,6 +13,7 @@ import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema } from
 
 /** A message of an immutable import. The card keeps the reference; the text is read from the import. */
 const eventRefSchema = z.strictObject({ batchId: id, dialogueId: id, eventIndex: z.number().int().nonnegative() });
+export type EventRef = z.infer<typeof eventRefSchema>;
 
 /**
  * How the customer shares a fact: `initial` — already in the first message; `on_request` — names it
@@ -97,7 +98,7 @@ export const cardSchema = z.strictObject({
 export type Card = z.infer<typeof cardSchema>;
 
 /** What the owner can do to a card. Every applied command is kept verbatim in an owner receipt, so this union is part of the stored format. */
-const cardCommandSchema = z.discriminatedUnion('kind', [
+export const cardCommandSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('set_fact_disclosure'), cardId: id, factId: id, disclosure: disclosureSchema }),
   // A new fact when factId is absent; the owner vouches for it.
   z.strictObject({ kind: z.literal('set_fact'), cardId: id, factId: id.optional(), label: text(120), value: factSchema.shape.value,
@@ -115,6 +116,7 @@ const cardCommandSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('add_similar'), parentId: id, change: similarChangeSchema, title: text(160).optional() }),
   z.strictObject({ kind: z.literal('remove_card'), cardId: id }),
 ]);
+export type CardCommand = z.infer<typeof cardCommandSchema>;
 
 /** The reviewer's answer on one semantic claim, addressed by content: key = digest(kind, subject, basisHash). */
 const claimReceiptSchema = z.strictObject({
@@ -122,6 +124,7 @@ const claimReceiptSchema = z.strictObject({
   basisHash: hash, status: z.enum(['ready', 'needs_owner', 'blocked']), reason: text(240),
   reviewer: z.strictObject({ protocol: z.literal('card-review-v1'), model: text(200) }),
 });
+export type ClaimReceipt = z.infer<typeof claimReceiptSchema>;
 
 /** An owner decision or edit: the exact command the owner confirmed. Receipts are only ever appended. */
 const ownerReceiptSchema = z.strictObject({
@@ -155,3 +158,41 @@ export type LibraryV2 = z.infer<typeof libraryV2Schema>;
 /** Every stored library, told apart by format. Old libraries are read as they are: no file is ever migrated. */
 export const scenarioLibrarySchema = z.discriminatedUnion('formatVersion', [libraryV1Schema, libraryV2Schema]);
 export type ScenarioLibrary = z.infer<typeof scenarioLibrarySchema>;
+
+/**
+ * The checkpoint of a card preparation (card/prepare.ts), saved with the draft after every step. A unit of work
+ * is one dialogue of the import (its id), or `rules_N` for a situation from the owner's rules alone. What a unit
+ * finished is kept, so a resume continues it from the next step: the articles chosen for it, the rules grounded
+ * for it and the card made from it. A paid call names its unit and step before it is sent and clears them when
+ * it returns, so a crash leaves them behind and a resume never repeats a call whose cost is unknown. The owner
+ * reads the same counts as in the first format (processed, pending, excluded).
+ */
+const cardPreparationSchema = z.strictObject({
+  protocol: z.literal('cards-v1'),
+  /** What the plan was made from: a resume on changed inputs is refused. */
+  inputHash: hash,
+  status: z.enum(['preparing', 'complete', 'partial', 'cancelled']),
+  pending: ids(300), processed: ids(300),
+  excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000) })).max(300),
+  /** The whole policy was grounded in one call (a knowledge base small enough to read at once). */
+  groundingComplete: z.boolean(),
+  /** Situations asked for from the owner's rules alone. */
+  requestedCount: z.number().int().min(1).max(200).optional(),
+  /** A call in flight; a stage without a unit is the one grounding of the whole policy. */
+  activeDialogueId: id.optional(),
+  activeStage: z.enum(['select', 'ground', 'propose', 'review']).optional(),
+  elapsedMs: z.number().int().nonnegative().optional(),
+  /** Proposal calls spent per unit, repairs included; the allowance survives a resume. */
+  generationAttempts: z.array(z.strictObject({ dialogueId: id, calls: z.number().int().nonnegative() })).max(300).optional(),
+  /** A large knowledge base: the articles chosen for each dialogue from the table of contents. */
+  sourceSelection: z.array(z.strictObject({ dialogueId: id, sourceIds: ids(40) })).max(300).optional(),
+  /** A large knowledge base: the rules grounded for each dialogue, by requirement id. */
+  focus: z.array(z.strictObject({ dialogueId: id, requirementIds: ids(FOCUSED_REQUIREMENT_LIMIT) })).max(300).optional(),
+  /** The card each unit made. */
+  cards: z.array(z.strictObject({ dialogueId: id, cardId: id })).max(300).optional(),
+});
+export type CardPreparation = z.infer<typeof cardPreparationSchema>;
+
+/** A preparation's checkpoint in either format; the first format's is read as it was stored. */
+export const preparationProgressSchema = z.discriminatedUnion('protocol', [variantPreparationSchema, cardPreparationSchema]);
+export type PreparationProgress = z.infer<typeof preparationProgressSchema>;

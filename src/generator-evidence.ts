@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { addUsage, emptyUsage, fingerprint, type CallContext, type Runtime } from './contracts.js';
 
 /** `prepare` is how journals written before `groundRequirements` name the grounding call. */
-type Method = 'groundRequirements' | 'prepare' | 'selectSources' | 'scenarioProposals' | 'assessScenarioProposals';
+type Method = 'groundRequirements' | 'prepare' | 'selectSources' | 'scenarioProposals' | 'assessScenarioProposals' | 'proposeCard' | 'reviewCard';
 export type GeneratorEvidence = {
   workId: string;
   method: Method;
@@ -45,5 +45,7 @@ export function captureGeneratorEvidence(runtime: Runtime, emit: (event: Generat
     ...(runtime.selectSources ? { selectSources: capture('selectSources', runtime.selectSources.bind(runtime)) } : {}),
     ...(runtime.scenarioProposals ? { scenarioProposals: capture('scenarioProposals', runtime.scenarioProposals.bind(runtime)) } : {}),
     ...(runtime.assessScenarioProposals ? { assessScenarioProposals: capture('assessScenarioProposals', runtime.assessScenarioProposals.bind(runtime)) } : {}),
+    ...(runtime.proposeCard ? { proposeCard: capture('proposeCard', runtime.proposeCard.bind(runtime)) } : {}),
+    ...(runtime.reviewCard ? { reviewCard: capture('reviewCard', runtime.reviewCard.bind(runtime)) } : {}),
   };
 }

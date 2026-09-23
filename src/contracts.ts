@@ -1,7 +1,9 @@
 import { USER_CONTROLLER_PROTOCOL, userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
 import { checkpointSchema } from './scenario-contracts.js';
-import { importBatchSchema, preparationProgressSchema, type ImportBatch, type LibraryV1, type ScenarioProposal, type SemanticFinding, type PreparationProgress } from './scenario-contracts.js';
-import { expectationSchema, scenarioLibrarySchema, type ScenarioLibrary } from './card/schema.js';
+import { importBatchSchema, type ImportBatch, type LibraryV1, type ScenarioProposal, type SemanticFinding } from './scenario-contracts.js';
+import { expectationSchema, preparationProgressSchema, scenarioLibrarySchema, type PreparationProgress, type ScenarioLibrary } from './card/schema.js';
+import type { CardProposal, CardProposalRequest } from './card/proposal.js';
+import type { CardReview, CardReviewRequest } from './card/review.js';
 import { createHash } from 'node:crypto';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS } from './limits.js';
 import { z } from 'zod';
@@ -844,6 +846,10 @@ export interface Runtime {
   selectUserAction?(input: { user: UserView; state: string; actions: AllowedUserAction[]; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserDecision>;
   scenarioProposals?(input: ScenarioProposalsInput, ctx: CallContext): Promise<ScenarioProposal[]>;
   assessScenarioProposals?(input: ScenarioAssessmentInput, ctx: CallContext): Promise<SemanticFinding[]>;
+  /** One card from one dialogue or from the owner's rules alone; every reference in the answer is an enum of this call. */
+  proposeCard?(input: CardProposalRequest, ctx: CallContext): Promise<CardProposal>;
+  /** The independent reviewer's verdict on each listed claim of one card, and the model that gave it. */
+  reviewCard?(input: CardReviewRequest, ctx: CallContext): Promise<CardReview>;
   /** Owner requirements with exact quotes from the supplied sources, and the business questions they leave open. */
   groundRequirements?(input: GroundingInput, ctx: CallContext): Promise<Grounding>;
   /** The free LLM user of scenarios without an `execution` block: recorded runs made before the scenario library. */
@@ -938,7 +944,8 @@ export function validatePreparation(raw: unknown, sources: Source[]): Preparatio
       const unknown = [...valueTokens(answer.reply)].filter(token => !known.has(token));
       if (unknown.length) throw new Error(`Scenario ${s.id}: the reply to "${answer.ifAsked}" reveals a value the user does not know: ${unknown[0]}`);
     }
-    if (!s.successCriteria || s.user.maxFollowUps === undefined) {
+    // A card compiled from a brief is judged by its expectations alone: it carries no success criteria.
+    if ((!s.successCriteria && !isCardExecution(s.execution)) || s.user.maxFollowUps === undefined) {
       throw new Error(`Scenario ${s.id} needs success criteria and an explicit follow-up limit`);
     }
     requireUnique(s.checks.map(c => c.id), 'check IDs');

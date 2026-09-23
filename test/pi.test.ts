@@ -896,3 +896,49 @@ test('proposal transport rejects coverage of an opening even when the one-turn s
     assert.match(JSON.stringify(f.requests[1]!.messages), /opening is not a continuation/);
   } finally { await f.close(); }
 });
+
+test('a card proposal that does not bind goes back with its exact reason, and the repaired answer is taken', async () => {
+  const { importBatch } = await import('../src/scenario-library.js');
+  const { loggedMessages } = await import('../src/card/checks.js');
+  const { proposalCall } = await import('../src/card/proposal.js');
+  const { CARD_ROLE } = await import('../src/prompts.js');
+  const { dialogues, policy, proposals, refundRule } = await import('./helpers/card-prep.js');
+  const batch = importBatch(dialogues);
+  const rule = { ...refundRule, sourceId: 'source-1' };
+  const call = proposalCall({ source: { kind: 'dialogue', batchId: batch.id, dialogueId: 'late' }, messages: loggedMessages(batch.dialogues[0]!), requirements: [rule], maxTurns: 6 });
+  // The first answer names the terminal number with a digit the customer never wrote.
+  const broken = { ...proposals.late, knows: [{ ...proposals.late.knows[0]!, value: '5679' }] };
+  const f = await fixture((_request, index) => JSON.stringify(index === 0 ? broken : proposals.late));
+  try {
+    const { ctx, usage } = callContext();
+    const answer = await f.adapter.proposeCard!({ task: 'Возвраты', call, requirements: [{ id: rule.id, text: rule.text, quote: rule.quote }], articles: [{ id: 'source-1', name: 'Правила', content: policy }], topics: [], written: [] }, ctx);
+    assert.deepEqual(answer, proposals.late);
+    assert.equal(usage.calls, 2, 'one proposal and one repair');
+    const system = f.requests[0]!.systemPrompt!;
+    assert.ok(system.startsWith(CARD_ROLE));
+    assert.match(system, /"writesEvent":\{"type":"number","enum":\[0,2,4\]\}/, 'a message is referred to by an index of this call');
+    assert.match(system, /"enum":\["refund_rule"\]/, 'a rule by an id of this call');
+    assert.doesNotMatch(system, /"id":|"number":|"quote":\{/, 'ids, numbers and quotes belong to the harness');
+    const repair = JSON.parse(String(f.requests[1]!.messages[0]!.content)) as { repair: string; previousReply: string };
+    assert.match(repair.repair, /knows\[0\] "Номер терминала": the value "5679" is not in customer message 2\./);
+    assert.match(repair.previousReply, /"5679"/, 'the repair starts afresh from the evidence and the latest draft only');
+    assert.match(JSON.stringify(f.requests[0]!.messages), /Помогите с возвратом\./, 'the model reads the dialogue');
+  } finally { await f.close(); }
+});
+
+test('the card reviewer answers exactly the listed claims, under the judge\'s model, and a missing answer is asked for again', async () => {
+  const { CARD_REVIEW_ROLE } = await import('../src/prompts.js');
+  const verdict = { status: 'ready', reason: 'Подтверждено разговором.' };
+  const f = await fixture((_request, index) => JSON.stringify({ claims: index === 0 ? { goal: verdict } : { goal: verdict, fact_f1: { status: 'needs_owner', reason: 'Неясно, знал ли клиент номер заранее.' } } }), true);
+  try {
+    const adapter = await createPiRuntime(settingsSchema.parse({ ...settings, judge: { provider: settings.provider, model: 'role-model' } }), f.runtime);
+    const { ctx, usage } = callContext();
+    const payload = { card: {}, dialogue: null, requirements: [], articles: [], claims: [{ alias: 'goal', kind: 'goal', subject: '' }, { alias: 'fact_f1', kind: 'fact', subject: 'f1' }] };
+    const review = await adapter.reviewCard!({ aliases: ['goal', 'fact_f1'], payload: payload as never }, ctx);
+    assert.deepEqual(review, { verdicts: { goal: verdict, fact_f1: { status: 'needs_owner', reason: 'Неясно, знал ли клиент номер заранее.' } }, model: 'agent-lab-test/role-model' });
+    assert.equal(usage.calls, 2);
+    assert.deepEqual(f.modelsUsed, ['role-model', 'role-model'], 'the reviewer is the judge, not the author');
+    assert.ok(f.requests[0]!.systemPrompt!.startsWith(CARD_REVIEW_ROLE));
+    assert.match(JSON.stringify(f.requests[1]!.messages), /claims\.fact_f1/, 'the repair names the missing claim');
+  } finally { await f.close(); }
+});
