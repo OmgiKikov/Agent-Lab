@@ -623,20 +623,18 @@ test('required checkpoint decisions reach the existing accuracy while diagnostic
   assert.match(trialProofLines(r, t.id).lines.join('\n'), /terminal_rule/);
 });
 
-test('conditional deterministic checkpoints use checkpoint completeness rather than unconditional code-check counts', async () => {
+test('a first-format checkpoint with an exact check is a direct check of every newly judged attempt', async () => {
   const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
   const { libraryFixture } = await import('./helpers/scenario-library.js');
-  const { checkpointReceipt } = await import('../src/checkpoints.js');
   const library = libraryFixture();
   library.variants[0]!.evaluationSpec.checkpoints[0]!.check = { id: 'literal', kind: 'answer_equals', description: 'Точная инструкция', value: 'Инструкция' };
   const s = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
-  const t = trial('controlled_exact', s.id, 'ungraded', 'pass'); t.familyId = s.familyId; t.initialState = s.initialState; t.finalState = s.initialState; t.checks = []; t.assessments = [];
-  const raw = [{ checkpointId: 'ask_terminal', result: 'not_applicable' as const, evidence: [0], rationale: 'Условие отсутствует' }];
-  t.checkpoints = raw.map(r => ({ ...r, requirementId: 'terminal_rule', observation: 'reply', role: 'required' }));
-  t.checkpointReceipt = checkpointReceipt(s, t, t.checkpoints, raw);
+  const t = trial('controlled_exact', s.id, 'pass', 'pass'); t.familyId = s.familyId; t.initialState = s.initialState; t.finalState = s.initialState; t.assessments = [];
+  t.checks = [{ id: 'literal', description: 'Точная инструкция', passed: true, evidence: 'Последний ответ совпал' }];
   const r = record({ scenarios: [s], trials: [t] });
-  assert.equal(qualitySummary(r).cards.accuracy, 1);
-  assert.equal(qualitySummary(r).metrics.some(m => m.id === 'code'), false);
-  delete t.checkpoints; delete t.checkpointReceipt;
-  assert.equal(qualitySummary(r).cards.accuracy, null);
+  assert.equal(qualitySummary(r).cards.accuracy, 1, 'nothing is left to judge: the exact check decides');
+  assert.equal(qualitySummary(r).metrics.some(m => m.id === 'code'), true, 'the exact check is counted with the code checks');
+  t.checks[0]!.passed = false; t.outcome = 'fail';
+  assert.equal(qualitySummary(r).cards.accuracy, 0);
 });
+

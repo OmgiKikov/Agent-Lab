@@ -1,6 +1,7 @@
+import { judgedScenario } from './card/legacy-v1.js';
 import { checkpointReceiptValid } from './checkpoints.js';
 import { z } from 'zod';
-import { assessmentEventContent, assessmentRubrics, fingerprint, metricApplies, metricAssessmentSchema, observableRule, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Scenario, type Source } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, fingerprint, isCardExecution, metricApplies, metricAssessmentSchema, observableRule, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Scenario, type Source } from './contracts.js';
 import { ASSESS_ROLE, DATA_BOUNDARY } from './prompts.js';
 import { ragFaithfulnessEvidence, ragJudgeEvents, ragJudgeInput } from './rag-evidence.js';
 
@@ -60,6 +61,27 @@ export function scenarioSources(record: { sources: Source[]; requirements: Requi
   return record.sources.filter(source => source.kind === 'prompt' || sourceIds.has(source.id));
 }
 
+/**
+ * The card as the judge reads it. A card judged by expectations shows only the expectations being judged
+ * and the owner rules they cite: no success criteria and no other expectation, so one duty never colours
+ * the verdict on another. Every other card keeps its frozen shape, byte for byte, or its stored judgments
+ * would stop verifying.
+ */
+function judgedCard(input: Input) {
+  const { scenario, trial } = input;
+  const user = trial.userMode === 'static' ? { ...scenario.user, script: [], maxFollowUps: 0 } : scenario.user;
+  const execution = scenario.execution;
+  if (isCardExecution(execution)) {
+    const judged = new Set((scenario.metrics ?? []).map(metric => metric.id));
+    const expectations = execution.evaluatorView.expectations.filter(expectation => judged.has(expectation.id));
+    const cited = new Set(expectations.flatMap(expectation => expectation.requirementIds));
+    return { execution: { evaluation: execution.evaluation, expectations, requirements: execution.evaluatorView.requirements.filter(requirement => cited.has(requirement.id)) },
+      metrics: scenario.metrics, user };
+  }
+  return { ...(execution ? { execution: { protocol: execution.checkpointProtocol, checkpointHash: execution.checkpointHash, evaluatorView: execution.evaluatorView } } : {}), metrics: scenario.metrics, successCriteria: scenario.successCriteria, checks: scenario.checks, goalObservation: scenario.goalObservation,
+    user };
+}
+
 /** This is the complete, frozen judge input. Prior verdicts, usage and run identity are deliberately absent. */
 export function judgeInput(input: Input) {
   const metric = input.scenario.metrics?.length === 1 ? input.scenario.metrics[0] : undefined;
@@ -69,8 +91,7 @@ export function judgeInput(input: Input) {
     ? 'Opening and first answer ONLY. Planned follow-ups were not delivered. Never penalize the agent for their absence.'
     : 'Evaluate only delivered requests, within the rubric stage.';
   return {
-    scenario: { ...(input.scenario.execution ? { execution: { protocol: input.scenario.execution.checkpointProtocol, checkpointHash: input.scenario.execution.checkpointHash, evaluatorView: input.scenario.execution.evaluatorView } } : {}), metrics: input.scenario.metrics, successCriteria: input.scenario.successCriteria, checks: input.scenario.checks, goalObservation: input.scenario.goalObservation,
-      user: input.trial.userMode === 'static' ? { ...input.scenario.user, script: [], maxFollowUps: 0 } : input.scenario.user },
+    scenario: judgedCard(input),
     evaluationScope: observationMissing
       ? `${scope} Agent prose proves only what was said. Without observed state, action-dependent pass conditions remain unclear; assess reply quality independently.`
       : scope,
@@ -184,6 +205,8 @@ function hasCompleteReceipt(input: Input, receipt: JudgeReceipt, metrics: NonNul
 /** Historical verdicts remain readable, but incomplete or stale receipts cannot support a comparison. */
 export function hasCompleteJudgment(input: Input): boolean {
   if (!input.scenario || !checkpointReceiptValid(input.scenario, input.trial)) return false;
+  // The judgment is checked against the card as it was judged: a first-format card through its projection.
+  input = { ...input, scenario: judgedScenario(input.scenario, input.trial) };
   const metrics = assessmentRubrics(input.scenario, input.trial);
   if (!metrics.length) return true;
   const audit = input.trial.judgeAudit;
@@ -213,6 +236,7 @@ export function hasCompleteJudgment(input: Input): boolean {
 
 export async function assessRepeated(input: Input, model: { provider: string; id: string; configurationHash?: string; transport?: JudgeAudit['transport'] }, ctx: CallContext,
   respond: (prompt: string, input: string, recordPartial: (raw: string) => void) => Promise<string>): Promise<MetricAssessment[]> {
+  input = { ...input, scenario: judgedScenario(input.scenario, input.trial) };
   const metrics = assessmentRubrics(input.scenario, input.trial);
   if (!metrics.length) return [];
   // Only the harness-owned reactive fidelity rubric has this applicability rule.

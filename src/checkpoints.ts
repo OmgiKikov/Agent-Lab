@@ -1,115 +1,66 @@
-import { z } from 'zod';
-import { CHECKPOINT_PROTOCOL, checkpointDecisionSchema, checkpointRawDecisionsSchema, type CheckpointResult, checkSchema, fingerprint, type CheckResult, type Scenario, type Trial, type TraceEvent } from './contracts.js';
+import { CHECKPOINT_PROTOCOL, checkSchema, fingerprint, isCardExecution, type Scenario, type Trial, type TraceEvent, type VariantExecution } from './contracts.js';
+import { judgedByCheckpoints } from './card/legacy-v1.js';
 import type { Checkpoint } from './scenario-contracts.js';
 
-export { checkpointDecisionSchema, checkpointResultSchema, checkpointReceiptSchema } from './contracts.js';
-export type { CheckpointDecision, CheckpointResult } from './contracts.js';
+/*
+ * The frozen read path of first-format runs judged by the checkpoint judge. Nothing writes checkpoint
+ * verdicts any more: a first-format card is judged through the projection (card/legacy-v1.ts). The
+ * stored verdicts keep their rule — every required checkpoint, then the `library_required` rubric — and
+ * their receipts keep verifying against the input rebuilt here, byte for byte as it was hashed.
+ */
+
+type VariantScenario = Scenario & { execution: VariantExecution };
+/** A first-format card whose attempt carries a checkpoint verdict. */
+const checkpointJudged = (scenario: Scenario | undefined, trial: Trial): scenario is VariantScenario =>
+  !!scenario?.execution && !isCardExecution(scenario.execution) && judgedByCheckpoints(trial);
 
 const channelEvents = (cp: Checkpoint, trial: Trial): TraceEvent[] => trial.events.filter(e => cp.observation === 'reply' ? e.type === 'assistant'
   : cp.observation === 'tool' ? e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'observation' : e.state !== undefined || e.type === 'tool_result');
-const toolContext = (scenario:Scenario, cp:Checkpoint, trial:Trial) => scenario.execution?.checkpointContext==='observed-tools-v1' && cp.observation==='reply' ? trial.events.filter(e=>e.type==='tool_call'||e.type==='tool_result') : [];
+const toolContext = (scenario:VariantScenario, cp:Checkpoint, trial:Trial) => scenario.execution.checkpointContext==='observed-tools-v1' && cp.observation==='reply' ? trial.events.filter(e=>e.type==='tool_call'||e.type==='tool_result') : [];
 function missingObservation(cp: Checkpoint, trial: Trial): string | undefined {
   if (cp.observation === 'tool' && (!trial.observation || trial.observation.tools === 'partial')) return 'Полнота событий инструментов не подтверждена';
   if (cp.observation === 'state' && (!trial.observation || trial.observation.state === 'missing')) return 'Итоговое состояние не наблюдалось';
   if (cp.observation === 'state' && trial.observation?.state !== 'sandbox' && trial.observation?.resetConfirmed !== true) return 'Сброс состояния не подтверждён';
 }
-/** No prior verdicts, simulator decisions or hidden state outside the declared channel. */
-export function checkpointInput(scenario: Scenario, trial: Trial) {
-  const view = scenario.execution!.evaluatorView;
+/** The checkpoint judge's input as its receipts hashed it: no prior verdicts, simulator decisions or hidden state outside the declared channel. */
+function checkpointInput(scenario: VariantScenario, trial: Trial) {
+  const view = scenario.execution.evaluatorView;
   return {
     protocol: CHECKPOINT_PROTOCOL,
     checkpoints: view.checkpoints.map(checkpoint => ({ checkpoint, requirement: view.requirements.find(r => r.id === checkpoint.requirementId),
       dialogue: trial.events.filter(e => e.type === 'user' || e.type === 'assistant').map(({ seq, type, text }) => ({ seq, type, text })),
       evidence: channelEvents(checkpoint, trial).map(({ seq, type, text, tool, args, result, state }) => ({ seq, type, text, tool, args, result, ...(checkpoint.observation === 'state' && state ? { state } : {}) })),
       allowedEvidence: channelEvents(checkpoint, trial).map(e => e.seq),
-      ...(scenario.execution!.checkpointContext==='observed-tools-v1' && checkpoint.observation==='reply'?{context:toolContext(scenario,checkpoint,trial).map(({seq,type,text,tool,args,result})=>({seq,type,...(text===undefined?{}:{text}),...(tool===undefined?{}:{tool}),...(args===undefined?{}:{args}),...(result===undefined?{}:{result})}))}:{}),
+      ...(scenario.execution.checkpointContext==='observed-tools-v1' && checkpoint.observation==='reply'?{context:toolContext(scenario,checkpoint,trial).map(({seq,type,text,tool,args,result})=>({seq,type,...(text===undefined?{}:{text}),...(tool===undefined?{}:{tool}),...(args===undefined?{}:{args}),...(result===undefined?{}:{result})}))}:{}),
       applicabilityEvidence: trial.events.filter(e => ['user', 'assistant'].includes(e.type)||toolContext(scenario,checkpoint,trial).some(c=>c.seq===e.seq)).map(e => e.seq),
       observation: trial.observation ?? { state: 'missing', tools: 'partial' },
       ...(checkpoint.observation === 'state' && !missingObservation(checkpoint, trial) ? { state: trial.finalState } : {}),
     })),
   };
 }
-export type CheckpointInput = ReturnType<typeof checkpointInput>;
 
-export function checkpointResponseSchema(checkpoints: Checkpoint[]) {
-  const diagnosticIds = checkpoints.filter(cp => cp.role === 'diagnostic').map(cp => cp.id);
-  const candidate = diagnosticIds.length ? z.union([checkpointDecisionSchema,
-    z.object({ checkpointId: z.enum(diagnosticIds) }).catchall(z.json()),
-  ]) : checkpointDecisionSchema;
-  return z.strictObject({ results: z.array(candidate).max(48) })
-    .refine(value => JSON.stringify(value.results).length <= 128000, 'Checkpoint response exceeds 128000 characters');
-}
-
-
-export function evaluateCheckpoints(scenario: Scenario, trial: Trial, raw: unknown, grade: (scenario: Scenario, trial: Trial) => CheckResult[]): CheckpointResult[] {
-  const decisions = checkpointRawDecisionsSchema.parse(raw);
-  const view = scenario.execution!.evaluatorView;
-  const idOf = (decision: typeof decisions[number]) => decision && typeof decision === 'object' && !Array.isArray(decision) ? decision.checkpointId : undefined;
-  if (decisions.some(d => !view.checkpoints.some(cp => cp.id === idOf(d)))) throw new Error('Неизвестная контрольная точка');
-  return view.checkpoints.map(cp => {
-    const candidates = decisions.filter(d => idOf(d) === cp.id);
-    const parsed = candidates.length === 1 ? checkpointDecisionSchema.safeParse(candidates[0]) : undefined;
-    if (cp.role === 'required' && !parsed?.success) throw new Error('Нужен один корректный результат для каждой обязательной контрольной точки');
-    const d = parsed?.success ? parsed.data : { checkpointId: cp.id, result: 'unknown' as const, evidence: [],
-      rationale: candidates.length === 0 ? 'Диагностическая точка не оценена' : candidates.length > 1 ? 'Повторный результат диагностической точки' : 'Некорректный результат диагностической точки' };
-    const base: CheckpointResult = { ...d, requirementId: cp.requirementId, role: cp.role, observation: cp.observation };
-    const unknown = (reason: string): CheckpointResult => ({ ...base, result: 'unknown', evidence: [], rationale: reason });
-    const requirement = view.requirements.find(r => r.id === cp.requirementId);
-    if (!requirement || !requirement.quote.includes(cp.quote)) return unknown('Требование или цитата не подтверждены принятым снимком');
-    if (d.evidence.some(seq => !trial.events.some(e => e.seq === seq))) {
-      if (cp.role === 'diagnostic') return unknown('Диагностика ссылается на неизвестное событие');
-      throw new Error('Контрольная точка ссылается на неизвестное событие доказательства');
-    }
-    if (d.result === 'unknown') return base;
-    if (!d.evidence.length) return unknown('Нет конкретных событий, подтверждающих решение');
-    if (d.result === 'not_applicable') {
-      return d.evidence.every(seq => trial.events.some(e => e.seq === seq && (['user', 'assistant'].includes(e.type)||toolContext(scenario,cp,trial).some(c=>c.seq===seq)))) ? base : unknown('Неприменимость не подтверждена условиями диалога');
-    }
-    const unavailable = missingObservation(cp, trial);
-    if (unavailable) return unknown(unavailable);
-    const events = channelEvents(cp, trial);
-    const evidence = d.evidence.filter(seq => events.some(e => e.seq === seq));
-    const contextEvidence = d.evidence.filter(seq => !evidence.includes(seq));
-    if (!evidence.length || contextEvidence.some(seq => !trial.events.some(e => e.seq === seq && (['user', 'assistant'].includes(e.type)||toolContext(scenario,cp,trial).some(c=>c.seq===seq))))) return unknown('Доказательство не относится к объявленному каналу наблюдения');
-    base.evidence = evidence;
-    if (contextEvidence.length) base.contextEvidence = contextEvidence;
-    if (cp.check !== undefined) {
-      const parsed = checkSchema.safeParse(cp.check);
-      if (!parsed.success) return unknown('Некорректная точная проверка');
-      const check = parsed.data;
-      const channel = check.kind === 'state_equals' ? 'state' : check.kind.startsWith('answer_') ? 'reply' : 'tool';
-      if (channel !== cp.observation) return unknown('Точная проверка использует другой канал наблюдения');
-      try {
-        const [result] = grade({ ...scenario, execution: undefined, checks: [check] }, trial);
-        return { ...base, result: result!.passed ? 'pass' : 'fail', rationale: result!.evidence };
-      } catch (error) { return unknown(error instanceof Error ? error.message : 'Проверка не измерена'); }
-    }
-    return base;
-  });
-}
-export function checkpointReceipt(scenario: Scenario, trial: Trial, results: CheckpointResult[], decisions: unknown[]) {
-  const normalized = checkpointRawDecisionsSchema.parse(decisions).map(value => {
-    const parsed = checkpointDecisionSchema.safeParse(value);
-    return parsed.success ? parsed.data : value;
-  });
-  return { protocolHash: scenario.execution!.checkpointHash, inputHash: fingerprint(checkpointInput(scenario, trial)), resultHash: fingerprint(results), decisionHash: fingerprint(normalized), decisions: normalized };
-}
+/** The frozen checkpoint half of a first-format verdict; undefined for an attempt that carries no checkpoint verdict. */
 export function requiredCheckpointResult(scenario: Scenario | undefined, trial: Trial): 'pass' | 'fail' | 'unknown' | undefined {
-  if (!scenario?.execution) return undefined;
+  if (!checkpointJudged(scenario, trial)) return undefined;
   if (trial.checkpointReceipt && !checkpointReceiptValid(scenario, trial)) return 'unknown';
   const required = scenario.execution.evaluatorView.checkpoints.filter(c => c.role === 'required');
   const results = required.map(c => trial.checkpoints?.find(r => r.checkpointId === c.id && r.requirementId === c.requirementId)?.result ?? 'unknown');
   return results.includes('fail') ? 'fail' : results.every(r => r === 'pass' || r === 'not_applicable') ? 'pass' : 'unknown';
 }
 
-/** Compiler-visible checkpoint checks wait for applicability; only these checks run directly. */
-export function directChecks(scenario: Scenario) {
-  if (!scenario.execution) return scenario.checks;
+/**
+ * The checks an attempt was graded with directly. The checkpoint judge applied a checkpoint's exact check
+ * only where the checkpoint applied, so its attempts were graded without them; every other attempt —
+ * a card's, a first-format card's through the projection — is graded with all of them.
+ */
+export function directChecks(scenario: Scenario, trial: Trial) {
+  if (!checkpointJudged(scenario, trial)) return scenario.checks;
   const ids = scenario.execution.evaluatorView.checkpoints.flatMap(cp => { const check = checkSchema.safeParse(cp.check); return check.success ? [check.data.id] : []; });
   return scenario.checks.filter(check => !ids.includes(check.id));
 }
+/** A stored checkpoint verdict is trusted only with its receipt rebuilt from the record; an attempt without one needs none. */
 export function checkpointReceiptValid(scenario: Scenario, trial: Trial): boolean {
-  if (!scenario.execution) return true;
+  if (!checkpointJudged(scenario, trial)) return true;
   const receipt = trial.checkpointReceipt;
   return !!receipt && !!trial.checkpoints && receipt.protocolHash === scenario.execution.checkpointHash
     && receipt.inputHash === fingerprint(checkpointInput(scenario, trial))

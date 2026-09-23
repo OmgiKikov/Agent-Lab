@@ -1,7 +1,7 @@
 import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
 import { agentMetricResult, COUNTING_RULES, GOAL_METRIC_ID, observedRecord, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
-import { cardVerdict, headlineCardOutcome, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
+import { cardVerdict, headlineCardOutcome, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, stabilityBetweenRuns, type CardPart, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
 import { exampleRows, failureExplanation, rowsToLines, violatedRuleNumber, type ExplanationRole, type FailureExplanation } from './explain.js';
 import { pluralForm } from './plural.js';
 import { oneLine, shortId } from './text.js';
@@ -94,9 +94,11 @@ export interface ResultView {
   /**
    * One row per card: `outcome` is the headline verdict (goal-only for a control); `goal` and `rules`
    * are its two parts — the goal result and the prompt-rule result — each 'none' when the card has no
-   * such check (a legacy card without the goal rubric has neither).
+   * such check (a legacy card without the goal rubric has neither). `parts` are the parts of the
+   * verdict in the owner's words: a card's expectations А, Б, В (each over every attempt), or «Цель»
+   * and «Правила промпта»; empty for a legacy card decided by its strict result.
    */
-  cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; goal: CardOutcome | 'none'; rules: CardOutcome | 'none'; control: boolean; unstable: boolean; provenance: Scenario['provenance'] }[];
+  cards: { scenarioId: string; title: string; outcome: CardOutcome; reason?: NotMeasuredCode; goal: CardOutcome | 'none'; rules: CardOutcome | 'none'; parts: CardPart[]; control: boolean; unstable: boolean; provenance: Scenario['provenance'] }[];
   /** One explanation per failed situation of the headline (controls left out), in record order; built from stored data only. */
   failures: FailureExplanation[];
   /** Up to three failure causes, largest first; each counts distinct failed situations and carries one full explanation. */
@@ -187,7 +189,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     const verdict = cardVerdict(record, scenario, controlIds.has(scenario.id) ? 'goal' : 'headline');
     const parts = headlineCardOutcome(record, scenario);
     return { scenarioId: scenario.id, title: scenario.title, outcome: verdict.outcome, ...(verdict.reason ? { reason: verdict.reason } : {}),
-      goal: parts.goal, rules: parts.rules, control: controlIds.has(scenario.id), unstable: unstableIds.has(scenario.id), provenance: scenario.provenance };
+      goal: parts.goal, rules: parts.rules, parts: parts.parts, control: controlIds.has(scenario.id), unstable: unstableIds.has(scenario.id), provenance: scenario.provenance };
   });
   const counted = cards.filter(card => !card.control);
   const failures = record.scenarios.flatMap(scenario => {

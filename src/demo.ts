@@ -88,27 +88,25 @@ export function createDemoRuntime(): Runtime {
     async selectUserAction(input) {
       const reply = input.messages.filter(m => m.role === 'assistant').at(-1)?.content ?? '';
       const disclose = input.actions.find(a => a.id === 'disclose');
-      return disclose && asksNumber(reply) ? { actionId: disclose.id, factIds: disclose.factIds } : { actionId: 'finish', factIds: [] };
+      return { actionId: disclose && asksNumber(reply) ? disclose.id : 'finish' };
     },
-    async assessCheckpoints(input) {
-      return input.checkpoints.map(c => {
-        let hasNumber = false, repeated = false, asked = false;
-        for (const event of c.dialogue) {
-          if (event.type === 'user' && /терминала:\s*\d+/i.test(event.text ?? '')) hasNumber = true;
-          if (event.type === 'assistant' && asksNumber(event.text ?? '')) { repeated ||= hasNumber; asked = true; }
-        }
-        const openingHasNumber = /терминала:\s*\d+/i.test(c.dialogue.find(e => e.type === 'user')?.text ?? '');
-        const explained = c.evidence.some(e => /Подайте заявление в поддержку/i.test(e.text ?? ''));
-        const pass = c.checkpoint.id === 'ask_once' ? !repeated && (openingHasNumber || asked) : c.checkpoint.id === 'refund_explanation' ? hasNumber && explained : undefined;
-        return { checkpointId: c.checkpoint.id, result: pass === undefined ? 'unknown' : pass ? 'pass' : 'fail', evidence: c.allowedEvidence,
-          rationale: c.checkpoint.id === 'ask_once' ? `Учебная проверка: номер запрошен=${asked}, повтор после раскрытия=${repeated}` : 'Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок' };
-      });
-    },
+    /** The teaching judge: each expectation of the example's card (its two checkpoints, projected) by a fixed reading of the dialogue. */
     async assess({ scenario, trial }) {
-      return (scenario.metrics ?? []).map((metric): MetricAssessment => scenario.execution
-        ? { metricId: metric.id, result: trial.checkpoints?.filter(c => c.role === 'required').every(c => c.result === 'pass') ? 'pass' : 'fail',
-          evidence: trial.events.filter(e => e.type === 'assistant').map(e => e.seq), rationale: 'Детерминированная учебная оценка по обязательным контрольным точкам' }
-        : { metricId: metric.id, result: 'unknown', evidence: [], rationale: 'Учебный судья оценивает только карточки учебной библиотеки.' });
+      let hasNumber = false, repeated = false, asked = false;
+      for (const event of trial.events) {
+        if (event.type === 'user' && /терминала:\s*\d+/i.test(event.text ?? '')) hasNumber = true;
+        if (event.type === 'assistant' && asksNumber(event.text ?? '')) { repeated ||= hasNumber; asked = true; }
+      }
+      const openingHasNumber = /терминала:\s*\d+/i.test(trial.events.find(e => e.type === 'user')?.text ?? '');
+      const replies = trial.events.filter(e => e.type === 'assistant');
+      const explained = replies.some(e => /Подайте заявление в поддержку/i.test(e.text ?? ''));
+      return (scenario.metrics ?? []).map((metric): MetricAssessment => {
+        const pass = metric.id === 'ask_once' ? !repeated && (openingHasNumber || asked) : metric.id === 'refund_explanation' ? hasNumber && explained : undefined;
+        return pass === undefined
+          ? { metricId: metric.id, result: 'unknown', evidence: [], rationale: 'Учебный судья оценивает только ожидания учебной карточки.' }
+          : { metricId: metric.id, result: pass ? 'pass' : 'fail', evidence: replies.map(e => e.seq),
+            rationale: metric.id === 'ask_once' ? `Учебная проверка: номер запрошен=${asked}, повтор после раскрытия=${repeated}` : 'Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок' };
+      });
     },
   };
 }

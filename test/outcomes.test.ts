@@ -133,13 +133,13 @@ test('markTargets is the recorded verdict by the headline rule plus the metrics 
 
 test('markUnderCurrentRule: a stamped mark answers the current rule; an unstamped one only where the old rule asked the same question', () => {
   const stamped = (countingRules?: string): HumanReview => ({ ...review('fail', GOAL), source: 'quick', judgeVerdict: 'fail', ...(countingRules === undefined ? {} : { countingRules }) });
-  assert.equal(markUnderCurrentRule(scenario, stamped(COUNTING_RULES), [GOAL, RULES]), true);
-  assert.equal(markUnderCurrentRule(scenario, stamped(COUNTING_RULES), [RULES]), true);
-  assert.equal(markUnderCurrentRule(scenario, stamped('goal-v1'), [GOAL]), false, 'a stamp that names another rule is never current');
-  assert.equal(markUnderCurrentRule(scenario, stamped(), [GOAL]), true, 'a goal-only failure asked the same question under the previous rule');
-  assert.equal(markUnderCurrentRule(scenario, stamped(), [GOAL, RULES]), false, 'a double failure did not exist under the previous rule');
-  assert.equal(markUnderCurrentRule(scenario, stamped(), [RULES]), false);
-  assert.equal(markUnderCurrentRule(card(['a', 'b']), stamped(), ['b']), true, 'a legacy card counts the same way under both rules');
+  assert.equal(markUnderCurrentRule(scenario, trial, stamped(COUNTING_RULES), [GOAL, RULES]), true);
+  assert.equal(markUnderCurrentRule(scenario, trial, stamped(COUNTING_RULES), [RULES]), true);
+  assert.equal(markUnderCurrentRule(scenario, trial, stamped('goal-v1'), [GOAL]), false, 'a stamp that names another rule is never current');
+  assert.equal(markUnderCurrentRule(scenario, trial, stamped(), [GOAL]), true, 'a goal-only failure asked the same question under the previous rule');
+  assert.equal(markUnderCurrentRule(scenario, trial, stamped(), [GOAL, RULES]), false, 'a double failure did not exist under the previous rule');
+  assert.equal(markUnderCurrentRule(scenario, trial, stamped(), [RULES]), false);
+  assert.equal(markUnderCurrentRule(card(['a', 'b']), trial, stamped(), ['b']), true, 'a legacy card counts the same way under both rules');
 });
 
 test('headlineTrialResult combines the headline metrics fail-first with the human verdicts applied', () => {

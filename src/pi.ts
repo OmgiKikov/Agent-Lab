@@ -1,8 +1,7 @@
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
-import { checkpointResponseSchema } from './checkpoints.js';
 import {
-  checkSchema, failureModeSchema, fingerprint, requirementSchema, REQUIREMENT_LIMIT, SIMULATOR_PROTOCOL, sourceSelectionSchema, userTurnSchema, VERSION, verbatimSpan, worldSchema,
+  checkSchema, EXPECTATIONS_PROTOCOL, failureModeSchema, fingerprint, requirementSchema, REQUIREMENT_LIMIT, SIMULATOR_PROTOCOL, sourceSelectionSchema, userTurnSchema, VERSION, verbatimSpan, worldSchema,
   type CallContext, type FailureMode, type GroundingInput, type Requirement, type Runtime, type ScenarioProposalsInput, type Settings, type Source,
 } from './contracts.js';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.js';
@@ -11,12 +10,12 @@ import { callModel, type Model } from './llm/model-call.js';
 import { AUTH_HELP, resolveModels } from './llm/models.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
 import {
-  CHECKPOINT_ROLE, FAILURE_MODES_ROLE, LEGACY_CHECKPOINT_ROLE, REQUIREMENTS_ROLE, SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE,
+  FAILURE_MODES_ROLE, REQUIREMENTS_ROLE, SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE,
   SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
 } from './prompts.js';
 import { scenarioProposalSchema, semanticFindingSchema } from './scenario-contracts.js';
 import { SCENARIO_OUTPUT_BYTES, SCENARIO_REQUEST_BYTES, SEMANTIC_BATCH_FIELDS, SEMANTIC_REASON_CHARS, workInputIssue } from './scenario-work.js';
-import { userDecisionSchema } from './user-controller.js';
+import { USER_CONTROLLER_PROTOCOL, userDecisionSchema } from './user-controller.js';
 
 /*
  * The Pi runtime of Agent Lab: every model step is a task descriptor (who answers, what it is told, the
@@ -24,7 +23,13 @@ import { userDecisionSchema } from './user-controller.js';
  * task's role; the models of the roles are resolved and checked once, before the first paid call.
  */
 
+/**
+ * Everything that decides how a run is judged besides its cards: the judge, both customer roles (the free
+ * simulator of older cards and the controller of compiled ones, whose prompt is no longer inside a card's
+ * definition), how card expectations are judged, and the models. Runs compare only under the same version.
+ */
 export const evaluatorVersion = (settings: Settings): string => fingerprint({ protocol: VERSION, judge: JUDGE_PROTOCOL, simulator: { role: SIMULATOR_ROLE, protocol: SIMULATOR_PROTOCOL },
+  controller: { role: USER_CONTROLLER_ROLE, protocol: USER_CONTROLLER_PROTOCOL, decision: 'action-enum-v1' }, expectations: EXPECTATIONS_PROTOCOL,
   provider: settings.provider, model: settings.model, roles: settings.roles ?? {}, judgeModel: settings.judge });
 
 const OBSERVABLE = 'true when a user can see this rule kept or broken in the agent\'s reply; false only for an internal interface of the agent\'s prompt, such as its machine output format: recorded, never judged';
@@ -214,16 +219,9 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           ...(models.judgeTransport.structured ? { responseFormat: JUDGE_RESPONSE_FORMAT } : {}),
         }, ctx, recordPartial)).text);
     },
-    async assessCheckpoints(input, ctx) {
-      // A checkpoint with observed tool context was compiled with the role that explains that context.
-      const instructions = input.checkpoints.some(checkpoint => Object.hasOwn(checkpoint, 'context')) ? CHECKPOINT_ROLE : LEGACY_CHECKPOINT_ROLE;
-      return (await run({
-        id: 'checkpoints', label: 'Контрольные точки', role: 'judge', instructions,
-        output: checkpointResponseSchema(input.checkpoints.map(item => item.checkpoint)),
-      }, input, ctx)).results;
-    },
     async selectUserAction(input, ctx) {
-      return run({ id: 'user-action', label: 'Действие пользователя', role: 'simulator', instructions: USER_CONTROLLER_ROLE, output: userDecisionSchema }, input, ctx);
+      // The answer is an enum of exactly the moves allowed now, so a move outside the policy cannot be returned.
+      return run({ id: 'user-action', label: 'Действие пользователя', role: 'simulator', instructions: USER_CONTROLLER_ROLE, output: userDecisionSchema(input.actions) }, input, ctx);
     },
     async userTurn(input, ctx) {
       const reply = await run({ id: 'user-turn', label: 'Реплика пользователя', role: 'simulator', instructions: SIMULATOR_ROLE, output: simulatorReplySchema }, {

@@ -1,9 +1,10 @@
 import { SERVICE_REPLY_REASON } from './comparison.js';
-import { checkpointInput, checkpointReceipt, directChecks, evaluateCheckpoints } from './checkpoints.js';
-import { createUserState, allowedUserActions, advanceUser, requiredUserTurns } from './user-controller.js';
+import { judgedScenario } from './card/legacy-v1.js';
+import { directChecks } from './checkpoints.js';
+import { createUserState, allowedUserActions, advanceUser, requiredUserTurns, userDecisionSchema } from './user-controller.js';
 import { randomUUID } from 'node:crypto';
 import {
-  addUsage, assessmentRubrics, emptyUsage, judgeAuditSchema, runnableTarget, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
+  addUsage, assessmentRubrics, emptyUsage, isCardExecution, judgeAuditSchema, runnableTarget, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
   type CallContext, type CheckResult, type DialogueMessage, type JudgeAudit, type MetricAssessment, type Requirement, type Revision,
   type Runtime, type Scenario, type Settings, type Source, type Target, type TargetSession, type TraceEvent, type Trial, type UserMode,
 } from './contracts.js';
@@ -15,11 +16,11 @@ import { simulatorChecks } from './simulator.js';
  * One trial = one fresh world, one target session, one user side.
  *
  *   opening ──► target.respond ──► [static? budget? done?] ──► next user message ──► target.respond ──► ...
- *      │                                   │ library card (execution): runtime.selectUserAction    │
+ *      │                                   │ compiled card (execution): runtime.selectUserAction   │
  *      │                                   │ older card, reactive: runtime.userTurn (free LLM user) │
  *      │                                   │ scripted: user.script[turn]                            │
  *      └────────── every message, tool call/result and user decision → trial.events ◄──────────────┘
- *   end ──► grade(checks) over finalState + events ──► outcome ──► optional rubric assessment
+ *   end ──► grade(checks) over finalState + events ──► outcome ──► rubric assessment (a card: one per expectation)
  *
  * Target: an external agent (http/module/command) whose reported events/records feed the grading.
  * Invalid = the harness could not measure the agent. Fail = the agent was measured and fell short.
@@ -71,7 +72,7 @@ const stages: Record<string, string> = {
 export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
   if (scenario.execution) {
     if (scenario.execution.environmentView.mode === 'managed' && trial.observation?.state !== 'sandbox' && trial.observation?.resetConfirmed !== true) throw new Error('Сброс управляемого окружения не подтверждён адаптером.');
-    scenario = { ...scenario, checks: directChecks(scenario) };
+    scenario = { ...scenario, checks: directChecks(scenario, trial) };
   }
   if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) {
     throw new Error('Внешнее состояние карточки не подтверждено адаптером (resetConfirmed). Измерение недействительно.');
@@ -168,6 +169,10 @@ export async function evaluateTrial(input: {
   let finalUserReply = false;
   let reportedState = false;
   let controlled: ReturnType<typeof createUserState> | undefined;
+  // A card judged on tools or state needs the observed state recorded after every agent reply.
+  const execution = scenario.execution;
+  const observesBeyondReply = !!execution && (isCardExecution(execution) ? execution.evaluatorView.expectations : execution.evaluatorView.checkpoints)
+    .some(item => item.observation !== 'reply');
   try {
     ctx.signal.throwIfAborted();
     if (scenario.execution) {
@@ -220,7 +225,7 @@ export async function evaluateTrial(input: {
       if (persistenceFailed) throw persistenceError;
       ctx.signal.throwIfAborted();
       if (typeof response !== 'string') throw new Error('Target returned a non-text response');
-      if (controlled && scenario.execution!.evaluatorView.checkpoints.some(cp => cp.observation !== 'reply')) {
+      if (controlled && observesBeyondReply) {
         emit({ type: 'observation', result: structuredClone(trial.observation), ...(trial.observation?.state !== 'missing' ? { state: structuredClone(state) } : {}) });
       }
       append('assistant', response);
@@ -239,23 +244,17 @@ export async function evaluateTrial(input: {
       stage = 'user simulation';
       onStage?.('user');
       if (controlled) {
-        let repair: string | undefined;
-        let accepted: ReturnType<typeof advanceUser> | undefined;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          ctx.signal.throwIfAborted();
-          const decision = await runtime.selectUserAction!({ user: structuredClone(scenario.execution!.userView), state: controlled.position,
-            actions: allowedUserActions(controlled, response), messages: structuredClone(messages), turn, ...(repair ? { repair } : {}) }, userCtx);
-          ctx.signal.throwIfAborted();
-          try {
-            accepted = advanceUser(controlled, decision);
-            emit({ type: 'simulator', result: { protocol: scenario.execution!.protocol, attempt, decision, accepted: true, from: controlled.position, to: accepted.state.position } });
-            break;
-          } catch (error) {
-            repair = error instanceof Error ? error.message : 'Неразрешённое действие';
-            emit({ type: 'simulator', result: { protocol: scenario.execution!.protocol, attempt, decision, accepted: false, reason: repair } });
-          }
-        }
-        if (!accepted) throw new Error('Симулятор не выбрал допустимое действие после ограниченного исправления.');
+        // The answer must be one of the moves allowed now (an enum); the message comes from the move itself.
+        const actions = allowedUserActions(controlled, response);
+        const choice = userDecisionSchema(actions);
+        ctx.signal.throwIfAborted();
+        const answer = choice.safeParse(await runtime.selectUserAction!({ user: structuredClone(scenario.execution!.userView), state: controlled.position,
+          actions, messages: structuredClone(messages), turn }, userCtx));
+        ctx.signal.throwIfAborted();
+        if (!answer.success) throw new Error('Симулятор выбрал действие, которого нет среди допустимых сейчас.');
+        const decision = answer.data;
+        const accepted = advanceUser(controlled, decision);
+        emit({ type: 'simulator', result: { protocol: scenario.execution!.protocol, decision, accepted: true, from: controlled.position, to: accepted.state.position } });
         controlled = accepted.state;
         if (accepted.done && !accepted.message) { stopped = true; break; }
         if (turn + 1 >= settings.maxTurns) throw new Error('Симулятор исчерпал лимит реплик до завершения обязательного пути.');
@@ -300,9 +299,8 @@ export async function evaluateTrial(input: {
     trial.elapsedMs = Math.round(performance.now() - started);
     if (persistenceFailed) throw persistenceError;
   }
-  if (stopped && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && (scenario.execution || assessmentRubrics(scenario, trial).length)) {
+  if (stopped && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && assessmentRubrics(judgedScenario(scenario, trial), trial).length) {
     try {
-      if (!runtime.assess && !scenario.execution) throw new Error('Metric assessment is unavailable for this runtime');
       ctx.signal.throwIfAborted();
       onStage?.('assessment');
       trial.assessments = await assessTrial(runtime, scenario, input.judgeSources ?? sources, trial, { ...localCtx, onJudgment: (id, audit, final) => {
@@ -318,16 +316,14 @@ export async function evaluateTrial(input: {
   return trial;
 }
 
-/** Shared by live evaluation and reassessment of immutable recorded evidence. The judge sees the agent prompt only as its observable rules. */
-export async function assessTrial(runtime: Runtime, scenario: Scenario, sources: Source[], trial: Trial, ctx: CallContext, requirements: Requirement[]) {
-  if (scenario.execution) {
-    delete trial.checkpoints; delete trial.checkpointReceipt;
-    if (!runtime.assessCheckpoints) throw new Error('Оценка контрольных точек недоступна в этой среде');
-    const raw = await runtime.assessCheckpoints(checkpointInput(scenario, trial), { ...ctx, onTargetEvent: undefined, onTrace: undefined });
-    ctx.signal.throwIfAborted();
-    trial.checkpoints = evaluateCheckpoints(scenario, trial, raw, grade);
-    trial.checkpointReceipt = checkpointReceipt(scenario, trial, trial.checkpoints, raw);
-  }
+/**
+ * Shared by live evaluation and reassessment of immutable recorded evidence. The judge sees the agent prompt
+ * only as its observable rules. A new judgment never carries a checkpoint verdict: a first-format card is
+ * judged through its projection, one expectation per required checkpoint (card/legacy-v1.ts).
+ */
+export async function assessTrial(runtime: Runtime, stored: Scenario, sources: Source[], trial: Trial, ctx: CallContext, requirements: Requirement[]) {
+  delete trial.checkpoints; delete trial.checkpointReceipt;
+  const scenario = judgedScenario(stored, trial);
   const metrics = assessmentRubrics(scenario, trial);
   if (!metrics.length) return [];
   if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');

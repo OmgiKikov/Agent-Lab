@@ -5,15 +5,13 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
-import { DEFAULT_JUDGE, emptyUsage, experimentSchema, settingsSchema, type Experiment, type Trial } from '../src/contracts.js';
-import { checkpointInput } from '../src/checkpoints.js';
+import { DEFAULT_JUDGE, emptyUsage, experimentSchema, settingsSchema, type Experiment } from '../src/contracts.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { hasCompleteJudgment, observableSources, scenarioSources } from '../src/judge.js';
 import { callModel, ProviderFailure, type ProviderFailureKind } from '../src/llm/model-call.js';
 import { resolveModels } from '../src/llm/models.js';
 import { REPAIR_ATTEMPTS, runStructured, StructuredTaskError } from '../src/llm/structured.js';
 import { createPiRuntime, evaluatorVersion } from '../src/pi.js';
-import { acceptLibrary, compileLibrary, libraryHash } from '../src/scenario-library.js';
 import { planSemanticWork } from '../src/scenario-work.js';
 import { callContext, fixture, fixtureSettings, type Reply } from './helpers/pi-fixture.js';
 import { libraryFixture } from './helpers/scenario-library.js';
@@ -68,7 +66,9 @@ test('judgments written before the harness still verify, and the harness writes 
       const before = experimentSchema.parse(judged[name]);
       assert.ok(before.trials.every(trial => trial.judgeReceipt?.complete && !trial.judgeAudit), `${name} carries receipts only`);
       assert.deepEqual(verifies(before), before.trials.map(() => true), `${name}: a receipt made before the harness verifies`);
-      assert.equal(evaluatorVersion(before.settings), before.evaluatorVersion, `${name}: the evaluator version is computed as before`);
+      // Today's evaluator also names the controller of compiled cards (its prompt left the card definitions), so it is a
+      // new evaluator version; a stored run keeps its own, and only its judge receipts must stay identical.
+      assert.notEqual(evaluatorVersion(before.settings), before.evaluatorVersion, `${name}: the controller prompt is part of today's evaluator version`);
       const f = await fixture(request => agreeingJudgment(text(request.messages.at(-1)!.content)));
       const directory = await mkdtemp(join(tmpdir(), 'agent-lab-llm-'));
       try {
@@ -77,13 +77,13 @@ test('judgments written before the harness still verify, and the harness writes 
         await lab.init();
         try {
           const stored = experimentSchema.parse(await storedFixture(source));
-          assert.equal(evaluatorVersion(stored.settings), stored.evaluatorVersion);
           await lab.store.save(stored);
           const pending = await lab.reassess(stored.id, { judge });
           await lab.waitForIdle();
           const after = await lab.get(pending.id);
           assert.equal(after.phase, 'results_review', after.error ?? '');
           assert.deepEqual(verifies(after), after.trials.map(() => true));
+          assert.equal(after.evaluatorVersion, evaluatorVersion(after.settings), 'the reassessment is judged by today\'s evaluator');
           assert.deepEqual(receipts(after), receipts(before), `${name}: the same judge protocol, input, configuration, transport and votes`);
         } finally { await lab.close(); }
       } finally { await f.close(); await rm(directory, { recursive: true, force: true }); }
@@ -176,24 +176,17 @@ test('the catalog is an enum of the source selection schema up to 500 articles; 
 
 test('every judge-role task of an OpenRouter judge goes through the Chat Completions adapter pinned to its upstream', async () => {
   const library = libraryFixture();
-  const scenario = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
-  const trial: Trial = { id: 't', scenarioId: scenario.id, familyId: scenario.familyId, revisionId: 'r', userMode: 'reactive', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '',
-    checks: [], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1,
-    events: [{ seq: 0, type: 'user', text: 'Возврат' }, { seq: 1, type: 'assistant', text: 'Назовите терминал' }] };
   const job = planSemanticWork(library).jobs[0]!;
   const wire = openRouter(data => {
     const input = JSON.parse(data);
-    return JSON.stringify(input.fields
-      ? { findings: input.fields.flatMap((field: any) => field.paths.map((path: string) => ({ variantId: field.variantId, path, status: 'ready', reason: 'Проверено' }))) }
-      : { results: [{ checkpointId: 'ask_terminal', result: 'pass', evidence: [1], rationale: 'Уточнение соответствует правилу' }] });
+    return JSON.stringify({ findings: input.fields.flatMap((field: any) => field.paths.map((path: string) => ({ variantId: field.variantId, path, status: 'ready', reason: 'Проверено' }))) });
   });
   const f = await fixture(() => { throw new Error('The builder provider must not answer a judge-role task.'); });
   try {
     await f.runtime.setRuntimeApiKey('openrouter', 'offline-fixture-key');
     const adapter = await createPiRuntime(settingsSchema.parse({ ...fixtureSettings, judge: DEFAULT_JUDGE }), f.runtime);
     await adapter.assessScenarioProposals!(job.input, callContext().ctx);
-    await adapter.assessCheckpoints!(checkpointInput(scenario, trial), callContext().ctx);
-    assert.equal(wire.bodies.length, 2);
+    assert.equal(wire.bodies.length, 1);
     for (const body of wire.bodies) {
       assert.equal(body.model, DEFAULT_JUDGE.model);
       assert.deepEqual(body.provider, { only: [DEFAULT_JUDGE.upstream], allow_fallbacks: false });

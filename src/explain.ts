@@ -1,5 +1,6 @@
 import { internalPromptRule, type Experiment, type MetricAssessment, type Scenario, type Trial, verbatimSpanAt } from './contracts.js';
-import { agentMetricResult, automaticTrialResult } from './outcomes.js';
+import { headlineRule, type CountedExpectation } from './card/expectations.js';
+import { agentMetricResult, automaticTrialResult, expectationResult } from './outcomes.js';
 import { AGREED_RATIONALE_PREFIX } from './judge.js';
 import { pluralForm } from './plural.js';
 import { oneLine } from './text.js';
@@ -11,7 +12,7 @@ import { oneLine } from './text.js';
  * against the record (the reply against its event, a rule quote against its source); a part
  * that fails its check is replaced by a named «не подтверждено» row, never guessed.
  * Pure: no I/O, no escaping, raw text; every surface escapes at its own boundary. Imports only
- * contracts.js, outcomes.js, comparison.js, judge.js and plural.js; it must not import
+ * contracts.js, outcomes.js, card/expectations.js, judge.js and plural.js; it must not import
  * experiment.ts, quality.ts or result-view.ts.
  */
 export const UNVERIFIED = 'объяснение не подтверждено цитатой';
@@ -184,15 +185,27 @@ export function failureExplanation(record: Experiment, scenario: Scenario, trial
   const kind = hasGoal && goalFailed(chosen) && rulesFailed(chosen) ? 'both' : goalFailed(chosen) ? 'goal' : rulesFailed(chosen) ? 'rules' : null;
   if (!kind) return null;
 
-  const cited = kind === 'rules' ? assessment(chosen, COMPLIANCE)
+  const rule = headlineRule(scenario, [chosen]);
+  const failed = rule.kind === 'expectations' ? rule.expectations.filter(expectation => expectationResult(chosen, expectation, reviews) === 'fail') : [];
+  const cited = failed[0] ? assessment(chosen, failed[0].id) : kind === 'rules' ? assessment(chosen, COMPLIANCE)
     : assessment(chosen, GOAL) ?? chosen.assessments?.find(item => item.result === 'fail' && agentMetrics.includes(item.metricId));
-  const details = detailRows(record, scenario, chosen, kind, cited);
+  const details = detailRows(record, owed(scenario, failed), chosen, kind, cited);
   const rows: ExplanationRow[] = [{ role: 'title', indent: 0, text: `✗ ${oneLine(scenario.title)}` }, ...details.rows];
   return {
     scenarioId: scenario.id, trialId: chosen.id, title: scenario.title, kind, said: details.said,
     rules: details.rules, unverifiedRules: details.unverifiedRules, moreRules: details.moreRules,
     ...(details.violated ? { violated: details.violated } : {}), rows, lines: rowsToLines(rows),
   };
+}
+
+/**
+ * A card counted by its expectations owed exactly the expectations at stake — «Б — объяснить, как оформить
+ * возврат» — and rests on the owner rules those expectations cite.
+ */
+function owed(scenario: Scenario, expectations: CountedExpectation[]): Scenario {
+  if (!expectations.length) return scenario;
+  return { ...scenario, successCriteria: expectations.map(expectation => `${expectation.letter} — ${oneLine(expectation.text)}`).join('; '),
+    requirementIds: [...new Set(expectations.flatMap(expectation => expectation.requirementIds))] };
 }
 
 type DetailKind = FailureExplanation['kind'] | 'pass';
@@ -263,7 +276,8 @@ function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind:
 export function situationEvidence(record: Experiment, scenario: Scenario, trial: Trial, metricId: string): ExplanationRow[] {
   const judged: Experiment = { ...record, humanReviews: [] };
   const cited = assessment(trial, metricId);
-  if (cited?.result === 'pass') return detailRows(judged, scenario, trial, 'pass', cited).rows;
+  const rule = headlineRule(scenario, [trial]);
+  if (cited?.result === 'pass') return detailRows(judged, owed(scenario, rule.kind === 'expectations' ? rule.expectations : []), trial, 'pass', cited).rows;
   if (cited?.result !== 'fail') return [];
   const explanation = failureExplanation(judged, scenario, trial);
   if (explanation) return explanation.rows.filter(row => row.role !== 'title');

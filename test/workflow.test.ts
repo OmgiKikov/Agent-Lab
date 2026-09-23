@@ -145,7 +145,8 @@ test('CLI run returns the full persisted dialogue, automatic verdict and cited p
   assert.match(proof.automaticVerdict, /^(?:pass|fail|unknown)$/);
   assert.match(proof.lines.join('\n'), /РЕПЛИКИ\n#0 ПОЛЬЗОВАТЕЛЬ: [^\n]+\n#\d+ АГЕНТ:/);
   assert.match(proof.lines.join('\n'), /Автоматический вердикт: (?:pass|fail|unknown)/);
-  assert.match(proof.lines.join('\n'), /КОНТРОЛЬНЫЕ ТОЧКИ\n(?:ВЫПОЛНЕНО|НАРУШЕНО) \[ask_once\] · обязательная · требование refund_rule · события #\d+\n  Обоснование:/);
+  assert.doesNotMatch(proof.lines.join('\n'), /КОНТРОЛЬНЫЕ ТОЧКИ/, 'a new judgment carries no checkpoint verdicts');
+  assert.match(proof.lines.join('\n'), /(?:PASS|FAIL) \[ask_once\] Если номер уже сообщён[^\n]* · события: #\d+\n  Обоснование:/);
   assert.match(proof.lines.join('\n'), /ОЦЕНКИ\n(?:PASS|FAIL|UNKNOWN) \[[^\]]+\].*события: #\d+/);
 });
 

@@ -16,8 +16,12 @@ function runtimeFixture(): Runtime {
     async groundRequirements() { return { requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [] }; },
     async scenarioProposals(request, ctx) { ctx.beforeCall(); return proposals(request.batchId).filter(p => request.dialogues.some(d => d.id === p.variant.sourceDialogues[0]!.dialogueId)) as any; },
     async assessScenarioProposals(request, ctx) { ctx.beforeCall(); return request.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready' as const, reason: 'Детерминированная проверка синтетического примера' }))); },
-    async selectUserAction() { return { actionId: 'finish', factIds: [] }; },
-    async assessCheckpoints({ checkpoints, events }) { return checkpoints.map(cp => ({ checkpointId: cp.id, result: 'pass' as const, rationale: 'Номер запрошен', evidence: [events.find(e => e.type === 'assistant')!.index] })); },
+    async selectUserAction() { return { actionId: 'finish' }; },
+    // Every expectation of the card passes on the agent's first reply.
+    async assess({ scenario, trial }) {
+      const reply = trial.events.find(e => e.type === 'assistant')!.seq;
+      return (scenario.metrics ?? []).map(metric => ({ metricId: metric.id, result: 'pass' as const, rationale: 'Номер запрошен', evidence: [reply] }));
+    },
   } as Runtime;
 }
 
@@ -100,7 +104,8 @@ test('reproducible demo exercises persisted import, owner edit, accepted run and
     for (const trial of late) {
       assert.deepEqual(trial.events.filter((e: any) => e.type === 'user').map((e: any) => e.text), ['Помогите с возвратом.', 'Номер терминала: 5678']);
       assert.ok(trial.events.some((e: any) => e.type === 'assistant' && e.text.includes('Подайте заявление')));
-      assert.equal(trial.checkpoints.find((c: any) => c.checkpointId === 'refund_explanation')?.result, 'pass');
+      assert.equal(trial.checkpoints, undefined, 'judged through the projection: one expectation per required checkpoint');
+      assert.equal(trial.assessments.find((a: any) => a.metricId === 'refund_explanation')?.result, 'pass');
     }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
@@ -155,12 +160,12 @@ test('demo direct invocation through a symlink path prints an isolated review dr
 });
 
 
-test('teaching checkpoint assessor rejects alternative repeated questions and missing refund instructions', async () => {
+test('the teaching judge fails a repeated question in other words and a missing refund instruction', async () => {
   const { demoScenarioRuntime } = await import('../examples/scenario-lab-demo.mjs');
   const runtime = demoScenarioRuntime();
   const assess = async (id: string, replies: string[]) => {
-    const dialogue = [{ seq: 0, type: 'user', text: 'Номер терминала: 1234. Помогите с возвратом.' }, ...replies.map((text, i) => ({ seq: i + 1, type: 'assistant', text }))];
-    return (await runtime.assessCheckpoints({ checkpoints: [{ checkpoint: { id }, dialogue, evidence: dialogue.slice(1), allowedEvidence: dialogue.slice(1).map(e => e.seq) }] }))[0].result;
+    const events = [{ seq: 0, type: 'user', text: 'Номер терминала: 1234. Помогите с возвратом.' }, ...replies.map((text, i) => ({ seq: i + 1, type: 'assistant', text }))];
+    return (await runtime.assess({ scenario: { metrics: [{ id }] }, sources: [], trial: { events } }))[0].result;
   };
   assert.equal(await assess('ask_once', ['Какой у вас номер терминала?']), 'fail');
   assert.equal(await assess('refund_explanation', ['Спасибо, номер записан.']), 'fail');

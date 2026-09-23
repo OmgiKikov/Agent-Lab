@@ -905,10 +905,13 @@ const votes = (goal: Vote, rules: Vote, fidelity: Vote = 'pass', extra: MetricAs
 function ruledRun(cards: Scenario[], trials: Trial[], overrides: Partial<Experiment> = {}): Experiment {
   return record({ id: 'ruled', settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1 }), scenarios: cards, trials, ...overrides });
 }
-/** One card `c` with one attempt; returns the headline outcome, the verdict with its reason and the goal-only outcome. */
+/** The headline verdict and its two halves, without the owner-facing parts (asserted on their own). */
+const halves = ({ outcome, goal, rules }: ReturnType<typeof headlineCardOutcome>) => ({ outcome, goal, rules });
+/** One card `c` with one attempt; returns the headline outcome, its parts, the verdict with its reason and the goal-only outcome. */
 function one(assessments: MetricAssessment[], extra: Partial<Trial> = {}, overrides: Partial<Experiment> = {}, card = ruledCard('c')) {
   const run = ruledRun([card], [ruledAttempt('t', 'c', assessments, extra)], overrides);
-  return { headline: headlineCardOutcome(run, card), verdict: cardVerdict(run, card), goal: goalCardOutcome(run, card), run, card };
+  const headline = headlineCardOutcome(run, card);
+  return { headline: halves(headline), parts: headline.parts, verdict: cardVerdict(run, card), goal: goalCardOutcome(run, card), run, card };
 }
 
 test('the headline card passes only when the goal and the prompt rules pass; either failing fails it', () => {
@@ -923,6 +926,8 @@ test('the headline card passes only when the goal and the prompt rules pass; eit
   assert.deepEqual(one(votes('unknown', 'pass')).verdict, { outcome: 'unknown', reason: 'judge_split' });
   assert.deepEqual(one(votes('pass', 'pass')).verdict, { outcome: 'pass' });
   assert.deepEqual(one(votes('pass', 'fail')).verdict, { outcome: 'fail' });
+  assert.deepEqual(one(votes('pass', 'fail')).parts, [{ id: 'goal_attainment', label: 'Цель', outcome: 'pass' }, { id: 'prompt_compliance', label: 'Правила промпта', outcome: 'fail' }],
+    'the owner reads the two halves as the parts «Цель» and «Правила промпта»');
   // The other undecided rules reasons reuse the goal ladder.
   const unjudgedRules = one([judged('goal_attainment', 'pass'), judged('user_fidelity', 'pass')]);
   assert.deepEqual(unjudgedRules.verdict, { outcome: 'unknown', reason: 'not_judged' });
@@ -950,13 +955,13 @@ test('two attempts: a rules failure in one of them fails the card; a missing att
   const card = ruledCard('c');
   const two = { settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 2 }) };
   const mixed = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'pass')), ruledAttempt('t1', 'c', votes('pass', 'fail'), { repeat: 1 })], two);
-  assert.deepEqual(headlineCardOutcome(mixed, card), { outcome: 'fail', goal: 'pass', rules: 'fail' });
+  assert.deepEqual(halves(headlineCardOutcome(mixed, card)), { outcome: 'fail', goal: 'pass', rules: 'fail' });
   const clean = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'pass')), ruledAttempt('t1', 'c', votes('pass', 'pass'), { repeat: 1 })], two);
-  assert.deepEqual(headlineCardOutcome(clean, card), { outcome: 'pass', goal: 'pass', rules: 'pass' });
+  assert.deepEqual(halves(headlineCardOutcome(clean, card)), { outcome: 'pass', goal: 'pass', rules: 'pass' });
   const missing = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'fail'))], two);
-  assert.deepEqual(headlineCardOutcome(missing, card), { outcome: 'unknown', goal: 'unknown', rules: 'unknown' });
+  assert.deepEqual(halves(headlineCardOutcome(missing, card)), { outcome: 'unknown', goal: 'unknown', rules: 'unknown' });
   assert.deepEqual(cardVerdict(missing, card), { outcome: 'unknown', reason: 'attempts_mismatch' });
-  assert.deepEqual(headlineCardOutcome(missing, card, { partial: true }), { outcome: 'fail', goal: 'pass', rules: 'fail' }, 'the partial gate decides the matched attempts alone');
+  assert.deepEqual(halves(headlineCardOutcome(missing, card, { partial: true })), { outcome: 'fail', goal: 'pass', rules: 'fail' }, 'the partial gate decides the matched attempts alone');
   const foreign = ruledRun([card], [ruledAttempt('t', 'c', votes('pass', 'fail'), { manifestHash: 'other' })]);
   assert.deepEqual(cardVerdict(foreign, card), { outcome: 'unknown', reason: 'attempts_mismatch' });
   assert.equal(headlineCardOutcome(foreign, card, { partial: true }).outcome, 'unknown', 'a foreign attempt is never decided, even partially');
@@ -976,6 +981,7 @@ test('a legacy card without the goal rubric keeps the strict card outcome, with 
   const legacy = ruledCard('c', [{ ...replyQuality }, { ...simulatorFidelity }]);
   const failed = one([judged('reply_quality', 'fail'), judged('user_fidelity', 'pass')], {}, {}, legacy);
   assert.deepEqual(failed.headline, { outcome: 'fail', goal: 'none', rules: 'none' });
+  assert.deepEqual(failed.parts, [], 'the strict result has no parts');
   assert.equal(failed.headline.outcome, cardOutcome(failed.run, legacy));
   assert.equal(failed.goal, cardOutcome(failed.run, legacy));
   const passed = one([judged('reply_quality', 'pass'), judged('user_fidelity', 'pass')], {}, {}, legacy);

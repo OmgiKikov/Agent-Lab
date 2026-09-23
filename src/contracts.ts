@@ -1,22 +1,21 @@
-import type { CheckpointInput } from './checkpoints.js';
 import { USER_CONTROLLER_PROTOCOL, userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
 import { checkpointSchema } from './scenario-contracts.js';
 import { importBatchSchema, preparationProgressSchema, type ImportBatch, type LibraryV1, type ScenarioProposal, type SemanticFinding, type PreparationProgress } from './scenario-contracts.js';
-import { scenarioLibrarySchema, type ScenarioLibrary } from './card/schema.js';
+import { expectationSchema, scenarioLibrarySchema, type ScenarioLibrary } from './card/schema.js';
 import { createHash } from 'node:crypto';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS } from './limits.js';
 import { z } from 'zod';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 
-export const checkpointDecisionSchema = z.strictObject({
+/* The stored verdicts of the checkpoint judge of first-format runs (checkpoints.ts reads them); nothing writes them any more. */
+const checkpointDecisionSchema = z.strictObject({
   checkpointId: z.string().min(1).max(80), result: z.enum(['pass', 'fail', 'unknown', 'not_applicable']),
   evidence: z.array(z.number().int().nonnegative()).max(30), rationale: z.string().trim().min(1).max(2000),
 });
-export const checkpointResultSchema = checkpointDecisionSchema.extend({ requirementId: z.string(), role: z.enum(['required', 'diagnostic']), observation: z.enum(['reply', 'tool', 'state']), contextEvidence: z.array(z.number().int().nonnegative()).max(30).optional() });
-export type CheckpointDecision = z.infer<typeof checkpointDecisionSchema>;
-export type CheckpointResult = z.infer<typeof checkpointResultSchema>;
-export const checkpointRawDecisionsSchema = z.array(z.json()).max(48).refine(values => JSON.stringify(values).length <= 128000, 'Checkpoint response exceeds 128000 characters');
-export const checkpointReceiptSchema = z.strictObject({ protocolHash: z.string(), inputHash: z.string(), resultHash: z.string(), decisionHash: z.string(), decisions: checkpointRawDecisionsSchema });
+const checkpointResultSchema = checkpointDecisionSchema.extend({ requirementId: z.string(), role: z.enum(['required', 'diagnostic']), observation: z.enum(['reply', 'tool', 'state']), contextEvidence: z.array(z.number().int().nonnegative()).max(30).optional() });
+type CheckpointResult = z.infer<typeof checkpointResultSchema>;
+const checkpointRawDecisionsSchema = z.array(z.json()).max(48).refine(values => JSON.stringify(values).length <= 128000, 'Checkpoint response exceeds 128000 characters');
+const checkpointReceiptSchema = z.strictObject({ protocolHash: z.string(), inputHash: z.string(), resultHash: z.string(), decisionHash: z.string(), decisions: checkpointRawDecisionsSchema });
 
 
 export const VERSION = '6';
@@ -342,12 +341,33 @@ export type GoalObservation = z.infer<typeof goalObservationSchema>;
 export const DEFAULT_GOAL_OBSERVATION: GoalObservation = 'reply';
 /** The judged checkpoint protocol of compiled library cards; its role prompt is inside `checkpointHash`. */
 export const CHECKPOINT_PROTOCOL = 'checkpoints-v1';
-const executionSchema = z.strictObject({
+/** How a card compiled from a brief is judged: every expectation is its own rubric with its own verdict. */
+export const EXPECTATIONS_PROTOCOL = 'expectations-v1';
+const environmentViewSchema = z.strictObject({ mode: z.enum(['prompt', 'managed']), contract: z.strictObject({ operations: z.array(z.string()), reset: z.boolean(), observations: z.array(z.enum(['reply', 'tool', 'state'])), confirmed: z.boolean() }).optional() });
+/** A first-format library variant compiled at acceptance: the customer's controlled view and the checkpoints its judge read. */
+const executionV1Schema = z.strictObject({
   protocol: z.literal(USER_CONTROLLER_PROTOCOL), checkpointContext:z.literal('observed-tools-v1').optional(), checkpointProtocol: z.literal(CHECKPOINT_PROTOCOL), controllerHash: text, checkpointHash: text,
   userView: userViewSchema,
-  environmentView: z.strictObject({ mode: z.enum(['prompt', 'managed']), contract: z.strictObject({ operations: z.array(z.string()), reset: z.boolean(), observations: z.array(z.enum(['reply', 'tool', 'state'])), confirmed: z.boolean() }).optional() }),
+  environmentView: environmentViewSchema,
   evaluatorView: z.strictObject({ checkpoints: z.array(checkpointSchema).max(12), requirements: z.array(requirementSchema).max(80) }),
 });
+/**
+ * A card compiled at acceptance (card/compile.ts): the customer's controlled view, and for the judge the
+ * card's 1–3 expectations with the owner rules they cite. The controller prompt is not part of the card:
+ * it belongs to the evaluator version. The two strict shapes exclude each other (`evaluation` is only here).
+ */
+const executionV2Schema = z.strictObject({
+  protocol: z.literal(USER_CONTROLLER_PROTOCOL), evaluation: z.literal(EXPECTATIONS_PROTOCOL),
+  userView: userViewSchema,
+  environmentView: environmentViewSchema,
+  evaluatorView: z.strictObject({ expectations: z.array(expectationSchema).min(1).max(3), requirements: z.array(requirementSchema).max(9) }),
+});
+const executionSchema = z.union([executionV1Schema, executionV2Schema]);
+export type Execution = z.infer<typeof executionSchema>;
+export type CardExecution = z.infer<typeof executionV2Schema>;
+export type VariantExecution = z.infer<typeof executionV1Schema>;
+/** A card judged by its expectations: compiled from a brief, or a first-format card projected for judging (card/legacy-v1.ts). */
+export const isCardExecution = (execution: Execution | undefined): execution is CardExecution => execution !== undefined && 'evaluation' in execution;
 export const scenarioSchema = z.strictObject({
   id: identifier, familyId: identifier, title: text.max(200),
   requirementIds: z.array(identifier).max(20),
@@ -808,8 +828,8 @@ export interface ScenarioAssessmentInput {
 }
 export interface Runtime {
   generatorTransport?:'pi-model'|'deterministic-test';
-  assessCheckpoints?(input: CheckpointInput, ctx: CallContext): Promise<unknown[]>;
-  selectUserAction?(input: { user: UserView; state: string; actions: AllowedUserAction[]; messages: DialogueMessage[]; turn: number; repair?: string }, ctx: CallContext): Promise<UserDecision>;
+  /** The controlled customer's next move: one of `actions`, the moves allowed right now. The harness renders the message. */
+  selectUserAction?(input: { user: UserView; state: string; actions: AllowedUserAction[]; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserDecision>;
   scenarioProposals?(input: ScenarioProposalsInput, ctx: CallContext): Promise<ScenarioProposal[]>;
   assessScenarioProposals?(input: ScenarioAssessmentInput, ctx: CallContext): Promise<SemanticFinding[]>;
   /** Owner requirements with exact quotes from the supplied sources, and the business questions they leave open. */

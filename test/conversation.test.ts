@@ -53,8 +53,12 @@ function runtimeFixture(separateGroups = false, twoChecks = false): Runtime {
     }).filter(p => request.dialogues.some(d => d.id === p.variant.sourceDialogues[0]!.dialogueId)) as never; },
     async assessScenarioProposals(request, ctx) { ctx.beforeCall(); checkCalls++; await checkGate; ctx.signal.throwIfAborted();
       return request.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready' as const, reason: 'Детерминированная проверка учебного примера' }))); },
-    async selectUserAction() { return { actionId: 'finish', factIds: [] }; },
-    async assessCheckpoints({ checkpoints, events }) { return checkpoints.map(cp => ({ checkpointId: cp.id, result: 'pass' as const, rationale: 'Номер запрошен', evidence: [events.find(e => e.type === 'assistant')!.index] })); },
+    async selectUserAction() { return { actionId: 'finish' }; },
+    // Every expectation of the card passes on the agent's first reply.
+    async assess({ scenario, trial }) {
+      const reply = trial.events.find(e => e.type === 'assistant')!.seq;
+      return (scenario.metrics ?? []).map(metric => ({ metricId: metric.id, result: 'pass' as const, rationale: 'Номер запрошен', evidence: [reply] }));
+    },
   } as Runtime;
 }
 

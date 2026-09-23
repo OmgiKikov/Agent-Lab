@@ -3,7 +3,7 @@ import { semanticWorkStatus } from './scenario-work.js';
 import { captureGeneratorEvidence } from './generator-evidence.js';
 import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, verifyAcceptedRun } from './scenario-library.js';
 import type { LibraryPatch, LibraryV1 } from './scenario-contracts.js';
-import { requireLibraryV1 } from './card/legacy-v1.js';
+import { judgedScenario, requireLibraryV1 } from './card/legacy-v1.js';
 import { assessScenarioLibrary, compiledLibraryScenarios, prepareScenarioLibrary, resumeScenarioLibrary } from './scenario-preparation.js';
 import { proposeVariant as proposeScenarioVariant, type VariantProposalResult, type VariantRequest } from './scenario-variants.js';
 import { randomUUID } from 'node:crypto';
@@ -20,7 +20,7 @@ import { awaitingVerdict, isAgentFailure, plannedTrials } from './comparison.js'
 import { sameTargetVersion, targetFingerprint } from './target-version.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from './connection.js';
 import { preflightTarget, readPrompt, runRelease } from './targets.js';
-import { COUNTING_RULES, markTargets, measurementUsable } from './outcomes.js';
+import { countingRuleFor, markTargets, measurementUsable } from './outcomes.js';
 import { simulatorChecks } from './simulator.js';
 import { withDefaultGoalObservation } from './normalize.js';
 import { createDemoRuntime } from './demo.js';
@@ -468,10 +468,12 @@ export class ExperimentLab {
               const executionFailed = original.outcome === 'fail' && original.checks.every(c => c.passed);
               trial.outcome = executionFailed || trial.checks.some(c => !c.passed) ? 'fail' : trial.checks.length ? 'pass' : 'ungraded';
               trial.reason = executionFailed ? original.reason : 'Точные проверки пересчитаны по сохранённым фактам.';
-              if ((scenario.execution || assessmentRubrics(scenario, trial).length) && runtime) trial.assessments = await assessTrial(runtime, scenario, scenarioSources(record, scenario), trial, { ...ctx,
+              // The checkpoint verdicts are gone from the copy: a first-format card is judged through its projection.
+              const judged = judgedScenario(scenario, trial);
+              if (assessmentRubrics(judged, trial).length && runtime) trial.assessments = await assessTrial(runtime, scenario, scenarioSources(record, scenario), trial, { ...ctx,
                 beforeCall() { ctx.beforeCall(); trial.usage.calls++; },
                 addUsage(usage) { ctx.addUsage(usage); addUsage(trial.usage, usage); } }, record.requirements);
-              else if (scenario.execution || scenario.metrics?.length) trial.assessmentError = 'Только точные проверки; рубрики не переоценивались.';
+              else if (judged.metrics?.length) trial.assessmentError = 'Только точные проверки; рубрики не переоценивались.';
             } catch (error) {
               trial.assessmentError = (error instanceof Error ? error.message : String(error)).slice(0, 4000);
               if (!trial.checks.length || ctx.signal.aborted) trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';
@@ -502,7 +504,7 @@ export class ExperimentLab {
       if (objectiveCheck && simulatorCheck) throw new Error('ID проверки неоднозначен: он занят объективной проверкой и проверкой симулятора.');
       if (input.checkId && !objectiveCheck && !simulatorCheck) throw new Error('Такой объективной проверки или проверки симулятора в этом диалоге нет.');
       const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-      if (input.metricId && (!scenario || !assessmentRubrics(scenario, trial).some(m => m.id === input.metricId))) throw new Error('Такой рубрики в этой карточке нет.');
+      if (input.metricId && (!scenario || !assessmentRubrics(judgedScenario(scenario, trial), trial).some(m => m.id === input.metricId))) throw new Error('Такой рубрики в этой карточке нет.');
       // The counting rule is stamped by the lab on quick marks only; a caller value is never kept.
       if (input.source !== 'quick') delete input.countingRules;
       if (input.metricId) {
@@ -520,7 +522,7 @@ export class ExperimentLab {
           if (!targets.metricIds.includes(input.metricId)) throw new Error('Отметку согласия можно поставить только на оценку, из-за которой ситуация решена.');
           if (recorded !== 'pass' && recorded !== 'fail') throw new Error('Судья не вынес решения по этой ситуации — соглашаться не с чем.');
           if (input.judgeVerdict !== undefined && input.judgeVerdict !== recorded) throw new Error('Оценка судьи изменилась, пока вы смотрели. Проверьте ситуацию ещё раз.');
-          input.countingRules = COUNTING_RULES;
+          input.countingRules = countingRuleFor(scenario, trial);
         }
         // What the verdict argues with is read from the trial; a caller value is never kept.
         if (recorded) input.judgeVerdict = recorded; else delete input.judgeVerdict;

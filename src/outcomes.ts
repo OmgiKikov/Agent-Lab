@@ -1,3 +1,4 @@
+import { countingRuleOf, GOAL_METRIC_ID, headlineRule, recordedExpectationResult, type CountedExpectation, type CountingRule } from './card/expectations.js';
 import { requiredCheckpointResult } from './checkpoints.js';
 import { metricApplies, simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type Trial, isRunning } from './contracts.js';
 
@@ -49,14 +50,36 @@ export function primaryMetricId(scenario: Scenario | undefined, trial: Trial): s
  * not a verdict: it leaves the judge's own result in place, so the owner's hesitation can never
  * quietly take a failure out of the headline. A full review that says `unknown` still overrides.
  */
-export function agentMetricResult(trial: Trial, metricId: string, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
+export function agentMetricResult(trial: Trial, metricId: string, reviews: HumanReview[] = [],
+  /** The judge's result as it is read; a card expectation's is gated by its evidence channel (`expectationResult`). */
+  recorded = trial.assessments?.find(a => a.metricId === metricId)?.result): 'pass' | 'fail' | 'unknown' | undefined {
   const human = latestHumanReviews({ trials: [trial], humanReviews: reviews }).get(`${trial.id}|metric:${metricId}`);
-  const recorded = trial.assessments?.find(a => a.metricId === metricId)?.result;
   if (human?.source === 'quick' && human.verdict === 'unknown') return recorded;
   return human?.verdict === 'invalid' ? undefined : human?.verdict ?? recorded;
 }
 
+/** One card expectation in one attempt: the judge's result read through its evidence channel, then the human verdict over it. */
+export function expectationResult(trial: Trial, expectation: CountedExpectation, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
+  return agentMetricResult(trial, expectation.id, reviews, recordedExpectationResult(trial, expectation));
+}
+/** Every expectation of one attempt, fail-first: any fail fails, all pass passes, anything else is unknown. */
+function allExpectations(trial: Trial, expectations: CountedExpectation[], reviews: HumanReview[]): 'pass' | 'fail' | 'unknown' {
+  const results = expectations.map(expectation => expectationResult(trial, expectation, reviews) ?? 'unknown');
+  return results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
+}
+/**
+ * One usable attempt of a card counted by its expectations. A failed direct check (a first-format checkpoint's
+ * exact check) fails it; with no expectation to judge, the checks alone decide.
+ */
+function expectationsTrialResult(trial: Trial, expectations: CountedExpectation[], reviews: HumanReview[]): 'pass' | 'fail' | 'unknown' {
+  if (trial.outcome === 'fail') return 'fail';
+  if (!expectations.length) return trial.outcome === 'pass' ? 'pass' : 'unknown';
+  return allExpectations(trial, expectations, reviews);
+}
+
 export function agentRubricResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
+  const rule = headlineRule(scenario, [trial]);
+  if (rule.kind === 'expectations') return rule.expectations.length ? allExpectations(trial, rule.expectations, reviews) : undefined;
   const metrics = scenario?.metrics?.filter(m => m.subject === 'agent') ?? [];
   if (!metrics.length) return undefined;
   const results = metrics.flatMap(m => agentMetricResult(trial, m.id, reviews) ?? []);
@@ -99,6 +122,8 @@ export function measurementUsable(scenario: Scenario | undefined, trial: Trial, 
 /** Combined automatic result for triage, never a replacement for the separate code and rubric scores. */
 export function automaticTrialResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' {
   if (!scenario || !measurementUsable(scenario, trial, reviews)) return 'unknown';
+  const rule = headlineRule(scenario, [trial]);
+  if (rule.kind === 'expectations') return expectationsTrialResult(trial, rule.expectations, reviews);
   const checkpoint = requiredCheckpointResult(scenario, trial);
   if (checkpoint === 'fail') return 'fail';
   if (checkpoint === 'unknown') return 'unknown';
@@ -108,29 +133,29 @@ export function automaticTrialResult(scenario: Scenario | undefined, trial: Tria
     && (rubric === 'pass' || (rubric === undefined && scenario.checks.length > 0)) ? 'pass' : 'unknown';
 }
 
-/** The agent metric the headline reads first: whether the client's request was carried out. */
-export const GOAL_METRIC_ID = 'goal_attainment';
-/** The agent metric that says whether the agent kept the observable rules of its own prompt. */
-export const RULES_METRIC_ID = 'prompt_compliance';
+export { GOAL_METRIC_ID, RULES_METRIC_ID } from './card/expectations.js';
 /**
- * The counting rule of the headline: a situation is «справился» only when the request was met
- * and, where the card carries the prompt-rule check, no rule was broken. The previous rule was
- * `goal-v1` (goal only). It is derived when a result is shown and stamped by the lab on quick
- * marks (03.1-02), never stored on a run record: every stored run is recounted by the current
- * rule. It lives here because experiment.ts needs it and must not import result-view.ts.
+ * The counting rule of the headline on an old generated card: a situation is «справился» only when
+ * the request was met and, where the card carries the prompt-rule check, no rule was broken. The
+ * previous rule was `goal-v1` (goal only). Every quick mark was stamped with this name before cards
+ * had their own rules (`countingRuleFor`); it is derived when a result is shown, never stored on a
+ * run record. It lives here because experiment.ts needs it and must not import result-view.ts.
  */
 export const COUNTING_RULES = 'goal-and-rules-v2';
 
 /**
- * The agent metrics the headline counts for this card, goal first: [] for a legacy card without
- * the goal rubric (the strict card outcome decides it), [GOAL_METRIC_ID, RULES_METRIC_ID] when the
- * card also carries the prompt-rule check, else [GOAL_METRIC_ID]. Reply quality and the RAG
- * rubrics are never returned: they keep their own rows and never move the number.
+ * The goal and prompt-rule metrics an old generated card is counted by, goal first; [] for every
+ * other card — a card counted by its expectations or by the strict legacy result. Reply quality
+ * and the RAG rubrics are never returned: they keep their own rows and never move the number.
  */
 export function headlineMetricIds(scenario: Scenario | undefined): string[] {
-  const agent = (scenario?.metrics ?? []).filter(m => m.subject === 'agent').map(m => m.id);
-  if (!agent.includes(GOAL_METRIC_ID)) return [];
-  return agent.includes(RULES_METRIC_ID) ? [GOAL_METRIC_ID, RULES_METRIC_ID] : [GOAL_METRIC_ID];
+  const rule = headlineRule(scenario, []);
+  return rule.kind === 'goal_rules' ? rule.ids : [];
+}
+
+/** The counting rule a quick mark on this attempt is stamped with. */
+export function countingRuleFor(scenario: Scenario | undefined, trial: Trial): CountingRule {
+  return countingRuleOf(scenario, headlineRule(scenario, [trial]));
 }
 
 /**
@@ -141,6 +166,8 @@ export function headlineMetricIds(scenario: Scenario | undefined): string[] {
  */
 export function headlineTrialResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' {
   if (!scenario || !measurementUsable(scenario, trial, reviews)) return 'unknown';
+  const rule = headlineRule(scenario, [trial]);
+  if (rule.kind === 'expectations') return expectationsTrialResult(trial, rule.expectations, reviews);
   const checkpoint = requiredCheckpointResult(scenario, trial);
   if (checkpoint === 'fail') return 'fail';
   if (checkpoint === 'unknown') return 'unknown';
@@ -161,10 +188,18 @@ export function recordedResult(trial: Trial, metricId: string | undefined): 'pas
  * first. A goal card is failed when any headline metric is recorded `fail` — a double failure has
  * two targets, a goal-only or rules-only failure one — and passed when every headline metric is
  * `pass` (two targets on a card with prompt rules); anything else is no decision, so undefined.
+ * A card counted by its expectations is failed on its failed expectations and passed on all of
+ * them (read through their evidence channels); a failed direct check leaves no judgment to answer.
  * A legacy card keeps today's single primary metric. Reads recorded assessments only: a human
  * verdict never moves what a mark is measured against.
  */
 export function markTargets(scenario: Scenario | undefined, trial: Trial): { verdict: 'pass' | 'fail'; metricIds: string[] } | undefined {
+  const rule = headlineRule(scenario, [trial]);
+  if (rule.kind === 'expectations') {
+    const results = rule.expectations.map(expectation => recordedExpectationResult(trial, expectation));
+    if (results.includes('fail')) return { verdict: 'fail', metricIds: rule.ids.filter((_, i) => results[i] === 'fail') };
+    return results.length && trial.outcome !== 'fail' && results.every(result => result === 'pass') ? { verdict: 'pass', metricIds: rule.ids } : undefined;
+  }
   const ids = headlineMetricIds(scenario);
   if (!ids.length) {
     const id = primaryMetricId(scenario, trial);
@@ -178,13 +213,16 @@ export function markTargets(scenario: Scenario | undefined, trial: Trial): { ver
 }
 
 /**
- * Whether a quick mark answers the question the current counting rule asks. A mark stamped with
- * COUNTING_RULES does. An unstamped mark was given under the previous goal-only rule and counts
- * only where both rules ask the same thing: on a legacy strict card, or on a situation whose only
- * mark target is the goal. Anywhere else it is a mark under the previous rule and stays out of the count.
+ * Whether a quick mark answers the question the counting rule of its attempt asks. On a card counted by
+ * its expectations only a mark stamped with that rule does. On any older card a mark stamped with
+ * COUNTING_RULES or the card's own rule does; an unstamped mark was given under the previous goal-only
+ * rule and counts only where both rules ask the same thing: on a legacy strict card, or on a situation
+ * whose only mark target is the goal. Anywhere else it is a mark under another rule and stays out of the count.
  */
-export function markUnderCurrentRule(scenario: Scenario | undefined, review: HumanReview, metricIds: string[]): boolean {
-  if (review.countingRules === COUNTING_RULES) return true;
+export function markUnderCurrentRule(scenario: Scenario | undefined, trial: Trial, review: HumanReview, metricIds: string[]): boolean {
+  const rule = countingRuleFor(scenario, trial);
+  if (rule === 'all-expectations-v1') return review.countingRules === rule;
+  if (review.countingRules === COUNTING_RULES || review.countingRules === rule) return true;
   if (review.countingRules !== undefined) return false;
   return !headlineMetricIds(scenario).length || (metricIds.length === 1 && metricIds[0] === GOAL_METRIC_ID);
 }

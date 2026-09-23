@@ -611,51 +611,60 @@ test('scenario proposal transport rejects a prose deterministic check and permit
   } finally { await f.close(); }
 });
 
-test('controlled user and checkpoint roles use actual simulator/judge models and isolated compiler payloads', async () => {
+test('the controlled user answers with one allowed action id and the expectation judge reads what the customer never sees', async () => {
   const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
   const { libraryFixture } = await import('./helpers/scenario-library.js');
   const { createUserState, allowedUserActions } = await import('../src/user-controller.js');
-  const { checkpointInput } = await import('../src/checkpoints.js');
   const library = libraryFixture();
   const scenario = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
-  scenario.execution!.evaluatorView.checkpoints[0]!.rule += ' EVALUATOR_ONLY_MARKER';
-  const f = await fixture((_request, index) => JSON.stringify(index === 0 ? { actionId: 'finish', factIds: [] }
-    : { results: [{ checkpointId: 'ask_terminal', result: 'pass', evidence: [1], rationale: 'Уточнение соответствует правилу' }] }), true);
+  const view = scenario.execution!.evaluatorView;
+  if (!('checkpoints' in view)) throw new Error('a first-format card');
+  view.checkpoints[0]!.rule += ' EVALUATOR_ONLY_MARKER';
+  const vote = { assessments: [{ metricId: 'ask_terminal', passCondition: 'met', failCondition: 'not_met', rationale: 'Уточнение соответствует правилу', evidence: [1], citations: [{ seq: 1, quote: 'Назовите терминал' }] }] };
+  const f = await fixture((_request, index) => JSON.stringify(index === 0 ? { actionId: 'finish' } : vote), true);
   try {
     const adapter = await createPiRuntime(settingsSchema.parse({ ...settings, roles: { simulator: { provider: settings.provider, model: 'role-model' } }, judge: { provider: settings.provider, model: 'test-model' } }), f.runtime);
     const state = createUserState(scenario.execution!.userView.policy, scenario.execution!.userView.facts);
+    const actions = allowedUserActions(state, 'Назовите терминал');
     const { ctx, usage } = callContext();
-    await adapter.selectUserAction!({ user: scenario.execution!.userView, state: state.position, actions: allowedUserActions(state, 'Назовите терминал'), messages: [{ role: 'assistant', content: 'Назовите терминал' }], turn: 0 }, ctx);
+    assert.deepEqual(await adapter.selectUserAction!({ user: scenario.execution!.userView, state: state.position, actions, messages: [{ role: 'assistant', content: 'Назовите терминал' }], turn: 0 }, ctx), { actionId: 'finish' });
+    assert.match(f.requests[0]!.systemPrompt!, new RegExp(`"actionId":\\{"type":"string","enum":\\[${actions.map(action => `"${action.id}"`).join(',')}\\]\\}`), 'the answer is one of the allowed ids');
+    assert.doesNotMatch(f.requests[0]!.systemPrompt!, /factIds/, 'fact references come from the chosen action');
     const trial: Trial = { id: 't', scenarioId: scenario.id, familyId: scenario.familyId, revisionId: 'r', userMode: 'reactive', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1, events: [{ seq: 0, type: 'user', text: 'Возврат' }, { seq: 1, type: 'assistant', text: 'Назовите терминал' }] };
-    await adapter.assessCheckpoints!(checkpointInput(scenario, trial), ctx);
-    assert.deepEqual(f.modelsUsed, ['role-model', 'test-model']);
-    assert.equal(usage.calls, 2);
+    const judged = await adapter.assess!({ scenario, sources: [], trial }, ctx);
+    assert.deepEqual(judged.map(item => [item.metricId, item.result]), [['ask_terminal', 'pass']], 'the required checkpoint is judged as one expectation');
+    assert.deepEqual(f.modelsUsed, ['role-model', 'test-model', 'test-model']);
+    assert.equal(usage.calls, 3, 'one controller move and two votes on the one expectation');
     assert.doesNotMatch(JSON.stringify(f.requests[0]), /EVALUATOR_ONLY_MARKER|checkpoints|requirementId|environmentView|backend/);
     assert.match(JSON.stringify(f.requests[1]), /EVALUATOR_ONLY_MARKER/);
     assert.ok(f.requests.every(r => !r.tools?.length));
   } finally { await f.close(); }
 });
 
-test('real compiler, Pi transport and evaluator enforce repair, exact disclosure and correct-versus-wrong refusal', async () => {
+test('real compiler, Pi transport and evaluator: a move outside the policy is refused by the answer schema, the disclosure is exact and the refusal is judged', async () => {
   const { evaluateTrial } = await import('../src/evaluation.js');
   const { headlineTrialResult } = await import('../src/outcomes.js');
   const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
   const { libraryFixture, sources, requirements } = await import('./helpers/scenario-library.js');
-  const { USER_CONTROLLER_ROLE, CHECKPOINT_ROLE, ASSESS_ROLE } = await import('../src/prompts.js');
+  const { USER_CONTROLLER_ROLE, ASSESS_ROLE } = await import('../src/prompts.js');
   for (const verdict of ['pass', 'fail'] as const) {
     const library = libraryFixture();
     library.variants[0]!.behaviorPolicy = { version: 1, initialState: 'ask', states: ['ask', 'answered', 'done'], terminalStates: ['done'], maxFollowUps: 1, repetitionLimit: 1,
       actions: [{ id: 'number', kind: 'answer', factIds: ['terminal_number'], payload: 'Номер терминала: 1234', ifAsked: 'номер терминала' }, { id: 'finish', kind: 'finish', factIds: [] }],
       transitions: [{ from: 'ask', to: 'answered', actionId: 'number', when: 'Уточнение номера' }, { from: 'answered', to: 'done', actionId: 'finish', when: 'Получен отказ или инструкция' }] };
     const s = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
-    s.execution!.evaluatorView.checkpoints[0]!.rule += ' EVALUATOR_ONLY_MARKER';
+    const view = s.execution!.evaluatorView;
+    if (!('checkpoints' in view)) throw new Error('a first-format card');
+    view.checkpoints[0]!.rule += ' EVALUATOR_ONLY_MARKER';
     let selectorCalls = 0;
-    const agent = await httpAgent((_message, index) => index === 0 ? 'Назовите номер терминала' : verdict === 'pass' ? 'Без дополнительных данных возврат невозможен' : 'Возврат запрещён всем');
+    const refusal = verdict === 'pass' ? 'Без дополнительных данных возврат невозможен' : 'Возврат запрещён всем';
+    const agent = await httpAgent((_message, index) => index === 0 ? 'Назовите номер терминала' : refusal);
     const f = await fixture(request => {
       const prompt = request.systemPrompt ?? '';
-      if (prompt.startsWith(USER_CONTROLLER_ROLE)) return JSON.stringify(++selectorCalls === 1 ? { actionId: 'number', factIds: ['hidden'] } : selectorCalls === 2 ? { actionId: 'number', factIds: ['terminal_number'] } : { actionId: 'finish', factIds: [] });
-      if (prompt.startsWith(CHECKPOINT_ROLE)) return JSON.stringify({ results: [{ checkpointId: 'ask_terminal', result: verdict, evidence: [0, 1, 4, 5], rationale: verdict === 'pass' ? 'Корректно объяснён отказ' : 'Отказ противоречит правилу' }] });
-      if (prompt.startsWith(ASSESS_ROLE)) return JSON.stringify({ assessments: [{ metricId: 'library_required', passCondition: 'met', failCondition: 'not_met', rationale: 'Уточнение дано', evidence: [1], citations: [{ seq: 1, quote: 'Назовите номер терминала' }] }] });
+      // The first answer names a move the policy does not allow: the schema refuses it and the model is asked again.
+      if (prompt.startsWith(USER_CONTROLLER_ROLE)) return JSON.stringify({ actionId: ++selectorCalls === 1 ? 'leave' : selectorCalls === 2 ? 'number' : 'finish' });
+      if (prompt.startsWith(ASSESS_ROLE)) return JSON.stringify({ assessments: [{ metricId: 'ask_terminal', passCondition: verdict === 'pass' ? 'met' : 'not_met', failCondition: verdict === 'pass' ? 'not_met' : 'met',
+        rationale: verdict === 'pass' ? 'Корректно объяснён отказ' : 'Отказ противоречит правилу', evidence: [4], citations: [{ seq: 4, quote: refusal }] }] });
       throw new Error('The agent under test is external: no other model role is expected here.');
     });
     try {
@@ -663,50 +672,46 @@ test('real compiler, Pi transport and evaluator enforce repair, exact disclosure
       const trial = await evaluateTrial({ runtime: f.adapter, scenario: s, revision: { id: 'base', parentId: null, spec: { name: 'Агент', instructions: 'Помогать клиенту', tools: [] }, hypothesis: '', createdAt: '' }, repeat: 0, manifestHash: 'h', sources, requirements, settings: settingsSchema.parse({ ...settings, maxTurns: 2 }), ctx, userMode: 'reactive', target: agent.target });
       assert.deepEqual(trial.events.filter(e => e.type === 'user').map(e => e.text), ['Помогите с возвратом', 'Номер терминала: 1234']);
       assert.equal(trial.events.filter(e => e.type === 'assistant').length, 2);
-      assert.equal(trial.events.filter(e => e.type === 'simulator' && (e.result as any).accepted === false).length, 1);
+      assert.deepEqual(trial.events.filter(e => e.type === 'simulator').map(e => (e.result as { decision: unknown }).decision), [{ actionId: 'number' }, { actionId: 'finish' }]);
+      assert.equal(trial.checkpoints, undefined, 'no checkpoint verdict is written any more');
       assert.equal(headlineTrialResult(s, trial), verdict);
       assert.deepEqual(agent.sent, ['Помогите с возвратом', 'Номер терминала: 1234']);
-      assert.equal(usage.calls, 6, 'three user actions, one checkpoint judgment and two rubric votes; the external agent costs no model call');
-      assert.equal(trial.usage.calls, 6);
+      assert.equal(usage.calls, 5, 'three controller answers (one refused by the schema) and two votes; the external agent costs no model call');
+      assert.equal(trial.usage.calls, 5);
       assert.ok(trial.judgeReceipt?.complete);
-      for (const request of f.requests.filter(r => !(r.systemPrompt ?? '').startsWith(CHECKPOINT_ROLE) && !(r.systemPrompt ?? '').startsWith(ASSESS_ROLE))) assert.doesNotMatch(JSON.stringify(request), /EVALUATOR_ONLY_MARKER/);
+      for (const request of f.requests.filter(r => !(r.systemPrompt ?? '').startsWith(ASSESS_ROLE))) assert.doesNotMatch(JSON.stringify(request), /EVALUATOR_ONLY_MARKER/);
       assert.doesNotMatch(JSON.stringify(agent.bodies), /EVALUATOR_ONLY_MARKER/);
     } finally { await f.close(); await agent.close(); }
   }
 });
 
-test('checkpoint SDK boundary tolerates malformed known diagnostics while required decisions remain strict', async () => {
+test('a first-format checkpoint with an exact check is graded directly, never judged; a diagnostic checkpoint decides nothing', async () => {
   const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
   const { libraryFixture } = await import('./helpers/scenario-library.js');
-  const { checkpointInput } = await import('../src/checkpoints.js');
-  const { assessTrial } = await import('../src/evaluation.js');
+  const { assessTrial, grade } = await import('../src/evaluation.js');
   const { headlineTrialResult } = await import('../src/outcomes.js');
   const library = libraryFixture();
   const scenario = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  const view = scenario.execution!.evaluatorView;
+  if (!('checkpoints' in view)) throw new Error('a first-format card');
   delete scenario.metrics;
-  const required = scenario.execution!.evaluatorView.checkpoints[0]!;
+  const required = view.checkpoints[0]!;
   required.check = { id: 'literal', kind: 'answer_contains', description: 'Уточнение', value: 'Назовите номер терминала' };
-  scenario.checks = [required.check as any];
-  scenario.execution!.evaluatorView.checkpoints.push({ ...required, id: 'diagnostic', role: 'diagnostic' });
-  const trial: Trial = { id: 't', scenarioId: scenario.id, familyId: scenario.familyId, revisionId: 'r', userMode: 'reactive', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1, events: [{ seq: 0, type: 'user', text: 'Возврат' }, { seq: 1, type: 'assistant', text: 'Назовите номер терминала' }] };
-  const valid = { checkpointId: 'ask_terminal', result: 'pass', evidence: [1], rationale: 'Уточнение есть' };
-  for (const diagnostics of [
-    [{ checkpointId: 'diagnostic', result: 4, evidence: 'wrong', rationale: null }],
-    [{ ...valid, checkpointId: 'diagnostic' }, { ...valid, checkpointId: 'diagnostic' }],
-  ]) {
-    const f = await fixture(() => JSON.stringify({ results: [valid, ...diagnostics] }));
+  scenario.checks = [required.check as never];
+  view.checkpoints.push({ ...required, id: 'diagnostic', role: 'diagnostic', check: undefined });
+  for (const [reply, verdict] of [['Назовите номер терминала', 'pass'], ['Возврат оформлен', 'fail']] as const) {
+    const trial: Trial = { id: 't', scenarioId: scenario.id, familyId: scenario.familyId, revisionId: 'r', userMode: 'reactive', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1, events: [{ seq: 0, type: 'user', text: 'Возврат' }, { seq: 1, type: 'assistant', text: reply }] };
+    trial.checks = grade(scenario, trial);
+    trial.outcome = trial.checks.every(check => check.passed) ? 'pass' : 'fail';
+    const f = await fixture(() => { throw new Error('No judge call: nothing is left to judge.'); });
     try {
       const { ctx, usage } = callContext();
-      await assessTrial(f.adapter, scenario, [], trial, ctx, []);
-      assert.equal(headlineTrialResult(scenario, trial), 'pass');
-      assert.equal(trial.checkpoints?.find(c => c.checkpointId === 'diagnostic')?.result, 'unknown');
-      assert.equal(usage.calls, 1, 'diagnostic defects must not trigger batch repair or erase required evidence');
+      assert.deepEqual(await assessTrial(f.adapter, scenario, [], trial, ctx, []), []);
+      assert.equal(usage.calls, 0);
+      assert.deepEqual(trial.checks.map(check => check.id), ['literal'], 'the exact check of the checkpoint is a direct check');
+      assert.equal(headlineTrialResult(scenario, trial), verdict);
     } finally { await f.close(); }
   }
-  const invalid = await fixture(() => JSON.stringify({ results: [{ ...valid, result: 4 }] }));
-  try {
-    await assert.rejects(invalid.adapter.assessCheckpoints!(checkpointInput(scenario, trial), callContext().ctx), /не проходит проверку/);
-  } finally { await invalid.close(); }
 });
 
 test('scenario proposal transport separates no-log owner requirements from real import identity before a model call', async () => {

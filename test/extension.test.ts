@@ -246,7 +246,9 @@ test('conversation runs only the confirmed plan, then saves and loads the same c
   assert.match(proofText, /^ДОКАЗАТЕЛЬСТВО\nТест:/);
   assert.match(proofText, /Диалог: .*\nИсход: (pass|fail|unknown|invalid|ungraded|cancelled)/);
   assert.match(proofText, /РЕПЛИКИ\n#0 ПОЛЬЗОВАТЕЛЬ: [^\n]+\n#\d+ АГЕНТ:/);
-  assert.match(proofText, /КОНТРОЛЬНЫЕ ТОЧКИ\n(?:ВЫПОЛНЕНО|НАРУШЕНО) \[ask_once\]/);
+  // A first-format card is judged through its projection: each required checkpoint is an expectation with its own verdict.
+  assert.doesNotMatch(proofText, /КОНТРОЛЬНЫЕ ТОЧКИ/);
+  assert.match(proofText, /ОЦЕНКИ\n(?:PASS|FAIL) \[ask_once\] Если номер уже сообщён, не запрашивать его повторно/);
   assert.match(proofText, /ОЦЕНКИ\n(?:PASS|FAIL|UNKNOWN) \[[^\]]+\].*события: #\d+/);
   // Диалог подтверждения говорит ровно то, что «Да» записывает: набор принят раньше, «Да» запускает агента по этому плану.
   assert.match(plans[1]!, /Принятие набора уже записано отдельно; это подтверждение запуска агента именно по этому плану\./);
@@ -368,18 +370,21 @@ test('Pi connects a new request, conversational correction, reviewed run, eviden
     const discussion = JSON.parse(contexts.at(-1)!.content); assert.equal(discussion.experimentId, built.id); assert.ok(discussion.trialId);
     const evidence = await call('agent_lab_inspect', { id: built.id, trialId: discussion.trialId });
     assert.ok(evidence.events.length);
-    assert.ok(evidence.checkpoints.some((c: { result: string }) => c.result === 'fail'), 'the agent asked again for the number it was given');
+    assert.ok(evidence.assessments.some((a: { metricId: string; result: string }) => a.metricId === 'ask_once' && a.result === 'fail'), 'the agent asked again for the number it was given');
     steps = [['4', 'y'], ['f'], ['q']];
     await command(built.id, ctx);
     const reviewed = await call('agent_lab_inspect', { id: built.id, export: true });
-    assert.equal(reviewed.phase, 'complete'); assert.equal(reviewed.humanReviews.length, 1);
-    // Одна клавиша пишет быструю отметку на главную оценку ситуации и закрывает её (UI-SPEC F13).
+    assert.equal(reviewed.phase, 'complete');
+    // Одна клавиша отвечает на каждую оценку, решившую ситуацию, и закрывает её: здесь на каждое проваленное ожидание (UI-SPEC F13).
     const mark = reviewed.humanReviews[0];
     const marked = await call('agent_lab_inspect', { id: built.id, trialId: mark.trialId });
     const markedCard = reviewed.scenarios.find((card: { id: string }) => card.id === marked.scenarioId);
-    assert.equal(mark.source, 'quick');
-    assert.equal(mark.metricId, primaryMetricId(markedCard, marked));
-    assert.equal(mark.verdict, marked.assessments.find((a: { metricId: string }) => a.metricId === mark.metricId).result);
+    assert.deepEqual(reviewed.humanReviews.map((each: { metricId: string }) => each.metricId), markTargets(markedCard, marked)!.metricIds);
+    for (const each of reviewed.humanReviews) {
+      assert.equal(each.source, 'quick');
+      assert.equal(each.countingRules, 'all-expectations-v1', 'stamped with the rule of its card');
+      assert.equal(each.verdict, marked.assessments.find((a: { metricId: string }) => a.metricId === each.metricId).result);
+    }
     assert.equal(mark.note, 'Быстрая отметка: согласен с судьёй.');
     assert.equal(typeof mark.durationMs, 'number');
     const original = await call('agent_lab_inspect', { id: built.id, trialId: discussion.trialId }); assert.deepEqual(original, evidence);

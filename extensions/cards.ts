@@ -13,7 +13,7 @@ import { pluralForm } from '../src/plural.js';
 import { oneLine, safeText, shortId } from '../src/text.js';
 import { activeRunRows, preparationRows, progressLine } from './flow.ts';
 import { pendingLibrarySelection, logsRows, runRows, scenarioEntries, scenarioRows } from './scenarios.ts';
-import { libraryV1Of } from '../src/card/legacy-v1.js';
+import { judgedScenario, libraryV1Of } from '../src/card/legacy-v1.js';
 
 
 const phases: Record<string, string> = {
@@ -404,7 +404,7 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean, 
       ...(trial.simulatorChecks?.length ? trial.simulatorChecks.flatMap(c => [line(`${c.passed ? '✓' : '?'} ${c.description} [${c.id}]`, c.passed ? 'success' : 'warning'), line(c.evidence, 'muted')])
         : [line('Не применялись: симулятор не отправил реплик после первой.', 'muted')])] : []),
     line(''), line(record.mode === 'demo' ? 'СЦЕНАРНАЯ ОЦЕНКА ДЕМО — ПРОВЕРЬТЕ ПО ТРАССЕ' : 'РЕШЕНИЕ СУДЬИ ПО РУБРИКАМ — ПРОВЕРЬТЕ ПО ДИАЛОГУ', 'accent'),
-    ...(scenario?.metrics ?? []).flatMap(m => {
+    ...((scenario && judgedScenario(scenario, trial).metrics) ?? []).flatMap(m => {
       const a = trial.assessments?.find(a => a.metricId === m.id);
       return [line(`${m.subject === 'simulator' ? 'Симулятор' : 'Агент'} · ${m.name}: ${a ? verdicts[a.result] : 'НЕТ ОЦЕНКИ'}`, a ? outcomeColor(a.result) : 'warning'),
         line(a ? plainRationale(a.rationale) : 'Оценка отсутствует; это не прохождение.'),

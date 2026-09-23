@@ -143,7 +143,7 @@ export function judgeAgreement(input: Experiment): JudgeAgreement {
       const saw = review?.judgeVerdict;
       const answer = review && (saw === 'pass' || saw === 'fail') ? answerOf(review.verdict, saw) : undefined;
       if (!review || !answer) return { metricId, state: 'none', note: '' };
-      const ruleStale = !!own && !markUnderCurrentRule(scenario, own, metricIds);
+      const ruleStale = !!own && !markUnderCurrentRule(scenario, trial, own, metricIds);
       const stale = !own || saw !== recordedResult(trial, metricId)
         || (review.judge?.protocolHash ?? null) !== (judged?.protocolHash ?? null)
         || (review.judge?.inputHash ?? null) !== (judged?.inputHash ?? null);

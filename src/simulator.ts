@@ -1,4 +1,4 @@
-import { simulatorWasUsed, valueTokens, type Scenario, type SimulatorCheck, type Trial } from './contracts.js';
+import { isCardExecution, simulatorWasUsed, valueTokens, type Scenario, type SimulatorCheck, type Trial } from './contracts.js';
 
 /*
  * Heuristic checks over the simulated user's own replies. They answer three questions the judge is
@@ -31,7 +31,8 @@ export function hiddenLiterals(scenario: Scenario): string[] {
 const normalize = (text: string) => text.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 
 export function simulatorChecks(scenario: Scenario, trial: Trial): SimulatorCheck[] {
-  if (!simulatorWasUsed(trial)) return [];
+  // Every word of a compiled card's customer is harness text (card/compile.ts): there is nothing to suspect.
+  if (!simulatorWasUsed(trial) || isCardExecution(scenario.execution)) return [];
   const users = trial.events.filter(e => e.type === 'user');
   const simulated = users.slice(1);
   if (!simulated.length) return [];

@@ -1,9 +1,9 @@
 import type { Experiment, Trial } from '../src/contracts.js';
-import { isRunning, valueTokens } from '../src/contracts.js';
+import { assessmentRubrics, isRunning, valueTokens } from '../src/contracts.js';
 import { plannedTrials, type RunComparison } from '../src/comparison.js';
 import type { LibraryV1, ScenarioVariant } from '../src/scenario-contracts.js';
 import { resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../src/scenario-library.js';
-import { libraryV1Of, requireLibraryV1 } from '../src/card/legacy-v1.js';
+import { judgedScenario, libraryV1Of, requireLibraryV1 } from '../src/card/legacy-v1.js';
 import type { VariantFieldDiff, VariantOperation } from '../src/scenario-variants.js';
 import { semanticWorkStatus } from '../src/scenario-work.js';
 import type { ResultView } from '../src/result-view.js';
@@ -469,7 +469,22 @@ export const targetText = (record: Experiment): string => record.target.kind ===
 /** A path inside the project reads relative to it; anything else stays as written. */
 const projectPath = (text: string, cwd?: string): string => cwd && text.includes(`${cwd}/`) ? text.replaceAll(`${cwd}/`, '') : text;
 
-/** The plan a run confirmation refers to: agent and version, the set, attempts, models and spending limits. */
+/**
+ * The judge's ceiling for a run: two votes on every expectation of every attempt (a first-format card is judged
+ * through its projection, one expectation per required checkpoint), before any re-ask of a malformed vote.
+ */
+function judgeCeiling(record: Experiment): { perAttempt: number; total: number } {
+  let perAttempt = 0, total = 0;
+  for (const scenario of record.scenarios) {
+    const votes = 2 * assessmentRubrics(judgedScenario(scenario, {}), { events: [] }).length;
+    const attempts = record.settings.userModes.filter(mode => mode !== 'scripted' || scenario.user.script !== undefined).length * record.settings.repeats;
+    perAttempt = Math.max(perAttempt, votes);
+    total += votes * attempts;
+  }
+  return { perAttempt, total };
+}
+
+/** The plan a run confirmation refers to: agent and version, the set, attempts, models, the judge's ceiling and spending limits. */
 export function planLines(record: Experiment, cwd?: string): string[] {
   const library = libraryV1Of(record);
   const acceptance = library?.acceptance;
@@ -483,6 +498,7 @@ export function planLines(record: Experiment, cwd?: string): string[] {
   const common = { provider: record.settings.provider, model: record.settings.model };
   const simulator = record.settings.roles?.simulator ?? common;
   const judge = record.settings.roles?.judge ?? record.settings.judge ?? common;
+  const ceiling = judgeCeiling(record);
   return [
     `Агент: ${projectPath(targetText(record), cwd)}${record.targetVersion ? ` · версия ${record.targetVersion}` : ''}`,
     acceptance ? `Набор: принятая ревизия ${acceptance.revision}, ${countText(variants.length, VARIANTS)}${part}${origin ? ` (${origin})` : ''}`
@@ -490,6 +506,7 @@ export function planLines(record: Experiment, cwd?: string): string[] {
     `Попыток: ${plannedTrials(record)} (повторов ${record.settings.repeats}, режим клиента: ${record.settings.userModes.join(', ')})`,
     record.mode === 'demo' ? 'Учебный пример: без модели и оплаты.'
       : `Модели: клиента играет ${simulator.provider}/${simulator.model}; судья — ${judge.provider}/${judge.model}`,
+    ...(record.mode === 'demo' ? [] : [`Судья: по 2 голоса на каждое ожидание — до ${ceiling.perAttempt} вызовов на попытку, всего до ${ceiling.total}.`]),
     `Лимиты: использовано ${record.usage.calls} из ${record.settings.maxCalls} вызовов, до ${Math.round(record.settings.maxDurationMs / 60_000)} мин, до ${record.settings.maxTurns} ходов в диалоге. Стоимость заранее неизвестна.`,
   ];
 }

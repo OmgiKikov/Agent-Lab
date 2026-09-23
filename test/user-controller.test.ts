@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createUserState, allowedUserActions, advanceUser, requiredUserTurns } from '../src/user-controller.js';
+import { createUserState, allowedUserActions, advanceUser, requiredUserTurns, userDecisionSchema } from '../src/user-controller.js';
 import { behaviorPolicySchema } from '../src/scenario-contracts.js';
 import { acceptLibrary, compileLibrary, libraryHash } from '../src/scenario-library.js';
 import { libraryFixture, sources, requirements } from './helpers/scenario-library.js';
 import { evaluateTrial } from '../src/evaluation.js';
+import { headlineTrialResult } from '../src/outcomes.js';
 import { settingsSchema, targetSchema, type Runtime, type Scenario } from '../src/contracts.js';
 
 /** An external agent over HTTP inside the test process: `reply` answers each delivered message; `sent` is what reached the agent. */
@@ -32,17 +33,20 @@ const policy = () => behaviorPolicySchema.parse({ version: 1, initialState: 'sta
   transitions: [{ from: 'start', to: 'answered', actionId: 'answer', when: 'Нужен номер терминала' }, { from: 'start', to: 'done', actionId: 'finish', when: 'Достаточный ответ' }, { from: 'answered', to: 'done', actionId: 'change', when: 'После уточнения' }] });
 const facts = [{ id: 'number', statement: 'Номер терминала: 1234', value: '1234' }];
 
-test('controller rejects hidden fact references and undeclared transitions before rendering', () => {
+test('the controller answers with one allowed action id; the harness renders the message from the action', () => {
   const state = createUserState(policy(), facts);
-  assert.throws(() => advanceUser(state, { actionId: 'answer', factIds: ['hidden'] }), /факт|разреш/i);
-  assert.throws(() => advanceUser(state, { actionId: 'change', factIds: [] }), /переход|действие/i);
-  assert.throws(() => advanceUser(state, { actionId: 'answer', factIds: ['number'], message: 'secret-value' }), /пол|ключ|Unrecognized/i);
+  const choice = userDecisionSchema(allowedUserActions(state, ''));
+  assert.throws(() => choice.parse({ actionId: 'change' }), 'a move not allowed now is outside the enum');
+  assert.throws(() => choice.parse({ actionId: 'answer', factIds: ['hidden'] }), /Unrecognized/, 'fact references come from the action, never from the answer');
+  assert.throws(() => choice.parse({ actionId: 'answer', message: 'secret-value' }), /Unrecognized/, 'the answer carries no text');
+  assert.throws(() => userDecisionSchema([]), /допустимых действий/);
+  assert.throws(() => advanceUser(state, { actionId: 'change' }), /переход|действие/i);
   assert.equal(state.position, 'start');
   assert.deepEqual(allowedUserActions(state, 'Назовите номер терминала').map(a => a.id), ['answer']);
-  assert.throws(() => advanceUser(state, { actionId: 'finish', factIds: [] }), /действие|намерени/i);
-  const next = advanceUser(state, { actionId: 'answer', factIds: ['number'] });
+  assert.throws(() => advanceUser(state, { actionId: 'finish' }), /действие|намерени/i);
+  const next = advanceUser(state, choice.parse({ actionId: 'answer' }));
   assert.equal(next.message, 'Номер терминала: 1234');
-  const end = advanceUser(next.state, { actionId: 'change', factIds: [] });
+  const end = advanceUser(next.state, { actionId: 'change' });
   assert.equal(end.message, 'Теперь хочу отменить возврат');
   assert.equal(end.done, true);
   assert.equal(requiredUserTurns(policy(), facts), 3);
@@ -51,9 +55,9 @@ test('controller rejects hidden fact references and undeclared transitions befor
 test('repetition and finite follow-up bounds cannot be evaded with repeated clarification', () => {
   const p = policy(); p.actions = [{ id: 'ask', kind: 'clarify', factIds: [], payload: 'Что нужно уточнить?' }, { id: 'finish', kind: 'finish', factIds: [] }];
   p.transitions = [{ from: 'start', to: 'start', actionId: 'ask', when: 'Неясный ответ' }, { from: 'start', to: 'done', actionId: 'finish', when: 'Достаточный ответ' }];
-  const next = advanceUser(createUserState(p, []), { actionId: 'ask', factIds: [] });
-  assert.throws(() => advanceUser(next.state, { actionId: 'ask', factIds: [] }), /действие|повтор/i);
-  assert.equal(advanceUser(next.state, { actionId: 'finish', factIds: [] }).message, '');
+  const next = advanceUser(createUserState(p, []), { actionId: 'ask' });
+  assert.throws(() => advanceUser(next.state, { actionId: 'ask' }), /действие|повтор/i);
+  assert.equal(advanceUser(next.state, { actionId: 'finish' }).message, '');
   assert.equal(requiredUserTurns(p, []), 1, 'empty finish consumes no target turn');
 });
 
@@ -80,19 +84,20 @@ test('compiled accepted card freezes separated execution views and rejects illeg
   const scenario = compiled();
   assert.ok(scenario.execution);
   scenario.execution!.userView.policy = policy(); scenario.execution!.userView.facts = facts;
-  const result = await evaluate(scenario, [{ actionId: 'answer', factIds: ['hidden'] }, { actionId: 'answer', factIds: ['hidden'] }]);
-  assert.equal(result.result.outcome, 'invalid'); assert.match(result.result.reason, /симулятор/i);
-  assert.deepEqual(result.sent, ['Помогите с возвратом']); assert.equal(result.calls, 2);
-  assert.equal(result.result.events.filter(e => e.type === 'simulator').length, 2);
+  const result = await evaluate(scenario, [{ actionId: 'answer', factIds: ['hidden'] }]);
+  assert.equal(result.result.outcome, 'invalid'); assert.match(result.result.reason, /Симулятор выбрал действие, которого нет среди допустимых/);
+  assert.deepEqual(result.sent, ['Помогите с возвратом'], 'nothing the controller got wrong reaches the agent'); assert.equal(result.calls, 1);
+  assert.equal(result.result.events.filter(e => e.type === 'simulator').length, 0);
   assert.doesNotMatch(JSON.stringify(result.inputs), /evaluatorView|requirementId|environmentView|checkpoint/);
 });
 
-test('repair delivers exact authorized payload and terminal change intent still obtains target response', async () => {
+test('the exact authorized payload is delivered and a terminal change of intent still obtains the agent\'s response', async () => {
   const s = compiled(); s.execution!.userView.policy = policy(); s.execution!.userView.facts = facts;
-  const got = await evaluate(s, [{ actionId: 'change', factIds: [] }, { actionId: 'answer', factIds: ['number'] }, { actionId: 'change', factIds: [] }]);
+  const got = await evaluate(s, [{ actionId: 'answer' }, { actionId: 'change' }]);
   assert.deepEqual(got.sent, ['Помогите с возвратом', 'Номер терминала: 1234', 'Теперь хочу отменить возврат']);
   assert.equal(got.result.events.filter(e => e.type === 'assistant').length, 3);
-  assert.equal(got.calls, 3);
+  assert.deepEqual(got.result.events.filter(e => e.type === 'simulator').map(e => (e.result as { decision: unknown }).decision), [{ actionId: 'answer' }, { actionId: 'change' }]);
+  assert.equal(got.calls, 2);
   assert.notEqual(got.result.outcome, 'invalid');
 });
 
@@ -101,23 +106,28 @@ test('controlled execution preflights finite path and rejects bypass modes witho
   for (const options of [{ maxTurns: 2 }, { mode: 'static' as const }, { mode: 'scripted' as const }]) {
     const got = await evaluate(s, [], options); assert.equal(got.result.outcome, 'invalid'); assert.deepEqual(got.sent, []);
   }
-  const cancelled = await evaluate(s, [{ actionId: 'answer', factIds: ['number'] }], { abort: true });
+  const cancelled = await evaluate(s, [{ actionId: 'answer' }], { abort: true });
   assert.equal(cancelled.result.outcome, 'cancelled'); assert.deepEqual(cancelled.sent, ['Помогите с возвратом']);
 });
 
-test('trusted observation event supports correct refusal without tool calls and state snapshots without prose proof', async () => {
+test('trusted observation events let exact checks of a first-format card prove a correct refusal without prose', async () => {
   const s = compiled(); delete s.metrics;
   s.execution!.environmentView = { mode: 'managed', contract: { reset: true, confirmed: true, operations: ['update_record'], observations: ['reply', 'tool', 'state'] } };
   s.initialState = { records: { item: { status: 'pending' } }, writableFields: ['status'], transientFailures: 0 };
-  s.execution!.evaluatorView.checkpoints = [
-    { ...s.execution!.evaluatorView.checkpoints[0]!, observation: 'tool', check: { id: 'no_mutation', kind: 'tool_not_called', tool: 'update_record', description: 'При корректном отказе изменений нет' } },
-    { ...s.execution!.evaluatorView.checkpoints[0]!, id: 'state_unchanged', observation: 'state', check: { id: 'same_state', kind: 'state_equals', recordId: 'item', field: 'status', value: 'pending', description: 'Состояние не изменилось' } },
-  ];
+  const view = s.execution!.evaluatorView;
+  if (!('checkpoints' in view)) throw new Error('a first-format card');
+  const checks = [{ id: 'no_mutation', kind: 'tool_not_called', tool: 'update_record', description: 'При корректном отказе изменений нет' } as const,
+    { id: 'same_state', kind: 'state_equals', recordId: 'item', field: 'status', value: 'pending', description: 'Состояние не изменилось' } as const];
+  view.checkpoints = [{ ...view.checkpoints[0]!, observation: 'tool', check: checks[0] }, { ...view.checkpoints[0]!, id: 'state_unchanged', observation: 'state', check: checks[1] }];
+  // As the first-format compiler wrote them: a required checkpoint's exact check is also a check of the card.
+  s.checks = [...checks];
   // The agent reports its records, a confirmed reset and complete tool events: the trusted observation the checkpoints need.
   const agent = await httpAgent(body => ({ reply: 'Нет данных для изменения', records: (body.initialState as { records: unknown }).records, resetConfirmed: true, eventsComplete: true }));
-  const runtime = { async selectUserAction() { return { actionId: 'finish', factIds: [] }; },
-    async assessCheckpoints(input: any) { return input.checkpoints.map((c: any) => ({ checkpointId: c.checkpoint.id, result: 'pass', evidence: c.allowedEvidence, rationale: 'Полные наблюдения подтверждают отсутствие изменений' })); } } as Runtime;
+  const runtime = { async selectUserAction() { return { actionId: 'finish' }; },
+    async assess() { throw new Error('Exact checks decide this card: nothing is left to judge.'); } } as Runtime;
   const trial = await evaluateTrial({ scenario: s, runtime, revision: { id: 'base', parentId: null, spec: { name: 'Агент', instructions: 'Помогать', tools: [] }, hypothesis: '', createdAt: '' }, repeat: 0, manifestHash: 'frozen', sources, requirements, settings: settingsSchema.parse({}), userMode: 'reactive', target: agent.target, ctx: { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} } }).finally(agent.close);
-  assert.deepEqual(trial.checkpoints?.map(c => c.result), ['pass', 'pass']);
+  assert.deepEqual(trial.checks.map(check => [check.id, check.passed]), [['no_mutation', true], ['same_state', true]]);
+  assert.equal(trial.checkpoints, undefined);
+  assert.equal(headlineTrialResult(s, trial), 'pass');
   assert.ok(trial.events.some(e => e.type === 'observation'));
 });

@@ -8,7 +8,7 @@ import { countText, pluralForm } from './plural.js';
 import { oneLine, safeText, shortId } from './text.js';
 import { failureExplanation, ruleRegister, ruleText, UNVERIFIED, UNVERIFIED_REPLY, type FailureExplanation } from './explain.js';
 import { draftHash } from './experiment.js';
-import { libraryV1Of } from './card/legacy-v1.js';
+import { judgedScenario, libraryV1Of } from './card/legacy-v1.js';
 
 /*
  * The first screen. One question — "how good is the agent on these cards?" — answered in
@@ -271,7 +271,7 @@ export function trialProofLines(record: Experiment, trialId: string): TrialProof
     ...labelled('  Доказательство: ', check.evidence || '—'),
   ]);
   const rubrics = (trial.assessments ?? []).flatMap(assessment => {
-    const name = scenario.metrics?.find(metric => metric.id === assessment.metricId)?.name ?? assessment.metricId;
+    const name = judgedScenario(scenario, trial).metrics?.find(metric => metric.id === assessment.metricId)?.name ?? assessment.metricId;
     const citations = assessment.evidence.length ? assessment.evidence.map(seq => `#${seq}`).join(', ') : '—';
     return [
       ...labelled(`${assessment.result.toUpperCase()} [${assessment.metricId}] `, `${name} · события: ${citations}`),
@@ -325,12 +325,12 @@ function metricRows(record: Experiment): QualityMetric[] {
   for (const trial of record.trials) {
     const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
     if (!scenario || !measured(trial)) continue;
-    if (directChecks(scenario).length) {
+    if (directChecks(scenario, trial).length) {
       const row = rows.get('code') ?? { id: 'code', name: 'Точные проверки · код', kind: 'code', passed: 0, failed: 0, unknown: 0, total: 0, accuracy: null };
       rows.set('code', row);
       bump(row, !usable(scenario, trial) ? 'unknown' : trial.outcome === 'pass' ? 'pass' : trial.outcome === 'fail' ? 'fail' : 'unknown');
     }
-    for (const metric of assessmentRubrics(scenario, trial).filter(m => m.subject === 'agent')) {
+    for (const metric of assessmentRubrics(judgedScenario(scenario, trial), trial).filter(m => m.subject === 'agent')) {
       const key = `rubric:${stableMetricIds.has(metric.id) ? metric.id : fingerprint(metric)}`;
       const row = rows.get(key) ?? { id: metric.id, name: metric.name, kind: 'rubric', passed: 0, failed: 0, unknown: 0, total: 0, accuracy: null };
       rows.set(key, row);

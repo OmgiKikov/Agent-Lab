@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
-import { experimentSchema, fingerprint, judgeAuditSchema, type Experiment, type JudgeAudit } from '../src/contracts.js';
-import { libraryV1Of } from '../src/card/legacy-v1.js';
+import { experimentSchema, fingerprint, judgeAuditSchema, type Experiment, type JudgeAudit, type Runtime, type VariantExecution } from '../src/contracts.js';
+import { libraryV1Of, projectedExpectations } from '../src/card/legacy-v1.js';
+import { compareRuns } from '../src/comparison.js';
 import { scenarioLibrarySchema } from '../src/card/schema.js';
 import { demoTarget } from '../src/demo.js';
 import { draftHash } from '../src/experiment.js';
@@ -11,7 +12,7 @@ import { automaticTrialResult } from '../src/outcomes.js';
 import { buildResultView } from '../src/result-view.js';
 import { libraryHash, verifyAcceptedRun } from '../src/scenario-library.js';
 import { compiledLibraryScenarios } from '../src/scenario-preparation.js';
-import { libraryV1File, libraryV1Run } from './helpers/library-v1.js';
+import { libraryV1File, libraryV1Run, libraryV1Runtime } from './helpers/library-v1.js';
 
 /*
  * Goldens of a stored first-format library run (test/helpers/library-v1.ts). They must hold after every
@@ -101,11 +102,24 @@ test('the first-format run is re-assessed from its recorded evidence with its ac
   assert.equal(fingerprint(result.scenarios), fingerprint(record.scenarios), 'the accepted cards are judged as they are');
   assert.deepEqual(result.trials.map(trial => trial.events), record.trials.map(trial => trial.events), 'no agent or simulator ran');
   assert.deepEqual(verdicts(result), ['known_number:fail', 'known_number:fail', 'late_number:pass', 'late_number:pass']);
-  for (const trial of result.trials) assert.equal(complete(result, trial), true);
+  for (const trial of result.trials) {
+    assert.equal(complete(result, trial), true);
+    // Judged through the projection: no checkpoint verdict, one expectation per required checkpoint, two votes each.
+    const required = projectedExpectations(result.scenarios.find(item => item.id === trial.scenarioId)!.execution as VariantExecution).map(expectation => expectation.id);
+    assert.deepEqual(required, ['ask_once', 'refund_explanation']);
+    assert.equal(trial.checkpoints, undefined); assert.equal(trial.checkpointReceipt, undefined);
+    assert.deepEqual(trial.assessments?.map(assessment => assessment.metricId), required, 'the one `library_required` rubric is gone');
+    assert.deepEqual(trial.judgeReceipt?.votes.map(vote => vote.metricId), required.flatMap(id => [id, id]));
+  }
 });
 
 test('the first-format run repeats on a new agent version with its accepted cards, never recompiled', async t => {
-  const { lab, directory, record } = await libraryV1Run();
+  // The controller of the repeat is given each card's stored customer view, exactly as it was accepted.
+  const seen: unknown[] = [];
+  const runtime: Runtime = libraryV1Runtime();
+  const choose = runtime.selectUserAction!;
+  runtime.selectUserAction = (input, ctx) => { seen.push(input.user); return choose(input, ctx); };
+  const { lab, directory, record } = await libraryV1Run(runtime);
   t.after(async () => { await lab.close(); await rm(directory, { recursive: true, force: true }); });
   const repeated = await lab.repeat(record.id);
   assert.equal(fingerprint(repeated.scenarios), fingerprint(record.scenarios));
@@ -115,4 +129,22 @@ test('the first-format run repeats on a new agent version with its accepted card
   assert.equal(run.phase, 'results_review');
   assert.equal(fingerprint(run.scenarios), fingerprint(record.scenarios));
   assert.deepEqual(verdicts(run), ['known_number:pass', 'known_number:pass', 'late_number:pass', 'late_number:pass'], 'the fixed agent no longer asks twice');
+  const views = new Set(record.scenarios.map(scenario => fingerprint(scenario.execution!.userView)));
+  assert.ok(seen.length > 0 && seen.every(view => views.has(fingerprint(view))), 'the stored userView drives the controller');
+});
+
+test('a repeat compares with the old run re-judged by today\'s judge, never with the checkpoint verdicts of the raw run', async t => {
+  const { lab, directory, record } = await libraryV1Run();
+  t.after(async () => { await lab.close(); await rm(directory, { recursive: true, force: true }); });
+  const reassessed = await lab.reassess(record.id); await lab.waitForIdle();
+  const repeated = await lab.repeat(record.id);
+  const draft = await lab.updateDraft(repeated.id, draftHash(repeated), { target: demoTarget(true) });
+  await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) }); await lab.waitForIdle();
+  const run = await lab.get(draft.id);
+  const raw = compareRuns(record, run);
+  assert.equal(raw.comparable, false);
+  assert.ok(raw.notes.some(note => note.startsWith('Протокол судьи отличается')), raw.notes.join(' | '));
+  const rejudged = compareRuns(await lab.get(reassessed.id), run);
+  assert.equal(rejudged.comparable, true, rejudged.notes.join(' | '));
+  assert.deepEqual(rejudged.fixed.map(row => row.scenarioId), ['known_number'], 'the fixed agent no longer asks twice');
 });

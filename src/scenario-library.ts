@@ -210,7 +210,7 @@ function reachableSourceActions(variant: ScenarioVariant): Set<string> {
     seen.add(key);
     for (const action of allowedUserActions(state, '')) {
       reached.add(action.id);
-      queue.push(advanceUser(state, { actionId: action.id, factIds: action.factIds }).state);
+      queue.push(advanceUser(state, { actionId: action.id }).state);
     }
   }
   return reached;

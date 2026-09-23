@@ -2,8 +2,17 @@ import { z } from 'zod';
 import { behaviorPolicySchema, type BehaviorPolicy } from './scenario-contracts.js';
 
 export const USER_CONTROLLER_PROTOCOL = 'controlled-user-v1';
-export const userDecisionSchema = z.strictObject({ actionId: z.string().min(1).max(80), factIds: z.array(z.string().min(1).max(80)).max(20) });
-export type UserDecision = z.infer<typeof userDecisionSchema>;
+/**
+ * The controller's whole answer: which of the moves allowed right now the customer makes, as one of
+ * exactly their ids. The harness renders the message from the chosen action — its fixed words or its
+ * facts — so the answer carries no text and no fact references that could be wrong.
+ */
+export function userDecisionSchema(actions: readonly Pick<AllowedUserAction, 'id'>[]) {
+  const [first, ...rest] = actions.map(action => action.id);
+  if (first === undefined) throw new Error('Симулятор: у клиента не осталось допустимых действий.');
+  return z.strictObject({ actionId: z.enum([first, ...rest]) });
+}
+export interface UserDecision { actionId: string }
 export const userViewSchema = z.strictObject({
   goal: z.string(), opening: z.string(), policy: behaviorPolicySchema,
   facts: z.array(z.strictObject({ id: z.string(), statement: z.string(), value: z.union([z.string(), z.number(), z.boolean()]).optional() })).max(20),
@@ -49,14 +58,22 @@ function moved(state: UserState, action: AllowedUserAction): UserState {
 function complete(state: UserState): boolean {
   return state.policy.terminalStates.includes(state.position) && state.policy.actions.filter(a => a.kind === 'change_intent').every(a => state.changed.includes(a.id));
 }
-/** Bounded graph search: a finish cannot skip a declared staged intention. */
+/**
+ * Bounded graph search: a finish cannot skip a declared staged intention. A move that stays where it is and
+ * changes no intention (answering one more question) only spends a follow-up and a repetition, so every way
+ * to the end after it is also open without it: it never shortens the way and is not searched. This keeps the
+ * search to the moves between states, however many questions a customer can answer.
+ */
 function distance(state: UserState, memo = new Map<string, number>(), budget = { remaining: 20000 }): number {
   if (complete(state)) return 0;
   if (--budget.remaining < 0) throw new Error('Симулятор: политика слишком сложна для проверки конечного пути');
   const key = JSON.stringify([state.position, state.counts, state.changed]);
   if (memo.has(key)) return memo.get(key)!;
   let best = Infinity;
-  for (const action of candidates(state)) best = Math.min(best, (action.kind === 'finish' ? 0 : 1) + distance(moved(state, action), memo, budget));
+  for (const action of candidates(state)) {
+    if (action.to === state.position && action.kind !== 'change_intent') continue;
+    best = Math.min(best, (action.kind === 'finish' ? 0 : 1) + distance(moved(state, action), memo, budget));
+  }
   memo.set(key, best);
   return best;
 }
@@ -70,11 +87,10 @@ export function requiredUserTurns(policy: BehaviorPolicy, facts: UserView['facts
   if (!Number.isFinite(value)) throw new Error('Симулятор: обязательный путь не помещается в политику или недостижим');
   return value + 1;
 }
-export function advanceUser(state: UserState, raw: unknown): { state: UserState; message: string; done: boolean } {
-  const decision = userDecisionSchema.parse(raw);
+/** One move of the customer; the message is the action's own payload or the statements of its facts, never text from the decision. */
+export function advanceUser(state: UserState, decision: UserDecision): { state: UserState; message: string; done: boolean } {
   const action = allowedUserActions(state, '').find(a => a.id === decision.actionId);
   if (!action) throw new Error('Симулятор: действие или переход не разрешены; соблюдайте порядок намерений и предел повторов');
-  if (new Set(decision.factIds).size !== decision.factIds.length || decision.factIds.length !== action.factIds.length || decision.factIds.some(id => !action.factIds.includes(id))) throw new Error('Симулятор: неразрешённая ссылка на факт');
   const next = moved(state, action);
   const message = action.kind === 'finish' ? '' : action.payload ?? (action.kind === 'missing' ? 'У меня нет этих данных.' : action.factIds.map(id => state.facts.find(f => f.id === id)!.statement).join('\n'));
   return { state: next, message, done: complete(next) };

@@ -1,8 +1,10 @@
+import { headlineRule, undecidedExpectation, type CountedExpectation } from './card/expectations.js';
+import { judgedByCheckpoints } from './card/legacy-v1.js';
 import { directChecks } from './checkpoints.js';
 import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, scenarioSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
 import { fingerprint, metricApplies, simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode, isRunning } from './contracts.js';
-import { agentMetricResult, agentRubricResult, automaticTrialResult, GOAL_METRIC_ID, graded, headlineMetricIds, headlineTrialResult, isAgentFailure, latestHumanReviews, markTargets, markUnderCurrentRule, measured, measurementUsable, observedRecord, RULES_METRIC_ID, simulatorUsable } from './outcomes.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, expectationResult, GOAL_METRIC_ID, graded, headlineMetricIds, headlineTrialResult, isAgentFailure, latestHumanReviews, markTargets, markUnderCurrentRule, measured, measurementUsable, observedRecord, RULES_METRIC_ID, simulatorUsable } from './outcomes.js';
 import { judgeAgreement } from './agreement.js';
 import { shortId } from './text.js';
 import { sameTargetVersion } from './target-version.js';
@@ -122,7 +124,7 @@ export function awaitingVerdict(record: Experiment): Set<string> {
       const targets = markTargets(scenario, trial);
       const quickClosed = !!targets && targets.metricIds.every(id => {
         const mark = latest.get(`${trial.id}|metric:${id}`);
-        return mark?.source === 'quick' && ['pass', 'fail'].includes(mark.verdict) && markUnderCurrentRule(scenario, mark, targets.metricIds);
+        return mark?.source === 'quick' && ['pass', 'fail'].includes(mark.verdict) && markUnderCurrentRule(scenario, trial, mark, targets.metricIds);
       });
       if (quickClosed) {
         if (headlineMetricIds(scenario).length) return false;
@@ -397,8 +399,8 @@ function runCompleteness(record: Experiment, allowPartial = false): string[] {
     if (!expected.has(key) || seen.has(key) || ids.has(trial.id) || !scenario
       || trial.familyId !== scenario.familyId || fingerprint(trial.initialState) !== fingerprint(scenario.initialState)
       || trial.split !== scenario.split
-      || measured(trial) && (trial.checks.length !== directChecks(scenario).length || new Set(trial.checks.map(c => c.id)).size !== directChecks(scenario).length
-        || trial.checks.some(c => !directChecks(scenario).some(expected => expected.id === c.id)))
+      || measured(trial) && (trial.checks.length !== directChecks(scenario, trial).length || new Set(trial.checks.map(c => c.id)).size !== directChecks(scenario, trial).length
+        || trial.checks.some(c => !directChecks(scenario, trial).some(expected => expected.id === c.id)))
       || trial.outcome === 'pass' && (trial.checks.some(c => !c.passed) || !trial.checks.length && !scenario?.execution)
       || (record.manifestHash && trial.manifestHash !== record.manifestHash)) invalid = true;
     if (!measured(trial)) unmeasured = true;
@@ -445,25 +447,46 @@ function metricCardOutcome(record: Experiment, scenario: Scenario, metricId: str
   return results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
 }
 
-type HeadlineOutcome = { outcome: 'pass' | 'fail' | 'unknown'; goal: 'pass' | 'fail' | 'unknown' | 'none'; rules: 'pass' | 'fail' | 'unknown' | 'none' };
+type Verdict = 'pass' | 'fail' | 'unknown';
+/** One part of a card's verdict: an expectation (label А, Б, В…, with its words), a legacy card's goal or prompt rules, or a card's exact checks. */
+export interface CardPart { id: string; label: string; text?: string; outcome: Verdict }
+type HeadlineOutcome = { outcome: Verdict; goal: Verdict | 'none'; rules: Verdict | 'none'; parts: CardPart[] };
+const failFirst = (results: Verdict[]): Verdict => results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
 
 /**
- * The headline card result (counting rule COUNTING_RULES): goal attainment and, when the card has
- * it, prompt compliance; the card passes only when both pass in every attempt, fails when either
- * fails in any attempt, and stays unknown otherwise. Both metrics pass the same attempt and
- * usability gate before any fail is read, so an unusable card is «не измерено» whatever the rules
- * say. A legacy card without the goal rubric keeps the strict card outcome, with no goal and no
- * rules part. Reply quality and the RAG rubrics never enter.
+ * A card counted by its expectations: each expectation is fail-first over the attempts (its part), and the
+ * card passes only when every expectation passed in every attempt. Its exact checks, where it has them, are
+ * one more part of the same AND. The attempt and usability gate comes first, as for every headline card.
+ */
+function expectationsCardOutcome(record: Experiment, scenario: Scenario, trials: Trial[], expectations: CountedExpectation[], partial: boolean): HeadlineOutcome {
+  const gated = attemptsMatch(record, scenario, trials, partial) && trials.every(trial => measurementUsable(scenario, trial, record.humanReviews));
+  const over = (result: (trial: Trial) => Verdict): Verdict => gated ? failFirst(trials.map(result)) : 'unknown';
+  const parts: CardPart[] = expectations.map(expectation => ({ id: expectation.id, label: expectation.letter, text: expectation.text,
+    outcome: over(trial => expectationResult(trial, expectation, record.humanReviews) ?? 'unknown') }));
+  if (scenario.checks.length) parts.push({ id: 'checks', label: 'Точные проверки', outcome: over(trial => trial.outcome === 'pass' ? 'pass' : trial.outcome === 'fail' ? 'fail' : 'unknown') });
+  return { outcome: over(trial => headlineTrialResult(scenario, trial, record.humanReviews)), goal: 'none', rules: 'none', parts };
+}
+
+/**
+ * The headline card result by the card's counting rule (card/expectations.ts headlineRule). A card counted
+ * by its expectations passes only when every expectation passed in every attempt. An old generated card is
+ * counted by goal attainment and, when it has it, prompt compliance: it passes only when both pass in every
+ * attempt, fails when either fails in any attempt, and stays unknown otherwise. Every part passes the same
+ * attempt and usability gate before any fail is read, so an unusable card is «не измерено» whatever its parts
+ * say. A legacy card without the goal rubric keeps the strict card outcome, with no parts. Reply quality and
+ * the RAG rubrics never enter. `parts` name the verdict's parts in the owner's words (А, Б, В; Цель, Правила промпта).
  */
 export function headlineCardOutcome(record: Experiment, scenario: Scenario, options: { partial?: boolean } = {}): HeadlineOutcome {
   const partial = options.partial ?? false;
+  const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
+  const rule = headlineRule(scenario, trials);
+  if (rule.kind === 'expectations') return expectationsCardOutcome(record, scenario, trials, rule.expectations, partial);
   const ids = headlineMetricIds(scenario);
-  if (!ids.length) return { outcome: cardOutcome(record, scenario, partial), goal: 'none', rules: 'none' };
+  if (!ids.length) return { outcome: cardOutcome(record, scenario, partial), goal: 'none', rules: 'none', parts: [] };
   const goal = metricCardOutcome(record, scenario, GOAL_METRIC_ID, partial);
   const rules = ids.includes(RULES_METRIC_ID) ? metricCardOutcome(record, scenario, RULES_METRIC_ID, partial) : 'none';
-  const parts = rules === 'none' ? [goal] : [goal, rules];
-  const outcome = parts.includes('fail') ? 'fail' : parts.every(part => part === 'pass') ? 'pass' : 'unknown';
-  return { outcome, goal, rules };
+  const parts: CardPart[] = [{ id: GOAL_METRIC_ID, label: 'Цель', outcome: goal }, ...(rules === 'none' ? [] : [{ id: RULES_METRIC_ID, label: 'Правила промпта', outcome: rules }])];
+  return { outcome: failFirst(parts.map(part => part.outcome)), goal, rules, parts };
 }
 
 /**
@@ -492,8 +515,12 @@ const SIMULATOR_STAGE_REASON = 'реплика симулированного п
 export const SERVICE_REPLY_REASON = 'Стенд ответил служебным текстом';
 const CODE_ONLY_ASSESSMENT = 'Только точные проверки';
 
-/** Why one attempt leaves the card without a verdict; `ids` are the headline metrics whose undecided votes are explained. */
-function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids: string[]): NotMeasuredCode[] {
+/**
+ * Why one attempt leaves the card without a verdict; `ids` are the headline metrics and `expectations` the
+ * card's counted expectations whose undecided verdicts are explained — for an expectation, from what was
+ * recorded (its votes and its evidence channel), never from the judge's wording.
+ */
+function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids: string[], expectations: CountedExpectation[] = []): NotMeasuredCode[] {
   const codes: NotMeasuredCode[] = [];
   const latest = latestHumanReviews({ trials: [trial], humanReviews: record.humanReviews });
   if (trial.outcome === 'cancelled') codes.push('stopped');
@@ -516,6 +543,12 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids:
   if (checksDeviate || fidelity.includes('fail')) codes.push('simulator_deviated');
   // Without any judgment the vote is missing because the judge never ran: that is `not_judged`, not an unsure judge.
   if (trial.assessments && fidelity.some(result => result !== 'pass' && result !== 'fail')) codes.push('simulator_unclear');
+  for (const expectation of expectations) {
+    const result = expectationResult(trial, expectation, record.humanReviews);
+    if (result === 'pass' || result === 'fail') continue;
+    const review = latest.get(`${trial.id}|metric:${expectation.id}`);
+    codes.push(review?.verdict === 'invalid' ? 'human_invalid' : review?.verdict === 'unknown' && review.source !== 'quick' ? 'human_unknown' : undecidedExpectation(trial, expectation));
+  }
   for (const id of ids) {
     const result = agentMetricResult(trial, id, record.humanReviews);
     if (result === 'pass' || result === 'fail') continue;
@@ -545,7 +578,9 @@ export function cardVerdict(record: Experiment, scenario: Scenario, rule: 'headl
   const codes = new Set<NotMeasuredCode>();
   if (!trials.length) codes.add(isRunning(record.phase) ? 'in_progress' : 'not_reached');
   else if (!attemptsMatch(record, scenario, trials)) codes.add('attempts_mismatch');
-  for (const trial of trials) for (const code of trialReasons(record, scenario, trial, ids)) codes.add(code);
+  const rules = headlineRule(scenario, trials);
+  const expectations = rules.kind === 'expectations' ? rules.expectations : [];
+  for (const trial of trials) for (const code of trialReasons(record, scenario, trial, ids, expectations)) codes.add(code);
   return { outcome, reason: NOT_MEASURED_CODES.find(code => codes.has(code)) ?? 'judge_unclear' };
 }
 
@@ -741,9 +776,13 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   if (before.mode !== after.mode) notes.push('Демо и живые прогоны несравнимы.');
   const rejudgedPair = !!before.assessmentOf && !!after.assessmentOf && before.assessmentOf !== after.assessmentOf
     && after.sourceEvidence?.runId === after.assessmentOf && after.sourceEvidence.parentRunId === before.assessmentOf;
-  if (fingerprint(before.target) !== fingerprint(after.target) && after.parentRunId !== before.id && !rejudgedPair) notes.push('Испытуемый в прогонах разный: выберите повтор того же агента.');
+  // A repeat of a run compares with that run re-judged by today's judge: the same cards and judge, only the agent's answers differ.
+  const repeatOfReassessed = !!before.assessmentOf && !after.assessmentOf && after.parentRunId === before.assessmentOf;
+  if (fingerprint(before.target) !== fingerprint(after.target) && after.parentRunId !== before.id && !repeatOfReassessed && !rejudgedPair) notes.push('Испытуемый в прогонах разный: выберите повтор того же агента.');
   if (fingerprint(before.settings) !== fingerprint(after.settings)) notes.push('Настройки, модель, режимы пользователя или число повторов отличаются.');
-  if ((before.assessmentOf || after.assessmentOf) && !rejudgedPair) notes.push('Это переоценка сохранённых ответов. Для сравнения версий переоцените оба исходных прогона в одинаковых условиях.');
+  if ((before.assessmentOf || after.assessmentOf) && !rejudgedPair && !repeatOfReassessed) notes.push('Это переоценка сохранённых ответов. Для сравнения версий переоцените оба исходных прогона в одинаковых условиях.');
+  // A first-format run judged by its checkpoints is another judgment than one per expectation, whatever the judge model.
+  if (before.trials.some(judgedByCheckpoints) !== after.trials.some(judgedByCheckpoints)) notes.push('Протокол судьи отличается: один прогон судился по контрольным точкам, другой — по отдельным ожиданиям. Переоцените старый прогон, чтобы сравнить.');
   if (before.evaluatorVersion !== after.evaluatorVersion) notes.push('Версия оценщика или его инструкций отличается. Сначала переоцените сохранённые трассы в одинаковых условиях.');
   if (fingerprint(before.sources) !== fingerprint(after.sources) || fingerprint(before.requirements) !== fingerprint(after.requirements)) notes.push('Материалы или требования изменились.');
   if (result.cards.onlyBefore.length || result.cards.onlyAfter.length) notes.push('Набор карточек изменился.');
