@@ -196,7 +196,7 @@ async function main() {
     // The source run is read-only context for stability; the same verified path as Pi and the exports:
     // receipts checked against sidecars, source resolved once. The trace journal is not needed here.
     const verified = await resolveVerified(record, store, record.assessmentOf ?? record.parentRunId);
-    const numbers = await importNumbers(verified.record, importId => store.readImport(importId));
+    const numbers = verified.record.calibration?.entries.length ? await importNumbers(verified.record, importId => store.readImport(importId)) : undefined;
     const view = buildResultView(verified.record, { before: verified.before, ...(numbers ? { numbers } : {}) });
     if (values.json) { process.stdout.write(`${JSON.stringify({ ...machineResult(view), warnings: verified.warnings }, null, 2)}\n`); return; }
     process.stdout.write(screenText(view, verified.warnings));

@@ -134,7 +134,8 @@ export async function evidenceBundle(record: Experiment, store: BundleStore, bef
   const parent = beforeId ?? record.parentRunId;
   const verified = await resolveVerified(record, store, parent);
   const snapshot = verified.record;
-  const numbers = store.readImport ? await importNumbers(snapshot, store.readImport.bind(store)) : undefined;
+  // Only a calibration's disagreements need the dialogues' places in their imports: other bundles read no import.
+  const numbers = store.readImport && snapshot.calibration?.entries.length ? await importNumbers(snapshot, store.readImport.bind(store)) : undefined;
   // Stability is checked against the resolved source run; the headline itself never depends on it.
   const bundle: EvidenceBundle = { record: snapshot, view: buildResultView(snapshot, { before: verified.before, ...(numbers ? { numbers } : {}) }), warnings: [...verified.warnings], traceJournal: '',
     ...(numbers ? { dialogueNumbers: numbers } : {}) };
