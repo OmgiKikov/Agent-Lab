@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Ставит готовые node_modules и dist из ветки deps/node_modules-02e0a17 — без npm и реестра.
+# Ставит готовые node_modules из ветки deps/node_modules-1c6565a и собирает dist — без npm и реестра.
 #
 #   bash examples/fetch-deps.sh
 #
@@ -9,9 +9,9 @@
 # работает в любом клоне.
 set -euo pipefail
 
-branch="deps/node_modules-02e0a17"
-archive="agent-lab-node_modules-02e0a17.tgz"
-expected_sha="9e7061a259a73f5f"
+branch="deps/node_modules-1c6565a"
+archive="agent-lab-node_modules-1c6565a.tgz"
+expected_sha="b6387d9969ddf4df"
 lab_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 target="${TMPDIR:-/tmp}/agent-lab-deps.tgz"
 
@@ -26,5 +26,8 @@ if [ "${actual_sha}" != "${expected_sha}" ]; then
 fi
 
 tar xzf "${target}"
-echo "Готово: node_modules и dist на месте (архив ${actual_sha})."
+# dist из архива собран под один коммит, а ветка уходит дальше: расширение Pi импортирует модули,
+# которых в старом dist нет, и молча не загружается. Компилятор уже в node_modules, сеть не нужна.
+npm run build --silent
+echo "Готово: node_modules из архива ${actual_sha}, dist собран из $(git rev-parse --short HEAD)."
 node dist/cli.js status
