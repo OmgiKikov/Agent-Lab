@@ -107,12 +107,13 @@ function calibrationBlock(bundle: EvidenceBundle): Block[] {
   const items: DisagreementItem[] = calibration.disagreements.map(item => ({ number: item.number, title: oneLine(item.title),
     expectations: item.expectations.map(row => oneLine(disagreementText(row))), hint: item.hint, conversations: conversationsText(item),
     dialogue: turnsOf(bundle.record.trials.find(trial => trial.id === item.trialIds[0])) }));
-  return [{ kind: 'section', title: 'Сверка с продом', blocks: [
-    { kind: 'paragraph', muted: false, text: calibration.text },
+  const body: Block[] = [
     ...(excluded ? [{ kind: 'paragraph' as const, muted: true, text: excluded }] : []),
     ...(items.length ? [{ kind: 'disagreements' as const, items }] : []),
     ...(calibration.compared ? [{ kind: 'list' as const, items: [...CALIBRATION_CAVEATS] }] : []),
-  ] }];
+  ];
+  // Nothing beyond the line under the number (a calibration skipped for its budget): no section.
+  return body.length ? [{ kind: 'section', title: 'Сверка с продом', blocks: [{ kind: 'paragraph', muted: false, text: calibration.text }, ...body] }] : [];
 }
 
 function comparisonBlock(bundle: EvidenceBundle): Block[] {

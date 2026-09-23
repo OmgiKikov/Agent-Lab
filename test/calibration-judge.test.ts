@@ -73,6 +73,33 @@ test('the log judge reads the recorded conversation alone: no brief, no simulato
   assert.deepEqual(logJudgeInputV1({ ...requestFor(fixture, 1, 'e2'), dialogue: { ...withTools, observation: 'complete' } }).dialogue.events.at(-1), { seq: 5, type: 'tool', content: 'lookup_record' });
 });
 
+test('the log judge\'s input is frozen: version 1 renders exactly this, and any change is a new mode', () => {
+  const expectation = { id: 'e2', text: 'объяснить, как оформить возврат.', requirementIds: ['refund_rule'], appliesWhen: 'клиент назвал номер терминала', observation: 'reply' as const };
+  const cited = { id: 'refund_rule', sourceId: 'rules', text: 'Возврат объясняется.', quote: 'объясните, как оформить возврат', critical: true };
+  const request: LogJudgeRequest = { key: 'a'.repeat(64), expectation, letter: 'Б', card: 'карточки №1', importContentHash: 'b'.repeat(64),
+    requirements: [cited, { id: 'other_rule', sourceId: 'rules', text: 'Другое.', quote: 'другое правило', critical: false }],
+    sources: [{ id: 'rules', name: 'Правила', content: 'объясните, как оформить возврат; другое правило', hash: 'h1', kind: 'knowledge' }, { id: 'prompt', name: 'Промпт', content: 'Наблюдаемые правила.', hash: 'h2', kind: 'prompt' }],
+    dialogue: { observation: 'partial', events: [
+      { index: 0, type: 'message', role: 'system', content: 'Служебное', data: {} }, { index: 1, type: 'message', role: 'user', content: 'Помогите с возвратом.', data: {} },
+      { index: 2, type: 'message', role: 'assistant', content: 'Уточните номер терминала.', data: {} }, { index: 3, type: 'tool', content: 'lookup', data: {} },
+      { index: 4, type: 'message', role: 'user', content: 'Номер терминала: 5678', data: {} }] } };
+  assert.deepEqual(logJudgeInputV1(request), {
+    mode: 'logged-v1', importContentHash: 'b'.repeat(64),
+    scenario: { execution: { evaluation: 'expectations-v1', expectations: [expectation], requirements: [cited] },
+      metrics: [{ id: 'e2', subject: 'agent', name: 'объяснить, как оформить возврат.', description: 'Ожидание Б карточки №1. Основание — требования refund_rule (см. requirements).',
+        passCriteria: 'Условие «клиент назвал номер терминала» возникло, и выполнено: объяснить, как оформить возврат.',
+        failCriteria: 'Условие «клиент назвал номер терминала» возникло, но не выполнено: объяснить, как оформить возврат.' }] },
+    evaluationScope: 'Записанный разговор реального клиента с агентом прода: ни агент, ни клиент не запускались, реплики взяты из лога как есть. '
+      + 'Оценивайте только записанное. Ожидание наступает в тот момент разговора, когда агент уже должен был его выполнить. '
+      + 'Если разговор до этого момента не дошёл — клиент ушёл, разговор оборвался или перешёл к оператору, — оба условия not_met. '
+      + 'Слова агента доказывают только то, что сказано; действия агента видны только в записанных событиях инструментов и состояния.',
+    sources: [{ id: 'rules', name: 'Правила', content: 'объясните, как оформить возврат; другое правило', hash: fingerprint('объясните, как оформить возврат; другое правило') },
+      { id: 'prompt', name: 'Промпт (промпт агента)', content: 'Наблюдаемые правила.', hash: fingerprint('Наблюдаемые правила.') }],
+    dialogue: { observation: 'partial', events: [{ seq: 1, type: 'user', content: 'Помогите с возвратом.' }, { seq: 2, type: 'assistant', content: 'Уточните номер терминала.' },
+      { seq: 4, type: 'user', content: 'Номер терминала: 5678' }] },
+  });
+});
+
 test('the two judgments never meet: another input hash, another protocol hash, another place and another receipt', async () => {
   const fixture = accepted();
   const scenario = fixture.scenarioOf(2);
@@ -240,6 +267,17 @@ test('a first-format run is calibrated through its projection when it is judged 
     assert.equal(calls.count, 4);
     const audit = await lab.store.readCalibrationAudit(run.id, run.calibration!.entries[0]!.key);
     assert.match(JSON.parse(audit!.input).scenario.metrics[0].description, new RegExp(`ситуации «${run.scenarios[0]!.title}»`), 'named as its synthetic rubric names it');
+
+    // Had the log said the agent kept duty А: the disagreement reads the variant's program and its account of the log.
+    const flipped = structuredClone(run);
+    const first = flipped.calibration!.entries[0]!;
+    first.votes = first.votes.map(() => ({ pass: 'met' as const, fail: 'not_met' as const, result: 'pass' as const }));
+    first.result = 'pass';
+    const [disagreement] = buildResultView(flipped).calibration!.disagreements;
+    assert.deepEqual([disagreement!.number, disagreement!.expectations.map(row => `${row.letter} ${row.synthetic}→${row.log}`), disagreement!.log.number], [1, ['А fail→pass'], 1],
+      'numbered by its place in the run; its dialogue by its place in the import the old library carries');
+    assert.deepEqual(disagreement!.path, { synthetic: ['ушёл'], log: [], same: true }, 'the customer only left in both');
+    assert.equal(disagreement!.hint, 'Клиент тот же — вероятно, изменился агент (версии различаются или неизвестны).', 'no version was declared: only a comparison');
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
 

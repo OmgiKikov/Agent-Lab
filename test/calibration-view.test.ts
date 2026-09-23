@@ -78,6 +78,8 @@ test('calibration and comparison say what they are: the version note, the plural
   const skipped = calibrated(one, () => undefined);
   skipped.calibration!.unfinished = 'budget';
   assert.equal(buildResultView(skipped).calibration!.text, 'Сверка с продом пропущена: не хватило лимита вызовов судьи.');
+  assert.deepEqual(calibrationRows(buildResultView(skipped)), [], 'the line says it all: no empty block under it');
+  assert.equal(markdownReport(skipped).includes('## Сверка с продом'), false, 'nor an empty section in the report');
   const stopped = calibrated(big, number => number < 3 ? same(number) : undefined);
   stopped.calibration!.unfinished = 'stopped';
   assert.match(buildResultView(stopped).calibration!.text, /^Синтетика совпадает с продом в 2 из 2 ситуаций\. Мало данных: .*\. Сверка не завершена: прогон остановили\.$/);

@@ -155,8 +155,7 @@ export function calibrationRows(view: ResultView): ResultRow[] {
   const calibration = view.calibration;
   if (!calibration) return [];
   const excluded = exclusionsLine(calibration);
-  return [
-    { role: 'heading', indent: 0, text: 'Сверка с продом' },
+  const body: ResultRow[] = [
     ...(excluded ? [{ role: 'muted' as const, indent: 2, text: excluded }] : []),
     ...calibration.disagreements.flatMap(item => [
       { role: 'item' as const, indent: 2, text: `№${item.number}  ${oneLine(item.title)}` },
@@ -166,6 +165,8 @@ export function calibrationRows(view: ResultView): ResultRow[] {
     ]),
     ...(calibration.compared ? CALIBRATION_CAVEATS.map(text => ({ role: 'muted' as const, indent: 2, text })) : []),
   ];
+  // Nothing beyond the line under the number (a calibration skipped for its budget): no block.
+  return body.length ? [{ role: 'heading', indent: 0, text: 'Сверка с продом' }, ...body] : [];
 }
 
 const MAX_TOPICS = 5;
