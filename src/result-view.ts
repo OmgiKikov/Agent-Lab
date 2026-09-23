@@ -7,6 +7,9 @@ import { topicView, trafficCoverage, type TopicView } from './coverage.js';
 import { failureExplanation, violatedRuleNumber, type FailureExplanation } from './explain.js';
 import type { TopicCoverage } from './miner/coverage.js';
 import { deriveRun, NOT_MEASURED_CODES, type CardPart, type NotMeasuredCode, type RunDerivation, type Verdict } from './run.js';
+import { SMALL_SAMPLE, wilson } from './interval.js';
+import { buildCalibration, type CalibrationView } from './card/calibration-view.js';
+import type { DialogueNumbers } from './card/view.js';
 
 export { COUNTING_RULES } from './outcomes.js';
 
@@ -17,18 +20,7 @@ export { COUNTING_RULES } from './outcomes.js';
  * the owner's own quotes; the words around them live in result-text.ts. Pure: no I/O, no escaping.
  */
 
-/** Below this many decided situations the number is a rough estimate: the trust line says so. */
-export const SMALL_SAMPLE = 20;
-const Z = 1.959963984540054;
-
-/** 95% Wilson score interval for passed/decided; null when nothing was decided. */
-export function wilson(passed: number, decided: number): [number, number] | null {
-  if (decided <= 0) return null;
-  const p = passed / decided, d = 1 + Z * Z / decided;
-  const centre = (p + Z * Z / (2 * decided)) / d;
-  const half = Z * Math.sqrt(p * (1 - p) / decided + Z * Z / (4 * decided * decided)) / d;
-  return [Math.min(1, Math.max(0, centre - half)), Math.min(1, Math.max(0, centre + half))];
-}
+export { SMALL_SAMPLE, wilson } from './interval.js';
 
 /** Why a situation was not measured, in the owner's words: the tail of «не измерено N — …». */
 export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
@@ -137,6 +129,8 @@ export interface ResultView {
   stability?: Stability;
   /** How often the owner confirmed the judge's own decisions with one-key marks. Never changes the headline. */
   agreement: JudgeAgreement;
+  /** The same situations judged on their recorded conversations (card/calibration-view.ts); absent without a calibration. Never changes the headline. */
+  calibration?: CalibrationView;
   /**
    * Counted situations the owner reviewed in full — a verdict on the whole dialogue or on a metric that
    * decides it, not a one-key mark — and among them those where the owner's verdict on the whole
@@ -257,7 +251,8 @@ function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted:
   return [...steps, ...(failed ? [{ kind: 'repeat' } as const, { kind: 'report' } as const] : [{ kind: 'report' } as const, { kind: 'repeat' } as const])];
 }
 
-export function buildResultView(input: Experiment, options: { before?: Experiment } = {}): ResultView {
+/** `numbers` places the logged dialogues of a card run in their imports («диалог №17»); without it a disagreement names the dialogue without its number. */
+export function buildResultView(input: Experiment, options: { before?: Experiment; numbers?: DialogueNumbers } = {}): ResultView {
   const run = deriveRun(input);
   const { record } = run;
   const found = stabilityOf(input, options.before);
@@ -312,7 +307,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     },
     ...(stability ? { stability } : {}),
   };
-  return { ...view, next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
+  const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});
+  return { ...view, ...(calibration ? { calibration } : {}), next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
 }
 
 /**

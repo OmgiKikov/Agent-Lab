@@ -1,4 +1,5 @@
 import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLine } from './card/calibration-view.js';
 import type { Experiment } from './contracts.js';
 import type { FailureExplanation } from './explain.js';
 import { sharePercent } from './miner/coverage.js';
@@ -132,7 +133,7 @@ export function realityParts(view: ResultView): string[] {
   return [`С учётом частоты тем — около ${percent(topics.weighted)}${known}`];
 }
 
-/** The first block of every surface: alarm, number, trust line, reality line. */
+/** The first block of every surface: alarm, number, trust line, reality line, and how the synthetic customers compare with production. */
 export function headRows(view: ResultView): ResultRow[] {
   const trust = trustParts(view);
   const reality = realityParts(view);
@@ -141,6 +142,29 @@ export function headRows(view: ResultView): ResultRow[] {
     accuracyRow(view),
     ...(trust.length ? [{ role: view.headline.smallSample ? 'trust:small' : 'trust', indent: 0, text: trust.join(' · '), parts: trust } as ResultRow] : []),
     ...(reality.length ? [{ role: 'reality', indent: 0, text: reality.join(' · '), parts: reality } as ResultRow] : []),
+    ...(view.calibration ? [{ role: 'reality', indent: 0, text: view.calibration.text } as ResultRow] : []),
+  ];
+}
+
+/**
+ * «Сверка с продом» (card-v2 §10.4–10.5): what was not compared and why, each situation where the synthetic
+ * customer and the logged one led to different verdicts — the expectation, both verdicts, what the customers'
+ * paths suggest and where both conversations are — and what the agreement does not prove.
+ */
+export function calibrationRows(view: ResultView): ResultRow[] {
+  const calibration = view.calibration;
+  if (!calibration) return [];
+  const excluded = exclusionsLine(calibration);
+  return [
+    { role: 'heading', indent: 0, text: 'Сверка с продом' },
+    ...(excluded ? [{ role: 'muted' as const, indent: 2, text: excluded }] : []),
+    ...calibration.disagreements.flatMap(item => [
+      { role: 'item' as const, indent: 2, text: `№${item.number}  ${oneLine(item.title)}` },
+      ...item.expectations.map(row => ({ role: 'quote' as const, indent: 5, text: oneLine(disagreementText(row)) })),
+      { role: 'muted' as const, indent: 5, text: item.hint },
+      { role: 'muted' as const, indent: 5, text: conversationsText(item) },
+    ]),
+    ...(calibration.compared ? CALIBRATION_CAVEATS.map(text => ({ role: 'muted' as const, indent: 2, text })) : []),
   ];
 }
 
@@ -336,13 +360,14 @@ export function runLine(view: ResultView, now?: Date): ResultRow {
 
 /**
  * The result screen of the board and the CLI (ui-spec §4.7, §8.5): the head, the topics, the causes,
- * then — on the CLI and under the board's details — every error, the unmeasured situations and the
- * owner's disagreements; the run line and «Дальше» last. Blocks are separated by one blank row, never two.
+ * then — on the CLI and under the board's details — every error, the unmeasured situations, the
+ * owner's disagreements and the calibration against production; the run line and «Дальше» last.
+ * Blocks are separated by one blank row, never two.
  */
 export function resultScreen(view: ResultView, options: { surface: 'board' | 'cli'; details?: boolean; now?: Date }): ResultRow[] {
   // The board keeps its first screen short; its details and the CLI list every error, the unmeasured situations and the owner's disagreements once.
   const full = options.surface === 'cli' || !!options.details;
-  const blocks = [headRows(view), topicRows(view), causeRows(view), ...(full ? [errorListRows(view), unmeasuredRows(view), disagreementRows(view)] : []),
+  const blocks = [headRows(view), topicRows(view), causeRows(view), ...(full ? [errorListRows(view), unmeasuredRows(view), disagreementRows(view), calibrationRows(view)] : []),
     [runLine(view, options.now)], nextRows(view, options.surface)];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
 }

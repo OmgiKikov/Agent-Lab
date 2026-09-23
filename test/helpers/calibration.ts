@@ -1,9 +1,21 @@
-import type { LogJudge } from '../../src/card/calibration.js';
-import { judgeLogged, logProtocolHash } from '../../src/card/log-judge.js';
+import { fingerprint, type Experiment, type Scenario, type Trial } from '../../src/contracts.js';
+import { logJudgmentReceiptSchema, type Calibration, type LogJudge, type LogJudgmentReceipt } from '../../src/card/calibration.js';
+import { importEvidence, loggedMessages } from '../../src/card/checks.js';
+import { applyCommand, hostGrant, prepareCommand } from '../../src/card/commands.js';
+import { acceptLibraryV2, addCard, createLibraryV2 } from '../../src/card/library.js';
+import { calibrationKey, judgeLogged, logProtocolHash } from '../../src/card/log-judge.js';
+import { bindProposal, proposalCall, type DialogueProposal } from '../../src/card/proposal.js';
+import type { LibraryV2 } from '../../src/card/schema.js';
+import type { ImportBatch } from '../../src/scenario-contracts.js';
+import { importBatch, libraryHash } from '../../src/scenario-library.js';
+import { reviewed } from './card-library.js';
+import { policy, proposals, refundRule } from './card-prep.js';
+import { cardAttempt, cardRun } from './cards.js';
 
 /*
  * A judge of recorded conversations for tests: the real two-vote protocol (card/log-judge.ts judgeLogged) over
- * scripted answers, so receipts, sidecars and keys are the product's own. No model is called; invented data.
+ * scripted answers, so receipts, sidecars and keys are the product's own; and calibrated runs built from the
+ * record alone, for the view. No model is called; invented data.
  */
 
 /** The judge's input of one vote, as far as a scripted answer reads it. */
@@ -56,4 +68,82 @@ export function refundReading(data: LogVoteInput): LogVote {
   if (events.some(event => event.type === 'assistant' && event.content.includes('Подайте заявление'))) return 'pass';
   const last = events.at(-1);
   return last?.type === 'user' && last.content.includes('терминала: ') ? 'not_reached' : 'fail';
+}
+
+/* ───────────────────────────── a calibrated run built from the record alone ───────────────────────────── */
+
+/** Dialogue `i` of an invented export: an even one names the number when asked and thanks the agent; an odd one names it at once. */
+function loggedDialogue(i: number) {
+  return i % 2 === 0
+    ? { id: `d${i}`, messages: [{ role: 'user' as const, content: `Помогите с возвратом, заказ ${i}.` }, { role: 'assistant' as const, content: 'Уточните номер терминала.' },
+      { role: 'user' as const, content: `Номер терминала: ${5000 + i}` }, { role: 'assistant' as const, content: 'Возврат возможен. Подайте заявление в поддержку.' }, { role: 'user' as const, content: 'Спасибо!' }] }
+    : { id: `d${i}`, messages: [{ role: 'user' as const, content: `Номер терминала: ${1000 + i}. Помогите с возвратом.` }, { role: 'assistant' as const, content: 'Уточните номер терминала.' }] };
+}
+const proposalOf = (i: number): DialogueProposal => {
+  const base = i % 2 === 0 ? proposals.late : proposals.known;
+  return { ...base, title: `${base.title}, заказ ${i}`, knows: base.knows.map(fact => ({ ...fact, value: String(i % 2 === 0 ? 5000 + i : 1000 + i) })) };
+};
+
+export interface LoggedRun { record: Experiment; batch: ImportBatch; library: LibraryV2; scenarios: Scenario[] }
+type Verdict = 'pass' | 'fail' | 'unknown';
+
+/**
+ * A finished run of `count` cards made from an invented export, accepted as a preparation accepts them (card №k from
+ * dialogue d{k-1}); the cards listed in `edited` had their customer changed by the owner before acceptance. Each
+ * card's one attempt carries `synthetic(number)` for its duties А and Б.
+ */
+export function loggedRun(count: number, synthetic: (number: number) => { e1: Verdict; e2: Verdict }, edited: readonly number[] = []): LoggedRun {
+  const batch = importBatch(Array.from({ length: count }, (_, i) => loggedDialogue(i)));
+  const evidence = importEvidence([batch]);
+  const requirements = [{ ...refundRule, sourceId: 'source-1' }];
+  let library = createLibraryV2({ id: 'library_logs', imports: [{ id: batch.id, contentHash: batch.contentHash }], createdAt: '2026-09-23T10:00:00.000Z',
+    sources: [{ id: 'source-1', name: 'Правила возвратов', content: policy, hash: fingerprint(policy) }], requirements });
+  for (const [i, dialogue] of batch.dialogues.entries()) {
+    const call = proposalCall({ source: { kind: 'dialogue', batchId: batch.id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), requirements, maxTurns: 3 });
+    library = addCard(library, bindProposal(proposalOf(i), call, library.nextNumber), { dialogueId: dialogue.id, batchId: batch.id, sourceIds: ['source-1'] });
+  }
+  library = reviewed(library, evidence);
+  for (const number of edited) {
+    const card = library.cards.find(item => item.number === number)!;
+    const prepared = prepareCommand(library, { kind: 'set_fact_disclosure', cardId: card.id, factId: 'f1', disclosure: 'unknown' }, { evidence, maxTurns: 3, via: 'pi-confirm', at: '2026-09-23T11:00:00.000Z' });
+    library = reviewed(applyCommand(library, prepared, hostGrant(prepared, 'confirmed')), evidence);
+  }
+  const accepted = acceptLibraryV2(library, libraryHash(library), library.cards.map(card => card.id), { evidence, maxTurns: 3 });
+  const scenarios = accepted.scenarios;
+  const trials: Trial[] = scenarios.map((scenario, index) => cardAttempt(`attempt_${index + 1}`, scenario, synthetic(index + 1)));
+  const record = cardRun(scenarios, trials, 1, { id: 'calibrated_run', librarySnapshot: accepted.library, originalImport: { id: batch.id, contentHash: batch.contentHash },
+    acceptedTests: scenarios.map(scenario => ({ testId: `test_${scenario.id.slice(5, 21)}`, scenarioId: scenario.id, definitionHash: fingerprint(scenario), acceptedAt: '2026-09-23T12:00:00.000Z' })) });
+  return { record, batch, library: accepted.library, scenarios };
+}
+
+/** What the log judge said about one expectation: a verdict, a log that never got there, two votes apart, or nothing asked. */
+export type LogVerdict = 'pass' | 'fail' | 'not_reached' | 'split' | 'no_agent_reply' | 'channel_unobserved';
+
+/** A receipt of the log judge as the calibration stores it, keyed the product's own way. */
+export function logReceipt(run: LoggedRun, number: number, expectationId: 'e1' | 'e2', verdict: LogVerdict): LogJudgmentReceipt {
+  const scenario = run.scenarios[number - 1]!;
+  const identity = { cardId: scenario.id, expectationId, definitionHash: fingerprint(scenario), importId: run.batch.id, importContentHash: run.batch.contentHash, dialogueId: `d${number - 1}` };
+  const protocolHash = logProtocolHash();
+  const vote = (pass: 'met' | 'not_met', fail: 'met' | 'not_met', result: Verdict) => ({ pass, fail, result });
+  const votes = verdict === 'pass' ? [vote('met', 'not_met', 'pass'), vote('met', 'not_met', 'pass')] : verdict === 'fail' ? [vote('not_met', 'met', 'fail'), vote('not_met', 'met', 'fail')]
+    : verdict === 'not_reached' ? [vote('not_met', 'not_met', 'unknown'), vote('not_met', 'not_met', 'unknown')] : verdict === 'split' ? [vote('met', 'not_met', 'pass'), vote('not_met', 'met', 'fail')] : [];
+  const skipped = verdict === 'no_agent_reply' || verdict === 'channel_unobserved' ? verdict : undefined;
+  return logJudgmentReceiptSchema.parse({ mode: 'logged-v1', key: calibrationKey({ ...identity, protocolHash }), ...identity, protocolHash, inputHash: fingerprint({ identity }),
+    ...(skipped ? { skipped } : { auditHash: fingerprint({ audit: identity }) }), provider: 'fixture', model: 'log-judge', votes,
+    result: verdict === 'pass' || verdict === 'fail' ? verdict : 'unknown', complete: true });
+}
+
+/**
+ * The run with a calibration: `log(number)` gives the log judge's verdicts on each card's duties А and Б (undefined:
+ * not judged yet). By default the logs and the run are both of version agent-v7; `logs: null` declares nothing.
+ */
+export function calibrated(run: LoggedRun, log: (number: number) => [LogVerdict, LogVerdict] | undefined, versions: { logs?: string | null; tested?: string | null } = {}): Experiment {
+  const entries = run.scenarios.flatMap((_, index) => {
+    const verdicts = log(index + 1);
+    return verdicts ? [logReceipt(run, index + 1, 'e1', verdicts[0]), logReceipt(run, index + 1, 'e2', verdicts[1])] : [];
+  });
+  const logs = versions.logs === undefined ? 'agent-v7' : versions.logs;
+  const calibration: Calibration = { protocol: 'sim-to-real-v1', testedVersion: versions.tested === undefined ? 'agent-v7' : versions.tested, entries,
+    logVersions: logs === null ? [] : [{ importId: run.batch.id, contentHash: run.batch.contentHash, version: logs, receiptId: 'logs_1' }] };
+  return { ...structuredClone(run.record), calibration };
 }

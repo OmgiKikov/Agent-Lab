@@ -18,7 +18,7 @@ import { expectationSheet, testPlanLines, trialProofLines } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { buildResultView, exitCodeOf, type ResultView } from './result-view.js';
 import { MAX_WIDTH, plainText, resultScreen, type ResultRow } from './result-text.js';
-import { evidenceBundle, exportArtifacts, resolveVerified } from './artifacts.js';
+import { evidenceBundle, exportArtifacts, importNumbers, resolveVerified } from './artifacts.js';
 import { libraryHash } from './scenario-library.js';
 import { hostGrant, requiredAuthority, wordsOf } from './card/commands.js';
 import { cardCommandSchema } from './card/schema.js';
@@ -170,7 +170,8 @@ async function main() {
     // The source run is read-only context for stability; the same verified path as Pi and the exports:
     // receipts checked against sidecars, source resolved once. The trace journal is not needed here.
     const verified = await resolveVerified(record, store, record.assessmentOf ?? record.parentRunId);
-    const view = buildResultView(verified.record, { before: verified.before });
+    const numbers = await importNumbers(verified.record, importId => store.readImport(importId));
+    const view = buildResultView(verified.record, { before: verified.before, ...(numbers ? { numbers } : {}) });
     if (values.json) { process.stdout.write(`${JSON.stringify({ ...machineResult(view), warnings: verified.warnings }, null, 2)}\n`); return; }
     process.stdout.write(screenText(view, verified.warnings));
     return;
