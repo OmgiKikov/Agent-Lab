@@ -14,6 +14,8 @@ const READERS: Record<string, (file: Buffer) => string> = {
   '.html': file => htmlText(file.toString('utf8')),
   '.htm': file => htmlText(file.toString('utf8')),
 };
+/** The document types Lab reads as materials; project detection proposes only these. */
+export const MATERIAL_EXTENSIONS: ReadonlySet<string> = new Set(Object.keys(READERS));
 const SUPPORTED = 'формат не поддерживается: только .docx, .md, .txt, .html';
 const MIN_CHARS = 40;
 

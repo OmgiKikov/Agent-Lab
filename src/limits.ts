@@ -16,3 +16,7 @@ export const SELECTED_SOURCE_CHARS = 30_000;
 export const SELECTED_SOURCE_BYTES = 32_000;
 /** Requirements one dialogue's grounding call may return: the rules that decide this dialogue, not the whole policy. */
 export const FOCUSED_REQUIREMENT_LIMIT = 12;
+/** The largest dialogue file Lab reads whole; a bigger log needs a smaller sample first. */
+export const IMPORT_FILE_BYTES = 4_000_000;
+/** Dialogues one import batch takes. */
+export const IMPORT_DIALOGUE_LIMIT = 300;

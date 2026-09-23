@@ -3,6 +3,7 @@ import type { ImportBatch } from './scenario-contracts.js';
 import { readFile, stat } from 'node:fs/promises';
 import { z } from 'zod';
 import { dialogueSchema, fingerprint, type Dialogue, type ValidationExclusion } from './contracts.js';
+import { IMPORT_FILE_BYTES } from './limits.js';
 
 /** Drop the whole dialogue: removing one masked turn would silently change its meaning. */
 function validationDialogueIssue(dialogue: Dialogue): Omit<ValidationExclusion, 'dialogueId'> | undefined {
@@ -21,13 +22,16 @@ export function selectValidationDialogues(dialogues: Dialogue[], count = 15): Di
     .slice(0, count);
 }
 
-async function readRawData(file: string): Promise<unknown> {
-  if ((await stat(file)).size > 4_000_000) throw new Error('Файл импорта превышает 4 МБ. Выберите меньшую выборку.');
-  const text = await readFile(file, 'utf8');
-  const data: unknown = file.endsWith('.jsonl') ? text.split(/\r?\n/).filter(line => line.trim()).map((line, i) => {
+/** A JSON document, or JSON Lines: one row per non-empty line. The one reading of an import file, shared with project detection. */
+export function parseImportText(text: string, jsonl: boolean): unknown {
+  return jsonl ? text.split(/\r?\n/).filter(line => line.trim()).map((line, i) => {
     try { return JSON.parse(line); } catch { throw new Error(`Некорректный JSON в строке ${i + 1}.`); }
   }) : JSON.parse(text);
-  return data;
+}
+
+async function readRawData(file: string): Promise<unknown> {
+  if ((await stat(file)).size > IMPORT_FILE_BYTES) throw new Error('Файл импорта превышает 4 МБ. Выберите меньшую выборку.');
+  return parseImportText(await readFile(file, 'utf8'), file.endsWith('.jsonl'));
 }
 
 /** Retain full raw evidence before a bounded legacy projection used by old views. */

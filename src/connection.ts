@@ -13,7 +13,9 @@ const probeSchema = z.strictObject({
   initialState: worldSchema, write: step, read: step, reset: step,
   checks: z.array(checkSchema).max(10).default([]),
 }).refine(p => p.read.reply !== p.reset.reply, 'Проверка должна различать сохранённую историю и новую сессию.');
-const connectionSchema = z.strictObject({ format: z.literal('agent-lab-connection-1'), target: runnableTargetSchema,
+/** Marks a saved connection file; project detection recognises one by it before reading the file as a connection. */
+export const CONNECTION_FORMAT = 'agent-lab-connection-1';
+const connectionSchema = z.strictObject({ format: z.literal(CONNECTION_FORMAT), target: runnableTargetSchema,
   targetVersion: z.string().trim().min(1).max(200).optional(), probe: probeSchema.optional(), verifiedAt: z.string().optional() });
 export type Connection = z.infer<typeof connectionSchema>;
 
