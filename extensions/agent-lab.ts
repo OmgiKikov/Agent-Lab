@@ -39,9 +39,10 @@ import { activePhases, reviewOrder, safeText, showBoard, trialLines, type BoardA
 import { scenarioErrorText, scenarioLibrarySummary } from './scenarios.ts';
 import { isVerdictDetails, rememberView, renderAgentLabResult, VERDICT_KIND, type VerdictDetails } from './render/verdict-block.ts';
 import { callText, isFeedDetails, rememberFeed, renderFeedResult, setFeedRestorer, type FeedDetails, type FeedRef } from './render/feed.ts';
-import { acceptanceLines, authorize, ownerAsked, changeRows, checkRow, comparisonFeed, deriveVariantInput, dialogueFeed, disputedCheckpoints, ownerRemarks, plainIssue, failureFeed, libraryFeed, orderedVariants, ownerBasis, ownerMessages,
+import { ACCEPTANCE_PAGE, acceptanceLines, authorize, ownerAsked, changeRows, checkRow, comparisonFeed, deriveVariantInput, dialogueFeed, disputedCheckpoints, ownerRemarks, plainIssue, failureFeed, libraryFeed, orderedVariants, ownerBasis, ownerMessages,
   planLines, progressLines, referenceProblem, referenceQuestion, targetText, resolveFact, resolveGroup, resolveRun, resolveVariant, semanticDebt, stateRows, statusFeed, stoppedLines, variantDiff, variantFeed, variantNumber,
   type CheckOutcome, type Feed, type Resolved } from './conversation.ts';
+import type { InstructionObjects } from './conversation.ts';
 import type { LibraryPatch, ScenarioLibrary, ScenarioVariant } from '../dist/scenario-contracts.js';
 import type { VariantOperation } from '../dist/scenario-variants.js';
 import { progressLine } from './flow.ts';
@@ -260,7 +261,7 @@ Logs and scenarios: use agent_lab_build mode=validate to import de-identified di
 
 Acceptance and run are two separate owner decisions. The owner selects ready variants and accepts one immutable accepted revision in a native confirmation; acceptance does not run the agent. Never accept a set the owner has not seen in this conversation, and never start a run because a card was opened. agent_lab_run shows a compact plan in its own native confirmation: agent and version, accepted revision and selected count, planned dialogues, models and remaining cumulative budget; full expectations remain in the cards. Always tell apart the draft, the accepted set and the running snapshot: a draft edit drops acceptance and never changes a running or a past run.
 
-A long run continues in the background: the conversation stays free, progress above the input comes from stored data, and the result arrives as a message. Esc interrupts your current action, not the run; stop a run only when the owner asks, with agent_lab_run action:"stop", then say what was saved and that a repeat runs every attempt again.
+A long run continues in the background: the conversation stays free, progress above the input comes from stored data, and the result arrives as a message. Esc interrupts your current action, not the run; stop a run only when the owner asks, with agent_lab_run action:"stop", then say what was saved and that a repeat runs every attempt again. A long preparation of scenarios (agent_lab_build) is handed over the same way: the scenarios arrive as a message, so never wait for it or poll; agent_lab_run action:"progress" and action:"stop" work for it too, and stopping it keeps the partial draft.
 
 Results: after separate native execution confirmation, lead with one estimated card accuracy number on the accepted set, grounded failure causes, separate metrics and limits, and keep measured and unmeasured counts visible; save the suite when useful. When a run ends, the block already shows the accuracy and each main cause with what was expected, what the agent said and the owner rule. Close the run yourself in three to five plain sentences: the accuracy number, where the agent limps and why (the pattern across failures: what clients asked, what the agent did instead, which owner rule that breaks), what it handles well, and how far the number can be trusted. Do not copy the block's rows. agent_lab_agree records the owner's own agreement or disagreement with the judge about one situation (the owner answers in a native dialog; you never supply the answer) — offer it after showing a failure, because it is what makes the number trustworthy. agent_lab_inspect failure:N opens a failure with its dialogue, expectation and owner rule; dialogue opens any recorded dialogue; compare:true compares a repeat with its source run. «Повтори этот случай на новой версии и сравни» is agent_lab_repeat with the cards by title or number, then agent_lab_run, then agent_lab_inspect compare:true. This is accuracy on the validation set, never a calibrated production guarantee.
 
@@ -279,11 +280,26 @@ function projectTarget(target: unknown, cwd: string): unknown {
   return fixed;
 }
 
-/** How long `agent_lab_run` keeps a run in its own row before it continues in the background. */
-export interface AgentLabOptions { inlineRunMs?: number; inlineCheckMs?: number }
+/** How long a run, a semantic recheck and a preparation stay in the row of their own tool call before they continue in the background. */
+export interface AgentLabOptions { inlineRunMs?: number; inlineCheckMs?: number; inlineBuildMs?: number }
+/** A card field as the owner reads it in the native question about a change. */
+const DIFF_FIELD: Record<string, string> = { opening: 'первая реплика', goal: 'цель клиента', expectation: 'ожидаемый результат', rule: 'правило проверки', fact: 'факт' };
 const RUN_MESSAGE = 'agent-lab-run';
 const CHECK_MESSAGE = 'agent-lab-check';
-type Job = { directory: string; id: string; lab: ExperimentLab; done: Promise<void>; origin: 'board' | 'chat'; quiet?: boolean };
+const BUILD_MESSAGE = 'agent-lab-build';
+/** Custom session entry that keeps a shown list (ids only) across a restart of Pi. */
+const SHOWN_ENTRY = 'agent-lab-shown';
+/** The work this session owns after its row ended. One slot: a run and a preparation hold the same writer lock, so they never coexist. */
+type Job = { kind: 'run' | 'preparation'; directory: string; id: string; lab: ExperimentLab; done: Promise<void>; origin: 'board' | 'chat'; quiet?: boolean };
+/** What a finished preparation answers with: the model JSON and, for a prepared library, the feed of its scenarios. */
+type Prepared = { output: Record<string, unknown>; feed?: Feed; note?: string };
+/** After a stopped preparation: what the partial draft holds. Counts only — the same lines go into the session file. */
+const preparationStoppedLines = (record: Experiment): string[] => {
+  const variants = record.librarySnapshot?.variants ?? [];
+  return [`Подготовка ${record.id.slice(0, 8)} ${record.error ? 'остановлена' : 'успела завершиться до остановки'}.`, variants.length
+    ? `Сохранён черновик: карточек ${variants.length}, из них готовых ${variants.filter(variant => variant.quality === 'ready').length}. Их можно смотреть, править и принимать.`
+    : `Карточки собрать не успели. Запись сохранена: требований ${record.requirements.length}, вызовов модели ${record.usage.calls}.`];
+};
 /** A request the owner has to settle: nothing was written, and the feed shows the question instead of an error. */
 type OwnerQuestion = { status: 'ambiguous_reference' | 'unknown_reference' | 'needs_owner_input' | 'declined'; options: string[]; ownerText?: string };
 /** `message` instructs the model; `ownerText` is what the owner reads in the feed when the two differ. */
@@ -297,6 +313,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
   const inlineRunMs = options.inlineRunMs ?? 20_000;
   /** A recheck that finishes this fast is reported in the row of the edit; a longer one reports back as a message. */
   const inlineCheckMs = options.inlineCheckMs ?? 3_000;
+  const inlineBuildMs = options.inlineBuildMs ?? 5_000;
   /*
    * Внутренний шлюз нельзя описать декларативным models.json: там нужен клиентский сертификат.
    * Вложенные сессии Agent Lab регистрируют его сами (src/pi.ts), но внешний разговор — обычный
@@ -336,6 +353,33 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
   /** Lists as they were last shown, so «второй прогон» and «второй провал» mean the second row the owner saw, not the second row of a fresh query. */
   const shownRuns = new Map<string, string[]>();
   const shownFailures = new Map<string, string[]>();
+  /**
+   * A shown list is also written into the session (ids only, REV-01), so «второй прогон» keeps meaning the row the owner saw
+   * after Pi is reopened. The same list shown again is not written twice.
+   */
+  const rememberShown = (kind: 'runs' | 'failures', key: string, ids: string[]): void => {
+    const lists = kind === 'runs' ? shownRuns : shownFailures;
+    const known = lists.get(key);
+    lists.set(key, ids);
+    if (known && known.length === ids.length && known.every((id, index) => id === ids[index])) return;
+    try { pi.appendEntry?.(SHOWN_ENTRY, { kind, key, ids }); } catch { /* a session that cannot be written still works from memory */ }
+  };
+  /** The list as last shown: from memory, otherwise from the newest entry of the reopened session. */
+  const recallShown = (ctx: { sessionManager?: { getEntries?: () => unknown[] } } | undefined, kind: 'runs' | 'failures', key: string): string[] | undefined => {
+    const lists = kind === 'runs' ? shownRuns : shownFailures;
+    if (lists.has(key)) return lists.get(key);
+    let entries: unknown[];
+    try { entries = ctx?.sessionManager?.getEntries?.() ?? []; } catch { return undefined; }
+    const stored = entries.flatMap(entry => {
+      const item = entry as { type?: string; customType?: string; data?: { kind?: unknown; key?: unknown; ids?: unknown } } | null;
+      const ids = item?.type === 'custom' && item.customType === SHOWN_ENTRY && item.data?.kind === kind && item.data.key === key ? item.data.ids : undefined;
+      return Array.isArray(ids) && ids.every(id => typeof id === 'string') ? [ids as string[]] : [];
+    }).at(-1);
+    if (stored) lists.set(key, stored);
+    return stored;
+  };
+  /** The card last shown or changed, per library: the only card «её», «там» or «эту» in the owner's next message can mean. Memory only — after a restart the owner is asked. */
+  const lastCard = new Map<string, string>();
   const seenLibrary = new Map<string, string>();
   /** When each of those states was shown: redirected to another record of the same library, an edit applies to whichever view is the newer one. */
   const seenTick = new Map<string, number>();
@@ -355,7 +399,9 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
   };
   const open = async (cwd: string, pendingCheck: 'cancel' | 'wait' = 'cancel') => {
     await settleCheck(resolve(cwd, '.agent-lab'), pendingCheck);
-    if (activeClose) throw new Error(boardRun
+    if (activeClose) throw new Error(boardRun?.kind === 'preparation'
+      ? `Сейчас идёт подготовка сценариев ${shortRun(boardRun.id)}. Готовые сценарии, диалоги и результаты можно смотреть; правки и новый запуск — после её завершения или остановки.`
+      : boardRun
       ? `Сейчас идёт прогон ${shortRun(boardRun.id)}. Сценарии, диалоги и результаты можно смотреть; правки и новый запуск — после его завершения или остановки.`
       : 'Уже идёт другая операция Agent Lab. Историю и готовые результаты можно открыть; новый запуск — после её завершения.');
     const lab = new ExperimentLab(resolve(cwd, '.agent-lab'));
@@ -368,13 +414,13 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
   const reading = (directory: string): ExperimentLab => boardRun?.directory === directory ? boardRun.lab : new ExperimentLab(directory);
   const runName = (record: Experiment): string => `${shortRun(record.id)} «${safeText(record.task).slice(0, 60)}»`;
   /** The run a request means: an id, a short id, task words, or — with no reference — the run this conversation works on. Never a silent guess among several. */
-  const findRun = async (directory: string, ref?: string): Promise<Experiment> => {
+  const findRun = async (directory: string, ref?: string, ctx?: Parameters<typeof recallShown>[0]): Promise<Experiment> => {
     const reader = reading(directory);
     const wanted = ref?.trim();
     if (wanted && /^[a-zA-Z0-9_-]{1,80}$/.test(wanted)) { try { return await reader.get(wanted); } catch { /* a short id or task words: look through the list */ } }
     const stored = await reader.list();
     // Numbers resolve against the list the owner was shown; without one, against the same newest-first order the list uses.
-    const shown = shownRuns.get(directory) ?? [];
+    const shown = recallShown(ctx, 'runs', directory) ?? [];
     const rank = (record: Experiment): number => { const at = shown.indexOf(record.id); return at < 0 ? shown.length : at; };
     const records = [...stored].sort((x, y) => rank(x) - rank(y) || y.updatedAt.localeCompare(x.updatedAt));
     if (wanted) {
@@ -420,7 +466,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
   /** The verdict of a finished run for the model and for the feed; `details` stay ids only (REV-01). */
   const verdictOutput = async (record: Experiment, lab: ExperimentLab) => {
     const bundle = await evidenceBundle(record, lab.store);
-    if (bundle.view) shownFailures.set(record.id, bundle.view.failures.map(item => item.scenarioId));
+    if (bundle.view) rememberShown('failures', record.id, bundle.view.failures.map(item => item.scenarioId));
     const output = { ...summary(record, lab.store.directory, bundle.view), proofs: record.trials.map(trial => trialProofLines(record, trial.id)),
       comparison: bundle.comparison, artifacts: await exportArtifacts(bundle, lab.store.directory), shownToOwner: SHOWN_TO_OWNER };
     let details: VerdictDetails | { id: string } = { id: record.id };
@@ -434,10 +480,12 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
   /**
    * A started run belongs to the Pi session, not to the row or the board that started it: the
    * conversation stays free, progress comes from the stored record, and the result of a chat run
-   * arrives as a message. Closing Pi still ends the work it owns.
+   * arrives as a message. Closing Pi still ends the work it owns. A preparation is handed over the same
+   * way: `prepared` builds its answer once it has ended, from the stored record.
    */
-  const detach = (ctx: ExtensionContext, directory: string, owned: Awaited<ReturnType<typeof open>>, id: string, origin: Job['origin']): Job => {
-    const job: Job = { directory, id, lab: owned.lab, done: Promise.resolve(), origin };
+  const detach = (ctx: ExtensionContext, directory: string, owned: Awaited<ReturnType<typeof open>>, id: string, origin: Job['origin'], prepared?: (finished: Experiment) => Promise<Prepared>): Job => {
+    const job: Job = { kind: prepared ? 'preparation' : 'run', directory, id, lab: owned.lab, done: Promise.resolve(), origin };
+    const widget = prepared ? BUILD_MESSAGE : RUN_MESSAGE;
     boardRun = job;
     let updates = Promise.resolve();
     let shown = '';
@@ -448,7 +496,8 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
       if (lines.join('\n') === shown) return;
       shown = lines.join('\n');
       ctx.ui.setStatus?.('agent-lab-progress', safeText(progressLine(record)));
-      ctx.ui.setWidget?.(RUN_MESSAGE, [...lines, 'Разговор свободен. Остановить прогон — так и напишите; Esc его не останавливает.']);
+      ctx.ui.setWidget?.(widget, [...lines, prepared ? 'Разговор свободен. Остановить подготовку — так и напишите; Esc её не останавливает.'
+        : 'Разговор свободен. Остановить прогон — так и напишите; Esc его не останавливает.']);
     };
     const timer = setInterval(() => { updates = updates.then(update).catch(() => {}); }, 750);
     updates = updates.then(update).catch(() => {});
@@ -458,7 +507,18 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
         const finished = await owned.lab.get(id);
         returnToBoard(ctx, id);
         const complete = finished.phase === 'results_review' || finished.phase === 'complete';
-        if (origin === 'board') ctx.ui.notify?.(complete ? `Проверка завершена: /agent-lab ${shortRun(id)} — открыть результат.`
+        if (prepared) {
+          // A stop the owner asked for is answered in its own row; every other ending reports back, a failed one as plainly as a finished one.
+          if (!job.quiet) {
+            const answer = await prepared(finished);
+            const failed = [`Подготовка ${shortRun(id)} не завершена${finished.phase === 'cancelled' ? ': она остановлена' : ''}.`, ...(finished.error ? [safeText(finished.error)] : [])];
+            pi.sendMessage({ customType: BUILD_MESSAGE, display: true, content: JSON.stringify(answer.output),
+              details: answer.feed ? rememberFeed(`build:${id}:${finished.updatedAt}`, answer.feed, answer.note ?? `Сценарии прогона ${shortRun(id)}`)
+                : rememberFeed(`build:${id}:${finished.updatedAt}`, { rows: finished.phase === 'review' && !finished.error ? [row('Подготовка завершена. Агент не запускался.', 'success', true), ...stateRows(finished)]
+                  : failed.map((line, index) => row(line, index ? 'error' : 'warning', !index)) }, `Подготовка ${shortRun(id)}`),
+            }, { deliverAs: 'followUp', triggerTurn: true });
+          }
+        } else if (origin === 'board') ctx.ui.notify?.(complete ? `Проверка завершена: /agent-lab ${shortRun(id)} — открыть результат.`
           : `Проверка ${shortRun(id)} остановлена. Записанные диалоги доступны в истории.`, 'info');
         else if (!job.quiet) {
           const announced = complete ? await verdictOutput(finished, owned.lab) : undefined;
@@ -469,10 +529,10 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
               : rememberFeed(`run:${id}:${finished.updatedAt}`, { rows: [...stopped.map(line => row(line, 'warning')), ...(finished.error ? [row(safeText(finished.error), 'error')] : [])] }, `Прогон ${shortRun(id)} остановлен`),
           }, { deliverAs: 'followUp', triggerTurn: true });
         }
-      } catch (error) { ctx.ui.notify?.(`Не удалось завершить проверку: ${inputError(error)}`, 'error'); }
+      } catch (error) { ctx.ui.notify?.(`Не удалось завершить ${prepared ? 'подготовку' : 'проверку'}: ${inputError(error)}`, 'error'); }
       finally {
         clearInterval(timer);
-        try { await updates; ctx.ui.setStatus?.('agent-lab-progress', undefined); ctx.ui.setWidget?.(RUN_MESSAGE, undefined); }
+        try { await updates; ctx.ui.setStatus?.('agent-lab-progress', undefined); ctx.ui.setWidget?.(widget, undefined); }
         finally { try { await owned.close(); } finally { if (boardRun === job) boardRun = undefined; } }
       }
     })();
@@ -485,8 +545,9 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
   /**
    * A recheck too long for the row of its edit. The conversation goes on; the outcome arrives as a
    * message — silently when the card is ready, with a turn when the owner has something to decide.
+   * An assessment the owner asked for (`asked`) always ends with a turn: they are waiting for its answer.
    */
-  const backgroundCheck = (ctx: ExtensionContext, directory: string, id: string, owned: Awaited<ReturnType<typeof open>>, usedBefore: number, startHash: string, variantId?: string): void => {
+  const backgroundCheck = (ctx: ExtensionContext, directory: string, id: string, owned: Awaited<ReturnType<typeof open>>, usedBefore: number, startHash: string, variantId?: string, asked = false): void => {
     const check = { directory, id, lab: owned.lab, done: Promise.resolve(), cancelled: false };
     activeCheck = check;
     let updates = Promise.resolve();
@@ -522,9 +583,10 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
         pi.sendMessage({ customType: CHECK_MESSAGE, display: true,
           content: JSON.stringify({ status: 'semantic_check_finished', runId: id, check: outcome, ...scenarioLibrarySummary(experiment, library.acceptance?.variantIds ?? []),
             ...(variant ? { variant: { id: variant.id, title: variant.title, quality: variant.quality, issues: variant.issues.map(item => plainIssue(library, variant, item)), disputedChecks: disputed.map(item => ({ id: item.id, rule: item.rule })) } } : {}),
-            instruction: 'The background recheck of the last edit finished. Mention it only if the owner has something to decide; use this libraryHash from now on.' }),
+            instruction: asked ? 'The semantic assessment the owner asked for finished. Tell them the outcome in one or two sentences; use this libraryHash from now on.'
+              : 'The background recheck of the last edit finished. Mention it only if the owner has something to decide; use this libraryHash from now on.' }),
           details: rememberFeed(`check:${id}:${libraryHash(library)}`, feed, `Смысловая перепроверка · прогон ${shortRun(id)}`),
-        }, { deliverAs: 'followUp', triggerTurn: failed || (!!variant && variant.quality !== 'ready') });
+        }, { deliverAs: 'followUp', triggerTurn: asked || failed || (!!variant && variant.quality !== 'ready') });
       } catch (error) { ctx.ui.notify?.(`Перепроверка не завершилась: ${inputError(error)}`, 'error'); }
       finally {
         clearInterval(timer);
@@ -534,8 +596,8 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
     })();
     void check.done.catch(error => console.error(`Agent Lab: ${inputError(error)}`));
   };
-  // The result message of a background run: the same verdict block or feed a tool row would draw.
-  for (const kind of [RUN_MESSAGE, CHECK_MESSAGE]) pi.registerMessageRenderer?.(kind, (message, renderOptions, theme) => {
+  // The result message of background work: the same verdict block or feed a tool row would draw.
+  for (const kind of [RUN_MESSAGE, CHECK_MESSAGE, BUILD_MESSAGE]) pi.registerMessageRenderer?.(kind, (message, renderOptions, theme) => {
     const text = typeof message.content === 'string' ? message.content : '';
     const result = { content: [{ type: 'text' as const, text: isFeedDetails(message.details) ? message.details.note : text }], details: message.details };
     return renderFeedResult(result, { expanded: renderOptions.expanded, isPartial: false }, theme, (r, o, t) => renderAgentLabResult(r, o, t, legacyResult));
@@ -776,7 +838,11 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
         `Это расход на модель: не больше ${input.settings.maxCalls} вызовов и ${Math.ceil(input.settings.maxDurationMs / 60_000)} минут. Это потолок, а не прогноз: тратится только то, что понадобится на эти диалоги. Агент сейчас не запускается — запуск подтверждается отдельно.`,
       ].join('\n')))) return feedResult(callId, { status: 'cancelled', calls: 0, mutated: false, message: 'The owner declined. Nothing was spent or changed; do not ask again unless they request it.' },
         { rows: [row('Разбор логов отменён. Ничего не потрачено и не изменено.', 'warning')] }, 'Разбор логов отменён');
-      const { lab, close } = await open(ctx.cwd);
+      const owned = await open(ctx.cwd);
+      const { lab, close } = owned;
+      // Only a terminal can take a preparation over: the hand-over draws its progress and delivers its result through `ctx.ui` and a message.
+      const interactive = operation !== 'score' && !!ctx.hasUI && ctx.mode === 'tui' && !!ctx.ui;
+      let handedOver = false;
       let id: string | undefined;
       let polling: Promise<void> = Promise.resolve();
       let timer: ReturnType<typeof setInterval> | undefined;
@@ -831,35 +897,60 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
           returnToBoard(ctx, id);
           return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
         }
-        id = (await lab.create(input)).id;
-        if (signal.aborted) cancel();
-        await progress();
-        timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);
-        await lab.waitForIdle(); await progress();
-        const record = await lab.get(id);
-        const bundle = await evidenceBundle(record, lab.store);
-        const output = { ...summary(record, lab.store.directory, bundle.view),
-          ...(operation === 'validate' ? { validation: { sourceDialogues: sourceDialogueCount, candidateDialogues: parsedDialogues.length, sampledDialogues: record.scenarios.length, estimatedAccuracyAfterRun: true } } : {}),
-          artifacts: await exportArtifacts(bundle, lab.store.directory), ...(signal.aborted ? { cancelled: true } : {}) };
-        returnToBoard(ctx, id);
-        focus.set(lab.store.directory, id);
-        // A prepared library answers with the scenarios themselves: what was found, what is ready, what waits for the owner.
-        if (record.librarySnapshot && record.phase === 'review') {
+        /** The answer of a preparation that has ended — in the row of this call, or as the message of one that outlived it. */
+        const prepared = async (record: Experiment, interrupted: boolean): Promise<Prepared> => {
+          const bundle = await evidenceBundle(record, lab.store);
+          const output = { ...summary(record, lab.store.directory, bundle.view),
+            ...(operation === 'validate' ? { validation: { sourceDialogues: sourceDialogueCount, candidateDialogues: parsedDialogues.length, sampledDialogues: record.scenarios.length, estimatedAccuracyAfterRun: true } } : {}),
+            artifacts: await exportArtifacts(bundle, lab.store.directory), ...(interrupted ? { cancelled: true } : {}) };
+          returnToBoard(ctx, record.id);
+          focus.set(lab.store.directory, record.id);
+          // A prepared library answers with the scenarios themselves: what was found, what is ready, what waits for the owner.
+          if (!record.librarySnapshot || record.phase !== 'review') return { output };
           const library = record.librarySnapshot;
-          markSeen(`${lab.store.directory}|${id}`, libraryHash(library));
+          markSeen(`${lab.store.directory}|${record.id}`, libraryHash(library));
           const feed = libraryFeed(record);
           const readyCount = library.variants.filter(variant => variant.quality === 'ready').length;
-          feed.rows.unshift(row(signal.aborted ? 'Подготовка прервана; разобранное сохранено.' : library.imports.length ? 'Сценарии собраны из логов. Агент не запускался.' : 'Сценарии собраны по требованиям. Агент не запускался.', signal.aborted ? 'warning' : 'success', true),
+          feed.rows.unshift(row(interrupted ? 'Подготовка прервана; разобранное сохранено.' : library.imports.length ? 'Сценарии собраны из логов. Агент не запускался.' : 'Сценарии собраны по требованиям. Агент не запускался.', interrupted ? 'warning' : 'success', true),
             // The first number should not wait for every dispute: what is ready can run now.
             row(readyCount ? `Готовые карточки (${readyCount}) можно принять и запустить прямо сейчас — первая точность будет по ним; спорные разберём после.`
               : 'Готовых карточек пока нет. По каждой ниже сказано, что мешает: вопрос проверяющего можно закрыть вашим решением, и карточка станет готовой.', 'accent'));
-          return feedResult(callId, { ...output, ...scenarioLibrarySummary(record, library.acceptance?.variantIds ?? []),
+          return { output: { ...output, ...scenarioLibrarySummary(record, library.acceptance?.variantIds ?? []),
             groups: library.businessScenarios.map((group, index) => ({ number: index + 1, id: group.id, title: group.title })),
             variants: orderedVariants(library).map((variant, index) => ({ number: index + 1, id: variant.id, title: variant.title, quality: variant.quality, provenance: variant.provenance, issueCount: variant.issues.length })) },
-            feed, `Сценарии прогона ${shortRun(id)} · ревизия ${library.revision}`);
+            feed, note: `Сценарии прогона ${shortRun(record.id)} · ревизия ${library.revision}` };
+        };
+        // In the terminal Esc interrupts the action, not the work: from here an abort hands the preparation over instead of cancelling it.
+        if (interactive) signal.removeEventListener('abort', cancel);
+        id = (await lab.create(input)).id;
+        if (signal.aborted && !interactive) cancel();
+        await progress();
+        timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);
+        // A short preparation ends in this row. A long one, or Esc, goes to the session the way a long run does.
+        const inline = !interactive ? (await lab.waitForIdle(), true) : await new Promise<boolean>(settle => {
+          const wait = setTimeout(() => settle(false), inlineBuildMs);
+          const onAbort = () => settle(false);
+          signal.addEventListener('abort', onAbort, { once: true });
+          if (signal.aborted) onAbort();
+          void lab.waitForIdle().then(() => settle(true), () => settle(true)).finally(() => { clearTimeout(wait); signal.removeEventListener('abort', onAbort); });
+        });
+        if (!inline) {
+          clearInterval(timer); timer = undefined; await polling;
+          const record = await lab.get(id);
+          handedOver = true;
+          // The record ends with an error exactly when the preparation was cut short: stopped, out of calls or out of time.
+          detach(ctx, lab.store.directory, owned, id, 'chat', finished => prepared(finished, !!finished.error));
+          focus.set(lab.store.directory, id);
+          return feedResult(callId, { id, background: true, phase: record.phase, usage: record.usage, maxCalls: record.settings.maxCalls,
+            instruction: 'The preparation continues in the background and its result (the scenarios) will arrive as a message. Tell the owner in one short sentence and end your turn; do not poll. Reads still work; edits, a new preparation and runs wait until it ends. Stop it only when the owner asks: agent_lab_run action:"stop".' },
+            { rows: [row('Подготовка сценариев идёт в фоне.', 'success', true), ...progressLines(record).map(line => row(safeText(line), undefined, false, 1)),
+              row('Разговор свободен: готовые прогоны и сценарии можно смотреть. Собранные сценарии появятся здесь отдельным сообщением.', 'muted', false, 1),
+              row('Esc прерывает только текущее действие. Чтобы остановить подготовку, так и напишите.', 'muted', false, 1)] }, `Подготовка ${shortRun(id)} идёт в фоне`);
         }
-        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
-      } finally { clearInterval(timer); signal.removeEventListener('abort', cancel); await polling; await close(); }
+        await progress();
+        const done = await prepared(await lab.get(id), signal.aborted && !interactive);
+        return done.feed ? feedResult(callId, done.output, done.feed, done.note ?? '') : { content: [{ type: 'text', text: JSON.stringify(done.output, null, 2) }], details: done.output };
+      } finally { clearInterval(timer); signal.removeEventListener('abort', cancel); await polling; if (!handedOver) await close(); }
     },
   });
   pi.registerTool({
@@ -880,9 +971,9 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
       const directory = resolve(ctx.cwd, '.agent-lab');
       try {
         const lab = reading(directory);
-        const record = await findRun(directory, params.id);
+        const record = await findRun(directory, params.id, ctx);
         focus.set(directory, record.id);
-        const beforeId = typeof params.compare === 'string' ? (await findRun(directory, params.compare)).id : undefined;
+        const beforeId = typeof params.compare === 'string' ? (await findRun(directory, params.compare, ctx)).id : undefined;
         const bundle = await evidenceBundle(record, lab.store, beforeId);
         const controlVisible = record.workflow === 'evaluate' || !!record.controlConsumedAt && !activePhases.has(record.phase);
         const visible = (trial: Experiment['trials'][number] | undefined) => {
@@ -898,8 +989,8 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
             { rows: [row('В этом прогоне нет провалов по основному показателю.', 'success'), ...(view.notMeasured.total ? [row(`Не измерено ситуаций: ${view.notMeasured.total}.`, 'warning', false, 1)] : [])] }, note);
           const wanted = String(params.failure).trim();
           // A number names the row of the failure list the owner last saw; when the list has changed since, the same situation is opened.
-          const remembered = shownFailures.get(record.id) ?? view.failures.map(item => item.scenarioId);
-          shownFailures.set(record.id, remembered);
+          const remembered = recallShown(ctx, 'failures', record.id) ?? view.failures.map(item => item.scenarioId);
+          rememberShown('failures', record.id, remembered);
           const numbered = /^#?\d+$/.test(wanted) ? remembered[Number(wanted.replace('#', '')) - 1] : undefined;
           const byNumber = /^#?\d+$/.test(wanted) ? view.failures.filter(item => item.scenarioId === numbered) : undefined;
           const matches = byNumber ?? view.failures.filter(item => item.title.toLocaleLowerCase('ru').includes(wanted.toLocaleLowerCase('ru')));
@@ -958,7 +1049,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
       const directory = resolve(ctx.cwd, '.agent-lab');
       const records = (await reading(directory).list()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
       const active = boardRun?.directory === directory ? boardRun : undefined;
-      shownRuns.set(directory, records.map(record => record.id));
+      rememberShown('runs', directory, records.map(record => record.id));
       const feed = statusFeed(records, active);
       if (active) feed.rows.push(...progressLines(await active.lab.get(active.id)).map(line => row(line, 'accent')));
       const output = { runs: records.slice(0, 40).map(record => ({ id: record.id, shortId: shortRun(record.id), task: record.task, phase: record.phase, updatedAt: record.updatedAt,
@@ -1065,7 +1156,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
         throw needsOwner(resolved.kind === 'many' ? 'ambiguous_reference' : 'unknown_reference', referenceProblem('Группа', ref, resolved, candidates), candidates.slice(0, 12), referenceQuestion(ref, resolved));
       };
       try {
-        const found = await findRun(directory, params.id);
+        const found = await findRun(directory, params.id, ctx);
         focus.set(directory, found.id);
         const seenKey = `${directory}|${found.id}`;
         if (!found.librarySnapshot) {
@@ -1077,6 +1168,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
           const { experiment, library } = await reading(directory).readLibrary(found.id);
           const ref = params.variant ?? params.variantId;
           const shown = ref ? pickVariant(library, ref) : undefined;
+          if (shown) lastCard.set(`${directory}|${library.id}`, shown.id);
           markSeen(seenKey, libraryHash(library));
           returnToBoard(ctx, experiment.id);
           return feedResult(callId, output(experiment, library, shown), shown ? variantFeed(experiment, shown, { source: params.source }) : libraryFeed(experiment),
@@ -1094,6 +1186,12 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
           }
           return authority.reason;
         };
+        /** What the owner's message has to name for a change to need no extra stop: these cards (or groups) among all there are. */
+        const cardObjects = (library: ScenarioLibrary, cards: ScenarioVariant[]): InstructionObjects => ({ kind: 'card', exhaustive: cards.length >= library.variants.length,
+          targets: cards.map(card => ({ number: variantNumber(library, card), title: card.title, otherTitles: library.variants.filter(item => item.id !== card.id).map(item => item.title),
+            lastTouched: lastCard.get(`${directory}|${library.id}`) === card.id })) });
+        const groupObjects = (library: ScenarioLibrary, groups: ScenarioLibrary['businessScenarios']): InstructionObjects => ({ kind: 'group', exhaustive: groups.length >= library.businessScenarios.length,
+          targets: groups.map(group => ({ number: library.businessScenarios.indexOf(group) + 1, title: group.title, otherTitles: library.businessScenarios.filter(item => item.id !== group.id).map(item => item.title) })) });
         // An acceptance waits for a recheck that is still going; any other change cancels and restarts it.
         const owned = await open(ctx.cwd, operation === 'accept' ? 'wait' : 'cancel');
         const { lab, close } = owned;
@@ -1131,17 +1229,24 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
           let expected = params.expectedLibraryHash ?? seenLibrary.get(latestView) ?? seenLibrary.get(seenKey);
           if (!expected) throw new Error('Сначала прочитайте сценарии этого прогона (operation:"show"): правка применяется к состоянию, которое вы видели.');
           for (let hop = 0; hop < 16 && checkMoves.has(`${draftKey}|${expected}`); hop++) expected = checkMoves.get(`${draftKey}|${expected}`)!;
-          /** The semantic recheck a change needs, within the agreed call limit: in this row when it is fast, as a later message when it is not. */
-          const verify = async (variantId?: string, wait = false): Promise<CheckOutcome> => {
+          /**
+           * The semantic recheck a change needs, within the agreed call limit: in this row when it is fast, as a later message when it is not.
+           * `askedHash` marks the owner's explicit assess: it checks the state the model saw, is never postponed, and with fewer calls left
+           * than jobs owed it still runs — a bounded partial assessment — instead of asking for budget.
+           */
+          const verify = async (variantId?: string, wait = false, askedHash?: string): Promise<CheckOutcome> => {
             const fresh = await lab.readLibrary(draftId);
             let debt: ReturnType<typeof semanticDebt>;
             try { debt = semanticDebt(fresh.experiment, fresh.library); } catch (error) { return { status: 'failed', message: inputError(error) }; }
             if (!debt.pendingJobs) return { status: 'not_needed' };
-            if (params.verify === 'later' && !wait) return { status: 'skipped', ...debt };
-            if (debt.pendingJobs > debt.remainingCalls) return { status: 'needs_budget', ...debt };
-            const startHash = libraryHash(fresh.library);
-            onUpdate?.({ content: [{ type: 'text', text: `Перепроверяю смысл изменённых карточек · до ${debt.pendingJobs} вызовов модели…` }], details: { id: draftId, phase: 'preparing' } });
-            try { await lab.assessLibrary(draftId, startHash); } catch (error) { return { status: 'failed', message: inputError(error) }; }
+            if (params.verify === 'later' && !wait && !askedHash) return { status: 'skipped', ...debt };
+            if (!askedHash && debt.pendingJobs > debt.remainingCalls) return { status: 'needs_budget', ...debt };
+            const startHash = askedHash ?? libraryHash(fresh.library);
+            onUpdate?.({ content: [{ type: 'text', text: `Перепроверяю смысл изменённых карточек · до ${Math.min(debt.pendingJobs, debt.remainingCalls)} вызовов модели…` }], details: { id: draftId, phase: 'preparing' } });
+            // A stale view refuses an explicit assess the way it refuses any other operation: with the fresh state, not as a failed check.
+            try { await lab.assessLibrary(draftId, startHash); } catch (error) { if (askedHash) throw error; return { status: 'failed', message: inputError(error) }; }
+            // Without a terminal an abort still cancels an explicit assess; one that fired before the work was registered is caught up here.
+            if (askedHash && wait && signal.aborted) cancel();
             const inline = wait ? (await lab.waitForIdle(), true) : await new Promise<boolean>(settle => {
               const timer = setTimeout(() => settle(false), inlineCheckMs);
               const onAbort = () => settle(false);
@@ -1150,7 +1255,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
             });
             if (!inline) {
               handedOver = true;
-              backgroundCheck(ctx, directory, draftId, owned, fresh.experiment.usage.calls, startHash, variantId);
+              backgroundCheck(ctx, directory, draftId, owned, fresh.experiment.usage.calls, startHash, variantId, !!askedHash);
               return { status: 'running', ...debt };
             }
             const after = await lab.get(draftId);
@@ -1166,6 +1271,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
             const fresh = await lab.readLibrary(draftId);
             markSeen(draftKey, libraryHash(fresh.library));
             const variant = variantId ? fresh.library.variants.find(item => item.id === variantId) : undefined;
+            if (variant) lastCard.set(`${directory}|${fresh.library.id}`, variant.id);
             const card = variant ? variantFeed(fresh.experiment, variant) : undefined;
             const moved = movedFrom ? [row(movedFrom.phase === 'review' ? 'Правка сделана в черновике последней ревизии этого набора.'
               : `Прогон ${shortRun(movedFrom.id)} уже выполнен и не меняется: правка сделана в черновике того же набора.`, 'accent', false, 1)] : [];
@@ -1201,10 +1307,12 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
                 missingDescription: params.missingDescription, intent: params.intent, afterAction: params.afterAction, failures: params.failures });
               if (derived.kind === 'ask') throw needsOwner('needs_owner_input', derived.message);
               input = derived.input;
-              // The simulated client may only say values the owner or the parent card already hold.
-              await decide({ intent: 'variant', simulated: [params.opening, params.reply, params.intent].filter((text): text is string => !!text), known: knownTexts(parent),
-                summary: `Добавить к карточке «${parent.title}» синтетический вариант: ${kind}` });
             }
+            // The same authority whatever the form of the call: a ready-made request.input gets no rights the conversational form lacks.
+            // The simulated client may only say values the owner or the parent card already hold.
+            const spoken = Object.values(input && typeof input === 'object' ? input as Record<string, unknown> : {}).filter((value): value is string => typeof value === 'string');
+            await decide({ intent: 'variant', objects: cardObjects(library, [parent]), simulated: [...spoken, ...[params.opening, params.reply, params.intent].filter((text): text is string => !!text)], known: knownTexts(parent),
+              summary: `Добавить к карточке «${parent.title}» синтетический вариант: ${kind}` });
             const reason = legacy?.reason ?? ownerBasis(messages, params.ownerQuote)?.reason ?? 'Целевой вариант по запросу в разговоре';
             const proposed = await lab.proposeVariant(draftId, expected, { parentId: parent.id, operation: kind, reason, input });
             return await changed(`Добавлен синтетический вариант «${safeText(proposed.variant.title)}»`,
@@ -1214,10 +1322,21 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
           if (operation === 'assess') {
             const debt = semanticDebt(current.experiment, library);
             if (!debt.remainingCalls && debt.pendingJobs) throw new Error(`Осталось ${debt.pendingJobs} смысловых вызовов, модельный бюджет исчерпан. Увеличьте лимит (operation:"budget") с согласия владельца; использованный бюджет не сбрасывается.`);
-            if (debt.pendingJobs) { signal.addEventListener('abort', cancel, { once: true }); try { await lab.assessLibrary(draftId, expected); if (signal.aborted) cancel(); await lab.waitForIdle(); } finally { signal.removeEventListener('abort', cancel); } }
+            // In the terminal a long assessment goes on behind the conversation and reports back as a message; Esc hands it over, too.
+            // Without a terminal there is nowhere to report to, so the call waits, and an abort still cancels the work.
+            const interactive = !!ctx.hasUI && ctx.mode === 'tui' && !!ctx.ui;
+            let check: CheckOutcome = { status: 'not_needed' };
+            if (debt.pendingJobs) {
+              if (!interactive) signal.addEventListener('abort', cancel, { once: true });
+              try { check = await verify(undefined, !interactive, expected); } finally { signal.removeEventListener('abort', cancel); }
+            }
             const fresh = await lab.readLibrary(draftId);
-            markSeen(draftKey, libraryHash(fresh.library));
             returnToBoard(ctx, fresh.experiment.id);
+            if (check.status === 'running') return feedResult(callId, { ...output(fresh.experiment, fresh.library), check, mutated: true,
+              checkNote: 'The semantic assessment continues in the background and will report back as a message. Do not wait for it and do not poll; reads and further edits are fine.' },
+              { rows: [row(`Смысловая проверка идёт в фоне · до ${Math.min(debt.pendingJobs, debt.remainingCalls)} вызовов модели.`, 'success', true),
+                row('Разговор свободен. Итог появится здесь отдельным сообщением; новая правка перезапустит проверку, уже проверенное не пропадёт.', 'muted', false, 1)] }, `Смысловая проверка · прогон ${shortRun(draftId)}`);
+            markSeen(draftKey, libraryHash(fresh.library));
             const feed = libraryFeed(fresh.experiment);
             feed.rows.unshift(row(debt.pendingJobs ? `Смысловая проверка завершена · вызовов модели: ${Math.max(0, fresh.experiment.usage.calls - current.experiment.usage.calls)}` : 'Смысловая проверка не нужна: непроверенных изменений нет.', 'success', true));
             return feedResult(callId, { ...output(fresh.experiment, fresh.library), mutated: debt.pendingJobs > 0 }, feed, `Смысловая проверка · прогон ${shortRun(draftId)}`);
@@ -1232,11 +1351,30 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
             if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Принятие библиотеки требует native Pi confirmation; в CLI используйте scenarios --operation accept --yes.');
             const chosen = orderedVariants(library).filter(item => ids.includes(item.id));
             const left = orderedVariants(library).filter(item => !ids.includes(item.id));
-            const body = [...acceptanceLines(library, chosen),
-              ...(left.length ? ['', `Не входят (${left.length}): ${left.slice(0, 6).map(item => `${safeText(item.title)} — ${item.quality === 'ready' ? 'не выбрана' : item.quality === 'blocked' ? 'заблокирована' : 'ждёт решения'}`).join('; ')}${left.length > 6 ? '…' : ''}`] : []),
-              '', 'Агент не запускается. Запуск подтверждается отдельно.'].join('\n');
+            const tail = [...(left.length ? ['', `Не входят (${left.length}): ${left.slice(0, 6).map(item => `${safeText(item.title)} — ${item.quality === 'ready' ? 'не выбрана' : item.quality === 'blocked' ? 'заблокирована' : 'ждёт решения'}`).join('; ')}${left.length > 6 ? '…' : ''}`] : []),
+              '', 'Агент не запускается. Запуск подтверждается отдельно.'];
             const cards = ids.length % 10 === 1 && ids.length % 100 !== 11 ? 'карточку' : [2, 3, 4].includes(ids.length % 10) && ![12, 13, 14].includes(ids.length % 100) ? 'карточки' : 'карточек';
-            if (!await ctx.ui.confirm(`Принять ${ids.length} ${cards} как набор для проверки?`, safeText(body))) {
+            const question = `Принять ${ids.length} ${cards} как набор для проверки?`;
+            let agreed = false;
+            if (chosen.length <= ACCEPTANCE_PAGE) agreed = await ctx.ui.confirm(question, safeText([...acceptanceLines(library, chosen), ...tail].join('\n')));
+            else {
+              // A large set is paged inside the native dialog: every definition can be read there, accepting is possible on any page,
+              // and the dialog itself counts what was not opened — it never claims that something was shown elsewhere.
+              const accept = `Принять все ${ids.length} ${cards}`, next = 'Показать следующие определения', refuse = 'Не принимать';
+              const opened = new Set<string>();
+              for (let from = 0; ;) {
+                signal.throwIfAborted();
+                const page = chosen.slice(from, from + ACCEPTANCE_PAGE);
+                for (const item of page) opened.add(item.id);
+                const unseen = chosen.length - opened.size;
+                const picked = await ctx.ui.select(safeText([question, `Определения карточек ${from + 1}–${from + page.length} из ${chosen.length} · ${unseen ? `ещё не открыто: ${unseen}` : 'открыты все'}`,
+                  '', ...acceptanceLines(library, page), ...tail].join('\n')), [accept, from + ACCEPTANCE_PAGE < chosen.length ? next : 'Показать определения с начала', refuse]);
+                if (picked === accept) { agreed = true; break; }
+                if (picked === undefined || picked === refuse) break;
+                from = from + ACCEPTANCE_PAGE < chosen.length ? from + ACCEPTANCE_PAGE : 0;
+              }
+            }
+            if (!agreed) {
               return feedResult(callId, { cancelled: true, mutated: false, message: 'Принятие отменено. Агент не запускался.' }, { rows: [row('Принятие отменено. Набор не изменился, агент не запускался.', 'warning')] }, 'Принятие отменено');
             }
             const accepted = await lab.acceptLibrary(draftId, expected, ids);
@@ -1288,33 +1426,40 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
             const expectedKind = operation === 'merge' ? 'merge_business' : operation === 'split' ? 'split_business' : operation === 'remove' ? 'remove_variant' : undefined;
             if (expectedKind && patch.kind !== expectedKind) throw new Error(`Операция ${operation} требует patch.kind=${expectedKind}.`);
             if (patch.kind === 'upsert_variant') throw new Error('Целая карточка от модели не записывается. Меняйте одно поле через change или добавляйте вариант через operation:"variant".');
+            // The owner's waiver of a checker's question has one door: operation resolve with its native decision. A ready-made patch is not another one.
+            if (patch.kind === 'resolve_finding') throw new Error('Вопрос проверяющего закрывает только владелец: operation:"resolve" с его native-решением. Готовый patch для этого не принимается.');
             const patched = 'variantId' in patch ? patch.variantId : undefined;
             target = library.variants.find(item => item.id === patched);
             const attributed = patch.kind === 'edit_fact' || patch.kind === 'add_fact' ? [patch.statement, String(patch.value ?? '')]
               : patch.kind === 'edit_variant_text' && ['successCriteria', 'checkpointRule'].includes(patch.field) ? [patch.value] : [];
             const simulated = patch.kind === 'edit_variant_text' && !attributed.length ? [patch.value] : [];
+            const namedIds = patch.kind === 'merge_business' ? [patch.targetId, ...patch.sourceIds] : patch.kind === 'split_business' ? patch.variantIds : [];
             patch = { ...patch, reason: await decide({ intent: patch.kind === 'remove_variant' ? 'remove' : patch.kind === 'merge_business' ? 'merge' : patch.kind === 'split_business' ? 'split' : 'edit',
-              provenance: patch.kind === 'edit_fact' || patch.kind === 'add_fact', attributed, simulated, known: target ? (patch.kind === 'edit_fact' || patch.kind === 'add_fact' ? factSources(target) : knownTexts(target)) : [], summary: `${patch.kind}: ${JSON.stringify(params.patch).slice(0, 600)}` }) } as LibraryPatch;
+              provenance: patch.kind === 'edit_fact' || patch.kind === 'add_fact', attributed, simulated, known: target ? (patch.kind === 'edit_fact' || patch.kind === 'add_fact' ? factSources(target) : knownTexts(target)) : [],
+              // A ready-made patch names its objects by id: the owner's message still has to name the same cards or groups.
+              objects: target ? cardObjects(library, [target]) : patch.kind === 'merge_business' ? groupObjects(library, library.businessScenarios.filter(group => namedIds.includes(group.id)))
+                : patch.kind === 'split_business' ? cardObjects(library, library.variants.filter(item => namedIds.includes(item.id))) : undefined,
+              summary: `${target ? `Карточка «${target.title}» · ` : ''}${patch.kind}: ${JSON.stringify(params.patch).slice(0, 600)}` }) } as LibraryPatch;
             headline = patch.kind === 'remove_variant' ? `Карточка «${safeText(target?.title ?? patch.variantId)}» убрана из черновика` : patch.kind === 'merge_business' ? 'Группы объединены' : patch.kind === 'split_business' ? 'Карточки выделены в отдельную группу' : `Карточка «${safeText(target?.title ?? '')}» изменена`;
           } else if (operation === 'merge') {
             if (!params.groups) throw needsOwner('needs_owner_input', 'Не сказано, какие группы объединить. Спросите владельца.', library.businessScenarios.map(group => safeText(group.title)));
             const [into, ...sources] = params.groups.map(ref => pickGroup(library, ref));
             if (!into || !sources.length || sources.some(group => group.id === into.id)) throw needsOwner('needs_owner_input', 'Для объединения нужны две разные группы. Уточните у владельца.', library.businessScenarios.map(group => safeText(group.title)));
             const summaryText = `Объединить группы: «${into.title}» + ${sources.map(group => `«${group.title}»`).join(' + ')}`;
-            patch = { kind: 'merge_business', targetId: into.id, sourceIds: sources.map(group => group.id), reason: await decide({ intent: 'merge', summary: summaryText }) };
+            patch = { kind: 'merge_business', targetId: into.id, sourceIds: sources.map(group => group.id), reason: await decide({ intent: 'merge', objects: groupObjects(library, [into, ...sources]), summary: summaryText }) };
             headline = `Группы объединены: «${safeText(into.title)}» + ${sources.map(group => `«${safeText(group.title)}»`).join(' + ')} → «${safeText(into.title)}»`;
           } else if (operation === 'split') {
             const moving = (params.variants ?? (params.variant ? [params.variant] : [])).map(ref => pickVariant(library, ref));
             const source = library.businessScenarios.find(group => group.id === moving[0]?.businessScenarioId);
             if (!moving.length || !source) throw needsOwner('needs_owner_input', 'Не сказано, какие карточки выделить в отдельную группу. Спросите владельца.');
             if (!params.title) throw needsOwner('needs_owner_input', 'Спросите владельца, как назвать новую группу.');
-            const reason = await decide({ intent: 'split', summary: `Выделить в группу «${params.title}»: ${moving.map(item => item.title).join('; ')}` });
+            const reason = await decide({ intent: 'split', objects: cardObjects(library, moving), summary: `Выделить в группу «${params.title}»: ${moving.map(item => item.title).join('; ')}` });
             patch = { kind: 'split_business', businessScenarioId: source.id, variantIds: moving.map(item => item.id), reason,
               newBusiness: { key: `split_${Date.now().toString(36)}`, title: params.title, goal: params.goal ?? source.goal, conditions: source.conditions, requirementIds: source.requirementIds, grouping: { status: 'confirmed', reason } } };
             headline = `Новая группа «${safeText(params.title)}»: ${moving.map(item => `«${safeText(item.title)}»`).join(', ')}`;
           } else if (operation === 'remove') {
             target = pickVariant(library, params.variant ?? params.variantId);
-            patch = { kind: 'remove_variant', variantId: target.id, reason: await decide({ intent: 'remove', summary: `Убрать карточку «${target.title}» из новой ревизии` }) };
+            patch = { kind: 'remove_variant', variantId: target.id, reason: await decide({ intent: 'remove', objects: cardObjects(library, [target]), summary: `Убрать карточку «${target.title}» из новой ревизии` }) };
             headline = `Карточка «${safeText(target.title)}» убрана из черновика. Исходный импорт и прошлые прогоны сохранены.`;
           } else {
             const change = params.change;
@@ -1334,7 +1479,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
               if (existing && statement === existing.statement && value === existing.value && availability === existing.availability && existing.origin.kind === 'owner') throw new Error('Факт уже такой и уже подтверждён владельцем: менять нечего.');
               const attributed = [...(statement !== existing?.statement ? [statement] : []), ...(value !== existing?.value && value !== undefined ? [String(value)] : [])];
               const knew = { initial: 'клиент знал это до разговора', learned_in_source: 'клиент узнал это только в старом разговоре', uncertain: 'неясно, знал ли клиент заранее' }[availability];
-              const reason = await decide({ intent: 'edit', provenance: true, attributed, known: factSources(card),
+              const reason = await decide({ intent: 'edit', provenance: true, objects: cardObjects(library, [card]), attributed, known: factSources(card),
                 summary: `${existing ? 'Записать от вашего имени' : 'Добавить от вашего имени'} факт клиента в карточке «${card.title}»:\n«${statement}»${value !== undefined ? ` (значение: ${value})` : ''}\n${knew}.` });
               patch = { kind: existing ? 'edit_fact' : 'add_fact', variantId: card.id, factId: existing?.id ?? `fact_${Date.now().toString(36)}`, statement, ...(value !== undefined ? { value } : {}), availability, editId, reason };
             } else {
@@ -1348,14 +1493,15 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
                 if (field !== 'checkpointRule') throw new Error('Убрать можно только правило проверки (field:"rule").');
                 const kept = checkpoints.filter(item => !named.includes(item));
                 if (!kept.length) throw needsOwner('needs_owner_input', 'Без единой проверки карточку нечем измерять. Спросите владельца, чем заменить правило, и перепишите его (value), а не убирайте.');
-                const reason = await decide({ intent: 'remove', summary: `Убрать из карточки «${card.title}» проверки: ${named.map(item => `«${item.rule}»`).join('; ')}` });
+                const reason = await decide({ intent: 'remove', objects: cardObjects(library, [card]), summary: `Убрать из карточки «${card.title}» проверки: ${named.map(item => `«${item.rule}»`).join('; ')}` });
                 patch = { kind: 'upsert_variant', reason, variant: { ...structuredClone(card), semanticReviewRequired: true, evaluationSpec: { ...card.evaluationSpec, checkpoints: kept } } };
               } else {
                 if (!change.value?.trim()) throw needsOwner('needs_owner_input', 'Нет нового текста. Спросите владельца, как должно быть.');
                 const checkpoint = named[0];
                 const owned = field === 'successCriteria' || field === 'checkpointRule';
                 const texts = [change.value, ...(change.applicability ? [change.applicability] : [])];
-                const reason = await decide({ intent: 'edit', ...(owned ? { attributed: texts } : { simulated: texts }), known: knownTexts(card), summary: `${change.field}: «${change.value}»${change.applicability ? ` · когда применимо: «${change.applicability}»` : ''}` });
+                const reason = await decide({ intent: 'edit', ...(owned ? { attributed: texts } : { simulated: texts }), known: knownTexts(card), objects: cardObjects(library, [card]),
+                  summary: `Карточка «${card.title}» · ${DIFF_FIELD[change.field] ?? change.field}: «${change.value}»${change.applicability ? ` · когда применимо: «${change.applicability}»` : ''}` });
                 // A rule that also changes when it applies is a new state of the whole check, so the card is replaced as one owner edit.
                 patch = checkpoint && change.applicability
                   ? { kind: 'upsert_variant', reason, variant: { ...structuredClone(card), semanticReviewRequired: true, evaluationSpec: { ...card.evaluationSpec,
@@ -1497,7 +1643,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
       signal?.throwIfAborted();
       const directory = resolve(ctx.cwd, '.agent-lab');
       try {
-        const source = await findRun(directory, params.id);
+        const source = await findRun(directory, params.id, ctx);
         const titles = source.scenarios.map((item, index) => `${index + 1}. ${safeText(item.title)}`);
         const chosen = params.scenarioIds ?? params.scenarios?.map(ref => {
           const wanted = ref.trim().toLocaleLowerCase('ru');
@@ -1616,7 +1762,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
   });
   pi.registerTool({
     ...displayFor('agent_lab_run'), name: 'agent_lab_run', label: 'Run the accepted set',
-    description: 'start (default): run the accepted set of one run after a native confirmation of the exact plan shown: agent and version, set, attempts, models and spending limits. A short run ends in this row; a long one continues in the background, the conversation stays free and the result arrives as a message. progress: read how far the run is, from stored data. stop: stop the run of this session and keep what is recorded; only when the owner asks. Does not record human review of expectations or results. Cannot run headlessly or without the human confirmation. Never bypass this tool through shell or internal APIs.',
+    description: 'start (default): run the accepted set of one run after a native confirmation of the exact plan shown: agent and version, set, attempts, models and spending limits. A short run ends in this row; a long one continues in the background, the conversation stays free and the result arrives as a message. progress: read how far the run (or a preparation of scenarios that continues in the background) is, from stored data. stop: stop the run or the preparation of this session and keep what is recorded; only when the owner asks. Does not record human review of expectations or results. Cannot run headlessly or without the human confirmation. Never bypass this tool through shell or internal APIs.',
     parameters: Type.Object({
       id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Run: id, short id or words of its task. Omit for the run this conversation works on.' })),
       action: Type.Optional(Type.Union([Type.Literal('start'), Type.Literal('stop'), Type.Literal('progress')])),
@@ -1631,33 +1777,50 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
       try {
         if (action === 'progress') {
           // A named run is answered about that run; only a request without a reference means «the one going on now».
-          const named = params.id ? await findRun(directory, params.id) : undefined;
-          const record = job && (!named || named.id === job.id) ? await job.lab.get(job.id) : named ?? await findRun(directory, undefined);
+          const named = params.id ? await findRun(directory, params.id, ctx) : undefined;
+          const record = job && (!named || named.id === job.id) ? await job.lab.get(job.id) : named ?? await findRun(directory, undefined, ctx);
           const running = activePhases.has(record.phase);
+          // A preparation of this session is answered in its own words: no dialogue is planned before the scenarios exist.
+          const preparing = record.phase === 'preparing';
           const unusable = record.trials.filter(trial => trial.outcome === 'invalid' || trial.outcome === 'cancelled').length;
           const feed: Feed = { rows: running ? progressLines(record).map(line => row(safeText(line), 'accent')) : [row(`Прогон ${shortRun(record.id)} сейчас не идёт.`, 'muted'), ...stateRows(record)] };
+          if (preparing) return feedResult(callId, { id: record.id, phase: record.phase, running, preparation: true, ownedByThisSession: !!job && job.id === record.id, usage: record.usage, maxCalls: record.settings.maxCalls,
+            ...(job?.id === record.id ? { instruction: 'The preparation continues in the background; its result will arrive as a message. Do not poll.' } : {}) },
+            feed, `Подготовка ${shortRun(record.id)}`);
           return feedResult(callId, { id: record.id, phase: record.phase, running, ownedByThisSession: !!job && job.id === record.id, finishedDialogues: record.trials.length, plannedDialogues: plannedTrials(record), unusable, usage: record.usage, maxCalls: record.settings.maxCalls },
             feed, `Прогресс прогона ${shortRun(record.id)}`);
         }
         if (action === 'stop') {
-          if (!job) throw new Error('В этой сессии нет идущего прогона. Прогон, запущенный в другой сессии Pi, останавливается только там.');
+          if (!job) throw new Error('В этой сессии нет идущего прогона или подготовки. Работа, запущенная в другой сессии Pi, останавливается только там.');
+          const preparation = job.kind === 'preparation';
+          const going = `${preparation ? 'подготовка' : 'прогон'} ${shortRun(job.id)}`;
           // The run the owner named must be the one that is going: another run is never stopped in its place.
           if (params.id) {
-            const named = await findRun(directory, params.id);
-            if (named.id !== job.id) throw needsOwner('needs_owner_input', `Назван прогон ${shortRun(named.id)}, а сейчас идёт ${shortRun(job.id)}. Ничего не остановлено. Спросите владельца, останавливать ли идущий.`, [],
-              `Вы назвали прогон ${shortRun(named.id)}, а сейчас идёт ${shortRun(job.id)}. Я ничего не остановил — остановить идущий?`);
+            const named = await findRun(directory, params.id, ctx);
+            if (named.id !== job.id) throw needsOwner('needs_owner_input', `Назван прогон ${shortRun(named.id)}, а сейчас идёт ${going}. Ничего не остановлено. Спросите владельца, останавливать ли ${preparation ? 'идущую' : 'идущий'}.`, [],
+              `Вы назвали прогон ${shortRun(named.id)}, а сейчас идёт ${going}. Я ничего не остановил — остановить ${preparation ? 'её' : 'идущий'}?`);
           }
           // Stopping throws away attempts in flight, and a stopped run cannot be continued: the owner's own words must ask for it
           // («не останавливай» is not such a request); otherwise the native dialog decides.
           if (!ownerAsked(ownerMessages(ctx), 'stop', params.ownerQuote).asked) {
-            if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Остановка прогона требует просьбы владельца или native-подтверждения.');
-            if (!await ctx.ui.confirm('Остановить прогон?', 'Текущие попытки будут остановлены. Уже записанные диалоги сохранятся. Продолжить этот прогон потом нельзя.')) {
-              return feedResult(callId, { cancelled: true, mutated: false }, { rows: [row('Прогон продолжается.', 'muted')] }, 'Прогон продолжается');
+            if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error(`Остановка ${preparation ? 'подготовки' : 'прогона'} требует просьбы владельца или native-подтверждения.`);
+            if (!await ctx.ui.confirm(preparation ? 'Остановить подготовку?' : 'Остановить прогон?', preparation ? 'Разбор остановится. Уже собранные карточки сохранятся в черновике.'
+              : 'Текущие попытки будут остановлены. Уже записанные диалоги сохранятся. Продолжить этот прогон потом нельзя.')) {
+              return preparation ? feedResult(callId, { cancelled: true, mutated: false }, { rows: [row('Подготовка продолжается.', 'muted')] }, 'Подготовка продолжается')
+                : feedResult(callId, { cancelled: true, mutated: false }, { rows: [row('Прогон продолжается.', 'muted')] }, 'Прогон продолжается');
             }
           }
           job.quiet = true;
-          await job.lab.cancel(job.id); await job.done;
+          // A preparation that ended on its own in the meantime has nothing to cancel; what it saved is reported all the same.
+          await job.lab.cancel(job.id).catch(error => { if (!preparation) throw error; }); await job.done;
           const record = await reading(directory).get(job.id);
+          if (preparation) {
+            const saved = preparationStoppedLines(record);
+            const library = record.librarySnapshot;
+            if (library) markSeen(`${directory}|${record.id}`, libraryHash(library));
+            return feedResult(callId, { id: record.id, phase: record.phase, stopped: true, savedVariants: library?.variants.length ?? 0, savedRequirements: record.requirements.length, usage: record.usage, message: saved.join(' ') },
+              { rows: saved.map((line, index) => row(safeText(line), index ? 'muted' : 'warning', !index)) }, `Подготовка ${shortRun(record.id)} остановлена`);
+          }
           const lines = stoppedLines(record);
           return feedResult(callId, { id: record.id, phase: record.phase, stopped: true, savedDialogues: record.trials.length, plannedDialogues: plannedTrials(record), message: lines.join(' ') },
             { rows: lines.map((line, index) => row(safeText(line), index ? 'muted' : 'warning', !index)) }, `Прогон ${shortRun(record.id)} остановлен`);
@@ -1665,7 +1828,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
         if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для нового запуска нужен интерактивный терминал. В CI используйте evaluate --input suite.json --yes с явно заданным бюджетом.');
         const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
         signal.throwIfAborted();
-        const found = await findRun(directory, params.id);
+        const found = await findRun(directory, params.id, ctx);
         focus.set(directory, found.id);
         const owned = await open(ctx.cwd);
         let detached = false;
@@ -1901,13 +2064,13 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
       if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Отметку о решении судьи ставит только владелец в интерактивном терминале.');
       const directory = resolve(ctx.cwd, '.agent-lab');
       try {
-        const record = await findRun(directory, params.id);
+        const record = await findRun(directory, params.id, ctx);
         if (record.workflow !== 'evaluate' || !['results_review', 'complete'].includes(record.phase)) throw new Error('Отметить согласие с судьёй можно в завершённом прогоне.');
         const view = buildResultView(record);
         const titles = record.scenarios.map((item, index) => `${index + 1}. ${safeText(item.title)}`);
         const wanted = String(params.failure ?? params.dialogue ?? '').trim();
         if (!wanted) throw needsOwner('needs_owner_input', 'Не сказано, о какой ситуации речь. Спросите владельца.', titles.slice(0, 15));
-        const remembered = shownFailures.get(record.id) ?? view.failures.map(item => item.scenarioId);
+        const remembered = recallShown(ctx, 'failures', record.id) ?? view.failures.map(item => item.scenarioId);
         const scenarioId = params.failure !== undefined && /^#?\d+$/.test(wanted) ? remembered[Number(wanted.replace('#', '')) - 1]
           : /^#?\d+$/.test(wanted) ? record.scenarios[Number(wanted.replace('#', '')) - 1]?.id
           : record.scenarios.filter(item => item.title.toLocaleLowerCase('ru').includes(wanted.toLocaleLowerCase('ru'))).map(item => item.id).find((_, index, all) => all.length === 1);

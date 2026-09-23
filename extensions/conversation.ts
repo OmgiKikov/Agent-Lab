@@ -107,11 +107,19 @@ const CANCELS = ['не надо', 'не нужно', 'отмена', 'отмен
 const ownWords = (message: string): string => message.replace(/«[^»]*»|"[^"]*"|“[^”]*”/g, ' ').split('\n')
   .filter(line => !/^\s*(>|\{|\[|(user|assistant|клиент|агент|пользователь)\s*:)/i.test(line)).join(' ');
 
-/** True when the message asks for this operation in the owner's own words and does not negate it. */
+const EXPLAIN = new Set(['как', 'почему', 'зачем', 'можно', 'объясни', 'расскажи', 'подскажи', 'что', 'когда', 'нужно']);
+/**
+ * True when the message asks for this operation in the owner's own words. A question («как остановить прогон?») or a request to
+ * explain is not an instruction, and a negation anywhere earlier in the same clause turns the verb into its opposite.
+ */
 export function asksFor(message: string, intent: Intent): boolean {
-  const tokens = words(ownWords(message));
-  return tokens.some((token, at) => INTENT_STEMS[intent].some(stem => token.startsWith(stem))
-    && !tokens.slice(Math.max(0, at - 3), at).some(before => NEGATIONS.has(before)));
+  // What follows a colon is the wording being dictated («пусть спрашивает: когда вернут деньги?»), not the request itself.
+  const sentences = ownWords(message).split(/(?<=[.!?\n])/).map(sentence => sentence.split(':')[0]!).filter(sentence => !sentence.trim().endsWith('?') && !EXPLAIN.has(words(sentence)[0] ?? ''));
+  return sentences.flatMap(sentence => sentence.split(/[,;:—]| но | а /)).some(clause => {
+    const tokens = words(clause);
+    const at = tokens.findIndex(token => INTENT_STEMS[intent].some(stem => token.startsWith(stem)));
+    return at >= 0 && !tokens.slice(0, at).some(before => NEGATIONS.has(before));
+  });
 }
 
 /** The instruction behind an operation: the basis message asks for it, and no later owner message took it back. */
@@ -138,7 +146,7 @@ export type Authority =
  * user-simulation texts (opening, goal) where only invented values matter; `known` is what the card
  * already contains.
  */
-export function authorize(input: { messages: string[]; quote?: string; intent: Intent; attributed?: string[]; simulated?: string[]; known?: string[]; summary: string; provenance?: boolean }): Authority {
+export function authorize(input: { messages: string[]; quote?: string; intent: Intent; attributed?: string[]; simulated?: string[]; known?: string[]; summary: string; provenance?: boolean; objects?: InstructionObjects }): Authority {
   const { basis, asked } = ownerAsked(input.messages, input.intent, input.quote);
   if (!basis) return { kind: 'confirm', reason: 'Подтверждено владельцем в диалоге Pi.', question: input.summary };
   const allowed = [...input.messages, ...(input.known ?? [])];
@@ -149,9 +157,62 @@ export function authorize(input: { messages: string[]; quote?: string; intent: I
   if (input.provenance) return { kind: 'confirm', reason: basis.reason, question: input.summary };
   // Words of the owner are not yet an instruction of the owner: the message has to ask for this operation.
   if (!asked) return { kind: 'confirm', reason: basis.reason, question: input.summary };
+  // An instruction is about something: «исправь первую реплику» does not let the model pick the card it is applied to.
+  if (input.objects && !input.objects.exhaustive && !input.objects.targets.every(target => refersTo(basis.message, target, input.objects!.kind))) return { kind: 'confirm', reason: basis.reason, question: input.summary };
   const foreign = (input.attributed ?? []).some(text => wordingCoverage(text, allowed) < OWNER_WORDING_SHARE);
   return foreign ? { kind: 'confirm', reason: basis.reason, question: input.summary } : { kind: 'conversation', reason: basis.reason };
 }
+
+/* ───────────────────────────── the object of an instruction ───────────────────────────── */
+
+export interface InstructionTarget {
+  /** The number the object has in the list the owner sees. */
+  number?: number;
+  title: string;
+  /** Titles of the other candidates: a word they share with the target does not name the target. */
+  otherTitles: string[];
+  /** The card last shown or changed in this session: only then «её», «там», «эту» can mean it. */
+  lastTouched?: boolean;
+}
+/** `exhaustive`: the targets are all the candidates there are (one card in the library, both of two groups), so nothing else could be meant. */
+export interface InstructionObjects { kind: 'card' | 'group'; targets: InstructionTarget[]; exhaustive?: boolean }
+
+const OBJECT_NOUNS = { card: ['карточ', 'сценари', 'вариант', 'ситуаци', 'случа', 'кейс'], group: ['групп'] };
+/** Things an ordinal may count instead of the object: «первую реплику» is about a line of some card, not about the first card. */
+const OTHER_NOUNS = ['реплик', 'сообщен', 'фраз', 'правил', 'проверк', 'факт', 'строк', 'пункт', 'вопрос', 'ожидан', 'услов', 'замечан', 'шаг', 'предложен', 'провал', 'прогон', 'диалог', 'очеред', 'раз', 'попытк', 'верси', 'ревизи'];
+const ORDINAL_STEMS = ['перв', 'втор', 'трет', 'четверт', 'пят', 'шест', 'седьм', 'восьм', 'девят', 'десят'];
+const ORDINAL_ENDING = /^(ый|ой|ая|ое|ую|ого|ому|ым|ом|ые|ых|ыми)$/;
+const THIRD_ENDING = /^(ий|ья|ье|ью|ьего|ьему|ьим|ьем|ьей|ьи|ьих|ьими)$/;
+const DEICTIC = new Set(['эту', 'эта', 'этот', 'этой', 'этом', 'этого', 'ней', 'нее', 'него', 'нем', 'ее', 'здесь', 'там', 'туда', 'тут']);
+/** 1–10 for an ordinal adjective in any case form («первой», «третью»); 0 for anything else, cardinals («пять») and «вторник» included. */
+function ordinalValue(token: string): number {
+  const at = ORDINAL_STEMS.findIndex(stem => token.startsWith(stem) && (stem === 'трет' ? THIRD_ENDING : ORDINAL_ENDING).test(token.slice(stem.length)));
+  return at + 1;
+}
+
+/**
+ * True when the owner's message names this object: by its list number (an ordinal, or digits next to «карточка»/«№»), by its whole title
+ * or a title word no other candidate shares, or by «её»/«там» when it is the card last shown or changed. Only the instruction counts: what
+ * follows a colon is wording being dictated. Every doubt answers false — the native dialog then decides, which costs the owner one key.
+ */
+export function refersTo(message: string, target: InstructionTarget, kind: InstructionObjects['kind'] = 'card'): boolean {
+  const tokens = words(message.split('\n').map(line => line.split(':')[0]!).join(' ').replace(/[#№]\s*(?=\d)/g, ' № '));
+  const own = (token?: string): boolean => !!token && OBJECT_NOUNS[kind].some(stem => token.startsWith(stem));
+  const other = (token?: string): boolean => !!token && [...OTHER_NOUNS, ...OBJECT_NOUNS[kind === 'card' ? 'group' : 'card']].some(stem => token.startsWith(stem));
+  if (target.number !== undefined) for (const [index, token] of tokens.entries()) {
+    // «2-й», «2 й»: the letters after the digits are an ending, the noun follows them.
+    const next = /^[а-я]{1,3}$/.test(tokens[index + 1] ?? '') && /^\d+$/.test(token) ? tokens[index + 2] : tokens[index + 1];
+    if (/^\d+$/.test(token) ? Number(token) === target.number && (tokens[index - 1] === '№' || own(tokens[index - 1]) || own(next))
+      : ordinalValue(token) === target.number && !other(next) && !(tokens[index - 1] === 'во' && token.endsWith('ых'))) return true;
+  }
+  const title = words(target.title);
+  const others = target.otherTitles.map(item => words(item).join(' '));
+  if (title.length && !others.includes(title.join(' ')) && tokens.some((_, index) => title.every((word, offset) => tokens[index + offset] === word))) return true;
+  const shared = stems(target.otherTitles.join(' ')), said = stems(tokens.join(' '));
+  if ([...stems(target.title)].some(stem => !shared.has(stem) && said.has(stem))) return true;
+  return !!target.lastTouched && tokens.some(token => DEICTIC.has(token));
+}
+
 /* ───────────────────────────── references ───────────────────────────── */
 
 export type Resolved<T> = { kind: 'one'; item: T } | { kind: 'none' } | { kind: 'many'; items: T[] };
@@ -515,13 +576,17 @@ export function planLines(record: Experiment, cwd?: string): string[] {
   ];
 }
 
-/** What the owner accepts: for every chosen card the client's first message and the expected result, not a list of titles. */
-export function acceptanceLines(library: ScenarioLibrary, chosen: ScenarioVariant[], limit = 8): string[] {
-  const lines = chosen.slice(0, limit).flatMap(variant => [`${variantNumber(library, variant)}. ${variant.title}`,
+/** How many definitions one native dialog holds; a larger set is paged, never cut down to titles. */
+export const ACCEPTANCE_PAGE = 8;
+/**
+ * What the owner accepts: for every given card the client's first message and the expected result, not a list of titles.
+ * It says nothing about cards it was not given: what else was or was not shown is known only to the dialog that pages them.
+ */
+export function acceptanceLines(library: ScenarioLibrary, cards: ScenarioVariant[]): string[] {
+  return cards.flatMap(variant => [`${variantNumber(library, variant)}. ${variant.title}`,
     `   Клиент пишет: «${clip(variant.userState.opening, 200)}»`,
     ...(variant.userState.missing.length ? [`   Клиент не знает: ${clip(variant.userState.missing.join('; '), 160)}`] : []),
     `   Ожидается: ${clip(variant.evaluationSpec.successCriteria, 260)}`]);
-  return chosen.length > limit ? [...lines, `…и ещё ${chosen.length - limit}: ${chosen.slice(limit).map(variant => variant.title).join('; ')}. Их определения показаны в ленте выше.`] : lines;
 }
 
 /** Progress from the stored record only: finished, planned, unusable attempts and spending. Nothing is estimated. */
