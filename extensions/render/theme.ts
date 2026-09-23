@@ -1,5 +1,6 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
-import { safeText, wrapRows } from '../cards.ts';
+import { safeText } from '../../src/text.js';
+import { wrapRows } from '../cards.ts';
 
 /*
  * The one place that paints (04-UI-SPEC «Theme Module», CTX-19/CTX-20). Every row of the chat

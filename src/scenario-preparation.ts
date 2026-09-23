@@ -1,6 +1,6 @@
 import { assessScenarioLibrary, workInputIssue, serializedBytes, SCENARIO_OUTPUT_BYTES } from './scenario-work.js';
 export { assessScenarioLibrary } from './scenario-work.js';
-import { appendScenarioProposals, createLibrary, compileLibrary, libraryHash, libraryQuality, librarySnapshot, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
+import { appendScenarioProposals, createLibrary, compileLibrary, libraryHash, libraryQuality, librarySnapshot } from './scenario-library.js';
 import { importBatchSchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal } from './scenario-contracts.js';
 import { fingerprint, validatePreparation, type AgentSpec, type CallContext, type CreateInput, type Experiment, type GroundingInput, type Requirement, type Runtime, type ScenarioProposalsInput, type Source } from './contracts.js';
 import { SOURCES_PER_DIALOGUE } from './limits.js';
@@ -8,11 +8,11 @@ import { selectScenarioSources } from './scenario-sources.js';
 import { InvalidGeneratorResponse } from './generator-errors.js';
 import type { ExperimentStore } from './store.js';
 
-export const SCENARIO_EXTRACTION_PROTOCOL = 'chronological-scenarios-v1' as const;
+const SCENARIO_EXTRACTION_PROTOCOL = 'chronological-scenarios-v1' as const;
 /** The agent label of a library run when the owner names none: the agent under test runs outside Lab with its own instructions and tools. */
-export const EXTERNAL_AGENT: AgentSpec = { name: 'External agent', instructions: 'The agent under evaluation runs outside Agent Lab and keeps its own instructions and tools.', tools: [] };
+const EXTERNAL_AGENT: AgentSpec = { name: 'External agent', instructions: 'The agent under evaluation runs outside Agent Lab and keeps its own instructions and tools.', tools: [] };
 /** Extraction, JSON correction and later semantic repair share one per-source call allowance. */
-export const SOURCE_GENERATION_ATTEMPTS = 5;
+const SOURCE_GENERATION_ATTEMPTS = 5;
 function preparationInputHash(record: Experiment): string {
   const { maxCalls: _calls, maxDurationMs: _duration, timeoutMs: _timeout, ...settings } = record.settings;
   return fingerprint({ protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, mode: record.mode, sources: record.sources,

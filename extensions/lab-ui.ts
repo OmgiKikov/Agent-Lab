@@ -1,13 +1,12 @@
 import type { AgentToolResult, ExtensionContext, Theme, ToolDefinition, ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
 import { Text, type Component } from '@earendil-works/pi-tui';
-import { safeText, type Section } from './cards.ts';
+import { safeText, shortId } from '../src/text.js';
+import { LockedError } from '../src/errors.js';
+import type { Section } from './cards.ts';
 import type { Experiment } from '../src/contracts.js';
 import { libraryHash } from '../src/scenario-library.js';
 import { callText, renderFeedResult } from './render/feed.ts';
-import type { Feed } from './conversation.ts';
 import { renderAgentLabResult } from './render/verdict-block.ts';
-
-export type OwnerQuestion = { status: 'ambiguous_reference' | 'unknown_reference' | 'needs_owner_input' | 'declined'; options: string[]; ownerText?: string };
 
 export function legacyResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme): Component {
   const raw = result.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
@@ -44,30 +43,29 @@ export const displayFor = (name: string): Pick<ToolDefinition, 'renderCall' | 'r
     : renderFeedResult(result, options, theme, (r, o, t) => renderAgentLabResult(r, o, t, legacyResult), () => context?.invalidate?.()),
 });
 
+/** Native confirmations exist only in Pi's interactive terminal. */
+export const isInteractive = (ctx: Pick<ExtensionContext, 'hasUI' | 'mode'>): boolean => !!ctx.hasUI && ctx.mode === 'tui';
+/** What needs a person's native confirmation never runs headless: outside the terminal the call fails with `message`. */
+export function requireInteractive(ctx: Pick<ExtensionContext, 'hasUI' | 'mode'>, message: string): void {
+  if (!isInteractive(ctx)) throw new Error(message);
+}
+
 export const returnToBoard = (ctx: ExtensionContext, id: string) => {
-  if (!ctx.hasUI || ctx.mode !== 'tui') return;
-  ctx.ui?.setStatus?.('agent-lab', `Agent Lab · прогон ${id.slice(0, 8)}`);
+  if (!isInteractive(ctx)) return;
+  ctx.ui?.setStatus?.('agent-lab', `Agent Lab · прогон ${shortId(id)}`);
 };
 
-export const inputError = (error: unknown): string => {
-  const message = safeText(error instanceof Error ? error.message : error);
-  return message.startsWith('This data directory is already open')
-    ? 'Другая сессия выполняет проверку. Историю, диалоги и экспорт можно смотреть здесь. Изменения и новый запуск будут доступны после её завершения.'
-    : message;
-};
+export const inputError = (error: unknown): string => error instanceof LockedError
+  ? 'Другая сессия выполняет проверку. Историю, диалоги и экспорт можно смотреть здесь. Изменения и новый запуск будут доступны после её завершения.'
+  : safeText(error instanceof Error ? error.message : error);
 
 export const DIFF_FIELD: Record<string, string> = { opening: 'первая реплика', goal: 'цель клиента', expectation: 'ожидаемый результат', rule: 'правило проверки', fact: 'факт' };
 
-export const needsOwner = (status: OwnerQuestion['status'], message: string, options: string[] = [], ownerText?: string): Error =>
-  Object.assign(new Error(message), { needsOwner: { status, options, ownerText } });
-
-export const ownerQuestion = (error: unknown): OwnerQuestion | undefined =>
-  error instanceof Error ? (error as Error & { needsOwner?: OwnerQuestion }).needsOwner : undefined;
-
-export const row = (text: string, tone?: Feed['rows'][number]['tone'], bold = false, indent = 0) =>
-  ({ text, ...(tone ? { tone } : {}), ...(bold ? { bold } : {}), ...(indent ? { indent } : {}) });
-
-export const shortRun = (id: string): string => id.slice(0, 8);
+/** The model has to put a question to the owner; nothing was written. `code` says what is missing. */
+export class NeedsOwner extends Error {
+  constructor(readonly code: 'ambiguous_reference' | 'unknown_reference' | 'needs_owner_input' | 'declined', message: string,
+    readonly options: string[] = [], readonly ownerText?: string) { super(message); }
+}
 
 /** The board passes stable identities and the viewed revision, not a second copy of editable state. */
 export function boardDiscussionContext(record: Experiment, section: Section, selectedIndex: number) {

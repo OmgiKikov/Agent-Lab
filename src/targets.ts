@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { fingerprint, scalarSchema, usageSchema, type CallContext, type DialogueMessage, type ReleaseHook, type ReleaseLog, type Target, type TargetSession, type World } from './contracts.js';
 import { targetEntryPath } from './target-version.js';
+import { identifierSchema as identifier, sha256Schema } from './ids.js';
 
 function httpHeaders(target: Extract<Target, { kind: 'http' }>): Record<string, string> {
   const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' };
@@ -119,7 +120,6 @@ export async function runRelease(release: ReleaseHook, env: NodeJS.ProcessEnv, s
  * not state observed by trusted code; the runner labels it as such. Secrets come from the environment at request
  * time and never enter the persisted record.
  */
-const identifier = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).refine(v => !['__proto__', 'constructor', 'prototype'].includes(v));
 export const externalReplySchema = z.union([
   z.string().max(20000),
   z.strictObject({
@@ -139,7 +139,7 @@ export const externalReplySchema = z.union([
     retrievalStage: z.enum(['retrieved', 'model_context']).optional(),
     events: z.array(z.strictObject({ tool: z.string().min(1).max(200), args: z.unknown().optional(), result: z.unknown().optional() })).max(50).default([]),
     records: z.record(identifier, z.record(identifier, scalarSchema)).refine(v => Object.keys(v).length <= 30, 'Too many records').optional(),
-    promptHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    promptHash: sha256Schema.optional(),
     eventScope: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_.:/-]*\*?$/).max(200)).min(1).max(50).optional(),
     eventsComplete: z.boolean().optional(), resetConfirmed: z.boolean().optional(),
     version: z.string().trim().min(1).max(200).optional(),
@@ -147,8 +147,8 @@ export const externalReplySchema = z.union([
     usage: usageSchema.optional(),
   }),
 ]);
-export type ExternalReply = z.infer<typeof externalReplySchema>;
-export interface ExternalTargetInput {
+type ExternalReply = z.infer<typeof externalReplySchema>;
+interface ExternalTargetInput {
   target: Exclude<Target, { kind: 'sandbox' }>; sessionId: string; scenarioId: string;
   state: World; history: () => DialogueMessage[]; ctx: CallContext;
   /** Called whenever the agent's harness reports records; the runner uses it to label reported state. */

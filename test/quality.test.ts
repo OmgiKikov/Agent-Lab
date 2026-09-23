@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { rm } from 'node:fs/promises';
-import { expectationSheet, qualityLines, qualitySummary, plural, shorten, testPlanLines, trialProofLines } from '../src/quality.js';
+import { expectationSheet, qualityLines, qualitySummary, shorten, testPlanLines, trialProofLines } from '../src/quality.js';
+import { countText } from '../src/plural.js';
 import { emptyUsage, RAG_RUBRICS, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
 import { draftHash } from '../src/experiment.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
@@ -368,7 +369,7 @@ test('an unresolved simulator flag makes the card undecided on the first screen 
 });
 
 test('plural forms and sentence-bounded shortening', () => {
-  assert.deepEqual([1, 2, 5, 11, 21, 22].map(n => plural(n, ['диалог', 'диалога', 'диалогов'])), ['1 диалог', '2 диалога', '5 диалогов', '11 диалогов', '21 диалог', '22 диалога']);
+  assert.deepEqual([1, 2, 5, 11, 21, 22].map(n => countText(n, ['диалог', 'диалога', 'диалогов'])), ['1 диалог', '2 диалога', '5 диалогов', '11 диалогов', '21 диалог', '22 диалога']);
   const long = 'Первое предложение довольно длинное и содержит подробности. Второе предложение тоже. ' + 'x'.repeat(300);
   assert.equal(shorten(long, 120), 'Первое предложение довольно длинное и содержит подробности. Второе предложение тоже.…');
   assert.equal(shorten('коротко'), 'коротко');

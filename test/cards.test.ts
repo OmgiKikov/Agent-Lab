@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { visibleWidth, stripTerminalSequences, truncateToWidth } from '@earendil-works/pi-tui';
-import { LabBoard, resultEntries, reviewOrder, safeText, wrapRows, type BoardAction, type BoardOptions } from '../extensions/cards.ts';
+import { LabBoard, resultEntries, reviewOrder, wrapRows, type BoardAction, type BoardOptions } from '../extensions/cards.ts';
+import { safeText } from '../src/text.js';
 // Phase-3 chrome (F11, footer tiers) is read through the namespace, so a missing export fails an assertion, not the module link.
 import * as cards from '../extensions/cards.ts';
 import { agreementSample, judgeAgreement } from '../src/agreement.js';

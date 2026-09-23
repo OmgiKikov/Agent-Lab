@@ -1,9 +1,11 @@
 import { directChecks } from './checkpoints.js';
 import { GOAL_UNSUPPORTED_RATIONALE, hasCompleteJudgment, observableSources, scenarioSources, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
-import { fingerprint, metricApplies, simulatorWasUsed, type Comparison, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
-import { agentMetricResult, agentRubricResult, automaticTrialResult, GOAL_METRIC_ID, graded, headlineMetricIds, headlineTrialResult, isAgentFailure, latestHumanReviews, markTargets, markUnderCurrentRule, measured, measurementUsable, observedRecord, RULES_METRIC_ID, runningPhases, simulatorUsable, trialAssessmentComplete } from './outcomes.js';
+import { fingerprint, metricApplies, simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode, isRunning } from './contracts.js';
+import { agentMetricResult, agentRubricResult, automaticTrialResult, GOAL_METRIC_ID, graded, headlineMetricIds, headlineTrialResult, isAgentFailure, latestHumanReviews, markTargets, markUnderCurrentRule, measured, measurementUsable, observedRecord, RULES_METRIC_ID, simulatorUsable } from './outcomes.js';
 import { judgeAgreement } from './agreement.js';
+import { shortId } from './text.js';
+import { sameTargetVersion } from './target-version.js';
 export { observedRecord, agentRubricResult, isAgentFailure, trialAssessmentComplete, automaticTrialResult } from './outcomes.js';
 
 /*
@@ -26,7 +28,7 @@ export interface HumanFinding {
   trialId: string; reviewId: string; target: string; subject: 'agent' | 'simulator' | 'check' | 'test';
   verdict: 'pass' | 'fail' | 'invalid'; automatic: 'pass' | 'fail' | 'unknown'; disagreement: boolean; note: string;
 }
-export interface RepeatResult {
+interface RepeatResult {
   scenarioId: string; title: string; userMode: UserMode; planned: number; passed: number; failed: number; unknown: number;
   status: 'single' | 'mixed' | 'all_pass' | 'all_fail' | 'incomplete'; trialIds: string[];
 }
@@ -238,7 +240,7 @@ export function verdictSummary(record: Experiment): VerdictSummary {
     planned: plannedTrials(record), completed: completed.length, invalid,
     cancelled: record.trials.filter(t => t.outcome === 'cancelled').length,
     missing: [...expected].filter(key => !attempted.has(key)).length,
-    running: runningPhases.has(record.phase),
+    running: isRunning(record.phase),
   };
   const review: VerdictSummary['review'] = {
     status: !record.trials.length ? 'not_started' : finalized && pending.size === 0 ? 'complete' : 'pending',
@@ -369,7 +371,7 @@ export interface RunComparison {
 }
 
 /** Expected attempts, including all repeats. Missing/invalid attempts never disappear from a comparison. */
-export interface ExcludedBy { invalidBefore: number; missingBefore: number; invalidAfter: number; missingAfter: number; judgeIncomplete: number; other: number }
+interface ExcludedBy { invalidBefore: number; missingBefore: number; invalidAfter: number; missingAfter: number; judgeIncomplete: number; other: number }
 
 export function plannedTrials(record: Experiment): number {
   if (record.assessmentTrialIds) return record.assessmentTrialIds.length;
@@ -443,7 +445,7 @@ function metricCardOutcome(record: Experiment, scenario: Scenario, metricId: str
   return results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
 }
 
-export type HeadlineOutcome = { outcome: 'pass' | 'fail' | 'unknown'; goal: 'pass' | 'fail' | 'unknown' | 'none'; rules: 'pass' | 'fail' | 'unknown' | 'none' };
+type HeadlineOutcome = { outcome: 'pass' | 'fail' | 'unknown'; goal: 'pass' | 'fail' | 'unknown' | 'none'; rules: 'pass' | 'fail' | 'unknown' | 'none' };
 
 /**
  * The headline card result (counting rule COUNTING_RULES): goal attainment and, when the card has
@@ -541,7 +543,7 @@ export function cardVerdict(record: Experiment, scenario: Scenario, rule: 'headl
   const ids = rule === 'goal' ? headlineMetricIds(scenario).slice(0, 1) : headlineMetricIds(scenario);
   const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
   const codes = new Set<NotMeasuredCode>();
-  if (!trials.length) codes.add(runningPhases.has(record.phase) ? 'in_progress' : 'not_reached');
+  if (!trials.length) codes.add(isRunning(record.phase) ? 'in_progress' : 'not_reached');
   else if (!attemptsMatch(record, scenario, trials)) codes.add('attempts_mismatch');
   for (const trial of trials) for (const code of trialReasons(record, scenario, trial, ids)) codes.add(code);
   return { outcome, reason: NOT_MEASURED_CODES.find(code => codes.has(code)) ?? 'judge_unclear' };
@@ -599,7 +601,7 @@ export function stabilityBetweenRuns(before: Experiment, after: Experiment): Sta
   if (identity === null) return { ...result, skipped: SOURCE_UNAVAILABLE };
   if (!compareRuns(before, after).comparable) return { ...result, skipped: 'прогоны несравнимы' };
   const agent = identity ?? { ...before, agent: agentIdentity(before) };
-  if (agent.targetFingerprint !== after.targetFingerprint || agent.targetVersion !== after.targetVersion
+  if (!sameTargetVersion(agent.targetFingerprint, after.targetFingerprint) || agent.targetVersion !== after.targetVersion
     || agent.agent !== agentIdentity(after)) return { ...result, skipped: 'агент изменился между прогонами' };
   const source = observedRecord(before), repeat = observedRecord(after);
   for (const card of repeat.scenarios) {
@@ -675,7 +677,7 @@ export function compareRuns(before: Experiment, after: Experiment): RunCompariso
   // Marks given under the previous counting rule are named, never mixed in silently (CTX-21). Informational: `comparable` is untouched.
   for (const run of [before, after]) {
     const stale = judgeAgreement(run).staleRule;
-    if (stale > 0) result.notes.push(`В прогоне ${run.id.slice(0, 8)} есть отметки по прежнему правилу подсчёта: ${stale}.`);
+    if (stale > 0) result.notes.push(`В прогоне ${shortId(run.id)} есть отметки по прежнему правилу подсчёта: ${stale}.`);
   }
   return result;
 }

@@ -4,8 +4,8 @@ import type { SourceKind } from './contracts.js';
 import { docxText, htmlText } from './docx.js';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIAL_PART_CHARS } from './limits.js';
 
-export interface FileMaterial { name: string; content: string; kind: SourceKind; file: string }
-export interface MaterialsReport { materials: FileMaterial[]; skipped: Array<{ file: string; reason: string }> }
+interface FileMaterial { name: string; content: string; kind: SourceKind; file: string }
+interface MaterialsReport { materials: FileMaterial[]; skipped: Array<{ file: string; reason: string }> }
 
 const READERS: Record<string, (file: Buffer) => string> = {
   '.docx': docxText,
@@ -48,7 +48,7 @@ export async function readMaterialFiles(paths: string[], kind: SourceKind): Prom
 }
 
 /** Cuts a text into parts of at most `limit` characters at paragraph breaks (then line breaks); the parts joined by the break are the text. */
-export function splitParts(text: string, limit: number): string[] {
+function splitParts(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
   const parts: string[] = [];
   let rest = text;
@@ -80,7 +80,7 @@ async function listFiles(path: string): Promise<string[]> {
   return files;
 }
 
-export interface MaterialPaths { materials?: Array<{ name: string; content: string; kind?: SourceKind }>; materialFiles?: string[]; promptFiles?: string[] }
+interface MaterialPaths { materials?: Array<{ name: string; content: string; kind?: SourceKind }>; materialFiles?: string[]; promptFiles?: string[] }
 
 /** Inline materials first, then articles read from materialFiles and prompts from promptFiles, both resolved against baseDir. */
 export async function expandMaterials<T extends MaterialPaths>(input: T, baseDir: string): Promise<{ materials: Array<{ name: string; content: string; kind?: SourceKind }>; skipped: MaterialsReport['skipped']; read: number }> {

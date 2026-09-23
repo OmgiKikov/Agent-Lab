@@ -1,13 +1,12 @@
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { resolve } from 'node:path';
-import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme, ToolDefinition, ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
-import { Text, type Component } from '@earendil-works/pi-tui';
+import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { Text } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { z } from 'zod';
 import { ExperimentLab, draftHash, resultHash } from '../src/experiment.js';
-import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, reassessmentSchema, runnableTargetSchema, SCENARIO_LIMIT, settingsSchema, type Experiment, type HumanReviewInput } from '../src/contracts.js';
+import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, reassessmentSchema, runnableTargetSchema, isRunning, SCENARIO_LIMIT, settingsSchema, type Experiment, type HumanReviewInput } from '../src/contracts.js';
 import { awaitingVerdict, cardVerdict, evidenceSummary, headlineCardOutcome, plannedTrials } from '../src/comparison.js';
 import { judgeAgreement } from '../src/agreement.js';
 import { markTargets } from '../src/outcomes.js';
@@ -23,19 +22,17 @@ import { MATERIAL_CHARS, MATERIAL_LIMIT } from '../src/limits.js';
 import { ExperimentStore } from '../src/store.js';
 import { libraryHash } from '../src/scenario-library.js';
 import { semanticWorkStatus } from '../src/scenario-work.js';
-import { activePhases, reviewOrder, safeText, showBoard, trialLines, type BoardAction, type BoardOptions, type Section } from './cards.ts';
+import { safeText, shortId } from '../src/text.js';
+import { identifierPattern, isIdentifier, sha256Pattern } from '../src/ids.js';
+import { sameTargetVersion } from '../src/target-version.js';
+import { reviewOrder, showBoard, trialLines, type BoardAction, type BoardOptions, type Section } from './cards.ts';
 import { scenarioErrorText, scenarioLibrarySummary } from './scenarios.ts';
 import { isVerdictDetails, rememberView, renderAgentLabResult, VERDICT_KIND, type VerdictDetails } from './render/verdict-block.ts';
-import { callText, isFeedDetails, rememberFeed, renderFeedResult, setFeedRestorer, type FeedDetails, type FeedRef } from './render/feed.ts';
-import { ACCEPTANCE_PAGE, acceptanceLines, authorize, changeRows, checkRow, comparisonFeed, deriveVariantInput, dialogueFeed, disputedCheckpoints, ownerRemarks, ownerQuestions, sharedOwnerQuestions, plainIssue, failureFeed, libraryFeed, orderedVariants, ownerBasis, ownerMessages,
-  planLines, progressLines, referenceProblem, referenceQuestion, targetText, resolveFact, resolveGroup, resolveRun, resolveVariant, semanticDebt, stateRows, statusFeed, stoppedLines, variantDiff, variantFeed, variantNumber,
-  type CheckOutcome, type Feed, type Resolved } from './conversation.ts';
-import type { InstructionObjects } from './conversation.ts';
-import type { LibraryPatch, ScenarioLibrary, ScenarioVariant } from '../src/scenario-contracts.js';
-import type { VariantOperation } from '../src/scenario-variants.js';
+import { isFeedDetails, rememberFeed, renderFeedResult, setFeedRestorer, type FeedRef } from './render/feed.ts';
+import { changeRows, checkRow, comparisonFeed, dialogueFeed, disputedCheckpoints, ownerRemarks, plainIssue, failureFeed, libraryFeed, orderedVariants, planLines, progressLines, referenceProblem, targetText, resolveRun, stateRows, statusFeed, stoppedLines, variantDiff, variantFeed, row, type CheckOutcome, type Feed, type Resolved } from './conversation.ts';
 import { progressLine } from './flow.ts';
 import { SessionOperations, type SessionOperation as Job } from './operations.ts';
-import { boardDiscussionContext, displayFor, inputError, legacyResult, needsOwner, ownerQuestion, returnToBoard, row, shortRun, type OwnerQuestion } from './lab-ui.ts';
+import { boardDiscussionContext, displayFor, inputError, legacyResult, NeedsOwner, returnToBoard, isInteractive, requireInteractive } from './lab-ui.ts';
 import { registerScenarioTool } from './scenario-tool.ts';
 
 /** C-119: what the model reads instead of the block, so it does not restate the number and the causes (CTX-08). */
@@ -180,7 +177,7 @@ How to talk:
 - Every tool result is already shown to the owner as a short card whose details expand in place. Never re-list its cards, dialogue lines, numbers or plan. Your reply is the conclusion and the next useful step, one to three sentences in the owner's language, without ids, hashes or JSON.
 - Name runs, cards, groups and failures the way the owner does: by title or list number. The tools accept such references. When a tool answers that a reference is ambiguous or unknown, ask the owner which one they mean; never pick for them.
 - Use what the request and the card already contain. Ask only for a business decision you cannot find there; never invent a rule, a fact value or an expected result to complete a call.
-- The first accuracy number matters more than a perfect set. Right after preparation, when at least one card is ready, offer to accept and run the ready ones at once and to settle the disputed ones afterwards. A checker's open question the owner answers with «да, это моё правило» is settled with operation resolve (their native decision), not by rewriting the card.
+- The first accuracy number matters more than a perfect set. Right after preparation, when at least one card is ready, offer to accept and run the ready ones at once and to settle the disputed ones afterwards. A checker's open question the owner answers with «да, это моё правило» is settled with agent_lab_resolve (their native decision), not by rewriting the card.
 - When you do not know what exists in this project, call agent_lab_status first.
 - A card that waits for a decision needs one plain question to the owner that would settle it (the tool gives the checker's remarks in plain words as issuesInPlainWords); do not retell the checker.
 - Several changes asked for in one message: make them all, with verify:"later" on every edit but the last.
@@ -219,13 +216,13 @@ type Prepared = { output: Record<string, unknown>; feed?: Feed; note?: string };
 /** After a stopped preparation: what the partial draft holds. Counts only — the same lines go into the session file. */
 const preparationStoppedLines = (record: Experiment): string[] => {
   const variants = record.librarySnapshot?.variants ?? [];
-  return [`Подготовка ${record.id.slice(0, 8)} ${record.error ? 'остановлена' : 'успела завершиться до остановки'}.`, variants.length
+  return [`Подготовка ${shortId(record.id)} ${record.error ? 'остановлена' : 'успела завершиться до остановки'}.`, variants.length
     ? `Сохранён черновик: карточек ${variants.length}, из них готовых ${variants.filter(variant => variant.quality === 'ready').length}. Их можно смотреть, править и принимать.`
     : `Карточки собрать не успели. Запись сохранена: требований ${record.requirements.length}, вызовов модели ${record.usage.calls}.`];
 };
 
 /** Conversational execution asks the human to authorize a concrete plan; it never invents human reviews. */
-export interface AgentLabOptions { inlineRunMs?: number; inlineCheckMs?: number; inlineBuildMs?: number; createLab?: (directory: string) => ExperimentLab }
+interface AgentLabOptions { inlineRunMs?: number; inlineCheckMs?: number; inlineBuildMs?: number; createLab?: (directory: string) => ExperimentLab }
 export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}) {
   const inlineRunMs = options.inlineRunMs ?? 20_000;
   /** A recheck that finishes this fast is reported in the row of the edit; a longer one reports back as a message. */
@@ -264,7 +261,6 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     return stored;
   };
   /** The card last shown or changed, per library: the only card «её», «там» or «эту» in the owner's next message can mean. Memory only — after a restart the owner is asked. */
-  const lastCard = new Map<string, string>();
   const seenLibrary = new Map<string, string>();
   /** When each of those states was shown: redirected to another record of the same library, an edit applies to whichever view is the newer one. */
   const seenTick = new Map<string, number>();
@@ -273,12 +269,12 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   const open = (cwd: string, pendingCheck: 'cancel' | 'wait' = 'cancel') => operations.acquire(resolve(cwd, '.agent-lab'), pendingCheck);
   /** All surfaces read the live executor when this session owns it, otherwise the durable record. */
   const reading = (directory: string): ExperimentLab => operations.reader(directory);
-  const runName = (record: Experiment): string => `${shortRun(record.id)} «${safeText(record.task).slice(0, 60)}»`;
+  const runName = (record: Experiment): string => `${shortId(record.id)} «${safeText(record.task).slice(0, 60)}»`;
   /** The run a request means: an id, a short id, task words, or — with no reference — the run this conversation works on. Never a silent guess among several. */
   const findRun = async (directory: string, ref?: string, ctx?: Parameters<typeof recallShown>[0]): Promise<Experiment> => {
     const reader = reading(directory);
     const wanted = ref?.trim();
-    if (wanted && /^[a-zA-Z0-9_-]{1,80}$/.test(wanted)) { try { return await reader.get(wanted); } catch { /* a short id or task words: look through the list */ } }
+    if (wanted && isIdentifier(wanted)) { try { return await reader.get(wanted); } catch { /* a short id or task words: look through the list */ } }
     const stored = await reader.list();
     // Numbers resolve against the list the owner was shown; without one, against the same newest-first order the list uses.
     const shown = recallShown(ctx, 'runs', directory) ?? [];
@@ -287,7 +283,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     if (wanted) {
       const resolved: Resolved<Experiment> = resolveRun(records, wanted);
       if (resolved.kind === 'one') return resolved.item;
-      throw needsOwner(resolved.kind === 'many' ? 'ambiguous_reference' : 'unknown_reference',
+      throw new NeedsOwner(resolved.kind === 'many' ? 'ambiguous_reference' : 'unknown_reference',
         referenceProblem('Прогон', wanted, resolved, (resolved.kind === 'many' ? resolved.items : records).map(runName)));
     }
     const focused = records.find(record => record.id === focus.get(directory));
@@ -295,8 +291,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     const current = records.filter(record => ['preparing', 'review', 'evaluating', 'results_review'].includes(record.phase));
     if (current.length === 1) return current[0]!;
     if (records.length === 1) return records[0]!;
-    if (!records.length) throw needsOwner('unknown_reference', 'В этом проекте ещё нет прогонов. Сначала соберите сценарии: нужны агент и, если есть, логи.');
-    throw needsOwner('ambiguous_reference', `Неясно, о каком прогоне речь. Спросите владельца: ${records.slice(0, 8).map(runName).join('; ')}.`, records.slice(0, 8).map(runName));
+    if (!records.length) throw new NeedsOwner('unknown_reference', 'В этом проекте ещё нет прогонов. Сначала соберите сценарии: нужны агент и, если есть, логи.');
+    throw new NeedsOwner('ambiguous_reference', `Неясно, о каком прогоне речь. Спросите владельца: ${records.slice(0, 8).map(runName).join('; ')}.`, records.slice(0, 8).map(runName));
   };
   const feedResult = (callId: string, output: unknown, feed: Feed, note: string, ref?: FeedRef) =>
     ({ content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details: rememberFeed(callId, feed, note, ref) });
@@ -317,12 +313,11 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   });
   /** An owner question becomes an ordinary result: the feed shows what to clarify, the model is told not to guess. */
   const askOwner = (callId: string, error: unknown) => {
-    const question = ownerQuestion(error);
-    if (!question) throw error;
-    const message = safeText((error as Error).message);
-    return feedResult(callId, { status: question.status, mutated: false, message, options: question.options,
+    if (!(error instanceof NeedsOwner)) throw error;
+    const message = safeText(error.message);
+    return feedResult(callId, { status: error.code, mutated: false, message, options: error.options,
       instruction: 'Nothing was written. Put this question to the owner in plain words; do not pick an option or invent a value yourself.' },
-      { rows: [row(safeText(question.ownerText ?? message), 'warning'), ...question.options.map(option => row(`• ${safeText(option)}`, undefined, false, 1))] }, 'Agent Lab · нужно уточнение владельца');
+      { rows: [row(safeText(error.ownerText ?? message), 'warning'), ...error.options.map(option => row(`• ${safeText(option)}`, undefined, false, 1))] }, 'Agent Lab · нужно уточнение владельца');
   };
   /** The verdict of a finished run for the model and for the feed; `details` stay ids only (REV-01). */
   const verdictOutput = async (record: Experiment, lab: ExperimentLab) => {
@@ -365,22 +360,22 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           // A stop the owner asked for is answered in its own row; every other ending reports back, a failed one as plainly as a finished one.
           if (!job.quiet) {
             const answer = await prepared(finished);
-            const failed = [`Подготовка ${shortRun(id)} не завершена${finished.phase === 'cancelled' ? ': она остановлена' : ''}.`, ...(finished.error ? [safeText(finished.error)] : [])];
+            const failed = [`Подготовка ${shortId(id)} не завершена${finished.phase === 'cancelled' ? ': она остановлена' : ''}.`, ...(finished.error ? [safeText(finished.error)] : [])];
             pi.sendMessage({ customType: BUILD_MESSAGE, display: true, content: JSON.stringify(answer.output),
-              details: answer.feed ? rememberFeed(`build:${id}:${finished.updatedAt}`, answer.feed, answer.note ?? `Сценарии прогона ${shortRun(id)}`)
+              details: answer.feed ? rememberFeed(`build:${id}:${finished.updatedAt}`, answer.feed, answer.note ?? `Сценарии прогона ${shortId(id)}`)
                 : rememberFeed(`build:${id}:${finished.updatedAt}`, { rows: finished.phase === 'review' && !finished.error ? [row('Подготовка завершена. Агент не запускался.', 'success', true), ...stateRows(finished)]
-                  : failed.map((line, index) => row(line, index ? 'error' : 'warning', !index)) }, `Подготовка ${shortRun(id)}`),
+                  : failed.map((line, index) => row(line, index ? 'error' : 'warning', !index)) }, `Подготовка ${shortId(id)}`),
             }, { deliverAs: 'followUp', triggerTurn: true });
           }
-        } else if (origin === 'board') ctx.ui.notify?.(complete ? `Проверка завершена: /agent-lab ${shortRun(id)} — открыть результат.`
-          : `Проверка ${shortRun(id)} остановлена. Записанные диалоги доступны в истории.`, 'info');
+        } else if (origin === 'board') ctx.ui.notify?.(complete ? `Проверка завершена: /agent-lab ${shortId(id)} — открыть результат.`
+          : `Проверка ${shortId(id)} остановлена. Записанные диалоги доступны в истории.`, 'info');
         else if (!job.quiet) {
           const announced = complete ? await verdictOutput(finished, owned.lab) : undefined;
           const stopped = stoppedLines(finished);
           pi.sendMessage({ customType: RUN_MESSAGE, display: true,
             content: JSON.stringify(announced?.output ?? { id, phase: finished.phase, error: finished.error, trialCount: finished.trials.length, plannedTrials: plannedTrials(finished), message: stopped.join(' ') }),
             details: announced && isVerdictDetails(announced.details) ? announced.details
-              : rememberFeed(`run:${id}:${finished.updatedAt}`, { rows: [...stopped.map(line => row(line, 'warning')), ...(finished.error ? [row(safeText(finished.error), 'error')] : [])] }, `Прогон ${shortRun(id)} остановлен`),
+              : rememberFeed(`run:${id}:${finished.updatedAt}`, { rows: [...stopped.map(line => row(line, 'warning')), ...(finished.error ? [row(safeText(finished.error), 'error')] : [])] }, `Прогон ${shortId(id)} остановлен`),
           }, { deliverAs: 'followUp', triggerTurn: true });
         }
       },
@@ -400,7 +395,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       const library = finished.librarySnapshot;
       if (library) markSeen(`${owned.directory}|${id}`, libraryHash(library));
       return { output: { ...summary(finished, owned.directory), ...(library ? scenarioLibrarySummary(finished) : {}) },
-        feed: library ? libraryFeed(finished) : undefined, note: `Подготовка ${shortRun(id)}` };
+        feed: library ? libraryFeed(finished) : undefined, note: `Подготовка ${shortId(id)}` };
     });
   };
   const backgroundCheck = (ctx: ExtensionContext, directory: string, id: string, owned: Awaited<ReturnType<typeof open>>, usedBefore: number, startHash: string, variantId?: string, asked = false): void => {
@@ -434,7 +429,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             ...(variant ? { variant: { id: variant.id, title: variant.title, quality: variant.quality, issues: variant.issues.map(item => plainIssue(library, variant, item)), disputedChecks: disputed.map(item => ({ id: item.id, rule: item.rule })) } } : {}),
             instruction: asked ? 'The semantic assessment the owner asked for finished. Tell them the outcome in one or two sentences; use this libraryHash from now on.'
               : 'The background recheck of the last edit finished. Mention it only if the owner has something to decide; use this libraryHash from now on.' }),
-          details: rememberFeed(`check:${id}:${libraryHash(library)}`, feed, `Смысловая перепроверка · прогон ${shortRun(id)}`),
+          details: rememberFeed(`check:${id}:${libraryHash(library)}`, feed, `Смысловая перепроверка · прогон ${shortId(id)}`),
         }, { deliverAs: 'followUp', triggerTurn: asked || failed || (!!variant && variant.quality !== 'ready') });
       },
       error: error => ctx.ui.notify?.(`Перепроверка не завершилась: ${inputError(error)}`, 'error'),
@@ -448,7 +443,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     return renderFeedResult(result, { expanded: renderOptions.expanded, isPartial: false }, theme, (r, o, t) => renderAgentLabResult(r, o, t, legacyResult));
   });
   pi.on('session_start', async (_event, ctx) => {
-    if (process.env.AGENT_LAB_SESSION !== '1' || !ctx.hasUI || ctx.mode !== 'tui') return;
+    if (process.env.AGENT_LAB_SESSION !== '1' || !isInteractive(ctx)) return;
     ctx.ui.setTitle(`Agent Lab · ${ctx.cwd.split('/').at(-1)}`);
     ctx.ui.setHeader((_tui, theme) => new Text(theme.bold('Agent Lab') + '\nНасколько хорош ваш агент — на карточках пользователей, с причинами провалов.\n' + safeText(ctx.cwd), 1, 1));
     ctx.ui.setWidget('agent-lab-start', ['Напишите, что нужно, обычными словами — Lab сделает это сам и покажет результат здесь же:',
@@ -521,7 +516,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       if (operation === 'validate') {
         parsedDialogues = selectValidationDialogues(parsedDialogues, Math.min(40, validationCount * 3));
         if (!parsedDialogues.length && !libraryImport?.originalImport.dialogues.length) throw new Error('В логах нет пригодных диалогов с 1–16 репликами пользователя без полностью замаскированных реплик.');
-        if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для сборки validation set нужен native Pi confirmation в интерактивном терминале.');
+        requireInteractive(ctx, 'Для сборки validation set нужен native Pi confirmation в интерактивном терминале.');
       }
       const mode = operation === 'demo' ? 'demo' : 'live';
       const connection = mode === 'demo' ? undefined : connectionFile ? await readConnection(resolve(ctx.cwd, connectionFile)) : !rest.target ? await rememberedConnection(resolve(ctx.cwd, '.agent-lab')) : undefined;
@@ -553,7 +548,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       const owned = await open(ctx.cwd);
       const { lab, close } = owned;
       // Only a terminal can take a preparation over: the hand-over draws its progress and delivers its result through `ctx.ui` and a message.
-      const interactive = !!ctx.hasUI && ctx.mode === 'tui' && !!ctx.ui;
+      const interactive = isInteractive(ctx) && !!ctx.ui;
       let handedOver = false;
       let id: string | undefined;
       let polling: Promise<void> = Promise.resolve();
@@ -590,7 +585,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           return { output: { ...output, ...scenarioLibrarySummary(record, library.acceptance?.variantIds ?? []),
             groups: library.businessScenarios.map((group, index) => ({ number: index + 1, id: group.id, title: group.title })),
             variants: orderedVariants(library).map((variant, index) => ({ number: index + 1, id: variant.id, title: variant.title, quality: variant.quality, provenance: variant.provenance, issueCount: variant.issues.length })) },
-            feed, note: `Сценарии прогона ${shortRun(record.id)} · ревизия ${library.revision}` };
+            feed, note: `Сценарии прогона ${shortId(record.id)} · ревизия ${library.revision}` };
         };
         // In the terminal Esc interrupts the action, not the work: from here an abort hands the preparation over instead of cancelling it.
         if (interactive) signal.removeEventListener('abort', cancel);
@@ -617,7 +612,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             instruction: 'The preparation continues in the background and its result (the scenarios) will arrive as a message. Tell the owner in one short sentence and end your turn; do not poll. Reads still work; edits, a new preparation and runs wait until it ends. Stop it only when the owner asks: agent_lab_run action:"stop".' },
             { rows: [row('Подготовка сценариев идёт в фоне.', 'success', true), ...progressLines(record).map(line => row(safeText(line), undefined, false, 1)),
               row('Разговор свободен: готовые прогоны и сценарии можно смотреть. Собранные сценарии появятся здесь отдельным сообщением.', 'muted', false, 1),
-              row('Esc прерывает только текущее действие. Чтобы остановить подготовку, так и напишите.', 'muted', false, 1)] }, `Подготовка ${shortRun(id)} идёт в фоне`);
+              row('Esc прерывает только текущее действие. Чтобы остановить подготовку, так и напишите.', 'muted', false, 1)] }, `Подготовка ${shortId(id)} идёт в фоне`);
         }
         await progress();
         const done = await prepared(await lab.get(id), signal.aborted && !interactive);
@@ -633,7 +628,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Run: id, short id or words of its task. Omit for the run this conversation works on.' })),
       failure: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.String({ minLength: 1, maxLength: 300 })], { description: 'Number in the failure list (1 = first) or the situation title.' })),
       dialogue: Type.Optional(Type.String({ minLength: 1, maxLength: 300, description: 'Situation title or number whose recorded dialogue to open.' })),
-      trialId: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' })),
+      trialId: Type.Optional(Type.String({ pattern: identifierPattern })),
       compare: Type.Optional(Type.Union([Type.Boolean(), Type.String({ minLength: 1, maxLength: 200 })])),
       export: Type.Optional(Type.Boolean()),
     }, { additionalProperties: false }),
@@ -647,13 +642,13 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         focus.set(directory, record.id);
         const beforeId = typeof params.compare === 'string' ? (await findRun(directory, params.compare, ctx)).id : undefined;
         const bundle = await evidenceBundle(record, lab.store, beforeId);
-        const controlVisible = record.workflow === 'evaluate' || !!record.controlConsumedAt && !activePhases.has(record.phase);
+        const controlVisible = record.workflow === 'evaluate' || !!record.controlConsumedAt && !isRunning(record.phase);
         const visible = (trial: Experiment['trials'][number] | undefined) => {
           if (trial?.split === 'control' && !controlVisible) throw new Error('Control evidence stays hidden until the final control phase stops.');
           return trial;
         };
         returnToBoard(ctx, record.id);
-        const note = `Результаты прогона ${shortRun(record.id)}`;
+        const note = `Результаты прогона ${shortId(record.id)}`;
         if (params.failure !== undefined) {
           const view = bundle.view ?? buildResultView(bundle.record);
           const titles = view.failures.map((item, index) => `${index + 1}. ${safeText(item.title)}`);
@@ -666,12 +661,12 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const numbered = /^#?\d+$/.test(wanted) ? remembered[Number(wanted.replace('#', '')) - 1] : undefined;
           const byNumber = /^#?\d+$/.test(wanted) ? view.failures.filter(item => item.scenarioId === numbered) : undefined;
           const matches = byNumber ?? view.failures.filter(item => item.title.toLocaleLowerCase('ru').includes(wanted.toLocaleLowerCase('ru')));
-          if (matches.length !== 1) throw needsOwner(matches.length ? 'ambiguous_reference' : 'unknown_reference',
+          if (matches.length !== 1) throw new NeedsOwner(matches.length ? 'ambiguous_reference' : 'unknown_reference',
             matches.length ? `Провал «${wanted}» подходит к нескольким ситуациям. Спросите владельца, какая нужна.` : `Провала «${wanted}» в списке нет: всего провалов ${view.failures.length}.`, titles);
           const index = view.failures.indexOf(matches[0]!);
           const trial = visible(bundle.record.trials.find(item => item.id === matches[0]!.trialId));
           return feedResult(callId, { failure: { number: index + 1, of: view.failures.length, title: matches[0]!.title, kind: matches[0]!.kind, lines: matches[0]!.lines }, trial },
-            failureFeed(bundle.record, view, index)!, `Провал ${index + 1} из ${view.failures.length} · прогон ${shortRun(record.id)}`);
+            failureFeed(bundle.record, view, index)!, `Провал ${index + 1} из ${view.failures.length} · прогон ${shortId(record.id)}`);
         }
         if (params.dialogue || params.trialId) {
           let trial = params.trialId ? bundle.record.trials.find(item => item.id === params.trialId) : undefined;
@@ -681,19 +676,19 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             const scenarios = /^#?\d+$/.test(wanted) ? [bundle.record.scenarios[Number(wanted.replace('#', '')) - 1]].filter(item => !!item)
               : bundle.record.scenarios.filter(item => item.title.toLocaleLowerCase('ru').includes(wanted) || item.id === params.dialogue);
             const titles = bundle.record.scenarios.map((item, index) => `${index + 1}. ${safeText(item.title)}`);
-            if (scenarios.length !== 1) throw needsOwner(scenarios.length ? 'ambiguous_reference' : 'unknown_reference',
+            if (scenarios.length !== 1) throw new NeedsOwner(scenarios.length ? 'ambiguous_reference' : 'unknown_reference',
               scenarios.length ? `«${params.dialogue}» подходит к нескольким ситуациям. Спросите владельца, какая нужна.` : `Ситуации «${params.dialogue}» в этом прогоне нет.`, titles.slice(0, 15));
             const attempts = bundle.record.trials.filter(item => item.scenarioId === scenarios[0]!.id);
             trial = attempts.find(item => item.outcome === 'fail') ?? attempts[0];
             if (!trial) throw new Error(`По ситуации «${safeText(scenarios[0]!.title)}» ещё нет записанного диалога.`);
           }
-          return feedResult(callId, visible(trial), dialogueFeed(bundle.record, trial), `Диалог · прогон ${shortRun(record.id)}`);
+          return feedResult(callId, visible(trial), dialogueFeed(bundle.record, trial), `Диалог · прогон ${shortId(record.id)}`);
         }
         if (params.compare) {
           if (!bundle.comparison || !bundle.comparisonSource) return feedResult(callId, { comparable: false, warnings: bundle.warnings, message: 'This run has no source run to compare with. Prepare a repeat of an earlier run, or name the run to compare with.' },
             { rows: [row('Сравнивать не с чем: у этого прогона нет исходного. Назовите прогон для сравнения или подготовьте повтор прошлого прогона.', 'warning')] }, note);
           return feedResult(callId, { comparison: bundle.comparison, comparisonSource: bundle.comparisonSource, warnings: bundle.warnings }, comparisonFeed(bundle.comparison, bundle.comparisonSource.beforeId),
-            `Сравнение прогонов ${shortRun(bundle.comparisonSource.beforeId)} → ${shortRun(record.id)}`);
+            `Сравнение прогонов ${shortId(bundle.comparisonSource.beforeId)} → ${shortId(record.id)}`);
         }
         const output = {
           ...summary(record, lab.store.directory, bundle.view), agent: record.revisions.find(r => r.id === record.selectedRevisionId)?.spec,
@@ -724,7 +719,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       rememberShown('runs', directory, records.map(record => record.id));
       const feed = statusFeed(records, active);
       if (active) feed.rows.push(...progressLines(await active.lab.get(active.id)).map(line => row(line, 'accent')));
-      const output = { runs: records.slice(0, 40).map(record => ({ id: record.id, shortId: shortRun(record.id), task: record.task, phase: record.phase, updatedAt: record.updatedAt,
+      const output = { runs: records.slice(0, 40).map(record => ({ id: record.id, shortId: shortId(record.id), task: record.task, phase: record.phase, updatedAt: record.updatedAt,
         variants: record.librarySnapshot?.variants.length ?? record.scenarios.length, acceptedVariants: record.librarySnapshot?.acceptance?.variantIds.length ?? null,
         trials: record.trials.length, plannedTrials: plannedTrials(record), parentRunId: record.parentRunId })),
         workingOn: focus.get(directory) ?? null, runningInThisSession: active?.id ?? null,
@@ -732,12 +727,12 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       return feedResult(callId, output, feed, `Agent Lab · прогонов: ${records.length}`);
     },
   });
-  registerScenarioTool(pi, { inlineCheckMs, open, reading, feedResult, askOwner, findRun, focus, lastCard, seenLibrary, seenTick, markSeen, checkMoves, backgroundCheck, backgroundPreparation, operations, summary });
+  registerScenarioTool(pi, { inlineCheckMs, open, reading, feedResult, askOwner, findRun, focus, seenLibrary, seenTick, markSeen, checkMoves, backgroundCheck, backgroundPreparation, operations, summary });
   pi.registerTool({
     ...displayFor('agent_lab_edit'),
     name: 'agent_lab_edit', label: 'Edit an unapproved agent draft',
     description: 'Edit the run settings, the agent connection (target), targetVersion or the agent label of a draft after inspecting its current draftHash. Situations and their expectations change only in the scenario library (agent_lab_scenarios). Human approval stays pending. Cannot change started experiments, run dialogues, record human verdicts, or approve results.',
-    parameters: Type.Object({ id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), expectedHash: Type.String({ pattern: '^[a-f0-9]{64}$' }), patch: Type.Unsafe(z.toJSONSchema(draftPatchSchema, { io: 'input' })) }, { additionalProperties: false }),
+    parameters: Type.Object({ id: Type.String({ pattern: identifierPattern }), expectedHash: Type.String({ pattern: sha256Pattern }), patch: Type.Unsafe(z.toJSONSchema(draftPatchSchema, { io: 'input' })) }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(callId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
@@ -747,7 +742,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         const patch = draftPatchSchema.parse(params.patch);
         // A higher spending limit is the owner's decision: in the terminal it is confirmed natively, never raised silently.
         const before = await lab.get(params.id);
-        if (patch.settings?.maxCalls !== undefined && patch.settings.maxCalls > before.settings.maxCalls && ctx.hasUI && ctx.mode === 'tui'
+        if (patch.settings?.maxCalls !== undefined && patch.settings.maxCalls > before.settings.maxCalls && isInteractive(ctx)
           && !await ctx.ui.confirm('Увеличить лимит вызовов модели?', safeText(`Было: ${before.settings.maxCalls}. Станет: ${patch.settings.maxCalls}. Уже использовано ${before.usage.calls}; использованные вызовы не сбрасываются.`))) {
           return { content: [{ type: 'text', text: JSON.stringify({ id: before.id, cancelled: true, mutated: false, message: 'Лимит не изменён.' }) }], details: { cancelled: true } };
         }
@@ -762,7 +757,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           row(`Агент: ${safeText(targetText(record).replaceAll(`${ctx.cwd}/`, ''))}${record.targetVersion ? ` · версия ${safeText(record.targetVersion)}` : ''}`, undefined, false, 1),
           row('После изменения запуск подтверждается заново.', 'muted', false, 1), ...stateRows(record)],
           ...(output.sheetLines ? { more: output.sheetLines.map(line => row(safeText(line))) } : {}) };
-        return feedResult(callId, output, feed, `Черновик обновлён · прогон ${shortRun(record.id)}`);
+        return feedResult(callId, output, feed, `Черновик обновлён · прогон ${shortId(record.id)}`);
       } finally { await close(); }
     },
   });
@@ -770,10 +765,10 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     ...displayFor('agent_lab_accept'),
     name: 'agent_lab_accept', label: 'Confirm what the agent must do',
     description: "Show the owner what the agent must do in each situation of the set (or the complete one-test definition) and record their confirmation. The consent comes from a native Pi dialog only; the model never supplies it. It never runs the agent, calls a model, or saves a suite.",
-    parameters: Type.Object({ id: Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }) }, { additionalProperties: false }),
+    parameters: Type.Object({ id: Type.String({ pattern: identifierPattern }) }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(_callId, params, signal, _onUpdate, ctx) {
-      if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для принятия теста нужен интерактивный терминал. В CLI используйте accept --id RUN --yes.');
+      requireInteractive(ctx, 'Для принятия теста нужен интерактивный терминал. В CLI используйте accept --id RUN --yes.');
       signal?.throwIfAborted();
       const { lab, close } = await open(ctx.cwd);
       try {
@@ -820,7 +815,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     parameters: Type.Object({ id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Run to repeat: id, short id or words of its task. Omit for the run this conversation works on.' })),
       scenarios: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 300 }), { minItems: 1, maxItems: 40, description: 'Cards to repeat, by title or number in the run. Omit for the whole set.' })),
       scenarioIds: Type.Optional(Type.Array(Type.String(), { minItems: 1, maxItems: 40, description: 'Repeat only these existing tests by exact id; omit for the whole regression set.' })),
-      controlScenarioIds: Type.Optional(Type.Array(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), { minItems: 1, maxItems: 5, description: 'Mark existing situations as positive controls: real dialogues the agent is known to handle. They are shown apart and never enter the headline number. Each control runs as one turn (the opening and the agent\'s first reply, no simulator), so simulator drift cannot hide a broken judge or connection; controls are left out of the repeat diff.' })) }, { additionalProperties: false }),
+      controlScenarioIds: Type.Optional(Type.Array(Type.String({ pattern: identifierPattern }), { minItems: 1, maxItems: 5, description: 'Mark existing situations as positive controls: real dialogues the agent is known to handle. They are shown apart and never enter the headline number. Each control runs as one turn (the opening and the agent\'s first reply, no simulator), so simulator drift cannot hide a broken judge or connection; controls are left out of the repeat diff.' })) }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(callId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
@@ -832,8 +827,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const wanted = ref.trim().toLocaleLowerCase('ru');
           const matches = /^#?\d+$/.test(wanted) ? [source.scenarios[Number(wanted.replace('#', '')) - 1]].filter(item => !!item)
             : source.scenarios.filter(item => item.id === ref || item.title.toLocaleLowerCase('ru').includes(wanted));
-          if (matches.length !== 1) throw needsOwner(matches.length ? 'ambiguous_reference' : 'unknown_reference',
-            matches.length ? `«${ref}» подходит к нескольким ситуациям. Спросите владельца, какая нужна.` : `Ситуации «${ref}» в прогоне ${shortRun(source.id)} нет.`, titles.slice(0, 15));
+          if (matches.length !== 1) throw new NeedsOwner(matches.length ? 'ambiguous_reference' : 'unknown_reference',
+            matches.length ? `«${ref}» подходит к нескольким ситуациям. Спросите владельца, какая нужна.` : `Ситуации «${ref}» в прогоне ${shortId(source.id)} нет.`, titles.slice(0, 15));
           return matches[0]!.id;
         });
         const { lab, close } = await open(ctx.cwd);
@@ -842,12 +837,12 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const record = await lab.repeat(source.id, chosen, params.controlScenarioIds);
           focus.set(directory, record.id);
           returnToBoard(ctx, record.id);
-          const moved = !!source.targetFingerprint && !!record.targetFingerprint && source.targetFingerprint !== record.targetFingerprint;
-          const feed: Feed = { rows: [row(`Подготовлен повтор: ${record.scenarios.length} из ${source.scenarios.length} ситуаций прогона ${shortRun(source.id)}. Исходный прогон сохранён.`, 'success', true),
+          const moved = !!source.targetFingerprint && !!record.targetFingerprint && !sameTargetVersion(source.targetFingerprint, record.targetFingerprint);
+          const feed: Feed = { rows: [row(`Подготовлен повтор: ${record.scenarios.length} из ${source.scenarios.length} ситуаций прогона ${shortId(source.id)}. Исходный прогон сохранён.`, 'success', true),
             row(moved ? 'Код агента изменился с прошлого прогона: проверяется новая версия.' : 'Код агента с прошлого прогона не менялся.', moved ? 'accent' : 'muted', false, 1),
             row('Ожидания те же, результаты и подтверждения очищены. После запуска результат сравнится с исходным прогоном.', 'muted', false, 1), ...stateRows(record)],
             more: record.scenarios.map((item, index) => row(`${index + 1}. ${safeText(item.title)}`, undefined, false, 1)) };
-          return feedResult(callId, { ...summary(record, lab.store.directory), sourceRunId: source.id, agentCodeChanged: moved }, feed, `Повтор прогона ${shortRun(source.id)} → ${shortRun(record.id)}`);
+          return feedResult(callId, { ...summary(record, lab.store.directory), sourceRunId: source.id, agentCodeChanged: moved }, feed, `Повтор прогона ${shortId(source.id)} → ${shortId(record.id)}`);
         } finally { await close(); }
       } catch (error) { return askOwner(callId, error); }
     },
@@ -858,8 +853,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     parameters: Type.Object({
       id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Run: id, short id or words of its task. Omit for the run this conversation works on.' })),
       action: Type.Optional(Type.Union([Type.Literal('start'), Type.Literal('stop'), Type.Literal('progress')])),
-      expectedHash: Type.Optional(Type.String({ pattern: '^[a-f0-9]{64}$', description: 'Optional: refuse when the draft differs from the one you inspected. The confirmation always refers to the state it shows.' })),
-      ownerQuote: Type.Optional(Type.String({ maxLength: 1000, description: 'stop: the owner\'s exact words asking to stop.' })),
+      expectedHash: Type.Optional(Type.String({ pattern: sha256Pattern, description: 'Optional: refuse when the draft differs from the one you inspected. The confirmation always refers to the state it shows.' })),
     }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(callId, params, toolSignal, onUpdate, ctx) {
@@ -871,36 +865,36 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           // A named run is answered about that run; only a request without a reference means «the one going on now».
           const named = params.id ? await findRun(directory, params.id, ctx) : undefined;
           const record = job && (!named || named.id === job.id) ? await job.lab.get(job.id) : named ?? await findRun(directory, undefined, ctx);
-          const running = activePhases.has(record.phase);
+          const running = isRunning(record.phase);
           // A preparation of this session is answered in its own words: no dialogue is planned before the scenarios exist.
           if (job?.kind === 'assessment' && job.id === record.id) {
             const work = record.librarySnapshot ? semanticWorkStatus(record.librarySnapshot) : undefined;
-            const message = `Смысловая проверка ${shortRun(record.id)} идёт в фоне · вызовов модели ${record.usage.calls} из ${record.settings.maxCalls}.`;
+            const message = `Смысловая проверка ${shortId(record.id)} идёт в фоне · вызовов модели ${record.usage.calls} из ${record.settings.maxCalls}.`;
             return feedResult(callId, { id: record.id, operationId: job.operationId, operationKind: job.kind, phase: record.phase,
               running, assessment: true, preparation: false, ownedByThisSession: true, usage: record.usage, maxCalls: record.settings.maxCalls,
               ...(work ? { completedJobs: work.completedJobs, pendingJobs: work.pendingJobs } : {}),
               instruction: 'The semantic check is active in this session. Its result will arrive as a message; stop cancels this check and preserves the draft. Do not poll.' },
-              { rows: [row(message, 'accent')] }, `Смысловая проверка ${shortRun(record.id)}`);
+              { rows: [row(message, 'accent')] }, `Смысловая проверка ${shortId(record.id)}`);
           }
           const preparing = record.phase === 'preparing';
           const unusable = record.trials.filter(trial => trial.outcome === 'invalid' || trial.outcome === 'cancelled').length;
-          const feed: Feed = { rows: running ? progressLines(record).map(line => row(safeText(line), 'accent')) : [row(`Прогон ${shortRun(record.id)} сейчас не идёт.`, 'muted'), ...stateRows(record)] };
+          const feed: Feed = { rows: running ? progressLines(record).map(line => row(safeText(line), 'accent')) : [row(`Прогон ${shortId(record.id)} сейчас не идёт.`, 'muted'), ...stateRows(record)] };
           if (preparing) return feedResult(callId, { id: record.id, phase: record.phase, running, preparation: true, ownedByThisSession: !!job && job.id === record.id, usage: record.usage, maxCalls: record.settings.maxCalls,
             ...(job?.id === record.id ? { instruction: 'The preparation continues in the background; its result will arrive as a message. Do not poll.' } : {}) },
-            feed, `Подготовка ${shortRun(record.id)}`);
+            feed, `Подготовка ${shortId(record.id)}`);
           return feedResult(callId, { id: record.id, phase: record.phase, running, ownedByThisSession: !!job && job.id === record.id, finishedDialogues: record.trials.length, plannedDialogues: plannedTrials(record), unusable, usage: record.usage, maxCalls: record.settings.maxCalls },
-            feed, `Прогресс прогона ${shortRun(record.id)}`);
+            feed, `Прогресс прогона ${shortId(record.id)}`);
         }
         if (action === 'stop') {
           if (!job) throw new Error('В этой сессии нет идущего прогона, подготовки или смысловой проверки. Работа, запущенная в другой сессии Pi, останавливается только там.');
           const preparation = job.kind === 'preparation';
           const assessment = job.kind === 'assessment';
-          const going = `${assessment ? 'смысловая проверка' : preparation ? 'подготовка' : 'прогон'} ${shortRun(job.id)}`;
+          const going = `${assessment ? 'смысловая проверка' : preparation ? 'подготовка' : 'прогон'} ${shortId(job.id)}`;
           // The run the owner named must be the one that is going: another run is never stopped in its place.
           if (params.id) {
             const named = await findRun(directory, params.id, ctx);
-            if (named.id !== job.id) throw needsOwner('needs_owner_input', `Назван прогон ${shortRun(named.id)}, а сейчас идёт ${going}. Ничего не остановлено. Спросите владельца, останавливать ли ${preparation ? 'идущую' : 'идущий'}.`, [],
-              `Вы назвали прогон ${shortRun(named.id)}, а сейчас идёт ${going}. Я ничего не остановил — остановить ${preparation ? 'её' : 'идущий'}?`);
+            if (named.id !== job.id) throw new NeedsOwner('needs_owner_input', `Назван прогон ${shortId(named.id)}, а сейчас идёт ${going}. Ничего не остановлено. Спросите владельца, останавливать ли ${preparation ? 'идущую' : 'идущий'}.`, [],
+              `Вы назвали прогон ${shortId(named.id)}, а сейчас идёт ${going}. Я ничего не остановил — остановить ${preparation ? 'её' : 'идущий'}?`);
           }
           await operations.stop(job);
           const record = await reading(directory).get(job.id);
@@ -908,24 +902,24 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             const library = record.librarySnapshot;
             if (library) markSeen(`${directory}|${record.id}`, libraryHash(library));
             const work = library ? semanticWorkStatus(library) : undefined;
-            const message = `Смысловая проверка ${shortRun(record.id)} остановлена. Правки и записанные результаты проверки сохранены. Незавершённые проверки можно продолжить.`;
+            const message = `Смысловая проверка ${shortId(record.id)} остановлена. Правки и записанные результаты проверки сохранены. Незавершённые проверки можно продолжить.`;
             return feedResult(callId, { id: record.id, operationId: job.operationId, operationKind: job.kind, phase: record.phase,
               stopped: true, savedVariants: library?.variants.length ?? 0, usage: record.usage,
               ...(work ? { completedJobs: work.completedJobs, pendingJobs: work.pendingJobs } : {}), message },
-              { rows: [row(message, 'warning'), ...stateRows(record)] }, `Смысловая проверка ${shortRun(record.id)} остановлена`);
+              { rows: [row(message, 'warning'), ...stateRows(record)] }, `Смысловая проверка ${shortId(record.id)} остановлена`);
           }
           if (preparation) {
             const saved = preparationStoppedLines(record);
             const library = record.librarySnapshot;
             if (library) markSeen(`${directory}|${record.id}`, libraryHash(library));
             return feedResult(callId, { id: record.id, phase: record.phase, stopped: true, savedVariants: library?.variants.length ?? 0, savedRequirements: record.requirements.length, usage: record.usage, message: saved.join(' ') },
-              { rows: saved.map((line, index) => row(safeText(line), index ? 'muted' : 'warning', !index)) }, `Подготовка ${shortRun(record.id)} остановлена`);
+              { rows: saved.map((line, index) => row(safeText(line), index ? 'muted' : 'warning', !index)) }, `Подготовка ${shortId(record.id)} остановлена`);
           }
           const lines = stoppedLines(record);
           return feedResult(callId, { id: record.id, phase: record.phase, stopped: true, savedDialogues: record.trials.length, plannedDialogues: plannedTrials(record), message: lines.join(' ') },
-            { rows: lines.map((line, index) => row(safeText(line), index ? 'muted' : 'warning', !index)) }, `Прогон ${shortRun(record.id)} остановлен`);
+            { rows: lines.map((line, index) => row(safeText(line), index ? 'muted' : 'warning', !index)) }, `Прогон ${shortId(record.id)} остановлен`);
         }
-        if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Для нового запуска нужен интерактивный терминал. В CI используйте evaluate --input suite.json --yes с явно заданным бюджетом.');
+        requireInteractive(ctx, 'Для нового запуска нужен интерактивный терминал. В CI используйте evaluate --input suite.json --yes с явно заданным бюджетом.');
         const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
         signal.throwIfAborted();
         const found = await findRun(directory, params.id, ctx);
@@ -939,9 +933,9 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const draft = await owned.lab.get(found.id);
           const hash = draftHash(draft);
           if (draft.workflow !== 'evaluate' || (params.expectedHash && params.expectedHash !== hash)) throw new Error('План изменился. Прочитайте актуальный черновик через agent_lab_inspect.');
-          if (draft.phase !== 'review') throw new Error(activePhases.has(draft.phase) ? `Прогон ${shortRun(draft.id)} уже идёт.`
-            : `Прогон ${shortRun(draft.id)} уже выполнен, его результат не меняется. Чтобы проверить снова, подготовьте повтор (agent_lab_repeat).`);
-          if (draft.librarySnapshot && !draft.librarySnapshot.acceptance) throw needsOwner('needs_owner_input',
+          if (draft.phase !== 'review') throw new Error(isRunning(draft.phase) ? `Прогон ${shortId(draft.id)} уже идёт.`
+            : `Прогон ${shortId(draft.id)} уже выполнен, его результат не меняется. Чтобы проверить снова, подготовьте повтор (agent_lab_repeat).`);
+          if (draft.librarySnapshot && !draft.librarySnapshot.acceptance) throw new NeedsOwner('needs_owner_input',
             'Набор ещё не принят: после разбора логов или правки карточек владелец принимает набор заново. Покажите сценарии и предложите принять готовые; запуск будет после этого.');
           // UI-D-02 in chat: unconfirmed expectations are confirmed in the same native dialog that starts the run.
           const confirmed = draft.acceptedDraftHash === hash;
@@ -979,7 +973,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
               instruction: 'The run continues in the background and its result will arrive as a message. Tell the owner in one short sentence and end your turn; do not poll. Reads (scenarios, recorded dialogues) still work; edits and new runs wait until it ends.' },
               { rows: [row('Прогон запущен и идёт в фоне.', 'success', true), ...lines.map(line => row(safeText(line), undefined, false, 1)),
                 row('Разговор свободен: готовые диалоги и сценарии можно смотреть. Результат появится здесь отдельным сообщением.', 'muted', false, 1),
-                row('Esc прерывает только текущее действие. Чтобы остановить прогон, так и напишите.', 'muted', false, 1)] }, `Прогон ${shortRun(draft.id)} идёт в фоне`);
+                row('Esc прерывает только текущее действие. Чтобы остановить прогон, так и напишите.', 'muted', false, 1)] }, `Прогон ${shortId(draft.id)} идёт в фоне`);
           }
           await progress();
           // `content` stays the model's JSON plus C-119; the session holds ids only (REV-01, T-04-03):
@@ -1028,7 +1022,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       let output: unknown = connection;
       if (params.action === 'check') {
         if (!connection.probe) throw new Error('Добавьте probe.write/read/reset и initialState в файл подключения.');
-        if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Проверка подключения требует native Pi confirmation.');
+        requireInteractive(ctx, 'Проверка подключения требует native Pi confirmation.');
         if (!await ctx.ui.confirm('Проверить историю и сброс · 3 запроса?', safeText(JSON.stringify({ target: connection.target, probe: connection.probe }, null, 2)))) return { content: [{ type: 'text', text: 'Проверка отменена.' }], details: {} };
         const result = await doctor(connection, AbortSignal.any([signal, ctx.signal].filter((s): s is AbortSignal => !!s)));
         if (result.passed) await rememberConnection(directory, connection);
@@ -1050,7 +1044,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         await lab.init();
         const original = await lab.get(params.id);
         if (!input.codeOnly) {
-          if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Переоценка моделью требует native Pi confirmation.');
+          requireInteractive(ctx, 'Переоценка моделью требует native Pi confirmation.');
           if (!await ctx.ui.confirm('Переоценить сохранённые ответы?', safeText(`Агент не запускается. Диалогов: ${input.trialIds?.length ?? original.trials.length}. До ${original.settings.maxCalls} вызовов, ${original.settings.maxDurationMs / 1000} секунд.\n${JSON.stringify(input, null, 2)}`))) return { content: [{ type: 'text', text: 'Переоценка отменена.' }], details: {} };
         }
         signal?.throwIfAborted(); signal?.addEventListener('abort', cancel, { once: true });
@@ -1071,7 +1065,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     executionMode: 'sequential',
     async execute(_callId, params, toolSignal, _onUpdate, ctx) {
       const { id, trialId } = z.strictObject({ id: z.string().uuid(), trialId: z.string().min(1) }).parse(params);
-      if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Вердикт человека требует интерактивного терминала.');
+      requireInteractive(ctx, 'Вердикт человека требует интерактивного терминала.');
       const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
       signal.throwIfAborted();
       const { lab, close } = await open(ctx.cwd);
@@ -1105,7 +1099,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     executionMode: 'sequential',
     async execute(callId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
-      if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Отметку о решении судьи ставит только владелец в интерактивном терминале.');
+      requireInteractive(ctx, 'Отметку о решении судьи ставит только владелец в интерактивном терминале.');
       const directory = resolve(ctx.cwd, '.agent-lab');
       try {
         const record = await findRun(directory, params.id, ctx);
@@ -1113,13 +1107,13 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         const view = buildResultView(record);
         const titles = record.scenarios.map((item, index) => `${index + 1}. ${safeText(item.title)}`);
         const wanted = String(params.failure ?? params.dialogue ?? '').trim();
-        if (!wanted) throw needsOwner('needs_owner_input', 'Не сказано, о какой ситуации речь. Спросите владельца.', titles.slice(0, 15));
+        if (!wanted) throw new NeedsOwner('needs_owner_input', 'Не сказано, о какой ситуации речь. Спросите владельца.', titles.slice(0, 15));
         const remembered = recallShown(ctx, 'failures', record.id) ?? view.failures.map(item => item.scenarioId);
         const scenarioId = params.failure !== undefined && /^#?\d+$/.test(wanted) ? remembered[Number(wanted.replace('#', '')) - 1]
           : /^#?\d+$/.test(wanted) ? record.scenarios[Number(wanted.replace('#', '')) - 1]?.id
           : record.scenarios.filter(item => item.title.toLocaleLowerCase('ru').includes(wanted.toLocaleLowerCase('ru'))).map(item => item.id).find((_, index, all) => all.length === 1);
         const scenario = record.scenarios.find(item => item.id === scenarioId);
-        if (!scenario) throw needsOwner('unknown_reference', `Ситуация «${wanted}» не найдена однозначно. Спросите владельца, какая нужна.`, titles.slice(0, 15));
+        if (!scenario) throw new NeedsOwner('unknown_reference', `Ситуация «${wanted}» не найдена однозначно. Спросите владельца, какая нужна.`, titles.slice(0, 15));
         const attempts = record.trials.filter(item => item.scenarioId === scenario.id);
         const trial = attempts.find(item => item.id === view.failures.find(failure => failure.scenarioId === scenario.id)?.trialId) ?? attempts[0];
         const targets = trial ? markTargets(scenario, trial) : undefined;
@@ -1150,7 +1144,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             row(agreement.queueFailures.length ? `Проверено провалов: ${agreement.failures.checked} из ${agreement.queueFailures.length}.` : `Проверено успехов: ${agreement.sampleChecked} из ${agreement.sampledPasses.length}.`, undefined, false, 1),
             row(safeText(fresh.headline.text), answer === 'disagree' ? 'accent' : 'muted', false, 1)] };
           return feedResult(callId, { id: record.id, scenarioId: scenario.id, trialId: trial.id, answer, headline: fresh.headline.text, checkedFailures: agreement.failures.checked, queueFailures: agreement.queueFailures.length }, feed,
-            `Отметка владельца · прогон ${shortRun(record.id)}`);
+            `Отметка владельца · прогон ${shortId(record.id)}`);
         } finally { await close(); }
       } catch (error) { return askOwner(callId, error); }
     },
@@ -1158,7 +1152,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   pi.registerCommand('agent-lab', {
     description: 'Проверить агента: /agent-lab, /agent-lab demo или /agent-lab /путь/к/проекту',
     async handler(args, ctx) {
-      if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Human review requires the native Pi terminal. Start interactive Pi and open /agent-lab. Headless tools only prepare and edit drafts.');
+      requireInteractive(ctx, 'Human review requires the native Pi terminal. Start interactive Pi and open /agent-lab. Headless tools only prepare and edit drafts.');
       const startRequest = args.trim() === 'new' || args.trim().startsWith('/') || args.trim().startsWith('~');
       let handoff: { request: string; context: unknown } | undefined;
       // Opening history is a read, not a writer operation. In particular, never call init()
@@ -1277,7 +1271,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
                 if (!reason?.trim()) continue;
                 await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'edit_variant_text', variantId: variant.id,
                   field: textField.field, ...('checkpointId' in textField ? { checkpointId: textField.checkpointId } : {}), value: value.trim(),
-                  editId: `owner_${Date.now().toString(36)}`, reason: reason.trim() });
+                  editId: `owner_${Date.now().toString(36)}`, reason: reason.trim() }, 'owner');
               } else {
                 const fact = variant.userState.facts[factOptions.indexOf(picked)];
                 const adding = picked === 'Добавить факт владельца';
@@ -1293,7 +1287,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
                 if (!reason?.trim()) continue;
                 await lab.editLibrary(action.record.id, libraryHash(shown), { kind: adding ? 'add_fact' : 'edit_fact', variantId: variant.id, factId: fact?.id ?? `fact_${Date.now().toString(36)}`,
                   statement: statement.trim(), ...(valueText.trim() ? { value: valueText.trim() } : {}), availability: availability.split(' ')[0] as 'initial' | 'learned_in_source' | 'uncertain',
-                  editId: `owner_${Date.now().toString(36)}`, reason: reason.trim() });
+                  editId: `owner_${Date.now().toString(36)}`, reason: reason.trim() }, 'owner');
               }
               scenarioSelections.set(action.record.id, []);
               inform('Правка записана как явное решение владельца. Цитаты источников сохранены. Выполните смысловую проверку: g.');
@@ -1355,7 +1349,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
               if (!shown) throw new Error('Библиотека сценариев отсутствует.');
               const variant = shown.variants.find(item => item.id === action.variantId);
               if (!variant || !await ctx.ui.confirm('Удалить вариант из новой ревизии?', safeText(`${variant.title}\nИсходный импорт и прошлые снимки сохранятся.`))) continue;
-              await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'remove_variant', variantId: variant.id, reason: 'Владелец удалил вариант в native workspace' });
+              await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'remove_variant', variantId: variant.id, reason: 'Владелец удалил вариант в native workspace' }, 'owner');
               scenarioSelections.set(action.record.id, action.selectedVariantIds.filter(id => id !== variant.id));
               inform('Вариант удалён из новой ревизии; исходный импорт и прошлые прогоны сохранены.');
             } else if (action.type === 'mergeScenarios') {
@@ -1367,7 +1361,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
               if (!target) continue;
               const reason = await ctx.ui.editor('Почему это один бизнес-сценарий?', 'Решение владельца о группировке');
               if (!reason?.trim()) continue;
-              await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'merge_business', targetId: target.id, sourceIds: [action.businessScenarioId], reason: reason.trim() });
+              await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'merge_business', targetId: target.id, sourceIds: [action.businessScenarioId], reason: reason.trim() }, 'owner');
               scenarioSelections.set(action.record.id, []); inform('Группы объединены. Выполните смысловую проверку: g.');
             } else if (action.type === 'splitScenario') {
               const shown = action.record.librarySnapshot;
@@ -1380,7 +1374,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
               if (!title?.trim() || !goal?.trim() || !reason?.trim()) continue;
               await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'split_business', businessScenarioId: source.id,
                 newBusiness: { key: `split_${Date.now().toString(36)}`, title: title.trim(), goal: goal.trim(), conditions: source.conditions,
-                  requirementIds: source.requirementIds, grouping: { status: 'confirmed', reason: reason.trim() } }, variantIds: [action.variantId], reason: reason.trim() });
+                  requirementIds: source.requirementIds, grouping: { status: 'confirmed', reason: reason.trim() } }, variantIds: [action.variantId], reason: reason.trim() }, 'owner');
               scenarioSelections.set(action.record.id, []); inform('Вариант выделен в отдельную бизнес-группу. Выполните смысловую проверку: g.');
             } else if (action.type === 'resumePreparation') {
               const shown = action.record.librarySnapshot;

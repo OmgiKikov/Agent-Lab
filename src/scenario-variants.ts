@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { identifierSchema } from './ids.js';
 import { scenarioVariantSchema, type ScenarioLibrary, type ScenarioVariant } from './scenario-contracts.js';
 import { addGeneratedVariant } from './scenario-library.js';
 
@@ -15,11 +16,11 @@ export interface VariantProposalResult { library: ScenarioLibrary; variant: Scen
 
 const shortText = z.string().trim().min(1).max(1000);
 const inputs = {
-  reveal_on_request: z.strictObject({ factId: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/), opening: z.string().trim().min(1).max(3000).optional(), ifAsked: z.string().trim().min(1).max(300), reply: shortText.optional() }),
-  missing_fact: z.strictObject({ factId: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/), opening: z.string().trim().min(1).max(3000).optional(),
+  reveal_on_request: z.strictObject({ factId: identifierSchema, opening: z.string().trim().min(1).max(3000).optional(), ifAsked: z.string().trim().min(1).max(300), reply: shortText.optional() }),
+  missing_fact: z.strictObject({ factId: identifierSchema, opening: z.string().trim().min(1).max(3000).optional(),
     missingDescription: z.string().trim().min(1).max(300).optional(), ifAsked: z.string().trim().min(1).max(300), reply: shortText.optional() }),
   ambiguous_opening: z.strictObject({ opening: z.string().trim().min(1).max(3000) }),
-  changed_intent: z.strictObject({ intent: z.string().trim().min(1).max(1000), afterActionId: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/) }),
+  changed_intent: z.strictObject({ intent: z.string().trim().min(1).max(1000), afterActionId: identifierSchema }),
   tool_failure: z.strictObject({ operation: z.string().trim().min(1).max(200), failures: z.number().int().min(1).max(15).default(1) }),
 } as const;
 

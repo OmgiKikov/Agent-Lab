@@ -1,5 +1,6 @@
 import { fingerprint, type Experiment, type HumanReview, type Scenario, type Trial } from './contracts.js';
-import { headlineTrialResult, latestHumanReviews, markTargets, markUnderCurrentRule, measurementUsable, observedRecord, recordedResult, runningPhases } from './outcomes.js';
+import { isRunning } from './contracts.js';
+import { headlineTrialResult, latestHumanReviews, markTargets, markUnderCurrentRule, measurementUsable, observedRecord, recordedResult } from './outcomes.js';
 
 /*
  * How often the owner agreed with the judge, counted on what the judge actually recorded.
@@ -24,8 +25,8 @@ import { headlineTrialResult, latestHumanReviews, markTargets, markUnderCurrentR
 /** Passed situations to double-check: all of them when there are at most this many, else this many drawn by run id. */
 export const PASS_SAMPLE = 3;
 
-export interface AgreementGroup { agreed: number; checked: number }
-export interface AgreementMark {
+interface AgreementGroup { agreed: number; checked: number }
+interface AgreementMark {
   trialId: string; scenarioId: string; title: string;
   answer: 'agree' | 'disagree' | 'unsure';
   /** The judge verdict of the situation the marks refer to. */
@@ -93,7 +94,7 @@ function situations(record: Experiment): Situation[] {
  * person flips a verdict; a repeat or a reassessment has a new id and gets a new draw.
  */
 export function agreementSample(record: Experiment): string[] {
-  if (runningPhases.has(record.phase)) return [];
+  if (isRunning(record.phase)) return [];
   const observed = observedRecord(record);
   const passed = situations(observed).filter(item => item.base === 'pass').map(item => item.trial.id);
   if (passed.length <= PASS_SAMPLE) return passed;
@@ -119,7 +120,7 @@ interface Target { metricId: string; state: 'none' | 'current' | 'stale' | 'rule
 
 /** The share of the judge's decisions the owner confirmed, split by failures and passes. */
 export function judgeAgreement(input: Experiment): JudgeAgreement {
-  if (input.workflow !== 'evaluate' || runningPhases.has(input.phase)) return empty();
+  if (input.workflow !== 'evaluate' || isRunning(input.phase)) return empty();
   const record = observedRecord(input);
   const rows = situations(record);
   const latest = latestHumanReviews(record);

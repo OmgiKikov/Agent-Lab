@@ -72,7 +72,7 @@ test('no-log preparation creates honest curated review/edit/accept/controller li
     assert.equal(draft.library.variants[0]!.provenance, 'curated'); assert.equal(draft.library.variants[0]!.quality, 'ready');
     assert.equal(draft.experiment.scenarios.length, 0); assert.deepEqual(requestSeen.dialogues, []);
     assert.equal(requestSeen.preparationMode, 'owner_requirements');
-    const changed = await lab.editLibrary(seed.id, libraryHash(draft.library), { kind: 'add_fact', variantId: 'variant_1', factId: 'owner_number', statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'owner_added', reason: 'Владелец явно задал данные примера' } as any);
+    const changed = await lab.editLibrary(seed.id, libraryHash(draft.library), { kind: 'add_fact', variantId: 'variant_1', factId: 'owner_number', statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'owner_added', reason: 'Владелец явно задал данные примера' } as any, 'owner');
     const fact = changed.library.variants[0]!.userState.facts[0]!;
     assert.equal(fact.origin.kind, 'owner'); assert.ok(changed.library.variants[0]!.history.some(h => h.factEdit?.factId === fact.id));
     await lab.assessLibrary(seed.id, libraryHash(changed.library)); await lab.waitForIdle();

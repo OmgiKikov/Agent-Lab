@@ -9,11 +9,12 @@ import { experimentSchema, judgeAuditSchema, type Experiment, type TraceEvent, t
 
 import { libraryHash } from './scenario-library.js';
 import { ScenarioFiles } from './scenario-store.js';
+import { oneLine } from './text.js';
+import { isIdentifier } from './ids.js';
+import { LockedError } from './errors.js';
 import type { ImportBatch, ScenarioLibrary } from './scenario-contracts.js';
 
-const idPattern = /^[a-zA-Z0-9_-]{1,80}$/;
 type LockOwner = { pid: number; token: string };
-const busy = () => new Error('This data directory is already open in another Agent Lab instance. Просмотр и экспорт остаются доступны.');
 function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
   catch (error) {
@@ -68,7 +69,7 @@ export class ExperimentStore {
   }
   constructor(directory: string) { this.directory = resolve(directory); }
   private path(id: string): string {
-    if (!idPattern.test(id)) throw new Error('Invalid experiment ID');
+    if (!isIdentifier(id)) throw new Error('Invalid experiment ID');
     return join(this.directory, `${id}.json`);
   }
   private async owner(): Promise<LockOwner | null> {
@@ -89,7 +90,7 @@ export class ExperimentStore {
     const path = join(this.directory, '.lock');
     let lock;
     try { lock = await open(path, 'wx', 0o600); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw busy(); throw error; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new LockedError(); throw error; }
     const token = randomUUID();
     try { await lock.writeFile(JSON.stringify({ pid: process.pid, token })); this.lockToken = token; }
     catch (error) { await unlink(path); throw error; }
@@ -100,7 +101,7 @@ export class ExperimentStore {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const observed = await this.owner();
     if (!observed) { await this.acquire(); try { await this.recoverPublications(); } catch (error) { await this.close(); throw error; } return; }
-    if (alive(observed.pid)) throw busy();
+    if (alive(observed.pid)) throw new LockedError();
     // ponytail: one recovery gate per local directory; ambiguous gates need manual inspection, not recursive lock recovery.
     const recoveryPath = join(this.directory, '.recovery');
     let recovery;
@@ -113,7 +114,7 @@ export class ExperimentStore {
       await recovery.writeFile(JSON.stringify({ pid: process.pid, token: randomUUID() }));
       const current = await this.owner();
       if (current) {
-        if (current.pid !== observed.pid || current.token !== observed.token || alive(current.pid)) throw busy();
+        if (current.pid !== observed.pid || current.token !== observed.token || alive(current.pid)) throw new LockedError();
         await unlink(join(this.directory, '.lock'));
       }
       await this.acquire();
@@ -152,20 +153,20 @@ export class ExperimentStore {
     let names: string[];
     try { names = await readdir(this.directory); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
-    const ids = names.filter(n => n.endsWith('.json') && idPattern.test(n.slice(0, -5))).map(n => n.slice(0, -5));
+    const ids = names.filter(n => n.endsWith('.json') && isIdentifier(n.slice(0, -5))).map(n => n.slice(0, -5));
     const results = await Promise.allSettled(ids.map(id => this.get(id)));
     const records: Experiment[] = [];
     results.forEach((result, index) => {
       if (result.status === 'fulfilled') records.push(result.value);
       else this.diagnostics.push({ id: ids[index]!, message: result.reason instanceof SyntaxError ? 'Некорректный JSON. Исходный файл сохранён.'
-        : String(result.reason instanceof Error ? result.reason.message : result.reason).replace(/\s+/g, ' ').slice(0, 240) });
+        : oneLine(result.reason instanceof Error ? result.reason.message : result.reason).slice(0, 240) });
     });
     return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
   appendTrace(id: string, trialId: string, event: TraceEvent): void {
     if (!this.lockToken) throw new Error('Для записи трассы откройте лабораторию как писатель.');
     this.path(id);
-    if (!idPattern.test(trialId)) throw new Error('Invalid trial ID');
+    if (!isIdentifier(trialId)) throw new Error('Invalid trial ID');
     appendFileSync(join(this.directory, `${id}.trace.jsonl`), `${JSON.stringify({ trialId, event })}\n`, { mode: 0o600 });
   }
   /** Same writer as the library; each raw attempt is durable before parsing or another call. */
@@ -194,14 +195,14 @@ export class ExperimentStore {
   appendJudgment(id: string, trialId: string, audit: JudgeAudit): void {
     if (!this.lockToken) throw new Error('Для записи оценки откройте лабораторию как писатель.');
     this.path(id);
-    if (!idPattern.test(trialId)) throw new Error('Invalid trial ID');
+    if (!isIdentifier(trialId)) throw new Error('Invalid trial ID');
     // The existing evidence journal also survives interruption during assessment.
     appendFileSync(join(this.directory, `${id}.trace.jsonl`), `${JSON.stringify({ trialId, judgeAudit: judgeAuditSchema.parse(audit) })}\n`, { mode: 0o600, flush: true });
   }
   /** Full audit of one trial's judgment in `{id}.judge/{trialId}.json`, replaced atomically on every call. */
   private judgeAuditPath(id: string, trialId: string): string {
     this.path(id);
-    if (!idPattern.test(trialId)) throw new Error('Invalid trial ID');
+    if (!isIdentifier(trialId)) throw new Error('Invalid trial ID');
     return join(this.directory, `${id}.judge`, `${trialId}.json`);
   }
   // Synchronous on purpose: onJudgment is synchronous, and a crash must leave the last complete audit on disk.

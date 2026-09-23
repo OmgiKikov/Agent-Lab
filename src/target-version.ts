@@ -8,15 +8,36 @@ const exec = promisify(execFile);
 // ponytail: one cached repository snapshot; independent active repositories may recompute, never reuse stale data.
 let cached: { key: string; changes: string } | undefined;
 
+const commandEntry = (args: string[]): string | undefined => args.find(arg => /\.(?:[cm]?js|ts|py|sh)$/.test(arg));
 /** The same entry point is checked before preparation and fingerprinted before execution. */
 export function targetEntryPath(target: Target): string | undefined {
-  const entry = target.kind === 'module' ? target.path : target.kind === 'command'
-    ? target.args.find(arg => /\.(?:[cm]?js|ts|py|sh)$/.test(arg)) : undefined;
+  const entry = target.kind === 'module' ? target.path : target.kind === 'command' ? commandEntry(target.args) : undefined;
   return entry ? resolve(target.kind === 'command' ? target.cwd ?? process.cwd() : '.', entry) : undefined;
 }
 
-/** Record local code identity without persisting source code, diffs or environment secrets. */
+/**
+ * The agent version a record names: `<code>:<launch>`. The code part is the first algorithm unchanged
+ * (entry file, Git state, prompt); the launch part is what the code does not show — the module export
+ * or the command arguments (the entry file itself stands for its path, which differs between machines).
+ * Records written before the launch part existed carry the code part alone.
+ */
 export async function targetFingerprint(target: Target): Promise<string | undefined> {
+  const code = await codeFingerprint(target);
+  const launch = target.kind === 'module' ? { exportName: target.exportName }
+    : target.kind === 'command' ? { args: target.args.map(arg => arg === commandEntry(target.args) ? '<entry>' : arg) } : undefined;
+  return code && launch ? `${code}:${fingerprint(launch).slice(0, 16)}` : code;
+}
+
+/** Whether two fingerprints name the same agent version; an old one without the launch part is compared on its code alone. */
+export function sameTargetVersion(a: string | undefined, b: string | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const [codeA, launchA] = a.split(':'), [codeB, launchB] = b.split(':');
+  return codeA === codeB && (launchA === undefined || launchB === undefined);
+}
+
+/** Local code identity without persisting source code, diffs or environment secrets. */
+async function codeFingerprint(target: Target): Promise<string | undefined> {
   const path = targetEntryPath(target);
   const prompt = target.kind !== 'sandbox' && target.promptFile ? await readFile(target.promptFile, 'utf8') : undefined;
   if (!path) return prompt === undefined ? undefined : fingerprint({ prompt });

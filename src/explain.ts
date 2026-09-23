@@ -2,6 +2,7 @@ import { MACHINE_FORMAT, type Experiment, type MetricAssessment, type Requiremen
 import { agentMetricResult, automaticTrialResult } from './outcomes.js';
 import { AGREED_RATIONALE_PREFIX } from './judge.js';
 import { pluralForm } from './plural.js';
+import { oneLine } from './text.js';
 
 /*
  * Why a situation failed, in the owner's words: what the agent had to do, what it said, and
@@ -21,9 +22,9 @@ export const UNVERIFIED = 'объяснение не подтверждено ц
 export const UNVERIFIED_REPLY = 'реплика агента не подтверждена цитатой';
 
 export type ExplanationRole = 'title' | 'example' | 'expected' | 'said' | 'rule' | 'more' | 'violated' | 'unverified';
-export interface ExplanationRow { role: ExplanationRole; indent: number; text: string }
+interface ExplanationRow { role: ExplanationRole; indent: number; text: string }
 /** One owner rule: its number in the owner's materials and where to find it. */
-export interface RuleRef {
+interface RuleRef {
   number: number; requirementId: string; sourceId: string; sourceName: string;
   /** 1-based line of the quote start; null for a short source, found by name alone. */
   line: number | null;
@@ -63,7 +64,6 @@ const QUOTED_SPAN = /«([^«»]{12,})»/g;
 const MIN_SPAN_RATIO = 0.6;
 const MIN_CONTAINED_QUOTE = 24;
 const RULE_FORMS: [string, string, string] = ['правило', 'правила', 'правил'];
-const collapse = (value: string) => value.replace(/\s+/g, ' ').trim();
 /**
  * A line number helps only in a long source. Knowledge files of a few lines are found by name,
  * so `, строка L` is added only from this many non-blank lines up.
@@ -94,7 +94,7 @@ export function ruleRegister(record: Pick<Experiment, 'sources' | 'requirements'
     register.set(row.requirement.id, {
       number: register.size + 1, requirementId: row.requirement.id, sourceId: row.source.id, sourceName: row.source.name,
       line: numbered ? row.source.content.slice(0, row.offset).split('\n').length : null,
-      quote: collapse(row.span), prompt: row.source.kind === 'prompt',
+      quote: oneLine(row.span), prompt: row.source.kind === 'prompt',
     });
   }
   return register;
@@ -102,7 +102,7 @@ export function ruleRegister(record: Pick<Experiment, 'sources' | 'requirements'
 
 /** `Правило 7 · Возврат покупки: «…»`; the line is named only for a source of several lines. */
 export function ruleText(rule: RuleRef, word = 'Правило'): string {
-  return `${word} ${rule.number} · ${collapse(rule.sourceName)}${rule.line === null ? '' : `, строка ${rule.line}`}: «${rule.quote}»`;
+  return `${word} ${rule.number} · ${oneLine(rule.sourceName)}${rule.line === null ? '' : `, строка ${rule.line}`}: «${rule.quote}»`;
 }
 
 export function rowsToLines(rows: { indent: number; text: string }[]): string[] {
@@ -119,7 +119,7 @@ function assessment(trial: Trial, metricId: string): MetricAssessment | undefine
  * marked as not chosen by the judge.
  */
 function saidRow(trial: Trial, cited: MetricAssessment | undefined): { row: ExplanationRow; said: FailureExplanation['said'] } {
-  const replies = trial.events.filter(event => event.type === 'assistant' && typeof event.text === 'string' && collapse(event.text));
+  const replies = trial.events.filter(event => event.type === 'assistant' && typeof event.text === 'string' && oneLine(event.text));
   const reply = (seq: number) => replies.find(event => event.seq === seq);
   const shown = (seq: number, quote: string, judgeCited: boolean): ReturnType<typeof saidRow> => ({
     row: { role: 'said', indent: 2, text: `Сказал (реплика #${seq}${judgeCited ? '' : ', судья не указал реплику'}): «${quote}»` },
@@ -128,13 +128,13 @@ function saidRow(trial: Trial, cited: MetricAssessment | undefined): { row: Expl
   const citation = cited?.citations?.find(item => reply(item.seq));
   if (citation) {
     return reply(citation.seq)?.text?.includes(citation.quote)
-      ? shown(citation.seq, collapse(citation.quote), true)
+      ? shown(citation.seq, oneLine(citation.quote), true)
       : { row: { role: 'unverified', indent: 2, text: `Сказал (реплика #${citation.seq}): ${UNVERIFIED}` }, said: null };
   }
   const evidence = cited && !cited.citations ? cited.evidence.map(reply).find(Boolean) : undefined;
-  if (evidence) return shown(evidence.seq, collapse(evidence.text ?? ''), true);
+  if (evidence) return shown(evidence.seq, oneLine(evidence.text ?? ''), true);
   const last = replies.at(-1);
-  if (last) return shown(last.seq, collapse(last.text ?? ''), false);
+  if (last) return shown(last.seq, oneLine(last.text ?? ''), false);
   return { row: { role: 'unverified', indent: 2, text: 'Сказал: в записи нет ответа агента.' }, said: null };
 }
 
@@ -150,7 +150,7 @@ const machineFormat = (record: Experiment, requirement: Requirement) =>
 function violatedRule(record: Experiment, trial: Trial, register: Map<string, RuleRef>): RuleRef | undefined {
   if (agentMetricResult(trial, COMPLIANCE, record.humanReviews) !== 'fail') return undefined;
   const rationale = (assessment(trial, COMPLIANCE)?.rationale ?? '').replace(AGREED_RATIONALE_PREFIX, '');
-  const normal = (value: string) => collapse(value).toLowerCase();
+  const normal = (value: string) => oneLine(value).toLowerCase();
   const spans = [...rationale.matchAll(QUOTED_SPAN)].map(match => normal(match[1] ?? '')).filter(span => span.length >= 12);
   const found = new Map<number, RuleRef>();
   for (const requirement of record.requirements) {
@@ -190,7 +190,7 @@ export function failureExplanation(record: Experiment, scenario: Scenario, trial
   const cited = kind === 'rules' ? assessment(chosen, COMPLIANCE)
     : assessment(chosen, GOAL) ?? chosen.assessments?.find(item => item.result === 'fail' && agentMetrics.includes(item.metricId));
   const details = detailRows(record, scenario, chosen, kind, cited);
-  const rows: ExplanationRow[] = [{ role: 'title', indent: 0, text: `✗ ${collapse(scenario.title)}` }, ...details.rows];
+  const rows: ExplanationRow[] = [{ role: 'title', indent: 0, text: `✗ ${oneLine(scenario.title)}` }, ...details.rows];
   return {
     scenarioId: scenario.id, trialId: chosen.id, title: scenario.title, kind, said: details.said,
     rules: details.rules, unverifiedRules: details.unverifiedRules, moreRules: details.moreRules,
@@ -227,7 +227,7 @@ function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind:
   const violated = kind === 'pass' ? undefined : violatedRule(record, chosen, register);
 
   const rows: ExplanationRow[] = [];
-  const criteria = collapse(scenario.successCriteria ?? '');
+  const criteria = oneLine(scenario.successCriteria ?? '');
   const firstRule = shownRules.find((rule): rule is RuleRef => rule !== null);
   if (kind === 'rules') {
     rows.push(violated
@@ -236,7 +236,7 @@ function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind:
   } else if (criteria) {
     rows.push({ role: 'expected', indent: 2, text: `Должен был: ${criteria}` });
   } else if (firstRule) {
-    rows.push({ role: 'expected', indent: 2, text: `Должен был (из правила): ${collapse(requirements.get(firstRule.requirementId)?.text ?? '')}` });
+    rows.push({ role: 'expected', indent: 2, text: `Должен был (из правила): ${oneLine(requirements.get(firstRule.requirementId)?.text ?? '')}` });
   } else {
     rows.push({ role: 'unverified', indent: 2, text: 'Должен был: ожидание не записано в ситуации.' });
   }
@@ -276,6 +276,6 @@ export function situationEvidence(record: Experiment, scenario: Scenario, trial:
 /** The same block as a cause example: titled `Пример:` and indented three more columns. */
 export function exampleRows(explanation: FailureExplanation): ExplanationRow[] {
   return explanation.rows.map(row => row.role === 'title'
-    ? { role: 'example', indent: row.indent + 3, text: `Пример: ${collapse(explanation.title)}` }
+    ? { role: 'example', indent: row.indent + 3, text: `Пример: ${oneLine(explanation.title)}` }
     : { ...row, indent: row.indent + 3 });
 }

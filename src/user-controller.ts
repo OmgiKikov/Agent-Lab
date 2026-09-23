@@ -10,7 +10,7 @@ export const userViewSchema = z.strictObject({
   missing: z.array(z.string()).max(20), persona: z.string().optional(),
 });
 export type UserView = z.infer<typeof userViewSchema>;
-export interface UserState { policy: BehaviorPolicy; facts: UserView['facts']; position: string; counts: Record<string, number>; followUps: number; changed: string[] }
+interface UserState { policy: BehaviorPolicy; facts: UserView['facts']; position: string; counts: Record<string, number>; followUps: number; changed: string[] }
 export type AllowedUserAction = BehaviorPolicy['actions'][number] & { to: string; when: string };
 
 export function createUserState(policy: BehaviorPolicy, facts: UserView['facts']): UserState {

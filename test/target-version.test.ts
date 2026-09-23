@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
-import { targetFingerprint } from '../src/target-version.js';
+import { fingerprint } from '../src/contracts.js';
+import { sameTargetVersion, targetFingerprint } from '../src/target-version.js';
 
 const exec = promisify(execFile);
 test('fingerprints explain missing paths and reuse Git diffs only while tracked files remain unchanged', async () => {
@@ -40,4 +41,27 @@ test('fingerprints explain missing paths and reuse Git diffs only while tracked 
     await rm(target.path);
     await assert.rejects(targetFingerprint(target), /Не найден файл агента/);
   } finally { process.env.PATH = previousPath; await rm(directory, { recursive: true, force: true }); }
+});
+
+test('the version sees the module export and the command arguments, while an old fingerprint still matches unchanged code', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-launch-'));
+  try {
+    const path = join(directory, 'adapter.mjs');
+    const content = 'export const createSession = () => ({}); export const repaired = createSession;';
+    await writeFile(path, content);
+    const module = { kind: 'module' as const, path, exportName: 'createSession' };
+    const current = (await targetFingerprint(module))!;
+    const other = (await targetFingerprint({ ...module, exportName: 'repaired' }))!;
+    assert.notEqual(other, current, 'another export of the same file is another agent version');
+    const command = { kind: 'command' as const, command: process.execPath, args: [path, '--mode', 'a'], timeoutMs: 1000 };
+    assert.notEqual(await targetFingerprint({ ...command, args: [path, '--mode', 'b'] }), await targetFingerprint(command), 'other arguments are another agent version');
+    assert.equal(sameTargetVersion(current, other), false);
+    // A record written before the launch part holds what the first algorithm wrote: the code part alone.
+    const legacy = fingerprint({ content });
+    assert.equal(current.split(':')[0], legacy, 'the code part is the old algorithm unchanged');
+    assert.equal(sameTargetVersion(legacy, current), true, 'unchanged code keeps an old record on the same version');
+    assert.equal(sameTargetVersion(legacy, other), true, 'the old algorithm never saw the export, so it cannot tell');
+    await writeFile(path, 'export const createSession = () => ({ changed: true });');
+    assert.equal(sameTargetVersion(legacy, await targetFingerprint(module)), false, 'changed code is a new version for an old record too');
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

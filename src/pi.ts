@@ -265,7 +265,7 @@ async function jsonResponse<S extends z.ZodType>(
       let parsed: unknown;
       let outcome: 'syntax' | 'schema' | 'domain' = 'domain';
       try {
-        if (bounded && Buffer.byteLength(output, 'utf8') > SCENARIO_OUTPUT_BYTES) throw new Error('Ответ превышает 12000 байт; сократите его без потери обязательных полей');
+        if (bounded && Buffer.byteLength(output, 'utf8') > SCENARIO_OUTPUT_BYTES) throw new Error(`Ответ превышает ${SCENARIO_OUTPUT_BYTES} байт; сократите его без потери обязательных полей`);
         parsed = parseJsonOutput(output); rejection = ''; }
       catch (error) { rejection = `The reply was not a single JSON object (${error instanceof Error ? error.message : 'unreadable'}). Return one JSON object and nothing else; escape line breaks inside strings as \\n.`; outcome = 'syntax'; }
       if (!rejection) {

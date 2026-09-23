@@ -5,10 +5,13 @@ import { plannedTrials } from '../src/comparison.js';
 export interface FlowRow { text: string; color?: 'accent' | 'text' | 'muted' | 'warning' | 'success'; bold?: boolean }
 const r = (text: string, color?: FlowRow['color'], bold = false): FlowRow => ({ text, color, bold });
 
+/** What the run has cost so far, as every progress line words it. */
+export const costText = (record: Experiment): string => record.mode === 'demo' ? 'без оплаты'
+  : record.usage.costUsd === null ? 'стоимость неизвестна' : `$${record.usage.costUsd.toFixed(3)} (оценка)`;
+
 export function progressLine(record: Experiment): string {
   if (record.phase === 'preparing') return `Подготовка: ${record.scenarios.length ? `готово ситуаций ${record.scenarios.length}` : 'собираем ожидания'} · вызовов ${record.usage.calls}`;
-  const cost = record.mode === 'demo' ? 'без оплаты' : record.usage.costUsd === null ? 'стоимость неизвестна' : `$${record.usage.costUsd.toFixed(3)} (оценка)`;
-  return `Диалогов ${record.trials.length} из ${plannedTrials(record)} · ${cost}`;
+  return `Диалогов ${record.trials.length} из ${plannedTrials(record)} · ${costText(record)}`;
 }
 
 export function preparationRows(record: Experiment): FlowRow[] {

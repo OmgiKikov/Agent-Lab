@@ -1,20 +1,18 @@
 import { requiredCheckpointResult } from './checkpoints.js';
-import { metricApplies, simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type Trial } from './contracts.js';
+import { metricApplies, simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type Trial, isRunning } from './contracts.js';
 
 /*
  * Outcome helpers shared by comparison.ts (verdict, evidence, run delta) and simulator.ts
  * (scorecard, mode value). Nothing here performs I/O; nothing here depends on either consumer,
  * so both can import it without a cycle.
  */
-export const runningPhases = new Set(['preparing', 'evaluating', 'baseline', 'improving', 'control']);
-export const mean = (values: number[]): number | null => values.length ? values.reduce((sum, v) => sum + v, 0) / values.length : null;
 export const graded = (trial: Trial) => trial.outcome === 'pass' || trial.outcome === 'fail';
 export const measured = (trial: Trial) => graded(trial) || trial.outcome === 'ungraded';
 
 /** Legacy optimization runs contain several agents; their headline describes only the selected version. */
 export function observedRecord(record: Experiment): Experiment {
   if (record.workflow !== 'compare') return record;
-  const split = record.controlConsumedAt && !runningPhases.has(record.phase) ? 'control' : 'dev';
+  const split = record.controlConsumedAt && !isRunning(record.phase) ? 'control' : 'dev';
   const selected = record.selectedRevisionId ?? record.revisions[0]?.id;
   const trials = record.trials.filter(t => t.revisionId === selected && t.split === split);
   const ids = new Set(trials.map(t => t.id));

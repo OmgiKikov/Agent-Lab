@@ -3,7 +3,7 @@ import { semanticContentHash, semanticPaths, recordSemanticAssessment, ownerFact
 import { fingerprint, type CallContext, type Runtime, type ScenarioAssessmentInput } from './contracts.js';
 
 /** Conservative UTF-8 data envelopes, leaving prompt/schema and transport overhead outside the body budget. */
-export const SCENARIO_INPUT_BYTES = 64_000;
+const SCENARIO_INPUT_BYTES = 64_000;
 export const SCENARIO_OUTPUT_BYTES = 12_000;
 export const SEMANTIC_REASON_CHARS = 240;
 export const SEMANTIC_BATCH_FIELDS = 6;

@@ -1,8 +1,7 @@
 import { recheckDecision } from './scenario-draft.js';
 import { semanticWorkStatus } from './scenario-work.js';
 import { captureGeneratorEvidence } from './generator-evidence.js';
-import { targetSchema } from './contracts.js';
-import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, recordSemanticAssessment, semanticPaths } from './scenario-library.js';
+import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash } from './scenario-library.js';
 import type { LibraryPatch, ScenarioLibrary } from './scenario-contracts.js';
 import { assessScenarioLibrary, assertLibraryRun, compiledLibraryScenarios, prepareScenarioLibrary, resumeScenarioLibrary } from './scenario-preparation.js';
 import { proposeVariant as proposeScenarioVariant, type VariantProposalResult, type VariantRequest } from './scenario-variants.js';
@@ -10,24 +9,24 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
-  SANDBOX_RETIRED, VERSION, createInputSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, humanReviewInputSchema, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation,
+  SANDBOX_RETIRED, VERSION, addUsage, assessmentRubrics, createInputSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, humanReviewInputSchema, isRunning, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation,
   reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type DraftPatch, type Experiment, type HumanReviewInput, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
 import { ExperimentStore } from './store.js';
+import { LibraryConflict, Stopped } from './errors.js';
 import { assessTrial, evaluateTrial, grade } from './evaluation.js';
 import { scenarioSources } from './judge.js';
 import { awaitingVerdict, isAgentFailure, plannedTrials } from './comparison.js';
-import { targetFingerprint } from './target-version.js';
+import { sameTargetVersion, targetFingerprint } from './target-version.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from './connection.js';
 import { preflightTarget, readPrompt, runRelease } from './targets.js';
 import { COUNTING_RULES, markTargets, measurementUsable } from './outcomes.js';
-
-/** Dialogues a run may hold open against the target at once. */
-export const MAX_PARALLEL = 16;
 import { simulatorChecks } from './simulator.js';
 import { withDefaultGoalObservation } from './normalize.js';
-import { assessmentRubrics } from './contracts.js';
 import { createDemoRuntime } from './demo.js';
 import { createPiRuntime, evaluatorVersion } from './pi.js';
+
+/** Dialogues a run may hold open against the target at once. */
+const MAX_PARALLEL = 16;
 
 /*
  * Phase machine owned by ExperimentLab. Every transition is an atomic checkpoint.
@@ -38,7 +37,6 @@ import { createPiRuntime, evaluatorVersion } from './pi.js';
  * baseline, improving and control belong to the retired compare workflow: its records still
  * open, and one caught mid-run by a restart is marked interrupted like any other.
  */
-const runningPhases = new Set(['preparing', 'evaluating', 'baseline', 'improving', 'control']);
 export function draftHash(record: Experiment): string {
   return fingerprint({ task: record.task, workflow: record.workflow, mode: record.mode, sources: record.sources,
     settings: record.settings, target: record.target, requirements: record.requirements, questions: record.questions,
@@ -77,15 +75,6 @@ function retainAcceptedTests(record: Experiment): void {
     const scenario = scenarios.get(test.scenarioId);
     return scenario !== undefined && fingerprint(scenario) === test.definitionHash;
   });
-}
-
-/** A control checks the judge and the connection, not the simulator: it runs as the opening and the agent's first reply. */
-function oneTurnControls(record: Experiment): void {
-  const controls = new Set(record.positiveControlScenarioIds ?? []);
-  if (!controls.size) return;
-  record.scenarios = record.scenarios.map(scenario => controls.has(scenario.id)
-    ? { ...scenario, user: { ...scenario.user, maxFollowUps: 0, ...(scenario.user.script !== undefined ? { script: [] } : {}) } }
-    : scenario);
 }
 
 function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
@@ -134,7 +123,7 @@ export class ExperimentLab {
   private async initialize(): Promise<void> {
     await this.store.init();
     try {
-      for (const record of await this.store.list()) if (runningPhases.has(record.phase)) {
+      for (const record of await this.store.list()) if (isRunning(record.phase)) {
         record.phase = 'interrupted'; record.message = 'The previous process stopped. Partial evidence has been preserved.';
         record.usage.costUsd = null;
         record.limitations.push('The process stopped between checkpoints; observed call and token counts may be incomplete.');
@@ -209,7 +198,8 @@ export class ExperimentLab {
     if (!experiment.librarySnapshot) throw new Error('У эксперимента нет библиотеки сценариев.');
     return { library: structuredClone(experiment.librarySnapshot), experiment };
   }
-  async editLibrary(id: string, expectedHash: string, patch: LibraryPatch, author: 'owner' | 'assistant' = 'owner'): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
+  /** `author` is always named by the caller: owner authority is never a default. */
+  async editLibrary(id: string, expectedHash: string, patch: LibraryPatch, author: 'owner' | 'assistant'): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
     return this.change(async () => {
       const { experiment, library } = await this.readLibrary(id);
       if (experiment.phase !== 'review') throw new Error('Править библиотеку можно только в черновике.');
@@ -256,7 +246,7 @@ export class ExperimentLab {
       if (!progress?.pending.length) throw new Error('Необработанных источников нет.');
       if (progress.activeDialogueId) throw new Error(`Подготовка остановилась во время разбора «${progress.activeDialogueId}». Его стоимость неизвестна; этот источник не повторяется молча.`);
       if (!experiment.librarySnapshot) throw new Error('Черновик библиотеки не сохранён; продолжить нельзя.');
-      if (libraryHash(experiment.librarySnapshot) !== expectedHash || libraryHash(await this.store.readLibrary(experiment.librarySnapshot.id)) !== expectedHash) throw new Error('Библиотека изменилась: хеш устарел.');
+      if (libraryHash(experiment.librarySnapshot) !== expectedHash || libraryHash(await this.store.readLibrary(experiment.librarySnapshot.id)) !== expectedHash) throw new LibraryConflict('Библиотека изменилась: хеш устарел.');
       if (experiment.phase !== 'review' && experiment.phase !== 'interrupted') throw new Error('Продолжить можно только незавершённую подготовку.');
       if (experiment.librarySnapshot.acceptance || experiment.trials.length || experiment.acceptedTests?.length) throw new Error('Принятый или выполненный набор не меняется. Создайте новый черновик.');
       if ((progress.elapsedMs ?? 0) >= experiment.settings.maxDurationMs) throw new Error('Общий лимит времени подготовки исчерпан; сохранённый результат не меняется.');
@@ -281,7 +271,7 @@ export class ExperimentLab {
   async recheckLibrary(id: string, options: { expectedHash?: string; defer?: boolean; explicit?: boolean } = {}) {
     const { library, experiment } = await this.readLibrary(id);
     const hash = libraryHash(library);
-    if (options.expectedHash && options.expectedHash !== hash) throw new Error('Библиотека изменилась: хеш устарел.');
+    if (options.expectedHash && options.expectedHash !== hash) throw new LibraryConflict('Библиотека изменилась: хеш устарел.');
     const work = semanticWorkStatus(library), remainingCalls = Math.max(0, experiment.settings.maxCalls - experiment.usage.calls);
     if (options.explicit && work.pendingJobs && !remainingCalls) throw new Error('Модельный бюджет исчерпан. Увеличьте общий лимит; использованные вызовы не сбрасываются.');
     const decision = recheckDecision({ ...work, remainingCalls, defer: !!options.defer,
@@ -293,7 +283,7 @@ export class ExperimentLab {
   async assessLibrary(id: string, expectedHash: string): Promise<Experiment> {
     return this.change(async () => {
       const { experiment, library } = await this.readLibrary(id);
-      if (experiment.phase !== 'review' || libraryHash(library) !== expectedHash) throw new Error('Библиотека изменилась или уже запущена.');
+      if (experiment.phase !== 'review' || libraryHash(library) !== expectedHash) throw new LibraryConflict('Библиотека изменилась или уже запущена.');
       experiment.phase = 'preparing'; experiment.error = null;
       await this.launch(experiment, async ctx => {
         const runtime = await this.runtime(experiment);
@@ -362,7 +352,7 @@ export class ExperimentLab {
   async repeat(id: string, scenarioIds?: string[], controlScenarioIds?: string[]): Promise<Experiment> {
     return this.change(async () => {
       const previous = await this.store.get(id);
-      if (previous.workflow !== 'evaluate' || !previous.reviewedAt || runningPhases.has(previous.phase)) {
+      if (previous.workflow !== 'evaluate' || !previous.reviewedAt || isRunning(previous.phase)) {
         throw new Error('Повторить можно остановленный или завершённый прогон с утверждёнными карточками.');
       }
       if (previous.target.kind === 'sandbox') throw new Error(SANDBOX_RETIRED);
@@ -375,9 +365,7 @@ export class ExperimentLab {
         if (missing !== undefined) throw new Error(`Контрольная ситуация должна быть из этого набора: ${missing}.`);
         record.positiveControlScenarioIds = [...controlScenarioIds];
       }
-      // Explicit and inherited controls alike; an accepted control card changed, so its acceptance is dropped.
-      oneTurnControls(record);
-      retainAcceptedTests(record);
+      // A control keeps its accepted card: the one-turn rule is applied when it runs (evaluateTrial).
       record.targetFingerprint = await targetFingerprint(record.target);
       assertLibraryRun(record);
       await this.store.save(record);
@@ -387,7 +375,7 @@ export class ExperimentLab {
   /** A versionable local definition: provenance survives, run results and approvals do not. */
   async saveSuite(id: string, file: string, scenarioIds?: string[]): Promise<string> {
     const previous = await this.get(id);
-    if (previous.workflow !== 'evaluate' || !previous.scenarios.length || runningPhases.has(previous.phase)) throw new Error('Сначала дождитесь готовых тестов.');
+    if (previous.workflow !== 'evaluate' || !previous.scenarios.length || isRunning(previous.phase)) throw new Error('Сначала дождитесь готовых тестов.');
     const definition = freshDraft(previous, scenarioIds);
     assertLibraryRun(definition);
     if (previous.trials.length) definition.sourceEvidence = suiteEvidence(previous, definition.scenarios.map(s => s.id));
@@ -406,7 +394,6 @@ export class ExperimentLab {
       const record = freshDraft(previous, scenarioIds);
       // Keep the original run as the comparison source, not the exported draft's temporary ID.
       record.parentRunId = previous.parentRunId;
-      oneTurnControls(record);
       runnableTarget(record.target);
       const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions,
         scenarios: record.scenarios.map(({ split: _split, ...s }) => s) }, record.sources);
@@ -424,7 +411,7 @@ export class ExperimentLab {
     return this.change(async () => {
       const input = reassessmentSchema.parse(raw);
       const previous = await this.store.get(id);
-      if (previous.workflow !== 'evaluate' || runningPhases.has(previous.phase) || !previous.trials.length) throw new Error('Нужен завершённый прогон с сохранёнными трассами.');
+      if (previous.workflow !== 'evaluate' || isRunning(previous.phase) || !previous.trials.length) throw new Error('Нужен завершённый прогон с сохранёнными трассами.');
       if (previous.questions.length) throw new Error('Сначала ответьте на открытые вопросы владельца; оценка по неуточнённым требованиям не запускается.');
       if (input.trialIds?.some(id => !previous.trials.some(t => t.id === id))) throw new Error('Неизвестный исходный диалог.');
       const record = freshDraft(previous);
@@ -482,8 +469,7 @@ export class ExperimentLab {
               trial.reason = executionFailed ? original.reason : 'Точные проверки пересчитаны по сохранённым фактам.';
               if ((scenario.execution || assessmentRubrics(scenario, trial).length) && runtime) trial.assessments = await assessTrial(runtime, scenario, scenarioSources(record, scenario), trial, { ...ctx,
                 beforeCall() { ctx.beforeCall(); trial.usage.calls++; },
-                addUsage(usage) { ctx.addUsage(usage); trial.usage.inputTokens += usage.inputTokens; trial.usage.outputTokens += usage.outputTokens;
-                  trial.usage.costUsd = usage.costUsd === null || trial.usage.costUsd === null ? null : trial.usage.costUsd + usage.costUsd; } }, record.requirements);
+                addUsage(usage) { ctx.addUsage(usage); addUsage(trial.usage, usage); } }, record.requirements);
               else if (scenario.execution || scenario.metrics?.length) trial.assessmentError = 'Только точные проверки; рубрики не переоценивались.';
             } catch (error) {
               trial.assessmentError = (error instanceof Error ? error.message : String(error)).slice(0, 4000);
@@ -576,13 +562,14 @@ export class ExperimentLab {
         throw new Error('Сначала подтвердите ожидания ситуаций: они изменились или ещё не подтверждены.');
       }
       if (record.questions.length) throw new Error('Сначала ответьте на бизнес-вопросы из черновика: добавьте ответы в материалы и подготовьте новый эксперимент.');
-      if (record.settings.userModes.includes('scripted')) for (const scenario of record.scenarios) {
+      // A control delivers only its opening, so its script never has to fit.
+      if (record.settings.userModes.includes('scripted')) for (const scenario of record.scenarios.filter(s => !record.positiveControlScenarioIds?.includes(s.id))) {
         const issue = scriptIssue(scenario.user, record.settings.maxTurns);
         if (issue) throw new Error(`${scenario.title}: ${issue}`);
       }
       await preflightTarget(record.target);
       if (record.evaluatorVersion && record.evaluatorVersion !== evaluatorVersion(record.settings)) throw new Error('Версия оценщика изменилась. Обновите черновик и проверьте условия запуска.');
-      if (record.targetFingerprint && record.targetFingerprint !== await targetFingerprint(record.target)) {
+      if (record.targetFingerprint && !sameTargetVersion(record.targetFingerprint, await targetFingerprint(record.target))) {
         throw new Error('Код агента изменился после подготовки карточек. Обновите подключение в настройках и подтвердите новую версию.');
       }
       record.reviewedAt = new Date().toISOString();
@@ -600,14 +587,14 @@ export class ExperimentLab {
   }
   async cancel(id: string): Promise<Experiment> {
     if (this.active?.record.id !== id) throw new Error('Этот эксперимент сейчас не идёт.');
-    this.active.controller.abort(new Error('Cancelled by the user.'));
+    this.active.controller.abort(new Stopped('cancelled', 'Cancelled by the user.'));
     this.active.record.message = 'Cancelling; preserving recorded evidence.';
     return structuredClone(this.active.record);
   }
   async waitForIdle(): Promise<void> { await this.lastTask; }
   async close(): Promise<void> {
     this.closed = true; this.closing = true;
-    this.active?.controller.abort(new Error('Application is closing.'));
+    this.active?.controller.abort(new Stopped('closing', 'Application is closing.'));
     try { await this.initializing; await this.waitForIdle(); await this.mutation; } finally { await this.store.close(); }
   }
   private async runtime(record: Experiment): Promise<Runtime> {
@@ -625,22 +612,19 @@ export class ExperimentLab {
     let failed!: (error: unknown) => void;
     const initialCheckpoint = new Promise<void>((resolve, reject) => { ready = resolve; failed = reject; });
     const remainingDurationMs = Math.max(0, record.settings.maxDurationMs - (preparationElapsedBeforeMs ?? 0));
-    if (!remainingDurationMs) controller.abort(new Error('Experiment time limit reached.'));
-    const timer = setTimeout(() => controller.abort(new Error('Experiment time limit reached.')), remainingDurationMs);
+    const outOfTime = () => controller.abort(new Stopped('time', 'Experiment time limit reached.'));
+    if (!remainingDurationMs) outOfTime();
+    const timer = setTimeout(outOfTime, remainingDurationMs);
     const ctx: CallContext = {
       signal: controller.signal, timeoutMs: record.settings.timeoutMs,
       beforeCall: () => {
         controller.signal.throwIfAborted();
         if (record.usage.calls >= record.settings.maxCalls) {
-          controller.abort(new Error('Model call budget exhausted.')); controller.signal.throwIfAborted();
+          controller.abort(new Stopped('budget', 'Model call budget exhausted.')); controller.signal.throwIfAborted();
         }
         record.usage.calls++;
       },
-      addUsage: usage => {
-        record.usage.inputTokens += usage.inputTokens;
-        record.usage.outputTokens += usage.outputTokens;
-        record.usage.costUsd = usage.costUsd === null || record.usage.costUsd === null ? null : record.usage.costUsd + usage.costUsd;
-      },
+      addUsage: usage => addUsage(record.usage, usage),
       onTrace: (trialId, event) => this.store.appendTrace(record.id, trialId, event),
       // Every judgment report replaces the sidecar; only the finished one goes to the journal.
       onJudgment: (trialId, audit, final) => {
@@ -660,7 +644,7 @@ export class ExperimentLab {
         const reason = controller.signal.aborted ? controller.signal.reason : error;
         record.error = reason instanceof Error ? reason.message : String(reason);
         record.phase = record.phase === 'preparing' && record.librarySnapshot ? 'review'
-          : controller.signal.aborted && /user|closing/i.test(record.error) ? 'cancelled' : 'error';
+          : reason instanceof Stopped && (reason.reason === 'cancelled' || reason.reason === 'closing') ? 'cancelled' : 'error';
         record.message = record.error;
       } finally {
         clearTimeout(timer); this.updateElapsed(record); record.updatedAt = new Date().toISOString();
@@ -698,6 +682,7 @@ export class ExperimentLab {
     if (!hash) throw new Error('Missing measurement manifest.');
     const guard = this.frozenGuard(record, hash, ctx);
     const scenarios = record.scenarios;
+    const controls = new Set(record.positiveControlScenarioIds ?? []);
     const planned = plannedTrials({ ...record, scenarios });
     // Every attempt in the order it would run one at a time; a pool of `parallel` workers takes them from the front,
     // so a finished dialogue is recorded as soon as it ends and the trial order is the completion order.
@@ -715,7 +700,7 @@ export class ExperimentLab {
       }
     }
     const fingerprintCheck = async (message: string) => {
-      if (record.targetFingerprint && record.targetFingerprint !== await targetFingerprint(record.target)) throw new Error(message);
+      if (record.targetFingerprint && !sameTargetVersion(record.targetFingerprint, await targetFingerprint(record.target))) throw new Error(message);
     };
     let completed = 0, next = 0;
     let failed = false;
@@ -729,7 +714,7 @@ export class ExperimentLab {
         const progress = () => `${prefix}${scenario.title} · диалог ${completed + 1}/${planned}${running()}`;
         record.message = `${progress()} · открываем сессию`;
         const trial = await evaluateTrial({ runtime, revision, scenario, repeat, manifestHash: hash, sources: record.sources, judgeSources: scenarioSources(record, scenario), requirements: record.requirements, settings: record.settings,
-          onStage: stage => { record.message = `${progress()} · ${{ target: 'ответ агента', user: 'реплика пользователя', assessment: 'оценка критериев' }[stage]}`; },
+          control: controls.has(scenario.id), onStage: stage => { record.message = `${progress()} · ${{ target: 'ответ агента', user: 'реплика пользователя', assessment: 'оценка критериев' }[stage]}`; },
           ctx: { ...ctx, onTrace: (trialId, event) => {
             ctx.onTrace?.(trialId, event);
             const stage = event.type === 'user' ? 'ждём ответ агента' : event.type === 'assistant' ? 'ответ получен · готовим следующий шаг'

@@ -1,30 +1,26 @@
 import type { ExtensionContext, Theme, ThemeColor } from '@earendil-works/pi-coding-agent';
-import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
+import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 import type { Experiment, Scenario, Trial } from '../src/contracts.js';
-import { describeCheck, fingerprint } from '../src/contracts.js';
+import { describeCheck, fingerprint, isRunning } from '../src/contracts.js';
 import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../src/comparison.js';
 import { expectationSheet, qualitySummary, qualityLines, type ExpectationRole, type ExpectationSheet } from '../src/quality.js';
 import { agreementSample, judgeAgreement, type JudgeAgreement } from '../src/agreement.js';
 import { GOAL_METRIC_ID, headlineMetricIds, markTargets, measurementUsable, recordedResult, RULES_METRIC_ID } from '../src/outcomes.js';
 import type { EvidenceBundle } from '../src/artifacts.js';
 import { situationEvidence } from '../src/explain.js';
-import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, pluralForm, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../src/result-view.js';
+import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../src/result-view.js';
+import { pluralForm } from '../src/plural.js';
+import { oneLine, safeText, shortId } from '../src/text.js';
 import { activeRunRows, preparationRows, progressLine } from './flow.ts';
 import { pendingLibrarySelection, logsRows, runRows, scenarioEntries, scenarioRows } from './scenarios.ts';
 
-/** All material, model and persisted text crosses this boundary before terminal rendering. */
-export function safeText(value: unknown): string {
-  return stripTerminalSequences(String(value ?? '')).replace(/\r\n?/g, '\n').replace(/\t/g, '  ')
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '');
-}
 
-export const activePhases = new Set(['preparing', 'evaluating', 'baseline', 'improving', 'control']);
 const phases: Record<string, string> = {
   preparing: 'ПОДГОТОВКА', review: 'ПРОВЕРЬТЕ КАРТОЧКИ', evaluating: 'ИДУТ ДИАЛОГИ',
   results_review: 'ПРОВЕРЬТЕ РЕЗУЛЬТАТЫ', complete: 'ЗАВЕРШЕНО', cancelled: 'ОСТАНОВЛЕНО',
   error: 'ОШИБКА', interrupted: 'ПРЕРВАНО', baseline: 'БАЗОВАЯ ВЕРСИЯ', improving: 'УЛУЧШЕНИЕ', control: 'КОНТРОЛЬ',
 };
-export const verdicts: Record<string, string> = {
+const verdicts: Record<string, string> = {
   pass: 'ПРОЙДЕНО', fail: 'НЕ ПРОЙДЕНО', unknown: 'НЕЯСНО', invalid: 'НЕВАЛИДНЫЙ ТЕСТ', cancelled: 'ОСТАНОВЛЕНО', ungraded: 'ПО РУБРИКАМ',
 };
 
@@ -47,7 +43,7 @@ export function reviewOrder(record: Experiment): Trial[] {
 }
 
 /** What a one-key answer would land on for the selected situation (UI-SPEC F10). */
-export type AgreementTarget =
+type AgreementTarget =
   /** A positive control: it is not part of the agreement count. */
   | { kind: 'control' }
   /** The measurement is not usable (the simulator deviated, the judge failed, the dialogue was marked invalid…), so the headline does not count it and there is nothing to agree with (CTX-03). */
@@ -116,8 +112,6 @@ export function agreementBlockLines(record: Experiment, trial: Trial): Line[] {
     line(''),
   ];
 }
-/** The owner's own words on one row: whitespace runs become one space, nothing is cut. */
-const oneLine = (value: string) => value.replace(/\s+/gu, ' ').trim();
 /**
  * What the judge failed on a card that carries both headline metrics, from the recorded results
  * (never the human ones): both halves, the request alone or the rules alone; empty without the
@@ -525,10 +519,6 @@ function verdictLines(record: Experiment, expanded = false, comparison?: RunComp
     line('Что дальше:', 'accent'), ...v.nextSteps.map(step => line(`• ${noteText(step)}`)),
   ];
 }
-function verdictHeadline(view: ResultView): string {
-  return `Итог: ${view.headline.text} · 1 подробнее`;
-}
-
 /** A single native Pi component: immutable snapshots in, explicit human intentions out. */
 export class LabBoard implements Component {
   private record?: Experiment;
@@ -558,15 +548,15 @@ export class LabBoard implements Component {
   constructor(private options: BoardOptions, private theme: BoardTheme, private done: (action: BoardAction) => void,
     private redraw: () => void, private rows: () => number = () => 32) {
     this.record = options.record;
-    this.section = options.section ?? (this.record?.trials.length || this.record?.questions.length || this.record?.phase === 'error' || this.record && activePhases.has(this.record.phase) ? 'agent' : 'cards');
+    this.section = options.section ?? (this.record?.trials.length || this.record?.questions.length || this.record?.phase === 'error' || this.record && isRunning(this.record.phase) ? 'agent' : 'cards');
     this.selectedVariantIds = options.selectedVariantIds ?? this.record?.librarySnapshot?.acceptance?.variantIds.slice() ?? this.record?.librarySnapshot?.variants.filter(item => item.quality === 'ready').map(item => item.id) ?? [];
     options.selectedVariantIds = this.selectedVariantIds;
     this.selected = options.selected ?? 0;
     this.query = options.query ?? '';
     this.pendingOnly = options.pendingOnly ?? false;
     this.dialogueOpen = options.dialogueOpen ?? false;
-    if (options.load && this.record && activePhases.has(this.record.phase)
-      || !this.record && options.loadRecords && options.records?.some(r => activePhases.has(r.phase))) {
+    if (options.load && this.record && isRunning(this.record.phase)
+      || !this.record && options.loadRecords && options.records?.some(r => isRunning(r.phase))) {
       this.timer = setInterval(() => { void this.refresh(); }, 750);
     }
   }
@@ -581,7 +571,7 @@ export class LabBoard implements Component {
         this.options.records = records;
         const next = this.entries().findIndex(entry => entry.id === selectedId);
         if (next >= 0) this.selected = next;
-        if (!records.some(r => activePhases.has(r.phase))) { clearInterval(this.timer); this.timer = undefined; }
+        if (!records.some(r => isRunning(r.phase))) { clearInterval(this.timer); this.timer = undefined; }
         this.loadError = ''; this.redraw(); return;
       }
       const refreshed = await this.options.load!();
@@ -594,7 +584,7 @@ export class LabBoard implements Component {
       this.record = record;
       Object.assign(this.options, { comparison: refreshed.comparison, before: refreshed.before, warnings: refreshed.warnings, view: refreshed.view });
       this.loadError = '';
-      if (!activePhases.has(record.phase)) { clearInterval(this.timer); this.timer = undefined; }
+      if (!isRunning(record.phase)) { clearInterval(this.timer); this.timer = undefined; }
       this.redraw();
     } catch (error) {
       if (!this.disposed) { this.loadError = safeText(error instanceof Error ? error.message : error); this.redraw(); }
@@ -705,7 +695,7 @@ export class LabBoard implements Component {
     if (this.section === 'results' && record.trials.length) return this.dialogueOpen ? 'Enter — вернуться к объяснению' : 'Enter — открыть выбранный диалог';
     if (record.trials.length && this.section === 'agent') return 'Enter — разобрать результаты';
     if (record.phase === 'review') return 'Enter — открыть ожидания';
-    if (activePhases.has(record.phase)) return 'Проверка идёт · Esc — в историю';
+    if (isRunning(record.phase)) return 'Проверка идёт · Esc — в историю';
     return 'a — обсудить следующий шаг с Pi';
   }
   dispose() { this.disposed = true; clearInterval(this.timer); }
@@ -797,7 +787,7 @@ export class LabBoard implements Component {
         if (key('g')) return this.finish({ type: 'assessLibrary', ...state });
         if (key('b')) return this.finish({ type: 'editBudget', ...state });
       }
-      if (key('a') && !activePhases.has(this.record.phase)) return this.finish({ type: 'discuss', ...state,
+      if (key('a') && !isRunning(this.record.phase)) return this.finish({ type: 'discuss', ...state,
         selected: this.section === 'cards' && entry ? entry.index : this.selected });
       // CTX-01/UI-D-01…UI-D-04: three answers, one Latin key each, only where the F10 block is
       // shown. `p` is retired here (UI-D-02); a whole-dialogue verdict is still reachable with `v`.
@@ -806,14 +796,14 @@ export class LabBoard implements Component {
         const answer = key('y') ? 'agree' as const : key('n') ? 'disagree' as const : key('s') ? 'unsure' as const : undefined;
         if (answer) return this.finish({ type: 'agree', answer, ...state, trialId: entry.id, metricIds: target.metricIds, judgeVerdict: target.judgeVerdict });
       }
-      const finished = this.record.workflow === 'evaluate' && !!this.record.reviewedAt && !activePhases.has(this.record.phase);
+      const finished = this.record.workflow === 'evaluate' && !!this.record.reviewedAt && !isRunning(this.record.phase);
       const type = key('r') && editable && !this.record.questions.length && (!libraryPath || !!this.record.librarySnapshot?.acceptance && !pendingLibrarySelection(this.record, this.selectedVariantIds)) && (!libraryPath || this.section === 'agent') ? 'run'
         : key('r') && finished ? 'repeat'
         : key('v') && reviewable ? 'annotate'
         : key('f') && this.record.phase === 'results_review' ? 'finalize'
         : key('x') ? 'export'
         : key('o') && this.options.reportPath ? 'openReport'
-        : key('c') && activePhases.has(this.record.phase) ? 'cancel' : undefined;
+        : key('c') && isRunning(this.record.phase) ? 'cancel' : undefined;
       if (type) return this.finish({ type, ...state });
       // TRUST-10 (UI-D-01): the expectation sheet is the only scope of `y`; outside it it does nothing.
       const sheetScope = !libraryPath && editable && this.section === 'cards' && !this.record.questions.length && this.record.scenarios.length > 0;
@@ -859,7 +849,7 @@ export class LabBoard implements Component {
     const record = this.record;
     if (record) {
       const unresolved = record.phase === 'complete' && awaitingVerdict(record).size > 0;
-      header.push(line(`${unresolved ? 'НЕРАЗОБРАННЫЕ ПРОВАЛЫ' : phases[record.phase] ?? record.phase} · ${record.mode === 'demo' ? 'ДЕМО · без модели' : 'ЖИВОЙ ПРОГОН'}`, activePhases.has(record.phase) ? 'accent' : record.phase === 'complete' && !unresolved ? 'success' : 'warning'));
+      header.push(line(`${unresolved ? 'НЕРАЗОБРАННЫЕ ПРОВАЛЫ' : phases[record.phase] ?? record.phase} · ${record.mode === 'demo' ? 'ДЕМО · без модели' : 'ЖИВОЙ ПРОГОН'}`, isRunning(record.phase) ? 'accent' : record.phase === 'complete' && !unresolved ? 'success' : 'warning'));
       const navigation = record.librarySnapshot
         ? [['logs', '1 Логи'], ['cards', `2 Сценарии ${record.librarySnapshot.variants.length}`], ['agent', '3 Прогон'], ['results', `4 Результаты ${record.trials.length}`]]
         : [['agent', '1 Итог'], ['cards', `2 Ожидания ${record.scenarios.length}`], ['results', `3 Разбор ${record.trials.length}`]];
@@ -888,15 +878,15 @@ export class LabBoard implements Component {
         : `${i === this.selected ? '▸' : ' '} ${i + 1}/${items.length}  ${items[i]}`, i === this.selected ? 'accent' : 'muted', i === this.selected));
     }
     if (this.searching || this.query || this.pendingOnly) header.push(line(`${this.pendingOnly ? '● Только неразобранные · ' : ''}Поиск: ${this.query}${this.searching ? '▎  Enter — применить' : ' · Esc — сбросить'}`, 'accent'));
-    if (record && activePhases.has(record.phase)) {
+    if (record && isRunning(record.phase)) {
       header.push(line(progressLine(record), 'accent'));
     }
     let detail: Line[] = [];
     this.sheetAnchor = undefined;
     if (!record) {
       const chosen = this.options.records?.[entries[this.selected]?.index ?? -1];
-      detail = chosen ? [line('ИСТОРИЯ ПРОВЕРОК', 'accent', true), line(chosen.task, 'text', true), line(`Прогон ${chosen.id.slice(0, 8)} · ${chosen.createdAt.slice(0, 10)}`, 'muted'), line(chosen.phase === 'review' ? 'Черновик готов. Откройте ожидания перед запуском.' : chosen.trials.length ? buildResultView(chosen).headline.text : chosen.message),
-        ...(activePhases.has(chosen.phase) ? [line('Прогон выполняется. Открытие и закрытие доски его не останавливает.', 'muted')] : []), line(''), line('Enter — открыть · n — новая проверка', 'accent')]
+      detail = chosen ? [line('ИСТОРИЯ ПРОВЕРОК', 'accent', true), line(chosen.task, 'text', true), line(`Прогон ${shortId(chosen.id)} · ${chosen.createdAt.slice(0, 10)}`, 'muted'), line(chosen.phase === 'review' ? 'Черновик готов. Откройте ожидания перед запуском.' : chosen.trials.length ? buildResultView(chosen).headline.text : chosen.message),
+        ...(isRunning(chosen.phase) ? [line('Прогон выполняется. Открытие и закрытие доски его не останавливает.', 'muted')] : []), line(''), line('Enter — открыть · n — новая проверка', 'accent')]
         : [line('НАСКОЛЬКО ХОРОШ ВАШ АГЕНТ', 'accent', true), line(''),
           line('1  Подключение', 'text', true), line('   Agent Lab читает папку агента: промпт, точку входа, базу знаний.', 'muted'),
           line('2  Карточки', 'text', true), line('   Ситуации пользователей — из правил промпта, статей или ваших логов.', 'muted'),
@@ -925,7 +915,7 @@ export class LabBoard implements Component {
         ? trialLines(trial, record, this.expanded, agreementTarget(record, trial)?.kind === 'ready')
         : [...agreement, ...(agreementTarget(record, trial)?.kind === 'ready' ? [] : [line(record.scenarios.find(s => s.id === trial.scenarioId)?.title ?? trial.scenarioId, 'text', true), line(trial.reason)]), line('Enter — прочитать записанный разговор · d — технические подробности', 'accent')]
         : this.query || this.pendingOnly ? [line('Ничего не найдено. Esc — сбросить фильтр.', 'muted')]
-        : activePhases.has(record.phase) ? [line('ДИАЛОГ ВЫПОЛНЯЕТСЯ', 'accent', true), line(record.message), line('Первый результат появится после ответа и проверки критериев.', 'muted'), line('c — остановить с сохранением уже полученных реплик', 'muted')]
+        : isRunning(record.phase) ? [line('ДИАЛОГ ВЫПОЛНЯЕТСЯ', 'accent', true), line(record.message), line('Первый результат появится после ответа и проверки критериев.', 'muted'), line('c — остановить с сохранением уже полученных реплик', 'muted')]
         : [line('Диалогов ещё нет.', 'text', true), line(record.phase === 'review' ? 'Проверьте карточки и нажмите r для запуска.' : record.error ?? 'Прогон остановлен до завершения первой попытки.')];
     } else {
       const agent = record.revisions.find(r => r.id === record.selectedRevisionId)?.spec;
@@ -953,10 +943,10 @@ export class LabBoard implements Component {
         ...(record.error ? [line(record.error, 'error')] : []),
       ];
       if (record.trials.length && !this.expanded) detail = verdictLines(record, false, this.options.comparison, this.viewFor(record));
-      if (!this.expanded && activePhases.has(record.phase)) detail = activeRunRows(record).map(r => line(r.text, r.color, r.bold));
+      if (!this.expanded && isRunning(record.phase)) detail = activeRunRows(record).map(r => line(r.text, r.color, r.bold));
       else if (!this.expanded && !record.trials.length) detail = preparationRows(record).map(r => line(r.text, r.color, r.bold));
     }
-    if (record && this.section === 'agent' && record.librarySnapshot && !record.trials.length && !activePhases.has(record.phase)) {
+    if (record && this.section === 'agent' && record.librarySnapshot && !record.trials.length && !isRunning(record.phase)) {
       detail = runRows(record, this.selectedVariantIds).map(row => line(row.text, row.color, row.bold));
     }
     if (this.options.warnings?.length) detail.push(line(''), line('ДИАГНОСТИКА', 'warning'), ...this.options.warnings.map(w => line(w, 'warning')));
@@ -971,7 +961,7 @@ export class LabBoard implements Component {
       answerPhase ? resultsFooter(answerPhase, inner, !!this.options.reportPath)
         : record.workflow !== 'evaluate' ? 'Сравнительный эксперимент · только просмотр и экспорт'
         : record.phase === 'review' ? this.draftFooter(record, inner)
-        : activePhases.has(record.phase) ? 'c Остановить · обновляется автоматически'
+        : isRunning(record.phase) ? 'c Остановить · обновляется автоматически'
         : record.phase === 'results_review' ? 'a Обсудить · 3 Диалоги · f Завершить · r Повторить · x Экспорт'
         : record.reviewedAt ? 'a Обсудить результат · r Повторить · x Экспорт' : 'a Обсудить исправление · результат сохранён',
       this.section === 'results' ? 'i Проблемы · ↑↓ Выбор · PgUp/PgDn Текст · ? Помощь' : inner < 80 ? '↑↓ Выбор · PgUp/PgDn Текст · ? Помощь'

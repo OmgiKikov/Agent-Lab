@@ -2,6 +2,7 @@ import type { Experiment } from '../src/contracts.js';
 import type { ScenarioLibrary, ScenarioVariant } from '../src/scenario-contracts.js';
 import { libraryHash } from '../src/scenario-library.js';
 import { semanticWorkStatus } from '../src/scenario-work.js';
+import { LibraryConflict } from '../src/errors.js';
 import type { FlowRow } from './flow.ts';
 
 const r = (text: string, color?: FlowRow['color'], bold = false): FlowRow => ({ text, color, bold });
@@ -24,7 +25,7 @@ const actionLabel = (action: ScenarioVariant['behaviorPolicy']['actions'][number
   change_intent: 'сменить намерение', finish: 'завершить разговор', observe: 'сообщить, что видит',
 })[action.kind];
 
-export interface ScenarioEntry { id: string; index: number; text: string; businessScenarioId: string }
+interface ScenarioEntry { id: string; index: number; text: string; businessScenarioId: string }
 
 export function scenarioEntries(record: Experiment): ScenarioEntry[] {
   const library = libraryOf(record);
@@ -146,8 +147,6 @@ export function scenarioLibrarySummary(record: Experiment, selectedVariantIds: s
 }
 
 export function scenarioErrorText(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return /хеш устарел|библиотека изменилась/i.test(message)
-    ? 'Библиотека изменилась. Откройте сценарии заново и повторите правку по свежей ревизии.'
-    : message;
+  return error instanceof LibraryConflict ? 'Библиотека изменилась. Откройте сценарии заново и повторите правку по свежей ревизии.'
+    : error instanceof Error ? error.message : String(error);
 }

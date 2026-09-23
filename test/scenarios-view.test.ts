@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
 import { LabBoard, type BoardAction, type BoardOptions } from '../extensions/cards.ts';
 import { logsRows, runRows, scenarioErrorText, scenarioRows } from '../extensions/scenarios.ts';
+import { LibraryConflict } from '../src/errors.js';
 import { libraryFixture } from './helpers/scenario-library.js';
 import { demoEvaluateRecord } from './helpers/demo-record.js';
 
@@ -67,7 +68,7 @@ test('uncertain grouping and stale edits give an explicit owner decision and rec
     const text = scenarioRows(record, 'variant_1', ['variant_1']).map(row => row.text).join('\n');
     assert.match(text, /нужно решение владельца/i);
     assert.match(text, /m объединить|s разделить/i);
-    assert.match(scenarioErrorText(new Error('Библиотека изменилась: хеш устарел')), /откройте.*заново|обнов/i);
+    assert.match(scenarioErrorText(new LibraryConflict('Библиотека изменилась: хеш устарел')), /откройте.*заново|обнов/i);
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
 

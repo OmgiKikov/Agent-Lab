@@ -1,8 +1,7 @@
 import { z } from 'zod';
-import { checkpointDecisionSchema, checkpointRawDecisionsSchema, type CheckpointResult, checkSchema, fingerprint, type CheckResult, type Scenario, type Trial, type TraceEvent } from './contracts.js';
+import { CHECKPOINT_PROTOCOL, checkpointDecisionSchema, checkpointRawDecisionsSchema, type CheckpointResult, checkSchema, fingerprint, type CheckResult, type Scenario, type Trial, type TraceEvent } from './contracts.js';
 import type { Checkpoint } from './scenario-contracts.js';
 
-export const CHECKPOINT_PROTOCOL = 'checkpoints-v1';
 export { checkpointDecisionSchema, checkpointResultSchema, checkpointReceiptSchema } from './contracts.js';
 export type { CheckpointDecision, CheckpointResult } from './contracts.js';
 

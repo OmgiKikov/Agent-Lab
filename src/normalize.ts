@@ -1,5 +1,5 @@
 import { libraryHash } from './scenario-library.js';
-import { DEFAULT_GOAL_OBSERVATION, DEFAULT_JUDGE, fingerprint, type Experiment, type GoalObservation, type Scenario, type Settings, type SourceIdentity, type Target } from './contracts.js';
+import { DEFAULT_GOAL_OBSERVATION, fingerprint, type Experiment, type GoalObservation, type Scenario, type Settings, type SourceIdentity, type Target } from './contracts.js';
 
 /*
  * Defaults that decide whether two records describe the same thing. Nothing here performs I/O

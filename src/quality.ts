@@ -1,9 +1,11 @@
 import { directChecks } from './checkpoints.js';
-import type { Experiment, Requirement, Scenario, Source, TraceEvent, Trial, UserMode, ValidationExclusion } from './contracts.js';
-import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, MACHINE_FORMAT, metricApplies, ragEvidenceComplete, RAG_METRIC_IDS, verbatimSpan } from './contracts.js';
+import type { Experiment, Requirement, Scenario, Trial, UserMode, ValidationExclusion } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, MACHINE_FORMAT, metricApplies, ragEvidenceComplete, RAG_METRIC_IDS } from './contracts.js';
 import { agentMetricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
 import { cardOutcome, headlineCardOutcome, humanFindings, isAgentFailure, judgeModel as runJudgeModel, verdictSummary, type VerdictSummary } from './comparison.js';
-import { exclusionCounts, pluralForm } from './result-view.js';
+import { exclusionCounts } from './result-view.js';
+import { countText, pluralForm } from './plural.js';
+import { oneLine, safeText, shortId } from './text.js';
 import { failureExplanation, ruleRegister, ruleText, UNVERIFIED, UNVERIFIED_REPLY, type FailureExplanation } from './explain.js';
 import { draftHash } from './experiment.js';
 
@@ -15,14 +17,14 @@ import { draftHash } from './experiment.js';
  * number: every figure is derived from the same outcome helpers that CI, comparisons and
  * the verdict use, so the demo screen cannot disagree with the detailed evidence.
  */
-export interface QualityMetric {
+interface QualityMetric {
   id: string; name: string; kind: 'code' | 'rubric';
   /** Dialogues, not cards: a card may be measured in several modes. */
   passed: number; failed: number; unknown: number; total: number;
   /** passed / (passed + failed); null when nothing was decided. */
   accuracy: number | null;
 }
-export interface QualityCause {
+interface QualityCause {
   name: string; description: string; stage?: string; dialogues: number;
   /**
    * The card title and one checked reason from the first dialogue of the cluster; never a clipped
@@ -32,10 +34,10 @@ export interface QualityCause {
   example?: { trialId: string; card: string; quote: string; seq?: number; verified: boolean; explanation?: FailureExplanation };
   promptQuotes: string[];
 }
-export interface QualityCardScore {
+interface QualityCardScore {
   passed: number; failed: number; unknown: number; invalid: number; notReached: number; total: number; accuracy: number | null;
 }
-export interface QualitySlice extends QualityCardScore { id: string; label: string; planned: number; measured: number }
+interface QualitySlice extends QualityCardScore { id: string; label: string; planned: number; measured: number }
 export interface QualitySummary {
   /** Primary business result over the counted (non-control) cards. Generated prompt/RAG runs use goal_attainment: the headline rule (goal and prompt rules); legacy runs fall back to all criteria. */
   cards: QualityCardScore;
@@ -63,14 +65,14 @@ export interface QualitySummary {
   headline: string;
 }
 
-export interface TestPlanLines {
+interface TestPlanLines {
   lines: string[];
   draftHash: string;
 }
 
 /** `expected` — «Должен: …»; `rule` — a verified owner rule; `unverified` — a named gap; `more` — the compact tail; `marker` — «ожидание изменено владельцем». */
 export type ExpectationRole = 'expected' | 'rule' | 'unverified' | 'more' | 'marker';
-export interface ExpectationCard {
+interface ExpectationCard {
   scenarioId: string;
   title: string;
   /** `1.`, `12.` — the situation's position in the draft. */
@@ -92,7 +94,7 @@ export interface ExpectationSheet {
   compactLines(runId: string): string[];
 }
 
-export interface TrialProofLines {
+interface TrialProofLines {
   trialId: string;
   scenarioId: string;
   outcome: Trial['outcome'];
@@ -102,17 +104,14 @@ export interface TrialProofLines {
 }
 
 
-const planText = (value: string): string => value.replace(/\r\n?/g, '\n').replace(/\t/g, '  ')
-  .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '');
-const field = (label: string, value: string): string[] => [label, ...planText(value).split('\n').map(line => `  ${line}`)];
+const field = (label: string, value: string): string[] => [label, ...safeText(value).split('\n').map(line => `  ${line}`)];
 const labelled = (label: string, value: string): string[] => {
-  const [first = '', ...rest] = planText(value).split('\n');
+  const [first = '', ...rest] = safeText(value).split('\n');
   return [`${label}${first}`, ...rest.map(line => `  ${line}`)];
 };
 
 const SITUATION_FORMS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
 const SHEET_RULE_FORMS: [string, string, string] = ['правило', 'правила', 'правил'];
-const collapseText = (value: string): string => value.replace(/\s+/gu, ' ').trim();
 /** An internal machine-format prompt rule is not a rule the owner recognises, so the sheet leaves it out. */
 const machineFormatRule = (record: Experiment, requirement: Requirement): boolean =>
   record.sources.find(source => source.id === requirement.sourceId)?.kind === 'prompt' && MACHINE_FORMAT.test(requirement.quote);
@@ -144,7 +143,7 @@ export function expectationSheet(record: Experiment): ExpectationSheet {
       .filter(id => { const item = requirements.get(id); return !item || !machineFormatRule(record, item); });
     const rules = ids.flatMap(id => requirements.has(id) ? register.get(id) ?? [] : [])
       .sort((a, b) => Number(a.prompt) - Number(b.prompt) || a.number - b.number);
-    const criteria = collapseText(scenario.successCriteria ?? '');
+    const criteria = oneLine(scenario.successCriteria ?? '');
     const must: { role: ExpectationRole; text: string } = criteria
       ? { role: 'expected', text: `Должен: ${criteria}` }
       : { role: 'unverified', text: 'Должен: ожидание не записано.' };
@@ -156,8 +155,8 @@ export function expectationSheet(record: Experiment): ExpectationSheet {
     const markerRows: { role: ExpectationRole; text: string }[] = ownerEdited
       ? [{ role: 'marker', text: 'Ожидание изменено владельцем — с прошлыми прогонами не сравнивается.' }] : [];
     const card: ExpectationCard = {
-      scenarioId: scenario.id, title: collapseText(scenario.title), label: `${index + 1}.`,
-      goal: `Ситуация: ${collapseText(scenario.user.goal)}`,
+      scenarioId: scenario.id, title: oneLine(scenario.title), label: `${index + 1}.`,
+      goal: `Ситуация: ${oneLine(scenario.user.goal)}`,
       details: [must, ...ruleRows, ...markerRows], ownerEdited,
     };
     return { card, must, ruleRows, markerRows };
@@ -175,7 +174,7 @@ export function expectationSheet(record: Experiment): ExpectationSheet {
       const more = hidden ? [{ text: `и ещё ${hidden} ${pluralForm(hidden, SHEET_RULE_FORMS)}` }] : [];
       return [...block(item.card, [item.must, ...shown, ...more, ...item.markerRows]), ''];
     });
-    return [head, '', ...blocks, `Все правила — /agent-lab ${runId.slice(0, 8)}, раздел 2.`, version];
+    return [head, '', ...blocks, `Все правила — /agent-lab ${shortId(runId)}, раздел 2.`, version];
   };
   return { draftHash: hash, count, countText, labelWidth, boardHead, cards: built.map(item => item.card), lines, compactLines };
 }
@@ -289,8 +288,8 @@ export function trialProofLines(record: Experiment, trialId: string): TrialProof
     reason: trial.reason,
     lines: [
       'ДОКАЗАТЕЛЬСТВО',
-      `Тест: ${planText(scenario.id)} · ${planText(scenario.title)}`,
-      `Диалог: ${planText(trial.id)}`,
+      `Тест: ${safeText(scenario.id)} · ${safeText(scenario.title)}`,
+      `Диалог: ${safeText(trial.id)}`,
       `Исход: ${trial.outcome}`,
       `Автоматический вердикт: ${automaticVerdict}`,
       ...labelled('Причина: ', trial.reason),
@@ -314,13 +313,9 @@ export function trialProofLines(record: Experiment, trialId: string): TrialProof
 const modeNames: Record<UserMode, string> = { static: 'одна реплика', scripted: 'по сценарию', reactive: 'реактивный симулятор' };
 const rate = (passed: number, failed: number): number | null => passed + failed ? passed / (passed + failed) : null;
 export const percent = (value: number | null): string => value === null ? '—' : `${Math.round(value * 100)}%`;
-/** Russian plural: plural(2, ['диалог', 'диалога', 'диалогов']) → «2 диалога». */
-export function plural(n: number, forms: [string, string, string]): string {
-  return `${n} ${pluralForm(n, forms)}`;
-}
-export const dialogues = (n: number) => plural(n, ['диалог', 'диалога', 'диалогов']);
-export const cardsWord = (n: number) => plural(n, ['карточка', 'карточки', 'карточек']);
-const cardsOf = (n: number) => plural(n, ['карточки', 'карточек', 'карточек']);
+export const dialogues = (n: number) => countText(n, ['диалог', 'диалога', 'диалогов']);
+const cardsWord = (n: number) => countText(n, ['карточка', 'карточки', 'карточек']);
+const cardsOf = (n: number) => countText(n, ['карточки', 'карточек', 'карточек']);
 const stableMetricIds = new Set(['goal_attainment', 'prompt_compliance', 'reply_quality', ...RAG_METRIC_IDS]);
 
 function metricRows(record: Experiment): QualityMetric[] {
@@ -490,14 +485,14 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const judgeModel = runJudgeModel(record);
   const limitCodes = v.confidenceReasons.map(r => r.code).filter(code => code in limitTexts);
   const limits = limitCodes.length ? `Границы: ${[...new Set(limitCodes.map(c => limitTexts[c]!))].slice(0, 4).join(' · ')}.` : 'Границы: см. статистику.';
-  const reviewText = `разобрано человеком ${human.reviewed} из ${plural(human.total, ['диалога', 'диалогов', 'диалогов'])}`;
+  const reviewText = `разобрано человеком ${human.reviewed} из ${countText(human.total, ['диалога', 'диалогов', 'диалогов'])}`;
   // Only non-zero leftovers are named; the human-review count is always shown next to the automatic number.
   const leftovers = (items: [number, string][]) => items.filter(([n]) => n > 0).map(([, label]) => label);
   const sentence = (parts: string[]) => { const text = parts.join('; '); return text.charAt(0).toLocaleUpperCase() + text.slice(1); };
   // The rule the number is counted by is said in the sentence itself (C-309), so an old export is told apart by its wording.
   const ruleWords = withRules ? 'Справился (запрос выполнен и правила промпта соблюдены)' : 'Справился (запрос выполнен)';
   const headline = primary === 'goal_attainment'
-    ? `${ruleWords} в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${plural(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} справился, но провален другой критерий.` : ''} ${sentence([...leftovers([[cards.unknown, `без решения: ${cards.unknown}`], [cards.invalid, `невалидно: ${cards.invalid}`], [cards.notReached, `не дошли: ${cards.notReached}`]]), reviewText])}.`
+    ? `${ruleWords} в ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)}). Полностью прошли все критерии: ${strict.passed} из ${strict.passed + strict.failed} (${percent(strict.accuracy)}).${strict.goalMetWithOtherFailures ? ` В ${countText(strict.goalMetWithOtherFailures, ['карточке', 'карточках', 'карточках'])} справился, но провален другой критерий.` : ''} ${sentence([...leftovers([[cards.unknown, `без решения: ${cards.unknown}`], [cards.invalid, `невалидно: ${cards.invalid}`], [cards.notReached, `не дошли: ${cards.notReached}`]]), reviewText])}.`
     : `Справился с ${cards.passed} из ${cardsOf(cards.passed + cards.failed)} (${percent(cards.accuracy)})${leftovers([[cards.unknown, `${cards.unknown} без решения`], [cards.invalid, `${cards.invalid} невалидны`], [cards.notReached, `${cards.notReached} не дошли`]]).map(part => `, ${part}`).join('')}; ${reviewText}.`;
   const exclusions = record.validationExclusions ?? [];
   const excluded = { total: exclusions.length, kinds: exclusionCounts(exclusions) };
@@ -512,7 +507,7 @@ export function qualityLines(q: QualitySummary): { headline: string; coverage: s
   const bar = (value: number | null, width = 10) => value === null ? '·'.repeat(width) : `${'█'.repeat(Math.round(value * width))}${'░'.repeat(width - Math.round(value * width))}`;
   return {
     headline: q.headline,
-    coverage: !q.excluded.total ? '' : `${q.excluded.total === 1 ? 'Не вошёл' : 'Не вошли'} в набор ${plural(q.excluded.total, ['диалог', 'диалога', 'диалогов'])}: ${
+    coverage: !q.excluded.total ? '' : `${q.excluded.total === 1 ? 'Не вошёл' : 'Не вошли'} в набор ${countText(q.excluded.total, ['диалог', 'диалога', 'диалогов'])}: ${
       q.excluded.kinds.map(item => `${item.label} — ${item.count}`).join(', ')}. В accuracy они не считаются.`,
     metrics: q.metrics.map(m => `${bar(m.accuracy)} ${percent(m.accuracy).padStart(4)}  ${m.name} · ${m.passed}/${m.passed + m.failed}${m.unknown ? ` · неясно ${m.unknown}` : ''}`),
     rag: !(q.rag.complete || q.rag.partial) ? [] : [

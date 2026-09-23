@@ -4,8 +4,8 @@ import { judgeAgreement, type JudgeAgreement } from './agreement.js';
 import { cardVerdict, headlineCardOutcome, judgeModel, NOT_MEASURED_CODES, stabilityAfterReassess, stabilityBetweenRuns, type NotMeasuredCode, type Stability, type StabilityRow } from './comparison.js';
 import { exampleRows, failureExplanation, rowsToLines, violatedRuleNumber, type ExplanationRole, type FailureExplanation } from './explain.js';
 import { pluralForm } from './plural.js';
+import { oneLine, shortId } from './text.js';
 
-export { pluralForm } from './plural.js';
 export { COUNTING_RULES } from './outcomes.js';
 
 /*
@@ -13,16 +13,14 @@ export { COUNTING_RULES } from './outcomes.js';
  * denominator, what was not measured and why, and which dialogues never entered the set.
  * Pure: no I/O, no escaping (each surface escapes at its own boundary). Cards are decided by
  * cardVerdict in comparison.ts; this module only counts and words them. It must not import
- * quality.ts or experiment.ts, so quality.ts can reuse pluralForm without a cycle. The counting
- * rule COUNTING_RULES lives in outcomes.ts and is re-exported here for the surfaces.
+ * quality.ts or experiment.ts: quality.ts imports it. The counting rule COUNTING_RULES lives in
+ * outcomes.ts and is re-exported here for the surfaces.
  */
 
 /** Below this many decided situations the headline percent is shown with its Wilson range; the verdict line says «мало данных» below it too. */
 export const SMALL_SAMPLE = 20;
-/** The first 8 characters of a run id: the form every pointer and command prints (`/agent-lab <id8>`). */
-export const shortId = (runId: string): string => runId.slice(0, 8);
 /** Below this many checked marks the agreement row names no percent: a share of a handful is not a share. */
-export const PERCENT_FROM = 10;
+const PERCENT_FROM = 10;
 const Z = 1.959963984540054;
 
 /** 95% Wilson score interval for passed/decided; null when nothing was decided. */
@@ -58,7 +56,7 @@ export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
 
 type ExclusionKind = ValidationExclusion['kind'];
 const EXCLUSION_ORDER: ExclusionKind[] = ['unconfirmed', 'customer_data', 'masked', 'length'];
-export const EXCLUSION_TEXT: Record<ExclusionKind, string> = {
+const EXCLUSION_TEXT: Record<ExclusionKind, string> = {
   unconfirmed: 'в правилах нет ожидаемого ответа',
   customer_data: 'нужны данные клиента',
   masked: 'реплика клиента скрыта',
@@ -264,7 +262,7 @@ const VERDICT_WORD: Record<StabilityRow['before'], string> = { pass: 'справ
 /** Only found instability is stated; a skipped check is said in words, never as a silent 0. */
 function stabilityLine(stability: Stability): string {
   if (stability.skipped) return `Стабильность не проверена: ${stability.skipped}.`;
-  return `Нестабильных: ${stability.unstable.length} (${stability.basis === 'repeat' ? 'повтор' : 'переоценка'} прогона ${stability.comparedWith.slice(0, 8)}).`;
+  return `Нестабильных: ${stability.unstable.length} (${stability.basis === 'repeat' ? 'повтор' : 'переоценка'} прогона ${shortId(stability.comparedWith)}).`;
 }
 
 /** The prompt-rule half of a single control's line, in words (C-305). */
@@ -338,7 +336,7 @@ function agreementRows(view: ResultView): ResultRow[] {
  * `alarm` is the control warning above the number; `lead` is always the number itself;
  * `agreement` is the F6 row and `agreement-tail` its indented rows, so a surface can color them.
  */
-export type ResultRowRole = 'lead' | 'line' | 'situation' | 'detail' | 'alarm' | 'agreement' | 'agreement-tail';
+type ResultRowRole = 'lead' | 'line' | 'situation' | 'detail' | 'alarm' | 'agreement' | 'agreement-tail';
 export interface ResultRow { role: ResultRowRole; indent: number; text: string }
 
 /**
@@ -427,11 +425,8 @@ export function failureListRows(view: ResultView): SectionRow[] {
 export const DISAGREEMENT_BOARD_TITLE = 'НЕСОГЛАСИЯ С СУДЬЁЙ';
 export const disagreementTitle = (k: number) => `Несогласия с судьёй (${k}):`;
 
-export type DisagreementRole = 'dis-title' | 'dis-verdicts' | 'dis-reason' | 'blank';
+type DisagreementRole = 'dis-title' | 'dis-verdicts' | 'dis-reason' | 'blank';
 export interface DisagreementRow { role: DisagreementRole; indent: number; text: string }
-
-/** The owner's own words on one row: whitespace runs become one space, nothing is ever cut. */
-const oneLine = (value: string) => value.replace(/\s+/gu, ' ').trim();
 
 /** The owner's side of one headline metric on the F7 row (C-315): the metric after the mark, or that the owner could not tell. */
 const OWNER_PART: Record<string, Record<'pass' | 'fail' | 'unsure', string>> = {
@@ -480,7 +475,7 @@ export function disagreementRows(view: ResultView): DisagreementRow[] {
  */
 export function agreementNextStep(view: ResultView): string | null {
   if (!view.agreement.unmarked.length) return null;
-  return `Отметить согласие с судьёй можно в Pi: /agent-lab ${view.runId.slice(0, 8)}, раздел 3.`;
+  return `Отметить согласие с судьёй можно в Pi: /agent-lab ${shortId(view.runId)}, раздел 3.`;
 }
 
 /** F7 and F8 as plain lines for the CLI and the Pi answer; empty when there is neither. */

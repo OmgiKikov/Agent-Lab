@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import { checkSchema, emptyUsage, experimentSchema, fingerprint, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type Runtime, type Scenario, type Target } from './contracts.js';
+import { addUsage, checkSchema, emptyUsage, experimentSchema, fingerprint, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type Runtime, type Scenario, type Target } from './contracts.js';
 import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
 import { sourceIdentity } from './normalize.js';
@@ -9,7 +9,7 @@ import { preflightTarget } from './targets.js';
 import { writeFileAtomic } from './fs-atomic.js';
 
 const step = z.strictObject({ message: z.string().trim().min(1).max(3000), reply: z.string().min(1).max(8000) });
-export const probeSchema = z.strictObject({
+const probeSchema = z.strictObject({
   initialState: worldSchema, write: step, read: step, reset: step,
   checks: z.array(checkSchema).max(10).default([]),
 }).refine(p => p.read.reply !== p.reset.reply, 'Проверка должна различать сохранённую историю и новую сессию.');
@@ -111,7 +111,7 @@ export async function doctor(connection: Connection, signal = new AbortControlle
     for (const reset of [false, true]) trials.push(await evaluateTrial({ runtime, revision, scenario: makeCard(reset), sources: [], requirements: [], repeat: 0,
       manifestHash: fingerprint(probe), settings, userMode: 'scripted', target: connection.target,
       ctx: { signal: combined, timeoutMs: 60000, beforeCall() { combined.throwIfAborted(); if (++usage.calls > 3) throw new Error('Probe call limit exceeded'); },
-        addUsage(u) { usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens; usage.costUsd = u.costUsd === null || usage.costUsd === null ? null : usage.costUsd + u.costUsd; } } }));
+        addUsage(u) { addUsage(usage, u); } } }));
     const firstReply = trials[0]!.events.find(e => e.type === 'assistant')?.text;
     const passed = trials.every(t => t.outcome === 'pass') && firstReply === probe.write.reply
       && trials.every(t => t.observation?.resetConfirmed === true && t.observation.tools === 'complete' && !!t.observation.version)

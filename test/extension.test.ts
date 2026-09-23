@@ -47,6 +47,18 @@ function registered(onUserMessage?: (message: unknown) => void) {
 function output(result: Awaited<ReturnType<ToolDefinition['execute']>>) {
   return JSON.parse(result.content.filter(c => c.type === 'text').map(c => c.text).join('\n'));
 }
+test('the chat guidance names only registered tools and never the retired resolve operation', async () => {
+  const { tools, beforeAgentStart } = registered();
+  const previous = process.env.AGENT_LAB_SESSION;
+  process.env.AGENT_LAB_SESSION = '1';
+  try {
+    const prompt = (await beforeAgentStart({ systemPrompt: '' }, { ui: {} } as unknown as ExtensionContext))!.systemPrompt;
+    const named = [...new Set(prompt.match(/agent_lab_[a-z_]+/g) ?? [])];
+    assert.ok(named.includes('agent_lab_resolve'), 'an owner decision on a checker question goes through its own tool');
+    for (const name of named) assert.ok(tools.has(name), `${name} is named in the guidance but not registered`);
+    assert.doesNotMatch(prompt, /operation resolve/);
+  } finally { if (previous === undefined) delete process.env.AGENT_LAB_SESSION; else process.env.AGENT_LAB_SESSION = previous; }
+});
 /** A draft of old-format cards in `cwd/.agent-lab`, as a repeat of an old run leaves it; `mutate` shapes its cards before it is saved. */
 async function legacyDraftIn(cwd: string, options: Parameters<typeof legacyDraft>[1] = {}, mutate?: (record: Experiment) => void): Promise<Experiment> {
   const lab = new ExperimentLab(join(cwd, '.agent-lab'), legacyDemoRuntime());

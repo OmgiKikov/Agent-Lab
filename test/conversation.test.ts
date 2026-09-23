@@ -154,7 +154,7 @@ test('owner words come only from user entries of the session, and an edit is rec
 });
 
 test('draft authorship does not certify model wording as an owner decision', () => {
-  const base = { messages: ['Перефразируй начало первой карточки'], intent: 'edit' as const, summary: 'Новое начало' };
+  const base = { messages: ['Перефразируй начало первой карточки'], summary: 'Новое начало' };
   assert.equal(authorize({ ...base, simulated: ['Здравствуйте, помогите вернуть оплату.'] }).kind, 'conversation');
   assert.equal(authorize({ ...base, simulated: ['Номер 1234'], known: ['Номер: 1234'] }).kind, 'conversation');
   assert.equal(authorize({ ...base, simulated: ['Номер 9999'] }).kind, 'ask');
@@ -360,7 +360,7 @@ test('Q19: a numeric fact id is a reference, while an invented customer value st
       const previousId = parent.userState.facts[0]!.id;
       parent.userState.facts[0]!.id = 'fact_123';
       for (const action of parent.behaviorPolicy.actions) action.factIds = action.factIds.map(id => id === previousId ? 'fact_123' : id);
-      const edited = await lab.editLibrary(fixture.id, libraryHash(before.library), { kind: 'upsert_variant', variant: parent, reason: 'Regression fixture: rename an internal fact reference' });
+      const edited = await lab.editLibrary(fixture.id, libraryHash(before.library), { kind: 'upsert_variant', variant: parent, reason: 'Regression fixture: rename an internal fact reference' }, 'owner');
       await lab.assessLibrary(fixture.id, libraryHash(edited.library));
       await lab.waitForIdle();
     } finally { await lab.close(); }
@@ -408,7 +408,7 @@ test('an unclear card reference asks the owner and writes nothing; a stale view 
     const other = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime);
     await other.init();
     const current = await other.readLibrary(fixture.id);
-    await other.editLibrary(fixture.id, libraryHash(current.library), { kind: 'edit_variant_text', variantId: 'variant_2', field: 'goal', value: 'Узнать срок', editId: 'board_edit', reason: 'Правка с доски' });
+    await other.editLibrary(fixture.id, libraryHash(current.library), { kind: 'edit_variant_text', variantId: 'variant_2', field: 'goal', value: 'Узнать срок', editId: 'board_edit', reason: 'Правка с доски' }, 'owner');
     await other.close();
     const stale = await tool.execute('stale', { operation: 'remove', variant: 'Возврат 1' }, undefined, undefined, ctx);
     assert.equal(json(stale).status, 'stale_library'); assert.equal((await fixture.read()).librarySnapshot!.variants.length, 2, 'the concurrent edit is never overwritten');
@@ -469,7 +469,7 @@ test('split cannot silently add or erase business conditions through convenience
   try {
     const current = await setup.readLibrary(fixture.id);
     await setup.editLibrary(fixture.id, libraryHash(current.library), { kind: 'edit_business', businessScenarioId: current.library.businessScenarios[0]!.id,
-      conditions: ['При запросе возврата'], reason: 'Fixture needs nonempty conditions to test their removal' });
+      conditions: ['При запросе возврата'], reason: 'Fixture needs nonempty conditions to test their removal' }, 'owner');
   } finally { await setup.close(); }
   const { tools, shutdown } = registered();
   try {
@@ -531,7 +531,7 @@ test('edit_group refuses stale scope before any write or owner request', { timeo
   try {
     const current = await setup.readLibrary(fixture.id);
     await setup.editLibrary(fixture.id, libraryHash(current.library), { kind: 'edit_business', businessScenarioId: current.library.businessScenarios[0]!.id,
-      conditions: ['При запросе возврата'], reason: 'Fixture for protected condition removal' });
+      conditions: ['При запросе возврата'], reason: 'Fixture for protected condition removal' }, 'owner');
   } finally { await setup.close(); }
   const { tools, shutdown } = registered();
   try {
@@ -541,7 +541,7 @@ test('edit_group refuses stale scope before any write or owner request', { timeo
     await tool.execute('show', { operation: 'show' }, undefined, undefined, ctx);
     const before = (await fixture.read()).librarySnapshot!;
     const lab = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime); await lab.init();
-    try { await lab.editLibrary(fixture.id, libraryHash(before), { kind: 'edit_business', businessScenarioId: before.businessScenarios[1]!.id, title: 'Новая группа', reason: 'Concurrent fixture' }); }
+    try { await lab.editLibrary(fixture.id, libraryHash(before), { kind: 'edit_business', businessScenarioId: before.businessScenarios[1]!.id, title: 'Новая группа', reason: 'Concurrent fixture' }, 'owner'); }
     finally { await lab.close(); }
     said[0] = 'Измени цель первой группы';
     const current = (await fixture.read()).librarySnapshot!;
@@ -1198,7 +1198,7 @@ test('grouped resolve records only a native decision on the preview and refuses 
     said.push('Теперь решение относится к первой и второй карточкам');
     const lab = new ExperimentLab(join(fixture.cwd, '.agent-lab'), runtime);
     await lab.init();
-    try { await lab.editLibrary(fixture.id, libraryHash(before), { kind: 'edit_variant_text', variantId: 'variant_2', field: 'opening', value: 'Добрый день, когда будет возврат?', editId: 'concurrent_edit', reason: 'Concurrent revision fixture' }); }
+    try { await lab.editLibrary(fixture.id, libraryHash(before), { kind: 'edit_variant_text', variantId: 'variant_2', field: 'opening', value: 'Добрый день, когда будет возврат?', editId: 'concurrent_edit', reason: 'Concurrent revision fixture' }, 'owner'); }
     finally { await lab.close(); }
     const changed = (await fixture.read()).librarySnapshot!;
     const stale = json(await tool.execute('stale', { operation: 'resolve', variants: ['1', '2'], verify: 'later' }, undefined, undefined, ctx));
@@ -1209,7 +1209,7 @@ test('grouped resolve records only a native decision on the preview and refuses 
 });
 
 test('a resolve with no new owner sentence still stops for the diff', () => {
-  assert.equal(authorize({ messages: ['Закрой вопрос по первой карточке'], intent: 'edit', provenance: true, summary: 'Закрыть вопрос' }).kind, 'confirm');
+  assert.equal(authorize({ messages: ['Закрой вопрос по первой карточке'], provenance: true, summary: 'Закрыть вопрос' }).kind, 'confirm');
 });
 
 test('grouped resolve cannot turn user message fragments into a native owner receipt', { timeout: 60000 }, async () => {
@@ -1241,7 +1241,7 @@ test('legacy accepted owner decisions keep their snapshot and run identity; draf
   try {
     const before = await lab.readLibrary(fixture.id);
     const settled = await lab.editLibrary(fixture.id, libraryHash(before.library), { kind: 'resolve_finding', variantId: 'variant_2',
-      path: 'evaluationSpec.checkpoints.ask_terminal', editId: 'legacy_owner', reason: 'Historical owner resolution' });
+      path: 'evaluationSpec.checkpoints.ask_terminal', editId: 'legacy_owner', reason: 'Historical owner resolution' }, 'owner');
     assert.equal(settled.library.ownerResolutions![0]!.businessHash, undefined, 'legacy receipt has its original shape');
     const accepted = await lab.acceptLibrary(fixture.id, libraryHash(settled.library), ['variant_2']);
     const encoded = JSON.stringify(accepted.library);
@@ -1288,12 +1288,12 @@ test('grouped resolution API validates all member hashes and rule scopes atomica
         const finding = before.library.semanticAssessment!.findings.find(item => item.variantId === card.id && item.path === path)!;
         return { variantId: card.id, path, findingHash: resolutionHash(before.library, card, path, finding.reason) };
       }) };
-      await assert.rejects(lab.editLibrary(fixture.id, libraryHash(before.library), { ...patch, findings: [patch.findings[0]!, { ...patch.findings[1]!, findingHash: '0'.repeat(64) }] }), /устарели/);
+      await assert.rejects(lab.editLibrary(fixture.id, libraryHash(before.library), { ...patch, findings: [patch.findings[0]!, { ...patch.findings[1]!, findingHash: '0'.repeat(64) }] }, 'owner'), /устарели/);
       assert.deepEqual((await lab.readLibrary(fixture.id)).library, before.library, 'valid first member was not published before invalid second member');
       const mixedPath = 'behaviorPolicy';
       const mixedFinding = before.library.semanticAssessment!.findings.find(item => item.variantId === 'variant_1' && item.path === mixedPath)!;
       const mixed = { variantId: 'variant_1', path: mixedPath, findingHash: resolutionHash(before.library, before.library.variants[0]!, mixedPath, mixedFinding.reason) };
-      await assert.rejects(lab.editLibrary(fixture.id, libraryHash(before.library), { ...patch, findings: [mixed, patch.findings[1]!] }), /общего вопроса/);
+      await assert.rejects(lab.editLibrary(fixture.id, libraryHash(before.library), { ...patch, findings: [mixed, patch.findings[1]!] }, 'owner'), /общего вопроса/);
       assert.deepEqual((await lab.readLibrary(fixture.id)).library, before.library);
     } finally { await lab.close(); }
     const { ctx, confirms } = terminal(fixture.cwd, ['Закрой общий вопрос'], [true]);

@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab, draftHash } from './experiment.js';
 import { DEMO_OWNER_EDIT, demoInput } from './demo.js';
-import { createInputSchema, type Settings } from './contracts.js';
+import { createInputSchema } from './contracts.js';
 import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { readDialogueImport, importDialogues } from './imports.js';
@@ -18,16 +18,13 @@ import { ExperimentStore } from './store.js';
 import { agreementSectionLines, allFailuresTitle, buildResultView, causeSection, failureListRows, resultViewLines, SECTION_TEXT } from './result-view.js';
 import { rowsToLines } from './explain.js';
 import { evidenceBundle, exportArtifacts, resolveVerified } from './artifacts.js';
-import { stripTerminalSequences } from '@earendil-works/pi-tui';
 import { libraryHash } from './scenario-library.js';
 import { chooseEditableDraft, draftIsBusy } from './scenario-draft.js';
 import { libraryPatchSchema } from './scenario-contracts.js';
 import { semanticWorkStatus } from './scenario-work.js';
+import { safeLine, shortId } from './text.js';
 
 const percent = (value: number | null) => value === null ? 'нет данных' : `${Math.round(value * 100)}%`;
-const safeText = (value: unknown) => stripTerminalSequences(String(value ?? '')).replace(/\r\n?/g, '\n').replace(/\t/g, '  ')
-  .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '');
-const safeLine = (value: unknown) => safeText(value).replace(/\n+/g, ' ');
 const writeStdout = (value: string): Promise<void> => new Promise((resolve, reject) => {
   let settled = false;
   const finish = (error?: Error | null) => {
@@ -98,9 +95,9 @@ async function main() {
     if (settled.librarySnapshot && values.operation !== 'resume') {
       const headHash = await lab.store.readLibrary(settled.librarySnapshot.id).then(libraryHash, () => libraryHash(settled.librarySnapshot!));
       const choice = chooseEditableDraft({ settled, holders: await lab.list(), headHash, busy: draftIsBusy });
-      if (choice.action === 'busy') throw new Error(`Прогон ${values.id.slice(0, 8)} выполняется. Правки — после остановки.`);
-      if (choice.action === 'use') throw new Error(`Актуальный черновик — ${choice.id.slice(0, 8)}. Укажите его в --id.`);
-      if (choice.action === 'copy') throw new Error(`Прогон ${values.id.slice(0, 8)} уже выполнен и не меняется. Создайте черновик того же набора и правьте его.`);
+      if (choice.action === 'busy') throw new Error(`Прогон ${shortId(values.id)} выполняется. Правки — после остановки.`);
+      if (choice.action === 'use') throw new Error(`Актуальный черновик — ${shortId(choice.id)}. Укажите его в --id.`);
+      if (choice.action === 'copy') throw new Error(`Прогон ${shortId(values.id)} уже выполнен и не меняется. Создайте черновик того же набора и правьте его.`);
     }
       if (values.operation === 'variant') await lab.proposeVariant(values.id, values['expected-hash'], payload);
       else if (values.operation === 'resume') {
@@ -284,7 +281,7 @@ async function main() {
       if (current.phase !== 'review') throw new Error(current.error ?? 'Preparation failed');
       if (command === 'prepare' || command === 'build') { process.stdout.write(`${JSON.stringify(current, null, 2)}\n`); return; }
       // The teaching example takes the owner's path: confirm its one disputed fact, let the checker look again, accept every ready variant.
-      const edited = await lab.editLibrary(id, libraryHash(current.librarySnapshot!), DEMO_OWNER_EDIT);
+      const edited = await lab.editLibrary(id, libraryHash(current.librarySnapshot!), DEMO_OWNER_EDIT, 'owner');
       await lab.assessLibrary(id, libraryHash(edited.library)); await lab.waitForIdle();
       const reviewed = await lab.readLibrary(id);
       await lab.acceptLibrary(id, libraryHash(reviewed.library), reviewed.library.variants.filter(v => v.quality === 'ready').map(v => v.id));

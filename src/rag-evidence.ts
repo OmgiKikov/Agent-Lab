@@ -3,7 +3,7 @@ import { assessmentEventContent, fingerprint, RAG_RUBRICS, type Rubric, type Run
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
 
 /** Bind the adapter's last context to its next reply, in trace order (seq is an identity, not a clock). */
-export function ragReplyContexts(trial: Pick<Trial, 'events'>) {
+function ragReplyContexts(trial: Pick<Trial, 'events'>) {
   const contexts: { userSeqs: number[]; retrievalSeq?: number; answerSeq: number }[] = [];
   const userSeqs: number[] = [];
   let retrievalSeq: number | undefined;

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { ExperimentLab } from '../src/experiment.js';
+import { shortId } from '../src/text.js';
 
-export type OperationKind = 'run' | 'preparation' | 'assessment';
+type OperationKind = 'run' | 'preparation' | 'assessment';
 export interface LabLease { directory: string; lab: ExperimentLab; close(): Promise<void> }
 export interface SessionOperation {
   operationId: string;
@@ -41,9 +42,9 @@ export class SessionOperations {
     if (this.lease) {
       const active = this.job;
       throw new Error(active?.kind === 'preparation'
-        ? `Сейчас идёт подготовка сценариев ${active.id.slice(0, 8)}. Готовые сценарии, диалоги и результаты можно смотреть; правки и новый запуск — после её завершения или остановки.`
+        ? `Сейчас идёт подготовка сценариев ${shortId(active.id)}. Готовые сценарии, диалоги и результаты можно смотреть; правки и новый запуск — после её завершения или остановки.`
         : active?.kind === 'run'
-          ? `Сейчас идёт прогон ${active.id.slice(0, 8)}. Сценарии, диалоги и результаты можно смотреть; правки и новый запуск — после его завершения или остановки.`
+          ? `Сейчас идёт прогон ${shortId(active.id)}. Сценарии, диалоги и результаты можно смотреть; правки и новый запуск — после его завершения или остановки.`
           : 'Уже идёт другая операция Agent Lab. Историю и готовые результаты можно открыть; новый запуск — после её завершения.');
     }
     const lab = this.createLab(directory);

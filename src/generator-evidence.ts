@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { emptyUsage, fingerprint, type CallContext, type Runtime } from './contracts.js';
+import { addUsage, emptyUsage, fingerprint, type CallContext, type Runtime } from './contracts.js';
 
 /** `prepare` is how journals written before `groundRequirements` name the grounding call. */
 type Method = 'groundRequirements' | 'prepare' | 'selectSources' | 'scenarioProposals' | 'assessScenarioProposals';
@@ -27,10 +27,7 @@ export function captureGeneratorEvidence(runtime: Runtime, emit: (event: Generat
       try {
         const output = await work(input, { ...ctx,
           beforeCall() { ctx.beforeCall(); usage.calls++; },
-          addUsage(value) {
-            ctx.addUsage(value); usage.inputTokens += value.inputTokens; usage.outputTokens += value.outputTokens;
-            usage.costUsd = usage.costUsd === null || value.costUsd === null ? null : usage.costUsd + value.costUsd;
-          },
+          addUsage(value) { ctx.addUsage(value); addUsage(usage, value); },
           onGeneratorOutput(response) { emit({ ...base(), kind: 'response', response }); ctx.onGeneratorOutput?.(response); },
           onGeneratorTransport(model) { emit({ ...base(), kind: 'transport', model }); ctx.onGeneratorTransport?.(model); },
           onGeneratorValidation(validation) { emit({ ...base(), kind: 'validation', validation }); ctx.onGeneratorValidation?.(validation); },

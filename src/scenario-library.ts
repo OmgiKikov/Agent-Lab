@@ -1,8 +1,10 @@
-import { requiredUserTurns, createUserState, allowedUserActions, advanceUser } from './user-controller.js';
+import { requiredUserTurns, createUserState, allowedUserActions, advanceUser, USER_CONTROLLER_PROTOCOL } from './user-controller.js';
 import { USER_CONTROLLER_ROLE, CHECKPOINT_ROLE, LEGACY_CHECKPOINT_ROLE } from './prompts.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { checkSchema, scenarioSchema, worldSchema, valueTokens, type Requirement, type Scenario, type Source } from './contracts.js';
+import { isIdentifier } from './ids.js';
+import { LibraryConflict } from './errors.js';
+import { CHECKPOINT_PROTOCOL, checkSchema, scenarioSchema, worldSchema, valueTokens, type Requirement, type Scenario, type Source } from './contracts.js';
 import {
   importBatchSchema, libraryPatchSchema, scenarioLibrarySchema, scenarioProposalSchema, scenarioVariantSchema,
   type BusinessScenario, type ImportBatch, type LibraryPatch, type LibraryQualityIssue,
@@ -45,7 +47,7 @@ export function importBatch(raw: unknown): ImportBatch {
   rows.forEach((row, index) => {
     const reasons: string[] = [];
     const dialogueId = record(row) && typeof row.id === 'string' ? row.id : undefined;
-    if (!dialogueId || !/^[A-Za-z0-9_-]{1,80}$/.test(dialogueId) || ['__proto__', 'prototype', 'constructor'].includes(dialogueId)) reasons.push('Некорректный id диалога');
+    if (!dialogueId || !isIdentifier(dialogueId)) reasons.push('Некорректный id диалога');
     if (dialogueId && seen.has(dialogueId)) reasons.push('Повторяющийся id диалога');
     if (dialogueId) seen.add(dialogueId);
     const rich = record(row) && Array.isArray(row.events);
@@ -486,7 +488,7 @@ function ownerPersonaReceipt(library: ScenarioLibrary, variant: ScenarioVariant,
 }
 
 function checkHash(library: ScenarioLibrary, expectedHash: string): void {
-  if (libraryHash(library) !== expectedHash) throw new Error('Библиотека изменилась: хеш устарел');
+  if (libraryHash(library) !== expectedHash) throw new LibraryConflict('Библиотека изменилась: хеш устарел');
 }
 function unifyFamilies(variants: ScenarioVariant[]): void {
   for (let iteration = 0; iteration < variants.length; iteration++) {
@@ -542,7 +544,7 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
     if (patch.value === undefined) delete fact.value; else fact.value = patch.value;
     variant.semanticReviewRequired = true;
   } else if (patch.kind === 'resolve_findings') {
-    if (!next.semanticAssessment || next.semanticAssessment.contentHash !== semanticContentHash(next)) throw new Error('Библиотека изменилась: смысловая проверка устарела');
+    if (!next.semanticAssessment || next.semanticAssessment.contentHash !== semanticContentHash(next)) throw new LibraryConflict('Библиотека изменилась: смысловая проверка устарела');
     // Validate the complete scope before recording any receipt. The owning store publishes this one library revision atomically.
     const resolutions = patch.findings.map(item => {
       const variant = getVariant(item.variantId);
@@ -551,7 +553,7 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
       if (!semanticPaths(variant).includes(item.path) || findings.length !== 1 || !finding || finding.status === 'ready') throw new Error('По выбранному полю нет единственного открытого вопроса проверяющего');
       if (finding.status === 'blocked') throw new Error('Это замечание блокирует запуск: его снимает исправление карточки, а не решение владельца');
       const findingHash = resolutionHash(next, variant, item.path, finding.reason);
-      if (item.findingHash !== findingHash) throw new Error('Библиотека изменилась: вопрос или его основание устарели');
+      if (item.findingHash !== findingHash) throw new LibraryConflict('Библиотека изменилась: вопрос или его основание устарели');
       const businessHash = resolutionBusinessHash(next, variant);
       if (next.ownerResolutions?.some(old => old.variantId === item.variantId && old.path === item.path && old.findingHash === findingHash && (!old.businessHash || old.businessHash === businessHash))) throw new Error('Выбранный вопрос уже закрыт решением владельца');
       return { ...item, businessHash, editId: patch.editId, reason: patch.reason, questionHash: resolutionQuestionHash(next, variant, item.path, finding.reason) };
@@ -705,7 +707,7 @@ function compileVariant(library: ScenarioLibrary, variant: ScenarioVariant): Sce
       ...(variant.userState.persona ? { persona: variant.userState.persona.text } : {}),
     },
     initialState: worldSchema.parse(variant.environmentFixture.initialState), checks,
-    execution: { protocol: 'controlled-user-v1', ...(library.checkpointContext?{checkpointContext:library.checkpointContext}:{}), checkpointProtocol: 'checkpoints-v1', controllerHash: digest({ protocol: 'controlled-user-v1', role: USER_CONTROLLER_ROLE }), checkpointHash: digest({ protocol: 'checkpoints-v1', role: library.checkpointContext?CHECKPOINT_ROLE:LEGACY_CHECKPOINT_ROLE }),
+    execution: { protocol: USER_CONTROLLER_PROTOCOL, ...(library.checkpointContext?{checkpointContext:library.checkpointContext}:{}), checkpointProtocol: CHECKPOINT_PROTOCOL, controllerHash: digest({ protocol: USER_CONTROLLER_PROTOCOL, role: USER_CONTROLLER_ROLE }), checkpointHash: digest({ protocol: CHECKPOINT_PROTOCOL, role: library.checkpointContext?CHECKPOINT_ROLE:LEGACY_CHECKPOINT_ROLE }),
       userView: { goal: variant.userState.goal, opening: variant.userState.opening, facts: known.map(({ id, statement, value }) => ({ id, statement, ...(value !== undefined ? { value } : {}) })), policy: variant.behaviorPolicy, missing: variant.userState.missing, ...(variant.userState.persona ? { persona: variant.userState.persona.text } : {}) },
       environmentView: { mode: variant.environmentFixture.mode, ...(variant.environmentFixture.contract ? { contract: variant.environmentFixture.contract } : {}) },
       evaluatorView: { checkpoints: variant.evaluationSpec.checkpoints, requirements: library.requirements.filter(r => variant.evaluationSpec.checkpoints.some(c => c.requirementId === r.id)) },

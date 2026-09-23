@@ -1,5 +1,6 @@
 import { Type } from 'typebox';
 import { z } from 'zod';
+import { identifierPattern, sha256Pattern } from '../src/ids.js';
 import { behaviorPolicySchema, variantProposalSchema, type BehaviorPolicy, type ScenarioVariant } from '../src/scenario-contracts.js';
 
 // Internal superset for the dispatcher. The model receives only the matching operation branch.
@@ -39,9 +40,9 @@ export const scenarioParameters = Type.Object({
     maxCalls: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000, description: 'budget: the new total call limit; used calls are never reset.' })),
     ownerQuote: Type.Optional(Type.String({ maxLength: 1000, description: 'The owner\'s exact words that asked for this change, when they are not in their latest message. Checked against the real session.' })),
     verify: Type.Optional(Type.Union([Type.Literal('auto'), Type.Literal('later')], { description: 'later: skip the semantic recheck until the last edit of a series.' })),
-    expectedLibraryHash: Type.Optional(Type.String({ pattern: '^[a-f0-9]{64}$' })),
-    variantIds: Type.Optional(Type.Array(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' }), { minItems: 1, maxItems: 200 })),
-    variantId: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,80}$' })),
+    expectedLibraryHash: Type.Optional(Type.String({ pattern: sha256Pattern })),
+    variantIds: Type.Optional(Type.Array(Type.String({ pattern: identifierPattern }), { minItems: 1, maxItems: 200 })),
+    variantId: Type.Optional(Type.String({ pattern: identifierPattern })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
     cursor: Type.Optional(Type.Integer({ minimum: 0 })),
   }, { additionalProperties: false });

@@ -1,5 +1,6 @@
 import { pluralForm } from './plural.js';
-import { causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, resultViewRows, SECTION_TEXT, shortId, SMALL_SAMPLE, unmeasuredControl, type ResultView } from './result-view.js';
+import { causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, resultViewRows, SECTION_TEXT, SMALL_SAMPLE, unmeasuredControl, type ResultView } from './result-view.js';
+import { shortId } from './text.js';
 
 /*
  * The verdict block of phase 4: one line in plain words about how well the agent does, what to do
@@ -20,14 +21,14 @@ const SITUATIONS_OF: [string, string, string] = ['ситуации', 'ситуа
 const SITUATIONS_BY: [string, string, string] = ['ситуации', 'ситуациям', 'ситуациям'];
 
 /** The phase-2 row when something was decided and nothing failed (the board prints the same words). */
-export const NO_FAILURES_TEXT = 'Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.';
+const NO_FAILURES_TEXT = 'Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.';
 /** R-01: where every failure is read, by tab name (the phase-2 «раздел 1» pointer is never printed in the block). */
-export const allFailuresTab = (runId: string): string => `Все провалы — /agent-lab ${shortId(runId)}, вкладка «Провалы».`;
+const allFailuresTab = (runId: string): string => `Все провалы — /agent-lab ${shortId(runId)}, вкладка «Провалы».`;
 /** The same pointer in the conversation: a failure is opened by asking for it; the board stays optional. */
-export const allFailuresChat = (runId: string): string => `Любой провал можно открыть здесь: попросите показать его по номеру. Доска со всеми провалами — /agent-lab ${shortId(runId)}.`;
+const allFailuresChat = (runId: string): string => `Любой провал можно открыть здесь: попросите показать его по номеру. Доска со всеми провалами — /agent-lab ${shortId(runId)}.`;
 
-export type VerdictLevel = 'good' | 'warn' | 'bad';
-export type Surface = 'chat' | 'board';
+type VerdictLevel = 'good' | 'warn' | 'bad';
+type Surface = 'chat' | 'board';
 
 /**
  * The control word of the warning row (UI-D-01): the same two predicates `buildResultView` uses,

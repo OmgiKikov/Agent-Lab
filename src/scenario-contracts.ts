@@ -1,16 +1,15 @@
 import { z } from 'zod';
+import { identifierSchema as id, sha256Schema as hash } from './ids.js';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, RECORD_REQUIREMENT_LIMIT } from './limits.js';
 
-const id = z.string().regex(/^[A-Za-z0-9_-]{1,80}$/).refine(v => !['__proto__', 'prototype', 'constructor'].includes(v), 'Reserved identifier');
 const text = (max: number) => z.string().trim().min(1).max(max);
 const ids = (max: number) => z.array(id).max(max).refine(v => new Set(v).size === v.length, 'Duplicate identifiers');
 const json = z.json().refine(v => JSON.stringify(v).length <= 500_000, 'JSON exceeds 500000 characters');
 const timestamp = z.iso.datetime();
-const hash = z.string().regex(/^[a-f0-9]{64}$/);
 
-export const sourceDialogueSchema = z.strictObject({ batchId: id, dialogueId: id });
+const sourceDialogueSchema = z.strictObject({ batchId: id, dialogueId: id });
 export type SourceDialogue = z.infer<typeof sourceDialogueSchema>;
-export const importedEventSchema = z.strictObject({
+const importedEventSchema = z.strictObject({
   index: z.number().int().nonnegative(), type: z.enum(['message', 'tool', 'retrieval', 'state']),
   role: z.enum(['user', 'assistant', 'tool', 'system']).optional(), content: z.string().min(1).max(8000).refine(v => !!v.trim(), 'Empty content').optional(), data: json,
 });
@@ -21,7 +20,7 @@ export const importBatchSchema = z.strictObject({
 });
 export type ImportBatch = z.infer<typeof importBatchSchema>;
 
-export const userFactSchema = z.strictObject({
+const userFactSchema = z.strictObject({
   id, statement: text(300), value: z.union([text(300), z.number().finite(), z.boolean()]).optional(),
   availability: z.enum(['initial', 'learned_in_source', 'uncertain']), reason: text(1000),
   origin: z.discriminatedUnion('kind', [
@@ -30,7 +29,6 @@ export const userFactSchema = z.strictObject({
     z.strictObject({ kind: z.literal('synthetic'), parentVariantId: id, operation: text(200), reason: text(1000) }),
   ]),
 });
-export type UserFact = z.infer<typeof userFactSchema>;
 
 export const behaviorPolicySchema = z.strictObject({
   version: z.literal(1), initialState: id, states: ids(30).min(1), terminalStates: ids(30).min(1),
@@ -50,13 +48,13 @@ export const checkpointSchema = z.strictObject({
 });
 export type Checkpoint = z.infer<typeof checkpointSchema>;
 
-export const businessProposalSchema = z.strictObject({
+const businessProposalSchema = z.strictObject({
   key: text(200), title: text(200), goal: text(3000), conditions: z.array(text(1000)).max(20), requirementIds: ids(20),
   grouping: z.strictObject({ status: z.enum(['confirmed', 'uncertain']), reason: text(1000) }),
 });
-export const businessScenarioSchema = businessProposalSchema.extend({ id, sourceDialogues: z.array(sourceDialogueSchema).max(300) });
+const businessScenarioSchema = businessProposalSchema.extend({ id, sourceDialogues: z.array(sourceDialogueSchema).max(300) });
 export type BusinessScenario = z.infer<typeof businessScenarioSchema>;
-export const libraryQualityIssueSchema = z.strictObject({
+const libraryQualityIssueSchema = z.strictObject({
   code: text(80), severity: z.enum(['needs_review', 'blocked']), path: text(400), message: text(2000), variantId: id.optional(),
 });
 export type LibraryQualityIssue = z.infer<typeof libraryQualityIssueSchema>;

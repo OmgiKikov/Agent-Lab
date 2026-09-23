@@ -840,6 +840,11 @@ test('a record whose trials carry the legacy full audit reassesses without migra
   assert.deepEqual(await lab.get(legacy.id), saved, 'the legacy source record stays unchanged on disk');
 });
 
+test('a library edit always names its author: owner authority is never a default', () => {
+  // Function.length stops at the first defaulted parameter: an `author = 'owner'` default would make it 3.
+  assert.equal(ExperimentLab.prototype.editLibrary.length, 4);
+});
+
 test('a positive control rides on the record: hashes and card identity unchanged, inherited, and bad ids rejected before saving', async t => {
   const { lab, directory } = await setup(t, legacyDemoRuntime());
   const source = await runDraft(lab, await externalDraft(lab, { count: 2 }));
@@ -868,19 +873,9 @@ test('a positive control rides on the record: hashes and card identity unchanged
   const sourceHash = draftHash(await lab.get(source.id));
   const controlled = await lab.repeat(source.id, undefined, [a]);
   assert.deepEqual(controlled.positiveControlScenarioIds, [a]);
-  // A control runs as one turn: only its own follow-up limit (and a script, when present) changes; no marker enters the cards.
-  const plain = (await lab.repeat(source.id)).scenarios;
-  assert.equal(controlled.scenarios.length, plain.length);
-  for (const card of controlled.scenarios) {
-    const reference = plain.find(item => item.id === card.id)!;
-    if (card.id !== a) { assert.deepEqual(card, reference, 'a counted card is unchanged'); continue; }
-    assert.equal(card.user.maxFollowUps, 0);
-    if (reference.user.script === undefined) assert.equal('script' in card.user, false, 'no script appears where there was none');
-    else assert.deepEqual(card.user.script, []);
-    const { maxFollowUps: _m, script: _s, ...rest } = card.user;
-    const { maxFollowUps: _rm, script: _rs, ...referenceRest } = reference.user;
-    assert.deepEqual({ ...card, user: rest }, { ...reference, user: referenceRest });
-  }
+  // The marker rides on the record only: every card, the control's included, stays the accepted one;
+  // the one-turn rule applies when the control runs.
+  assert.deepEqual(controlled.scenarios, (await lab.repeat(source.id)).scenarios, 'no card changes, the control included');
   assert.equal(draftHash(await lab.get(source.id)), sourceHash, 'the stored source keeps its draft hash');
   // A control leaves the headline denominator, so two runs with different control sets did not
   // measure the same thing; the manifest hash is the record's own claim that they did.
@@ -918,7 +913,7 @@ test('a positive control rides on the record: hashes and card identity unchanged
   const suite = await lab.saveSuite(reassessed.id, join(directory, 'control-suite.json'));
   const loaded = await lab.loadSuite(suite);
   assert.deepEqual(loaded.positiveControlScenarioIds, [a]);
-  // A suite whose control card still allows follow-ups loads as a one-turn control; the other card is untouched.
+  // A suite whose control card allows follow-ups loads unchanged: the control still runs as one turn.
   const plainSuite = JSON.parse(await readFile(await lab.saveSuite(source.id, join(directory, 'plain-suite.json')), 'utf8'));
   plainSuite.definition.positiveControlScenarioIds = [a];
   plainSuite.definition.scenarios.find((s: { id: string }) => s.id === a).user.maxFollowUps = 5;
@@ -926,13 +921,46 @@ test('a positive control rides on the record: hashes and card identity unchanged
   await writeFile(multiTurn, JSON.stringify(plainSuite), { mode: 0o600 });
   const oneTurn = await lab.loadSuite(multiTurn);
   assert.deepEqual(oneTurn.positiveControlScenarioIds, [a]);
-  assert.equal(oneTurn.scenarios.find(s => s.id === a)!.user.maxFollowUps, 0);
-  assert.equal(oneTurn.scenarios.find(s => s.id === b)!.user.maxFollowUps, plainSuite.definition.scenarios.find((s: { id: string }) => s.id === b).user.maxFollowUps);
+  assert.equal(oneTurn.scenarios.find(s => s.id === a)!.user.maxFollowUps, 5);
+  const oneTurnRun = await runDraft(lab, oneTurn);
+  assert.equal(oneTurnRun.phase, 'results_review', oneTurnRun.error ?? '');
+  for (const trial of oneTurnRun.trials.filter(item => item.scenarioId === a)) {
+    assert.equal(trial.events.filter(event => event.type === 'assistant').length, 1, 'a control is the opening and one reply whatever its card allows');
+  }
   const narrowed = await lab.repeat(ran.id, [b]);
   assert.equal('positiveControlScenarioIds' in narrowed, false);
   assert.deepEqual((await lab.repeat(ran.id, [a])).positiveControlScenarioIds, [a]);
 });
 
+
+test('a library run repeats with a positive control: the accepted cards stay as accepted and the control is the opening and one reply', async t => {
+  const { lab } = await setup(t, createDemoRuntime());
+  const accepted = await acceptedDemoDraft(lab);
+  await lab.start(accepted.id, { approved: true, expectedHash: draftHash(accepted) }); await lab.waitForIdle();
+  const source = await lab.get(accepted.id);
+  assert.equal(source.phase, 'results_review', source.error ?? '');
+  const userTurns = (trial: Experiment['trials'][number]) => trial.events.filter(event => event.type === 'user').map(event => event.text);
+  const control = source.scenarios.find(card => source.trials.some(trial => trial.scenarioId === card.id && userTurns(trial).length > 1))!;
+  assert.ok(control, 'the demo has a card whose dialogue goes past its opening');
+  // Before the fix the control card was rewritten to one turn and the draft no longer matched the accepted library.
+  const repeated = await lab.repeat(source.id, undefined, [control.id]);
+  assert.deepEqual(repeated.positiveControlScenarioIds, [control.id]);
+  assert.deepEqual(repeated.scenarios, source.scenarios, 'no card is rewritten for a control');
+  await lab.start(repeated.id, { approved: true, expectedHash: draftHash(repeated) }); await lab.waitForIdle();
+  const ran = await lab.get(repeated.id);
+  assert.equal(ran.phase, 'results_review', ran.error ?? '');
+  const controlTrials = ran.trials.filter(trial => trial.scenarioId === control.id);
+  assert.ok(controlTrials.length);
+  for (const trial of controlTrials) {
+    assert.deepEqual(userTurns(trial), [control.user.opening]);
+    assert.equal(trial.events.filter(event => event.type === 'assistant').length, 1);
+    assert.equal(trial.events.filter(event => event.type === 'simulator').length, 0, 'the controller is never asked');
+  }
+  for (const trial of ran.trials.filter(item => item.scenarioId !== control.id)) {
+    const before = source.trials.find(item => item.scenarioId === trial.scenarioId && item.repeat === trial.repeat)!;
+    assert.deepEqual(userTurns(trial), userTurns(before), 'a counted card runs its path as before');
+  }
+});
 
 /**
  * A finished one-card run whose goal rubric the judge decided, with a sealed receipt on the trial.

@@ -1,8 +1,7 @@
-import type { Experiment } from './contracts.js';
+import { isRunning, type Experiment } from './contracts.js';
 import { libraryHash } from './scenario-library.js';
 
-const RUNNING = new Set<Experiment['phase']>(['preparing', 'evaluating', 'baseline', 'improving', 'control']);
-export const draftIsBusy = (record: DraftRecord): boolean => RUNNING.has(record.phase);
+export const draftIsBusy = (record: DraftRecord): boolean => isRunning(record.phase);
 
 export interface DraftRecord {
   id: string;
@@ -13,7 +12,7 @@ export interface DraftRecord {
   librarySnapshot?: Experiment['librarySnapshot'];
 }
 
-export type DraftChoice =
+type DraftChoice =
   | { action: 'busy' }
   | { action: 'edit' }
   | { action: 'use'; id: string; newer: boolean }
@@ -42,7 +41,7 @@ export function chooseEditableDraft(input: {
   return { action: 'copy', sourceId: source.id, newer };
 }
 
-export type Recheck =
+type Recheck =
   | { action: 'not_needed' }
   | { action: 'skipped'; pendingJobs: number; remainingCalls: number }
   | { action: 'needs_budget'; pendingJobs: number; remainingCalls: number }

@@ -1,12 +1,13 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { fingerprint, type Experiment } from './contracts.js';
+import { fingerprint, isRunning, type Experiment } from './contracts.js';
 import type { ExperimentStore } from './store.js';
 import { compareRuns, evidenceSummary, markReconstructedSource, type EvidenceSummary, type RunComparison } from './comparison.js';
 import { qualitySummary, type QualitySummary } from './quality.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { buildResultView, type ResultView } from './result-view.js';
+import { oneLine } from './text.js';
 
 export interface EvidenceBundle {
   record: Experiment;
@@ -21,7 +22,7 @@ export interface EvidenceBundle {
   warnings: string[];
   traceJournal: string;
 }
-const failureText = (error: unknown) => (error instanceof Error ? error.name === 'ZodError' ? 'Запись не соответствует формату Agent Lab.' : error.message : String(error)).replace(/\s+/g, ' ').slice(0, 300);
+const failureText = (error: unknown) => oneLine(error instanceof Error ? error.name === 'ZodError' ? 'Запись не соответствует формату Agent Lab.' : error.message : error).slice(0, 300);
 
 /** The source run rebuilt from the evidence a derived record carries; undefined when it carries none for this id. */
 export function embeddedBefore(record: Experiment, parentId: string): Experiment | undefined {
@@ -50,14 +51,14 @@ export function embeddedBefore(record: Experiment, parentId: string): Experiment
 }
 
 /** The source run a derived record is read against, and what the reader must be told about it. */
-export interface ResolvedSource { before?: Experiment; embedded: boolean; warning?: string }
+interface ResolvedSource { before?: Experiment; embedded: boolean; warning?: string }
 
 /**
  * Reads the source run once, the same way on every surface. Only a missing file falls back to the
  * evidence the record embedded; a corrupt, oversized, unreadable or mismatched record is reported
  * as it is and never replaced by the embedded copy.
  */
-export async function resolveSource(record: Experiment, store: Pick<ExperimentStore, 'get'>, sourceId: string): Promise<ResolvedSource> {
+async function resolveSource(record: Experiment, store: Pick<ExperimentStore, 'get'>, sourceId: string): Promise<ResolvedSource> {
   try { return { before: await store.get(sourceId), embedded: false }; }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -100,7 +101,7 @@ async function verifyReceipts(run: Experiment, store: Partial<Pick<ExperimentSto
 }
 
 /** A record and its source run as every surface must read them: receipts checked against sidecars, warnings in words. */
-export interface VerifiedRuns { record: Experiment; before?: Experiment; embedded: boolean; warnings: string[] }
+interface VerifiedRuns { record: Experiment; before?: Experiment; embedded: boolean; warnings: string[] }
 
 /**
  * The one path from stored files to a comparison: a copy of `record` with its receipts checked,
@@ -136,7 +137,7 @@ export async function evidenceBundle(record: Experiment, store: BundleStore, bef
   bundle.view = buildResultView(snapshot, { before: bundle.before });
   try { bundle.traceJournal = await store.traceJournal(snapshot.id); }
   catch (error) { bundle.warnings.push(`Журнал трасс недоступен; реплики из записи включены в отчёт. ${failureText(error)}`); }
-  if (['preparing', 'evaluating', 'baseline', 'improving', 'control'].includes(snapshot.phase)) {
+  if (isRunning(snapshot.phase)) {
     bundle.warnings.push('Прогон ещё идёт. Этот снимок содержит доступные сейчас доказательства; после завершения экспортируйте итог заново.');
   }
   return bundle;

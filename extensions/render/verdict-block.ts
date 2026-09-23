@@ -2,8 +2,8 @@ import { keyHint, type Theme } from '@earendil-works/pi-coding-agent';
 import { Text, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 import type { AgentToolResult, ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
 import { verdictBlockRows } from '../../src/verdict.js';
-import { shortId, type ResultView } from '../../src/result-view.js';
-import { safeText } from '../cards.ts';
+import type { ResultView } from '../../src/result-view.js';
+import { safeText, shortId } from '../../src/text.js';
 import { renderRows, type PaintTheme, type Row } from './theme.ts';
 
 /*
@@ -49,7 +49,7 @@ export function viewFor(details: VerdictDetails): ResultView | null {
 }
 
 /** C-190: the honest row when the block cannot be drawn from what the session holds. */
-export const missingRunText = (runId: string): string => `Прогон ${shortId(runId)} не найден в .agent-lab — блок нельзя показать.`;
+const missingRunText = (runId: string): string => `Прогон ${shortId(runId)} не найден в .agent-lab — блок нельзя показать.`;
 
 /**
  * The verdict block as a pi-tui component. The plain rows are built once, in the constructor, so a

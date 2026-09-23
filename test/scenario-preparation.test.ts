@@ -86,7 +86,7 @@ test('public preparation resume uses CAS, preserves owner edits and histories, a
     const accepted = await lab.acceptLibrary(seed.id, libraryHash(partial.library), ['variant_1']);
     await assert.rejects(lab.resumePreparation(seed.id, libraryHash(accepted.library)), /Принятый/);
     const edited = await lab.editLibrary(seed.id, libraryHash(accepted.library), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number',
-      statement: 'Номер терминала: 5678', value: '5678', availability: 'initial', editId: 'owner_resume', reason: 'Владелец уточнил номер' });
+      statement: 'Номер терминала: 5678', value: '5678', availability: 'initial', editId: 'owner_resume', reason: 'Владелец уточнил номер' }, 'owner');
     const before = structuredClone(edited.library.variants[0]!);
     const calls = edited.experiment.usage.calls;
     await assert.rejects(lab.resumePreparation(seed.id, libraryHash(partial.library)), /хеш устарел/);
@@ -341,7 +341,7 @@ test('owner correction invalidates semantic admission, reassessment binds new co
     await lab.init(); const seed = await lab.create(input()); await lab.waitForIdle();
     const draft = await lab.readLibrary(seed.id);
     const changed = await lab.editLibrary(seed.id, libraryHash(draft.library), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number',
-      statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'owner_correction', reason: 'Владелец исправил номер' });
+      statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'owner_correction', reason: 'Владелец исправил номер' }, 'owner');
     assert.equal(changed.library.variants[0]!.userState.facts[0]!.origin.kind, 'owner');
     assert.ok(libraryQuality(changed.library).some(issue => issue.code === 'semantic_pending'));
     await assert.rejects(() => lab.acceptLibrary(seed.id, libraryHash(changed.library), ['variant_1']), /готов/);
@@ -450,7 +450,7 @@ test('library run settings can change without using the legacy card editor or re
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('criteria reassessment and positive controls cannot silently change accepted library cards', async () => {
+test('criteria reassessment cannot silently change accepted library cards, and a positive control leaves them intact', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'scenario-gate-'));
   const lab = new ExperimentLab(directory, runtimeFixture([]));
   try {
@@ -459,7 +459,9 @@ test('criteria reassessment and positive controls cannot silently change accepte
     const accepted = await lab.acceptLibrary(seed.id, libraryHash(draft.library), ['variant_1']);
     await lab.start(seed.id, { approved: true, expectedHash: draftHash(accepted.experiment) }); await lab.waitForIdle();
     await assert.rejects(() => lab.reassess(seed.id, { criteria: [{ scenarioId: 'variant_1', successCriteria: 'Другое ожидание' }], codeOnly: true }), /библиотек/);
-    await assert.rejects(() => lab.repeat(seed.id, ['variant_1'], ['variant_1']), /библиотек/);
+    // A control never rewrites the card: the repeat keeps the accepted card and passes the library gate.
+    const controlled = await lab.repeat(seed.id, ['variant_1'], ['variant_1']);
+    assert.deepEqual(controlled.scenarios, (await lab.get(seed.id)).scenarios);
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -500,15 +502,15 @@ test('reopening completes a journaled library edit after a one-shot experiment w
       if (fail) { fail = false; throw Object.assign(new Error('one-shot experiment write failure'), { code: 'EIO' }); }
       return save(...args);
     };
-    await assert.rejects(() => lab.editLibrary(seed.id, libraryHash(before.library), { kind: 'remove_variant', variantId: 'variant_2', reason: 'Выбран первый' }), /one-shot/);
+    await assert.rejects(() => lab.editLibrary(seed.id, libraryHash(before.library), { kind: 'remove_variant', variantId: 'variant_2', reason: 'Выбран первый' }, 'owner'), /one-shot/);
     assert.equal((await lab.store.readLibrary(before.library.id)).variants.length, 1);
     assert.equal((await lab.readLibrary(seed.id)).library.variants.length, 2);
     await lab.close(); await reopened.init();
     const recovered = await reopened.readLibrary(seed.id);
     assert.equal(recovered.library.variants.length, 1, 'valid B publication finishes through the public reopen path');
-    await assert.rejects(() => reopened.editLibrary(seed.id, libraryHash(before.library), { kind: 'remove_variant', variantId: 'variant_1', reason: 'Устаревшая правка' }), /хеш|измен/);
+    await assert.rejects(() => reopened.editLibrary(seed.id, libraryHash(before.library), { kind: 'remove_variant', variantId: 'variant_1', reason: 'Устаревшая правка' }, 'owner'), /хеш|измен/);
     const changed = await reopened.editLibrary(seed.id, libraryHash(recovered.library), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number',
-      statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'after_recovery', reason: 'После восстановления' });
+      statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'after_recovery', reason: 'После восстановления' }, 'owner');
     assert.equal(changed.library.variants[0]!.userState.facts[0]!.value, '4321');
   } finally { await lab.close(); await reopened.close(); await rm(directory, { recursive: true, force: true }); }
 });

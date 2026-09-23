@@ -1,12 +1,15 @@
 import type { Experiment, Trial } from '../src/contracts.js';
-import { valueTokens } from '../src/contracts.js';
+import { isRunning, valueTokens } from '../src/contracts.js';
 import { plannedTrials, type RunComparison } from '../src/comparison.js';
 import type { ScenarioLibrary, ScenarioVariant } from '../src/scenario-contracts.js';
 import { resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../src/scenario-library.js';
 import type { VariantFieldDiff, VariantOperation } from '../src/scenario-variants.js';
 import { semanticWorkStatus } from '../src/scenario-work.js';
-import { shortId, type ResultView } from '../src/result-view.js';
+import type { ResultView } from '../src/result-view.js';
+import { countText } from '../src/plural.js';
+import { clip, shortId } from '../src/text.js';
 import { GLYPH, type Row } from './render/theme.ts';
+import { costText } from './flow.ts';
 
 /*
  * The conversational surface of Agent Lab: everything a chat request needs before it reaches the
@@ -25,8 +28,6 @@ const fold = (value: string): string => {
   for (const ch of value.toLocaleLowerCase('ru').replaceAll('ё', 'е')) out += SPACED.has(ch) || /\s/u.test(ch) ? ' ' : ch;
   return out.trim().split(' ').filter(Boolean).join(' ');
 };
-const oneLine = (value: unknown): string => String(value ?? '').replace(/\s+/g, ' ').trim();
-const clip = (value: unknown, limit: number): string => { const text = oneLine(value); return text.length <= limit ? text : `${text.slice(0, limit - 1).trimEnd()}…`; };
 
 /* ───────────────────────────── owner words ───────────────────────────── */
 
@@ -51,7 +52,7 @@ export function ownerMessages(ctx: BranchReader): string[] {
 }
 
 /** Value-like tokens (numbers, codes, dates) of `text` that occur in none of the `allowed` texts. */
-export function ungroundedValues(text: string, allowed: string[]): string[] {
+function ungroundedValues(text: string, allowed: string[]): string[] {
   const known = valueTokens(allowed.join('\n'));
   return [...valueTokens(text)].filter(token => !known.has(token));
 }
@@ -72,7 +73,7 @@ export function verbatimSpan(text: string, sources: string[]): boolean {
   });
 }
 
-export interface OwnerBasis {
+interface OwnerBasis {
   /** The reason stored with the edit: the owner's message, verbatim. */
   reason: string;
   /** `quote`: the model pointed at a message fragment and it was found; `latest`: the message that started this turn. */
@@ -98,9 +99,7 @@ export function ownerBasis(messages: string[], quote?: string): OwnerBasis | nul
 }
 const reasonText = (message: string): string => `Владелец в разговоре: «${clip(message, 940)}»`;
 
-/** The tool the model called. The harness does not decide this by reading the sentence. */
-export type Intent = 'edit' | 'variant' | 'remove' | 'merge' | 'split' | 'stop';
-export type Authority =
+type Authority =
   | { kind: 'conversation'; reason: string }
   | { kind: 'confirm'; reason: string; question: string }
   | { kind: 'ask'; message: string; ownerMessage: string };
@@ -110,7 +109,7 @@ export type Authority =
  * wording is a verbatim span. Simulated wording is a draft proposal, not an owner receipt.
  * Intent and reference selection belong to the model; this function does not certify them.
  */
-export function authorize(input: { messages: string[]; quote?: string; intent: Intent; attributed?: string[]; simulated?: string[]; known?: string[]; summary: string; provenance?: boolean; objects?: InstructionObjects }): Authority {
+export function authorize(input: { messages: string[]; quote?: string; attributed?: string[]; simulated?: string[]; known?: string[]; summary: string; provenance?: boolean }): Authority {
   const basis = ownerBasis(input.messages, input.quote);
   if (!basis) return { kind: 'confirm', reason: 'Подтверждено владельцем в диалоге Pi.', question: input.summary };
   const allowed = [...input.messages, ...(input.known ?? [])];
@@ -123,14 +122,6 @@ export function authorize(input: { messages: string[]; quote?: string; intent: I
   if (foreign) return { kind: 'confirm', reason: basis.reason, question: input.summary };
   return { kind: 'conversation', reason: basis.reason };
 }
-
-export interface InstructionTarget {
-  number?: number;
-  title: string;
-  otherTitles: string[];
-  lastTouched?: boolean;
-}
-export interface InstructionObjects { kind: 'card' | 'group'; targets: InstructionTarget[]; exhaustive?: boolean }
 
 /* ───────────────────────────── references ───────────────────────────── */
 
@@ -190,8 +181,8 @@ const factLabel = (statement: string): string => { const at = statement.indexOf(
 const withoutFinalDots = (text: string): string => { let out = text.trim(); while (out.endsWith('.')) out = out.slice(0, -1).trimEnd(); return out; };
 const mentions = (text: string, value: string): boolean => !!value && fold(text).includes(fold(value));
 
-export interface VariantHints { fact?: string; opening?: string; ifAsked?: string; reply?: string; missingDescription?: string; intent?: string; afterAction?: string; failures?: number }
-export type DerivedVariant = { kind: 'ready'; input: Record<string, unknown> } | { kind: 'ask'; message: string };
+interface VariantHints { fact?: string; opening?: string; ifAsked?: string; reply?: string; missingDescription?: string; intent?: string; afterAction?: string; failures?: number }
+type DerivedVariant = { kind: 'ready'; input: Record<string, unknown> } | { kind: 'ask'; message: string };
 
 /**
  * The `input` of a targeted variant, taken from the parent card wherever the card already answers:
@@ -236,13 +227,8 @@ export function deriveVariantInput(parent: ScenarioVariant, operation: VariantOp
 
 /* ───────────────────────────── feed rows ───────────────────────────── */
 
-const row = (text: string, tone?: Row['tone'], bold = false, indent = 0): Row => ({ text, ...(tone ? { tone } : {}), ...(bold ? { bold } : {}), ...(indent ? { indent } : {}) });
+export const row = (text: string, tone?: Row['tone'], bold = false, indent = 0): Row => ({ text, ...(tone ? { tone } : {}), ...(bold ? { bold } : {}), ...(indent ? { indent } : {}) });
 const blank = (): Row => row('');
-const plural = (n: number, forms: [string, string, string]): string => {
-  const tail = n % 100, last = n % 10;
-  return forms[tail >= 11 && tail <= 14 ? 2 : last === 1 ? 0 : last >= 2 && last <= 4 ? 1 : 2];
-};
-const count = (n: number, forms: [string, string, string]): string => `${n} ${plural(n, forms)}`;
 const VARIANTS: [string, string, string] = ['вариант', 'варианта', 'вариантов'];
 const DIALOGUES: [string, string, string] = ['диалог', 'диалога', 'диалогов'];
 const qualityWord = { ready: 'готов', needs_review: 'нужно решение', blocked: 'заблокирован' } as const;
@@ -309,10 +295,10 @@ export interface Feed { rows: Row[]; more?: Row[] }
 /** Draft, accepted set and running snapshot are three different things; every library view names all three. */
 export function stateRows(record: Experiment): Row[] {
   const library = record.librarySnapshot;
-  const running = ['evaluating', 'baseline', 'improving', 'control'].includes(record.phase);
+  const running = isRunning(record.phase) && record.phase !== 'preparing';
   const measured = ['results_review', 'complete', 'cancelled', 'interrupted'].includes(record.phase) && record.trials.length > 0;
   const acceptance = library?.acceptance;
-  const accepted = acceptance ? `принят набор: ревизия ${acceptance.revision}, ${count(acceptance.variantIds.length, VARIANTS)}`
+  const accepted = acceptance ? `принят набор: ревизия ${acceptance.revision}, ${countText(acceptance.variantIds.length, VARIANTS)}`
     : library ? 'принятого набора нет' : record.acceptedDraftHash ? 'ожидания подтверждены' : 'ожидания не подтверждены';
   return [row(running ? `Сейчас выполняется снимок этого набора: ${accepted}. Правки черновика на него не влияют.`
     : measured ? `Прогон выполнен на снимке: ${accepted}. Результат уже не изменится от правок.`
@@ -328,21 +314,21 @@ const budgetRow = (record: Experiment): Row => {
 export function libraryFeed(record: Experiment): Feed {
   const library = record.librarySnapshot;
   if (!library) {
-    const rows = [row(`${count(record.scenarios.length, ['ситуация', 'ситуации', 'ситуаций'])} в наборе`, 'text', true),
+    const rows = [row(`${countText(record.scenarios.length, ['ситуация', 'ситуации', 'ситуаций'])} в наборе`, 'text', true),
       ...record.scenarios.map((scenario, index) => row(`${index + 1}. ${clip(scenario.title, 120)}`, undefined, false, 1)), ...stateRows(record)];
     return { rows, more: record.scenarios.flatMap((scenario, index) => [row(`${index + 1}. ${scenario.title}`, 'accent', true), row(`Клиент пишет: «${scenario.user.opening}»`, undefined, false, 3), row(`Ожидается: ${scenario.successCriteria ?? 'не задано'}`, undefined, false, 3)]) };
   }
   const ordered = orderedVariants(library);
   const tally = (quality: ScenarioVariant['quality']) => ordered.filter(variant => variant.quality === quality).length;
-  const head = [`${count(ordered.length, VARIANTS)}`, count(tally('ready'), ['готов', 'готовы', 'готовы']), ...(tally('needs_review') ? [count(tally('needs_review'), ['ждёт решения', 'ждут решения', 'ждут решения'])] : []),
-    ...(tally('blocked') ? [count(tally('blocked'), ['заблокирован', 'заблокированы', 'заблокированы'])] : [])].join(' · ');
+  const head = [`${countText(ordered.length, VARIANTS)}`, countText(tally('ready'), ['готов', 'готовы', 'готовы']), ...(tally('needs_review') ? [countText(tally('needs_review'), ['ждёт решения', 'ждут решения', 'ждут решения'])] : []),
+    ...(tally('blocked') ? [countText(tally('blocked'), ['заблокирован', 'заблокированы', 'заблокированы'])] : [])].join(' · ');
   const rows: Row[] = [row(`Сценарии · ревизия ${library.revision} · ${head}`, 'text', true)];
   const more: Row[] = [];
   for (const group of library.businessScenarios) {
     const members = ordered.filter(variant => variant.businessScenarioId === group.id);
     if (!members.length) continue;
     const uncertain = group.grouping.status === 'uncertain';
-    rows.push(row(`${clip(group.title, 100)} · ${count(group.sourceDialogues.length, DIALOGUES)}${uncertain ? ' · группировка под вопросом' : ''}`, uncertain ? 'warning' : 'accent', false, 1));
+    rows.push(row(`${clip(group.title, 100)} · ${countText(group.sourceDialogues.length, DIALOGUES)}${uncertain ? ' · группировка под вопросом' : ''}`, uncertain ? 'warning' : 'accent', false, 1));
     more.push(row(group.title, 'accent', true), row(group.goal, 'muted', false, 1), ...(uncertain ? [row(`Нужно решение: ${group.grouping.reason}`, 'warning', false, 1)] : []));
     for (const variant of members) {
       const label = `${variantNumber(library, variant)}. ${qualityMark[variant.quality]} ${clip(variant.title, 100)} — ${qualityWord[variant.quality]} · ${provenanceWord[variant.provenance]}`;
@@ -372,7 +358,7 @@ function factOriginText(library: ScenarioLibrary, fact: ScenarioVariant['userSta
 }
 
 /** Transitions of a behaviour policy as sentences, used by the card and by «было → стало». */
-export function behaviorLines(variant: Pick<ScenarioVariant, 'behaviorPolicy'>): string[] {
+function behaviorLines(variant: Pick<ScenarioVariant, 'behaviorPolicy'>): string[] {
   return variant.behaviorPolicy.transitions.flatMap(transition => {
     const action = variant.behaviorPolicy.actions.find(item => item.id === transition.actionId);
     return action ? [`${transition.when} ${GLYPH.arrow} клиент ${actionWord[action.kind]}${action.payload ? `: «${action.payload}»` : ''}`] : [];
@@ -498,8 +484,8 @@ export function planLines(record: Experiment, cwd?: string): string[] {
   const judge = record.settings.roles?.judge ?? record.settings.judge ?? common;
   return [
     `Агент: ${projectPath(targetText(record), cwd)}${record.targetVersion ? ` · версия ${record.targetVersion}` : ''}`,
-    acceptance ? `Набор: принятая ревизия ${acceptance.revision}, ${count(variants.length, VARIANTS)}${part}${origin ? ` (${origin})` : ''}`
-      : `Набор: ${count(record.scenarios.length, ['ситуация', 'ситуации', 'ситуаций'])}${origin ? ` (${origin})` : ''}`,
+    acceptance ? `Набор: принятая ревизия ${acceptance.revision}, ${countText(variants.length, VARIANTS)}${part}${origin ? ` (${origin})` : ''}`
+      : `Набор: ${countText(record.scenarios.length, ['ситуация', 'ситуации', 'ситуаций'])}${origin ? ` (${origin})` : ''}`,
     `Попыток: ${plannedTrials(record)} (повторов ${record.settings.repeats}, режим клиента: ${record.settings.userModes.join(', ')})`,
     record.mode === 'demo' ? 'Учебный пример: без модели и оплаты.'
       : `Модели: клиента играет ${simulator.provider}/${simulator.model}; судья — ${judge.provider}/${judge.model}`,
@@ -524,7 +510,7 @@ export function acceptanceLines(library: ScenarioLibrary, cards: ScenarioVariant
 export function progressLines(record: Experiment): string[] {
   const planned = plannedTrials(record), done = record.trials.length;
   const unusable = record.trials.filter(trial => trial.outcome === 'invalid' || trial.outcome === 'cancelled').length;
-  const cost = record.mode === 'demo' ? 'без оплаты' : record.usage.costUsd === null ? 'стоимость неизвестна' : `$${record.usage.costUsd.toFixed(3)} (оценка)`;
+  const cost = costText(record);
   if (record.phase === 'preparing') return [`Подготовка ${shortId(record.id)} · вызовов модели ${record.usage.calls} из ${record.settings.maxCalls}`, clip(record.message, 160)];
   return [`Прогон ${shortId(record.id)} · ${done} из ${planned} диалогов завершено${unusable ? ` · непригодных ${unusable}` : ''} · вызовов ${record.usage.calls} из ${record.settings.maxCalls} · ${cost}`,
     ...(record.message ? [clip(record.message, 160)] : [])];
@@ -543,7 +529,7 @@ export function statusFeed(records: Experiment[], active?: { id: string }): Feed
   const sorted = [...records].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const line = (record: Experiment): Row => {
     const library = record.librarySnapshot;
-    const size = library ? count(library.variants.length, VARIANTS) : count(record.scenarios.length, ['ситуация', 'ситуации', 'ситуаций']);
+    const size = library ? countText(library.variants.length, VARIANTS) : countText(record.scenarios.length, ['ситуация', 'ситуации', 'ситуаций']);
     const tail = record.trials.length ? ` · ${record.trials.length} из ${plannedTrials(record)} диалогов` : library?.acceptance ? ' · набор принят' : '';
     // A repeat is named by the run it repeats, so a chain of reruns of one set does not print the same task five times.
     const about = record.parentRunId ? `повтор ${shortId(record.parentRunId)}${record.targetVersion ? ` · версия ${clip(record.targetVersion, 30)}` : ''}` : clip(record.task, 70);

@@ -1,10 +1,11 @@
 import type { CheckpointInput } from './checkpoints.js';
-import { userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
+import { USER_CONTROLLER_PROTOCOL, userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
 import { checkpointSchema } from './scenario-contracts.js';
 import { importBatchSchema, preparationProgressSchema, scenarioLibrarySchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal, type SemanticFinding, type PreparationProgress } from './scenario-contracts.js';
 import { createHash } from 'node:crypto';
-import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS, RECORD_REQUIREMENT_LIMIT } from './limits.js';
+import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS } from './limits.js';
 import { z } from 'zod';
+import { identifierSchema as identifier, sha256Schema } from './ids.js';
 
 export const checkpointDecisionSchema = z.strictObject({
   checkpointId: z.string().min(1).max(80), result: z.enum(['pass', 'fail', 'unknown', 'not_applicable']),
@@ -19,9 +20,7 @@ export const checkpointReceiptSchema = z.strictObject({ protocolHash: z.string()
 
 export const VERSION = '6';
 export const DEFAULT_JUDGE = { provider: 'openrouter', model: 'openai/gpt-5.6-sol', upstream: 'openai' } as const;
-export const TOOL_NAMES = ['search_materials', 'lookup_record', 'update_record'] as const;
-export type ToolName = typeof TOOL_NAMES[number];
-const identifier = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).refine(v => !['__proto__', 'prototype', 'constructor'].includes(v), 'Reserved identifier');
+const TOOL_NAMES = ['search_materials', 'lookup_record', 'update_record'] as const;
 const text = z.string().trim().min(1);
 const dialogueContent = z.string().min(1).max(8000).refine(v => !!v.trim(), 'Empty dialogue content');
 const unique = <T>(values: T[]) => new Set(values).size === values.length;
@@ -48,9 +47,9 @@ export const agentSchema = z.strictObject({
 });
 export type AgentSpec = z.infer<typeof agentSchema>;
 /** `kind: 'prompt'` marks the agent's own instructions: rules the user can observe are extracted from it, and the harness grades compliance with them. */
-export const sourceKindSchema = z.enum(['knowledge', 'prompt']);
+const sourceKindSchema = z.enum(['knowledge', 'prompt']);
 export type SourceKind = z.infer<typeof sourceKindSchema>;
-export const materialSchema = z.strictObject({ name: text.max(180), content: text.max(MATERIAL_CHARS), kind: sourceKindSchema.optional() });
+const materialSchema = z.strictObject({ name: text.max(180), content: text.max(MATERIAL_CHARS), kind: sourceKindSchema.optional() });
 
 /*
  * How the simulated user's side of a dialogue is produced:
@@ -59,11 +58,11 @@ export const materialSchema = z.strictObject({ name: text.max(180), content: tex
  *   static    – only the opening message; the dialogue ends after the first reply
  * Running the same cards in all three modes measures what the reactive simulator adds.
  */
-export const userModeSchema = z.enum(['reactive', 'scripted', 'static']);
+const userModeSchema = z.enum(['reactive', 'scripted', 'static']);
 export type UserMode = z.infer<typeof userModeSchema>;
 const providerName = z.string().max(120).describe('Provider key, e.g. openrouter. Never include the model or vendor path here.');
 const modelName = z.string().max(200).describe('Exact model ID within that provider, e.g. z-ai/glm-5.3-flash or openai/gpt-5.6-sol for openrouter.');
-export const modelChoiceSchema = z.strictObject({ provider: providerName.min(1), model: modelName.min(1) });
+const modelChoiceSchema = z.strictObject({ provider: providerName.min(1), model: modelName.min(1) });
 export const settingsSchema = z.strictObject({
   provider: providerName.default(''),
   model: modelName.default(''),
@@ -196,7 +195,7 @@ export function describeCheck(check: Check): string {
   if (check.kind === 'tool_count') return `${check.tool}: от ${check.min} до ${check.max} попыток вызова`;
   return 'Перед каждым изменением — успешное чтение той же записи';
 }
-export const rubricSchema = z.strictObject({
+const rubricSchema = z.strictObject({
   id: identifier, name: text.max(120), subject: z.enum(['agent', 'simulator']),
   description: text.max(2000), passCriteria: text.max(2000), failCriteria: text.max(2000), ...stage,
 });
@@ -227,31 +226,31 @@ export const replyQuality: Rubric = {
   failCriteria: 'Ответ неверен, не по существу, неисполняем, противоречит материалам владельца или выдаёт неподтверждённое за факт.',
 };
 /** Diagnostic-only RAG rubrics. They are added to a judge run only when the adapter reports retrieval events. */
-export const ragContextRecall: Rubric = {
+const ragContextRecall: Rubric = {
   id: 'rag_context_recall', name: 'RAG · нужное знание найдено', subject: 'agent',
   description: 'Достаточно ли переданного агенту контекста по приложенным требованиям владельца; это не полнота поиска по всей базе знаний.',
   passCriteria: 'Найденные RAG-фрагменты содержат все существенные факты и правила, необходимые для корректного ответа на доставленный запрос пользователя.',
   failCriteria: 'В найденных RAG-фрагментах отсутствует хотя бы один существенный факт или правило, без которого нельзя корректно выполнить доставленный запрос пользователя.',
 };
-export const ragContextRelevance: Rubric = {
+const ragContextRelevance: Rubric = {
   id: 'rag_context_relevance', name: 'RAG · найденное по делу', subject: 'agent',
   description: 'Насколько найденные RAG-фрагменты относятся к доставленному запросу пользователя.',
   passCriteria: 'Найденные RAG-фрагменты относятся к доставленному запросу и не состоят преимущественно из посторонней информации.',
   failCriteria: 'Найденные RAG-фрагменты не относятся к доставленному запросу или преимущественно состоят из посторонней информации, мешающей использовать нужное знание.',
 };
-export const ragContextFaithfulness: Rubric = {
+const ragContextFaithfulness: Rubric = {
   id: 'rag_context_faithfulness', name: 'RAG · ответ подтверждён найденным', subject: 'agent',
   description: 'Подтверждаются ли утверждения ответа о правилах, условиях и процедурах найденными RAG-фрагментами. Результаты инструментов и текущее состояние конкретной заявки эта метрика не проверяет.',
   passCriteria: 'Ответ содержит проверяемые утверждения о правилах, условиях или процедурах; каждое из них подтверждается найденными RAG-фрагментами и не противоречит им.',
   failCriteria: 'Ответ содержит хотя бы одно утверждение о правилах, условиях или процедурах, которое не подтверждается найденными RAG-фрагментами или противоречит им.',
 };
-export const validationExclusionSchema = z.strictObject({
+const validationExclusionSchema = z.strictObject({
   dialogueId: identifier, kind: z.enum(['customer_data', 'masked', 'length', 'unconfirmed']), reason: text.max(1000),
 });
 export type ValidationExclusion = z.infer<typeof validationExclusionSchema>;
 export const RAG_RUBRICS = [ragContextRecall, ragContextRelevance, ragContextFaithfulness] as const;
 export const RAG_METRIC_IDS = new Set<string>(RAG_RUBRICS.map(metric => metric.id));
-export const assessmentFindingSchema = z.strictObject({
+const assessmentFindingSchema = z.strictObject({
   criterion: text.max(2000), result: z.enum(['pass', 'fail', 'unknown']), rationale: text.max(1000),
   citations: z.array(z.strictObject({ seq: z.number().int().nonnegative(), quote: z.string().min(1).max(2000) })).max(6),
 });
@@ -299,7 +298,7 @@ export const judgeReceiptSchema = z.strictObject({
   complete: z.boolean(),
 });
 export type JudgeReceipt = z.infer<typeof judgeReceiptSchema>;
-export const userSchema = z.strictObject({
+const userSchema = z.strictObject({
   goal: text.max(3000), facts: text.max(5000), behavior: text.max(2000), opening: text.max(3000),
   maxFollowUps: z.number().int().min(0).max(15).optional(),
   persona: text.max(2000).optional(), characteristics: z.array(text.max(300)).max(12).optional(),
@@ -318,14 +317,16 @@ export const userSchema = z.strictObject({
  * is still climbing towards, where failures are expected and informative. One flat suite hides
  * the difference between "we broke the product" and "we have not got there yet".
  */
-export const tierSchema = z.enum(['smoke', 'regression', 'frontier']);
+const tierSchema = z.enum(['smoke', 'regression', 'frontier']);
 export type Tier = z.infer<typeof tierSchema>;
-export const goalObservationSchema = z.enum(['reply', 'tool', 'state']);
+const goalObservationSchema = z.enum(['reply', 'tool', 'state']);
 export type GoalObservation = z.infer<typeof goalObservationSchema>;
 /** The evidence channel an external agent is judged on when the owner did not pick one. */
 export const DEFAULT_GOAL_OBSERVATION: GoalObservation = 'reply';
-export const executionSchema = z.strictObject({
-  protocol: z.literal('controlled-user-v1'), checkpointContext:z.literal('observed-tools-v1').optional(), checkpointProtocol: z.literal('checkpoints-v1'), controllerHash: text, checkpointHash: text,
+/** The judged checkpoint protocol of compiled library cards; its role prompt is inside `checkpointHash`. */
+export const CHECKPOINT_PROTOCOL = 'checkpoints-v1';
+const executionSchema = z.strictObject({
+  protocol: z.literal(USER_CONTROLLER_PROTOCOL), checkpointContext:z.literal('observed-tools-v1').optional(), checkpointProtocol: z.literal(CHECKPOINT_PROTOCOL), controllerHash: text, checkpointHash: text,
   userView: userViewSchema,
   environmentView: z.strictObject({ mode: z.enum(['prompt', 'managed']), contract: z.strictObject({ operations: z.array(z.string()), reset: z.boolean(), observations: z.array(z.enum(['reply', 'tool', 'state'])), confirmed: z.boolean() }).optional() }),
   evaluatorView: z.strictObject({ checkpoints: z.array(checkpointSchema).max(12), requirements: z.array(requirementSchema).max(80) }),
@@ -398,6 +399,13 @@ export interface Revision { id: string; parentId: string | null; spec: AgentSpec
 export type Outcome = 'pass' | 'fail' | 'ungraded' | 'invalid' | 'cancelled';
 export interface Usage { calls: number; inputTokens: number; outputTokens: number; costUsd: number | null }
 export const emptyUsage = (): Usage => ({ calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 });
+/** Adds `delta` into `target`. An unknown cost stays unknown: one call without a price makes the sum unknown. */
+export function addUsage(target: Usage, delta: Omit<Usage, 'calls'> & { calls?: number }): void {
+  target.calls += delta.calls ?? 0;
+  target.inputTokens += delta.inputTokens;
+  target.outputTokens += delta.outputTokens;
+  target.costUsd = target.costUsd === null || delta.costUsd === null ? null : target.costUsd + delta.costUsd;
+}
 export interface TraceEvent {
   seq: number; type: 'user' | 'assistant' | 'simulator' | 'observation' | 'retrieval' | 'tool_call' | 'tool_result' | 'error';
   text?: string; tool?: string; args?: unknown; result?: unknown; state?: World;
@@ -501,8 +509,7 @@ export interface Comparison {
   reasons: string[]; cases: { scenarioId: string; baselinePasses: number; candidatePasses: number; repeats: number }[];
 }
 /** The judgment a human verdict refers to: the judge protocol and the exact input it was asked about. */
-export const judgeSnapshotSchema = z.strictObject({ protocolHash: text, inputHash: text });
-export type JudgeSnapshot = z.infer<typeof judgeSnapshotSchema>;
+const judgeSnapshotSchema = z.strictObject({ protocolHash: text, inputHash: text });
 export const humanReviewInputSchema = z.strictObject({
   trialId: identifier, metricId: identifier.optional(), checkId: identifier.optional(),
   verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000), reviewedDialogue: z.literal(true).optional(),
@@ -520,7 +527,7 @@ export const humanReviewInputSchema = z.strictObject({
   .refine(v => v.source !== 'quick' || (!!v.metricId && v.verdict !== 'invalid'), 'Быстрая отметка ставится на одну оценку судьи.');
 export type HumanReviewInput = z.infer<typeof humanReviewInputSchema>;
 export type HumanReview = HumanReviewInput & { id: string; createdAt: string };
-export const humanReviewSchema = humanReviewInputSchema.safeExtend({ id: identifier, createdAt: text });
+const humanReviewSchema = humanReviewInputSchema.safeExtend({ id: identifier, createdAt: text });
 /** What a draft may still change: run settings, the connection and the agent label. Situations change only in the library. */
 export const draftPatchSchema = z.strictObject({
   agent: agentSchema.optional(), settings: settingsPatchSchema.optional(),
@@ -536,6 +543,12 @@ export const reassessmentSchema = z.strictObject({
 export type ReassessmentInput = z.input<typeof reassessmentSchema>;
 export type DraftPatch = z.infer<typeof draftPatchSchema>;
 export type Phase = 'preparing' | 'review' | 'evaluating' | 'results_review' | 'baseline' | 'improving' | 'control' | 'complete' | 'cancelled' | 'error' | 'interrupted';
+/**
+ * A process owns the record and it still changes. baseline, improving and control belong to the
+ * retired compare workflow: an old record left in one of them is unfinished work, never a result.
+ */
+export const RUNNING_PHASES: ReadonlySet<Phase> = new Set<Phase>(['preparing', 'evaluating', 'baseline', 'improving', 'control']);
+export const isRunning = (phase: Phase): boolean => RUNNING_PHASES.has(phase);
 export interface AcceptedTest {
   testId: string; scenarioId: string; definitionHash: string; acceptedAt: string;
 }
@@ -630,7 +643,7 @@ const comparisonSchema = z.strictObject({
   cases: z.array(z.strictObject({ scenarioId: identifier, baselinePasses: z.number().int().nonnegative(), candidatePasses: z.number().int().nonnegative(), repeats: z.number().int().nonnegative() })),
 });
 const acceptedTestSchema = z.strictObject({
-  testId: identifier, scenarioId: identifier, definitionHash: z.string().regex(/^[a-f0-9]{64}$/), acceptedAt: text,
+  testId: identifier, scenarioId: identifier, definitionHash: sha256Schema, acceptedAt: text,
 });
 /** Files written by older versions load with defaults; the in-memory type is always complete. */
 /*
@@ -679,7 +692,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   generatorConfig: retired, generatorIdentity: retired,
   runKind: z.enum(['evaluation', 'diagnostic', 'generator']).optional(),
   librarySnapshot: scenarioLibrarySchema.optional(),
-  originalImport: z.strictObject({ id: identifier, contentHash: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
+  originalImport: z.strictObject({ id: identifier, contentHash: sha256Schema }).optional(),
   preparationProgress: preparationProgressSchema.optional(),
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
@@ -690,7 +703,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   goldenCases: z.array(z.json()).max(40).default([]), dialogues: z.array(dialogueSchema).max(300).default([]), profiles: z.array(z.json()).max(12).default([]),
   notes: z.string().max(8000).default(''),
   revisions: z.array(revisionSchema), selectedRevisionId: text.nullable(), manifestHash: text.nullable(), reviewedAt: text.nullable(), reviewMode: z.enum(['human', 'expectations', 'automated']).nullable().default(null), controlConsumedAt: text.nullable(),
-  acceptedDraftHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  acceptedDraftHash: sha256Schema.optional(),
   acceptedTests: z.array(acceptedTestSchema).max(200)
     .refine(tests => unique(tests.map(test => test.testId)) && unique(tests.map(test => test.scenarioId)), 'Accepted test identities must be unique').default([]),
   trials: z.array(trialSchema), comparisons: z.array(comparisonSchema), iterations: z.array(z.strictObject({ revisionId: text, accepted: z.boolean(), reason: z.string() })),

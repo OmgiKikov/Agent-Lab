@@ -3,7 +3,7 @@ import { checkpointInput, checkpointReceipt, directChecks, evaluateCheckpoints }
 import { createUserState, allowedUserActions, advanceUser, requiredUserTurns } from './user-controller.js';
 import { randomUUID } from 'node:crypto';
 import {
-  assessmentRubrics, emptyUsage, judgeAuditSchema, runnableTarget, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
+  addUsage, assessmentRubrics, emptyUsage, judgeAuditSchema, runnableTarget, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
   type CallContext, type CheckResult, type DialogueMessage, type JudgeAudit, type MetricAssessment, type Requirement, type Revision,
   type Runtime, type Scenario, type Settings, type Source, type Target, type TargetSession, type TraceEvent, type Trial, type UserMode,
 } from './contracts.js';
@@ -121,22 +121,18 @@ export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
   });
 }
 
-export function previewAnswer(scenario: Scenario, answer: string) {
-  const checks = scenario.checks.filter(c => c.kind.startsWith('answer_'));
-  const trial: Trial = { id: 'preview', revisionId: 'preview', scenarioId: scenario.id, familyId: scenario.familyId,
-    userMode: 'static', repeat: 0, split: 'dev', manifestHash: 'preview', outcome: 'ungraded', reason: '', checks: [],
-    events: [{ seq: 1, type: 'assistant', text: answer }], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 0 };
-  return { checks: grade({ ...scenario, checks }, trial), unmeasured: [
-    ...scenario.checks.filter(c => !checks.includes(c)).map(c => c.description), ...(scenario.metrics ?? []).map(m => m.name),
-  ] };
-}
-
+/**
+ * One dialogue of one card. A positive control (`control`) is the opening and the agent's first reply
+ * whatever follow-ups its card allows: it checks the judge and the connection, not the simulator, and
+ * its card stays the accepted one.
+ */
 export async function evaluateTrial(input: {
   runtime: Runtime; revision: Revision; scenario: Scenario; repeat: number; manifestHash: string;
   sources: Source[]; judgeSources?: Source[]; requirements: Requirement[]; settings: Settings; ctx: CallContext; userMode: UserMode; target: Target;
+  control?: boolean;
   onStage?(stage: 'target' | 'user' | 'assessment'): void;
 }): Promise<Trial> {
-  const { runtime, revision, scenario, repeat, manifestHash, sources, requirements, settings, ctx, userMode, onStage } = input;
+  const { runtime, revision, scenario, repeat, manifestHash, sources, requirements, settings, ctx, userMode, control, onStage } = input;
   const target = runnableTarget(input.target);
   const started = performance.now();
   const state = structuredClone(scenario.initialState);
@@ -149,12 +145,7 @@ export async function evaluateTrial(input: {
   const localCtx: CallContext = {
     ...ctx,
     beforeCall() { ctx.signal.throwIfAborted(); ctx.beforeCall(); trial.usage.calls += 1; },
-    addUsage(usage) {
-      ctx.addUsage(usage);
-      trial.usage.inputTokens += usage.inputTokens;
-      trial.usage.outputTokens += usage.outputTokens;
-      trial.usage.costUsd = usage.costUsd === null || trial.usage.costUsd === null ? null : trial.usage.costUsd + usage.costUsd;
-    },
+    addUsage(usage) { ctx.addUsage(usage); addUsage(trial.usage, usage); },
   };
   const messages: DialogueMessage[] = [];
   let persistenceError: unknown;
@@ -184,10 +175,10 @@ export async function evaluateTrial(input: {
       if (userMode !== 'reactive') throw new Error('Управляемая политика требует реактивного режима; статический и сценарный режимы её не исполняют.');
       if (!runtime.selectUserAction) throw new Error('Среда не поддерживает контроллер пользователя.');
       const { policy, facts } = scenario.execution.userView;
-      if (requiredUserTurns(policy, facts) > settings.maxTurns) throw new Error('Обязательный путь пользователя не помещается в лимит реплик.');
+      if (!control && requiredUserTurns(policy, facts) > settings.maxTurns) throw new Error('Обязательный путь пользователя не помещается в лимит реплик.');
       controlled = createUserState(policy, facts);
     }
-    if (userMode === 'scripted') {
+    if (userMode === 'scripted' && !control) {
       const issue = scriptIssue(scenario.user, settings.maxTurns);
       if (issue) { stage = 'сценарий теста'; throw new Error(issue); }
     }
@@ -215,8 +206,8 @@ export async function evaluateTrial(input: {
         }
         if (reply.usage) {
           const usage = trial.externalUsage ??= emptyUsage();
-          usage.calls += reply.usage.calls; usage.inputTokens += reply.usage.inputTokens; usage.outputTokens += reply.usage.outputTokens;
-          usage.costUsd = !usageComplete || usage.costUsd === null || reply.usage.costUsd === null ? null : usage.costUsd + reply.usage.costUsd;
+          addUsage(usage, reply.usage);
+          if (!usageComplete) usage.costUsd = null;
         }
       } });
     let userMessage = scenario.user.opening;
@@ -236,7 +227,7 @@ export async function evaluateTrial(input: {
       if (!response.trim()) { trial.reason = 'Испытуемый вернул пустой ответ.'; break; }
       const serviceMarker = target.serviceReplies?.find(marker => response.includes(marker));
       if (serviceMarker !== undefined) { trial.reason = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента, ситуация не измерена.`; break; }
-      if (controlled && (finalUserReply || controlled.policy.terminalStates.includes(controlled.position))) { stopped = true; break; }
+      if (control || controlled && (finalUserReply || controlled.policy.terminalStates.includes(controlled.position))) { stopped = true; break; }
       if (!controlled && (userMode === 'static' || finalUserReply || (scenario.user.maxFollowUps !== undefined && turn >= scenario.user.maxFollowUps))) { stopped = true; break; }
       if (userMode === 'scripted') {
         const next = scenario.user.script?.[turn];

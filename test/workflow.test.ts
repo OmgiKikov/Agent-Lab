@@ -170,7 +170,6 @@ test('external state must not pass when the adapter never reported it', async t 
 
 import { doctor, readConnection, listSuites, rememberedConnection } from '../src/connection.js';
 import { compareRuns } from '../src/comparison.js';
-import { previewAnswer } from '../src/evaluation.js';
 import { readData } from '../src/imports.js';
 
 test('reassessment never opens the target, preserves original evidence, versions criteria and validates citations', async t => {
@@ -227,12 +226,8 @@ test('rejudged version pairs remain comparable without copying original human la
   assert.equal(compareRuns(before, { ...after, evaluatorVersion: 'other' }).comparable, false);
 });
 
-test('good/bad previews and local JSONL imports validate actual criteria without fabricating state or provenance', async t => {
+test('local JSONL imports keep the dialogue as written and name the broken line', async t => {
   const lab = await labFixture(t, runtime());
-  const good = previewAnswer({ ...card(), split: 'dev' }, 'Answer');
-  const bad = previewAnswer({ ...card(), split: 'dev' }, 'internal_key');
-  assert.equal(good.checks[0].passed, true); assert.equal(bad.checks[0].passed, false);
-  assert.deepEqual(good.unmeasured, ['Correct answer']);
   const file = join(lab.store.directory, 'dialogues.jsonl');
   await writeFile(file, JSON.stringify({ id: 'real', messages: [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' }] }) + '\n');
   const imported = await readData(file); assert.equal(imported[0].id, 'real');

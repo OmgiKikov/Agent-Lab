@@ -121,7 +121,7 @@ export async function legacyDraft(lab: ExperimentLab, options: { count?: number;
 export async function acceptedDemoDraft(lab: ExperimentLab, input = demoInput()): Promise<Experiment> {
   const draft = await lab.create(input); await lab.waitForIdle();
   const prepared = await lab.readLibrary(draft.id);
-  const edited = await lab.editLibrary(draft.id, libraryHash(prepared.library), DEMO_OWNER_EDIT);
+  const edited = await lab.editLibrary(draft.id, libraryHash(prepared.library), DEMO_OWNER_EDIT, 'owner');
   await lab.assessLibrary(draft.id, libraryHash(edited.library)); await lab.waitForIdle();
   const reviewed = await lab.readLibrary(draft.id);
   return (await lab.acceptLibrary(draft.id, libraryHash(reviewed.library), reviewed.library.variants.filter(v => v.quality === 'ready').map(v => v.id))).experiment;

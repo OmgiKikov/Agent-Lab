@@ -1,7 +1,7 @@
 import { keyHint, type AgentToolResult, type Theme, type ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
 import { Text, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 import type { Feed } from '../conversation.ts';
-import { safeText } from '../cards.ts';
+import { safeText } from '../../src/text.js';
 import { renderRows, type PaintTheme, type Row } from './theme.ts';
 
 /*
@@ -14,7 +14,7 @@ import { renderRows, type PaintTheme, type Row } from './theme.ts';
  * from the 0600 store.
  */
 
-export const FEED_KIND = 'agent-lab/feed';
+const FEED_KIND = 'agent-lab/feed';
 
 /**
  * Where the rows can be rebuilt from when the memory copy is gone (a reopened session, an evicted entry): the run and the
@@ -22,7 +22,7 @@ export const FEED_KIND = 'agent-lab/feed';
  */
 export interface FeedRef { view: 'library' | 'card' | 'change'; directory: string; runId: string; libraryId: string; hash: string; beforeHash?: string; variantId?: string }
 /** `note` names the action and the run by short id and counts — never a title, a quote or a value. */
-export interface FeedDetails { kind: typeof FEED_KIND; version: 1; feedKey: string; note: string; ref?: FeedRef }
+interface FeedDetails { kind: typeof FEED_KIND; version: 1; feedKey: string; note: string; ref?: FeedRef }
 
 export function isFeedDetails(value: unknown): value is FeedDetails {
   if (!value || typeof value !== 'object') return false;
@@ -43,11 +43,11 @@ export function rememberFeed(feedKey: string, feed: Feed, note: string, ref?: Fe
   }
   return { kind: FEED_KIND, version: 1, feedKey, note, ...(ref ? { ref } : {}) };
 }
-export const feedFor = (details: FeedDetails): Feed | null => feeds.get(details.feedKey) ?? null;
+const feedFor = (details: FeedDetails): Feed | null => feeds.get(details.feedKey) ?? null;
 export function forgetFeeds(): void { feeds.clear(); }
 
 /** Rows first, details only when expanded, and the expand hint only when there is something behind it. */
-export class FeedBlock implements Component {
+class FeedBlock implements Component {
   constructor(private readonly feed: Feed, private readonly expanded: boolean, private readonly theme: PaintTheme, private readonly hint: (expanded: boolean) => string) {}
   invalidate(): void {}
   render(width: number): string[] {
