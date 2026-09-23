@@ -1,218 +1,164 @@
-import { stripVTControlCharacters } from 'node:util';
-import { createHash } from 'node:crypto';
-import { agentRubricResult, awaitingVerdict, evidenceSummary, isAgentFailure, observedRecord, humanFindings, humanFindingText, repeatResultText, type HumanFinding, type RunComparison } from './comparison.js';
-import type { Experiment, TraceEvent, Trial } from './contracts.js';
-import { assessmentRubrics, describeCheck, fingerprint } from './contracts.js';
+import type { Experiment, Trial } from './contracts.js';
 import type { EvidenceBundle } from './artifacts.js';
-import { shortId } from './text.js';
-import { qualityLines, qualitySummary, percent as pct, dialogues as dlg, type QualitySummary } from './quality.js';
+import { situationBrief } from './brief.js';
+import { toHtml, toMarkdown, type Block, type CardItem, type FailureItem, type Report, type Turn } from './blocks.js';
+import type { FailureExplanation } from './explain.js';
+import { countText } from './plural.js';
+import { accuracyParts, alarmRow, realityParts, trustSegments } from './result-text.js';
+import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
+import { oneLine } from './text.js';
 
-const plain = (value: unknown) => stripVTControlCharacters(String(value ?? '')).replace(/[\u202a-\u202e\u2066-\u2069]/g, '');
-const escape = (value: unknown) => plain(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-const md = (value: unknown) => plain(value).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!).replace(/[\\`*_{}\[\]()#|]/g, '\\$&');
-const outcomes: Record<string, string> = { pass: 'Пройдено', fail: 'Не пройдено', ungraded: 'По рубрикам', invalid: 'Не измерено', cancelled: 'Остановлено', unknown: 'Неясно' };
-const modes: Record<string, string> = { static: 'Первая реплика', scripted: 'По сценарию', reactive: 'Реактивный симулятор' };
-// Only this fixed script is permitted by CSP; all report data remains escaped text.
-const navigationScript = `function reveal(){const el=document.getElementById(decodeURIComponent(location.hash.slice(1)));if(!el)return;for(let p=el;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;el.scrollIntoView();}addEventListener('hashchange',reveal);addEventListener('DOMContentLoaded',reveal);document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#"]');if(a&&a.hash===location.hash)reveal();});`;
-const navigationHash = createHash('sha256').update(navigationScript).digest('base64');
-const reviewWord = (bundle: EvidenceBundle) => bundle.evidence.verdict.review.status === 'complete' ? 'Аудит завершён' : 'Аудит не завершён';
-const version = (record: Experiment) => record.targetVersion ?? record.targetRelease ?? record.targetFingerprint?.slice(0, 12) ?? record.selectedRevisionId?.slice(0, 12) ?? 'не указана';
-const trialId = (record: Experiment, trial: Pick<Trial, 'id'>) => `trial-${record.id}-${trial.id}`;
-const eventId = (record: Experiment, trial: Trial, seq: number) => `event-${record.id}-${trial.id}-${seq}`;
-const title = (record: Experiment) => {
-  const agent = record.revisions.find(r => r.id === record.selectedRevisionId)?.spec.name ?? 'Проверка агента';
-  return `${plain(agent)} · ${record.scenarios.length === 1 ? plain(record.scenarios[0]!.title) : `${record.scenarios.length} тестов`}`;
+/*
+ * The customer report: the result the owner reads in Pi, as one page for someone who never opened
+ * Pi. It is built only from the ResultView of the run (plus the stored dialogues it quotes), in the
+ * order a reader asks: how good is the agent, can I trust the number, where does it fail and why,
+ * what was checked, and each failure with its evidence. The owner's next steps stay in the owner's
+ * tools: the reader of this file cannot act on them. No ids, hashes or model internals on the page;
+ * the machine snapshot (jsonReport) keeps those.
+ */
+
+const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
+const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const dateText = (iso: string) => {
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime()) ? iso : `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]} ${at.getUTCFullYear()}, ${String(at.getUTCHours()).padStart(2, '0')}:${String(at.getUTCMinutes()).padStart(2, '0')} UTC`;
 };
-const target = (record: Experiment) => record.target.kind === 'sandbox' ? 'песочница'
-  : record.target.kind === 'http' ? `HTTP ${record.target.url}` : record.target.kind === 'module' ? `модуль ${record.target.path}`
-    : `процесс ${[record.target.command, ...record.target.args].join(' ')}`;
-const modelLabel = (record: Experiment) => record.mode === 'demo' ? 'Сценарная оценка демо' : 'Оценка модели';
-const lastAnswer = (trial: Trial) => trial.events.findLast(e => e.type === 'assistant')?.text ?? 'Ответ агента не записан.';
-const list = (values: string[]) => values.length ? `<ul>${values.map(v => `<li>${escape(v)}</li>`).join('')}</ul>` : '';
-const metadata = (record: Experiment) => [
-  `Релиз адаптера: ${record.targetRelease ?? 'не сообщён'}. Оценщик: ${record.evaluatorVersion ?? 'версия не записана'}.`,
-  `Версия критериев: ${fingerprint(record.scenarios.map(s => ({ id: s.id, checks: s.checks, metrics: s.metrics, successCriteria: s.successCriteria })))}.`,
-  `Модели ролей: ${JSON.stringify(record.settings.roles)}. Незаданные роли используют общую модель.`,
-  ...(record.assessmentOf ? [`Переоценка прогона ${record.assessmentOf}. Агент и симулятор не запускались. Хеш исходных фактов: ${record.evidenceHash}.`] : []),
-  ...(record.sourceEvidence ? [`Источник регрессии: прогон ${record.sourceEvidence.runId}, сохранено исходных диалогов ${record.sourceEvidence.trials.length}. Исходные ручные вердикты относятся к тем диалогам.`]
-    : record.parentRunId ? ['Исходная трасса не включена в набор; для разбора нужен исходный прогон.'] : []),
-];
-function reassessmentHTML(record: Experiment, before?: Experiment) {
-  if (!record.assessmentOf) return '';
-  return `<section><h2>Изменения оценок на тех же ответах</h2><p>Агент не запускался. Исходные оценки сохранены.</p>${record.trials.map(trial => {
-    const original = before?.trials.find(t => t.id === trial.id) ?? record.sourceEvidence?.trials.find(t => t.id === trial.id);
-    return `<details><summary>${escape(trial.id)}</summary><div class="pair"><div><h3>Исходные оценки</h3>${original ? list(originalChecks(before ?? record, original)) : '<p>Нет в этом снимке; откройте исходный прогон.</p>'}</div><div><h3>Новые оценки</h3>${list(originalChecks(record, trial))}</div></div><a href="#${escape(trialId(record, trial))}">Сохранённые реплики →</a></details>`;
-  }).join('')}</section>`;
+const pct = (share: number) => `${Math.round(share * 100)}%`;
+
+/** The dialogue of one attempt, client and agent only, in the order it happened. */
+function turnsOf(trial: Trial | undefined): Turn[] {
+  return (trial?.events ?? []).filter(event => (event.type === 'user' || event.type === 'assistant') && oneLine(event.text ?? ''))
+    .map(event => ({ who: event.type === 'user' ? 'Клиент' as const : 'Агент' as const, text: oneLine(event.text) }));
 }
-function normalize(input: Experiment | EvidenceBundle, comparison?: RunComparison): EvidenceBundle {
-  return 'record' in input ? input : { record: input, evidence: evidenceSummary(input), quality: qualitySummary(input), comparison, warnings: [], traceJournal: '' };
+
+const example = (failure: FailureExplanation) => ({
+  situation: oneLine(failure.title), expected: failure.expected ?? 'не записано в ситуации', said: failure.said?.quote ?? null,
+  rule: (failure.violated ?? failure.rules[0])?.quote ?? null,
+});
+
+function chipOf(card: ResultCard, view: ResultView): CardItem['chip'] {
+  if (card.control) return card.outcome === 'pass' ? { text: 'контроль ✓', tone: 'accent' } : { text: card.outcome === 'fail' ? 'контроль ✗' : 'контроль ?', tone: 'err' };
+  if (card.outcome === 'pass') return { text: '✓ справился', tone: 'ok' };
+  if (card.outcome === 'fail') return { text: '✗ не справился', tone: 'err' };
+  const reason = view.notMeasured.reasons.find(item => item.scenarioIds.includes(card.scenarioId));
+  return { text: reason ? `? не измерено — ${reason.label}` : '? ещё проверяется', tone: 'warn' };
 }
-function visibleScenarios(record: Experiment) {
-  const observed = observedRecord(record);
-  return record.workflow === 'evaluate' || observed.scenarios.some(s => s.split === 'control') ? record.scenarios : record.scenarios.filter(s => s.split === 'dev');
+
+/** «Почему ошибается»: each cause with up to three of its failures quoted; without causes, the failures themselves. */
+function causesBlock(view: ResultView): Block[] {
+  if (!view.failures.length) {
+    return view.headline.decided ? [{ kind: 'paragraph', muted: false,
+      text: `Ошибок нет. Это не гарантия для живых клиентов: проверено ${countText(view.headline.decided, SITUATIONS)}.` }] : [];
+  }
+  const items = view.topCauses.length
+    ? view.topCauses.map(cause => ({ title: oneLine(cause.name), count: countText(cause.count, SITUATIONS),
+      examples: view.failures.filter(failure => cause.scenarioIds.includes(failure.scenarioId)).slice(0, 3).map(example) }))
+    : view.failures.slice(0, 3).map(failure => ({ title: oneLine(failure.title), count: '1 ситуация', examples: [example(failure)] }));
+  return [{ kind: 'section', title: 'Почему ошибается', blocks: [{ kind: 'causes', items }] }];
 }
-function visibleTrials(record: Experiment) {
-  const ids = new Set(visibleScenarios(record).map(s => s.id));
-  return record.trials.filter(t => ids.has(t.scenarioId));
+
+function topicsBlock(view: ResultView): Block[] {
+  const topics = view.topics;
+  if (!topics?.rows.some(row => row.decided)) return [];
+  const shares = topics.rows.some(row => row.share !== null);
+  const rows = topics.rows.map(row => ({ muted: false, cells: [row.title, row.decided ? `${row.passed} из ${row.decided}` : '—', ...(shares ? [row.share === null ? '—' : pct(row.share)] : [])] }));
+  if (topics.uncovered) rows.push({ muted: true, cells: ['Не покрыто ситуациями', '—', pct(topics.uncovered.share)] });
+  return [{ kind: 'section', title: 'По темам', blocks: [{ kind: 'table', head: ['Тема', 'справился', ...(shares ? ['доля диалогов'] : [])], rows }] }];
 }
-function eventLabel(event: TraceEvent): string {
-  return ({ user: 'Пользователь', assistant: 'Агент', error: 'Ошибка', simulator: 'Симулятор', retrieval: 'RAG-контекст', tool_call: 'Вызов инструмента', tool_result: 'Результат инструмента', state: 'Состояние' } as Record<string, string>)[event.type] ?? event.type;
+
+/** How the number was made and what it rests on, in plain sentences for the fine print. */
+function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
+  const { agreement, breakdown, coverage, scope, stability } = view;
+  const lines = [
+    'Ситуация засчитана, если агент выполнил запрос клиента и не нарушил правил своего промпта во всех разговорах этой ситуации. Не измеренные ситуации в процент не входят; контрольные ситуации проверяют связь и судью и в процент не входят.',
+    `${countText(scope.cards, SITUATIONS)} · ${countText(scope.dialogues, ['разговор', 'разговора', 'разговоров'])} · клиента играет Lab${scope.judgeModel ? ` · судья — ${scope.judgeModel}` : ''}${scope.target ? ` · версия агента ${scope.target}` : ''}${scope.costUsd ? ` · $${scope.costUsd.toFixed(2)}` : ''}`,
+    ...(breakdown.goal.decided ? [`Запрос выполнен: ${breakdown.goal.met} из ${breakdown.goal.decided}.${breakdown.rules.decided ? ` Правила промпта нарушены: ${breakdown.rules.broken} из ${breakdown.rules.decided}.` : ''}`] : []),
+    agreement.checked ? `С решениями судьи вы согласились в ${agreement.agreed} из ${agreement.checked} проверенных случаев.`
+      : view.reviewed.situations ? `Вы сами проверили ${countText(view.reviewed.situations, ['ситуацию', 'ситуации', 'ситуаций'])}.`
+      : agreement.queueFailures.length + agreement.sampledPasses.length ? 'Решения судьи ещё не проверялись человеком.' : '',
+    ...(view.reviewed.contradicted ? [`В ${countText(view.reviewed.contradicted, ['ситуации', 'ситуациях', 'ситуациях'])} ваша отметка по всему разговору расходится с итогом: итог считается по ожиданиям ситуации, отметка по всему разговору в число не входит.`] : []),
+    ...(coverage.excluded.length ? [`Из ${coverage.examined} разговоров в набор вошли ${coverage.included}; не вошли: ${coverage.excluded.map(item => `${item.label} — ${item.count}`).join(', ')}.`] : []),
+    ...(stability?.skipped ? [`Стабильность не проверена: ${stability.skipped}.`] : stability?.unstable.length
+      ? [`Нестабильны при повторе: ${stability.unstable.map(row => oneLine(row.title)).join(', ')}.`] : []),
+    ...bundle.warnings,
+  ].filter(Boolean);
+  return { kind: 'section', title: 'Как считали', blocks: [{ kind: 'list', items: lines }] };
 }
-function eventText(event: TraceEvent): string {
-  return event.text ?? JSON.stringify(event.result !== undefined ? event.result : event.args !== undefined ? event.args : event.state ?? '', null, 2);
+
+function comparisonBlock(bundle: EvidenceBundle): Block[] {
+  const { comparison } = bundle;
+  if (!comparison) return [];
+  const version = bundle.before?.targetVersion ?? bundle.before?.targetRelease;
+  const source = `${bundle.comparisonSource?.kind === 'selected' ? 'База выбрана вручную' : 'Сравнение с прошлым прогоном'}${version ? ` — версия ${version}` : ''}.`;
+  return [{ kind: 'section', title: 'Было → стало', blocks: [
+    { kind: 'paragraph', muted: false, text: `${source} ${comparison.headline}` },
+    ...(comparison.fixed.length + comparison.regressed.length ? [{ kind: 'list' as const, items: [
+      ...comparison.regressed.map(row => `Сломалось: ${oneLine(row.title)}`), ...comparison.fixed.map(row => `Исправлено: ${oneLine(row.title)}`)] }] : []),
+  ] }];
 }
-function originalChecks(record: Experiment, trial: Trial): string[] {
-  const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-  return [
-    ...(trial.simulatorChecks ?? []).map(c => `Симулятор · эвристика · ${c.id}: ${c.passed ? 'без пометки' : 'подозрение'}. ${c.evidence}`),
-    ...trial.checks.map(c => `Код · ${outcomes[c.passed ? 'pass' : 'fail']}: ${c.description}. ${c.evidence}`),
-    ...(trial.assessments ?? []).map(a => `${modelLabel(record)} · ${outcomes[a.result]}: ${assessmentRubrics(scenario ?? {}, trial).find(m => m.id === a.metricId)?.name ?? a.metricId}. ${a.rationale}`),
-  ];
+
+/** The report of one run as blocks; `htmlReport` and `markdownReport` render the same tree. */
+export function runReport(bundle: EvidenceBundle): Report {
+  const { record } = bundle;
+  const view = bundle.view;
+  const accuracy = accuracyParts(view);
+  const trust = trustSegments(view);
+  const reality = realityParts(view);
+  const alarm = alarmRow(view);
+  const trials = new Map(record.trials.map(trial => [trial.id, trial]));
+  const byScenario = (id: string) => record.trials.filter(trial => trial.scenarioId === id);
+  const failed = new Map(view.failures.map(failure => [failure.scenarioId, failure]));
+  const cards: CardItem[] = view.cards.flatMap((card, index) => {
+    const scenario = record.scenarios.find(item => item.id === card.scenarioId);
+    if (!scenario) return [];
+    const failure = failed.get(card.scenarioId);
+    return [{ number: index + 1, brief: situationBrief(record, scenario), chip: chipOf(card, view),
+      dialogue: turnsOf(failure ? trials.get(failure.trialId) : byScenario(card.scenarioId)[0]) }];
+  });
+  const numbers = new Map(view.cards.map((card, index) => [card.scenarioId, index + 1]));
+  const failures: FailureItem[] = view.failures.map(failure => {
+    const rule = failure.violated ?? failure.rules[0];
+    return { number: numbers.get(failure.scenarioId) ?? 0, title: oneLine(failure.title), expected: failure.expected ?? 'не записано в ситуации',
+      said: failure.said?.quote ?? null, rule: rule ? { quote: rule.quote, source: oneLine(rule.sourceName) } : null, dialogue: turnsOf(trials.get(failure.trialId)) };
+  });
+  const unmeasured = view.notMeasured.reasons.flatMap(reason => reason.scenarioIds.map(id => `${oneLine(view.cards.find(card => card.scenarioId === id)?.title ?? id)}: ${reason.label}`));
+  return {
+    title: `Проверка агента · ${countText(view.cards.length, SITUATIONS)}`,
+    meta: [dateText(view.createdAt), ...(view.scope.target ? [`версия ${view.scope.target}`] : []), ...(view.mode === 'demo' ? ['учебный пример'] : [])],
+    head: [
+      ...(alarm ? [{ kind: 'alarm' as const, text: alarm.text }] : []),
+      { kind: 'accuracy', lead: accuracy.lead, value: accuracy.value, tail: accuracy.tail, level: accuracy.level,
+        band: view.headline.range && view.headline.accuracy !== null ? { point: view.headline.accuracy, range: view.headline.range, weighted: view.topics?.weighted ?? null } : null },
+      ...(trust.length ? [{ kind: 'trust' as const, parts: trust }] : []),
+      ...(reality.length ? [{ kind: 'trust' as const, parts: reality.map(text => ({ text, warn: false })) }] : []),
+    ],
+    blocks: [
+      ...topicsBlock(view),
+      ...causesBlock(view),
+      ...(cards.length ? [{ kind: 'section' as const, title: 'Ситуации', blocks: [{ kind: 'cards' as const, items: cards }] }] : []),
+      ...(failures.length ? [{ kind: 'section' as const, title: 'Разбор ошибок', blocks: [{ kind: 'failures' as const, items: failures }] }] : []),
+      ...(unmeasured.length ? [{ kind: 'section' as const, title: 'Не измерено', blocks: [{ kind: 'list' as const, items: unmeasured }] }] : []),
+      ...comparisonBlock(bundle),
+      basisBlock(bundle, view),
+    ],
+    footer: [`Отчёт Agent Lab · ${dateText(view.createdAt)}`, 'Полные записи разговоров и оценок судьи хранятся у владельца агента.'],
+  };
 }
-/** Who judged and how many fresh calls; the full audit stays in the record (legacy) or the sidecar file (receipt). */
-function judgeSummary(trial: Trial) {
-  const judge = trial.judgeAudit ?? trial.judgeReceipt;
-  if (!judge) return;
-  const calls = trial.judgeAudit ? trial.judgeAudit.attempts.length : trial.judgeReceipt!.votes.length;
-  return { provider: judge.provider, model: judge.model, protocolHash: judge.protocolHash, calls, legacy: !!trial.judgeAudit };
+
+/** A bare record reads as a bundle with its own view and nothing resolved around it. */
+function bundleOf(input: Experiment | EvidenceBundle): EvidenceBundle {
+  return 'record' in input ? input : { record: input, view: buildResultView(input), warnings: [], traceJournal: '' };
 }
-const judgeFile = (record: Experiment, trial: Pick<Trial, 'id'>) => `${record.id}.judge/${trial.id}.json`;
-function judgeHTML(record: Experiment, trial: Trial): string {
-  const judge = judgeSummary(trial);
-  if (!judge) return '';
-  const raw = judge.legacy ? `<p>Исходные ответы судьи сохранены без исправлений в записи прогона <code>${escape(record.id)}.json</code> в локальной папке Agent Lab; в экспорт они не входят.</p>`
-    : `<p>Полный ответ судьи: <code>${escape(judgeFile(record, trial))}</code> рядом с записью прогона.</p>`;
-  return `<details><summary>Проверка судьи · ${escape(judge.provider)}/${escape(judge.model)} · ${judge.calls} вызовов в свежих сессиях</summary><p>Совпадение повторов не доказывает правильность. Протокол: <code>${escape(judge.protocolHash)}</code>.</p>${raw}</details>`;
-}
+
+/** The styled, self-contained customer report. */
+export const htmlReport = (input: Experiment | EvidenceBundle): string => toHtml(runReport(bundleOf(input)));
+/** The same report as Markdown. */
+export const markdownReport = (input: Experiment | EvidenceBundle): string => toMarkdown(runReport(bundleOf(input)));
+
 /** The embedded source run without the heavy judge audits; receipts and verdicts stay. */
 function sourceEvidenceWithoutAudits(source: NonNullable<Experiment['sourceEvidence']>) {
   return { ...source, trials: source.trials.map(({ judgeAudit: _audit, ...trial }) => trial) };
 }
-function trialHTML(record: Experiment, trial: Trial, findings: HumanFinding[]): string {
-  const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-  const failure = isAgentFailure(record, trial);
-  const label = findings.length ? 'Замечание человека' : failure ? 'Требует внимания' : outcomes[trial.outcome];
-  const rubric = agentRubricResult(scenario, trial);
-  const reviews = record.humanReviews.filter(r => r.trialId === trial.id);
-  const revision = record.workflow === 'compare' ? `${trial.revisionId === record.revisions[0]?.id ? 'Исходная версия' : trial.revisionId === record.selectedRevisionId ? 'Выбранная версия' : 'Кандидат'} ${trial.revisionId.slice(0, 10)} · ${trial.split === 'control' ? 'Контрольные карточки' : 'Карточки разработки'}` : `Версия ${version(record)}`;
-  return `<details class="trial" id="${escape(trialId(record, trial))}"><summary><span class="tag ${failure || trial.outcome === 'invalid' ? 'warning' : ''}">${escape(label)}</span> ${escape(scenario?.title ?? trial.scenarioId)} <span class="muted">· ${escape(modes[trial.userMode])} · попытка ${trial.repeat + 1}</span></summary>
-<p class="muted">${escape(revision)} · ${(trial.elapsedMs / 1000).toFixed(1)} с · <code>${escape(trial.id)}</code></p>
-<p>${escape(trial.reason)}</p>${list([`Наблюдение: состояние ${trial.observation?.state ?? 'не записано'}, события ${trial.observation?.tools ?? 'не записано'}, сброс ${trial.observation?.resetConfirmed === true ? 'подтверждён адаптером' : 'не подтверждён'}.`])}
-<p class="basis">Код: ${trial.checks.length ? `${trial.checks.filter(c => c.passed).length}/${trial.checks.length} проверок` : 'проверок нет'} · ${escape(modelLabel(record))}: ${rubric ? escape(outcomes[rubric]) : 'нет оценки'} · Человек: ${reviews.length ? 'см. историю вердиктов' : 'вердикта нет'}</p>
-${findings.length ? `<div class="notice">${list(findings.map(humanFindingText))}</div>` : ''}
-<h3>Реплики и события</h3>${trial.events.map(e => ['user', 'assistant', 'error'].includes(e.type)
-    ? `<div class="turn ${escape(e.type)}" id="${escape(eventId(record, trial, e.seq))}"><small><a href="#${escape(eventId(record, trial, e.seq))}">#${e.seq}</a> · ${escape(eventLabel(e))}</small><pre>${escape(eventText(e))}</pre></div>`
-    : `<details class="event" id="${escape(eventId(record, trial, e.seq))}"><summary>#${e.seq} · ${escape(eventLabel(e))}${e.tool ? ` · ${escape(e.tool)}` : ''}</summary><pre>${escape(eventText(e))}</pre></details>`).join('')}
-<h3>Пройдено по точным проверкам</h3>${trial.checks.length ? list(trial.checks.map(c => `${c.passed ? 'Пройдено' : 'Не пройдено'} · ${c.description}: ${c.evidence}`)) : '<p class="muted">Не заданы. Оценки по рубрикам показаны отдельно.</p>'}
-${trial.userMode === 'reactive' ? `<h3>Проверки симулятора · эвристики</h3>${trial.simulatorChecks?.length ? `<ul>${trial.simulatorChecks.map(c => `<li>${escape(c.id)} · ${c.passed ? 'Без пометки' : 'Подозрение'}: ${escape(c.evidence)} ${c.seq === undefined ? '' : `<a href="#${escape(eventId(record, trial, c.seq))}">#${c.seq}</a>`}</li>`).join('')}</ul>` : '<p class="muted">Не применялись: симулятор не отправил реплик после первой.</p>'}` : ''}
-<h3>${escape(modelLabel(record))} по рубрикам · предварительно</h3>${(trial.assessments ?? []).length ? `<ul>${trial.assessments!.map(a => `<li><b>${escape(outcomes[a.result])} · ${escape(scenario?.metrics?.find(m => m.id === a.metricId)?.name ?? a.metricId)}</b>: ${escape(a.rationale)} ${a.evidence.map(seq => trial.events.some(e => e.seq === seq) ? `<a class="event-link" href="#${escape(eventId(record, trial, seq))}">#${seq}</a>` : `<span class="warning">#${seq} отсутствует</span>`).join(' ')}</li>`).join('')}</ul>` : '<p class="muted">Оценок по рубрикам нет.</p>'}
-${judgeHTML(record, trial)}
-${trial.assessmentError ? `<p class="warning">${escape(trial.assessmentError)}</p>` : ''}
-<h3>История вердиктов человека</h3>${reviews.length ? list(reviews.map(r => `${outcomes[r.verdict]} · ${r.metricId ?? r.checkId ?? 'весь диалог'} · ${r.createdAt}: ${r.note}`)) : '<p class="muted">Вердикты не записаны.</p>'}
-<details><summary>Полная трасса и состояния</summary><pre>${escape(JSON.stringify({ trialId: trial.id, revisionId: trial.revisionId, events: trial.events, initialState: trial.initialState, finalState: trial.finalState }, null, 2))}</pre></details>
-<p><a href="#attention">К списку замечаний ↑</a></p></details>`;
-}
-function comparisonHTML(bundle: EvidenceBundle): string {
-  const { record, before, comparison, comparisonSource } = bundle;
-  if (!comparison) return '';
-  const changed = new Set([...comparison.regressed, ...comparison.fixed].map(c => c.scenarioId));
-  const pairs = (comparison.pairs ?? []).filter(p => changed.has(p.scenarioId));
-  const pairAnchor = (scenarioId: string) => {
-    const pair = pairs.find(p => p.scenarioId === scenarioId);
-    return pair ? `pair-${pair.scenarioId}-${pair.userMode}-${pair.repeat}` : 'comparison';
-  };
-  const changes = (values: RunComparison['fixed'], label: string) => values.map(c => `<li><a href="#${escape(pairAnchor(c.scenarioId))}">${escape(label)}: ${escape(c.title)}</a></li>`).join('');
-  return `<section id="comparison"><div class="section-heading"><h2>Изменение версии</h2><span class="tag">${comparisonSource?.kind === 'selected' ? 'База выбрана вручную' : 'Сравнение с предыдущим прогоном'}</span></div>
-<p class="lead">${escape(comparison.headline)}</p><p class="muted">${before ? `До: <b>${escape(version(before))}</b> · <code>${escape(before.id)}</code><br>` : ''}После: <b>${escape(version(record))}</b> · <code>${escape(record.id)}</code></p>
-<p class="basis">Сопоставлено ${comparison.coverage.validPairs} из ${comparison.coverage.plannedPairs} пар · исключено ${comparison.coverage.excludedPairs}. ${comparison.includesRubrics ? 'В сравнении участвуют предварительные оценки по рубрикам.' : 'Сравнение по кодовым проверкам.'}</p>
-${comparison.regressed.length || comparison.fixed.length || comparison.incomparable.length ? `<ul class="change-list">${changes(comparison.regressed, comparison.includesRubrics ? 'Оценка снизилась' : 'Сломалось')}${changes(comparison.fixed, comparison.includesRubrics ? 'Оценка выросла' : 'Исправлено')}${comparison.incomparable.map(c => `<li>Несравнимо: ${escape(c.title)} · ${escape(modes[c.userMode])} · ${c.repeat + 1}. ${escape(c.reason)}</li>`).join('')}</ul>` : ''}
-${comparison.notes.length ? `<details><summary>Условия сравнения · ${comparison.notes.length}</summary>${list(comparison.notes)}</details>` : ''}
-${before ? pairs.map(pair => {
-    const a = before.trials.find(t => t.id === pair.beforeTrialId);
-    const b = record.trials.find(t => t.id === pair.afterTrialId);
-    if (!a || !b) return '';
-    return `<article class="pair-card" id="${escape(pairAnchorFor(pair))}"><h3>${escape(record.scenarios.find(s => s.id === pair.scenarioId)?.title ?? pair.scenarioId)} · ${escape(modes[pair.userMode])} · ${pair.repeat + 1}</h3>${pair.reviewNote ? `<p class="warning">${escape(pair.reviewNote)}</p>` : ''}<div class="pair">${([[before, a, 'До'], [record, b, 'После']] as const).map(([run, trial, label]) => {
-      return `<div><p class="eyebrow">${label} · ${escape(version(run))}</p><pre class="answer">${escape(lastAnswer(trial))}</pre>${list(originalChecks(run, trial))}<a href="#${escape(trialId(run, trial))}">Полный диалог · ${escape(shortId(trial.id))} →</a></div>`;
-    }).join('')}</div></article>`;
-  }).join('') : ''}</section>`;
-}
-function pairAnchorFor(pair: RunComparison['pairs'][number]): string { return `pair-${pair.scenarioId}-${pair.userMode}-${pair.repeat}`; }
-
-/** The first screen of the report: accuracy per card and per criterion, the causes with one quote each, what a person still has to look at. */
-function qualityHTML(bundle: EvidenceBundle): { grid: string; why: string; basis: string; lead: string } {
-  const { record, quality: q } = bundle;
-  const observed = observedRecord(record);
-  const text = qualityLines(q);
-  const measured = q.scope.dialogues > 0;
-  const bar = (value: number | null) => `<div class="bar" aria-hidden="true"><span style="width:${value === null ? 0 : Math.round(value * 100)}%"></span></div>`;
-  const metricCard = (m: QualitySummary['metrics'][number]) => `<article class="metric"><h3>${escape(m.name)} · ${m.kind === 'code' ? 'код' : 'судья, предварительно'}</h3><strong>${pct(m.accuracy)}</strong>${bar(m.accuracy)}<small>${m.passed} из ${dlg(m.passed + m.failed)}${m.unknown ? ` · неясно ${m.unknown}` : ''}</small></article>`;
-  const hasChecks = observed.scenarios.some(s => s.checks.length), hasRubrics = observed.scenarios.some(s => s.metrics?.some(m => m.subject === 'agent'));
-  const placeholders = [
-    ...(!q.metrics.some(m => m.kind === 'code') ? [`<article class="metric"><h3>Точные проверки · код</h3><strong>${hasChecks ? 'Нет данных' : 'Нет'}</strong><small>${hasChecks ? 'Проверки заданы, измерений нет' : 'Кодовых проверок не задано'}</small></article>`] : []),
-    ...(!q.metrics.some(m => m.kind === 'rubric') ? [`<article class="metric"><h3>Оценено моделью · предварительно</h3><strong>${hasRubrics ? 'Нет оценок' : 'Нет'}</strong><small>${hasRubrics ? 'Рубрики заданы, оценок пока нет' : 'Рубрики агента не заданы'}</small></article>`] : []),
-  ];
-  const v = bundle.evidence.verdict;
-  const strictCard = q.primary === 'goal_attainment' ? `<article class="metric"><h3>Полностью прошли все критерии</h3><strong>${q.strict.passed}<span class="muted"> / ${q.strict.passed + q.strict.failed}</span></strong>${bar(q.strict.accuracy)}<small>${pct(q.strict.accuracy)}${q.strict.goalMetWithOtherFailures ? ` · ${q.strict.goalMetWithOtherFailures} достигли цели, но нарушили другой критерий` : ''}</small></article>` : '';
-  const grid = `<div class="grid"><article class="metric"><h3>${escape(q.cardsLabel)}</h3><strong>${q.cards.passed}<span class="muted"> / ${q.cards.passed + q.cards.failed}</span></strong>${bar(q.cards.accuracy)}<small>${pct(q.cards.accuracy)}${q.cards.unknown ? ` · ${q.cards.unknown} без решения` : ''} · ${dlg(q.scope.dialogues)}${v.execution.invalid ? ` · ${v.execution.invalid} не измерено` : ''}</small></article>
-${strictCard}
-${q.metrics.map(metricCard).join('\n')}${placeholders.join('\n')}
-<article class="metric"><h3>Разметить человеку</h3><strong>${q.humanQueue.total}</strong><small>${q.humanQueue.total ? `неясных ${q.humanQueue.unknownJudgments} · расхождений ${q.humanQueue.disagreements} · пометок симулятора ${q.humanQueue.simulatorFlags}` : 'Спорных оценок нет'}<br>Разобрано человеком: ${v.review.reviewed} / ${v.review.total} · только спорные случаи</small></article></div>`;
-  const why = q.causes.length ? `<section id="why"><h2>Почему не справился</h2><ol class="causes">${q.causes.slice(0, 5).map(c => `<li><b>${escape(c.name)}</b> · ${dlg(c.dialogues)}${c.stage ? ` · <span class="tag">${escape(c.stage)}</span>` : ''}<p>${escape(c.description)}</p>${c.example ? `<p class="muted">${record.trials.some(t => t.id === c.example!.trialId) ? `<a href="#${escape(trialId(record, { id: c.example.trialId }))}">${escape(c.example.card)}</a>` : escape(c.example.card)}: ${c.example.verified ? `«${escape(c.example.quote)}»` : escape(c.example.quote)}${c.example.seq === undefined ? '' : ` · реплика #${c.example.seq}`}</p>` : ''}${c.promptQuotes.map(quote => `<p class="muted">Правило промпта: «${escape(quote)}»</p>`).join('')}</li>`).join('')}</ol>${q.causes.length > 5 ? `<p class="muted">Ещё ${q.causes.length - 5} причин ниже, в диалогах.</p>` : ''}</section>` : '';
-  const basis = measured ? `<p class="basis">${escape(text.judge)} ${escape(text.queue)}<br>${escape(text.scope)}<br>${escape(text.limits)} Подробности — в разделе «Границы результата».</p>` : '';
-  const lead = measured ? `<p class="lead">${escape(q.headline)}</p>${text.coverage ? `<p class="warning">${escape(text.coverage)}</p>` : ''}<p class="muted">${escape(v.headline)}</p>` : `<p class="lead">${escape(v.headline)}</p>`;
-  const rag = measured && text.rag.length ? `<section id="rag"><h2>RAG: что видно по контексту</h2><p>${escape(text.rag[0])}</p>${q.rag.signals.map(signal => `<p><a href="#${escape(trialId(record, { id: signal.trialId }))}">${escape(signal.trialId)}</a>: ${escape(signal.explanation)}</p>`).join('')}</section>` : '';
-  return { grid, why: why + rag, basis, lead };
-}
-
-/** A portable, script-free report. Every supplied or generated string is escaped. */
-export function htmlReport(input: Experiment | EvidenceBundle, comparison?: RunComparison): string {
-  const bundle = normalize(input, comparison);
-  const { record, evidence, before } = bundle;
-  const v = evidence.verdict;
-  const observed = observedRecord(record);
-  const pending = awaitingVerdict(record);
-  const trials = visibleTrials(record);
-  const flagged = new Set(v.review.findings.map(f => f.trialId));
-  const attention = observed.trials.filter(t => pending.has(t.id) || flagged.has(t.id) || isAgentFailure(observed, t) || ['invalid', 'cancelled'].includes(t.outcome) || t.assessmentError)
-    .sort((a, b) => Number(pending.has(b.id)) - Number(pending.has(a.id)));
-  const limits = [...new Set([...v.confidenceReasons.map(n => n.text), ...evidence.notes, ...record.limitations])];
-  const beforeFindings = before ? humanFindings(before) : [];
-  const comparedBefore = before ? before.trials.filter(t => bundle.comparison?.pairs?.some(p => p.beforeTrialId === t.id)) : [];
-  const final = record.comparisons.findLast(c => c.split === 'control');
-  const sourceLine = `Карточки: ${v.provenance.synthetic.cards} синтетических · ${v.provenance.curated.cards} golden · ${v.provenance.production.cards} из импортированных диалогов`;
-  const quality = qualityHTML(bundle);
-  return `<!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-${navigationHash}'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
-<title>Agent Lab · ${escape(title(record))}</title><style>
-:root{color-scheme:light dark;--bg:#f7f8f5;--surface:#fff;--text:#17271f;--muted:#56695d;--line:#dce4db;--accent:#176447;--soft:#eaf2eb;--warn:#a23f25}
-@media(prefers-color-scheme:dark){:root{--bg:#101713;--surface:#18221c;--text:#edf4ed;--muted:#adc0b1;--line:#34453a;--accent:#9ad6b3;--soft:#24392c;--warn:#ffa68c}}
-*{box-sizing:border-box}html{scroll-padding-top:24px}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.65 system-ui,sans-serif}main{max-width:1120px;margin:auto;padding:38px 30px 70px}a{color:var(--accent);text-underline-offset:3px}a:hover{text-decoration-thickness:2px}:focus-visible{outline:3px solid var(--accent);outline-offset:5px}header,.section-heading{display:flex;align-items:center;justify-content:space-between;gap:20px}header{border-bottom:1px solid var(--line);padding-bottom:22px;color:var(--muted);font-size:12px}.brand{font-weight:800;letter-spacing:.18em;color:var(--accent)}h1{font-size:clamp(28px,4vw,46px);line-height:1.13;letter-spacing:-.035em;margin:30px 0 16px;max-width:960px;overflow-wrap:anywhere}h2{font-size:22px;letter-spacing:-.02em;margin:0}h3{font-size:15px;margin:20px 0 8px}p{margin:10px 0}.muted{color:var(--muted)}.lead{font-size:19px;line-height:1.5;max-width:930px}.eyebrow{text-transform:uppercase;letter-spacing:.12em;font-size:11px;color:var(--muted)}nav{display:flex;gap:12px 22px;flex-wrap:wrap;margin:25px 0}nav a{font-size:13px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:24px 0 14px}.bar{height:6px;background:var(--soft);border-radius:3px;margin-top:10px;overflow:hidden}.bar span{display:block;height:100%;background:var(--accent)}.causes{padding-left:22px}.causes li{margin:12px 0}.causes p{margin:4px 0}.metric,section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px}.metric h3{font-size:12px;font-weight:550;color:var(--muted);margin:0}.metric strong{display:block;font-size:30px;letter-spacing:-.04em;line-height:1.4;margin-top:8px}.metric small{display:block;color:var(--muted);line-height:1.5;margin-top:8px}section{margin:20px 0}section>h2{margin-bottom:12px}.tag{display:inline-block;border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600;color:var(--muted)}.warning{color:var(--warn)}.notice{padding:15px 18px;border-left:3px solid var(--warn);background:var(--surface);border-radius:5px;margin:15px 0}.basis{font-size:12px;color:var(--muted);background:var(--soft);padding:12px 15px;border-radius:8px}ul{padding-left:21px}li{margin:7px 0}.attention{list-style:none;padding:0}.attention li{border-top:1px solid var(--line);padding:14px 0;margin:0}.attention a{font-weight:650}.attention p{font-size:13px;color:var(--muted);margin:4px 0}.attention .tag{margin-right:8px}details{border-top:1px solid var(--line);padding:16px 0}summary{cursor:pointer;font-weight:600;overflow-wrap:anywhere}details>p,pre{overflow-wrap:anywhere}.trial:target,.pair-card:target,.turn:target,.event:target{outline:2px solid var(--accent);outline-offset:6px;border-radius:6px}.trial>summary{line-height:1.9}.trial .muted{font-size:12px}.turn{border-left:2px solid var(--line);padding:0 16px;margin:18px 0}.turn.user{border-color:var(--accent)}.turn.error{border-color:var(--warn)}.turn small{font-size:11px;color:var(--muted)}pre{white-space:pre-wrap;font:13px/1.7 ui-monospace,monospace;background:var(--bg);padding:15px;border-radius:8px;overflow:auto;max-height:480px}.turn pre{font:15px/1.7 system-ui,sans-serif;padding:8px 0;background:none;margin:0}.event{padding:9px 0}.event summary,.event-link{font-size:12px}.pair{display:grid;grid-template-columns:1fr 1fr;gap:22px}.pair>div{min-width:0}.pair-card{border-top:1px solid var(--line);padding:12px 0;margin-top:24px}.pair-card>h3{font-size:17px}.pair-card ul{font-size:12px}.answer{min-height:85px}.full-task{max-width:920px;border:0;font-size:12px;padding:0}.full-task summary{font-weight:500;color:var(--muted)}.full-task p{white-space:pre-wrap}code{font-size:12px;overflow-wrap:anywhere}.limits{font-size:13px}footer{color:var(--muted);font-size:12px;margin-top:30px}.skip{position:absolute;left:-9999px}.skip:focus{left:20px;top:12px;background:var(--surface);padding:10px}.empty{padding:10px 0;color:var(--muted)}table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;border-bottom:1px solid var(--line);padding:9px;overflow-wrap:anywhere}
-@media(max-width:700px){main{padding:24px 16px}.grid{grid-template-columns:repeat(2,1fr)}.pair{grid-template-columns:1fr}.metric,section{padding:17px}header,.section-heading{align-items:flex-start;flex-direction:column;gap:8px}.lead{font-size:17px}}@media print{:root{--bg:#fff;--surface:#fff;--text:#000;--muted:#444;--line:#ccc;--accent:#154e35;--soft:#f6f6f6;--warn:#7a351e}main{padding:0}nav,.skip{display:none}section,.pair-card{break-inside:avoid}pre{max-height:none}a{color:inherit}.trial{break-inside:avoid}}
-</style></head><body><a class="skip" href="#attention">Перейти к замечаниям</a><main>
-<header><span class="brand">AGENT LAB</span><span>${escape(record.createdAt.slice(0, 16).replace('T', ' '))} UTC · ${record.mode === 'demo' ? 'Сценарное демо' : 'Живой прогон'} · <code>${escape(shortId(record.id))}</code></span></header>
-<h1>${escape(title(record))}</h1>${quality.lead}<p class="muted">${reviewWord(bundle)} · Версия ${escape(version(record))}${record.workflow === 'compare' ? ` · Итог по ${observed.scenarios.some(s => s.split === 'control') ? 'контрольным карточкам' : 'карточкам разработки'} выбранной версии` : ''}</p>
-<details class="full-task"><summary>Исходная задача и подключение</summary><p>${escape(record.task)}</p><p>Испытуемый: <code>${escape(target(record))}</code></p></details>
-${bundle.warnings.map(w => `<div class="notice" role="note">${escape(w)}</div>`).join('')}
-${quality.grid}
-${quality.basis}
-<p class="muted">${escape(sourceLine)}</p><nav aria-label="Разделы отчёта">${bundle.quality.causes.length ? '<a href="#why">Почему</a>' : ''}<a href="#attention">Замечания · ${attention.length}</a><a href="#repeats">Повторы</a>${bundle.comparison ? '<a href="#comparison">До и после</a>' : ''}<a href="#dialogues">Диалоги · ${trials.length}</a><a href="#cards">Карточки и критерии</a><a href="#limits">Границы результата</a></nav>
-${quality.why}
-<section id="attention"><h2>Что требует внимания</h2>${v.review.findings.length ? `<p class="notice">Замечания человека: ${v.review.flagged} диалогов · расхождения оценок: ${v.review.disagreements}. Исходные оценки сохранены; основания расхождений нужно проверить по трассе.</p>` : ''}${record.error ? `<p class="warning">${escape(record.error)}</p>` : ''}${attention.length ? `<ul class="attention">${attention.slice(0, 8).map(t => `<li><span class="tag ${isAgentFailure(observed, t) || t.outcome === 'invalid' ? 'warning' : ''}">${escape(['invalid', 'cancelled'].includes(t.outcome) ? outcomes[t.outcome] : pending.has(t.id) ? 'Нужен вердикт' : flagged.has(t.id) ? 'Замечание человека' : t.assessmentError ? 'Ошибка оценщика' : 'Провал разобран')}</span><a href="#${escape(trialId(record, t))}">${escape(record.scenarios.find(s => s.id === t.scenarioId)?.title ?? t.scenarioId)} →</a><p>${escape(v.review.findings.filter(f => f.trialId === t.id).map(humanFindingText).join(' ') || (t.checks.find(c => !c.passed)?.description ?? t.assessments?.find(a => a.result === 'fail' && record.scenarios.find(s => s.id === t.scenarioId)?.metrics?.some(m => m.id === a.metricId && m.subject === 'agent'))?.rationale ?? t.assessmentError ?? t.reason))}</p></li>`).join('')}</ul>${attention.length > 8 ? `<p><a href="#dialogues">Все замечания: ${attention.length} →</a></p>` : ''}` : `<p class="empty">${v.execution.completed ? 'В сохранённых диалогах нет зарегистрированных провалов. Это не гарантия качества в реальном трафике.' : 'Измерений пока нет. Следующий шаг указан ниже.'}</p>`}
-${record.failureModes?.length ? `<details><summary>Типы провалов</summary>${list(record.failureModes.flatMap(m => [`${m.name}: ${m.description}`, ...(m.promptQuotes ?? []).map(q => `Цитата промпта · гипотеза: «${q}»`)]))}</details>` : ''}
-<h3>Следующий шаг</h3>${list(v.nextSteps.slice(0, 1).map(n => n.text))}</section>
-<section id="repeats"><h2>Повторы одинаковых карточек</h2><p class="basis">Код и рубрики вместе для разбора; ручные вердикты отдельно. Наблюдаемые попытки не дают вероятность будущего успеха.</p>${record.settings.repeats > 1 ? `<ul>${v.repeats.map(r => `<li>${escape(repeatResultText(r))}<br>${r.trialIds.map((id, i) => `<a href="#${escape(trialId(record, { id }))}">Диалог ${i + 1}</a>`).join(" · ")}</li>`).join("")}</ul>` : '<p class="muted">По одной попытке на карточку и режим: повторяемость не проверена.</p>'}</section>
-${reassessmentHTML(record, before)}${comparisonHTML(bundle)}
-${final && record.workflow === 'compare' && observed.scenarios.some(s => s.split === 'control') ? `<section><h2>Контрольное сравнение</h2><p class="lead">Исходная версия: ${final.baselinePasses}/${final.validPairs} → выбранная версия: ${final.candidatePasses}/${final.validPairs}.</p><p>Исправлено ${final.fixed}, сломалось ${final.regressed}. ${final.validPairs} валидных пар из ${final.plannedPairs}.</p>${list(final.reasons)}<p class="muted">Все версии и попытки сохранены ниже с отдельными обозначениями.</p></section>` : ''}
-<section id="dialogues"><h2>Диалоги и основания</h2><p class="muted">Раскройте диалог. Ссылки # ведут к событию, на которое опиралась оценка; исходные оценки и вердикты человека сохранены отдельно.</p>${trials.length ? trials.map(t => trialHTML(record, t, v.review.findings.filter(f => f.trialId === t.id))).join('') : '<p class="empty">Диалоги появятся после утверждения карточек и запуска.</p>'}</section>
-${before && comparedBefore.length ? `<section id="before-dialogues"><h2>Диалоги до изменения · ${escape(version(before))}</h2><p class="muted">Базовый прогон <code>${escape(before.id)}</code>. Это исходные доказательства для сопоставленных попыток.</p>${comparedBefore.map(t => trialHTML(before, t, beforeFindings.filter(f => f.trialId === t.id))).join('')}</section>` : ''}
-<section id="cards"><h2>Карточки и критерии</h2><p class="muted">${record.reviewedAt ? 'Версия, использованная в прогоне.' : 'Черновик · карточки ещё не утверждены.'}</p>${visibleScenarios(record).map(s => `<details><summary>${escape(s.title)} <span class="tag">${escape({ synthetic: 'Синтетика', curated: 'Golden', production: 'Импортированный диалог' }[s.provenance])}</span></summary><p>${escape(s.user.persona ?? 'Без персоны · по цели, фактам и поведению')}${s.profileId ? ` · профиль ${escape(s.profileId)}` : ''}</p>${list(s.user.characteristics ?? [])}${list([`Цель: ${s.user.goal}`, `Знает: ${s.user.facts}`, ...(s.user.knows ?? []).map(v => `Известно: ${v}`), ...(s.user.cannotKnow ?? []).map(v => `Не знает: ${v}`), ...(s.user.answers ?? []).map(a => `Если спросят ${a.ifAsked}: «${a.reply}»`), ...(s.initialState.external ? [`Внешний мир: ${JSON.stringify(s.initialState.external)}`] : []), `Поведение: ${s.user.behavior}`, `Первая реплика: ${s.user.opening}`, ...(s.user.script ?? []).map((message, i) => `Продолжение ${i + 1}: ${message}`), `Успех: ${s.successCriteria ?? 'По проверкам ниже'}`])}<h3>Правило и источник</h3>${s.requirementIds.map(id => record.requirements.find(r => r.id === id)).filter(r => !!r).map(r => `<blockquote>${escape(r!.quote)}<br><small>${escape(record.sources.find(source => source.id === r!.sourceId)?.name ?? r!.sourceId)} · ${escape(r!.id)}</small></blockquote>`).join('')}<h3>Проверки и рубрики</h3>${list([...s.checks.map(c => `Код: ${c.description}. Проверяется: ${describeCheck(c)}`), ...(s.metrics ?? []).map(m => `${m.subject === 'simulator' ? 'Симулятор' : 'Агент'} · ${m.name}. Прошёл: ${m.passCriteria} Не прошёл: ${m.failCriteria}`)])}${s.assumptions?.length ? `<h3>Допущения</h3>${list(s.assumptions)}` : ''}</details>`).join('')}
-</section>
-<section id="limits"><details class="limits"><summary>Условия и границы результата · ${limits.length}</summary>${list(limits)}</details></section>
-<section><h2>Идентичность и источник доказательств</h2>${list(metadata(record))}${record.releaseLog ? `<details><summary>Выпуск версии</summary><pre>${escape(JSON.stringify(record.releaseLog, null, 2))}</pre></details>` : ''}${record.sourceEvidence ? `<details><summary>Исходные диалоги и вердикты · ${escape(record.sourceEvidence.runId)}</summary><pre>${escape(JSON.stringify(sourceEvidenceWithoutAudits(record.sourceEvidence), null, 2))}</pre></details>` : ''}</section>
-<footer><p>Локальный автономный отчёт · JSON-снимок содержит запись прогона и сравнение без полных ответов судьи; полные ответы судьи и журнал трасс остаются только в локальной папке Agent Lab рядом с записью прогона. ${escape(record.id)}</p></footer></main><script>${navigationScript}</script></body></html>`;
-}
-
 /** A run for export: legacy full judge audits are left out, receipts and verdicts stay. */
 function runWithoutAudits(run: Experiment): Experiment {
   return { ...run, trials: run.trials.map(({ judgeAudit: _audit, ...trial }) => trial),
@@ -220,8 +166,9 @@ function runWithoutAudits(run: Experiment): Experiment {
 }
 
 /**
- * Preserve the CLI's `experiment` field while exporting the shared snapshot.
- * The trace journal and full judge audits stay next to the record; the export only names them.
+ * The machine snapshot: the run record without full judge audits, the ResultView every surface
+ * shows, the comparison when there is one. The trace journal and full judge audits stay next to the
+ * record; the export only names them.
  */
 export function jsonReport(bundle: EvidenceBundle): string {
   const { record, traceJournal, before, ...evidence } = bundle;
@@ -232,67 +179,4 @@ export function jsonReport(bundle: EvidenceBundle): string {
     traceJournal: { file: `${record.id}.trace.jsonl`, bytes: Buffer.byteLength(traceJournal) },
     judgeAudits: { included: false, omittedLegacyAudits: legacyAudits,
       location: `Полные ответы судьи остаются в локальной папке Agent Lab: ${record.id}.judge/<trialId>.json или, для старых записей, в ${record.id}.json.` } }, null, 2);
-}
-
-function judgeLines(record: Experiment, trial: Trial): string[] {
-  const judge = judgeSummary(trial);
-  if (!judge) return [];
-  const raw = judge.legacy ? `Исходные ответы — в записи прогона ${md(`${record.id}.json`)} в локальной папке Agent Lab; в экспорт они не входят.` : `Полный ответ судьи — в файле ${md(judgeFile(record, trial))} рядом с записью прогона.`;
-  return [`- Судья: ${md(judge.provider)}/${md(judge.model)}, ${judge.calls} вызовов в свежих сессиях. Протокол: ${md(judge.protocolHash)}. ${raw}`];
-}
-
-export function markdownReport(bundle: EvidenceBundle): string {
-  const { record, evidence: e, comparison, before } = bundle;
-  const v = e.verdict;
-  const quote = (value: unknown) => md(value).split('\n').map(line => `> ${line}`).join('\n');
-  const rows = [
-    `# Agent Lab · ${md(title(record))}`, '',
-    '## Итог', '', ...(bundle.quality.scope.dialogues ? [md(bundle.quality.headline), '', ...(qualityLines(bundle.quality).coverage ? [md(qualityLines(bundle.quality).coverage), ''] : []), md(v.headline), '', ...qualityLines(bundle.quality).metrics.map(m => `- ${md(m)}`), ''] : [md(v.headline), '']),
-    ...(bundle.quality.causes.length ? ['### Почему не справился', '', ...bundle.quality.causes.slice(0, 5).map((c, i) => `${i + 1}. **${md(c.name)}** · ${dlg(c.dialogues)}${c.stage ? ` · ${md(c.stage)}` : ''}. ${md(c.description)}${c.example ? ` Пример — ${md(c.example.card)}: ${c.example.verified ? `«${md(c.example.quote)}»` : md(c.example.quote)}` : ''}${c.promptQuotes.map(q => ` Правило промпта: «${md(q)}»`).join('')}`), ''] : []),
-    ...(bundle.quality.scope.dialogues ? [...(qualityLines(bundle.quality).rag.length ? ['### RAG-контекст', '', ...qualityLines(bundle.quality).rag.map(md), ''] : []), md(qualityLines(bundle.quality).judge), md(qualityLines(bundle.quality).queue), '', md(qualityLines(bundle.quality).scope), md(qualityLines(bundle.quality).limits), ''] : []),
-    `Выполнено: ${v.execution.completed}/${v.execution.planned}. Не измерено: ${v.execution.invalid}. Остановлено: ${v.execution.cancelled}. Не выполнено: ${v.execution.missing}.`,
-    `Кодовые проверки: ${v.graded ? `${v.passed}/${v.graded} диалогов` : observedRecord(record).scenarios.some(s => s.checks.length) ? 'заданы, измерений нет' : 'не заданы'}. ${modelLabel(record)} по рубрикам: ${v.rubric.passed}/${v.rubric.assessed}; неясно ${v.rubric.unknown}.`,
-    `Вердикт на весь диалог: ${v.review.reviewed}/${v.review.total}. Пройдено ${v.review.passed}, не пройдено ${v.review.failed}. Автоматических провалов без решения: ${v.review.pending}. ${reviewWord(bundle)}.`,
-    `Карточки: синтетических ${v.provenance.synthetic.cards}, golden ${v.provenance.curated.cards}, из продакшна ${v.provenance.production.cards}.`, '',
-    `Проверка карточек: ${record.reviewMode === 'human' ? 'человеком' : record.reviewMode === 'expectations' ? 'ожидания подтверждены владельцем' : record.reviewMode === 'automated' ? 'автоматическая' : 'ожидается'}.`,
-    `Испытуемый: ${md(target(record))}. Версия: ${md(version(record))}. Прогон: ${md(record.id)}.`, '',
-    ...metadata(record).map(md), '',
-    ...bundle.warnings.map(w => `- ${md(w)}`), '',
-    ...(v.review.findings.length ? ['### Человек и автоматическая оценка', '', ...v.review.findings.map(f => `- Диалог ${md(f.trialId)}: ${md(humanFindingText(f))}`), '', 'Исходные оценки сохранены. Расхождение нужно проверить по трассе.', ''] : []),
-    '### Повторы одинаковых карточек', '', 'Код и рубрики вместе для разбора; ручные вердикты отдельно. Это наблюдения, не вероятность успеха.', '',
-    ...(record.settings.repeats > 1 ? v.repeats.map(r => `- ${md(repeatResultText(r))} Диалоги: ${r.trialIds.map(md).join(', ')}.`) : ['По одной попытке на карточку и режим: повторяемость не проверена.']), '',
-    '### Что делать дальше', '', ...v.nextSteps.map(n => `- ${md(n.text)}`), '',
-    '## Наблюдаемый результат', '',
-    ...(comparison ? [
-      md(comparison.headline), '',
-      `${bundle.comparisonSource?.kind === 'selected' ? 'База выбрана вручную' : 'Сравнение с предыдущим прогоном'}: ${md(before ? version(before) : bundle.comparisonSource?.beforeId)} → ${md(version(record))}.`,
-      `До: ${md(bundle.comparisonSource?.beforeId)}. После: ${md(record.id)}.`,
-      ...comparison.regressed.map(c => `- ${comparison.includesRubrics ? 'Оценка снизилась' : 'Сломалось'}: ${md(c.title)}`), ...comparison.fixed.map(c => `- ${comparison.includesRubrics ? 'Оценка выросла' : 'Исправлено'}: ${md(c.title)}`),
-      ...comparison.incomparable.map(c => `- Несравнимо: ${md(c.title)} · ${md(modes[c.userMode])} · ${c.repeat + 1}. ${md(c.reason)}`), '',
-      ...comparison.notes.map(n => `- ${md(n)}`), '',
-      ...(before ? comparison.pairs.filter(p => [...comparison.fixed, ...comparison.regressed].some(c => c.scenarioId === p.scenarioId)).flatMap(p => {
-        const a = before.trials.find(t => t.id === p.beforeTrialId); const b = record.trials.find(t => t.id === p.afterTrialId);
-        return a && b ? [`### ${md(record.scenarios.find(s => s.id === p.scenarioId)?.title ?? p.scenarioId)} · попытка ${p.repeat + 1}`, '', `До · ${md(a.id)}`, '', quote(lastAnswer(a)), '', ...originalChecks(before, a).map(c => `- ${md(c)}`), '', `После · ${md(b.id)}`, '', quote(lastAnswer(b)), '', ...originalChecks(record, b).map(c => `- ${md(c)}`), ''] : [];
-      }) : []),
-    ] : e.comparison ? [md(e.comparison.observed), md(e.comparison.status), ''] : [bundle.comparisonSource ? 'Сравнение недоступно; причина указана выше.' : 'Предыдущая версия для сравнения не задана.', '']),
-    '## Типы провалов', '', ...(record.failureModes ?? []).flatMap(m => [`- ${md(m.name)}: ${md(m.description)}`, ...(m.promptQuotes ?? []).map(q => `- Цитата промпта · гипотеза: ${md(q)}`)]), '',
-    '## Диалоги и основания', '',
-    ...visibleTrials(record).flatMap(t => [
-      `### ${md(record.scenarios.find(s => s.id === t.scenarioId)?.title ?? t.scenarioId)} · ${md(t.id)}`, '',
-      `Версия: ${md(t.revisionId)}. ${t.split === 'control' ? 'Контрольные карточки' : 'Карточки разработки'}. ${modes[t.userMode]}, попытка ${t.repeat + 1}.`,
-      `Результат кодовых проверок: ${t.outcome === 'ungraded' ? 'нет' : outcomes[t.outcome]}. ${md(t.reason)}`, '',
-      ...t.events.flatMap(event => [`**#${event.seq} · ${eventLabel(event)}${event.tool ? ` · ${md(event.tool)}` : ''}**`, '', quote(eventText(event)), '']),
-      ...originalChecks(record, t).map(c => `- ${md(c)}`),
-      ...judgeLines(record, t),
-      ...(t.assessmentError ? [`- Ошибка оценщика: ${md(t.assessmentError)}`] : []),
-      ...record.humanReviews.filter(r => r.trialId === t.id).map(r => `- Человек · ${outcomes[r.verdict]} · ${md(r.metricId ?? r.checkId ?? 'весь диалог')} · ${md(r.createdAt)}: ${md(r.note)}`), '',
-    ]),
-    '## Карточки бизнес-сценария', '', ...visibleScenarios(record).flatMap(s => [`### ${md(s.title)}`, '', `Цель: ${md(s.user.goal)}. Факты: ${md(s.user.facts)}`, '', ...(s.user.knows ?? []).map(v => `- Знает: ${md(v)}`), ...(s.user.cannotKnow ?? []).map(v => `- Не знает: ${md(v)}`), ...(s.user.answers ?? []).map(a => `- Если спросят ${md(a.ifAsked)}: «${md(a.reply)}»`), ...(s.initialState.external ? [`Внешний мир: ${md(JSON.stringify(s.initialState.external))}`] : []), '']),
-    ...(record.releaseLog ? ['## Выпуск версии', '', md(JSON.stringify(record.releaseLog)), ''] : []),
-    '## Исходная задача', '', quote(record.task), '',
-    '## Границы доказательств', '',
-    ...[...new Set([...v.confidenceReasons.map(n => n.text), ...e.notes, ...record.limitations])].map(n => `- ${md(n)}`), '',
-    'Полные состояния, журнал и базовый прогон для сравнения сохранены в JSON-снимке.', '',
-  ];
-  return rows.join('\n');
 }

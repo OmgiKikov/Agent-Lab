@@ -8,7 +8,7 @@ import { stripTerminalSequences } from '@earendil-works/pi-tui';
 /** Everything shown in the terminal crosses this boundary; line breaks survive, tabs become two spaces. */
 export function safeText(value: unknown): string {
   return stripTerminalSequences(String(value ?? '')).replace(/\r\n?/g, '\n').replace(/\t/g, '  ')
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f‪-‮⁦-⁩]/g, '');
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '');
 }
 /** `safeText` for a single output line. */
 export const safeLine = (value: unknown): string => safeText(value).replace(/\n+/g, ' ');

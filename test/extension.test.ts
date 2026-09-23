@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import { DefaultResourceLoader, SettingsManager, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext, type ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { DefaultResourceLoader, initTheme, SettingsManager, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, type Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { demoInput, demoTarget } from '../src/demo.js';
@@ -16,7 +16,8 @@ import { resultHash } from '../src/experiment.js';
 import { judgeAgreement } from '../src/agreement.js';
 import { assertPlainCopy } from './helpers/copy-check.js';
 import { ExperimentStore } from '../src/store.js';
-import { buildResultView, resultViewLines } from '../src/result-view.js';
+import { buildResultView } from '../src/result-view.js';
+import { chatBlock, fitRows, MAX_WIDTH, plainText, resultScreen } from '../src/result-text.js';
 import { COUNTING_RULES, markTargets, measurementUsable, primaryMetricId } from '../src/outcomes.js';
 import { demoEvaluateRecord, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 import { libraryFixture } from './helpers/scenario-library.js';
@@ -473,7 +474,8 @@ test('native command demo fixture requires two separate confirmations and preser
     assert.deepEqual(trial.assessments, evidence.trials[0].assessments);
     const exported = output(await tools.get('agent_lab_inspect')!.execute('export-reviewed', { id: report.id, export: true }, undefined, undefined, ctx));
     const markdown = await readFile(exported.artifacts.report, 'utf8');
-    assert.match(markdown, /Сценарная оценка демо/); assert.doesNotMatch(markdown, /Оценка модели/);
+    // The demo's scripted estimate is labelled as the training example and never passed off as a model judgment.
+    assert.match(markdown, / · учебный пример$/m); assert.doesNotMatch(markdown, /Оценка модели/);
     await assert.rejects(access(join(directory, '.agent-lab', '.lock')));
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
@@ -492,7 +494,7 @@ test('native tool cancellation preserves partial preparation and releases owners
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('the built-in example prepares a library for its external module agent from real dialogues; inspect and exports carry the evidence summary', async () => {
+test('the built-in example prepares a library for its external module agent from real dialogues; inspect and exports show the situation from its dialogue', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-extension-v2-'));
   const { tools, shutdown } = registered();
   const ctx = { cwd: directory, model: undefined, mode: 'print', hasUI: false } as ExtensionContext;
@@ -502,19 +504,20 @@ test('the built-in example prepares a library for its external module agent from
     assert.deepEqual(report.target, demoTarget());
     assert.equal(report.dialogueCount, 2, 'the example is prepared from its own two dialogues');
     assert.equal(report.scenarioCount, 0, 'nothing is runnable before the owner accepts a variant');
-    assert.equal(report.evidence.comparison, null);
+    assert.equal(report.comparison, undefined); assert.equal(report.view, undefined, 'a draft has no result yet');
     // The owner accepts the ready variant in the library; the draft then carries it as a card from a real dialogue.
     const lab = new ExperimentLab(join(directory, '.agent-lab'));
     await lab.init();
     try { await lab.acceptLibrary(report.id, libraryHash((await lab.readLibrary(report.id)).library), ['known_number']); } finally { await lab.close(); }
     const inspect = output(await tools.get('agent_lab_inspect')!.execute('inspect-v2', { id: report.id, export: true }, undefined, undefined, ctx));
-    assert.equal(inspect.evidence.verdict.provenance.production.cards, 1);
     assert.equal(inspect.artifacts.agent, undefined, 'an external agent is not exported as an AgentSpec');
     assert.match(await readFile(inspect.artifacts.htmlReport, 'utf8'), /<!doctype html>/);
     assert.equal(inspect.scenarios.filter((s: { provenance: string }) => s.provenance === 'production').length, 1);
+    // The report of the draft names the situation taken from the owner's own dialogue and says the run has not started.
     const markdown = await readFile(inspect.artifacts.report, 'utf8');
-    assert.match(markdown, /Наблюдаемый результат/); assert.match(markdown, /Диалоги и основания/); assert.match(markdown, /Карточки бизнес-сценария/); assert.match(markdown, /Границы доказательств/);
-    assert.match(markdown, /Испытуемый: модуль/);
+    assert.match(markdown, /^# Проверка агента · 1 ситуация$/m);
+    assert.match(markdown, /^\*\*Точность агента:\*\* прогон ещё не запускался$/m);
+    assert.match(markdown, /^## Ситуации$/m); assert.match(markdown, /^из диалога №1$/m);
     await assert.rejects(access(join(directory, '.agent-lab', '.lock')));
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
@@ -526,13 +529,14 @@ test('the plain verdict leads every surface without research presets', async () 
   try {
     const quick = output(await tools.get('agent_lab_build')!.execute('build-quick', { mode: 'demo' }, undefined, undefined, ctx));
     assert.equal(quick.phase, 'review');
-    assert.match(quick.evidence.verdict.headline, /Черновик готов.*после подтверждения/);
-    assert.ok(quick.evidence.verdict.nextSteps.length >= 1);
+    // A draft has no result yet: no number, no «Дальше» line; its report says the run has not started.
+    assert.equal(quick.view, undefined); assert.equal(quick.nextStep, undefined);
     await assert.rejects(tools.get('agent_lab_build')!.execute('build-thorough', { mode: 'live', task: 'Проверить агента', withoutDialogues: true,
       materials: [{ name: 'Правила', content: 'Отвечать по правилам.' }], target: { kind: 'command', command: process.execPath, args: [] }, preset: 'thorough' }, undefined, undefined, ctx));
     const markdown = await readFile(quick.artifacts.report, 'utf8');
-    assert.ok(markdown.indexOf('## Итог') < markdown.indexOf('## Наблюдаемый результат'));
-    assert.match(markdown, /Карточки: синтетических 0, golden 0, из продакшна 0/);
+    assert.match(markdown, /^# Проверка агента · 0 ситуаций$/m);
+    const answer = markdown.indexOf('**Точность агента:** прогон ещё не запускался');
+    assert.ok(answer > 0 && answer < markdown.indexOf('## Как считали'), 'the answer leads the report');
     await assert.rejects(access(join(directory, '.agent-lab', '.lock')));
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
@@ -579,15 +583,17 @@ test('Pi inspect of a repeat shows the same first block as the CLI summary, stab
 
   const inspected = output(await tools.get('agent_lab_inspect')!.execute('repeat-view', { id: repeatId }, undefined, undefined,
     { cwd: directory, hasUI: false, mode: 'print' } as ExtensionContext));
-  const viewLines: string[] = inspected.viewLines;
-  assert.ok(viewLines.some(line => line.startsWith('Нестабильных:') || line.startsWith('Стабильность не проверена:')), viewLines.join('\n'));
+  // A repeat is checked against its source run; a flip would be counted in the trust line as «нестабильно N».
+  assert.ok(inspected.view.stability, 'a repeat is compared with its source run');
+  const unstable = inspected.view.cards.filter((card: { control: boolean; flaky: boolean; unstable: boolean }) => !card.control && (card.flaky || card.unstable)).length;
+  const lines: string[] = inspected.resultLines;
+  const head = (all: string[]) => all.slice(0, all.indexOf(''));
+  assert.equal(head(lines).some(line => line.includes(`нестабильно ${unstable}`)), unstable > 0, head(lines).join('\n'));
   const cli = spawnSync(process.execPath, [fileURLToPath(new URL('../dist/cli.js', import.meta.url)), 'summary', '--id', repeatId, '--data-dir', data], { encoding: 'utf8' });
   assert.equal(cli.status, 0, cli.stderr);
-  const block = cli.stdout.split('\n');
-  const first = block.slice(0, block.indexOf(''));
-  const detailsAt = first.indexOf('Не измерено по причинам:');
-  const cliBlock = (detailsAt < 0 ? first : first.slice(0, detailsAt)).filter(line => !line.startsWith('  нестабильно:'));
-  assert.deepEqual(viewLines, cliBlock);
+  // The number, the trust line and the reality line read the same in Pi and on the command line.
+  assert.ok(head(lines).length >= 2, lines.join('\n'));
+  assert.deepEqual(head(cli.stdout.split('\n')), head(lines));
 });
 
 /** A finished demo evaluation copied into a fresh Pi working directory, ready for `/agent-lab`. */
@@ -1054,25 +1060,21 @@ test('Pi inspect payload, its collapsed result and CLI summary open with the sam
     const inspect = tools.get('agent_lab_inspect')!;
     const result = await inspect.execute('inspect-view', { id: record.id }, undefined, undefined, { cwd, hasUI: false, mode: 'print' } as ExtensionContext);
     const payload = output(result);
-    const expected = resultViewLines(buildResultView(record));
-    assert.deepEqual(payload.viewLines, expected);
-    assert.equal(payload.view.headline.text, expected[0]);
-    const rendered = inspect.renderResult!(result as never, { expanded: false, isPartial: false }, { fg: (_color: string, text: string) => text } as never) as unknown as Component;
-    const text = rendered.render(400).map(line => line.trimEnd()).join('\n').trim();
-    assert.ok(text.startsWith(payload.viewLines.join('\n')), 'the collapsed tool result opens with the ResultView block');
-    if (payload.view.failures.length) {
-      assert.ok(Array.isArray(payload.failureLines) && payload.failureLines.length, 'a run with failures carries the failure section');
-      assert.ok(['Главные причины провалов:', 'Провалы:'].includes(payload.failureLines[0]), payload.failureLines[0]);
-      const pointer = `Все провалы — /agent-lab ${record.id.slice(0, 8)}, раздел 1, Enter.`;
-      assert.equal(payload.failureLines.at(-1), pointer);
-      // The pointer to the board is the last row: the disagreements (F7) and the next step (F8)
-      // come between the causes and it, so the Pi order matches the CLI one.
-      const causes = payload.failureLines.slice(0, -1).join('\n');
-      const agreement = (payload.disagreementLines ?? []).join('\n');
-      assert.ok(text.startsWith([payload.viewLines.join('\n'), causes, agreement, pointer].filter(Boolean).join('\n\n')),
-        'the block, the failure section, the agreement section and the pointer follow in that order');
-      assert.ok(!text.includes('ЧТО ТРЕБУЕТ ВНИМАНИЯ'));
-    }
+    // The payload carries the one view and the board's full result screen made from it; «Дальше» is the chat line of the same view.
+    assert.deepEqual(payload.view.headline, buildResultView(record).headline);
+    assert.deepEqual(payload.resultLines, plainText(resultScreen(payload.view, { surface: 'board', details: true }), MAX_WIDTH).split('\n'));
+    assert.match(payload.nextStep, /^Дальше: /);
+    // The collapsed chat block is drawn from that view: it opens with the same number and trust line as the board.
+    initTheme('dark', false);
+    const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+    const rendered = inspect.renderResult!(result as never, { expanded: false, isPartial: false }, theme as never) as unknown as Component;
+    const shown = rendered.render(MAX_WIDTH).map(line => stripTerminalSequences(line).trimEnd());
+    const block = fitRows(chatBlock(payload.view, { expanded: false }), MAX_WIDTH).map(line => line.text.trimEnd());
+    assert.deepEqual(shown.slice(0, block.length), block);
+    assert.equal(shown[0], payload.resultLines[0], 'the chat and the board open with the same number');
+    assert.ok(!shown.join('\n').includes('"resultLines"'), 'the block is drawn, not the raw payload');
+    if (payload.view.failures.length) assert.ok(shown.slice(block.length).join(' ').includes('«покажи ошибку 1»'), shown.join('\n'));
+    // The CLI summary prints the same screen: the same head, and every failure listed the same way.
     const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
     const child = spawn(process.execPath, [cli, 'summary', '--id', record.id, '--data-dir', join(cwd, '.agent-lab')]);
     let stdout = ''; let stderr = '';
@@ -1080,9 +1082,11 @@ test('Pi inspect payload, its collapsed result and CLI summary open with the sam
     const code = await new Promise<number | null>(resolve => child.on('close', resolve));
     assert.equal(code, 0, stderr);
     const lines = stdout.split('\n');
-    const block = lines.slice(0, lines.indexOf(''));
-    const details = block.indexOf('Не измерено по причинам:');
-    assert.deepEqual(details < 0 ? block : block.slice(0, details), payload.viewLines);
+    const head = (all: string[]) => all.slice(0, all.indexOf(''));
+    assert.deepEqual(head(lines), head(payload.resultLines));
+    const section = (all: string[], title: string) => { const at = all.indexOf(title); return at < 0 ? [] : all.slice(at, all.indexOf('', at)); };
+    assert.deepEqual(section(lines, ' Все ошибки'), section(payload.resultLines, ' Все ошибки'));
+    assert.equal(section(lines, ' Все ошибки').filter(line => line.trimStart().startsWith('✗ ')).length, payload.view.failures.length);
   } finally {
     await shutdown();
     await rm(cwd, { recursive: true, force: true });
@@ -1113,17 +1117,22 @@ test('the owner’s disagreement with the judge reads the same in the Pi payload
     await store.init();
     try { await store.save(record); } finally { await store.close(); }
 
-    const expected = ['Несогласия с судьёй (1):', `! ${marked.scenario.title}`,
-      '  Судья: не справился → владелец: справился', '  Причина: «Проверка: судья не учёл уточнение клиента.»'];
-    const nextStep = `Отметить согласие с судьёй можно в Pi: /agent-lab ${record.id.slice(0, 8)}, раздел 3.`;
+    // F7: the situation, both verdicts and the owner's reason in full, whitespace folded.
+    const expected = [' Вы не согласились с судьёй', `   ${marked.scenario.title}`,
+      '     Судья: не справился → вы: справился', '     Причина: «Проверка: судья не учёл уточнение клиента.»'];
     const inspect = tools.get('agent_lab_inspect')!;
     const result = await inspect.execute('inspect-disagreement', { id: record.id }, undefined, undefined, { cwd, hasUI: false, mode: 'print' } as ExtensionContext);
     const payload = output(result);
-    assert.deepEqual(payload.disagreementLines, [...expected, '', nextStep]);
+    const section = (all: string[]) => { const at = all.indexOf(expected[0]!); return at < 0 ? [] : all.slice(at, all.indexOf('', at)); };
+    assert.deepEqual(section(payload.resultLines), expected);
+    assert.deepEqual([payload.view.agreement.checked, payload.view.agreement.agreed], [1, 0]);
 
-    const rendered = inspect.renderResult!(result as never, { expanded: false, isPartial: false }, { fg: (_color: string, text: string) => text } as never) as unknown as Component;
-    const shown = rendered.render(400).map(line => line.trimEnd().trim());
-    for (const line of [...expected, nextStep]) assert.ok(shown.includes(line.trim()), `${line} is missing from the collapsed result`);
+    // The collapsed chat block does not list the disagreement; its trust line counts it.
+    initTheme('dark', false);
+    const rendered = inspect.renderResult!(result as never, { expanded: false, isPartial: false },
+      { fg: (_color: string, text: string) => text, bold: (text: string) => text } as never) as unknown as Component;
+    const shown = rendered.render(400).map(line => stripTerminalSequences(line).trimEnd());
+    assert.ok(shown.some(line => line.includes('с судьёй согласны 0 из 1')), shown.join('\n'));
 
     const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
     const child = spawn(process.execPath, [cli, 'summary', '--id', record.id, '--data-dir', join(cwd, '.agent-lab')]);
@@ -1132,11 +1141,10 @@ test('the owner’s disagreement with the judge reads the same in the Pi payload
     const code = await new Promise<number | null>(resolve => child.on('close', resolve));
     assert.equal(code, 0, stderr);
     const lines = stdout.split('\n');
-    const causeAt = lines.findIndex(line => ['Главные причины провалов:', 'Провалы:'].includes(line));
-    const startAt = lines.findIndex(line => line.startsWith('Несогласия с судьёй ('));
-    const endAt = lines.findIndex(line => line.startsWith('Все провалы (') || line === 'Подробности:');
-    assert.ok(causeAt >= 0 && causeAt < startAt && startAt < endAt, `${causeAt} / ${startAt} / ${endAt}`);
-    assert.deepEqual(lines.slice(startAt, endAt).filter(line => line.trim()), [...expected, nextStep]);
+    assert.deepEqual(section(lines), expected);
+    // On the result screen the disagreement follows every error and comes before «Дальше».
+    const causeAt = lines.indexOf(' Почему ошибается'), errorsAt = lines.indexOf(' Все ошибки'), startAt = lines.indexOf(expected[0]!), nextAt = lines.indexOf(' Дальше');
+    assert.ok(causeAt >= 0 && causeAt < errorsAt && errorsAt < startAt && startAt < nextAt, `${causeAt} / ${errorsAt} / ${startAt} / ${nextAt}`);
 
     // No chat path writes a mark: no tool takes a verdict, a one-key mark or the judgment it
     // answers, and the review tool still asks only which dialogue to show the owner. The one
@@ -1392,7 +1400,7 @@ test('headless model tools prepare and edit only; approvals and human assessment
     assert.equal(report.phase, 'review'); assert.equal(report.workflow, 'evaluate');
     assert.equal(report.reviewMode, null); assert.equal(report.trialCount, 0);
     assert.equal(report.comparison, undefined); assert.equal(report.scenarioCount, 0, 'the library waits for the owner to accept variants');
-    assert.ok(updates.length >= 1); assert.match(report.nextStep, /Дальше/);
+    assert.ok(updates.length >= 1); assert.equal(report.nextStep, undefined, 'a draft has no result yet, so no «Дальше» line');
     const evidence = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
     assert.equal(evidence.settings.repeats, 2); assert.equal(evidence.trials.length, 0);
     assert.equal(evidence.controlConsumedAt, null);

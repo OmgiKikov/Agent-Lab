@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compileCard } from '../src/card/compile.js';
 import { headlineRule, recordedExpectationResult, undecidedExpectation } from '../src/card/expectations.js';
-import { cardVerdict, headlineCardOutcome } from '../src/comparison.js';
+import { cardVerdict, headlineCardOutcome } from '../src/run.js';
 import type { HumanReview, Trial } from '../src/contracts.js';
 import { judgeInput, observableSources } from '../src/judge.js';
 import { countingRuleFor, headlineTrialResult, markTargets, markUnderCurrentRule } from '../src/outcomes.js';
@@ -127,7 +127,8 @@ test('the result names the parts of every card and says which expectation failed
   const view = buildResultView(cardRun([scenario], [cardAttempt('t', scenario, { e1: 'pass', e2: 'fail', e3: 'pass' })]));
   assert.deepEqual({ passed: view.headline.passed, decided: view.headline.decided }, { passed: 0, decided: 1 });
   assert.deepEqual(view.cards[0]!.parts.map(part => `${part.label}:${part.outcome}`), ['А:pass', 'Б:fail', 'В:pass']);
-  assert.equal(view.breakdown.text, null, 'no goal and prompt-rule row for a card');
+  assert.deepEqual([view.breakdown.goal.decided, view.breakdown.rules.decided], [0, 0], 'no goal and prompt-rule row for a card');
+  assert.equal(view.countingRules, 'all-expectations-v1', 'the view names the rule its situations are counted by');
   const [failure] = view.failures;
   assert.ok(failure);
   assert.ok(failure.lines.includes('  Должен был: Б — объяснить, как оформить возврат'), failure.lines.join('\n'));

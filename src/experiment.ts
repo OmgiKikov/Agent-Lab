@@ -16,7 +16,8 @@ import { ExperimentStore } from './store.js';
 import { LibraryConflict, Stopped } from './errors.js';
 import { assessTrial, evaluateTrial, grade } from './evaluation.js';
 import { scenarioSources } from './judge.js';
-import { awaitingVerdict, isAgentFailure, plannedTrials } from './comparison.js';
+import { awaitingVerdict } from './comparison.js';
+import { CODE_ONLY_ASSESSMENT, deriveRun, judgeFailure, plannedTrials } from './run.js';
 import { sameTargetVersion, targetFingerprint } from './target-version.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from './connection.js';
 import { preflightTarget, readPrompt, runRelease } from './targets.js';
@@ -454,7 +455,7 @@ export class ExperimentLab {
           ctx.signal.throwIfAborted();
           const trial = structuredClone(original);
           const scenario = record.scenarios.find(s => s.id === trial.scenarioId)!;
-          trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.judgeAudit; delete trial.judgeReceipt; delete trial.checkpoints; delete trial.checkpointReceipt;
+          trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.assessmentFailure; delete trial.judgeAudit; delete trial.judgeReceipt; delete trial.checkpoints; delete trial.checkpointReceipt;
           trial.manifestHash = record.manifestHash!;
           if (record.target.kind !== 'sandbox' && !trial.observation) trial.observation = { state: 'missing', tools: 'partial' };
           const started = performance.now();
@@ -473,10 +474,13 @@ export class ExperimentLab {
               if (assessmentRubrics(judged, trial).length && runtime) trial.assessments = await assessTrial(runtime, scenario, scenarioSources(record, scenario), trial, { ...ctx,
                 beforeCall() { ctx.beforeCall(); trial.usage.calls++; },
                 addUsage(usage) { ctx.addUsage(usage); addUsage(trial.usage, usage); } }, record.requirements);
-              else if (judged.metrics?.length) trial.assessmentError = 'Только точные проверки; рубрики не переоценивались.';
+              else if (judged.metrics?.length) { trial.assessmentError = CODE_ONLY_ASSESSMENT; trial.assessmentFailure = 'code_only'; }
             } catch (error) {
               trial.assessmentError = (error instanceof Error ? error.message : String(error)).slice(0, 4000);
+              trial.assessmentFailure = judgeFailure(error, ctx.signal);
               if (!trial.checks.length || ctx.signal.aborted) trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';
+              // The saved facts could not be graded again (a reset or a state the agent never confirmed): the agent's side, not the judge's.
+              if (trial.outcome === 'invalid') trial.invalidCause = 'agent';
             }
           }
           trial.elapsedMs = Math.round(performance.now() - started);
@@ -783,7 +787,10 @@ export class ExperimentLab {
    * lose a completed run: it is recorded as a limitation instead.
    */
   private async nameFailureModes(record: Experiment, runtime: Runtime, ctx: CallContext): Promise<void> {
-    const failed = record.trials.filter(t => isAgentFailure(record, t));
+    // Exactly the attempts the number calls failures: a cause must explain the headline, not a rubric it does not count.
+    // Clustering runs just before the run turns to results_review, and a strict legacy card is decided only on a finished
+    // run, so the failures are read from the record as it is about to be saved.
+    const failed = deriveRun({ ...record, phase: 'results_review' }).failedAttempts;
     if (!runtime.failureModes || !failed.length) return;
     const failures = failed.map(trial => ({
       trialId: trial.id,

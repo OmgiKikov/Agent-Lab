@@ -7,14 +7,15 @@ import { Type } from 'typebox';
 import { z } from 'zod';
 import { ExperimentLab, draftHash, resultHash } from '../src/experiment.js';
 import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, reassessmentSchema, runnableTargetSchema, isRunning, SCENARIO_LIMIT, settingsSchema, type Experiment, type HumanReviewInput } from '../src/contracts.js';
-import { awaitingVerdict, cardVerdict, evidenceSummary, headlineCardOutcome, plannedTrials } from '../src/comparison.js';
+import { awaitingVerdict } from '../src/comparison.js';
+import { cardVerdict, headlineCardOutcome, plannedTrials } from '../src/run.js';
 import { judgeAgreement } from '../src/agreement.js';
 import { markTargets } from '../src/outcomes.js';
-import { expectationSheet, qualityLines, qualitySummary, testPlanLines, trialProofLines } from '../src/quality.js';
+import { expectationSheet, testPlanLines, trialProofLines } from '../src/quality.js';
 import { demoInput } from '../src/demo.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
-import { agreementSectionLines, allFailuresPointer, buildResultView, causeSection, resultViewLines, SECTION_TEXT, type ResultView } from '../src/result-view.js';
-import { rowsToLines } from '../src/explain.js';
+import { buildResultView, type ResultView } from '../src/result-view.js';
+import { accuracyRow, MAX_WIDTH, nextRows, plainText, resultScreen } from '../src/result-text.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../src/connection.js';
 import { readData, selectValidationDialogues, readDialogueImport, importDialogues } from '../src/imports.js';
 import { expandMaterials } from '../src/materials.js';
@@ -88,31 +89,20 @@ function runPlan(record: Experiment, cwd?: string): string {
 /** `view` is the evidence bundle's view when the caller has one, so stability matches the CLI summary. */
 function summary(record: Experiment, directory: string, view?: ResultView) {
   const comparison = record.comparisons.findLast(c => c.split === 'control');
-  const evidence = evidenceSummary(record);
-  const quality = record.trials.length ? qualitySummary(record) : undefined;
   const block = record.trials.length ? view ?? buildResultView(record) : undefined;
-  const section = block ? causeSection(block) : null;
-  const failureLines = block && section
-    ? [SECTION_TEXT[section.kind].text, ...rowsToLines(section.rows), ...(block.failures.length ? [allFailuresPointer(record.id)] : [])]
-    : undefined;
   // A draft carries its whole expectation sheet, so what the agent must do stays in the chat history (UI-SPEC Chat step 5).
   const sheet = record.workflow === 'evaluate' && record.phase === 'review' && record.scenarios.length ? expectationSheet(record) : undefined;
   return {
     ...(sheet ? { sheetLines: sheet.lines } : {}),
-    // Lead with the answer a person asked for; the detailed evidence follows in the same object.
-    ...(quality ? { quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes.slice(0, 5), humanQueue: quality.humanQueue, human: quality.human } } : {}),
-    // The same block lines the CLI summary prints first (block only, no details).
-    ...(block ? { view: block, viewLines: resultViewLines(block) } : {}),
-    // The same failure section the CLI prints under the block; raw text, escaped by each surface.
-    ...(failureLines ? { failureLines } : {}),
-    // The same disagreement list and next-step row the CLI prints after the causes (F7, F8).
-    ...(block ? { disagreementLines: agreementSectionLines(block) } : {}),
+    // Lead with the answer: the same screen the board and the CLI show — the number, the trust line, the
+    // causes, every error, what was not measured and the owner's disagreements — then the view it is made of.
+    ...(block ? { resultLines: plainText(resultScreen(block, { surface: 'board', details: true }), MAX_WIDTH).split('\n'), view: block } : {}),
     id: record.id, runKind: record.runKind ?? 'evaluation', phase: record.phase, mode: record.mode, workflow: record.workflow,
     reviewMode: record.reviewMode, resultsReviewedAt: record.resultsReviewedAt,
     draftHash: draftHash(record), acceptedDraftHash: record.acceptedDraftHash, resultHash: record.trials.length ? resultHash(record) : undefined,
     message: record.message, error: record.error, questions: record.questions,
     scenarioCount: record.scenarios.length, revisionCount: record.revisions.length,
-    target: record.target, dialogueCount: record.dialogues.length, evidence,
+    target: record.target, dialogueCount: record.dialogues.length,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, parentRunId: record.parentRunId,
     positiveControlScenarioIds: record.positiveControlScenarioIds,
     trialCount: record.trials.length, humanReviews: record.humanReviews ?? [], usage: record.usage, failureModes: record.failureModes ?? [],
@@ -124,7 +114,7 @@ function summary(record: Experiment, directory: string, view?: ResultView) {
       scenarioFamilies: comparison.families, delta: comparison.delta, interval: comparison.interval, reasons: comparison.reasons,
     },
     limitations: record.limitations,
-    nextStep: evidence.verdict.nextSteps[0] ? `Дальше: ${evidence.verdict.nextSteps[0].text}` : undefined,
+    nextStep: block ? nextRows(block, 'chat')[0]?.text : undefined,
     artifacts: { evidence: resolve(directory, `${record.id}.json`),
       ...(record.trials.length ? { traceJournal: resolve(directory, `${record.id}.trace.jsonl`) } : {}) },
   };
@@ -652,7 +642,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         returnToBoard(ctx, record.id);
         const note = `Результаты прогона ${shortId(record.id)}`;
         if (params.failure !== undefined) {
-          const view = bundle.view ?? buildResultView(bundle.record);
+          const view = bundle.view;
           const titles = view.failures.map((item, index) => `${index + 1}. ${safeText(item.title)}`);
           if (!view.failures.length) return feedResult(callId, { failures: 0, notMeasured: view.notMeasured.total, message: 'No failed situation in the headline of this run.' },
             { rows: [row('В этом прогоне нет провалов по основному показателю.', 'success'), ...(view.notMeasured.total ? [row(`Не измерено ситуаций: ${view.notMeasured.total}.`, 'warning', false, 1)] : [])] }, note);
@@ -701,8 +691,13 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           warnings: bundle.warnings,
           ...(params.export ? { artifacts: await exportArtifacts(bundle, lab.store.directory) } : {}),
         };
-        // A run with dialogues opens with the same ResultView block as the CLI summary; a draft shows its scenarios.
-        if (record.trials.length) return { content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details: { id: record.id } };
+        // A run with dialogues opens with the same result block as a finished run in the chat (ui-spec §7.1); a draft shows its scenarios.
+        if (record.trials.length) {
+          const resultKey = `${record.id}:${resultHash(record)}`;
+          rememberView(resultKey, bundle.view);
+          const details: VerdictDetails = { kind: VERDICT_KIND, version: 1, runId: record.id, resultKey };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details };
+        }
         return feedResult(callId, output, libraryFeed(record), note);
       } catch (error) { return askOwner(callId, error); }
     },
@@ -1145,8 +1140,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const word = answer === 'agree' ? 'согласен с судьёй' : answer === 'disagree' ? 'не согласен с судьёй' : 'не могу сказать';
           const feed: Feed = { rows: [row(`Отмечено вашим решением: ${word} · «${safeText(scenario.title)}»`, 'success', true),
             row(agreement.queueFailures.length ? `Проверено провалов: ${agreement.failures.checked} из ${agreement.queueFailures.length}.` : `Проверено успехов: ${agreement.sampleChecked} из ${agreement.sampledPasses.length}.`, undefined, false, 1),
-            row(safeText(fresh.headline.text), answer === 'disagree' ? 'accent' : 'muted', false, 1)] };
-          return feedResult(callId, { id: record.id, scenarioId: scenario.id, trialId: trial.id, answer, headline: fresh.headline.text, checkedFailures: agreement.failures.checked, queueFailures: agreement.queueFailures.length }, feed,
+            row(safeText(accuracyRow(fresh).text), answer === 'disagree' ? 'accent' : 'muted', false, 1)] };
+          return feedResult(callId, { id: record.id, scenarioId: scenario.id, trialId: trial.id, answer, headline: accuracyRow(fresh).text, checkedFailures: agreement.failures.checked, queueFailures: agreement.queueFailures.length }, feed,
             `Отметка владельца · прогон ${shortId(record.id)}`);
         } finally { await close(); }
       } catch (error) { return askOwner(callId, error); }

@@ -822,9 +822,15 @@ test('results: a failure opens by its number with the dialogue, an unknown one a
     assert.equal(json(status).runs[0].id, source.id); assert.match(drawn(tools.get('agent_lab_status')!, status, false).join('\n'), /есть результат/);
     const failure = await inspect.execute('failure', { failure: 1 }, undefined, undefined, ctx);
     const payload = json(failure);
+    assert.deepEqual(Object.keys(payload.failure), ['number', 'of', 'title', 'kind', 'lines']);
     assert.equal(payload.failure.number, 1); assert.equal(payload.trial.id, source.trials.find(trial => trial.id === payload.trial.id)!.id);
-    const collapsed = drawn(inspect, failure, false).join('\n');
-    assert.match(collapsed, new RegExp(`Провал 1 из ${payload.failure.of}`)); assert.match(collapsed, /#\d+ Клиент: /); assert.match(collapsed, /#\d+ Агент: /);
+    // One failure on one screen: what was expected, what the agent said, the owner's rule, then the conversation itself.
+    const rows = drawn(inspect, failure, false);
+    assert.equal(rows[0], `✗ 1  ${payload.failure.title} · ошибка 1 из ${payload.failure.of}`);
+    for (const label of ['Ожидалось', 'Агент ответил', 'Правило']) assert.ok(rows.some(line => line.startsWith(`    ${label.padEnd(16)}`)), `${label}\n${rows.join('\n')}`);
+    const collapsed = rows.join('\n');
+    assert.match(collapsed, /^ {4}Разговор$/m); assert.match(collapsed, /^ {6}Клиент {3}\S/m); assert.match(collapsed, /^ {6}Агент {4}\S/m);
+    assert.ok(rows.includes('Судья решил: не справился. Вы согласны?'), 'an unmarked failure asks the owner');
     assert.doesNotMatch(collapsed, /Решение судьи/); assert.match(drawn(inspect, failure, true).join('\n'), /Решение судьи/);
     assert.equal(json(await inspect.execute('missing', { failure: 99 }, undefined, undefined, ctx)).status, 'unknown_reference');
     const title = source.scenarios[0]!.title;

@@ -7,17 +7,17 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab, draftHash } from './experiment.js';
 import { DEMO_OWNER_EDIT, demoInput } from './demo.js';
 import { createInputSchema } from './contracts.js';
-import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.js';
+import { compareRuns } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { detectionLines, detectProject } from './detect.js';
 import { readDialogueImport, importDialogues } from './imports.js';
 import { expandMaterials } from './materials.js';
 import { getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
-import { expectationSheet, qualityLines, qualitySummary, testPlanLines, trialProofLines } from './quality.js';
+import { expectationSheet, testPlanLines, trialProofLines } from './quality.js';
 import { ExperimentStore } from './store.js';
-import { agreementSectionLines, allFailuresTitle, buildResultView, causeSection, failureListRows, resultViewLines, SECTION_TEXT } from './result-view.js';
-import { rowsToLines } from './explain.js';
+import { buildResultView, exitCodeOf, type ResultView } from './result-view.js';
+import { MAX_WIDTH, plainText, resultScreen, type ResultRow } from './result-text.js';
 import { evidenceBundle, exportArtifacts, resolveVerified } from './artifacts.js';
 import { libraryHash } from './scenario-library.js';
 import { chooseEditableDraft, draftIsBusy } from './scenario-draft.js';
@@ -25,7 +25,18 @@ import { libraryPatchSchema } from './scenario-contracts.js';
 import { semanticWorkStatus } from './scenario-work.js';
 import { safeLine, shortId } from './text.js';
 
-const percent = (value: number | null) => value === null ? 'нет данных' : `${Math.round(value * 100)}%`;
+/**
+ * The rows of the result screen with every text made safe for a terminal before layout: titles, quotes
+ * and the owner's reasons come from records, and the layout must measure what will actually be printed.
+ */
+const cliRows = (view: ResultView): ResultRow[] => resultScreen(view, { surface: 'cli' }).map(row => ({ ...row, text: safeLine(row.text),
+  ...(row.right === undefined ? {} : { right: safeLine(row.right) }), ...(row.short === undefined ? {} : { short: safeLine(row.short) }),
+  ...(row.parts ? { parts: row.parts.map(safeLine) } : {}) }));
+/** The result screen as the terminal shows it: the same rows as the board, wrapped to the terminal width. */
+const screenText = (view: ResultView, warnings: string[]) => [plainText(cliRows(view), process.stdout.columns ?? MAX_WIDTH),
+  ...warnings.map(warning => `Внимание: ${safeLine(warning)}`), ''].join('\n');
+/** What `evaluate`, `run` and `reassess` print for a script: the one view, its exit code and the screen lines. */
+const machineResult = (view: ResultView) => ({ view, exitCode: exitCodeOf(view), lines: plainText(cliRows(view), MAX_WIDTH).split('\n') });
 const writeStdout = (value: string): Promise<void> => new Promise((resolve, reject) => {
   let settled = false;
   const finish = (error?: Error | null) => {
@@ -146,26 +157,12 @@ async function main() {
     if (!values.id) throw new Error('Укажите --id RUN');
     const store = new ExperimentStore(directory);
     const record = await store.get(values.id);
-    const q = qualitySummary(record);
-    // The source run is read-only context for stability; the whole evidence bundle (trace journal) is not needed here.
-    const baseId = record.assessmentOf ?? record.parentRunId;
-    // The same verified path as Pi and the exports: receipts checked against sidecars, source resolved once.
-    const verified = await resolveVerified(record, store, baseId);
+    // The source run is read-only context for stability; the same verified path as Pi and the exports:
+    // receipts checked against sidecars, source resolved once. The trace journal is not needed here.
+    const verified = await resolveVerified(record, store, record.assessmentOf ?? record.parentRunId);
     const view = buildResultView(verified.record, { before: verified.before });
-    const { warnings } = verified;
-    if (values.json) { process.stdout.write(`${JSON.stringify({ ...q, view, warnings }, null, 2)}\n`); return; }
-    const text = qualityLines(q);
-    // One denominator in the first block; the other scores stay below «Подробности».
-    // Block, top causes with a full example, every failed situation, then the details. Each row is escaped on its own.
-    const section = causeSection(view);
-    const causeLines = section ? ['', SECTION_TEXT[section.kind].text, ...rowsToLines(section.rows).map(safeLine)] : [];
-    // Where the owner overturned the judge, and where the rest of the queue is marked (F7, F8).
-    const agreement = agreementSectionLines(view);
-    const agreementLines = agreement.length ? ['', ...agreement.map(line => line ? safeLine(line) : line)] : [];
-    const failureLines = view.failures.length ? ['', allFailuresTitle(view.failures.length), ...rowsToLines(failureListRows(view)).map(safeLine)] : [];
-    process.stdout.write([...resultViewLines(view, { details: true }).map(safeLine), ...warnings.map(warning => `Внимание: ${safeLine(warning)}`),
-      ...causeLines, ...agreementLines, ...failureLines, '', 'Подробности:', ...text.metrics, '',
-      ...(text.rag.length ? [...text.rag, ''] : []), text.queue, '', text.scope, text.limits, ''].join('\n'));
+    if (values.json) { process.stdout.write(`${JSON.stringify({ ...machineResult(view), warnings: verified.warnings }, null, 2)}\n`); return; }
+    process.stdout.write(screenText(view, verified.warnings));
     return;
   }
   // Reading an atomic snapshot must not take the writer lock or mark another process interrupted.
@@ -184,12 +181,10 @@ async function main() {
       if (values.json) process.stdout.write(`${JSON.stringify(diff, null, 2)}\n`);
       else process.stdout.write([
         diff.headline, '',
-        ...(diff.regressed.length ? ['Сломалось:', ...diff.regressed.map(r => `  - [${r.tier}] ${r.title} (${r.scenarioId})`), ''] : []),
-        ...(diff.fixed.length ? ['Исправлено:', ...diff.fixed.map(r => `  + [${r.tier}] ${r.title} (${r.scenarioId})`), ''] : []),
-        ...(diff.incomparable.length ? ['Несравнимо:', ...diff.incomparable.map(r => `  ? [${r.tier}] ${r.title} (${r.scenarioId}, ${r.userMode} #${r.repeat + 1}): ${r.reason}`), ''] : []),
-        ...(diff.stages.length ? ['По этапам работы агента:', ...diff.stages.map(st => `  ${st.stage}: ${percent(st.before)} → ${percent(st.after)}`), ''] : []),
-        'По ступеням:', ...diff.tiers.filter(t => t.before.graded || t.after.graded).map(t => `  ${t.tier}: ${t.before.passed}/${t.before.graded} → ${t.after.passed}/${t.after.graded}`), '',
-        ...(diff.notes.length ? ['Оговорки:', ...diff.notes.map(n => `  · ${n}`), ''] : []),
+        ...(diff.regressed.length ? ['Сломалось:', ...diff.regressed.map(r => `  ✗ ${safeLine(r.title)}`), ''] : []),
+        ...(diff.fixed.length ? ['Исправлено:', ...diff.fixed.map(r => `  ✓ ${safeLine(r.title)}`), ''] : []),
+        ...(diff.incomparable.length ? ['Несравнимо:', ...diff.incomparable.map(r => `  ? ${safeLine(r.title)} (попытка ${r.repeat + 1}): ${safeLine(r.reason)}`), ''] : []),
+        ...(diff.notes.length ? ['Оговорки:', ...diff.notes.map(n => `  · ${safeLine(n)}`), ''] : []),
       ].join('\n') + '\n');
       if (!diff.comparable) process.exitCode = 2;
     }
@@ -246,9 +241,10 @@ async function main() {
       await lab.waitForIdle();
       const record = await lab.get(draft.id);
       const bundle = await evidenceBundle(record, lab.store);
+      const result = machineResult(bundle.view);
       process.stdout.write(JSON.stringify({ id: record.id, phase: record.phase, assessmentOf: record.assessmentOf,
-        evaluatorVersion: record.evaluatorVersion, artifacts: await exportArtifacts(bundle, directory), evidence: bundle.evidence }, null, 2) + '\n');
-      process.exitCode = record.phase === 'results_review' && !record.trials.some(t => t.assessmentError || ['invalid', 'cancelled'].includes(t.outcome)) ? 0 : 2; return;
+        evaluatorVersion: record.evaluatorVersion, artifacts: await exportArtifacts(bundle, directory), ...result }, null, 2) + '\n');
+      process.exitCode = result.exitCode; return;
     }
     if (command === 'save-suite') {
       if (!id || !values.output) throw new Error('Укажите --id RUN --output .evals/regression.json.');
@@ -261,12 +257,9 @@ async function main() {
       const record = await lab.get(draft.id);
       const bundle = await evidenceBundle(record, lab.store, values.before);
       const artifacts = await exportArtifacts(bundle, lab.store.directory);
-      const v = evidenceSummary(record).verdict;
-      const quality = qualitySummary(record);
-      process.exitCode = evaluationExitCode(record);
-      process.stdout.write(JSON.stringify({ id: record.id, exitCode: process.exitCode,
-        quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes },
-        verdict: v, comparison: bundle.comparison, view: bundle.view, artifacts }, null, 2) + '\n');
+      const result = machineResult(bundle.view);
+      process.exitCode = result.exitCode;
+      process.stdout.write(JSON.stringify({ id: record.id, ...result, comparison: bundle.comparison, artifacts }, null, 2) + '\n');
       return;
     }
     if (command === 'demo' || command === 'prepare' || command === 'build') {
@@ -304,16 +297,13 @@ async function main() {
       if (command === 'run' && !values.yes) throw new Error('Для запуска согласованных тестов укажите --yes.');
       await lab.start(id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft), ...(values.parallel ? { parallel: Number(values.parallel) } : {}) }); await lab.waitForIdle();
       const result = await lab.get(id);
-      const quality = qualitySummary(result);
       // The source run is read-only context for stability, as in `summary`.
       const verified = await resolveVerified(result, lab.store, result.parentRunId);
       const view = buildResultView(verified.record, { before: verified.before });
       process.stdout.write(`${JSON.stringify({ id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode,
-        ...(result.workflow === 'evaluate' ? { quality: { ...qualityLines(quality), primary: quality.primary, cards: quality.cards, strict: quality.strict, metrics: quality.metrics, causes: quality.causes },
-          verdict: evidenceSummary(result).verdict, exitCode: evaluationExitCode(result),
-          proofs: result.trials.map(trial => trialProofLines(result, trial.id)) } : {}),
-        comparison: result.comparisons.at(-1), view, ...(verified.warnings.length ? { warnings: verified.warnings } : {}), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
-      if (result.workflow === 'evaluate') process.exitCode = evaluationExitCode(result);
+        ...(result.workflow === 'evaluate' ? { ...machineResult(view), proofs: result.trials.map(trial => trialProofLines(result, trial.id)) } : { view }),
+        comparison: result.comparisons.at(-1), ...(verified.warnings.length ? { warnings: verified.warnings } : {}), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
+      if (result.workflow === 'evaluate') process.exitCode = exitCodeOf(view);
       if (!['complete', 'results_review'].includes(result.phase)) throw new Error(result.error ?? 'Experiment did not complete');
     } else throw new Error(`Unknown command: ${command}`);
   } finally {

@@ -2,14 +2,15 @@ import type { ExtensionContext, Theme, ThemeColor } from '@earendil-works/pi-cod
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 import type { Experiment, Scenario, Trial } from '../src/contracts.js';
 import { describeCheck, fingerprint, isRunning } from '../src/contracts.js';
-import { awaitingVerdict, verdictSummary, isAgentFailure, humanFindings, humanFindingText, repeatResultText, plannedTrials, type RunComparison, type VerdictNote } from '../src/comparison.js';
-import { expectationSheet, qualitySummary, qualityLines, type ExpectationRole, type ExpectationSheet } from '../src/quality.js';
+import { awaitingVerdict, humanFindings, humanFindingText, type RunComparison } from '../src/comparison.js';
+import { expectationSheet, type ExpectationRole, type ExpectationSheet } from '../src/quality.js';
 import { agreementSample, judgeAgreement, type JudgeAgreement } from '../src/agreement.js';
 import { GOAL_METRIC_ID, headlineMetricIds, markTargets, measurementUsable, recordedResult, RULES_METRIC_ID } from '../src/outcomes.js';
 import type { EvidenceBundle } from '../src/artifacts.js';
-import { situationEvidence } from '../src/explain.js';
-import { buildResultView, causeSection, DISAGREEMENT_BOARD_TITLE, disagreementRows, failureListRows, resultViewRows, SECTION_TEXT, type DisagreementRow, type ResultRow, type ResultView, type SectionRow } from '../src/result-view.js';
-import { pluralForm } from '../src/plural.js';
+import { situationEvidence, type ExplanationRole } from '../src/explain.js';
+import { buildResultView, type ResultView } from '../src/result-view.js';
+import { deriveRun, plannedTrials } from '../src/run.js';
+import { accuracyRow, fitRows, resultScreen, type ResultRole } from '../src/result-text.js';
 import { oneLine, safeText, shortId } from '../src/text.js';
 import { activeRunRows, preparationRows, progressLine } from './flow.ts';
 import { pendingLibrarySelection, logsRows, runRows, scenarioEntries, scenarioRows } from './scenarios.ts';
@@ -38,8 +39,9 @@ export function reviewOrder(record: Experiment): Trial[] {
   const agreement = judgeAgreement(record);
   const unmarked = new Set(agreement.unmarked);
   const queued = new Set(agreement.queueFailures);
+  const run = deriveRun(record);
   const rank = (trial: Trial) => unmarked.has(trial.id) ? (queued.has(trial.id) ? 0 : 1)
-    : pending.has(trial.id) ? 2 : flagged.has(trial.id) ? 3 : isAgentFailure(record, trial) || trial.outcome === 'invalid' ? 4 : 5;
+    : pending.has(trial.id) ? 2 : flagged.has(trial.id) ? 3 : run.attempt(trial.id)?.verdict === 'fail' || trial.outcome === 'invalid' ? 4 : 5;
   return record.trials.map((trial, index) => ({ trial, index })).sort((a, b) => rank(a.trial) - rank(b.trial) || a.index - b.index).map(v => v.trial);
 }
 
@@ -136,9 +138,10 @@ export function resultEntries(record: Experiment): { id: string; text: string; w
   const unmarked = new Set(agreement.unmarked);
   const queued = new Set(agreement.queueFailures);
   const answers = new Map(agreement.marks.filter(m => !m.stale).map(m => [m.trialId, m.answer]));
+  const run = deriveRun(record);
   return reviewOrder(record).map(trial => {
     const answer = answers.get(trial.id);
-    const today = flagged.has(trial.id) ? 'ЗАМЕЧАНИЕ ЧЕЛОВЕКА' : isAgentFailure(record, trial) ? 'НЕ ПРОЙДЕНО' : verdicts[trial.outcome];
+    const today = flagged.has(trial.id) ? 'ЗАМЕЧАНИЕ ЧЕЛОВЕКА' : run.attempt(trial.id)?.verdict === 'fail' ? 'НЕ ПРОЙДЕНО' : verdicts[trial.outcome];
     // A situation still in the queue says what to do with it; an answered one says what was said.
     const queue = unmarked.has(trial.id) ? queued.has(trial.id) ? 'ПРОВЕРЬТЕ ПРОВАЛ' : 'ПРОВЕРЬТЕ И УСПЕХ' : undefined;
     const label = queue ?? (answer === 'disagree' ? 'НЕСОГЛАСИЕ С СУДЬЁЙ' : today);
@@ -303,32 +306,16 @@ const outcomeColor = (value: string): ThemeColor => value === 'pass' ? 'success'
  * colors a row by its position in the list, and never rewords or reorders what result-view.ts
  * and explain.ts produced.
  */
-const VIEW_ROLE: Record<ResultRow['role'], { color: ThemeColor; bold: boolean }> = {
-  lead: { color: 'text', bold: true }, line: { color: 'muted', bold: false },
-  detail: { color: 'muted', bold: false }, situation: { color: 'warning', bold: false },
-  alarm: { color: 'error', bold: true },
-  agreement: { color: 'text', bold: false }, 'agreement-tail': { color: 'muted', bold: false },
+/** The evidence rows of the agreement block (explain.ts), one colour per role. */
+const EXPLANATION_ROLE: Record<ExplanationRole, { color?: ThemeColor; bold: boolean }> = {
+  title: { color: 'error', bold: true }, example: { color: 'text', bold: true }, expected: { color: 'text', bold: false }, said: { color: 'text', bold: false },
+  rule: { color: 'muted', bold: false }, more: { color: 'muted', bold: false }, violated: { color: 'muted', bold: false }, unverified: { color: 'warning', bold: false },
 };
-const SECTION_ROLE: Record<SectionRow['role'], { color?: ThemeColor; bold: boolean }> = {
-  cause: { color: 'accent', bold: false }, example: { color: 'text', bold: true }, title: { color: 'error', bold: true },
-  expected: { color: 'text', bold: false }, said: { color: 'text', bold: false },
-  rule: { color: 'muted', bold: false }, more: { color: 'muted', bold: false }, violated: { color: 'muted', bold: false },
-  unverified: { color: 'warning', bold: false }, blank: { bold: false },
-};
+const sectionRow = (row: { role: ExplanationRole; indent: number; text: string }): Line => line(row.text, EXPLANATION_ROLE[row.role].color, EXPLANATION_ROLE[row.role].bold, row.indent);
 /** The expectation sheet uses the same role → token rule (UI-SPEC «Row role → token»): `warning` only means «не подтверждено». */
 const SHEET_ROLE: Record<ExpectationRole, ThemeColor> = {
   expected: 'text', rule: 'muted', unverified: 'warning', more: 'muted', marker: 'warning',
 };
-const DISAGREEMENT_ROLE: Record<DisagreementRow['role'], ThemeColor | undefined> = {
-  'dis-title': 'warning', 'dis-verdicts': 'text', 'dis-reason': 'text', blank: undefined,
-};
-/** F7 on the board (CTX-11, UI-D-16): the heading and every current disagreement; nothing when there is none. */
-const disagreementLines = (view: ResultView): Line[] => view.agreement.disagreements.length
-  ? [line(DISAGREEMENT_BOARD_TITLE, 'accent', true), ...disagreementRows(view).map(row => line(row.text, DISAGREEMENT_ROLE[row.role], false, row.indent))]
-  : [];
-const viewRow = (row: ResultRow): Line => line(row.text, VIEW_ROLE[row.role].color, VIEW_ROLE[row.role].bold, row.indent);
-const sectionRow = (row: SectionRow): Line => line(row.text, SECTION_ROLE[row.role].color, SECTION_ROLE[row.role].bold, row.indent);
-
 function scenarioLines(scenario: Scenario, record: Experiment, expanded: boolean): Line[] {
   const origin = scenario.provenance === 'synthetic' ? 'Синтетическая карточка' : scenario.provenance === 'production' ? 'Из реального диалога' : 'Golden-карточка';
   if (!expanded) return [
@@ -419,7 +406,7 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean, 
   ];
   // C-77/C-78: `p` is retired and `n` now means «не согласен», so this row names only `v`.
   if (!agreementShown && !record.humanReviews?.some(r => r.trialId === trial.id)) rows.push(line(
-    verdictSummary(record).review.status === 'complete' ? 'Разбор набора завершён; у этого диалога отдельного вердикта нет. v — оценить подробно.'
+    record.resultsReviewedAt && !awaitingVerdict(record).size ? 'Разбор набора завершён; у этого диалога отдельного вердикта нет. v — оценить подробно.'
       : 'Вердикта человека нет. v — оценить критерий или весь диалог.', 'muted'));
   const transcript: Line[] = [line('ДИАЛОГ', 'accent', true)];
   const roles = { user: 'ПОЛЬЗОВАТЕЛЬ', assistant: 'АГЕНТ', simulator: 'СИМУЛЯТОР', observation: 'НАБЛЮДЕНИЕ', retrieval: 'RAG-КОНТЕКСТ', tool_call: 'ВЫЗОВ', tool_result: 'РЕЗУЛЬТАТ', error: 'ОШИБКА' };
@@ -446,79 +433,23 @@ export function trialLines(trial: Trial, record: Experiment, expanded: boolean, 
 const tierLabels: Record<string, string> = { smoke: 'дымовые', regression: 'регрессия', frontier: 'фронтир' };
 /** The judge's self-consistency preamble («Совпало 2/2 оценок … это не проверка правильности.») is bookkeeping; the board shows the reason itself. */
 const plainRationale = (text: string): string => text.replace(/^Совпало \d+\/\d+ оценок этой рубрики в свежих сессиях; это не проверка правильности\.\s*/u, '');
-/** Verdict wording comes from the record itself, so the board, the report and the CLI never disagree. */
-const noteText = (note: VerdictNote): string => note.text;
+/** The board's colour for each result row role (ui-spec §6): the same roles the chat block paints. */
+const RESULT_ROLE: Record<ResultRole, { color?: ThemeColor; bold: boolean }> = {
+  'accuracy:good': { color: 'success', bold: true }, 'accuracy:warn': { color: 'warning', bold: true },
+  'accuracy:bad': { color: 'error', bold: true }, 'accuracy:none': { color: 'text', bold: true }, alarm: { color: 'error', bold: true },
+  trust: { color: 'muted', bold: false }, 'trust:small': { color: 'warning', bold: false }, reality: { color: 'muted', bold: false },
+  heading: { color: 'accent', bold: true }, item: { color: 'text', bold: false }, 'item:muted': { color: 'muted', bold: false },
+  failed: { color: 'error', bold: true }, quote: { color: 'text', bold: false }, muted: { color: 'muted', bold: false },
+  next: { color: 'text', bold: false }, 'next:first': { color: 'accent', bold: false }, good: { color: 'success', bold: false }, blank: { bold: false },
+};
 
-/** The simple layer: how good the agent is on these cards, why it failed, what the judge could not settle, what to do next. */
-function verdictLines(record: Experiment, expanded = false, comparison?: RunComparison, view: ResultView = buildResultView(record)): Line[] {
-  const v = verdictSummary(record);
-  if (!expanded) {
-    const q = qualitySummary(record);
-    const text = qualityLines(q);
-    const finding = v.review.findings[0];
-    const measuredAny = q.scope.dialogues > 0;
-    const section = causeSection(view);
-    const disagreements = disagreementLines(view);
-    // The first screen gives the outcome and routes to evidence. The full canonical rows
-    // remain behind d; counts are always those of ResultView, never a UI-only denominator.
-    const unmeasuredRows = measuredAny ? resultViewRows(view).filter(row => row.role === 'situation').length : 0;
-    return [
-      line('ИТОГ ПРОВЕРКИ', 'accent', true),
-      ...(measuredAny ? [line(`Получили оценку: ${view.headline.decided} · не измерено: ${view.notMeasured.total}.`, 'muted')] : []),
-      ...(measuredAny ? resultViewRows(view).filter(row => row.role !== 'situation').map(viewRow) : [line(v.headline, 'text', true)]),
-      ...(unmeasuredRows ? [line('Какие ситуации не измерены и почему — d (подробности) или раздел 3.', 'muted', false, 2)] : []),
-      line(''),
-      ...(finding ? [line(humanFindingText(finding), 'warning')] : []),
-      ...(section ? [line(SECTION_TEXT[section.kind].board, 'accent', true),
-        ...(view.topCauses.length ? view.topCauses.map((cause, i) => line(`${i+1}. ${cause.name} — ${cause.count} ${pluralForm(cause.count, ['ситуация', 'ситуации', 'ситуаций'])}`, 'accent'))
-          : view.failures.map(failure => line(failure.title)))]
-        : measuredAny ? [line('Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.', 'success')] : [line('Сохраните полезные тесты и повторите их после следующей правки.')]),
-      // UI-SPEC F7 S3: the owner's disagreements follow the causes and come before the pointer to all failures.
-      ...(disagreements.length ? [line(''), ...disagreements] : []),
-      ...(section && view.failures.length ? [...(disagreements.length ? [line('')] : []), line('Enter — открыть провал: ожидание → ответ → правило.', 'accent')] : []),
-      line(''),
-      ...(measuredAny ? [line(text.judge), line(text.queue, q.humanQueue.total ? 'warning' : 'muted')] : []),
-      line(`Дальше: ${v.nextSteps[0]?.text ?? 'Повторите тест после изменения агента.'}`),
-      line('i — постоянные проблемы · a — обсудить · r — повторить · d — детали', 'accent'),
-      ...(comparison ? [line(`После исправления: ${comparison.headline}`, 'accent')] : []),
-      ...(measuredAny ? [line(text.scope, 'muted'), line(text.limits, 'muted')] : []),
-      line(`Выполнено ${v.execution.completed}/${v.execution.planned} · спорных ${q.humanQueue.total} · сбоев ${v.invalid} · тестов отклонено ${v.review.invalid}`, 'muted'),
-    ];
-  }
-  const p = v.provenance;
-  return [
-    line('ИТОГ', 'accent', true),
-    ...resultViewRows(view).map(viewRow),
-    line(''),
-    ...(view.agreement.disagreements.length ? [...disagreementLines(view), line('')] : []),
-    // Every failure, in record order, with the explanation the CLI and the collapsed result show.
-    ...(view.failures.length ? [line(SECTION_TEXT.all.board, 'accent', true), ...failureListRows(view).map(sectionRow), line('')] : []),
-    ...(v.review.findings.length ? [line(''), line('ЗАМЕЧАНИЯ ЧЕЛОВЕКА', 'warning', true),
-      ...v.review.findings.slice(0, 3).flatMap(f => [line(record.scenarios.find(s => s.id === record.trials.find(t => t.id === f.trialId)?.scenarioId)?.title ?? f.trialId, 'text', true),
-        line(humanFindingText(f).slice(0, 300), 'warning')]),
-      line('3 — открыть диалоги и полные пояснения · a — обсудить исправление', 'muted')] : []),
-    ...(v.repeats.some(r => r.passed && r.failed) ? [line(''), line('РАЗБРОС ПОПЫТОК', 'warning', true),
-      ...v.repeats.filter(r => r.passed && r.failed).slice(0, 3).map(r => line(repeatResultText(r), 'warning')),
-      line('Это наблюдения, а не вероятность будущего успеха.', 'muted')] : []),
-    ...(view.failures.length ? [line('3 — открыть диалоги · a — обсудить причины и следующие шаги с Pi', 'muted'), line('')] : []),
-    line(`Карточки: синтетических ${p.synthetic.cards}, golden ${p.curated.cards}, из продакшна ${p.production.cards}.`, 'muted'),
-    line(v.weakSpots.length ? `Автоматические замечания: ${v.weakSpots.map(w => `${w.stage ? `[${w.stage}] ` : ''}${w.description} (${w.failures} провал(ов))`).join('; ')}.` : 'Автоматические проверки не отметили провалов.'),
-    ...(v.stages.length ? [line('По этапам работы агента:', 'accent'),
-      ...v.stages.map(st => line(`  ${st.stage}: ${st.passed} из ${st.evaluated}`, st.passed === st.evaluated ? 'success' : 'warning'))] : []),
-    line(`Выполнено: ${v.execution.completed}/${v.execution.planned} · не измерено ${v.execution.invalid} · остановлено ${v.execution.cancelled} · пропущено ${v.execution.missing}`, 'muted'),
-    line(`Кодовые проверки: ${v.graded ? `${v.passed}/${v.graded} пройдено` : 'нет'} · рубрики: ${v.rubric.assessed ? `${v.rubric.passed}/${v.rubric.assessed} без замечаний` : 'нет оценок'}`),
-    line(`Вердикт на весь диалог: ${v.review.reviewed}/${v.review.total} · пройдено ${v.review.passed}, не пройдено ${v.review.failed}`),
-    line(`Провалов без решения: ${v.review.pending} · расхождений с ручной оценкой: ${v.review.disagreements}`, 'muted'),
-    line(`Разбор: ${v.review.status === 'complete' ? 'завершён' : 'не завершён'}`, 'muted'),
-    ...(v.tiers.some(t => t.graded) ? [line(`Кодовые проверки по ступеням: ${v.tiers.filter(t => t.graded).map(t => `${tierLabels[t.tier]} ${t.passed}/${t.graded}`).join(' · ')}.`, 'muted')] : []),
-    ...(record.failureModes?.length ? [line('Типы провалов:', 'accent'),
-      ...record.failureModes.flatMap(mode => [
-        line(`• ${mode.name}${mode.stage ? ` [${mode.stage}]` : ''} — ${mode.trialIds.length} диалог(ов)`, 'warning'),
-        line(`  ${mode.description}`, 'muted'),
-        ...(mode.promptQuotes ?? []).map(q => line(`  Цитата промпта · гипотеза: «${q}»`, 'muted')),
-      ])] : []),
-    line('Что дальше:', 'accent'), ...v.nextSteps.map(step => line(`• ${noteText(step)}`)),
-  ];
+/**
+ * The result screen (ui-spec §4.7): the same rows the chat and the CLI show, laid out for the board's
+ * width. `d` adds every error, the unmeasured situations and the owner's disagreements.
+ */
+function verdictLines(view: ResultView, width: number, expanded: boolean, comparison?: RunComparison): Line[] {
+  return [...fitRows(resultScreen(view, { surface: 'board', details: expanded }), width).map(row => line(row.text, RESULT_ROLE[row.role].color, RESULT_ROLE[row.role].bold)),
+    ...(comparison ? [line(''), line(`Сравнение с прошлым прогоном: ${comparison.headline}`, 'muted')] : [])];
 }
 /** A single native Pi component: immutable snapshots in, explicit human intentions out. */
 export class LabBoard implements Component {
@@ -887,7 +818,7 @@ export class LabBoard implements Component {
     this.sheetAnchor = undefined;
     if (!record) {
       const chosen = this.options.records?.[entries[this.selected]?.index ?? -1];
-      detail = chosen ? [line('ИСТОРИЯ ПРОВЕРОК', 'accent', true), line(chosen.task, 'text', true), line(`Прогон ${shortId(chosen.id)} · ${chosen.createdAt.slice(0, 10)}`, 'muted'), line(chosen.phase === 'review' ? 'Черновик готов. Откройте ожидания перед запуском.' : chosen.trials.length ? buildResultView(chosen).headline.text : chosen.message),
+      detail = chosen ? [line('ИСТОРИЯ ПРОВЕРОК', 'accent', true), line(chosen.task, 'text', true), line(`Прогон ${shortId(chosen.id)} · ${chosen.createdAt.slice(0, 10)}`, 'muted'), line(chosen.phase === 'review' ? 'Черновик готов. Откройте ожидания перед запуском.' : chosen.trials.length ? accuracyRow(buildResultView(chosen)).text : chosen.message),
         ...(isRunning(chosen.phase) ? [line('Прогон выполняется. Открытие и закрытие доски его не останавливает.', 'muted')] : []), line(''), line('Enter — открыть · n — новая проверка', 'accent')]
         : [line('НАСКОЛЬКО ХОРОШ ВАШ АГЕНТ', 'accent', true), line(''),
           line('1  Подключение', 'text', true), line('   Agent Lab читает папку агента: промпт, точку входа, базу знаний.', 'muted'),
@@ -921,7 +852,7 @@ export class LabBoard implements Component {
         : [line('Диалогов ещё нет.', 'text', true), line(record.phase === 'review' ? 'Проверьте карточки и нажмите r для запуска.' : record.error ?? 'Прогон остановлен до завершения первой попытки.')];
     } else {
       const agent = record.revisions.find(r => r.id === record.selectedRevisionId)?.spec;
-      detail = [...(record.trials.length ? [...verdictLines(record, this.expanded, undefined, this.viewFor(record)), line('')] : []), line(record.task, 'text', true),
+      detail = [...(record.trials.length ? [...verdictLines(this.viewFor(record), inner, this.expanded), line('')] : []), line(record.task, 'text', true),
         ...(record.error ? [line('НЕ УДАЛОСЬ ЗАВЕРШИТЬ', 'warning'), line(record.error), line('a Обсудить исправление с Pi · исходные данные сохранены'), line('')] : []),
         ...(record.questions.length ? [line('ТРЕБУЮТСЯ УТОЧНЕНИЯ', 'warning'), ...record.questions.map(q => line(`• ${q}`)), line('Нажмите a и ответьте своими словами. Pi подготовит уточнённый черновик.')] : []),
         line(''), line('ПОДКЛЮЧЕНИЕ', 'accent'), line(record.target.kind === 'sandbox' ? agent?.name ?? 'Песочница' : record.target.kind === 'module' ? record.target.path : record.target.kind === 'http' ? record.target.url : [record.target.command, ...record.target.args].join(' ')),
@@ -936,7 +867,7 @@ export class LabBoard implements Component {
         line(''), line('ПРОВЕРКА ЧЕЛОВЕКОМ', 'accent'),
         line(`Карточки: ${!record.reviewedAt ? 'ожидают проверки' : record.reviewMode === 'human' ? 'подтверждены человеком' : record.reviewMode === 'expectations' ? 'ожидания подтверждены владельцем' : 'автоматическая проверка'}`),
         line(`Диалоги с заметкой: ${new Set(record.humanReviews?.map(r => r.trialId)).size} / ${record.trials.length}`),
-        line(`Разбор: ${verdictSummary(record).review.status === 'complete' ? 'завершён' : 'ещё не завершён'}`),
+        line(`Разбор: ${record.resultsReviewedAt && !awaitingVerdict(record).size ? 'завершён' : 'ещё не завершён'}`),
         line(`${record.usage.calls} ${record.mode === 'demo' ? 'сценарных' : 'модельных'} вызовов · стоимость ${record.usage.costUsd === null ? 'неизвестна' : `$${record.usage.costUsd.toFixed(4)}`}`, 'muted'),
         line(''), line('ОСНОВАНИЯ', 'accent'),
         ...record.requirements.flatMap(r => [line(`${r.id} · ${r.text}`, 'text', true), line(`${record.sources.find(s => s.id === r.sourceId)?.name ?? r.sourceId}: «${r.quote}»`, 'muted')]),
@@ -944,7 +875,7 @@ export class LabBoard implements Component {
         line(''), ...record.limitations.map(v => line(`• ${v}`, 'muted')),
         ...(record.error ? [line(record.error, 'error')] : []),
       ];
-      if (record.trials.length && !this.expanded) detail = verdictLines(record, false, this.options.comparison, this.viewFor(record));
+      if (record.trials.length && !this.expanded) detail = verdictLines(this.viewFor(record), inner, false, this.options.comparison);
       if (!this.expanded && isRunning(record.phase)) detail = activeRunRows(record).map(r => line(r.text, r.color, r.bold));
       else if (!this.expanded && !record.trials.length) detail = preparationRows(record).map(r => line(r.text, r.color, r.bold));
     }

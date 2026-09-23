@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { rm } from 'node:fs/promises';
-import { expectationSheet, qualityLines, qualitySummary, shorten, testPlanLines, trialProofLines } from '../src/quality.js';
+import { expectationSheet, testPlanLines, trialProofLines } from '../src/quality.js';
 import { countText } from '../src/plural.js';
 import { emptyUsage, RAG_RUBRICS, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
 import { draftHash } from '../src/experiment.js';
-import { demoEvaluateRecord } from './helpers/demo-record.js';
-import { verdictSummary } from '../src/comparison.js';
-import { buildResultView } from '../src/result-view.js';
+import { buildResultView, exitCodeOf } from '../src/result-view.js';
+import { accuracyRow, causeRows, plainText, resultScreen } from '../src/result-text.js';
 import { htmlReport } from '../src/report.js';
 
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
@@ -34,21 +32,13 @@ const review = (trialId: string, metricId: string, verdict: HumanReview['verdict
   id: `h-${trialId}-${metricId}-${verdict}`, trialId, metricId, verdict, note: 'n', createdAt: '2026-09-15T10:00:00Z',
 });
 
-test('RAG diagnostics remain independent of accuracy and require complete usable evidence', () => {
+test('RAG diagnostics never move the headline', () => {
   const t = trial('rag_trial', 'a', 'pass', 'pass');
   t.events.splice(1, 0, { seq: 2, type: 'retrieval', result: { chunks: [], complete: true } });
   t.assessments!.push(...RAG_RUBRICS.map(metric => ({ metricId: metric.id, result: 'fail' as const, evidence: [2], rationale: 'Missing context' })));
-  const r = record({ scenarios: [scenario('a')], trials: [t] });
-  const q = qualitySummary(r);
-  assert.equal(q.cards.accuracy, 1); assert.equal(q.strict.accuracy, 1);
-  assert.equal(q.rag.complete, 1); assert.equal(q.rag.signals.length, 1);
-  assert.equal(q.metrics.filter(m => m.id.startsWith('rag_')).length, 3);
-  assert.match(qualityLines(q).rag.join(' '), /не хватает знания/);
-  (t.events[1]!.result as { complete: boolean }).complete = false;
-  assert.equal(qualitySummary(r).rag.signals.length, 0);
-  assert.equal(qualitySummary(r).rag.partial, 1);
-  t.events.splice(1, 1);
-  assert.deepEqual(qualityLines(qualitySummary(r)).rag, [], 'without retrieval evidence the first screen says nothing about RAG');
+  const view = buildResultView(record({ scenarios: [scenario('a')], trials: [t] }));
+  assert.deepEqual([view.headline.passed, view.headline.decided], [1, 1]);
+  assert.deepEqual(view.failures, []);
 });
 
 test('one-test acceptance projection shows the complete current definition and observation channel', () => {
@@ -234,29 +224,17 @@ test('trial proof preserves passing and failing dialogue evidence with exact cit
   assert.throws(() => trialProofLines(passedRecord, 'missing'), /не найден/);
 });
 
-test('the first screen counts cards, criteria and causes from the shared outcome rules and names what a person still has to look at', () => {
+test('a legacy card without the goal rubric is counted by the strict rule, and its recorded cause is named', () => {
   const r = record({ trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'fail', 'fail', 'fail'), trial('t3', 'c', 'pass', 'unknown')],
     failureModes: [{ id: 'm1', name: 'Переспрашивает терминал вместо пути', description: 'Агент задаёт уточнение там, где нужен путь.', stage: 'сборка ответа', trialIds: ['t2'], promptQuotes: ['Отвечай сразу, если данных достаточно'] }] });
-  const q = qualitySummary(r);
-  assert.deepEqual(q.cards, { passed: 1, failed: 1, unknown: 1, invalid: 0, notReached: 0, total: 3, accuracy: 0.5 });
-  assert.equal(q.headline, 'Справился с 1 из 2 карточек (50%), 1 без решения; разобрано человеком 0 из 3 диалогов.');
-  assert.deepEqual(q.metrics.map(m => [m.id, m.passed, m.failed, m.unknown]), [['code', 2, 1, 0], ['goal', 1, 1, 1], ['format', 2, 1, 0]]);
-  assert.equal(q.metrics[0]!.kind, 'code');
-  assert.equal(q.causes.length, 1);
-  assert.equal(q.causes[0]!.example?.card, 'Карточка b');
-  assert.equal(q.causes[0]!.example?.quote, 'осталось 0', 'a failed exact check is quoted before the judge');
-  assert.deepEqual(q.causes[0]!.promptQuotes, ['Отвечай сразу, если данных достаточно']);
-  assert.deepEqual(q.humanQueue, { unknownJudgments: 1, disagreements: 0, simulatorFlags: 0, total: 1, pendingFailures: 0 });
-  assert.match(q.judge.label, /автоматически оценено 2 из 3; без решения 1/);
-  assert.match(q.limits, /судья не сверен с человеком/);
-  const text = qualityLines(q);
-  assert.match(text.metrics[0]!, /^███████░░░  67%  Точные проверки · код · 2\/3$/);
-  assert.match(text.causes[0]!, /^1\. Переспрашивает терминал вместо пути — 1 диалог\. Карточка b: «осталось 0» · правило промпта: «Отвечай сразу/);
-  assert.match(text.scope, /3 карточки · 3 диалога · одна реплика · golden 3 · версия песочница · \$0\.27 · 3 мин/);
-  assert.match(text.queue, /Разметить человеку: 1/);
+  const view = buildResultView(r);
+  assert.deepEqual(view.cards.map(card => [card.scenarioId, card.outcome, card.goal, card.rules]), [['a', 'pass', 'none', 'none'], ['b', 'fail', 'none', 'none'], ['c', 'unknown', 'none', 'none']]);
+  assert.deepEqual([view.headline.passed, view.headline.decided, view.headline.accuracy], [1, 2, 0.5]);
+  assert.deepEqual(view.notMeasured.reasons.map(reason => reason.scenarioIds), [['c']], 'an undecided criterion leaves the situation unmeasured');
+  assert.deepEqual(view.topCauses.map(cause => [cause.name, cause.count, cause.scenarioIds, cause.example.trialId]), [['Переспрашивает терминал вместо пути', 1, ['b'], 't2']]);
 });
 
-test('business accuracy follows the headline rule (request met and prompt rules kept) while strict success and other rubric failures stay separate', () => {
+test('the headline counts a situation as handled only when the request was met and the prompt rules were kept', () => {
   const goalAttainment = { ...goal, id: 'goal_attainment', name: 'Достижение цели' };
   const promptCompliance = { ...format, id: 'prompt_compliance', name: 'Соблюдение промпта' };
   const scenarios = ['solved', 'failed', 'broken'].map(id => ({ ...scenario(id, false), metrics: [goalAttainment, promptCompliance] }));
@@ -267,23 +245,19 @@ test('business accuracy follows the headline rule (request met and prompt rules 
     ],
   });
   const invalid = { ...assessed('t3', 'broken', 'fail', 'fail'), outcome: 'invalid' as const, assessments: undefined };
-  const q = qualitySummary(record({ scenarios, trials: [assessed('t1', 'solved', 'pass', 'fail'), assessed('t2', 'failed', 'fail', 'fail'), invalid],
+  const view = buildResultView(record({ scenarios, trials: [assessed('t1', 'solved', 'pass', 'fail'), assessed('t2', 'failed', 'fail', 'fail'), invalid],
     failureModes: [{ id: 'business', name: 'Бизнес-причина', description: 'd', trialIds: ['t2'] }] }));
-  assert.equal(q.primary, 'goal_attainment');
-  // Phase 03.1 (deliberate pin change): t1 met the request but broke a prompt rule, so it is no longer «справился».
-  assert.deepEqual(q.cards, { passed: 0, failed: 2, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0 });
-  assert.deepEqual(q.strict, { passed: 0, failed: 2, unknown: 0, invalid: 1, notReached: 0, total: 3, accuracy: 0, goalMetWithOtherFailures: 0 });
-  assert.ok(q.headline.startsWith('Справился (запрос выполнен и правила промпта соблюдены) в 0 из 2 карточек (0%). '), q.headline);
-  assert.match(q.headline, /Полностью прошли все критерии: 0 из 2 \(0%\)/);
-  assert.doesNotMatch(q.headline, /провален другой критерий/);
-  assert.doesNotMatch(q.headline, /Бизнес-цель|по цели/);
-  assert.match(q.headline, /\. Невалидно: 1; разобрано человеком 0 из 3 диалогов\.$/);
-  assert.equal(q.cardsLabel, 'Справился · запрос и правила промпта');
+  // Phase 03.1: t1 met the request but broke a prompt rule, so it is not «справился».
+  assert.deepEqual(view.cards.map(card => [card.scenarioId, card.outcome, card.goal, card.rules]),
+    [['solved', 'fail', 'pass', 'fail'], ['failed', 'fail', 'fail', 'fail'], ['broken', 'unknown', 'unknown', 'unknown']]);
+  assert.deepEqual([view.headline.passed, view.headline.decided, view.headline.accuracy], [0, 2, 0]);
+  assert.deepEqual(view.notMeasured.reasons.map(reason => [reason.code, reason.scenarioIds]), [['agent_error', ['broken']]]);
+  assert.deepEqual(view.breakdown.goal, { met: 1, decided: 2 });
+  assert.deepEqual([view.breakdown.rules.broken, view.breakdown.rules.decided], [2, 2]);
   // The saved example is the verified agent reply of that dialogue, not the judge's rationale.
-  assert.equal(q.causes[0]?.example?.quote, 'ok');
-  assert.equal(q.causes[0]?.example?.seq, 1);
-  assert.equal(q.causes[0]?.example?.explanation?.trialId, 't2', 'a business failure explains the headline before secondary prompt/style failures');
-  assert.equal(q.causes[0]?.example?.explanation?.said?.judgeCited, true, 'the quote is the reply the judge pointed at');
+  const example = view.topCauses[0]?.example;
+  assert.equal(example?.trialId, 't2', 'a business failure explains the headline');
+  assert.deepEqual(example?.said, { seq: 1, quote: 'ok', judgeCited: true }, 'the quote is the reply the judge pointed at');
 });
 
 // ---- Phase 03.1: the report number is the CLI number — same rule, same non-control cards. ----
@@ -302,309 +276,119 @@ function judgedRecord(cards: ReturnType<typeof judgedCard>[], overrides: Partial
   return record({ scenarios: cards.map(c => c.scenario), trials: cards.map(c => c.trial), ...overrides });
 }
 
-test('the report counts the same non-control cards by the same rule as the CLI headline', () => {
+test('the report counts the same non-control situations by the same rule as the CLI headline', () => {
   const rubrics = [GOAL_ATTAINMENT, PROMPT_COMPLIANCE];
   const r = judgedRecord([
     judgedCard('met', rubrics, ['pass', 'pass']), judgedCard('broke', rubrics, ['pass', 'fail']), judgedCard('missed', rubrics, ['fail', 'pass']),
     judgedCard('unsure', rubrics, ['pass', 'unknown']), judgedCard('ctl', rubrics, ['pass', 'fail']),
   ], { positiveControlScenarioIds: ['ctl'] });
-  const q = qualitySummary(r);
   const view = buildResultView(r);
-  assert.equal(q.cards.passed, view.headline.passed);
-  assert.equal(q.cards.passed + q.cards.failed, view.headline.decided);
-  assert.deepEqual(q.cards, { passed: 1, failed: 2, unknown: 1, invalid: 0, notReached: 0, total: 4, accuracy: 1 / 3 }, 'the control is not in the cards');
-  assert.equal(q.strict.total, 4, 'nor in the strict score');
-  assert.equal(view.headline.text, 'Справился в 1 из 3 проверенных ситуаций — 33%.');
-  assert.ok(q.headline.startsWith('Справился (запрос выполнен и правила промпта соблюдены) в 1 из 3 карточек (33%). '), q.headline);
-  assert.match(q.headline, /\. Без решения: 1; разобрано человеком 0 из 5 диалогов\.$/);
-  assert.equal(q.cardsLabel, 'Справился · запрос и правила промпта');
-  assert.ok(htmlReport(r).includes('<h3>Справился · запрос и правила промпта</h3>'), 'the HTML grid carries the same label');
-  assert.ok(!htmlReport(r).includes('Достижение бизнес-цели'));
+  assert.deepEqual([view.headline.passed, view.headline.decided], [1, 3]);
+  assert.deepEqual(view.notMeasured.reasons.map(reason => reason.scenarioIds), [['unsure']]);
+  assert.deepEqual(view.control.cards.map(card => [card.scenarioId, card.outcome]), [['ctl', 'pass']], 'the control is decided by its goal alone and never counted');
+  assert.equal(view.control.alarm, null);
+  assert.equal(accuracyRow(view).text, 'Точность агента: 33% — справился в 1 из 3 ситуаций');
+  assert.match(plainText(resultScreen(view, { surface: 'cli' }), 100), /Точность агента: 33% — справился в 1 из 3 ситуаций/);
+  const html = htmlReport(r);
+  assert.ok(html.includes('33%') && html.includes('справился в 1 из 3 ситуаций'), 'the report prints the same number');
 });
 
-test('reply quality never moves the report number: it is its own row, and a pass with a quality failure is counted and named', () => {
+test('reply quality never moves the headline: a met request with kept rules and a quality failure is «справился»', () => {
   const rubrics = [GOAL_ATTAINMENT, PROMPT_COMPLIANCE, REPLY_QUALITY];
-  const q = qualitySummary(judgedRecord([judgedCard('a', rubrics, ['pass', 'pass', 'fail']), judgedCard('b', rubrics, ['fail', 'fail', 'pass'])]));
-  assert.deepEqual([q.cards.passed, q.cards.failed], [1, 1]);
-  assert.equal(q.strict.goalMetWithOtherFailures, 1);
-  assert.ok(q.headline.startsWith('Справился (запрос выполнен и правила промпта соблюдены) в 1 из 2 карточек (50%). Полностью прошли все критерии: 0 из 2 (0%). В 1 карточке справился, но провален другой критерий. '), q.headline);
-  const quality = q.metrics.find(m => m.id === 'reply_quality');
-  assert.ok(quality, 'reply quality keeps its own row');
-  assert.deepEqual([quality!.passed, quality!.failed], [1, 1]);
+  const view = buildResultView(judgedRecord([judgedCard('a', rubrics, ['pass', 'pass', 'fail']), judgedCard('b', rubrics, ['fail', 'fail', 'pass'])]));
+  assert.deepEqual(view.cards.map(card => [card.scenarioId, card.outcome]), [['a', 'pass'], ['b', 'fail']]);
+  assert.deepEqual([view.headline.passed, view.headline.decided], [1, 2]);
 });
 
-test('cardsLabel names the rule the number is counted by', () => {
-  assert.equal(qualitySummary(judgedRecord([judgedCard('a', [GOAL_ATTAINMENT, PROMPT_COMPLIANCE], ['pass', 'pass'])])).cardsLabel, 'Справился · запрос и правила промпта');
-  const goalOnly = qualitySummary(judgedRecord([judgedCard('a', [GOAL_ATTAINMENT, REPLY_QUALITY], ['pass', 'fail'])]));
-  assert.equal(goalOnly.cardsLabel, 'Справился · запрос');
-  assert.ok(goalOnly.headline.startsWith('Справился (запрос выполнен) в 1 из 1 карточки (100%). '), goalOnly.headline);
-  const legacy = qualitySummary(record({ scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] }));
-  assert.equal(legacy.primary, 'all_criteria');
-  assert.equal(legacy.cardsLabel, 'Справился · карточки');
-  assert.ok(htmlReport(record({ scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] })).includes('<h3>Справился · карточки</h3>'));
-  // A control whose rules were broken never turns a goal-only set into a ruled one.
-  const mixed = qualitySummary(judgedRecord([judgedCard('a', [GOAL_ATTAINMENT], ['pass']), judgedCard('ctl', [GOAL_ATTAINMENT, PROMPT_COMPLIANCE], ['pass', 'fail'])], { positiveControlScenarioIds: ['ctl'] }));
-  assert.equal(mixed.cardsLabel, 'Справился · запрос');
-});
-
-test('an unresolved simulator flag makes the card undecided on the first screen instead of counting as a failure, and clusters fall back to weak spots', () => {
+test('an unresolved simulator flag leaves the situation unmeasured instead of counting it as a failure', () => {
   const t = trial('t1', 'a', 'pass', 'fail', 'pass', 'reactive');
   t.events.push({ seq: 2, type: 'simulator', result: { message: '4321', done: false } }, { seq: 3, type: 'user', text: '4321' }, { seq: 4, type: 'assistant', text: 'ok' });
   t.simulatorChecks = [{ id: 'simulator_fabrication', description: 'd', evidence: 'Подозрение: реплика #3', passed: false, heuristic: true, seq: 3 }];
   const r = record({ scenarios: [scenario('a')], settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1 }), trials: [t] });
-  const flagged = qualitySummary(r);
-  assert.deepEqual([flagged.cards.passed, flagged.cards.failed, flagged.cards.unknown], [0, 0, 1]);
-  assert.equal(flagged.metrics.find(m => m.id === 'goal')!.unknown, 1);
-  assert.equal(flagged.humanQueue.simulatorFlags, 1);
-  assert.match(qualityLines(flagged).queue, /пометок симулятора 1/);
-  // A human clears the suspicion: the same dialogue becomes a decided failure with its judge rationale as the quoted cause.
-  r.humanReviews = [{ id: 'h', trialId: 't1', verdict: 'pass', note: 'ложная тревога', createdAt: '2026-09-14T00:00:00Z', checkId: 'simulator_fabrication' }];
-  const cleared = qualitySummary(r);
-  assert.deepEqual([cleared.cards.passed, cleared.cards.failed, cleared.cards.unknown], [0, 1, 0]);
-  assert.equal(cleared.humanQueue.total, 0);
-  assert.equal(cleared.causes[0]!.name, 'Цель выполнена');
-  assert.equal(cleared.causes[0]!.example?.quote, 'ok', 'the verified agent reply is quoted, never the judge rationale');
-  assert.equal(cleared.causes[0]!.example?.seq, 1);
-  assert.ok(cleared.causes[0]!.example?.explanation, 'the full explanation is saved with the cause');
+  const flagged = buildResultView(r);
+  assert.deepEqual(flagged.cards.map(card => [card.outcome, card.reason]), [['unknown', 'simulator_deviated']]);
+  assert.equal(flagged.headline.decided, 0);
+  // A human clears the suspicion: the same dialogue becomes a decided failure, explained by the verified agent reply.
+  const cleared = buildResultView({ ...r, humanReviews: [{ id: 'h', trialId: 't1', verdict: 'pass', note: 'ложная тревога', createdAt: '2026-09-14T00:00:00Z', checkId: 'simulator_fabrication' }] });
+  assert.deepEqual([cleared.headline.passed, cleared.headline.decided], [0, 1]);
+  assert.deepEqual(cleared.failures[0]?.said, { seq: 1, quote: 'ok', judgeCited: true }, 'the verified agent reply is quoted, never the judge rationale');
 });
 
-test('plural forms and sentence-bounded shortening', () => {
+test('plural forms', () => {
   assert.deepEqual([1, 2, 5, 11, 21, 22].map(n => countText(n, ['диалог', 'диалога', 'диалогов'])), ['1 диалог', '2 диалога', '5 диалогов', '11 диалогов', '21 диалог', '22 диалога']);
-  const long = 'Первое предложение довольно длинное и содержит подробности. Второе предложение тоже. ' + 'x'.repeat(300);
-  assert.equal(shorten(long, 120), 'Первое предложение довольно длинное и содержит подробности. Второе предложение тоже.…');
-  assert.equal(shorten('коротко'), 'коротко');
-  assert.match(shorten('слово '.repeat(60), 50), /^(слово ){1,8}слово…$/);
 });
 
-test('a card with a missing planned repeat is undecided on the first screen, not a pass', () => {
-  const r = record({ settings: settingsSchema.parse({ userModes: ['static'], repeats: 2 }), scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] });
-  const q = qualitySummary(r);
-  assert.deepEqual(q.cards, { passed: 0, failed: 0, unknown: 1, invalid: 0, notReached: 0, total: 1, accuracy: null });
-  assert.match(q.headline, /без решения/);
-  assert.match(q.limits, /неполный/);
-});
-
-test('automatic failures do not require manual labelling; only disputed results do', () => {
-  const r = record({ scenarios: [scenario('a'), scenario('b')], trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'fail', 'fail')] });
-  const q = qualitySummary(r);
-  assert.equal(q.humanQueue.total, 0);
-  assert.equal(q.humanQueue.pendingFailures, 0);
-  const lines = qualityLines(q);
-  assert.match(lines.queue, /не требуется/);
-  const clean = qualityLines(qualitySummary(record({ scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] })));
-  assert.match(clean.queue, /не требуется/);
-
-  r.humanReviews = [{ id: 'h', trialId: 't2', verdict: 'fail', note: '#1: подтверждено', reviewedDialogue: true, createdAt: '2026-09-15T10:00:00Z' }];
-  const completed = qualitySummary(r);
-  assert.equal(completed.humanQueue.total, 0);
-  assert.ok(completed.causes.length, 'the reviewed cause stays in the aggregate');
-  assert.match(qualityLines(completed).queue, /спорных диалогов нет/);
-});
-
-test('a separate unknown is not routed into causes of an already reviewed failure', () => {
-  const r = record({ scenarios: [scenario('a'), scenario('b')], trials: [trial('failed', 'a', 'fail', 'fail'), trial('unknown', 'b', 'pass', 'unknown')],
-    humanReviews: [{ id: 'h', trialId: 'failed', verdict: 'fail', note: '#1: подтверждено', reviewedDialogue: true, createdAt: '2026-09-15T10:00:00Z' }] });
-  const q = qualitySummary(r);
-  assert.ok(q.causes.length);
-  assert.equal(q.humanQueue.pendingFailures, 0);
-  assert.equal(q.humanQueue.unknownJudgments, 1);
-  assert.match(qualityLines(q).queue, /Разметить человеку: 1 \(неясных 1/);
-  assert.doesNotMatch(qualityLines(q).queue, /Откройте диалоги причин/);
-});
-
-test('criteria that share an id but not a name stay separate rows, and a rubric named code never merges with the exact checks', () => {
-  const codeRubric = { ...goal, id: 'code', name: 'Код ответа' };
-  const other = { ...goal, name: 'Другая цель' };
-  const a = { ...scenario('a'), metrics: [codeRubric] };
-  const b = { ...scenario('b'), metrics: [goal] };
-  const c = { ...scenario('c'), metrics: [other] };
-  const t = (id: string, sid: string, metricId: string) => ({ ...trial(id, sid, 'pass', 'pass'), assessments: [{ metricId, result: 'fail' as const, rationale: 'r', evidence: [1] }] });
-  const q = qualitySummary(record({ scenarios: [a, b, c], trials: [t('t1', 'a', 'code'), t('t2', 'b', 'goal'), t('t3', 'c', 'goal')] }));
-  assert.deepEqual(q.metrics.map(m => [m.kind, m.name, m.passed, m.failed]), [['code', 'Точные проверки · код', 3, 0], ['rubric', 'Код ответа', 0, 1], ['rubric', 'Цель выполнена', 0, 1], ['rubric', 'Другая цель', 0, 1]]);
+test('a situation with a missing planned repeat is unmeasured, not a pass', () => {
+  const view = buildResultView(record({ settings: settingsSchema.parse({ userModes: ['static'], repeats: 2 }), scenarios: [scenario('a')], trials: [trial('t1', 'a', 'pass', 'pass')] }));
+  assert.deepEqual(view.cards.map(card => [card.outcome, card.reason]), [['unknown', 'attempts_mismatch']]);
+  assert.equal(view.headline.decided, 0);
+  assert.equal(exitCodeOf(view), 2);
 });
 
 test('duplicate attempts cannot replace missing repeats, and selected reassessments use their selected attempts', () => {
   const first = trial('t1', 'a', 'pass', 'pass');
   const r = record({ scenarios: [scenario('a')], settings: settingsSchema.parse({ userModes: ['static'], repeats: 2 }), trials: [first, { ...first, id: 't2' }] });
-  assert.equal(qualitySummary(r).cards.unknown, 1);
+  assert.deepEqual(buildResultView(r).cards.map(card => card.outcome), ['unknown']);
   const reassessed = { ...r, assessmentTrialIds: ['t1'], trials: [first] };
-  assert.equal(qualitySummary(reassessed).cards.passed, 1);
-  const clean = qualitySummary(record({ scenarios: [scenario('a')], trials: [first] }));
-  assert.doesNotMatch(clean.judge.label, /2 из 2|единогласно/);
+  assert.deepEqual(buildResultView(reassessed).cards.map(card => card.outcome), ['pass']);
 });
 
-test('same metric labels with different pass criteria do not merge', () => {
-  const a = { ...scenario('a'), metrics: [goal] };
-  const b = { ...scenario('b'), metrics: [{ ...goal, passCriteria: 'A different business requirement' }] };
-  const q = qualitySummary(record({ scenarios: [a, b], trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'fail', 'fail')] }));
-  assert.deepEqual(q.metrics.filter(m => m.kind === 'rubric').map(m => [m.passed, m.failed]), [[1, 0], [0, 1]]);
-});
-
-test('reserved rubric ids share stable rows while owner rubrics require identical definitions', () => {
-  const reserved = ['goal_attainment', 'prompt_compliance', 'reply_quality'] as const;
-  const owner = { ...goal, id: 'owner_rule', name: 'Критерий владельца' };
-  const a = { ...scenario('a'), metrics: [...reserved.map(id => ({ ...goal, id, name: `Служебная ${id}` })), owner] };
-  const b = { ...scenario('b'), metrics: [...reserved.map(id => ({ ...format, id, name: `Другая ${id}` })), { ...owner, description: 'другое определение' }] };
-  const c = { ...scenario('c'), metrics: [owner] };
-  const measuredTrial = (id: string, card: Scenario, result: 'pass' | 'fail') => ({
-    ...trial(id, card.id, 'pass', 'pass'),
-    assessments: card.metrics!.map(metric => ({ metricId: metric.id, result, rationale: 'r', evidence: [1] })),
-  });
-
-  const metrics = qualitySummary(record({
-    scenarios: [a, b, c],
-    trials: [measuredTrial('t1', a, 'pass'), measuredTrial('t2', b, 'fail'), measuredTrial('t3', c, 'pass')],
-  })).metrics.filter(metric => metric.kind === 'rubric');
-
-  for (const id of reserved) {
-    assert.deepEqual(metrics.filter(metric => metric.id === id).map(metric => [metric.passed, metric.failed, metric.total]), [[1, 1, 2]]);
-  }
-  assert.deepEqual(metrics.filter(metric => metric.id === 'owner_rule').map(metric => [metric.passed, metric.failed, metric.total]), [[2, 0, 2], [0, 1, 1]]);
-  assert.deepEqual(metrics.filter(metric => metric.id === 'owner_rule').map(metric => metric.name), [
-    'Критерий владельца · Карточка a; Карточка c', 'Критерий владельца · Карточка b',
-  ], 'equal labels must identify the cards whose different criteria they measure');
-});
-
-test('metric rows use the same human criterion verdict as card outcomes', () => {
-  const trials = [trial('t1', 'a', 'pass', 'fail'), trial('t2', 'b', 'pass', 'pass')];
-  const original = JSON.stringify(trials);
-  const row = (humanReviews: HumanReview[]) => qualitySummary(record({ scenarios: [scenario('a'), scenario('b')], trials, humanReviews }))
-    .metrics.find(metric => metric.id === 'goal')!;
-
-  assert.deepEqual(row([]), { id: 'goal', name: 'Цель выполнена', kind: 'rubric', passed: 1, failed: 1, unknown: 0, total: 2, accuracy: 0.5 });
-  assert.deepEqual(row([review('t1', 'goal', 'pass')]), { id: 'goal', name: 'Цель выполнена', kind: 'rubric', passed: 2, failed: 0, unknown: 0, total: 2, accuracy: 1 });
-  assert.deepEqual(row([review('t1', 'goal', 'fail')]), row([]));
-  assert.deepEqual(row([review('t1', 'goal', 'unknown')]), { id: 'goal', name: 'Цель выполнена', kind: 'rubric', passed: 1, failed: 0, unknown: 1, total: 2, accuracy: 1 });
-  assert.deepEqual(row([review('t1', 'goal', 'invalid')]), { id: 'goal', name: 'Цель выполнена', kind: 'rubric', passed: 1, failed: 0, unknown: 0, total: 1, accuracy: 1 });
-  assert.deepEqual(row([review('other-trial', 'goal', 'pass'), review('t1', 'format', 'pass')]), row([]));
-  assert.equal(JSON.stringify(trials), original, 'row aggregation never mutates saved assessments');
-});
-
-test('weak spots, stages and saved failure clusters use authoritative human rubric verdicts', () => {
-  const staged = { ...scenario('a'), metrics: [{ ...goal, stage: 'цель' }, { ...format, stage: 'формат' }] };
+test('a saved failure cluster is explained by an attempt that still fails after the human rubric verdicts', () => {
   const corrected = trial('t1', 'a', 'pass', 'fail');
-  const failed = trial('t2', 'a', 'pass', 'fail', 'fail');
-  const r = record({ scenarios: [staged], trials: [corrected, failed], humanReviews: [review('t1', 'goal', 'pass'), review('t2', 'goal', 'pass')],
+  const failed = { ...trial('t2', 'a', 'pass', 'fail', 'fail'), repeat: 1 };
+  const r = record({ scenarios: [scenario('a')], settings: settingsSchema.parse({ userModes: ['static'], repeats: 2 }), trials: [corrected, failed],
+    humanReviews: [review('t1', 'goal', 'pass'), review('t2', 'goal', 'pass')],
     failureModes: [{ id: 'saved', name: 'Сохранённый кластер', description: 'd', trialIds: ['t1', 't2'] }] });
-
-  const verdict = verdictSummary(r);
-  assert.deepEqual(verdict.weakSpots.filter(spot => spot.kind === 'metric').map(spot => [spot.description, spot.failures]), [['Формат ответа', 1]]);
-  assert.deepEqual(verdict.stages.map(stage => [stage.stage, stage.passed, stage.evaluated]), [['формат', 1, 2], ['цель', 2, 2]]);
-  const summary = qualitySummary(r);
-  // The weak-spot fallback follows the same rule: the verified reply of that dialogue.
-  assert.deepEqual([summary.causes[0]?.dialogues, summary.causes[0]?.example?.trialId, summary.causes[0]?.example?.quote], [1, 't2', 'ok']);
+  const view = buildResultView(r);
+  assert.deepEqual(view.cards.map(card => [card.outcome, card.flaky]), [['fail', true]], 'the corrected attempt passes, the other still fails');
+  assert.deepEqual(view.topCauses.map(cause => [cause.name, cause.count, cause.example.trialId, cause.example.said?.quote]), [['Сохранённый кластер', 1, 't2', 'ok']]);
 });
 
-test('multiple disputed criteria count as one disputed dialogue', () => {
-  const disputed = trial('t1', 'a', 'pass', 'fail', 'fail');
-  const q = qualitySummary(record({ scenarios: [scenario('a')], trials: [disputed], humanReviews: [review('t1', 'goal', 'pass'), review('t1', 'format', 'pass')] }));
-  assert.equal(q.humanQueue.disagreements, 1);
-  assert.equal(q.judge.disputed, 1);
-  assert.equal(q.humanQueue.total, 1);
-});
-
-test('the first screen separates reached undecided cards, not-reached cards, and all current dialogues', () => {
+test('the view separates decided, undecided and stopped situations and counts every current dialogue', () => {
   const invalid = { ...trial('cancelled', 'c', 'fail', 'fail'), outcome: 'cancelled' as const };
-  const q = qualitySummary(record({ scenarios: [scenario('a'), scenario('b'), scenario('c')],
-    trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'pass', 'unknown'), invalid] }));
-  assert.deepEqual(q.cards, { passed: 1, failed: 0, unknown: 1, invalid: 1, notReached: 0, total: 3, accuracy: 1 });
-  assert.deepEqual(q.human, { reviewed: 0, total: 3 });
-  assert.match(q.headline, /1 без решения, 1 невалидны; разобрано человеком 0 из 3 диалогов\.$/);
-});
-
-test('only the latest marked whole-dialogue review certifies a complete persisted review', async () => {
-  const { lab, directory, record: initial } = await demoEvaluateRecord();
-  try {
-    assert.deepEqual(qualitySummary(initial).human, { reviewed: 0, total: initial.trials.length });
-    const trial = initial.trials[0]!;
-    const metric = initial.scenarios.find(s => s.id === trial.scenarioId)!.metrics!.find(m => m.subject === 'agent')!;
-    await lab.addHumanReview(initial.id, { trialId: trial.id, metricId: metric.id, verdict: 'unknown', note: `#${trial.events[0]!.seq}: partial review` });
-    assert.equal(qualitySummary(await lab.get(initial.id)).human.reviewed, 0);
-    await lab.addHumanReview(initial.id, { trialId: trial.id, verdict: 'unknown', note: `#${trial.events[0]!.seq}: legacy whole-dialogue review` });
-    assert.equal(qualitySummary(await lab.get(initial.id)).human.reviewed, 0);
-    await lab.addHumanReview(initial.id, { trialId: trial.id, verdict: 'unknown', note: `#${trial.events[0]!.seq}: complete review`, reviewedDialogue: true });
-    assert.equal(qualitySummary(await lab.get(initial.id)).human.reviewed, 1);
-    await lab.addHumanReview(initial.id, { trialId: trial.id, verdict: 'unknown', note: `#${trial.events[0]!.seq}: newer legacy review` });
-    assert.equal(qualitySummary(await lab.get(initial.id)).human.reviewed, 0, 'the latest whole-dialogue review wins');
-  } finally {
-    await lab.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test('the headline names only non-zero leftovers, exclusions sit next to the number, and missing retrieval evidence stays off the first screen', async () => {
-  const { lab, directory, record } = await demoEvaluateRecord();
-  try {
-    const q = qualitySummary(record);
-    assert.doesNotMatch(q.headline, /: 0[;.]|, 0 /, 'zero counters are not printed');
-    assert.match(q.headline, /разобрано человеком 0 из \d+ диалог/);
-    const lines = qualityLines(q);
-    assert.equal(lines.coverage, '', 'no exclusions, no coverage line');
-    assert.deepEqual(lines.rag, [], 'without retrieval events there is nothing to say about RAG on the first screen');
-    const excluded = qualityLines(qualitySummary({ ...record, validationExclusions: [
-      { dialogueId: 'a', kind: 'customer_data', reason: 'нужна ставка клиента' },
-      { dialogueId: 'b', kind: 'customer_data', reason: 'нужна заявка клиента' },
-      { dialogueId: 'c', kind: 'length', reason: 'нужны 1–16 реплик клиента' },
-    ] }));
-    assert.equal(excluded.coverage, 'Не вошли в набор 3 диалога: нужны данные клиента — 2, слишком длинный диалог или нет реплик клиента — 1. В accuracy они не считаются.');
-  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+  const view = buildResultView(record({ trials: [trial('t1', 'a', 'pass', 'pass'), trial('t2', 'b', 'pass', 'unknown'), invalid] }));
+  assert.deepEqual([view.headline.passed, view.headline.decided], [1, 1]);
+  assert.deepEqual(view.notMeasured.reasons.map(reason => [reason.code, reason.scenarioIds]), [['stopped', ['c']], ['judge_unclear', ['b']]]);
+  assert.equal(view.scope.dialogues, 3);
 });
 
 test('a cause example that cannot be quoted says so instead of showing a judge rationale', () => {
   const failed = trial('t1', 'a', 'fail', 'fail');
-  // No exact check failed, and the judge cites words the stored reply does not contain.
+  // No exact check, and the judge cites words the stored reply does not contain.
   failed.checks = [];
   failed.assessments = [{ metricId: 'goal', result: 'fail', rationale: 'Агент ошибся.', evidence: [1], citations: [{ seq: 1, quote: 'этого в ответе нет' }] }];
-  const q = qualitySummary(record({ scenarios: [scenario('a')], trials: [failed],
+  const view = buildResultView(record({ scenarios: [scenario('a', false)], trials: [failed],
     failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
-  assert.equal(q.causes[0]?.example?.quote, 'реплика агента не подтверждена цитатой');
-  assert.equal(q.causes[0]?.example?.seq, undefined);
-  assert.equal(q.causes[0]?.example?.verified, false, 'the gap travels with the example, not inside the quote');
-  assert.ok(!JSON.stringify(q.causes[0]).includes('Агент ошибся'));
+  assert.equal(view.topCauses[0]?.example.said, null);
+  assert.ok(!JSON.stringify(view.topCauses[0]).includes('Агент ошибся'));
 
   // No surface may wrap that status line in «…»: doing so states that the agent said it.
-  const causeLine = qualityLines(q).causes[0]!;
-  assert.match(causeLine, /Карточка a: реплика агента не подтверждена цитатой/);
-  assert.doesNotMatch(causeLine, /«реплика агента не подтверждена цитатой»/);
+  const causes = plainText(causeRows(view, { examples: true }), 100);
+  assert.match(causes, /Агент: ответ не подтверждён цитатой/);
+  assert.doesNotMatch(causes, /«ответ не подтверждён цитатой»/);
 });
 
 test('a verified reply is still quoted, and only a verified one', () => {
   const failed = trial('t1', 'a', 'fail', 'fail');
   failed.checks = [];
-  const q = qualitySummary(record({ scenarios: [scenario('a', false)], trials: [failed],
+  const view = buildResultView(record({ scenarios: [scenario('a', false)], trials: [failed],
     failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
-  assert.equal(q.causes[0]?.example?.verified, true);
-  assert.equal(q.causes[0]?.example?.quote, 'ok');
-  assert.match(qualityLines(q).causes[0]!, /Карточка a: «ok»/);
+  assert.equal(view.topCauses[0]?.example.said?.quote, 'ok');
+  assert.match(plainText(causeRows(view, { examples: true }), 100), /Агент: «ok»/);
 });
 
-test('the flattened cause quote is clamped for the report while the board keeps the whole reply', () => {
+test('a cause example keeps the whole agent reply; every surface wraps it', () => {
   const long = `Здравствуйте! ${'Разъясняю условия эквайринга по пунктам. '.repeat(40)}`.trim();
   const failed = trial('t1', 'a', 'fail', 'fail');
   failed.checks = [];
   failed.events = [{ seq: 0, type: 'user', text: 'hi' }, { seq: 1, type: 'assistant', text: long }];
-  const q = qualitySummary(record({ scenarios: [scenario('a', false)], trials: [failed],
+  const view = buildResultView(record({ scenarios: [scenario('a', false)], trials: [failed],
     failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
-  const example = q.causes[0]?.example;
-  assert.ok(example, 'the cluster has an example');
-  // The exporters inline this string into one <li>; a multi-thousand-character reply destroys the
-  // cause list the customer reads first.
   assert.ok(long.length > 1000);
-  assert.ok(example.quote.length <= 221, `the report quote is clamped, got ${example.quote.length}`);
-  assert.equal(example.quote, shorten(long));
-  // The board wraps and shows every word, so the explanation keeps the reply in full.
-  assert.equal(example.explanation?.said?.quote, long);
+  assert.equal(view.topCauses[0]?.example.said?.quote, long);
 });
 
-test('a failed exact check is quoted with its own evidence, not with the explanation', () => {
-  const failed = trial('t1', 'a', 'fail', 'fail');
-  const q = qualitySummary(record({ scenarios: [scenario('a')], trials: [failed],
-    failureModes: [{ id: 'c', name: 'Причина', description: 'd', trialIds: ['t1'] }] }));
-  assert.equal(q.causes[0]?.example?.quote, 'осталось 0');
-  assert.equal(q.causes[0]?.example?.explanation, undefined);
-});
-
-test('required checkpoint decisions reach the existing accuracy while diagnostics remain explanatory', async () => {
+test('required checkpoint decisions reach the headline while diagnostics remain explanatory', async () => {
   const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
   const { libraryFixture } = await import('./helpers/scenario-library.js');
   const library = libraryFixture();
@@ -614,11 +398,13 @@ test('required checkpoint decisions reach the existing accuracy while diagnostic
   t.checkpoints = [{ checkpointId: 'ask_terminal', requirementId: 'terminal_rule', observation: 'reply', role: 'required', result: 'fail', evidence: [1], rationale: 'Обязательное уточнение пропущено' },
     { checkpointId: 'diagnostic', requirementId: 'terminal_rule', observation: 'reply', role: 'diagnostic', result: 'fail', evidence: [1], rationale: 'Диагностика' }];
   const r = record({ scenarios: [s], trials: [t] });
-  assert.equal(qualitySummary(r).cards.accuracy, 0);
+  // A derivation is remembered per record snapshot, so each reading takes a fresh copy of the mutated record.
+  const accuracy = () => buildResultView({ ...r }).headline.accuracy;
+  assert.equal(accuracy(), 0);
   t.checkpoints[0]!.result = 'pass';
-  assert.equal(qualitySummary(r).cards.accuracy, 1);
+  assert.equal(accuracy(), 1);
   t.checkpoints[0]!.result = 'unknown';
-  assert.equal(qualitySummary(r).cards.accuracy, null);
+  assert.equal(accuracy(), null);
   assert.match(trialProofLines(r, t.id).lines.join('\n'), /КОНТРОЛЬНЫЕ ТОЧКИ/);
   assert.match(trialProofLines(r, t.id).lines.join('\n'), /terminal_rule/);
 });
@@ -632,9 +418,10 @@ test('a first-format checkpoint with an exact check is a direct check of every n
   const t = trial('controlled_exact', s.id, 'pass', 'pass'); t.familyId = s.familyId; t.initialState = s.initialState; t.finalState = s.initialState; t.assessments = [];
   t.checks = [{ id: 'literal', description: 'Точная инструкция', passed: true, evidence: 'Последний ответ совпал' }];
   const r = record({ scenarios: [s], trials: [t] });
-  assert.equal(qualitySummary(r).cards.accuracy, 1, 'nothing is left to judge: the exact check decides');
-  assert.equal(qualitySummary(r).metrics.some(m => m.id === 'code'), true, 'the exact check is counted with the code checks');
+  // A derivation is remembered per record snapshot, so each reading takes a fresh copy of the mutated record.
+  const accuracy = () => buildResultView({ ...r }).headline.accuracy;
+  assert.equal(accuracy(), 1, 'nothing is left to judge: the exact check decides');
   t.checks[0]!.passed = false; t.outcome = 'fail';
-  assert.equal(qualitySummary(r).cards.accuracy, 0);
+  assert.equal(accuracy(), 0);
 });
 
