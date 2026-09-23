@@ -298,7 +298,11 @@ class Preparation {
         progress.groundingComplete = true;
         await this.publish();
       } else if (!whole) progress.sourceSelection ??= [];
-      for (const unit of [...progress.pending]) {
+      // A replacement joins the pending units while the run goes on; a unit whose step failed unsent stays pending for a resume.
+      const tried = new Set<string>();
+      const next = () => progress.pending.find(id => !tried.has(id));
+      for (let unit = next(); unit !== undefined; unit = next()) {
+        tried.add(unit);
         ctx.signal.throwIfAborted();
         try { await this.prepareUnit(unit, whole); }
         catch (error) {
