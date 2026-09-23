@@ -3,26 +3,27 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { fingerprint, isRunning, type Experiment } from './contracts.js';
 import type { ExperimentStore } from './store.js';
-import { compareRuns, evidenceSummary, markReconstructedSource, type EvidenceSummary, type RunComparison } from './comparison.js';
-import { qualitySummary, type QualitySummary } from './quality.js';
+import { compareRuns, markReconstructedSource, type RunComparison } from './comparison.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { buildResultView, type ResultView } from './result-view.js';
-import { oneLine } from './text.js';
+import { countText } from './plural.js';
 
 export interface EvidenceBundle {
   record: Experiment;
-  evidence: EvidenceSummary;
-  /** The first-screen answer, derived from the same helpers as `evidence`; never a separate count. */
-  quality: QualitySummary;
-  /** The headline block every surface shows; never a separate count. Readers fall back to `buildResultView(record)`. */
-  view?: ResultView;
+  /** The one result every surface shows, stability checked against the resolved source run. */
+  view: ResultView;
   before?: Experiment;
   comparison?: RunComparison;
   comparisonSource?: { kind: 'parent' | 'selected' | 'embedded'; beforeId: string; afterId: string };
   warnings: string[];
   traceJournal: string;
 }
-const failureText = (error: unknown) => oneLine(error instanceof Error ? error.name === 'ZodError' ? 'Запись не соответствует формату Agent Lab.' : error.message : error).slice(0, 300);
+/**
+ * Why a stored run could not be read, in words a reader of any surface may see: never the file path or
+ * the run id an I/O error carries (the owner reaches the file from the run itself).
+ */
+const failureText = (error: unknown) => error instanceof Error && error.name === 'ZodError' ? 'Запись не соответствует формату Agent Lab.'
+  : (error as NodeJS.ErrnoException).code === 'EACCES' ? 'Нет прав на чтение файла.' : 'Файл повреждён или слишком большой.';
 
 /** The source run rebuilt from the evidence a derived record carries; undefined when it carries none for this id. */
 export function embeddedBefore(record: Experiment, parentId: string): Experiment | undefined {
@@ -62,12 +63,12 @@ async function resolveSource(record: Experiment, store: Pick<ExperimentStore, 'g
   try { return { before: await store.get(sourceId), embedded: false }; }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      return { embedded: false, warning: `Исходный прогон ${sourceId} не удалось прочитать. Сравнение и стабильность не проверены; встроенная копия не подставлялась, чтобы не скрыть повреждение. ${failureText(error)}` };
+      return { embedded: false, warning: `Исходный прогон не удалось прочитать: ${failureText(error)} Сравнение и стабильность не проверены; встроенная копия не подставлялась, чтобы не скрыть повреждение.` };
     }
     const before = embeddedBefore(record, sourceId);
     return before
-      ? { before, embedded: true, warning: `Базовый прогон ${sourceId} не найден. Сравнение восстановлено из frozen-определения и встроенных попыток набора; это парный diff, не статистическая оценка и не полная копия исходного прогона. ${failureText(error)}` }
-      : { embedded: false, warning: `Базовый прогон ${sourceId} не найден. Сравнение не выполнено; текущие доказательства сохранены. ${failureText(error)}` };
+      ? { before, embedded: true, warning: 'Исходный прогон не найден. Сравнение восстановлено из сохранённых в наборе ситуаций и разговоров: это сравнение по парам, не полная копия исходного прогона.' }
+      : { embedded: false, warning: 'Исходный прогон не найден. Сравнение не выполнено; этот прогон сохранён полностью.' };
   }
 }
 
@@ -92,11 +93,11 @@ async function verifyReceipts(run: Experiment, store: Partial<Pick<ExperimentSto
     } catch { unreadable.push(trial.id); }
     receipt.complete = false;
   }
-  const ids = (list: string[]) => `${list.slice(0, 5).join(', ')}${list.length > 5 ? ` и ещё ${list.length - 5}` : ''}`;
+  const talks = (n: number) => countText(n, ['разговора', 'разговоров', 'разговоров']);
   return [
-    ...(mismatched.length ? [`${label}: квитанция судьи не совпала с файлом полной оценки у ${mismatched.length} попыток (${ids(mismatched)}). Эти оценки не считаются завершёнными и не входят в сравнение.`] : []),
-    ...(unreadable.length ? [`${label}: файл полной оценки судьи не удалось прочитать у ${unreadable.length} попыток (${ids(unreadable)}). Эти оценки не считаются завершёнными и не входят в сравнение.`] : []),
-    ...(missing.length ? [`${label}: файл полной оценки судьи не найден у ${missing.length} попыток (${ids(missing)}). Квитанции проверены только по самой записи.`] : []),
+    ...(mismatched.length ? [`${label}: запись оценки судьи не совпала с полной оценкой у ${talks(mismatched.length)}. Эти оценки не считаются завершёнными и не входят в сравнение.`] : []),
+    ...(unreadable.length ? [`${label}: полную оценку судьи не удалось прочитать у ${talks(unreadable.length)}. Эти оценки не считаются завершёнными и не входят в сравнение.`] : []),
+    ...(missing.length ? [`${label}: полная оценка судьи не найдена у ${talks(missing.length)}. Оценки проверены только по самой записи.`] : []),
   ];
 }
 
@@ -110,14 +111,14 @@ interface VerifiedRuns { record: Experiment; before?: Experiment; embedded: bool
  */
 export async function resolveVerified(record: Experiment, store: Pick<ExperimentStore, 'get'> & Partial<Pick<ExperimentStore, 'readJudgeAudit'>>, sourceId?: string): Promise<VerifiedRuns> {
   const copy = structuredClone(record);
-  const result: VerifiedRuns = { record: copy, embedded: false, warnings: await verifyReceipts(copy, store, `Прогон ${copy.id}`) };
+  const result: VerifiedRuns = { record: copy, embedded: false, warnings: await verifyReceipts(copy, store, 'Этот прогон') };
   if (!sourceId) return result;
   const source = await resolveSource(copy, store, sourceId);
   result.embedded = source.embedded;
   if (source.warning) result.warnings.push(source.warning);
   if (source.before) {
     // The embedded copy has no sidecar of its own; its receipts were checked when they were embedded.
-    if (!source.embedded) result.warnings.push(...await verifyReceipts(source.before, store, `Базовый прогон ${sourceId}`));
+    if (!source.embedded) result.warnings.push(...await verifyReceipts(source.before, store, 'Исходный прогон'));
     result.before = source.before;
   }
   return result;
@@ -128,15 +129,14 @@ export async function evidenceBundle(record: Experiment, store: BundleStore, bef
   const parent = beforeId ?? record.parentRunId;
   const verified = await resolveVerified(record, store, parent);
   const snapshot = verified.record;
-  const bundle: EvidenceBundle = { record: snapshot, evidence: evidenceSummary(snapshot), quality: qualitySummary(snapshot), warnings: [...verified.warnings], traceJournal: '' };
+  // Stability is checked against the resolved source run; the headline itself never depends on it.
+  const bundle: EvidenceBundle = { record: snapshot, view: buildResultView(snapshot, { before: verified.before }), warnings: [...verified.warnings], traceJournal: '' };
   if (parent) {
     bundle.comparisonSource = { kind: verified.embedded ? 'embedded' : beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };
     if (verified.before) { bundle.before = verified.before; bundle.comparison = compareRuns(verified.before, snapshot); }
   }
-  // Stability is checked against the resolved source run; the headline itself never depends on it.
-  bundle.view = buildResultView(snapshot, { before: bundle.before });
   try { bundle.traceJournal = await store.traceJournal(snapshot.id); }
-  catch (error) { bundle.warnings.push(`Журнал трасс недоступен; реплики из записи включены в отчёт. ${failureText(error)}`); }
+  catch { bundle.warnings.push('Журнал событий прогона недоступен; реплики взяты из самой записи прогона.'); }
   if (isRunning(snapshot.phase)) {
     bundle.warnings.push('Прогон ещё идёт. Этот снимок содержит доступные сейчас доказательства; после завершения экспортируйте итог заново.');
   }

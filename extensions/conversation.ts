@@ -1,11 +1,13 @@
 import type { Experiment, Trial } from '../src/contracts.js';
 import { isRunning, valueTokens } from '../src/contracts.js';
-import { plannedTrials, type RunComparison } from '../src/comparison.js';
+import type { RunComparison } from '../src/comparison.js';
+import { plannedTrials } from '../src/run.js';
 import type { ScenarioLibrary, ScenarioVariant } from '../src/scenario-contracts.js';
 import { resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../src/scenario-library.js';
 import type { VariantFieldDiff, VariantOperation } from '../src/scenario-variants.js';
 import { semanticWorkStatus } from '../src/scenario-work.js';
 import type { ResultView } from '../src/result-view.js';
+import { failureRows } from '../src/result-text.js';
 import { countText } from '../src/plural.js';
 import { clip, shortId } from '../src/text.js';
 import { GLYPH, type Row } from './render/theme.ts';
@@ -542,16 +544,13 @@ export function statusFeed(records: Experiment[], active?: { id: string }): Feed
 const ROLE_WORD: Record<string, string> = { user: 'Клиент', assistant: 'Агент', simulator: 'Симулятор', observation: 'Наблюдение', retrieval: 'Контекст RAG', tool_call: 'Вызов', tool_result: 'Результат', error: 'Ошибка' };
 const OUTCOME_WORD: Record<string, string> = { pass: 'справился', fail: 'не справился', unknown: 'неясно', invalid: 'тест непригоден', cancelled: 'остановлен', ungraded: 'без итоговой оценки' };
 
-/** One failed situation: what was expected, what the agent said, which owner rule — then the dialogue; full trace on expand. */
+/** One failure on one screen (E7): expected → the agent's words → the owner's rule → the conversation; tools, checks and the judge's reasons on expand. */
 export function failureFeed(record: Experiment, view: ResultView, index: number): Feed | null {
   const failure = view.failures[index];
   if (!failure) return null;
+  const rows: Row[] = failureRows(view, record, index).map(item => ({ text: item.right ? `${item.text} · ${item.right}` : item.text, role: item.role, ...(item.indent ? { indent: item.indent } : {}) }));
   const trial = record.trials.find(item => item.id === failure.trialId);
-  const rows: Row[] = [row(`Провал ${index + 1} из ${view.failures.length}: ${failure.title}`, 'error', true),
-    ...failure.rows.filter(item => item.role !== 'title').map(item => row(item.text, item.role === 'unverified' ? 'warning' : item.role === 'rule' || item.role === 'more' || item.role === 'violated' ? 'muted' : undefined, false, 1 + item.indent))];
-  if (!trial) return { rows };
-  const dialogue = dialogueFeed(record, trial);
-  return { rows: [...rows, blank(), ...dialogue.rows.slice(1)], more: dialogue.more };
+  return trial ? { rows, more: dialogueFeed(record, trial).more } : { rows };
 }
 
 /** A recorded dialogue: client and agent turns in the feed; tool calls, checks and the judge's reasons on expand. */

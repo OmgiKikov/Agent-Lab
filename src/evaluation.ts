@@ -1,4 +1,4 @@
-import { SERVICE_REPLY_REASON } from './comparison.js';
+import { judgeFailure, SERVICE_REPLY_REASON } from './run.js';
 import { checkpointInput, checkpointReceipt, directChecks, evaluateCheckpoints } from './checkpoints.js';
 import { createUserState, allowedUserActions, advanceUser, requiredUserTurns } from './user-controller.js';
 import { randomUUID } from 'node:crypto';
@@ -224,9 +224,9 @@ export async function evaluateTrial(input: {
         emit({ type: 'observation', result: structuredClone(trial.observation), ...(trial.observation?.state !== 'missing' ? { state: structuredClone(state) } : {}) });
       }
       append('assistant', response);
-      if (!response.trim()) { trial.reason = 'Испытуемый вернул пустой ответ.'; break; }
+      if (!response.trim()) { trial.reason = 'Испытуемый вернул пустой ответ.'; trial.invalidCause = 'agent'; break; }
       const serviceMarker = target.serviceReplies?.find(marker => response.includes(marker));
-      if (serviceMarker !== undefined) { trial.reason = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента, ситуация не измерена.`; break; }
+      if (serviceMarker !== undefined) { trial.reason = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента, ситуация не измерена.`; trial.invalidCause = 'service_reply'; break; }
       if (control || controlled && (finalUserReply || controlled.policy.terminalStates.includes(controlled.position))) { stopped = true; break; }
       if (!controlled && (userMode === 'static' || finalUserReply || (scenario.user.maxFollowUps !== undefined && turn >= scenario.user.maxFollowUps))) { stopped = true; break; }
       if (userMode === 'scripted') {
@@ -278,6 +278,7 @@ export async function evaluateTrial(input: {
     trial.checks = grade(scenario, trial);
     const allPassed = trial.checks.length > 0 && trial.checks.every(check => check.passed);
     trial.outcome = !stopped ? 'invalid' : trial.checks.length === 0 ? 'ungraded' : allPassed ? 'pass' : 'fail';
+    if (!stopped) trial.invalidCause ??= 'turn_limit';
     trial.reason ||= !stopped ? 'Разговор не завершился в отведённое число реплик.' : trial.checks.length === 0
       ? 'Диалог дошёл до конца, но объективных проверок в карточке нет: оценки по рубрикам считаются отдельно.'
       : allPassed ? 'Все объективные проверки пройдены.' : 'Часть объективных проверок провалена.';
@@ -288,14 +289,16 @@ export async function evaluateTrial(input: {
     if (persistenceFailed) throw persistenceError;
     trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';
     trial.reason = ctx.signal.aborted ? 'Диалог остановлен.' : `${stages[stage] ?? stage}: ${error instanceof Error ? error.message : 'неизвестный сбой'}`;
+    if (trial.outcome === 'invalid') trial.invalidCause = stage === 'user simulation' ? 'simulator' : 'agent';
+    else delete trial.invalidCause;
     emit({ type: 'error', text: trial.reason });
   } finally {
     try { await session?.close(); }
     catch {
       emit({ type: 'error', text: 'Target session cleanup failed' });
-      if (trial.outcome !== 'cancelled') { trial.outcome = 'invalid'; trial.reason = 'Не удалось корректно закрыть сессию испытуемого.'; }
+      if (trial.outcome !== 'cancelled') { trial.outcome = 'invalid'; trial.reason = 'Не удалось корректно закрыть сессию испытуемого.'; trial.invalidCause = 'agent'; }
     }
-    if (ctx.signal.aborted) { trial.outcome = 'cancelled'; trial.reason = 'Диалог остановлен.'; }
+    if (ctx.signal.aborted) { trial.outcome = 'cancelled'; trial.reason = 'Диалог остановлен.'; delete trial.invalidCause; }
     trial.finalState = structuredClone(state);
     trial.elapsedMs = Math.round(performance.now() - started);
     if (persistenceFailed) throw persistenceError;
@@ -312,6 +315,7 @@ export async function evaluateTrial(input: {
     } catch (error) {
       if (persistenceFailed) throw persistenceError;
       trial.assessmentError = (ctx.signal.aborted ? 'Metric assessment cancelled' : error instanceof Error ? error.message : 'Metric assessment failed').slice(0, 4000);
+      trial.assessmentFailure = judgeFailure(error, ctx.signal);
     }
     trial.elapsedMs = Math.round(performance.now() - started);
   }

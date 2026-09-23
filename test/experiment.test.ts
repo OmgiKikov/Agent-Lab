@@ -16,8 +16,9 @@ import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/j
 import { awaitingVerdict, compareRuns } from '../src/comparison.js';
 import { COUNTING_RULES, simulatorUsable } from '../src/outcomes.js';
 import { judgeAgreement } from '../src/agreement.js';
-import { buildResultView, resultViewLines } from '../src/result-view.js';
-import { qualityLines, qualitySummary } from '../src/quality.js';
+import { buildResultView } from '../src/result-view.js';
+import { trustParts } from '../src/result-text.js';
+import { CODE_ONLY_ASSESSMENT, deriveRun } from '../src/run.js';
 import { acceptedDemoDraft, appointmentAgent, demoEvaluateRecord, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 
 async function setup(t: TestContext, runtime?: Runtime) {
@@ -47,6 +48,12 @@ async function runDraft(lab: ExperimentLab, draft: Experiment, reviewer: 'human'
   await lab.start(draft.id, { approved: true, reviewer, expectedHash: draftHash(draft), ...(parallel ? { parallel } : {}) });
   await lab.waitForIdle();
   return lab.get(draft.id);
+}
+/** The headline of a run as every surface reads it: counted situations handled of those decided, and what is left undecided. */
+function headlineOf(record: Experiment) {
+  const view = buildResultView(record);
+  return { passed: view.headline.passed, decided: view.headline.decided, accuracy: view.headline.accuracy,
+    notMeasured: view.notMeasured.total, pending: view.pending, situations: view.cards.length };
 }
 
 test('a completed evaluation freezes the measurement, persists the observed evidence and never starts again', async t => {
@@ -204,14 +211,17 @@ test('провалы прогона получают имена, а сорван
   };
   const { lab } = await setup(t, named);
   const done = await runDraft(lab, await externalDraft(lab), 'human');
-  assert.ok(done.trials.filter(t => t.outcome === 'fail').length >= 2, 'в демо-прогоне есть что кластеризовать');
+  // Кластеризатору дают ровно те провалы, которые считает главное число: провалившиеся попытки засчитанных ситуаций, с их трассами.
+  const failed = deriveRun(done).failedAttempts.map(t => t.id);
+  assert.ok(failed.length >= 2, 'в демо-прогоне есть что кластеризовать');
+  assert.deepEqual((seen[0] as { failures: { trialId: string }[] }).failures.map(f => f.trialId), failed);
+  assert.deepEqual(failed, done.trials.filter(t => t.outcome === 'fail').map(t => t.id), 'в этом прогоне провал числа — это провал точных проверок');
   assert.equal(done.failureModes?.length, 1);
   assert.match(done.failureModes![0]!.name, /Пообещал/);
-  assert.deepEqual(done.failureModes![0]!.trialIds.sort(), done.trials.filter(t => t.outcome === 'fail').map(t => t.id).sort());
-  // Кластеризатору дают только провалившиеся диалоги и их трассы.
+  assert.deepEqual(done.failureModes![0]!.trialIds.sort(), [...failed].sort());
   const passed = new Set(done.trials.filter(t => t.outcome !== 'fail').map(t => t.id));
   assert.ok(passed.size > 0, 'прочитанная без изменения запись проходит');
-  assert.equal((seen[0] as { failures: { trialId: string }[] }).failures.some(f => passed.has(f.trialId)), false);
+  assert.equal(failed.some(id => passed.has(id)), false);
 
   // Сорванный разбор — это оговорка в записи, а не потерянный прогон.
   const { lab: broken } = await setup(t, { ...legacyDemoRuntime(), async failureModes() { throw new Error('судья недоступен'); } });
@@ -406,7 +416,7 @@ test('fifteen unaccepted cards still run, report accuracy, save, load and rerun 
   assert.equal(first.phase, 'results_review', first.error ?? '');
   assert.equal(first.trials.length, 15);
   // Only the two read-only questions pass: the agent cannot move an appointment.
-  assert.deepEqual(qualitySummary(first).cards, { passed: 2, failed: 13, unknown: 0, invalid: 0, notReached: 0, total: 15, accuracy: 2 / 15 });
+  assert.deepEqual(headlineOf(first), { passed: 2, decided: 15, accuracy: 2 / 15, notMeasured: 0, pending: 0, situations: 15 });
   assert.equal(first.acceptedDraftHash, undefined);
 
   const suitePath = await lab.saveSuite(first.id, join(directory, 'fifteen-card-suite.json'));
@@ -417,7 +427,7 @@ test('fifteen unaccepted cards still run, report accuracy, save, load and rerun 
   const rerun = await runDraft(lab, loaded, 'automated');
   assert.equal(rerun.trials.length, 15);
   assert.deepEqual(rerun.scenarios.map(scenario => scenario.id), first.scenarios.map(scenario => scenario.id));
-  assert.deepEqual(qualitySummary(rerun).cards, qualitySummary(first).cards);
+  assert.deepEqual(headlineOf(rerun), headlineOf(first));
   assert.equal(rerun.acceptedDraftHash, undefined);
 });
 
@@ -569,6 +579,8 @@ test('rubric-only agent failures reach clustering', async t => {
   const result = await runDraft(lab, await externalDraft(lab, { count: 1 }, draft => { draft.scenarios.forEach(s => { s.checks = []; }); }), 'human');
   assert.ok(result.trials.length > 0);
   assert.ok(result.trials.every(t => t.outcome === 'ungraded'));
+  // A failure decided by the rubrics alone is a headline failure, so it is clustered like any other.
+  assert.deepEqual(deriveRun(result).failedAttempts.map(t => t.id), result.trials.map(t => t.id));
   assert.deepEqual(result.failureModes?.[0]?.trialIds, result.trials.map(t => t.id));
 });
 
@@ -631,11 +643,16 @@ test('invalid excludes partial simulator criteria and allows finalizing the audi
   trial.simulatorChecks = [{ id: 'simulator_loop', description: 'loop', passed: false, evidence: 'e', heuristic: false }];
   trial.assessments = [{ metricId: 'simulator_metric', result: 'fail', rationale: 'r', evidence: [trial.events[0]!.seq] }];
   await lab.store.save(record);
+  const reasonOf = (run: Experiment) => buildResultView(run).cards.find(card => card.scenarioId === scenario.id)!.reason;
+  assert.equal(deriveRun(record).attempt(trial.id)!.usable, false);
+  assert.equal(reasonOf(record), 'simulator_deviated', 'the failed simulator criteria leave the situation unmeasured');
   let reviewed = await lab.addHumanReview(record.id, { trialId: trial.id, checkId: 'simulator_loop', verdict: 'invalid', note: 'ошибочна проверка' });
   reviewed = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'simulator_metric', verdict: 'invalid', note: 'ошибочна рубрика' });
   assert.equal(simulatorUsable(scenario, trial, reviewed.humanReviews), true);
   assert.equal(awaitingVerdict(reviewed).size, 0);
-  assert.equal(qualitySummary(reviewed).humanQueue.simulatorFlags, 0);
+  // No simulator flag is left: the attempt is a usable measurement again and no longer unmeasured for the simulator.
+  assert.equal(deriveRun(reviewed).attempt(trial.id)!.usable, true);
+  assert.ok(!['simulator_deviated', 'simulator_unclear'].includes(reasonOf(reviewed) ?? ''), reasonOf(reviewed));
   assert.equal((await lab.reviewResults(record.id, resultHash(reviewed))).phase, 'complete');
 });
 
@@ -754,6 +771,8 @@ test('human verdicts may target simulator checks, reassessment recomputes them, 
   const reassessed = await lab.reassess(record.id, { codeOnly: true }); await lab.waitForIdle();
   const again = (await lab.get(reassessed.id)).trials.find(t => t.id === clarified.id)!;
   assert.deepEqual(again.simulatorChecks, clarified.simulatorChecks);
+  // A code-only reassessment says so in a typed field next to its fixed sentence: the situation is «судья не оценивал».
+  assert.deepEqual([again.assessmentFailure, again.assessmentError], ['code_only', CODE_ONLY_ASSESSMENT]);
   // A card that seeds the agent's own test environment: an adapter that does not confirm the reset leaves it unmeasured.
   const unconfirmed = await runDraft(lab, await externalDraft(lab, { ...oneStaticCard, target: stdioTarget(undefined, 'ok') }, draft => {
     draft.scenarios = [{ ...draft.scenarios[0]!, id: 'gold_cards', familyId: 'gold_cards', title: 'List my cards', requirementIds: [], provenance: 'curated',
@@ -801,6 +820,7 @@ async function assertReceiptOnly(lab: ExperimentLab, directory: string, record: 
     assert.ok(trial.judgeReceipt, `${trial.id} carries a receipt`);
     assert.equal(trial.judgeAudit, undefined);
     assert.ok(trial.assessments?.length);
+    assert.equal(trial.assessmentFailure, undefined, 'a judged trial carries no judgment failure');
     assert.equal(hasCompleteJudgment({ scenario, sources: observableSources(record.sources, record.requirements), trial }), true);
     assert.ok(existsSync(join(directory, `${record.id}.judge`, `${trial.id}.json`)));
     assert.equal(fingerprint(await lab.store.readJudgeAudit(record.id, trial.id)), trial.judgeReceipt.auditHash);
@@ -1060,7 +1080,7 @@ test('a double failure needs a stamped mark on both metrics before it counts onc
   assert.equal(half.checked, 0, 'one mark on a double failure is not a checked situation (CR-02)');
   assert.deepEqual(half.unmarked, [trial.id], 'the situation stays in the queue until its second metric is answered');
   assert.deepEqual(half.marks, [], 'a half-answered situation has no mark to show');
-  assert.equal(resultViewLines(buildResultView(first)).includes('Согласие с судьёй: ещё не проверено.'), true);
+  assert.ok(trustParts(buildResultView(first)).includes('судью ещё не проверяли'), trustParts(buildResultView(first)).join(' · '));
 
   const second = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'fail', judgeVerdict: 'fail', note: 'Быстрая отметка: согласен с судьёй.' });
   assert.equal(second.humanReviews.at(-1)!.countingRules, COUNTING_RULES);
@@ -1070,7 +1090,7 @@ test('a double failure needs a stamped mark on both metrics before it counts onc
   assert.deepEqual(whole.unmarked, []);
   assert.deepEqual(whole.marks.map(item => [item.trialId, item.answer, item.judge, item.targets]), [[trial.id, 'agree', 'fail',
     [{ metricId: 'goal_attainment', answer: 'agree' }, { metricId: 'prompt_compliance', answer: 'agree' }]]]);
-  assert.ok(resultViewLines(buildResultView(second)).includes('Согласие с судьёй: 1 из 1 проверенных · мало проверок (провалы: 1 из 1 · успехов нет).'));
+  assert.ok(trustParts(buildResultView(second)).includes('с судьёй согласны 1 из 1'), trustParts(buildResultView(second)).join(' · '));
 
   // The stamps survive a reload through the strict schema in a fresh lab on the same directory.
   await lab.close();
@@ -1192,7 +1212,7 @@ test('a stored run of old-format cards repeats on a new agent version through th
   assert.equal(fixed.targetVersion, 'repaired-v2');
   assert.deepEqual(fixed.trials.map(trial => trial.outcome), ['pass', 'pass']);
   assert.ok(fixed.trials.every(trial => trial.checks.every(check => check.passed)));
-  assert.equal(qualitySummary(fixed).cards.passed, 2);
+  assert.deepEqual([headlineOf(fixed).passed, headlineOf(fixed).decided], [2, 2]);
 });
 
 test('a retired sandbox or compare record opens and reassesses but never runs again, and a new draft cannot name the sandbox', async t => {

@@ -39,6 +39,8 @@ export interface FailureExplanation {
    * rules: only the prompt-rule check failed; both: the goal and the prompt-rule check failed in the same attempt.
    */
   kind: 'goal' | 'rules' | 'both';
+  /** What the agent had to do, in the situation's or the rule's own words; null when the record does not say it. */
+  expected: string | null;
   /** The verified agent reply; null when it could not be shown verbatim. */
   said: { seq: number; quote: string; judgeCited: boolean } | null;
   /** Verified rules shown or counted, knowledge first; unverified ones are only counted. */
@@ -192,14 +194,14 @@ export function failureExplanation(record: Experiment, scenario: Scenario, trial
   const details = detailRows(record, scenario, chosen, kind, cited);
   const rows: ExplanationRow[] = [{ role: 'title', indent: 0, text: `✗ ${oneLine(scenario.title)}` }, ...details.rows];
   return {
-    scenarioId: scenario.id, trialId: chosen.id, title: scenario.title, kind, said: details.said,
+    scenarioId: scenario.id, trialId: chosen.id, title: scenario.title, kind, expected: details.expected, said: details.said,
     rules: details.rules, unverifiedRules: details.unverifiedRules, moreRules: details.moreRules,
     ...(details.violated ? { violated: details.violated } : {}), rows, lines: rowsToLines(rows),
   };
 }
 
 type DetailKind = FailureExplanation['kind'] | 'pass';
-interface Details extends Pick<FailureExplanation, 'said' | 'rules' | 'unverifiedRules' | 'moreRules' | 'violated'> { rows: ExplanationRow[] }
+interface Details extends Pick<FailureExplanation, 'expected' | 'said' | 'rules' | 'unverifiedRules' | 'moreRules' | 'violated'> { rows: ExplanationRow[] }
 
 /**
  * The F1 detail rows of one attempt, without its title: what the agent had to do, what it said
@@ -229,13 +231,17 @@ function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind:
   const rows: ExplanationRow[] = [];
   const criteria = oneLine(scenario.successCriteria ?? '');
   const firstRule = shownRules.find((rule): rule is RuleRef => rule !== null);
+  let expected: string | null = null;
   if (kind === 'rules') {
+    if (violated) expected = `соблюдать правило «${violated.quote}»`;
     rows.push(violated
       ? { role: 'expected', indent: 2, text: `Должен был: соблюдать ${ruleText(violated, 'правило')}` }
       : { role: 'unverified', indent: 2, text: `Должен был: соблюдать правила из ваших материалов — ${UNVERIFIED}` });
   } else if (criteria) {
+    expected = criteria;
     rows.push({ role: 'expected', indent: 2, text: `Должен был: ${criteria}` });
   } else if (firstRule) {
+    expected = oneLine(requirements.get(firstRule.requirementId)?.text ?? '') || null;
     rows.push({ role: 'expected', indent: 2, text: `Должен был (из правила): ${oneLine(requirements.get(firstRule.requirementId)?.text ?? '')}` });
   } else {
     rows.push({ role: 'unverified', indent: 2, text: 'Должен был: ожидание не записано в ситуации.' });
@@ -254,7 +260,7 @@ function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind:
   } else if (kind === 'both' && !violated) {
     rows.push({ role: 'unverified', indent: 2, text: `Нарушены правила промпта — ${UNVERIFIED}` });
   }
-  return { rows, said, rules, unverifiedRules, moreRules, ...(violated ? { violated } : {}) };
+  return { rows, expected, said, rules, unverifiedRules, moreRules, ...(violated ? { violated } : {}) };
 }
 
 /**

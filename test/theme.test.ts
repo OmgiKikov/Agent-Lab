@@ -42,10 +42,10 @@ const QUOTE = [
 test('renderRows keeps every word of a 600-character quote inside 40–160 columns on both fake themes, with only the eight tones', () => {
   assert.ok(QUOTE.length >= 600, `fixture is ${QUOTE.length} characters`);
   const rows: Row[] = [
-    { text: 'Точность 0% · агент справляется плохо: 0 из 9 ситуаций (мало данных)', role: 'verdict:bad' },
-    { text: `Сказал (реплика #7): «${QUOTE}»`, indent: 2, role: 'said' },
+    { text: 'Точность агента: 0% — справился в 0 из 9 ситуаций', role: 'accuracy:bad' },
+    { text: `Агент ответил   «${QUOTE}»`, indent: 2, role: 'quote' },
     { text: QUOTE, indent: 5, tone: 'muted' },
-    { text: 'Дальше: выгрузите отчёт для заказчика.', role: 'next' },
+    { text: 'Дальше: скажите «отчёт для заказчика».', role: 'next:first' },
   ];
   for (const [name, theme] of [['dark', dark], ['light', light]] as const) {
     for (const width of WIDTHS) {
@@ -55,7 +55,7 @@ test('renderRows keeps every word of a 600-character quote inside 40–160 colum
         assert.ok(!line.includes('…'), `${name} ${width}: an ellipsis was produced`);
         assert.ok(!plain(line).includes('\x1b'), `${name} ${width}: the escape sequence reached the output`);
       }
-      const expected = normalise(['Точность 0% · агент справляется плохо: 0 из 9 ситуаций (мало данных)', `Сказал (реплика #7): «${QUOTE}»`, QUOTE, 'Дальше: выгрузите отчёт для заказчика.'].join(' ')
+      const expected = normalise(['Точность агента: 0% — справился в 0 из 9 ситуаций', `Агент ответил   «${QUOTE}»`, QUOTE, 'Дальше: скажите «отчёт для заказчика».'].join(' ')
         .replace(/\x1b\[[0-9;]*m/g, '').replace(/\t/g, '  '));
       assert.equal(normalise(lines.map(plain).join(' ')), expected, `${name} ${width}: a word was lost or cut`);
       const used = new Set(tokens(lines));
@@ -66,23 +66,32 @@ test('renderRows keeps every word of a 600-character quote inside 40–160 colum
 });
 
 test('paint puts the weight inside the colour and takes both from the role when the row names none', () => {
-  assert.equal(paint({ text: 'Хорошо', role: 'verdict:good' }, dark), '<fg:success><b>Хорошо</b></fg>');
-  assert.equal(paint({ text: 'Хорошо', role: 'verdict:good' }, light), '[fg:success][b]Хорошо[/b][/fg]');
-  assert.equal(paint({ text: 'С ошибками', role: 'verdict:warn' }, dark), '<fg:warning><b>С ошибками</b></fg>');
-  assert.equal(paint({ text: 'Плохо', role: 'verdict:bad' }, dark), '<fg:error><b>Плохо</b></fg>');
-  assert.equal(paint({ text: 'Справился в 1 из 2', role: 'headline' }, dark), '<fg:text>Справился в 1 из 2</fg>');
-  assert.equal(paint({ text: 'Дальше: …', role: 'next' }, dark), '<fg:accent>Дальше: …</fg>');
-  assert.equal(paint({ text: 'ГЛАВНЫЕ ПРИЧИНЫ ПРОВАЛОВ', role: 'heading' }, dark), '<fg:accent><b>ГЛАВНЫЕ ПРИЧИНЫ ПРОВАЛОВ</b></fg>');
-  assert.equal(paint({ text: 'Все провалы — …', role: 'pointer' }, dark), '<fg:muted>Все провалы — …</fg>');
-  assert.equal(paint({ text: 'Провалов не зарегистрировано.', role: 'no-failures' }, dark), '<fg:success>Провалов не зарегистрировано.</fg>');
-  // An explicit tone wins over the role; a row without either is printed as it is.
-  assert.equal(paint({ text: 'x', role: 'next', tone: 'dim' }, dark), '<fg:dim>x</fg>');
+  // The answer of result-text.ts, coloured by level (ui-spec §6).
+  assert.equal(paint({ text: 'Точность агента: 86%', role: 'accuracy:good' }, dark), '<fg:success><b>Точность агента: 86%</b></fg>');
+  assert.equal(paint({ text: 'Точность агента: 86%', role: 'accuracy:good' }, light), '[fg:success][b]Точность агента: 86%[/b][/fg]');
+  assert.equal(paint({ text: 'Точность агента: 72%', role: 'accuracy:warn' }, dark), '<fg:warning><b>Точность агента: 72%</b></fg>');
+  assert.equal(paint({ text: 'Точность агента: 40%', role: 'accuracy:bad' }, dark), '<fg:error><b>Точность агента: 40%</b></fg>');
+  assert.equal(paint({ text: 'Точность агента: прогон ещё не запускался', role: 'accuracy:none' }, dark), '<fg:text><b>Точность агента: прогон ещё не запускался</b></fg>');
+  assert.equal(paint({ text: '✗ Числу пока не верить', role: 'alarm' }, dark), '<fg:error><b>✗ Числу пока не верить</b></fg>');
+  assert.equal(paint({ text: 'Вероятно, от 52% до 86% (95%)', role: 'trust' }, dark), '<fg:muted>Вероятно, от 52% до 86% (95%)</fg>');
+  assert.equal(paint({ text: 'мало данных', role: 'trust:small' }, dark), '<fg:warning>мало данных</fg>');
+  assert.equal(paint({ text: 'Почему ошибается', role: 'heading' }, dark), '<fg:accent><b>Почему ошибается</b></fg>');
+  assert.equal(paint({ text: '✗ 1  Возврат', role: 'failed' }, dark), '<fg:error><b>✗ 1  Возврат</b></fg>');
+  assert.equal(paint({ text: 'Дальше: …', role: 'next:first' }, dark), '<fg:accent>Дальше: …</fg>');
+  assert.equal(paint({ text: 'Отчёт для заказчика', role: 'next' }, dark), '<fg:text>Отчёт для заказчика</fg>');
+  assert.equal(paint({ text: 'Ошибок нет.', role: 'good' }, dark), '<fg:success>Ошибок нет.</fg>');
+  // An explicit tone wins over the role; a row without either, or with a role the table does not name, is printed as it is.
+  assert.equal(paint({ text: 'x', role: 'next:first', tone: 'dim' }, dark), '<fg:dim>x</fg>');
   assert.equal(paint({ text: 'пусто' }, dark), 'пусто');
   assert.equal(paint({ text: '', role: 'blank' }, dark), '');
-  for (const role of ['lead', 'line', 'detail', 'situation', 'alarm', 'agreement', 'agreement-tail', 'cause', 'example', 'title', 'expected', 'said', 'rule', 'more', 'violated', 'unverified', 'dis-title', 'dis-verdicts', 'dis-reason']) {
-    assert.ok(ROLE_TONE[role], `phase 2–3 role «${role}» has a token`);
-    assert.ok(TONES.includes(ROLE_TONE[role]!.tone));
+  const resultRoles = ['accuracy:good', 'accuracy:warn', 'accuracy:bad', 'accuracy:none', 'alarm', 'trust', 'trust:small', 'reality', 'heading', 'item', 'item:muted', 'failed', 'quote', 'muted', 'next', 'next:first', 'good'];
+  for (const role of [...resultRoles, 'lead', 'line', 'detail', 'situation', 'agreement', 'agreement-tail', 'cause', 'example', 'title', 'expected', 'said', 'rule', 'more', 'violated', 'unverified', 'dis-title', 'dis-verdicts', 'dis-reason']) {
+    assert.ok(ROLE_TONE[role], `role «${role}» has a token`);
   }
+  // The phase-4 verdict roles are gone with src/verdict.ts; every tone of the table is one of the eight.
+  for (const role of ['verdict:good', 'verdict:warn', 'verdict:bad', 'headline', 'pointer', 'no-failures', 'blank']) assert.equal(ROLE_TONE[role], undefined, role);
+  assert.equal(paint({ text: 'Плохо', role: 'verdict:bad' }, dark), 'Плохо');
+  for (const [role, { tone }] of Object.entries(ROLE_TONE)) assert.ok(TONES.includes(tone), `${role}: «${tone}»`);
 });
 
 test('the glyph registry of phases 2–4 lives in one const', () => {
@@ -94,9 +103,9 @@ test('the glyph registry of phases 2–4 lives in one const', () => {
 
 // ---- Lint (SCREEN-07): width is never measured or cut by hand in the render code. ----
 
+// src/result-text.ts is out of scope on purpose: laying rows out in columns is its job, done with pi-tui visibleWidth.
 const here = dirname(fileURLToPath(import.meta.url));
 const RENDER_DIR = join(here, '..', 'extensions', 'render');
-const VERDICT = join(here, '..', 'src', 'verdict.ts');
 const BANNED_CALLS = /\.slice\(|\.substring\(|padStart\(|padEnd\(/g;
 const BANNED_LENGTH = /\b(?:text|line|title|label|message|quote)\.length\b/g;
 const GLYPHS = /[✗✓▸●◆━─→]/g;
@@ -107,8 +116,8 @@ async function renderFiles(): Promise<string[]> {
   return walk(RENDER_DIR);
 }
 
-test('lint: extensions/render and src/verdict.ts never slice, pad or measure displayed text, and draw glyphs only from GLYPH', async () => {
-  const files = [...await renderFiles(), VERDICT];
+test('lint: extensions/render never slices, pads or measures displayed text, and draws glyphs only from GLYPH', async () => {
+  const files = await renderFiles();
   assert.ok(files.some(file => file.endsWith('theme.ts')) && files.some(file => file.endsWith('verdict-block.ts')), 'both render modules are scanned');
   for (const file of files) {
     const source = await readFile(file, 'utf8');
@@ -117,7 +126,6 @@ test('lint: extensions/render and src/verdict.ts never slice, pad or measure dis
       assert.equal(line.match(BANNED_CALLS)?.[0], undefined, `${file}:${i + 1}: «${line.trim()}»`);
       assert.equal(line.match(BANNED_LENGTH)?.[0], undefined, `${file}:${i + 1}: «${line.trim()}»`);
     });
-    if (!file.startsWith(RENDER_DIR)) continue;
     // The GLYPH const itself is the one place a glyph may be written.
     const withoutRegistry = file.endsWith('theme.ts') ? source.replace(/export const GLYPH = \{[\s\S]*?\} as const;/, '') : source;
     withoutRegistry.split('\n').forEach((line, i) => {

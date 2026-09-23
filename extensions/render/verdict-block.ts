@@ -1,10 +1,10 @@
 import { keyHint, type Theme } from '@earendil-works/pi-coding-agent';
 import { Text, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 import type { AgentToolResult, ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
-import { verdictBlockRows } from '../../src/verdict.js';
+import { chatBlock, fitRows } from '../../src/result-text.js';
 import type { ResultView } from '../../src/result-view.js';
 import { safeText, shortId } from '../../src/text.js';
-import { renderRows, type PaintTheme, type Row } from './theme.ts';
+import { renderRows, type PaintTheme } from './theme.ts';
 
 /*
  * The chat verdict block (04-UI-SPEC B1–B4) and its tool host. One component draws the block for
@@ -52,18 +52,20 @@ export function viewFor(details: VerdictDetails): ResultView | null {
 const missingRunText = (runId: string): string => `Прогон ${shortId(runId)} не найден в .agent-lab — блок нельзя показать.`;
 
 /**
- * The verdict block as a pi-tui component. The plain rows are built once, in the constructor, so a
- * failing view fails inside the host's try/catch and never inside Pi's render loop. The hint is
- * Pi's own styled `keyHint` text (or a fixed string in tests), so it is not escaped again.
+ * The result block of the chat (ui-spec §4.10) as a pi-tui component: the same rows the board and
+ * the CLI lay out, fitted to the width by `fitRows` and painted by role. The rows are built once,
+ * in the constructor, so a failing view fails inside the host's try/catch and never inside Pi's
+ * render loop. The hint is Pi's own styled `keyHint` text (or a fixed string in tests), so it is not
+ * escaped again.
  */
 export class VerdictBlock implements Component {
-  private readonly rows: Row[];
+  private readonly rows: ReturnType<typeof chatBlock>;
   constructor(view: ResultView, private readonly expanded: boolean, private readonly theme: PaintTheme, private readonly hint: (expanded: boolean) => string) {
-    this.rows = verdictBlockRows(view, { expanded, runId: view.runId, surface: 'chat' });
+    this.rows = chatBlock(view, { expanded });
   }
   invalidate(): void {}
   render(width: number): string[] {
-    return [...renderRows(this.rows, this.theme, width), ...wrapTextWithAnsi(this.hint(this.expanded), width)];
+    return [...renderRows(fitRows(this.rows, width), this.theme, width), ...wrapTextWithAnsi(this.hint(this.expanded), width)];
   }
 }
 
@@ -85,7 +87,9 @@ export function renderAgentLabResult(result: AgentToolResult<unknown>, options: 
     if (isVerdictDetails(details)) {
       const view = viewFor(details);
       if (!view) return new Text(theme.fg('warning', safeText(missingRunText(details.runId))), 0, 0);
-      return new VerdictBlock(view, options.expanded, theme, expanded => keyHint('app.tools.expand', expanded ? 'свернуть' : 'подробнее'));
+      return new VerdictBlock(view, options.expanded, theme, expanded => expanded ? keyHint('app.tools.expand', 'свернуть')
+        : view.failures.length ? `${keyHint('app.tools.expand', 'причины с примерами')} · «покажи ошибку 1» · «отчёт для заказчика»`
+          : `${keyHint('app.tools.expand', 'подробнее')} · «отчёт для заказчика»`);
     }
     return legacy(result, options, theme);
   } catch {

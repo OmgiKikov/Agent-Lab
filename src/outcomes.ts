@@ -43,17 +43,25 @@ export function primaryMetricId(scenario: Scenario | undefined, trial: Trial): s
   return agent.find(m => result(m.id) === 'fail')?.id ?? agent.find(m => result(m.id) === 'pass')?.id;
 }
 
+type Judged = 'pass' | 'fail' | 'unknown';
+
 /**
- * Rubric outcomes stay separate from objective checks everywhere they are presented. A human
- * verdict on a criterion is authoritative — except a one-key «не могу сказать», which is doubt,
- * not a verdict: it leaves the judge's own result in place, so the owner's hesitation can never
- * quietly take a failure out of the headline. A full review that says `unknown` still overrides.
+ * The human-override rule — the only copy of it. The latest human verdict on a target (one metric,
+ * one check) replaces the recorded result, with two exceptions: a one-key «не могу сказать» is
+ * doubt, not a verdict, so the recorded result stays and the owner's hesitation can never quietly
+ * take a failure out of the headline (a full review that says `unknown` still overrides); and
+ * «invalid» takes the target out of the judgment altogether (`invalid: true`, no result).
  */
-export function agentMetricResult(trial: Trial, metricId: string, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
+export function humanOverride(review: HumanReview | undefined, recorded: Judged | undefined): { invalid: boolean; result: Judged | undefined } {
+  if (review?.verdict === 'invalid') return { invalid: true, result: undefined };
+  if (!review || (review.source === 'quick' && review.verdict === 'unknown')) return { invalid: false, result: recorded };
+  return { invalid: false, result: review.verdict };
+}
+
+/** Rubric outcomes stay separate from objective checks everywhere they are presented; a human verdict applies by `humanOverride`. */
+export function agentMetricResult(trial: Trial, metricId: string, reviews: HumanReview[] = []): Judged | undefined {
   const human = latestHumanReviews({ trials: [trial], humanReviews: reviews }).get(`${trial.id}|metric:${metricId}`);
-  const recorded = trial.assessments?.find(a => a.metricId === metricId)?.result;
-  if (human?.source === 'quick' && human.verdict === 'unknown') return recorded;
-  return human?.verdict === 'invalid' ? undefined : human?.verdict ?? recorded;
+  return humanOverride(human, trial.assessments?.find(a => a.metricId === metricId)?.result).result;
 }
 
 export function agentRubricResult(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
@@ -68,25 +76,36 @@ export function isAgentFailure(record: Experiment, trial: Trial): boolean {
   return requiredCheckpointResult(scenario, trial) !== 'unknown' && measurementUsable(scenario, trial, record.humanReviews) && (requiredCheckpointResult(scenario, trial) === 'fail' || trial.outcome === 'fail'
     || agentRubricResult(scenario, trial, record.humanReviews) === 'fail');
 }
-/** A candidate cannot be accepted on a partially scored agent rubric. A quick «не могу сказать» is skipped here too: the judge's recorded result still decides. */
+/** A candidate cannot be accepted on a partially scored agent rubric; a rubric a human took out of the judgment is not waiting for a score. */
 export function trialAssessmentComplete(scenario: Scenario, trial: Trial, reviews: HumanReview[] = []): boolean {
   const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
   return measurementUsable(scenario, trial, reviews) && requiredCheckpointResult(scenario, trial) !== 'unknown' && (scenario.metrics ?? []).filter(m => m.subject === 'agent')
-    .every(m => { const human = latest.get(`${trial.id}|metric:${m.id}`);
-      if (human && !(human.source === 'quick' && human.verdict === 'unknown')) return human.verdict !== 'unknown';
-      const result = trial.assessments?.find(a => a.metricId === m.id)?.result;
-      return result === 'pass' || result === 'fail'; });
+    .every(m => {
+      const judged = humanOverride(latest.get(`${trial.id}|metric:${m.id}`), trial.assessments?.find(a => a.metricId === m.id)?.result);
+      return judged.invalid || judged.result === 'pass' || judged.result === 'fail';
+    });
 }
-/** Human decisions override interpretation, never the recorded check or judge response. */
-export function simulatorUsable(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): boolean {
+
+/**
+ * The simulated client's side of one attempt after human decisions: each code check on its replies
+ * and each fidelity vote, as `humanOverride` leaves them. A target a human marked invalid no longer
+ * counts against the measurement. Human decisions override interpretation, never the recorded check or judge response.
+ */
+export function simulatorVerdicts(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): { checks: boolean[]; fidelity: (Judged | undefined)[] } {
   const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
-  return (simulatorWasUsed(trial) ? trial.simulatorChecks ?? [] : []).every(c => {
-    const review = latest.get(`${trial.id}|check:${c.id}`);
-    return review?.verdict === 'invalid' || (review ? review.verdict === 'pass' : c.passed);
-  }) && (scenario?.metrics ?? []).filter(m => m.subject === 'simulator' && metricApplies(m, trial)).every(m => {
-    const review = latest.get(`${trial.id}|metric:${m.id}`);
-    return review?.verdict === 'invalid' || (review?.verdict ?? trial.assessments?.find(a => a.metricId === m.id)?.result) === 'pass';
+  const checks = (simulatorWasUsed(trial) ? trial.simulatorChecks ?? [] : []).map(c => {
+    const judged = humanOverride(latest.get(`${trial.id}|check:${c.id}`), c.passed ? 'pass' : 'fail');
+    return judged.invalid || judged.result === 'pass';
   });
+  const fidelity = (scenario?.metrics ?? []).filter(m => m.subject === 'simulator' && metricApplies(m, trial)).flatMap(m => {
+    const judged = humanOverride(latest.get(`${trial.id}|metric:${m.id}`), trial.assessments?.find(a => a.metricId === m.id)?.result);
+    return judged.invalid ? [] : [judged.result];
+  });
+  return { checks, fidelity };
+}
+export function simulatorUsable(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): boolean {
+  const { checks, fidelity } = simulatorVerdicts(scenario, trial, reviews);
+  return checks.every(Boolean) && fidelity.every(result => result === 'pass');
 }
 /** Shared eligibility for comparisons, CI and prompt proposals. Raw outcomes remain inspectable. */
 export function measurementUsable(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): boolean {

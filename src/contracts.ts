@@ -429,7 +429,17 @@ export interface Trial {
   assessments?: MetricAssessment[]; assessmentError?: string; judgeAudit?: JudgeAudit; judgeReceipt?: JudgeReceipt;
   observation?: { state: 'sandbox' | 'reported' | 'missing'; tools: 'sandbox' | 'complete' | 'partial'; resetConfirmed?: boolean; version?: string; toolScope?: string[] };
   externalUsage?: Usage;
+  /** Why the dialogue could not be measured, typed where it broke. Records written before it carry only `reason` (run.ts decodes them). */
+  invalidCause?: InvalidCause;
+  /** Why the judge left the attempt without a judgment, typed where it failed. Records written before it carry only `assessmentError`. */
+  assessmentFailure?: AssessmentFailure;
 }
+/** Where a dialogue broke: the turn budget ran out, the simulated client failed, the agent or its connection failed, or a service text stood in for the agent's reply. */
+export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply'] as const;
+export type InvalidCause = typeof INVALID_CAUSES[number];
+/** Why an attempt has no judgment: only code checks were re-run, the run was stopped, the model provider did not answer, or the judge's answers were rejected. */
+export const ASSESSMENT_FAILURES = ['code_only', 'stopped', 'unavailable', 'rejected'] as const;
+export type AssessmentFailure = typeof ASSESSMENT_FAILURES[number];
 /** Keep RAG diagnosis outside the frozen card: it appears only when the target exposes retrieval evidence. */
 export function assessmentRubrics(scenario: Pick<Scenario, 'metrics'>, trial: Pick<Trial, 'events'>): Rubric[] {
   // These IDs are harness-owned diagnostics; a card cannot replace their criteria with a reference answer.
@@ -633,6 +643,8 @@ export const trialSchema = z.strictObject({
   externalUsage: usageSchema.optional(),
   judgeAudit: judgeAuditSchema.optional(),
   judgeReceipt: judgeReceiptSchema.optional(),
+  invalidCause: z.enum(INVALID_CAUSES).optional(),
+  assessmentFailure: z.enum(ASSESSMENT_FAILURES).optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),

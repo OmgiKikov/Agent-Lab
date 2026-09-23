@@ -11,6 +11,7 @@ import { exampleRows, failureExplanation, ruleRegister, rowsToLines, UNVERIFIED 
 import * as explain from '../src/explain.js';
 import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView } from '../src/result-view.js';
+import { errorListRows, MAX_WIDTH, plainText } from '../src/result-text.js';
 import { ExperimentStore } from '../src/store.js';
 
 /*
@@ -130,16 +131,40 @@ test('CLI summary lists every failed situation with its explanation, from the bu
     await store.init();
     try { await store.save(record); } finally { await store.close(); }
     const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
-    const child = spawn(process.execPath, [cli, 'summary', '--id', record.id, '--data-dir', directory]);
-    let stdout = ''; let stderr = '';
-    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
-    const code = await new Promise<number | null>(resolve => child.on('close', resolve));
-    assert.equal(code, 0, stderr);
+    const summary = async (...extra: string[]) => {
+      const child = spawn(process.execPath, [cli, 'summary', '--id', record.id, '--data-dir', directory, ...extra]);
+      let stdout = ''; let stderr = '';
+      child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+      const code = await new Promise<number | null>(resolve => child.on('close', resolve));
+      assert.equal(code, 0, stderr);
+      return stdout;
+    };
+    const stdout = await summary();
     const lines = stdout.split('\n');
-    const at = lines.indexOf('Все провалы (1):');
+    // The CLI prints the one result screen: its «Все ошибки» block is the view's error list at the same width.
+    const errors = plainText(errorListRows(buildResultView(record)), MAX_WIDTH).split('\n');
+    const at = lines.indexOf(errors[0]!);
+    assert.equal(errors[0], ' Все ошибки');
     assert.ok(at > 0, stdout);
-    assert.deepEqual(lines.slice(at + 1, at + 1 + REFUND_LINES.length), REFUND_LINES);
-    assert.ok(lines.indexOf('Подробности:') > at);
+    assert.deepEqual(lines.slice(at, at + errors.length), errors);
+    // Every failure says what was expected, what the agent said and the owner's rule, in the owner's words.
+    const block = errors.map(line => line.trim()).join(' ');
+    assert.match(block, /✗ 1 {2}Возврат через терминал/);
+    assert.ok(block.includes('Ожидалось: Объяснить порядок возврата через терминал и срок зачисления.'), block);
+    assert.ok(block.includes('Агент: «Ожидайте, заявка передана специалисту.»'), block);
+    assert.ok(block.includes('Правило: «Возврат выполняется через меню терминала в течение 30 дней.»'), block);
+    // The number opens the screen, the causes come before the list, and «Дальше» names the commands.
+    assert.equal(lines[0], ' Точность агента: 50% — справился в 1 из 2 ситуаций');
+    const causes = lines.indexOf(' Почему ошибается');
+    assert.ok(causes > 0 && causes < at, stdout);
+    assert.ok(lines.indexOf(' Дальше') > at, stdout);
+    assert.ok(lines.some(line => line.trim() === `Отчёт для заказчика: agent-lab export --id ${record.id} --format html`), stdout);
+    // --json carries the same view, the CI exit code and the very lines printed above.
+    const machine = JSON.parse(await summary('--json'));
+    assert.deepEqual(Object.keys(machine).sort(), ['exitCode', 'lines', 'view', 'warnings']);
+    assert.equal(machine.exitCode, 1, 'a counted situation failed');
+    assert.deepEqual(machine.view.failures.map((item: { lines: string[] }) => item.lines), [REFUND_LINES]);
+    assert.deepEqual(machine.lines, lines.slice(0, machine.lines.length));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

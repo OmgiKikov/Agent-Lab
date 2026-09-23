@@ -3,21 +3,25 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { initTheme, ToolExecutionComponent, type ExtensionAPI, type ExtensionContext, type Theme, type ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { initTheme, keyHint, ToolExecutionComponent, type ExtensionAPI, type ExtensionContext, type Theme, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, Text, visibleWidth, type Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { forgetViews, isVerdictDetails, rememberView, renderAgentLabResult, VERDICT_KIND, VerdictBlock, viewFor, type VerdictDetails } from '../extensions/render/verdict-block.ts';
 import type { PaintTheme } from '../extensions/render/theme.ts';
 import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type MetricAssessment, type Trial } from '../src/contracts.js';
 import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
+import { accuracyRow, chatBlock, fitRows, nextRows } from '../src/result-text.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
-import { verdictLine } from '../src/verdict.js';
 
 /*
- * The phase-4 tracer: a real `agent_lab_run` result is drawn by Pi's own tool row as the verdict
- * block, from `details` that hold ids only (REV-01). The fake `pi` and `output()` mirror the ones
- * in extension.test.ts; nothing is imported across test files.
+ * The phase-4 tracer: a real `agent_lab_run` result is drawn by Pi's own tool row as the result
+ * block — the chat rows of result-text.ts laid out by `fitRows` — from `details` that hold ids only
+ * (REV-01). The fake `pi` and `output()` mirror the ones in extension.test.ts; nothing is imported
+ * across test files.
  */
+
+/** The hint under a collapsed block: what to press or say next. */
+const collapsedHint = (view: ResultView) => view.failures.length ? 'причины с примерами · «покажи ошибку 1» · «отчёт для заказчика»' : 'подробнее · «отчёт для заказчика»';
 
 const SHOWN_TO_OWNER = 'Блок с точностью и причинами уже показан владельцу. Не копируйте его строки. Назовите точность одной фразой и объясните по-человечески, где и почему агент хромает: что просили клиенты, что агент сделал вместо этого, какое правило владельца это нарушает; что он делает хорошо и насколько числу можно верить. Затем предложите следующий шаг.';
 
@@ -75,23 +79,26 @@ test('после agent_lab_run Pi рисует блок-вердикт из deta
   assert.equal(details.resultKey, `${run.id}:${run.resultHash}`);
   // The model gets today's JSON plus the one new field that tells it the block is already shown (C-119).
   assert.equal(run.shownToOwner, SHOWN_TO_OWNER);
-  assert.ok(Array.isArray(run.viewLines) && run.viewLines.length > 0);
+  assert.ok(Array.isArray(run.resultLines) && run.resultLines.length > 0);
 
-  // Pi's real tool row draws the block: the verdict line is the first row under the call row.
+  // Pi's real tool row draws the block: the first chat row under the call row, the number among the rows.
   initTheme('dark', false);
   const view = viewFor(details);
   assert.ok(view, 'the view produced with the result is remembered for the block');
+  assert.ok(run.resultLines.some((line: string) => line.trim() === accuracyRow(view).text), 'the model reads the same number');
+  assert.equal(run.nextStep, nextRows(view, 'chat')[0]?.text);
   const { raw, lines } = toolRow(tools.get('agent_lab_run')!, result, 80);
   assert.equal(lines[0], 'Готовлю запуск');
-  assert.equal(lines[1], verdictLine(view));
-  assert.ok(lines.some(line => line.startsWith('Дальше: ')), 'the block ends with the «Дальше» row');
-  assert.ok(lines.some(line => line.endsWith('подробнее')), 'the expand hint is under the block');
+  assert.equal(lines[1], fitRows(chatBlock(view, { expanded: false }), 80)[0]!.text.trim());
+  assert.ok(lines.includes(accuracyRow(view).text), 'the number is drawn in one piece');
+  assert.ok(!lines.some(line => line.startsWith('Дальше: ')), 'the collapsed block leaves «Дальше» to the hint and the expanded block');
+  assert.ok(lines.at(-1)!.endsWith(collapsedHint(view)), `the expand hint is under the block, got «${lines.at(-1)}»`);
   for (const line of raw) assert.ok(visibleWidth(line) <= 80, `wider than 80: «${stripTerminalSequences(line)}»`);
   // The model-only text is never drawn.
   const shown = lines.join('\n');
   assert.doesNotMatch(shown, /shownToOwner/);
   assert.doesNotMatch(shown, /уже показан владельцу/);
-  assert.doesNotMatch(shown, /"viewLines"/);
+  assert.doesNotMatch(shown, /"resultLines"/);
 });
 
 test('ни текст ситуаций, ни их названия не попадают в details', async t => {
@@ -163,7 +170,12 @@ function fixtureView(): ResultView {
   add('f1', 'Подключение СБП', 'fail'); add('f2', 'Отмена платежа', 'fail');
   add('u0', 'Чек не пришёл покупателю на электронную почту после оплаты картой на кассе самообслуживания', 'unknown', SPLIT);
   add('u1', 'Тариф эквайринга', 'unknown', SPLIT);
-  const record: Experiment = {
+  return buildResultView(record(cards, trials));
+}
+/** Two passed situations: nothing failed, so the collapsed block offers only «подробнее» and the report. */
+const cleanView = (): ResultView => buildResultView(record([card('p0', 'Смена реквизитов'), card('p1', 'Выписка за месяц')], [attempt('p0', 'pass'), attempt('p1', 'pass')]));
+function record(cards: Card[], trials: Trial[]): Experiment {
+  return {
     schemaVersion: '1', id: HEX_ID, task: 't', mode: 'live', workflow: 'evaluate', createdAt: 'now', updatedAt: 'now', phase: 'results_review', message: '',
     sources: [], settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 1 }),
     target: { kind: 'command', command: 'python3', args: ['agent.py'], timeoutMs: 60000 },
@@ -171,7 +183,6 @@ function fixtureView(): ResultView {
     manifestHash: 'h', reviewedAt: null, reviewMode: 'human', controlConsumedAt: null, acceptedTests: [], trials, comparisons: [], iterations: [],
     usage: emptyUsage(), error: null, limitations: [], humanReviews: [],
   };
-  return buildResultView(record);
 }
 const verdictResult = (resultKey: string, text = '{"shownToOwner":"скрытый текст для модели"}'): ToolResult =>
   ({ content: [{ type: 'text', text }], details: { kind: VERDICT_KIND, version: 1, runId: HEX_ID, resultKey } as VerdictDetails });
@@ -247,16 +258,18 @@ test('through Pi\'s real tool row in the dark and light themes, at 40–160 colu
         for (const line of raw) assert.ok(visibleWidth(line) <= width, `${label}: «${stripTerminalSequences(line)}» is wider than ${width}`);
         assert.ok(!lines.some(line => line.includes('…')), `${label}: an ellipsis was produced`);
         assert.equal(lines[0], 'Готовлю запуск', label);
-        if (width >= 80) assert.equal(lines[1], verdictLine(view), label);
-        assert.ok(lines.join(' ').includes('Точность 40% · агент справляется плохо: 2 из 5 ситуаций'), `${label}: the verdict line is drawn`);
+        if (width >= 80) assert.equal(lines[1], accuracyRow(view).text, label);
+        assert.ok(lines.join(' ').includes('Точность агента: 40% — справился в 2 из 5 ситуаций'), `${label}: the number is drawn`);
         assert.ok(!lines.some(line => line.includes('shownToOwner') || line.includes('скрытый текст')), `${label}: the model text stays hidden`);
         assert.ok(!raw.join('').includes('\x1b[31m'), `${label}: the escape sequence of the quote is gone`);
         const text = lines.join(' ');
-        assert.ok(text.includes('Дальше: '), `${label}: the «Дальше» row is drawn`);
-        assert.equal(text.includes('Тариф эквайринга — судья не уверен: голоса разошлись'), expanded, `${label}: the «?» rows only when expanded`);
-        assert.equal(text.includes('Любой провал можно открыть здесь: попросите показать его по номеру. Доска со всеми провалами — /agent-lab 0123abcd.'), expanded, `${label}: the pointer only when expanded`);
-        assert.ok(text.includes('выберите операцию в журнале') === expanded || !expanded, `${label}: the long quote is in the expanded block`);
-        assert.ok(lines.at(-1)!.endsWith(expanded ? 'свернуть' : 'подробнее'), `${label}: the hint is the last row, got «${lines.at(-1)}»`);
+        assert.ok(text.includes('не измерено 2 — судья не уверен — его оценки разошлись'), `${label}: the trust line is drawn in both forms`);
+        assert.equal(text.includes('Чаще всего: '), !expanded, `${label}: the causes in one row only when collapsed`);
+        assert.equal(text.includes('Дальше: '), expanded, `${label}: «Дальше» only when expanded`);
+        assert.equal(text.includes('Тариф эквайринга: судья не уверен — его оценки разошлись'), expanded, `${label}: the unmeasured situations only when expanded`);
+        assert.equal(text.includes('выберите операцию в журнале'), expanded, `${label}: the long quote only in the expanded block`);
+        assert.ok(lines.at(-1)!.endsWith(expanded ? 'свернуть' : 'заказчика»'), `${label}: the hint is the last row, got «${lines.at(-1)}»`);
+        assert.ok(text.includes(expanded ? 'свернуть' : collapsedHint(view)), `${label}: the whole hint is drawn`);
         heights[label] = lines.length;
       }
     }
@@ -281,12 +294,37 @@ test('VerdictBlock takes the hint as a function and paints the rows with the the
       const lines = new VerdictBlock(view, expanded, fake, hint).render(width);
       for (const line of lines) assert.ok(visibleWidth(plain(line)) <= width, `${width}: «${plain(line)}»`);
       assert.equal(lines.at(-1), expanded ? 'ПОДСКАЗКА-СВЕРНУТЬ' : 'ПОДСКАЗКА-ПОДРОБНЕЕ', 'the injected hint closes the block, unpainted and unescaped');
-      assert.ok(lines[0]!.startsWith('<error><b>Точность 40% · агент справляется плохо'), `${width}: V1 is bold error`);
-      assert.equal(lines.some(line => plain(line).startsWith('? ') || plain(line).startsWith('  ? ')), expanded, `${width}: «?» rows only when expanded`);
+      assert.ok(lines[0]!.startsWith('<error><b>'), `${width}: the number is bold error`);
+      assert.ok(plain(lines[0]!).trim().startsWith('Точность агента: 40%'), `${width}: «${plain(lines[0]!)}»`);
+      // The painted lines are exactly the laid-out rows: fitRows decides the layout, the theme only paints.
+      assert.deepEqual(lines.slice(0, -1).map(plain), fitRows(chatBlock(view, { expanded }), width).map(line => stripTerminalSequences(line.text)), `${width}: painting changed the layout`);
+      assert.equal(lines.some(line => plain(line).trim() === 'Не измерено'), expanded, `${width}: the unmeasured situations only when expanded`);
     }
   }
   assert.ok(new Set(marks).size <= 8 && ['error', 'accent', 'muted', 'text'].every(tone => marks.includes(tone)), `tones used: ${[...new Set(marks)].join(', ')}`);
   const component: Component = new VerdictBlock(view, false, fake, hint);
   component.invalidate();
   assert.ok(Array.isArray(component.render(80)));
+});
+
+test('the host hint: the causes and the phrases to say when something failed, «подробнее» otherwise, «свернуть» when expanded', () => {
+  initTheme('dark', false);
+  const theme = realTheme();
+  // Pi's own key hint; the stripped row is trimmed, so is the hint (a test process may have no key bound).
+  const key = (description: string) => stripTerminalSequences(keyHint('app.tools.expand', description)).trim();
+  const cases: [string, ResultView, string][] = [
+    ['failing', fixtureView(), `${key('причины с примерами')} · «покажи ошибку 1» · «отчёт для заказчика»`],
+    ['clean', cleanView(), `${key('подробнее')} · «отчёт для заказчика»`],
+  ];
+  for (const [name, view, collapsed] of cases) {
+    rememberView(`${HEX_ID}:hint-${name}`, view);
+    for (const expanded of [false, true]) {
+      const rendered = renderAgentLabResult(verdictResult(`${HEX_ID}:hint-${name}`), { expanded, isPartial: false }, theme, () => { throw new Error('legacy must not be asked'); });
+      assert.ok(rendered instanceof VerdictBlock, `${name}: the block is drawn`);
+      const lines = strip(rendered.render(200));
+      assert.equal(lines.at(-1), expanded ? key('свернуть') : collapsed, `${name} ${expanded ? 'развёрнуто' : 'свёрнуто'}`);
+      assert.equal(lines[0], accuracyRow(view).text, `${name}: the number comes first`);
+    }
+  }
+  assert.equal(accuracyRow(cleanView()).text, 'Точность агента: 100% — справился в 2 из 2 ситуаций');
 });

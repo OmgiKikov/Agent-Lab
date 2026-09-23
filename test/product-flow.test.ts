@@ -11,7 +11,9 @@ import { ExperimentLab, draftHash, resultHash } from '../src/experiment.js';
 import { createDemoRuntime, demoInput, demoTarget } from '../src/demo.js';
 import { createInputSchema, draftPatchSchema, fingerprint, goalAttainment, scriptIssue, type Experiment, type Runtime } from '../src/contracts.js';
 import { listSuites } from '../src/connection.js';
-import { automaticTrialResult, awaitingVerdict, compareRuns, verdictSummary } from '../src/comparison.js';
+import { awaitingVerdict, compareRuns } from '../src/comparison.js';
+import { automaticTrialResult } from '../src/outcomes.js';
+import { buildResultView, exitCodeOf } from '../src/result-view.js';
 import { acceptedDemoDraft } from './helpers/demo-record.js';
 import { evaluateTrial } from '../src/evaluation.js';
 import { htmlReport } from '../src/report.js';
@@ -54,9 +56,11 @@ test('a failed case becomes a reusable regression test without changing provenan
   assert.equal(failure.scenarioId, scenario.id);
   let reviewed = await lab.addHumanReview(before.id, { trialId: failure.id, verdict: 'invalid', note: 'Synthetic test of invalid classification; not owner review.' });
   assert.equal(awaitingVerdict(reviewed).has(failure.id), false);
-  assert.equal(verdictSummary(reviewed).review.invalid, 1);
-  assert.equal(verdictSummary(reviewed).review.reviewed, 1);
-  assert.match(verdictSummary(reviewed).headline, /Качество агента по ним не установлено/);
+  // An invalidated test says nothing about the agent: its situation leaves the number and is named as unmeasured.
+  const invalidated = buildResultView(reviewed);
+  assert.deepEqual(invalidated.notMeasured.reasons.map(reason => [reason.code, reason.scenarioIds]), [['human_invalid', [scenario.id]]]);
+  assert.deepEqual([invalidated.headline.passed, invalidated.headline.decided], [1, 1]);
+  assert.equal(exitCodeOf(invalidated), 2);
   for (const id of awaitingVerdict(reviewed)) reviewed = await lab.addHumanReview(before.id, { trialId: id, verdict: 'fail', note: 'Synthetic fixture: the number is asked again.' });
   reviewed = await lab.reviewResults(before.id, resultHash(reviewed));
   assert.deepEqual(reviewed.trials, before.trials, 'classification never rewrites original evidence');
@@ -82,14 +86,17 @@ test('a failed case becomes a reusable regression test without changing provenan
   const invalidAfter = await lab.addHumanReview(after.id, { trialId: after.trials[0]!.id, verdict: 'invalid', note: 'Synthetic fixture: invalid measurement after the change.' });
   assert.equal(compareRuns(before, invalidAfter).coverage.invalidAfter, 1);
   assert.deepEqual(compareRuns(before, invalidAfter).fixed, []);
-  assert.equal(verdictSummary({ ...reviewed, trials: reviewed.trials.filter(t => t.id !== failure.id) }).review.invalid, 0, 'a selected subset ignores reviews of other attempts');
+  assert.equal(buildResultView({ ...reviewed, trials: reviewed.trials.filter(t => t.id !== failure.id) }).notMeasured.reasons.some(reason => reason.code === 'human_invalid'), false,
+    'a selected subset ignores reviews of other attempts');
 
   const failedCLI = spawnSync(process.execPath, [resolve('dist/cli.js'), 'evaluate', '--input', file, '--yes', '--case', scenario.id, '--data-dir', join(directory, 'ci-fail')], { encoding: 'utf8' });
   assert.equal(failedCLI.status, 1, failedCLI.stderr);
   const fixedFile = await lab.saveSuite(after.id, join(directory, '.evals', 'fixed.json'));
   const passedCLI = spawnSync(process.execPath, [resolve('dist/cli.js'), 'evaluate', '--input', fixedFile, '--yes', '--data-dir', join(directory, 'ci-pass')], { encoding: 'utf8' });
   assert.equal(passedCLI.status, 0, passedCLI.stderr);
-  assert.equal(JSON.parse(passedCLI.stdout).verdict.execution.completed, 1);
+  const printed = JSON.parse(passedCLI.stdout);
+  assert.equal(printed.exitCode, 0, 'the printed exit code is the one the process returns');
+  assert.deepEqual([printed.view.headline.passed, printed.view.headline.decided, printed.view.scope.dialogues], [1, 1, 1]);
 });
 
 test('Python reference adapter retains state within a dialogue and resets in a new process', () => {
@@ -104,26 +111,24 @@ test('Python reference adapter retains state within a dialogue and resets in a n
   }
 });
 
-test('report links reveal their dialogue and event with only the fixed CSP-authorized script', async t => {
+test('the report runs only its fixed CSP-authorized script and escapes recorded text', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-navigation-'));
   const lab = new ExperimentLab(directory, createDemoRuntime());
   t.after(async () => { await lab.close(); await rm(directory, { recursive: true, force: true }); });
   await lab.init();
-  const created = await lab.create(demoInput()); await lab.waitForIdle();
-  const record = await lab.get(created.id);
-  record.task = '<script>evil()</script>';
+  const record = await acceptedDemoDraft(lab);
+  record.scenarios[0]!.title = '<script>evil()</script>';
   const html = htmlReport(record);
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
   assert.equal(scripts.length, 1);
   const code = scripts[0]![1]!;
   assert.ok(html.includes(`script-src 'sha256-${createHash('sha256').update(code).digest('base64')}'`));
   assert.ok(html.includes('&lt;script&gt;evil()&lt;/script&gt;'));
+  // The one script unfolds every section for printing.
   const handlers: Record<string, () => void> = {};
-  const details = { tagName: 'DETAILS', open: false, parentElement: null };
-  let scrolled = false;
-  const event = { tagName: 'DIV', parentElement: details, scrollIntoView() { scrolled = true; } };
-  runInNewContext(code, { location: { hash: '#example' }, document: { getElementById: () => event, addEventListener() {} }, addEventListener: (name: string, handler: () => void) => { handlers[name] = handler; } });
-  handlers.hashchange!();
-  assert.equal(details.open, true); assert.equal(scrolled, true);
+  const sections = [{ open: false }, { open: false }];
+  runInNewContext(code, { document: { querySelectorAll: () => sections }, addEventListener: (name: string, handler: () => void) => { handlers[name] = handler; } });
+  handlers.beforeprint!();
+  assert.deepEqual(sections.map(section => section.open), [true, true]);
 });
 

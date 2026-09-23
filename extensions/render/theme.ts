@@ -55,11 +55,13 @@ export const ROLE_TONE: Record<string, { tone: Tone; bold: boolean }> = {
   unverified: { tone: 'warning', bold: false },
   // phase 3 disagreement rows (result-view.ts DisagreementRole)
   'dis-title': { tone: 'warning', bold: false }, 'dis-verdicts': { tone: 'text', bold: false }, 'dis-reason': { tone: 'text', bold: false },
-  // phase 4 verdict block
-  'verdict:good': { tone: 'success', bold: true }, 'verdict:warn': { tone: 'warning', bold: true }, 'verdict:bad': { tone: 'error', bold: true },
-  headline: { tone: 'text', bold: false }, next: { tone: 'accent', bold: false },
-  heading: { tone: 'accent', bold: true }, pointer: { tone: 'muted', bold: false },
-  'no-failures': { tone: 'success', bold: false },
+  // the result rows of result-text.ts (chat block, board, CLI): the answer coloured by level (ui-spec §6)
+  'accuracy:good': { tone: 'success', bold: true }, 'accuracy:warn': { tone: 'warning', bold: true },
+  'accuracy:bad': { tone: 'error', bold: true }, 'accuracy:none': { tone: 'text', bold: true },
+  trust: { tone: 'muted', bold: false }, 'trust:small': { tone: 'warning', bold: false }, reality: { tone: 'muted', bold: false },
+  heading: { tone: 'accent', bold: true }, item: { tone: 'text', bold: false }, 'item:muted': { tone: 'muted', bold: false },
+  failed: { tone: 'error', bold: true }, quote: { tone: 'text', bold: false }, muted: { tone: 'muted', bold: false },
+  next: { tone: 'text', bold: false }, 'next:first': { tone: 'accent', bold: false }, good: { tone: 'success', bold: false },
 };
 
 /** Bold first, then the foreground token, so the weight sits inside the colour. */

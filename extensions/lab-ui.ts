@@ -13,26 +13,16 @@ export function legacyResult(result: AgentToolResult<unknown>, options: ToolRend
   if (options.expanded) return new Text(safeText(raw), 0, 0);
   try {
     const data = JSON.parse(raw);
-    const block: string | undefined = Array.isArray(data.viewLines) && data.viewLines.length ? data.viewLines.join('\n') : undefined;
-    const failureRows: string[] = Array.isArray(data.failureLines) ? data.failureLines : [];
-    const pointer = (failureRows.at(-1) ?? '').startsWith('Все провалы — ') ? failureRows.at(-1) : undefined;
-    const causeBlock = pointer ? failureRows.slice(0, -1) : failureRows;
-    const agreementBlock: string[] = Array.isArray(data.disagreementLines) ? data.disagreementLines : [];
-    const parts = [causeBlock, agreementBlock].filter(rows => rows.length).map(rows => rows.join('\n'));
-    if (pointer) parts.push(pointer);
-    const failures: string | undefined = parts.length ? parts.join('\n\n') : undefined;
-    if (data.brief) return new Text(theme.fg('text', safeText([data.scoreState, block, failures, data.brief].filter(Boolean).join('\n\n'))), 0, 0);
+    // A result travels as the lines of the result screen (result-text.ts), the same rows the board and the CLI show.
+    const block: string | undefined = Array.isArray(data.resultLines) && data.resultLines.length ? data.resultLines.join('\n') : undefined;
+    if (data.brief) return new Text(theme.fg('text', safeText([data.scoreState, block, data.brief].filter(Boolean).join('\n\n'))), 0, 0);
     if (data.proofs?.length) return new Text(theme.fg('text', safeText([
-      data.error ?? block ?? data.quality?.headline ?? data.evidence?.verdict?.headline,
-      ...(data.error ? [] : [failures]),
-      ...data.proofs.map((proof: { lines: string[] }) => proof.lines.join('\n')),
+      data.error ?? block, ...data.proofs.map((proof: { lines: string[] }) => proof.lines.join('\n')),
     ].filter(Boolean).join('\n\n'))), 0, 0);
     const title = data.error ?? (data.phase === 'review' ? data.message ?? `Готово ${data.scenarioCount} сценариев. Посмотрите их перед запуском.`
-      : block ?? data.quality?.headline ?? data.evidence?.verdict?.headline ?? data.message ?? 'Доказательства прочитаны.');
+      : block ?? data.message ?? 'Доказательства прочитаны.');
     const sheetLines: string[] | undefined = Array.isArray(data.sheetLines) && data.sheetLines.length ? data.sheetLines : undefined;
-    const lines = [title, ...(title === block && failures ? ['', failures] : []),
-      ...(sheetLines ? ['', ...sheetLines] : []), ...(data.quality?.queue ? [data.quality.queue] : [])];
-    return new Text(theme.fg(data.error ? 'error' : 'text', safeText(lines.join('\n'))), 0, 0);
+    return new Text(theme.fg(data.error ? 'error' : 'text', safeText([title, ...(sheetLines ? ['', ...sheetLines] : [])].join('\n'))), 0, 0);
   } catch { return new Text(safeText(raw), 0, 0); }
 }
 

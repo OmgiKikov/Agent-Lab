@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { visibleWidth, stripTerminalSequences, truncateToWidth } from '@earendil-works/pi-tui';
 import { LabBoard, resultEntries, reviewOrder, wrapRows, type BoardAction, type BoardOptions } from '../extensions/cards.ts';
-import { safeText } from '../src/text.js';
+import { oneLine, safeText } from '../src/text.js';
 // Phase-3 chrome (F11, footer tiers) is read through the namespace, so a missing export fails an assertion, not the module link.
 import * as cards from '../extensions/cards.ts';
 import { agreementSample, judgeAgreement } from '../src/agreement.js';
@@ -15,7 +15,8 @@ import { emptyUsage, experimentSchema, fingerprint, type Experiment } from '../s
 import { compareRuns } from '../src/comparison.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { markdownReport } from '../src/report.js';
-import { buildResultView, causeSection, disagreementRows, failureListRows, resultViewLines, SECTION_TEXT, type ResultView } from '../src/result-view.js';
+import { buildResultView, NOT_MEASURED_TEXT, type ResultView } from '../src/result-view.js';
+import { accuracyRow, disagreementRows, errorListRows, fitRows, resultScreen, trustParts } from '../src/result-text.js';
 import { expectationSheet } from '../src/quality.js';
 
 const theme = { fg: (_: string, value: string) => value, bold: (value: string) => value };
@@ -55,12 +56,13 @@ test('coincident replies with different scores are visible in Pi and exported re
   const bundle = await evidenceBundle(after, { get: async () => before, traceJournal: async () => '' });
   const board = new LabBoard({ record: after, before, comparison: bundle.comparison, section: 'agent' }, theme, () => {}, () => {}, () => 40);
   try {
-    const overview = board.render(120).join('\n');
-    assert.match(overview, /Общих оценённых карточек нет/);
-    assert.match(overview, /совпавшими ответами.*1/is);
+    // The comparison row wraps on the board, so it is read with the frame removed.
+    const overview = boardCells(board, 120).join(' ');
+    assert.match(overview, /Сравнение с прошлым прогоном: .*Общих оценённых ситуаций нет/);
+    assert.match(overview, /совпавшими ответами и разными оценками: 1\. Нужна проверка\./);
     assert.doesNotMatch(overview, /Исправлено 1/);
     for (const text of [htmlReport(bundle), markdownReport(bundle)]) {
-      assert.match(text, /Ответы агента совпали/);
+      assert.match(text, /совпавшими ответами и разными оценками: 1\. Нужна проверка\./);
       assert.doesNotMatch(text, /Исправлено 1/);
     }
   } finally { board.dispose(); }
@@ -70,9 +72,9 @@ test('a confirmed draft says the owner confirmed the expectations, never that a 
   const record = await fixture();
   record.phase = 'results_review'; record.reviewedAt = '2026-09-17T00:00:00.000Z'; record.reviewMode = 'expectations';
   const bundle = await evidenceBundle(record, { get: async () => record, traceJournal: async () => '' });
-  const markdown = markdownReport(bundle);
-  assert.match(markdown, /Проверка карточек: ожидания подтверждены владельцем\./);
-  assert.doesNotMatch(markdown, /Проверка карточек: человеком/);
+  // The customer report no longer names who confirmed the cards, and it never claims a human checked them.
+  assert.doesNotMatch(markdownReport(bundle), /Проверка карточек: человеком|подтверждены человеком/);
+  assert.doesNotMatch(htmlReport(bundle), /Проверка карточек: человеком|подтверждены человеком/);
 
   const board = new LabBoard({ record, section: 'agent' }, theme, () => {}, () => {}, () => 120);
   const text = stripTerminalSequences(board.render(120).join('\n'));
@@ -106,14 +108,19 @@ test('an unverified reply is a status line in the exported report, never a quota
   const bundle = await evidenceBundle(record, { get: async () => record, traceJournal: async () => '' });
   const html = htmlReport(record);
   const markdown = markdownReport(bundle);
-  const whyHtml = html.match(/<section id="why">[\s\S]*?<\/section>/)?.[0] ?? '';
-  const whyMarkdown = markdown.split('### Почему не справился')[1]?.split('\n###')[0] ?? '';
-  for (const why of [whyHtml, markdown && whyMarkdown]) {
+  const whyHtml = html.match(/<h2>Почему ошибается<\/h2>[\s\S]*?<\/section>/)?.[0] ?? '';
+  const whyMarkdown = markdown.split('## Почему ошибается')[1]?.split('\n## ')[0] ?? '';
+  for (const why of [whyHtml, whyMarkdown]) {
     assert.ok(why, 'the cause list is exported');
-    assert.match(why, /реплика агента не подтверждена цитатой/);
+    assert.match(why, /ответ не подтверждён цитатой/);
     // The customer reads this list first: quoting the sentinel would say the agent uttered it.
-    assert.doesNotMatch(why, /«реплика агента не подтверждена цитатой»/);
+    assert.doesNotMatch(why, /«ответ не подтверждён цитатой»/);
     assert.doesNotMatch(why, /Обоснование судьи/, 'the judge rationale is never the cause quote');
+  }
+  // The failure breakdown says it the same way, and nowhere is the sentinel quoted or the rationale shown.
+  for (const text of [html, markdown]) {
+    assert.doesNotMatch(text, /«ответ не подтверждён цитатой»|«этих слов в ответе нет»/);
+    assert.doesNotMatch(text, /Обоснование судьи/);
   }
 });
 
@@ -211,8 +218,7 @@ test('a finished repeat refreshes the comparison headline in the overview', asyn
   t.after(() => { clearTimeout(timer); board.dispose(); });
   await Promise.race([refreshed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('board did not refresh')), 3000); })]);
   const text = board.render(120).join('\n');
-  assert.match(text, /Исправлено 1, сломалось 0/);
-  assert.match(text, /После исправления/);
+  assert.match(boardCells(board, 120).join(' '), /Сравнение с прошлым прогоном: Исправлено 1, сломалось 0/);
   assert.doesNotMatch(text, /4 Статистика|5 Сравнение/);
   assert.doesNotMatch(text, /Прогон ещё идёт|Промежуточный отчёт|o Открыть отчёт/);
   board.handleInput('o');
@@ -293,13 +299,14 @@ test('result cards keep model grades, missing grades, traces and human annotatio
   const overviewText = overview.render(120).join('\n');
   // The overview explains only decided failures, with verified text: no judge rationale reaches it.
   assert.doesNotMatch(overviewText, /AGENT_FAILURE_SENTINEL/); assert.doesNotMatch(overviewText, /SIMULATOR_FAILURE_SENTINEL/);
-  assert.match(stripTerminalSequences(overviewText), /Не измерено: 2/); overview.dispose();
+  assert.match(stripTerminalSequences(overviewText), /Не измерено 2 — /); overview.dispose();
   const html = htmlReport(record);
-  // The simulator rubric failed, so the agent grade is not a usable measurement yet: the first screen says «—», not 0%, and queues one dialogue for a human.
-  assert.match(html, /Точность · судья, предварительно<\/h3><strong>—<\/strong>/); assert.match(html, /неясно 1/);
-  assert.match(html, /Разметить человеку<\/h3><strong>1<\/strong>/); assert.match(html, /пометок симулятора 1/);
-  assert.match(html, /Почему не справился/); assert.match(html, /AGENT_FAILURE_SENTINEL/);
-  assert.doesNotMatch(html.match(/<section id="why">[\s\S]*?<\/section>/)?.[0] ?? '', /SIMULATOR_FAILURE_SENTINEL/);
+  // The simulator rubric failed, so the agent grade is not a usable measurement yet: the report shows no number, not 0%, and lists the situations as not measured.
+  assert.match(html, /Точность агента:<\/span><span>нет данных — ни одна ситуация не измерена<\/span>/);
+  assert.doesNotMatch(html, /class="pct"/);
+  assert.match(html, /<h2>Не измерено<\/h2>/);
+  // Judge rationales stay in the record: neither reaches the customer page.
+  assert.doesNotMatch(html, /AGENT_FAILURE_SENTINEL|SIMULATOR_FAILURE_SENTINEL/);
   record.phase = 'complete'; record.resultsReviewedAt = record.updatedAt; record.humanReviews = [];
   const reviewed = new LabBoard({ record, section: 'results' }, theme, () => {}, () => {}, () => 120);
   // CTX-03 / CR-01 (03.1): the simulator rubric failed, so the headline does not measure this
@@ -406,13 +413,15 @@ test('the board leads with a plain verdict once dialogues exist and has only thr
     events: [{ seq: 0, type: 'user' as const, text: 'hi' }, { seq: 1, type: 'assistant' as const, text: 'ok' }], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1 }));
   const board = new LabBoard({ record, section: 'agent' }, theme, () => {}, () => {}, () => 40);
   const text = stripTerminalSequences(board.render(120).join('\n'));
-  assert.match(text, /ИТОГ/);
+  const view = buildResultView(record);
+  // The number leads, in the one wording every surface uses.
+  assert.ok(text.includes(accuracyRow(view).text));
   // Technical metric bars no longer compete with the primary answer.
   assert.doesNotMatch(text, /Точные проверки · код · 2\/3/);
-  assert.ok(text.includes(resultViewLines(buildResultView(record))[0]!));
-  assert.match(text, /спорных 0/);
-  // The failed repeat leaves the card unstable, so it is named as not measured, not as a failure.
-  assert.match(text, /Провалов не зарегистрировано/);
+  // The failed repeat leaves the card unstable, so it is named as not measured and unstable, never as a failure.
+  assert.match(text, /Не измерено 2 — /);
+  assert.match(text, /нестабильно 1/);
+  assert.doesNotMatch(text, /Почему ошибается|Все ошибки/);
   assert.match(text, /Дальше/);
   assert.doesNotMatch(text, /TPR/);
   assert.match(text, /1 Итог.*2 Ожидания.*3 Разбор/);
@@ -421,7 +430,7 @@ test('the board leads with a plain verdict once dialogues exist and has only thr
   board.dispose();
   const results = new LabBoard({ record }, theme, () => {}, () => {}, () => 40);
   assert.doesNotMatch(results.render(120).join('\n'), /ЧТО ТРЕБУЕТ ВНИМАНИЯ/);
-  assert.ok(stripTerminalSequences(results.render(120).join('\n')).includes(buildResultView(record).headline.text));
+  assert.ok(stripTerminalSequences(results.render(120).join('\n')).includes(accuracyRow(view).text));
   results.dispose();
 });
 
@@ -826,23 +835,34 @@ test('справка и подробности диалога называют �
 
 test('HTML reports escape untrusted text and remain self-contained with explicit evidence limits', async () => {
   const record = await fixture();
-  record.task = '<script>alert(1)</script> & "тест"';
+  // The situation title is record text the report prints; the task itself is no longer on the page.
+  record.scenarios[0]!.title = '<script>alert(1)</script> & "тест"';
   const html = htmlReport(record);
-  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
-  assert.doesNotMatch(html, /<iframe|<img|<link|<form/i);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt; &amp; &quot;тест&quot;/);
+  assert.doesNotMatch(html, /<script>alert/);
+  assert.doesNotMatch(html, /<iframe|<img|<form/i);
+  // Self-contained: the one script runs by its hash, and the optional font stylesheet is the only thing fetched.
   assert.match(html, /default-src 'none'/);
+  assert.equal(html.match(/<script\b/gi)?.length, 1);
+  assert.equal(html.match(/<link\b/gi)?.length, 1);
+  assert.match(html, /<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com\//);
   assert.match(html, /lang="ru"/);
-  assert.match(html, /Аудит не завершён/);
-  assert.match(html, /Сценарное демо/);
-  record.scenarios[0]!.user.persona = '<img src=x>';
-  const persona = htmlReport(record);
-  assert.match(persona, /&lt;img src=x&gt;/);
-  assert.doesNotMatch(persona, /<img/i);
-  record.workflow = 'compare'; record.scenarios[1]!.split = 'control'; record.scenarios[1]!.title = 'CONTROL_CARD_SENTINEL';
-  assert.doesNotMatch(htmlReport(record), /CONTROL_CARD_SENTINEL/);
-  record.controlConsumedAt = 'now'; record.phase = 'control';
-  assert.doesNotMatch(htmlReport(record), /CONTROL_CARD_SENTINEL/);
-  record.phase = 'complete'; assert.match(htmlReport(record), /CONTROL_CARD_SENTINEL/);
+  // Explicit limits: a draft says it never ran, the demo is labelled, and the full records stay with the owner.
+  assert.match(html, /прогон ещё не запускался/);
+  assert.match(html, /учебный пример/);
+  assert.match(html, /Полные записи разговоров и оценок судьи хранятся у владельца агента\./);
+  record.scenarios[0]!.user.opening = '<img src=x>';
+  const opening = htmlReport(record);
+  assert.match(opening, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(opening, /<img/i);
+  // A compare record keeps its control cards off the page until the control phase is over. Each state is
+  // its own snapshot, as surfaces receive records: the run derivation is remembered per snapshot.
+  const compare = structuredClone(record);
+  compare.workflow = 'compare'; compare.scenarios[1]!.split = 'control'; compare.scenarios[1]!.title = 'CONTROL_CARD_SENTINEL';
+  assert.doesNotMatch(htmlReport(compare), /CONTROL_CARD_SENTINEL/);
+  const control: Experiment = { ...structuredClone(compare), controlConsumedAt: 'now', phase: 'control' };
+  assert.doesNotMatch(htmlReport(control), /CONTROL_CARD_SENTINEL/);
+  assert.match(htmlReport({ ...structuredClone(control), phase: 'complete' }), /CONTROL_CARD_SENTINEL/);
 });
 
 test('the board keeps simulator checks in the dialogue and the repeat headline in the overview', async () => {
@@ -888,7 +908,7 @@ test('the board keeps simulator checks in the dialogue and the repeat headline i
   const comparison = new LabBoard({ record: after, before, comparison: bundle.comparison, section: 'agent' }, theme, () => {}, () => {}, () => 40);
   try {
     const text = stripTerminalSequences(comparison.render(120).join('\n'));
-    assert.match(text, /После исправления: .*Оценка выросла/iu);
+    assert.match(boardCells(comparison, 120).join(' '), /Сравнение с прошлым прогоном: .*Оценка выросла/iu);
     assert.doesNotMatch(text, /Парная дельта|Ценность режимов/);
   } finally { comparison.dispose(); }
 });
@@ -911,49 +931,68 @@ function boardCells(board: LabBoard, width = 200): string[] {
     .flatMap(row => row.split('│')).map(cell => cell.trim()).filter(Boolean);
 }
 
-test('the detailed overview preserves every canonical ResultView line', async () => {
+test('the overview shows the canonical result screen, and d adds the unmeasured situations with their reasons', async () => {
   const record = await finishedWithInvalid();
   const view = buildResultView(record);
   const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 80);
+  const collapsed = boardCells(board);
   board.handleInput('d');
   const cells = boardCells(board);
-  // Board cells are trimmed; the indented rows under «Не измерено» are compared without their indent.
-  for (const expected of resultViewLines(view)) assert.ok(cells.includes(expected.trim()), `board misses block line: ${expected}`);
+  // The board lays out the one result screen at its inner width (196, capped at 100); board cells are trimmed.
+  const canonical = (details: boolean) => fitRows(resultScreen(view, { surface: 'board', details }), 196).map(row => row.text.trim());
+  for (const expected of canonical(false).filter(Boolean)) assert.ok(collapsed.includes(expected), `board misses result line: ${expected}`);
+  for (const expected of canonical(true).filter(Boolean)) assert.ok(cells.includes(expected), `board misses detailed result line: ${expected}`);
+  // The rows stand in their order, one blank row between blocks and never two.
+  const rows = canonical(true);
+  const body = bodyCells(board, 200);
+  const at = body.indexOf(rows[0]!);
+  assert.deepEqual(body.slice(at, at + rows.length), rows, 'the detailed result block is the canonical one, blank rows included');
+  assert.ok(!rows.some((row, i) => !row && i > 0 && !rows[i - 1]), 'never two blank rows in a row');
+  // Every unmeasured situation is named with its reason under d, and only there.
+  const titles = new Map(record.scenarios.map(scenario => [scenario.id, oneLine(scenario.title)]));
+  const unmeasured = view.notMeasured.reasons.flatMap(reason => reason.scenarioIds.map(id => `${titles.get(id)}: ${reason.label}`));
+  assert.ok(unmeasured.length > 0, 'the fixture has an unmeasured situation');
+  for (const row of unmeasured) {
+    assert.ok(cells.includes(row), `d misses ${row}`);
+    assert.ok(!collapsed.includes(row), `the collapsed overview lists ${row}`);
+  }
   assert.ok(!cells.includes('НЕ ИЗМЕРЕНО'), 'the single-trial not-measured header is gone');
   const broken = record.scenarios.find(scenario => scenario.id === record.trials.find(trial => trial.outcome === 'invalid')?.scenarioId)!;
   assert.ok(!cells.includes(`${broken.title}: ОДИНОЧНЫЙ СБОЙ`), 'the first invalid trial is not picked on its own');
-  assert.ok(cells.includes(view.headline.text));
+  assert.ok(cells.includes(accuracyRow(view).text));
   board.dispose();
 });
+
+/** A view told apart by its numbers: seven of nine decided reads «78% — справился в 7 из 9 ситуаций». */
+const markedView = (view: ResultView, runId = view.runId): ResultView => ({ ...view, runId, headline: { ...view.headline, passed: 7, decided: 9, accuracy: 7 / 9 } });
+const MARKED_ROW = 'Точность агента: 78% — справился в 7 из 9 ситуаций';
 
 test('the board uses a supplied view only for the same run', async () => {
   const record = await finishedWithInvalid();
   const view = buildResultView(record);
-  const marked = (runId: string, text: string): ResultView => ({ ...view, runId, headline: { ...view.headline, text } });
-  const own = new LabBoard({ record, view: marked(record.id, 'СВОЙ ИТОГ') }, theme, () => {}, () => {}, () => 80);
+  assert.equal(accuracyRow(markedView(view)).text, MARKED_ROW);
+  const own = new LabBoard({ record, view: markedView(view, record.id) }, theme, () => {}, () => {}, () => 80);
   const ownCells = boardCells(own);
-  assert.ok(ownCells.includes('СВОЙ ИТОГ'));
-  assert.equal(ownCells.filter(c => c === 'СВОЙ ИТОГ').length, 1, 'headline is not duplicated in the header');
+  assert.equal(ownCells.filter(c => c === MARKED_ROW).length, 1, 'the supplied headline is shown once, not duplicated in the header');
   own.dispose();
-  const stale = new LabBoard({ record, view: marked('another-run', 'ЧУЖОЙ ИТОГ') }, theme, () => {}, () => {}, () => 80);
+  const stale = new LabBoard({ record, view: markedView(view, 'another-run') }, theme, () => {}, () => {}, () => 80);
   const staleCells = boardCells(stale);
-  assert.ok(!staleCells.some(cell => cell.includes('ЧУЖОЙ ИТОГ')), 'a view of another run is ignored');
-  assert.ok(staleCells.includes(view.headline.text));
+  assert.ok(!staleCells.some(cell => cell.includes(MARKED_ROW)), 'a view of another run is ignored');
+  assert.ok(staleCells.includes(accuracyRow(view).text));
   stale.dispose();
 });
 
 test('after refresh the board shows the refreshed bundle view', async () => {
   const finished = await finishedWithInvalid();
   const running = { ...structuredClone(finished), phase: 'evaluating' as const };
-  const refreshedView: ResultView = { ...buildResultView(finished), headline: { ...buildResultView(finished).headline, text: 'ОБНОВЛЁННЫЙ ИТОГ' } };
+  const refreshedView = markedView(buildResultView(finished));
   let renders = 0;
   const board = new LabBoard({ record: running, section: 'agent',
     load: async () => ({ record: finished, warnings: [], view: refreshedView }) }, theme, () => {}, () => { renders++; }, () => 80);
   await new Promise(resolve => setTimeout(resolve, 900));
   assert.ok(renders > 0);
   const cells = boardCells(board);
-  assert.ok(cells.includes('ОБНОВЛЁННЫЙ ИТОГ'));
-  assert.equal(cells.filter(c => c === 'ОБНОВЛЁННЫЙ ИТОГ').length, 1);
+  assert.equal(cells.filter(c => c === MARKED_ROW).length, 1);
   board.dispose();
 });
 
@@ -991,19 +1030,20 @@ async function failedCard(cards = 1): Promise<Experiment> {
 test('the overview summarizes causes and keeps full evidence behind details', async () => {
   const record = await failedCard();
   const view = buildResultView(record);
-  const section = causeSection(view);
-  assert.ok(section, 'the fixture has a failed situation to explain');
+  assert.ok(view.topCauses.length, 'the fixture has a recorded cause to explain');
   const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 200);
   const cells = boardCells(board);
-  assert.ok(cells.includes(SECTION_TEXT[section.kind].board), `board misses the heading ${SECTION_TEXT[section.kind].board}`);
-  assert.ok(cells.includes('Enter — открыть провал: ожидание → ответ → правило.'));
-  assert.ok(cells.some(cell => cell.includes(view.topCauses[0]!.name)));
+  assert.ok(cells.includes('Почему ошибается'), 'board misses the cause heading');
+  assert.ok(cells.some(cell => cell.startsWith(`1  ${view.topCauses[0]!.name}`)), 'the cause is named with its number');
+  assert.ok(!cells.includes('Все ошибки'), 'the full error list waits behind d');
   board.handleInput('d');
   const detailed = boardCells(board);
-  for (const row of failureListRows(view)) if (row.text.trim()) assert.ok(detailed.includes(row.text.trim()), `missing evidence: ${row.text}`);
+  const errors = fitRows(errorListRows(view), 196).map(row => row.text.trim()).filter(Boolean);
+  assert.ok(errors.length > 1, 'the fixture has an error to list');
+  for (const row of errors) assert.ok(detailed.includes(row), `missing evidence: ${row}`);
   assert.ok(!cells.includes('ЧТО ТРЕБУЕТ ВНИМАНИЯ'), 'the old block with a clipped quote is gone');
   assert.ok(!cells.some(cell => cell.endsWith('…')), 'nothing on the overview is clipped');
-  assert.ok(!cells.some(cell => cell.includes('CLIPPED_JUDGE_RATIONALE')), 'the judge rationale never reaches the overview');
+  for (const shown of [cells, detailed]) assert.ok(!shown.some(cell => cell.includes('CLIPPED_JUDGE_RATIONALE')), 'the judge rationale never reaches the overview');
   board.dispose();
 });
 
@@ -1012,9 +1052,10 @@ test('with nothing failed the overview says so and shows no failure heading', as
   const view: ResultView = { ...buildResultView(record), failures: [], topCauses: [] };
   const board = new LabBoard({ record, view }, theme, () => {}, () => {}, () => 200);
   const cells = boardCells(board);
-  assert.ok(cells.includes('Провалов не зарегистрировано. Это не гарантия качества в реальном трафике.'));
-  assert.ok(!cells.includes(SECTION_TEXT.causes.board) && !cells.includes(SECTION_TEXT.failures.board));
-  assert.ok(!cells.includes(SECTION_TEXT.all.hint));
+  assert.ok(cells.includes('Ошибок нет. Это не гарантия для живых клиентов: проверено 1 ситуация.'));
+  assert.ok(!cells.includes('Почему ошибается'));
+  board.handleInput('d');
+  assert.ok(!boardCells(board).includes('Все ошибки'), 'd lists no errors either');
   board.dispose();
 });
 
@@ -1051,14 +1092,17 @@ test('d on the overview lists every failure in full, before technical details', 
   const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 3000);
   board.handleInput('d');
   const cells = boardCells(board, 400);
-  assert.equal(cells.filter(cell => cell === SECTION_TEXT.all.board).length, 1);
-  const titles = view.failures.map(item => `✗ ${item.title}`);
+  assert.equal(cells.filter(cell => cell === 'Все ошибки').length, 1);
+  const titles = view.failures.map((item, i) => `✗ ${i + 1}  ${oneLine(item.title)}`);
   const shown = cells.filter(cell => titles.includes(cell));
   assert.deepEqual(shown, titles, 'every failure title appears once, in record order');
-  for (const row of failureListRows(view)) if (row.text.trim()) assert.ok(cells.includes(row.text.trim()), `missing: ${row.text}`);
+  for (const row of fitRows(errorListRows(view), 396).map(item => item.text.trim()).filter(Boolean)) assert.ok(cells.includes(row), `missing: ${row}`);
   assert.ok(!cells.some(cell => cell.includes('CLIPPED_JUDGE_RATIONALE')), 'the raw rationale example block is gone');
-  assert.ok(cells.some(cell => cell.startsWith('Карточки: синтетических')), 'today provenance rows still follow');
-  assert.ok(cells.some(cell => cell.startsWith('Что дальше:')));
+  // The errors and «Дальше» come first; the connection, the plan and the sources follow.
+  const errors = cells.indexOf('Все ошибки');
+  const next = cells.indexOf('Дальше');
+  const technical = cells.indexOf('ПОДКЛЮЧЕНИЕ');
+  assert.ok(errors >= 0 && next > errors && technical > next, `order: errors ${errors}, next ${next}, technical ${technical}`);
   board.dispose();
 });
 
@@ -1067,13 +1111,17 @@ test('every board row keeps one color by its role and fits widths 40 to 160', as
   const recording = { fg: (color: string, value: string) => `<${color}>${value}</${color}>`, bold: (value: string) => value };
   const board = new LabBoard({ record }, recording, () => {}, () => {}, () => 3000);
   const painted = board.render(300).join('\n');
-  assert.match(painted, /<accent>\s*1\. /, 'the cause name is accent');
+  assert.match(painted, /<error>\s*Точность агента: 0% /, 'a number below half is error');
+  assert.match(painted, /<warning>\s*Вероятно, от /, 'the trust line of a small sample is warning');
+  assert.match(painted, /<accent>\s*Почему ошибается<\/accent>/, 'a heading is accent');
+  assert.match(painted, /<text>\s*1  Агент отказывается решать задачу/, 'a cause is text');
+  assert.match(painted, /<muted>\s*Прогон /, 'the run line is muted');
   board.handleInput('d');
   const expanded = board.render(300).join('\n');
-  assert.match(expanded, /<text>\s*Должен был: /, 'the expectation keeps the text token');
-  assert.match(expanded, /<warning>\s*\? /, 'a not-measured situation is warning');
-  assert.match(expanded, /<muted>\s*(Правило|и ещё)/, 'rule rows are muted');
-  assert.match(expanded, /<error>\s*✗ /, 'a failure title is error');
+  assert.match(expanded, /<error>\s*✗ 1  /, 'a failure title is error');
+  assert.match(expanded, /<text>\s*Ожидалось: /, 'the expectation keeps the text token');
+  assert.match(expanded, /<accent>\s*Не измерено<\/accent>/, 'the unmeasured heading is accent');
+  assert.match(expanded, /<muted>\s*[^<]+: прогон остановился раньше<\/muted>/, 'a not-measured situation is muted');
   board.dispose();
   const wide = new LabBoard({ record }, theme, () => {}, () => {}, () => 3000);
   for (const width of [40, 60, 80, 110, 160]) {
@@ -1440,94 +1488,117 @@ async function overturned(cards: number, count: number, note = (i: number) => `�
   return record;
 }
 
-test('обзор показывает согласие и несогласия между причинами и переходом к разбору', async () => {
+test('обзор называет согласие с судьёй в строке доверия, а несогласия показывает под d, после ошибок', async () => {
   const record = await overturned(2, 1);
-  const view = buildResultView(record);
   const title = record.scenarios[0]!.title;
   const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 3000);
   const cells = bodyCells(board, 300);
-  const heading = cells.indexOf('НЕСОГЛАСИЯ С СУДЬЁЙ');
-  const causes = cells.indexOf(SECTION_TEXT[causeSection(view)!.kind].board);
-  const hint = cells.indexOf('Enter — открыть провал: ожидание → ответ → правило.');
-  assert.ok(causes >= 0 && heading > causes && hint > heading, `order: causes ${causes}, heading ${heading}, hint ${hint}`);
-  assert.equal(cells[heading - 1], '', 'a blank row separates the cause section from the disagreements');
-  assert.deepEqual(cells.slice(heading + 1, heading + 4), [`! ${title}`, 'Судья: не справился → владелец: справился', 'Причина: «Агент выполнил просьбу клиента номер 1, судья ошибся.»']);
-  assert.ok(cells.slice(heading + 4, hint).every(cell => cell === ''), 'nothing but spacing before the hint');
+  assert.ok(cells.some(cell => cell.includes('с судьёй согласны 0 из 1')), 'the trust line counts the owner\'s checks');
+  assert.ok(!cells.includes('Вы не согласились с судьёй'), 'the collapsed overview keeps the disagreements behind d');
 
   board.handleInput('d');
   const expanded = bodyCells(board, 300);
   board.dispose();
-  const block = expanded.findIndex(cell => cell.startsWith('Согласие с судьёй'));
-  const expandedHeading = expanded.indexOf('НЕСОГЛАСИЯ С СУДЬЁЙ');
-  const all = expanded.indexOf(SECTION_TEXT.all.board);
-  assert.ok(expanded.indexOf('ИТОГ') < block && block < expandedHeading && expandedHeading < all, `expanded order: ${block}, ${expandedHeading}, ${all}`);
-  assert.equal(expanded[expandedHeading + 1], `! ${title}`);
-  assert.equal(expanded.filter(cell => cell === 'НЕСОГЛАСИЯ С СУДЬЁЙ').length, 1);
+  const heading = expanded.indexOf('Вы не согласились с судьёй');
+  const causes = expanded.indexOf('Почему ошибается');
+  const errors = expanded.indexOf('Все ошибки');
+  assert.ok(causes >= 0 && errors > causes && heading > errors, `expanded order: causes ${causes}, errors ${errors}, heading ${heading}`);
+  assert.equal(expanded[heading - 1], '', 'a blank row separates the disagreements from the block above');
+  assert.notEqual(expanded[heading - 2], '', 'never two blank rows');
+  assert.deepEqual(expanded.slice(heading + 1, heading + 4), [title, 'Судья: не справился → вы: справился', 'Причина: «Агент выполнил просьбу клиента номер 1, судья ошибся.»']);
+  assert.equal(expanded[heading + 4], '', 'one blank row closes the section');
+  assert.equal(expanded.filter(cell => cell === 'Вы не согласились с судьёй').length, 1);
 
   const colored = new LabBoard({ record }, sgrTheme, () => {}, () => {}, () => 3000);
+  colored.handleInput('d');
   const rows = colored.render(300).join('\n');
   colored.dispose();
-  const agreement = resultViewLines(view).find(entry => entry.startsWith('Согласие с судьёй'))!;
-  assert.ok(rows.includes(painted('text', agreement)), 'the agreement row is text');
-  assert.ok(rows.includes(painted('muted', '  Цель — согласие в 9 случаях из 10.')), 'its tail rows are muted');
-  assert.ok(rows.includes(painted('accent', 'НЕСОГЛАСИЯ С СУДЬЁЙ', true)), 'the heading is accent and bold');
-  assert.ok(rows.includes(painted('warning', `! ${title}`)), 'an item title is warning');
-  assert.ok(rows.includes(painted('text', '  Судья: не справился → владелец: справился')), 'the verdict row is text');
-  assert.ok(rows.includes(painted('text', '  Причина: «Агент выполнил просьбу клиента номер 1, судья ошибся.»')), 'the reason row is text');
+  assert.ok(rows.includes(painted('accent', ' Вы не согласились с судьёй', true)), 'the heading is accent and bold');
+  assert.ok(rows.includes(painted('text', `   ${title}`)), 'an item title is text');
+  assert.ok(rows.includes(painted('muted', '     Судья: не справился → вы: справился')), 'the verdict row is muted');
+  assert.ok(rows.includes(painted('text', '     Причина: «Агент выполнил просьбу клиента номер 1, судья ошибся.»')), 'the reason row is text');
 });
 
-test('два несогласия разделены пустой строкой, а без несогласий раздела нет ни в одном виде', async () => {
+test('два несогласия идут подряд под d, а без несогласий раздела нет ни в одном виде', async () => {
   const record = await overturned(2, 2);
   const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 3000);
+  assert.ok(!bodyCells(board, 300).includes('Вы не согласились с судьёй'), 'the collapsed overview keeps them behind d');
+  board.handleInput('d');
   const cells = bodyCells(board, 300);
   board.dispose();
-  const heading = cells.indexOf('НЕСОГЛАСИЯ С СУДЬЁЙ');
-  assert.ok(heading >= 0);
-  const items = disagreementRows(buildResultView(record)).map(row => row.text);
-  assert.deepEqual(cells.slice(heading + 1, heading + 1 + items.length), items, 'items and the blank row between them');
-  assert.equal(items.filter(item => item === '').length, 1);
+  const items = fitRows(disagreementRows(buildResultView(record)), 296).map(row => row.text.trim());
+  assert.equal(items[0], 'Вы не согласились с судьёй');
+  assert.equal(items.filter(item => item.startsWith('Причина: «')).length, 2, 'both reasons');
+  assert.ok(!items.includes(''), 'no blank row inside the section');
+  const heading = cells.indexOf(items[0]!);
+  assert.deepEqual(cells.slice(heading, heading + items.length), items, 'the heading and both items, one after the other');
 
   const calm = await failedCard(2);
   const quiet = new LabBoard({ record: calm }, theme, () => {}, () => {}, () => 3000);
-  assert.ok(!bodyCells(quiet, 300).includes('НЕСОГЛАСИЯ С СУДЬЁЙ'));
-  quiet.handleInput('\r');
-  assert.ok(!bodyCells(quiet, 300).includes('НЕСОГЛАСИЯ С СУДЬЁЙ'));
+  assert.ok(!bodyCells(quiet, 300).includes('Вы не согласились с судьёй'));
+  quiet.handleInput('d');
+  assert.ok(!bodyCells(quiet, 300).includes('Вы не согласились с судьёй'));
   quiet.dispose();
 });
 
-test('обзор с самой длинной строкой согласия и двумя длинными несогласиями помещается в 36–156 колонок без обрезки', async () => {
+test('обзор с самой длинной строкой доверия и двумя длинными несогласиями помещается в 36–156 колонок без обрезки', async () => {
   const reason = (i: number) => `Причина номер ${i + 1}: ${'агент выполнил просьбу, судья ошибся в оценке ответа. '.repeat(4)}\n\n`
     + `Второй абзац\x1b[31m: ${'клиент получил то, что просил, и сказал спасибо. '.repeat(4)}`;
   const record = await overturned(2, 2, reason);
   const base = buildResultView(record);
-  // The longest F6 row: M ≥ 10 with both parts, plus every tail row.
-  const view: ResultView = { ...base, agreement: { ...base.agreement, agreed: 18, checked: 20, unsure: 1, stale: 13,
-    failures: { agreed: 16, checked: 17 }, passes: { agreed: 2, checked: 3 } } };
-  const longest = 'Согласие с судьёй: 18 из 20 проверенных — 90% (провалы: 16 из 17 · успехи: 2 из 3).';
-  assert.ok(resultViewLines(view).includes(longest));
+  // The longest trust line: the interval, «мало данных», two unmeasured reasons, a pending count, the agreement and an unstable situation.
+  const [first, second] = base.cards;
+  const view: ResultView = { ...base, pending: 1,
+    notMeasured: { total: 2, reasons: [
+      { code: 'judge_unavailable', label: NOT_MEASURED_TEXT.judge_unavailable, count: 1, scenarioIds: [first!.scenarioId] },
+      { code: 'turn_limit', label: NOT_MEASURED_TEXT.turn_limit, count: 1, scenarioIds: [second!.scenarioId] }] },
+    agreement: { ...base.agreement, agreed: 18, checked: 20 },
+    cards: [{ ...first!, flaky: true }, second!] };
+  const trust = trustParts(view);
+  assert.equal(trust.length, 6, trust.join(' · '));
   const words = (value: string) => value.replace(/\x1b\[31m/g, '').split(/\s+/).filter(Boolean);
-  const source = words(disagreementRows(view).map(row => row.text).join(' '));
+  const source = words(disagreementRows(view).map(row => row.text).join(' ')).join(' ');
+  const line = words(trust.join(' · ')).join(' ');
   for (const inner of [36, 56, 76, 106, 156]) {
     const width = inner + 4;
     const board = new LabBoard({ record, view }, theme, () => {}, () => {}, () => 3000);
+    board.handleInput('d');
     const rows = board.render(width);
     board.dispose();
     const separator = rows.findIndex(row => /^│ ─+ │$/.test(stripTerminalSequences(row)));
-    const body = rows.slice(separator + 1, -3).map(row => stripTerminalSequences(row).slice(2, -2));
+    // The result block leads the detailed body; the record's own rows (task, connection, sources) follow it.
+    const result = rows.slice(separator + 1, separator + 1 + fitRows(resultScreen(view, { surface: 'board', details: true }), inner).length);
+    const body = result.map(row => stripTerminalSequences(row).slice(2, -2));
     assert.ok(separator > 0 && body.length > 10, `inner ${inner}: the body is found`);
     for (const row of rows) assert.ok(visibleWidth(row) <= width, `inner ${inner}: overflow`);
-    assert.ok(!body.some(row => row.includes('…')), `inner ${inner}: a body row was clipped`);
+    assert.ok(!body.some(row => row.includes('…')), `inner ${inner}: a result row was clipped`);
     // The frame's own truncation of header rows adds resets; the body must carry no escape byte at all.
-    assert.ok(!rows.slice(separator + 1, -3).some(row => row.includes('\x1b')), `inner ${inner}: an escape byte reached the board`);
+    assert.ok(!result.some(row => row.includes('\x1b')), `inner ${inner}: an escape byte reached the board`);
     assert.ok(!rows.some(row => stripTerminalSequences(row).includes('[31m')), `inner ${inner}: an escape sequence leaked as text`);
-    const text = body.map(row => row.trim());
-    const from = text.indexOf('НЕСОГЛАСИЯ С СУДЬЁЙ');
-    const to = text.indexOf(SECTION_TEXT.all.hint, from);
-    assert.ok(from >= 0, `inner ${inner}: the disagreement heading`);
-    assert.deepEqual(words(text.slice(from + 1, to < 0 ? undefined : to).join(' ')).slice(0, source.length), source, `inner ${inner}: disagreement text changed`);
-    const joined = words(text.join(' ')).join(' ');
-    assert.ok(joined.includes(words(longest).join(' ')), `inner ${inner}: the longest agreement row is whole`);
+    const text = words(body.map(row => row.trim()).join(' ')).join(' ');
+    assert.ok(body.some(row => row.trim() === 'Вы не согласились с судьёй'), `inner ${inner}: the disagreement heading`);
+    assert.ok(text.includes(source), `inner ${inner}: disagreement text changed`);
+    assert.ok(text.includes(line), `inner ${inner}: the longest trust line is whole`);
   }
+});
+
+test('a failed control puts the alarm right above the number and never enters the count', async () => {
+  const record = await failedCard(2);
+  record.positiveControlScenarioIds = [record.scenarios[1]!.id];
+  const view = buildResultView(record);
+  assert.equal(view.control.alarm, 'failed');
+  assert.equal(view.headline.decided, 1, 'the control is not counted');
+  const alarm = '✗ Числу пока не верить: контрольная ситуация не прошла — проверьте связь с агентом';
+  const board = new LabBoard({ record }, theme, () => {}, () => {}, () => 3000);
+  const cells = bodyCells(board, 120);
+  board.dispose();
+  const at = cells.indexOf(alarm);
+  assert.ok(at >= 0, 'the alarm is on the board');
+  assert.equal(cells[at + 1], 'Точность агента: 0% — справился в 0 из 1 ситуации', 'the number follows, over the counted situation only');
+  assert.equal(cells[cells.indexOf('Дальше') + 1], 'Проверить связь с агентом и судью — пока это не сделано, числу не верить', 'the first step is the connection');
+  const colored = new LabBoard({ record }, sgrTheme, () => {}, () => {}, () => 3000);
+  assert.ok(colored.render(120).join('\n').includes(painted('error', ` ${alarm}`, true)), 'the alarm is error and bold');
+  colored.dispose();
 });
 
 /** A stamped one-key mark on a metric that decided the situation, exactly as the lab writes it after 03.1-02. */
@@ -1649,31 +1720,35 @@ test('строки 03.1 — разбор, контроль с правилами
   record.trials.push({ ...structuredClone(record.trials[0]!), id: 'c0', scenarioId: controlCard.id, familyId: controlCard.familyId, outcome: 'pass',
     checks: [], assessments: [{ metricId: 'goal_attainment', result: 'pass', rationale: 'Клиент узнал время.', evidence: [1] }, { metricId: 'prompt_compliance', result: 'fail', rationale: 'Агент отправил клиента в отделение.', evidence: [1] }] });
   record.positiveControlScenarioIds = [controlCard.id];
-  const base = buildResultView(record);
-  const disagreement = base.agreement.disagreements[0];
+  const view = buildResultView(record);
+  const disagreement = view.agreement.disagreements[0];
   assert.deepEqual(disagreement?.overturned, ['prompt_compliance'], 'the fixture holds a partial overturn');
-  const controlRow = resultViewLines(base).find(row => row.startsWith('Контроль:'));
-  assert.ok(controlRow?.includes('запрос выполнен ✓ · правила промпта нарушены ✗'), controlRow);
-  // The breakdown names the most frequent rule with its count (C-301); the fixture's rule cannot be named, so the row is set as the CLI prints it.
-  const view: ResultView = { ...base, breakdown: { ...base.breakdown, text: 'Запрос выполнен: 0 из 9. Правила промпта нарушены: 10 из 10, из них правило 34 — 3.' } };
-  const overview = words(resultViewLines(view).join(' '));
-  const partial = words(disagreementRows(view).map(row => row.text).join(' '));
-  assert.ok(disagreementRows(view).some(row => row.text === 'Судья: не справился → владелец: правила промпта соблюдены; запрос не выполнен'), 'the F7 partial-overturn row');
+  // A control is decided by its goal alone: its broken rule raises no alarm, and it never enters the count.
+  assert.equal(view.control.alarm, null);
+  assert.equal(view.headline.decided, 1, 'the control is not counted');
+  const partialRows = disagreementRows(view);
+  assert.ok(partialRows.some(row => row.text === 'Судья: не справился → вы: правила промпта соблюдены; запрос не выполнен'), 'the F7 partial-overturn row names the overturned half');
+  const partial = words(partialRows.map(row => row.text).join(' ')).join(' ');
+  const head = [words(accuracyRow(view).text).join(' '), words(trustParts(view).join(' · ')).join(' ')];
   for (const inner of [36, 56, 76, 106, 156]) {
     const width = inner + 4;
     const board = new LabBoard({ record, view }, theme, () => {}, () => {}, () => 3000);
+    board.handleInput('d');
     const rows = board.render(width);
     board.dispose();
     const separator = rows.findIndex(row => /^│ ─+ │$/.test(stripTerminalSequences(row)));
-    const body = rows.slice(separator + 1, -3).map(row => stripTerminalSequences(row).slice(2, -2));
+    // The result block leads the detailed body; the record's own rows (task, connection, sources) follow it.
+    const result = rows.slice(separator + 1, separator + 1 + fitRows(resultScreen(view, { surface: 'board', details: true }), inner).length);
+    const body = result.map(row => stripTerminalSequences(row).slice(2, -2));
     assert.ok(separator > 0 && body.length > 10, `inner ${inner}: the body is found`);
     for (const row of rows) assert.ok(visibleWidth(row) <= width, `inner ${inner}: overflow`);
-    assert.ok(!body.some(row => row.includes('…')), `inner ${inner}: a body row was clipped`);
-    assert.ok(!rows.slice(separator + 1, -3).some(row => row.includes('\x1b')), `inner ${inner}: an escape byte reached the board`);
+    // Only a cause row may shorten its name on a narrow screen, keeping its counter; no other row is cut.
+    assert.ok(!body.some(row => row.includes('…') && !/^\s*\d  /.test(row)), `inner ${inner}: a result row was clipped`);
+    assert.ok(!result.some(row => row.includes('\x1b')), `inner ${inner}: an escape byte reached the board`);
     assert.ok(!rows.some(row => stripTerminalSequences(row).includes('[31m')), `inner ${inner}: an escape sequence leaked as text`);
     const text = words(body.map(row => row.trim()).join(' ')).join(' ');
-    assert.ok(text.includes(overview.join(' ')), `inner ${inner}: the first block is whole (breakdown and control line)`);
-    assert.ok(text.includes(partial.join(' ')), `inner ${inner}: the partial-overturn rows are whole`);
+    for (const whole of head) assert.ok(text.includes(whole), `inner ${inner}: the head is whole: ${whole}`);
+    assert.ok(text.includes(partial), `inner ${inner}: the partial-overturn rows are whole`);
   }
   // Section 3: the two-metric judge row under the long title, and the unmeasured row.
   const block = blockOf(record);
@@ -1719,12 +1794,13 @@ test('все строки фазы 3 на доске — простой русс
   assert.ok(cards.agreementBlockLines(ruled, ruled.trials[0]!).some(row => row.text.endsWith('правила промпта нарушены')), 'the scan sees the two-metric judge row');
   assert.ok(cards.agreementBlockLines(ruledOld, ruledOld.trials[0]!).some(row => row.text === OLD_RULE), 'the scan sees the old-rule row');
   assert.ok(cards.agreementBlockLines(ruledUnmeasured, ruledUnmeasured.trials[0]!).some(row => row.text === UNMEASURED), 'the scan sees the unmeasured row');
-  assert.ok(disagreementRows(buildResultView(ruledHalf)).some(row => row.text.includes('правила промпта соблюдены; запрос не выполнен')), 'the scan sees the partial-overturn row');
+  assert.ok(disagreementRows(buildResultView(ruledHalf)).some(row => row.text === 'Судья: не справился → вы: правила промпта соблюдены; запрос не выполнен'), 'the scan sees the partial-overturn row');
+  const agreementParts = new Set<string>();
   for (const record of variants) {
     for (const trial of record.trials) for (const row of cards.agreementBlockLines(record, trial)) assertPlainCopy(row.text, `блок ${trial.id}`);
     for (const entry of resultEntries(record)) assertPlainCopy(entry.text.replace(/ · (reactive|scripted|static) #\d+/, ''), 'ярлык списка');
     for (const row of disagreementRows(buildResultView(record))) assertPlainCopy(row.text, 'несогласие');
-    for (const row of resultViewLines(buildResultView(record)).filter(entry => /согласи|Человек не смог|Отметки устарели/.test(entry))) assertPlainCopy(row, 'строка согласия');
+    for (const part of trustParts(buildResultView(record)).filter(entry => /судь/i.test(entry))) { agreementParts.add(part); assertPlainCopy(part, 'строка согласия'); }
     for (const phase of ['results_review', 'complete'] as const) {
       const agreement = judgeAgreement(record);
       const states = [agreement, { ...agreement, sampledPasses: [] }, { ...agreement, queueFailures: [] },
@@ -1733,6 +1809,7 @@ test('все строки фазы 3 на доске — простой русс
     }
   }
   assert.ok(new Set(variants.flatMap(record => resultEntries(record).map(entry => entry.text.split(' · ')[0]))).size >= 4, 'the scan saw several list labels');
+  assert.ok(agreementParts.size >= 2, `the scan saw the agreement parts: ${[...agreementParts].join(' | ')}`);
   for (const phase of ['results_review', 'complete'] as const) {
     for (const inner of BOUNDARIES) for (const report of [false, true]) assertPlainCopy(footerOf(phase, inner, report), 'подвал');
   }
