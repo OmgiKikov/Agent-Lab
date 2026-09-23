@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:https';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -18,7 +18,7 @@ const keyPath = join(fixtures, 'tls-loopback-key.pem');
 const catalog = JSON.stringify({ data: [{ id: 'GigaChat-3-Ultra', type: 'chat' }, { id: 'Embeddings', type: 'embeddings' }] });
 
 /** The settings file stays pointed at the test directory for the whole test: the owner's real one is never touched. */
-async function lab(settingsFile: string) {
+async function lab(settingsFile: string, harnessesRoot?: string) {
   const previous = process.env.AGENT_LAB_GATEWAY_FILE;
   process.env.AGENT_LAB_GATEWAY_FILE = settingsFile;
   const tools = new Map<string, ToolDefinition>();
@@ -32,7 +32,7 @@ async function lab(settingsFile: string) {
     unregisterProvider: (name: string) => providers.delete(name),
     on: (name: string, handler: () => Promise<void>) => { if (name === 'session_shutdown') shutdown = handler; },
     sendMessage: () => undefined, sendUserMessage: () => undefined,
-  } as unknown as ExtensionAPI);
+  } as unknown as ExtensionAPI, harnessesRoot ? { harnessesRoot } : {});
   const call = async (name: string, params: object, cwd: string, confirmed?: boolean) => {
     const ui = confirmed === undefined ? { hasUI: false } : { hasUI: true, ui: { confirm: async () => confirmed } };
     const result = await tools.get(name)!.execute(name, params, undefined, undefined, { cwd, mode: 'print', ...ui } as unknown as ExtensionContext);
@@ -228,7 +228,9 @@ test('imported production dialogues stay private to the owner', { skip: !hasOpen
   const { call, shutdown } = await lab(join(cwd, 'gateway.json'));
   try {
     const imported = await call('agent_lab_import', { kind: 'dialogues', file: 'размеченные логи.xlsx' }, cwd);
-    assert.deepEqual([imported.dialoguesFile.startsWith('.agent-lab/imports/'), (await stat(join(cwd, imported.dialoguesFile))).mode & 0o777], [true, 0o600]);
+    const produced = await readdir(join(cwd, '.agent-lab', 'imports'));
+    const modes = await Promise.all(produced.map(async name => (await stat(join(cwd, '.agent-lab', 'imports', name))).mode & 0o777));
+    assert.deepEqual([imported.dialoguesFile.startsWith('.agent-lab/imports/'), produced.length, new Set(modes)], [true, 2, new Set([0o600])]);
   } finally { await shutdown(); }
 });
 
@@ -238,5 +240,44 @@ test('only .xlsx goes through the import; JSON goes to the build directly', asyn
   const { call, shutdown } = await lab(join(cwd, 'gateway.json'));
   try {
     await assert.rejects(call('agent_lab_import', { kind: 'dialogues', file: 'logs.jsonl' }, cwd), /Нужен файл \.xlsx/);
+  } finally { await shutdown(); }
+});
+
+/** A harness whose converter only proves it was the one called. */
+async function harnesses(names: string[]): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'agent-lab-harnesses-'));
+  for (const name of names) {
+    await mkdir(join(root, name));
+    await writeFile(join(root, name, 'import-dialogues.py'),
+      `import sys\nout = sys.argv[sys.argv.index('--output') + 1]\nopen(out, 'w').write('{"id": "${name}", "messages": [{"role": "user", "content": "x"}]}\\n')\nprint('${name}')\n`);
+  }
+  return root;
+}
+
+test('without a harness that reads .xlsx the owner is told to export JSON instead', async () => {
+  const cwd = await workspace();
+  await writeFile(join(cwd, 'logs.xlsx'), 'x');
+  const { call, shutdown } = await lab(join(cwd, 'gateway.json'), await harnesses([]));
+  try {
+    await assert.rejects(call('agent_lab_import', { kind: 'dialogues', file: 'logs.xlsx' }, cwd), /Нет обвязки с конвертером диалогов/);
+  } finally { await shutdown(); }
+});
+
+test('with two harnesses that read .xlsx the owner is asked whose export it is', async () => {
+  const cwd = await workspace();
+  await writeFile(join(cwd, 'logs.xlsx'), 'x');
+  const { call, shutdown } = await lab(join(cwd, 'gateway.json'), await harnesses(['acquiring', 'agent-oc']));
+  try {
+    await assert.rejects(call('agent_lab_import', { kind: 'dialogues', file: 'logs.xlsx' }, cwd), /нескольких обвязок: acquiring, agent-oc/);
+  } finally { await shutdown(); }
+});
+
+test('the named harness converts the export', { timeout: 30000 }, async () => {
+  const cwd = await workspace();
+  await writeFile(join(cwd, 'logs.xlsx'), 'x');
+  const { call, shutdown } = await lab(join(cwd, 'gateway.json'), await harnesses(['acquiring', 'agent-oc']));
+  try {
+    const imported = await call('agent_lab_import', { kind: 'dialogues', file: 'logs.xlsx', harness: 'acquiring' }, cwd);
+    assert.equal(JSON.parse(await readFile(join(cwd, imported.dialoguesFile), 'utf8')).id, 'acquiring');
   } finally { await shutdown(); }
 });

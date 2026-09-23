@@ -6,7 +6,7 @@
 символов при пределе Agent Lab в 300 000, и это инструкции модели, а не описание покрытия.
 Поэтому здесь собирается реестр: имя скилла, заголовок и первые содержательные строки.
 
-    python examples/agent-oc-materials.py --root ../agent_oc --output task-cards.json
+    python harnesses/agent-oc/materials.py --root ../agent_oc --output task-cards.json
 
 Файл можно править руками: `notes` — ваши вводные своими словами, `scenarioCount` — сколько
 карточек просить. Дальше:

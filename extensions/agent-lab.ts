@@ -281,7 +281,7 @@ function projectTarget(target: unknown, cwd: string): unknown {
 }
 
 /** How long a run, a semantic recheck and a preparation stay in the row of their own tool call before they continue in the background. */
-export interface AgentLabOptions { inlineRunMs?: number; inlineCheckMs?: number; inlineBuildMs?: number }
+export interface AgentLabOptions { inlineRunMs?: number; inlineCheckMs?: number; inlineBuildMs?: number; harnessesRoot?: string }
 /** A card field as the owner reads it in the native question about a change. */
 const DIFF_FIELD: Record<string, string> = { opening: 'первая реплика', goal: 'цель клиента', expectation: 'ожидаемый результат', rule: 'правило проверки', fact: 'факт' };
 const RUN_MESSAGE = 'agent-lab-run';
@@ -321,6 +321,8 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
    * На старте регистрация ждётся: так провайдер попадает в первый же список моделей. Позже
    * настроенный из разговора шлюз Pi подключает сразу, без перезапуска (agent_lab_gateway).
    */
+  // Обвязки агентов лежат сбоку от ядра; путь переопределяется для тестов и для обвязок вне репозитория.
+  const harnessesRoot = options.harnessesRoot ?? fileURLToPath(new URL('../harnesses/', import.meta.url));
   let gigaNote: string | undefined;
   let gatewayModels: string[] | undefined;
   // Один файл на сессию: и подключение на старте, и правки из разговора говорят об одной настройке.
@@ -1975,9 +1977,10 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
   });
   pi.registerTool({
     ...displayFor('agent_lab_import'), name: 'agent_lab_import', label: 'Выгрузка .xlsx',
-    description: "Convert an agent_oc .xlsx export the conversation cannot read itself. kind=dialogues: labelled production logs → dialoguesFile for agent_lab_build. kind=cases: analysis of broken (or, with passing, successful) cases → goldenFile for agent_lab_build. Files stay in .agent-lab/imports with owner-only permissions. Costs no model calls. JSON/JSONL files go to agent_lab_build directly.",
+    description: "Convert an .xlsx export the conversation cannot read itself, with the converter of the agent's harness (harnesses/<agent>). kind=dialogues: labelled production logs → dialoguesFile for agent_lab_build. kind=cases: analysis of broken (or, with passing, successful) cases → goldenFile for agent_lab_build. harness is needed only when several harnesses convert this kind; ask the owner whose export it is. Files stay in .agent-lab/imports with owner-only permissions. Costs no model calls. JSON/JSONL files go to agent_lab_build directly.",
     parameters: Type.Object({
       kind: Type.Union([Type.Literal('dialogues'), Type.Literal('cases')]), file: Type.String({ minLength: 1, maxLength: 4000 }),
+      harness: Type.Optional(Type.String({ pattern: '^[a-z0-9][a-z0-9-]{0,63}$', description: 'Harness directory name under harnesses/' })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })), multiTurnOnly: Type.Optional(Type.Boolean({ description: 'dialogues: only dialogues where the client wrote more than once' })),
       sheets: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 120 }), { maxItems: 12 })), passing: Type.Optional(Type.Boolean({ description: 'cases: take successful cases instead of broken ones' })),
     }, { additionalProperties: false }),
@@ -1985,7 +1988,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
     async execute(callId, params, toolSignal, _onUpdate, ctx) {
       const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
       const { kind, file, ...options } = params;
-      const result = await importWorkbook(kind, ownerPath(file, ctx.cwd), options, ctx.cwd, fileURLToPath(new URL('../', import.meta.url)), signal);
+      const result = await importWorkbook(kind, ownerPath(file, ctx.cwd), options, ctx.cwd, harnessesRoot, signal);
       const shown = (path: string | undefined) => path ? path.replace(`${ctx.cwd}/`, '') : undefined;
       const feed: Feed = { rows: [row(kind === 'dialogues' ? `Диалоги из ${file.split('/').at(-1)} готовы для сборки сценариев.` : `Кейсы из ${file.split('/').at(-1)} готовы как карточки.`, 'success'),
         ...result.report.map(line => row(line.replace(`${ctx.cwd}/`, ''), 'muted'))] };

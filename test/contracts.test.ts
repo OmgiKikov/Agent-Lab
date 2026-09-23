@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFile } from 'node:fs/promises';
 import {
   createInputSchema, dialogueSchema, dialogueToScenario, dialogueToTrial, discoverInputSchema, draftPatchSchema, emptyUsage, fingerprint, goalAttainment, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, goalToScenario, goldenCaseSchema, goldenToScenario, observedGoalSchema, profileSchema, replyQuality, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validateObservedGoals, validatePreparation, valueTokens, verbatimSpan, verbatimSpanAt, worldSchema,
   type Profile,
@@ -357,20 +356,6 @@ test('exact final-answer checks reject impossible combinations without constrain
   assert.throws(() => validate([exact, forbidden]), /Exact answer contains forbidden/);
   assert.throws(() => validate([forbidden, exact]), /Exact answer contains forbidden/);
   assert.doesNotThrow(() => validate([exact, { ...exact, id: 'same' }, { id: 'earlier', kind: 'answer_contains', description: 'Earlier clarification', value: 'What is your name?' }]));
-});
-
-test('the shipped agent_oc end2end card passes preparation validation', async () => {
-  // Карточку в примере правят руками, а её ошибки видны только в живом прогоне: проверка
-  // state_equals требует, чтобы запись и поле уже существовали в initialState, а меняющееся
-  // поле было объявлено writableFields. Без этого теста ошибка находится на рабочем стенде.
-  const template = JSON.parse(await readFile(new URL('../examples/agent-oc-e2e/task.json', import.meta.url), 'utf8'));
-  const input = createInputSchema.parse(template);
-  const sources = input.materials.map((m, i) => ({ id: `s${i}`, name: m.name, content: m.content, hash: 'hash' }));
-  validatePreparation({
-    requirements: [{ id: 'r1', text: 'Агент отвечает клиенту', sourceId: sources[0]!.id, quote: sources[0]!.content.slice(0, 40), critical: false }],
-    questions: [], agent: { name: 'agent_oc', instructions: 'Прод-путь ветки B', tools: [] },
-    scenarios: input.goldenCases.map(goldenToScenario),
-  }, sources, 'evaluate');
 });
 
 test('user state fields are optional, unique and travel through golden cases', () => {

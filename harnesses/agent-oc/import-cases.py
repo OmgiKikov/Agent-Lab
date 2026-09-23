@@ -5,8 +5,8 @@
 (полномочия, профиль, ЕПК), поверхность и ожидание владельца в колонке «Ожидалось». Поэтому
 карточки собираются из него, а не пишутся руками и не придумываются моделью.
 
-    python examples/agent-oc-cases.py --input "сломавшиеся кейсы раг.xlsx" --output cases-task.json
-    AGENT_LAB_TASK=cases-task.json AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… bash examples/agent-oc-e2e.sh
+    python harnesses/agent-oc/import-cases.py --input "сломавшиеся кейсы раг.xlsx" --output cases-task.json
+    AGENT_LAB_TASK=cases-task.json AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… bash harnesses/agent-oc/e2e.sh
 
 По умолчанию берутся строки, где «Версия» = «Новая», а «Итог проверки» = «Ошибка», то есть то,
 что сломалось на текущей редакции. `--passing` берёт вместо этого успешные строки — тогда прогон

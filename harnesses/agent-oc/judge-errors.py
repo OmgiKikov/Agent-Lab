@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Почему судья отклонён: причины отказа и один исходный ответ из сохранённого прогона.
 
-    python examples/agent-oc-judge-errors.py RUN_ID
+    python harnesses/agent-oc/judge-errors.py RUN_ID
 
 Когда отчёт пишет «Judge response rejected», сам ответ судьи и причина отказа лежат в JSON
 прогона (`trials[].judgeAudit.attempts[]`), а в markdown-отчёт не попадают. Скрипт группирует
@@ -25,7 +25,7 @@ def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         return 2
-    path = Path(__file__).resolve().parent.parent / ".agent-lab" / f"{argv[1]}.json"
+    path = Path(__file__).resolve().parents[2] / ".agent-lab" / f"{argv[1]}.json"
     if not path.exists():
         print(f"Нет файла прогона: {path}", file=sys.stderr)
         return 2

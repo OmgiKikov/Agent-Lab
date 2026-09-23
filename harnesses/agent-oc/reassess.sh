@@ -2,9 +2,9 @@
 #
 # Пересчитывает оценки судьи по уже записанным диалогам прогона и выгружает отчёт.
 #
-#   bash examples/agent-oc-reassess.sh RUN_ID [criteria.json]
+#   bash harnesses/agent-oc/reassess.sh RUN_ID [criteria.json]
 #
-# criteria.json (examples/agent-oc-cases.py --criteria-output) заменяет критерии карточек: например,
+# criteria.json (harnesses/agent-oc/import-cases.py --criteria-output) заменяет критерии карточек: например,
 # голый код ответа из разбора становится точной проверкой result.status_code вместо рубрики судьи.
 # Точные проверки считаются по сохранённым фактам прогона.
 #
@@ -13,8 +13,8 @@
 # Код возврата: 0 - все оценки получены, 2 - остались ошибки оценщика или неполные данные.
 set -euo pipefail
 
-run_id="${1:?Укажите идентификатор прогона: bash examples/agent-oc-reassess.sh RUN_ID}"
-lab_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+run_id="${1:?Укажите идентификатор прогона: bash harnesses/agent-oc/reassess.sh RUN_ID}"
+lab_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 run_dir="${AGENT_LAB_RUN_DIR:-${lab_root}/.agent-lab-run}"
 
 mkdir -p "${run_dir}"

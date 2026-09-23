@@ -5,7 +5,7 @@ Agent Lab строит карточки бизнес-сценариев из р�
 обязана ссылаться на `id` диалога-доказательства. Формат входа — `dialogueSchema` из
 `src/contracts.ts`: `{id, messages: [{role: user|assistant, content}], outcome}`.
 
-    python3 examples/agent-oc-dialogues.py \\
+    python3 harnesses/agent-oc/import-dialogues.py \\
         --input "/путь/agent_oc/data/размеченные логи 1607_2007.xlsx" \\
         --output dialogues.jsonl --multi-turn-only --limit 60
 

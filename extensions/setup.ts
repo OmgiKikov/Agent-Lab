@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { access, chmod, mkdir } from 'node:fs/promises';
+import { type Dirent } from 'node:fs';
+import { access, chmod, mkdir, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -9,7 +10,7 @@ import { type Row } from './render/theme.ts';
 
 /*
  * Подготовка без терминала: личный шлюз моделей и выгрузки .xlsx, которые разговор сам прочитать
- * не может. Здесь только слова для владельца и запуск конвертеров; настройка и транспорт — в src.
+ * не может. Здесь только слова для владельца и запуск конвертеров обвязок; настройка и транспорт — в src.
  */
 
 const FIELD_NAMES: Record<string, string> = {
@@ -23,7 +24,7 @@ const MAX_WORKBOOK_ROWS_OUTPUT = 4000;
 /** Как владелец назвал шлюз и свои файлы: пути ещё не приведены к абсолютным. */
 export interface GatewayInput { url: string; certPath: string; keyPath: string; caPath?: string; insecure?: boolean }
 export type WorkbookKind = 'dialogues' | 'cases';
-export interface WorkbookOptions { limit?: number; multiTurnOnly?: boolean; sheets?: string[]; passing?: boolean }
+export interface WorkbookOptions { harness?: string; limit?: number; multiTurnOnly?: boolean; sheets?: string[]; passing?: boolean }
 export interface WorkbookImport { files: { dialoguesFile?: string; goldenFile?: string; taskFile?: string }; report: string[] }
 
 const row = (text: string, tone?: Row['tone']): Row => ({ text, ...(tone ? { tone } : {}) });
@@ -71,34 +72,66 @@ export function gatewayFeed(status: GatewayStatus, models: string[] | undefined,
 }
 
 /**
- * Конвертеры выгрузок agent_oc (examples/agent-oc-*.py) — единственное место, где знают колонки этих
- * .xlsx. Нужен python3 с openpyxl, то есть окружение, из которого запущен Lab. Результат ложится в
- * `.agent-lab/imports`: это прод-диалоги, им место рядом с прогонами и с правами только для владельца.
+ * Колонки выгрузок .xlsx знает только обвязка конкретного агента, а не ядро. Обвязка — каталог
+ * `harnesses/<агент>` с конвертерами `import-dialogues.py` и `import-cases.py` (контракт — в
+ * harnesses/README.md). Нет обвязки — нет импорта .xlsx; остальной Lab от неё не зависит.
+ * Нужен python3 с тем, что требует конвертер (обычно openpyxl), то есть окружение, из которого
+ * запущен Lab. Результат ложится в `.agent-lab/imports`: это прод-диалоги, им место рядом с
+ * прогонами и с правами только для владельца.
  */
-export async function importWorkbook(kind: WorkbookKind, input: string, options: WorkbookOptions, cwd: string, labRoot: string, signal?: AbortSignal): Promise<WorkbookImport> {
+export async function importWorkbook(kind: WorkbookKind, input: string, options: WorkbookOptions, cwd: string, harnessesRoot: string, signal?: AbortSignal): Promise<WorkbookImport> {
   if (extname(input).toLowerCase() !== '.xlsx') throw new Error('Нужен файл .xlsx. JSON и JSONL передавайте сборке сценариев напрямую.');
   try { await access(input); } catch { throw new Error(`Файл ${basename(input)} не найден. Проверьте путь.`); }
+  const converter = await findConverter(harnessesRoot, kind, options.harness);
   const directory = resolve(cwd, '.agent-lab', 'imports');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const stem = basename(input, extname(input)).replace(/[^\p{L}\p{N}_-]+/gu, '-').slice(0, 80) || 'import';
-  const { script, args, files }: { script: string; args: string[]; files: WorkbookImport['files'] } = kind === 'dialogues'
+  const { args, files }: { args: string[]; files: WorkbookImport['files'] } = kind === 'dialogues'
     ? dialoguesCommand(input, options, directory, stem) : casesCommand(input, options, directory, stem);
-  const report = await runConverter(join(labRoot, 'examples', script), args, signal);
-  for (const file of [...Object.values(files), files.dialoguesFile ? `${files.dialoguesFile}.meta.json` : undefined]) if (file) await chmod(file, 0o600);
+  const report = await runConverter(converter, args, signal);
+  await restrictOutputs(directory, stem);
   return { files, report };
 }
+
+/** Обвязки, у которых есть конвертер этого вида. Имя обвязки нужно, только когда их несколько. */
+export async function workbookHarnesses(harnessesRoot: string, kind: WorkbookKind): Promise<string[]> {
+  let entries: Dirent[];
+  try { entries = await readdir(harnessesRoot, { withFileTypes: true }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+  const names = entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
+  const present = await Promise.all(names.map(name => access(converterPath(harnessesRoot, name, kind)).then(() => true, () => false)));
+  return names.filter((_, index) => present[index]);
+}
+
+async function findConverter(harnessesRoot: string, kind: WorkbookKind, harness: string | undefined): Promise<string> {
+  const available = await workbookHarnesses(harnessesRoot, kind);
+  const what = kind === 'dialogues' ? 'диалогов' : 'кейсов';
+  if (harness && !available.includes(harness)) throw new Error(`У обвязки «${harness}» нет конвертера ${what} из .xlsx.${available.length ? ` Есть: ${available.join(', ')}.` : ''}`);
+  if (harness) return converterPath(harnessesRoot, harness, kind);
+  if (!available.length) throw new Error(`Нет обвязки с конвертером ${what} из .xlsx. Выгрузите данные в JSON/JSONL или добавьте обвязку агента в harnesses/.`);
+  if (available.length > 1) throw new Error(`Конвертеры ${what} есть у нескольких обвязок: ${available.join(', ')}. Спросите владельца, чья это выгрузка.`);
+  return converterPath(harnessesRoot, available[0]!, kind);
+}
+
+/** Конвертер может писать и свои побочные файлы рядом (например, `.meta.json`); закрываются все файлы этой выгрузки. */
+async function restrictOutputs(directory: string, stem: string): Promise<void> {
+  const produced = (await readdir(directory)).filter(name => name.startsWith(`${stem}.`));
+  await Promise.all(produced.map(name => chmod(join(directory, name), 0o600)));
+}
+
+const converterPath = (harnessesRoot: string, harness: string, kind: WorkbookKind) => join(harnessesRoot, harness, `import-${kind}.py`);
 
 function dialoguesCommand(input: string, options: WorkbookOptions, directory: string, stem: string) {
   const dialoguesFile = join(directory, `${stem}.dialogues.jsonl`);
   const args = ['--input', input, '--output', dialoguesFile, ...sheetArgs(options), ...(options.limit ? ['--limit', String(options.limit)] : []), ...(options.multiTurnOnly ? ['--multi-turn-only'] : [])];
-  return { script: 'agent-oc-dialogues.py', args, files: { dialoguesFile } };
+  return { args, files: { dialoguesFile } };
 }
 
 function casesCommand(input: string, options: WorkbookOptions, directory: string, stem: string) {
   const taskFile = join(directory, `${stem}.task.json`);
   const goldenFile = join(directory, `${stem}.golden.json`);
   const args = ['--input', input, '--output', taskFile, '--golden-output', goldenFile, ...sheetArgs(options), ...(options.limit ? ['--limit', String(options.limit)] : []), ...(options.passing ? ['--passing'] : [])];
-  return { script: 'agent-oc-cases.py', args, files: { goldenFile, taskFile } };
+  return { args, files: { goldenFile, taskFile } };
 }
 
 const sheetArgs = (options: WorkbookOptions) => (options.sheets ?? []).flatMap(sheet => ['--sheet', sheet]);
@@ -109,9 +142,9 @@ async function runConverter(script: string, args: string[], signal?: AbortSignal
     return lines(stdout);
   } catch (error) {
     const failure = error as NodeJS.ErrnoException & { stderr?: string };
-    if (failure.code === 'ENOENT') throw new Error('Не найден python3. Запустите Lab из окружения, где есть python3 с openpyxl (например, conda activate agent_oc).');
+    if (failure.code === 'ENOENT') throw new Error('Не найден python3. Запустите Lab из окружения, где есть python3 с тем, что нужно конвертеру (обычно openpyxl).');
     const stderr = failure.stderr ?? '';
-    if (/No module named ['"]?openpyxl/.test(stderr)) throw new Error('Для чтения .xlsx нужен openpyxl. Запустите Lab из окружения agent_oc (conda activate agent_oc) или поставьте openpyxl.');
+    if (/No module named ['"]?openpyxl/.test(stderr)) throw new Error('Для чтения .xlsx нужен openpyxl. Запустите Lab из окружения агента, где он есть, или поставьте openpyxl.');
     const reason = lines(stderr).filter(line => !/^\s*(Traceback|File "|\^)/.test(line)).at(-1);
     throw new Error(`Не удалось прочитать .xlsx${reason ? `: ${reason}` : '.'}`);
   }

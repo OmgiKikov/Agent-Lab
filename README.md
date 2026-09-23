@@ -187,7 +187,7 @@ status` показывает блок `giga`: каких переменных н
 список `evidence`: он обязан совпадать с номерами событий в `citations`, поэтому берётся из самих
 цитат, а каждая цитата по-прежнему сверяется с событием дословно.
 
-Проверка SkillAgent из `agent_oc` — [docs/AGENT-OC-RUNBOOK.md](docs/AGENT-OC-RUNBOOK.md).
+Всё, что относится к конкретному проверяемому агенту (адаптеры, конвертеры выгрузок, сценарии запуска), лежит в [harnesses/](harnesses/README.md), сбоку от ядра: эквайринг — [harnesses/acquiring](harnesses/acquiring/README.md), SkillAgent из `agent_oc` — [harnesses/agent-oc](harnesses/agent-oc/README.md).
 
 ## Разработка
 

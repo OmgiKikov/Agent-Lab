@@ -4,7 +4,7 @@
 Живёт здесь, а не в agent_oc: прод-репозиторий остаётся нетронутым, скрипт только читает его
 через публичные точки `harness_core.bootstrap_environment` и `harness_core.run_turn`.
 
-    python examples/agent-oc-adapter.py ../agent_oc < /dev/null
+    python harnesses/agent-oc/adapter.py ../agent_oc < /dev/null
 
 Так проверяется окружение: скрипт поднимает agent_oc, печатает замечания в stderr и выходит.
 

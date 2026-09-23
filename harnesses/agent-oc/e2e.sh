@@ -2,13 +2,13 @@
 #
 # End2end прогон SkillAgent из agent_oc: сборка задания, запуск и HTML-отчёт одной командой.
 #
-#   AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… bash examples/agent-oc-e2e.sh
+#   AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… bash harnesses/agent-oc/e2e.sh
 #
 # Скрипт существует потому, что команды с флагами и heredoc не переживают копирование через
 # мессенджер: двойной дефис приезжает длинным тире, кавычки — типографскими. Здесь всё это
 # зафиксировано в файле, а от оператора нужны только два значения ЕПК в окружении.
 #
-# AGENT_LAB_TASK — готовое задание вместо шаблона одной карточки (examples/agent-oc-cases.py).
+# AGENT_LAB_TASK — готовое задание вместо шаблона одной карточки (harnesses/agent-oc/import-cases.py).
 # Необязательные переменные: AGENT_OC_ROOT (по умолчанию ../agent_oc), AGENT_LAB_RUN_DIR
 # (куда положить сгенерированные файлы и отчёт, по умолчанию .agent-lab-run),
 # AGENT_OC_SURFACE, AGENT_OC_AUTHORITY. DRY_RUN=1 останавливается после подготовки файлов,
@@ -18,14 +18,14 @@
 # или переменные AGENT_LAB_GATEWAY_* в окружении — они важнее личной настройки.
 set -euo pipefail
 
-# Готовое задание (например, собранное examples/agent-oc-cases.py) берётся как есть: ЕПК и
+# Готовое задание (например, собранное harnesses/agent-oc/import-cases.py) берётся как есть: ЕПК и
 # поверхность там уже стоят из разбора кейсов. Иначе они подставляются в шаблон одной карточки.
 if [ -z "${AGENT_LAB_TASK:-}" ]; then
   : "${AGENT_OC_EPK_UL:?Задайте AGENT_OC_EPK_UL: ЕПК юридического лица, либо AGENT_LAB_TASK с готовым заданием}"
   : "${AGENT_OC_EPK_FL:?Задайте AGENT_OC_EPK_FL: ЕПК физического лица, либо AGENT_LAB_TASK с готовым заданием}"
 fi
 
-lab_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+lab_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 agent_root="$(cd "${AGENT_OC_ROOT:-${lab_root}/../agent_oc}" && pwd)"
 run_dir="${AGENT_LAB_RUN_DIR:-${lab_root}/.agent-lab-run}"
 surface="${AGENT_OC_SURFACE:-GIGAASSISTANT}"
@@ -47,7 +47,7 @@ cat > "${run_dir}/connection.json" <<JSON
   "target": {
     "kind": "command",
     "command": "python",
-    "args": ["${lab_root}/examples/agent-oc-adapter.py", "${agent_root}"],
+    "args": ["${lab_root}/harnesses/agent-oc/adapter.py", "${agent_root}"],
     "cwd": "${agent_root}",
     "timeoutMs": 180000
   },
@@ -58,9 +58,9 @@ JSON
 if [ -n "${AGENT_LAB_TASK:-}" ]; then
   cp "${AGENT_LAB_TASK}" "${run_dir}/task.json"
 else
-  python3 "${lab_root}/examples/agent-oc-e2e/fill-task.py" \
+  python3 "${lab_root}/harnesses/agent-oc/e2e/fill-task.py" \
     "${AGENT_OC_EPK_UL}" "${AGENT_OC_EPK_FL}" "${surface}" "${authority}" \
-    "${lab_root}/examples/agent-oc-e2e/task.json" "${run_dir}/task.json"
+    "${lab_root}/harnesses/agent-oc/e2e/task.json" "${run_dir}/task.json"
 fi
 
 echo "Подготовлено: ${run_dir}/task.json и ${run_dir}/connection.json"
@@ -84,7 +84,7 @@ if [ "${questions}" != "0" ]; then
     python3 -c 'import json,sys; [print(" -", q) for q in json.load(open(sys.argv[1]))["questions"]]' "${run_dir}/draft.json"
     exit 3
   fi
-  python3 "${lab_root}/examples/agent-oc-e2e/add-answers.py" "${run_dir}/task.json" "${answers}"
+  python3 "${lab_root}/harnesses/agent-oc/e2e/add-answers.py" "${run_dir}/task.json" "${answers}"
   node dist/cli.js build --input "${run_dir}/task.json" --connection "${run_dir}/connection.json" > "${run_dir}/draft.json"
   run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${run_dir}/draft.json")"
   echo "Ответы учтены, новый черновик ${run_id}"

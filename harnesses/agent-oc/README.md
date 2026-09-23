@@ -5,16 +5,16 @@
 
 | Файл | Роль |
 |---|---|
-| [examples/agent-oc-dialogues.py](../examples/agent-oc-dialogues.py) | прод-разметка `.xlsx` → диалоги в схеме Agent Lab |
-| [examples/agent-oc-adapter.py](../examples/agent-oc-adapter.py) | испытуемый: контракт `kind: "command"` поверх `harness_core.run_turn` |
-| [examples/agent-oc-materials.py](../examples/agent-oc-materials.py) | реестр скиллов агента → готовый вход `build --input` |
+| [harnesses/agent-oc/import-dialogues.py](import-dialogues.py) | прод-разметка `.xlsx` → диалоги в схеме Agent Lab |
+| [harnesses/agent-oc/adapter.py](adapter.py) | испытуемый: контракт `kind: "command"` поверх `harness_core.run_turn` |
+| [harnesses/agent-oc/materials.py](materials.py) | реестр скиллов агента → готовый вход `build --input` |
 
 ## Весь end2end в интерфейсе
 
 Всё делается в Pi, без отдельных скриптов. Заранее нужно только подключение к агенту:
 
 ```bash
-AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… DRY_RUN=1 bash examples/agent-oc-e2e.sh
+AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… DRY_RUN=1 bash harnesses/agent-oc/e2e.sh
 node dist/cli.js chat
 ```
 
@@ -34,7 +34,7 @@ node dist/cli.js chat
 > судья giga/GigaChat-3-Ultra. Покажи карточки до запуска.
 
 Выгрузки `.xlsx` разговор читает сам: инструмент `agent_lab_import` вызывает те же конвертеры
-`examples/agent-oc-*.py` и кладёт результат в `.agent-lab/imports` с правами только для вас. Для этого
+`import-*.py` из этой обвязки и кладёт результат в `.agent-lab/imports` с правами только для вас. Для этого
 Lab должен быть запущен из окружения, где есть `python3` с `openpyxl` (`conda activate agent_oc`).
 
 Дальше — доска: карточки видны до запуска, `r` запускает после подтверждения плана, `p`/`n`
@@ -62,7 +62,7 @@ GigaChat-3-Ultra`: решает шаг 2, строка `OK` или причин�
   "target": {
     "kind": "command",
     "command": "python",
-    "args": ["../conductor-playground/examples/agent-oc-adapter.py", "."],
+    "args": ["../conductor-playground/harnesses/agent-oc/adapter.py", "."],
     "cwd": "../agent_oc",
     "timeoutMs": 180000
   }
@@ -94,7 +94,7 @@ conda activate agent_oc
 ```json
 { "command": "conda",
   "args": ["run", "-n", "agent_oc", "--no-capture-output", "python",
-           "/путь/conductor-playground/examples/agent-oc-adapter.py", "/путь/agent_oc"] }
+           "/путь/conductor-playground/harnesses/agent-oc/adapter.py", "/путь/agent_oc"] }
 ```
 
 Сертификаты у двух сервисов **разные**: agent_oc ходит в GigaChat своими, Agent Lab — в шлюз
@@ -141,7 +141,7 @@ export AGENT_LAB_GATEWAY_CA_PATH=/абсолютный/путь/chain.pem   # н
 
 ```bash
 conda activate agent_oc
-python examples/agent-oc-adapter.py ../agent_oc < /dev/null
+python harnesses/agent-oc/adapter.py ../agent_oc < /dev/null
 ```
 
 Без кавычек намеренно: скопированная из документа строка с `{"type":"close"}` легко приезжает в
@@ -150,7 +150,7 @@ python examples/agent-oc-adapter.py ../agent_oc < /dev/null
 ## Карточки бизнес-сценариев из логов
 
 ```bash
-python examples/agent-oc-dialogues.py \
+python harnesses/agent-oc/import-dialogues.py \
     --input "../agent_oc/data/размеченные логи 1607_2007.xlsx" \
     --output dialogues.jsonl --multi-turn-only --limit 60
 ```
@@ -164,7 +164,7 @@ python examples/agent-oc-dialogues.py \
 в 300 000, и это инструкции модели, а не описание покрытия.
 
 ```bash
-python examples/agent-oc-materials.py --root ../agent_oc --output task-cards.json
+python harnesses/agent-oc/materials.py --root ../agent_oc --output task-cards.json
 ```
 
 В полученном файле заполните `notes` своими вводными про клиентов; модели уже проставлены
@@ -185,11 +185,11 @@ node dist/cli.js export --id RUN_ID --format markdown --output cards.md
 поверхность и ожидание владельца. Это лучший источник для end2end, чем карточка, написанная руками:
 
 ```bash
-python examples/agent-oc-cases.py --input "/путь/сломавшиеся кейсы раг.xlsx" --output cases-task.json
+python harnesses/agent-oc/import-cases.py --input "/путь/сломавшиеся кейсы раг.xlsx" --output cases-task.json
 ```
 
 ```bash
-AGENT_LAB_TASK=cases-task.json bash examples/agent-oc-e2e.sh
+AGENT_LAB_TASK=cases-task.json bash harnesses/agent-oc/e2e.sh
 ```
 
 По умолчанию берутся строки «Версия» = «Новая» и «Итог проверки» = «Ошибка» — то, что сломалось на
@@ -210,7 +210,7 @@ AGENT_LAB_TASK=cases-task.json bash examples/agent-oc-e2e.sh
 записанного прогона — точные проверки считаются по сохранённым фактам, агент не вызывается:
 
 ```bash
-bash examples/agent-oc-reassess.sh RUN_ID criteria.json
+bash harnesses/agent-oc/reassess.sh RUN_ID criteria.json
 ```
 
 ## Через доску /agent-lab
@@ -219,7 +219,7 @@ bash examples/agent-oc-reassess.sh RUN_ID criteria.json
 пока сам разговор на моделях шлюза недоступен. Черновик собирается командой, остальное — на доске:
 
 ```bash
-BUILD_ONLY=1 AGENT_LAB_TASK=cases-task.json bash examples/agent-oc-e2e.sh
+BUILD_ONLY=1 AGENT_LAB_TASK=cases-task.json bash harnesses/agent-oc/e2e.sh
 node dist/cli.js chat
 ```
 
@@ -244,11 +244,11 @@ node dist/cli.js chat
 ## Если судья вынес «Judge response rejected»
 
 Это отказ проверки формы ответа судьи, а не разногласие двух его вызовов. Причины и исходные
-ответы достаёт `python examples/agent-oc-judge-errors.py RUN_ID` — только читает сохранённый
+ответы достаёт `python harnesses/agent-oc/judge-errors.py RUN_ID` — только читает сохранённый
 прогон. Пересчитать оценки по уже записанным диалогам, не вызывая агента:
 
 ```bash
-bash examples/agent-oc-reassess.sh RUN_ID
+bash harnesses/agent-oc/reassess.sh RUN_ID
 ```
 
 ## End2end одной командой
@@ -258,7 +258,7 @@ bash examples/agent-oc-reassess.sh RUN_ID
 оператора нужны только два значения ЕПК:
 
 ```bash
-AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… bash examples/agent-oc-e2e.sh
+AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… bash harnesses/agent-oc/e2e.sh
 ```
 
 Скрипт кладёт `task.json`, `connection.json`, черновик и `report.html` в `.agent-lab-run`.
@@ -267,7 +267,7 @@ AGENT_OC_EPK_UL=… AGENT_OC_EPK_FL=… bash examples/agent-oc-e2e.sh
 модель их не выдумывает. Скрипт выложит их списком и заготовкой `.agent-lab-run/answers.json` —
 заполните поля `answer` и запустите скрипт снова: он добавит ответы в задание отдельным материалом, пересоберёт черновик и продолжит
 с новым черновиком.
-Карточку правьте в [examples/agent-oc-e2e/task.json](../examples/agent-oc-e2e/task.json) —
+Карточку правьте в [harnesses/agent-oc/e2e/task.json](e2e/task.json) —
 ЕПК туда не вписываются, они подставляются из окружения при запуске. `AGENT_LAB_TASK` подставляет
 готовое задание целиком и отменяет этот шаг. Полезные переменные:
 `AGENT_OC_ROOT` (по умолчанию `../agent_oc`), `AGENT_OC_SURFACE`, `AGENT_OC_AUTHORITY`,

@@ -37,3 +37,4 @@ dist/
 .cache
 # exported OpenCode transcripts
 session-*.md
+__pycache__/

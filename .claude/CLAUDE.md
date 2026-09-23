@@ -33,7 +33,7 @@ Agent Lab — пакет для Pi, который прогоняет насто
 
 - TypeScript 5.9.3 - Full codebase (src/, extensions/, skills/)
 - JavaScript - Development utilities, Node.js ecosystem
-- Python - Example target agents (`examples/aigw-observed.py`, `examples/stateful-agent.py`, `examples/echo-agent.py`)
+- Python - Example target agents (`harnesses/acquiring/aigw-observed.py`, `examples/stateful-agent.py`, `examples/echo-agent.py`)
 - Shell - CI/CD pipeline examples (`examples/regression-ci.yml`)
 
 ## Runtime
