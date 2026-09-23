@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { calibrationConsent } from '../src/card/calibrate.js';
 import { applyCommand, applyLogVersion, hostGrant, prepareCommand, prepareLogVersion, requiredAuthority, wordsOf, type PreparedLogVersion } from '../src/card/commands.js';
-import { calibrationCalls, calibrationMode, calibratable, cardExclusion, cardLogSituation, logSkip, runLogSituations, testedVersion, variantExclusion } from '../src/card/calibration-scope.js';
+import { calibrationCalls, calibrationMode, calibratable, cardExclusion, cardLogSituation, logImports, logSkip, runLogSituations, testedVersion, variantExclusion } from '../src/card/calibration-scope.js';
 import { logVersionJournalSchema, type LogVersionJournal } from '../src/card/calibration.js';
 import { cardSchema, type Card } from '../src/card/schema.js';
 import { fingerprint, type Experiment, type Trial } from '../src/contracts.js';
@@ -204,4 +207,57 @@ test('what a log cannot show is skipped without a call, and the ceiling is two v
   const situations = draft.library.cards.map(card => cardLogSituation(draft.library, card));
   assert.equal(calibrationCalls(situations, (importId, dialogueId) => importId === draft.batch.id ? logged(dialogueId) : undefined), 8, 'two cards × two expectations × two votes');
   assert.equal(calibrationCalls(situations, () => undefined), 0, 'a conversation that is not at hand is never judged');
+});
+
+test('the launch dialog\'s consent line: the most judge calls calibration may take from the run\'s limit, or nothing to consent to', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-consent-'));
+  const lab = new ExperimentLab(directory, cardRuntime());
+  try {
+    await lab.init();
+    const draft = await lab.create(cardInput(), { cards: true });
+    await lab.waitForIdle();
+    const { library, experiment } = await lab.readCards(draft.id);
+    const ids = library.cards.map(card => card.id);
+    assert.deepEqual(await calibrationConsent(lab.store, experiment, ids), { calls: 8, line: 'Сверка с продом: до 8 вызовов судьи; агент и симулятор не участвуют' });
+    assert.deepEqual(await calibrationConsent(lab.store, experiment, ids.slice(0, 1)), { calls: 4, line: 'Сверка с продом: до 4 вызовов судьи; агент и симулятор не участвуют' }, 'only the cards that will run');
+    const accepted = await lab.acceptCards(draft.id, libraryHash(library), ids);
+    assert.equal((await calibrationConsent(lab.store, accepted.experiment))?.calls, 8, 'an accepted set: the run\'s own situations');
+    assert.equal(await calibrationConsent(lab.store, { ...accepted.experiment, settings: { ...accepted.experiment.settings, calibration: 'off' } }), null, 'the owner turned it off');
+    assert.equal(await calibrationConsent(lab.store, { ...accepted.experiment, mode: 'demo' }), null, 'the teaching example judges no logs');
+    assert.equal(await calibrationConsent({ readImport: () => Promise.reject(new Error('нет файла')) }, accepted.experiment), null, 'a log that cannot be read will not be judged');
+    assert.deepEqual(logImports(accepted.experiment), [accepted.experiment.originalImport!.id]);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+async function cli(...args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const child = spawn(process.execPath, [CLI, ...args]);
+  let stdout = '', stderr = '';
+  child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+  return { code: await new Promise<number | null>(resolve => child.on('close', resolve)), stdout, stderr };
+}
+
+test('agent-lab logs: shows the version each import was declared with, previews a declaration, and writes it only with --yes', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-logs-cli-'));
+  const lab = new ExperimentLab(directory, cardRuntime());
+  try {
+    await lab.init();
+    const draft = await lab.create(cardInput(), { cards: true });
+    await lab.waitForIdle();
+    const importId = (await lab.get(draft.id)).originalImport!.id;
+    await lab.close();
+    const list = await cli('logs', '--id', draft.id, '--data-dir', directory);
+    assert.equal(list.code, 0, list.stderr);
+    assert.equal(list.stdout.split('\n')[0], `${importId} · 2 разговора · версия агента: не указана`);
+    const preview = await cli('logs', '--id', draft.id, '--agent-version', 'agent-v7', '--data-dir', directory);
+    assert.equal(preview.stdout, 'Версия агента в логах: было «не указана», стало «agent-v7».\nЗаписать: та же команда с --yes.\n');
+    assert.match((await cli('logs', '--id', draft.id, '--data-dir', directory)).stdout, /версия агента: не указана/, 'a preview writes nothing');
+    const written = await cli('logs', '--id', draft.id, '--agent-version', 'agent-v7', '--yes', '--data-dir', directory);
+    assert.equal(written.code, 0, written.stderr);
+    assert.match((await cli('logs', '--id', draft.id, '--data-dir', directory)).stdout, /версия агента: agent-v7/);
+    await cli('logs', '--id', draft.id, '--unknown', '--yes', '--data-dir', directory);
+    assert.match((await cli('logs', '--id', draft.id, '--data-dir', directory)).stdout, /версия агента: неизвестна/);
+    const store = new ExperimentStore(directory);
+    assert.deepEqual((await store.readLogVersions(importId))!.declarations.map(item => [item.via, item.command.version]), [['cli-yes', 'agent-v7'], ['cli-yes', null]]);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });

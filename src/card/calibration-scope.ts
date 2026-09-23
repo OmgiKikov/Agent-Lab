@@ -119,6 +119,11 @@ export function runLogSituations(record: Pick<Experiment, 'librarySnapshot' | 's
   });
 }
 
+/** The imports whose logs a record's situations were taken from: what the owner declares a version for. */
+export function logImports(record: Pick<Experiment, 'librarySnapshot' | 'originalImport'>): string[] {
+  return record.librarySnapshot ? record.librarySnapshot.imports.map(item => item.id) : record.originalImport ? [record.originalImport.id] : [];
+}
+
 /**
  * Why the log cannot show an expectation, so the judge is not asked (0 calls): the agent never replied after the
  * customer's first message, or the expectation is judged on tool calls or state and the import did not record

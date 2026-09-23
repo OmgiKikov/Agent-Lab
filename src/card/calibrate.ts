@@ -173,7 +173,8 @@ export async function calibrationConsent(store: Pick<ExperimentStore, 'readImpor
   const situations: LogSituation[] = library?.formatVersion === 2 && cardIds
     ? cardIds.flatMap(id => library.cards.filter(card => card.id === id).map(card => cardLogSituation(library, card)))
     : runLogSituations(record);
-  const batches = await logBatches(store, situations);
+  // A log that cannot be read will not be judged: the run spends nothing on it, so the line promises nothing.
+  const batches = await logBatches(store, situations).catch(() => new Map<string, ImportBatch>());
   const calls = calibrationCalls(situations, (importId, dialogueId) => batches.get(importId)?.dialogues.find(dialogue => dialogue.id === dialogueId));
   return calls ? { calls, line: `Сверка с продом: до ${calls} ${pluralForm(calls, ['вызова', 'вызовов', 'вызовов'])} судьи; агент и симулятор не участвуют` } : null;
 }
