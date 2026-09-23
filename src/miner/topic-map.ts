@@ -1,15 +1,16 @@
 import { createHash } from 'node:crypto';
-import type { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
 import type { CallContext, ValidationExclusion } from '../contracts.js';
 import { identifierSchema, sha256Schema } from '../ids.js';
 import { validationDialogueIssue } from '../imports.js';
 import { IMPORT_DIALOGUE_LIMIT } from '../limits.js';
 import type { Model } from '../llm/model-call.js';
-import type { ModelTable } from '../llm/models.js';
-import type { runStructured, StructuredTask } from '../llm/structured.js';
+import type { StructuredTask } from '../llm/structured.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import { oneLine, safeLine } from '../text.js';
+import { OTHER, OTHER_TITLE, TITLE_CHARS, TOPIC_LIMIT } from './schema.js';
+
+export { OTHER, OTHER_TITLE, TOPIC_LIMIT } from './schema.js';
 
 /*
  * The topic map of one import batch (E1): what the customers in these logs contact the business about,
@@ -26,17 +27,11 @@ import { oneLine, safeLine } from '../text.js';
  * every batch, so an interrupted build continues where it stopped instead of paying again.
  */
 
-export const OTHER = 'other';
-/** How «other» is named wherever it is shown: one more topic, with its own share of the conversations. */
-export const OTHER_TITLE = 'Другое';
 /** A topic id (`t1`…`tN`, numbered by the harness in the order the model proposed them) or OTHER. */
 export type TopicRef = string;
 
-/** Topics one map holds: a business's recurring requests fit, and their rows still fit one screen. */
-export const TOPIC_LIMIT = 15;
 /** Conversations sorted by one call: the answer stays small, and a rejected answer is repaired cheaply. */
 export const CLASSIFY_BATCH = 40;
-const TITLE_CHARS = 60;
 const DESCRIPTION_CHARS = 240;
 /**
  * The proposal reads a seeded sample of customer openings: each the customer's first messages up to
@@ -127,12 +122,14 @@ export type TopicMapProgress = z.infer<typeof topicMapProgressSchema>;
 
 /** The part of an import batch a map reads: its identity and its conversations. */
 export type MinerImport = Pick<ImportBatch, 'id' | 'contentHash' | 'dialogues'>;
-type BuilderModel = Pick<Model, 'provider' | 'id'>;
+/** The model that answers a map's calls: a map is bound to it. */
+export type BuilderModel = Pick<Model, 'provider' | 'id'>;
 /** A conversation as the miner reads it: only the customer's own messages. */
 interface Conversation { dialogueId: string; customer: string[] }
 
 const modelName = (model: BuilderModel): string => `${model.provider}/${model.id}`;
-const keyOf = (batch: MinerImport, builder: BuilderModel): TopicMapKey =>
+/** What a map of `batch` built by `builder` is bound to: where it is stored, and when it can be reused. */
+export const topicMapKey = (batch: MinerImport, builder: BuilderModel): TopicMapKey =>
   ({ importId: batch.id, contentHash: batch.contentHash, model: modelName(builder), promptVersion: TOPIC_MAP_PROMPT_VERSION });
 const sameKey = (a: TopicMapKey, b: TopicMapKey): boolean =>
   a.importId === b.importId && a.contentHash === b.contentHash && a.model === b.model && a.promptVersion === b.promptVersion;
@@ -201,6 +198,11 @@ function partition(batch: MinerImport): { usable: Conversation[]; excluded: Vali
   }
   return { usable, excluded };
 }
+/** The conversations of an import a situation can be made from, in import order, and those the usability check refuses, with the reason. */
+export function usableConversations(batch: MinerImport): { dialogueIds: string[]; excluded: ValidationExclusion[] } {
+  const { usable, excluded } = partition(batch);
+  return { dialogueIds: usable.map(conversation => conversation.dialogueId), excluded };
+}
 
 const sorted = (batch: readonly Conversation[], assignments: TopicMapProgress['assignments']): boolean =>
   batch.every(conversation => Object.hasOwn(assignments, conversation.dialogueId));
@@ -238,7 +240,7 @@ export interface TopicMapPlan {
  * the number the build spends when every answer passes. `resume` is whatever was stored by `onProgress`.
  */
 export function planTopicMap(batch: MinerImport, builder: BuilderModel, resume?: unknown): TopicMapPlan {
-  const key = keyOf(batch, builder);
+  const key = topicMapKey(batch, builder);
   const { usable, excluded } = partition(batch);
   const openings: string[][] = [];
   let bytes = 0;
@@ -262,7 +264,7 @@ export function planTopicMap(batch: MinerImport, builder: BuilderModel, resume?:
  */
 export function reusableTopicMap(stored: unknown, batch: MinerImport, builder: BuilderModel): TopicMap | undefined {
   const parsed = topicMapSchema.safeParse(stored);
-  if (!parsed.success || !sameKey(parsed.data, keyOf(batch, builder))) return undefined;
+  if (!parsed.success || !sameKey(parsed.data, topicMapKey(batch, builder))) return undefined;
   const map = parsed.data;
   const { usable, excluded } = partition(batch);
   const ids = (list: readonly { dialogueId: string }[]) => JSON.stringify(list.map(item => item.dialogueId));
@@ -320,12 +322,12 @@ function classificationTask(topics: readonly Topic[], batch: readonly Conversati
   };
 }
 
-/** runStructured's signature: the preparation passes runStructured itself, tests and the demo a deterministic stand-in. */
-export type StructuredRunner = typeof runStructured;
+/** One structured task answered by the builder: runStructured bound to the Pi runtime and its model table, or the demo's and the tests' deterministic stand-in. */
+export type TopicTaskRunner = <O>(task: StructuredTask<O>, input: unknown, ctx: CallContext) => Promise<O>;
 export interface TopicMapBuild {
-  runtime: ModelRuntime;
-  models: ModelTable;
-  run: StructuredRunner;
+  /** The model `run` asks: the plan must have been made for it. */
+  builder: BuilderModel;
+  run: TopicTaskRunner;
   ctx: CallContext;
   /** The map so far, after the proposal and after every sorted batch: store it and pass it to planTopicMap to continue. */
   onProgress?(progress: TopicMapProgress): void | Promise<void>;
@@ -336,13 +338,13 @@ export interface TopicMapBuild {
  * named in the message); everything finished before it has already reached `onProgress`.
  */
 export async function buildTopicMap(plan: TopicMapPlan, build: TopicMapBuild): Promise<TopicMap> {
-  const { runtime, models, run, ctx } = build;
-  if (modelName(models.builder) !== plan.key.model) throw new Error('План карты тем составлен для другой модели: составьте его заново.');
+  const { builder, run, ctx } = build;
+  if (modelName(builder) !== plan.key.model) throw new Error('План карты тем составлен для другой модели: составьте его заново.');
   const header = { formatVersion: 1 as const, ...plan.key };
   let progress = plan.resume;
   if (!progress) {
     if (!plan.batches.length) return topicMapSchema.parse({ ...header, topics: [], assignments: {}, excluded: plan.excluded });
-    const proposal = await run(runtime, models, PROPOSAL_TASK, { conversations: plan.openings }, ctx);
+    const proposal = await run(PROPOSAL_TASK, { conversations: plan.openings }, ctx);
     const topics = proposal.topics.map((topic, index) => ({ id: numbered(index), title: plain(topic.title), description: plain(topic.description) }));
     progress = { ...header, topics, assignments: {} };
     await build.onProgress?.(progress);
@@ -352,7 +354,7 @@ export async function buildTopicMap(plan: TopicMapPlan, build: TopicMapBuild): P
   let { assignments } = progress;
   for (const [index, batch] of plan.batches.entries()) {
     if (sorted(batch, assignments)) continue;
-    const answer = await run(runtime, models, classificationTask(topics, batch, `${index + 1} из ${plan.batches.length}`), { topics, conversations: batch }, ctx);
+    const answer = await run(classificationTask(topics, batch, `${index + 1} из ${plan.batches.length}`), { topics, conversations: batch }, ctx);
     assignments = { ...assignments, ...Object.fromEntries(answer.assignments.map(({ dialogueId, topicId }) => [dialogueId, topicId])) };
     await build.onProgress?.({ ...header, topics, assignments });
   }

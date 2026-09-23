@@ -1,6 +1,7 @@
 import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import type { Experiment } from './contracts.js';
 import type { FailureExplanation } from './explain.js';
+import { sharePercent } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
 import type { NextStep, ResultView } from './result-view.js';
 import { oneLine } from './text.js';
@@ -150,9 +151,10 @@ export function topicRows(view: ResultView): ResultRow[] {
   // A table of dashes says nothing: topics are shown once at least one of them has a decided situation.
   if (!topics?.rows.some(row => row.decided)) return [];
   const shares = topics.rows.some(row => row.share !== null);
+  // A share is read like the coverage line reads it: a small topic never shows as 0%, nor a large one as 100%.
   const cells = (passed: number, decided: number, share: number | null) => {
     const handled = (decided ? `${passed} из ${decided}` : '—').padStart(9);
-    return shares ? `${handled}   ${(share === null ? '—' : percent(share)).padStart(13)}` : handled;
+    return shares ? `${handled}   ${(share === null ? '—' : sharePercent(share)).padStart(13)}` : handled;
   };
   const shown = topics.rows.slice(0, MAX_TOPICS);
   const rest = topics.rows.slice(MAX_TOPICS);

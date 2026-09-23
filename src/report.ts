@@ -3,6 +3,7 @@ import type { EvidenceBundle } from './artifacts.js';
 import { situationBrief } from './brief.js';
 import { toHtml, toMarkdown, type Block, type CardItem, type FailureItem, type Report, type Turn } from './blocks.js';
 import type { FailureExplanation } from './explain.js';
+import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText } from './plural.js';
 import { accuracyParts, alarmRow, realityParts, trustSegments } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
@@ -23,7 +24,6 @@ const dateText = (iso: string) => {
   const at = new Date(iso);
   return Number.isNaN(at.getTime()) ? iso : `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]} ${at.getUTCFullYear()}, ${String(at.getUTCHours()).padStart(2, '0')}:${String(at.getUTCMinutes()).padStart(2, '0')} UTC`;
 };
-const pct = (share: number) => `${Math.round(share * 100)}%`;
 
 /** The dialogue of one attempt, client and agent only, in the order it happened. */
 function turnsOf(trial: Trial | undefined): Turn[] {
@@ -61,9 +61,17 @@ function topicsBlock(view: ResultView): Block[] {
   const topics = view.topics;
   if (!topics?.rows.some(row => row.decided)) return [];
   const shares = topics.rows.some(row => row.share !== null);
-  const rows = topics.rows.map(row => ({ muted: false, cells: [row.title, row.decided ? `${row.passed} из ${row.decided}` : '—', ...(shares ? [row.share === null ? '—' : pct(row.share)] : [])] }));
-  if (topics.uncovered) rows.push({ muted: true, cells: ['Не покрыто ситуациями', '—', pct(topics.uncovered.share)] });
+  const rows = topics.rows.map(row => ({ muted: false, cells: [row.title, row.decided ? `${row.passed} из ${row.decided}` : '—', ...(shares ? [row.share === null ? '—' : sharePercent(row.share)] : [])] }));
+  if (topics.uncovered) rows.push({ muted: true, cells: ['Не покрыто ситуациями', '—', sharePercent(topics.uncovered.share)] });
   return [{ kind: 'section', title: 'По темам', blocks: [{ kind: 'table', head: ['Тема', 'справился', ...(shares ? ['доля диалогов'] : [])], rows }] }];
+}
+
+/** How much of the logs the situations stand for: «15 ситуаций покрывают 9 из 11 тем — 94% диалогов. Не покрыты: …». */
+function coverageSentence(view: ResultView): string[] {
+  const line = view.topicCoverage && coverageLine(view.topicCoverage);
+  if (!view.topicCoverage || !line) return [];
+  const uncovered = uncoveredLine(view.topicCoverage);
+  return [`${line}.${uncovered ? ` ${uncovered}.` : ''}`];
 }
 
 /** How the number was made and what it rests on, in plain sentences for the fine print. */
@@ -72,6 +80,7 @@ function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
   const lines = [
     'Ситуация засчитана, если агент выполнил запрос клиента и не нарушил правил своего промпта во всех разговорах этой ситуации. Не измеренные ситуации в процент не входят; контрольные ситуации проверяют связь и судью и в процент не входят.',
     `${countText(scope.cards, SITUATIONS)} · ${countText(scope.dialogues, ['разговор', 'разговора', 'разговоров'])} · клиента играет Lab${scope.judgeModel ? ` · судья — ${scope.judgeModel}` : ''}${scope.target ? ` · версия агента ${scope.target}` : ''}${scope.costUsd ? ` · $${scope.costUsd.toFixed(2)}` : ''}`,
+    ...coverageSentence(view),
     ...(breakdown.goal.decided ? [`Запрос выполнен: ${breakdown.goal.met} из ${breakdown.goal.decided}.${breakdown.rules.decided ? ` Правила промпта нарушены: ${breakdown.rules.broken} из ${breakdown.rules.decided}.` : ''}`] : []),
     agreement.checked ? `С решениями судьи вы согласились в ${agreement.agreed} из ${agreement.checked} проверенных случаев.`
       : view.reviewed.situations ? `Вы сами проверили ${countText(view.reviewed.situations, ['ситуацию', 'ситуации', 'ситуаций'])}.`

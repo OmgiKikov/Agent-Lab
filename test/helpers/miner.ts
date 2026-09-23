@@ -1,11 +1,9 @@
 import { createHash } from 'node:crypto';
-import type { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { ValidationExclusion } from '../../src/contracts.js';
 import { importDialogues } from '../../src/imports.js';
 import { ProviderFailure } from '../../src/llm/model-call.js';
-import type { ModelTable } from '../../src/llm/models.js';
 import { StructuredTaskError } from '../../src/llm/structured.js';
-import { OTHER, TOPIC_MAP_PROMPT_VERSION, topicMapSchema, type StructuredRunner, type Topic, type TopicMap } from '../../src/miner/topic-map.js';
+import { OTHER, TOPIC_MAP_PROMPT_VERSION, topicMapSchema, type Topic, type TopicMap, type TopicTaskRunner } from '../../src/miner/topic-map.js';
 
 /*
  * A synthetic import with its answer key: every logged conversation carries the topic it truly belongs
@@ -14,9 +12,6 @@ import { OTHER, TOPIC_MAP_PROMPT_VERSION, topicMapSchema, type StructuredRunner,
  */
 
 export const BUILDER = { provider: 'agent-lab-test', id: 'test-model' };
-/** The build reads only the builder of the table; the scripted runner never touches a runtime. */
-export const MODELS = { builder: BUILDER } as unknown as ModelTable;
-export const RUNTIME = {} as ModelRuntime;
 export const AGENT_REPLY = 'Понимаю, сейчас помогу.';
 
 export const TOPICS = [
@@ -63,7 +58,7 @@ export function sortedByTruth(input: ClassificationInput, truth: ReadonlyMap<str
 export function scriptedRunner(logged: readonly Logged[], options: { failAt?: number } = {}) {
   const truth = new Map(logged.map(item => [item.id, item.topic]));
   const calls: Call[] = [];
-  const run: StructuredRunner = async (_runtime, _models, task, input, ctx) => {
+  const run: TopicTaskRunner = async (task, input, ctx) => {
     ctx.beforeCall();
     calls.push({ id: task.id, label: task.label, input });
     if (calls.length === options.failAt) throw new ProviderFailure('rate limit', 'Pi provider response incomplete: rate limit');

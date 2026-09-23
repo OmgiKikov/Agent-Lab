@@ -3,8 +3,9 @@ import { isRunning, type Experiment, type Scenario, type ValidationExclusion } f
 import { agentMetricResult, COUNTING_RULES, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
 import { judgeModel, stabilityAfterReassess, stabilityBetweenRuns, type Stability } from './comparison.js';
-import { topicView, type TopicView } from './coverage.js';
+import { topicView, trafficCoverage, type TopicView } from './coverage.js';
 import { failureExplanation, violatedRuleNumber, type FailureExplanation } from './explain.js';
+import type { TopicCoverage } from './miner/coverage.js';
 import { deriveRun, NOT_MEASURED_CODES, type CardPart, type NotMeasuredCode, type RunDerivation, type Verdict } from './run.js';
 
 export { COUNTING_RULES } from './outcomes.js';
@@ -130,6 +131,8 @@ export interface ResultView {
   topCauses: { name: string; count: number; scenarioIds: string[]; example: FailureExplanation }[];
   /** Per-topic rows and the traffic-weighted estimate, when the run's situations come from at least two topics. */
   topics: TopicView | null;
+  /** How much of the logs' traffic the counted situations cover: a run of cards sampled from logs whose topics were mapped; null otherwise. */
+  topicCoverage: TopicCoverage | null;
   /** Found flips against the source run; absent when there is nothing to compare with. Never changes the headline. */
   stability?: Stability;
   /** How often the owner confirmed the judge's own decisions with one-key marks. Never changes the headline. */
@@ -296,7 +299,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     breakdown: breakdownOf(run, counted),
     coverage: { examined: record.dialogues.length + exclusions.length, included: record.dialogues.length, excluded: exclusionCounts(exclusions) },
     cards, failures, topCauses: causesOf(run, failures),
-    topics: topicView(record, cards),
+    topics: topicView(record, cards), topicCoverage: trafficCoverage(record, cards),
     agreement: judgeAgreement(input),
     reviewed: { situations: reviewed.situations, contradicted: reviewed.contradicted },
     scope: {

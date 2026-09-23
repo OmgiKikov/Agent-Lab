@@ -1,15 +1,18 @@
 import type { Experiment } from './contracts.js';
 import { libraryV1Of } from './card/legacy-v1.js';
+import type { LibraryV2 } from './card/schema.js';
+import { cardCoverage, cardTrafficTopic, libraryTraffic, trafficKey } from './miner/cards.js';
+import type { TopicCoverage } from './miner/coverage.js';
 import type { Verdict } from './run.js';
 
 /*
  * How close the number is to real traffic (E2): the counted situations grouped by the topic of the
  * logged conversations they came from, each topic's share of those conversations, and the accuracy
- * weighted by that share. A topic is a business scenario of the accepted library. A logged
- * conversation has a topic when a business scenario of the library names it as a source; topics of
- * the conversations that never became situations arrive with the scenario miner, and until then the
- * shares are counted over the conversations whose topic is known — the view says how many that is.
- * A card library has no topic map until then either, so its run has no topic rows yet.
+ * weighted by that share. A card library carries the traffic of the logs' topic map (miner/): every
+ * conversation of the import has its topic, so the shares are those of the whole import, and a card
+ * stands for the topic of its conversation. A first-format library has no map: there a topic is a
+ * business scenario, and a logged conversation has one only when a business scenario names it as a
+ * source, so the shares are counted over those conversations — the view says how many that is.
  * Pure: no I/O, no wording.
  */
 
@@ -33,8 +36,43 @@ export interface TopicView {
 
 interface CountedCard { scenarioId: string; outcome: Verdict; control: boolean }
 
+/** One topic's row: its counted situations, and how many of the decided ones the agent handled. */
+function topicRow(id: string, title: string, own: readonly CountedCard[], share: number | null): TopicRow {
+  const passed = own.filter(card => card.outcome === 'pass').length;
+  return { id, title, situations: own.length, passed, decided: passed + own.filter(card => card.outcome === 'fail').length, share };
+}
+
+/** The accuracy of each measured topic weighted by its share: null without shares or with fewer than two measured topics. */
+function weightedAccuracy(rows: readonly TopicRow[]): number | null {
+  const measured = rows.filter(row => row.decided > 0 && row.share !== null && row.share > 0);
+  const measuredShare = measured.reduce((sum, row) => sum + row.share!, 0);
+  return measured.length >= 2 && measuredShare > 0 ? measured.reduce((sum, row) => sum + row.share! * (row.passed / row.decided), 0) / measuredShare : null;
+}
+
+/** The topic rows of a run of accepted cards: each counted card under the topic of the logs it stands for, shares from the library's traffic. */
+function cardTopicView(library: LibraryV2, cards: CountedCard[]): TopicView | null {
+  const traffic = libraryTraffic(library);
+  if (!traffic) return null;
+  const topicOf = new Map(library.cards.flatMap(card => {
+    const topic = cardTrafficTopic(library, card);
+    return topic ? [[card.id, trafficKey(topic)] as const] : [];
+  }));
+  const counted = cards.filter(card => !card.control && topicOf.has(card.scenarioId));
+  const used = new Set(counted.map(card => topicOf.get(card.scenarioId)!));
+  if (used.size < 2) return null;
+  // The traffic lists the topics largest first, so its order breaks the ties the way the first format's library order does.
+  const order = new Map(traffic.topics.map((topic, index) => [topic.id, index]));
+  const rows = traffic.topics.filter(topic => used.has(topic.id))
+    .map(topic => topicRow(topic.id, topic.title, counted.filter(card => topicOf.get(card.scenarioId) === topic.id), topic.share))
+    .sort((a, b) => b.share! - a.share! || b.situations - a.situations || order.get(a.id)! - order.get(b.id)!);
+  const missing = traffic.topics.filter(topic => !used.has(topic.id));
+  const uncovered = missing.length ? { topics: missing.length, share: missing.reduce((sum, topic) => sum + topic.dialogues, 0) / traffic.labeled } : null;
+  return { rows, uncovered, weighted: weightedAccuracy(rows), logged: traffic.logged, labeled: traffic.labeled };
+}
+
 /** The topic rows of a run made from a library with at least two topics among its counted situations; null otherwise. */
 export function topicView(record: Experiment, cards: CountedCard[]): TopicView | null {
+  if (record.librarySnapshot?.formatVersion === 2) return cardTopicView(record.librarySnapshot, cards);
   const library = libraryV1Of(record);
   if (!library) return null;
   const topicOf = new Map(library.variants.map(variant => [variant.id, variant.businessScenarioId]));
@@ -55,17 +93,18 @@ export function topicView(record: Experiment, cards: CountedCard[]): TopicView |
   const labeled = labels.size;
   const share = (id: string): number | null => labeled ? (conversations.get(id) ?? 0) / labeled : null;
   const order = new Map(library.businessScenarios.map((topic, index) => [topic.id, index]));
-  const rows = library.businessScenarios.filter(topic => used.has(topic.id)).map((topic): TopicRow => {
-    const own = counted.filter(card => topicOf.get(card.scenarioId) === topic.id);
-    const passed = own.filter(card => card.outcome === 'pass').length;
-    return { id: topic.id, title: topic.title, situations: own.length, passed, decided: passed + own.filter(card => card.outcome === 'fail').length, share: share(topic.id) };
-  }).sort((a, b) => (b.share ?? 0) - (a.share ?? 0) || b.situations - a.situations || order.get(a.id)! - order.get(b.id)!);
-  const measured = rows.filter(row => row.decided > 0 && row.share !== null && row.share > 0);
-  const measuredShare = measured.reduce((sum, row) => sum + row.share!, 0);
-  const weighted = measured.length >= 2 && measuredShare > 0
-    ? measured.reduce((sum, row) => sum + row.share! * (row.passed / row.decided), 0) / measuredShare : null;
+  const rows = library.businessScenarios.filter(topic => used.has(topic.id))
+    .map(topic => topicRow(topic.id, topic.title, counted.filter(card => topicOf.get(card.scenarioId) === topic.id), share(topic.id)))
+    .sort((a, b) => (b.share ?? 0) - (a.share ?? 0) || b.situations - a.situations || order.get(a.id)! - order.get(b.id)!);
   const missing = [...conversations.keys()].filter(id => !used.has(id));
   const uncovered = labeled && missing.length
     ? { topics: missing.length, share: missing.reduce((sum, id) => sum + (conversations.get(id) ?? 0), 0) / labeled } : null;
-  return { rows, uncovered, weighted, logged: logged.size, labeled };
+  return { rows, uncovered, weighted: weightedAccuracy(rows), logged: logged.size, labeled };
+}
+
+/** How much of the logged traffic the counted situations of a card run cover (E1); null without the logs' topics. */
+export function trafficCoverage(record: Experiment, cards: CountedCard[]): TopicCoverage | null {
+  const library = record.librarySnapshot;
+  if (library?.formatVersion !== 2) return null;
+  return cardCoverage(library, cards.filter(card => !card.control).map(card => card.scenarioId)) ?? null;
 }

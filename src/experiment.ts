@@ -5,7 +5,7 @@ import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as edi
 import type { LibraryPatch, LibraryV1 } from './scenario-contracts.js';
 import { judgedScenario, requireLibraryV1 } from './card/legacy-v1.js';
 import { acceptLibraryV2, requireLibraryV2 } from './card/library.js';
-import { prepareCards, resumeCards, reviewCards, storedEvidence } from './card/prepare.js';
+import { prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from './card/prepare.js';
 import type { LibraryV2 } from './card/schema.js';
 import { assessScenarioLibrary, compiledLibraryScenarios, prepareScenarioLibrary, resumeScenarioLibrary } from './scenario-preparation.js';
 import { proposeVariant as proposeScenarioVariant, type VariantProposalResult, type VariantRequest } from './scenario-variants.js';
@@ -28,6 +28,7 @@ import { countingRuleFor, markTargets, measurementUsable } from './outcomes.js';
 import { simulatorChecks } from './simulator.js';
 import { withDefaultGoalObservation } from './normalize.js';
 import { createDemoRuntime } from './demo.js';
+import { logSample, situationCount } from './miner/plan.js';
 import { createPiRuntime, evaluatorVersion } from './pi.js';
 
 /** Dialogues a run may hold open against the target at once. */
@@ -179,11 +180,13 @@ export class ExperimentLab {
   }
   /**
    * A new draft is always a scenario library: requirements grounded in the owner's materials, situations proposed from
-   * real dialogues or from the requirements alone. `cards` prepares them as cards (card/prepare.ts); otherwise they are
-   * the first format's variants.
+   * real dialogues or from the requirements alone. `cards` prepares them as cards (card/prepare.ts) — from logs, at most
+   * `situations` of them, the representative sample of the logs' topics (miner/plan.ts); otherwise they are the first
+   * format's variants.
    */
-  async create(raw: CreateInput, options: { cards?: boolean } = {}): Promise<Experiment> {
+  async create(raw: CreateInput, options: { cards?: boolean; situations?: number } = {}): Promise<Experiment> {
     this.ensureIdle();
+    const situations = situationCount(options.situations);
     const originalImport = raw.originalImport ?? (raw.dialogues?.length ? importBatch(raw.dialogues) : undefined);
     const input = createInputSchema.parse({ ...raw, ...(originalImport ? { originalImport } : {}) });
     const record = this.newRecord(input);
@@ -198,9 +201,9 @@ export class ExperimentLab {
       const batch = record.originalImport ? await this.store.readImport(record.originalImport.id) : undefined;
       if (options.cards) {
         if (!runtime.proposeCard || !runtime.reviewCard) throw new Error('Эта среда не умеет готовить ситуации.');
-        // Every dialogue of the import is prepared; this list is where a representative sample of the logs plugs in.
-        await prepareCards(record, batch ? { kind: 'dialogues', batch, dialogueIds: batch.dialogues.map(dialogue => dialogue.id) } : { kind: 'rules', count: input.scenarioCount || 1 },
-          input.existingAgent, runtime, ctx, this.store);
+        const plan: CardPlan = batch ? { kind: 'dialogues', batch, sample: await logSample(this.store, batch, runtime, ctx, situations, message => { record.message = message; }) }
+          : { kind: 'rules', count: input.scenarioCount || 1 };
+        await prepareCards(record, plan, input.existingAgent, runtime, ctx, this.store);
         await this.checkpoint(record, 'review', 'Ситуации готовы. Проверьте их и утвердите для прогона.');
         return;
       }

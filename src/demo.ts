@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { createInputSchema, type CreateInput, type MetricAssessment, type RunnableTarget, type Runtime } from './contracts.js';
+import { buildTopicMap, type TopicTaskRunner } from './miner/topic-map.js';
 import type { LibraryPatch, ScenarioProposal } from './scenario-contracts.js';
 
 /*
@@ -60,9 +61,24 @@ function proposal(batchId: string, dialogue: typeof demoDialogues[number]): Scen
 const asksNumber = (text: string) => /(?:уточните|сообщите|назовите|укажите|какой|номер.*\?).*номер|номер.*терминал.*\?/i.test(text);
 const DEMO_ONLY = 'Учебный пример поддерживает только свои два диалога и правило владельца. Для своих материалов выберите живой режим с моделью.';
 
+/** The example's topic map is fixed, so its builder names no model: nothing is called and nothing is spent. */
+const DEMO_BUILDER = { provider: 'agent-lab', id: 'demo' };
+/** Both teaching dialogues ask for a refund: one topic. The answers pass the output contract a model's answer passes. */
+const demoTopics: TopicTaskRunner = async (task, input) => {
+  const conversations = task.id === 'topic-classification' ? (input as { conversations: { dialogueId: string }[] }).conversations : [];
+  if (conversations.some(item => !demoDialogues.some(dialogue => dialogue.id === item.dialogueId))) throw new Error(DEMO_ONLY);
+  const value = task.output.parse(task.id === 'topic-proposal'
+    ? { topics: [{ title: 'Возврат оплаты', description: 'Клиент просит вернуть оплату за покупку.' }] }
+    : { assignments: conversations.map(({ dialogueId }) => ({ dialogueId, topicId: 't1' })) });
+  const problem = task.check?.(value);
+  if (problem) throw new Error(problem);
+  return value;
+};
+
 /** Explicit deterministic teaching runtime: no model is called, and nothing here is evidence of model quality. */
 export function createDemoRuntime(): Runtime {
   return {
+    topicMap: { builder: DEMO_BUILDER, build: (plan, ctx, onProgress) => buildTopicMap(plan, { builder: DEMO_BUILDER, run: demoTopics, ctx, onProgress }) },
     async groundRequirements(input) {
       const source = input.sources[0];
       if (!source || source.content !== demoPolicy) throw new Error(DEMO_ONLY);

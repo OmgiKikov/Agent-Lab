@@ -3,11 +3,11 @@ import { test } from 'node:test';
 import { coverageLine, sharePercent, topicCoverage, topicTraffic, uncoveredLine } from '../src/miner/coverage.js';
 import { representativeSample } from '../src/miner/sample.js';
 import { buildTopicMap, OTHER, planTopicMap, topicOfDialogue } from '../src/miner/topic-map.js';
-import { BUILDER, importOf, mapOf, MASKED, MODELS, RUNTIME, scriptedRunner, world } from './helpers/miner.js';
+import { BUILDER, importOf, mapOf, MASKED, scriptedRunner, world } from './helpers/miner.js';
 import { callContext } from './helpers/pi-fixture.js';
 
 test('the coverage line agrees in number with 1, 2 and 5 situations and topics', () => {
-  const line = (sizes: number[], situations: (string | undefined)[]) => coverageLine(topicCoverage(mapOf(sizes), situations));
+  const line = (sizes: number[], situations: (string | undefined)[]) => coverageLine(topicCoverage(topicTraffic(mapOf(sizes)), situations));
   assert.equal(line([10], ['t1']), '1 ситуация покрывает 1 из 1 темы — 100% диалогов');
   assert.equal(line([10, 10], ['t1', 't2']), '2 ситуации покрывают 2 из 2 тем — 100% диалогов');
   assert.equal(line([20, 20, 20, 20, 20], ['t1', 't1', 't2', 't3', 't3']), '5 ситуаций покрывают 3 из 5 тем — 60% диалогов');
@@ -17,7 +17,7 @@ test('the coverage line agrees in number with 1, 2 and 5 situations and topics',
 });
 
 test('uncovered topics are named with their shares, largest first; a long tail is summed', () => {
-  const uncovered = (sizes: number[], other: number, situations: string[]) => uncoveredLine(topicCoverage(mapOf(sizes, { other }), situations));
+  const uncovered = (sizes: number[], other: number, situations: string[]) => uncoveredLine(topicCoverage(topicTraffic(mapOf(sizes, { other })), situations));
   assert.equal(uncovered([60, 36, 4], 0, ['t1', 't2']), 'Не покрыта: Смена тарифа (4% диалогов)');
   assert.equal(uncovered([60, 34, 4], 2, ['t1', 't2']), 'Не покрыты: Смена тарифа (4% диалогов), Другое (2%)');
   assert.equal(uncovered([40, 20, 15, 12, 8, 5], 0, ['t1', 't2']), 'Не покрыты: Смена тарифа (15% диалогов), Подключение терминала (12%), Жалоба на сотрудника (8%), Тема 6 (5%)',
@@ -29,14 +29,14 @@ test('uncovered topics are named with their shares, largest first; a long tail i
 
 test('a share that is neither none nor all never reads as 0% or 100%', () => {
   assert.deepEqual([0, 0.004, 0.005, 0.5, 0.94, 0.995, 0.999, 1].map(sharePercent), ['0%', 'меньше 1%', '1%', '50%', '94%', '99%', '99%', '100%']);
-  const nearlyAll = topicCoverage(mapOf([299, 1]), ['t1']);
+  const nearlyAll = topicCoverage(topicTraffic(mapOf([299, 1])), ['t1']);
   assert.equal(coverageLine(nearlyAll), '1 ситуация покрывает 1 из 2 тем — 99% диалогов');
   assert.equal(uncoveredLine(nearlyAll), 'Не покрыта: Статус заявки (меньше 1% диалогов)');
 });
 
 test('situations without a topic of the map are counted but cover nothing; «Другое» is covered like any topic', () => {
   const map = mapOf([50, 30], { other: 20 });
-  const coverage = topicCoverage(map, ['t1', undefined, OTHER, 'unknown']);
+  const coverage = topicCoverage(topicTraffic(map), ['t1', undefined, OTHER, 'unknown']);
   assert.deepEqual([coverage.situations, coverage.topics, coverage.covered, coverage.share], [4, 3, 2, 0.7]);
   assert.equal(coverageLine(coverage), '4 ситуации покрывают 2 из 3 тем — 70% диалогов');
   assert.equal(uncoveredLine(coverage), 'Не покрыта: Статус заявки (30% диалогов)');
@@ -54,11 +54,11 @@ test('the traffic of a map: topic shares of the sorted conversations, largest fi
 test('a representative sample of the logs covers every topic, and each picked conversation names its topic', async () => {
   const logged = [...world(), MASKED];
   const batch = importOf(logged);
-  const map = await buildTopicMap(planTopicMap(batch, BUILDER), { runtime: RUNTIME, models: MODELS, run: scriptedRunner(logged).run, ctx: callContext().ctx });
+  const map = await buildTopicMap(planTopicMap(batch, BUILDER), { builder: BUILDER, run: scriptedRunner(logged).run, ctx: callContext().ctx });
   const sample = representativeSample(map, 15);
   const topics = sample.picked.map(dialogueId => topicOfDialogue(map, { batchId: batch.id, dialogueId }));
   assert.ok(topics.every(topic => topic !== undefined));
-  const coverage = topicCoverage(map, topics);
+  const coverage = topicCoverage(topicTraffic(map), topics);
   assert.equal(coverageLine(coverage), '15 ситуаций покрывают 6 из 6 тем — 100% диалогов');
   assert.equal(uncoveredLine(coverage), undefined);
   assert.equal(topicOfDialogue(map, { batchId: 'import_other', dialogueId: sample.picked[0]! }), undefined, 'a conversation of another import has no topic here');

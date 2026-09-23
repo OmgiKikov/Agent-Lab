@@ -2,6 +2,8 @@ import { Stopped } from '../errors.js';
 import { fingerprint, internalPromptRule, type AgentSpec, type CallContext, type Experiment, type Grounding, type GroundingInput, type Requirement, type Runtime, type Source } from '../contracts.js';
 import { SOURCES_PER_DIALOGUE } from '../limits.js';
 import { StructuredTaskError } from '../llm/structured.js';
+import { withTrafficTopic } from '../miner/cards.js';
+import { replacementFor, unitTopic, type LogSample } from '../miner/plan.js';
 import { countText } from '../plural.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import { libraryHash } from '../scenario-library.js';
@@ -73,8 +75,8 @@ export function mergeRequirements(record: Experiment, extracted: Requirement[], 
 
 /** What a preparation turns into situations. */
 export type CardPlan =
-  /** Dialogues of an import. Today every dialogue of it; the Scenario Miner's representative sample plugs in here. */
-  | { kind: 'dialogues'; batch: ImportBatch; dialogueIds: string[] }
+  /** Dialogues of an import: the logs' sample (miner/plan.ts) — its picks, and the conversations that replace a pick left out. */
+  | { kind: 'dialogues'; batch: ImportBatch; sample: LogSample }
   /** Situations from the owner's rules alone, when there are no logs. */
   | { kind: 'rules'; count: number };
 
@@ -115,9 +117,12 @@ class Preparation {
     if (!this.progress.processed.includes(unit)) this.progress.processed.push(unit);
   }
 
-  private exclude(unit: string, reason: string): void {
+  /** `replace`: the unit's own reason, so a sampled conversation gives its seat to the next one of its topic. */
+  private exclude(unit: string, reason: string, replace = true): void {
     this.progress.excluded.push({ dialogueId: unit, reason: clip(reason, 2000) });
     this.finish(unit);
+    const next = replace ? replacementFor(this.progress, unit) : undefined;
+    if (next) this.progress.pending.push(next);
   }
 
   /** A proposal step spends the unit's own allowance first, then the run's budget. */
@@ -198,9 +203,11 @@ class Preparation {
     const call = proposalCall({ source: dialogue && batch ? { kind: 'dialogue', batchId: batch.id, dialogueId: unit } : { kind: 'rules', unit },
       messages: dialogue ? loggedMessages(dialogue) : [], requirements: rules, maxTurns: record.settings.maxTurns });
     if (call.laterEvents.length > LATER_MESSAGES) return { excluded: `После первой реплики клиент пишет ещё больше ${LATER_MESSAGES} раз — для одной ситуации это слишком много.` };
+    // A sampled conversation's topic is the map's: the model is offered it alone, and the card takes it as the map words it.
+    const topic = dialogue && batch ? unitTopic(this.progress, this.library, batch.id, unit) : undefined;
     const request: CardProposalRequest = { task: record.task, call, requirements: rules.map(({ id, text, quote }) => ({ id, text, quote })),
       articles: reading.sources.map(({ id, name, content, kind }) => ({ id, name, content, ...(kind ? { kind } : {}) })),
-      topics: [...new Set(this.library.cards.map(card => card.topic))],
+      topics: topic ? [topic.title] : [...new Set(this.library.cards.map(card => card.topic))],
       written: dialogue ? [] : this.library.cards.filter(card => card.origin.kind === 'rules').map(card => card.title) };
     const oversize = workInputIssue(proposalPayload(request));
     if (oversize) return { excluded: oversize };
@@ -210,7 +217,7 @@ class Preparation {
     const parsed = cardProposalSchema(call).safeParse(answer);
     const problem = parsed.success ? cardProposalProblem(parsed.data, call) : parsed.error.message;
     if (!parsed.success || problem) return { excluded: `Предложенная ситуация не прошла проверку: ${problem}` };
-    const card = bindProposal(parsed.data, call, this.library.nextNumber);
+    const card = withTrafficTopic(bindProposal(parsed.data, call, this.library.nextNumber), topic);
     const next = addCard(this.library, card, dialogue && batch ? { dialogueId: unit, batchId: batch.id, sourceIds: reading.sources.map(source => source.id) } : undefined);
     // A card that could never be checked is not kept: its review is sized against the draft that holds its reading row.
     const context: ReviewContext = { library: next, evidence: this.evidence };
@@ -282,7 +289,8 @@ class Preparation {
       const issue = workInputIssue({ task: record.task, sources: record.sources });
       const whole = !issue;
       if (issue && !(this.batch && this.runtime.selectSources)) {
-        for (const unit of [...progress.pending]) this.exclude(unit, issue);
+        // The materials fit no call: no conversation could take a unit's seat either.
+        for (const unit of [...progress.pending]) this.exclude(unit, issue, false);
       } else if (whole && !progress.groundingComplete) {
         const grounded = await this.call(undefined, 'ground', callCtx => this.ground({ task: record.task, sources: record.sources }, callCtx));
         record.requirements = grounded.requirements; record.questions = grounded.questions;
@@ -316,16 +324,18 @@ class Preparation {
 /** Prepares a new draft of cards from the plan: the library is published after every step. */
 export async function prepareCards(record: Experiment, plan: CardPlan, agent: AgentSpec | undefined, runtime: Runtime, ctx: CallContext, store: ExperimentStore): Promise<void> {
   const batch = plan.kind === 'dialogues' ? plan.batch : undefined;
-  const units = plan.kind === 'dialogues' ? plan.dialogueIds : Array.from({ length: plan.count }, (_, index) => `rules_${index + 1}`);
+  const sample = plan.kind === 'dialogues' ? plan.sample : undefined;
+  const units = plan.kind === 'dialogues' ? plan.sample.picked : Array.from({ length: plan.count }, (_, index) => `rules_${index + 1}`);
   if (new Set(units).size !== units.length || (batch && units.some(id => !batch.dialogues.some(dialogue => dialogue.id === id)))) {
     throw new Error('В плане подготовки повторяется диалог или есть диалог, которого нет в импорте.');
   }
   const progress: CardPreparation = { protocol: PROTOCOL, inputHash: preparationInputHash(record, PROTOCOL), status: 'preparing',
-    pending: [...units], processed: [], groundingComplete: false, ...(plan.kind === 'rules' ? { requestedCount: plan.count } : {}),
-    excluded: (batch?.rejected ?? []).map(row => ({ dialogueId: clip(row.id ?? `row_${row.index}`, 200), reason: clip(row.reasons.join('; '), 2000) })) };
+    pending: [...units], processed: [], groundingComplete: false, requestedCount: sample ? sample.count : units.length,
+    ...(sample ? { sample: sample.strata } : {}), excluded: (sample?.excluded ?? []).map(({ dialogueId, reason }) => ({ dialogueId, reason })) };
   record.preparationProgress = progress;
   ensureAgentRevision(record, agent);
-  const library = createLibraryV2({ id: `library_${record.id}`, imports: batch ? [{ id: batch.id, contentHash: batch.contentHash }] : [], sources: record.sources, requirements: [] });
+  const library = createLibraryV2({ id: `library_${record.id}`, imports: batch ? [{ id: batch.id, contentHash: batch.contentHash }] : [], sources: record.sources, requirements: [],
+    ...(sample?.traffic ? { traffic: [sample.traffic] } : {}) });
   await new Preparation(record, progress, batch, library, runtime, ctx, store, undefined).run();
 }
 
