@@ -1,9 +1,8 @@
-import { inflateRawSync } from 'node:zlib';
+import { zipEntries, zipRead } from './zip.js';
 
-const LOCAL_HEADER = 0x04034b50;
-const CENTRAL_HEADER = 0x02014b50;
-const END_OF_CENTRAL = 0x06054b50;
 const DOCUMENT_PART = 'word/document.xml';
+/** No real document part comes near this; a bigger one is an archive built to exhaust memory. */
+const PART_BYTES = 64_000_000;
 
 /**
  * Text of a .docx file without external libraries: the archive is a ZIP, the body lives in word/document.xml.
@@ -88,35 +87,10 @@ function htmlLines(html: string): string[] {
 }
 
 function zipEntry(file: Buffer, wanted: string): Buffer | null {
-  const end = endOfCentralDirectory(file);
-  if (end === -1) return null;
-  const entries = file.readUInt16LE(end + 10);
-  let cursor = file.readUInt32LE(end + 16);
-  for (let i = 0; i < entries && cursor + 46 <= file.length; i++) {
-    if (file.readUInt32LE(cursor) !== CENTRAL_HEADER) return null;
-    const method = file.readUInt16LE(cursor + 10);
-    const compressedSize = file.readUInt32LE(cursor + 20);
-    const nameLength = file.readUInt16LE(cursor + 28);
-    const extraLength = file.readUInt16LE(cursor + 30);
-    const commentLength = file.readUInt16LE(cursor + 32);
-    const localOffset = file.readUInt32LE(cursor + 42);
-    const name = file.subarray(cursor + 46, cursor + 46 + nameLength).toString('utf8');
-    cursor += 46 + nameLength + extraLength + commentLength;
-    if (name !== wanted) continue;
-    if (file.readUInt32LE(localOffset) !== LOCAL_HEADER) return null;
-    const dataStart = localOffset + 30 + file.readUInt16LE(localOffset + 26) + file.readUInt16LE(localOffset + 28);
-    const data = file.subarray(dataStart, dataStart + compressedSize);
-    if (method === 0) return data;
-    if (method === 8) return inflateRawSync(data);
-    throw new Error(`Документ Word сжат неподдерживаемым способом (${method}).`);
-  }
-  return null;
-}
-
-function endOfCentralDirectory(file: Buffer): number {
-  const floor = Math.max(0, file.length - 22 - 65535);
-  for (let i = file.length - 22; i >= floor; i--) if (file.readUInt32LE(i) === END_OF_CENTRAL) return i;
-  return -1;
+  const entry = zipEntries(file)?.find(item => item.name === wanted);
+  if (!entry) return null;
+  if (entry.method !== 0 && entry.method !== 8) throw new Error(`Документ Word сжат неподдерживаемым способом (${entry.method}).`);
+  return zipRead(file, entry, PART_BYTES);
 }
 
 function paragraphs(xml: string): string[] {
