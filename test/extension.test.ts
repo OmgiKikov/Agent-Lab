@@ -465,7 +465,9 @@ test('the built-in example prepares a library for its external module agent from
     await lab.init();
     try {
       const { library } = await lab.cardContext(report.id);
-      await lab.acceptCards(report.id, libraryHash(library), [library.cards.find(card => card.number === 1)!.id]);
+      // The sample orders situations by the content hash, not by the log: the ready one is the card of the dialogue that names the number at once.
+      const ready = library.cards.find(card => card.origin.kind === 'dialogue' && card.origin.dialogueId === 'known')!;
+      await lab.acceptCards(report.id, libraryHash(library), [ready.id]);
     } finally { await lab.close(); }
     const inspect = output(await tools.get('agent_lab_inspect')!.execute('inspect-v2', { id: report.id, export: true }, undefined, undefined, ctx));
     assert.equal(inspect.artifacts.agent, undefined, 'an external agent is not exported as an AgentSpec');
@@ -1329,15 +1331,15 @@ test('on the board a digit answers a situation\'s question: the owner\'s decisio
   let id: string;
   try { id = (await seed.create(demoInput(), { cards: true })).id; await seed.waitForIdle(); } finally { await seed.close(); }
   const { command, shutdown } = registered(), session = boardSession(cwd);
-  // ↓ selects situation 2, whose question waits; «1» is its first answer, «Да».
-  session.state.steps = [['\x1b[B', '1'], ['q']];
+  // Situation 1 — the first of the sample, selected when the board opens — waits for an answer; «1» is its first answer, «Да».
+  session.state.steps = [['1'], ['q']];
   try {
     await command(id, session.ctx);
-    assert.match(session.screens[0]!, /2 {2}Возврат оплаты — номер только по просьбе +\? нужен ваш ответ/);
+    assert.match(session.screens[0]!, /1 {2}Возврат оплаты — номер только по просьбе +\? нужен ваш ответ/);
     const library = (await new ExperimentStore(join(cwd, '.agent-lab')).get(id)).librarySnapshot as LibraryV2;
     assert.deepEqual([library.receipts.at(-1)!.via, library.receipts.at(-1)!.command.kind], ['board', 'settle_claim']);
-    assert.match(session.screens[1]!, /Ситуация 2: записано\./);
-    assert.match(session.screens[1]!, /2 {2}Возврат оплаты — номер только по просьбе +✓ готова/);
+    assert.match(session.screens[1]!, /Ситуация 1: записано\./);
+    assert.match(session.screens[1]!, /1 {2}Возврат оплаты — номер только по просьбе +✓ готова/);
     assert.deepEqual([session.selectCalls.length, session.confirmBodies.length, session.editorCalls.length], [0, 0, 0], 'the key pressed on the shown answer is the decision');
   } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); }
 });

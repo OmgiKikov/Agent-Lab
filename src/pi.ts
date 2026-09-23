@@ -15,6 +15,7 @@ import {
 } from './prompts.js';
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
 import { cardReviewSchema } from './card/review.js';
+import { buildTopicMap } from './miner/topic-map.js';
 import { scenarioProposalSchema, semanticFindingSchema } from './scenario-contracts.js';
 import { SCENARIO_OUTPUT_BYTES, SCENARIO_REQUEST_BYTES, SEMANTIC_BATCH_FIELDS, SEMANTIC_REASON_CHARS, workInputIssue } from './scenario-work.js';
 import { USER_CONTROLLER_PROTOCOL, userDecisionSchema } from './user-controller.js';
@@ -156,8 +157,11 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   catch { throw new Error(`Не удалось инициализировать Pi. ${AUTH_HELP}`); }
   const models = await resolveModels(runtime, settings, signal);
   const run = <O>(task: StructuredTask<O>, input: unknown, ctx: CallContext): Promise<O> => runStructured(runtime, models, task, input, ctx);
+  const builder = { provider: models.builder.provider, id: models.builder.id };
   return {
     generatorTransport: 'pi-model',
+    // The logs' topics are the builder's work, like the situations prepared from them.
+    topicMap: { builder, build: (plan, ctx, onProgress) => buildTopicMap(plan, { builder, run, ctx, onProgress }) },
     async selectSources(input, ctx) {
       const ids = input.catalog.map(item => item.id);
       const known = new Set(ids);

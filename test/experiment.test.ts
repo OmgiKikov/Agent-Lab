@@ -1165,24 +1165,28 @@ test('a changed judge verdict is still refused, and a full review never keeps a 
   assert.equal('countingRules' in dialogue.humanReviews.at(-1)!, false);
 });
 test('a run may drive several dialogues at once: their trace events interleave, while the default keeps them one after another', async t => {
-  // In the parallel run each dialogue's judgment waits until all three dialogues have finished talking — the one
-  // step every dialogue takes — so their overlap is certain instead of a matter of timing. If the run stopped
-  // honouring `parallel`, the first judgment would go on alone after the safety timeout and the assertion below
-  // would fail instead of hanging.
+  // In the parallel run each dialogue's first simulator call waits until all three dialogues have reached it; once
+  // the gate opens, the three resume together and their trace events interleave for certain instead of by timing.
+  // Every card allows one follow-up, so every dialogue asks the simulator once (the demo's own cards end two of them
+  // after the first reply). If the run stopped honouring `parallel`, the waiting dialogue would go on alone after
+  // the safety timeout and the assertion below would fail instead of hanging.
   let gate: { arrived: Set<string>; open: () => void; opened: Promise<void> } | undefined;
   const base = legacyDemoRuntime();
-  const runtime: Runtime = { ...base, async assess(input, ctx) {
-    if (gate) {
-      gate.arrived.add(input.trial.id);
+  const runtime: Runtime = { ...base, async userTurn(input, ctx) {
+    if (gate && input.turn === 0) {
+      gate.arrived.add(input.user.goal);
       if (gate.arrived.size === 3) gate.open();
       // An unreferenced timer: once the gate opens, it keeps nothing alive.
       await Promise.race([gate.opened, delay(5000, undefined, { ref: false })]);
     }
-    return base.assess!(input, ctx);
+    return base.userTurn!(input, ctx);
   } };
   const { lab } = await setup(t, runtime);
+  const oneFollowUp = (draft: Experiment) => {
+    draft.scenarios = draft.scenarios.map(scenario => ({ ...scenario, user: { ...scenario.user, maxFollowUps: Math.max(1, scenario.user.maxFollowUps ?? 0) } }));
+  };
   const order = async (parallel: number | undefined) => {
-    const result = await runDraft(lab, await externalDraft(lab), 'automated', parallel);
+    const result = await runDraft(lab, await externalDraft(lab, {}, oneFollowUp), 'automated', parallel);
     assert.equal(result.phase, 'results_review', result.error ?? result.message); assert.equal(result.trials.length, 3);
     const journal = (await lab.store.traceJournal(result.id)).trim().split('\n').map(line => JSON.parse(line).trialId as string);
     // How many times the journal switches from one dialogue to another: 2 when dialogues run one after another, more when they overlap.

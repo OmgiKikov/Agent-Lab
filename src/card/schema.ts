@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from '../ids.js';
 import { FOCUSED_REQUIREMENT_LIMIT, MATERIAL_LIMIT } from '../limits.js';
+import { cardTopicSchema, sampleSchema, topicsKnown, trafficSchema } from '../miner/schema.js';
 import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema, preparationProgressSchema as variantPreparationSchema } from '../scenario-contracts.js';
 
 /*
@@ -80,6 +81,8 @@ export const cardSchema = z.strictObject({
   number: z.number().int().positive(), // «№3»; assigned once, never reused
   title: text(160),
   topic: text(120),                    // a plain label; there are no groups
+  // The topic of the logs it stands for (miner/schema.ts), `topic` being its title; a card from the owner's rules has none.
+  trafficTopic: cardTopicSchema.optional(),
   origin: cardOriginSchema,
   client: z.strictObject({
     wants: text(300),                  // Хочет
@@ -151,8 +154,11 @@ export const libraryV2Schema = z.strictObject({
   claims: z.array(claimReceiptSchema).max(5000),  // library-wide: a similar card reuses receipts with the same key
   receipts: z.array(ownerReceiptSchema).max(2000),
   acceptance: cardAcceptanceSchema.optional(),
+  /** The topic traffic of each import whose logs the cards were sampled from: what a result reads of the logs' topics. */
+  traffic: z.array(trafficSchema).max(30).optional(),
 }).refine(library => new Set(library.cards.map(card => card.number)).size === library.cards.length
-  && library.cards.every(card => card.number < library.nextNumber), 'A card number repeats or is not below nextNumber: a number is never given twice');
+  && library.cards.every(card => card.number < library.nextNumber), 'A card number repeats or is not below nextNumber: a number is never given twice')
+  .refine(topicsKnown, 'A card stands for a topic its library has no traffic of');
 export type LibraryV2 = z.infer<typeof libraryV2Schema>;
 
 /** Every stored library, told apart by format. Old libraries are read as they are: no file is ever migrated. */
@@ -176,8 +182,10 @@ const cardPreparationSchema = z.strictObject({
   excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000) })).max(300),
   /** The whole policy was grounded in one call (a knowledge base small enough to read at once). */
   groundingComplete: z.boolean(),
-  /** Situations asked for from the owner's rules alone. */
+  /** Situations asked for — from the owner's rules alone, or from the logs' sample: never more are made. */
   requestedCount: z.number().int().min(1).max(200).optional(),
+  /** The logs' sample the units are drawn from: a unit that makes no situation gives its seat to the next one of its topic. */
+  sample: sampleSchema.optional(),
   /** A call in flight; a stage without a unit is the one grounding of the whole policy. */
   activeDialogueId: id.optional(),
   activeStage: z.enum(['select', 'ground', 'propose', 'review']).optional(),

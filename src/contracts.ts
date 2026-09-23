@@ -4,6 +4,7 @@ import { importBatchSchema, type ImportBatch, type LibraryV1, type ScenarioPropo
 import { expectationSchema, preparationProgressSchema, scenarioLibrarySchema, type PreparationProgress, type ScenarioLibrary } from './card/schema.js';
 import type { CardProposal, CardProposalRequest } from './card/proposal.js';
 import type { CardReview, CardReviewRequest } from './card/review.js';
+import type { BuilderModel, TopicMap, TopicMapPlan, TopicMapProgress } from './miner/topic-map.js';
 import { createHash } from 'node:crypto';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS } from './limits.js';
 import { z } from 'zod';
@@ -857,6 +858,8 @@ export interface Runtime {
   assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial }, ctx: CallContext): Promise<MetricAssessment[]>;
   /** Which articles of a large knowledge base one dialogue needs: the model reads the table of contents, never the bodies. */
   selectSources?(input: SourceSelectionInput, ctx: CallContext): Promise<SourceSelection>;
+  /** The topic map of an import (miner/topic-map.ts), built by `builder` from a plan made for it; each finished step reaches `onProgress` before the next call. */
+  topicMap?: { builder: BuilderModel; build(plan: TopicMapPlan, ctx: CallContext, onProgress: (progress: TopicMapProgress) => Promise<void>): Promise<TopicMap> };
   failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
 }
 

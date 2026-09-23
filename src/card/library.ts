@@ -1,5 +1,6 @@
 import { fingerprint, validatePreparation, type CardExecution, type Requirement, type Scenario, type Source } from '../contracts.js';
 import { LibraryConflict } from '../errors.js';
+import type { Traffic } from '../miner/schema.js';
 import { libraryHash, snapshotDigest, verifiedAcceptance } from '../scenario-library.js';
 import { compileCard } from './compile.js';
 import { libraryV2Schema, type Card, type ClaimReceipt, type LibraryV2, type ScenarioLibrary } from './schema.js';
@@ -17,9 +18,11 @@ export function requireLibraryV2(library: ScenarioLibrary): LibraryV2 {
   return library;
 }
 
-export function createLibraryV2(input: { id: string; imports: { id: string; contentHash: string }[]; sources: Source[]; requirements: Requirement[]; createdAt?: string }): LibraryV2 {
+/** An empty draft; `traffic` is the topic traffic of the logs its cards will be sampled from. */
+export function createLibraryV2(input: { id: string; imports: { id: string; contentHash: string }[]; sources: Source[]; requirements: Requirement[]; createdAt?: string; traffic?: Traffic[] }): LibraryV2 {
   return libraryV2Schema.parse({ formatVersion: 2, id: input.id, revision: 1, createdAt: input.createdAt ?? new Date().toISOString(), imports: input.imports,
-    sources: input.sources, requirements: input.requirements, readingManifest: [], cards: [], nextNumber: 1, claims: [], receipts: [] });
+    sources: input.sources, requirements: input.requirements, readingManifest: [], cards: [], nextNumber: 1, claims: [], receipts: [],
+    ...(input.traffic?.length ? { traffic: input.traffic } : {}) });
 }
 
 const draftOnly = (library: LibraryV2): void => {

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { addUsage, emptyUsage, fingerprint, type CallContext, type Runtime } from './contracts.js';
 
 /** `prepare` is how journals written before `groundRequirements` name the grounding call. */
-type Method = 'groundRequirements' | 'prepare' | 'selectSources' | 'scenarioProposals' | 'assessScenarioProposals' | 'proposeCard' | 'reviewCard';
+type Method = 'groundRequirements' | 'prepare' | 'selectSources' | 'scenarioProposals' | 'assessScenarioProposals' | 'proposeCard' | 'reviewCard' | 'topicMap';
 export type GeneratorEvidence = {
   workId: string;
   method: Method;
@@ -40,7 +40,12 @@ export function captureGeneratorEvidence(runtime: Runtime, emit: (event: Generat
       }
     };
   }
+  const mapper = runtime.topicMap;
+  // One journal entry per build: the plan it was given, every raw reply of its calls, then the map or the error.
+  const topicMap: Runtime['topicMap'] = mapper && { builder: mapper.builder,
+    build: (plan, ctx, onProgress) => capture('topicMap', (input: typeof plan, inner: CallContext) => mapper.build(input, inner, onProgress))(plan, ctx) };
   return { ...runtime,
+    ...(topicMap ? { topicMap } : {}),
     ...(runtime.groundRequirements ? { groundRequirements: capture('groundRequirements', runtime.groundRequirements.bind(runtime)) } : {}),
     ...(runtime.selectSources ? { selectSources: capture('selectSources', runtime.selectSources.bind(runtime)) } : {}),
     ...(runtime.scenarioProposals ? { scenarioProposals: capture('scenarioProposals', runtime.scenarioProposals.bind(runtime)) } : {}),

@@ -8,11 +8,11 @@ import {
   buildTopicMap, OTHER, planTopicMap, reusableTopicMap, TOPIC_MAP_PROMPT_VERSION, topicMapCalls, topicMapProgressSchema, topicMapSchema,
   type TopicMapBuild, type TopicMapProgress,
 } from '../src/miner/topic-map.js';
-import { MASKED, TOO_LONG, BUILDER, importOf, MODELS, RUNTIME, scriptedRunner, sortedByTruth, TOPICS, world, AGENT_REPLY, type Logged } from './helpers/miner.js';
+import { MASKED, TOO_LONG, BUILDER, importOf, scriptedRunner, sortedByTruth, TOPICS, world, AGENT_REPLY, type Logged } from './helpers/miner.js';
 import { callContext, fixture, fixtureSettings, type Request } from './helpers/pi-fixture.js';
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
-const scripted = (run: TopicMapBuild['run'], extra: Partial<TopicMapBuild> = {}): TopicMapBuild => ({ runtime: RUNTIME, models: MODELS, run, ctx: callContext().ctx, ...extra });
+const scripted = (run: TopicMapBuild['run'], extra: Partial<TopicMapBuild> = {}): TopicMapBuild => ({ builder: BUILDER, run, ctx: callContext().ctx, ...extra });
 /** The last user message of a request, as JSON: the task's input, or a bounded repair `{input, repair, previousReply}`. */
 const body = (request: Request): { input?: any; repair?: string; previousReply?: string } & Record<string, any> => {
   const content = request.messages.at(-1)!.content;
@@ -190,7 +190,7 @@ test('an invented topic or a skipped conversation is refused by the per-call enu
   const f = await fixture((request, index) => JSON.stringify(replies[index]!(inputOf(request))));
   try {
     const models = await resolveModels(f.runtime, fixtureSettings, AbortSignal.timeout(1000));
-    const map = await buildTopicMap(planTopicMap(importOf(logged), models.builder), { runtime: f.runtime, models, run: runStructured, ctx: callContext().ctx });
+    const map = await f.adapter.topicMap!.build(planTopicMap(importOf(logged), models.builder), callContext().ctx, async () => {});
     assert.equal(f.requests.length, 4);
     const item = schemaOf(f.requests[1]!).properties.assignments.items.properties;
     assert.deepEqual(item.dialogueId.enum, logged.map(conversation => conversation.id), 'the conversations of exactly this call');
@@ -216,15 +216,14 @@ test('a batch that never passes fails typed and names its part; what was finishe
     const models = await resolveModels(f.runtime, fixtureSettings, AbortSignal.timeout(1000));
     const batch = importOf(logged);
     const snapshots: unknown[] = [];
-    await assert.rejects(buildTopicMap(planTopicMap(batch, models.builder), { runtime: f.runtime, models, run: runStructured, ctx: callContext().ctx,
-      onProgress: progress => { snapshots.push(clone(progress)); } }),
+    await assert.rejects(f.adapter.topicMap!.build(planTopicMap(batch, models.builder), callContext().ctx, async progress => { snapshots.push(clone(progress)); }),
     error => error instanceof StructuredTaskError && error.message.startsWith(`Темы разговоров, часть 2 из 2: модель ${REPAIR_ATTEMPTS} раза подряд`));
     assert.equal(f.requests.length, 2 + REPAIR_ATTEMPTS);
     assert.equal(snapshots.length, 2, 'the proposal and the first batch were delivered before the failure');
     const plan = planTopicMap(batch, models.builder, snapshots.at(-1));
     assert.equal(plan.calls, 1);
     const rest = scriptedRunner(logged);
-    const map = await buildTopicMap(plan, { runtime: f.runtime, models, run: rest.run, ctx: callContext().ctx });
+    const map = await buildTopicMap(plan, { builder: models.builder, run: rest.run, ctx: callContext().ctx });
     assert.deepEqual(rest.calls.map(call => call.label), ['Темы разговоров, часть 2 из 2']);
     assert.equal(Object.keys(map.assignments).length, 41);
   } finally { await f.close(); }
@@ -249,7 +248,7 @@ test('the largest request of either step fits its byte cap, a repair carrying th
     const models = await resolveModels(f.runtime, fixtureSettings, AbortSignal.timeout(1000));
     const plan = planTopicMap(importOf(logged), models.builder);
     assert.deepEqual(plan.batches.map(batch => batch.length), Array(7).fill(40));
-    const map = await buildTopicMap(plan, { runtime: f.runtime, models, run: runStructured, ctx: callContext().ctx });
+    const map = await buildTopicMap(plan, { builder: models.builder, run: (task, input, ctx) => runStructured(f.runtime, models, task, input, ctx), ctx: callContext().ctx });
     assert.equal(Object.keys(map.assignments).length, 280);
     assert.equal(f.requests.length, 2 + 7 * 2, 'every step was rejected once and repaired');
     assert.ok(f.requests.filter((_, index) => index % 2 === 1).every(request => body(request).previousReply), 'each repair carries the rejected draft');
