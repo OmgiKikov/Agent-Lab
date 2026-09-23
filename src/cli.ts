@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab, draftHash } from './experiment.js';
-import { DEMO_OWNER_EDIT, demoInput } from './demo.js';
+import { demoInput } from './demo.js';
 import { createInputSchema } from './contracts.js';
 import { compareRuns } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
@@ -20,10 +20,10 @@ import { buildResultView, exitCodeOf, type ResultView } from './result-view.js';
 import { MAX_WIDTH, plainText, resultScreen, type ResultRow } from './result-text.js';
 import { evidenceBundle, exportArtifacts, resolveVerified } from './artifacts.js';
 import { libraryHash } from './scenario-library.js';
-import { chooseEditableDraft, draftIsBusy } from './scenario-draft.js';
-import { libraryPatchSchema } from './scenario-contracts.js';
-import { semanticWorkStatus } from './scenario-work.js';
-import { safeLine, shortId } from './text.js';
+import { hostGrant, requiredAuthority, wordsOf } from './card/commands.js';
+import { cardCommandSchema } from './card/schema.js';
+import { actionRow, briefRows, changeText, countsText, detailRows, formatNote, listRows, plainSituationText, situationActions, situationData, situationViews, type SituationView } from './card/view.js';
+import { safeLine } from './text.js';
 
 /**
  * The rows of the result screen with every text made safe for a terminal before layout: titles, quotes
@@ -68,7 +68,8 @@ async function main() {
     format: { type: 'string', default: 'json' }, json: { type: 'boolean' },
     connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
     'dialogues-file': { type: 'string' }, trial: { type: 'string', multiple: true },
-    yes: { type: 'boolean' }, verify: { type: 'string' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
+    yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
+    card: { type: 'string' }, choice: { type: 'string' }, text: { type: 'string' }, check: { type: 'boolean' }, resume: { type: 'boolean' }, accept: { type: 'boolean' },
   } });
   const command = positionals[0];
   if (values.help || !command) {
@@ -77,7 +78,10 @@ async function main() {
     process.stdout.write('  agent-lab accept --id RUN [--yes]      Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания\n');
     process.stdout.write('Agent Lab — validation set, accuracy и причины провалов вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
     process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  evaluate принимает --connection; build — --dialogues-file (JSON/JSONL).\n\n');
-    process.stdout.write('  agent-lab scenarios --id RUN --operation inspect [--json]\n  agent-lab scenarios --id RUN --operation edit|merge|split|variant|assess|resume|accept --expected-hash HASH [--input action.json] [--yes]\n');
+    process.stdout.write('  agent-lab cards --id RUN [--card N] [--json]           Ситуации: что пишет и знает клиент, что должен агент, статус и вопрос\n'
+      + '  agent-lab cards --id RUN --card N --choice a|b|c [--text «…»] --yes   Ответ на вопрос ситуации\n'
+      + '  agent-lab cards --id RUN --input команда.json [--yes]   Команда владельца; без --yes — только «было → стало»\n'
+      + '  agent-lab cards --id RUN --check|--resume|--accept --yes   Проверить ситуации · продолжить подготовку · утвердить готовые\n');
     process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID] · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
@@ -89,60 +93,66 @@ async function main() {
   }
   const directory = values['data-dir'] ?? resolve('.agent-lab');
   if (command === 'suites') { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); return; }
-  if (command === 'scenarios') {
-    if (!values.id || !values.operation) throw new Error('Укажите --id RUN и --operation inspect|edit|merge|split|variant|assess|resume|accept.');
-    if (!['inspect', 'edit', 'merge', 'split', 'variant', 'assess', 'resume', 'accept'].includes(values.operation)) throw new Error('Неизвестная операция scenarios.');
+  if (command === 'cards') {
+    if (!values.id) throw new Error('Укажите --id RUN.');
     const lab = new ExperimentLab(directory);
-    const present = async () => {
-      const { library, experiment } = await lab.readLibrary(values.id!);
-      const work = semanticWorkStatus(library);
-      return { id: experiment.id, libraryId: library.id, revision: library.revision, libraryHash: libraryHash(library), acceptance: library.acceptance,
-        selectedVariantIds: library.acceptance?.variantIds ?? [], nextAction: library.acceptance ? 'run' : library.variants.some(v => v.quality === 'ready') ? 'accept' : 'review',
-        progress: experiment.preparationProgress,
-        budget: { usedCalls: experiment.usage.calls, maxCalls: experiment.settings.maxCalls, remainingCalls: Math.max(0, experiment.settings.maxCalls - experiment.usage.calls),
-          semanticTotalJobs: work.totalJobs, semanticCompletedJobs: work.completedJobs, semanticPendingJobs: work.pendingJobs, skipped: work.skipped },
-        businessScenarios: library.businessScenarios, variants: library.variants.map(variant => ({ ...variant,
-          environmentFixture: { mode: variant.environmentFixture.mode, contract: variant.environmentFixture.contract } })), agentRun: false };
+    const situations = async (id: string) => {
+      const record = await lab.get(id);
+      if (record.librarySnapshot?.formatVersion !== 2) return { record, views: situationViews(record, { maxTurns: record.settings.maxTurns }) };
+      const context = await lab.cardContext(id);
+      return { record: context.experiment, views: situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns }) };
     };
-    if (values.operation === 'inspect') { await writeStdout(`${JSON.stringify(await present(), null, 2)}\n`); return; }
-    if (!values['expected-hash']) throw new Error('Укажите --expected-hash из свежего scenarios inspect.');
-    if (values.verify && !['auto', 'later'].includes(values.verify)) throw new Error('--verify должен быть auto или later.');
-    const payload = values.input ? JSON.parse(await readFile(values.input, 'utf8')) : {};
+    /** The list, or one situation with its question and its actions — the same rows the chat and the board draw. JSON carries each situation's id: a command file names its card by it. */
+    const show = async (id: string, changes: string[] = []) => {
+      const { record, views } = await situations(id);
+      const number = values.card === undefined ? undefined : Number(values.card);
+      const view = number === undefined ? undefined : views.find(item => item.number === number);
+      if (number !== undefined && !view) throw new Error(`Ситуации №${values.card} нет. Есть: ${views.map(item => item.number).join(', ')}.`);
+      if (values.json) { await writeStdout(`${JSON.stringify({ runId: id, counts: countsText(views), ...(changes.length ? { changes } : {}), ...(view ? { situation: { id: view.id, ...situationData(view), details: view.details } } : { situations: views.map(item => ({ id: item.id, ...situationData(item) })) }) }, null, 2)}\n`); return; }
+      const actions = view && !view.question ? situationActions(view) : [];
+      const rows = view ? [...briefRows(view), ...(actions.length ? [{ role: 'blank' as const, indent: 0, text: '' }, actionRow(actions)] : []), { role: 'blank' as const, indent: 0, text: '' }, ...detailRows(view)]
+        : views.flatMap(item => listRows(item));
+      const head = view ? [] : [countsText(views), ...(formatNote(record) ? [formatNote(record)!] : []), ''];
+      await writeStdout(`${[...changes, ...(changes.length ? [''] : []), ...head.map(line => line && ` ${safeLine(line)}`), plainSituationText(rows.map(row => ({ ...row, text: safeLine(row.text) })), process.stdout.columns ?? 100)].join('\n')}\n`);
+    };
+    if (!values.input && !values.choice && !values.check && !values.resume && !values.accept) { await show(values.id); return; }
     await lab.init();
     try {
-    const settled = await lab.get(values.id);
-    if (settled.librarySnapshot && values.operation !== 'resume') {
-      const headHash = await lab.store.readLibrary(settled.librarySnapshot.id).then(libraryHash, () => libraryHash(settled.librarySnapshot!));
-      const choice = chooseEditableDraft({ settled, holders: await lab.list(), headHash, busy: draftIsBusy });
-      if (choice.action === 'busy') throw new Error(`Прогон ${shortId(values.id)} выполняется. Правки — после остановки.`);
-      if (choice.action === 'use') throw new Error(`Актуальный черновик — ${shortId(choice.id)}. Укажите его в --id.`);
-      if (choice.action === 'copy') throw new Error(`Прогон ${shortId(values.id)} уже выполнен и не меняется. Создайте черновик того же набора и правьте его.`);
-    }
-      if (values.operation === 'variant') await lab.proposeVariant(values.id, values['expected-hash'], payload);
-      else if (values.operation === 'resume') {
-        if (!values.yes) throw new Error('Продолжение расходует оставшийся модельный бюджет; укажите --yes после проверки плана.');
-        await lab.resumePreparation(values.id, values['expected-hash']); await lab.waitForIdle();
-      } else if (values.operation === 'assess') {
-        if (!values.yes) throw new Error('Смысловая проверка расходует модельный бюджет; укажите --yes после проверки плана.');
-        const current = await lab.readLibrary(values.id); const plan = semanticWorkStatus(current.library);
-        const remaining = Math.max(0, current.experiment.settings.maxCalls - current.experiment.usage.calls);
-        if (!remaining && plan.pendingJobs) throw new Error(`Осталось ${plan.pendingJobs} смысловых вызовов, бюджет исчерпан; увеличьте settings.maxCalls через edit. Использованный бюджет не сбрасывается.`);
-        await lab.recheckLibrary(values.id, { expectedHash: values['expected-hash'], explicit: true }); await lab.waitForIdle();
-      } else if (values.operation === 'accept') {
-        if (!values.yes) throw new Error('Принятие фиксирует выбранную ревизию; укажите --yes. Агент запускаться не будет.');
-        if (!Array.isArray(payload.variantIds)) throw new Error('В --input нужен объект {"variantIds":[...]}.');
-        await lab.acceptLibrary(values.id, values['expected-hash'], payload.variantIds);
-      } else {
-        const patch = libraryPatchSchema.parse(payload.patch ?? payload);
-        const expectedKind = values.operation === 'merge' ? 'merge_business' : values.operation === 'split' ? 'split_business' : undefined;
-        if (expectedKind && patch.kind !== expectedKind) throw new Error(`${values.operation} требует patch.kind=${expectedKind}.`);
-        await lab.editLibrary(values.id, values['expected-hash'], patch, values.yes ? 'owner' : 'assistant');
+      const target = values.check || values.resume || values.accept ? { id: values.id } : await lab.editableCards(values.id);
+      if (target.id !== values.id) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка идёт в черновик ${target.id}.\n`);
+      if (values.resume || values.check || values.accept) {
+        if (!values.yes) throw new Error(values.accept ? 'Утверждение фиксирует готовые ситуации для прогона; укажите --yes. Агент не запускается.' : 'Это расходует вызовы модели в пределах лимита; укажите --yes.');
+        const { record, views } = await situations(target.id);
+        if (values.resume) { if (!record.librarySnapshot) throw new Error('Продолжать нечего.'); await lab.resumePreparation(target.id, libraryHash(record.librarySnapshot)); await lab.waitForIdle(); }
+        else if (values.check) { await lab.recheckCards(target.id, { explicit: true }); await lab.waitForIdle(); }
+        else {
+          const ready = views.filter(view => view.status === 'ready');
+          if (!ready.length) throw new Error('Утверждать нечего: ни одна ситуация не готова.');
+          await lab.acceptCards(target.id, libraryHash((await lab.cardContext(target.id)).library), ready.map(view => view.id));
+        }
+        await show(target.id); return;
       }
-      if (values.verify === 'auto' && ['edit', 'merge', 'split', 'variant'].includes(values.operation)) {
-        await lab.recheckLibrary(values.id); await lab.waitForIdle();
+      let command: ReturnType<typeof cardCommandSchema.parse>;
+      if (values.choice) {
+        const view: SituationView | undefined = (await situations(target.id)).views.find(item => item.number === Number(values.card));
+        if (!view?.question?.id) throw new Error(`У ситуации ${values.card ?? '(укажите --card N)'} нет открытого вопроса.`);
+        if (!['a', 'b', 'c'].includes(values.choice)) throw new Error('--choice: a, b или c — ответ из списка вопроса.');
+        command = { kind: 'answer_question', cardId: view.id, questionId: view.question.id, choice: values.choice as 'a' | 'b' | 'c', ...(values.text ? { text: values.text } : {}) };
+      } else command = cardCommandSchema.parse(JSON.parse(await readFile(values.input!, 'utf8')));
+      // The command file and the text on the command line are the owner's own: their words, confirmed by --yes.
+      const words = wordsOf(command).join('\n');
+      const prepared = await lab.prepareCardCommand(target.id, command, { via: 'cli-yes', ...(words && words.length <= 1000 ? { ownerWords: words } : {}) });
+      const changes = prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`));
+      if (!values.yes) {
+        await writeStdout(`${[...changes, '', ...(prepared.recheck.length ? ['После записи Lab проверит изменённое заново.'] : []), 'Записать: та же команда с --yes.'].map(line => safeLine(line)).join('\n')}\n`);
+        return;
       }
-      await writeStdout(`${JSON.stringify(await present(), null, 2)}\n`); return;
+      await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, requiredAuthority(prepared.command) === 'owner-words' && words ? 'words' : 'confirmed'));
+      const check = await lab.recheckCards(target.id);
+      if (check.decision.action === 'run') await lab.waitForIdle();
+      await show(target.id, changes.map(line => safeLine(line)));
     } finally { await lab.close(); }
+    return;
   }
   if (command === 'doctor') {
     const connection = values.connection ? await readConnection(values.connection) : await rememberedConnection(directory);
@@ -277,15 +287,19 @@ async function main() {
       const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file']) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
       const input = createInputSchema.parse({ ...raw, ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
         ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}) });
-      const prepared = await lab.create(input); id = prepared.id; await lab.waitForIdle();
+      const prepared = await lab.create(input, { cards: true }); id = prepared.id; await lab.waitForIdle();
       const current = await lab.get(id);
       if (current.phase !== 'review') throw new Error(current.error ?? 'Preparation failed');
       if (command === 'prepare' || command === 'build') { process.stdout.write(`${JSON.stringify(current, null, 2)}\n`); return; }
-      // The teaching example takes the owner's path: confirm its one disputed fact, let the checker look again, accept every ready variant.
-      const edited = await lab.editLibrary(id, libraryHash(current.librarySnapshot!), DEMO_OWNER_EDIT, 'owner');
-      await lab.assessLibrary(id, libraryHash(edited.library)); await lab.waitForIdle();
-      const reviewed = await lab.readLibrary(id);
-      await lab.acceptLibrary(id, libraryHash(reviewed.library), reviewed.library.variants.filter(v => v.quality === 'ready').map(v => v.id));
+      // The teaching example takes the owner's path: answer its one question («Да» — the customer knew the number), then accept every ready situation.
+      const context = await lab.cardContext(id);
+      for (const view of situationViews(context.experiment, { evidence: context.evidence, maxTurns: context.experiment.settings.maxTurns })) if (view.question?.id) {
+        const answer = await lab.prepareCardCommand(id, { kind: 'answer_question', cardId: view.id, questionId: view.question.id, choice: 'a' }, { via: 'cli-yes' });
+        await lab.applyCardCommand(id, answer, hostGrant(answer, 'confirmed'));
+      }
+      const answered = await lab.cardContext(id);
+      const ready = situationViews(answered.experiment, { evidence: answered.evidence, maxTurns: answered.experiment.settings.maxTurns }).filter(view => view.status === 'ready');
+      await lab.acceptCards(id, libraryHash(answered.library), ready.map(view => view.id));
     }
     if (!id) throw new Error('Укажите прогон: --id EXPERIMENT_ID');
     if (command === 'repeat') {

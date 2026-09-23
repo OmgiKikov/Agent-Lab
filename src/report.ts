@@ -1,11 +1,11 @@
 import type { Experiment, Trial } from './contracts.js';
 import type { EvidenceBundle } from './artifacts.js';
-import { situationBrief } from './brief.js';
 import { toHtml, toMarkdown, type Block, type CardItem, type FailureItem, type Report, type Turn } from './blocks.js';
 import type { FailureExplanation } from './explain.js';
 import { countText } from './plural.js';
 import { accuracyParts, alarmRow, realityParts, trustSegments } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
+import { situationBrief, situationNumber } from './card/view.js';
 import { oneLine } from './text.js';
 
 /*
@@ -108,14 +108,15 @@ export function runReport(bundle: EvidenceBundle): Report {
   const trials = new Map(record.trials.map(trial => [trial.id, trial]));
   const byScenario = (id: string) => record.trials.filter(trial => trial.scenarioId === id);
   const failed = new Map(view.failures.map(failure => [failure.scenarioId, failure]));
-  const cards: CardItem[] = view.cards.flatMap((card, index) => {
+  // A situation keeps the number the owner knows it by in Pi: a card's own, the place in the run for older formats.
+  const numbers = new Map(view.cards.map((card, index) => [card.scenarioId, situationNumber(record, card.scenarioId, index + 1)]));
+  const cards: CardItem[] = view.cards.flatMap(card => {
     const scenario = record.scenarios.find(item => item.id === card.scenarioId);
     if (!scenario) return [];
     const failure = failed.get(card.scenarioId);
-    return [{ number: index + 1, brief: situationBrief(record, scenario), chip: chipOf(card, view),
+    return [{ number: numbers.get(card.scenarioId)!, brief: situationBrief(record, scenario, bundle.dialogueNumbers), chip: chipOf(card, view),
       dialogue: turnsOf(failure ? trials.get(failure.trialId) : byScenario(card.scenarioId)[0]) }];
   });
-  const numbers = new Map(view.cards.map((card, index) => [card.scenarioId, index + 1]));
   const failures: FailureItem[] = view.failures.map(failure => {
     const rule = failure.violated ?? failure.rules[0];
     return { number: numbers.get(failure.scenarioId) ?? 0, title: oneLine(failure.title), expected: failure.expected ?? 'не записано в ситуации',

@@ -1,108 +1,107 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { stripTerminalSequences } from '@earendil-works/pi-tui';
-import { LabBoard, type BoardAction, type BoardOptions } from '../extensions/cards.ts';
-import { logsRows, runRows, scenarioErrorText, scenarioRows } from '../extensions/scenarios.ts';
-import { LibraryConflict } from '../src/errors.js';
-import { libraryFixture } from './helpers/scenario-library.js';
-import { demoEvaluateRecord } from './helpers/demo-record.js';
+import { LabBoard, type BoardAction } from '../extensions/cards.ts';
+import { logsRows, runRows, scenarioErrorText } from '../extensions/scenarios.ts';
+import { dialogueNumbers, situationViews } from '../src/card/view.js';
+import { experimentSchema, settingsSchema, type Experiment } from '../src/contracts.js';
+import { LibraryConflict, StaleRevisionError } from '../src/errors.js';
+import { cardDraft, READY } from './helpers/card-library.js';
+import { cardRun } from './helpers/cards.js';
+
+/*
+ * The situations of a draft on the board (ui-spec §4.2–4.5, §8.4), drawn by the shared projection: the list with
+ * the selected situation's numbered actions, one situation open with its question, the keys that act on it, the
+ * old format only read, the plan of the run and the state of the preparation.
+ */
 
 const theme = { fg: (_: string, value: string) => value, bold: (value: string) => value };
+const doubt = { status: 'needs_owner' as const, reason: 'В исходном разговоре клиент назвал номер только после вопроса агента.' };
 
-async function recordFixture() {
-  const fixture = await demoEvaluateRecord('scenario-view-');
-  const record = structuredClone(fixture.record);
-  const library = libraryFixture();
-  Object.assign(record, {
-    phase: 'review', scenarios: [], trials: [], librarySnapshot: library,
-    sources: library.sources, requirements: library.requirements,
-    preparationProgress: { protocol: 'chronological-scenarios-v1', processed: ['terminal'], pending: ['repeated'],
-      excluded: [{ dialogueId: 'broken', reason: 'Некорректная запись' }], status: 'partial' },
-  });
-  return { ...fixture, record };
+function boardDraft() {
+  const draft = cardDraft({ verdict: (claim, card) => card.number === 1 && claim.alias === 'fact_f1' ? doubt : READY });
+  const record = cardRun([], [], 1, { phase: 'review', librarySnapshot: draft.library, reviewedAt: null, manifestHash: null, settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 2 }),
+    preparationProgress: { protocol: 'cards-v1', inputHash: 'a'.repeat(64), status: 'partial', processed: ['late', 'known'], pending: ['third'], groundingComplete: true,
+      excluded: [{ dialogueId: 'broken', reason: 'Правила владельца не решают этот разговор.' }] } });
+  const situations = situationViews(record, { evidence: draft.evidence, numbers: dialogueNumbers([draft.batch]), maxTurns: 3 });
+  return { record, situations };
+}
+function board(record: Experiment, situations: ReturnType<typeof situationViews>) {
+  const actions: BoardAction[] = [];
+  const shown = new LabBoard({ record, section: 'cards', situations }, theme, action => actions.push(action), () => {}, () => 60);
+  return { shown, actions, text: (width = 110) => stripTerminalSequences(shown.render(width).join('\n')) };
 }
 
-test('native scenario workspace shows four stages, grouped readiness, source quote and honest import progress', async () => {
-  const { lab, directory, record } = await recordFixture();
-  try {
-    const board = new LabBoard({ record, section: 'cards' }, theme, () => {}, () => {}, () => 42);
-    const text = stripTerminalSequences(board.render(120).join('\n'));
-    assert.match(text, /1 Логи.*2 Сценарии.*3 Прогон.*4 Результаты/s);
-    assert.match(text, /Возврат/);
-    assert.match(text, /готов|требует решения/i);
-    assert.match(text, /Номер терминала: 1234/);
-    assert.match(text, /цитат|источник/i);
-    assert.match(text, /Получена достаточная инструкция → завершить разговор/i);
-    assert.match(text, /e изменить реплику, цель, ожидание, правило или факт/i);
-    assert.match(logsRows(record).map(row => row.text).join('\n'), /обработано: 1.*ожидают: 1.*исключено: 1/is);
-  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+test('the situations of a draft: three lines each, the selected one with its numbered answers under it', () => {
+  const { record, situations } = boardDraft();
+  const { text } = board(record, situations);
+  const screen = text();
+  assert.match(screen, /2 Ситуации 2/);
+  assert.match(screen, /2 ситуации: 1 готова · 1 ждёт вашего ответа/);
+  assert.match(screen, /› 1  Возврат оплаты — номер по просьбе +\? нужен ваш ответ/);
+  assert.match(screen, /1 Да {2}· {2}2 Не знал {2}· {2}3 Убрать/, 'the selected situation\'s question answers sit under it');
+  assert.match(screen, /2  Возврат оплаты — номер назван сразу +✓ готова/);
+  assert.match(screen, /↑↓ выбрать · Enter открыть · 1–3 действие · Tab разделы/);
+  assert.doesNotMatch(screen, /вариант|ревизия|Space|card_/i);
 });
 
-test('selection controls survive board recreation and bulk acceptance never emits a run action', async () => {
-  const { lab, directory, record } = await recordFixture();
-  try {
-    const selectedVariantIds: string[] = [];
-    const options: BoardOptions = { record, section: 'cards', selectedVariantIds };
-    let action: BoardAction | undefined;
-    const first = new LabBoard(options, theme, value => { action = value; }, () => {}, () => 38);
-    first.handleInput(' ');
-    assert.deepEqual(selectedVariantIds, ['variant_1']);
-    first.handleInput('\x1b');
-    assert.equal(action?.type, 'back');
-
-    action = undefined;
-    const reopened = new LabBoard(options, theme, value => { action = value; }, () => {}, () => 38);
-    assert.match(stripTerminalSequences(reopened.render(110).join('\n')), /выбрано для прогона: 1/i);
-    reopened.handleInput('y');
-    assert.equal(action?.type, 'acceptLibrary');
-    if (action?.type === 'acceptLibrary') assert.deepEqual(action.variantIds, ['variant_1']);
-    assert.notEqual(action?.type, 'run');
-  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+test('Enter opens the situation with its question; a digit answers it; Esc goes back to the list', () => {
+  const { record, situations } = boardDraft();
+  const { shown, actions, text } = board(record, situations);
+  shown.handleInput('\r');
+  const open = text();
+  assert.match(open, / Клиент {2,}│[\s\S]*Хочет {4}Получить инструкцию по возврату оплаты/);
+  assert.match(open, /\? Клиент знал «Номер терминала» до разговора\?/);
+  assert.match(open, /1–3 ответить · a спросить Lab · d как это проверяется · Esc назад/);
+  shown.handleInput('\x1b');
+  assert.match(text(), /2 ситуации: 1 готова/);
+  shown.handleInput('2');
+  const [action] = actions;
+  assert.ok(action?.type === 'situation' && action.action.kind === 'answer');
+  assert.deepEqual([action.situation.number, action.action.choice.id, action.action.choice.command.kind], [1, 'b', 'set_fact_disclosure']);
 });
 
-test('uncertain grouping and stale edits give an explicit owner decision and recovery action', async () => {
-  const { lab, directory, record } = await recordFixture();
-  try {
-    record.librarySnapshot!.businessScenarios[0]!.grouping = { status: 'uncertain', reason: 'Цели похожи, условия могут различаться' };
-    const text = scenarioRows(record, 'variant_1', ['variant_1']).map(row => row.text).join('\n');
-    assert.match(text, /нужно решение владельца/i);
-    assert.match(text, /m объединить|s разделить/i);
-    assert.match(scenarioErrorText(new LibraryConflict('Библиотека изменилась: хеш устарел')), /откройте.*заново|обнов/i);
-  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+test('a ready situation offers «Изменить · Добавить похожую · Не проверять»', () => {
+  const { record, situations } = boardDraft();
+  const { shown, actions } = board(record, situations);
+  shown.handleInput('\x1b[B');
+  shown.handleInput('3');
+  const [action] = actions;
+  assert.ok(action?.type === 'situation');
+  assert.deepEqual([action.situation.number, action.action.kind], [2, 'remove']);
 });
 
-test('run stage leads with accepted revision, selected count and real remaining budget', async () => {
-  const { lab, directory, record } = await recordFixture();
-  try {
-    record.usage.calls = 10;
-    record.settings.maxCalls = 20;
-    record.librarySnapshot!.acceptance = undefined;
-    const text = runRows(record, ['variant_1']).map(row => row.text).join('\n');
-    assert.match(text, /Ревизия 1/);
-    assert.match(text, /выбрано: 1/);
-    assert.match(text, /использовано 10.*осталось 10/i);
-    assert.match(text, /сначала принять/i);
-  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+test('a first-format draft is only read on the board: no numbered actions, the old format named', async () => {
+  const run = experimentSchema.parse(JSON.parse(await readFile(new URL('./fixtures/library-v1/run.json', import.meta.url), 'utf8')));
+  const library = structuredClone(run.librarySnapshot!);
+  delete library.acceptance;
+  const record = { ...run, phase: 'review', trials: [], librarySnapshot: library } as Experiment;
+  const { shown, actions, text } = board(record, situationViews(record, { maxTurns: 3 }));
+  const screen = text();
+  assert.match(screen, /Старый формат: эти ситуации можно посмотреть, но не изменить\./);
+  assert.match(screen, /Номер уже в первой реплике +✓ готова/);
+  assert.doesNotMatch(screen, /1 Изменить|1–3 действие/);
+  shown.handleInput('1');
+  assert.deepEqual(actions, [], 'a digit is not an action on a read-only draft');
+  assert.match(runRows(record, situationViews(record, { maxTurns: 3 })).map(row => row.text).join('\n'), /Старый формат: утвердить эти ситуации нельзя\./);
 });
 
-test('accepted library selection changes require reacceptance; Enter label matches native action', async () => {
-  const { lab, directory, record } = await recordFixture();
-  try {
-    const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
-    record.librarySnapshot = acceptLibrary(record.librarySnapshot!, libraryHash(record.librarySnapshot!), ['variant_1']);
-    record.scenarios = compileLibrary(record.librarySnapshot);
-    record.reviewedAt = null;
-    let action: BoardAction | undefined;
-    const board = new LabBoard({ record, section: 'cards', selectedVariantIds: ['variant_1'] }, theme, a => { action = a; }, () => {}, () => 45);
-    assert.match(stripTerminalSequences(board.render(120).join('\n')), /Enter — принять выбранные варианты/);
-    assert.match(stripTerminalSequences(board.render(72).join('\n')), /Карточка 1 из 2/);
-    board.handleInput('\r'); assert.equal(action?.type, 'acceptLibrary');
-    const pending = new LabBoard({ record, section: 'agent', selectedVariantIds: ['variant_1', 'variant_2'] }, theme, a => { action = a; }, () => {}, () => 45);
-    assert.match(stripTerminalSequences(pending.render(120).join('\n')), /выбор изменён.*принять заново/is);
-    action = undefined; pending.handleInput('r'); assert.equal(action, undefined);
-    pending.handleInput('\r'); assert.equal(action, undefined);
-    const rows = scenarioRows(record, 'variant_1', ['variant_1']).map(r => r.text).join('\n');
-    assert.match(rows, /происхождение: из диалогов/); assert.doesNotMatch(rows, /происхождение: production/);
-  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+test('the run plan of a card draft: the ready situations run and are accepted with it, the waiting ones stay out', () => {
+  const { record, situations } = boardDraft();
+  const text = runRows(record, situations).map(row => row.text).join('\n');
+  assert.match(text, /1 ситуация · 2 разговора: клиента играет Lab, ответы агента оценивает судья\./);
+  assert.match(text, /Судья: по 2 голоса на каждое ожидание — до 4 вызовов на попытку, всего до 8\./);
+  assert.match(text, /Не войдут: 1 ждёт вашего ответа/);
+  assert.match(text, /r — утвердить готовые ситуации и запустить: одно подтверждение/);
+});
+
+test('the preparation says what was read, what waits and what was left out and why', () => {
+  const { record } = boardDraft();
+  const text = logsRows(record).map(row => row.text).join('\n');
+  assert.match(text, /Разобрано разговоров: 2 · ждут: 1 · исключено: 1/);
+  assert.match(text, /u — продолжить подготовку с того же места/);
+  assert.match(text, /• broken: Правила владельца не решают этот разговор\./);
+  assert.equal(scenarioErrorText(new StaleRevisionError('a', 'b')), 'Ситуации изменились, пока вы смотрели: покажу свежее состояние.');
+  assert.equal(scenarioErrorText(new LibraryConflict('x')), 'Ситуации изменились. Откройте их заново и повторите по свежему состоянию.');
 });

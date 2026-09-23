@@ -1,5 +1,5 @@
 import { stripVTControlCharacters } from 'node:util';
-import type { Brief } from './brief.js';
+import type { Brief } from './card/view.js';
 import { FONT_STYLESHEET, REPORT_CSS, REPORT_SCRIPT, REPORT_SCRIPT_HASH } from './report-style.js';
 import type { Level } from './result-text.js';
 

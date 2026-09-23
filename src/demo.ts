@@ -1,13 +1,16 @@
 import { fileURLToPath } from 'node:url';
 import { createInputSchema, type CreateInput, type MetricAssessment, type RunnableTarget, type Runtime } from './contracts.js';
+import type { DialogueProposal } from './card/proposal.js';
+import type { ReviewVerdict } from './card/review.js';
 import type { LibraryPatch, ScenarioProposal } from './scenario-contracts.js';
 
 /*
  * The built-in teaching example: two invented refund dialogues, one owner rule and a small module
  * agent with a deliberate defect (it asks again for a terminal number it was already given).
- * Preparation, the user controller and the judge are deterministic stand-ins, so the example goes
- * through the real library path — review, owner edit, acceptance, run — without a model. It is
- * never evidence of model quality.
+ * Preparation, the reviewer, the user controller and the judge are deterministic stand-ins, so the
+ * example goes through the real card path — two situations, one question for the owner, acceptance,
+ * run — without a model. It is never evidence of model quality. The first-format proposals below stay
+ * for the old example's records, which still open and repeat.
  */
 const demoPolicy = 'Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.';
 const demoDialogues = [
@@ -57,6 +60,25 @@ function proposal(batchId: string, dialogue: typeof demoDialogues[number]): Scen
   };
 }
 
+/** What a careful model proposes for each example dialogue: the number named at once, and the number named only when asked. */
+const DEMO_CARDS: Record<'known' | 'late', DialogueProposal> = {
+  known: { title: 'Возврат оплаты — номер назван сразу', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', writesEvent: 0,
+    knows: [{ label: 'Номер терминала', value: '1234', disclosure: 'initial', from: 0, askedAs: 'номер терминала' }],
+    leaves: 'получил инструкцию по возврату или понял, что агент не поможет', turn: null, coverage: {},
+    agentMust: [{ text: 'не спрашивать номер терминала ещё раз, если клиент его уже назвал', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' },
+      { text: 'объяснить, как оформить возврат', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' }] },
+  late: { title: 'Возврат оплаты — номер только по просьбе', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', writesEvent: 0,
+    knows: [{ label: 'Номер терминала', value: '5678', disclosure: 'on_request', from: 2, askedAs: 'номер терминала' }],
+    leaves: 'получил инструкцию по возврату или понял, что агент не поможет', turn: null, coverage: { 2: { as: 'fact', reason: null } },
+    agentMust: [{ text: 'спросить номер терминала один раз, до инструкции', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' },
+      { text: 'объяснить, как оформить возврат', requirementIds: ['refund_rule'], appliesWhen: 'клиент назвал номер терминала', observation: 'reply' }] },
+};
+/** The example's one question for the owner: the number the customer named only after the agent asked — did they know it before? */
+const DEMO_DOUBT: ReviewVerdict = { status: 'needs_owner', reason: 'В исходном разговоре клиент назвал номер только после вопроса агента.' };
+const DEMO_READY: ReviewVerdict = { status: 'ready', reason: 'Учебный пример проверен по заранее заданным правилам; это не оценка модели.' };
+/** The judge's reading of each duty: the stored example's checkpoints and a card's expectations name the same two duties. */
+const DUTY: Record<string, 'ask' | 'explain'> = { ask_once: 'ask', refund_explanation: 'explain', e1: 'ask', e2: 'explain' };
+
 const asksNumber = (text: string) => /(?:уточните|сообщите|назовите|укажите|какой|номер.*\?).*номер|номер.*терминал.*\?/i.test(text);
 const DEMO_ONLY = 'Учебный пример поддерживает только свои два диалога и правило владельца. Для своих материалов выберите живой режим с моделью.';
 
@@ -85,12 +107,24 @@ export function createDemoRuntime(): Runtime {
           reason: uncertain ? 'Нужно явное уточнение исходного знания личного номера' : noDisclosure ? 'Нет действия раскрытия номера по просьбе' : noExplanation ? 'Нет проверки инструкции по возврату' : 'Проверка заранее заданного учебного примера; не модельная оценка' };
       }));
     },
+    async proposeCard(input) {
+      const { source } = input.call;
+      if (source.kind !== 'dialogue' || (source.dialogueId !== 'known' && source.dialogueId !== 'late')) throw new Error(DEMO_ONLY);
+      return DEMO_CARDS[source.dialogueId];
+    },
+    /** Every claim holds except the one the example teaches with: a number named after the agent's question, while no one has vouched for it. */
+    async reviewCard(input) {
+      const fact = input.payload.card.knows[0];
+      const doubted = (alias: string) => alias === 'fact_f1' && fact?.from === 2 && !fact.owner;
+      return { verdicts: Object.fromEntries(input.aliases.map(alias => [alias, doubted(alias) ? DEMO_DOUBT : DEMO_READY])), model: 'demo/reviewer' };
+    },
+    /** The customer names the number when the agent asks for it (a card's `tell_…`, the old example's `disclose`) and leaves otherwise. */
     async selectUserAction(input) {
       const reply = input.messages.filter(m => m.role === 'assistant').at(-1)?.content ?? '';
-      const disclose = input.actions.find(a => a.id === 'disclose');
-      return { actionId: disclose && asksNumber(reply) ? disclose.id : 'finish' };
+      const tell = input.actions.find(a => a.id === 'disclose' || a.id.startsWith('tell_'));
+      return { actionId: tell && asksNumber(reply) ? tell.id : input.actions.some(a => a.id === 'finish') ? 'finish' : 'leave' };
     },
-    /** The teaching judge: each expectation of the example's card (its two checkpoints, projected) by a fixed reading of the dialogue. */
+    /** The teaching judge: each duty of the example — a card's expectation or the old example's checkpoint — by a fixed reading of the dialogue. */
     async assess({ scenario, trial }) {
       let hasNumber = false, repeated = false, asked = false;
       for (const event of trial.events) {
@@ -101,11 +135,12 @@ export function createDemoRuntime(): Runtime {
       const replies = trial.events.filter(e => e.type === 'assistant');
       const explained = replies.some(e => /Подайте заявление в поддержку/i.test(e.text ?? ''));
       return (scenario.metrics ?? []).map((metric): MetricAssessment => {
-        const pass = metric.id === 'ask_once' ? !repeated && (openingHasNumber || asked) : metric.id === 'refund_explanation' ? hasNumber && explained : undefined;
+        const duty = DUTY[metric.id];
+        const pass = duty === 'ask' ? !repeated && (openingHasNumber || asked) : duty === 'explain' ? hasNumber && explained : undefined;
         return pass === undefined
           ? { metricId: metric.id, result: 'unknown', evidence: [], rationale: 'Учебный судья оценивает только ожидания учебной карточки.' }
           : { metricId: metric.id, result: pass ? 'pass' : 'fail', evidence: replies.map(e => e.seq),
-            rationale: metric.id === 'ask_once' ? `Учебная проверка: номер запрошен=${asked}, повтор после раскрытия=${repeated}` : 'Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок' };
+            rationale: duty === 'ask' ? `Учебная проверка: номер запрошен=${asked}, повтор после раскрытия=${repeated}` : 'Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок' };
       });
     },
   };

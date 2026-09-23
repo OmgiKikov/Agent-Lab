@@ -8,7 +8,7 @@ import { judgeInput, observableSources } from '../src/judge.js';
 import { countingRuleFor, headlineTrialResult, markTargets, markUnderCurrentRule } from '../src/outcomes.js';
 import { buildResultView } from '../src/result-view.js';
 import { simulatorChecks } from '../src/simulator.js';
-import { planLines } from '../extensions/conversation.ts';
+import { launchLines, scenarioPlan } from '../extensions/conversation.ts';
 import { briefCard, cardAttempt, cardRun, compiledCard, requirements } from './helpers/cards.js';
 
 /*
@@ -139,6 +139,7 @@ test('the result names the parts of every card and says which expectation failed
 test('the run plan states the judge\'s ceiling: two votes on every expectation of every attempt', () => {
   const card = briefCard();
   const two = compileCard({ ...card, id: `card_${'d'.repeat(64)}`, number: 4, agentMust: card.agentMust.slice(0, 2) }, { requirements });
-  const plan = planLines(cardRun([compiledCard(card), two], [], 2, { settings: { ...cardRun([], []).settings, repeats: 2, provider: 'openrouter', model: 'm' } }));
+  const record = cardRun([compiledCard(card), two], [], 2, { settings: { ...cardRun([], []).settings, repeats: 2, provider: 'openrouter', model: 'm' } });
+  const plan = launchLines(record, scenarioPlan(record));
   assert.ok(plan.includes('Судья: по 2 голоса на каждое ожидание — до 6 вызовов на попытку, всего до 20.'), plan.join('\n'));
 });

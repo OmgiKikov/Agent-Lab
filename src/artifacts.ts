@@ -7,6 +7,8 @@ import { compareRuns, markReconstructedSource, type RunComparison } from './comp
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { buildResultView, type ResultView } from './result-view.js';
 import { countText } from './plural.js';
+import { dialogueNumbers, type DialogueNumbers } from './card/view.js';
+import { ScenarioFiles } from './scenario-store.js';
 
 export interface EvidenceBundle {
   record: Experiment;
@@ -17,6 +19,8 @@ export interface EvidenceBundle {
   comparisonSource?: { kind: 'parent' | 'selected' | 'embedded'; beforeId: string; afterId: string };
   warnings: string[];
   traceJournal: string;
+  /** The numbers the owner knows imported dialogues by («из диалога №17»): a card library only references its imports, so an export reads them. */
+  dialogueNumbers?: DialogueNumbers;
 }
 /**
  * Why a stored run could not be read, in words a reader of any surface may see: never the file path or
@@ -143,10 +147,22 @@ export async function evidenceBundle(record: Experiment, store: BundleStore, bef
   return bundle;
 }
 
+/**
+ * The dialogue numbers of a card run's imports. They only name where a situation came from, so an import that
+ * cannot be read leaves the source line without its number («из разговора в логах») instead of failing the export.
+ */
+async function importNumbers(record: Experiment, directory: string): Promise<DialogueNumbers | undefined> {
+  const library = record.librarySnapshot;
+  if (library?.formatVersion !== 2 || !library.imports.length) return undefined;
+  const files = new ScenarioFiles(directory);
+  return Promise.all(library.imports.map(item => files.readImport(item.id))).then(dialogueNumbers, () => undefined);
+}
+
 /** Each format consumes the same snapshot; canonical raw evidence paths stay compatible with Pi tools. */
-export async function exportArtifacts(bundle: EvidenceBundle, directory: string) {
+export async function exportArtifacts(input: EvidenceBundle, directory: string) {
   const exportDir = resolve(directory, 'exports');
   await mkdir(exportDir, { recursive: true, mode: 0o700 });
+  const bundle = { ...input, dialogueNumbers: input.dialogueNumbers ?? await importNumbers(input.record, directory) };
   const record = bundle.record;
   const stem = `${record.id}.${randomUUID().slice(0, 8)}`;
   const selected = record.target.kind === 'sandbox' ? record.revisions.find(r => r.id === record.selectedRevisionId)?.spec : undefined;

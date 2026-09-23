@@ -8,7 +8,7 @@ import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { htmlReport, jsonReport, markdownReport, runReport } from '../src/report.js';
 import { REPORT_CSS } from '../src/report-style.js';
 import { buildResultView } from '../src/result-view.js';
-import { situationBrief } from '../src/brief.js';
+import { situationBrief } from '../src/card/view.js';
 import type { Card as BriefCard } from '../src/card/schema.js';
 import { briefCard, cardRun, compiledCard, requirements } from './helpers/cards.js';
 
@@ -87,7 +87,8 @@ function variant(id: string, input: VariantInput) {
     id, title: input.title, businessScenarioId: input.topic, provenance: input.provenance ?? 'production',
     sourceDialogues: input.dialogue ? [{ batchId: BATCH, dialogueId: input.dialogue }] : [], ...(input.parent ? { parentVariantId: input.parent } : {}),
     userState: { goal: input.goal, opening: input.opening, facts: input.facts ?? [], cannotKnow: input.cannotKnow ?? [], missing: input.missing ?? [] },
-    behaviorPolicy: { terminalStates: ['done'], transitions: input.leaves ? [{ from: 'asking', to: 'done', actionId: 'finish', when: input.leaves }] : [] },
+    behaviorPolicy: { terminalStates: ['done'], actions: [{ id: 'finish', kind: 'finish', factIds: [] }],
+      transitions: input.leaves ? [{ from: 'asking', to: 'done', actionId: 'finish', when: input.leaves }] : [] },
     evaluationSpec: { successCriteria: input.criteria, goalObservation: 'reply', checkpoints: [
       ...input.must.map(must => ({ role: 'required', rule: must.rule, quote: must.quote })),
       { role: 'diagnostic', rule: 'Поздороваться с клиентом', quote: 'Приветствуйте клиента.' },
@@ -242,14 +243,16 @@ test('the report reads in the order a customer asks: number, trust, topics, caus
   assert.deepEqual(cards.items.map(item => [item.number, item.brief.title, item.brief.source, item.chip]), [
     [1, 'Возврат без чека', 'из диалога №2', { text: '✗ не справился', tone: 'err' }],
     [2, 'Возврат с чеком', 'похожая на «Возврат без чека»', { text: '✓ справился', tone: 'ok' }],
-    [3, 'Сроки доставки', 'добавлена вами', { text: '✓ справился', tone: 'ok' }],
-    [4, 'Доставка в пункт выдачи', 'по вашему правилу', { text: '? не измерено — судья не уверен — его оценки разошлись', tone: 'warn' }],
+    [3, 'Сроки доставки', 'по вашим правилам', { text: '✓ справился', tone: 'ok' }],
+    [4, 'Доставка в пункт выдачи', 'по вашим правилам', { text: '? не измерено — судья не уверен — его оценки разошлись', tone: 'warn' }],
   ]);
   // The brief of a library situation: the client's side from the variant, the agent's duties from its required checkpoints.
+  // A number known before the conversation but not in the opening is said when asked; a fact learned only in the old
+  // conversation was never the customer's at the start of a run, so it is not listed.
   assert.deepEqual(cards.items[0]!.brief, {
     title: 'Возврат без чека', source: 'из диалога №2', wants: 'Вернуть деньги за наушники без чека', writes: OPENING,
     knows: [
-      { what: 'Номер заказа: A-1043', when: 'сразу' }, { what: 'Дата покупки: 3 сентября', when: 'если спросят' }, { what: 'Цвет упаковки', when: '?' },
+      { what: 'Номер заказа: A-1043', when: 'если спросят' }, { what: 'Цвет упаковки', when: '?' },
       { what: 'Остаток бонусов на карте', when: 'не знает' }, { what: 'Номер чека', when: 'не знает' },
     ],
     leaves: 'агент назвал срок возврата денег', turn: null,
@@ -349,7 +352,8 @@ test('a card reads as its own brief: when each fact is said, the turn, and every
   const [terminal, receipt] = requirements.map(item => item.quote);
   assert.deepEqual(first, {
     title: 'Возврат без номера в первой реплике', source: 'из разговора в логах', wants: 'Получить инструкцию по возврату', writes: 'Помогите с возвратом, я Анна.',
-    knows: [{ what: 'Имя: Анна', when: 'сразу' }, { what: 'Номер терминала: 5678', when: 'если спросят' }, { what: 'Сумма: 1200', when: 'если спросят' }, { what: 'Дата покупки', when: 'не знает' }],
+    // No message vouches for the purchase date: until the owner says, it is «?».
+    knows: [{ what: 'Имя: Анна', when: 'сразу' }, { what: 'Номер терминала: 5678', when: 'если спросят' }, { what: 'Сумма: 1200', when: 'если спросят' }, { what: 'Дата покупки', when: '?' }],
     leaves: 'получил инструкцию по возврату или понял, что агент не поможет',
     turn: 'после «агент объяснил, как оформить возврат»: «Тогда лучше отмените покупку.»',
     must: [{ text: 'запросить номер терминала не больше одного раза', rule: terminal }, { text: 'объяснить, как оформить возврат', rule: terminal },

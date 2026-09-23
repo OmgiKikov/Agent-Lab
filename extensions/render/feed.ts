@@ -16,13 +16,8 @@ import { renderRows, type PaintTheme, type Row } from './theme.ts';
 
 const FEED_KIND = 'agent-lab/feed';
 
-/**
- * Where the rows can be rebuilt from when the memory copy is gone (a reopened session, an evicted entry): the run and the
- * immutable library revisions by hash. Ids and hashes only — the session file never gets card text (REV-01).
- */
-export interface FeedRef { view: 'library' | 'card' | 'change'; directory: string; runId: string; libraryId: string; hash: string; beforeHash?: string; variantId?: string }
 /** `note` names the action and the run by short id and counts — never a title, a quote or a value. */
-interface FeedDetails { kind: typeof FEED_KIND; version: 1; feedKey: string; note: string; ref?: FeedRef }
+interface FeedDetails { kind: typeof FEED_KIND; version: 1; feedKey: string; note: string }
 
 export function isFeedDetails(value: unknown): value is FeedDetails {
   if (!value || typeof value !== 'object') return false;
@@ -34,14 +29,14 @@ const FEED_CACHE_SIZE = 200;
 const feeds = new Map<string, Feed>();
 
 /** Keep the rows of one action under its tool call id and return the details the session may store. */
-export function rememberFeed(feedKey: string, feed: Feed, note: string, ref?: FeedRef): FeedDetails {
+export function rememberFeed(feedKey: string, feed: Feed, note: string): FeedDetails {
   feeds.delete(feedKey);
   feeds.set(feedKey, feed);
   for (const key of feeds.keys()) {
     if (feeds.size <= FEED_CACHE_SIZE) break;
     feeds.delete(key);
   }
-  return { kind: FEED_KIND, version: 1, feedKey, note, ...(ref ? { ref } : {}) };
+  return { kind: FEED_KIND, version: 1, feedKey, note };
 }
 const feedFor = (details: FeedDetails): Feed | null => feeds.get(details.feedKey) ?? null;
 export function forgetFeeds(): void { feeds.clear(); }
@@ -59,81 +54,40 @@ class FeedBlock implements Component {
 
 type Fallback = (result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme) => Component;
 
-/** The cache only speeds drawing up. What a row showed is rebuilt from the stored revisions it points at. */
-let restorer: ((ref: FeedRef) => Promise<Feed | null>) | undefined;
-export function setFeedRestorer(restore: typeof restorer): void { restorer = restore; }
-const restoring = new Set<string>();
-const unrestorable = new Set<string>();
-function restore(details: FeedDetails, redraw?: () => void): boolean {
-  if (!details.ref || !restorer || unrestorable.has(details.feedKey)) return false;
-  if (restoring.has(details.feedKey)) return true;
-  restoring.add(details.feedKey);
-  // A revision that cannot be read ends the attempt: the row says so instead of «восстанавливаю» forever.
-  void restorer(details.ref).then(feed => { if (feed) rememberFeed(details.feedKey, feed, details.note, details.ref); else unrestorable.add(details.feedKey); })
-    .catch(() => { unrestorable.add(details.feedKey); }).finally(() => { restoring.delete(details.feedKey); redraw?.(); });
-  return true;
-}
-
 /** Feed details draw the feed; everything else (verdict blocks, progress text, errors, old sessions) goes to `fallback`. */
-export function renderFeedResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme, fallback: Fallback, redraw?: () => void): Component {
+export function renderFeedResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme, fallback: Fallback): Component {
   try {
     const details: unknown = result.details;
     if (!isFeedDetails(details)) return fallback(result, options, theme);
     const feed = feedFor(details);
-    if (!feed) {
-      // Rebuilt from the stored revision when the row points at one; otherwise the note and an honest hint.
-      const coming = restore(details, redraw);
-      return new Text(theme.fg('muted', safeText(`${details.note} · ${coming ? 'восстанавливаю из сохранённой ревизии' : unrestorable.has(details.feedKey) ? 'сохранённая ревизия недоступна — попросите показать текущее состояние' : 'сессия открыта заново: попросите показать это ещё раз'}`)), 0, 0);
-    }
+    // A reopened session keeps only the note: the rows are asked for again from the 0600 store.
+    if (!feed) return new Text(theme.fg('muted', safeText(`${details.note} · сессия открыта заново: попросите показать это ещё раз`)), 0, 0);
     return new FeedBlock(feed, options.expanded, theme, expanded => keyHint('app.tools.expand', expanded ? 'свернуть' : 'подробнее'));
   } catch {
     return fallback(result, options, theme);
   }
 }
 
-const looksLikeId = (value: string): boolean => /^[A-Za-z0-9_-]{16,}$/.test(value) || /^(variant|business|fact|owner)_/.test(value);
-const named = (value: unknown): string => {
-  const text = typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : '';
-  if (!text || looksLikeId(text)) return '';
-  return /^#?\d+$/.test(text) ? ` №${text.replace('#', '')}` : ` «${text}»`;
-};
-
 /** The line of a tool call in the feed: what is being done, in the owner's words. No argument dump, no ids. */
 export function callText(tool: string, args: Record<string, unknown> | undefined): string {
   const a = args ?? {};
-  if (tool === 'agent_lab_status') return 'Смотрю, что уже есть';
+  const card = typeof a.card === 'number' ? ` ${a.card}` : '';
   if (tool === 'agent_lab_build') {
     const file = typeof a.dialoguesFile === 'string' ? ` · ${a.dialoguesFile.split('/').at(-1)}` : '';
-    return a.mode === 'validate' ? `Собираю сценарии из логов${file}` : a.mode === 'demo' ? 'Готовлю учебный пример'
-      : a.mode === 'discover' ? `Ищу проверяемую гипотезу в логах${file}` : a.mode === 'score' ? `Оцениваю записанные диалоги${file}` : 'Готовлю сценарии по требованиям';
-  }
-  if (tool === 'agent_lab_scenarios') {
-    const card = named(a.variant);
-    switch (a.operation) {
-      case 'edit': return `Правлю карточку${card}`;
-      case 'edit_group': return `Правлю группу сценариев${named(a.group)}`;
-      case 'behavior': return `Правлю поведение клиента${card}`;
-      case 'resume': return 'Продолжаю подготовку сценариев';
-      case 'variant': return `Добавляю вариант к карточке${card}`;
-      case 'remove': return `Убираю карточку${card}`;
-      case 'resolve': return `Записываю ваше решение по карточке${card}`;
-      case 'merge': return 'Объединяю группы сценариев';
-      case 'split': return 'Выделяю карточки в отдельную группу';
-      case 'assess': return 'Перепроверяю смысл сценариев';
-      case 'accept': return 'Принимаю набор сценариев';
-      case 'budget': return 'Меняю лимит вызовов модели';
-      default: return a.variant || a.variantId ? `${a.source ? 'Открываю источник карточки' : 'Открываю карточку'}${card}` : 'Читаю сценарии';
-    }
+    return a.mode === 'validate' ? `Собираю ситуации из логов${file}` : a.mode === 'demo' ? 'Готовлю учебный пример' : 'Готовлю ситуации по вашим правилам';
   }
   if (tool === 'agent_lab_run') return a.action === 'stop' ? 'Останавливаю прогон' : a.action === 'progress' ? 'Смотрю, как идёт прогон' : 'Готовлю запуск';
-  if (tool === 'agent_lab_inspect') return a.failure !== undefined ? `Открываю провал ${String(a.failure)}` : a.dialogue || a.trialId ? 'Открываю диалог'
-    : a.compare ? 'Сравниваю с прошлым прогоном' : a.export ? 'Сохраняю отчёт' : 'Читаю результаты';
+  if (tool === 'agent_lab_inspect') return a.failure !== undefined ? `Открываю ошибку ${String(a.failure)}` : a.dialogue || a.trialId ? 'Открываю разговор'
+    : a.compare ? 'Сравниваю с прошлым прогоном' : a.export ? 'Сохраняю отчёт' : 'Читаю результат';
+  if (tool === 'agent_lab_cards') return card ? `Открываю ситуацию${card}` : 'Показываю ситуации';
   const fixed: Record<string, string> = {
-    agent_lab_edit: 'Правлю настройки черновика', agent_lab_accept: 'Показываю ожидания на подтверждение', agent_lab_repeat: 'Готовлю повтор набора',
-    agent_lab_issues: 'Смотрю постоянные проблемы', agent_lab_resolution: 'Проверяю исправление', agent_lab_diagnostics: 'Проверяю гипотезу парной диагностикой',
+    agent_lab_status: 'Смотрю, что уже есть', agent_lab_card_fact: `Меняю ситуацию${card}: что знает клиент`, agent_lab_card_expectation: `Меняю ситуацию${card}: что должен агент`,
+    agent_lab_card_client: `Меняю ситуацию${card}: клиент`, agent_lab_card_answer: `Записываю ваш ответ по ситуации${card}`, agent_lab_card_similar: `Добавляю похожую на ситуацию${card}`,
+    agent_lab_card_remove: `Убираю ситуацию${card}`, agent_lab_card_check: 'Проверяю ситуации', agent_lab_resume_preparation: 'Продолжаю подготовку ситуаций',
+    agent_lab_edit: 'Правлю настройки черновика', agent_lab_accept: 'Утверждаю ситуации', agent_lab_repeat: 'Готовлю повтор набора',
     agent_lab_suite: a.action === 'save' ? 'Сохраняю набор в файл' : a.action === 'load' ? 'Загружаю набор из файла' : 'Смотрю сохранённые наборы',
-    agent_lab_connection: a.action === 'check' ? 'Проверяю подключение к агенту' : 'Читаю подключение к агенту', agent_lab_reassess: 'Переоцениваю сохранённые диалоги',
-    agent_lab_review: 'Показываю диалог для вашей оценки', agent_lab_agree: 'Записываю вашу отметку о решении судьи', agent_lab_prompt: 'Готовлю изменение промпта', agent_lab_generator: 'Оцениваю генератор сценариев',
+    agent_lab_connection: a.action === 'check' ? 'Проверяю подключение к агенту' : 'Читаю подключение к агенту', agent_lab_reassess: 'Переоцениваю сохранённые разговоры',
+    agent_lab_review: 'Показываю разговор для вашей оценки', agent_lab_agree: 'Записываю вашу отметку о решении судьи',
   };
   return fixed[tool] ?? 'Agent Lab';
 }

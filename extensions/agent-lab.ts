@@ -1,90 +1,39 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Text } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { z } from 'zod';
 import { ExperimentLab, draftHash, resultHash } from '../src/experiment.js';
-import { agentSchema, createInputSchema, DEFAULT_JUDGE, describeCheck, dialogueSchema, draftPatchSchema, reassessmentSchema, runnableTargetSchema, isRunning, SCENARIO_LIMIT, settingsSchema, type Experiment, type HumanReviewInput } from '../src/contracts.js';
-import { awaitingVerdict } from '../src/comparison.js';
-import { cardVerdict, headlineCardOutcome, plannedTrials } from '../src/run.js';
-import { judgeAgreement } from '../src/agreement.js';
-import { markTargets } from '../src/outcomes.js';
+import { agentSchema, createInputSchema, DEFAULT_JUDGE, dialogueSchema, draftPatchSchema, reassessmentSchema, runnableTargetSchema, isRunning, SCENARIO_LIMIT, settingsSchema, type Experiment } from '../src/contracts.js';
+import { plannedTrials } from '../src/run.js';
 import { expectationSheet, testPlanLines, trialProofLines } from '../src/quality.js';
 import { demoInput } from '../src/demo.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
-import { accuracyRow, MAX_WIDTH, nextRows, plainText, resultScreen } from '../src/result-text.js';
+import { MAX_WIDTH, nextRows, plainText, resultScreen } from '../src/result-text.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../src/connection.js';
 import { readData, selectValidationDialogues, readDialogueImport, importDialogues } from '../src/imports.js';
 import { expandMaterials } from '../src/materials.js';
 import { MATERIAL_CHARS, MATERIAL_LIMIT } from '../src/limits.js';
-import { ExperimentStore } from '../src/store.js';
 import { libraryHash } from '../src/scenario-library.js';
-import { libraryV1Of, requireLibraryV1 } from '../src/card/legacy-v1.js';
-import { semanticWorkStatus } from '../src/scenario-work.js';
+import { countsText, situationData, situationEntry, situationViews } from '../src/card/view.js';
 import { safeText, shortId } from '../src/text.js';
 import { identifierPattern, isIdentifier, sha256Pattern } from '../src/ids.js';
 import { sameTargetVersion } from '../src/target-version.js';
-import { reviewOrder, showBoard, trialLines, type BoardAction, type BoardOptions, type Section } from './cards.ts';
-import { scenarioErrorText, scenarioLibrarySummary } from './scenarios.ts';
 import { isVerdictDetails, rememberView, renderAgentLabResult, VERDICT_KIND, type VerdictDetails } from './render/verdict-block.ts';
-import { isFeedDetails, rememberFeed, renderFeedResult, setFeedRestorer, type FeedRef } from './render/feed.ts';
-import { changeRows, checkRow, comparisonFeed, dialogueFeed, disputedCheckpoints, ownerRemarks, plainIssue, failureFeed, libraryFeed, orderedVariants, planLines, progressLines, referenceProblem, targetText, resolveRun, stateRows, statusFeed, stoppedLines, variantDiff, variantFeed, row, type CheckOutcome, type Feed, type Resolved } from './conversation.ts';
+import { isFeedDetails, rememberFeed, renderFeedResult } from './render/feed.ts';
+import { comparisonFeed, dialogueFeed, failureFeed, progressLines, referenceProblem, targetText, resolveRun, statusFeed, stoppedLines, row, type Feed, type Resolved } from './conversation.ts';
+import { registerCardTools, situationFeed, situationsFeed, situationsNow } from './card-tools.ts';
+import { launchRun } from './launch.ts';
+import { registerBoardCommand } from './board-command.ts';
+import { registerReviewTools } from './review-tools.ts';
 import { progressLine } from './flow.ts';
 import { SessionOperations, type SessionOperation as Job } from './operations.ts';
-import { boardDiscussionContext, displayFor, inputError, legacyResult, NeedsOwner, returnToBoard, isInteractive, requireInteractive } from './lab-ui.ts';
-import { registerScenarioTool } from './scenario-tool.ts';
+import { displayFor, inputError, legacyResult, NeedsOwner, returnToBoard, isInteractive, requireInteractive } from './lab-ui.ts';
 
 /** C-119: what the model reads instead of the block, so it does not restate the number and the causes (CTX-08). */
 const SHOWN_TO_OWNER = 'Блок с точностью и причинами уже показан владельцу. Не копируйте его строки. Назовите точность одной фразой и объясните по-человечески, где и почему агент хромает: что просили клиенты, что агент сделал вместо этого, какое правило владельца это нарушает; что он делает хорошо и насколько числу можно верить. Затем предложите следующий шаг.';
 
-
-/**
- * What is being checked, in the owner's words. A set of more than one situation leads with the
- * compact expectation sheet (UI-D-04): the same rows the board and the tool text show, at most two
- * rules each. A single test keeps its full definition.
- *
- * Confirming seals `fingerprint(scenario)` for every card — the checks, the initial state and the
- * simulator facts too — so a set that is not built from production logs also lists the opening
- * request and the exact checks under the sheet. In a validation set the opening and the checks come
- * from the logged dialogue itself, which the log line above the sheet already says.
- */
-function runScope(record: Experiment): string[] {
-  const sheet = record.workflow === 'evaluate' && record.phase === 'review' && record.scenarios.length > 1
-    ? expectationSheet(record) : undefined;
-  if (sheet) {
-    const fromLog = record.scenarios.every(scenario => scenario.provenance === 'production');
-    const sealed = fromLog ? [] : record.scenarios.flatMap(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
-      ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)]);
-    return [...(fromLog ? ['Клиент отвечает на уточнения симулятором, используя только факты из лога.', ''] : []),
-      ...sheet.compactLines(record.id).map(item => safeText(item)),
-      ...(sealed.length ? ['', 'Что вы подтверждаете дословно:', ...sealed] : [])];
-  }
-  return record.scenarios.map(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
-    ...(record.settings.userModes.includes('scripted') ? (s.user.script ?? []).map((message, i) => `  Продолжение ${i + 1}: ${safeText(message)}`) : []),
-    `  Ожидается: ${safeText(s.successCriteria)}`, ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)].join('\n'));
-}
-
-function runPlan(record: Experiment, cwd?: string): string {
-  // One plan for the chat and the board: agent and version, the accepted set, attempts, models and limits.
-  if (record.librarySnapshot?.acceptance) return [...planLines(record, cwd).map(line => safeText(line)), `Версия тестов: ${draftHash(record).slice(0, 12)}`,
-    'Полные факты, источники и правила остаются в карточках сценариев.',
-    record.acceptedDraftHash === draftHash(record) ? 'Принятие набора уже записано отдельно; это подтверждение запуска агента именно по этому плану.'
-      : 'Состав набора принят раньше, но черновик с тех пор изменился (повтор, настройки или подключение). «Да» подтверждает те же ожидания для этого плана и запускает агента.'].join('\n');
-  return [
-    ...runScope(record),
-    '', `Диалогов: ${plannedTrials(record)}. Режимы: ${record.settings.userModes.join(', ')}.`,
-    `До ${record.settings.maxCalls} вызовов, ${Math.round(record.settings.maxDurationMs / 1000)} секунд, ${record.settings.maxTurns} ходов.`,
-    record.mode === 'demo' ? 'Учебный пример: без модели и оплаты.' : `Модель: ${safeText(record.settings.provider)}/${safeText(record.settings.model)}. Стоимость зависит от фактических вызовов.`,
-    ...(record.mode === 'live' ? [`Судья: ${safeText(record.settings.judge?.provider ?? record.settings.provider)}/${safeText(record.settings.judge?.model ?? record.settings.model)}; по 2 вызова в свежих сессиях на каждую применимую рубрику.`] : []),
-    'Если адаптер передаёт полный RAG-контекст: ещё до 6 вызовов судьи на диалог в пределах указанного бюджета; диагностика отдельно от accuracy.',
-    `Агент: ${safeText(record.target.kind === 'sandbox' ? 'Учебная песочница' : `${targetText(record)}${record.target.kind === 'command' && record.target.cwd ? ` · ${record.target.cwd}` : ''}`)}`, `Версия тестов: ${draftHash(record).slice(0, 12)}`,
-    'Подтверждая, вы подтверждаете ожидания ситуаций выше. Оценки судьи вы не проверяли.',
-    ...(record.acceptedDraftHash === draftHash(record) ? [] : ['Да — подтвердить все ожидания и начать прогон.']),
-  ].join('\n');
-}
 
 /** `view` is the evidence bundle's view when the caller has one, so stability matches the CLI summary. */
 function summary(record: Experiment, directory: string, view?: ResultView) {
@@ -120,41 +69,6 @@ function summary(record: Experiment, directory: string, view?: ResultView) {
   };
 }
 
-async function humanAnnotation(ctx: ExtensionContext, record: Experiment, selected: number, readingMs = 0, reviewTimes?: Map<string, number>): Promise<HumanReviewInput[] | undefined> {
-  const started = performance.now();
-  const trial = reviewOrder(record)[selected];
-  if (!trial) return;
-  const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-  const targets: { label: string; ids: { metricId?: string; checkId?: string } }[] = [
-    { label: 'Весь диалог', ids: {} },
-    ...(scenario?.metrics ?? []).map(m => ({ label: `Критерий · ${safeText(m.name)} [${m.id}]`, ids: { metricId: m.id } })),
-    ...(trial.simulatorChecks ?? []).map(c => ({ label: `Симулятор · ${safeText(c.description)} [${c.id}]`, ids: { checkId: c.id } })),
-    ...trial.checks.map(c => ({ label: `Проверка · ${safeText(c.description)} [${c.id}]`, ids: { checkId: c.id } })),
-  ];
-  const choice = await ctx.ui.select('Область вашей оценки', targets.map(t => t.label));
-  const target = targets.find(t => t.label === choice);
-  if (!target) return;
-  const simulator = !!target.ids.checkId && trial.simulatorChecks?.some(c => c.id === target.ids.checkId) || !!target.ids.metricId && scenario?.metrics?.some(m => m.id === target.ids.metricId && m.subject === 'simulator');
-  const choices = [{ value: 'fail', label: simulator ? 'Ошибся симулятор' : 'Ошибся агент' }, { value: 'invalid', label: 'Ошибся тест' }, { value: 'unknown', label: 'Данных недостаточно' }, { value: 'pass', label: simulator ? 'Симулятор соблюдает карточку' : 'Агент выполнил задачу' }] as const;
-  const answer = await ctx.ui.select(`Диалог ${trial.id} · исходная оценка сохранится`, choices.map(v => v.label));
-  const verdict = choices.find(v => v.label === answer)?.value;
-  if (!verdict) return;
-  const note = await ctx.ui.editor('Пояснение · укажите реплики # и причину согласия или ошибки', '');
-  if (note === undefined) return;
-  const wholeDialogue = !target.ids.metricId && !target.ids.checkId;
-  if (wholeDialogue && ![...note.matchAll(/#(\d+)\b/g)].some(match => trial.events.some(event => event.seq === Number(match[1])))) {
-    ctx.ui.notify?.('Полный разбор отменён: в пояснении укажите номер события из этого диалога, например #1.', 'warning');
-    return;
-  }
-  return [{ trialId: trial.id, ...target.ids, verdict, note, ...(wholeDialogue ? { reviewedDialogue: true as const } : {}),
-    durationMs: Math.min(3600000, Math.round(performance.now() - started + (reviewTimes?.get(`${record.id}|${trial.id}`) ?? readingMs))) }];
-}
-
-/** A real agent is independent per dialogue, so several run at once. */
-function runParallel(record: Experiment): number {
-  return Math.max(1, Math.min(8, record.scenarios.length * record.settings.userModes.length * record.settings.repeats));
-}
-
 /**
  * What the model is told about the conversation. The four stages stay the product logic; they are
  * no longer a route through four screens, and no answer may be a list of keys to press.
@@ -164,18 +78,18 @@ You are Agent Lab, a conversational tool for measuring the user's real agent. Th
 
 How to talk:
 - Act, do not instruct. Never answer with navigation or keys to press. /agent-lab is an optional board for bulk work; never send the owner there to get something done.
-- The primary validation flow is Логи → Сценарии → Прогон → Результаты. It is the logic of the product, not a route through screens: do the step the owner asked for, in any order that is valid.
-- Every tool result is already shown to the owner as a short card whose details expand in place. Never re-list its cards, dialogue lines, numbers or plan. Your reply is the conclusion and the next useful step, one to three sentences in the owner's language, without ids, hashes or JSON.
-- Name runs, cards, groups and failures the way the owner does: by title or list number. The tools accept such references. When a tool answers that a reference is ambiguous or unknown, ask the owner which one they mean; never pick for them.
-- Use what the request and the card already contain. Ask only for a business decision you cannot find there; never invent a rule, a fact value or an expected result to complete a call.
-- The first accuracy number matters more than a perfect set. Right after preparation, when at least one card is ready, offer to accept and run the ready ones at once and to settle the disputed ones afterwards. A checker's open question the owner answers with «да, это моё правило» is settled with agent_lab_resolve (their native decision), not by rewriting the card.
+- The product has three steps: Ситуации › Прогон › Результат. It is the logic of the product, not a route through screens: do the step the owner asked for, in any order that is valid.
+- Every tool result is already shown to the owner as a short card whose details expand in place. Never re-list its situations, dialogue lines, numbers or plan. Your reply is the conclusion and the next useful step, one to three sentences in the owner's language, without ids, hashes or JSON.
+- Name runs the way the owner does (by task words or list number) and situations by their number. When a tool answers that a reference is unknown or ambiguous, ask the owner which one they mean; never pick for them.
+- Use what the request and the situation already contain. Ask only for a business decision you cannot find there; never invent a rule, a fact value or what the agent must do to complete a call.
+- The first accuracy number matters more than a perfect set. Right after preparation, when at least one situation is ready, offer to run the ready ones at once; the questions wait and never block them.
 - When you do not know what exists in this project, call agent_lab_status first.
-- A card that waits for a decision needs one plain question to the owner that would settle it (the tool gives the checker's remarks in plain words as issuesInPlainWords); do not retell the checker.
-- Several changes asked for in one message: make them all, with verify:"later" on every edit but the last.
+- A situation that waits for the owner has one question with 2–3 numbered answers. When the owner answers it, call agent_lab_card_answer: the owner picks the answer in a native dialog.
+- Several changes asked for in one message: make them all, with verify:"later" on every change but the last.
 
-Logs and scenarios: use agent_lab_build mode=validate to import de-identified dialogues, then agent_lab_scenarios to show grouped variants, source quotes and indexes, lineage, pending sources, origin readiness and semantic readiness. Read cards and sources with agent_lab_scenarios. Mutate with dedicated tools: agent_lab_edit_card (change), agent_lab_edit_behavior (complete behaviorPolicy and/or sourceCoverage; preserves facts and immutable source evidence), agent_lab_edit_group (group/title/goal/conditions), agent_lab_add_variant (parent in variant, kind), agent_lab_merge_groups (groups), agent_lab_split_group (variants/title/goal/conditions), agent_lab_remove_card (variant), agent_lab_resolve (one card or explicit variants; native owner decision), agent_lab_assess_cards, agent_lab_resume_preparation, agent_lab_accept_set (native confirmation; never runs), agent_lab_set_budget (maxCalls). Do not send operation or raw patch/request to these action tools. Ordinary draft edits are assistant proposals, linked to the user's request and shown as a diff; they do not establish owner-confirmed facts. You select operations and references from the user's current instruction: a mention, quoted log, prohibition or retracted request never authorizes a change. Do not infer owner intent from a word overlap. Respect protected cards and ask when the requested scope is ambiguous. The harness validates references, revision and evidence; it does not interpret natural-language instructions. Stop the active operation directly when requested; status/progress must never stop it. What the client knew beforehand and any fact recorded in the owner's name is always the owner's native decision. Fact values and expectations must come from the owner's words: when the tool answers needs_owner_input, put its question to the owner; never fabricate owner facts from model text. A rule the checker calls inapplicable to a card (disputedChecks) is removed with change:{field:"rule", rule:"…" or "disputed", remove:true} or rewritten with value and applicability, when the owner agrees; a card keeps at least one rule. An edit asked for after a run goes into a fresh draft of the same set by itself — the finished run never changes; say so in one phrase and keep working on the draft. After a change the tool rechecks meaning itself within the agreed call limit: a fast recheck is in the same result, a long one continues in the background while the conversation goes on and reports back as a message — never wait for it or poll. Semantic reassessment resumes semantic jobs only; agent_lab_resume_preparation continues saved pending sources and refuses to repeat an ambiguous interrupted paid call. Neither operation resets usage. When it reports needs_budget, show its call estimate and ask before agent_lab_set_budget: a deliberate settings.maxCalls increase is required when the remaining cumulative budget is insufficient; never reset usage. Use recorded user facts with a reactive simulator, and exclude masked-only turns and unavailable customer-data cases with explicit reasons.
+Situations: agent_lab_build prepares them — mode=validate from de-identified dialogues, otherwise from the owner's rules. agent_lab_cards lists them — number, title, status and the one question — and card:N shows one whole: what the customer wants, writes first and knows (fact ids f1…) and when they leave; what the agent must do (duty ids e1…), each with the owner's rule. Read a situation by its number before changing it. Change a situation with the narrow tools: agent_lab_card_fact (what the customer knows and when they say it), agent_lab_card_expectation (what the agent must do), agent_lab_card_client (what the customer wants, writes first, when they leave, their late turn), agent_lab_card_similar (a new situation with one difference, the original unchanged), agent_lab_card_remove. What the customer knows is always the owner's decision in a native dialog; wording the owner wrote in their own message is recorded as it is, other wording is shown to the owner to confirm. An edit asked for after a run goes into a fresh draft of the same set by itself — the finished run never changes; say so in one phrase. A changed situation is checked again within the agreed calls: a quick check answers in the same row, a longer one reports back as a message — never wait for it or poll. agent_lab_card_check checks what is still unchecked; agent_lab_resume_preparation continues a stopped preparation and never repeats a paid call whose cost is unknown. Situations of an older format are shown the same way and cannot be changed.
 
-Acceptance and run are two separate owner decisions. The owner selects ready variants and accepts one immutable accepted revision in a native confirmation; acceptance does not run the agent. Never accept a set the owner has not seen in this conversation, and never start a run because a card was opened. agent_lab_run shows a compact plan in its own native confirmation: agent and version, accepted revision and selected count, planned dialogues, models and remaining cumulative budget; full expectations remain in the cards. Always tell apart the draft, the accepted set and the running snapshot: a draft edit drops acceptance and never changes a running or a past run.
+Accepting and running are the owner's decisions in one native dialog: agent_lab_run shows the plan — the ready situations, conversations, the judge's ceiling and the limits — and accepts the ready situations as it starts; agent_lab_accept accepts them without running when the owner asks only for that. Never start a run because a situation was opened.
 
 A long run continues in the background: the conversation stays free, progress above the input comes from stored data, and the result arrives as a message. Esc interrupts your current action, not the run; stop a run only when the owner asks, with agent_lab_run action:"stop", then say what was saved and that a repeat runs every attempt again. A long preparation of scenarios (agent_lab_build) is handed over the same way: the scenarios arrive as a message, so never wait for it or poll; agent_lab_run action:"progress" and action:"stop" work for it too, and stopping it keeps the partial draft.
 
@@ -206,10 +120,10 @@ const SHOWN_ENTRY = 'agent-lab-shown';
 type Prepared = { output: Record<string, unknown>; feed?: Feed; note?: string };
 /** After a stopped preparation: what the partial draft holds. Counts only — the same lines go into the session file. */
 const preparationStoppedLines = (record: Experiment): string[] => {
-  const variants = libraryV1Of(record)?.variants ?? [];
-  return [`Подготовка ${shortId(record.id)} ${record.error ? 'остановлена' : 'успела завершиться до остановки'}.`, variants.length
-    ? `Сохранён черновик: карточек ${variants.length}, из них готовых ${variants.filter(variant => variant.quality === 'ready').length}. Их можно смотреть, править и принимать.`
-    : `Карточки собрать не успели. Запись сохранена: требований ${record.requirements.length}, вызовов модели ${record.usage.calls}.`];
+  const cards = record.librarySnapshot?.formatVersion === 2 ? record.librarySnapshot.cards.length : 0;
+  return [`Подготовка ${shortId(record.id)} ${record.error ? 'остановлена' : 'успела завершиться до остановки'}.`, cards
+    ? `Сохранён черновик: ситуаций ${cards}. Их можно смотреть и менять; подготовку можно продолжить с того же места.`
+    : `Ситуации собрать не успели. Запись сохранена: правил ${record.requirements.length}, вызовов модели ${record.usage.calls}.`];
 };
 
 /** Conversational execution asks the human to authorize a concrete plan; it never invents human reviews. */
@@ -251,12 +165,6 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     if (stored) lists.set(key, stored);
     return stored;
   };
-  /** The card last shown or changed, per library: the only card «её», «там» or «эту» in the owner's next message can mean. Memory only — after a restart the owner is asked. */
-  const seenLibrary = new Map<string, string>();
-  /** When each of those states was shown: redirected to another record of the same library, an edit applies to whichever view is the newer one. */
-  const seenTick = new Map<string, number>();
-  let seenClock = 0;
-  const markSeen = (key: string, hash: string): void => { seenLibrary.set(key, hash); seenTick.set(key, ++seenClock); };
   const open = (cwd: string, pendingCheck: 'cancel' | 'wait' = 'cancel') => operations.acquire(resolve(cwd, '.agent-lab'), pendingCheck);
   /** All surfaces read the live executor when this session owns it, otherwise the durable record. */
   const reading = (directory: string): ExperimentLab => operations.reader(directory);
@@ -285,24 +193,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     if (!records.length) throw new NeedsOwner('unknown_reference', 'В этом проекте ещё нет прогонов. Сначала соберите сценарии: нужны агент и, если есть, логи.');
     throw new NeedsOwner('ambiguous_reference', `Неясно, о каком прогоне речь. Спросите владельца: ${records.slice(0, 8).map(runName).join('; ')}.`, records.slice(0, 8).map(runName));
   };
-  const feedResult = (callId: string, output: unknown, feed: Feed, note: string, ref?: FeedRef) =>
-    ({ content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details: rememberFeed(callId, feed, note, ref) });
-  // A row of an earlier session, or one the cache let go, is redrawn from the immutable revisions it points at — the state it showed, not today's.
-  setFeedRestorer(async ref => {
-    const store = new ExperimentStore(ref.directory);
-    const [record, stored] = await Promise.all([store.get(ref.runId), store.readLibrary(ref.libraryId, ref.hash)]);
-    const library = requireLibraryV1(stored);
-    const then: Experiment = { ...record, librarySnapshot: library };
-    const stamp = row(`Восстановлено из сохранённой ревизии ${library.revision}.`, 'muted');
-    if (ref.view === 'library') { const feed = libraryFeed(then); return { rows: [stamp, ...feed.rows.filter(item => !item.text.startsWith('Вызовы модели')), ], more: feed.more }; }
-    const variant = library.variants.find(item => item.id === ref.variantId);
-    if (!variant) return null;
-    const card = variantFeed(then, variant);
-    if (ref.view === 'card' || !ref.beforeHash) return { rows: [stamp, ...card.rows], more: card.more };
-    const before = requireLibraryV1(await store.readLibrary(ref.libraryId, ref.beforeHash)).variants.find(item => item.id === ref.variantId);
-    return { rows: [stamp, row(`Правка карточки «${safeText(variant.title)}»`, 'success', true), ...(before ? changeRows(variantDiff(before, variant)) : [row('Карточка появилась в этой ревизии.', 'muted', false, 1)])],
-      more: [...card.rows, row(''), ...(card.more ?? [])] };
-  });
+  const feedResult = (callId: string, output: unknown, feed: Feed, note: string) =>
+    ({ content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details: rememberFeed(callId, feed, note) });
   /** An owner question becomes an ordinary result: the feed shows what to clarify, the model is told not to guess. */
   const askOwner = (callId: string, error: unknown) => {
     if (!(error instanceof NeedsOwner)) throw error;
@@ -355,7 +247,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             const failed = [`Подготовка ${shortId(id)} не завершена${finished.phase === 'cancelled' ? ': она остановлена' : ''}.`, ...(finished.error ? [safeText(finished.error)] : [])];
             pi.sendMessage({ customType: BUILD_MESSAGE, display: true, content: JSON.stringify(answer.output),
               details: answer.feed ? rememberFeed(`build:${id}:${finished.updatedAt}`, answer.feed, answer.note ?? `Сценарии прогона ${shortId(id)}`)
-                : rememberFeed(`build:${id}:${finished.updatedAt}`, { rows: finished.phase === 'review' && !finished.error ? [row('Подготовка завершена. Агент не запускался.', 'success', true), ...stateRows(finished)]
+                : rememberFeed(`build:${id}:${finished.updatedAt}`, { rows: finished.phase === 'review' && !finished.error ? [row('Подготовка завершена. Агент не запускался.', 'success', true)]
                   : failed.map((line, index) => row(line, index ? 'error' : 'warning', !index)) }, `Подготовка ${shortId(id)}`),
             }, { deliverAs: 'followUp', triggerTurn: true });
           }
@@ -375,56 +267,58 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       clear: () => { ctx.ui.setStatus?.('agent-lab-progress', undefined); ctx.ui.setWidget?.(widget, undefined); },
     });
   };
-  /** Hash moves made by this session's own semantic rechecks: bookkeeping on top of the state the model saw, never an owner-visible change. */
-  const checkMoves = new Map<string, string>();
   /**
-   * A recheck too long for the row of its edit. The conversation goes on; the outcome arrives as a
-   * message — silently when the card is ready, with a turn when the owner has something to decide.
-   * An assessment the owner asked for (`asked`) always ends with a turn: they are waiting for its answer.
+   * The answer of a preparation that has ended, in the row of its call or as the message of one that outlived it: the
+   * situations found — the counts, who waits for an answer, every situation on expand — and that the agent did not run.
    */
-  const backgroundPreparation = (ctx: ExtensionContext, owned: Awaited<ReturnType<typeof open>>, id: string): void => {
-    detach(ctx, owned.directory, owned, id, 'chat', async finished => {
-      const library = libraryV1Of(finished);
-      if (library) markSeen(`${owned.directory}|${id}`, libraryHash(library));
-      return { output: { ...summary(finished, owned.directory), ...(library ? scenarioLibrarySummary(finished) : {}) },
-        feed: library ? libraryFeed(finished) : undefined, note: `Подготовка ${shortId(id)}` };
-    });
+  const preparedAnswer = async (lab: ExperimentLab, record: Experiment, interrupted: boolean): Promise<Prepared> => {
+    const output = summary(record, lab.store.directory);
+    if (record.librarySnapshot?.formatVersion !== 2 || record.phase !== 'review') return { output };
+    const context = await lab.cardContext(record.id);
+    const views = situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns });
+    const feed = situationsFeed(context.experiment, views);
+    const ready = views.filter(view => view.status === 'ready').length;
+    feed.rows.unshift(row(interrupted ? 'Подготовка прервана; собранное сохранено.' : context.library.imports.length ? 'Ситуации собраны из логов. Агент не запускался.' : 'Ситуации собраны по вашим правилам. Агент не запускался.',
+      interrupted ? 'warning' : 'success', true));
+    // The first number should not wait for every question: what is ready can run now.
+    feed.rows.push(row(ready ? `Готовые (${ready}) можно запустить сразу — первая точность будет по ним; вопросы подождут.`
+      : 'Готовых ситуаций пока нет: у каждой сказано, что нужно, — ответ на её вопрос сделает её готовой.', 'accent', false, 2));
+    return { output: { ...output, counts: countsText(views), situations: views.map(situationEntry) }, feed, note: `Ситуации прогона ${shortId(record.id)}` };
   };
-  const backgroundCheck = (ctx: ExtensionContext, directory: string, id: string, owned: Awaited<ReturnType<typeof open>>, usedBefore: number, startHash: string, variantId?: string, asked = false): void => {
+  const backgroundPreparation = (ctx: ExtensionContext, owned: Awaited<ReturnType<typeof open>>, id: string): void => {
+    detach(ctx, owned.directory, owned, id, 'chat', finished => preparedAnswer(owned.lab, finished, !!finished.error));
+  };
+  /**
+   * A check of changed situations too long for the row of its command. The conversation goes on; the outcome arrives as
+   * a message — quietly when the situation is ready, with a turn when the owner has something to decide.
+   */
+  const backgroundCheck = (ctx: ExtensionContext, owned: Awaited<ReturnType<typeof open>>, id: string, card: number | undefined): void => {
     let shown = '';
+    let usedBefore: number | undefined;
     operations.present(owned, { kind: 'assessment', id, origin: 'chat',
       progress: async () => {
-      const text = `Перепроверяю смысл изменённых карточек · вызовов модели: ${Math.max(0, (await owned.lab.get(id)).usage.calls - usedBefore)}`;
-      if (text === shown) return;
-      shown = text;
-      ctx.ui.setWidget?.(CHECK_MESSAGE, [text, 'Можно продолжать: новая правка перезапустит проверку, уже проверенное не пропадёт.']);
+        const record = await owned.lab.get(id);
+        usedBefore ??= record.usage.calls;
+        const text = `Проверяю ситуации · вызовов модели: ${record.usage.calls - usedBefore}`;
+        if (text === shown) return;
+        shown = text;
+        ctx.ui.setWidget?.(CHECK_MESSAGE, [text, 'Можно продолжать: новая правка перезапустит проверку, проверенное не пропадёт.']);
       },
       complete: async check => {
-        const { experiment, library } = await owned.lab.readLibrary(id);
-        checkMoves.set(`${directory}|${id}|${startHash}`, libraryHash(library));
         if (check.quiet) return;
-        markSeen(`${directory}|${id}`, libraryHash(library));
-        const variant = variantId ? library.variants.find(item => item.id === variantId) : undefined;
-        const failed = experiment.phase !== 'review' || !!experiment.error;
-        const outcome: CheckOutcome = failed ? { status: 'failed', message: safeText(experiment.error ?? experiment.message) }
-          : { status: 'done', calls: Math.max(0, experiment.usage.calls - usedBefore) };
-        const waiting = orderedVariants(library).filter(item => item.quality !== 'ready');
-        const disputed = variant ? disputedCheckpoints(variant) : [];
-        const card = variant ? variantFeed(experiment, variant) : undefined;
-        const feed: Feed = { rows: [checkRow(outcome, variant),
-          ...(variant ? ownerRemarks(variant.issues).slice(0, 3).map(item => row(`• ${safeText(plainIssue(library, variant, item))}`, 'warning', false, 1)) : []),
-          ...(disputed.length ? [row(`Под вопросом проверки: ${disputed.map(item => `«${safeText(item.rule)}»`).join('; ')}. Их можно переписать или убрать — скажите как.`, 'accent', false, 1)] : []),
-          row(`Готовы ${library.variants.length - waiting.length} из ${library.variants.length} карточек.`, 'muted', false, 1)],
-          ...(card ? { more: [...card.rows, row(''), ...(card.more ?? [])] } : {}) };
+        const context = await owned.lab.cardContext(id);
+        const views = situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns });
+        const view = card === undefined ? undefined : views.find(item => item.number === card);
+        const failed = context.experiment.phase !== 'review' || !!context.experiment.error;
+        const feed: Feed = failed ? { rows: [row(`Проверка не завершилась: ${safeText(context.experiment.error ?? context.experiment.message)}`, 'warning', true)] }
+          : view ? situationFeed(view) : situationsFeed(context.experiment, views);
         pi.sendMessage({ customType: CHECK_MESSAGE, display: true,
-          content: JSON.stringify({ status: 'semantic_check_finished', runId: id, check: outcome, ...scenarioLibrarySummary(experiment, library.acceptance?.variantIds ?? []),
-            ...(variant ? { variant: { id: variant.id, title: variant.title, quality: variant.quality, issues: variant.issues.map(item => plainIssue(library, variant, item)), disputedChecks: disputed.map(item => ({ id: item.id, rule: item.rule })) } } : {}),
-            instruction: asked ? 'The semantic assessment the owner asked for finished. Tell them the outcome in one or two sentences; use this libraryHash from now on.'
-              : 'The background recheck of the last edit finished. Mention it only if the owner has something to decide; use this libraryHash from now on.' }),
-          details: rememberFeed(`check:${id}:${libraryHash(library)}`, feed, `Смысловая перепроверка · прогон ${shortId(id)}`),
-        }, { deliverAs: 'followUp', triggerTurn: asked || failed || (!!variant && variant.quality !== 'ready') });
+          content: JSON.stringify({ status: failed ? 'check_failed' : 'check_finished', runId: id, ...(view ? { situation: situationData(view) } : { counts: countsText(views) }),
+            instruction: 'The background check of changed situations finished. Mention it only if the owner has something to decide.' }),
+          details: rememberFeed(`check:${id}:${context.experiment.updatedAt}`, feed, `Проверка ситуаций · прогон ${shortId(id)}`),
+        }, { deliverAs: 'followUp', triggerTurn: failed || (view ? view.status !== 'ready' : views.some(item => item.status === 'needs_owner')) });
       },
-      error: error => ctx.ui.notify?.(`Перепроверка не завершилась: ${inputError(error)}`, 'error'),
+      error: error => ctx.ui.notify?.(`Проверка не завершилась: ${inputError(error)}`, 'error'),
       clear: () => ctx.ui.setWidget?.(CHECK_MESSAGE, undefined),
     });
   };
@@ -531,9 +425,9 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           provider: supplied.provider || ctx.model?.provider || '', model: supplied.model || ctx.model?.id || '' },
       }); } catch (error) { throw plainInputError(error); }
       // The spending question comes last: a request that cannot start never asks the owner for money.
-      if (operation === 'validate' && !await ctx.ui.confirm('Разобрать логи и собрать сценарии?', safeText([
-        `Диалогов в выгрузке: ${sourceDialogueCount}; к разбору подходят ${parsedDialogues.length}; карточек получится не больше ${Math.min(validationCount, Math.max(parsedDialogues.length, 1))}.`,
-        'Один подходящий диалог — одна карточка. Диалоги без правил владельца или с недоступными данными клиента исключаются с причиной; прежние оценки не используются.',
+      if (operation === 'validate' && !await ctx.ui.confirm('Разобрать логи и собрать ситуации?', safeText([
+        `Диалогов в выгрузке: ${sourceDialogueCount}; к разбору подходят ${parsedDialogues.length}; ситуаций получится не больше ${Math.min(validationCount, Math.max(parsedDialogues.length, 1))}.`,
+        'Один подходящий диалог — одна ситуация. Диалоги без правил владельца или с недоступными данными клиента исключаются с причиной; прежние оценки не используются.',
         `Это расход на модель: не больше ${input.settings.maxCalls} вызовов и ${Math.ceil(input.settings.maxDurationMs / 60_000)} минут. Это потолок, а не прогноз: тратится только то, что понадобится на эти диалоги. Агент сейчас не запускается — запуск подтверждается отдельно.`,
       ].join('\n')))) return feedResult(callId, { status: 'cancelled', calls: 0, mutated: false, message: 'The owner declined. Nothing was spent or changed; do not ask again unless they request it.' },
         { rows: [row('Разбор логов отменён. Ничего не потрачено и не изменено.', 'warning')] }, 'Разбор логов отменён');
@@ -549,7 +443,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       const progress = async () => {
         if (!id || !onUpdate) return;
         const record = await lab.get(id);
-        const text = safeText(`${record.phase === 'preparing' ? 'Готовлю требования и тест' : 'Тест готов'}: ${record.message} · вызовов ${record.usage.calls}`);
+        const text = safeText(`${record.phase === 'preparing' ? 'Готовлю ситуации' : 'Ситуации готовы'}: ${record.message} · вызовов ${record.usage.calls}`);
         if (text !== lastProgress) { lastProgress = text; onUpdate({ content: [{ type: 'text', text }], details: { id, phase: record.phase } }); }
       };
       const cancel = () => { if (id) void lab.cancel(id).catch(() => {}); };
@@ -564,24 +458,14 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
             artifacts: await exportArtifacts(bundle, lab.store.directory), ...(interrupted ? { cancelled: true } : {}) };
           returnToBoard(ctx, record.id);
           focus.set(lab.store.directory, record.id);
-          // A prepared library answers with the scenarios themselves: what was found, what is ready, what waits for the owner.
-          const library = libraryV1Of(record);
-          if (!library || record.phase !== 'review') return { output };
-          markSeen(`${lab.store.directory}|${record.id}`, libraryHash(library));
-          const feed = libraryFeed(record);
-          const readyCount = library.variants.filter(variant => variant.quality === 'ready').length;
-          feed.rows.unshift(row(interrupted ? 'Подготовка прервана; разобранное сохранено.' : library.imports.length ? 'Сценарии собраны из логов. Агент не запускался.' : 'Сценарии собраны по требованиям. Агент не запускался.', interrupted ? 'warning' : 'success', true),
-            // The first number should not wait for every dispute: what is ready can run now.
-            row(readyCount ? `Готовые карточки (${readyCount}) можно принять и запустить прямо сейчас — первая точность будет по ним; спорные разберём после.`
-              : 'Готовых карточек пока нет. По каждой ниже сказано, что мешает: вопрос проверяющего можно закрыть вашим решением, и карточка станет готовой.', 'accent'));
-          return { output: { ...output, ...scenarioLibrarySummary(record, library.acceptance?.variantIds ?? []),
-            groups: library.businessScenarios.map((group, index) => ({ number: index + 1, id: group.id, title: group.title })),
-            variants: orderedVariants(library).map((variant, index) => ({ number: index + 1, id: variant.id, title: variant.title, quality: variant.quality, provenance: variant.provenance, issueCount: variant.issues.length })) },
-            feed, note: `Сценарии прогона ${shortId(record.id)} · ревизия ${library.revision}` };
+          // A prepared draft answers with the situations themselves: what was found, what is ready, what waits for the owner.
+          // The answer adds the situations; the exported files and the validation counts of this call stay as they are.
+          const situations = await preparedAnswer(lab, record, interrupted);
+          return { ...situations, output: { ...situations.output, ...output } };
         };
         // In the terminal Esc interrupts the action, not the work: from here an abort hands the preparation over instead of cancelling it.
         if (interactive) signal.removeEventListener('abort', cancel);
-        id = (await lab.create(input)).id;
+        id = (await lab.create(input, { cards: true })).id;
         if (signal.aborted && !interactive) cancel();
         await progress();
         timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);
@@ -698,7 +582,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const details: VerdictDetails = { kind: VERDICT_KIND, version: 1, runId: record.id, resultKey };
           return { content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details };
         }
-        return feedResult(callId, output, libraryFeed(record), note);
+        const { views } = await situationsNow(lab, record);
+        return feedResult(callId, { ...output, situations: views.map(situationEntry) }, situationsFeed(record, views), note);
       } catch (error) { return askOwner(callId, error); }
     },
   });
@@ -717,18 +602,19 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       const feed = statusFeed(records, active);
       if (active) feed.rows.push(...progressLines(await active.lab.get(active.id)).map(line => row(line, 'accent')));
       const output = { runs: records.slice(0, 40).map(record => ({ id: record.id, shortId: shortId(record.id), task: record.task, phase: record.phase, updatedAt: record.updatedAt,
-        variants: libraryV1Of(record)?.variants.length ?? record.scenarios.length, acceptedVariants: libraryV1Of(record)?.acceptance?.variantIds.length ?? null,
+        situations: record.librarySnapshot?.formatVersion === 2 ? record.librarySnapshot.cards.length : record.librarySnapshot?.formatVersion === 1 ? record.librarySnapshot.variants.length : record.scenarios.length,
+        accepted: !!record.librarySnapshot?.acceptance,
         trials: record.trials.length, plannedTrials: plannedTrials(record), parentRunId: record.parentRunId })),
         workingOn: focus.get(directory) ?? null, runningInThisSession: active?.id ?? null,
         activeOperation: active ? { id: active.operationId, runId: active.id, kind: active.kind } : null };
       return feedResult(callId, output, feed, `Agent Lab · прогонов: ${records.length}`);
     },
   });
-  registerScenarioTool(pi, { inlineCheckMs, open, reading, feedResult, askOwner, findRun, focus, seenLibrary, seenTick, markSeen, checkMoves, backgroundCheck, backgroundPreparation, operations, summary });
+  registerCardTools(pi, { inlineCheckMs, operations, open, reading, findRun, focus, feedResult, askOwner, backgroundCheck, backgroundPreparation });
   pi.registerTool({
     ...displayFor('agent_lab_edit'),
     name: 'agent_lab_edit', label: 'Edit an unapproved agent draft',
-    description: 'Edit the run settings, the agent connection (target), targetVersion or the agent label of a draft after inspecting its current draftHash. Situations and their expectations change only in the scenario library (agent_lab_scenarios). Human approval stays pending. Cannot change started experiments, run dialogues, record human verdicts, or approve results.',
+    description: 'Edit the run settings, the agent connection (target), targetVersion or the agent label of a draft after inspecting its current draftHash. Situations change only through the situation tools (agent_lab_card_*). Human approval stays pending. Cannot change started experiments, run dialogues, record human verdicts, or approve results.',
     parameters: Type.Object({ id: Type.String({ pattern: identifierPattern }), expectedHash: Type.String({ pattern: sha256Pattern }), patch: Type.Unsafe(z.toJSONSchema(draftPatchSchema, { io: 'input' })) }, { additionalProperties: false }),
     executionMode: 'sequential',
     async execute(callId, params, signal, _onUpdate, ctx) {
@@ -752,7 +638,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           patch.agent ? 'описание агента' : ''].filter(Boolean);
         const feed: Feed = { rows: [row(`Черновик обновлён: ${safeText(parts.join(', ') || 'без видимых изменений')}.`, 'success', true),
           row(`Агент: ${safeText(targetText(record).replaceAll(`${ctx.cwd}/`, ''))}${record.targetVersion ? ` · версия ${safeText(record.targetVersion)}` : ''}`, undefined, false, 1),
-          row('После изменения запуск подтверждается заново.', 'muted', false, 1), ...stateRows(record)],
+          row('После изменения запуск подтверждается заново.', 'muted', false, 1)],
           ...(output.sheetLines ? { more: output.sheetLines.map(line => row(safeText(line))) } : {}) };
         return feedResult(callId, output, feed, `Черновик обновлён · прогон ${shortId(record.id)}`);
       } finally { await close(); }
@@ -761,16 +647,29 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   pi.registerTool({
     ...displayFor('agent_lab_accept'),
     name: 'agent_lab_accept', label: 'Confirm what the agent must do',
-    description: "Show the owner what the agent must do in each situation of the set (or the complete one-test definition) and record their confirmation. The consent comes from a native Pi dialog only; the model never supplies it. It never runs the agent, calls a model, or saves a suite.",
+    description: "Accept the ready situations of a draft for a run without running it (agent_lab_run accepts them itself in the same dialog that starts the run); for a draft of a record made before situations, show what the agent must do in each and record the owner's confirmation. The consent comes from a native Pi dialog only; the model never supplies it. It never runs the agent or calls a model.",
     parameters: Type.Object({ id: Type.String({ pattern: identifierPattern }) }, { additionalProperties: false }),
     executionMode: 'sequential',
-    async execute(_callId, params, signal, _onUpdate, ctx) {
+    async execute(callId, params, signal, _onUpdate, ctx) {
       requireInteractive(ctx, 'Для принятия теста нужен интерактивный терминал. В CLI используйте accept --id RUN --yes.');
       signal?.throwIfAborted();
       const { lab, close } = await open(ctx.cwd);
       try {
         await lab.init();
         const record = await lab.get(params.id);
+        if (record.librarySnapshot?.formatVersion === 2 && record.phase === 'review') {
+          const context = await lab.cardContext(record.id);
+          const views = situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns });
+          const ready = views.filter(view => view.status === 'ready');
+          if (!ready.length) return askOwner(callId, new NeedsOwner('needs_owner_input', 'Утверждать нечего: ни одна ситуация не готова. Покажите владельцу вопросы по ситуациям.'));
+          const picked = await ctx.ui.select(safeText([`Утвердить готовые ситуации (${ready.length}) для прогона?`, '', ...ready.map(view => `${view.number}  ${view.brief.title}`),
+            '', 'Агент сейчас не запускается; запуск — отдельно.'].join('\n')), ['Утвердить', 'Не сейчас']);
+          if (picked !== 'Утвердить') return feedResult(callId, { accepted: false, message: 'The owner did not accept. Nothing changed.' }, { rows: [row('Не утверждено. Агент не запускался.', 'warning')] }, 'Не утверждено');
+          const accepted = await lab.acceptCards(record.id, libraryHash(context.library), ready.map(view => view.id));
+          returnToBoard(ctx, record.id);
+          return feedResult(callId, { accepted: true, id: record.id, situations: ready.map(view => view.number), draftHash: draftHash(accepted.experiment) },
+            { rows: [row(`Утверждено ситуаций: ${ready.length}. Агент не запускался — скажите «запусти».`, 'success', true)] }, `Утверждены ситуации · прогон ${shortId(record.id)}`);
+        }
         // A set of more than one situation is confirmed as one sheet (UI-D-03); one test keeps its own definition.
         if (record.workflow === 'evaluate' && record.phase === 'review' && record.scenarios.length > 1) {
           const answer = (output: Record<string, unknown>) => {
@@ -837,7 +736,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const moved = !!source.targetFingerprint && !!record.targetFingerprint && !sameTargetVersion(source.targetFingerprint, record.targetFingerprint);
           const feed: Feed = { rows: [row(`Подготовлен повтор: ${record.scenarios.length} из ${source.scenarios.length} ситуаций прогона ${shortId(source.id)}. Исходный прогон сохранён.`, 'success', true),
             row(moved ? 'Код агента изменился с прошлого прогона: проверяется новая версия.' : 'Код агента с прошлого прогона не менялся.', moved ? 'accent' : 'muted', false, 1),
-            row('Ожидания те же, результаты и подтверждения очищены. После запуска результат сравнится с исходным прогоном.', 'muted', false, 1), ...stateRows(record)],
+            row('Ожидания те же, результаты и подтверждения очищены. После запуска результат сравнится с исходным прогоном.', 'muted', false, 1)],
             more: record.scenarios.map((item, index) => row(`${index + 1}. ${safeText(item.title)}`, undefined, false, 1)) };
           return feedResult(callId, { ...summary(record, lab.store.directory), sourceRunId: source.id, agentCodeChanged: moved }, feed, `Повтор прогона ${shortId(source.id)} → ${shortId(record.id)}`);
         } finally { await close(); }
@@ -865,18 +764,15 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const running = isRunning(record.phase);
           // A preparation of this session is answered in its own words: no dialogue is planned before the scenarios exist.
           if (job?.kind === 'assessment' && job.id === record.id) {
-            const library = libraryV1Of(record);
-            const work = library ? semanticWorkStatus(library) : undefined;
-            const message = `Смысловая проверка ${shortId(record.id)} идёт в фоне · вызовов модели ${record.usage.calls} из ${record.settings.maxCalls}.`;
+            const message = `Проверка ситуаций ${shortId(record.id)} идёт в фоне · вызовов модели ${record.usage.calls} из ${record.settings.maxCalls}.`;
             return feedResult(callId, { id: record.id, operationId: job.operationId, operationKind: job.kind, phase: record.phase,
               running, assessment: true, preparation: false, ownedByThisSession: true, usage: record.usage, maxCalls: record.settings.maxCalls,
-              ...(work ? { completedJobs: work.completedJobs, pendingJobs: work.pendingJobs } : {}),
-              instruction: 'The semantic check is active in this session. Its result will arrive as a message; stop cancels this check and preserves the draft. Do not poll.' },
-              { rows: [row(message, 'accent')] }, `Смысловая проверка ${shortId(record.id)}`);
+              instruction: 'The check of changed situations is active in this session. Its result will arrive as a message; stop cancels it and keeps the draft. Do not poll.' },
+              { rows: [row(message, 'accent')] }, `Проверка ситуаций ${shortId(record.id)}`);
           }
           const preparing = record.phase === 'preparing';
           const unusable = record.trials.filter(trial => trial.outcome === 'invalid' || trial.outcome === 'cancelled').length;
-          const feed: Feed = { rows: running ? progressLines(record).map(line => row(safeText(line), 'accent')) : [row(`Прогон ${shortId(record.id)} сейчас не идёт.`, 'muted'), ...stateRows(record)] };
+          const feed: Feed = { rows: running ? progressLines(record).map(line => row(safeText(line), 'accent')) : [row(`Прогон ${shortId(record.id)} сейчас не идёт.`, 'muted')] };
           if (preparing) return feedResult(callId, { id: record.id, phase: record.phase, running, preparation: true, ownedByThisSession: !!job && job.id === record.id, usage: record.usage, maxCalls: record.settings.maxCalls,
             ...(job?.id === record.id ? { instruction: 'The preparation continues in the background; its result will arrive as a message. Do not poll.' } : {}) },
             feed, `Подготовка ${shortId(record.id)}`);
@@ -887,7 +783,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           if (!job) throw new Error('В этой сессии нет идущего прогона, подготовки или смысловой проверки. Работа, запущенная в другой сессии Pi, останавливается только там.');
           const preparation = job.kind === 'preparation';
           const assessment = job.kind === 'assessment';
-          const going = `${assessment ? 'смысловая проверка' : preparation ? 'подготовка' : 'прогон'} ${shortId(job.id)}`;
+          const going = `${assessment ? 'проверка ситуаций' : preparation ? 'подготовка' : 'прогон'} ${shortId(job.id)}`;
           // The run the owner named must be the one that is going: another run is never stopped in its place.
           if (params.id) {
             const named = await findRun(directory, params.id, ctx);
@@ -897,20 +793,14 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           await operations.stop(job);
           const record = await reading(directory).get(job.id);
           if (assessment) {
-            const library = libraryV1Of(record);
-            if (library) markSeen(`${directory}|${record.id}`, libraryHash(library));
-            const work = library ? semanticWorkStatus(library) : undefined;
-            const message = `Смысловая проверка ${shortId(record.id)} остановлена. Правки и записанные результаты проверки сохранены. Незавершённые проверки можно продолжить.`;
-            return feedResult(callId, { id: record.id, operationId: job.operationId, operationKind: job.kind, phase: record.phase,
-              stopped: true, savedVariants: library?.variants.length ?? 0, usage: record.usage,
-              ...(work ? { completedJobs: work.completedJobs, pendingJobs: work.pendingJobs } : {}), message },
-              { rows: [row(message, 'warning'), ...stateRows(record)] }, `Смысловая проверка ${shortId(record.id)} остановлена`);
+            const message = `Проверка ситуаций ${shortId(record.id)} остановлена. Правки и уже проверенное сохранены; остальное можно проверить позже.`;
+            return feedResult(callId, { id: record.id, operationId: job.operationId, operationKind: job.kind, phase: record.phase, stopped: true, usage: record.usage, message },
+              { rows: [row(message, 'warning')] }, `Проверка ситуаций ${shortId(record.id)} остановлена`);
           }
           if (preparation) {
             const saved = preparationStoppedLines(record);
-            const library = libraryV1Of(record);
-            if (library) markSeen(`${directory}|${record.id}`, libraryHash(library));
-            return feedResult(callId, { id: record.id, phase: record.phase, stopped: true, savedVariants: library?.variants.length ?? 0, savedRequirements: record.requirements.length, usage: record.usage, message: saved.join(' ') },
+            const situations = record.librarySnapshot?.formatVersion === 2 ? record.librarySnapshot.cards.length : 0;
+            return feedResult(callId, { id: record.id, phase: record.phase, stopped: true, savedSituations: situations, savedRequirements: record.requirements.length, usage: record.usage, message: saved.join(' ') },
               { rows: saved.map((line, index) => row(safeText(line), index ? 'muted' : 'warning', !index)) }, `Подготовка ${shortId(record.id)} остановлена`);
           }
           const lines = stoppedLines(record);
@@ -933,19 +823,15 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           if (draft.workflow !== 'evaluate' || (params.expectedHash && params.expectedHash !== hash)) throw new Error('План изменился. Прочитайте актуальный черновик через agent_lab_inspect.');
           if (draft.phase !== 'review') throw new Error(isRunning(draft.phase) ? `Прогон ${shortId(draft.id)} уже идёт.`
             : `Прогон ${shortId(draft.id)} уже выполнен, его результат не меняется. Чтобы проверить снова, подготовьте повтор (agent_lab_repeat).`);
-          if (draft.librarySnapshot && !draft.librarySnapshot.acceptance) throw new NeedsOwner('needs_owner_input',
-            'Набор ещё не принят: после разбора логов или правки карточек владелец принимает набор заново. Покажите сценарии и предложите принять готовые; запуск будет после этого.');
-          // UI-D-02 in chat: unconfirmed expectations are confirmed in the same native dialog that starts the run.
-          const confirmed = draft.acceptedDraftHash === hash;
-          const plan = runPlan(draft, ctx.cwd);
-          if (!await ctx.ui.confirm(confirmed ? 'Запустить проверку?' : 'Подтвердить ожидания и запустить?', plan)) {
-            const output = { id: draft.id, cancelled: true, message: 'Запуск отменён. Тесты сохранены; не повторяйте запрос запуска без новой просьбы пользователя.' };
-            return { content: [{ type: 'text' as const, text: JSON.stringify(output) }],
-              details: rememberFeed(callId, { rows: [row('Запуск отменён. Набор сохранён, агент не запускался.', 'warning')] }, 'Запуск отменён') };
-          }
+          // Nothing has started yet: an Esc before the dialog ends the action.
           signal.throwIfAborted();
-          if (!confirmed) await owned.lab.acceptDraft(draft.id, hash);
-          await owned.lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: hash, parallel: runParallel(draft), requireAccepted: true });
+          // One native dialog: a card draft is accepted with its ready situations as it starts; unconfirmed expectations are confirmed with the run.
+          if (!await launchRun(ctx, owned.lab, draft)) {
+            const output = { id: draft.id, cancelled: true, message: 'Запуск отменён. Ситуации сохранены; не повторяйте запрос запуска без новой просьбы пользователя.' };
+            return { content: [{ type: 'text' as const, text: JSON.stringify(output) }],
+              details: rememberFeed(callId, { rows: [row('Запуск отменён. Ситуации сохранены, агент не запускался.', 'warning')] }, 'Запуск отменён') };
+          }
+          // The run has started: from here an Esc, even one pressed while it was starting, hands it to the session.
           const progress = async () => {
             const r = await owned.lab.get(draft.id);
             const text = safeText(progressLine(r));
@@ -958,7 +844,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const inline = await new Promise<boolean>(settle => {
             const wait = setTimeout(() => settle(false), inlineRunMs);
             const onAbort = () => settle(false);
-            signal.addEventListener('abort', onAbort, { once: true });
+            if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
             void owned.lab.waitForIdle().then(() => settle(true), () => settle(true)).finally(() => { clearTimeout(wait); signal.removeEventListener('abort', onAbort); });
           });
           clearInterval(timer); timer = undefined; await polling;
@@ -1056,532 +942,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       } finally { signal?.removeEventListener('abort', cancel); await close(); }
     },
   });
-  pi.registerTool({
-    ...displayFor('agent_lab_review'), name: 'agent_lab_review', label: 'Ask for a human verdict',
-    description: 'Show a recorded dialogue and its evidence, then ask the human to choose a verdict and explanation in native Pi UI. Call after discussing a concrete finding. Only id and trialId are accepted: the model cannot supply a human verdict. Cancellation saves no annotation. After a confirmed dev failure, use agent_lab_prompt for a requested fix.',
-    parameters: Type.Object({ id: Type.String(), trialId: Type.String() }, { additionalProperties: false }),
-    executionMode: 'sequential',
-    async execute(_callId, params, toolSignal, _onUpdate, ctx) {
-      const { id, trialId } = z.strictObject({ id: z.string().uuid(), trialId: z.string().min(1) }).parse(params);
-      requireInteractive(ctx, 'Вердикт человека требует интерактивного терминала.');
-      const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
-      signal.throwIfAborted();
-      const { lab, close } = await open(ctx.cwd);
-      try {
-        await lab.init();
-        let record = await lab.get(id);
-        if (record.workflow !== 'evaluate' || !['results_review', 'complete'].includes(record.phase)) throw new Error('Нужен завершённый прогон.');
-        const selected = reviewOrder(record).findIndex(t => t.id === trialId);
-        const trial = reviewOrder(record)[selected];
-        if (!trial) throw new Error('Такого диалога в этом эксперименте нет.');
-        const started = performance.now();
-        // The native multiline viewer scrolls long traces. Its editable copy is never persisted.
-        const viewed = await ctx.ui.editor('Прочитайте диалог · Enter — к оценке, Esc — закрыть. Исходная запись сохранится.',
-          trialLines(trial, record, true).map(line => safeText(line.text)).join('\n')) !== undefined;
-        signal.throwIfAborted();
-        const reviews = viewed ? await humanAnnotation(ctx, record, selected, performance.now() - started) : undefined;
-        signal.throwIfAborted();
-        if (!reviews) return { content: [{ type: 'text', text: JSON.stringify({ id, cancelled: true, message: 'Оценка отменена. Не запрашивайте её снова без просьбы пользователя.' }) }], details: { cancelled: true } };
-        for (const review of reviews) record = await lab.addHumanReview(id, review);
-        const bundle = await evidenceBundle(record, lab.store);
-        const output = { ...summary(record, lab.store.directory, bundle.view), artifacts: await exportArtifacts(bundle, lab.store.directory) };
-        return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }], details: output };
-      } finally { await close(); }
-    },
-  });
-  pi.registerTool({
-    ...displayFor('agent_lab_agree'), name: 'agent_lab_agree', label: 'Owner marks the judge\'s decision',
-    description: 'The owner\'s own mark on the judge\'s decision about one situation of a finished run: согласен, не согласен (with their reason) or не могу сказать. The answer is chosen by the owner in a native Pi dialog; you pass only which situation (failure: its number in the failure list, or dialogue: its title or number) and can never supply the answer. This is what tells how far the accuracy number can be trusted.',
-    parameters: Type.Object({ id: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), failure: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.String({ minLength: 1, maxLength: 300 })])),
-      dialogue: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })) }, { additionalProperties: false }),
-    executionMode: 'sequential',
-    async execute(callId, params, signal, _onUpdate, ctx) {
-      signal?.throwIfAborted();
-      requireInteractive(ctx, 'Отметку о решении судьи ставит только владелец в интерактивном терминале.');
-      const directory = resolve(ctx.cwd, '.agent-lab');
-      try {
-        const record = await findRun(directory, params.id, ctx);
-        if (record.workflow !== 'evaluate' || !['results_review', 'complete'].includes(record.phase)) throw new Error('Отметить согласие с судьёй можно в завершённом прогоне.');
-        const view = buildResultView(record);
-        const titles = record.scenarios.map((item, index) => `${index + 1}. ${safeText(item.title)}`);
-        const wanted = String(params.failure ?? params.dialogue ?? '').trim();
-        if (!wanted) throw new NeedsOwner('needs_owner_input', 'Не сказано, о какой ситуации речь. Спросите владельца.', titles.slice(0, 15));
-        const remembered = recallShown(ctx, 'failures', record.id) ?? view.failures.map(item => item.scenarioId);
-        const scenarioId = params.failure !== undefined && /^#?\d+$/.test(wanted) ? remembered[Number(wanted.replace('#', '')) - 1]
-          : /^#?\d+$/.test(wanted) ? record.scenarios[Number(wanted.replace('#', '')) - 1]?.id
-          : record.scenarios.filter(item => item.title.toLocaleLowerCase('ru').includes(wanted.toLocaleLowerCase('ru'))).map(item => item.id).find((_, index, all) => all.length === 1);
-        const scenario = record.scenarios.find(item => item.id === scenarioId);
-        if (!scenario) throw new NeedsOwner('unknown_reference', `Ситуация «${wanted}» не найдена однозначно. Спросите владельца, какая нужна.`, titles.slice(0, 15));
-        const attempts = record.trials.filter(item => item.scenarioId === scenario.id);
-        const trial = attempts.find(item => item.id === view.failures.find(failure => failure.scenarioId === scenario.id)?.trialId) ?? attempts[0];
-        const targets = trial ? markTargets(scenario, trial) : undefined;
-        if (!trial || !targets) throw new Error(`У ситуации «${safeText(scenario.title)}» нет решения судьи, с которым можно согласиться или поспорить.`);
-        const failed = targets.verdict === 'fail';
-        const started = performance.now();
-        const options = ['Согласен с судьёй', 'Не согласен с судьёй', 'Не могу сказать'];
-        const picked = await ctx.ui.select(safeText(`«${scenario.title}» — судья решил: ${failed ? 'не справился' : 'справился'}. Ваше мнение?`), options);
-        if (!picked) return feedResult(callId, { cancelled: true, mutated: false }, { rows: [row('Отметка не поставлена.', 'muted')] }, 'Отметка не поставлена');
-        const answer = picked === options[0] ? 'agree' as const : picked === options[1] ? 'disagree' as const : 'unsure' as const;
-        let note = answer === 'agree' ? 'Быстрая отметка: согласен с судьёй.' : 'Быстрая отметка: не могу сказать.';
-        if (answer === 'disagree') {
-          const reason = await ctx.ui.editor(`Судья решил: ${failed ? 'не справился' : 'справился'}. Почему вы не согласны? Коротко, своими словами.`, '');
-          if (!reason?.trim()) return feedResult(callId, { cancelled: true, mutated: false }, { rows: [row('Несогласие не сохранено: нужна ваша причина.', 'warning')] }, 'Отметка не поставлена');
-          note = reason.trim().slice(0, 3000);
-        }
-        const { lab, close } = await open(ctx.cwd);
-        try {
-          await lab.init();
-          const verdict = answer === 'unsure' ? 'unknown' as const : answer === 'disagree' ? (failed ? 'pass' as const : 'fail' as const) : targets.verdict;
-          const durationMs = Math.min(3600000, Math.round(performance.now() - started));
-          for (const [index, metricId] of targets.metricIds.entries()) await lab.addHumanReview(record.id, { trialId: trial.id, metricId, source: 'quick', verdict, judgeVerdict: targets.verdict, note, ...(index === 0 ? { durationMs } : {}) });
-          const after = await lab.get(record.id);
-          const agreement = judgeAgreement(after);
-          const fresh = buildResultView(after);
-          const word = answer === 'agree' ? 'согласен с судьёй' : answer === 'disagree' ? 'не согласен с судьёй' : 'не могу сказать';
-          const feed: Feed = { rows: [row(`Отмечено вашим решением: ${word} · «${safeText(scenario.title)}»`, 'success', true),
-            row(agreement.queueFailures.length ? `Проверено провалов: ${agreement.failures.checked} из ${agreement.queueFailures.length}.` : `Проверено успехов: ${agreement.sampleChecked} из ${agreement.sampledPasses.length}.`, undefined, false, 1),
-            row(safeText(accuracyRow(fresh).text), answer === 'disagree' ? 'accent' : 'muted', false, 1)] };
-          return feedResult(callId, { id: record.id, scenarioId: scenario.id, trialId: trial.id, answer, headline: accuracyRow(fresh).text, checkedFailures: agreement.failures.checked, queueFailures: agreement.queueFailures.length }, feed,
-            `Отметка владельца · прогон ${shortId(record.id)}`);
-        } finally { await close(); }
-      } catch (error) { return askOwner(callId, error); }
-    },
-  });
-  pi.registerCommand('agent-lab', {
-    description: 'Проверить агента: /agent-lab, /agent-lab demo или /agent-lab /путь/к/проекту',
-    async handler(args, ctx) {
-      requireInteractive(ctx, 'Human review requires the native Pi terminal. Start interactive Pi and open /agent-lab. Headless tools only prepare and edit drafts.');
-      const startRequest = args.trim() === 'new' || args.trim().startsWith('/') || args.trim().startsWith('~');
-      let handoff: { request: string; context: unknown } | undefined;
-      // Opening history is a read, not a writer operation. In particular, never call init()
-      // here: it acquires the lock and recovers running records as interrupted.
-      const directory = resolve(ctx.cwd, '.agent-lab');
-      const reader = operations.reader(directory);
-      let lab = reader;
-      let lease: Awaited<ReturnType<typeof open>> | undefined;
-      const reading = () => operations.reader(directory);
-      const release = async () => {
-        const owned = lease; lease = undefined; lab = reader;
-        if (owned) await owned.close();
-      };
-      const writing = async (pendingCheck: 'cancel' | 'wait' = 'cancel') => {
-        if (lease) return;
-        const owned = await open(ctx.cwd, pendingCheck);
-        try { await owned.lab.init(); lease = owned; lab = owned.lab; }
-        catch (error) { await owned.close(); throw error; }
-      };
-      try {
-        let id = startRequest || args.trim() === 'demo' ? undefined : args.trim() || undefined;
-        if (id) {
-          const candidates = (await reading().list()).filter(record => record.id === id || record.id.startsWith(id!));
-          const exact = candidates.find(record => record.id === id);
-          if (exact) id = exact.id;
-          else if (candidates.length === 1) id = candidates[0]!.id;
-          else throw new Error(candidates.length ? 'Нашлось несколько прогонов. Откройте /agent-lab и выберите нужный.' : 'Прогон не найден. Откройте /agent-lab, чтобы посмотреть историю.');
-        }
-        let section: Section | undefined;
-        let selected = 0;
-        let query = '';
-        let pendingOnly = false;
-        let dialogueOpen = false;
-        let beforeId: string | undefined;
-        let newRequested = startRequest;
-        let demoRequested = args.trim() === 'demo';
-        let reportPath: string | undefined;
-        const scenarioSelections = new Map<string, string[]>();
-        // Elapsed time with the dialogue visible plus its verdict form, including time spent idle.
-        const reviewTimes = new Map<string, number>();
-        let notice: BoardOptions['notice'];
-        const inform = (message: string, kind: 'success' | 'info' | 'error' = 'success') => {
-          notice = { message: safeText(message), kind };
-        };
-        while (true) {
-          const record = id ? await reading().get(id) : undefined;
-          const variantLibrary = record && libraryV1Of(record);
-          if (record && variantLibrary && !scenarioSelections.has(record.id)) scenarioSelections.set(record.id, variantLibrary.acceptance?.variantIds.slice()
-            ?? variantLibrary.variants.filter(variant => variant.quality === 'ready').map(variant => variant.id));
-          const bundle = record ? await evidenceBundle(record, reader.store, beforeId) : undefined;
-          const action: BoardAction = demoRequested ? { type: 'demo' } : newRequested ? { type: 'new' } : await showBoard(ctx, record
-            ? { record, section, selected, query, pendingOnly, dialogueOpen, selectedVariantIds: scenarioSelections.get(record.id), comparison: bundle?.comparison, before: bundle?.before, notice, reportPath, reviewTimes,
-                warnings: bundle?.warnings, view: bundle?.view, load: async () => evidenceBundle(await reading().get(record.id), reader.store, beforeId) }
-            : { records: await reading().list(), loadRecords: () => reading().list(), notice, warnings: reader.store.diagnostics.map(d => `${d.id}: ${d.message}`) });
-          notice = undefined;
-          if ('record' in action && (action.record.updatedAt !== record?.updatedAt || action.record.phase !== record?.phase)) reportPath = undefined;
-          if (action.type === 'demo') {
-            demoRequested = false;
-            try {
-              await writing();
-              const draft = await lab.create(demoInput());
-              await lab.waitForIdle();
-              id = draft.id; section = 'cards'; selected = 0; query = ''; pendingOnly = false; beforeId = undefined; reportPath = undefined;
-              inform('Учебный пример: агент переспрашивает уже названный номер терминала. Подтвердите спорный факт, примите варианты и запустите. Модель и провайдер не нужны.');
-            } catch (error) { inform(inputError(error), 'error'); }
-            finally { await release(); }
-            continue;
-          }
-          if (action.type === 'new') {
-            const request = newRequested && args.trim() !== 'new' ? `Проверь агента в ${args.trim()}`
-              : await ctx.ui.editor('Папка агента и что проверить · своими словами', '');
-            newRequested = false;
-            if (!request?.trim()) continue;
-            handoff = { request, context: { task: 'Prepare a new Agent Lab draft. Ask once for optional real dialogue logs or an explicit choice to start without them; honor the answer already given in this conversation. Read the authorized local agent project and relevant materials; infer or prepare its adapter. Use agent_lab_build, then explain the proposed user scenarios in plain language. Explain the first test and use agent_lab_run when the user asked to check the agent. Do not claim human review. Follow the agent-builder skill.' } };
-            break;
-          }
-          if (action.type === 'open') { id = action.id; section = undefined; selected = 0; query = ''; pendingOnly = false; dialogueOpen = false; beforeId = undefined; reportPath = undefined; continue; }
-          if (action.type === 'close' || action.type === 'back') {
-            // Navigating away is not cancellation. The session owns a started run until
-            // completion (or Pi shutdown), independently of this board's lifetime.
-            if (action.type === 'close') break;
-            id = undefined; section = undefined; selected = 0; query = ''; pendingOnly = false; dialogueOpen = false; beforeId = undefined; reportPath = undefined; continue;
-          }
-          section = action.section; selected = action.selected;
-          if ('selectedVariantIds' in action) scenarioSelections.set(action.record.id, action.selectedVariantIds);
-          query = 'query' in action ? action.query ?? '' : ''; pendingOnly = 'pendingOnly' in action ? action.pendingOnly ?? false : false;
-          dialogueOpen = 'dialogueOpen' in action ? action.dialogueOpen ?? false : false;
-          try {
-            if (!['discuss', 'export', 'openReport', 'cancel'].includes(action.type)) await writing(action.type === 'acceptLibrary' ? 'wait' : 'cancel');
-            if (action.type === 'acceptLibrary') {
-              const shown = libraryV1Of(action.record);
-              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
-              const accepted = await lab.acceptLibrary(action.record.id, libraryHash(shown), action.variantIds);
-              scenarioSelections.set(action.record.id, accepted.library.acceptance!.variantIds.slice());
-              section = 'agent'; selected = 0;
-              inform(`Принята ревизия ${accepted.library.revision}: ${action.variantIds.length} вариантов. Агент не запускался. 3 — проверить план запуска.`);
-            } else if (action.type === 'editScenario') {
-              const shown = libraryV1Of(action.record);
-              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
-              const variant = shown.variants.find(item => item.id === action.variantId);
-              if (!variant) throw new Error('Выбранный вариант уже отсутствует.');
-              const textFields = [
-                { label: 'Первая реплика пользователя', field: 'opening' as const, value: variant.userState.opening },
-                { label: 'Цель пользователя', field: 'goal' as const, value: variant.userState.goal },
-                { label: 'Ожидаемый результат', field: 'successCriteria' as const, value: variant.evaluationSpec.successCriteria },
-                ...variant.evaluationSpec.checkpoints.map(checkpoint => ({ label: `Правило проверки · ${checkpoint.id}`, field: 'checkpointRule' as const, value: checkpoint.rule, checkpointId: checkpoint.id })),
-              ];
-              const factOptions = variant.userState.facts.map(fact => safeText(`Факт · ${fact.statement} · ${fact.availability}`));
-              const options = [...textFields.map(item => item.label), ...factOptions, 'Добавить факт владельца'];
-              const picked = await ctx.ui.select('Что изменить своими словами?', options);
-              if (!picked) continue;
-              const textField = textFields.find(item => item.label === picked);
-              if (textField) {
-                const value = await ctx.ui.editor(`${textField.label} · обычным текстом`, textField.value);
-                if (!value?.trim() || value.trim() === textField.value) continue;
-                const reason = await ctx.ui.editor('Почему вы вносите эту правку?', 'Правка владельца в разделе «Сценарии»');
-                if (!reason?.trim()) continue;
-                await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'edit_variant_text', variantId: variant.id,
-                  field: textField.field, ...('checkpointId' in textField ? { checkpointId: textField.checkpointId } : {}), value: value.trim(),
-                  editId: `owner_${Date.now().toString(36)}`, reason: reason.trim() }, 'owner');
-              } else {
-                const fact = variant.userState.facts[factOptions.indexOf(picked)];
-                const adding = picked === 'Добавить факт владельца';
-                if (!fact && !adding) continue;
-                const statement = await ctx.ui.editor('Факт пользователя · обычным текстом', fact?.statement ?? '');
-                if (statement === undefined || !statement.trim()) continue;
-                const currentValue = fact?.value === undefined ? '' : String(fact.value);
-                const valueText = await ctx.ui.editor('Точное значение · оставьте пустым, если отдельного значения нет', currentValue);
-                if (valueText === undefined) continue;
-                const availability = await ctx.ui.select('Когда пользователь знает этот факт?', ['initial · знает до разговора', 'learned_in_source · узнал только в старом разговоре', 'uncertain · нужно уточнить']);
-                if (!availability) continue;
-                const reason = await ctx.ui.editor('Почему вы исправляете факт?', 'Правка владельца в разделе «Сценарии»');
-                if (!reason?.trim()) continue;
-                await lab.editLibrary(action.record.id, libraryHash(shown), { kind: adding ? 'add_fact' : 'edit_fact', variantId: variant.id, factId: fact?.id ?? `fact_${Date.now().toString(36)}`,
-                  statement: statement.trim(), ...(valueText.trim() ? { value: valueText.trim() } : {}), availability: availability.split(' ')[0] as 'initial' | 'learned_in_source' | 'uncertain',
-                  editId: `owner_${Date.now().toString(36)}`, reason: reason.trim() }, 'owner');
-              }
-              scenarioSelections.set(action.record.id, []);
-              inform('Правка записана как явное решение владельца. Цитаты источников сохранены. Выполните смысловую проверку: g.');
-            } else if (action.type === 'variant') {
-              const shown = libraryV1Of(action.record);
-              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
-              const variant = shown.variants.find(item => item.id === action.variantId);
-              if (!variant) throw new Error('Выбранный вариант уже отсутствует.');
-              const labels = ['Раскрыть известный факт только по запросу', 'Сделать известный факт отсутствующим', 'Неоднозначная первая реплика', 'Смена намерения на выбранном шаге', 'Временный сбой update_record'];
-              const operation = await ctx.ui.select('Какой целевой вариант добавить?', labels);
-              if (!operation) continue;
-              let requestInput: Record<string, unknown>;
-              if (operation === labels[0] || operation === labels[1]) {
-                const facts = variant.userState.facts.filter(fact => fact.availability === 'initial');
-                const choices = facts.map(fact => safeText(fact.statement));
-                const fact = facts[choices.indexOf(await ctx.ui.select('Какой известный факт изменить?', choices) ?? '')];
-                if (!fact) continue;
-                const value = String(fact.value ?? '');
-                const suggestedOpening = value ? variant.userState.opening.replaceAll(value, '').replace(/\s{2,}/g, ' ').trim() : variant.userState.opening;
-                const opening = await ctx.ui.editor('Первая реплика без выбранного значения', suggestedOpening);
-                if (!opening?.trim()) continue;
-                const ifAsked = await ctx.ui.editor('Как понять, что агент запросил этот факт?', `Агент запросил: ${fact.statement.split(':')[0]}`);
-                if (!ifAsked?.trim()) continue;
-                let missingDescription: string | undefined;
-                if (operation === labels[1]) {
-                  const separator = fact.statement.indexOf(':');
-                  const suggested = separator > 0 ? fact.statement.slice(0, separator).trim() : fact.id.replaceAll('_', ' ');
-                  const written = await ctx.ui.editor('Название отсутствующих данных без секретного значения', suggested);
-                  if (!written?.trim()) continue;
-                  missingDescription = written.trim();
-                }
-                requestInput = { factId: fact.id, opening: opening.trim(), ifAsked: ifAsked.trim(), ...(missingDescription ? { missingDescription } : {}) };
-              } else if (operation === labels[2]) {
-                const opening = await ctx.ui.editor('Новая неоднозначная первая реплика', variant.userState.opening);
-                if (!opening?.trim()) continue;
-                requestInput = { opening: opening.trim() };
-              } else if (operation === labels[3]) {
-                const choices = variant.behaviorPolicy.actions.map(item => `${item.id} · ${item.kind}${item.kind === 'finish' ? ' · сменить намерение вместо завершения' : ''}`);
-                const chosen = await ctx.ui.select('После какого шага сменить намерение?', choices);
-                const actionId = chosen?.split(' · ')[0];
-                if (!actionId) continue;
-                const intent = await ctx.ui.editor('Новое намерение пользователя', '');
-                if (!intent?.trim()) continue;
-                requestInput = { intent: intent.trim(), afterActionId: actionId };
-              } else {
-                const failures = await ctx.ui.editor('Сколько первых update_record завершатся временной ошибкой?', '1');
-                if (!failures || !/^\d+$/.test(failures.trim())) continue;
-                requestInput = { operation: 'update_record', failures: Number(failures) };
-              }
-              const reason = await ctx.ui.editor('Зачем нужен этот синтетический вариант?', operation);
-              if (!reason?.trim()) continue;
-              const kind = operation === labels[0] ? 'reveal_on_request' : operation === labels[1] ? 'missing_fact' : operation === labels[2] ? 'ambiguous_opening' : operation === labels[3] ? 'changed_intent' : 'tool_failure';
-              const proposed = await lab.proposeVariant(action.record.id, libraryHash(shown), { parentId: variant.id, operation: kind, reason: reason.trim(), input: requestInput });
-              scenarioSelections.set(action.record.id, []);
-              selected = proposed.library.variants.findIndex(item => item.id === proposed.variant.id);
-              inform(`Добавлен синтетический вариант «${safeText(proposed.variant.title)}». Он требует смысловой проверки.`);
-            } else if (action.type === 'removeVariant') {
-              const shown = libraryV1Of(action.record);
-              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
-              const variant = shown.variants.find(item => item.id === action.variantId);
-              if (!variant || !await ctx.ui.confirm('Удалить вариант из новой ревизии?', safeText(`${variant.title}\nИсходный импорт и прошлые снимки сохранятся.`))) continue;
-              await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'remove_variant', variantId: variant.id, reason: 'Владелец удалил вариант в native workspace' }, 'owner');
-              scenarioSelections.set(action.record.id, action.selectedVariantIds.filter(id => id !== variant.id));
-              inform('Вариант удалён из новой ревизии; исходный импорт и прошлые прогоны сохранены.');
-            } else if (action.type === 'mergeScenarios') {
-              const shown = libraryV1Of(action.record);
-              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
-              const targets = shown.businessScenarios.filter(group => group.id !== action.businessScenarioId);
-              const labels = targets.map(group => safeText(`${group.title} · ${group.goal}`));
-              const target = targets[labels.indexOf(await ctx.ui.select('С какой группой объединить выбранную?', labels) ?? '')];
-              if (!target) continue;
-              const reason = await ctx.ui.editor('Почему это один бизнес-сценарий?', 'Решение владельца о группировке');
-              if (!reason?.trim()) continue;
-              await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'merge_business', targetId: target.id, sourceIds: [action.businessScenarioId], reason: reason.trim() }, 'owner');
-              scenarioSelections.set(action.record.id, []); inform('Группы объединены. Выполните смысловую проверку: g.');
-            } else if (action.type === 'splitScenario') {
-              const shown = libraryV1Of(action.record);
-              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
-              const source = shown.businessScenarios.find(group => group.id === action.businessScenarioId);
-              if (!source) throw new Error('Группа уже отсутствует.');
-              const title = await ctx.ui.editor('Название новой бизнес-группы', `${source.title} · отдельный случай`);
-              const goal = title === undefined ? undefined : await ctx.ui.editor('Цель новой бизнес-группы', source.goal);
-              const reason = goal === undefined ? undefined : await ctx.ui.editor('Почему вариант нужно отделить?', 'Решение владельца о группировке');
-              if (!title?.trim() || !goal?.trim() || !reason?.trim()) continue;
-              await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'split_business', businessScenarioId: source.id,
-                newBusiness: { key: `split_${Date.now().toString(36)}`, title: title.trim(), goal: goal.trim(), conditions: source.conditions,
-                  requirementIds: source.requirementIds, grouping: { status: 'confirmed', reason: reason.trim() } }, variantIds: [action.variantId], reason: reason.trim() }, 'owner');
-              scenarioSelections.set(action.record.id, []); inform('Вариант выделен в отдельную бизнес-группу. Выполните смысловую проверку: g.');
-            } else if (action.type === 'resumePreparation') {
-              const shown = libraryV1Of(action.record);
-              if (!shown || !lease) throw new Error('Нет сохранённого черновика для продолжения.');
-              await lab.resumePreparation(action.record.id, libraryHash(shown));
-              backgroundPreparation(ctx, lease, action.record.id); lease = undefined;
-              inform('Продолжаю подготовку по сохранённым источникам. Итог появится в чате.');
-            } else if (action.type === 'assessLibrary') {
-              const shown = libraryV1Of(action.record);
-              if (!shown) throw new Error('Библиотека сценариев отсутствует.');
-              const check = await lab.recheckLibrary(action.record.id, { expectedHash: libraryHash(shown), explicit: true });
-              if (check.decision.action === 'run' && lease) {
-                backgroundCheck(ctx, lab.store.directory, action.record.id, lease, check.before.usage.calls, check.decision.startHash, undefined, true);
-                lease = undefined;
-                inform('Смысловая проверка идёт в фоне. Итог появится в чате; готовые результаты можно смотреть.');
-              } else inform('Все смысловые проверки этой ревизии уже сохранены.');
-              scenarioSelections.set(action.record.id, []);
-            } else if (action.type === 'editBudget') {
-              const current = await lab.get(action.record.id);
-              const written = await ctx.ui.editor('Новый общий потолок model calls · уже использованные вызовы сохранятся', String(current.settings.maxCalls));
-              const maxCalls = Number(written);
-              if (!Number.isInteger(maxCalls) || maxCalls <= current.usage.calls) { inform(`Введите целое число больше уже использованных ${current.usage.calls}.`, 'error'); continue; }
-              await lab.updateDraft(current.id, draftHash(current), { settings: { maxCalls } });
-              inform(`Общий потолок увеличен до ${maxCalls}; использовано ${current.usage.calls}.`);
-            } else if (action.type === 'discuss') {
-              const r = action.record;
-              const request = await ctx.ui.editor(r.phase === 'review' ? 'Что изменить или уточнить? · обычными словами' : 'Что разобрать вместе с Pi?',
-                r.phase === 'review' ? '' : 'Объясни, что сломалось, на каких репликах это видно и что делать дальше.');
-              if (!request?.trim()) continue;
-              const discussionBundle = action.trialId ? await evidenceBundle(r, lab.store, beforeId) : undefined;
-              const comparedPair = discussionBundle?.comparison?.pairs.find(pair => pair.afterTrialId === action.trialId);
-              handoff = { request, context: { ...boardDiscussionContext(r, action.section, action.selected), trialId: action.trialId,
-                ...(comparedPair ? { comparisonSource: discussionBundle?.comparisonSource, comparedPair } : {}) } };
-              break;
-            } else if (action.type === 'repeat') {
-              const next = await lab.repeat(action.record.id);
-              beforeId = action.record.id; id = next.id; section = 'cards'; selected = 0; query = ''; pendingOnly = false; dialogueOpen = false; reportPath = undefined;
-              inform(`Создан повтор того же набора: ${next.scenarios.length} ситуаций. Исходный прогон сохранён. Проверьте ожидания перед новым запуском.`);
-            } else if (action.type === 'run') {
-              const r = await lab.get(action.record.id);
-              if (r.workflow !== 'evaluate') throw new Error('Legacy comparison records cannot run from the evaluation board.');
-              const hash = draftHash(r);
-              // UI-D-02: an unconfirmed draft confirms every expectation and starts in one dialog.
-              const confirmed = r.acceptedDraftHash === hash;
-              const plan = runPlan(r, ctx.cwd);
-              if (await ctx.ui.confirm(confirmed ? 'Запустить проверку?' : 'Подтвердить ожидания и запустить?', plan)) {
-                if (!confirmed) await lab.acceptDraft(r.id, hash);
-                await lab.start(r.id, { approved: true, reviewer: 'expectations', expectedHash: hash, parallel: runParallel(r), requireAccepted: true });
-                // The session owns the run from here: leaving the board, or the conversation going on, never stops it.
-                const owned = lease!;
-                lease = undefined; lab = reader;
-                detach(ctx, directory, owned, r.id, 'board');
-                section = 'results'; selected = 0;
-                reportPath = undefined;
-              }
-            } else if (action.type === 'accept') {
-              // TRUST-10: one key confirms every expectation of the shown draft version, and only that version.
-              const r = await lab.get(action.record.id);
-              const sheet = expectationSheet(r);
-              if (r.acceptedDraftHash === sheet.draftHash) inform('Ожидания уже подтверждены. r — запуск.', 'info');
-              else {
-                await lab.acceptDraft(r.id, sheet.draftHash);
-                inform(`Ожидания подтверждены: ${sheet.countText}. r — запуск.`);
-              }
-              section = 'cards';
-            } else if (action.type === 'cancel') {
-              const job = operations.current(directory);
-              if (!job || job.directory !== directory || job.id !== action.record.id) {
-                throw new Error('Этот прогон запущен в другой сессии. Здесь доступен просмотр; остановите его в сессии, которая его запустила.');
-              }
-              if (!await ctx.ui.confirm(job.kind === 'assessment' ? 'Остановить смысловую проверку?' : job.kind === 'preparation' ? 'Остановить подготовку?' : 'Остановить прогон?', 'Текущая работа остановится. Уже записанные карточки, проверки и диалоги сохранятся. Для возврата в историю останавливать работу не нужно.')) continue;
-              await operations.stop(job);
-              reportPath = undefined;
-            } else if (action.type === 'agree') {
-              // CTX-18: a mark exists only because the owner pressed a key here, and a disagreement
-              // only because they typed a reason into the native editor. No tool writes one.
-              const before = await lab.get(action.record.id);
-              const current = judgeAgreement(before).marks.find(m => m.trialId === action.trialId && !m.stale);
-              const card = before.scenarios.find(s => s.id === before.trials.find(t => t.id === action.trialId)?.scenarioId);
-              const title = card?.title ?? '';
-              // CTX-15: one key answers every metric that decided the situation, goal first (markTargets).
-              const ids = action.metricIds;
-              const failed = action.judgeVerdict === 'fail';
-              const started = performance.now();
-              let disagreeIds = ids;
-              let note: string;
-              if (action.answer === 'disagree') {
-                // CTX-16/CTX-25: only a disagreement moves the number, so only «не согласен» on two
-                // metrics asks which half the owner disputes; Esc saves nothing and says nothing.
-                if (ids.length > 1) {
-                  const options = failed
-                    ? ['Запрос выполнен — судья ошибся', 'Правила промпта соблюдены — судья ошибся', 'С обоими: запрос выполнен и правила соблюдены']
-                    : ['Запрос не выполнен — судья ошибся', 'Правила промпта нарушены — судья ошибся', 'С обоими: запрос не выполнен и правила нарушены'];
-                  const picked = await ctx.ui.select('С чем вы не согласны?', options);
-                  if (picked === undefined) continue;
-                  disagreeIds = picked === options[0] ? [ids[0]!] : picked === options[1] ? [ids[1]!] : ids;
-                }
-                // UI-D-28: `n` always opens the editor, prefilled with the reason already given, so
-                // the same key edits a reason; the duplicate check runs only after it closes.
-                const reason = await ctx.ui.editor(`Судья решил: ${failed ? 'не справился' : 'справился'}. Почему вы не согласны? Коротко, своими словами.`,
-                  current?.answer === 'disagree' ? current.note : '');
-                if (reason === undefined) continue;
-                // Input validation, not display: the schema caps a stored reason at 3000 characters,
-                // so the owner is told to shorten it instead of losing the text to a write error.
-                if (!reason.trim()) { inform('Несогласие не сохранено: напишите причину.', 'error'); continue; }
-                if (reason.length > 3000) { inform('Причина длиннее 3000 знаков. Сократите и попробуйте снова.', 'error'); continue; }
-                // The same disputed half with the same reason is already the current mark: nothing is written.
-                const disputed = current?.answer === 'disagree' ? current.targets.filter(t => t.answer === 'disagree').map(t => t.metricId).join(' ') : undefined;
-                if (current && disputed === disagreeIds.join(' ') && reason.trim() === current.note.trim()) { inform('Отметка уже стоит: не согласен.', 'info'); continue; }
-                note = reason;
-              } else {
-                // UI-D-19: the same answer again on every target writes nothing, so the record keeps one mark per answer (CTX-17).
-                if (current && current.targets.every(t => t.answer === action.answer)) { inform(`Отметка уже стоит: ${action.answer === 'agree' ? 'согласен' : 'не могу сказать'}.`, 'info'); continue; }
-                note = action.answer === 'agree' ? 'Быстрая отметка: согласен с судьёй.' : 'Быстрая отметка: не могу сказать.';
-              }
-              // CTX-05: reading time on the board plus the time the answer itself took, recorded once.
-              const durationMs = Math.min(3600000, Math.round((action.reviewMs ?? 0) + performance.now() - started));
-              for (const [i, metricId] of ids.entries()) {
-                // CTX-04: согласен — вердикт судьи, не согласен — противоположный, не могу сказать — сомнение.
-                // Disputing one half of a double failure means agreeing with the other half (RESEARCH A6).
-                const disputes = action.answer === 'disagree' && disagreeIds.includes(metricId);
-                const verdict = action.answer === 'unsure' ? 'unknown' as const : disputes ? (failed ? 'pass' as const : 'fail' as const) : action.judgeVerdict;
-                // The lab stamps the counting rule and the judge snapshot itself; the request never names them.
-                await lab.addHumanReview(action.record.id, {
-                  trialId: action.trialId, metricId, source: 'quick', verdict, judgeVerdict: action.judgeVerdict,
-                  note: action.answer === 'disagree' && !disputes ? 'Быстрая отметка: согласен с судьёй.' : note,
-                  ...(i === 0 ? { durationMs } : {}),
-                });
-              }
-              reviewTimes.delete(`${action.record.id}|${action.trialId}`);
-              reportPath = undefined;
-              const afterRecord = await lab.get(action.record.id);
-              const after = judgeAgreement(afterRecord);
-              // C-98: a mark on a finished run reopens the review, and the notice says so.
-              const reopened = before.phase === 'complete' ? ' Разбор снова открыт: f — завершить.' : '';
-              const progress = after.queueFailures.length
-                ? `Проверено провалов: ${after.failures.checked} из ${after.queueFailures.length}.`
-                : `Проверено успехов: ${after.sampleChecked} из ${after.sampledPasses.length}.`;
-              // CR-02 notice: «Итог пересчитан» only when the situation's headline verdict moved;
-              // otherwise the notice names what still fails, so the number is never claimed to have changed.
-              const disagreed = () => {
-                const was = card ? cardVerdict(before, card).outcome : undefined;
-                const now = card ? cardVerdict(afterRecord, card).outcome : undefined;
-                if (card && now !== was) return `Отмечено: не согласен · «${title}». Итог пересчитан с учётом вашей отметки.`;
-                if (!card || now !== 'fail') return `Отмечено: не согласен · «${title}». Итог не изменился.`;
-                const parts = headlineCardOutcome(afterRecord, card);
-                const what = parts.goal === 'fail' && parts.rules === 'fail' ? 'запрос не выполнен, нарушены правила промпта'
-                  : parts.goal === 'fail' ? 'запрос не выполнен'
-                  : parts.rules === 'fail' ? 'нарушены правила промпта'
-                  : 'остальные провалы — через v';
-                return `Отмечено: не согласен · «${title}». Ситуация остаётся «не справился»: ${what}.`;
-              };
-              inform(action.answer === 'agree' ? `Отмечено: согласен с судьёй · «${title}». ${progress}${reopened}`
-                : action.answer === 'disagree' ? `${disagreed()}${reopened}`
-                : `Отмечено: не могу сказать · «${title}». В итоге остаётся оценка судьи; чтобы закрыть ситуацию, позже нажмите y или n.${reopened}`);
-            } else if (action.type === 'annotate') {
-              const index = action.trialId ? reviewOrder(action.record).findIndex(t => t.id === action.trialId) : action.selected;
-              const reviews = await humanAnnotation(ctx, action.record, index, action.reviewMs, reviewTimes);
-              if (reviews) { for (const review of reviews) { await lab.addHumanReview(action.record.id, review); reviewTimes.delete(`${action.record.id}|${review.trialId}`); } reportPath = undefined; }
-            } else if (action.type === 'finalize') {
-              const r = action.record;
-              const pending = awaitingVerdict(r).size;
-              if (pending) {
-                section = 'results'; pendingOnly = true; selected = 0; query = '';
-                inform(`Не разобрано ситуаций: ${pending}. y / n — согласие с судьёй · v — подробная оценка.`, 'error');
-                continue;
-              }
-              const hash = resultHash(r);
-              const invalid = r.trials.filter(t => t.outcome === 'invalid' || t.outcome === 'cancelled').length;
-              const ungraded = r.trials.filter(t => t.outcome === 'ungraded').length;
-              if (await ctx.ui.confirm('Завершить человеческий аудит?', `Я проверил диалоги, основания оценок и поведение симуляторов.\nДиалогов: ${r.trials.length}; невалидных/остановленных: ${invalid}; без объективной оценки: ${ungraded}.\nОтдельных заметок человека: ${r.humanReviews?.length ?? 0}. ${r.mode === 'demo' ? 'Сценарные оценки демо останутся отдельными от моих.' : 'Оценки модели останутся отдельными от моих.'}\nОтметка согласия ставится на оценки, из-за которых ситуация решена: запрос и правила промпта; остальные критерии — через v.\nВерсия результатов: ${hash}\nПодтвердить проверку всего набора?`)) {
-                const reviewed = await lab.reviewResults(r.id, hash);
-                section = 'agent'; selected = 0; query = ''; pendingOnly = false;
-                const artifacts = await exportArtifacts(await evidenceBundle(reviewed, lab.store, beforeId), lab.store.directory);
-                reportPath = artifacts.htmlReport;
-                inform('Разбор завершён. HTML-отчёт сохранён. o — открыть отчёт.');
-              }
-            } else if (action.type === 'export') {
-              const artifacts = await exportArtifacts(await evidenceBundle(action.record, lab.store, beforeId), lab.store.directory);
-              reportPath = artifacts.htmlReport;
-              inform('HTML, Markdown и снимок доказательств сохранены. o — открыть отчёт.');
-              ctx.ui.notify(safeText(`Отчёт: ${artifacts.htmlReport}\nMarkdown: ${artifacts.report}\nДоказательства: ${artifacts.evidence}`), 'info');
-            } else if (action.type === 'openReport' && reportPath) {
-              const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'rundll32.exe' : 'xdg-open';
-              const args = process.platform === 'win32' ? ['url.dll,FileProtocolHandler', reportPath] : [reportPath];
-              await promisify(execFile)(command, args, { timeout: 10000 });
-              inform('Отчёт открыт в браузере.');
-            }
-            if (lease && ['editScenario', 'variant', 'removeVariant', 'mergeScenarios', 'splitScenario'].includes(action.type)) {
-              const check = await lab.recheckLibrary(action.record.id);
-              if (check.decision.action === 'run') {
-                backgroundCheck(ctx, lab.store.directory, action.record.id, lease, check.before.usage.calls, check.decision.startHash);
-                lease = undefined;
-                inform('Правка сохранена. Смысловая перепроверка идёт в фоне; итог появится в чате.');
-              } else if (check.decision.action === 'needs_budget') inform(`Правка сохранена. Для перепроверки нужно до ${check.decision.pendingJobs} вызовов, осталось ${check.decision.remainingCalls}. b — изменить общий лимит.`, 'info');
-            }
-          } catch (error) {
-            // A start refused for stale expectations names the key that fixes it (UI-SPEC Board flow 4).
-            const message = scenarioErrorText(error);
-            inform(message.startsWith('Сначала подтвердите ожидания ситуаций') ? `${message} y — подтвердить.` : message, 'error');
-          } finally { await release(); }
-        }
-      } finally { await release(); }
-      if (handoff) {
-        pi.sendMessage({ customType: 'agent-lab-context', content: JSON.stringify(handoff.context), display: false }, { deliverAs: 'followUp' });
-        pi.sendUserMessage(handoff.request, { deliverAs: 'followUp', expandPromptTemplates: false });
-      }
-    },
-  });
+  registerReviewTools(pi, { open, findRun, feedResult, askOwner, summary, recallShown });
+  registerBoardCommand(pi, { open, operations, detach, backgroundPreparation, backgroundCheck });
   pi.on('session_shutdown', () => operations.shutdown());
 }

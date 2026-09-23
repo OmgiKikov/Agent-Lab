@@ -1,5 +1,5 @@
 import { EXPECTATIONS_PROTOCOL, isCardExecution, type CardExecution, type Scenario, type Trial, type VariantExecution } from '../contracts.js';
-import type { LibraryV1 } from '../scenario-contracts.js';
+import type { LibraryV1, ScenarioVariant } from '../scenario-contracts.js';
 import { EXPECTATION_LETTERS, expectationRubric } from './compile.js';
 import type { ScenarioLibrary } from './schema.js';
 
@@ -64,4 +64,54 @@ function projected(scenario: Scenario, execution: VariantExecution): Scenario {
 export function judgedScenario(scenario: Scenario, trial: Pick<Trial, 'checkpoints' | 'checkpointReceipt'>): Scenario {
   const execution = scenario.execution;
   return execution && !isCardExecution(execution) && !judgedByCheckpoints(trial) ? projected(scenario, execution) : scenario;
+}
+
+/*
+ * Reading a first-format draft: the order its variants are listed in, and its checker's remarks and the
+ * customer's program in the owner's words. The projection onto the brief (card/view.ts) is built from these.
+ */
+
+/** Variants in the order every list shows them: group by group, so «третья ситуация» means the third row on screen. */
+export function orderedVariants(library: LibraryV1): ScenarioVariant[] {
+  const grouped = library.businessScenarios.flatMap(group => library.variants.filter(variant => variant.businessScenarioId === group.id));
+  return [...grouped, ...library.variants.filter(variant => !grouped.includes(variant))];
+}
+
+/** Remarks the owner can act on: «the recheck has not run yet» is the tool's own bookkeeping. */
+export const ownerRemarks = <T extends { code: string }>(issues: T[]): T[] => issues.filter(issue => issue.code !== 'semantic_pending' && issue.code !== 'semantic_variant_pending');
+
+/** The checker's open questions the owner could settle in their own name. */
+export const ownerQuestions = (variant: ScenarioVariant) => ownerRemarks(variant.issues).filter(issue => issue.code === 'semantic_finding' && issue.severity === 'needs_review');
+
+/** Internal field and enum names the checker sometimes writes into a remark, as the owner says them. Whole words only. */
+const CHECKER_WORDS = new Map([
+  ['ownerFactEvidence', 'подтверждение владельца'], ['checkpoints', 'проверки'], ['checkpoint', 'проверка'],
+  ['learned_in_source', 'узнал только в старом разговоре'], ['initial', 'знал заранее'], ['uncertain', 'неясно'], ['missing', '«данных нет»'],
+]);
+const WORDS = new Intl.Segmenter('ru', { granularity: 'word' });
+const ownerWords = (text: string): string => Array.from(WORDS.segment(text), ({ segment, isWordLike }) => isWordLike ? CHECKER_WORDS.get(segment) ?? segment : segment).join('');
+
+/** A checker remark as the owner can act on it: titles instead of ids, and the part of the situation it is about. The stored remark is not changed. */
+export function plainIssue(library: LibraryV1, variant: ScenarioVariant, issue: { path: string; message: string }): string {
+  let text = issue.message;
+  for (const other of library.variants) if (other.id.length >= 6) text = text.split(other.id).join(`«${other.title}»`);
+  for (const fact of variant.userState.facts) if (fact.id.length >= 6) text = text.split(fact.id).join(`«${fact.statement}»`);
+  text = ownerWords(text);
+  const checkpointId = issue.path.split('.checkpoints.')[1]?.split('.')[0];
+  const checkpoint = checkpointId ? variant.evaluationSpec.checkpoints.find(item => item.id === checkpointId) : undefined;
+  const factId = issue.path.split('.facts.')[1]?.split('.')[0];
+  const fact = factId ? variant.userState.facts.find(item => item.id === factId) : undefined;
+  const about = checkpoint ? `Проверка «${checkpoint.rule}»` : fact ? `Факт «${fact.statement}»` : issue.path.endsWith('.duplicates') ? 'Похоже на дубль'
+    : issue.path.includes('behaviorPolicy') ? 'Поведение клиента' : issue.path.includes('successCriteria') ? 'Ожидаемый результат' : issue.path.includes('opening') ? 'Первая реплика' : '';
+  return about ? `${about}: ${text}` : text;
+}
+
+const ACTION_WORDS = { answer: 'отвечает', missing: 'говорит, что данных нет', clarify: 'уточняет', correct: 'исправляет ответ', change_intent: 'меняет намерение', finish: 'завершает разговор', observe: 'сообщает, что видит' } as const;
+
+/** The customer's program as sentences: when, and what the customer does then. */
+export function behaviorLines(variant: Pick<ScenarioVariant, 'behaviorPolicy'>): string[] {
+  return variant.behaviorPolicy.transitions.flatMap(transition => {
+    const action = variant.behaviorPolicy.actions.find(item => item.id === transition.actionId);
+    return action ? [`${transition.when}: клиент ${ACTION_WORDS[action.kind]}${action.payload ? ` «${action.payload}»` : ''}`] : [];
+  });
 }

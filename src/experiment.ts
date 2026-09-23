@@ -1,12 +1,15 @@
-import { recheckDecision } from './scenario-draft.js';
+import { chooseEditableDraft, draftIsBusy, recheckDecision } from './scenario-draft.js';
 import { semanticWorkStatus } from './scenario-work.js';
 import { captureGeneratorEvidence } from './generator-evidence.js';
 import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, verifyAcceptedRun } from './scenario-library.js';
 import type { LibraryPatch, LibraryV1 } from './scenario-contracts.js';
 import { judgedScenario, requireLibraryV1 } from './card/legacy-v1.js';
 import { acceptLibraryV2, requireLibraryV2 } from './card/library.js';
-import { prepareCards, resumeCards, reviewCards, storedEvidence } from './card/prepare.js';
-import type { LibraryV2 } from './card/schema.js';
+import { pendingReviewCalls, prepareCards, resumeCards, reviewCards, storedEvidence } from './card/prepare.js';
+import type { CardCommand, LibraryV2 } from './card/schema.js';
+import { applyCommand, prepareCommand, type HostGrant, type Prepared, type Via } from './card/commands.js';
+import { importEvidence, type CardEvidence } from './card/checks.js';
+import { dialogueNumbers, type DialogueNumbers } from './card/view.js';
 import { assessScenarioLibrary, compiledLibraryScenarios, prepareScenarioLibrary, resumeScenarioLibrary } from './scenario-preparation.js';
 import { proposeVariant as proposeScenarioVariant, type VariantProposalResult, type VariantRequest } from './scenario-variants.js';
 import { randomUUID } from 'node:crypto';
@@ -245,6 +248,55 @@ export class ExperimentLab {
       }, true);
       return structuredClone(experiment);
     });
+  }
+  /** A card draft with what its cards cite: statuses, checks and «из диалога №17» read the import batches. */
+  async cardContext(id: string): Promise<{ experiment: Experiment; library: LibraryV2; evidence: CardEvidence; numbers: DialogueNumbers }> {
+    const { experiment, library } = await this.readCards(id);
+    const batches = await Promise.all(library.imports.map(item => this.store.readImport(item.id)));
+    return { experiment, library, evidence: importEvidence(batches), numbers: dialogueNumbers(batches) };
+  }
+  /**
+   * The draft an owner command goes to: this draft, the draft that holds the newest revision of its cards, or — when
+   * only finished runs hold it — a fresh copy of the newest of them: a run that happened never changes.
+   */
+  async editableCards(id: string): Promise<{ id: string; copiedFrom?: string }> {
+    const settled = await this.get(id);
+    if (!settled.librarySnapshot) throw new Error('У этого прогона нет ситуаций нового формата.');
+    const library = requireLibraryV2(settled.librarySnapshot);
+    const headHash = await this.store.readLibrary(library.id).then(libraryHash, () => libraryHash(library));
+    const choice = chooseEditableDraft({ settled, holders: await this.list(), headHash, busy: draftIsBusy });
+    if (choice.action === 'busy') throw new Error('Этот прогон сейчас идёт: ситуации можно смотреть, изменить — после него.');
+    if (choice.action === 'edit') return { id };
+    return choice.action === 'use' ? { id: choice.id, copiedFrom: id } : { id: (await this.repeat(choice.sourceId)).id, copiedFrom: id };
+  }
+  /** Previews an owner command on a card draft (card/commands.ts); nothing is written. */
+  async prepareCardCommand(id: string, command: CardCommand, options: { via: Via; ownerWords?: string }): Promise<Prepared> {
+    const { experiment, library, evidence } = await this.cardContext(id);
+    return prepareCommand(library, command, { evidence, maxTurns: experiment.settings.maxTurns, via: options.via, ...(options.ownerWords === undefined ? {} : { ownerWords: options.ownerWords }) });
+  }
+  /** Applies a previewed command with the owner's grant: a new revision of the draft, and what was accepted from it gives way. */
+  async applyCardCommand(id: string, prepared: Prepared, grant: HostGrant): Promise<{ library: LibraryV2; experiment: Experiment }> {
+    return this.change(async () => {
+      const { experiment, library } = await this.readCards(id);
+      if (experiment.phase !== 'review' || experiment.trials.length) throw new Error('Менять можно только черновик: прогон, который уже шёл, не меняется.');
+      const next = applyCommand(library, prepared, grant);
+      experiment.librarySnapshot = next; experiment.scenarios = []; experiment.acceptedTests = [];
+      delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds; delete experiment.positiveControlScenarioIds;
+      experiment.reviewedAt = null; experiment.reviewMode = null; experiment.manifestHash = null;
+      await this.store.publishLibrary(experiment, next, prepared.libraryHash);
+      return { library: next, experiment };
+    });
+  }
+  /** After an owner command: the claims it opened are checked now within the calls left, later, or wait for a larger limit. */
+  async recheckCards(id: string, options: { defer?: boolean; expectedHash?: string; explicit?: boolean } = {}) {
+    const { experiment, library, evidence } = await this.cardContext(id);
+    const hash = libraryHash(library);
+    if (options.expectedHash && options.expectedHash !== hash) throw new LibraryConflict('Библиотека изменилась: хеш устарел.');
+    const pendingJobs = pendingReviewCalls(library, evidence), remainingCalls = Math.max(0, experiment.settings.maxCalls - experiment.usage.calls);
+    if (options.explicit && pendingJobs && !remainingCalls) throw new Error('Лимит вызовов модели исчерпан. Увеличьте его; использованные вызовы не сбрасываются.');
+    const decision = recheckDecision({ pendingJobs, remainingCalls, defer: !!options.defer, askedHash: options.explicit ? hash : undefined, libraryHash: hash });
+    if (decision.action === 'run') await this.checkCards(id, decision.startHash);
+    return { decision, before: experiment };
   }
   /** Detached variant library plus its current (empty until accepted) runnable draft: what the variant editor below works on. */
   async readLibrary(id: string): Promise<{ library: LibraryV1; experiment: Experiment }> {

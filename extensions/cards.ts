@@ -13,8 +13,10 @@ import { deriveRun, plannedTrials } from '../src/run.js';
 import { accuracyRow, fitRows, resultScreen, type ResultRole } from '../src/result-text.js';
 import { oneLine, safeText, shortId } from '../src/text.js';
 import { activeRunRows, preparationRows, progressLine } from './flow.ts';
-import { pendingLibrarySelection, logsRows, runRows, scenarioEntries, scenarioRows } from './scenarios.ts';
-import { judgedScenario, libraryV1Of } from '../src/card/legacy-v1.js';
+import { logsRows, runRows, situationLines } from './scenarios.ts';
+import { judgedScenario } from '../src/card/legacy-v1.js';
+import { countsText, layoutRows, situationActions, type SituationAction, type SituationRow, type SituationView } from '../src/card/view.js';
+import { SITUATION_TONE } from './render/situation.ts';
 
 
 const phases: Record<string, string> = {
@@ -220,10 +222,9 @@ export type BoardAction =
   | { type: 'demo' }
   | { type: 'open'; id: string }
   | { type: 'discuss' | 'run' | 'annotate' | 'finalize' | 'export' | 'openReport' | 'cancel' | 'repeat' | 'accept'; record: Experiment; section: Section; selected: number; query?: string; pendingOnly?: boolean; trialId?: string; reviewMs?: number; dialogueOpen?: boolean }
-  | { type: 'acceptLibrary'; variantIds: string[]; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
-  | { type: 'editScenario' | 'variant' | 'removeVariant'; variantId: string; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
-  | { type: 'mergeScenarios' | 'splitScenario'; businessScenarioId: string; variantId: string; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
-  | { type: 'assessLibrary' | 'resumePreparation' | 'editBudget'; record: Experiment; section: Section; selected: number; selectedVariantIds: string[] }
+  /** One numbered action of the selected situation: an answer to its question, or its own «Изменить», «Добавить похожую», «Не проверять»… */
+  | { type: 'situation'; action: SituationAction; situation: SituationView; record: Experiment; section: Section; selected: number }
+  | { type: 'checkCards' | 'resumePreparation'; record: Experiment; section: Section; selected: number }
   /**
    * CTX-01/CTX-18: the owner answered the judge with one key. The answer carries the judgment it
    * refers to, so a verdict that moved while the situation was on screen is refused by the lab.
@@ -237,15 +238,17 @@ export interface BoardOptions {
   record?: Experiment;
   section?: Section;
   selected?: number;
-  load?: () => Promise<Pick<EvidenceBundle, 'record' | 'comparison' | 'before' | 'warnings' | 'view'>>;
+  load?: () => Promise<Pick<EvidenceBundle, 'record' | 'comparison' | 'before' | 'warnings' | 'view'> & { situations?: SituationView[] }>;
+  /** The record's situations with their status now (card/view.ts). */
+  situations?: SituationView[];
+  /** A check of the draft's situations is running in this session. */
+  checking?: boolean;
   /** The headline block of `record`; ignored when it belongs to another run. */
   view?: ResultView;
   comparison?: RunComparison;
   before?: Experiment;
   notice?: { message: string; kind: 'success' | 'info' | 'error' };
   warnings?: string[];
-  /** Mutable per-run selection retained when the board is recreated or navigated away from. */
-  selectedVariantIds?: string[];
   reportPath?: string;
   query?: string;
   pendingOnly?: boolean;
@@ -258,7 +261,9 @@ type BoardTheme = Pick<Theme, 'fg' | 'bold'>;
  * `hang` is the continuation column when it is not `indent + 2`; `breakAt` names the separator a key
  * hint row breaks at, so a narrow board never splits one key from its word.
  */
-type Line = { text: string; color?: ThemeColor; bold?: boolean; indent?: number; lead?: string; hang?: number; breakAt?: string };
+type Line = { text: string; color?: ThemeColor; bold?: boolean; indent?: number; lead?: string; hang?: number; breakAt?: string;
+  /** Laid out already (a situation's line): never wrapped again; `right` is its chip, painted in its own colour. */
+  fixed?: true; right?: { text: string; color?: ThemeColor } };
 const line = (text: unknown, color?: ThemeColor, bold = false, indent?: number): Line => ({ text: safeText(text), color, bold, ...(indent ? { indent } : {}) });
 
 /**
@@ -269,6 +274,7 @@ const line = (text: unknown, color?: ThemeColor, bold = false, indent?: number):
 export function wrapRows(rows: Line[], inner: number): Line[] {
   const width = Math.max(1, Math.floor(inner));
   return rows.flatMap(row => {
+    if (row.fixed) return [row];
     const indent = row.indent ?? 0;
     const hang = row.hang ?? indent + 2;
     // A terminal too narrow for the hanging indent falls back to plain wrapping, still never wider.
@@ -297,6 +303,11 @@ function packAt(text: string, separator: string, width: number): string[] | unde
     current = part;
   }
   return [...lines, current];
+}
+/** A situation's rows laid out at the board's width, each line in its role's colour and its chip in the chip's. */
+function situationBoardLines(rows: SituationRow[], width: number): Line[] {
+  return layoutRows(rows, width, 0).map(item => ({ text: item.text, fixed: true, ...SITUATION_TONE[item.role].tone ? { color: SITUATION_TONE[item.role].tone } : {}, bold: SITUATION_TONE[item.role].bold,
+    ...(item.right ? { right: { text: item.right.text, ...SITUATION_TONE[item.right.role].tone ? { color: SITUATION_TONE[item.right.role].tone } : {} } } : {}) }));
 }
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 const outcomeColor = (value: string): ThemeColor => value === 'pass' ? 'success' : value === 'fail' || value === 'invalid' ? 'error' : 'warning';
@@ -475,15 +486,13 @@ export class LabBoard implements Component {
   private sheetAnchor?: number;
   /** ↑/↓ put the selected situation at the top of the body; an explicit scroll key hands control back. */
   private followSelection = true;
-  private selectedVariantIds: string[];
+  /** A situation of the list is open: its whole brief, its question and its actions. */
+  private situationOpen = false;
 
   constructor(private options: BoardOptions, private theme: BoardTheme, private done: (action: BoardAction) => void,
     private redraw: () => void, private rows: () => number = () => 32) {
     this.record = options.record;
     this.section = options.section ?? (this.record?.trials.length || this.record?.questions.length || this.record?.phase === 'error' || this.record && isRunning(this.record.phase) ? 'agent' : 'cards');
-    const library = this.record && libraryV1Of(this.record);
-    this.selectedVariantIds = options.selectedVariantIds ?? library?.acceptance?.variantIds.slice() ?? library?.variants.filter(item => item.quality === 'ready').map(item => item.id) ?? [];
-    options.selectedVariantIds = this.selectedVariantIds;
     this.selected = options.selected ?? 0;
     this.query = options.query ?? '';
     this.pendingOnly = options.pendingOnly ?? false;
@@ -515,7 +524,8 @@ export class LabBoard implements Component {
         this.options.notice = undefined;
       }
       this.record = record;
-      Object.assign(this.options, { comparison: refreshed.comparison, before: refreshed.before, warnings: refreshed.warnings, view: refreshed.view });
+      Object.assign(this.options, { comparison: refreshed.comparison, before: refreshed.before, warnings: refreshed.warnings, view: refreshed.view,
+        ...(refreshed.situations ? { situations: refreshed.situations } : {}) });
       this.loadError = '';
       if (!isRunning(record.phase)) { clearInterval(this.timer); this.timer = undefined; }
       this.redraw();
@@ -571,12 +581,12 @@ export class LabBoard implements Component {
    * `agent_lab_edit` of the model must not tell the owner that one of their expectations moved.
    */
   private draftHeadline(record: Experiment): { text: string; color?: ThemeColor } {
-    if (record.librarySnapshot) {
-      const accepted = libraryV1Of(record)?.acceptance;
-      if (pendingLibrarySelection(record, this.selectedVariantIds)) return { text: 'Выбор изменён: нужно принять заново. 2 — Сценарии, y — принять.', color: 'warning' };
-      return accepted
-        ? { text: `Принята ревизия ${accepted.revision}: ${accepted.variantIds.length} вариантов. 3 — план запуска.`, color: 'success' }
-        : { text: `Выберите готовые варианты: ${this.selectedVariantIds.length}. y — принять без запуска.`, color: 'warning' };
+    const library = record.librarySnapshot;
+    if (library) {
+      if (library.acceptance) return { text: `Ситуации утверждены: ${this.situations().length}. r — запуск.`, color: 'success' };
+      if (library.formatVersion === 1) return { text: 'Старый формат: эти ситуации можно посмотреть, но не изменить.', color: 'muted' };
+      const waiting = this.situations().filter(view => view.status === 'needs_owner').length;
+      return { text: `${countsText(this.situations())}. ${waiting ? 'Готовые можно запускать уже сейчас.' : 'r — запуск.'}`, color: waiting ? 'warning' : 'success' };
     }
     const sheet = this.sheet();
     if (!sheet?.count || record.questions.length) return { text: 'Проверьте цель, первую реплику и критерии. r — запуск.' };
@@ -596,16 +606,32 @@ export class LabBoard implements Component {
    * with its object, and the narrow tiers drop the key the header line already names.
    */
   private draftFooter(record: Experiment, inner: number): string {
-    if (record.librarySnapshot) return this.section === 'cards'
-      ? 'Space Выбрать · y Принять выбранные · e Изменить · v Вариант · g Перепроверить'
-      : this.section === 'logs' ? 'g Смысловая проверка · b Изменить бюджет · 2 Сценарии'
-      : record.librarySnapshot.acceptance && !pendingLibrarySelection(record, this.selectedVariantIds) ? 'r Открыть подтверждение запуска · 2 Сценарии' : '2 Сценарии · сначала принять выбранные';
+    if (record.librarySnapshot) {
+      const open = this.situationOpen ? this.situations()[this.selected] : undefined;
+      if (this.section === 'cards') return open ? `${open.question?.choices.length ? '1–3 ответить · ' : situationActions(open).length ? '1–3 действие · ' : ''}a спросить Lab · d как это проверяется · Esc назад`
+        : `↑↓ выбрать · Enter открыть${this.editableCards() ? ' · 1–3 действие' : ''}${this.situations().some(view => view.status === 'checking') && this.editableCards() ? ' · g проверить' : ''} · Tab разделы`;
+      if (this.section === 'logs') return `${record.preparationProgress?.pending.length && this.editableCards() ? 'u Продолжить подготовку · ' : ''}Tab разделы`;
+      return `${this.runnable() ? 'r Запустить · ' : ''}Tab разделы`;
+    }
     const sheet = this.sheet();
     if (record.questions.length || !sheet?.count) return `a Правка словами · ${record.questions.length ? 'Ответьте на вопросы' : 'r Запустить'}`;
     const confirmed = record.acceptedDraftHash === sheet.draftHash;
     if (inner >= 85) return 'a Правка словами · y Подтвердить ожидания · r Запустить прогон';
     if (inner >= 61) return 'y Подтвердить всё · r Запустить прогон';
     return confirmed ? 'r Запустить прогон' : 'y Подтвердить всё';
+  }
+  private situations(): SituationView[] { return this.options.situations ?? []; }
+  /** A draft of cards the owner can still change: its situations have numbered actions. */
+  private editableCards(): boolean {
+    const record = this.record;
+    return !!record && record.librarySnapshot?.formatVersion === 2 && record.phase === 'review' && !record.trials.length;
+  }
+  /** A draft of a library that can start: accepted already, or cards with at least one ready situation. */
+  private runnable(): boolean {
+    const record = this.record;
+    if (!record || record.phase !== 'review' || record.workflow !== 'evaluate' || record.questions.length) return false;
+    const library = record.librarySnapshot;
+    return !library || !!library.acceptance || library.formatVersion === 2 && this.situations().some(view => view.status === 'ready');
   }
   /** The supplied view when it describes the shown run; otherwise a fresh one, so a stale view is never shown. */
   private viewFor(record: Experiment): ResultView {
@@ -621,9 +647,9 @@ export class LabBoard implements Component {
       return confirmed ? 'Enter — проверить план и запустить' : `Enter — подтвердить ожидания (${record.scenarios.length})`;
     }
     if (record.phase === 'review' && record.librarySnapshot) {
-      if (this.section === 'cards') return this.selectedVariantIds.length ? `Enter — принять выбранные варианты (${this.selectedVariantIds.length})` : 'Space — выбрать готовый вариант';
-      if (this.section === 'agent') return record.librarySnapshot.acceptance && !pendingLibrarySelection(record, this.selectedVariantIds) ? 'Enter — проверить план и запустить' : '2 — выбрать и принять сценарии';
-      if (this.section === 'logs') return '2 — перейти к сценариям';
+      if (this.section === 'cards') return this.situationOpen ? (this.situations()[this.selected]?.question ? 'Ответьте на вопрос: 1–3' : 'Esc — к списку ситуаций') : 'Enter — открыть ситуацию';
+      if (this.section === 'agent') return this.runnable() ? 'Enter — утвердить готовые и запустить' : 'Tab — к ситуациям: сначала ответьте на вопросы';
+      if (this.section === 'logs') return 'Tab — к ситуациям';
     }
     if (this.section === 'results' && record.trials.length) return this.dialogueOpen ? 'Enter — вернуться к объяснению' : 'Enter — открыть выбранный диалог';
     if (record.trials.length && this.section === 'agent') return 'Enter — разобрать результаты';
@@ -652,7 +678,7 @@ export class LabBoard implements Component {
       entries = resultEntries(record).flatMap((entry, index) => !this.pendingOnly || entry.waiting
         ? [{ id: entry.id, index, text: entry.text }] : []);
     } else if (this.section === 'cards') {
-      if (record.librarySnapshot) entries = scenarioEntries(record);
+      if (record.librarySnapshot) entries = this.situations().map((view, index) => ({ id: view.id, index, text: view.brief.title }));
       else {
         const edited = new Set(record.ownerExpectationScenarioIds ?? []);
         entries = record.scenarios.map((s, index) => ({ text: `${s.tier === 'smoke' ? '◆ ' : ''}${s.title}${edited.has(s.id) ? ' · ожидание изменено' : ''}`, index, id: s.id }));
@@ -674,7 +700,7 @@ export class LabBoard implements Component {
     if (key('q') || key('ctrl+c')) return this.finish({ type: 'close' });
     if (key('escape')) {
       if (this.help) { this.help = false; this.redraw(); return; }
-      if (this.expanded || this.dialogueOpen) { this.expanded = false; this.dialogueOpen = false; this.scroll = 0; this.redraw(); return; }
+      if (this.expanded || this.dialogueOpen || this.situationOpen) { this.expanded = false; this.dialogueOpen = false; this.situationOpen = false; this.scroll = 0; this.redraw(); return; }
       if (this.query || this.pendingOnly) { this.query = ''; this.pendingOnly = false; this.selected = 0; this.redraw(); return; }
       return this.finish({ type: this.record ? 'back' : 'close' });
     }
@@ -686,10 +712,13 @@ export class LabBoard implements Component {
     if (this.record) {
       const libraryPath = !!this.record.librarySnapshot;
       const sections: Section[] = libraryPath ? ['logs', 'cards', 'agent', 'results'] : ['agent', 'cards', 'results'];
-      const section = key('1') ? (libraryPath ? 'logs' : 'agent') : key('2') ? 'cards' : key('3') ? (libraryPath ? 'agent' : 'results') : key('4') && libraryPath ? 'results'
+      // In the situations of a draft of cards 1–3 are the selected situation's actions; sections go by Tab there.
+      const numbered = this.section === 'cards' && this.editableCards();
+      const section = numbered && !key('tab') && !key('shift+tab') ? undefined
+        : key('1') ? (libraryPath ? 'logs' : 'agent') : key('2') ? 'cards' : key('3') ? (libraryPath ? 'agent' : 'results') : key('4') && libraryPath ? 'results'
         : key('tab') ? sections[(sections.indexOf(this.section)+1)%sections.length]
         : key('shift+tab') ? sections[(sections.indexOf(this.section)+sections.length-1)%sections.length] : undefined;
-      if (section) { this.section = section; this.selected = 0; this.scroll = 0; this.query = ''; this.help = false; this.expanded = false; this.dialogueOpen = false; this.followSelection = true; }
+      if (section) { this.section = section; this.selected = 0; this.scroll = 0; this.query = ''; this.help = false; this.expanded = false; this.dialogueOpen = false; this.situationOpen = false; this.followSelection = true; }
       if (key('d')) { this.expanded = !this.expanded; this.scroll = 0; this.redraw(); return; }
       if (key('u') && this.section === 'results') { this.pendingOnly = !this.pendingOnly; this.selected = 0; this.scroll = 0; }
       const editable = this.record.workflow === 'evaluate' && this.record.phase === 'review';
@@ -697,29 +726,15 @@ export class LabBoard implements Component {
         && ['results_review', 'complete'].includes(this.record.phase) && this.entries().length > 0;
       const entry = this.entries()[this.selected];
       const state = { record: this.record, section: this.section, selected: this.selected, query: this.query, pendingOnly: this.pendingOnly, dialogueOpen: this.dialogueOpen,
-        selectedVariantIds: [...this.selectedVariantIds],
         ...(this.section === 'results' && entry ? { trialId: entry.id } : {}) };
-      if (libraryPath && this.section === 'cards' && entry && data === ' ') {
-        const variant = libraryV1Of(this.record)?.variants.find(item => item.id === entry.id);
-        if (variant?.quality === 'ready') {
-          const index = this.selectedVariantIds.indexOf(entry.id);
-          if (index >= 0) this.selectedVariantIds.splice(index, 1); else this.selectedVariantIds.push(entry.id);
-        }
-        this.redraw(); return;
+      if (numbered) {
+        const situation = this.situations()[this.selected];
+        const action = situation && situationActions(situation)[['1', '2', '3'].findIndex(digit => data === digit)];
+        if (situation && action) return this.finish({ type: 'situation', action, situation, ...state });
+        if (key('enter') && situation) { this.situationOpen = !this.situationOpen; this.scroll = 0; this.redraw(); return; }
+        if (key('g') && this.situations().some(view => view.status === 'checking')) return this.finish({ type: 'checkCards', ...state });
       }
-      if (libraryPath && editable) {
-        const variant = entry && libraryV1Of(this.record)?.variants.find(item => item.id === entry.id);
-        const groupId = variant?.businessScenarioId;
-        if (this.section === 'cards' && key('y') && this.selectedVariantIds.length) return this.finish({ type: 'acceptLibrary', ...state, variantIds: [...this.selectedVariantIds] });
-        if (this.section === 'cards' && variant && key('e')) return this.finish({ type: 'editScenario', ...state, variantId: variant.id });
-        if (this.section === 'cards' && variant && key('v')) return this.finish({ type: 'variant', ...state, variantId: variant.id });
-        if (this.section === 'cards' && variant && key('delete')) return this.finish({ type: 'removeVariant', ...state, variantId: variant.id });
-        if (this.section === 'cards' && variant && groupId && key('m')) return this.finish({ type: 'mergeScenarios', ...state, variantId: variant.id, businessScenarioId: groupId });
-        if (this.section === 'cards' && variant && groupId && key('s')) return this.finish({ type: 'splitScenario', ...state, variantId: variant.id, businessScenarioId: groupId });
-        if (this.section === 'cards' && key('u') && this.record.preparationProgress?.pending.length) return this.finish({ type: 'resumePreparation', ...state });
-        if (key('g')) return this.finish({ type: 'assessLibrary', ...state });
-        if (key('b')) return this.finish({ type: 'editBudget', ...state });
-      }
+      if (this.editableCards() && key('u') && this.record.preparationProgress?.pending.length) return this.finish({ type: 'resumePreparation', ...state });
       if (key('a') && !isRunning(this.record.phase)) return this.finish({ type: 'discuss', ...state,
         selected: this.section === 'cards' && entry ? entry.index : this.selected });
       // CTX-01/UI-D-01…UI-D-04: three answers, one Latin key each, only where the F10 block is
@@ -730,7 +745,7 @@ export class LabBoard implements Component {
         if (answer) return this.finish({ type: 'agree', answer, ...state, trialId: entry.id, metricIds: target.metricIds, judgeVerdict: target.judgeVerdict });
       }
       const finished = this.record.workflow === 'evaluate' && !!this.record.reviewedAt && !isRunning(this.record.phase);
-      const type = key('r') && editable && !this.record.questions.length && (!libraryPath || !!this.record.librarySnapshot?.acceptance && !pendingLibrarySelection(this.record, this.selectedVariantIds)) && (!libraryPath || this.section === 'agent') ? 'run'
+      const type = key('r') && editable && this.runnable() && (!libraryPath || this.section !== 'results') ? 'run'
         : key('r') && finished ? 'repeat'
         : key('v') && reviewable ? 'annotate'
         : key('f') && this.record.phase === 'results_review' ? 'finalize'
@@ -743,8 +758,8 @@ export class LabBoard implements Component {
       if (sheetScope && key('y')) return this.finish({ type: 'accept', ...state });
       if (key('enter') && !this.expanded) {
         if (sheetScope) return this.finish({ type: this.sheet()?.draftHash === this.record.acceptedDraftHash ? 'run' : 'accept', ...state });
-        if (libraryPath && editable && this.section === 'cards' && this.selectedVariantIds.length) return this.finish({ type: 'acceptLibrary', ...state, variantIds: [...this.selectedVariantIds] });
-        if (libraryPath && editable && this.section === 'agent' && this.record.librarySnapshot?.acceptance && !pendingLibrarySelection(this.record, this.selectedVariantIds)) return this.finish({ type: 'run', ...state });
+        if (libraryPath && this.section === 'cards' && !this.situationOpen && this.situations().length) { this.situationOpen = true; this.scroll = 0; this.redraw(); return; }
+        if (libraryPath && editable && this.section === 'agent' && this.runnable()) return this.finish({ type: 'run', ...state });
         if (this.section === 'agent' && this.record.trials.length) { this.section = 'results'; this.selected = 0; this.scroll = 0; this.redraw(); return; }
         if (this.section === 'agent' && editable) { this.section = 'cards'; this.selected = 0; this.scroll = 0; this.redraw(); return; }
         if (this.section === 'results' && entry) { this.dialogueOpen = !this.dialogueOpen; this.scroll = 0; this.redraw(); return; }
@@ -769,12 +784,14 @@ export class LabBoard implements Component {
     const entries = this.entries();
     const reading = this.section === 'results' && !this.help && !this.searching ? entries[this.selected]?.id : undefined;
     this.recordReading(reading ? `${this.record!.id}|${reading}` : undefined);
-    const sidebar = !this.help && width >= 110 && entries.length > 0 ? 32 : 0;
+    // The situations of a library are a list in the body itself; a side list would repeat it.
+    const sidebar = !this.help && width >= 110 && entries.length > 0 && !(this.record?.librarySnapshot && this.section === 'cards') ? 32 : 0;
     const inner = Math.max(1, width - 4 - (sidebar ? sidebar + 3 : 0));
     const paint = (row: Line) => {
       let value = row.text;
       if (row.bold) value = this.theme.bold(value);
-      return row.color ? this.theme.fg(row.color, value) : value;
+      const right = row.right ? row.right.color ? this.theme.fg(row.right.color, row.right.text) : row.right.text : '';
+      return (row.color ? this.theme.fg(row.color, value) : value) + right;
     };
     const frame = (content: string) => width < 6 ? truncateToWidth(content, width, '…')
       : `${this.theme.fg('borderMuted', '│')} ${truncateToWidth(content, Math.max(1, width - 4), '…', true)} ${this.theme.fg('borderMuted', '│')}`;
@@ -784,7 +801,7 @@ export class LabBoard implements Component {
       const unresolved = record.phase === 'complete' && awaitingVerdict(record).size > 0;
       header.push(line(`${unresolved ? 'НЕРАЗОБРАННЫЕ ПРОВАЛЫ' : phases[record.phase] ?? record.phase} · ${record.mode === 'demo' ? 'ДЕМО · без модели' : 'ЖИВОЙ ПРОГОН'}`, isRunning(record.phase) ? 'accent' : record.phase === 'complete' && !unresolved ? 'success' : 'warning'));
       const navigation = record.librarySnapshot
-        ? [['logs', '1 Логи'], ['cards', `2 Сценарии ${libraryV1Of(record)?.variants.length ?? 0}`], ['agent', '3 Прогон'], ['results', `4 Результаты ${record.trials.length}`]]
+        ? [['logs', '1 Логи'], ['cards', `2 Ситуации ${this.situations().length}`], ['agent', '3 Прогон'], ['results', `4 Результат ${record.trials.length}`]]
         : [['agent', '1 Итог'], ['cards', `2 Ожидания ${record.scenarios.length}`], ['results', `3 Разбор ${record.trials.length}`]];
       header.push(line(navigation
         .map(([id, label]) => this.section === id ? `[${label}]` : label).join('   '), 'muted'));
@@ -805,7 +822,7 @@ export class LabBoard implements Component {
     this.selected = Math.max(0, Math.min(this.selected, items.length - 1));
     const visibleItems = record ? 1 : Math.max(1, Math.min(4, Math.floor(height / 5)));
     const from = Math.max(0, Math.min(this.selected - Math.floor(visibleItems / 2), items.length - visibleItems));
-    if (items.length && !sidebar) for (let i = from; i < Math.min(items.length, from + visibleItems); i++) {
+    if (items.length && !sidebar && !(record?.librarySnapshot && this.section === 'cards')) for (let i = from; i < Math.min(items.length, from + visibleItems); i++) {
       const edited = record && !record.librarySnapshot && this.section === 'cards' && (record.ownerExpectationScenarioIds ?? []).includes(entries[i]!.id);
       header.push(line(record ? `Карточка ${i+1} из ${items.length} · ↑↓ другая ситуация${edited ? ' · ожидание изменено' : ''}`
         : `${i === this.selected ? '▸' : ' '} ${i + 1}/${items.length}  ${items[i]}`, i === this.selected ? 'accent' : 'muted', i === this.selected));
@@ -831,7 +848,8 @@ export class LabBoard implements Component {
     } else if (this.section === 'logs') {
       detail = logsRows(record).map(row => line(row.text, row.color, row.bold));
     } else if (this.section === 'cards') {
-      if (record.librarySnapshot) detail = scenarioRows(record, entries[this.selected]?.id, this.selectedVariantIds).map(row => line(row.text, row.color, row.bold));
+      if (record.librarySnapshot) detail = situationBoardLines(situationLines(record, this.situations(), { selected: this.selected, open: this.situationOpen, details: this.expanded,
+        running: !!this.options.checking }), inner);
       else {
         const scenario = record.scenarios[entries[this.selected]?.index ?? -1];
         const sheet = this.expanded ? undefined : this.sheet();
@@ -880,10 +898,10 @@ export class LabBoard implements Component {
       else if (!this.expanded && !record.trials.length) detail = preparationRows(record).map(r => line(r.text, r.color, r.bold));
     }
     if (record && this.section === 'agent' && record.librarySnapshot && !record.trials.length && !isRunning(record.phase)) {
-      detail = runRows(record, this.selectedVariantIds).map(row => line(row.text, row.color, row.bold));
+      detail = runRows(record, this.situations()).map(row => line(row.text, row.color, row.bold));
     }
     if (this.options.warnings?.length) detail.push(line(''), line('ДИАГНОСТИКА', 'warning'), ...this.options.warnings.map(w => line(w, 'warning')));
-    if (this.help) { detail = [line('КЛАВИШИ', 'accent', true), line(record?.librarySnapshot ? '1 Логи · 2 Сценарии · 3 Прогон · 4 Результаты · Tab — следующий раздел' : '1 Итог · 2 Ожидания · 3 Разбор · Tab — следующий раздел'), line('Enter — следующее действие, написанное внизу экрана'), line('d — раскрыть источники, инструменты и состояния'), line('a — правка или разбор словами с Pi · n в истории — новая проверка'), line('↑ ↓ или j k — выбрать ситуацию или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), ...(record?.librarySnapshot ? [line('Space — выбрать вариант · y — принять выбранные без запуска'), line('e — изменить текст или факт · v — целевой вариант · m/s — объединить/разделить'), line('g — смысловая проверка · b — увеличить бюджет · r — запуск после принятия')] : [line('y / n / s — согласен с судьёй / не согласен / не могу сказать'), line('n — спросит причину · v — оценить критерий или весь диалог'), line('r — запустить черновик или создать повтор готового прогона'), line('y — подтвердить все ожидания')]), line('x — экспортировать · c — остановить запуск с подтверждением'), line('Esc — назад · q — закрыть доску; прогон продолжится, пока открыт Pi'), line(''), line('Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.', 'muted'), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')]; this.sheetAnchor = undefined; }
+    if (this.help) { detail = [line('КЛАВИШИ', 'accent', true), line(record?.librarySnapshot ? '1 Логи · 2 Сценарии · 3 Прогон · 4 Результаты · Tab — следующий раздел' : '1 Итог · 2 Ожидания · 3 Разбор · Tab — следующий раздел'), line('Enter — следующее действие, написанное внизу экрана'), line('d — раскрыть источники, инструменты и состояния'), line('a — правка или разбор словами с Pi · n в истории — новая проверка'), line('↑ ↓ или j k — выбрать ситуацию или диалог'), line('← → или PgUp PgDn — прокрутить подробности'), line('/ — поиск по списку · u — только неразобранные диалоги'), ...(record?.librarySnapshot ? [line('В «Ситуациях»: Enter — открыть ситуацию · 1–3 — ответ на её вопрос или её действие · Tab — другой раздел'), line('g — проверить непроверенные ситуации · u — продолжить подготовку · r — утвердить готовые и запустить')] : [line('y / n / s — согласен с судьёй / не согласен / не могу сказать'), line('n — спросит причину · v — оценить критерий или весь диалог'), line('r — запустить черновик или создать повтор готового прогона'), line('y — подтвердить все ожидания')]), line('x — экспортировать · c — остановить запуск с подтверждением'), line('Esc — назад · q — закрыть доску; прогон продолжится, пока открыт Pi'), line(''), line('Клавиши — латинские буквы: переключите раскладку, если буквы не срабатывают.', 'muted'), line('Все оценки и подтверждения относятся к показанной версии.', 'muted')]; this.sheetAnchor = undefined; }
     const content = wrapRows(detail, inner).map(paint);
     // The selected situation starts the body, so its expectation and rules are read without scrolling.
     if (this.followSelection && this.sheetAnchor !== undefined) this.scroll = wrapRows(detail.slice(0, this.sheetAnchor), inner).length;

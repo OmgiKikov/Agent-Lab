@@ -1,4 +1,5 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
+import { layoutRows } from '../../src/card/view.js';
 import { safeText } from '../../src/text.js';
 import { wrapRows } from '../cards.ts';
 
@@ -18,7 +19,15 @@ export type Tone = 'text' | 'muted' | 'dim' | 'accent' | 'success' | 'warning' |
  * One row to paint: raw `text` (escaped inside `renderRows`), an explicit `tone`/`bold` or a `role`
  * that ROLE_TONE maps to them, and the indent of the phase-2 hanging-indent rule.
  */
-export interface Row { text: string; tone?: Tone; bold?: boolean; indent?: number; role?: string }
+export interface Row {
+  text: string; tone?: Tone; bold?: boolean; indent?: number; role?: string;
+  /** The column wrapped lines continue at, when it is not two past the indent: the value column of a brief. */
+  hang?: number;
+  /** A part aligned to the right edge and never cut, in its own tone: a situation's status chip. */
+  right?: { text: string; tone: Tone };
+  /** One line cut with «…» instead of wrapped: a line of a list. */
+  clip?: true;
+}
 
 /** What a host theme must offer; the test fakes implement all three with distinct markers per token. */
 export type PaintTheme = Pick<Theme, 'fg' | 'bold' | 'bg'>;
@@ -78,6 +87,12 @@ export function paint(row: Row, theme: PaintTheme): string {
  * the hanging indent, then paint. Nothing is cut and no `…` is produced; no line is wider than `width`.
  */
 export function renderRows(rows: Row[], theme: PaintTheme, width: number): string[] {
-  const safe = rows.map(row => ({ ...row, text: safeText(row.text) }));
-  return (wrapRows(safe, width) as Row[]).map(row => paint(row, theme));
+  return rows.flatMap(raw => {
+    const row = { ...raw, text: safeText(raw.text) };
+    if (!row.right && !row.clip) return (wrapRows([row], width) as Row[]).map(line => paint(line, theme));
+    // A list line is laid out in src like every other surface's (cut with «…», the right part never cut); here it is only painted.
+    const right = row.right && { role: 'right', text: safeText(row.right.text) };
+    return layoutRows([{ role: 'row', indent: row.indent ?? 0, text: row.text, clip: true, ...(right ? { right } : {}) }], width, 0)
+      .map(line => paint({ ...row, text: line.text }, theme) + (row.right && line.right ? paint({ text: line.right.text, tone: row.right.tone }, theme) : ''));
+  });
 }

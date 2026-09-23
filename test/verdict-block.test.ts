@@ -41,15 +41,13 @@ function registered() {
 type ToolResult = Awaited<ReturnType<ToolDefinition['execute']>>;
 const output = (result: ToolResult) => JSON.parse(result.content.filter(c => c.type === 'text').map(c => c.text).join('\n'));
 
-/** A finished demo run through the chat path: build the library, accept its ready situation, run. */
+/** A finished demo run through the chat path: prepare the situations, then run the ready one — accepted in the run's own dialog. */
 async function demoRun(directory: string, tools: Map<string, ToolDefinition>) {
-  const ctx = { cwd: directory, mode: 'tui', hasUI: true, ui: { confirm: async () => true } } as unknown as ExtensionContext;
+  const ctx = { cwd: directory, mode: 'tui', hasUI: true, ui: { confirm: async () => true, select: async (_title: string, options: string[]) => options[0] } } as unknown as ExtensionContext;
   const call = async (name: string, params: unknown) => tools.get(name)!.execute('fixture', params, undefined, undefined, ctx);
   const built = output(await call('agent_lab_build', { mode: 'demo' }));
-  // The demo's disputed fact waits for the owner; the situation that is already ready becomes the set.
-  await call('agent_lab_accept_set', { id: built.id, select: 'ready' });
-  const draft = output(await call('agent_lab_inspect', { id: built.id }));
-  const result = await call('agent_lab_run', { id: built.id, expectedHash: draft.draftHash });
+  // The demo's second situation waits for the owner's answer; the ready one is accepted and run in one dialog.
+  const result = await call('agent_lab_run', { id: built.id });
   const scenarios = output(await call('agent_lab_inspect', { id: built.id })).scenarios as { title: string; user: { opening: string } }[];
   return { result, run: output(result), scenarios };
 }
