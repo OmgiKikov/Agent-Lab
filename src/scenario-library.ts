@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { isIdentifier } from './ids.js';
 import { LibraryConflict } from './errors.js';
+import { IMPORT_DIALOGUE_LIMIT } from './limits.js';
 import { CHECKPOINT_PROTOCOL, checkSchema, fingerprint, scenarioSchema, worldSchema, valueTokens, type Experiment, type Requirement, type Scenario, type Source } from './contracts.js';
 import type { LibraryV2, ScenarioLibrary } from './card/schema.js';
 import {
@@ -41,7 +42,7 @@ export function importBatch(raw: unknown): ImportBatch {
   if (record(parsed) && parsed.formatVersion !== undefined && parsed.formatVersion !== 1) throw new Error('Неподдерживаемая версия импорта');
   const rows = Array.isArray(parsed) ? parsed : record(parsed) ? parsed.dialogues : undefined;
   if (!Array.isArray(rows)) throw new Error('Ожидается массив диалогов или объект {dialogues: [...]}');
-  if (rows.length > 300) throw new Error('В одном импорте допустимо не больше 300 диалогов');
+  if (rows.length > IMPORT_DIALOGUE_LIMIT) throw new Error(`В одном импорте допустимо не больше ${IMPORT_DIALOGUE_LIMIT} диалогов`);
   const contentHash = digest(rows);
   const batch: ImportBatch = { formatVersion: 1, id: `import_${contentHash.slice(0, 32)}`, contentHash, createdAt: new Date().toISOString(), dialogues: [], rejected: [] };
   const seen = new Set<string>();

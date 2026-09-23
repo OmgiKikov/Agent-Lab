@@ -9,6 +9,7 @@ import { DEMO_OWNER_EDIT, demoInput } from './demo.js';
 import { createInputSchema } from './contracts.js';
 import { compareRuns, evidenceSummary, evaluationExitCode } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
+import { detectionLines, detectProject } from './detect.js';
 import { readDialogueImport, importDialogues } from './imports.js';
 import { expandMaterials } from './materials.js';
 import { getPiStatus } from './pi.js';
@@ -60,6 +61,7 @@ async function main() {
   } });
   const command = positionals[0];
   if (values.help || !command) {
+    process.stdout.write('  agent-lab detect [--directory ПАПКА] [--json]  Что Lab нашёл в папке проекта: агента, логи, материалы, промпт\n');
     process.stdout.write('  agent-lab summary --id RUN [--json]     Сколько ситуаций агент прошёл, что не измерено и почему\n');
     process.stdout.write('  agent-lab accept --id RUN [--yes]      Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания\n');
     process.stdout.write('Agent Lab — validation set, accuracy и причины провалов вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
@@ -68,6 +70,12 @@ async function main() {
     process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID] · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
+  if (command === 'detect') {
+    // Read-only: nothing is started, imported or written; a .env file contributes variable names only.
+    const detection = await detectProject(values.directory ?? process.cwd());
+    await writeStdout(values.json ? `${JSON.stringify(detection, null, 2)}\n` : `${detectionLines(detection).map(safeLine).join('\n')}\n`);
+    return;
+  }
   const directory = values['data-dir'] ?? resolve('.agent-lab');
   if (command === 'suites') { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); return; }
   if (command === 'scenarios') {
