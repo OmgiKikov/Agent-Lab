@@ -9,7 +9,7 @@ import { issueDecisionSchema } from '../dist/issues.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolve } from 'node:path';
-import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme, ToolDefinition, ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
+import type { AgentToolResult, ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme, ToolDefinition, ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
 import { Text, type Component } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { z } from 'zod';
@@ -27,7 +27,10 @@ import { scoreSettings } from '../dist/normalize.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from '../dist/connection.js';
 import { inspectPrompt, promptVersion, proposePrompt } from '../dist/prompt-edit.js';
 import { readData, selectValidationDialogues, readDialogueImport, importDialogues } from '../dist/imports.js';
-import { createGigaProvider, GIGA_PROVIDER_ID } from '../dist/giga-provider.js';
+import { connectGateway, GIGA_PROVIDER_ID } from '../dist/giga-provider.js';
+import { forgetGatewaySettings, gatewayFile, gatewaySettingsSchema, gatewayStatus, saveGatewaySettings, settingsEnvironment, unreadableGigaFiles, type GatewaySettings } from '../dist/giga-transport.js';
+import { fieldNames, gatewayFailureText, gatewayFeed, importWorkbook, ownerPath, type GatewayInput } from './setup.ts';
+import { fileURLToPath } from 'node:url';
 import { ExperimentStore } from '../dist/store.js';
 import { libraryHash } from '../dist/scenario-library.js';
 import { semanticWorkStatus } from '../dist/scenario-work.js';
@@ -298,18 +301,32 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
    * Внутренний шлюз нельзя описать декларативным models.json: там нужен клиентский сертификат.
    * Вложенные сессии Agent Lab регистрируют его сами (src/pi.ts), но внешний разговор — обычный
    * Pi, и без этой регистрации он отвечает «no api key» на моделях, которыми идёт прогон.
-   * Регистрация ждётся здесь, а не в фоне: список моделей Pi строит сразу после загрузки
-   * расширений, и провайдер, доехавший позже, в выборе уже не появится. Без переменных шлюза
-   * вызов возвращает undefined, не обращаясь к сети.
+   * На старте регистрация ждётся: так провайдер попадает в первый же список моделей. Позже
+   * настроенный из разговора шлюз Pi подключает сразу, без перезапуска (agent_lab_gateway).
    */
   let gigaNote: string | undefined;
-  try {
-    const provider = await createGigaProvider();
-    if (provider) pi.registerProvider(GIGA_PROVIDER_ID, provider);
-    else gigaNote = 'Внутренний шлюз не подключён: проверьте AGENT_LAB_GATEWAY_URL, AGENT_LAB_GATEWAY_CERT_PATH и AGENT_LAB_GATEWAY_KEY_PATH.';
-  } catch (error) {
-    gigaNote = `Внутренний шлюз не подключён: ${error instanceof Error ? error.message : 'ошибка регистрации'}.`;
-  }
+  let gatewayModels: string[] | undefined;
+  // Один файл на сессию: и подключение на старте, и правки из разговора говорят об одной настройке.
+  const settingsFile = gatewayFile();
+  const settingsContext = () => ({ ...process.env, AGENT_LAB_GATEWAY_FILE: settingsFile });
+  const startup = await connectGateway();
+  if ('provider' in startup) { pi.registerProvider(GIGA_PROVIDER_ID, startup.provider); gatewayModels = startup.models; }
+  else if (startup.failure === 'not configured') gigaNote = 'Модели GigaChat: /agent-lab gateway — укажите адрес шлюза и пути к своим сертификату и ключу.';
+  else gigaNote = `Шлюз моделей не подключился: ${gatewayFailureText(startup.failure)} Команда /agent-lab gateway настроит его заново.`;
+  /** Проверяет доступ именно этими файлами и только после успеха запоминает пути и подключает провайдера. */
+  const rememberGateway = async (input: GatewayInput, cwd: string, signal?: AbortSignal): Promise<{ settings: GatewaySettings } | { failure: string; message: string }> => {
+    const parsed = gatewaySettingsSchema.safeParse({ format: 'agent-lab-gateway-1', url: input.url.trim(), certPath: ownerPath(input.certPath, cwd), keyPath: ownerPath(input.keyPath, cwd),
+      ...(input.caPath ? { caPath: ownerPath(input.caPath, cwd) } : {}), ...(input.insecure ? { insecure: true } : {}) });
+    if (!parsed.success) return { failure: 'bad url', message: `Адрес шлюза не похож на URL: ${parsed.error.issues[0]?.message ?? 'неверный формат'}.` };
+    const env = settingsEnvironment(parsed.data);
+    const unreadable = unreadableGigaFiles(env);
+    if (unreadable.length) return { failure: 'unreadable', message: `Не читается: ${fieldNames(unreadable)}. Проверьте путь.` };
+    const connection = await connectGateway(env, undefined, signal);
+    if (!('provider' in connection)) return { failure: connection.failure, message: `Шлюз не подключён, ничего не сохранено: ${gatewayFailureText(connection.failure)}` };
+    await saveGatewaySettings(parsed.data, settingsFile);
+    pi.registerProvider(GIGA_PROVIDER_ID, connection.provider); gatewayModels = connection.models; gigaNote = undefined;
+    return { settings: parsed.data };
+  };
 
   let activeClose: (() => Promise<void>) | undefined;
   let boardRun: Job | undefined;
@@ -561,7 +578,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
       settings: Type.Optional(Type.Unsafe(z.toJSONSchema(settingsSchema, { io: 'input' }))),
       scenarioCount: Type.Optional(Type.Integer({ minimum: 0, maximum: SCENARIO_LIMIT })),
       validationCount: Type.Optional(Type.Integer({ minimum: 1, maximum: SCENARIO_LIMIT, description: 'Cards in mode=validate; defaults to 15.' })),
-      connectionFile: Type.Optional(Type.String()), goldenFile: Type.Optional(Type.String()), dialoguesFile: Type.Optional(Type.String()),
+      connectionFile: Type.Optional(Type.String()), goldenFile: Type.Optional(Type.String()), dialoguesFile: Type.Optional(Type.String({ description: 'JSON/JSONL. An .xlsx export is converted with agent_lab_import first.' })),
       withoutDialogues: Type.Optional(Type.Boolean({ description: 'Set true only when the user explicitly chose to start without real dialogues. Otherwise ask for optional JSON/JSONL logs before building a live run.' })),
       codeOnly: Type.Optional(Type.Boolean({ description: 'With mode=score, preserve recorded facts without any model calls.' })),
       target: Type.Optional(Type.Unsafe(z.toJSONSchema(targetSchema, { io: 'input' }))),
@@ -668,7 +685,7 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
       }
       if (operation === 'validate' && !parsedDialogues.length && !libraryImport?.originalImport.dialogues.length) throw new Error('Для validation set укажите JSON/JSONL с обезличенными реальными диалогами.');
       if (operation !== 'demo' && !parsedDialogues.length && !libraryImport?.originalImport.dialogues.length && withoutDialogues !== true) {
-        const output = { status: 'needs_input', message: 'Есть реальные диалоги с агентом? Укажите файл JSON/JSONL с обезличенными разговорами или скажите «начать без логов».',
+        const output = { status: 'needs_input', message: 'Есть реальные диалоги с агентом? Укажите файл JSON/JSONL или выгрузку .xlsx с обезличенными разговорами или скажите «начать без логов».',
           nextStep: 'Ask the user in ordinary language. Import their supplied dialoguesFile/dialogues, or set withoutDialogues=true after their explicit choice to skip. Do not silently skip or search unrelated logs.' };
         return { content: [{ type: 'text', text: JSON.stringify(output) }], details: output };
       }
@@ -1758,6 +1775,62 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
     },
   });
   pi.registerTool({
+    ...displayFor('agent_lab_gateway'), name: 'agent_lab_gateway', label: 'Шлюз моделей GigaChat',
+    description: "The owner's personal internal model gateway (GigaChat and other models behind it, provider giga). status: read-only, is it connected and what is missing. save: only with the url and certificate/key paths the owner named in this conversation — never guess a path; checks the model catalog with those files, remembers the paths (not the files) for every project of this user and connects the provider in this conversation without a restart. forget: the owner explicitly asked to stop using the gateway. After save, tell the owner to choose a model with /model.",
+    parameters: Type.Object({
+      action: Type.Union([Type.Literal('status'), Type.Literal('save'), Type.Literal('forget')]),
+      url: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: 'Gateway root, e.g. https://host or https://host/v1' })),
+      certPath: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })), keyPath: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
+      caPath: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
+      insecure: Type.Optional(Type.Boolean({ description: 'Skip the gateway server certificate check. Only when the owner explicitly asked for it.' })),
+    }, { additionalProperties: false }),
+    executionMode: 'sequential',
+    async execute(callId, params, toolSignal, _onUpdate, ctx) {
+      const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
+      const environmentWins = Object.keys(process.env).some(name => name.startsWith('AGENT_LAB_GATEWAY_') && name !== 'AGENT_LAB_GATEWAY_FILE' && process.env[name]);
+      if (params.action === 'forget') {
+        if (!ctx.hasUI) throw new Error('Отключение шлюза подтверждается владельцем в Pi.');
+        if (!await ctx.ui.confirm('Отключить шлюз моделей?', 'Lab забудет пути к вашим сертификату и ключу. Сами файлы не удаляются.')) return { content: [{ type: 'text', text: 'Отключение отменено.' }], details: {} };
+        const removed = await forgetGatewaySettings(settingsFile);
+        pi.unregisterProvider(GIGA_PROVIDER_ID); gatewayModels = undefined;
+        const feed: Feed = { rows: [row(removed ? 'Шлюз моделей отключён: личная настройка удалена, модели giga убраны из выбора.' : 'Личной настройки шлюза не было; модели giga убраны из выбора.', 'success'),
+          ...(environmentWins ? [row('Переменные AGENT_LAB_GATEWAY_* всё ещё заданы: в следующем запуске шлюз подключится по ним.', 'warning')] : [])] };
+        return feedResult(callId, { connected: false, removed }, feed, 'Шлюз моделей');
+      }
+      if (params.action === 'status') {
+        const status = gatewayStatus(settingsContext());
+        return feedResult(callId, { connected: !!gatewayModels?.length, models: gatewayModels ?? [], configured: status.configured, missing: fieldNames(status.missingVariables), unreadable: fieldNames(status.unreadableFiles), settingsError: status.settingsError },
+          gatewayFeed(status, gatewayModels, environmentWins), 'Шлюз моделей');
+      }
+      if (!params.url || !params.certPath || !params.keyPath) throw new Error('Для подключения нужны адрес шлюза, путь к сертификату и путь к ключу. Спросите у владельца недостающее.');
+      const remembered = await rememberGateway({ url: params.url, certPath: params.certPath, keyPath: params.keyPath, caPath: params.caPath, insecure: params.insecure }, ctx.cwd, signal);
+      if (!('settings' in remembered)) throw new Error(remembered.message);
+      const feed = gatewayFeed(gatewayStatus(settingsContext()), gatewayModels, environmentWins);
+      feed.rows.push(row(`Пути запомнены для всех ваших проектов${remembered.settings.insecure ? '; проверка сертификата шлюза отключена по вашей просьбе' : ''}.`, 'muted'));
+      return feedResult(callId, { connected: true, models: gatewayModels, remembered: true, nextStep: 'Choose a model with /model (provider giga).' }, feed, 'Шлюз моделей');
+    },
+  });
+  pi.registerTool({
+    ...displayFor('agent_lab_import'), name: 'agent_lab_import', label: 'Выгрузка .xlsx',
+    description: "Convert an agent_oc .xlsx export the conversation cannot read itself. kind=dialogues: labelled production logs → dialoguesFile for agent_lab_build. kind=cases: analysis of broken (or, with passing, successful) cases → goldenFile for agent_lab_build. Files stay in .agent-lab/imports with owner-only permissions. Costs no model calls. JSON/JSONL files go to agent_lab_build directly.",
+    parameters: Type.Object({
+      kind: Type.Union([Type.Literal('dialogues'), Type.Literal('cases')]), file: Type.String({ minLength: 1, maxLength: 4000 }),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })), multiTurnOnly: Type.Optional(Type.Boolean({ description: 'dialogues: only dialogues where the client wrote more than once' })),
+      sheets: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 120 }), { maxItems: 12 })), passing: Type.Optional(Type.Boolean({ description: 'cases: take successful cases instead of broken ones' })),
+    }, { additionalProperties: false }),
+    executionMode: 'sequential',
+    async execute(callId, params, toolSignal, _onUpdate, ctx) {
+      const signal = AbortSignal.any([toolSignal, ctx.signal].filter((s): s is AbortSignal => !!s));
+      const { kind, file, ...options } = params;
+      const result = await importWorkbook(kind, ownerPath(file, ctx.cwd), options, ctx.cwd, fileURLToPath(new URL('../', import.meta.url)), signal);
+      const shown = (path: string | undefined) => path ? path.replace(`${ctx.cwd}/`, '') : undefined;
+      const feed: Feed = { rows: [row(kind === 'dialogues' ? `Диалоги из ${file.split('/').at(-1)} готовы для сборки сценариев.` : `Кейсы из ${file.split('/').at(-1)} готовы как карточки.`, 'success'),
+        ...result.report.map(line => row(line.replace(`${ctx.cwd}/`, ''), 'muted'))] };
+      return feedResult(callId, { dialoguesFile: shown(result.files.dialoguesFile), goldenFile: shown(result.files.goldenFile), converterReport: result.report,
+        nextStep: kind === 'dialogues' ? 'Pass dialoguesFile to agent_lab_build.' : 'Pass goldenFile to agent_lab_build.' }, feed, kind === 'dialogues' ? 'Диалоги из .xlsx' : 'Кейсы из .xlsx');
+    },
+  });
+  pi.registerTool({
     ...displayFor('agent_lab_reassess'), name: 'agent_lab_reassess', label: 'Reassess recorded evidence',
     description: 'Evaluate new checks/rubrics on existing trial traces without calling the target or simulator. Creates a separate immutable result retaining the original run. codeOnly uses no model; judge overrides are optional. This cannot demonstrate an agent improvement. Ask native confirmation before model spending.',
     parameters: Type.Object({ id: Type.String(), input: Type.Optional(Type.Unsafe(z.toJSONSchema(reassessmentSchema, { io: 'input' }))) }, { additionalProperties: false }),
@@ -1906,10 +1979,35 @@ export default async function agentLab(pi: ExtensionAPI, options: AgentLabOption
       } finally { await close(); }
     },
   });
+  /*
+   * Шлюз часто единственный доступ к моделям на рабочей машине: пока он не подключён, разговору не
+   * на чем понять просьбу. Поэтому подключение есть и командой — она обходится без модели.
+   */
+  const gatewaySetup = async (ctx: ExtensionCommandContext) => {
+    const current = gatewayStatus(settingsContext());
+    const url = await ctx.ui.input('Адрес шлюза моделей', 'https://…');
+    if (!url?.trim()) return;
+    const certPath = await ctx.ui.input('Путь к вашему сертификату', '~/certs/tls.cer');
+    if (!certPath?.trim()) return;
+    const keyPath = await ctx.ui.input('Путь к вашему ключу', '~/certs/tls.key');
+    if (!keyPath?.trim()) return;
+    const caPath = (await ctx.ui.input('Путь к цепочке CA шлюза (Enter — пропустить)', ''))?.trim() || undefined;
+    let input: GatewayInput = { url, certPath, keyPath, caPath };
+    let result = await rememberGateway(input, ctx.cwd, ctx.signal);
+    if ('failure' in result && /CERT|SIGNATURE|SELF_SIGNED|ISSUER/.test(result.failure)
+      && await ctx.ui.confirm('Сертификат шлюза не проверяется', 'Подключиться без проверки сертификата самого шлюза? Ваш сертификат при этом по-прежнему нужен. Решение запомнится.')) {
+      input = { ...input, insecure: true };
+      result = await rememberGateway(input, ctx.cwd, ctx.signal);
+    }
+    if ('failure' in result) { ctx.ui.notify(result.message, 'error'); return; }
+    ctx.ui.notify(`Шлюз подключён: моделей ${gatewayModels?.length ?? 0}. Выберите модель: /model → giga.${current.configured ? ' Прежняя настройка заменена.' : ''}`, 'info');
+    ctx.ui.setWidget('agent-lab-start', undefined);
+  };
   pi.registerCommand('agent-lab', {
-    description: 'Проверить агента: /agent-lab, /agent-lab demo или /agent-lab /путь/к/проекту',
+    description: 'Проверить агента: /agent-lab, /agent-lab demo или /agent-lab /путь/к/проекту. /agent-lab gateway — подключить шлюз моделей GigaChat',
     async handler(args, ctx) {
       if (!ctx.hasUI || ctx.mode !== 'tui') throw new Error('Human review requires the native Pi terminal. Start interactive Pi and open /agent-lab. Headless tools only prepare and edit drafts.');
+      if (args.trim() === 'gateway') { await gatewaySetup(ctx); return; }
       const startRequest = args.trim() === 'new' || args.trim().startsWith('/') || args.trim().startsWith('~');
       let handoff: { request: string; context: unknown } | undefined;
       // Opening history is a read, not a writer operation. In particular, never call init()

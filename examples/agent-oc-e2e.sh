@@ -14,7 +14,8 @@
 # AGENT_OC_SURFACE, AGENT_OC_AUTHORITY. DRY_RUN=1 останавливается после подготовки файлов,
 # BUILD_ONLY=1 - после сборки черновика: его карточки смотрят и запускают на доске /agent-lab.
 #
-# Переменные шлюза (AGENT_LAB_GATEWAY_*) должны быть в окружении: см. раздел о провайдере giga в README.
+# Шлюз моделей: один раз /agent-lab gateway в Pi (личная настройка ~/.agent-lab/gateway.json)
+# или переменные AGENT_LAB_GATEWAY_* в окружении — они важнее личной настройки.
 set -euo pipefail
 
 # Готовое задание (например, собранное examples/agent-oc-cases.py) берётся как есть: ЕПК и

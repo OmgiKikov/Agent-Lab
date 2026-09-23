@@ -1,6 +1,6 @@
 import type { ModelRuntime, ProviderConfig } from '@earendil-works/pi-coding-agent';
 import { buildChatRequest, normalizeResponseFormat, parseCatalog, parseChatResponse, type GigaAssistantMessage, type GigaResponse } from './giga-protocol.js';
-import { createGigaTransport, readGigaConfig, type GigaConfig, type GigaTransport } from './giga-transport.js';
+import { createGigaTransport, gatewayEnvironment, readGigaConfig, type GigaConfig, type GigaTransport } from './giga-transport.js';
 
 // Шлюз не сообщает ни окна контекста, ни лимита ответа, ни цен.
 // maxTokens не ниже протокола судьи (16384), иначе вердикт молча обрежется.
@@ -33,18 +33,34 @@ function failureCategory(error: unknown): string {
   return 'request failed';
 }
 
+export type GatewayConnection = { provider: ProviderConfig; models: string[] } | { failure: string };
+
 export async function createGigaProvider(
-  env: Record<string, string | undefined> = process.env,
+  env?: Record<string, string | undefined>,
   injectedTransport?: GigaTransport,
   signal?: AbortSignal,
 ): Promise<ProviderConfig | undefined> {
+  const connection = await connectGateway(env, injectedTransport, signal);
+  if ('provider' in connection) return connection.provider;
+  if (connection.failure !== 'not configured') reportCatalogFailure(connection.failure);
+  return undefined;
+}
+
+/**
+ * Подключение к шлюзу с причиной отказа. Причина — только категория (код ошибки Node, HTTP-статус),
+ * без тела ответа, путей и содержимого сертификатов: она показывается владельцу в разговоре.
+ */
+export async function connectGateway(
+  env?: Record<string, string | undefined>,
+  injectedTransport?: GigaTransport,
+  signal?: AbortSignal,
+): Promise<GatewayConnection> {
   let config: GigaConfig | undefined;
   try {
-    // readGigaConfig throws on an unreadable configured path (bad cert/key/CA path). That
-    // failure must degrade like any other misconfiguration, not crash every run on every provider.
-    config = injectedTransport ? undefined : readGigaConfig(env);
-  } catch { reportCatalogFailure('bad configuration'); return undefined; }
-  if (!injectedTransport && !config) return undefined;
+    // Нечитаемый путь или повреждённый личный файл не должны ронять прогоны на других провайдерах.
+    config = injectedTransport ? undefined : readGigaConfig(env ?? gatewayEnvironment());
+  } catch { return { failure: 'bad configuration' }; }
+  if (!injectedTransport && !config) return { failure: 'not configured' };
   const transport = injectedTransport ?? createGigaTransport(config!);
 
   let catalog: { status: number; text: string };
@@ -55,18 +71,20 @@ export async function createGigaProvider(
     // Код ошибки Node (ENOTFOUND, UNABLE_TO_VERIFY_LEAF_SIGNATURE, CERT_HAS_EXPIRED…) сразу
     // говорит оператору, что чинить, и не несёт ни путей, ни содержимого сертификата.
     const code = (error as NodeJS.ErrnoException).code;
-    reportCatalogFailure(code ? `connection ${code}` : 'timeout or aborted');
-    return undefined;
+    return { failure: code ? `connection ${code}` : 'timeout or aborted' };
   }
-  if (catalog.status !== 200) { reportCatalogFailure(`HTTP ${catalog.status}`); return undefined; }
+  if (catalog.status !== 200) return { failure: `HTTP ${catalog.status}` };
 
   let parsedCatalog: unknown;
   try { parsedCatalog = JSON.parse(catalog.text); }
-  catch { reportCatalogFailure('bad JSON'); return undefined; }
+  catch { return { failure: 'bad JSON' }; }
 
   const ids = parseCatalog(parsedCatalog);
-  if (!ids.length) { reportCatalogFailure('empty catalog'); return undefined; }
+  if (!ids.length) return { failure: 'empty catalog' };
+  return { provider: gatewayProvider(config, transport, ids), models: ids };
+}
 
+function gatewayProvider(config: GigaConfig | undefined, transport: GigaTransport, ids: string[]): ProviderConfig {
   return {
     name: 'Internal model gateway',
     baseUrl: `${config?.baseUrl ?? ''}/v2`,
@@ -118,7 +136,7 @@ export const GIGA_PROVIDER_ID = 'giga';
 /** Внутренний шлюз нельзя описать декларативным models.json: там нужен клиентский сертификат. */
 export async function registerGigaProvider(
   runtime: ModelRuntime,
-  env: Record<string, string | undefined> = process.env,
+  env?: Record<string, string | undefined>,
   injectedTransport?: GigaTransport,
   signal?: AbortSignal,
 ): Promise<void> {

@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createServer as createTlsServer, type TLSSocket } from 'node:tls';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createGigaTransport, type GigaConfig } from '../src/giga-transport.js';
+import { createGigaTransport, forgetGatewaySettings, gatewayEnvironment, gatewaySettingsSchema, gatewayStatus, readGigaConfig, saveGatewaySettings, type GatewaySettings, type GigaConfig } from '../src/giga-transport.js';
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 // Self-signed, test-only, loopback-only: never a real gateway certificate.
@@ -55,4 +57,60 @@ test('an already aborted signal rejects immediately instead of waiting for a res
     controller.abort();
     await assert.rejects(transport('/v1/models', undefined, controller.signal));
   } finally { await close(); }
+});
+
+async function settingsDirectory() {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-gateway-'));
+  await writeFile(join(directory, 'cert.pem'), 'cert');
+  await writeFile(join(directory, 'key.pem'), 'key');
+  return directory;
+}
+const personal = (directory: string): GatewaySettings => ({ format: 'agent-lab-gateway-1', url: 'https://gateway.example/v1',
+  certPath: join(directory, 'cert.pem'), keyPath: join(directory, 'key.pem') });
+
+test('the personal settings file configures the gateway without any variable', async () => {
+  const directory = await settingsDirectory();
+  const file = join(directory, 'gateway.json');
+  await saveGatewaySettings(personal(directory), file);
+  const config = readGigaConfig(gatewayEnvironment({}, file));
+  assert.equal(config?.baseUrl, 'https://gateway.example');
+  assert.equal(config?.cert.toString(), 'cert');
+});
+
+test('a variable overrides only its own field of the personal settings', async () => {
+  const directory = await settingsDirectory();
+  const file = join(directory, 'gateway.json');
+  await saveGatewaySettings(personal(directory), file);
+  const merged = gatewayEnvironment({ AGENT_LAB_GATEWAY_URL: 'https://other.example' }, file);
+  assert.deepEqual([merged.AGENT_LAB_GATEWAY_URL, merged.AGENT_LAB_GATEWAY_KEY_PATH], ['https://other.example', join(directory, 'key.pem')]);
+});
+
+test('personal settings are readable by the owner only', async () => {
+  const directory = await settingsDirectory();
+  const file = join(directory, 'nested', 'gateway.json');
+  await saveGatewaySettings(personal(directory), file);
+  assert.equal((await stat(file)).mode & 0o777, 0o600);
+});
+
+test('without a personal settings file only the variables count', () => {
+  assert.deepEqual(gatewayEnvironment({ HOME: '/x', AGENT_LAB_GATEWAY_URL: 'https://g' }, '/nonexistent/gateway.json'), { AGENT_LAB_GATEWAY_URL: 'https://g' });
+});
+
+test('a damaged settings file is reported by the status instead of crashing it', async () => {
+  const directory = await settingsDirectory();
+  const file = join(directory, 'gateway.json');
+  await writeFile(file, '{not json');
+  const status = gatewayStatus({ AGENT_LAB_GATEWAY_FILE: file });
+  assert.deepEqual([status.configured, /повреждён/.test(status.settingsError ?? '')], [false, true]);
+});
+
+test('relative certificate paths are not accepted into the personal settings', () => {
+  assert.equal(gatewaySettingsSchema.safeParse({ format: 'agent-lab-gateway-1', url: 'https://g', certPath: 'cert.pem', keyPath: '/key.pem' }).success, false);
+});
+
+test('forgetting settings removes the file and tolerates its absence', async () => {
+  const directory = await settingsDirectory();
+  const file = join(directory, 'gateway.json');
+  await saveGatewaySettings(personal(directory), file);
+  assert.deepEqual([await forgetGatewaySettings(file), await forgetGatewaySettings(file)], [true, false]);
 });

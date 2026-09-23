@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { missingGigaVariables, readGigaConfig, requestOptions, unreadableGigaFiles } from '../src/giga-transport.js';
-import { createGigaProvider, registerGigaProvider } from '../src/giga-provider.js';
+import { connectGateway, createGigaProvider, registerGigaProvider } from '../src/giga-provider.js';
 import type { GigaModel } from '../src/giga-protocol.js';
 
 const catalogBody = JSON.stringify({ data: [
@@ -329,4 +329,18 @@ test('registration is silent when the gateway is not configured', async () => {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('connecting names why the gateway is unavailable', async () => {
+  const outcomes = await Promise.all([
+    connectGateway({}),
+    connectGateway({}, async () => ({ status: 403, text: 'denied' })),
+    connectGateway({}, async () => { throw Object.assign(new Error('x'), { code: 'ENOTFOUND' }); }),
+  ]);
+  assert.deepEqual(outcomes.map(outcome => 'failure' in outcome ? outcome.failure : 'connected'), ['not configured', 'HTTP 403', 'connection ENOTFOUND']);
+});
+
+test('a connected gateway lists its chat models', async () => {
+  const connection = await connectGateway({}, async () => ({ status: 200, text: catalogBody }));
+  assert.deepEqual('models' in connection ? connection.models : [], ['GigaChat-3-Pro', 'glm-5.2']);
 });

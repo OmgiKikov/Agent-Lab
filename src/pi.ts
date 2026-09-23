@@ -23,7 +23,7 @@ import {
   type CallContext, type Runtime, type Settings, type TargetSession, type Tool,
 } from './contracts.js';
 import { GIGA_PROVIDER_ID, registerGigaProvider } from './giga-provider.js';
-import { missingGigaVariables, unreadableGigaFiles } from './giga-transport.js';
+import { gatewayStatus, type GatewayStatus } from './giga-transport.js';
 import { AGENT_ROLE, ASSESS_ROLE, DATA_BOUNDARY, DISCOVERY_COARSE_ROLE, DISCOVERY_GROUP_ROLE, DISCOVERY_HYPOTHESIS_ROLE, EXTERNAL_CARDS_CLAUSE, FAILURE_MODES_ROLE, FAMILY_PLAN_ROLE, GOALS_ROLE, IMPROVE_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, TOOL_GUIDE, cardsRole } from './prompts.js';
 
 type Model = NonNullable<ReturnType<ModelRuntime['getModel']>>;
@@ -392,21 +392,12 @@ async function jsonResponse<S extends z.ZodType>(
   } finally { await session.close(); }
 }
 
-interface GigaStatus { configured: boolean; registered?: boolean; missingVariables: string[]; unreadableFiles: string[] }
-
-/*
- * Провайдер внутреннего шлюза либо есть, либо его нет, и снаружи второе выглядит как отказ
- * авторизации Pi. Статус отвечает на единственный вопрос оператора: чинить окружение или доступ.
- */
-function gigaStatus(): GigaStatus {
-  const missingVariables = missingGigaVariables();
-  return { configured: missingVariables.length === 0, missingVariables, unreadableFiles: unreadableGigaFiles() };
-}
+type GigaStatus = GatewayStatus & { registered?: boolean };
 
 export async function getPiStatus(injectedRuntime?: ModelRuntime): Promise<{
   models: Array<{ provider: string; id: string; name: string }>; giga: GigaStatus; error?: string;
 }> {
-  const giga = gigaStatus();
+  const giga = gatewayStatus();
   try {
     const signal = AbortSignal.timeout(10000);
     const runtime = injectedRuntime ?? await ModelRuntime.create({ allowModelNetwork: false, signal });

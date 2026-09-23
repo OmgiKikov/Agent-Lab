@@ -127,6 +127,8 @@ export function callText(tool: string, args: Record<string, unknown> | undefined
     agent_lab_edit: 'Правлю настройки черновика', agent_lab_accept: 'Показываю ожидания на подтверждение', agent_lab_repeat: 'Готовлю повтор набора',
     agent_lab_issues: 'Смотрю постоянные проблемы', agent_lab_resolution: 'Проверяю исправление', agent_lab_diagnostics: 'Проверяю гипотезу парной диагностикой',
     agent_lab_suite: a.action === 'save' ? 'Сохраняю набор в файл' : a.action === 'load' ? 'Загружаю набор из файла' : 'Смотрю сохранённые наборы',
+    agent_lab_gateway: a.action === 'save' ? 'Проверяю доступ к шлюзу моделей' : a.action === 'forget' ? 'Отключаю шлюз моделей' : 'Смотрю, подключён ли шлюз моделей',
+    agent_lab_import: a.kind === 'cases' ? 'Читаю кейсы из .xlsx' : 'Читаю диалоги из .xlsx',
     agent_lab_connection: a.action === 'check' ? 'Проверяю подключение к агенту' : 'Читаю подключение к агенту', agent_lab_reassess: 'Переоцениваю сохранённые диалоги',
     agent_lab_review: 'Показываю диалог для вашей оценки', agent_lab_agree: 'Записываю вашу отметку о решении судьи', agent_lab_prompt: 'Готовлю изменение промпта', agent_lab_generator: 'Оцениваю генератор сценариев',
   };
