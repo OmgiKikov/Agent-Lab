@@ -2,10 +2,10 @@ import { assessScenarioLibrary, workInputIssue, serializedBytes, SCENARIO_OUTPUT
 export { assessScenarioLibrary } from './scenario-work.js';
 import { appendScenarioProposals, createLibrary, compileLibrary, libraryHash, libraryQuality, librarySnapshot } from './scenario-library.js';
 import { importBatchSchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal } from './scenario-contracts.js';
-import { fingerprint, validatePreparation, type AgentSpec, type CallContext, type CreateInput, type Experiment, type GroundingInput, type Requirement, type Runtime, type ScenarioProposalsInput, type Source } from './contracts.js';
+import { fingerprint, internalPromptRule, validatePreparation, type AgentSpec, type CallContext, type CreateInput, type Experiment, type GroundingInput, type Requirement, type Runtime, type ScenarioProposalsInput, type Source } from './contracts.js';
 import { SOURCES_PER_DIALOGUE } from './limits.js';
 import { selectScenarioSources } from './scenario-sources.js';
-import { InvalidGeneratorResponse } from './generator-errors.js';
+import { StructuredTaskError } from './llm/structured.js';
 import type { ExperimentStore } from './store.js';
 
 const SCENARIO_EXTRACTION_PROTOCOL = 'chronological-scenarios-v1' as const;
@@ -111,7 +111,7 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
         const attempts = progress.generationAttempts ??= [];
         let unit = attempts.find(item => item.dialogueId === dialogueId);
         if (!unit) { unit = { dialogueId, calls: 0 }; attempts.push(unit); }
-        if (unit.calls >= SOURCE_GENERATION_ATTEMPTS) throw new InvalidGeneratorResponse(`Для источника «${dialogueId}» исчерпаны ${SOURCE_GENERATION_ATTEMPTS} попыток извлечения и исправления. Сохранённый черновик доступен для правки.`);
+        if (unit.calls >= SOURCE_GENERATION_ATTEMPTS) throw new StructuredTaskError(`Для источника «${dialogueId}» исчерпаны ${SOURCE_GENERATION_ATTEMPTS} попыток извлечения и исправления. Сохранённый черновик доступен для правки.`);
         ctx.beforeCall(); unit.calls++;
       } };
       const result = await work(scoped);
@@ -119,7 +119,7 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
       return result;
     } catch (error) {
       // No started call means no ambiguous provider charge. A started, failed call is never replayed silently.
-      if (record.usage.calls === used || error instanceof InvalidGeneratorResponse) { delete progress.activeDialogueId; delete progress.activeStage; }
+      if (record.usage.calls === used || error instanceof StructuredTaskError) { delete progress.activeDialogueId; delete progress.activeStage; }
       throw error;
     }
   };
@@ -182,7 +182,8 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
         requirements = mergeRequirements(record, grounded.requirements, sources);
       }
       const request = { businessCatalog: library.businessScenarios.map(({ key, title, goal, conditions, requirementIds }) => ({ key, title, goal, conditions, requirementIds })), protocol: SCENARIO_EXTRACTION_PROTOCOL, task: record.task, sources: structuredClone(sources),
-        requirements: structuredClone(requirements), ...(original ? { batchId: original.id } : { preparationMode: 'owner_requirements', scenarioCount: input.scenarioCount || 1 }), dialogues: original ? chronologicalInput(original, [workId]) : [] } as ScenarioProposalsInput;
+        // An internal prompt rule (a machine output format) is recorded but never becomes an expectation of a card.
+        requirements: structuredClone(requirements.filter(requirement => !internalPromptRule(sources, requirement))), ...(original ? { batchId: original.id } : { preparationMode: 'owner_requirements', scenarioCount: input.scenarioCount || 1 }), dialogues: original ? chronologicalInput(original, [workId]) : [] } as ScenarioProposalsInput;
       const oversize = workInputIssue(request);
       if (oversize) { record.preparationProgress.excluded.push({ dialogueId: workId, reason: oversize }); continue; }
       let extracted: ScenarioProposal[] = [], next: ScenarioLibrary | undefined;
@@ -251,7 +252,7 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
         let revised: ScenarioProposal[];
         try { revised = requireSourceCoverage(await call(request.dialogues[0]?.id ?? 'owner_requirements', 'repair', scoped => runtime.scenarioProposals!(request, scoped)), request); }
         catch (error) {
-          if (!(error instanceof InvalidGeneratorResponse)) throw error;
+          if (!(error instanceof StructuredTaskError)) throw error;
           record.limitations.push(error.message); await publish(); continue;
         }
         if (serializedBytes({ proposals: revised }) > SCENARIO_OUTPUT_BYTES) throw new Error('Исправление превышает допустимый объём ответа. Исходная карточка сохранена.');

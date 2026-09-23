@@ -151,8 +151,24 @@ export const REQUIREMENT_LIMIT = 80;
 export const SCENARIO_LIMIT = 20;
 export const requirementSchema = z.strictObject({
   id: identifier, text: text.max(2000), sourceId: identifier, quote: text.max(3000), critical: z.boolean(),
+  /** Whether a user can see the rule kept or broken in a reply, as the grounding call typed it. Requirements stored before the field existed lack it. */
+  observable: z.boolean().optional(),
 });
 export type Requirement = z.infer<typeof requirementSchema>;
+/**
+ * How requirements were told apart before the grounding call typed `observable`: a JSON envelope, a named field,
+ * a structured-output directive or a bare quoted key. It decodes only stored requirements without the field, so
+ * the judge input of old records stays exactly as it was.
+ */
+const LEGACY_MACHINE_FORMAT = /\bjson\b|response_format|\{\s*"[a-z_]+"\s*:|^\s*"[a-z_]+"\s*$/i;
+export const observableRule = (requirement: Requirement): boolean => requirement.observable ?? !LEGACY_MACHINE_FORMAT.test(requirement.quote);
+/**
+ * A rule of the agent's own prompt that no user can see kept or broken in a reply, such as its machine output
+ * format: an internal interface between the agent's components. It is recorded, never judged or offered as an owner rule.
+ */
+export function internalPromptRule(sources: readonly Pick<Source, 'id' | 'kind'>[], requirement: Requirement): boolean {
+  return sources.find(source => source.id === requirement.sourceId)?.kind === 'prompt' && !observableRule(requirement);
+}
 export const worldSchema = z.strictObject({
   records: z.record(identifier, z.record(identifier, scalarSchema)).refine(v => Object.keys(v).length <= 30, 'Too many records'),
   writableFields: z.array(identifier).max(16),
@@ -653,8 +669,6 @@ const acceptedTestSchema = z.strictObject({
  * must cite the dialogues it was drawn from and may name the stage where the chain broke.
  * Clusters cover the traces of this run only; they are not a picture of production traffic.
  */
-/** A JSON envelope, a named field, a structured-output directive or a bare quoted key: an internal interface between the agent's components, never a rule a user can observe in a reply. */
-export const MACHINE_FORMAT = /\bjson\b|response_format|\{\s*"[a-z_]+"\s*:|^\s*"[a-z_]+"\s*$/i;
 export const failureModeSchema = z.strictObject({
   id: identifier, name: text.max(160), description: text.max(2000),
   stage: text.max(80).optional(), trialIds: z.array(identifier).min(1).max(200),
@@ -673,7 +687,6 @@ export function validateFailureModes(modes: FailureMode[], trials: Trial[], prom
     for (const quote of mode.promptQuotes ?? []) {
       if (prompt === undefined) throw new Error(`Кластер ${mode.id} цитирует промпт, но промпт не передавался.`);
       if (!prompt.includes(quote)) throw new Error(`Кластер ${mode.id} цитирует фрагмент, которого нет дословно в промпте: «${quote.slice(0, 80)}»`);
-      if (MACHINE_FORMAT.test(quote)) throw new Error(`Кластер ${mode.id} цитирует машинный формат ответа, а не правило, которое видит пользователь: «${quote.slice(0, 80)}»`);
     }
   }
 }

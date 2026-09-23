@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  SANDBOX_RETIRED, runnableTargetSchema, createInputSchema, dialogueSchema, draftPatchSchema, emptyUsage, fingerprint, humanReviewInputSchema, MACHINE_FORMAT, validateFailureModes, experimentSchema, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, verbatimSpan, verbatimSpanAt, worldSchema,
+  SANDBOX_RETIRED, runnableTargetSchema, createInputSchema, dialogueSchema, draftPatchSchema, emptyUsage, fingerprint, humanReviewInputSchema, internalPromptRule, observableRule, validateFailureModes, experimentSchema, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, verbatimSpan, verbatimSpanAt, worldSchema,
 } from '../src/contracts.js';
 import { selectValidationDialogues } from '../src/imports.js';
 
@@ -343,13 +343,21 @@ test('a run may be given hours, and a single model call minutes: thirty slow dia
   assert.throws(() => settingsSchema.parse({ maxDurationMs: 14400001 }));
 });
 
-test('a failure cluster cannot quote a machine output format of the prompt, and the detector names JSON envelopes, named fields and bare keys', () => {
+test('a prompt rule is observable as the grounding call typed it; a stored rule without the field is decoded by the legacy machine-format detector', () => {
+  const rule = (quote: string, observable?: boolean) => ({ id: 'r', text: 't', sourceId: 'prompt_1', quote, critical: true, ...(observable === undefined ? {} : { observable }) });
+  // Stored before the field existed: the judge input of these records must not change.
+  for (const quote of ['ВСЕГДА возвращай валидный JSON', '{"output": "*Финальный ответ*"}', '"output"', 'response_format: json_schema']) assert.equal(observableRule(rule(quote)), false, quote);
+  for (const quote of ['Отвечай на «вы»', 'Никогда не направляй в поддержку', 'Эквайринг → Мои точки продаж']) assert.equal(observableRule(rule(quote)), true, quote);
+  // Typed by the grounding call: the model's classification, not a pattern over the words.
+  assert.equal(observableRule(rule('Отвечай в формате JSON, если клиент просит выгрузку', true)), true);
+  assert.equal(observableRule(rule('Передавай номер терминала в поле terminal_id', false)), false);
+  const sources = [{ id: 'prompt_1', kind: 'prompt' as const }, { id: 'kb', kind: 'knowledge' as const }];
+  assert.equal(internalPromptRule(sources, rule('Передавай номер терминала в поле terminal_id', false)), true);
+  assert.equal(internalPromptRule(sources, { ...rule('Верни JSON', false), sourceId: 'kb' }), false, 'only the agent prompt has internal rules');
+  // A failure cluster may quote any verbatim fragment of the prompt: it is a hypothesis about the broken behaviour.
   const trials = [{ id: 't1', outcome: 'fail' } as unknown as Parameters<typeof validateFailureModes>[1][number]];
   const prompt = 'Отвечай на «вы». ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}.';
   const mode = { id: 'm', name: 'Ответ обычным текстом', description: 'd', trialIds: ['t1'] };
-  validateFailureModes([{ ...mode, promptQuotes: ['Отвечай на «вы»'] }], trials, prompt);
-  assert.throws(() => validateFailureModes([{ ...mode, promptQuotes: ['ВСЕГДА возвращай валидный JSON'] }], trials, prompt), /машинный формат/);
-  assert.throws(() => validateFailureModes([{ ...mode, promptQuotes: ['{"output": "*Финальный ответ*"}'] }], trials, prompt), /машинный формат/);
-  for (const text of ['ВСЕГДА возвращай валидный JSON', '{"output": "*Финальный ответ*"}', '"output"', 'response_format: json_schema']) assert.ok(MACHINE_FORMAT.test(text), text);
-  for (const text of ['Отвечай на «вы»', 'Никогда не направляй в поддержку', 'Эквайринг → Мои точки продаж']) assert.ok(!MACHINE_FORMAT.test(text), text);
+  validateFailureModes([{ ...mode, promptQuotes: ['Отвечай на «вы»', 'ВСЕГДА возвращай валидный JSON'] }], trials, prompt);
+  assert.throws(() => validateFailureModes([{ ...mode, promptQuotes: ['возвращай JSON'] }], trials, prompt), /дословно/);
 });

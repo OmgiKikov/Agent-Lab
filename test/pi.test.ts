@@ -1,21 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { ModelRuntime, type ProviderConfig } from '@earendil-works/pi-coding-agent';
-import { createPiRuntime, getPiStatus, groundingRequest, REPAIR_ATTEMPTS } from '../src/pi.js';
+import { createPiRuntime, getPiStatus, groundingRequest } from '../src/pi.js';
+import { REPAIR_ATTEMPTS } from '../src/llm/structured.js';
 import { FOCUSED_REQUIREMENT_LIMIT } from '../src/limits.js';
 import { REQUIREMENTS_ROLE } from '../src/prompts.js';
-import { judgeInput } from '../src/judge.js';
+import { judgeInput, observableSources } from '../src/judge.js';
 import { ExperimentLab } from '../src/experiment.js';
-import { DEFAULT_JUDGE, emptyUsage, promptCompliance, REQUIREMENT_LIMIT, settingsSchema, targetSchema, type CallContext, type Scenario, type Trial } from '../src/contracts.js';
-
-type Request = Parameters<NonNullable<ProviderConfig['streamSimple']>>[1];
-type Options = Parameters<NonNullable<ProviderConfig['streamSimple']>>[2];
-type Message = Awaited<ReturnType<ReturnType<ModelRuntime['streamSimple']>['result']>>;
-type Reply = string | Message['content'];
-const settings = settingsSchema.parse({ provider: 'agent-lab-test', model: 'test-model', timeoutMs: 1000 });
+import { DEFAULT_JUDGE, emptyUsage, promptCompliance, REQUIREMENT_LIMIT, settingsSchema, targetSchema, type Scenario, type Trial } from '../src/contracts.js';
+import { callContext, fixture, fixtureSettings as settings, type Options, type Reply, type Request } from './helpers/pi-fixture.js';
 
 test('invalid role configuration fails before any paid builder request and names configuration separately from authentication', async () => {
   const f = await fixture(() => '{}');
@@ -54,69 +48,6 @@ function scripted(outputs: unknown[]): (request: Request, index: number, options
   };
 }
 
-function callContext(options: { timeoutMs?: number; signal?: AbortSignal; limit?: number } = {}) {
-  const usage = emptyUsage();
-  const ctx: CallContext = {
-    signal: options.signal ?? new AbortController().signal, timeoutMs: options.timeoutMs ?? 1000,
-    beforeCall() {
-      if (usage.calls >= (options.limit ?? 100)) throw new Error('Call budget exhausted');
-      usage.calls++;
-    },
-    addUsage(value) {
-      usage.inputTokens += value.inputTokens;
-      usage.outputTokens += value.outputTokens;
-      usage.costUsd = usage.costUsd === null || value.costUsd === null ? null : usage.costUsd + value.costUsd;
-    },
-  };
-  return { ctx, usage };
-}
-
-async function fixture(reply: (request: Request, index: number, options?: Options) => Reply | Promise<Reply>, roleModel = false, reasoning = false) {
-  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-pi-'));
-  const requests: Request[] = [];
-  const modelsUsed: string[] = [];
-  const runtime = await ModelRuntime.create({
-    authPath: join(directory, 'auth.json'), modelsPath: null,
-    modelsStorePath: join(directory, 'models-store.json'), allowModelNetwork: false, refreshOnCreate: false,
-  });
-  runtime.registerProvider('agent-lab-test', {
-    api: 'openai-completions', apiKey: 'fixture-only-not-a-real-key', baseUrl: 'http://127.0.0.1:1',
-    models: (roleModel ? ['test-model', 'role-model'] : ['test-model']).map(id => ({
-      id, name: 'Offline SDK fixture', reasoning, input: ['text'],
-      cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }, contextWindow: 200000, maxTokens: 16384,
-    })),
-    streamSimple(model, request, options) {
-      modelsUsed.push(model.id);
-      const index = requests.length;
-      requests.push(JSON.parse(JSON.stringify(request)));
-      const finished = (async (): Promise<Message> => {
-        const value = await reply(request, index, options);
-        const content: Message['content'] = typeof value === 'string' ? [{ type: 'text', text: value }] : value;
-        return {
-          role: 'assistant', content, api: model.api, provider: model.provider, model: model.id,
-          usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18,
-            cost: { input: 0.01, output: 0.02, cacheRead: 0.001, cacheWrite: 0.001, total: 0.032 } },
-          stopReason: content.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop', timestamp: Date.now(),
-        };
-      })();
-      // The SDK consumes the public stream iterator/result protocol. No network or model output is mocked above it.
-      return {
-        result: () => finished,
-        async *[Symbol.asyncIterator]() {
-          const message = await finished;
-          yield { type: 'start', partial: message };
-          yield { type: 'done', reason: message.stopReason, message };
-        },
-      } as ReturnType<ModelRuntime['streamSimple']>;
-    },
-  });
-  return {
-    runtime, requests, directory, modelsUsed,
-    adapter: await createPiRuntime(settings, runtime),
-    async close() { await rm(directory, { recursive: true, force: true }); },
-  };
-}
-
 /** An external agent over HTTP inside the test process: it answers each delivered message in turn and keeps what it received. */
 async function httpAgent(reply: (message: string, index: number) => unknown) {
   const { createServer } = await import('node:http');
@@ -137,7 +68,7 @@ async function httpAgent(reply: (message: string, index: number) => unknown) {
     close: () => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }) };
 }
 
-test('real SDK sessions omit discovered resources and simulator receives only explicit user data', async () => {
+test('a model call reads no discovered resources and the simulator receives only explicit user data', async () => {
   const f = await fixture(() => JSON.stringify({ message: 'Please use the later time.', done: false }));
   const cwd = process.cwd();
   try {
@@ -166,8 +97,7 @@ test('real SDK sessions omit discovered resources and simulator receives only ex
     assert.match(f.requests[0]?.systemPrompt ?? '', /use done:true rather than repeatedly asking "try again" to force success/);
     assert.match(f.requests[0]?.systemPrompt ?? '', /Before composing another message, check whether the assigned stopping condition/);
     assert.doesNotMatch(payload, /PRIVATE_CONTEXT_SENTINEL|HIDDEN_RUBRIC_SENTINEL|BACKEND_FAILURE_SCHEDULE_SENTINEL|Current working directory/);
-    assert.deepEqual(f.requests[0]?.tools, []);
-    assert.ok(f.requests.every(r => !(r.tools ?? []).some(t => /web|fetch|browse|bash|read|write/.test(t.name))));
+    assert.ok(f.requests.every(r => !r.tools?.length), 'a model call offers no tools');
     assert.equal(process.env.AGENT_LAB_EXTENSION_LOADED, undefined);
     const status = await getPiStatus(f.runtime);
     assert.deepEqual(status.models, [{ provider: 'agent-lab-test', id: 'test-model', name: 'Offline SDK fixture' }]);
@@ -219,7 +149,7 @@ test('a structured answer wrapped in a markdown fence is not repaired into JSON'
 test('grounding asks the model for requirements only: one request, no cards and no agent', async () => {
   // Nothing here may be invented by the model: the owner brought the agent, and the situations come from the library.
   const f = await fixture(() => JSON.stringify({
-    requirements: [{ id: 'req_1', text: 'The agent answers acquiring questions.', sourceId: 'source-1', quote: 'answers acquiring questions', critical: true }],
+    requirements: [{ id: 'req_1', text: 'The agent answers acquiring questions.', sourceId: 'source-1', quote: 'answers acquiring questions', critical: true, observable: true }],
     questions: [],
   }));
   try {
@@ -235,7 +165,7 @@ test('grounding asks the model for requirements only: one request, no cards and 
 
 test('two requirements with one id go back to the model instead of failing the preparation', async () => {
   const content = 'Rule one: reply formally. Rule two: numbered steps.';
-  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'source_1', quote, critical: true });
+  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'source_1', quote, critical: true, observable: true });
   const outputs = [
     { requirements: [req('req_1', 'reply formally'), req('req_1', 'numbered steps')], questions: [] },
     { requirements: [req('req_1', 'reply formally'), req('req_2', 'numbered steps')], questions: [] },
@@ -290,7 +220,7 @@ test('isolated assessment uses approved rubrics and trace evidence without inher
     const { ctx, usage } = callContext();
     assert.deepEqual((await f.adapter.assess!({ scenario, sources: [], trial }, ctx)).map(a => ({ ...a, rationale: a.rationale.replace(/^Совпало 2\/2 оценок этой рубрики в свежих сессиях; это не проверка правильности\. /, '') })), assessments);
     assert.equal(usage.calls, 4);
-    assert.deepEqual(f.requests[0]?.tools, []);
+    assert.ok(!f.requests[0]?.tools?.length);
     assert.deepEqual(f.requests[0]?.messages.map(({ role, content }) => ({ role, content })), f.requests[1]?.messages.map(({ role, content }) => ({ role, content })), 'each vote receives exactly the same evidence and no previous judgment; SDK timestamps are local metadata');
     const payload = JSON.stringify(f.requests[0]?.messages);
     assert.match(payload, /passCriteria|support@example.test/);
@@ -307,26 +237,31 @@ test('isolated assessment uses approved rubrics and trace evidence without inher
   } finally { await f.close(); }
 });
 
-test('расплывчатое имя типа провала отклоняется и переписывается, ссылки проверяются', async () => {
+test('кластер провалов ссылается только на переданные провалы: неизвестный id отклоняет схема, а имя кластера — слова модели', async () => {
   const failures = [
     { trialId: 't1', card: 'Тариф', reason: 'Часть проверок провалена.', failed: ['Клиент получил ответ'], trace: 'Агент: оператору необходимо осуществить ручной поиск' },
     { trialId: 't2', card: 'Возврат', reason: 'Часть проверок провалена.', failed: ['Клиент получил ответ'], trace: 'Агент: обратитесь на горячую линию' },
   ];
-  const vague = { modes: [{ id: 'bad', name: 'Bad answer', description: 'd', trialIds: ['t1', 't2'] }] };
   const invented = { modes: [{ id: 'hotline', name: 'Отправил на горячую линию вместо ответа', description: 'd', trialIds: ['t1', 't9'] }] };
   const good = { modes: [{ id: 'hotline', name: 'Отправил на горячую линию вместо ответа', description: 'Нашёл статью и всё равно перевёл клиента.', stage: 'сборка ответа', trialIds: ['t1', 't2'] }] };
-  // Каждая попытка получает следующий ответ: проверяем, что отказ доходит и правка принимается.
-  const replies = [vague, invented, good];
+  const replies = [invented, good];
   let step = -1;
   const f = await fixture(() => { step += 1; return JSON.stringify(replies[step]); });
   try {
     const modes = await f.adapter.failureModes!({ task: 'Проверить агента', failures }, callContext().ctx);
     assert.deepEqual(modes, good.modes);
-    assert.equal(f.requests.length, 3, 'две попытки отклонены, третья принята');
-    const rejections = JSON.stringify(f.requests.slice(1).map(r => r.messages));
-    assert.match(rejections, /does not say what went wrong/);
-    assert.match(rejections, /not in the supplied failures/);
+    assert.equal(f.requests.length, 2, 'выдуманный диалог отклонён, исправление принято');
+    assert.deepEqual(JSON.parse(f.requests[0]!.systemPrompt!.split('\n').find(line => line.startsWith('{"$schema"'))!).properties.modes.items.properties.trialIds.items.enum, ['t1', 't2'],
+      'the answer schema lists exactly the supplied failures');
+    assert.match(JSON.stringify(f.requests[1]!.messages), /not in the supplied failures/i);
   } finally { await f.close(); }
+  // Whether a name says what went wrong is the model's judgement under its role, not a pattern over its words.
+  const plain = { modes: [{ id: 'bad', name: 'Bad answer', description: 'd', trialIds: ['t1', 't2'] }] };
+  const g = await fixture(() => JSON.stringify(plain));
+  try {
+    assert.deepEqual(await g.adapter.failureModes!({ task: 'Проверить агента', failures }, callContext().ctx), plain.modes);
+    assert.equal(g.requests.length, 1);
+  } finally { await g.close(); }
 });
 
 test('a rejected answer is repaired from the stated reason instead of losing the run', async () => {
@@ -334,8 +269,8 @@ test('a rejected answer is repaired from the stated reason instead of losing the
   const source = { id: 'source_1', name: 'Policy', content: quote, hash: 'hash' };
   // First the model paraphrases the source, which is the most common real rejection.
   const outputs = [
-    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote: 'Support can be reached by email.', critical: true }], questions: [] },
-    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true }], questions: [] },
+    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote: 'Support can be reached by email.', critical: true, observable: true }], questions: [] },
+    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true, observable: true }], questions: [] },
   ];
   const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
   try {
@@ -350,7 +285,7 @@ test('a rejected answer is repaired from the stated reason instead of losing the
 
 test('a source marked as the agent prompt reaches the builder and the judge labelled', async () => {
   const prompt = 'Отвечай только по эквайрингу. Всегда заканчивай ответ вопросом «Чем ещё помочь?». Никогда не называй внутренние системы.';
-  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'Every reply ends with «Чем ещё помочь?»', sourceId: 'prompt_1', quote: 'Всегда заканчивай ответ вопросом «Чем ещё помочь?»', critical: true }], questions: [] }));
+  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'Every reply ends with «Чем ещё помочь?»', sourceId: 'prompt_1', quote: 'Всегда заканчивай ответ вопросом «Чем ещё помочь?»', critical: true, observable: true }], questions: [] }));
   try {
     const promptSource = { id: 'prompt_1', name: 'system.md', content: prompt, hash: 'hash', kind: 'prompt' as const };
     await f.adapter.groundRequirements!({ task: 'Проверить агента эквайринга', sources: [promptSource, { id: 'kb_1', name: 'Статья', content: 'Тариф виден в СберБизнес.', hash: 'h2' }] }, callContext().ctx);
@@ -462,7 +397,7 @@ test('failure clusters may quote only a supplied prompt, verbatim', async () => 
 
 test('requirements extraction states its budget and asks the model to merge when it overshoots', async () => {
   const quote = 'Reply in the formal register and never redirect the user to a phone line.';
-  const many = Array.from({ length: REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `req_${i}`, text: `Observable rule ${i}`, sourceId: 'prompt_1', quote, critical: false }));
+  const many = Array.from({ length: REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `req_${i}`, text: `Observable rule ${i}`, sourceId: 'prompt_1', quote, critical: false, observable: true }));
   const outputs = [{ requirements: many, questions: [] }, { requirements: many.slice(0, 2), questions: [] }];
   const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
   try {
@@ -482,7 +417,7 @@ test('requirements extraction states its budget and asks the model to merge when
 
 test('requirement quotes are matched through the typography a model normalises, then stored in the source\'s own characters', async () => {
   const content = 'Раздел «Эквайринг» → «Мои точки продаж» → карточка точки → «Тариф».';
-  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'Where the tariff is shown', sourceId: 'source_1', quote: 'Раздел "Эквайринг" -> "Мои точки продаж"', critical: true }], questions: [] }));
+  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'Where the tariff is shown', sourceId: 'source_1', quote: 'Раздел "Эквайринг" -> "Мои точки продаж"', critical: true, observable: true }], questions: [] }));
   try {
     const grounded = await f.adapter.groundRequirements!({ task: 'Check tariff answers', sources: [{ id: 'source_1', name: 'idp/tariff_view.md', content, hash: 'h' }] }, callContext().ctx);
     assert.equal(f.requests.length, 1, 'normalised typography costs no repair attempt');
@@ -493,7 +428,7 @@ test('requirement quotes are matched through the typography a model normalises, 
 test('raw line breaks are rejected and a new valid provider reply preserves the exact source text', async () => {
   const quote = 'Rule one.\nRule two.';
   const sources = [{ id: 'source_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' as const }];
-  const valid = JSON.stringify({ requirements: [{ id: 'req_1', text: 'Two rules', sourceId: 'source_1', quote, critical: true }], questions: [] });
+  const valid = JSON.stringify({ requirements: [{ id: 'req_1', text: 'Two rules', sourceId: 'source_1', quote, critical: true, observable: true }], questions: [] });
   const rawNewline = '{"requirements":[{"id":"req_1","text":"Two rules","sourceId":"source_1","quote":"Rule one.\nRule two.","critical":true}],"questions":[]}';
   const f = await fixture((_request, index) => index === 0 ? rawNewline : valid);
   try {
@@ -515,7 +450,7 @@ test('raw line breaks are rejected and a new valid provider reply preserves the 
 test('unescaped quotes require a new valid provider reply and are never rewritten locally', async () => {
   const quote = 'Удали данные из "СберДруг", "ДРУГ", "ЦКР" и не упоминай "историю вопросов".';
   const broken = '{"requirements":[{"id":"req_1","text":"No "СберДруг", "ДРУГ" data in a reply","sourceId":"source_1","quote":"Удали данные из "СберДруг", "ДРУГ", "ЦКР" и не упоминай "историю вопросов".","critical":true}],"questions":[]}';
-  const outputs = [broken, JSON.stringify({ requirements: [{ id: 'req_1', text: 'No \"СберДруг\", \"ДРУГ\" data in a reply', sourceId: 'source_1', quote, critical: true }], questions: [] })];
+  const outputs = [broken, JSON.stringify({ requirements: [{ id: 'req_1', text: 'No \"СберДруг\", \"ДРУГ\" data in a reply', sourceId: 'source_1', quote, critical: true, observable: true }], questions: [] })];
   const f = await fixture((_request, index) => outputs[index]!);
   try {
     const grounded = await f.adapter.groundRequirements!({ task: 'Check internal names', sources: [{ id: 'source_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
@@ -529,7 +464,7 @@ test('unescaped quotes require a new valid provider reply and are never rewritte
 
 test('a rejection names every requirement whose quote is not in its source, so one repair fixes them all', async () => {
   const content = 'Rule one: reply formally. Rule two: never send the user to a phone line. Rule three: numbered steps.';
-  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'source_1', quote, critical: true });
+  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'source_1', quote, critical: true, observable: true });
   const outputs = [
     { requirements: [req('req_1', 'reply formally'), req('req_2', 'never phone the user'), req('req_3', 'numbered lists')], questions: [] },
     { requirements: [req('req_1', 'reply formally'), req('req_2', 'never send the user to a phone line'), req('req_3', 'numbered steps')], questions: [] },
@@ -549,7 +484,7 @@ test('a rejection names every requirement whose quote is not in its source, so o
 test('a quote that lives in another supplied source is re-attributed to it instead of being rejected', async () => {
   const rules = 'Удали из ответа служебную информацию: данные из "СберДруг", "ЦКР".';
   const articles = 'Терминал блокируется по инициативе банка.';
-  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'No internal names', sourceId: 'article_1', quote: 'данные из "СберДруг", "ЦКР"', critical: true }], questions: [] }));
+  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'No internal names', sourceId: 'article_1', quote: 'данные из "СберДруг", "ЦКР"', critical: true, observable: true }], questions: [] }));
   try {
     const grounded = await f.adapter.groundRequirements!({ task: 'Check internal names',
       sources: [{ id: 'article_1', name: 'block.md', content: articles, hash: 'a' }, { id: 'prompt_1', name: 'prompt.md', content: rules, hash: 'p', kind: 'prompt' }] }, callContext().ctx);
@@ -559,19 +494,23 @@ test('a quote that lives in another supplied source is re-attributed to it inste
   } finally { await f.close(); }
 });
 
-test('a machine output-format instruction in the agent prompt is an internal interface, not a requirement a user can observe', async () => {
+test('a machine output-format instruction in the agent prompt is typed as unobservable by the grounding call and never reaches the judge', async () => {
   const prompt = 'Отвечай на «вы». ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}. Никогда не направляй в поддержку.';
-  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'prompt_1', quote, critical: true });
-  const outputs = [
-    { requirements: [req('formal', 'Отвечай на «вы»'), req('json', 'ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}')], questions: [] },
-    { requirements: [req('formal', 'Отвечай на «вы»'), req('no_support', 'Никогда не направляй в поддержку')], questions: [] },
-  ];
-  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
+  const req = (id: string, quote: string, observable: boolean) => ({ id, text: id, sourceId: 'prompt_1', quote, critical: true, observable });
+  const reply = { requirements: [req('formal', 'Отвечай на «вы»', true), req('json', 'ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}', false),
+    req('no_support', 'Никогда не направляй в поддержку', true)], questions: [] };
+  const f = await fixture(() => JSON.stringify(reply));
   try {
-    const grounded = await f.adapter.groundRequirements!({ task: 'Check the agent against its prompt', sources: [{ id: 'prompt_1', name: 'prompt.md', content: prompt, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
-    assert.deepEqual(grounded.requirements.map(r => r.id), ['formal', 'no_support']);
-    assert.match(JSON.stringify(f.requests[1]?.messages), /machine output format/i);
+    const source = { id: 'prompt_1', name: 'prompt.md', content: prompt, hash: 'h', kind: 'prompt' as const };
+    const grounded = await f.adapter.groundRequirements!({ task: 'Check the agent against its prompt', sources: [source] }, callContext().ctx);
+    assert.equal(f.requests.length, 1, 'a typed classification costs no repair');
+    assert.deepEqual(grounded.requirements.map(r => [r.id, r.observable]), [['formal', true], ['json', false], ['no_support', true]]);
     assert.match(f.requests[0]?.systemPrompt ?? '', /machine output format/i);
+    assert.match(f.requests[0]?.systemPrompt ?? '', /"observable":\{"type":"boolean"/, 'the answer schema asks for the classification');
+    const [judged] = observableSources([source], grounded.requirements);
+    assert.match(judged!.content, /Отвечай на «вы»/);
+    assert.match(judged!.content, /Никогда не направляй в поддержку/);
+    assert.doesNotMatch(judged!.content, /JSON/);
   } finally { await f.close(); }
 });
 
@@ -611,7 +550,7 @@ test('real Pi extraction, semantic admission and library store form one chronolo
     if (payload.batchId) return JSON.stringify({ proposals: proposals(payload.batchId).filter(p => payload.dialogues.some((d: any) => d.id === p.variant.sourceDialogues[0]!.dialogueId)) });
     if (payload.library) return JSON.stringify({ findings: payload.fields.flatMap((field: any) => field.paths.map((path: string) => ({ variantId: field.variantId, path, status: 'ready', reason: 'Проверено по всей хронологии и требованиям' }))) });
     if (payload.user) return JSON.stringify({ done: true, message: '' });
-    return JSON.stringify({ requirements: requirements.map(r => ({ ...r, sourceId: 'source-1' })), questions: [] });
+    return JSON.stringify({ requirements: requirements.map(r => ({ ...r, sourceId: 'source-1', observable: true })), questions: [] });
   });
   const lab = new ExperimentLab(join(f.directory, 'store'), f.adapter);
   try {
@@ -693,7 +632,7 @@ test('controlled user and checkpoint roles use actual simulator/judge models and
     assert.equal(usage.calls, 2);
     assert.doesNotMatch(JSON.stringify(f.requests[0]), /EVALUATOR_ONLY_MARKER|checkpoints|requirementId|environmentView|backend/);
     assert.match(JSON.stringify(f.requests[1]), /EVALUATOR_ONLY_MARKER/);
-    assert.deepEqual(f.requests.map(r => r.tools), [[], []]);
+    assert.ok(f.requests.every(r => !r.tools?.length));
   } finally { await f.close(); }
 });
 
@@ -808,12 +747,12 @@ test('grounding for one dialogue asks for the rules that decide that dialogue on
   const focused = groundingRequest({ task: 't', sources: [], focus: { dialogueId: 'd', customerMessages: ['Как вернуть деньги?'] } });
   assert.equal(whole.limit, REQUIREMENT_LIMIT);
   assert.equal(focused.limit, FOCUSED_REQUIREMENT_LIMIT);
-  assert.equal(whole.role, REQUIREMENTS_ROLE);
-  assert.ok(focused.role.startsWith(REQUIREMENTS_ROLE) && /customerMessages/.test(focused.role.slice(REQUIREMENTS_ROLE.length)), 'the focus clause is appended, the base role is unchanged');
+  assert.equal(whole.task.instructions, REQUIREMENTS_ROLE);
+  assert.ok(focused.task.instructions.startsWith(REQUIREMENTS_ROLE) && /customerMessages/.test(focused.task.instructions.slice(REQUIREMENTS_ROLE.length)), 'the focus clause is appended, the base role is unchanged');
   assert.deepEqual(focused.payload.customerMessages, ['Как вернуть деньги?']);
   assert.equal('customerMessages' in whole.payload, false);
   assert.equal('dialogues' in focused.payload, false, 'the old agent’s replies never reach the grounding call');
-  assert.ok(focused.schema.safeParse({ requirements: Array.from({ length: FOCUSED_REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `r${i}`, text: 'x', sourceId: 's', quote: 'x', critical: true })), questions: [] }).success === false);
+  assert.ok(focused.task.output.safeParse({ requirements: Array.from({ length: FOCUSED_REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `r${i}`, text: 'x', sourceId: 's', quote: 'x', critical: true, observable: true })), questions: [] }).success === false);
 });
 
 test('a missing JSON closer is a failed attempt; only the next complete response supplies fields', async () => {
@@ -831,7 +770,7 @@ test('a missing JSON closer is a failed attempt; only the next complete response
     const actual = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Возврат', sources, requirements, batchId: batch.id, dialogues: chronologicalInput(batch) }, ctx);
     assert.deepEqual(actual, expected);
     assert.equal(usage.calls, 2);
-    assert.deepEqual(seen, [{ role: (await import('../src/prompts.js')).SCENARIO_PROPOSALS_ROLE, text: raw, attempt: 1 }, { role: (await import('../src/prompts.js')).SCENARIO_PROPOSALS_ROLE, text: valid, attempt: 2 }]);
+    assert.deepEqual(seen, [{ role: 'scenario-proposals', text: raw, attempt: 1 }, { role: 'scenario-proposals', text: valid, attempt: 2 }]);
   } finally { await f.close(); }
 });
 

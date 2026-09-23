@@ -1,6 +1,6 @@
 import { directChecks } from './checkpoints.js';
-import type { Experiment, Requirement, Scenario, Trial, UserMode, ValidationExclusion } from './contracts.js';
-import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, MACHINE_FORMAT, metricApplies, ragEvidenceComplete, RAG_METRIC_IDS } from './contracts.js';
+import type { Experiment, Scenario, Trial, UserMode, ValidationExclusion } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, describeCheck, fingerprint, internalPromptRule, metricApplies, ragEvidenceComplete, RAG_METRIC_IDS } from './contracts.js';
 import { agentMetricResult, automaticTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, simulatorUsable } from './outcomes.js';
 import { cardOutcome, headlineCardOutcome, humanFindings, isAgentFailure, judgeModel as runJudgeModel, verdictSummary, type VerdictSummary } from './comparison.js';
 import { exclusionCounts } from './result-view.js';
@@ -112,9 +112,6 @@ const labelled = (label: string, value: string): string[] => {
 
 const SITUATION_FORMS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
 const SHEET_RULE_FORMS: [string, string, string] = ['правило', 'правила', 'правил'];
-/** An internal machine-format prompt rule is not a rule the owner recognises, so the sheet leaves it out. */
-const machineFormatRule = (record: Experiment, requirement: Requirement): boolean =>
-  record.sources.find(source => source.id === requirement.sourceId)?.kind === 'prompt' && MACHINE_FORMAT.test(requirement.quote);
 
 /**
  * What the agent must do in every situation of a draft, in the owner's words: the goal, the
@@ -140,7 +137,7 @@ export function expectationSheet(record: Experiment): ExpectationSheet {
   const edited = new Set(record.ownerExpectationScenarioIds ?? []);
   const built = record.scenarios.map((scenario, index) => {
     const ids = [...new Set(scenario.requirementIds)]
-      .filter(id => { const item = requirements.get(id); return !item || !machineFormatRule(record, item); });
+      .filter(id => { const item = requirements.get(id); return !item || !internalPromptRule(record.sources, item); });
     const rules = ids.flatMap(id => requirements.has(id) ? register.get(id) ?? [] : [])
       .sort((a, b) => Number(a.prompt) - Number(b.prompt) || a.number - b.number);
     const criteria = oneLine(scenario.successCriteria ?? '');

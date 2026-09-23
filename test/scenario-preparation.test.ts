@@ -737,7 +737,7 @@ test('a failed source remains pending with its error while unrelated cards finis
       ctx.beforeCall();
       ctx.onGeneratorOutput?.({ role: 'extraction', text: '{broken', attempt: 1 });
       ctx.onGeneratorValidation?.({ attempt: 1, accepted: false, reason: 'Malformed JSON' });
-      throw new (await import('../src/generator-errors.js')).InvalidGeneratorResponse('Malformed JSON');
+      throw new (await import('../src/llm/structured.js')).StructuredTaskError('Malformed JSON');
     }
     return extract(request, ctx);
   };

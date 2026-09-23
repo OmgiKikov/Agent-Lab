@@ -1,4 +1,4 @@
-import { MACHINE_FORMAT, type Experiment, type MetricAssessment, type Requirement, type Scenario, type Trial, verbatimSpanAt } from './contracts.js';
+import { internalPromptRule, type Experiment, type MetricAssessment, type Scenario, type Trial, verbatimSpanAt } from './contracts.js';
 import { agentMetricResult, automaticTrialResult } from './outcomes.js';
 import { AGREED_RATIONALE_PREFIX } from './judge.js';
 import { pluralForm } from './plural.js';
@@ -138,9 +138,6 @@ function saidRow(trial: Trial, cited: MetricAssessment | undefined): { row: Expl
   return { row: { role: 'unverified', indent: 2, text: 'Сказал: в записи нет ответа агента.' }, said: null };
 }
 
-const machineFormat = (record: Experiment, requirement: Requirement) =>
-  record.sources.find(source => source.id === requirement.sourceId)?.kind === 'prompt' && MACHINE_FORMAT.test(requirement.quote);
-
 /**
  * The prompt rule a failed prompt-rule check names: the «…» spans of its rationale (the agreed
  * prefix removed) are matched against registered, observable prompt rules. A match must be exact or
@@ -155,7 +152,7 @@ function violatedRule(record: Experiment, trial: Trial, register: Map<string, Ru
   const found = new Map<number, RuleRef>();
   for (const requirement of record.requirements) {
     const rule = register.get(requirement.id);
-    if (!rule?.prompt || machineFormat(record, requirement)) continue;
+    if (!rule?.prompt || internalPromptRule(record.sources, requirement)) continue;
     const quote = normal(rule.quote);
     if (spans.some(span => (quote.includes(span) && span.length >= Math.ceil(quote.length * MIN_SPAN_RATIO))
       || (span.includes(quote) && quote.length >= MIN_CONTAINED_QUOTE))) found.set(rule.number, rule);
@@ -210,8 +207,8 @@ interface Details extends Pick<FailureExplanation, 'said' | 'rules' | 'unverifie
 function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind: DetailKind, cited: MetricAssessment | undefined): Details {
   const register = ruleRegister(record);
   const requirements = new Map(record.requirements.map(item => [item.id, item]));
-  // Internal machine-format prompt rules are never shown or counted; their register numbers stay.
-  const ids = [...new Set(scenario.requirementIds)].filter(id => { const item = requirements.get(id); return !item || !machineFormat(record, item); });
+  // Internal prompt rules (a machine output format) are never shown or counted; their register numbers stay.
+  const ids = [...new Set(scenario.requirementIds)].filter(id => { const item = requirements.get(id); return !item || !internalPromptRule(record.sources, item); });
   const rules = ids.flatMap(id => requirements.has(id) ? register.get(id) ?? [] : [])
     .sort((a, b) => Number(a.prompt) - Number(b.prompt) || a.number - b.number);
   const unverifiedRules = ids.length - rules.length;

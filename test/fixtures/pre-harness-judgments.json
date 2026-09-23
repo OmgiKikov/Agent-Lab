@@ -1,0 +1,2612 @@
+{
+  "recordedRun": {
+    "schemaVersion": "1",
+    "id": "d8a94bba-2860-4c71-b3a8-4672485fb07b",
+    "task": "Score recorded dialogues",
+    "mode": "live",
+    "createdAt": "2026-09-23T08:15:48.669Z",
+    "updatedAt": "2026-09-23T08:15:48.870Z",
+    "workflow": "evaluate",
+    "phase": "results_review",
+    "message": "Переоценка готова. Исходные трассы, оценки и ручные решения сохранены в исходном прогоне.",
+    "sources": [
+      {
+        "id": "source-1",
+        "name": "policy",
+        "content": "Answer from the owner material",
+        "hash": "4826cfa8b1cf3f530686a0a25cfc598da3804bd2f3e835512ed2c3e62610e528"
+      }
+    ],
+    "settings": {
+      "provider": "",
+      "model": "",
+      "judge": {
+        "provider": "agent-lab-test",
+        "model": "test-model"
+      },
+      "repeats": 2,
+      "maxIterations": 2,
+      "maxTurns": 6,
+      "maxCalls": 300,
+      "timeoutMs": 120000,
+      "maxDurationMs": 600000,
+      "userModes": [
+        "reactive"
+      ],
+      "roles": {}
+    },
+    "target": {
+      "kind": "sandbox"
+    },
+    "requirements": [
+      {
+        "id": "owner_rule",
+        "text": "Answer from the owner material",
+        "sourceId": "source-1",
+        "quote": "Answer from the owner material",
+        "critical": false
+      }
+    ],
+    "questions": [],
+    "scenarios": [
+      {
+        "id": "d0",
+        "familyId": "d0",
+        "title": "Answer d0",
+        "requirementIds": [
+          "owner_rule"
+        ],
+        "provenance": "production",
+        "tier": "regression",
+        "user": {
+          "goal": "Answer d0",
+          "facts": "Только факты, сообщённые пользователем в записанном диалоге.",
+          "behavior": "Воспроизводить реплики пользователя из записи в исходном порядке.",
+          "opening": "Question d0",
+          "maxFollowUps": 0,
+          "script": []
+        },
+        "initialState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "checks": [],
+        "goalObservation": "reply",
+        "successCriteria": "Answer from the owner material",
+        "assumptions": [
+          "Recorded dialogue d0; no target or simulator execution and no observed external state."
+        ],
+        "metrics": [
+          {
+            "id": "goal_attainment",
+            "name": "Достижение цели",
+            "subject": "agent",
+            "description": "Достиг ли пользователь заявленной цели по наблюдаемым фактам диалога.",
+            "passCriteria": "Цель достигнута; если требовалось действие, его результат подтверждён наблюдаемым состоянием или событием инструмента.",
+            "failCriteria": "Наблюдаемые факты показывают, что цель не достигнута или достигнута неверно. Одно заявление агента о ненаблюдавшемся действии не доказывает ни успех, ни провал."
+          },
+          {
+            "id": "reply_quality",
+            "name": "Качество ответа",
+            "subject": "agent",
+            "description": "Насколько ответ корректен, уместен, заземлён и исполним для пользователя независимо от результата внешнего действия.",
+            "passCriteria": "Ответ корректен по материалам владельца, отвечает на запрос и, если следующий шаг нужен, даёт его без выдуманных фактов.",
+            "failCriteria": "Ответ неверен, не по существу, неисполняем, противоречит материалам владельца или выдаёт неподтверждённое за факт."
+          }
+        ],
+        "split": "dev"
+      },
+      {
+        "id": "d1",
+        "familyId": "d1",
+        "title": "Answer d1",
+        "requirementIds": [
+          "owner_rule"
+        ],
+        "provenance": "production",
+        "tier": "regression",
+        "user": {
+          "goal": "Answer d1",
+          "facts": "Только факты, сообщённые пользователем в записанном диалоге.",
+          "behavior": "Воспроизводить реплики пользователя из записи в исходном порядке.",
+          "opening": "Question d1",
+          "maxFollowUps": 0,
+          "script": []
+        },
+        "initialState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "checks": [],
+        "goalObservation": "reply",
+        "successCriteria": "Answer from the owner material",
+        "assumptions": [
+          "Recorded dialogue d1; no target or simulator execution and no observed external state."
+        ],
+        "metrics": [
+          {
+            "id": "goal_attainment",
+            "name": "Достижение цели",
+            "subject": "agent",
+            "description": "Достиг ли пользователь заявленной цели по наблюдаемым фактам диалога.",
+            "passCriteria": "Цель достигнута; если требовалось действие, его результат подтверждён наблюдаемым состоянием или событием инструмента.",
+            "failCriteria": "Наблюдаемые факты показывают, что цель не достигнута или достигнута неверно. Одно заявление агента о ненаблюдавшемся действии не доказывает ни успех, ни провал."
+          },
+          {
+            "id": "reply_quality",
+            "name": "Качество ответа",
+            "subject": "agent",
+            "description": "Насколько ответ корректен, уместен, заземлён и исполним для пользователя независимо от результата внешнего действия.",
+            "passCriteria": "Ответ корректен по материалам владельца, отвечает на запрос и, если следующий шаг нужен, даёт его без выдуманных фактов.",
+            "failCriteria": "Ответ неверен, не по существу, неисполняем, противоречит материалам владельца или выдаёт неподтверждённое за факт."
+          }
+        ],
+        "split": "dev"
+      }
+    ],
+    "goldenCases": [],
+    "dialogues": [
+      {
+        "id": "d0",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Question d0"
+          },
+          {
+            "role": "assistant",
+            "content": "Answer d0"
+          }
+        ],
+        "outcome": "unknown"
+      },
+      {
+        "id": "d1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Question d1"
+          },
+          {
+            "role": "assistant",
+            "content": "Answer d1"
+          }
+        ],
+        "outcome": "unknown"
+      }
+    ],
+    "profiles": [],
+    "notes": "",
+    "revisions": [
+      {
+        "id": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+        "parentId": null,
+        "spec": {
+          "name": "Recorded agent",
+          "instructions": "Recorded only",
+          "tools": []
+        },
+        "hypothesis": "Agent configuration associated with imported recorded dialogues.",
+        "createdAt": "2026-09-22T21:04:37.739Z"
+      }
+    ],
+    "selectedRevisionId": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+    "manifestHash": "ca0344a51a622fa10321d2b7eb71549ea3a96b6337266a84f8c0336dd4f58e65",
+    "reviewedAt": "2026-09-23T08:15:48.671Z",
+    "reviewMode": "automated",
+    "controlConsumedAt": null,
+    "acceptedTests": [],
+    "trials": [
+      {
+        "id": "d0",
+        "revisionId": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+        "scenarioId": "d0",
+        "familyId": "d0",
+        "repeat": 0,
+        "userMode": "scripted",
+        "split": "dev",
+        "manifestHash": "ca0344a51a622fa10321d2b7eb71549ea3a96b6337266a84f8c0336dd4f58e65",
+        "outcome": "ungraded",
+        "reason": "Точные проверки пересчитаны по сохранённым фактам.",
+        "checks": [],
+        "simulatorChecks": [],
+        "events": [
+          {
+            "seq": 0,
+            "type": "user",
+            "text": "Question d0"
+          },
+          {
+            "seq": 1,
+            "type": "assistant",
+            "text": "Answer d0"
+          }
+        ],
+        "initialState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "finalState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "usage": {
+          "calls": 4,
+          "inputTokens": 52,
+          "outputTokens": 20,
+          "costUsd": 0.128
+        },
+        "elapsedMs": 92,
+        "assessments": [
+          {
+            "metricId": "goal_attainment",
+            "result": "pass",
+            "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. The recorded reply answers the request.",
+            "evidence": [
+              1
+            ],
+            "citations": [
+              {
+                "seq": 1,
+                "quote": "Answer d0"
+              }
+            ]
+          },
+          {
+            "metricId": "reply_quality",
+            "result": "pass",
+            "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. The recorded reply answers the request.",
+            "evidence": [
+              1
+            ],
+            "citations": [
+              {
+                "seq": 1,
+                "quote": "Answer d0"
+              }
+            ]
+          }
+        ],
+        "observation": {
+          "state": "missing",
+          "tools": "partial"
+        },
+        "judgeReceipt": {
+          "protocolHash": "d93e715d48996c27e8981ecfb3737db67ad270e814932e676260dedc66261b2b",
+          "inputHash": "9b800464b6a30b6011057daec9f4da89249a03cc8c88a4a334260c06efb599ee",
+          "provider": "agent-lab-test",
+          "model": "test-model",
+          "configurationHash": "126d0a163cf71d1017116c1096c42c16832ea7c77467f04ef06ee82a30b8a4be",
+          "transport": {
+            "api": "openai-completions",
+            "structured": false
+          },
+          "auditHash": "4a171d427b02919a4356768cf7535e6e42f34f3cc9981366725a5e21f0d7b196",
+          "votes": [
+            {
+              "metricId": "goal_attainment",
+              "result": "pass"
+            },
+            {
+              "metricId": "goal_attainment",
+              "result": "pass"
+            },
+            {
+              "metricId": "reply_quality",
+              "result": "pass"
+            },
+            {
+              "metricId": "reply_quality",
+              "result": "pass"
+            }
+          ],
+          "notApplicable": [],
+          "complete": true
+        }
+      },
+      {
+        "id": "d1",
+        "revisionId": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+        "scenarioId": "d1",
+        "familyId": "d1",
+        "repeat": 0,
+        "userMode": "scripted",
+        "split": "dev",
+        "manifestHash": "ca0344a51a622fa10321d2b7eb71549ea3a96b6337266a84f8c0336dd4f58e65",
+        "outcome": "ungraded",
+        "reason": "Точные проверки пересчитаны по сохранённым фактам.",
+        "checks": [],
+        "simulatorChecks": [],
+        "events": [
+          {
+            "seq": 0,
+            "type": "user",
+            "text": "Question d1"
+          },
+          {
+            "seq": 1,
+            "type": "assistant",
+            "text": "Answer d1"
+          }
+        ],
+        "initialState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "finalState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "usage": {
+          "calls": 4,
+          "inputTokens": 52,
+          "outputTokens": 20,
+          "costUsd": 0.128
+        },
+        "elapsedMs": 79,
+        "assessments": [
+          {
+            "metricId": "goal_attainment",
+            "result": "pass",
+            "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. The recorded reply answers the request.",
+            "evidence": [
+              1
+            ],
+            "citations": [
+              {
+                "seq": 1,
+                "quote": "Answer d1"
+              }
+            ]
+          },
+          {
+            "metricId": "reply_quality",
+            "result": "pass",
+            "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. The recorded reply answers the request.",
+            "evidence": [
+              1
+            ],
+            "citations": [
+              {
+                "seq": 1,
+                "quote": "Answer d1"
+              }
+            ]
+          }
+        ],
+        "observation": {
+          "state": "missing",
+          "tools": "partial"
+        },
+        "judgeReceipt": {
+          "protocolHash": "d93e715d48996c27e8981ecfb3737db67ad270e814932e676260dedc66261b2b",
+          "inputHash": "764adbcc8d235770609b32bbeb79a1316a2353d1af6fdd5fefd8b8c6694548a5",
+          "provider": "agent-lab-test",
+          "model": "test-model",
+          "configurationHash": "126d0a163cf71d1017116c1096c42c16832ea7c77467f04ef06ee82a30b8a4be",
+          "transport": {
+            "api": "openai-completions",
+            "structured": false
+          },
+          "auditHash": "d5060505e8c5975c2baa8735faddc653ccb268c523e466e77e6a3dc819d292f3",
+          "votes": [
+            {
+              "metricId": "goal_attainment",
+              "result": "pass"
+            },
+            {
+              "metricId": "goal_attainment",
+              "result": "pass"
+            },
+            {
+              "metricId": "reply_quality",
+              "result": "pass"
+            },
+            {
+              "metricId": "reply_quality",
+              "result": "pass"
+            }
+          ],
+          "notApplicable": [],
+          "complete": true
+        }
+      }
+    ],
+    "comparisons": [],
+    "iterations": [],
+    "usage": {
+      "calls": 8,
+      "inputTokens": 104,
+      "outputTokens": 40,
+      "costUsd": 0.256
+    },
+    "error": null,
+    "limitations": [
+      "Tools operate on isolated test records, not production systems. Only instructions and registered tool permissions are edited.",
+      "Scenario expectations are grounded automatically and should be spot-checked; text matching checks measure literal content, not semantic correctness.",
+      "Synthetic simulations do not establish performance with real users. Model rubric assessments are provisional; human review is reserved for disputes and calibration claims.",
+      "Model costs are observed usage estimates; unknown costs remain unknown. Call limits are not hard provider billing caps.",
+      "Записанные диалоги: агент и симулятор не запускались; результаты внешних действий не наблюдались.",
+      "Переоценка сохранённых фактов: агент и симулятор не запускались. Смена критериев или судьи не доказывает улучшение агента."
+    ],
+    "humanReviews": [],
+    "parentRunId": "a212d6cd-9f29-4e0d-9b84-6e6bd85cb788",
+    "executionRunId": "a212d6cd-9f29-4e0d-9b84-6e6bd85cb788",
+    "assessmentOf": "a212d6cd-9f29-4e0d-9b84-6e6bd85cb788",
+    "assessmentTrialIds": [
+      "d0",
+      "d1"
+    ],
+    "evidenceHash": "d668bb0f9c94c2f528f2dbd87fda34e671d33bb62fc8c74e8436b35f8b693ded",
+    "evaluatorVersion": "53304ca1a49e4dc14277488d79046f067730d0347ef49a4c6f0911493c9b220b",
+    "sourceEvidence": {
+      "runId": "a212d6cd-9f29-4e0d-9b84-6e6bd85cb788",
+      "trials": [
+        {
+          "id": "d0",
+          "revisionId": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+          "scenarioId": "d0",
+          "familyId": "d0",
+          "repeat": 0,
+          "userMode": "scripted",
+          "split": "dev",
+          "manifestHash": "c7c09cc2867746f8c5be45a5616f1e37b24a57815d7c7ca82ce58a534566810d",
+          "outcome": "ungraded",
+          "reason": "Записанный диалог импортирован без повторного запуска агента; семантическая оценка ещё не выполнялась.",
+          "checks": [],
+          "events": [
+            {
+              "seq": 0,
+              "type": "user",
+              "text": "Question d0"
+            },
+            {
+              "seq": 1,
+              "type": "assistant",
+              "text": "Answer d0"
+            }
+          ],
+          "initialState": {
+            "records": {},
+            "writableFields": [],
+            "transientFailures": 0
+          },
+          "finalState": {
+            "records": {},
+            "writableFields": [],
+            "transientFailures": 0
+          },
+          "usage": {
+            "calls": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "elapsedMs": 0,
+          "observation": {
+            "state": "missing",
+            "tools": "partial"
+          }
+        },
+        {
+          "id": "d1",
+          "revisionId": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+          "scenarioId": "d1",
+          "familyId": "d1",
+          "repeat": 0,
+          "userMode": "scripted",
+          "split": "dev",
+          "manifestHash": "c7c09cc2867746f8c5be45a5616f1e37b24a57815d7c7ca82ce58a534566810d",
+          "outcome": "ungraded",
+          "reason": "Записанный диалог импортирован без повторного запуска агента; семантическая оценка ещё не выполнялась.",
+          "checks": [],
+          "events": [
+            {
+              "seq": 0,
+              "type": "user",
+              "text": "Question d1"
+            },
+            {
+              "seq": 1,
+              "type": "assistant",
+              "text": "Answer d1"
+            }
+          ],
+          "initialState": {
+            "records": {},
+            "writableFields": [],
+            "transientFailures": 0
+          },
+          "finalState": {
+            "records": {},
+            "writableFields": [],
+            "transientFailures": 0
+          },
+          "usage": {
+            "calls": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "elapsedMs": 0,
+          "observation": {
+            "state": "missing",
+            "tools": "partial"
+          }
+        }
+      ],
+      "humanReviews": [],
+      "identity": {
+        "evaluatorVersion": "e0470a8358b77d2daf4f326f08a09fea0c154306d2380d784ac6c859205f9983",
+        "manifestHash": "c7c09cc2867746f8c5be45a5616f1e37b24a57815d7c7ca82ce58a534566810d",
+        "agent": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+        "judge": "4f560f1b9eb65520da4572b943fd92cd7b6d2c420162fd65417453fafd32dc5f",
+        "scenarios": {
+          "d0": "fdfbfae69e713ce630ad5d730e0c096b879cee0d2280ab470c7e714ffff59af6",
+          "d1": "ede9e33881621ece56fa0c38195d2fc7040ac6fd80d76169a8bbb42a57f763f7"
+        }
+      }
+    }
+  },
+  "recordedRunOpenRouter": {
+    "schemaVersion": "1",
+    "id": "bb619014-c3e3-45e7-8737-1f97f286025e",
+    "task": "Score recorded dialogues",
+    "mode": "live",
+    "createdAt": "2026-09-23T08:15:48.894Z",
+    "updatedAt": "2026-09-23T08:15:49.188Z",
+    "workflow": "evaluate",
+    "phase": "results_review",
+    "message": "Переоценка готова. Исходные трассы, оценки и ручные решения сохранены в исходном прогоне.",
+    "sources": [
+      {
+        "id": "source-1",
+        "name": "policy",
+        "content": "Answer from the owner material",
+        "hash": "4826cfa8b1cf3f530686a0a25cfc598da3804bd2f3e835512ed2c3e62610e528"
+      }
+    ],
+    "settings": {
+      "provider": "",
+      "model": "",
+      "judge": {
+        "provider": "openrouter",
+        "model": "openai/gpt-5.6-sol",
+        "upstream": "openai"
+      },
+      "repeats": 2,
+      "maxIterations": 2,
+      "maxTurns": 6,
+      "maxCalls": 300,
+      "timeoutMs": 120000,
+      "maxDurationMs": 600000,
+      "userModes": [
+        "reactive"
+      ],
+      "roles": {}
+    },
+    "target": {
+      "kind": "sandbox"
+    },
+    "requirements": [
+      {
+        "id": "owner_rule",
+        "text": "Answer from the owner material",
+        "sourceId": "source-1",
+        "quote": "Answer from the owner material",
+        "critical": false
+      }
+    ],
+    "questions": [],
+    "scenarios": [
+      {
+        "id": "d0",
+        "familyId": "d0",
+        "title": "Answer d0",
+        "requirementIds": [
+          "owner_rule"
+        ],
+        "provenance": "production",
+        "tier": "regression",
+        "user": {
+          "goal": "Answer d0",
+          "facts": "Только факты, сообщённые пользователем в записанном диалоге.",
+          "behavior": "Воспроизводить реплики пользователя из записи в исходном порядке.",
+          "opening": "Question d0",
+          "maxFollowUps": 0,
+          "script": []
+        },
+        "initialState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "checks": [],
+        "goalObservation": "reply",
+        "successCriteria": "Answer from the owner material",
+        "assumptions": [
+          "Recorded dialogue d0; no target or simulator execution and no observed external state."
+        ],
+        "metrics": [
+          {
+            "id": "goal_attainment",
+            "name": "Достижение цели",
+            "subject": "agent",
+            "description": "Достиг ли пользователь заявленной цели по наблюдаемым фактам диалога.",
+            "passCriteria": "Цель достигнута; если требовалось действие, его результат подтверждён наблюдаемым состоянием или событием инструмента.",
+            "failCriteria": "Наблюдаемые факты показывают, что цель не достигнута или достигнута неверно. Одно заявление агента о ненаблюдавшемся действии не доказывает ни успех, ни провал."
+          },
+          {
+            "id": "reply_quality",
+            "name": "Качество ответа",
+            "subject": "agent",
+            "description": "Насколько ответ корректен, уместен, заземлён и исполним для пользователя независимо от результата внешнего действия.",
+            "passCriteria": "Ответ корректен по материалам владельца, отвечает на запрос и, если следующий шаг нужен, даёт его без выдуманных фактов.",
+            "failCriteria": "Ответ неверен, не по существу, неисполняем, противоречит материалам владельца или выдаёт неподтверждённое за факт."
+          }
+        ],
+        "split": "dev"
+      },
+      {
+        "id": "d1",
+        "familyId": "d1",
+        "title": "Answer d1",
+        "requirementIds": [
+          "owner_rule"
+        ],
+        "provenance": "production",
+        "tier": "regression",
+        "user": {
+          "goal": "Answer d1",
+          "facts": "Только факты, сообщённые пользователем в записанном диалоге.",
+          "behavior": "Воспроизводить реплики пользователя из записи в исходном порядке.",
+          "opening": "Question d1",
+          "maxFollowUps": 0,
+          "script": []
+        },
+        "initialState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "checks": [],
+        "goalObservation": "reply",
+        "successCriteria": "Answer from the owner material",
+        "assumptions": [
+          "Recorded dialogue d1; no target or simulator execution and no observed external state."
+        ],
+        "metrics": [
+          {
+            "id": "goal_attainment",
+            "name": "Достижение цели",
+            "subject": "agent",
+            "description": "Достиг ли пользователь заявленной цели по наблюдаемым фактам диалога.",
+            "passCriteria": "Цель достигнута; если требовалось действие, его результат подтверждён наблюдаемым состоянием или событием инструмента.",
+            "failCriteria": "Наблюдаемые факты показывают, что цель не достигнута или достигнута неверно. Одно заявление агента о ненаблюдавшемся действии не доказывает ни успех, ни провал."
+          },
+          {
+            "id": "reply_quality",
+            "name": "Качество ответа",
+            "subject": "agent",
+            "description": "Насколько ответ корректен, уместен, заземлён и исполним для пользователя независимо от результата внешнего действия.",
+            "passCriteria": "Ответ корректен по материалам владельца, отвечает на запрос и, если следующий шаг нужен, даёт его без выдуманных фактов.",
+            "failCriteria": "Ответ неверен, не по существу, неисполняем, противоречит материалам владельца или выдаёт неподтверждённое за факт."
+          }
+        ],
+        "split": "dev"
+      }
+    ],
+    "goldenCases": [],
+    "dialogues": [
+      {
+        "id": "d0",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Question d0"
+          },
+          {
+            "role": "assistant",
+            "content": "Answer d0"
+          }
+        ],
+        "outcome": "unknown"
+      },
+      {
+        "id": "d1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Question d1"
+          },
+          {
+            "role": "assistant",
+            "content": "Answer d1"
+          }
+        ],
+        "outcome": "unknown"
+      }
+    ],
+    "profiles": [],
+    "notes": "",
+    "revisions": [
+      {
+        "id": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+        "parentId": null,
+        "spec": {
+          "name": "Recorded agent",
+          "instructions": "Recorded only",
+          "tools": []
+        },
+        "hypothesis": "Agent configuration associated with imported recorded dialogues.",
+        "createdAt": "2026-09-22T21:04:37.739Z"
+      }
+    ],
+    "selectedRevisionId": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+    "manifestHash": "0947fa291da69f71c696c8594792cfbfd9d3ad8fdf59b44b2e4ddce48c70a320",
+    "reviewedAt": "2026-09-23T08:15:48.894Z",
+    "reviewMode": "automated",
+    "controlConsumedAt": null,
+    "acceptedTests": [],
+    "trials": [
+      {
+        "id": "d0",
+        "revisionId": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+        "scenarioId": "d0",
+        "familyId": "d0",
+        "repeat": 0,
+        "userMode": "scripted",
+        "split": "dev",
+        "manifestHash": "0947fa291da69f71c696c8594792cfbfd9d3ad8fdf59b44b2e4ddce48c70a320",
+        "outcome": "ungraded",
+        "reason": "Точные проверки пересчитаны по сохранённым фактам.",
+        "checks": [],
+        "simulatorChecks": [],
+        "events": [
+          {
+            "seq": 0,
+            "type": "user",
+            "text": "Question d0"
+          },
+          {
+            "seq": 1,
+            "type": "assistant",
+            "text": "Answer d0"
+          }
+        ],
+        "initialState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "finalState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "usage": {
+          "calls": 4,
+          "inputTokens": 400,
+          "outputTokens": 160,
+          "costUsd": 0.0024000000000000002
+        },
+        "elapsedMs": 191,
+        "assessments": [
+          {
+            "metricId": "goal_attainment",
+            "result": "pass",
+            "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. The recorded reply answers the request.",
+            "evidence": [
+              1
+            ],
+            "citations": [
+              {
+                "seq": 1,
+                "quote": "Answer d0"
+              }
+            ]
+          },
+          {
+            "metricId": "reply_quality",
+            "result": "pass",
+            "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. The recorded reply answers the request.",
+            "evidence": [
+              1
+            ],
+            "citations": [
+              {
+                "seq": 1,
+                "quote": "Answer d0"
+              }
+            ]
+          }
+        ],
+        "observation": {
+          "state": "missing",
+          "tools": "partial"
+        },
+        "judgeReceipt": {
+          "protocolHash": "34449c47096fbd511b633b286e4f986610a0d1b6dbdb46838f22ee2c2dfe9f51",
+          "inputHash": "9b800464b6a30b6011057daec9f4da89249a03cc8c88a4a334260c06efb599ee",
+          "provider": "openrouter",
+          "model": "openai/gpt-5.6-sol",
+          "configurationHash": "1fc06ba3d1946e2594d273127f2dfde2efa7c55be24ea4fbadfffe22bf781c96",
+          "transport": {
+            "api": "openai-completions",
+            "upstream": "openai",
+            "structured": true
+          },
+          "auditHash": "7f3560e3786cc91d3c9ad3c5885f95cf850217fb2e6394d195c887ac6d5cc524",
+          "votes": [
+            {
+              "metricId": "goal_attainment",
+              "result": "pass"
+            },
+            {
+              "metricId": "goal_attainment",
+              "result": "pass"
+            },
+            {
+              "metricId": "reply_quality",
+              "result": "pass"
+            },
+            {
+              "metricId": "reply_quality",
+              "result": "pass"
+            }
+          ],
+          "notApplicable": [],
+          "complete": true
+        }
+      },
+      {
+        "id": "d1",
+        "revisionId": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+        "scenarioId": "d1",
+        "familyId": "d1",
+        "repeat": 0,
+        "userMode": "scripted",
+        "split": "dev",
+        "manifestHash": "0947fa291da69f71c696c8594792cfbfd9d3ad8fdf59b44b2e4ddce48c70a320",
+        "outcome": "ungraded",
+        "reason": "Точные проверки пересчитаны по сохранённым фактам.",
+        "checks": [],
+        "simulatorChecks": [],
+        "events": [
+          {
+            "seq": 0,
+            "type": "user",
+            "text": "Question d1"
+          },
+          {
+            "seq": 1,
+            "type": "assistant",
+            "text": "Answer d1"
+          }
+        ],
+        "initialState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "finalState": {
+          "records": {},
+          "writableFields": [],
+          "transientFailures": 0
+        },
+        "usage": {
+          "calls": 4,
+          "inputTokens": 400,
+          "outputTokens": 160,
+          "costUsd": 0.0024000000000000002
+        },
+        "elapsedMs": 81,
+        "assessments": [
+          {
+            "metricId": "goal_attainment",
+            "result": "pass",
+            "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. The recorded reply answers the request.",
+            "evidence": [
+              1
+            ],
+            "citations": [
+              {
+                "seq": 1,
+                "quote": "Answer d1"
+              }
+            ]
+          },
+          {
+            "metricId": "reply_quality",
+            "result": "pass",
+            "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. The recorded reply answers the request.",
+            "evidence": [
+              1
+            ],
+            "citations": [
+              {
+                "seq": 1,
+                "quote": "Answer d1"
+              }
+            ]
+          }
+        ],
+        "observation": {
+          "state": "missing",
+          "tools": "partial"
+        },
+        "judgeReceipt": {
+          "protocolHash": "34449c47096fbd511b633b286e4f986610a0d1b6dbdb46838f22ee2c2dfe9f51",
+          "inputHash": "764adbcc8d235770609b32bbeb79a1316a2353d1af6fdd5fefd8b8c6694548a5",
+          "provider": "openrouter",
+          "model": "openai/gpt-5.6-sol",
+          "configurationHash": "1fc06ba3d1946e2594d273127f2dfde2efa7c55be24ea4fbadfffe22bf781c96",
+          "transport": {
+            "api": "openai-completions",
+            "upstream": "openai",
+            "structured": true
+          },
+          "auditHash": "83b0a303c49d7e95974f5dcea4d6e55d8b1b554b815c6841a1bc6840b1b27bb4",
+          "votes": [
+            {
+              "metricId": "goal_attainment",
+              "result": "pass"
+            },
+            {
+              "metricId": "goal_attainment",
+              "result": "pass"
+            },
+            {
+              "metricId": "reply_quality",
+              "result": "pass"
+            },
+            {
+              "metricId": "reply_quality",
+              "result": "pass"
+            }
+          ],
+          "notApplicable": [],
+          "complete": true
+        }
+      }
+    ],
+    "comparisons": [],
+    "iterations": [],
+    "usage": {
+      "calls": 8,
+      "inputTokens": 800,
+      "outputTokens": 320,
+      "costUsd": 0.0048
+    },
+    "error": null,
+    "limitations": [
+      "Tools operate on isolated test records, not production systems. Only instructions and registered tool permissions are edited.",
+      "Scenario expectations are grounded automatically and should be spot-checked; text matching checks measure literal content, not semantic correctness.",
+      "Synthetic simulations do not establish performance with real users. Model rubric assessments are provisional; human review is reserved for disputes and calibration claims.",
+      "Model costs are observed usage estimates; unknown costs remain unknown. Call limits are not hard provider billing caps.",
+      "Записанные диалоги: агент и симулятор не запускались; результаты внешних действий не наблюдались.",
+      "Переоценка сохранённых фактов: агент и симулятор не запускались. Смена критериев или судьи не доказывает улучшение агента."
+    ],
+    "humanReviews": [],
+    "parentRunId": "a212d6cd-9f29-4e0d-9b84-6e6bd85cb788",
+    "executionRunId": "a212d6cd-9f29-4e0d-9b84-6e6bd85cb788",
+    "assessmentOf": "a212d6cd-9f29-4e0d-9b84-6e6bd85cb788",
+    "assessmentTrialIds": [
+      "d0",
+      "d1"
+    ],
+    "evidenceHash": "d668bb0f9c94c2f528f2dbd87fda34e671d33bb62fc8c74e8436b35f8b693ded",
+    "evaluatorVersion": "bb86a62b72ad954dc71969fc4cf66af537c35d05726207e0303bbbfb0f1c712c",
+    "sourceEvidence": {
+      "runId": "a212d6cd-9f29-4e0d-9b84-6e6bd85cb788",
+      "trials": [
+        {
+          "id": "d0",
+          "revisionId": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+          "scenarioId": "d0",
+          "familyId": "d0",
+          "repeat": 0,
+          "userMode": "scripted",
+          "split": "dev",
+          "manifestHash": "c7c09cc2867746f8c5be45a5616f1e37b24a57815d7c7ca82ce58a534566810d",
+          "outcome": "ungraded",
+          "reason": "Записанный диалог импортирован без повторного запуска агента; семантическая оценка ещё не выполнялась.",
+          "checks": [],
+          "events": [
+            {
+              "seq": 0,
+              "type": "user",
+              "text": "Question d0"
+            },
+            {
+              "seq": 1,
+              "type": "assistant",
+              "text": "Answer d0"
+            }
+          ],
+          "initialState": {
+            "records": {},
+            "writableFields": [],
+            "transientFailures": 0
+          },
+          "finalState": {
+            "records": {},
+            "writableFields": [],
+            "transientFailures": 0
+          },
+          "usage": {
+            "calls": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "elapsedMs": 0,
+          "observation": {
+            "state": "missing",
+            "tools": "partial"
+          }
+        },
+        {
+          "id": "d1",
+          "revisionId": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+          "scenarioId": "d1",
+          "familyId": "d1",
+          "repeat": 0,
+          "userMode": "scripted",
+          "split": "dev",
+          "manifestHash": "c7c09cc2867746f8c5be45a5616f1e37b24a57815d7c7ca82ce58a534566810d",
+          "outcome": "ungraded",
+          "reason": "Записанный диалог импортирован без повторного запуска агента; семантическая оценка ещё не выполнялась.",
+          "checks": [],
+          "events": [
+            {
+              "seq": 0,
+              "type": "user",
+              "text": "Question d1"
+            },
+            {
+              "seq": 1,
+              "type": "assistant",
+              "text": "Answer d1"
+            }
+          ],
+          "initialState": {
+            "records": {},
+            "writableFields": [],
+            "transientFailures": 0
+          },
+          "finalState": {
+            "records": {},
+            "writableFields": [],
+            "transientFailures": 0
+          },
+          "usage": {
+            "calls": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "elapsedMs": 0,
+          "observation": {
+            "state": "missing",
+            "tools": "partial"
+          }
+        }
+      ],
+      "humanReviews": [],
+      "identity": {
+        "evaluatorVersion": "e0470a8358b77d2daf4f326f08a09fea0c154306d2380d784ac6c859205f9983",
+        "manifestHash": "c7c09cc2867746f8c5be45a5616f1e37b24a57815d7c7ca82ce58a534566810d",
+        "agent": "5256153f024077f1000e6831b59eb8b38ee2ab1ca54beca3ed1cf3a26d1e1a87",
+        "judge": "4f560f1b9eb65520da4572b943fd92cd7b6d2c420162fd65417453fafd32dc5f",
+        "scenarios": {
+          "d0": "fdfbfae69e713ce630ad5d730e0c096b879cee0d2280ab470c7e714ffff59af6",
+          "d1": "ede9e33881621ece56fa0c38195d2fc7040ac6fd80d76169a8bbb42a57f763f7"
+        }
+      }
+    }
+  },
+  "legacyDemoRun": {
+    "schemaVersion": "1",
+    "id": "1441bc5d-6983-4c3f-8fcd-125c5f2c708f",
+    "task": "Build an appointment assistant that consults policy, reads appointments, and reliably changes the requested time without altering unrelated fields.",
+    "mode": "demo",
+    "createdAt": "2026-09-23T08:15:49.212Z",
+    "updatedAt": "2026-09-23T08:15:49.379Z",
+    "workflow": "evaluate",
+    "phase": "results_review",
+    "message": "Переоценка готова. Исходные трассы, оценки и ручные решения сохранены в исходном прогоне.",
+    "sources": [
+      {
+        "id": "source-1",
+        "name": "Appointment policy",
+        "content": "Appointment policy\nBefore changing an appointment, read its current record and update only its time field to the user’s requested time.\nRead-only requests must leave every record unchanged.\nIf the appointment ID or desired time is missing, ask the user to provide it before making a change.\nIf an update returns a retryable error, retry it up to two more times and confirm success only after a successful tool result.\nIf the user changes their preferred time during the conversation, the final record must reflect their last request.",
+        "hash": "19f4dc5d426c37c8cb0a81870e45ce29dd740d29eafe8b766fea3c343741f9f0"
+      }
+    ],
+    "settings": {
+      "provider": "",
+      "model": "",
+      "judge": {
+        "provider": "agent-lab-test",
+        "model": "test-model"
+      },
+      "repeats": 1,
+      "maxIterations": 1,
+      "maxTurns": 6,
+      "maxCalls": 20,
+      "timeoutMs": 120000,
+      "maxDurationMs": 180000,
+      "userModes": [
+        "reactive"
+      ],
+      "roles": {}
+    },
+    "target": {
+      "kind": "sandbox"
+    },
+    "requirements": [
+      {
+        "id": "change",
+        "text": "Before changing an appointment, read its current record and update only its time field to the user’s requested time.",
+        "sourceId": "source-1",
+        "quote": "Before changing an appointment, read its current record and update only its time field to the user’s requested time.",
+        "critical": true
+      },
+      {
+        "id": "read",
+        "text": "Read-only requests must leave every record unchanged.",
+        "sourceId": "source-1",
+        "quote": "Read-only requests must leave every record unchanged.",
+        "critical": true
+      },
+      {
+        "id": "clarify",
+        "text": "If the appointment ID or desired time is missing, ask the user to provide it before making a change.",
+        "sourceId": "source-1",
+        "quote": "If the appointment ID or desired time is missing, ask the user to provide it before making a change.",
+        "critical": true
+      },
+      {
+        "id": "retry",
+        "text": "If an update returns a retryable error, retry it up to two more times and confirm success only after a successful tool result.",
+        "sourceId": "source-1",
+        "quote": "If an update returns a retryable error, retry it up to two more times and confirm success only after a successful tool result.",
+        "critical": true
+      },
+      {
+        "id": "preference",
+        "text": "If the user changes their preferred time during the conversation, the final record must reflect their last request.",
+        "sourceId": "source-1",
+        "quote": "If the user changes their preferred time during the conversation, the final record must reflect their last request.",
+        "critical": true
+      }
+    ],
+    "questions": [],
+    "scenarios": [
+      {
+        "id": "a_direct",
+        "familyId": "a_direct",
+        "title": "Move an appointment",
+        "requirementIds": [
+          "change"
+        ],
+        "provenance": "synthetic",
+        "tier": "regression",
+        "user": {
+          "goal": "Move appointment A101 to 14:00.",
+          "facts": "Your appointment ID is A101. Your desired time is 14:00.",
+          "behavior": "Finish when the assistant answers the request.",
+          "opening": "Please move appointment A101 to 14:00.",
+          "maxFollowUps": 0,
+          "persona": "An appointment holder arranging their own visit.",
+          "characteristics": [
+            "Uses concise requests",
+            "Ends after the assigned request is answered"
+          ],
+          "knows": [
+            "Appointment ID A101",
+            "Desired time 14:00"
+          ],
+          "cannotKnow": [
+            "Whether the backend will accept the change before it answers"
+          ]
+        },
+        "initialState": {
+          "records": {
+            "A101": {
+              "time": "09:00",
+              "owner": "Sample customer",
+              "status": "booked"
+            }
+          },
+          "writableFields": [
+            "time"
+          ],
+          "transientFailures": 0
+        },
+        "checks": [
+          {
+            "id": "time",
+            "description": "The final appointment time matches the user request",
+            "kind": "state_equals",
+            "recordId": "A101",
+            "field": "time",
+            "value": "14:00"
+          },
+          {
+            "id": "owner",
+            "description": "The appointment owner is preserved",
+            "kind": "state_equals",
+            "recordId": "A101",
+            "field": "owner",
+            "value": "Sample customer"
+          },
+          {
+            "id": "status",
+            "description": "The booking remains active",
+            "kind": "state_equals",
+            "recordId": "A101",
+            "field": "status",
+            "value": "booked"
+          },
+          {
+            "id": "lookup",
+            "description": "The assistant looked up the actual record",
+            "kind": "tool_called",
+            "tool": "lookup_record"
+          }
+        ],
+        "successCriteria": "Move appointment A101 to 14:00. Preserve the appointment owner and booking status, and report only actions supported by tool results.",
+        "assumptions": [
+          "This is a curated, scripted appointment demo.",
+          "The user is authorized to access their fixture appointment."
+        ],
+        "metrics": [
+          {
+            "id": "demo_task_state",
+            "name": "Task outcome (scripted estimate)",
+            "subject": "agent",
+            "description": "A deterministic demo estimate from the objective checks, not a semantic model judgment.",
+            "passCriteria": "Every approved objective check passes in the completed dialogue.",
+            "failCriteria": "At least one approved objective check fails."
+          }
+        ],
+        "split": "dev"
+      },
+      {
+        "id": "i_preference",
+        "familyId": "e_preference",
+        "title": "Change preference after the first response",
+        "requirementIds": [
+          "change",
+          "preference"
+        ],
+        "provenance": "synthetic",
+        "tier": "regression",
+        "user": {
+          "goal": "Move appointment A109 to 18:00.",
+          "facts": "Your appointment ID is A109. Your desired time is 18:00.",
+          "behavior": "After the first complete response, change preference once to 18:00.",
+          "opening": "Move appointment A109 to 10:00.",
+          "maxFollowUps": 1,
+          "persona": "An appointment holder arranging their own visit.",
+          "characteristics": [
+            "Uses concise requests",
+            "Revises the desired time once"
+          ],
+          "script": [
+            "Actually, please move it to 18:00 instead."
+          ],
+          "knows": [
+            "Appointment ID A109",
+            "Desired time 18:00"
+          ],
+          "cannotKnow": [
+            "Whether the backend will accept the change before it answers"
+          ]
+        },
+        "initialState": {
+          "records": {
+            "A109": {
+              "time": "09:00",
+              "owner": "Sample customer",
+              "status": "booked"
+            }
+          },
+          "writableFields": [
+            "time"
+          ],
+          "transientFailures": 0
+        },
+        "checks": [
+          {
+            "id": "time",
+            "description": "The final appointment time matches the user request",
+            "kind": "state_equals",
+            "recordId": "A109",
+            "field": "time",
+            "value": "18:00"
+          },
+          {
+            "id": "owner",
+            "description": "The appointment owner is preserved",
+            "kind": "state_equals",
+            "recordId": "A109",
+            "field": "owner",
+            "value": "Sample customer"
+          },
+          {
+            "id": "status",
+            "description": "The booking remains active",
+            "kind": "state_equals",
+            "recordId": "A109",
+            "field": "status",
+            "value": "booked"
+          },
+          {
+            "id": "lookup",
+            "description": "The assistant looked up the actual record",
+            "kind": "tool_called",
+            "tool": "lookup_record"
+          }
+        ],
+        "successCriteria": "Move appointment A109 to 18:00. Preserve the appointment owner and booking status, and report only actions supported by tool results.",
+        "assumptions": [
+          "This is a curated, scripted appointment demo.",
+          "The user is authorized to access their fixture appointment."
+        ],
+        "metrics": [
+          {
+            "id": "demo_task_state",
+            "name": "Task outcome (scripted estimate)",
+            "subject": "agent",
+            "description": "A deterministic demo estimate from the objective checks, not a semantic model judgment.",
+            "passCriteria": "Every approved objective check passes in the completed dialogue.",
+            "failCriteria": "At least one approved objective check fails."
+          },
+          {
+            "id": "demo_follow_ups",
+            "name": "Interaction budget (scripted estimate)",
+            "subject": "simulator",
+            "description": "A narrow count and delivery check, not an assessment of human realism or full role fidelity.",
+            "passCriteria": "The assigned follow-up budget is respected, and every nonempty terminal simulator message is delivered to the agent.",
+            "failCriteria": "The assigned follow-up budget is exceeded or a nonempty terminal simulator message is discarded."
+          }
+        ],
+        "split": "dev"
+      }
+    ],
+    "goldenCases": [],
+    "dialogues": [],
+    "profiles": [],
+    "notes": "",
+    "revisions": [
+      {
+        "id": "2f9b50da15c00d83d8437371651bb476e01dd5c7668311b1868246a174809a38",
+        "parentId": null,
+        "spec": {
+          "name": "Appointment assistant",
+          "instructions": "Consult appointment policy. Read the appointment before changing it. Ask for missing appointment IDs or desired times. Update only the time field. Retry retryable errors up to two times. Never claim an update succeeded without its successful tool result. Handle changed user preferences and read-only questions.",
+          "tools": [
+            "search_materials",
+            "lookup_record"
+          ]
+        },
+        "hypothesis": "Agent configuration selected for dialogue evaluation.",
+        "createdAt": "2026-09-22T21:13:15.128Z"
+      }
+    ],
+    "selectedRevisionId": "2f9b50da15c00d83d8437371651bb476e01dd5c7668311b1868246a174809a38",
+    "manifestHash": "af78847996c6c1278ea7279516baa12dbd32a7eccb153662807332d995e6f0ec",
+    "reviewedAt": "2026-09-23T08:15:49.213Z",
+    "reviewMode": "automated",
+    "controlConsumedAt": null,
+    "acceptedTests": [],
+    "trials": [
+      {
+        "id": "d67cab00-004f-4be7-8ec4-79ac1102f533",
+        "revisionId": "2f9b50da15c00d83d8437371651bb476e01dd5c7668311b1868246a174809a38",
+        "scenarioId": "a_direct",
+        "familyId": "a_direct",
+        "repeat": 0,
+        "userMode": "reactive",
+        "split": "dev",
+        "manifestHash": "af78847996c6c1278ea7279516baa12dbd32a7eccb153662807332d995e6f0ec",
+        "outcome": "fail",
+        "reason": "Точные проверки пересчитаны по сохранённым фактам.",
+        "checks": [
+          {
+            "id": "time",
+            "description": "The final appointment time matches the user request",
+            "passed": false,
+            "evidence": "A101.time: expected \"14:00\", observed \"09:00\""
+          },
+          {
+            "id": "owner",
+            "description": "The appointment owner is preserved",
+            "passed": true,
+            "evidence": "A101.owner: expected \"Sample customer\", observed \"Sample customer\""
+          },
+          {
+            "id": "status",
+            "description": "The booking remains active",
+            "passed": true,
+            "evidence": "A101.status: expected \"booked\", observed \"booked\""
+          },
+          {
+            "id": "lookup",
+            "description": "The assistant looked up the actual record",
+            "passed": true,
+            "evidence": "lookup_record was attempted 1 time(s)"
+          }
+        ],
+        "simulatorChecks": [],
+        "events": [
+          {
+            "seq": 0,
+            "type": "user",
+            "text": "Please move appointment A101 to 14:00."
+          },
+          {
+            "seq": 1,
+            "type": "tool_call",
+            "tool": "search_materials",
+            "args": {
+              "query": "appointment policy"
+            },
+            "state": {
+              "records": {
+                "A101": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 2,
+            "type": "tool_result",
+            "tool": "search_materials",
+            "result": {
+              "ok": true,
+              "matches": [
+                {
+                  "sourceId": "source-1",
+                  "name": "Appointment policy",
+                  "content": "Appointment policy\nBefore changing an appointment, read its current record and update only its time field to the user’s requested time.\nRead-only requests must leave every record unchanged.\nIf the appointment ID or desired time is missing, ask the user to provide it before making a change.\nIf an update returns a retryable error, retry it up to two more times and confirm success only after a successful tool result.\nIf the user changes their preferred time during the conversation, the final record must reflect their last request."
+                }
+              ]
+            },
+            "state": {
+              "records": {
+                "A101": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 3,
+            "type": "tool_call",
+            "tool": "lookup_record",
+            "args": {
+              "recordId": "A101"
+            },
+            "state": {
+              "records": {
+                "A101": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 4,
+            "type": "tool_result",
+            "tool": "lookup_record",
+            "result": {
+              "ok": true,
+              "recordId": "A101",
+              "record": {
+                "time": "09:00",
+                "owner": "Sample customer",
+                "status": "booked"
+              }
+            },
+            "state": {
+              "records": {
+                "A101": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 5,
+            "type": "assistant",
+            "text": "I cannot update this appointment because the update tool is unavailable."
+          }
+        ],
+        "initialState": {
+          "records": {
+            "A101": {
+              "time": "09:00",
+              "owner": "Sample customer",
+              "status": "booked"
+            }
+          },
+          "writableFields": [
+            "time"
+          ],
+          "transientFailures": 0
+        },
+        "finalState": {
+          "records": {
+            "A101": {
+              "time": "09:00",
+              "owner": "Sample customer",
+              "status": "booked"
+            }
+          },
+          "writableFields": [
+            "time"
+          ],
+          "transientFailures": 0
+        },
+        "usage": {
+          "calls": 2,
+          "inputTokens": 26,
+          "outputTokens": 10,
+          "costUsd": 0.064
+        },
+        "elapsedMs": 49,
+        "assessments": [
+          {
+            "metricId": "demo_task_state",
+            "result": "pass",
+            "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. The recorded reply answers the request.",
+            "evidence": [
+              5
+            ],
+            "citations": [
+              {
+                "seq": 5,
+                "quote": "I cannot update this appointment because the update tool is unavailable."
+              }
+            ]
+          }
+        ],
+        "observation": {
+          "state": "sandbox",
+          "tools": "sandbox"
+        },
+        "judgeReceipt": {
+          "protocolHash": "d93e715d48996c27e8981ecfb3737db67ad270e814932e676260dedc66261b2b",
+          "inputHash": "23974d8942ad3237b38a7f805af6a1221a1d308497f9b5e1e8b1fdf747cf6b5d",
+          "provider": "agent-lab-test",
+          "model": "test-model",
+          "configurationHash": "126d0a163cf71d1017116c1096c42c16832ea7c77467f04ef06ee82a30b8a4be",
+          "transport": {
+            "api": "openai-completions",
+            "structured": false
+          },
+          "auditHash": "62bcf87d32f2548901fdc8f9b30e4e234a2052796d0d77d9db69087053b42ac1",
+          "votes": [
+            {
+              "metricId": "demo_task_state",
+              "result": "pass"
+            },
+            {
+              "metricId": "demo_task_state",
+              "result": "pass"
+            }
+          ],
+          "notApplicable": [],
+          "complete": true
+        }
+      },
+      {
+        "id": "a8a9efda-1f58-4da5-a3b7-ca598a8c5926",
+        "revisionId": "2f9b50da15c00d83d8437371651bb476e01dd5c7668311b1868246a174809a38",
+        "scenarioId": "i_preference",
+        "familyId": "e_preference",
+        "repeat": 0,
+        "userMode": "reactive",
+        "split": "dev",
+        "manifestHash": "af78847996c6c1278ea7279516baa12dbd32a7eccb153662807332d995e6f0ec",
+        "outcome": "fail",
+        "reason": "Точные проверки пересчитаны по сохранённым фактам.",
+        "checks": [
+          {
+            "id": "time",
+            "description": "The final appointment time matches the user request",
+            "passed": false,
+            "evidence": "A109.time: expected \"18:00\", observed \"09:00\""
+          },
+          {
+            "id": "owner",
+            "description": "The appointment owner is preserved",
+            "passed": true,
+            "evidence": "A109.owner: expected \"Sample customer\", observed \"Sample customer\""
+          },
+          {
+            "id": "status",
+            "description": "The booking remains active",
+            "passed": true,
+            "evidence": "A109.status: expected \"booked\", observed \"booked\""
+          },
+          {
+            "id": "lookup",
+            "description": "The assistant looked up the actual record",
+            "passed": true,
+            "evidence": "lookup_record was attempted 2 time(s)"
+          }
+        ],
+        "simulatorChecks": [
+          {
+            "id": "simulator_leak",
+            "description": "Упоминание скрытого значения до его раскрытия (эвристика)",
+            "passed": true,
+            "evidence": "Скрытых значений: 3; ни одно не прозвучало раньше агента.",
+            "heuristic": true
+          },
+          {
+            "id": "simulator_fabrication",
+            "description": "Пользователь не называет значения, которых нет ни в карточке, ни в предыдущих репликах (эвристика по токенам)",
+            "passed": true,
+            "evidence": "Все значения в репликах пользователя прослеживаются к карточке или предыдущим репликам.",
+            "heuristic": true
+          },
+          {
+            "id": "simulator_loop",
+            "description": "Повтор пары ответ агента → реплика пользователя (эвристика)",
+            "passed": true,
+            "evidence": "Повторов реплик нет.",
+            "heuristic": true
+          }
+        ],
+        "events": [
+          {
+            "seq": 0,
+            "type": "user",
+            "text": "Move appointment A109 to 10:00."
+          },
+          {
+            "seq": 1,
+            "type": "tool_call",
+            "tool": "search_materials",
+            "args": {
+              "query": "appointment policy"
+            },
+            "state": {
+              "records": {
+                "A109": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 2,
+            "type": "tool_result",
+            "tool": "search_materials",
+            "result": {
+              "ok": true,
+              "matches": [
+                {
+                  "sourceId": "source-1",
+                  "name": "Appointment policy",
+                  "content": "Appointment policy\nBefore changing an appointment, read its current record and update only its time field to the user’s requested time.\nRead-only requests must leave every record unchanged.\nIf the appointment ID or desired time is missing, ask the user to provide it before making a change.\nIf an update returns a retryable error, retry it up to two more times and confirm success only after a successful tool result.\nIf the user changes their preferred time during the conversation, the final record must reflect their last request."
+                }
+              ]
+            },
+            "state": {
+              "records": {
+                "A109": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 3,
+            "type": "tool_call",
+            "tool": "lookup_record",
+            "args": {
+              "recordId": "A109"
+            },
+            "state": {
+              "records": {
+                "A109": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 4,
+            "type": "tool_result",
+            "tool": "lookup_record",
+            "result": {
+              "ok": true,
+              "recordId": "A109",
+              "record": {
+                "time": "09:00",
+                "owner": "Sample customer",
+                "status": "booked"
+              }
+            },
+            "state": {
+              "records": {
+                "A109": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 5,
+            "type": "assistant",
+            "text": "I cannot update this appointment because the update tool is unavailable."
+          },
+          {
+            "seq": 6,
+            "type": "simulator",
+            "result": {
+              "message": "Actually, please move it to 18:00 instead.",
+              "done": false
+            }
+          },
+          {
+            "seq": 7,
+            "type": "user",
+            "text": "Actually, please move it to 18:00 instead."
+          },
+          {
+            "seq": 8,
+            "type": "tool_call",
+            "tool": "search_materials",
+            "args": {
+              "query": "appointment policy"
+            },
+            "state": {
+              "records": {
+                "A109": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 9,
+            "type": "tool_result",
+            "tool": "search_materials",
+            "result": {
+              "ok": true,
+              "matches": [
+                {
+                  "sourceId": "source-1",
+                  "name": "Appointment policy",
+                  "content": "Appointment policy\nBefore changing an appointment, read its current record and update only its time field to the user’s requested time.\nRead-only requests must leave every record unchanged.\nIf the appointment ID or desired time is missing, ask the user to provide it before making a change.\nIf an update returns a retryable error, retry it up to two more times and confirm success only after a successful tool result.\nIf the user changes their preferred time during the conversation, the final record must reflect their last request."
+                }
+              ]
+            },
+            "state": {
+              "records": {
+                "A109": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 10,
+            "type": "tool_call",
+            "tool": "lookup_record",
+            "args": {
+              "recordId": "A109"
+            },
+            "state": {
+              "records": {
+                "A109": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 11,
+            "type": "tool_result",
+            "tool": "lookup_record",
+            "result": {
+              "ok": true,
+              "recordId": "A109",
+              "record": {
+                "time": "09:00",
+                "owner": "Sample customer",
+                "status": "booked"
+              }
+            },
+            "state": {
+              "records": {
+                "A109": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "writableFields": [
+                "time"
+              ],
+              "transientFailures": 0
+            }
+          },
+          {
+            "seq": 12,
+            "type": "assistant",
+            "text": "I cannot update this appointment because the update tool is unavailable."
+          }
+        ],
+        "initialState": {
+          "records": {
+            "A109": {
+              "time": "09:00",
+              "owner": "Sample customer",
+              "status": "booked"
+            }
+          },
+          "writableFields": [
+            "time"
+          ],
+          "transientFailures": 0
+        },
+        "finalState": {
+          "records": {
+            "A109": {
+              "time": "09:00",
+              "owner": "Sample customer",
+              "status": "booked"
+            }
+          },
+          "writableFields": [
+            "time"
+          ],
+          "transientFailures": 0
+        },
+        "usage": {
+          "calls": 4,
+          "inputTokens": 52,
+          "outputTokens": 20,
+          "costUsd": 0.128
+        },
+        "elapsedMs": 89,
+        "assessments": [
+          {
+            "metricId": "demo_task_state",
+            "result": "pass",
+            "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. The recorded reply answers the request.",
+            "evidence": [
+              12
+            ],
+            "citations": [
+              {
+                "seq": 12,
+                "quote": "I cannot update this appointment because the update tool is unavailable."
+              }
+            ]
+          },
+          {
+            "metricId": "demo_follow_ups",
+            "result": "pass",
+            "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. The recorded reply answers the request.",
+            "evidence": [
+              12
+            ],
+            "citations": [
+              {
+                "seq": 12,
+                "quote": "I cannot update this appointment because the update tool is unavailable."
+              }
+            ]
+          }
+        ],
+        "observation": {
+          "state": "sandbox",
+          "tools": "sandbox"
+        },
+        "judgeReceipt": {
+          "protocolHash": "d93e715d48996c27e8981ecfb3737db67ad270e814932e676260dedc66261b2b",
+          "inputHash": "b76ac0a6124ab45608fd9ec694dffe1359d99c960f6586464b1db5066ee213cd",
+          "provider": "agent-lab-test",
+          "model": "test-model",
+          "configurationHash": "126d0a163cf71d1017116c1096c42c16832ea7c77467f04ef06ee82a30b8a4be",
+          "transport": {
+            "api": "openai-completions",
+            "structured": false
+          },
+          "auditHash": "d1fc3b9cc7b42df17d170661bbef5e54aa9d609e4e50ac7b5593851a4e983c12",
+          "votes": [
+            {
+              "metricId": "demo_task_state",
+              "result": "pass"
+            },
+            {
+              "metricId": "demo_task_state",
+              "result": "pass"
+            },
+            {
+              "metricId": "demo_follow_ups",
+              "result": "pass"
+            },
+            {
+              "metricId": "demo_follow_ups",
+              "result": "pass"
+            }
+          ],
+          "notApplicable": [],
+          "complete": true
+        }
+      }
+    ],
+    "comparisons": [],
+    "iterations": [],
+    "usage": {
+      "calls": 7,
+      "inputTokens": 78,
+      "outputTokens": 30,
+      "costUsd": null
+    },
+    "error": null,
+    "limitations": [
+      "Tools operate on isolated test records, not production systems. Only instructions and registered tool permissions are edited.",
+      "Scenario expectations are grounded automatically and should be spot-checked; text matching checks measure literal content, not semantic correctness.",
+      "Synthetic simulations do not establish performance with real users. Model rubric assessments are provisional; human review is reserved for disputes and calibration claims.",
+      "Model costs are observed usage estimates; unknown costs remain unknown. Call limits are not hard provider billing caps.",
+      "Scripted demonstration: user/target behavior and the missing-tool repair are deterministic fixtures, not a measured LLM improvement.",
+      "Generated scenario expectations were checked automatically, without human validation. Spot-check disputes; decisive automatic results remain usable as provisional evidence.",
+      "Переоценка сохранённых фактов: агент и симулятор не запускались. Смена критериев или судьи не доказывает улучшение агента.",
+      "Не удалось назвать типы провалов: Разбор провалов: Pi provider response incomplete: error"
+    ],
+    "humanReviews": [],
+    "parentRunId": "056197a9-5ad7-4afc-b787-25bea046ef3c",
+    "executionRunId": "056197a9-5ad7-4afc-b787-25bea046ef3c",
+    "assessmentOf": "056197a9-5ad7-4afc-b787-25bea046ef3c",
+    "assessmentTrialIds": [
+      "d67cab00-004f-4be7-8ec4-79ac1102f533",
+      "a8a9efda-1f58-4da5-a3b7-ca598a8c5926"
+    ],
+    "evidenceHash": "2bba7198c4210d32ec222ca1d32f24d3274be5423674207617f765d734224d30",
+    "evaluatorVersion": "53304ca1a49e4dc14277488d79046f067730d0347ef49a4c6f0911493c9b220b",
+    "sourceEvidence": {
+      "runId": "056197a9-5ad7-4afc-b787-25bea046ef3c",
+      "trials": [
+        {
+          "id": "d67cab00-004f-4be7-8ec4-79ac1102f533",
+          "revisionId": "2f9b50da15c00d83d8437371651bb476e01dd5c7668311b1868246a174809a38",
+          "scenarioId": "a_direct",
+          "familyId": "a_direct",
+          "repeat": 0,
+          "userMode": "reactive",
+          "split": "dev",
+          "manifestHash": "0f744ce8132ee4c7ea34547cde213d08ec8f97207b47cc2f3f687a1ca8b7461b",
+          "outcome": "fail",
+          "reason": "Часть объективных проверок провалена.",
+          "checks": [
+            {
+              "id": "time",
+              "description": "The final appointment time matches the user request",
+              "passed": false,
+              "evidence": "A101.time: expected \"14:00\", observed \"09:00\""
+            },
+            {
+              "id": "owner",
+              "description": "The appointment owner is preserved",
+              "passed": true,
+              "evidence": "A101.owner: expected \"Sample customer\", observed \"Sample customer\""
+            },
+            {
+              "id": "status",
+              "description": "The booking remains active",
+              "passed": true,
+              "evidence": "A101.status: expected \"booked\", observed \"booked\""
+            },
+            {
+              "id": "lookup",
+              "description": "The assistant looked up the actual record",
+              "passed": true,
+              "evidence": "lookup_record was attempted 1 time(s)"
+            }
+          ],
+          "simulatorChecks": [],
+          "events": [
+            {
+              "seq": 0,
+              "type": "user",
+              "text": "Please move appointment A101 to 14:00."
+            },
+            {
+              "seq": 1,
+              "type": "tool_call",
+              "tool": "search_materials",
+              "args": {
+                "query": "appointment policy"
+              },
+              "state": {
+                "records": {
+                  "A101": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 2,
+              "type": "tool_result",
+              "tool": "search_materials",
+              "result": {
+                "ok": true,
+                "matches": [
+                  {
+                    "sourceId": "source-1",
+                    "name": "Appointment policy",
+                    "content": "Appointment policy\nBefore changing an appointment, read its current record and update only its time field to the user’s requested time.\nRead-only requests must leave every record unchanged.\nIf the appointment ID or desired time is missing, ask the user to provide it before making a change.\nIf an update returns a retryable error, retry it up to two more times and confirm success only after a successful tool result.\nIf the user changes their preferred time during the conversation, the final record must reflect their last request."
+                  }
+                ]
+              },
+              "state": {
+                "records": {
+                  "A101": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 3,
+              "type": "tool_call",
+              "tool": "lookup_record",
+              "args": {
+                "recordId": "A101"
+              },
+              "state": {
+                "records": {
+                  "A101": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 4,
+              "type": "tool_result",
+              "tool": "lookup_record",
+              "result": {
+                "ok": true,
+                "recordId": "A101",
+                "record": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "state": {
+                "records": {
+                  "A101": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 5,
+              "type": "assistant",
+              "text": "I cannot update this appointment because the update tool is unavailable."
+            }
+          ],
+          "initialState": {
+            "records": {
+              "A101": {
+                "time": "09:00",
+                "owner": "Sample customer",
+                "status": "booked"
+              }
+            },
+            "writableFields": [
+              "time"
+            ],
+            "transientFailures": 0
+          },
+          "finalState": {
+            "records": {
+              "A101": {
+                "time": "09:00",
+                "owner": "Sample customer",
+                "status": "booked"
+              }
+            },
+            "writableFields": [
+              "time"
+            ],
+            "transientFailures": 0
+          },
+          "usage": {
+            "calls": 2,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "elapsedMs": 2,
+          "assessments": [
+            {
+              "metricId": "demo_task_state",
+              "result": "fail",
+              "rationale": "Scripted estimate from the recorded objective checks. It does not independently assess meaning, truthfulness, or user satisfaction.",
+              "evidence": [
+                2,
+                4,
+                5
+              ]
+            }
+          ],
+          "observation": {
+            "state": "sandbox",
+            "tools": "sandbox"
+          }
+        },
+        {
+          "id": "a8a9efda-1f58-4da5-a3b7-ca598a8c5926",
+          "revisionId": "2f9b50da15c00d83d8437371651bb476e01dd5c7668311b1868246a174809a38",
+          "scenarioId": "i_preference",
+          "familyId": "e_preference",
+          "repeat": 0,
+          "userMode": "reactive",
+          "split": "dev",
+          "manifestHash": "0f744ce8132ee4c7ea34547cde213d08ec8f97207b47cc2f3f687a1ca8b7461b",
+          "outcome": "fail",
+          "reason": "Часть объективных проверок провалена.",
+          "checks": [
+            {
+              "id": "time",
+              "description": "The final appointment time matches the user request",
+              "passed": false,
+              "evidence": "A109.time: expected \"18:00\", observed \"09:00\""
+            },
+            {
+              "id": "owner",
+              "description": "The appointment owner is preserved",
+              "passed": true,
+              "evidence": "A109.owner: expected \"Sample customer\", observed \"Sample customer\""
+            },
+            {
+              "id": "status",
+              "description": "The booking remains active",
+              "passed": true,
+              "evidence": "A109.status: expected \"booked\", observed \"booked\""
+            },
+            {
+              "id": "lookup",
+              "description": "The assistant looked up the actual record",
+              "passed": true,
+              "evidence": "lookup_record was attempted 2 time(s)"
+            }
+          ],
+          "simulatorChecks": [
+            {
+              "id": "simulator_leak",
+              "description": "Упоминание скрытого значения до его раскрытия (эвристика)",
+              "passed": true,
+              "evidence": "Скрытых значений: 3; ни одно не прозвучало раньше агента.",
+              "heuristic": true
+            },
+            {
+              "id": "simulator_fabrication",
+              "description": "Пользователь не называет значения, которых нет ни в карточке, ни в предыдущих репликах (эвристика по токенам)",
+              "passed": true,
+              "evidence": "Все значения в репликах пользователя прослеживаются к карточке или предыдущим репликам.",
+              "heuristic": true
+            },
+            {
+              "id": "simulator_loop",
+              "description": "Повтор пары ответ агента → реплика пользователя (эвристика)",
+              "passed": true,
+              "evidence": "Повторов реплик нет.",
+              "heuristic": true
+            }
+          ],
+          "events": [
+            {
+              "seq": 0,
+              "type": "user",
+              "text": "Move appointment A109 to 10:00."
+            },
+            {
+              "seq": 1,
+              "type": "tool_call",
+              "tool": "search_materials",
+              "args": {
+                "query": "appointment policy"
+              },
+              "state": {
+                "records": {
+                  "A109": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 2,
+              "type": "tool_result",
+              "tool": "search_materials",
+              "result": {
+                "ok": true,
+                "matches": [
+                  {
+                    "sourceId": "source-1",
+                    "name": "Appointment policy",
+                    "content": "Appointment policy\nBefore changing an appointment, read its current record and update only its time field to the user’s requested time.\nRead-only requests must leave every record unchanged.\nIf the appointment ID or desired time is missing, ask the user to provide it before making a change.\nIf an update returns a retryable error, retry it up to two more times and confirm success only after a successful tool result.\nIf the user changes their preferred time during the conversation, the final record must reflect their last request."
+                  }
+                ]
+              },
+              "state": {
+                "records": {
+                  "A109": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 3,
+              "type": "tool_call",
+              "tool": "lookup_record",
+              "args": {
+                "recordId": "A109"
+              },
+              "state": {
+                "records": {
+                  "A109": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 4,
+              "type": "tool_result",
+              "tool": "lookup_record",
+              "result": {
+                "ok": true,
+                "recordId": "A109",
+                "record": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "state": {
+                "records": {
+                  "A109": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 5,
+              "type": "assistant",
+              "text": "I cannot update this appointment because the update tool is unavailable."
+            },
+            {
+              "seq": 6,
+              "type": "simulator",
+              "result": {
+                "message": "Actually, please move it to 18:00 instead.",
+                "done": false
+              }
+            },
+            {
+              "seq": 7,
+              "type": "user",
+              "text": "Actually, please move it to 18:00 instead."
+            },
+            {
+              "seq": 8,
+              "type": "tool_call",
+              "tool": "search_materials",
+              "args": {
+                "query": "appointment policy"
+              },
+              "state": {
+                "records": {
+                  "A109": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 9,
+              "type": "tool_result",
+              "tool": "search_materials",
+              "result": {
+                "ok": true,
+                "matches": [
+                  {
+                    "sourceId": "source-1",
+                    "name": "Appointment policy",
+                    "content": "Appointment policy\nBefore changing an appointment, read its current record and update only its time field to the user’s requested time.\nRead-only requests must leave every record unchanged.\nIf the appointment ID or desired time is missing, ask the user to provide it before making a change.\nIf an update returns a retryable error, retry it up to two more times and confirm success only after a successful tool result.\nIf the user changes their preferred time during the conversation, the final record must reflect their last request."
+                  }
+                ]
+              },
+              "state": {
+                "records": {
+                  "A109": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 10,
+              "type": "tool_call",
+              "tool": "lookup_record",
+              "args": {
+                "recordId": "A109"
+              },
+              "state": {
+                "records": {
+                  "A109": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 11,
+              "type": "tool_result",
+              "tool": "lookup_record",
+              "result": {
+                "ok": true,
+                "recordId": "A109",
+                "record": {
+                  "time": "09:00",
+                  "owner": "Sample customer",
+                  "status": "booked"
+                }
+              },
+              "state": {
+                "records": {
+                  "A109": {
+                    "time": "09:00",
+                    "owner": "Sample customer",
+                    "status": "booked"
+                  }
+                },
+                "writableFields": [
+                  "time"
+                ],
+                "transientFailures": 0
+              }
+            },
+            {
+              "seq": 12,
+              "type": "assistant",
+              "text": "I cannot update this appointment because the update tool is unavailable."
+            }
+          ],
+          "initialState": {
+            "records": {
+              "A109": {
+                "time": "09:00",
+                "owner": "Sample customer",
+                "status": "booked"
+              }
+            },
+            "writableFields": [
+              "time"
+            ],
+            "transientFailures": 0
+          },
+          "finalState": {
+            "records": {
+              "A109": {
+                "time": "09:00",
+                "owner": "Sample customer",
+                "status": "booked"
+              }
+            },
+            "writableFields": [
+              "time"
+            ],
+            "transientFailures": 0
+          },
+          "usage": {
+            "calls": 4,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "costUsd": 0
+          },
+          "elapsedMs": 4,
+          "assessments": [
+            {
+              "metricId": "demo_task_state",
+              "result": "fail",
+              "rationale": "Scripted estimate from the recorded objective checks. It does not independently assess meaning, truthfulness, or user satisfaction.",
+              "evidence": [
+                2,
+                4,
+                5,
+                9,
+                11,
+                12
+              ]
+            },
+            {
+              "metricId": "demo_follow_ups",
+              "result": "pass",
+              "rationale": "Scripted delivery check: 1 follow-up(s), no discarded terminal message. This does not establish realistic user behavior.",
+              "evidence": [
+                6,
+                7
+              ]
+            }
+          ],
+          "observation": {
+            "state": "sandbox",
+            "tools": "sandbox"
+          }
+        }
+      ],
+      "humanReviews": [],
+      "identity": {
+        "evaluatorVersion": "e0470a8358b77d2daf4f326f08a09fea0c154306d2380d784ac6c859205f9983",
+        "manifestHash": "0f744ce8132ee4c7ea34547cde213d08ec8f97207b47cc2f3f687a1ca8b7461b",
+        "agent": "2f9b50da15c00d83d8437371651bb476e01dd5c7668311b1868246a174809a38",
+        "judge": "4f560f1b9eb65520da4572b943fd92cd7b6d2c420162fd65417453fafd32dc5f",
+        "scenarios": {
+          "a_direct": "a0c3dd9d5c3af54692640589b0120e8bd034f920769c21db2281d7643944ce08",
+          "i_preference": "1445bfb4f4845c262e33acaac3c2773a6e0dfd5c1ab33dc5823cdfa0c673ffd8"
+        }
+      }
+    }
+  }
+}

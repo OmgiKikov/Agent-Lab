@@ -1,6 +1,6 @@
 import { checkpointReceiptValid } from './checkpoints.js';
 import { z } from 'zod';
-import { assessmentEventContent, assessmentRubrics, fingerprint, MACHINE_FORMAT, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Scenario, type Source } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, fingerprint, metricApplies, metricAssessmentSchema, observableRule, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Scenario, type Source } from './contracts.js';
 import { ASSESS_ROLE, DATA_BOUNDARY } from './prompts.js';
 import { ragFaithfulnessEvidence, ragJudgeEvents, ragJudgeInput } from './rag-evidence.js';
 
@@ -40,7 +40,7 @@ const JUDGE_CONCURRENCY = 8;
 export function observableSources(sources: Source[], requirements: Requirement[]): Source[] {
   return sources.map(source => {
     if (source.kind !== 'prompt') return source;
-    const rules = requirements.filter(r => r.sourceId === source.id && !MACHINE_FORMAT.test(r.quote)).map((r, i) => `${i + 1}. «${r.quote}»`);
+    const rules = requirements.filter(r => r.sourceId === source.id && observableRule(r)).map((r, i) => `${i + 1}. «${r.quote}»`);
     const content = rules.length
       ? `Наблюдаемые правила промпта агента, извлечённые при подготовке; внутренние правила формата ответа и работы с инструментами исключены:\n${rules.join('\n')}`
       : 'Наблюдаемых правил из промпта агента не извлечено: ни одно правило промпта к этому диалогу не применимо.';

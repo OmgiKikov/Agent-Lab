@@ -4,6 +4,8 @@ import { fingerprint, type CallContext, type Runtime, type ScenarioAssessmentInp
 
 /** Conservative UTF-8 data envelopes, leaving prompt/schema and transport overhead outside the body budget. */
 const SCENARIO_INPUT_BYTES = 64_000;
+/** One whole scenario request: the data envelope plus its role prompt, output schema and repair feedback. */
+export const SCENARIO_REQUEST_BYTES = 96_000;
 export const SCENARIO_OUTPUT_BYTES = 12_000;
 export const SEMANTIC_REASON_CHARS = 240;
 export const SEMANTIC_BATCH_FIELDS = 6;

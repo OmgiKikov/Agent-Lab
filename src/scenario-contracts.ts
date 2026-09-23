@@ -128,7 +128,8 @@ export const scenarioLibrarySchema = z.strictObject({
   formatVersion: z.literal(1), id, revision: z.number().int().positive(), createdAt: timestamp,
   imports: z.array(importBatchSchema).max(30),
   sources: z.array(z.strictObject({ id, name: text(180), content: text(MATERIAL_CHARS), hash: text(200), kind: z.enum(['knowledge', 'prompt']).optional() })).max(MATERIAL_LIMIT),
-  requirements: z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean() })).max(RECORD_REQUIREMENT_LIMIT),
+  // The record's requirements, field for field (contracts.ts requirementSchema, which this module cannot import).
+  requirements: z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean(), observable: z.boolean().optional() })).max(RECORD_REQUIREMENT_LIMIT),
   businessScenarios: z.array(businessScenarioSchema).max(200), variants: z.array(scenarioVariantSchema).max(200),
   /** Articles chosen for a dialogue before the model wrote the card. Edits of the card do not shrink this list. */
   readingManifest: z.array(z.strictObject({ dialogueId: text(200), batchId: id.optional(), sourceIds: ids(MATERIAL_LIMIT),
