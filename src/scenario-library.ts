@@ -4,11 +4,12 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { isIdentifier } from './ids.js';
 import { LibraryConflict } from './errors.js';
-import { CHECKPOINT_PROTOCOL, checkSchema, scenarioSchema, worldSchema, valueTokens, type Requirement, type Scenario, type Source } from './contracts.js';
+import { CHECKPOINT_PROTOCOL, checkSchema, fingerprint, scenarioSchema, worldSchema, valueTokens, type Experiment, type Requirement, type Scenario, type Source } from './contracts.js';
+import type { LibraryV2, ScenarioLibrary } from './card/schema.js';
 import {
-  importBatchSchema, libraryPatchSchema, scenarioLibrarySchema, scenarioProposalSchema, scenarioVariantSchema,
+  importBatchSchema, libraryPatchSchema, libraryV1Schema, scenarioProposalSchema, scenarioVariantSchema,
   type BusinessScenario, type ImportBatch, type LibraryPatch, type LibraryQualityIssue,
-  type ScenarioLibrary, type ScenarioVariant, type SourceDialogue, type SemanticFinding,
+  type LibraryV1, type ScenarioVariant, type SourceDialogue, type SemanticFinding,
 } from './scenario-contracts.js';
 
 function canonical(value: unknown): string {
@@ -117,7 +118,7 @@ function policyIdentity(variant: ScenarioVariant): unknown {
   };
 }
 
-function executionFingerprint(library: ScenarioLibrary, variant: ScenarioVariant): string {
+function executionFingerprint(library: LibraryV1, variant: ScenarioVariant): string {
   const group = library.businessScenarios.find(item => item.id === variant.businessScenarioId);
   const initial = variant.userState.facts.filter(fact => fact.availability === 'initial');
   return digest({
@@ -132,7 +133,7 @@ function executionFingerprint(library: ScenarioLibrary, variant: ScenarioVariant
   });
 }
 
-export function createLibrary(input: { id?: string; batch?: ImportBatch; sources: Source[]; requirements: Requirement[]; proposals: unknown[]; createdAt?: string; semanticRequired?: true }): ScenarioLibrary {
+export function createLibrary(input: { id?: string; batch?: ImportBatch; sources: Source[]; requirements: Requirement[]; proposals: unknown[]; createdAt?: string; semanticRequired?: true }): LibraryV1 {
   if (input.proposals.length > 200) throw new Error('Допустимо не больше 200 вариантов');
   const batch = input.batch ? importBatchSchema.parse(input.batch) : undefined;
   const groups = new Map<string, BusinessScenario>();
@@ -149,14 +150,14 @@ export function createLibrary(input: { id?: string; batch?: ImportBatch; sources
     variants.push({ ...variant, businessScenarioId, familyId: businessScenarioId, revision: 1, quality: 'needs_review', issues: [], ownerDecision: 'pending', history: [{ author: 'generator', reason: 'Структурированное предложение из источников', revision: 1 }] });
   }
   unifyFamilies(variants);
-  const library = scenarioLibrarySchema.parse({ checkpointContext:'observed-tools-v1', formatVersion: 1, id: input.id ?? `library_${digest({ batchId: batch?.id, proposals: input.proposals }).slice(0, 24)}`, revision: 1, createdAt: input.createdAt ?? new Date().toISOString(), imports: batch ? [batch] : [], ...(input.semanticRequired ? { semanticRequired: true } : {}), sources: input.sources, requirements: input.requirements, businessScenarios: [...groups.values()], variants });
+  const library = libraryV1Schema.parse({ checkpointContext:'observed-tools-v1', formatVersion: 1, id: input.id ?? `library_${digest({ batchId: batch?.id, proposals: input.proposals }).slice(0, 24)}`, revision: 1, createdAt: input.createdAt ?? new Date().toISOString(), imports: batch ? [batch] : [], ...(input.semanticRequired ? { semanticRequired: true } : {}), sources: input.sources, requirements: input.requirements, businessScenarios: [...groups.values()], variants });
   return refreshQuality(library);
 }
 
 /** Add generated cases to a draft without re-generating the history or authority of existing cards. */
-export function appendScenarioProposals(library: ScenarioLibrary, proposals: unknown[], requirements: Requirement[]): ScenarioLibrary {
+export function appendScenarioProposals(library: LibraryV1, proposals: unknown[], requirements: Requirement[]): LibraryV1 {
   if (library.acceptance) throw new Error('Принятый набор нельзя дополнять подготовкой. Сначала создайте новый черновик.');
-  const next = scenarioLibrarySchema.parse(library);
+  const next = libraryV1Schema.parse(library);
   const added = createLibrary({ id: next.id, batch: next.imports[0], sources: next.sources, requirements, proposals, semanticRequired: true });
   if (next.variants.length + added.variants.length > 200) throw new Error('Допустимо не больше 200 вариантов');
   if (added.variants.some(variant => next.variants.some(existing => existing.id === variant.id))) throw new Error('Новое предложение использует ID существующей карточки.');
@@ -184,7 +185,7 @@ export function libraryHash(library: ScenarioLibrary): string {
 }
 
 /** Findings bind to all evidence and editable content, not derived quality or acceptance badges. */
-export function semanticContentHash(library: ScenarioLibrary): string {
+export function semanticContentHash(library: LibraryV1): string {
   return digest({ imports: library.imports, sources: library.sources, requirements: library.requirements,
     ...(library.readingManifest ? { readingManifest: library.readingManifest } : {}),
     businessScenarios: library.businessScenarios, variants: library.variants.map(({ quality, issues, ownerDecision, ...content }) => content) });
@@ -213,8 +214,8 @@ function reachableSourceActions(variant: ScenarioVariant): Set<string> {
   }
   return reached;
 }
-export function recordSemanticAssessment(library: ScenarioLibrary, findings: SemanticFinding[], contextVersion?: number): ScenarioLibrary {
-  const next = scenarioLibrarySchema.parse(library);
+export function recordSemanticAssessment(library: LibraryV1, findings: SemanticFinding[], contextVersion?: number): LibraryV1 {
+  const next = libraryV1Schema.parse(library);
   delete next.acceptance;
   next.semanticRequired = true;
   for (const variant of next.variants) { variant.ownerDecision = 'pending'; delete variant.semanticReviewRequired; }
@@ -226,19 +227,19 @@ export function recordSemanticAssessment(library: ScenarioLibrary, findings: Sem
  * What an owner resolution is about: the remark, and the exact card, requirements and sources it was made on. The remark's words alone
  * are not an identity — the same sentence about a rewritten rule is a new question for the owner.
  */
-export function resolutionHash(library: ScenarioLibrary, variant: ScenarioVariant, path: string, reason: string): string {
+export function resolutionHash(library: LibraryV1, variant: ScenarioVariant, path: string, reason: string): string {
   const { quality, issues, ownerDecision, history, revision, semanticReviewRequired, ...content } = variant;
   return digest({ path, reason, card: content, requirements: library.requirements, sources: library.sources.map(source => source.hash) });
 }
 
 /** Additive binding on new receipts; old accepted snapshots keep their original hash and remain executable. */
-export function resolutionBusinessHash(library: ScenarioLibrary, variant: ScenarioVariant): string {
+export function resolutionBusinessHash(library: LibraryV1, variant: ScenarioVariant): string {
   const group = library.businessScenarios.find(item => item.id === variant.businessScenarioId);
   return digest(group ? { goal: group.goal, conditions: group.conditions, requirementIds: group.requirementIds } : null);
 }
 
 /** Conservative shared question identity: the same rule, applicability, source version and exact checker uncertainty. */
-export function resolutionQuestionHash(library: ScenarioLibrary, variant: ScenarioVariant, path: string, reason: string): string | undefined {
+export function resolutionQuestionHash(library: LibraryV1, variant: ScenarioVariant, path: string, reason: string): string | undefined {
   const checkpoint = variant.evaluationSpec.checkpoints.find(item => path === `evaluationSpec.checkpoints.${item.id}`);
   const requirement = checkpoint && library.requirements.find(item => item.id === checkpoint.requirementId);
   const source = requirement && library.sources.find(item => item.id === requirement.sourceId);
@@ -247,7 +248,7 @@ export function resolutionQuestionHash(library: ScenarioLibrary, variant: Scenar
   return digest({ rule, requirement, source: { id: source.id, hash: source.hash }, business: resolutionBusinessHash(library, variant), reason });
 }
 
-export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] {
+export function libraryQuality(library: LibraryV1): LibraryQualityIssue[] {
   const issues: LibraryQualityIssue[] = [];
   const add = (code: string, path: string, message: string, variantId?: string, severity: LibraryQualityIssue['severity'] = 'blocked') => issues.push({ code, path, message, ...(variantId ? { variantId } : {}), severity });
   if (library.semanticRequired) {
@@ -450,24 +451,24 @@ export function libraryQuality(library: ScenarioLibrary): LibraryQualityIssue[] 
   return issues;
 }
 
-function refreshQuality(library: ScenarioLibrary): ScenarioLibrary {
+function refreshQuality(library: LibraryV1): LibraryV1 {
   const issues = libraryQuality(library);
   for (const variant of library.variants) {
     variant.issues = issues.filter(i => !i.variantId || i.variantId === variant.id);
     variant.quality = variant.issues.some(i => i.severity === 'blocked') ? 'blocked' : variant.issues.length ? 'needs_review' : 'ready';
   }
-  return scenarioLibrarySchema.parse(library);
+  return libraryV1Schema.parse(library);
 }
 
 /** Harness-authenticated owner grounding; semantic readiness is still assessed independently. */
-export function ownerFactEvidence(library: ScenarioLibrary, variant: ScenarioVariant): { variantId: string; factId: string; editId: string; status: 'verified' | 'unverified' }[] {
+export function ownerFactEvidence(library: LibraryV1, variant: ScenarioVariant): { variantId: string; factId: string; editId: string; status: 'verified' | 'unverified' }[] {
   return variant.userState.facts.flatMap(fact => fact.origin.kind === 'owner' ? [{
     variantId: variant.id, factId: fact.id, editId: fact.origin.editId,
     status: ownerFactReceipt(library, variant, fact) ? 'verified' as const : 'unverified' as const,
   }] : []);
 }
 
-function ownerFactReceipt(library: ScenarioLibrary, variant: ScenarioVariant, fact: ScenarioVariant['userState']['facts'][number], seen = new Set<string>()): boolean {
+function ownerFactReceipt(library: LibraryV1, variant: ScenarioVariant, fact: ScenarioVariant['userState']['facts'][number], seen = new Set<string>()): boolean {
   if (seen.has(variant.id)) return false;
   seen.add(variant.id);
   if (variant.history.some(entry => entry.author === 'owner' && entry.factEdit?.factId === fact.id
@@ -478,7 +479,7 @@ function ownerFactReceipt(library: ScenarioLibrary, variant: ScenarioVariant, fa
   return !!parent && !!inherited && digest(inherited) === digest(fact) && ownerFactReceipt(library, parent, inherited, seen);
 }
 
-function ownerPersonaReceipt(library: ScenarioLibrary, variant: ScenarioVariant, persona: NonNullable<ScenarioVariant['userState']['persona']>, seen = new Set<string>()): boolean {
+function ownerPersonaReceipt(library: LibraryV1, variant: ScenarioVariant, persona: NonNullable<ScenarioVariant['userState']['persona']>, seen = new Set<string>()): boolean {
   if (seen.has(variant.id)) return false;
   seen.add(variant.id);
   if (variant.history.some(entry => entry.author === 'owner' && entry.personaEdit?.editId === persona.ownerEditId && entry.personaEdit.personaHash === digest(persona))) return true;
@@ -487,7 +488,7 @@ function ownerPersonaReceipt(library: ScenarioLibrary, variant: ScenarioVariant,
   return !!parent && !!parent.userState.persona && digest(parent.userState.persona) === digest(persona) && ownerPersonaReceipt(library, parent, parent.userState.persona, seen);
 }
 
-function checkHash(library: ScenarioLibrary, expectedHash: string): void {
+function checkHash(library: LibraryV1, expectedHash: string): void {
   if (libraryHash(library) !== expectedHash) throw new LibraryConflict('Библиотека изменилась: хеш устарел');
 }
 function unifyFamilies(variants: ScenarioVariant[]): void {
@@ -505,11 +506,11 @@ function unifyFamilies(variants: ScenarioVariant[]): void {
 }
 
 /** The adapter supplies authorship separately from model-owned patch data. */
-export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawPatch: LibraryPatch, author: 'owner' | 'assistant' = 'owner'): ScenarioLibrary {
+export function editLibrary(library: LibraryV1, expectedHash: string, rawPatch: LibraryPatch, author: 'owner' | 'assistant' = 'owner'): LibraryV1 {
   checkHash(library, expectedHash);
   const patch = libraryPatchSchema.parse(rawPatch);
   if (author !== 'owner' && ['edit_fact', 'add_fact', 'resolve_finding', 'resolve_findings'].includes(patch.kind)) throw new Error('Для факта или решения от имени владельца нужно его подтверждение.');
-  const next = scenarioLibrarySchema.parse(library);
+  const next = libraryV1Schema.parse(library);
   // Bind legacy decisions only when editing a new draft. Reading/compiling an accepted historical snapshot stays byte-identical.
   if (next.ownerResolutions) next.ownerResolutions = next.ownerResolutions.map(receipt => {
     const variant = next.variants.find(item => item.id === receipt.variantId);
@@ -642,9 +643,9 @@ export function editLibrary(library: ScenarioLibrary, expectedHash: string, rawP
 }
 
 /** Generator-only append. It cannot mint owner receipts; inherited owner data is verified through the parent chain. */
-export function addGeneratedVariant(library: ScenarioLibrary, expectedHash: string, rawVariant: ScenarioVariant, reason: string): ScenarioLibrary {
+export function addGeneratedVariant(library: LibraryV1, expectedHash: string, rawVariant: ScenarioVariant, reason: string): LibraryV1 {
   checkHash(library, expectedHash);
-  const next = scenarioLibrarySchema.parse(library);
+  const next = libraryV1Schema.parse(library);
   const candidate = scenarioVariantSchema.parse(rawVariant);
   if (next.variants.some(item => item.id === candidate.id)) throw new Error(`Вариант ${candidate.id} уже существует`);
   const parent = candidate.parentVariantId && next.variants.find(item => item.id === candidate.parentVariantId);
@@ -666,23 +667,23 @@ export function addGeneratedVariant(library: ScenarioLibrary, expectedHash: stri
   return refreshed;
 }
 
-export function acceptLibrary(library: ScenarioLibrary, expectedHash: string, variantIds: string[]): ScenarioLibrary {
+export function acceptLibrary(library: LibraryV1, expectedHash: string, variantIds: string[]): LibraryV1 {
   checkHash(library, expectedHash);
   if (!variantIds.length || variantIds.length > 200 || new Set(variantIds).size !== variantIds.length) throw new Error('Нужен непустой набор уникальных вариантов');
-  const next = refreshQuality(scenarioLibrarySchema.parse(library));
+  const next = refreshQuality(libraryV1Schema.parse(library));
   for (const id of variantIds) if (!next.variants.some(v => v.id === id && v.quality === 'ready')) throw new Error(`Вариант ${id} не готов к принятию`);
   if (next.acceptance) {
-    librarySnapshot(next);
+    verifiedAcceptance(next);
     if (canonical(next.acceptance.variantIds) === canonical(variantIds)) return next;
     next.revision++;
   }
   for (const v of next.variants) v.ownerDecision = variantIds.includes(v.id) ? 'accepted' : 'excluded';
-  const bodyHash = libraryHash(next);
-  next.acceptance = { revision: next.revision, libraryHash: bodyHash, variantIds: [...variantIds], snapshotHash: digest({ libraryId: next.id, revision: next.revision, libraryHash: bodyHash, variantIds }) };
+  const seal = { libraryHash: libraryHash(next), variantIds: [...variantIds] };
+  next.acceptance = { revision: next.revision, ...seal, snapshotHash: snapshotDigest(next, seal) };
   return next;
 }
 
-function compileVariant(library: ScenarioLibrary, variant: ScenarioVariant): Scenario {
+function compileVariant(library: LibraryV1, variant: ScenarioVariant): Scenario {
   const known = variant.userState.facts.filter(f => f.availability === 'initial');
   const required = variant.evaluationSpec.checkpoints.filter(c => c.role === 'required');
   const checks = required.filter(c => c.check !== undefined).map(c => checkSchema.parse(c.check));
@@ -718,15 +719,58 @@ function compileVariant(library: ScenarioLibrary, variant: ScenarioVariant): Sce
   return { ...parsed, split: 'dev' };
 }
 
-/** Additive run metadata. It is a detached copy, so a later edit cannot rewrite a run. */
-export function librarySnapshot(library: ScenarioLibrary) {
+/** What an acceptance fixes besides the library body: the accepted selection and, for cards, each compiled definition. */
+type AcceptanceSeal = { libraryHash: string } & ({ variantIds: string[] } | Pick<NonNullable<LibraryV2['acceptance']>, 'cardIds' | 'definitions'>);
+
+/** The digest an acceptance receipt stores as `snapshotHash`. The first format's formula is frozen: old receipts keep verifying. */
+export function snapshotDigest(library: ScenarioLibrary, seal: AcceptanceSeal): string {
+  return digest({ libraryId: library.id, revision: library.revision, libraryHash: seal.libraryHash,
+    ...('variantIds' in seal ? { variantIds: seal.variantIds } : { cardIds: seal.cardIds, definitions: seal.definitions }) });
+}
+
+/**
+ * The acceptance receipt of a library, checked against the library itself: same revision, same body,
+ * same selection, every accepted card present. Integrity only: quality was judged once, at acceptance,
+ * and today's quality rules never re-grade an accepted snapshot.
+ */
+export function verifiedAcceptance(library: LibraryV1): NonNullable<LibraryV1['acceptance']>;
+export function verifiedAcceptance(library: LibraryV2): NonNullable<LibraryV2['acceptance']>;
+export function verifiedAcceptance(library: ScenarioLibrary): NonNullable<ScenarioLibrary['acceptance']>;
+export function verifiedAcceptance(library: ScenarioLibrary): NonNullable<ScenarioLibrary['acceptance']> {
   const acceptance = library.acceptance;
-  if (!acceptance || acceptance.revision !== library.revision || acceptance.libraryHash !== libraryHash(library) || acceptance.snapshotHash !== digest({ libraryId: library.id, revision: library.revision, libraryHash: acceptance.libraryHash, variantIds: acceptance.variantIds })) throw new Error('Нужна неизменная принятая ревизия библиотеки');
-  if (libraryQuality(library).some(i => !i.variantId || acceptance.variantIds.includes(i.variantId))) throw new Error('Принятый набор больше не готов');
-  const variants = acceptance.variantIds.map(id => { const v = library.variants.find(v => v.id === id); if (!v) throw new Error('Принятый вариант отсутствует'); return v; });
+  if (!acceptance) throw new Error('Ситуации ещё не утверждены для прогона.');
+  const accepted = 'variantIds' in acceptance ? acceptance.variantIds : acceptance.cardIds;
+  const present = new Set(library.formatVersion === 1 ? library.variants.map(variant => variant.id) : library.cards.map(card => card.id));
+  if (acceptance.revision !== library.revision || acceptance.libraryHash !== libraryHash(library) || acceptance.snapshotHash !== snapshotDigest(library, acceptance)
+    || accepted.some(id => !present.has(id))) throw new Error('Утверждённые ситуации изменены после утверждения — прогон по ним невозможен.');
+  return acceptance;
+}
+
+/**
+ * A run of an accepted library runs exactly what was accepted, proven by stored hashes alone: the library
+ * against its receipt, the run's materials against the library's, every card against the definition hash
+ * fixed at acceptance. Nothing is recompiled, so a later change of the compiler or its prompts never makes
+ * an old run unrepeatable or unassessable.
+ */
+export function verifyAcceptedRun(record: Experiment): void {
+  const library = record.librarySnapshot;
+  if (!library) return;
+  const acceptance = verifiedAcceptance(library);
+  if (fingerprint(record.requirements) !== fingerprint(library.requirements) || fingerprint(record.sources) !== fingerprint(library.sources)) throw new Error('Правила изменились после утверждения ситуаций: подготовьте и утвердите ситуации заново.');
+  // A card library seals every definition hash in its receipt; the first format did not, so there the run's acceptance entries of the accepted variants hold them.
+  const definitions = new Map('definitions' in acceptance
+    ? acceptance.definitions.map(definition => [definition.cardId, definition.definitionHash])
+    : (record.acceptedTests ?? []).filter(test => acceptance.variantIds.includes(test.scenarioId)).map(test => [test.scenarioId, test.definitionHash]));
+  for (const scenario of record.scenarios) if (definitions.get(scenario.id) !== fingerprint(scenario)) throw new Error('Ситуация отличается от утверждённой — прогон по ней невозможен.');
+}
+
+/** Additive run metadata: the accepted variants as a detached copy, so a later edit cannot rewrite a run. */
+export function librarySnapshot(library: LibraryV1) {
+  const acceptance = verifiedAcceptance(library);
+  const variants = acceptance.variantIds.flatMap(id => library.variants.find(variant => variant.id === id) ?? []);
   return structuredClone({ formatVersion: 1 as const, libraryId: library.id, revision: library.revision, libraryHash: acceptance.libraryHash, snapshotHash: acceptance.snapshotHash, variantIds: acceptance.variantIds, imports: library.imports, sources: library.sources, requirements: library.requirements, businessScenarios: library.businessScenarios, variants });
 }
 
-export function compileLibrary(library: ScenarioLibrary): Scenario[] {
+export function compileLibrary(library: LibraryV1): Scenario[] {
   return librarySnapshot(library).variants.map(v => compileVariant(library, v));
 }

@@ -18,7 +18,7 @@ import { scenarioLibrarySummary } from './scenarios.ts';
 import { ACCEPTANCE_PAGE, acceptanceLines, authorize, changeRows, checkRow, deriveVariantInput, disputedCheckpoints, ownerRemarks, ownerQuestions, sharedOwnerQuestions, plainIssue, libraryFeed, orderedVariants, ownerBasis, ownerMessages,
   planLines, referenceProblem, referenceQuestion, resolveFact, resolveGroup, resolveVariant, semanticDebt, stateRows, variantDiff, variantFeed, variantNumber,
   row, type CheckOutcome, type Feed } from './conversation.ts';
-import type { LibraryPatch, ScenarioLibrary, ScenarioVariant } from '../src/scenario-contracts.js';
+import type { LibraryPatch, LibraryV1, ScenarioVariant } from '../src/scenario-contracts.js';
 import type { VariantOperation } from '../src/scenario-variants.js';
 import type { SessionOperations } from './operations.ts';
 import { DIFF_FIELD, displayFor, inputError, NeedsOwner, returnToBoard, isInteractive, requireInteractive } from './lab-ui.ts';
@@ -67,7 +67,7 @@ register({
     if (rawCommand.patch !== undefined || rawCommand.request !== undefined) throw new Error('Готовый patch или request не принимается. Команда задаётся своими полями: change, group, kind, variants, resolve. Ничего не записано.');
     const directory = resolve(ctx.cwd, '.agent-lab');
     const operation = params.operation === 'inspect' ? 'show' : params.operation;
-    const output = (record: Experiment, library: ScenarioLibrary, shown?: ScenarioVariant) => {
+    const output = (record: Experiment, library: LibraryV1, shown?: ScenarioVariant) => {
       const semantic = semanticWorkStatus(library);
       const offset = shown ? 0 : params.cursor ?? 0;
       const limit = shown ? 1 : params.limit ?? 20;
@@ -102,17 +102,17 @@ register({
         agentRun: false,
       };
     };
-    const titled = (library: ScenarioLibrary, items: ScenarioVariant[]) => items.map(item => `${variantNumber(library, item)}. ${safeText(item.title)}`);
+    const titled = (library: LibraryV1, items: ScenarioVariant[]) => items.map(item => `${variantNumber(library, item)}. ${safeText(item.title)}`);
     const splitSummary = (cards: ScenarioVariant[], title: string, goal: string, conditions: string[]): string =>
       `Выделить в группу «${title}»: ${cards.map(item => item.title).join('; ')}\nЦель группы: ${goal}\nУсловия группы: ${conditions.length ? conditions.join('; ') : 'нет'}\nОстальные карточки и их группа не меняются.`;
-    const pickVariant = (library: ScenarioLibrary, ref: string | undefined): ScenarioVariant => {
+    const pickVariant = (library: LibraryV1, ref: string | undefined): ScenarioVariant => {
       if (!ref) throw new NeedsOwner('unknown_reference', 'Не сказано, о какой карточке речь. Спросите владельца.', titled(library, orderedVariants(library)).slice(0, 12));
       const resolved = resolveVariant(library, ref);
       if (resolved.kind === 'one') return resolved.item;
       const candidates = titled(library, resolved.kind === 'many' ? resolved.items : orderedVariants(library));
       throw new NeedsOwner(resolved.kind === 'many' ? 'ambiguous_reference' : 'unknown_reference', referenceProblem('Карточка', ref, resolved, candidates), candidates.slice(0, 12), referenceQuestion(ref, resolved));
     };
-    const pickGroup = (library: ScenarioLibrary, ref: string) => {
+    const pickGroup = (library: LibraryV1, ref: string) => {
       const resolved = resolveGroup(library, ref);
       if (resolved.kind === 'one') return resolved.item;
       const candidates = (resolved.kind === 'many' ? resolved.items : library.businessScenarios).map(group => safeText(group.title));

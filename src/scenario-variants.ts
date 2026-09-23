@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { identifierSchema } from './ids.js';
-import { scenarioVariantSchema, type ScenarioLibrary, type ScenarioVariant } from './scenario-contracts.js';
+import { scenarioVariantSchema, type LibraryV1, type ScenarioVariant } from './scenario-contracts.js';
 import { addGeneratedVariant } from './scenario-library.js';
 
 export type VariantOperation = 'reveal_on_request' | 'missing_fact' | 'ambiguous_opening' | 'changed_intent' | 'tool_failure';
@@ -12,7 +12,7 @@ export interface VariantRequest {
   input: unknown;
 }
 export interface VariantFieldDiff { path: string; before?: unknown; after?: unknown }
-export interface VariantProposalResult { library: ScenarioLibrary; variant: ScenarioVariant; diff: VariantFieldDiff[] }
+export interface VariantProposalResult { library: LibraryV1; variant: ScenarioVariant; diff: VariantFieldDiff[] }
 
 const shortText = z.string().trim().min(1).max(1000);
 const inputs = {
@@ -89,7 +89,7 @@ function replaceCoveredDisclosure(variant: ScenarioVariant, removedActions: Set<
 }
 
 /** Pure deterministic proposal. Persistence belongs to ExperimentLab so CAS and writer ownership stay intact. */
-export function proposeVariant(library: ScenarioLibrary, request: VariantRequest, expectedHash: string): VariantProposalResult {
+export function proposeVariant(library: LibraryV1, request: VariantRequest, expectedHash: string): VariantProposalResult {
   const parent = library.variants.find(item => item.id === request.parentId);
   if (!parent) throw new Error(`Вариант ${request.parentId} не найден`);
   const reason = shortText.parse(request.reason);

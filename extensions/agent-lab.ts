@@ -21,6 +21,7 @@ import { expandMaterials } from '../src/materials.js';
 import { MATERIAL_CHARS, MATERIAL_LIMIT } from '../src/limits.js';
 import { ExperimentStore } from '../src/store.js';
 import { libraryHash } from '../src/scenario-library.js';
+import { libraryV1Of, requireLibraryV1 } from '../src/card/legacy-v1.js';
 import { semanticWorkStatus } from '../src/scenario-work.js';
 import { safeText, shortId } from '../src/text.js';
 import { identifierPattern, isIdentifier, sha256Pattern } from '../src/ids.js';
@@ -215,7 +216,7 @@ const SHOWN_ENTRY = 'agent-lab-shown';
 type Prepared = { output: Record<string, unknown>; feed?: Feed; note?: string };
 /** After a stopped preparation: what the partial draft holds. Counts only — the same lines go into the session file. */
 const preparationStoppedLines = (record: Experiment): string[] => {
-  const variants = record.librarySnapshot?.variants ?? [];
+  const variants = libraryV1Of(record)?.variants ?? [];
   return [`Подготовка ${shortId(record.id)} ${record.error ? 'остановлена' : 'успела завершиться до остановки'}.`, variants.length
     ? `Сохранён черновик: карточек ${variants.length}, из них готовых ${variants.filter(variant => variant.quality === 'ready').length}. Их можно смотреть, править и принимать.`
     : `Карточки собрать не успели. Запись сохранена: требований ${record.requirements.length}, вызовов модели ${record.usage.calls}.`];
@@ -299,7 +300,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   // A row of an earlier session, or one the cache let go, is redrawn from the immutable revisions it points at — the state it showed, not today's.
   setFeedRestorer(async ref => {
     const store = new ExperimentStore(ref.directory);
-    const [record, library] = await Promise.all([store.get(ref.runId), store.readLibrary(ref.libraryId, ref.hash)]);
+    const [record, stored] = await Promise.all([store.get(ref.runId), store.readLibrary(ref.libraryId, ref.hash)]);
+    const library = requireLibraryV1(stored);
     const then: Experiment = { ...record, librarySnapshot: library };
     const stamp = row(`Восстановлено из сохранённой ревизии ${library.revision}.`, 'muted');
     if (ref.view === 'library') { const feed = libraryFeed(then); return { rows: [stamp, ...feed.rows.filter(item => !item.text.startsWith('Вызовы модели')), ], more: feed.more }; }
@@ -307,7 +309,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     if (!variant) return null;
     const card = variantFeed(then, variant);
     if (ref.view === 'card' || !ref.beforeHash) return { rows: [stamp, ...card.rows], more: card.more };
-    const before = (await store.readLibrary(ref.libraryId, ref.beforeHash)).variants.find(item => item.id === ref.variantId);
+    const before = requireLibraryV1(await store.readLibrary(ref.libraryId, ref.beforeHash)).variants.find(item => item.id === ref.variantId);
     return { rows: [stamp, row(`Правка карточки «${safeText(variant.title)}»`, 'success', true), ...(before ? changeRows(variantDiff(before, variant)) : [row('Карточка появилась в этой ревизии.', 'muted', false, 1)])],
       more: [...card.rows, row(''), ...(card.more ?? [])] };
   });
@@ -392,7 +394,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
    */
   const backgroundPreparation = (ctx: ExtensionContext, owned: Awaited<ReturnType<typeof open>>, id: string): void => {
     detach(ctx, owned.directory, owned, id, 'chat', async finished => {
-      const library = finished.librarySnapshot;
+      const library = libraryV1Of(finished);
       if (library) markSeen(`${owned.directory}|${id}`, libraryHash(library));
       return { output: { ...summary(finished, owned.directory), ...(library ? scenarioLibrarySummary(finished) : {}) },
         feed: library ? libraryFeed(finished) : undefined, note: `Подготовка ${shortId(id)}` };
@@ -573,8 +575,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           returnToBoard(ctx, record.id);
           focus.set(lab.store.directory, record.id);
           // A prepared library answers with the scenarios themselves: what was found, what is ready, what waits for the owner.
-          if (!record.librarySnapshot || record.phase !== 'review') return { output };
-          const library = record.librarySnapshot;
+          const library = libraryV1Of(record);
+          if (!library || record.phase !== 'review') return { output };
           markSeen(`${lab.store.directory}|${record.id}`, libraryHash(library));
           const feed = libraryFeed(record);
           const readyCount = library.variants.filter(variant => variant.quality === 'ready').length;
@@ -720,7 +722,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
       const feed = statusFeed(records, active);
       if (active) feed.rows.push(...progressLines(await active.lab.get(active.id)).map(line => row(line, 'accent')));
       const output = { runs: records.slice(0, 40).map(record => ({ id: record.id, shortId: shortId(record.id), task: record.task, phase: record.phase, updatedAt: record.updatedAt,
-        variants: record.librarySnapshot?.variants.length ?? record.scenarios.length, acceptedVariants: record.librarySnapshot?.acceptance?.variantIds.length ?? null,
+        variants: libraryV1Of(record)?.variants.length ?? record.scenarios.length, acceptedVariants: libraryV1Of(record)?.acceptance?.variantIds.length ?? null,
         trials: record.trials.length, plannedTrials: plannedTrials(record), parentRunId: record.parentRunId })),
         workingOn: focus.get(directory) ?? null, runningInThisSession: active?.id ?? null,
         activeOperation: active ? { id: active.operationId, runId: active.id, kind: active.kind } : null };
@@ -868,7 +870,8 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           const running = isRunning(record.phase);
           // A preparation of this session is answered in its own words: no dialogue is planned before the scenarios exist.
           if (job?.kind === 'assessment' && job.id === record.id) {
-            const work = record.librarySnapshot ? semanticWorkStatus(record.librarySnapshot) : undefined;
+            const library = libraryV1Of(record);
+            const work = library ? semanticWorkStatus(library) : undefined;
             const message = `Смысловая проверка ${shortId(record.id)} идёт в фоне · вызовов модели ${record.usage.calls} из ${record.settings.maxCalls}.`;
             return feedResult(callId, { id: record.id, operationId: job.operationId, operationKind: job.kind, phase: record.phase,
               running, assessment: true, preparation: false, ownedByThisSession: true, usage: record.usage, maxCalls: record.settings.maxCalls,
@@ -899,7 +902,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           await operations.stop(job);
           const record = await reading(directory).get(job.id);
           if (assessment) {
-            const library = record.librarySnapshot;
+            const library = libraryV1Of(record);
             if (library) markSeen(`${directory}|${record.id}`, libraryHash(library));
             const work = library ? semanticWorkStatus(library) : undefined;
             const message = `Смысловая проверка ${shortId(record.id)} остановлена. Правки и записанные результаты проверки сохранены. Незавершённые проверки можно продолжить.`;
@@ -910,7 +913,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           }
           if (preparation) {
             const saved = preparationStoppedLines(record);
-            const library = record.librarySnapshot;
+            const library = libraryV1Of(record);
             if (library) markSeen(`${directory}|${record.id}`, libraryHash(library));
             return feedResult(callId, { id: record.id, phase: record.phase, stopped: true, savedVariants: library?.variants.length ?? 0, savedRequirements: record.requirements.length, usage: record.usage, message: saved.join(' ') },
               { rows: saved.map((line, index) => row(safeText(line), index ? 'muted' : 'warning', !index)) }, `Подготовка ${shortId(record.id)} остановлена`);
@@ -1199,8 +1202,9 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
         };
         while (true) {
           const record = id ? await reading().get(id) : undefined;
-          if (record?.librarySnapshot && !scenarioSelections.has(record.id)) scenarioSelections.set(record.id, record.librarySnapshot.acceptance?.variantIds.slice()
-            ?? record.librarySnapshot.variants.filter(variant => variant.quality === 'ready').map(variant => variant.id));
+          const variantLibrary = record && libraryV1Of(record);
+          if (record && variantLibrary && !scenarioSelections.has(record.id)) scenarioSelections.set(record.id, variantLibrary.acceptance?.variantIds.slice()
+            ?? variantLibrary.variants.filter(variant => variant.quality === 'ready').map(variant => variant.id));
           const bundle = record ? await evidenceBundle(record, reader.store, beforeId) : undefined;
           const action: BoardAction = demoRequested ? { type: 'demo' } : newRequested ? { type: 'new' } : await showBoard(ctx, record
             ? { record, section, selected, query, pendingOnly, dialogueOpen, selectedVariantIds: scenarioSelections.get(record.id), comparison: bundle?.comparison, before: bundle?.before, notice, reportPath, reviewTimes,
@@ -1242,14 +1246,14 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
           try {
             if (!['discuss', 'export', 'openReport', 'cancel'].includes(action.type)) await writing(action.type === 'acceptLibrary' ? 'wait' : 'cancel');
             if (action.type === 'acceptLibrary') {
-              const shown = action.record.librarySnapshot;
+              const shown = libraryV1Of(action.record);
               if (!shown) throw new Error('Библиотека сценариев отсутствует.');
               const accepted = await lab.acceptLibrary(action.record.id, libraryHash(shown), action.variantIds);
               scenarioSelections.set(action.record.id, accepted.library.acceptance!.variantIds.slice());
               section = 'agent'; selected = 0;
               inform(`Принята ревизия ${accepted.library.revision}: ${action.variantIds.length} вариантов. Агент не запускался. 3 — проверить план запуска.`);
             } else if (action.type === 'editScenario') {
-              const shown = action.record.librarySnapshot;
+              const shown = libraryV1Of(action.record);
               if (!shown) throw new Error('Библиотека сценариев отсутствует.');
               const variant = shown.variants.find(item => item.id === action.variantId);
               if (!variant) throw new Error('Выбранный вариант уже отсутствует.');
@@ -1292,7 +1296,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
               scenarioSelections.set(action.record.id, []);
               inform('Правка записана как явное решение владельца. Цитаты источников сохранены. Выполните смысловую проверку: g.');
             } else if (action.type === 'variant') {
-              const shown = action.record.librarySnapshot;
+              const shown = libraryV1Of(action.record);
               if (!shown) throw new Error('Библиотека сценариев отсутствует.');
               const variant = shown.variants.find(item => item.id === action.variantId);
               if (!variant) throw new Error('Выбранный вариант уже отсутствует.');
@@ -1345,7 +1349,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
               selected = proposed.library.variants.findIndex(item => item.id === proposed.variant.id);
               inform(`Добавлен синтетический вариант «${safeText(proposed.variant.title)}». Он требует смысловой проверки.`);
             } else if (action.type === 'removeVariant') {
-              const shown = action.record.librarySnapshot;
+              const shown = libraryV1Of(action.record);
               if (!shown) throw new Error('Библиотека сценариев отсутствует.');
               const variant = shown.variants.find(item => item.id === action.variantId);
               if (!variant || !await ctx.ui.confirm('Удалить вариант из новой ревизии?', safeText(`${variant.title}\nИсходный импорт и прошлые снимки сохранятся.`))) continue;
@@ -1353,7 +1357,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
               scenarioSelections.set(action.record.id, action.selectedVariantIds.filter(id => id !== variant.id));
               inform('Вариант удалён из новой ревизии; исходный импорт и прошлые прогоны сохранены.');
             } else if (action.type === 'mergeScenarios') {
-              const shown = action.record.librarySnapshot;
+              const shown = libraryV1Of(action.record);
               if (!shown) throw new Error('Библиотека сценариев отсутствует.');
               const targets = shown.businessScenarios.filter(group => group.id !== action.businessScenarioId);
               const labels = targets.map(group => safeText(`${group.title} · ${group.goal}`));
@@ -1364,7 +1368,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
               await lab.editLibrary(action.record.id, libraryHash(shown), { kind: 'merge_business', targetId: target.id, sourceIds: [action.businessScenarioId], reason: reason.trim() }, 'owner');
               scenarioSelections.set(action.record.id, []); inform('Группы объединены. Выполните смысловую проверку: g.');
             } else if (action.type === 'splitScenario') {
-              const shown = action.record.librarySnapshot;
+              const shown = libraryV1Of(action.record);
               if (!shown) throw new Error('Библиотека сценариев отсутствует.');
               const source = shown.businessScenarios.find(group => group.id === action.businessScenarioId);
               if (!source) throw new Error('Группа уже отсутствует.');
@@ -1377,13 +1381,13 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
                   requirementIds: source.requirementIds, grouping: { status: 'confirmed', reason: reason.trim() } }, variantIds: [action.variantId], reason: reason.trim() }, 'owner');
               scenarioSelections.set(action.record.id, []); inform('Вариант выделен в отдельную бизнес-группу. Выполните смысловую проверку: g.');
             } else if (action.type === 'resumePreparation') {
-              const shown = action.record.librarySnapshot;
+              const shown = libraryV1Of(action.record);
               if (!shown || !lease) throw new Error('Нет сохранённого черновика для продолжения.');
               await lab.resumePreparation(action.record.id, libraryHash(shown));
               backgroundPreparation(ctx, lease, action.record.id); lease = undefined;
               inform('Продолжаю подготовку по сохранённым источникам. Итог появится в чате.');
             } else if (action.type === 'assessLibrary') {
-              const shown = action.record.librarySnapshot;
+              const shown = libraryV1Of(action.record);
               if (!shown) throw new Error('Библиотека сценариев отсутствует.');
               const check = await lab.recheckLibrary(action.record.id, { expectedHash: libraryHash(shown), explicit: true });
               if (check.decision.action === 'run' && lease) {

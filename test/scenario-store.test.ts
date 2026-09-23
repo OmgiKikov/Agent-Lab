@@ -70,7 +70,7 @@ test('accepted revision cannot be replaced in place or published with a stale ac
     delete modified.acceptance;
     await assert.rejects(() => store.writeLibrary(modified, libraryHash(accepted)), /ревизи|Ревизи/);
     const forged = structuredClone(accepted); forged.revision++;
-    await assert.rejects(() => store.writeLibrary(forged, libraryHash(accepted)), /принят|ревизи/);
+    await assert.rejects(() => store.writeLibrary(forged, libraryHash(accepted)), /изменены после утверждения/);
     assert.deepEqual(await store.readLibrary(accepted.id), accepted);
   } finally { await store.close(); await rm(directory, { recursive: true, force: true }); }
 });

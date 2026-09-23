@@ -1,4 +1,4 @@
-import { semanticFindingSchema, type ScenarioLibrary, type SemanticFinding } from './scenario-contracts.js';
+import { semanticFindingSchema, type LibraryV1, type SemanticFinding } from './scenario-contracts.js';
 import { semanticContentHash, semanticPaths, recordSemanticAssessment, ownerFactEvidence } from './scenario-library.js';
 import { fingerprint, type CallContext, type Runtime, type ScenarioAssessmentInput } from './contracts.js';
 
@@ -22,7 +22,7 @@ function responseBound(fields: ScenarioAssessmentInput['fields']): number {
   // Six escaped bytes per UTF-16 unit is the maximum JSON expansion of an arbitrary reason.
   return serializedBytes({ findings: fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'needs_review', reason: '\0'.repeat(SEMANTIC_REASON_CHARS) }))) });
 }
-export function planSemanticWork(library: ScenarioLibrary): { contentHash: string; jobs: Job[]; skipped: SemanticFinding[] } {
+export function planSemanticWork(library: LibraryV1): { contentHash: string; jobs: Job[]; skipped: SemanticFinding[] } {
   const contentHash = semanticContentHash(library), jobs: Job[] = [], skipped: SemanticFinding[] = [];
   const context = (ids: string[], fullEvidence: boolean): ScenarioAssessmentInput['library'] => {
     // Admission badges and edit chatter are not evidence. Verified owner facts have a separate receipt;
@@ -81,7 +81,7 @@ export function planSemanticWork(library: ScenarioLibrary): { contentHash: strin
 }
 
 /** Articles the checker must see for these cards: cited requirements plus the reading manifest, which the card cannot shrink. */
-export function checkerSourceIds(library: ScenarioLibrary, variantIds: string[]): string[] {
+export function checkerSourceIds(library: LibraryV1, variantIds: string[]): string[] {
   const variants = library.variants.filter(variant => variantIds.includes(variant.id));
   const cited = library.requirements.filter(requirement => variants.some(variant => {
     const business = library.businessScenarios.find(item => item.id === variant.businessScenarioId);
@@ -91,7 +91,7 @@ export function checkerSourceIds(library: ScenarioLibrary, variantIds: string[])
   return [...new Set([...cited, ...selected])];
 }
 
-function readingEvidence(library: ScenarioLibrary, variantIds: string[]): NonNullable<ScenarioLibrary['readingManifest']> {
+function readingEvidence(library: LibraryV1, variantIds: string[]): NonNullable<LibraryV1['readingManifest']> {
   const identities = new Set(variantIds);
   for (let remaining = library.variants.length; remaining > 0; remaining--) {
     const size = identities.size;
@@ -110,7 +110,7 @@ function semanticWorkHash(job: Job): string {
   return fingerprint({ evidenceVersion: SEMANTIC_CONTEXT_VERSION, input });
 }
 
-function finalAssessmentCoversPlan(library: ScenarioLibrary, plan: ReturnType<typeof planSemanticWork>): boolean {
+function finalAssessmentCoversPlan(library: LibraryV1, plan: ReturnType<typeof planSemanticWork>): boolean {
   const assessment = library.semanticAssessment;
   if (!assessment || assessment.contextVersion !== SEMANTIC_CONTEXT_VERSION || assessment.contentHash !== plan.contentHash) return false;
   if (assessment.workReceipts !== undefined) {
@@ -122,7 +122,7 @@ function finalAssessmentCoversPlan(library: ScenarioLibrary, plan: ReturnType<ty
 }
 
 /** Counts only calls that do not already have a receipt for this exact semantic content. */
-export function semanticWorkStatus(library: ScenarioLibrary): {
+export function semanticWorkStatus(library: LibraryV1): {
   contentHash: string; totalJobs: number; completedJobs: number; pendingJobs: number; needsFinalization: boolean; skipped: SemanticFinding[];
 } {
   const plan = planSemanticWork(library);
@@ -137,8 +137,8 @@ export function semanticWorkStatus(library: ScenarioLibrary): {
 }
 
 /** Same bounded plan for initial extraction and explicit reassessment. Each completed call has a persisted partial receipt. */
-export async function assessScenarioLibrary(library: ScenarioLibrary, runtime: Pick<Runtime, 'assessScenarioProposals'>, ctx: CallContext,
-  persist: (partial: ScenarioLibrary) => Promise<void>): Promise<ScenarioLibrary> {
+export async function assessScenarioLibrary(library: LibraryV1, runtime: Pick<Runtime, 'assessScenarioProposals'>, ctx: CallContext,
+  persist: (partial: LibraryV1) => Promise<void>): Promise<LibraryV1> {
   if (!runtime.assessScenarioProposals) throw new Error('Смысловая проверка недоступна.');
   const plan = planSemanticWork(library), findings = new Map<string, SemanticFinding>(), results = new Map<string, SemanticFinding>();
   const stored = library.semanticAssessment;

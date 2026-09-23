@@ -57,7 +57,7 @@ test('uncertainty, forged citations and unsupported environment stay reviewable 
 
 test('selection preserves excluded drafts and edits cannot change an accepted snapshot', () => {
   const draft = libraryFixture();
-  assert.throws(() => compileLibrary(draft), /принят|accepted/i);
+  assert.throws(() => compileLibrary(draft), /не утверждены/);
   const accepted = acceptLibrary(draft, libraryHash(draft), ['variant_1']);
   const before = JSON.stringify(accepted);
   const snapshot = librarySnapshot(accepted);
@@ -190,7 +190,7 @@ test('changing accepted payloads invalidates the acceptance receipt', () => {
   const draft = libraryFixture();
   const accepted = acceptLibrary(draft, libraryHash(draft), ['variant_1']);
   accepted.variants[0]!.userState.opening = 'Изменено после принятия';
-  assert.throws(() => compileLibrary(accepted), /неизмен|принят/i);
+  assert.throws(() => compileLibrary(accepted), /изменены после утверждения/);
 });
 
 test('required checks compile separately from diagnostic observations and environment', () => {
@@ -422,8 +422,8 @@ test('changed state requires an explicitly supported mutation operation, not onl
   assert.equal(compileLibrary(acceptLibrary(unchanged, libraryHash(unchanged), ['variant_1']))[0]!.checks[0]!.kind, 'state_equals');
 });
 
-test('historical accepted library cards retain their legacy compiler identity and reject edited definitions', async () => {
-  const { assertLibraryRun } = await import('../src/scenario-preparation.js');
+test('an accepted library run is checked by its stored definition hashes: a pre-controller card runs as accepted, an edited one is refused', async () => {
+  const { verifyAcceptedRun } = await import('../src/scenario-library.js');
   const { fingerprint } = await import('../src/contracts.js');
   const draft = libraryFixture();
   const library = acceptLibrary(draft, libraryHash(draft), ['variant_1']);
@@ -432,10 +432,10 @@ test('historical accepted library cards retain their legacy compiler identity an
     revisions: [{ spec: { name: 'Агент', instructions: 'Помогать', tools: [] } }],
     acceptedTests: [{ testId: 'historical_test', scenarioId: legacy.id, definitionHash: fingerprint(legacy), acceptedAt: '2026-09-19T00:00:00.000Z' }] } as any;
   const before = JSON.stringify(record);
-  assert.doesNotThrow(() => assertLibraryRun(record));
+  assert.doesNotThrow(() => verifyAcceptedRun(record));
   assert.equal(JSON.stringify(record), before);
   record.scenarios[0].user.opening = 'Изменённый вход';
-  assert.throws(() => assertLibraryRun(record), /Карточки отличаются/);
+  assert.throws(() => verifyAcceptedRun(record), /отличается от утверждённой/);
 });
 
 test('policy admission counts empty finish as zero follow-up messages', () => {

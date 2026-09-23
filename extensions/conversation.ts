@@ -1,8 +1,9 @@
 import type { Experiment, Trial } from '../src/contracts.js';
 import { isRunning, valueTokens } from '../src/contracts.js';
 import { plannedTrials, type RunComparison } from '../src/comparison.js';
-import type { ScenarioLibrary, ScenarioVariant } from '../src/scenario-contracts.js';
+import type { LibraryV1, ScenarioVariant } from '../src/scenario-contracts.js';
 import { resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../src/scenario-library.js';
+import { libraryV1Of, requireLibraryV1 } from '../src/card/legacy-v1.js';
 import type { VariantFieldDiff, VariantOperation } from '../src/scenario-variants.js';
 import { semanticWorkStatus } from '../src/scenario-work.js';
 import type { ResultView } from '../src/result-view.js';
@@ -145,19 +146,19 @@ function resolveBy<T>(items: T[], ref: string, id: (item: T) => string, name: (i
 }
 
 /** Variants in the order every list shows them: group by group, so «третья карточка» means the third row on screen. */
-export function orderedVariants(library: ScenarioLibrary): ScenarioVariant[] {
+export function orderedVariants(library: LibraryV1): ScenarioVariant[] {
   const grouped = library.businessScenarios.flatMap(group => library.variants.filter(variant => variant.businessScenarioId === group.id));
   return [...grouped, ...library.variants.filter(variant => !grouped.includes(variant))];
 }
 /** The number a card has in every list, found by id so a detached copy of the library gives the same answer. */
-export const variantNumber = (library: ScenarioLibrary, variant: Pick<ScenarioVariant, 'id'>): number => orderedVariants(library).findIndex(item => item.id === variant.id) + 1;
-const groupTitle = (library: ScenarioLibrary, variant: ScenarioVariant): string => library.businessScenarios.find(group => group.id === variant.businessScenarioId)?.title ?? '';
-export const resolveVariant = (library: ScenarioLibrary, ref: string): Resolved<ScenarioVariant> => {
+export const variantNumber = (library: LibraryV1, variant: Pick<ScenarioVariant, 'id'>): number => orderedVariants(library).findIndex(item => item.id === variant.id) + 1;
+const groupTitle = (library: LibraryV1, variant: ScenarioVariant): string => library.businessScenarios.find(group => group.id === variant.businessScenarioId)?.title ?? '';
+export const resolveVariant = (library: LibraryV1, ref: string): Resolved<ScenarioVariant> => {
   const byTitle = resolveBy(orderedVariants(library), ref, variant => variant.id, variant => variant.title);
   return byTitle.kind !== 'none' ? byTitle : resolveBy(orderedVariants(library), ref, variant => variant.id, variant => `${groupTitle(library, variant)} ${variant.title}`);
 };
 /** A group is named by its title first; its goal only helps when no title matches. */
-export const resolveGroup = (library: ScenarioLibrary, ref: string) => {
+export const resolveGroup = (library: LibraryV1, ref: string) => {
   const byTitle = resolveBy(library.businessScenarios, ref, group => group.id, group => group.title);
   return byTitle.kind !== 'none' ? byTitle : resolveBy(library.businessScenarios, ref, group => group.id, group => `${group.title} ${group.goal}`);
 };
@@ -249,7 +250,7 @@ const WORDS = new Intl.Segmenter('ru', { granularity: 'word' });
 const ownerWords = (text: string): string => Array.from(WORDS.segment(text), ({ segment, isWordLike }) => isWordLike ? CHECKER_WORDS.get(segment) ?? segment : segment).join('');
 
 /** A checker remark as the owner can act on it. The stored remark is not changed. */
-export function plainIssue(library: ScenarioLibrary, variant: ScenarioVariant, issue: { path: string; message: string }): string {
+export function plainIssue(library: LibraryV1, variant: ScenarioVariant, issue: { path: string; message: string }): string {
   let text = issue.message;
   for (const other of library.variants) if (other.id.length >= 6) text = text.split(other.id).join(`«${other.title}»`);
   for (const fact of variant.userState.facts) if (fact.id.length >= 6) text = text.split(fact.id).join(`«${fact.statement}»`);
@@ -269,7 +270,7 @@ export const ownerRemarks = <T extends { code: string }>(issues: T[]): T[] => is
 export const ownerQuestions = (variant: ScenarioVariant) => ownerRemarks(variant.issues).filter(issue => issue.code === 'semantic_finding' && issue.severity === 'needs_review');
 
 /** Only an identical checkpoint uncertainty across every explicitly selected card is offered as one owner decision. */
-export function sharedOwnerQuestions(library: ScenarioLibrary, cards: ScenarioVariant[]) {
+export function sharedOwnerQuestions(library: LibraryV1, cards: ScenarioVariant[]) {
   return (cards[0] ? ownerQuestions(cards[0]) : []).flatMap((anchor, index) => {
     const path = anchor.path.replace(`variants.${cards[0]!.id}.`, '');
     const scope = resolutionQuestionHash(library, cards[0]!, path, anchor.message);
@@ -294,7 +295,7 @@ export interface Feed { rows: Row[]; more?: Row[] }
 
 /** Draft, accepted set and running snapshot are three different things; every library view names all three. */
 export function stateRows(record: Experiment): Row[] {
-  const library = record.librarySnapshot;
+  const library = libraryV1Of(record);
   const running = isRunning(record.phase) && record.phase !== 'preparing';
   const measured = ['results_review', 'complete', 'cancelled', 'interrupted'].includes(record.phase) && record.trials.length > 0;
   const acceptance = library?.acceptance;
@@ -312,7 +313,7 @@ const budgetRow = (record: Experiment): Row => {
 
 /** Groups and variants of a draft: one row each in the feed, openings and expectations on expand. */
 export function libraryFeed(record: Experiment): Feed {
-  const library = record.librarySnapshot;
+  const library = libraryV1Of(record);
   if (!library) {
     const rows = [row(`${countText(record.scenarios.length, ['ситуация', 'ситуации', 'ситуаций'])} в наборе`, 'text', true),
       ...record.scenarios.map((scenario, index) => row(`${index + 1}. ${clip(scenario.title, 120)}`, undefined, false, 1)), ...stateRows(record)];
@@ -351,7 +352,7 @@ const availabilityWord = { initial: 'Знает', learned_in_source: 'Узнал
 const originWord = { dialogue: 'прочитано из диалога', owner: 'подтверждено владельцем', synthetic: 'синтетическое допущение' } as const;
 const actionWord = { answer: 'отвечает', missing: 'говорит, что данных нет', clarify: 'уточняет', correct: 'исправляет ответ', change_intent: 'меняет намерение', finish: 'завершает разговор', observe: 'сообщает, что видит' } as const;
 
-function factOriginText(library: ScenarioLibrary, fact: ScenarioVariant['userState']['facts'][number]): string {
+function factOriginText(library: LibraryV1, fact: ScenarioVariant['userState']['facts'][number]): string {
   if (fact.origin.kind === 'owner') return `слова владельца: «${fact.origin.text}»`;
   if (fact.origin.kind === 'synthetic') return `синтетическое допущение: ${fact.origin.reason}`;
   return `диалог ${fact.origin.dialogueId}, реплика ${fact.origin.eventIndex}: «${fact.origin.quote}»`;
@@ -367,7 +368,7 @@ function behaviorLines(variant: Pick<ScenarioVariant, 'behaviorPolicy'>): string
 
 /** One card: who the client is and what is expected first; origins, behaviour, rules and the source dialogue on expand. */
 export function variantFeed(record: Experiment, variant: ScenarioVariant, options: { source?: boolean } = {}): Feed {
-  const library = record.librarySnapshot!;
+  const library = requireLibraryV1(record.librarySnapshot!);
   const position = variantNumber(library, variant);
   const rows: Row[] = [
     row(`${position}. ${variant.title} — ${qualityWord[variant.quality]} · ${provenanceWord[variant.provenance]}`, qualityTone[variant.quality], true),
@@ -470,7 +471,7 @@ const projectPath = (text: string, cwd?: string): string => cwd && text.includes
 
 /** The plan a run confirmation refers to: agent and version, the set, attempts, models and spending limits. */
 export function planLines(record: Experiment, cwd?: string): string[] {
-  const library = record.librarySnapshot;
+  const library = libraryV1Of(record);
   const acceptance = library?.acceptance;
   // A repeat of chosen cards runs a part of the accepted revision; the plan counts what will actually run.
   const chosen = record.selectedScenarioIds;
@@ -499,7 +500,7 @@ export const ACCEPTANCE_PAGE = 8;
  * What the owner accepts: for every given card the client's first message and the expected result, not a list of titles.
  * It says nothing about cards it was not given: what else was or was not shown is known only to the dialog that pages them.
  */
-export function acceptanceLines(library: ScenarioLibrary, cards: ScenarioVariant[]): string[] {
+export function acceptanceLines(library: LibraryV1, cards: ScenarioVariant[]): string[] {
   return cards.flatMap(variant => [`${variantNumber(library, variant)}. ${variant.title}`,
     `   Клиент пишет: «${clip(variant.userState.opening, 200)}»`,
     ...(variant.userState.missing.length ? [`   Клиент не знает: ${clip(variant.userState.missing.join('; '), 160)}`] : []),
@@ -528,7 +529,7 @@ export function statusFeed(records: Experiment[], active?: { id: string }): Feed
   if (!records.length) return { rows: [row('Прогонов пока нет. Скажите, какого агента проверить и где лежат логи.', 'muted')] };
   const sorted = [...records].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const line = (record: Experiment): Row => {
-    const library = record.librarySnapshot;
+    const library = libraryV1Of(record);
     const size = library ? countText(library.variants.length, VARIANTS) : countText(record.scenarios.length, ['ситуация', 'ситуации', 'ситуаций']);
     const tail = record.trials.length ? ` · ${record.trials.length} из ${plannedTrials(record)} диалогов` : library?.acceptance ? ' · набор принят' : '';
     // A repeat is named by the run it repeats, so a chain of reruns of one set does not print the same task five times.
@@ -590,7 +591,7 @@ export function comparisonFeed(comparison: RunComparison, beforeId: string): Fee
 }
 
 /** Semantic work still owed by a library and whether the agreed budget covers it. */
-export function semanticDebt(record: Experiment, library: ScenarioLibrary): { pendingJobs: number; remainingCalls: number; needsFinalization: boolean } {
+export function semanticDebt(record: Experiment, library: LibraryV1): { pendingJobs: number; remainingCalls: number; needsFinalization: boolean } {
   const { pendingJobs, needsFinalization } = semanticWorkStatus(library);
   return { pendingJobs, needsFinalization, remainingCalls: Math.max(0, record.settings.maxCalls - record.usage.calls) };
 }

@@ -8,6 +8,7 @@ import { countText, pluralForm } from './plural.js';
 import { oneLine, safeText, shortId } from './text.js';
 import { failureExplanation, ruleRegister, ruleText, UNVERIFIED, UNVERIFIED_REPLY, type FailureExplanation } from './explain.js';
 import { draftHash } from './experiment.js';
+import { libraryV1Of } from './card/legacy-v1.js';
 
 /*
  * The first screen. One question — "how good is the agent on these cards?" — answered in
@@ -429,7 +430,7 @@ export function qualitySummary(input: Experiment): QualitySummary {
   const cards = cardScore(countedRecord, cardOutcomes);
   const slice = (id: string, rows: typeof cardOutcomes): QualitySlice => {
     const score = cardScore({ ...countedRecord, scenarios: rows.map(r => r.scenario) }, rows);
-    return { id, label: ({production:'из логов',curated:'экспертные',synthetic:'синтетические'} as Record<string,string>)[id] ?? input.librarySnapshot?.businessScenarios.find(b=>b.id===id)?.title ?? rows[0]?.scenario.title ?? id, ...score, planned: rows.length, measured: score.passed + score.failed };
+    return { id, label: ({production:'из логов',curated:'экспертные',synthetic:'синтетические'} as Record<string,string>)[id] ?? libraryV1Of(input)?.businessScenarios.find(b=>b.id===id)?.title ?? rows[0]?.scenario.title ?? id, ...score, planned: rows.length, measured: score.passed + score.failed };
   };
   const slices = { revision: input.librarySnapshot ? String(input.librarySnapshot.revision) : fingerprint(counted), label: 'По принятому набору',
     groups: [...new Set(counted.map(s => s.familyId))].map(id => slice(id, cardOutcomes.filter(r => r.scenario.familyId === id))),

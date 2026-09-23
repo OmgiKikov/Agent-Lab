@@ -13,6 +13,7 @@ import { pluralForm } from '../src/plural.js';
 import { oneLine, safeText, shortId } from '../src/text.js';
 import { activeRunRows, preparationRows, progressLine } from './flow.ts';
 import { pendingLibrarySelection, logsRows, runRows, scenarioEntries, scenarioRows } from './scenarios.ts';
+import { libraryV1Of } from '../src/card/legacy-v1.js';
 
 
 const phases: Record<string, string> = {
@@ -549,7 +550,8 @@ export class LabBoard implements Component {
     private redraw: () => void, private rows: () => number = () => 32) {
     this.record = options.record;
     this.section = options.section ?? (this.record?.trials.length || this.record?.questions.length || this.record?.phase === 'error' || this.record && isRunning(this.record.phase) ? 'agent' : 'cards');
-    this.selectedVariantIds = options.selectedVariantIds ?? this.record?.librarySnapshot?.acceptance?.variantIds.slice() ?? this.record?.librarySnapshot?.variants.filter(item => item.quality === 'ready').map(item => item.id) ?? [];
+    const library = this.record && libraryV1Of(this.record);
+    this.selectedVariantIds = options.selectedVariantIds ?? library?.acceptance?.variantIds.slice() ?? library?.variants.filter(item => item.quality === 'ready').map(item => item.id) ?? [];
     options.selectedVariantIds = this.selectedVariantIds;
     this.selected = options.selected ?? 0;
     this.query = options.query ?? '';
@@ -639,7 +641,7 @@ export class LabBoard implements Component {
    */
   private draftHeadline(record: Experiment): { text: string; color?: ThemeColor } {
     if (record.librarySnapshot) {
-      const accepted = record.librarySnapshot.acceptance;
+      const accepted = libraryV1Of(record)?.acceptance;
       if (pendingLibrarySelection(record, this.selectedVariantIds)) return { text: 'Выбор изменён: нужно принять заново. 2 — Сценарии, y — принять.', color: 'warning' };
       return accepted
         ? { text: `Принята ревизия ${accepted.revision}: ${accepted.variantIds.length} вариантов. 3 — план запуска.`, color: 'success' }
@@ -767,7 +769,7 @@ export class LabBoard implements Component {
         selectedVariantIds: [...this.selectedVariantIds],
         ...(this.section === 'results' && entry ? { trialId: entry.id } : {}) };
       if (libraryPath && this.section === 'cards' && entry && data === ' ') {
-        const variant = this.record.librarySnapshot!.variants.find(item => item.id === entry.id);
+        const variant = libraryV1Of(this.record)?.variants.find(item => item.id === entry.id);
         if (variant?.quality === 'ready') {
           const index = this.selectedVariantIds.indexOf(entry.id);
           if (index >= 0) this.selectedVariantIds.splice(index, 1); else this.selectedVariantIds.push(entry.id);
@@ -775,7 +777,7 @@ export class LabBoard implements Component {
         this.redraw(); return;
       }
       if (libraryPath && editable) {
-        const variant = entry && this.record.librarySnapshot!.variants.find(item => item.id === entry.id);
+        const variant = entry && libraryV1Of(this.record)?.variants.find(item => item.id === entry.id);
         const groupId = variant?.businessScenarioId;
         if (this.section === 'cards' && key('y') && this.selectedVariantIds.length) return this.finish({ type: 'acceptLibrary', ...state, variantIds: [...this.selectedVariantIds] });
         if (this.section === 'cards' && variant && key('e')) return this.finish({ type: 'editScenario', ...state, variantId: variant.id });
@@ -851,7 +853,7 @@ export class LabBoard implements Component {
       const unresolved = record.phase === 'complete' && awaitingVerdict(record).size > 0;
       header.push(line(`${unresolved ? 'НЕРАЗОБРАННЫЕ ПРОВАЛЫ' : phases[record.phase] ?? record.phase} · ${record.mode === 'demo' ? 'ДЕМО · без модели' : 'ЖИВОЙ ПРОГОН'}`, isRunning(record.phase) ? 'accent' : record.phase === 'complete' && !unresolved ? 'success' : 'warning'));
       const navigation = record.librarySnapshot
-        ? [['logs', '1 Логи'], ['cards', `2 Сценарии ${record.librarySnapshot.variants.length}`], ['agent', '3 Прогон'], ['results', `4 Результаты ${record.trials.length}`]]
+        ? [['logs', '1 Логи'], ['cards', `2 Сценарии ${libraryV1Of(record)?.variants.length ?? 0}`], ['agent', '3 Прогон'], ['results', `4 Результаты ${record.trials.length}`]]
         : [['agent', '1 Итог'], ['cards', `2 Ожидания ${record.scenarios.length}`], ['results', `3 Разбор ${record.trials.length}`]];
       header.push(line(navigation
         .map(([id, label]) => this.section === id ? `[${label}]` : label).join('   '), 'muted'));

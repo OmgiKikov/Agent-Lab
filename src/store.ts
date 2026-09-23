@@ -12,7 +12,8 @@ import { ScenarioFiles } from './scenario-store.js';
 import { oneLine } from './text.js';
 import { isIdentifier } from './ids.js';
 import { LockedError } from './errors.js';
-import type { ImportBatch, ScenarioLibrary } from './scenario-contracts.js';
+import type { ImportBatch } from './scenario-contracts.js';
+import type { ScenarioLibrary } from './card/schema.js';
 
 type LockOwner = { pid: number; token: string };
 function alive(pid: number): boolean {

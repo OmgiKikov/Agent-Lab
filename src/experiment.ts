@@ -1,9 +1,10 @@
 import { recheckDecision } from './scenario-draft.js';
 import { semanticWorkStatus } from './scenario-work.js';
 import { captureGeneratorEvidence } from './generator-evidence.js';
-import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash } from './scenario-library.js';
-import type { LibraryPatch, ScenarioLibrary } from './scenario-contracts.js';
-import { assessScenarioLibrary, assertLibraryRun, compiledLibraryScenarios, prepareScenarioLibrary, resumeScenarioLibrary } from './scenario-preparation.js';
+import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, verifyAcceptedRun } from './scenario-library.js';
+import type { LibraryPatch, LibraryV1 } from './scenario-contracts.js';
+import { requireLibraryV1 } from './card/legacy-v1.js';
+import { assessScenarioLibrary, compiledLibraryScenarios, prepareScenarioLibrary, resumeScenarioLibrary } from './scenario-preparation.js';
 import { proposeVariant as proposeScenarioVariant, type VariantProposalResult, type VariantRequest } from './scenario-variants.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -192,14 +193,14 @@ export class ExperimentLab {
     });
     return structuredClone(record);
   }
-  /** Detached library preview plus its current (empty until accepted) runnable draft. */
-  async readLibrary(id: string): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
+  /** Detached variant library plus its current (empty until accepted) runnable draft: what the variant editor below works on. */
+  async readLibrary(id: string): Promise<{ library: LibraryV1; experiment: Experiment }> {
     const experiment = await this.get(id);
     if (!experiment.librarySnapshot) throw new Error('У эксперимента нет библиотеки сценариев.');
-    return { library: structuredClone(experiment.librarySnapshot), experiment };
+    return { library: structuredClone(requireLibraryV1(experiment.librarySnapshot)), experiment };
   }
   /** `author` is always named by the caller: owner authority is never a default. */
-  async editLibrary(id: string, expectedHash: string, patch: LibraryPatch, author: 'owner' | 'assistant'): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
+  async editLibrary(id: string, expectedHash: string, patch: LibraryPatch, author: 'owner' | 'assistant'): Promise<{ library: LibraryV1; experiment: Experiment }> {
     return this.change(async () => {
       const { experiment, library } = await this.readLibrary(id);
       if (experiment.phase !== 'review') throw new Error('Править библиотеку можно только в черновике.');
@@ -223,7 +224,7 @@ export class ExperimentLab {
       return { ...result, experiment };
     });
   }
-  async acceptLibrary(id: string, expectedHash: string, variantIds: string[]): Promise<{ library: ScenarioLibrary; experiment: Experiment }> {
+  async acceptLibrary(id: string, expectedHash: string, variantIds: string[]): Promise<{ library: LibraryV1; experiment: Experiment }> {
     return this.change(async () => {
       const { experiment, library } = await this.readLibrary(id);
       if (experiment.phase !== 'review') throw new Error('Принять библиотеку можно только в черновике.');
@@ -309,7 +310,7 @@ export class ExperimentLab {
       if (record.phase !== 'review') throw new Error('Править можно только незапущенный черновик. Готовые доказательства остаются как есть, для изменений создайте новый эксперимент.');
       if (draftHash(record) !== expectedHash) throw new Error('Черновик изменился. Откройте карточки заново, прежде чем править.');
       const patch = draftPatchSchema.parse(raw);
-      if (record.librarySnapshot?.acceptance) assertLibraryRun(record);
+      if (record.librarySnapshot?.acceptance) verifyAcceptedRun(record);
       record.settings = settingsSchema.parse({ ...record.settings, ...patch.settings,
         roles: Object.fromEntries(Object.entries({ ...record.settings.roles, ...patch.settings?.roles }).filter(([, value]) => value !== null)) });
       if (patch.target) record.target = patch.target;
@@ -326,7 +327,7 @@ export class ExperimentLab {
   async acceptDraft(id: string, expectedHash: string): Promise<Experiment> {
     return this.change(async () => {
       const record = await this.store.get(id);
-      assertLibraryRun(record);
+      verifyAcceptedRun(record);
       if (record.workflow !== 'evaluate') throw new Error('Принять тест можно только в workflow evaluate.');
       if (record.phase !== 'review') throw new Error('Принять можно только незапущенный черновик.');
       if (!record.scenarios.length) throw new Error('Подтверждать нечего: в черновике нет ситуаций.');
@@ -367,7 +368,7 @@ export class ExperimentLab {
       }
       // A control keeps its accepted card: the one-turn rule is applied when it runs (evaluateTrial).
       record.targetFingerprint = await targetFingerprint(record.target);
-      assertLibraryRun(record);
+      verifyAcceptedRun(record);
       await this.store.save(record);
       return structuredClone(record);
     });
@@ -377,7 +378,7 @@ export class ExperimentLab {
     const previous = await this.get(id);
     if (previous.workflow !== 'evaluate' || !previous.scenarios.length || isRunning(previous.phase)) throw new Error('Сначала дождитесь готовых тестов.');
     const definition = freshDraft(previous, scenarioIds);
-    assertLibraryRun(definition);
+    verifyAcceptedRun(definition);
     if (previous.trials.length) definition.sourceEvidence = suiteEvidence(previous, definition.scenarios.map(s => s.id));
     const path = resolve(file);
     await mkdir(dirname(path), { recursive: true });
@@ -401,7 +402,7 @@ export class ExperimentLab {
       retainAcceptedTests(record);
       await preflightTarget(record.target);
       record.targetFingerprint = await targetFingerprint(record.target);
-      assertLibraryRun(record);
+      verifyAcceptedRun(record);
       await this.store.save(record);
       return structuredClone(record);
     });
@@ -425,7 +426,7 @@ export class ExperimentLab {
       const prepared = validatePreparation({ requirements: record.requirements, questions: record.questions,
         scenarios: record.scenarios.map(({ split: _, ...s }) => s) }, record.sources);
       record.scenarios = prepared.scenarios;
-      assertLibraryRun(record);
+      verifyAcceptedRun(record);
       retainAcceptedTests(record);
       if (input.judge) { record.settings.judge = input.judge; delete record.settings.roles.judge; }
       record.evaluatorVersion = evaluatorVersion(record.settings);
@@ -549,7 +550,7 @@ export class ExperimentLab {
     if (!Number.isInteger(parallel) || parallel < 1 || parallel > MAX_PARALLEL) throw new Error(`Параллельных диалогов может быть от 1 до ${MAX_PARALLEL}.`);
     return this.change(async () => {
       const record = await this.store.get(id);
-      assertLibraryRun(record);
+      verifyAcceptedRun(record);
       if (record.phase !== 'review') throw new Error('Запустить можно только эксперимент, ожидающий проверки. Чтобы поменять набор карточек, создайте новый.');
       if (record.workflow !== 'evaluate') throw new Error('Сравнение с автоматическим улучшением агента больше не запускается: такой прогон можно только открыть. Для новой проверки подготовьте библиотеку сценариев.');
       runnableTarget(record.target);

@@ -1,7 +1,8 @@
 import { assessScenarioLibrary, workInputIssue, serializedBytes, SCENARIO_OUTPUT_BYTES } from './scenario-work.js';
 export { assessScenarioLibrary } from './scenario-work.js';
-import { appendScenarioProposals, createLibrary, compileLibrary, libraryHash, libraryQuality, librarySnapshot } from './scenario-library.js';
-import { importBatchSchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal } from './scenario-contracts.js';
+import { appendScenarioProposals, createLibrary, compileLibrary, libraryHash, libraryQuality } from './scenario-library.js';
+import { requireLibraryV1 } from './card/legacy-v1.js';
+import { importBatchSchema, type ImportBatch, type LibraryV1, type ScenarioProposal } from './scenario-contracts.js';
 import { fingerprint, internalPromptRule, validatePreparation, type AgentSpec, type CallContext, type CreateInput, type Experiment, type GroundingInput, type Requirement, type Runtime, type ScenarioProposalsInput, type Source } from './contracts.js';
 import { SOURCES_PER_DIALOGUE } from './limits.js';
 import { selectScenarioSources } from './scenario-sources.js';
@@ -24,7 +25,7 @@ export function chronologicalInput(batch: ImportBatch, ids = batch.dialogues.map
 }
 
 /** Only the actual request can establish coverage obligations, including absence of later source turns. */
-function proposalsFromLibrary(library: ScenarioLibrary): ScenarioProposal[] {
+function proposalsFromLibrary(library: LibraryV1): ScenarioProposal[] {
   return library.variants.map(variant => {
     const business = library.businessScenarios.find(item => item.id === variant.businessScenarioId);
     if (!business) throw new Error(`Нет группы для карточки ${variant.id}`);
@@ -46,9 +47,9 @@ function requireSourceCoverage(proposals: ScenarioProposal[], request: ScenarioP
 type PreparationStart = {
   original: ImportBatch | undefined;
   workIds: string[];
-  library: ScenarioLibrary;
+  library: LibraryV1;
   proposals: ScenarioProposal[];
-  previousAssessment: ScenarioLibrary['semanticAssessment'];
+  previousAssessment: LibraryV1['semanticAssessment'];
   /** Fresh preparation grounds requirements once. A continuation already has them. */
   groundOnce: boolean;
   expectedHash?: string;
@@ -77,7 +78,7 @@ export async function resumeScenarioLibrary(record: Experiment, input: CreateInp
   if (!progress.pending.length) throw new Error('Необработанных источников нет.');
   if (!record.librarySnapshot) throw new Error('Черновик библиотеки не сохранён; продолжить нельзя.');
   progress.status = 'preparing';
-  const library = structuredClone(record.librarySnapshot);
+  const library = structuredClone(requireLibraryV1(record.librarySnapshot));
   await runPreparation(record, input, runtime, ctx, store, {
     original: batch, workIds: [...progress.pending], library, proposals: proposalsFromLibrary(library),
     previousAssessment: structuredClone(library.semanticAssessment), groundOnce: !progress.groundingComplete, expectedHash: libraryHash(library),
@@ -92,7 +93,7 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
   const retained = structuredClone(start.library);
   const existingIds = new Set(retained.variants.map(variant => variant.id));
   let manifest = [...(library.readingManifest ?? [])];
-  const keepManifest = (next: ScenarioLibrary): ScenarioLibrary => { if (manifest.length) next.readingManifest = manifest; return next; };
+  const keepManifest = (next: LibraryV1): LibraryV1 => { if (manifest.length) next.readingManifest = manifest; return next; };
   let published = start.expectedHash;
   const publish = async () => {
     record.librarySnapshot = library;
@@ -186,7 +187,7 @@ async function runPreparation(record: Experiment, input: CreateInput, runtime: R
         requirements: structuredClone(requirements.filter(requirement => !internalPromptRule(sources, requirement))), ...(original ? { batchId: original.id } : { preparationMode: 'owner_requirements', scenarioCount: input.scenarioCount || 1 }), dialogues: original ? chronologicalInput(original, [workId]) : [] } as ScenarioProposalsInput;
       const oversize = workInputIssue(request);
       if (oversize) { record.preparationProgress.excluded.push({ dialogueId: workId, reason: oversize }); continue; }
-      let extracted: ScenarioProposal[] = [], next: ScenarioLibrary | undefined;
+      let extracted: ScenarioProposal[] = [], next: LibraryV1 | undefined;
       for (let attempt = 0; attempt < 3; attempt++) {
         ctx.signal.throwIfAborted();
         const issue = workInputIssue(request);
@@ -297,27 +298,8 @@ function mergeRequirements(record: Experiment, extracted: Requirement[], sources
   return focused;
 }
 
-/** No run or legacy editor can launder a draft or change a compiled card after library acceptance. */
-export function assertLibraryRun(record: Experiment): void {
-  const library = record.librarySnapshot;
-  if (!library) return;
-  librarySnapshot(library);
-  if (fingerprint(record.requirements) !== fingerprint(library.requirements) || fingerprint(record.sources) !== fingerprint(library.sources)) throw new Error('Требования библиотеки изменились; требуется новая подготовка и принятие.');
-  const compiled = compiledLibraryScenarios(record, library);
-  const ids = record.selectedScenarioIds ?? library.acceptance!.variantIds;
-  const expected = compiled.filter(s => ids.includes(s.id)).map(scenario => {
-    const recorded = record.scenarios.find(s => s.id === scenario.id);
-    // Pre-controller accepted cards retain their exact definition and simulator protocol.
-    // A matching historical acceptance receipt prevents dropping execution from a new card.
-    if (recorded && !recorded.execution && record.acceptedTests?.some(t => t.scenarioId === recorded.id && t.definitionHash === fingerprint(recorded))) {
-      const { execution, ...legacy } = scenario;
-      return legacy;
-    }
-    return scenario;
-  });
-  if (!expected.length || ids.some(id => !compiled.some(s => s.id === id)) || fingerprint(expected) !== fingerprint(record.scenarios)) throw new Error('Карточки отличаются от принятой библиотеки; повторите принятие.');
-}
-export function compiledLibraryScenarios(record: Experiment, library: ScenarioLibrary) {
+/** The runnable cards of a library at the moment of its acceptance: compiled once, then fixed by their definition hashes. */
+export function compiledLibraryScenarios(record: Experiment, library: LibraryV1) {
   return validatePreparation({ requirements: library.requirements, questions: record.questions,
     scenarios: compileLibrary(library).map(({ split, ...scenario }) => scenario) }, library.sources).scenarios;
 }

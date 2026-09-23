@@ -1,0 +1,1854 @@
+{
+  "librarySnapshot": {
+    "checkpointContext": "observed-tools-v1",
+    "formatVersion": 1,
+    "id": "library_852202d0-136a-4682-bc5f-f96513f0dd88",
+    "revision": 24,
+    "createdAt": "2026-09-23T09:41:46.775Z",
+    "imports": [
+      {
+        "formatVersion": 1,
+        "id": "import_ef149ee8d822a3c4c21495a62088872b",
+        "contentHash": "ef149ee8d822a3c4c21495a62088872bad59acf52a21e2c6a7cb4bb58c3d3eee",
+        "createdAt": "2026-09-23T09:41:46.746Z",
+        "dialogues": [
+          {
+            "id": "known",
+            "events": [
+              {
+                "index": 0,
+                "type": "message",
+                "role": "user",
+                "content": "Номер терминала: 1234. Помогите с возвратом.",
+                "data": {
+                  "role": "user",
+                  "content": "Номер терминала: 1234. Помогите с возвратом."
+                }
+              },
+              {
+                "index": 1,
+                "type": "message",
+                "role": "assistant",
+                "content": "Уточните номер терминала.",
+                "data": {
+                  "role": "assistant",
+                  "content": "Уточните номер терминала."
+                }
+              }
+            ],
+            "observation": "partial",
+            "original": {
+              "id": "known",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "Номер терминала: 1234. Помогите с возвратом."
+                },
+                {
+                  "role": "assistant",
+                  "content": "Уточните номер терминала."
+                }
+              ],
+              "outcome": "unknown"
+            }
+          },
+          {
+            "id": "late",
+            "events": [
+              {
+                "index": 0,
+                "type": "message",
+                "role": "user",
+                "content": "Помогите с возвратом.",
+                "data": {
+                  "role": "user",
+                  "content": "Помогите с возвратом."
+                }
+              },
+              {
+                "index": 1,
+                "type": "message",
+                "role": "assistant",
+                "content": "Уточните номер терминала.",
+                "data": {
+                  "role": "assistant",
+                  "content": "Уточните номер терминала."
+                }
+              },
+              {
+                "index": 2,
+                "type": "message",
+                "role": "user",
+                "content": "Номер терминала: 5678",
+                "data": {
+                  "role": "user",
+                  "content": "Номер терминала: 5678"
+                }
+              }
+            ],
+            "observation": "partial",
+            "original": {
+              "id": "late",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "Помогите с возвратом."
+                },
+                {
+                  "role": "assistant",
+                  "content": "Уточните номер терминала."
+                },
+                {
+                  "role": "user",
+                  "content": "Номер терминала: 5678"
+                }
+              ],
+              "outcome": "unknown"
+            }
+          }
+        ],
+        "rejected": []
+      }
+    ],
+    "sources": [
+      {
+        "id": "source-1",
+        "name": "Учебное правило владельца",
+        "content": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+        "hash": "fc0f08780143051c1f7456516e09c78d2dde624ba761e3d37304b891e772249c"
+      }
+    ],
+    "requirements": [
+      {
+        "id": "refund_rule",
+        "text": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+        "sourceId": "source-1",
+        "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+        "critical": true
+      }
+    ],
+    "businessScenarios": [
+      {
+        "key": "refund",
+        "title": "Возврат оплаты",
+        "goal": "Получить инструкцию по возврату оплаты",
+        "conditions": [],
+        "requirementIds": [
+          "refund_rule"
+        ],
+        "grouping": {
+          "status": "confirmed",
+          "reason": "Одинаковая цель и правило; номер отличается по способу раскрытия"
+        },
+        "id": "business_e9d704f8c773032147a3d9c7",
+        "sourceDialogues": [
+          {
+            "batchId": "import_ef149ee8d822a3c4c21495a62088872b",
+            "dialogueId": "known"
+          },
+          {
+            "batchId": "import_ef149ee8d822a3c4c21495a62088872b",
+            "dialogueId": "late"
+          }
+        ]
+      }
+    ],
+    "variants": [
+      {
+        "id": "known_number",
+        "title": "Номер уже в первой реплике",
+        "purpose": "Проверить уместность запроса номера и получение инструкции по возврату",
+        "provenance": "production",
+        "sourceDialogues": [
+          {
+            "batchId": "import_ef149ee8d822a3c4c21495a62088872b",
+            "dialogueId": "known"
+          }
+        ],
+        "userState": {
+          "goal": "Получить инструкцию по возврату",
+          "opening": "Номер терминала: 1234. Помогите с возвратом.",
+          "facts": [
+            {
+              "id": "terminal",
+              "statement": "Номер терминала: 1234",
+              "value": "1234",
+              "availability": "initial",
+              "reason": "Личные данные в первой реплике",
+              "origin": {
+                "kind": "dialogue",
+                "batchId": "import_ef149ee8d822a3c4c21495a62088872b",
+                "dialogueId": "known",
+                "eventIndex": 0,
+                "quote": "Номер терминала: 1234"
+              }
+            }
+          ],
+          "cannotKnow": [],
+          "missing": []
+        },
+        "behaviorPolicy": {
+          "version": 1,
+          "initialState": "waiting",
+          "states": [
+            "waiting",
+            "done"
+          ],
+          "terminalStates": [
+            "done"
+          ],
+          "maxFollowUps": 1,
+          "repetitionLimit": 1,
+          "actions": [
+            {
+              "id": "finish",
+              "kind": "finish",
+              "factIds": []
+            }
+          ],
+          "transitions": [
+            {
+              "from": "waiting",
+              "to": "done",
+              "actionId": "finish",
+              "when": "После первого ответа: если есть инструкция, цель достигнута; если агент повторно просит уже указанный номер или не помогает, пользователь прекращает попытку без достижения цели"
+            }
+          ]
+        },
+        "environmentFixture": {
+          "mode": "prompt",
+          "initialState": {
+            "records": {},
+            "writableFields": [],
+            "transientFailures": 0
+          }
+        },
+        "evaluationSpec": {
+          "successCriteria": "Номер запрошен только до его раскрытия; после получения номера агент объяснил, как оформить возврат",
+          "goalObservation": "reply",
+          "checkpoints": [
+            {
+              "id": "ask_once",
+              "requirementId": "refund_rule",
+              "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "applicability": "Вариант обращения за возвратом с номером в первой реплике или раскрываемым по просьбе",
+              "observation": "reply",
+              "role": "required",
+              "rule": "Если номер уже сообщён, не запрашивать его повторно независимо от формулировки вопроса. Если в первой реплике номера нет, запросить его до инструкции."
+            },
+            {
+              "id": "refund_explanation",
+              "requirementId": "refund_rule",
+              "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "applicability": "Пользователь обратился за возвратом и сообщил номер терминала",
+              "observation": "reply",
+              "role": "required",
+              "rule": "Объяснить пользователю, как оформить возврат. Один запрос номера, подтверждение получения номера или обещание помочь без инструкции не выполняют требование."
+            }
+          ]
+        },
+        "businessScenarioId": "business_e9d704f8c773032147a3d9c7",
+        "familyId": "business_e9d704f8c773032147a3d9c7",
+        "revision": 1,
+        "quality": "ready",
+        "issues": [],
+        "ownerDecision": "accepted",
+        "history": [
+          {
+            "author": "generator",
+            "reason": "Структурированное предложение из источников",
+            "revision": 1
+          }
+        ]
+      },
+      {
+        "id": "late_number",
+        "title": "Номер раскрывается по просьбе",
+        "purpose": "Проверить уместность запроса номера и получение инструкции по возврату",
+        "provenance": "production",
+        "sourceDialogues": [
+          {
+            "batchId": "import_ef149ee8d822a3c4c21495a62088872b",
+            "dialogueId": "late"
+          }
+        ],
+        "sourceCoverageRequired": true,
+        "sourceCoverageBasis": [
+          {
+            "batchId": "import_ef149ee8d822a3c4c21495a62088872b",
+            "dialogueId": "late",
+            "eventIndex": 2
+          }
+        ],
+        "sourceCoverage": [
+          {
+            "batchId": "import_ef149ee8d822a3c4c21495a62088872b",
+            "dialogueId": "late",
+            "eventIndex": 2,
+            "disposition": "initial_fact",
+            "actionIds": [],
+            "factIds": [
+              "terminal"
+            ],
+            "reason": "Личный номер раскрыт по просьбе; его исходная доступность в этом учебном примере требует подтверждения владельца."
+          }
+        ],
+        "userState": {
+          "goal": "Получить инструкцию по возврату",
+          "opening": "Помогите с возвратом.",
+          "facts": [
+            {
+              "id": "terminal",
+              "statement": "Номер терминала: 5678",
+              "value": "5678",
+              "availability": "initial",
+              "reason": "Учебная явная правка: личный номер был известен до разговора",
+              "origin": {
+                "kind": "owner",
+                "editId": "demo_owner_confirmed",
+                "text": "Учебная явная правка: личный номер был известен до разговора"
+              }
+            }
+          ],
+          "cannotKnow": [],
+          "missing": []
+        },
+        "behaviorPolicy": {
+          "version": 1,
+          "initialState": "waiting",
+          "states": [
+            "waiting",
+            "disclosed",
+            "done"
+          ],
+          "terminalStates": [
+            "done"
+          ],
+          "maxFollowUps": 1,
+          "repetitionLimit": 1,
+          "actions": [
+            {
+              "id": "disclose",
+              "kind": "answer",
+              "factIds": [
+                "terminal"
+              ],
+              "ifAsked": "Агент просит номер терминала"
+            },
+            {
+              "id": "finish",
+              "kind": "finish",
+              "factIds": []
+            }
+          ],
+          "transitions": [
+            {
+              "from": "waiting",
+              "to": "disclosed",
+              "actionId": "disclose",
+              "when": "Агент просит номер терминала, ещё не сообщённый в этом разговоре"
+            },
+            {
+              "from": "waiting",
+              "to": "done",
+              "actionId": "finish",
+              "when": "Агент не просит номер: дал инструкцию либо ответил иначе; пользователь завершает попытку"
+            },
+            {
+              "from": "disclosed",
+              "to": "done",
+              "actionId": "finish",
+              "when": "После ответа на сообщённый номер: есть инструкция либо пользователь прекращает неудачную попытку; повторять номер не будет"
+            }
+          ]
+        },
+        "environmentFixture": {
+          "mode": "prompt",
+          "initialState": {
+            "records": {},
+            "writableFields": [],
+            "transientFailures": 0
+          }
+        },
+        "evaluationSpec": {
+          "successCriteria": "Номер запрошен только до его раскрытия; после получения номера агент объяснил, как оформить возврат",
+          "goalObservation": "reply",
+          "checkpoints": [
+            {
+              "id": "ask_once",
+              "requirementId": "refund_rule",
+              "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "applicability": "Вариант обращения за возвратом с номером в первой реплике или раскрываемым по просьбе",
+              "observation": "reply",
+              "role": "required",
+              "rule": "Если номер уже сообщён, не запрашивать его повторно независимо от формулировки вопроса. Если в первой реплике номера нет, запросить его до инструкции."
+            },
+            {
+              "id": "refund_explanation",
+              "requirementId": "refund_rule",
+              "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "applicability": "Пользователь обратился за возвратом и сообщил номер терминала",
+              "observation": "reply",
+              "role": "required",
+              "rule": "Объяснить пользователю, как оформить возврат. Один запрос номера, подтверждение получения номера или обещание помочь без инструкции не выполняют требование."
+            }
+          ]
+        },
+        "businessScenarioId": "business_e9d704f8c773032147a3d9c7",
+        "familyId": "business_e9d704f8c773032147a3d9c7",
+        "revision": 2,
+        "quality": "ready",
+        "issues": [],
+        "ownerDecision": "accepted",
+        "history": [
+          {
+            "author": "generator",
+            "reason": "Структурированное предложение из источников",
+            "revision": 1
+          },
+          {
+            "previousHash": "a735de4ddda6dc4503818fd751b85d6f93acb1bcce97e04e57fc92b0510af116",
+            "author": "owner",
+            "reason": "Учебная явная правка: личный номер был известен до разговора",
+            "revision": 2,
+            "factEdit": {
+              "factId": "terminal",
+              "editId": "demo_owner_confirmed",
+              "factHash": "e66e073ece794476477bf06972c9eb3acd1f48a312e9f042f4805ff108f3dc5f"
+            }
+          }
+        ]
+      }
+    ],
+    "readingManifest": [
+      {
+        "dialogueId": "known",
+        "batchId": "import_ef149ee8d822a3c4c21495a62088872b",
+        "sourceIds": [
+          "source-1"
+        ],
+        "variantIds": [
+          "known_number"
+        ],
+        "requestHash": "2dcfb23556ebf6f32e54f53b27b3e7d2131f9022ea5098be4677501c591f13f3"
+      },
+      {
+        "dialogueId": "late",
+        "batchId": "import_ef149ee8d822a3c4c21495a62088872b",
+        "sourceIds": [
+          "source-1"
+        ],
+        "variantIds": [
+          "late_number"
+        ],
+        "requestHash": "b19757b776e4532173543c5aa59b76327e937a58a3f2d972d9279a76612c68d8"
+      }
+    ],
+    "semanticRequired": true,
+    "semanticAssessment": {
+      "contextVersion": 11,
+      "contentHash": "76f8aadd18adcdd0807dbc55385f23a90cd65c9ecdcf22a555f04d17abb8da7c",
+      "findings": [
+        {
+          "variantId": "known_number",
+          "path": "userState",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "known_number",
+          "path": "userState.facts.terminal",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "known_number",
+          "path": "behaviorPolicy",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "known_number",
+          "path": "environmentFixture",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "known_number",
+          "path": "evaluationSpec.successCriteria",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "known_number",
+          "path": "businessScenarioId",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "known_number",
+          "path": "evaluationSpec.checkpoints.ask_once",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "known_number",
+          "path": "evaluationSpec.checkpoints.refund_explanation",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "late_number",
+          "path": "userState",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "late_number",
+          "path": "userState.facts.terminal",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "late_number",
+          "path": "behaviorPolicy",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "late_number",
+          "path": "environmentFixture",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "late_number",
+          "path": "sourceCoverage",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "late_number",
+          "path": "evaluationSpec.successCriteria",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "late_number",
+          "path": "businessScenarioId",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "late_number",
+          "path": "evaluationSpec.checkpoints.ask_once",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "late_number",
+          "path": "evaluationSpec.checkpoints.refund_explanation",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "known_number",
+          "path": "duplicates",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        },
+        {
+          "variantId": "late_number",
+          "path": "duplicates",
+          "status": "ready",
+          "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+        }
+      ],
+      "complete": true,
+      "workReceipts": [
+        {
+          "workHash": "fae8c3ab183ee4fc2136375a97e83c1a34d5c2ab08123839bec3ad160f337e4d",
+          "findings": [
+            {
+              "variantId": "known_number",
+              "path": "userState",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "known_number",
+              "path": "userState.facts.terminal",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "known_number",
+              "path": "behaviorPolicy",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "known_number",
+              "path": "environmentFixture",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "known_number",
+              "path": "evaluationSpec.successCriteria",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "known_number",
+              "path": "businessScenarioId",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            }
+          ]
+        },
+        {
+          "workHash": "4402a1db27dff66b3080f6c85a7ed0c8e2a665028cbd3902c0bc3e5bc37a323b",
+          "findings": [
+            {
+              "variantId": "known_number",
+              "path": "evaluationSpec.checkpoints.ask_once",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "known_number",
+              "path": "evaluationSpec.checkpoints.refund_explanation",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            }
+          ]
+        },
+        {
+          "workHash": "f1f60934dd3dd96919e0ebd5bc0847957996a0b4d2b45f2e602ebedd71046f09",
+          "findings": [
+            {
+              "variantId": "late_number",
+              "path": "userState",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "late_number",
+              "path": "userState.facts.terminal",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "late_number",
+              "path": "behaviorPolicy",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "late_number",
+              "path": "environmentFixture",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "late_number",
+              "path": "sourceCoverage",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "late_number",
+              "path": "evaluationSpec.successCriteria",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            }
+          ]
+        },
+        {
+          "workHash": "1d3c01d7815330d90dcfb824b5b49a54b2f6f50aafc3e70ee182f5db28007dcb",
+          "findings": [
+            {
+              "variantId": "late_number",
+              "path": "businessScenarioId",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "late_number",
+              "path": "evaluationSpec.checkpoints.ask_once",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "late_number",
+              "path": "evaluationSpec.checkpoints.refund_explanation",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            }
+          ]
+        },
+        {
+          "workHash": "bc11d58cea80b1ce8dfc40c44d41d972c5bb4bb3d685d4cc5b534d5cc8e5b158",
+          "findings": [
+            {
+              "variantId": "known_number",
+              "path": "businessScenarioId",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "known_number",
+              "path": "duplicates",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "late_number",
+              "path": "businessScenarioId",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            },
+            {
+              "variantId": "late_number",
+              "path": "duplicates",
+              "status": "ready",
+              "reason": "Проверка заранее заданного учебного примера; не модельная оценка"
+            }
+          ]
+        }
+      ]
+    },
+    "acceptance": {
+      "revision": 24,
+      "libraryHash": "b2254009ad9db8de8c311ae31e31a046ead38287f08bf7487566538ec718ecd1",
+      "variantIds": [
+        "known_number",
+        "late_number"
+      ],
+      "snapshotHash": "b32e8adec9ff16c0ae3338560dc3e95813b6cf28c2b7ff8c5bb3edf801970874"
+    }
+  },
+  "originalImport": {
+    "id": "import_ef149ee8d822a3c4c21495a62088872b",
+    "contentHash": "ef149ee8d822a3c4c21495a62088872bad59acf52a21e2c6a7cb4bb58c3d3eee"
+  },
+  "preparationProgress": {
+    "protocol": "chronological-scenarios-v1",
+    "processed": [
+      "known",
+      "late"
+    ],
+    "pending": [],
+    "excluded": [],
+    "status": "complete",
+    "checkpointVersion": 1,
+    "requestedCount": 0,
+    "inputHash": "49d8c6f7d7981cec0cf57e9d33fb60f34f3be8e6a956fcaa8642908bfa342de5",
+    "groundingComplete": true,
+    "elapsedMs": 1181
+  },
+  "schemaVersion": "1",
+  "id": "852202d0-136a-4682-bc5f-f96513f0dd88",
+  "task": "Проверка возвратов: два вымышленных диалога",
+  "mode": "live",
+  "createdAt": "2026-09-23T09:41:46.749Z",
+  "updatedAt": "2026-09-23T09:41:48.375Z",
+  "workflow": "evaluate",
+  "phase": "results_review",
+  "message": "Диалоги и оценки готовы. Разберите провалы и проверьте поведение симулятора, прежде чем принимать результат.",
+  "sources": [
+    {
+      "id": "source-1",
+      "name": "Учебное правило владельца",
+      "content": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+      "hash": "fc0f08780143051c1f7456516e09c78d2dde624ba761e3d37304b891e772249c"
+    }
+  ],
+  "settings": {
+    "provider": "agent-lab-test",
+    "model": "test-model",
+    "judge": {
+      "provider": "agent-lab-test",
+      "model": "test-model"
+    },
+    "repeats": 2,
+    "maxIterations": 2,
+    "maxTurns": 3,
+    "maxCalls": 60,
+    "timeoutMs": 60000,
+    "maxDurationMs": 300000,
+    "userModes": [
+      "reactive"
+    ],
+    "roles": {}
+  },
+  "target": {
+    "kind": "http",
+    "url": "http://127.0.0.1:47801/",
+    "headersEnv": {},
+    "timeoutMs": 60000
+  },
+  "requirements": [
+    {
+      "id": "refund_rule",
+      "text": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+      "sourceId": "source-1",
+      "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+      "critical": true
+    }
+  ],
+  "questions": [],
+  "scenarios": [
+    {
+      "id": "known_number",
+      "familyId": "business_e9d704f8c773032147a3d9c7",
+      "title": "Номер уже в первой реплике",
+      "requirementIds": [
+        "refund_rule"
+      ],
+      "provenance": "production",
+      "tier": "regression",
+      "user": {
+        "goal": "Получить инструкцию по возврату",
+        "facts": "Номер терминала: 1234",
+        "behavior": "Используйте только известные факты. Неизвестные данные: не указаны. Предел повторов: 1. После первого ответа: если есть инструкция, цель достигнута; если агент повторно просит уже указанный номер или не помогает, пользователь прекращает попытку без достижения цели: Завершить разговор",
+        "opening": "Номер терминала: 1234. Помогите с возвратом.",
+        "maxFollowUps": 1,
+        "knows": [
+          "Номер терминала: 1234"
+        ],
+        "cannotKnow": [],
+        "answers": []
+      },
+      "initialState": {
+        "records": {},
+        "writableFields": [],
+        "transientFailures": 0
+      },
+      "execution": {
+        "protocol": "controlled-user-v1",
+        "checkpointContext": "observed-tools-v1",
+        "checkpointProtocol": "checkpoints-v1",
+        "controllerHash": "022c984d66af960b9d39b2d973744b02d325cc3289380afd95143121401759f7",
+        "checkpointHash": "0d2c9ab3d4b339529f5419ebc54be102ac5300a6fc5dc6c20bb0554fd445e131",
+        "userView": {
+          "goal": "Получить инструкцию по возврату",
+          "opening": "Номер терминала: 1234. Помогите с возвратом.",
+          "policy": {
+            "version": 1,
+            "initialState": "waiting",
+            "states": [
+              "waiting",
+              "done"
+            ],
+            "terminalStates": [
+              "done"
+            ],
+            "maxFollowUps": 1,
+            "repetitionLimit": 1,
+            "actions": [
+              {
+                "id": "finish",
+                "kind": "finish",
+                "factIds": []
+              }
+            ],
+            "transitions": [
+              {
+                "from": "waiting",
+                "to": "done",
+                "actionId": "finish",
+                "when": "После первого ответа: если есть инструкция, цель достигнута; если агент повторно просит уже указанный номер или не помогает, пользователь прекращает попытку без достижения цели"
+              }
+            ]
+          },
+          "facts": [
+            {
+              "id": "terminal",
+              "statement": "Номер терминала: 1234",
+              "value": "1234"
+            }
+          ],
+          "missing": []
+        },
+        "environmentView": {
+          "mode": "prompt"
+        },
+        "evaluatorView": {
+          "checkpoints": [
+            {
+              "id": "ask_once",
+              "requirementId": "refund_rule",
+              "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "applicability": "Вариант обращения за возвратом с номером в первой реплике или раскрываемым по просьбе",
+              "observation": "reply",
+              "role": "required",
+              "rule": "Если номер уже сообщён, не запрашивать его повторно независимо от формулировки вопроса. Если в первой реплике номера нет, запросить его до инструкции."
+            },
+            {
+              "id": "refund_explanation",
+              "requirementId": "refund_rule",
+              "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "applicability": "Пользователь обратился за возвратом и сообщил номер терминала",
+              "observation": "reply",
+              "role": "required",
+              "rule": "Объяснить пользователю, как оформить возврат. Один запрос номера, подтверждение получения номера или обещание помочь без инструкции не выполняют требование."
+            }
+          ],
+          "requirements": [
+            {
+              "id": "refund_rule",
+              "text": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "sourceId": "source-1",
+              "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "critical": true
+            }
+          ]
+        }
+      },
+      "checks": [],
+      "goalObservation": "reply",
+      "successCriteria": "Номер запрошен только до его раскрытия; после получения номера агент объяснил, как оформить возврат",
+      "metrics": [
+        {
+          "id": "library_required",
+          "name": "Обязательные контрольные точки",
+          "subject": "agent",
+          "description": "Если номер уже сообщён, не запрашивать его повторно независимо от формулировки вопроса. Если в первой реплике номера нет, запросить его до инструкции.\nОбъяснить пользователю, как оформить возврат. Один запрос номера, подтверждение получения номера или обещание помочь без инструкции не выполняют требование.",
+          "passCriteria": "Вариант обращения за возвратом с номером в первой реплике или раскрываемым по просьбе: Если номер уже сообщён, не запрашивать его повторно независимо от формулировки вопроса. Если в первой реплике номера нет, запросить его до инструкции.\nПользователь обратился за возвратом и сообщил номер терминала: Объяснить пользователю, как оформить возврат. Один запрос номера, подтверждение получения номера или обещание помочь без инструкции не выполняют требование.",
+          "failCriteria": "Наблюдаемые доказательства подтверждают нарушение хотя бы одной применимой обязательной контрольной точки."
+        }
+      ],
+      "split": "dev"
+    },
+    {
+      "id": "late_number",
+      "familyId": "business_e9d704f8c773032147a3d9c7",
+      "title": "Номер раскрывается по просьбе",
+      "requirementIds": [
+        "refund_rule"
+      ],
+      "provenance": "production",
+      "tier": "regression",
+      "user": {
+        "goal": "Получить инструкцию по возврату",
+        "facts": "Номер терминала: 5678",
+        "behavior": "Используйте только известные факты. Неизвестные данные: не указаны. Предел повторов: 1. Агент просит номер терминала, ещё не сообщённый в этом разговоре: Ответить известными фактами (Номер терминала: 5678); Агент не просит номер: дал инструкцию либо ответил иначе; пользователь завершает попытку: Завершить разговор; После ответа на сообщённый номер: есть инструкция либо пользователь прекращает неудачную попытку; повторять номер не будет: Завершить разговор",
+        "opening": "Помогите с возвратом.",
+        "maxFollowUps": 1,
+        "knows": [
+          "Номер терминала: 5678"
+        ],
+        "cannotKnow": [],
+        "answers": []
+      },
+      "initialState": {
+        "records": {},
+        "writableFields": [],
+        "transientFailures": 0
+      },
+      "execution": {
+        "protocol": "controlled-user-v1",
+        "checkpointContext": "observed-tools-v1",
+        "checkpointProtocol": "checkpoints-v1",
+        "controllerHash": "022c984d66af960b9d39b2d973744b02d325cc3289380afd95143121401759f7",
+        "checkpointHash": "0d2c9ab3d4b339529f5419ebc54be102ac5300a6fc5dc6c20bb0554fd445e131",
+        "userView": {
+          "goal": "Получить инструкцию по возврату",
+          "opening": "Помогите с возвратом.",
+          "policy": {
+            "version": 1,
+            "initialState": "waiting",
+            "states": [
+              "waiting",
+              "disclosed",
+              "done"
+            ],
+            "terminalStates": [
+              "done"
+            ],
+            "maxFollowUps": 1,
+            "repetitionLimit": 1,
+            "actions": [
+              {
+                "id": "disclose",
+                "kind": "answer",
+                "factIds": [
+                  "terminal"
+                ],
+                "ifAsked": "Агент просит номер терминала"
+              },
+              {
+                "id": "finish",
+                "kind": "finish",
+                "factIds": []
+              }
+            ],
+            "transitions": [
+              {
+                "from": "waiting",
+                "to": "disclosed",
+                "actionId": "disclose",
+                "when": "Агент просит номер терминала, ещё не сообщённый в этом разговоре"
+              },
+              {
+                "from": "waiting",
+                "to": "done",
+                "actionId": "finish",
+                "when": "Агент не просит номер: дал инструкцию либо ответил иначе; пользователь завершает попытку"
+              },
+              {
+                "from": "disclosed",
+                "to": "done",
+                "actionId": "finish",
+                "when": "После ответа на сообщённый номер: есть инструкция либо пользователь прекращает неудачную попытку; повторять номер не будет"
+              }
+            ]
+          },
+          "facts": [
+            {
+              "id": "terminal",
+              "statement": "Номер терминала: 5678",
+              "value": "5678"
+            }
+          ],
+          "missing": []
+        },
+        "environmentView": {
+          "mode": "prompt"
+        },
+        "evaluatorView": {
+          "checkpoints": [
+            {
+              "id": "ask_once",
+              "requirementId": "refund_rule",
+              "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "applicability": "Вариант обращения за возвратом с номером в первой реплике или раскрываемым по просьбе",
+              "observation": "reply",
+              "role": "required",
+              "rule": "Если номер уже сообщён, не запрашивать его повторно независимо от формулировки вопроса. Если в первой реплике номера нет, запросить его до инструкции."
+            },
+            {
+              "id": "refund_explanation",
+              "requirementId": "refund_rule",
+              "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "applicability": "Пользователь обратился за возвратом и сообщил номер терминала",
+              "observation": "reply",
+              "role": "required",
+              "rule": "Объяснить пользователю, как оформить возврат. Один запрос номера, подтверждение получения номера или обещание помочь без инструкции не выполняют требование."
+            }
+          ],
+          "requirements": [
+            {
+              "id": "refund_rule",
+              "text": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "sourceId": "source-1",
+              "quote": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+              "critical": true
+            }
+          ]
+        }
+      },
+      "checks": [],
+      "goalObservation": "reply",
+      "successCriteria": "Номер запрошен только до его раскрытия; после получения номера агент объяснил, как оформить возврат",
+      "metrics": [
+        {
+          "id": "library_required",
+          "name": "Обязательные контрольные точки",
+          "subject": "agent",
+          "description": "Если номер уже сообщён, не запрашивать его повторно независимо от формулировки вопроса. Если в первой реплике номера нет, запросить его до инструкции.\nОбъяснить пользователю, как оформить возврат. Один запрос номера, подтверждение получения номера или обещание помочь без инструкции не выполняют требование.",
+          "passCriteria": "Вариант обращения за возвратом с номером в первой реплике или раскрываемым по просьбе: Если номер уже сообщён, не запрашивать его повторно независимо от формулировки вопроса. Если в первой реплике номера нет, запросить его до инструкции.\nПользователь обратился за возвратом и сообщил номер терминала: Объяснить пользователю, как оформить возврат. Один запрос номера, подтверждение получения номера или обещание помочь без инструкции не выполняют требование.",
+          "failCriteria": "Наблюдаемые доказательства подтверждают нарушение хотя бы одной применимой обязательной контрольной точки."
+        }
+      ],
+      "split": "dev"
+    }
+  ],
+  "goldenCases": [],
+  "dialogues": [
+    {
+      "id": "known",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Номер терминала: 1234. Помогите с возвратом."
+        },
+        {
+          "role": "assistant",
+          "content": "Уточните номер терминала."
+        }
+      ],
+      "outcome": "unknown"
+    },
+    {
+      "id": "late",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Помогите с возвратом."
+        },
+        {
+          "role": "assistant",
+          "content": "Уточните номер терминала."
+        },
+        {
+          "role": "user",
+          "content": "Номер терминала: 5678"
+        }
+      ],
+      "outcome": "unknown"
+    }
+  ],
+  "profiles": [],
+  "notes": "",
+  "revisions": [
+    {
+      "id": "9a09e13e0b0fd1602d98f7e6db6d4444697c9468438e3c4d70dc78e6a6b9d0cd",
+      "parentId": null,
+      "spec": {
+        "name": "Учебный агент возвратов",
+        "instructions": "Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.",
+        "tools": []
+      },
+      "hypothesis": "Конфигурация агента для библиотеки сценариев.",
+      "createdAt": "2026-09-23T09:41:46.814Z"
+    }
+  ],
+  "selectedRevisionId": "9a09e13e0b0fd1602d98f7e6db6d4444697c9468438e3c4d70dc78e6a6b9d0cd",
+  "manifestHash": "7f020ff558503ff3feba88fd7d6ab0177dac3e2b47b18c60fafbaecd2c43bf0b",
+  "reviewedAt": "2026-09-23T09:41:48.060Z",
+  "reviewMode": "automated",
+  "controlConsumedAt": null,
+  "acceptedDraftHash": "3cbe89d4c9e0daae9b594afd7e264b5160ec0dbd0252af8b9fa5861dcddc5ed4",
+  "acceptedTests": [
+    {
+      "testId": "bafc6ee8-1396-4538-a7c9-c752a7f9e75e",
+      "scenarioId": "known_number",
+      "definitionHash": "566cdab9ada4cc47651c5d89ec76867feacb98e2827b0743268550b34a7b7823",
+      "acceptedAt": "2026-09-23T09:41:48.000Z"
+    },
+    {
+      "testId": "18176289-eec8-47f9-a6fb-f33e2eb21d4e",
+      "scenarioId": "late_number",
+      "definitionHash": "132dbc60950b79cf464db659faea76d177ab81566ba60c9dbd9269892c459865",
+      "acceptedAt": "2026-09-23T09:41:48.000Z"
+    }
+  ],
+  "trials": [
+    {
+      "checkpoints": [
+        {
+          "checkpointId": "ask_once",
+          "result": "fail",
+          "evidence": [
+            1
+          ],
+          "rationale": "Учебная проверка: номер запрошен=true, повтор после раскрытия=true",
+          "requirementId": "refund_rule",
+          "role": "required",
+          "observation": "reply"
+        },
+        {
+          "checkpointId": "refund_explanation",
+          "result": "fail",
+          "evidence": [
+            1
+          ],
+          "rationale": "Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок",
+          "requirementId": "refund_rule",
+          "role": "required",
+          "observation": "reply"
+        }
+      ],
+      "checkpointReceipt": {
+        "protocolHash": "0d2c9ab3d4b339529f5419ebc54be102ac5300a6fc5dc6c20bb0554fd445e131",
+        "inputHash": "4a9fa3bc6ccd52c4715dadf78b9d5987c4585f7ce8d49d29f92ccea17377b722",
+        "resultHash": "a13628b5cc1e7cd407b7d8d992c6453aed5f9d1b5a1f5ee023c30989761e647e",
+        "decisionHash": "cff53dcb602f3746a3632fa30a166305a71062e8e759e88f2c5d933d5011413d",
+        "decisions": [
+          {
+            "checkpointId": "ask_once",
+            "result": "fail",
+            "evidence": [
+              1
+            ],
+            "rationale": "Учебная проверка: номер запрошен=true, повтор после раскрытия=true"
+          },
+          {
+            "checkpointId": "refund_explanation",
+            "result": "fail",
+            "evidence": [
+              1
+            ],
+            "rationale": "Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок"
+          }
+        ]
+      },
+      "id": "91365a86-1805-40d8-ba8e-1bad70ebda07",
+      "revisionId": "9a09e13e0b0fd1602d98f7e6db6d4444697c9468438e3c4d70dc78e6a6b9d0cd",
+      "scenarioId": "known_number",
+      "familyId": "business_e9d704f8c773032147a3d9c7",
+      "repeat": 0,
+      "userMode": "reactive",
+      "split": "dev",
+      "manifestHash": "7f020ff558503ff3feba88fd7d6ab0177dac3e2b47b18c60fafbaecd2c43bf0b",
+      "outcome": "ungraded",
+      "reason": "Диалог дошёл до конца, но объективных проверок в карточке нет: оценки по рубрикам считаются отдельно. Состояние сообщил сам агент, доверенный код его не наблюдал.",
+      "checks": [],
+      "simulatorChecks": [],
+      "events": [
+        {
+          "seq": 0,
+          "type": "user",
+          "text": "Номер терминала: 1234. Помогите с возвратом."
+        },
+        {
+          "seq": 1,
+          "type": "assistant",
+          "text": "Уточните номер терминала."
+        },
+        {
+          "seq": 2,
+          "type": "simulator",
+          "result": {
+            "protocol": "controlled-user-v1",
+            "attempt": 0,
+            "decision": {
+              "actionId": "finish",
+              "factIds": []
+            },
+            "accepted": true,
+            "from": "waiting",
+            "to": "done"
+          }
+        }
+      ],
+      "initialState": {
+        "records": {},
+        "writableFields": [],
+        "transientFailures": 0
+      },
+      "finalState": {
+        "records": {},
+        "writableFields": [],
+        "transientFailures": 0
+      },
+      "usage": {
+        "calls": 2,
+        "inputTokens": 26,
+        "outputTokens": 10,
+        "costUsd": 0.064
+      },
+      "elapsedMs": 79,
+      "assessments": [
+        {
+          "metricId": "library_required",
+          "result": "fail",
+          "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. Агент повторно запросил номер терминала, который клиент уже назвал.",
+          "evidence": [
+            1
+          ],
+          "citations": [
+            {
+              "seq": 1,
+              "quote": "Уточните номер терминала."
+            }
+          ]
+        }
+      ],
+      "observation": {
+        "state": "reported",
+        "tools": "complete",
+        "resetConfirmed": true,
+        "version": "demo-baseline-v1"
+      },
+      "judgeReceipt": {
+        "protocolHash": "d93e715d48996c27e8981ecfb3737db67ad270e814932e676260dedc66261b2b",
+        "inputHash": "d5d9284077e0c73a7d3278104b7cdb61260258145b72163b8fca482c6c06f279",
+        "provider": "agent-lab-test",
+        "model": "test-model",
+        "configurationHash": "126d0a163cf71d1017116c1096c42c16832ea7c77467f04ef06ee82a30b8a4be",
+        "transport": {
+          "api": "openai-completions",
+          "structured": false
+        },
+        "auditHash": "f15f3a0925f73f394101cfa3dd9678dcd6da9125f764582fc7af207d3bedd0d0",
+        "votes": [
+          {
+            "metricId": "library_required",
+            "result": "fail"
+          },
+          {
+            "metricId": "library_required",
+            "result": "fail"
+          }
+        ],
+        "notApplicable": [],
+        "complete": true
+      }
+    },
+    {
+      "checkpoints": [
+        {
+          "checkpointId": "ask_once",
+          "result": "fail",
+          "evidence": [
+            1
+          ],
+          "rationale": "Учебная проверка: номер запрошен=true, повтор после раскрытия=true",
+          "requirementId": "refund_rule",
+          "role": "required",
+          "observation": "reply"
+        },
+        {
+          "checkpointId": "refund_explanation",
+          "result": "fail",
+          "evidence": [
+            1
+          ],
+          "rationale": "Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок",
+          "requirementId": "refund_rule",
+          "role": "required",
+          "observation": "reply"
+        }
+      ],
+      "checkpointReceipt": {
+        "protocolHash": "0d2c9ab3d4b339529f5419ebc54be102ac5300a6fc5dc6c20bb0554fd445e131",
+        "inputHash": "4a9fa3bc6ccd52c4715dadf78b9d5987c4585f7ce8d49d29f92ccea17377b722",
+        "resultHash": "a13628b5cc1e7cd407b7d8d992c6453aed5f9d1b5a1f5ee023c30989761e647e",
+        "decisionHash": "cff53dcb602f3746a3632fa30a166305a71062e8e759e88f2c5d933d5011413d",
+        "decisions": [
+          {
+            "checkpointId": "ask_once",
+            "result": "fail",
+            "evidence": [
+              1
+            ],
+            "rationale": "Учебная проверка: номер запрошен=true, повтор после раскрытия=true"
+          },
+          {
+            "checkpointId": "refund_explanation",
+            "result": "fail",
+            "evidence": [
+              1
+            ],
+            "rationale": "Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок"
+          }
+        ]
+      },
+      "id": "e02eff86-672b-414c-a8e7-85ff5097ff78",
+      "revisionId": "9a09e13e0b0fd1602d98f7e6db6d4444697c9468438e3c4d70dc78e6a6b9d0cd",
+      "scenarioId": "known_number",
+      "familyId": "business_e9d704f8c773032147a3d9c7",
+      "repeat": 1,
+      "userMode": "reactive",
+      "split": "dev",
+      "manifestHash": "7f020ff558503ff3feba88fd7d6ab0177dac3e2b47b18c60fafbaecd2c43bf0b",
+      "outcome": "ungraded",
+      "reason": "Диалог дошёл до конца, но объективных проверок в карточке нет: оценки по рубрикам считаются отдельно. Состояние сообщил сам агент, доверенный код его не наблюдал.",
+      "checks": [],
+      "simulatorChecks": [],
+      "events": [
+        {
+          "seq": 0,
+          "type": "user",
+          "text": "Номер терминала: 1234. Помогите с возвратом."
+        },
+        {
+          "seq": 1,
+          "type": "assistant",
+          "text": "Уточните номер терминала."
+        },
+        {
+          "seq": 2,
+          "type": "simulator",
+          "result": {
+            "protocol": "controlled-user-v1",
+            "attempt": 0,
+            "decision": {
+              "actionId": "finish",
+              "factIds": []
+            },
+            "accepted": true,
+            "from": "waiting",
+            "to": "done"
+          }
+        }
+      ],
+      "initialState": {
+        "records": {},
+        "writableFields": [],
+        "transientFailures": 0
+      },
+      "finalState": {
+        "records": {},
+        "writableFields": [],
+        "transientFailures": 0
+      },
+      "usage": {
+        "calls": 2,
+        "inputTokens": 26,
+        "outputTokens": 10,
+        "costUsd": 0.064
+      },
+      "elapsedMs": 47,
+      "assessments": [
+        {
+          "metricId": "library_required",
+          "result": "fail",
+          "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. Агент повторно запросил номер терминала, который клиент уже назвал.",
+          "evidence": [
+            1
+          ],
+          "citations": [
+            {
+              "seq": 1,
+              "quote": "Уточните номер терминала."
+            }
+          ]
+        }
+      ],
+      "observation": {
+        "state": "reported",
+        "tools": "complete",
+        "resetConfirmed": true,
+        "version": "demo-baseline-v1"
+      },
+      "judgeReceipt": {
+        "protocolHash": "d93e715d48996c27e8981ecfb3737db67ad270e814932e676260dedc66261b2b",
+        "inputHash": "d5d9284077e0c73a7d3278104b7cdb61260258145b72163b8fca482c6c06f279",
+        "provider": "agent-lab-test",
+        "model": "test-model",
+        "configurationHash": "126d0a163cf71d1017116c1096c42c16832ea7c77467f04ef06ee82a30b8a4be",
+        "transport": {
+          "api": "openai-completions",
+          "structured": false
+        },
+        "auditHash": "d9a62d7df558cfb0627ecc401ea42f199c055d87db244a37de8f0786569b79f8",
+        "votes": [
+          {
+            "metricId": "library_required",
+            "result": "fail"
+          },
+          {
+            "metricId": "library_required",
+            "result": "fail"
+          }
+        ],
+        "notApplicable": [],
+        "complete": true
+      }
+    },
+    {
+      "checkpoints": [
+        {
+          "checkpointId": "ask_once",
+          "result": "pass",
+          "evidence": [
+            1,
+            4
+          ],
+          "rationale": "Учебная проверка: номер запрошен=true, повтор после раскрытия=false",
+          "requirementId": "refund_rule",
+          "role": "required",
+          "observation": "reply"
+        },
+        {
+          "checkpointId": "refund_explanation",
+          "result": "pass",
+          "evidence": [
+            1,
+            4
+          ],
+          "rationale": "Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок",
+          "requirementId": "refund_rule",
+          "role": "required",
+          "observation": "reply"
+        }
+      ],
+      "checkpointReceipt": {
+        "protocolHash": "0d2c9ab3d4b339529f5419ebc54be102ac5300a6fc5dc6c20bb0554fd445e131",
+        "inputHash": "3d72caeb9d7b43f67793fcd1169fedd82f726a70dc4d4ff2d7a909e58b530b57",
+        "resultHash": "01312ad09826a3fa5213dde5d2fe1ca2c813b54f4c7d03d40421193ce68f0a74",
+        "decisionHash": "a48345420c0c5e7c289f2d42edb91e6c51f8a73e90d320110bbc24b31ed60dda",
+        "decisions": [
+          {
+            "checkpointId": "ask_once",
+            "result": "pass",
+            "evidence": [
+              1,
+              4
+            ],
+            "rationale": "Учебная проверка: номер запрошен=true, повтор после раскрытия=false"
+          },
+          {
+            "checkpointId": "refund_explanation",
+            "result": "pass",
+            "evidence": [
+              1,
+              4
+            ],
+            "rationale": "Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок"
+          }
+        ]
+      },
+      "id": "ed9dac4e-f2a5-449a-a526-94ad96586f12",
+      "revisionId": "9a09e13e0b0fd1602d98f7e6db6d4444697c9468438e3c4d70dc78e6a6b9d0cd",
+      "scenarioId": "late_number",
+      "familyId": "business_e9d704f8c773032147a3d9c7",
+      "repeat": 0,
+      "userMode": "reactive",
+      "split": "dev",
+      "manifestHash": "7f020ff558503ff3feba88fd7d6ab0177dac3e2b47b18c60fafbaecd2c43bf0b",
+      "outcome": "ungraded",
+      "reason": "Диалог дошёл до конца, но объективных проверок в карточке нет: оценки по рубрикам считаются отдельно. Состояние сообщил сам агент, доверенный код его не наблюдал.",
+      "checks": [],
+      "simulatorChecks": [
+        {
+          "id": "simulator_fabrication",
+          "description": "Пользователь не называет значения, которых нет ни в карточке, ни в предыдущих репликах (эвристика по токенам)",
+          "passed": true,
+          "evidence": "Все значения в репликах пользователя прослеживаются к карточке или предыдущим репликам.",
+          "heuristic": true
+        },
+        {
+          "id": "simulator_loop",
+          "description": "Повтор пары ответ агента → реплика пользователя (эвристика)",
+          "passed": true,
+          "evidence": "Повторов реплик нет.",
+          "heuristic": true
+        }
+      ],
+      "events": [
+        {
+          "seq": 0,
+          "type": "user",
+          "text": "Помогите с возвратом."
+        },
+        {
+          "seq": 1,
+          "type": "assistant",
+          "text": "Уточните номер терминала."
+        },
+        {
+          "seq": 2,
+          "type": "simulator",
+          "result": {
+            "protocol": "controlled-user-v1",
+            "attempt": 0,
+            "decision": {
+              "actionId": "disclose",
+              "factIds": [
+                "terminal"
+              ]
+            },
+            "accepted": true,
+            "from": "waiting",
+            "to": "disclosed"
+          }
+        },
+        {
+          "seq": 3,
+          "type": "user",
+          "text": "Номер терминала: 5678"
+        },
+        {
+          "seq": 4,
+          "type": "assistant",
+          "text": "Возврат возможен. Подайте заявление в поддержку."
+        },
+        {
+          "seq": 5,
+          "type": "simulator",
+          "result": {
+            "protocol": "controlled-user-v1",
+            "attempt": 0,
+            "decision": {
+              "actionId": "finish",
+              "factIds": []
+            },
+            "accepted": true,
+            "from": "disclosed",
+            "to": "done"
+          }
+        }
+      ],
+      "initialState": {
+        "records": {},
+        "writableFields": [],
+        "transientFailures": 0
+      },
+      "finalState": {
+        "records": {},
+        "writableFields": [],
+        "transientFailures": 0
+      },
+      "usage": {
+        "calls": 2,
+        "inputTokens": 26,
+        "outputTokens": 10,
+        "costUsd": 0.064
+      },
+      "elapsedMs": 54,
+      "assessments": [
+        {
+          "metricId": "library_required",
+          "result": "pass",
+          "rationale": "Совпало 2/2 оценок этой рубрики в свежих сессиях; это не проверка правильности. Номер запрошен один раз, возврат объяснён.",
+          "evidence": [
+            4
+          ],
+          "citations": [
+            {
+              "seq": 4,
+              "quote": "Возврат возможен. Подайте заявление в поддержку."
+            }
+          ]
+        }
+      ],
+      "observation": {
+        "state": "reported",
+        "tools": "complete",
+        "resetConfirmed": true,
+        "version": "demo-baseline-v1"
+      },
+      "judgeReceipt": {
+        "protocolHash": "d93e715d48996c27e8981ecfb3737db67ad270e814932e676260dedc66261b2b",
+        "inputHash": "3ffbe7afb4fd357f69b9f3f517af6c88a27de14ff0b73ebe8465bb9b0eec051c",
+        "provider": "agent-lab-test",
+        "model": "test-model",
+        "configurationHash": "126d0a163cf71d1017116c1096c42c16832ea7c77467f04ef06ee82a30b8a4be",
+        "transport": {
+          "api": "openai-completions",
+          "structured": false
+        },
+        "auditHash": "caa0fb47d288a46c7e59479ff81696946ed770d73ec5d281adfb33d631f685a1",
+        "votes": [
+          {
+            "metricId": "library_required",
+            "result": "pass"
+          },
+          {
+            "metricId": "library_required",
+            "result": "pass"
+          }
+        ],
+        "notApplicable": [],
+        "complete": true
+      }
+    },
+    {
+      "checkpoints": [
+        {
+          "checkpointId": "ask_once",
+          "result": "pass",
+          "evidence": [
+            1,
+            4
+          ],
+          "rationale": "Учебная проверка: номер запрошен=true, повтор после раскрытия=false",
+          "requirementId": "refund_rule",
+          "role": "required",
+          "observation": "reply"
+        },
+        {
+          "checkpointId": "refund_explanation",
+          "result": "pass",
+          "evidence": [
+            1,
+            4
+          ],
+          "rationale": "Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок",
+          "requirementId": "refund_rule",
+          "role": "required",
+          "observation": "reply"
+        }
+      ],
+      "checkpointReceipt": {
+        "protocolHash": "0d2c9ab3d4b339529f5419ebc54be102ac5300a6fc5dc6c20bb0554fd445e131",
+        "inputHash": "3d72caeb9d7b43f67793fcd1169fedd82f726a70dc4d4ff2d7a909e58b530b57",
+        "resultHash": "01312ad09826a3fa5213dde5d2fe1ca2c813b54f4c7d03d40421193ce68f0a74",
+        "decisionHash": "a48345420c0c5e7c289f2d42edb91e6c51f8a73e90d320110bbc24b31ed60dda",
+        "decisions": [
+          {
+            "checkpointId": "ask_once",
+            "result": "pass",
+            "evidence": [
+              1,
+              4
+            ],
+            "rationale": "Учебная проверка: номер запрошен=true, повтор после раскрытия=false"
+          },
+          {
+            "checkpointId": "refund_explanation",
+            "result": "pass",
+            "evidence": [
+              1,
+              4
+            ],
+            "rationale": "Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок"
+          }
+        ]
+      },
+      "id": "23834a55-8cf2-41c8-9775-2dba07fb01af",
+      "revisionId": "9a09e13e0b0fd1602d98f7e6db6d4444697c9468438e3c4d70dc78e6a6b9d0cd",
+      "scenarioId": "late_number",
+      "familyId": "business_e9d704f8c773032147a3d9c7",
+      "repeat": 1,
+      "userMode": "reactive",
+      "split": "dev",
+      "manifestHash": "7f020ff558503ff3feba88fd7d6ab0177dac3e2b47b18c60fafbaecd2c43bf0b",
+      "outcome": "ungraded",
+      "reason": "Диалог дошёл до конца, но объективных проверок в карточке нет: оценки по рубрикам считаются отдельно. Состояние сообщил сам агент, доверенный код его не наблюдал.",
+      "checks": [],
+      "simulatorChecks": [
+        {
+          "id": "simulator_fabrication",
+          "description": "Пользователь не называет значения, которых нет ни в карточке, ни в предыдущих репликах (эвристика по токенам)",
+          "passed": true,
+          "evidence": "Все значения в репликах пользователя прослеживаются к карточке или предыдущим репликам.",
+          "heuristic": true
+        },
+        {
+          "id": "simulator_loop",
+          "description": "Повтор пары ответ агента → реплика пользователя (эвристика)",
+          "passed": true,
+          "evidence": "Повторов реплик нет.",
+          "heuristic": true
+        }
+      ],
+      "events": [
+        {
+          "seq": 0,
+          "type": "user",
+          "text": "Помогите с возвратом."
+        },
+        {
+          "seq": 1,
+          "type": "assistant",
+          "text": "Уточните номер терминала."
+        },
+        {
+          "seq": 2,
+          "type": "simulator",
+          "result": {
+            "protocol": "controlled-user-v1",
+            "attempt": 0,
+            "decision": {
+              "actionId": "disclose",
+              "factIds": [
+                "terminal"
+              ]
+            },
+            "accepted": true,
+            "from": "waiting",
+            "to": "disclosed"
+          }
+        },
+        {
+          "seq": 3,
+          "type": "user",
+          "text": "Номер терминала: 5678"
+        },
+        {
+          "seq": 4,
+          "type": "assistant",
+          "text": "Возврат возможен. Подайте заявление в поддержку."
+        },
+        {
+          "seq": 5,
+          "type": "simulator",
+          "result": {
+            "protocol": "controlled-user-v1",
+            "attempt": 0,
+            "decision": {
+              "actionId": "finish",
+              "factIds": []
+            },
+            "accepted": true,
+            "from": "disclosed",
+            "to": "done"
+          }
+        }
+      ],
+      "initialState": {
+        "records": {},
+        "writableFields": [],
+        "transientFailures": 0
+      },
+      "finalState": {
+        "records": {},
+        "writableFields": [],
+        "transientFailures": 0
+      },
+      "usage": {
+        "calls": 2,
+        "inputTokens": 26,
+        "outputTokens": 10,
+        "costUsd": 0.064
+      },
+      "elapsedMs": 52,
+      "assessments": [
+        {
+          "metricId": "library_required",
+          "result": "unknown",
+          "rationale": "Судья разошёлся на неизменном входе: pass / fail. Основания каждой оценки сохранены в judgeAudit.",
+          "evidence": [
+            4
+          ]
+        }
+      ],
+      "observation": {
+        "state": "reported",
+        "tools": "complete",
+        "resetConfirmed": true,
+        "version": "demo-baseline-v1"
+      },
+      "judgeReceipt": {
+        "protocolHash": "d93e715d48996c27e8981ecfb3737db67ad270e814932e676260dedc66261b2b",
+        "inputHash": "3ffbe7afb4fd357f69b9f3f517af6c88a27de14ff0b73ebe8465bb9b0eec051c",
+        "provider": "agent-lab-test",
+        "model": "test-model",
+        "configurationHash": "126d0a163cf71d1017116c1096c42c16832ea7c77467f04ef06ee82a30b8a4be",
+        "transport": {
+          "api": "openai-completions",
+          "structured": false
+        },
+        "auditHash": "327e8029475142f895ff872840cd649349ff4c7fdeb096e0483218dd25e63c56",
+        "votes": [
+          {
+            "metricId": "library_required",
+            "result": "pass"
+          },
+          {
+            "metricId": "library_required",
+            "result": "fail"
+          }
+        ],
+        "notApplicable": [],
+        "complete": true
+      }
+    }
+  ],
+  "comparisons": [],
+  "iterations": [],
+  "usage": {
+    "calls": 8,
+    "inputTokens": 104,
+    "outputTokens": 40,
+    "costUsd": 0.256
+  },
+  "error": null,
+  "limitations": [
+    "External agent state and tool events are reported by its adapter. Isolation and reset of external services are the responsibility of that adapter.",
+    "Scenario expectations are grounded automatically and should be spot-checked; text matching checks measure literal content, not semantic correctness.",
+    "Synthetic simulations do not establish performance with real users. Model rubric assessments are provisional; human review is reserved for disputes and calibration claims.",
+    "Model costs are observed usage estimates; unknown costs remain unknown. Call limits are not hard provider billing caps.",
+    "Generated scenario expectations were checked automatically, without human validation. Spot-check disputes; decisive automatic results remain usable as provisional evidence."
+  ],
+  "humanReviews": [],
+  "evaluatorVersion": "c479639b3a6afa634836782443afaa6ec9635ee3270a9e5d1912514e6e5805be",
+  "targetRelease": "demo-baseline-v1"
+}

@@ -5,6 +5,7 @@ import { LockedError } from '../src/errors.js';
 import type { Section } from './cards.ts';
 import type { Experiment } from '../src/contracts.js';
 import { libraryHash } from '../src/scenario-library.js';
+import { libraryV1Of } from '../src/card/legacy-v1.js';
 import { callText, renderFeedResult } from './render/feed.ts';
 import { renderAgentLabResult } from './render/verdict-block.ts';
 
@@ -70,7 +71,7 @@ export class NeedsOwner extends Error {
 /** The board passes stable identities and the viewed revision, not a second copy of editable state. */
 export function boardDiscussionContext(record: Experiment, section: Section, selectedIndex: number) {
   const library = record.librarySnapshot;
-  const variant = section === 'cards' ? library?.variants[selectedIndex] : undefined;
+  const variant = section === 'cards' ? libraryV1Of(record)?.variants[selectedIndex] : undefined;
   return { experimentId: record.id, phase: record.phase,
     ...(library ? { libraryId: library.id, expectedLibraryHash: libraryHash(library),
       ...(variant ? { variantId: variant.id, businessScenarioId: variant.businessScenarioId } : {}) }

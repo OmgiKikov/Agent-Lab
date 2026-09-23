@@ -1,16 +1,16 @@
 import type { Experiment } from '../src/contracts.js';
-import type { ScenarioLibrary, ScenarioVariant } from '../src/scenario-contracts.js';
+import type { LibraryV1, ScenarioVariant } from '../src/scenario-contracts.js';
 import { libraryHash } from '../src/scenario-library.js';
+import { libraryV1Of } from '../src/card/legacy-v1.js';
 import { semanticWorkStatus } from '../src/scenario-work.js';
 import { LibraryConflict } from '../src/errors.js';
 import type { FlowRow } from './flow.ts';
 
 const r = (text: string, color?: FlowRow['color'], bold = false): FlowRow => ({ text, color, bold });
 const status = (variant: ScenarioVariant) => variant.quality === 'ready' ? 'готов' : variant.quality === 'blocked' ? 'заблокирован' : 'требует решения';
-const libraryOf = (record: Experiment): ScenarioLibrary | undefined => record.librarySnapshot;
 const semanticCache = new Map<string, ReturnType<typeof semanticWorkStatus>>();
 
-function cachedSemanticWork(library: ScenarioLibrary) {
+function cachedSemanticWork(library: LibraryV1) {
   const key = `${library.id}/${library.revision}/${library.semanticAssessment?.contentHash ?? 'none'}/${library.semanticAssessment?.workReceipts?.length ?? 0}`;
   const cached = semanticCache.get(key);
   if (cached) return cached;
@@ -28,7 +28,7 @@ const actionLabel = (action: ScenarioVariant['behaviorPolicy']['actions'][number
 interface ScenarioEntry { id: string; index: number; text: string; businessScenarioId: string }
 
 export function scenarioEntries(record: Experiment): ScenarioEntry[] {
-  const library = libraryOf(record);
+  const library = libraryV1Of(record);
   if (!library) return record.scenarios.map((scenario, index) => ({ id: scenario.id, index, text: scenario.title, businessScenarioId: scenario.familyId }));
   return library.businessScenarios.flatMap(group => library.variants.filter(variant => variant.businessScenarioId === group.id).map(variant => ({
     id: variant.id, index: library.variants.indexOf(variant), businessScenarioId: group.id,
@@ -36,7 +36,7 @@ export function scenarioEntries(record: Experiment): ScenarioEntry[] {
   })));
 }
 
-function factOrigin(library: ScenarioLibrary, fact: ScenarioVariant['userState']['facts'][number]): string[] {
+function factOrigin(library: LibraryV1, fact: ScenarioVariant['userState']['facts'][number]): string[] {
   if (fact.origin.kind === 'owner') return [`Правка владельца ${fact.origin.editId}: «${fact.origin.text}»`];
   if (fact.origin.kind === 'synthetic') return [`Синтетическое допущение от ${fact.origin.parentVariantId}: ${fact.origin.operation} · ${fact.origin.reason}`];
   const origin = fact.origin;
@@ -47,12 +47,12 @@ function factOrigin(library: ScenarioLibrary, fact: ScenarioVariant['userState']
 }
 
 export function pendingLibrarySelection(record: Experiment, selected: string[]): boolean {
-  const accepted = record.librarySnapshot?.acceptance?.variantIds;
+  const accepted = libraryV1Of(record)?.acceptance?.variantIds;
   return !!accepted && (accepted.length !== selected.length || selected.some(id => !accepted.includes(id)));
 }
 
 export function scenarioRows(record: Experiment, variantId?: string, selectedVariantIds: string[] = []): FlowRow[] {
-  const library = libraryOf(record);
+  const library = libraryV1Of(record);
   if (!library) return [r('Сценарии из старой записи', 'accent', true), r('Эта запись использует прежние карточки; их можно читать и повторять без перезаписи.', 'muted')];
   const variant = library.variants.find(item => item.id === variantId) ?? library.variants[0];
   if (!variant) return [r('СЦЕНАРИИ', 'accent', true), r('В библиотеке пока нет вариантов.', 'muted')];
@@ -96,7 +96,7 @@ export function scenarioRows(record: Experiment, variantId?: string, selectedVar
 }
 
 export function logsRows(record: Experiment): FlowRow[] {
-  const library = libraryOf(record);
+  const library = libraryV1Of(record);
   if (!library) return [r('ЛОГИ', 'accent', true), r(record.dialogues.length ? `Диалогов в старой записи: ${record.dialogues.length}` : 'Запись создана без библиотеки логов.', 'muted')];
   const progress = record.preparationProgress;
   const accepted = library.imports.reduce((sum, batch) => sum + batch.dialogues.length, 0);
@@ -111,7 +111,7 @@ export function logsRows(record: Experiment): FlowRow[] {
   return rows;
 }
 
-function budgetRows(record: Experiment, library: ScenarioLibrary): FlowRow[] {
+function budgetRows(record: Experiment, library: LibraryV1): FlowRow[] {
   const remaining = Math.max(0, record.settings.maxCalls - record.usage.calls);
   let estimate = 0, total = 0, completed = 0, skipped = 0;
   try { const plan = cachedSemanticWork(library); estimate = plan.pendingJobs; total = plan.totalJobs; completed = plan.completedJobs; skipped = plan.skipped.length; } catch { skipped = 1; }
@@ -121,7 +121,7 @@ function budgetRows(record: Experiment, library: ScenarioLibrary): FlowRow[] {
 }
 
 export function runRows(record: Experiment, selectedVariantIds: string[] = []): FlowRow[] {
-  const library = libraryOf(record);
+  const library = libraryV1Of(record);
   if (!library) return [r('ПРОГОН', 'accent', true), r(`${record.scenarios.length} карточек · бюджет ${record.usage.calls}/${record.settings.maxCalls}`)];
   const accepted = library.acceptance;
   const pending = pendingLibrarySelection(record, selectedVariantIds);
@@ -137,7 +137,7 @@ export function runRows(record: Experiment, selectedVariantIds: string[] = []): 
 }
 
 export function scenarioLibrarySummary(record: Experiment, selectedVariantIds: string[] = []) {
-  const library = libraryOf(record);
+  const library = libraryV1Of(record);
   if (!library) return undefined;
   const quality = { ready: library.variants.filter(item => item.quality === 'ready').length,
     needsReview: library.variants.filter(item => item.quality === 'needs_review').length,

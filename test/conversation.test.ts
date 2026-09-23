@@ -13,9 +13,8 @@ import { draftHash, ExperimentLab } from '../src/experiment.js';
 import { recordSemanticAssessment, semanticPaths } from '../src/scenario-library.js';
 import { createInputSchema, type Experiment, type Runtime } from '../src/contracts.js';
 import { createDemoRuntime } from '../src/demo.js';
-import { acceptLibrary, compileLibrary, editLibrary, libraryHash, librarySnapshot, ownerFactEvidence, resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../src/scenario-library.js';
-import { scenarioLibrarySchema } from '../src/scenario-contracts.js';
-import { assertLibraryRun } from '../src/scenario-preparation.js';
+import { acceptLibrary, compileLibrary, editLibrary, libraryHash, librarySnapshot, verifyAcceptedRun, ownerFactEvidence, resolutionBusinessHash, resolutionHash, resolutionQuestionHash } from '../src/scenario-library.js';
+import { libraryV1Schema } from '../src/scenario-contracts.js';
 import { ExperimentStore } from '../src/store.js';
 import { demoEvaluateRecord, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 import { libraryFixture, coverageProposals as proposals, rawDialogues, requirements, sources } from './helpers/scenario-library.js';
@@ -1245,11 +1244,11 @@ test('legacy accepted owner decisions keep their snapshot and run identity; draf
     assert.equal(settled.library.ownerResolutions![0]!.businessHash, undefined, 'legacy receipt has its original shape');
     const accepted = await lab.acceptLibrary(fixture.id, libraryHash(settled.library), ['variant_2']);
     const encoded = JSON.stringify(accepted.library);
-    const restored = scenarioLibrarySchema.parse(JSON.parse(encoded));
+    const restored = libraryV1Schema.parse(JSON.parse(encoded));
     assert.equal(libraryHash(restored), libraryHash(accepted.library));
     assert.deepEqual(librarySnapshot(restored), librarySnapshot(accepted.library));
     assert.deepEqual(compileLibrary(restored), compileLibrary(accepted.library));
-    assertLibraryRun(JSON.parse(JSON.stringify(accepted.experiment)));
+    verifyAcceptedRun(JSON.parse(JSON.stringify(accepted.experiment)));
     const original = restored.businessScenarios[0]!;
     const split = editLibrary(restored, libraryHash(restored), { kind: 'split_business', businessScenarioId: original.id, variantIds: ['variant_1'], reason: 'New draft context',
       newBusiness: { key: 'other_context', title: 'Иные условия', goal: original.goal, conditions: ['Клиент отменил запрос'], requirementIds: original.requirementIds, grouping: { status: 'confirmed', reason: 'Owner requested context' } } });
@@ -1258,7 +1257,7 @@ test('legacy accepted owner decisions keep their snapshot and run identity; draf
     const checked = recordSemanticAssessment(merged, restored.semanticAssessment!.findings);
     assert.equal(checked.variants.find(card => card.id === 'variant_2')!.quality, 'needs_review', 'same card, rule and checker words with different group conditions need a new decision');
     assert.equal(JSON.stringify(accepted.library), encoded, 'accepted historical snapshot was not upgraded in place');
-    assertLibraryRun(accepted.experiment);
+    verifyAcceptedRun(accepted.experiment);
   } finally { await lab.close(); await fixture.cleanup(); }
 });
 

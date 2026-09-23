@@ -1,9 +1,7 @@
 import { z } from 'zod';
-import { identifierSchema as id, sha256Schema as hash } from './ids.js';
+import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from './ids.js';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, RECORD_REQUIREMENT_LIMIT } from './limits.js';
 
-const text = (max: number) => z.string().trim().min(1).max(max);
-const ids = (max: number) => z.array(id).max(max).refine(v => new Set(v).size === v.length, 'Duplicate identifiers');
 const json = z.json().refine(v => JSON.stringify(v).length <= 500_000, 'JSON exceeds 500000 characters');
 const timestamp = z.iso.datetime();
 
@@ -123,13 +121,17 @@ export const preparationProgressSchema = z.strictObject({
   sourceSelection: z.array(z.strictObject({ dialogueId: text(200), sourceIds: ids(40) })).max(300).optional(),
 });
 export type PreparationProgress = z.infer<typeof preparationProgressSchema>;
-export const scenarioLibrarySchema = z.strictObject({
+/** A library's materials and requirements; both library formats keep them in this shape. */
+export const librarySourcesSchema = z.array(z.strictObject({ id, name: text(180), content: text(MATERIAL_CHARS), hash: text(200), kind: z.enum(['knowledge', 'prompt']).optional() })).max(MATERIAL_LIMIT);
+// The record's requirements, field for field (contracts.ts requirementSchema, which this module cannot import).
+export const libraryRequirementsSchema = z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean(), observable: z.boolean().optional() })).max(RECORD_REQUIREMENT_LIMIT);
+/** The first library format: business groups of variants, compiled into runnable cards at acceptance. The card format is card/schema.ts. */
+export const libraryV1Schema = z.strictObject({
   checkpointContext:z.literal('observed-tools-v1').optional(),
   formatVersion: z.literal(1), id, revision: z.number().int().positive(), createdAt: timestamp,
   imports: z.array(importBatchSchema).max(30),
-  sources: z.array(z.strictObject({ id, name: text(180), content: text(MATERIAL_CHARS), hash: text(200), kind: z.enum(['knowledge', 'prompt']).optional() })).max(MATERIAL_LIMIT),
-  // The record's requirements, field for field (contracts.ts requirementSchema, which this module cannot import).
-  requirements: z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean(), observable: z.boolean().optional() })).max(RECORD_REQUIREMENT_LIMIT),
+  sources: librarySourcesSchema,
+  requirements: libraryRequirementsSchema,
   businessScenarios: z.array(businessScenarioSchema).max(200), variants: z.array(scenarioVariantSchema).max(200),
   /** Articles chosen for a dialogue before the model wrote the card. Edits of the card do not shrink this list. */
   readingManifest: z.array(z.strictObject({ dialogueId: text(200), batchId: id.optional(), sourceIds: ids(MATERIAL_LIMIT),
@@ -145,7 +147,7 @@ export const scenarioLibrarySchema = z.strictObject({
    */
   ownerResolutions: z.array(z.strictObject({ variantId: id, path: text(400), findingHash: hash, businessHash: hash.optional(), editId: id, reason: text(1000) })).max(400).optional(),
 });
-export type ScenarioLibrary = z.infer<typeof scenarioLibrarySchema>;
+export type LibraryV1 = z.infer<typeof libraryV1Schema>;
 
 const reason = { reason: text(1000) };
 export const libraryPatchSchema = z.discriminatedUnion('kind', [

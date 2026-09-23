@@ -1,7 +1,8 @@
 import type { CheckpointInput } from './checkpoints.js';
 import { USER_CONTROLLER_PROTOCOL, userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
 import { checkpointSchema } from './scenario-contracts.js';
-import { importBatchSchema, preparationProgressSchema, scenarioLibrarySchema, type ImportBatch, type ScenarioLibrary, type ScenarioProposal, type SemanticFinding, type PreparationProgress } from './scenario-contracts.js';
+import { importBatchSchema, preparationProgressSchema, type ImportBatch, type LibraryV1, type ScenarioProposal, type SemanticFinding, type PreparationProgress } from './scenario-contracts.js';
+import { scenarioLibrarySchema, type ScenarioLibrary } from './card/schema.js';
 import { createHash } from 'node:crypto';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS } from './limits.js';
 import { z } from 'zod';
@@ -788,7 +789,7 @@ export type SourceSelection = z.infer<typeof sourceSelectionSchema>;
 export interface ScenarioProposalsInput {
   preparationMode?: 'owner_requirements';
   scenarioCount?: number;
-  businessCatalog?: Pick<ScenarioLibrary['businessScenarios'][number], 'key' | 'title' | 'goal' | 'conditions' | 'requirementIds'>[];
+  businessCatalog?: Pick<LibraryV1['businessScenarios'][number], 'key' | 'title' | 'goal' | 'conditions' | 'requirementIds'>[];
   feedback?: { proposals: ScenarioProposal[]; issues: { code: string; path: string; message: string }[] };
   protocol: 'chronological-scenarios-v1'; task: string; sources: Source[]; requirements: Requirement[]; batchId?: string;
   dialogues: { id: string; observation: ImportBatch['dialogues'][number]['observation']; events: ImportBatch['dialogues'][number]['events'];
@@ -796,13 +797,13 @@ export interface ScenarioProposalsInput {
 }
 export interface ScenarioAssessmentInput {
   protocol: 'chronological-scenarios-v1'; contentHash: string; scope: 'fields' | 'relations';
-  library: Pick<ScenarioLibrary, 'sources' | 'requirements' | 'businessScenarios' | 'variants'> & {
+  library: Pick<LibraryV1, 'sources' | 'requirements' | 'businessScenarios' | 'variants'> & {
     imports: { id: string; dialogues: Pick<ImportBatch['dialogues'][number], 'id' | 'events' | 'observation'>[] }[];
   };
   ownerFactEvidence: { variantId: string; factId: string; editId: string; status: 'verified' | 'unverified' }[];
   fields: { variantId: string; paths: string[] }[];
-  comparisonCandidates: (Omit<ScenarioLibrary['variants'][number], 'quality' | 'issues' | 'ownerDecision'> & {
-    business: Pick<ScenarioLibrary['businessScenarios'][number], 'goal' | 'conditions' | 'requirementIds'>;
+  comparisonCandidates: (Omit<LibraryV1['variants'][number], 'quality' | 'issues' | 'ownerDecision'> & {
+    business: Pick<LibraryV1['businessScenarios'][number], 'goal' | 'conditions' | 'requirementIds'>;
   })[];
 }
 export interface Runtime {

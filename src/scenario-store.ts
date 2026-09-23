@@ -1,8 +1,9 @@
 import { mkdir, readFile, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { importBatchSchema, scenarioLibrarySchema, type ImportBatch, type ScenarioLibrary } from './scenario-contracts.js';
+import { importBatchSchema, type ImportBatch } from './scenario-contracts.js';
+import { scenarioLibrarySchema, type ScenarioLibrary } from './card/schema.js';
 import { experimentSchema, fingerprint, type Experiment } from './contracts.js';
-import { libraryHash, librarySnapshot } from './scenario-library.js';
+import { libraryHash, verifiedAcceptance } from './scenario-library.js';
 import { writeFileAtomic } from './fs-atomic.js';
 import { isIdentifier, isSha256 } from './ids.js';
 import { LibraryConflict } from './errors.js';
@@ -45,8 +46,9 @@ export class ScenarioFiles {
   }
   async retainLibrary(raw: ScenarioLibrary): Promise<void> {
     const library = scenarioLibrarySchema.parse(raw);
-    if (library.acceptance) librarySnapshot(library);
-    for (const batch of library.imports) await this.writeImport(batch);
+    if (library.acceptance) verifiedAcceptance(library);
+    // A variant library carries its import batches; a card library only references batches already in the store.
+    if (library.formatVersion === 1) for (const batch of library.imports) await this.writeImport(batch);
     const directory = join(this.directory, 'libraries', identifier(library.id));
     const hash = libraryHash(library);
     const existing = await this.readLibrary(library.id, hash).catch(error => { if (!missing(error)) throw error; });

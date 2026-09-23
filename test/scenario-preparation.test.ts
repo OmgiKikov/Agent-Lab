@@ -253,7 +253,7 @@ test('full chronological preparation keeps original import, awaits real acceptan
     assert.equal(draft.librarySnapshot.variants.length, 2, 'requested run count must not truncate analysis');
     assert.equal(draft.scenarios.length, 0, 'preview never fabricates acceptance');
     assert.equal(draft.librarySnapshot.acceptance, undefined);
-    await assert.rejects(() => lab.start(seed.id, { approved: true, expectedHash: draftHash(draft) }), /библиотек|принят/i);
+    await assert.rejects(() => lab.start(seed.id, { approved: true, expectedHash: draftHash(draft) }), /не утверждены/);
     const accepted = await lab.acceptLibrary(seed.id, libraryHash(draft.librarySnapshot), ['variant_2']);
     assert.equal(accepted.library.variants.length, 2);
     assert.equal(accepted.experiment.scenarios.length, 1);
@@ -353,8 +353,8 @@ test('owner correction invalidates semantic admission, reassessment binds new co
     const altered = structuredClone(accepted.experiment);
     altered.requirements[0]!.text = 'Другое требование';
     await lab.store.save(altered);
-    await assert.rejects(() => lab.acceptDraft(seed.id, draftHash(altered)), /Требования/);
-    await assert.rejects(() => lab.start(seed.id, { approved: true, expectedHash: draftHash(altered) }), /Требования/);
+    await assert.rejects(() => lab.acceptDraft(seed.id, draftHash(altered)), /Правила изменились/);
+    await assert.rejects(() => lab.start(seed.id, { approved: true, expectedHash: draftHash(altered) }), /Правила изменились/);
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -458,7 +458,7 @@ test('criteria reassessment cannot silently change accepted library cards, and a
     const draft = await lab.readLibrary(seed.id);
     const accepted = await lab.acceptLibrary(seed.id, libraryHash(draft.library), ['variant_1']);
     await lab.start(seed.id, { approved: true, expectedHash: draftHash(accepted.experiment) }); await lab.waitForIdle();
-    await assert.rejects(() => lab.reassess(seed.id, { criteria: [{ scenarioId: 'variant_1', successCriteria: 'Другое ожидание' }], codeOnly: true }), /библиотек/);
+    await assert.rejects(() => lab.reassess(seed.id, { criteria: [{ scenarioId: 'variant_1', successCriteria: 'Другое ожидание' }], codeOnly: true }), /отличается от утверждённой/);
     // A control never rewrites the card: the repeat keeps the accepted card and passes the library gate.
     const controlled = await lab.repeat(seed.id, ['variant_1'], ['variant_1']);
     assert.deepEqual(controlled.scenarios, (await lab.get(seed.id)).scenarios);

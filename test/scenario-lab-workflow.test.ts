@@ -6,7 +6,7 @@ import test from 'node:test';
 import { ExperimentLab, draftHash } from '../src/experiment.js';
 import { createInputSchema, type Runtime } from '../src/contracts.js';
 import { createDemoRuntime, demoTarget } from '../src/demo.js';
-import { scenarioLibrarySchema } from '../src/scenario-contracts.js';
+import { scenarioLibrarySchema } from '../src/card/schema.js';
 import { acceptLibrary, libraryHash, libraryQuality } from '../src/scenario-library.js';
 import { libraryFixture, coverageProposals as proposals, rawDialogues, sources, requirements } from './helpers/scenario-library.js';
 
