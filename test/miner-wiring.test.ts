@@ -1,27 +1,31 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createInputSchema, type MetricAssessment, type Runtime } from '../src/contracts.js';
+import { createInputSchema, experimentSchema, fingerprint, settingsSchema, type MetricAssessment, type Runtime } from '../src/contracts.js';
 import { storedEvidence } from '../src/card/prepare.js';
 import type { CardProposal, CardProposalRequest } from '../src/card/proposal.js';
 import { addCard } from '../src/card/library.js';
 import { cardSchema, libraryV2Schema, type Card, type CardPreparation } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
-import { demoTarget } from '../src/demo.js';
+import { createDemoRuntime, demoInput, demoTarget } from '../src/demo.js';
 import { draftHash, ExperimentLab } from '../src/experiment.js';
 import { importDialogues } from '../src/imports.js';
 import { StructuredTaskError } from '../src/llm/structured.js';
 import { cardTrafficTopic, situationCoverage } from '../src/miner/cards.js';
 import { coverageLine, uncoveredLine } from '../src/miner/coverage.js';
-import { preparationConsent } from '../src/miner/plan.js';
-import { buildTopicMap, OTHER, TOPIC_MAP_PROMPT_VERSION } from '../src/miner/topic-map.js';
+import { builderOf, preparationConsent } from '../src/miner/plan.js';
+import { buildTopicMap, OTHER, planTopicMap, TOPIC_MAP_PROMPT_VERSION } from '../src/miner/topic-map.js';
+import { createPiRuntime } from '../src/pi.js';
 import { markdownReport } from '../src/report.js';
 import { realityParts, topicRows } from '../src/result-text.js';
 import { buildResultView } from '../src/result-view.js';
 import { libraryHash } from '../src/scenario-library.js';
+import { cardInput, cardRuntime } from './helpers/card-prep.js';
+import { libraryV1File } from './helpers/library-v1.js';
 import { BUILDER, scriptedRunner, type Logged } from './helpers/miner.js';
+import { callContext, fixture, fixtureSettings } from './helpers/pi-fixture.js';
 
 /*
  * The Scenario Miner inside a preparation (M2): the consent, the topic map built through the runtime and kept next to
@@ -325,4 +329,48 @@ test('a card run reads its topics from the record alone: rows by traffic share, 
     const repeat = await lab.repeat(draft.id);
     assert.deepEqual(buildResultView(repeat).topicCoverage, view.topicCoverage, 'a repeat stands for the same topics, with no map at hand');
   });
+});
+
+test('records without the logs\' topics read as before; the new stored fields parse to themselves', async () => {
+  const legacy = experimentSchema.parse(await libraryV1File('run.json'));
+  assert.equal(buildResultView(legacy).topicCoverage, null);
+  assert.ok(!markdownReport(legacy).includes('покрыва'), 'a first-format run has no coverage sentence');
+  // The card-preparation runtime of the earlier tests maps no topics: the first usable conversations, in import order, and no topic claimed.
+  await withLab(cardRuntime(), async lab => {
+    const draft = await lab.create(cardInput(), { cards: true });
+    await lab.waitForIdle();
+    const { library, experiment } = await lab.readCards(draft.id);
+    const progress = experiment.preparationProgress as CardPreparation;
+    assert.deepEqual([progress.processed, progress.requestedCount, progress.sample], [['late', 'known'], 15, [{ dialogueIds: ['late', 'known'] }]]);
+    assert.deepEqual([library.traffic, library.cards.map(card => card.trafficTopic)], [undefined, [undefined, undefined]]);
+    assert.equal(situationCoverage(library, new Map(library.cards.map(card => [card.id, { status: 'ready' as const }]))), undefined);
+  });
+  await withLab(minerRuntime(TEN()).runtime, async (lab, directory) => {
+    const draft = await lab.create(createInput(batchOf(TEN())), { cards: true, situations: 2 });
+    await lab.waitForIdle();
+    const raw = JSON.parse(await readFile(join(directory, `${draft.id}.json`), 'utf8'));
+    assert.ok(raw.librarySnapshot.traffic && raw.librarySnapshot.cards[0].trafficTopic && raw.preparationProgress.sample);
+    assert.equal(fingerprint(experimentSchema.parse(raw)), fingerprint(raw), 'nothing is added, trimmed or defaulted');
+  });
+});
+
+test('the demo runtime answers with a fixed topic map and spends nothing', async () => {
+  const demo = createDemoRuntime();
+  const mapper = demo.topicMap!;
+  const batch = importDialogues(demoInput().dialogues).originalImport;
+  const { ctx, usage } = callContext();
+  const map = await mapper.build(planTopicMap(batch, mapper.builder), ctx, async () => {});
+  assert.deepEqual([map.topics.map(topic => topic.title), map.assignments, map.model, usage.calls], [['Возврат оплаты'], { known: 't1', late: 't1' }, 'agent-lab/demo', 0]);
+  assert.deepEqual(await mapper.build(planTopicMap(batch, mapper.builder), ctx, async () => {}), map, 'the same map every time');
+  await assert.rejects(mapper.build(planTopicMap(batchOf(TEN()), mapper.builder), ctx, async () => {}), /Учебный пример поддерживает только/);
+});
+
+test('the Pi runtime maps topics with the builder model the consent plans with', async () => {
+  const f = await fixture(() => '{}', true);
+  try {
+    assert.deepEqual(f.adapter.topicMap!.builder, builderOf(fixtureSettings));
+    const roles = settingsSchema.parse({ ...fixtureSettings, roles: { builder: { provider: 'agent-lab-test', model: 'role-model' } } });
+    const adapter = await createPiRuntime(roles, f.runtime);
+    assert.deepEqual([adapter.topicMap!.builder, builderOf(roles)], [{ provider: 'agent-lab-test', id: 'role-model' }, { provider: 'agent-lab-test', id: 'role-model' }]);
+  } finally { await f.close(); }
 });
