@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -1164,7 +1165,22 @@ test('a changed judge verdict is still refused, and a full review never keeps a 
   assert.equal('countingRules' in dialogue.humanReviews.at(-1)!, false);
 });
 test('a run may drive several dialogues at once: their trace events interleave, while the default keeps them one after another', async t => {
-  const { lab } = await setup(t, legacyDemoRuntime());
+  // In the parallel run each dialogue's judgment waits until all three dialogues have finished talking — the one
+  // step every dialogue takes — so their overlap is certain instead of a matter of timing. If the run stopped
+  // honouring `parallel`, the first judgment would go on alone after the safety timeout and the assertion below
+  // would fail instead of hanging.
+  let gate: { arrived: Set<string>; open: () => void; opened: Promise<void> } | undefined;
+  const base = legacyDemoRuntime();
+  const runtime: Runtime = { ...base, async assess(input, ctx) {
+    if (gate) {
+      gate.arrived.add(input.trial.id);
+      if (gate.arrived.size === 3) gate.open();
+      // An unreferenced timer: once the gate opens, it keeps nothing alive.
+      await Promise.race([gate.opened, delay(5000, undefined, { ref: false })]);
+    }
+    return base.assess!(input, ctx);
+  } };
+  const { lab } = await setup(t, runtime);
   const order = async (parallel: number | undefined) => {
     const result = await runDraft(lab, await externalDraft(lab), 'automated', parallel);
     assert.equal(result.phase, 'results_review', result.error ?? result.message); assert.equal(result.trials.length, 3);
@@ -1173,6 +1189,9 @@ test('a run may drive several dialogues at once: their trace events interleave, 
     return journal.filter((id, i) => i > 0 && journal[i - 1] !== id).length;
   };
   assert.equal(await order(undefined), 2);
+  let open!: () => void;
+  const opened = new Promise<void>(resolve => { open = resolve; });
+  gate = { arrived: new Set(), open, opened };
   assert.ok(await order(3) > 2, 'three parallel dialogues must interleave their traces');
 });
 
