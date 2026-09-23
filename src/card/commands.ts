@@ -1,7 +1,9 @@
 import { fingerprint } from '../contracts.js';
 import { CommandRefused, StaleRevisionError, UnknownReference } from '../errors.js';
+import type { ImportBatch } from '../scenario-contracts.js';
 import { libraryHash } from '../scenario-library.js';
 import { clip } from '../text.js';
+import { logVersionCommandSchema, logVersionJournalSchema, type LogVersionCommand, type LogVersionJournal } from './calibration.js';
 import { messageAt, problemText, unusableFindings, type CardEvidence, type CheckFinding } from './checks.js';
 import { pendingClaims } from './review.js';
 import { cardCommandSchema, cardSchema, libraryV2Schema, type Card, type CardCommand, type EventRef, type LibraryV2 } from './schema.js';
@@ -33,8 +35,10 @@ export type Authority = 'owner-confirm' | 'owner-words';
 export type Via = 'pi-confirm' | 'board' | 'cli-yes';
 
 /** The authority a command needs; the same in every adapter. */
-export function requiredAuthority(command: CardCommand): Authority {
+export function requiredAuthority(command: CardCommand | LogVersionCommand): Authority {
   switch (command.kind) {
+    // Which agent wrote the logs decides whether agreement with them is a calibration: the owner's decision.
+    case 'declare_log_version': return 'owner-confirm';
     case 'edit_client': return 'owner-words';
     case 'edit_expectation': return command.text !== undefined || typeof command.appliesWhen === 'string' ? 'owner-words' : 'owner-confirm';
     case 'set_turn': return command.turn && !command.turn.event ? 'owner-words' : 'owner-confirm';
@@ -47,7 +51,7 @@ export function requiredAuthority(command: CardCommand): Authority {
 }
 
 /** The wordings of a command: what `owner-words` asks to be the owner's own text. */
-export function wordsOf(command: CardCommand): string[] {
+export function wordsOf(command: CardCommand | LogVersionCommand): string[] {
   const texts = (...items: (string | null | undefined)[]) => items.filter((item): item is string => typeof item === 'string');
   switch (command.kind) {
     case 'edit_client': return texts(command.wants, command.writes, command.leaves);
@@ -56,7 +60,7 @@ export function wordsOf(command: CardCommand): string[] {
     case 'add_similar': return command.change.kind === 'opening' ? [command.change.writes] : command.change.kind === 'turn' ? texts(command.change.turn?.after, command.change.turn?.says)
       : texts(command.change.writes);
     case 'answer_question': return texts(command.text);
-    case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': return [];
+    case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': case 'declare_log_version': return [];
   }
 }
 
@@ -379,4 +383,56 @@ export function applyCommand(library: LibraryV2, prepared: Prepared, grant: Host
   const current = libraryHash(library);
   if (current !== prepared.libraryHash) throw new StaleRevisionError(prepared.libraryHash, current);
   return libraryV2Schema.parse(prepared.next);
+}
+
+/* ───────────────────────────── the agent version behind the logs ───────────────────────────── */
+
+export interface PreparedLogVersion {
+  command: LogVersionCommand;
+  /** The import's journal it was prepared on, null before the first declaration: applied to any other state it is refused. */
+  journalHash: string | null;
+  /** Binds a grant to exactly what the owner was shown. */
+  previewHash: string;
+  authority: 'owner-confirm';
+  via: Via;
+  /** «Было → стало»: the version declared before (undefined — never declared, null — «неизвестно») and the one declared now. */
+  change: { before: string | null | undefined; after: string | null };
+  next: LogVersionJournal;
+}
+
+const PREVIEW_ONLY = 'Изменение записывается только после вашего решения в Pi, на доске или с --yes в командной строке.';
+const MOVED = 'Версию логов уже изменили: покажу, что записано сейчас.';
+const previewOf = (prepared: Pick<PreparedLogVersion, 'journalHash' | 'command' | 'next'>): string =>
+  fingerprint({ journal: prepared.journalHash, command: prepared.command, next: fingerprint(prepared.next) });
+
+/**
+ * Prepares the owner's word on which agent version wrote an import's logs (card-v2 §10.2): the next journal of
+ * the import with one more declaration. Pure; nothing is written. The declaration lives beside the import and
+ * never in a library, so declaring after an acceptance changes no library hash and no acceptance; a run keeps
+ * a snapshot of what it used, so its result never moves with a later declaration.
+ */
+export function prepareLogVersion(journal: LogVersionJournal | undefined, batch: Pick<ImportBatch, 'id' | 'contentHash'>, raw: LogVersionCommand,
+  context: { via: Via; at?: string }): PreparedLogVersion {
+  const command = logVersionCommandSchema.parse(raw);
+  if (command.importId !== batch.id || journal && (journal.importId !== batch.id || journal.contentHash !== batch.contentHash)) {
+    throw new CommandRefused('Версия относится к другому импорту логов.');
+  }
+  const before = journal?.declarations.at(-1)?.command.version;
+  if (before === command.version) throw new CommandRefused('Так уже записано.');
+  const journalHash = journal ? fingerprint(journal) : null;
+  const receipt = { id: `logs_${fingerprint({ journal: journalHash, command }).slice(0, 32)}`, at: context.at ?? new Date().toISOString(), via: context.via, command };
+  const next = logVersionJournalSchema.parse({ formatVersion: 1, importId: batch.id, contentHash: batch.contentHash, declarations: [...journal?.declarations ?? [], receipt] });
+  return { command, journalHash, previewHash: previewOf({ journalHash, command, next }), authority: 'owner-confirm', via: context.via, change: { before, after: command.version }, next };
+}
+
+/**
+ * Applies a prepared declaration with the owner's grant: one a host issued for this very preview after a native
+ * confirmation. The journal must still be the one the preview was made on, or the owner is shown the fresh state.
+ */
+export function applyLogVersion(journal: LogVersionJournal | undefined, prepared: PreparedLogVersion, grant: HostGrant): LogVersionJournal {
+  if (!issued.has(grant) || grant.previewHash !== prepared.previewHash || grant.via !== prepared.via || previewOf(prepared) !== prepared.previewHash) throw new CommandRefused(PREVIEW_ONLY);
+  if (grant.basis !== 'confirmed') throw new CommandRefused('Версию логов нужно подтвердить.');
+  const current = journal ? fingerprint(journal) : null;
+  if (current !== prepared.journalHash) throw new StaleRevisionError(prepared.journalHash ?? 'none', current ?? 'none', MOVED);
+  return logVersionJournalSchema.parse(prepared.next);
 }

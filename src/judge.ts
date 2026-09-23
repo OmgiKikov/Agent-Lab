@@ -1,7 +1,7 @@
 import { judgedScenario } from './card/legacy-v1.js';
 import { checkpointReceiptValid } from './checkpoints.js';
 import { z } from 'zod';
-import { assessmentEventContent, assessmentRubrics, fingerprint, isCardExecution, metricApplies, metricAssessmentSchema, observableRule, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Runtime, type Scenario, type Source } from './contracts.js';
+import { assessmentEventContent, assessmentRubrics, fingerprint, isCardExecution, metricApplies, metricAssessmentSchema, observableRule, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type CallContext, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Requirement, type Rubric, type Runtime, type Scenario, type Source } from './contracts.js';
 import { ASSESS_ROLE, DATA_BOUNDARY } from './prompts.js';
 import { ragFaithfulnessEvidence, ragJudgeEvents, ragJudgeInput } from './rag-evidence.js';
 
@@ -234,8 +234,72 @@ export function hasCompleteJudgment(input: Input): boolean {
     counted.filter(a => !isolated || a.metricId === m.id).map(a => a.assessments?.find(v => v.metricId === m.id)?.result)));
 }
 
+/** The answers of one vote as the judge wrote them: each rubric's row with its two conditions, read against the frozen response schema. */
+export const judgmentRows = (raw: string) => responseSchema.parse(JSON.parse(raw)).assessments;
+
+/** One request to the judge model: the prompt, the vote's input, and a callback that records a partial answer as it arrives. */
+export type Respond = (prompt: string, input: string, recordPartial: (raw: string) => void) => Promise<string>;
+
+/** What one judgment asks: the rubrics voted on, the input of each vote, how an answer becomes its assessment, and which rubrics may fail without failing it. */
+export interface Ballot {
+  metrics: readonly Rubric[];
+  input(metric: Rubric): string;
+  /** Throws on an answer that does not hold: the answer stays on record and is asked once more. */
+  parse(raw: string, metric: Rubric): MetricAssessment[];
+  optional?(metric: Rubric): boolean;
+}
+
+/**
+ * The two-vote protocol every judgment shares — of a synthetic attempt and of a recorded conversation alike.
+ * Every rubric is voted on twice, every vote an independent fresh request under JUDGE_PROMPT, so one
+ * judgment's votes run together; they are launched in rubric order, which keeps the audit order stable. A
+ * malformed answer stays on record, is not a vote, and is asked once more; a failed request stops every vote
+ * not yet sent (unless its rubric is optional) and is thrown after the rest settled. `save` sees every change
+ * of the audit and exactly one final report, which never masks the original error.
+ */
+export async function castVotes(audit: JudgeAudit, ballot: Ballot, signal: AbortSignal, save: (final?: boolean) => void, respond: Respond): Promise<void> {
+  const jobs = ballot.metrics.flatMap(metric => [{ metric, retry: false }, { metric, retry: false }]);
+  let next = 0;
+  let failure: unknown;
+  const worker = async (): Promise<void> => {
+    while (next < jobs.length && failure === undefined) {
+      const { metric, retry } = jobs[next++]!;
+      signal.throwIfAborted();
+      const attempt: JudgeAudit['attempts'][number] = { metricId: metric.id, startedAt: new Date().toISOString(), input: ballot.input(metric) };
+      audit.attempts.push(attempt);
+      save(); // A crash leaves a visible pending request, not a missing favorable/unfavorable vote.
+      try {
+        attempt.raw = await respond(JUDGE_PROMPT, attempt.input!, raw => { attempt.raw = raw; save(); });
+      } catch (error) {
+        attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Judge request failed';
+        save();
+        if (!ballot.optional?.(metric)) failure ??= error;
+        continue;
+      }
+      save(); // Persist the original response before parsing; never repair a judgment in-place.
+      try {
+        attempt.assessments = ballot.parse(attempt.raw, metric);
+      } catch (error) {
+        attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Invalid judgment';
+        // A malformed answer is asked once more as a fresh request; the original stays on record and is not a vote.
+        if (!retry) { attempt.superseded = true; jobs.push({ metric, retry: true }); }
+      }
+      save();
+    }
+  };
+  const settled = await Promise.allSettled(Array.from({ length: Math.min(JUDGE_CONCURRENCY, jobs.length) },
+    () => worker().catch(error => { failure ??= error; throw error; })));
+  const rejected = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+  let saveFailure: unknown;
+  let saveFailed = false;
+  try { save(true); } catch (error) { saveFailed = true; saveFailure = error; }
+  if (rejected) throw rejected.reason;
+  if (failure !== undefined) throw failure;
+  if (saveFailed) throw saveFailure;
+}
+
 export async function assessRepeated(input: Input, model: { provider: string; id: string; configurationHash?: string; transport?: JudgeAudit['transport'] }, ctx: CallContext,
-  respond: (prompt: string, input: string, recordPartial: (raw: string) => void) => Promise<string>): Promise<MetricAssessment[]> {
+  respond: Respond): Promise<MetricAssessment[]> {
   input = { ...input, scenario: judgedScenario(input.scenario, input.trial) };
   const metrics = assessmentRubrics(input.scenario, input.trial);
   if (!metrics.length) return [];
@@ -252,49 +316,12 @@ export async function assessRepeated(input: Input, model: { provider: string; id
   };
   const save = (final = false) => ctx.onJudgment?.(input.trial.id, structuredClone(audit), final);
   save();
-  // Every vote is an independent fresh request, so one dialogue's votes run together. They are
-  // launched in rubric order, which keeps the audit order stable; after any failure nothing new starts.
-  const jobs = applicable.flatMap(metric => [{ metric, retry: false }, { metric, retry: false }]);
-  let next = 0;
-  let failure: unknown;
-  const worker = async (): Promise<void> => {
-    while (next < jobs.length && failure === undefined) {
-      const { metric, retry } = jobs[next++]!;
-      ctx.signal.throwIfAborted();
-      const attempt: JudgeAudit['attempts'][number] = { metricId: metric.id, startedAt: new Date().toISOString(),
-        input: JSON.stringify(judgeInput({ ...input, scenario: { ...input.scenario, metrics: [metric] } })),
-      };
-      audit.attempts.push(attempt);
-      save(); // A crash leaves a visible pending request, not a missing favorable/unfavorable vote.
-      try {
-        attempt.raw = await respond(JUDGE_PROMPT, attempt.input!, raw => { attempt.raw = raw; save(); });
-      } catch (error) {
-        attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Judge request failed';
-        save();
-        if (!RAG_METRIC_IDS.has(metric.id)) failure ??= error;
-        continue;
-      }
-      save(); // Persist the original response before parsing; never repair a judgment in-place.
-      try {
-        attempt.assessments = parseJudgment(attempt.raw, input, [metric]);
-      } catch (error) {
-        attempt.error = error instanceof Error ? error.message.slice(0, 4000) : 'Invalid judgment';
-        // A malformed answer is asked once more as a fresh request; the original stays on record and is not a vote.
-        if (!retry) { attempt.superseded = true; jobs.push({ metric, retry: true }); }
-      }
-      save();
-    }
-  };
-  const settled = await Promise.allSettled(Array.from({ length: Math.min(JUDGE_CONCURRENCY, jobs.length) },
-    () => worker().catch(error => { failure ??= error; throw error; })));
-  const rejected = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
-  // Exactly one final report per judgment, whatever happened; it never masks the original error.
-  let saveFailure: unknown;
-  let saveFailed = false;
-  try { save(true); } catch (error) { saveFailed = true; saveFailure = error; }
-  if (rejected) throw rejected.reason;
-  if (failure !== undefined) throw failure;
-  if (saveFailed) throw saveFailure;
+  await castVotes(audit, {
+    metrics: applicable,
+    input: metric => JSON.stringify(judgeInput({ ...input, scenario: { ...input.scenario, metrics: [metric] } })),
+    parse: (raw, metric) => parseJudgment(raw, input, [metric]),
+    optional: metric => RAG_METRIC_IDS.has(metric.id),
+  }, ctx.signal, save, respond);
   if (audit.attempts.some(a => a.error && !a.superseded && !RAG_METRIC_IDS.has(a.metricId ?? ''))) throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
   return metrics.map(metric => {
     if (notApplicable.includes(metric.id)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: RAG_METRIC_IDS.has(metric.id)

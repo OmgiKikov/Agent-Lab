@@ -2,6 +2,7 @@ import { USER_CONTROLLER_PROTOCOL, userViewSchema, type UserDecision, type UserV
 import { checkpointSchema } from './scenario-contracts.js';
 import { importBatchSchema, type ImportBatch, type LibraryV1, type ScenarioProposal, type SemanticFinding } from './scenario-contracts.js';
 import { expectationSchema, preparationProgressSchema, scenarioLibrarySchema, type PreparationProgress, type ScenarioLibrary } from './card/schema.js';
+import { calibrationSchema, calibrationSettingSchema, type Calibration, type LogJudge } from './card/calibration.js';
 import type { CardProposal, CardProposalRequest } from './card/proposal.js';
 import type { CardReview, CardReviewRequest } from './card/review.js';
 import type { BuilderModel, TopicMap, TopicMapPlan, TopicMapProgress } from './miner/topic-map.js';
@@ -19,7 +20,6 @@ const checkpointResultSchema = checkpointDecisionSchema.extend({ requirementId: 
 type CheckpointResult = z.infer<typeof checkpointResultSchema>;
 const checkpointRawDecisionsSchema = z.array(z.json()).max(48).refine(values => JSON.stringify(values).length <= 128000, 'Checkpoint response exceeds 128000 characters');
 const checkpointReceiptSchema = z.strictObject({ protocolHash: z.string(), inputHash: z.string(), resultHash: z.string(), decisionHash: z.string(), decisions: checkpointRawDecisionsSchema });
-
 
 export const VERSION = '6';
 export const DEFAULT_JUDGE = { provider: 'openrouter', model: 'openai/gpt-5.6-sol', upstream: 'openai' } as const;
@@ -81,6 +81,7 @@ export const settingsSchema = z.strictObject({
   maxDurationMs: z.number().int().min(5000).max(14400000).default(600000),
   userModes: z.array(userModeSchema).min(1).max(3).refine(unique, 'Duplicate user modes').default(['reactive']),
   roles: z.strictObject({ builder: modelChoiceSchema.optional(), simulator: modelChoiceSchema.optional(), judge: modelChoiceSchema.optional() }).default({}),
+  calibration: calibrationSettingSchema.optional(), // sim-to-real after the run (card/calibrate.ts): 'auto' when absent
 });
 export type Settings = z.infer<typeof settingsSchema>;
 // A patch must never materialize defaults for keys the caller did not send.
@@ -90,7 +91,7 @@ const settingsPatchSchema = z.strictObject({
   repeats: settingsSchema.shape.repeats.removeDefault(), maxIterations: settingsSchema.shape.maxIterations.removeDefault(),
   maxTurns: settingsSchema.shape.maxTurns.removeDefault(), maxCalls: settingsSchema.shape.maxCalls.removeDefault(),
   timeoutMs: settingsSchema.shape.timeoutMs.removeDefault(), maxDurationMs: settingsSchema.shape.maxDurationMs.removeDefault(),
-  userModes: settingsSchema.shape.userModes.removeDefault(),
+  userModes: settingsSchema.shape.userModes.removeDefault(), calibration: settingsSchema.shape.calibration,
   roles: z.strictObject({ builder: modelChoiceSchema.nullable().optional(), simulator: modelChoiceSchema.nullable().optional(), judge: modelChoiceSchema.nullable().optional() }),
 }).partial();
 
@@ -428,7 +429,6 @@ export const createInputSchema = z.strictObject({
 });
 export type CreateInput = z.infer<typeof createInputSchema>;
 
-
 const preparationSchema = z.strictObject({
   requirements: z.array(requirementSchema).min(1).max(REQUIREMENT_LIMIT),
   questions: z.array(text.max(2000)).max(12),
@@ -665,6 +665,7 @@ export interface Experiment {
   assessmentTrialIds?: string[];
   evidenceHash?: string;
   discovery?: unknown;
+  calibration?: Calibration; // the same situations judged on their recorded conversations (card/calibration.ts); never moves the number
 }
 export const usageSchema = z.strictObject({ calls: z.number().int().nonnegative(), inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), costUsd: z.number().finite().nonnegative().nullable() });
 const revisionSchema = z.strictObject({ id: text, parentId: text.nullable(), spec: agentSchema, hypothesis: z.string(), createdAt: text });
@@ -772,6 +773,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
     identity: z.strictObject({ libraryHash: text.optional(), importHash: text.optional(), targetFingerprint: text.optional(), targetVersion: text.max(200).optional(), evaluatorVersion: text.optional(), manifestHash: text.nullable(),
       agent: text, judge: text, scenarios: z.record(identifier, text).refine(value => Object.keys(value).length <= 200, 'Too many scenario identities') }).optional() }).optional(),
   discovery: retired,
+  calibration: calibrationSchema.optional(),
 }).superRefine((record, ctx) => {
   record.scenarios.forEach((scenario, index) => {
     if (scenario.checks.some(check => (SIMULATOR_CHECK_IDS as readonly string[]).includes(check.id))) {
@@ -856,6 +858,8 @@ export interface Runtime {
   /** The free LLM user of scenarios without an `execution` block: recorded runs made before the scenario library. */
   userTurn?(input: { user: Scenario['user']; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserTurn>;
   assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial }, ctx: CallContext): Promise<MetricAssessment[]>;
+  /** The same judge on a recorded conversation (card/log-judge.ts): one expectation, two votes, a receipt of its own. */
+  logJudge?: LogJudge;
   /** Which articles of a large knowledge base one dialogue needs: the model reads the table of contents, never the bodies. */
   selectSources?(input: SourceSelectionInput, ctx: CallContext): Promise<SourceSelection>;
   /** The topic map of an import (miner/topic-map.ts), built by `builder` from a plan made for it; each finished step reaches `onProgress` before the next call. */
