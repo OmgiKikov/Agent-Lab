@@ -6,13 +6,14 @@ import { test } from 'node:test';
 import { createInputSchema, type MetricAssessment, type Runtime } from '../src/contracts.js';
 import { storedEvidence } from '../src/card/prepare.js';
 import type { CardProposal, CardProposalRequest } from '../src/card/proposal.js';
-import type { Card, CardPreparation } from '../src/card/schema.js';
+import { addCard } from '../src/card/library.js';
+import { cardSchema, libraryV2Schema, type Card, type CardPreparation } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { demoTarget } from '../src/demo.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { importDialogues } from '../src/imports.js';
 import { StructuredTaskError } from '../src/llm/structured.js';
-import { situationCoverage } from '../src/miner/cards.js';
+import { cardTrafficTopic, situationCoverage } from '../src/miner/cards.js';
 import { preparationConsent } from '../src/miner/plan.js';
 import { buildTopicMap, OTHER, TOPIC_MAP_PROMPT_VERSION } from '../src/miner/topic-map.js';
 import { libraryHash } from '../src/scenario-library.js';
@@ -214,5 +215,70 @@ test('a pick whose paid call died in flight is never asked again: after the resu
     assert.deepEqual(library.cards.map(card => [conversationOf(card), card.trafficTopic!.id]).sort(),
       [[refunds[1], 't1'], [progress.sample![1]!.dialogueIds[0], 't2'], [progress.sample![2]!.dialogueIds[0], 't3']].sort());
     assert.deepEqual([progress.status, progress.pending], ['complete', []]);
+  });
+});
+
+test('the topic map is paid for once: a build cut short continues from its last stored step, a finished map is reused', async () => {
+  const logged = logs([['Возврат оплаты', 50], ['Статус заявки', 30], ['Смена тарифа', 10]]);
+  const batch = batchOf(logged);
+  const broken = minerRuntime(logged, { failTopicAt: 3 });
+  const working = minerRuntime(logged);
+  const { runtime } = broken;
+  await withLab(runtime, async lab => {
+    const mapCalls = async (extra: Record<string, unknown> = {}) =>
+      (await preparationConsent(lab.store, { batch, settings: createInput(batch, extra).settings, situations: 3 })).topicMapCalls;
+    assert.equal(await mapCalls(), 4);
+    const failed = await lab.create(createInput(batch), { cards: true, situations: 3 });
+    await lab.waitForIdle();
+    const stopped = await lab.get(failed.id);
+    assert.deepEqual([stopped.phase, stopped.librarySnapshot], ['error', undefined]);
+    assert.match(stopped.error ?? '', /rate limit/);
+    assert.deepEqual(broken.seen.topicCalls, ['Темы разговоров', 'Темы разговоров, часть 1 из 3', 'Темы разговоров, часть 2 из 3']);
+    assert.equal(await mapCalls(), 2, 'the proposal and the first batch are stored: two calls are left');
+
+    runtime.topicMap = working.runtime.topicMap;
+    const first = await lab.create(createInput(batch), { cards: true, situations: 3 });
+    await lab.waitForIdle();
+    assert.deepEqual(working.seen.topicCalls, ['Темы разговоров, часть 2 из 3', 'Темы разговоров, часть 3 из 3'], 'the build goes on where it stopped');
+    assert.equal(await mapCalls(), 0, 'a finished map of these logs costs nothing');
+    assert.equal(await mapCalls({ roles: { builder: { provider: 'agent-lab-test', model: 'role-model' } } }), 4, 'another builder model maps the logs anew');
+
+    const again = await lab.create(createInput(batch), { cards: true, situations: 3 });
+    await lab.waitForIdle();
+    assert.equal(working.seen.topicCalls.length, 2, 'the stored map is reused without a call');
+    const [one, two] = await Promise.all([first.id, again.id].map(id => lab.readCards(id)));
+    assert.deepEqual(two!.library.cards.map(conversationOf), one!.library.cards.map(conversationOf), 'the same map gives the same sample');
+    assert.deepEqual(two!.library.traffic, one!.library.traffic);
+    assert.equal(one!.experiment.usage.calls - two!.experiment.usage.calls, 2, 'the reused map spends none of the budget');
+  });
+});
+
+test('topics on cards: a dialogue card takes its conversation\'s, a similar card its parent\'s, a card from the owner\'s rules none', async () => {
+  const logged = TEN();
+  const batch = batchOf(logged);
+  await withLab(minerRuntime(logged).runtime, async lab => {
+    const rules = await lab.create(createInputSchema.parse({ task: 'Проверить поддержку', mode: 'live', target: demoTarget(), scenarioCount: 2,
+      materials: [{ name: 'Правила поддержки', content: RULE }], settings: settings() }), { cards: true });
+    await lab.waitForIdle();
+    const written = await lab.readCards(rules.id);
+    assert.deepEqual(written.library.cards.map(card => [card.origin.kind, card.topic, card.trafficTopic]), [['rules', 'Вопросы клиентов', undefined], ['rules', 'Вопросы клиентов', undefined]]);
+    assert.deepEqual([written.library.traffic, (written.experiment.preparationProgress as CardPreparation).sample], [undefined, undefined]);
+    assert.equal(situationCoverage(written.library, new Map(written.library.cards.map(card => [card.id, { status: 'ready' as const }]))), undefined, 'no logs, no coverage line');
+
+    const sampled = await lab.create(createInput(batch), { cards: true, situations: 2 });
+    await lab.waitForIdle();
+    const { library } = await lab.readCards(sampled.id);
+    const parent = library.cards[0]!;
+    const { trafficTopic: _topic, ...unmarked } = parent;
+    const similar = cardSchema.parse({ ...unmarked, id: 'card_similar', number: library.nextNumber, origin: { kind: 'similar', parentId: parent.id, change: { kind: 'turn', turn: null } } });
+    const drafted = addCard(library, similar);
+    assert.deepEqual(cardTrafficTopic(drafted, similar), parent.trafficTopic, 'a similar card stands for its parent\'s topic');
+    const copied = cardSchema.parse({ ...similar, trafficTopic: parent.trafficTopic });
+    assert.deepEqual(cardTrafficTopic(addCard(library, copied), copied), parent.trafficTopic, 'and so does one that copied it');
+    const orphaned = libraryV2Schema.parse({ ...drafted, cards: drafted.cards.filter(card => card.id !== parent.id) });
+    assert.equal(cardTrafficTopic(orphaned, similar), undefined, 'a similar card whose parent was removed claims no topic');
+    const naming = (trafficTopic: unknown) => libraryV2Schema.safeParse({ ...library, cards: library.cards.map(card => card.id === parent.id ? { ...card, trafficTopic } : card) }).success;
+    assert.deepEqual([naming({ batchId: batch.id, id: 't4' }), naming({ batchId: 'import_other', id: 't1' }), naming(parent.trafficTopic)], [false, false, true],
+      'a card names only a topic its library has the traffic of');
   });
 });
