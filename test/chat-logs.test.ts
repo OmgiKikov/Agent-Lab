@@ -8,7 +8,7 @@ import { TOOL } from '../extensions/steps.ts';
 import { ExperimentLab } from '../src/experiment.js';
 import { questionAnswers, withAnswer } from '../src/spreadsheet/answers.js';
 import { proposeTableImport } from '../src/spreadsheet/import.js';
-import { proposalLines } from '../src/spreadsheet/lines.js';
+import { proposalLines, whereChoices } from '../src/spreadsheet/lines.js';
 import { ExperimentStore } from '../src/store.js';
 import { cardRuntime, dialogues, policy } from './helpers/card-prep.js';
 import { output, registered } from './helpers/pi-session.js';
@@ -55,6 +55,21 @@ test('the table question is numbered answers the owner picks; each answer adds i
     const both = withAnswer(withAnswer({ id: 'A', markers: [{ token: 'BOT', role: 'assistant' }] }, answers[2]!.choices), { markers: [{ token: 'OPERATOR', role: 'text' }], id: 'B' });
     assert.deepEqual(both, { id: 'B', markers: [{ token: 'BOT', role: 'assistant' }, { token: 'OPERATOR', role: 'text' }] });
     assert.equal((await proposeTableImport(join(cwd, 'logs.xlsx'), answers[2]!.choices)).status, 'ready');
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test('«Какие разговоры оценивать?» is numbered answers too: each value of the chosen column, labelled as the preview counts it', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'agent-lab-answers-'));
+  try {
+    const agents = ["['ACQUIRING_AGENT']", "['ACQUIRING_AGENT', 'AGENT_GIGACHAT']"];
+    const rows: CellSpec[][] = [[...refundRows[0]!, 'agentCode'], ...refundRows.slice(1).map((row, i): CellSpec[] => [...row, agents[i % 2]!])];
+    await writeFile(join(cwd, 'logs.xlsx'), xlsxFile([{ name: 'Данные', rows }]));
+    const asked = await proposeTableImport(join(cwd, 'logs.xlsx'), { where: { column: 'agentCode' } });
+    assert.ok(asked.status === 'question' && asked.question.kind === 'where', `a question about the column, not ${asked.status}`);
+    const answers = questionAnswers(asked.question);
+    assert.deepEqual(answers.map(answer => answer.label), whereChoices(asked.question));
+    assert.deepEqual(answers.map(answer => answer.choices.where?.values), asked.question.values.map(item => [item.value]), 'one value per answer, as written in the cell');
+    assert.equal((await proposeTableImport(join(cwd, 'logs.xlsx'), answers[0]!.choices)).status, 'ready');
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 

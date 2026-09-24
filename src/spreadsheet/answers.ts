@@ -1,4 +1,5 @@
 import { ROLE_WORDS, ROLES, columnLabel, type MarkerRole, type TableChoices } from './mapping.js';
+import { whereChoices } from './lines.js';
 import type { TableQuestion } from './proposal.js';
 
 /*
@@ -21,6 +22,11 @@ export function questionAnswers(question: TableQuestion): TableAnswer[] {
     case 'id': return question.columns.map(column => ({ label: `колонка «${columnLabel(column)}»`, choices: { id: columnLabel(column) } }));
     case 'marker': return MARKER_ROLES.map(role => ({ label: MARKER_WORDS[role], choices: { markers: [{ token: question.token, role }] } }));
     case 'role': return ROLES.map(role => ({ label: ROLE_WORDS[role], choices: { roles: [{ value: question.value, role }] } }));
+    // One value per answer, labelled as the preview counts it; several values are kept through the CLI's `--where A|B`.
+    case 'where': {
+      const labels = whereChoices(question);
+      return question.values.map((item, index) => ({ label: labels[index]!, choices: { where: { column: columnLabel(question.column), values: [item.value] } } }));
+    }
   }
 }
 

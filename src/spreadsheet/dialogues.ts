@@ -4,6 +4,7 @@ import type { ImportBatch } from '../scenario-contracts.js';
 import { importBatch } from '../scenario-library.js';
 import { columnLabel, type Column, type Role, type TableMapping } from './mapping.js';
 import { splitMessages } from './markers.js';
+import { conversationRows, selectedConversations } from './selection.js';
 import { cellOf, columnLetter, type Sheet } from './sheet.js';
 
 /*
@@ -13,6 +14,7 @@ import { cellOf, columnLetter, type Sheet } from './sheet.js';
  * problem only the spreadsheet can see (no marker, an unknown role) is handed to it as the row's reason.
  * Every other column of a conversation travels with it verbatim, as the fields of a JSON row do.
  *
+ * The owner's filter (selection.ts) comes first: the conversations it leaves out are not read at all.
  * One import holds IMPORT_DIALOGUE_LIMIT conversations. A longer log gives a sample of its usable
  * conversations taken in the order of a hash of each one's id and messages: blind to outcomes and to
  * where a row stands in the sheet, and the same for the same logs.
@@ -34,6 +36,8 @@ export interface TablePreview {
   rows: number;
   /** Conversations the sheet holds under the mapping. */
   dialogues: number;
+  /** With the owner's filter: the conversations it keeps. Usable, taken and rejected count only these. */
+  selected?: number;
   /** Conversations the import accepts. */
   usable: number;
   /** Conversations in the import: all usable ones, or the sample of them when there are more than one import holds. */
@@ -59,9 +63,11 @@ const contentKey = (id: string, messages: readonly { content: string }[], labels
 
 export function importTable(sheet: Sheet, mapping: TableMapping): { batch: ImportBatch; preview: TablePreview } {
   const header = mapping.headerRow - 1;
-  const rows = sheet.rows.map((cells, index) => ({ index, cells })).filter(row => row.index > header && row.cells.some(cell => cell.trim()));
-  const kept = keptColumns(sheet, mapping, rows.map(row => row.index));
-  const dialogues = mapping.layout.kind === 'dialogue_per_row' ? rowDialogues(sheet, mapping, rows.map(row => row.index), kept) : messageDialogues(sheet, mapping, rows.map(row => row.index), kept);
+  const rows = sheet.rows.flatMap((cells, index) => index > header && cells.some(cell => cell.trim()) ? [index] : []);
+  const kept = keptColumns(sheet, mapping, rows);
+  const conversations = conversationRows(sheet, mapping, rows);
+  const chosen = mapping.filter ? selectedConversations(sheet, conversations, mapping.filter) : conversations;
+  const dialogues = mapping.layout.kind === 'dialogue_per_row' ? rowDialogues(sheet, mapping, chosen, kept) : messageDialogues(sheet, mapping, chosen, kept);
   const verdicts: (string[] | undefined)[] = [];
   let whole: ImportBatch | undefined;
   for (let start = 0; start < dialogues.length; start += IMPORT_DIALOGUE_LIMIT) {
@@ -81,7 +87,7 @@ export function importTable(sheet: Sheet, mapping: TableMapping): { batch: Impor
     entry.count++; messages.set(label, entry);
   }
   return { batch, preview: {
-    rows: rows.length, dialogues: dialogues.length, usable: usable.length, taken: batch.dialogues.length,
+    rows: rows.length, dialogues: conversations.length, ...mapping.filter ? { selected: chosen.length } : {}, usable: usable.length, taken: batch.dialogues.length,
     rejected: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)),
     messages: [...messages.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
     kept: kept.map(item => item.key),
@@ -116,43 +122,35 @@ function keptCells(sheet: Sheet, row: number, kept: readonly KeptColumn[]): Reco
 
 const cellText = (sheet: Sheet, row: number, column: Column) => cellOf(sheet, row, column.index);
 
-function rowDialogues(sheet: Sheet, mapping: TableMapping, rows: number[], kept: readonly KeptColumn[]): SheetDialogue[] {
+/** One conversation per row: `conversations` holds each conversation's one row (selection.ts conversationRows). */
+function rowDialogues(sheet: Sheet, mapping: TableMapping, conversations: readonly number[][], kept: readonly KeptColumn[]): SheetDialogue[] {
   if (mapping.layout.kind !== 'dialogue_per_row') return [];
   const { separator, markers } = mapping.layout;
   const roleOf = new Map(markers.map(item => [item.token, item.role]));
   const tokens = markers.map(item => item.token);
   const seen = new Set<string>();
-  return rows.flatMap((row): SheetDialogue[] => {
-    const id = cellText(sheet, row, mapping.id).trim(), text = cellText(sheet, row, mapping.text);
-    // Neither an id nor a text: a note under the table or an empty line, not a conversation.
-    if (!id && !text.trim()) return [];
+  return conversations.map((rows): SheetDialogue => {
+    const row = rows[0]!, id = cellText(sheet, row, mapping.id).trim(), text = cellText(sheet, row, mapping.text);
     const columns = keptCells(sheet, row, kept);
     const base = { id, row: row + 1, ...columns ? { columns } : {} };
     const duplicate = id !== '' && seen.has(id) ? ROW_ISSUES.duplicate : undefined;
     seen.add(id);
-    if (!text.trim()) return [{ raw: base, issue: duplicate ?? ROW_ISSUES.noText, labels: [], key: contentKey(id, [], []) }];
+    if (!text.trim()) return { raw: base, issue: duplicate ?? ROW_ISSUES.noText, labels: [], key: contentKey(id, [], []) };
     const split = splitMessages(text, separator, tokens);
-    if (!split) return [{ raw: { ...base, text }, issue: duplicate ?? ROW_ISSUES.noMarker, labels: [], key: contentKey(id, [], []) }];
+    if (!split) return { raw: { ...base, text }, issue: duplicate ?? ROW_ISSUES.noMarker, labels: [], key: contentKey(id, [], []) };
     const messages = split.map(message => ({ role: roleOf.get(message.marker)!, content: message.content, marker: message.marker }));
     const issue = duplicate ?? (messages.some(message => !message.content) ? ROW_ISSUES.emptyMessage : undefined);
     const labels = messages.map(message => ({ label: message.marker, role: message.role }));
-    return [{ raw: { ...base, messages }, ...issue ? { issue } : {}, labels, key: contentKey(id, messages, labels) }];
+    return { raw: { ...base, messages }, ...issue ? { issue } : {}, labels, key: contentKey(id, messages, labels) };
   });
 }
 
-function messageDialogues(sheet: Sheet, mapping: TableMapping, rows: number[], kept: readonly KeptColumn[]): SheetDialogue[] {
+/** One message per row: `conversations` holds the rows of each conversation (selection.ts conversationRows). */
+function messageDialogues(sheet: Sheet, mapping: TableMapping, conversations: readonly number[][], kept: readonly KeptColumn[]): SheetDialogue[] {
   const layout = mapping.layout;
   if (layout.kind !== 'message_per_row') return [];
   const roleOf = new Map(layout.roles.map(item => [item.value, item.role]));
-  // Messages of one conversation may be anywhere in the sheet; a row without an id stays on its own.
-  const groups = new Map<string, number[]>();
-  for (const row of rows) {
-    const id = cellText(sheet, row, mapping.id).trim();
-    if (!id && !cellText(sheet, row, layout.role).trim() && !cellText(sheet, row, mapping.text).trim()) continue;
-    const key = id || `\u0000${row}`, group = groups.get(key);
-    if (group) group.push(row); else groups.set(key, [row]);
-  }
-  return [...groups.values()].map((group): SheetDialogue => {
+  return conversations.map((group): SheetDialogue => {
     const id = cellText(sheet, group[0]!, mapping.id).trim();
     const ordered = layout.order ? group.map(row => ({ row, key: parseOrder(cellText(sheet, row, layout.order!)) })) : group.map(row => ({ row, key: undefined }));
     // A message without its place, or a column mixing numbers and dates, leaves the order unknown: never guessed.

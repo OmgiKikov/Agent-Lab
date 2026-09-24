@@ -7,6 +7,7 @@ import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeRecei
 import { sourceIdentity } from './normalize.js';
 import { preflightTarget } from './targets.js';
 import { writeFileAtomic } from './fs-atomic.js';
+import { SUITE_FORMAT } from './suite.js';
 
 const step = z.strictObject({ message: z.string().trim().min(1).max(3000), reply: z.string().min(1).max(8000) });
 const probeSchema = z.strictObject({
@@ -73,7 +74,7 @@ export async function listSuites(directory: string) {
     const path = resolve(directory, file);
     try {
       const raw = JSON.parse(await readFile(path, 'utf8'));
-      if (raw.format !== 'agent-lab-suite-1') return { file: path, error: 'Не является набором Agent Lab.' };
+      if (raw.format !== SUITE_FORMAT) return { file: path, error: 'Не является набором Agent Lab.' };
       const record = experimentSchema.parse({ ...raw.definition, target: resolveTarget(raw.definition.target, dirname(path)) });
       const accepted = (record.acceptedTests ?? []).filter(test => {
         const scenario = record.scenarios.find(candidate => candidate.id === test.scenarioId);
