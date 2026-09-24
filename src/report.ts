@@ -1,6 +1,7 @@
 import type { Experiment, Trial } from './contracts.js';
 import type { EvidenceBundle } from './artifacts.js';
-import { toHtml, toMarkdown, type Block, type CardItem, type FailureItem, type Report, type Turn } from './blocks.js';
+import { toHtml, toMarkdown, type Block, type CardItem, type DisagreementItem, type FailureItem, type Report, type Turn } from './blocks.js';
+import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLine } from './card/calibration-view.js';
 import type { FailureExplanation } from './explain.js';
 import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText } from './plural.js';
@@ -94,6 +95,27 @@ function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
   return { kind: 'section', title: 'Как считали', blocks: [{ kind: 'list', items: lines }] };
 }
 
+/**
+ * «Сверка с продом»: the situations not compared and why, then each disagreement between the synthetic run and
+ * the logged conversation — the expectation, both verdicts, the hint and where both conversations are, with the
+ * run's conversation shown. A logged conversation is production data: the report names it and never quotes it.
+ */
+function calibrationBlock(bundle: EvidenceBundle): Block[] {
+  const calibration = bundle.view.calibration;
+  if (!calibration) return [];
+  const excluded = exclusionsLine(calibration);
+  const items: DisagreementItem[] = calibration.disagreements.map(item => ({ number: item.number, title: oneLine(item.title),
+    expectations: item.expectations.map(row => oneLine(disagreementText(row))), hint: item.hint, conversations: conversationsText(item),
+    dialogue: turnsOf(bundle.record.trials.find(trial => trial.id === item.trialIds[0])) }));
+  const body: Block[] = [
+    ...(excluded ? [{ kind: 'paragraph' as const, muted: true, text: excluded }] : []),
+    ...(items.length ? [{ kind: 'disagreements' as const, items }] : []),
+    ...(calibration.compared ? [{ kind: 'list' as const, items: [...CALIBRATION_CAVEATS] }] : []),
+  ];
+  // Nothing beyond the line under the number (a calibration skipped for its budget): no section.
+  return body.length ? [{ kind: 'section', title: 'Сверка с продом', blocks: [{ kind: 'paragraph', muted: false, text: calibration.text }, ...body] }] : [];
+}
+
 function comparisonBlock(bundle: EvidenceBundle): Block[] {
   const { comparison } = bundle;
   if (!comparison) return [];
@@ -141,6 +163,7 @@ export function runReport(bundle: EvidenceBundle): Report {
         band: view.headline.range && view.headline.accuracy !== null ? { point: view.headline.accuracy, range: view.headline.range, weighted: view.topics?.weighted ?? null } : null },
       ...(trust.length ? [{ kind: 'trust' as const, parts: trust }] : []),
       ...(reality.length ? [{ kind: 'trust' as const, parts: reality.map(text => ({ text, warn: false })) }] : []),
+      ...(view.calibration ? [{ kind: 'trust' as const, parts: [{ text: view.calibration.text, warn: false }] }] : []),
     ],
     blocks: [
       ...topicsBlock(view),
@@ -148,6 +171,7 @@ export function runReport(bundle: EvidenceBundle): Report {
       ...(cards.length ? [{ kind: 'section' as const, title: 'Ситуации', blocks: [{ kind: 'cards' as const, items: cards }] }] : []),
       ...(failures.length ? [{ kind: 'section' as const, title: 'Разбор ошибок', blocks: [{ kind: 'failures' as const, items: failures }] }] : []),
       ...(unmeasured.length ? [{ kind: 'section' as const, title: 'Не измерено', blocks: [{ kind: 'list' as const, items: unmeasured }] }] : []),
+      ...calibrationBlock(bundle),
       ...comparisonBlock(bundle),
       basisBlock(bundle, view),
     ],

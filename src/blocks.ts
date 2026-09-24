@@ -15,6 +15,8 @@ export interface Turn { who: 'Клиент' | 'Агент'; text: string }
 export interface Example { situation: string; expected: string; said: string | null; rule: string | null }
 export interface CardItem { number: number; brief: Brief; chip: { text: string; tone: Tone }; dialogue: Turn[] }
 export interface FailureItem { number: number; title: string; expected: string; said: string | null; rule: { quote: string; source: string } | null; dialogue: Turn[] }
+/** A situation where the synthetic customer and the logged one led to different verdicts; the logged conversation is named, never quoted. */
+export interface DisagreementItem { number: number; title: string; expectations: string[]; hint: string; conversations: string; dialogue: Turn[] }
 
 export type Block =
   | { kind: 'alarm'; text: string }
@@ -27,6 +29,7 @@ export type Block =
   | { kind: 'causes'; items: { title: string; count: string; examples: Example[] }[] }
   | { kind: 'cards'; items: CardItem[] }
   | { kind: 'failures'; items: FailureItem[] }
+  | { kind: 'disagreements'; items: DisagreementItem[] }
   | { kind: 'list'; items: string[] }
   | { kind: 'paragraph'; text: string; muted: boolean };
 
@@ -71,6 +74,12 @@ function failureHtml(item: FailureItem): string {
     + (item.dialogue.length ? `<details class="fold"><summary>Разговор</summary>${turnsHtml(item.dialogue)}</details>` : '') + `</article>`;
 }
 
+function disagreementHtml(item: DisagreementItem): string {
+  return `<article class="failure"><div class="ttl"><span class="mark">≠ ${item.number}</span>${e(item.title)}</div>`
+    + dl([...item.expectations.map(text => ['Ожидание', text] as [string, string]), ['Подсказка', item.hint], ['Где смотреть', item.conversations]])
+    + (item.dialogue.length ? `<details class="fold"><summary>Разговор в прогоне</summary>${turnsHtml(item.dialogue)}</details>` : '') + `</article>`;
+}
+
 function blockHtml(block: Block): string {
   switch (block.kind) {
     case 'alarm': return `<p class="alarm">${e(block.text)}</p>`;
@@ -84,6 +93,7 @@ function blockHtml(block: Block): string {
         ['Агент ответил', example.said === null ? 'ответ не подтверждён цитатой' : `«${example.said}»`, example.said === null ? undefined : 'bad-quote'], ...(example.rule ? [['Правило', `«${example.rule}»`] as [string, string]] : [])])}</div>`).join('')}</div></details>`).join('')}</div>`;
     case 'cards': return `<div class="cards">${block.items.map(cardHtml).join('')}</div>`;
     case 'failures': return `<div class="cards">${block.items.map(failureHtml).join('')}</div>`;
+    case 'disagreements': return `<div class="cards">${block.items.map(disagreementHtml).join('')}</div>`;
     case 'list': return `<ul class="plain">${block.items.map(item => `<li>${e(item)}</li>`).join('')}</ul>`;
     case 'paragraph': return `<p${block.muted ? ' class="muted"' : ''}>${e(block.text)}</p>`;
   }
@@ -128,6 +138,9 @@ function blockMarkdown(block: Block): string[] {
       ...mdDl([['Ожидалось', item.expected], ['Агент ответил', item.said === null ? 'ответ не подтверждён цитатой' : `«${item.said}»`],
         ['Правило', item.rule ? `«${item.rule.quote}» — ${item.rule.source}` : 'у ситуации нет правила из ваших материалов']]), '',
       ...(item.dialogue.length ? [...mdTurns(item.dialogue), ''] : [])]);
+    case 'disagreements': return block.items.flatMap(item => [`### ≠ ${item.number}. ${md(item.title)}`, '',
+      ...mdDl([...item.expectations.map(text => ['Ожидание', text] as [string, string]), ['Подсказка', item.hint], ['Где смотреть', item.conversations]]), '',
+      ...(item.dialogue.length ? ['**Разговор в прогоне**', '', ...mdTurns(item.dialogue), ''] : [])]);
     case 'list': return [...block.items.map(item => `- ${md(item)}`), ''];
     case 'paragraph': return [md(block.text), ''];
   }

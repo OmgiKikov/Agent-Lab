@@ -8,6 +8,7 @@ import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { buildResultView, type ResultView } from './result-view.js';
 import { countText } from './plural.js';
 import { dialogueNumbers, type DialogueNumbers } from './card/view.js';
+import type { ImportBatch } from './scenario-contracts.js';
 import { ScenarioFiles } from './scenario-store.js';
 
 export interface EvidenceBundle {
@@ -76,7 +77,7 @@ async function resolveSource(record: Experiment, store: Pick<ExperimentStore, 'g
   }
 }
 
-type BundleStore = Pick<ExperimentStore, 'get' | 'traceJournal'> & Partial<Pick<ExperimentStore, 'readJudgeAudit'>>;
+type BundleStore = Pick<ExperimentStore, 'get' | 'traceJournal'> & Partial<Pick<ExperimentStore, 'readJudgeAudit' | 'readImport'>>;
 
 /**
  * A receipt is sealed with the hash of the full audit in `{runId}.judge/{trialId}.json`. When that
@@ -133,8 +134,11 @@ export async function evidenceBundle(record: Experiment, store: BundleStore, bef
   const parent = beforeId ?? record.parentRunId;
   const verified = await resolveVerified(record, store, parent);
   const snapshot = verified.record;
+  // Only a calibration's disagreements need the dialogues' places in their imports: other bundles read no import.
+  const numbers = store.readImport && snapshot.calibration?.entries.length ? await importNumbers(snapshot, store.readImport.bind(store)) : undefined;
   // Stability is checked against the resolved source run; the headline itself never depends on it.
-  const bundle: EvidenceBundle = { record: snapshot, view: buildResultView(snapshot, { before: verified.before }), warnings: [...verified.warnings], traceJournal: '' };
+  const bundle: EvidenceBundle = { record: snapshot, view: buildResultView(snapshot, { before: verified.before, ...(numbers ? { numbers } : {}) }), warnings: [...verified.warnings], traceJournal: '',
+    ...(numbers ? { dialogueNumbers: numbers } : {}) };
   if (parent) {
     bundle.comparisonSource = { kind: verified.embedded ? 'embedded' : beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };
     if (verified.before) { bundle.before = verified.before; bundle.comparison = compareRuns(verified.before, snapshot); }
@@ -148,21 +152,21 @@ export async function evidenceBundle(record: Experiment, store: BundleStore, bef
 }
 
 /**
- * The dialogue numbers of a card run's imports. They only name where a situation came from, so an import that
- * cannot be read leaves the source line without its number («из разговора в логах») instead of failing the export.
+ * The dialogue numbers of a card run's imports («из диалога №17», «диалог №17 из логов»). They only name where a
+ * situation came from, so an import that cannot be read leaves the number out instead of failing the reader.
  */
-async function importNumbers(record: Experiment, directory: string): Promise<DialogueNumbers | undefined> {
+export async function importNumbers(record: Experiment, readImport: (id: string) => Promise<ImportBatch>): Promise<DialogueNumbers | undefined> {
   const library = record.librarySnapshot;
   if (library?.formatVersion !== 2 || !library.imports.length) return undefined;
-  const files = new ScenarioFiles(directory);
-  return Promise.all(library.imports.map(item => files.readImport(item.id))).then(dialogueNumbers, () => undefined);
+  return Promise.all(library.imports.map(item => readImport(item.id))).then(dialogueNumbers, () => undefined);
 }
 
 /** Each format consumes the same snapshot; canonical raw evidence paths stay compatible with Pi tools. */
 export async function exportArtifacts(input: EvidenceBundle, directory: string) {
   const exportDir = resolve(directory, 'exports');
   await mkdir(exportDir, { recursive: true, mode: 0o700 });
-  const bundle = { ...input, dialogueNumbers: input.dialogueNumbers ?? await importNumbers(input.record, directory) };
+  const store = new ScenarioFiles(directory);
+  const bundle = { ...input, dialogueNumbers: input.dialogueNumbers ?? await importNumbers(input.record, id => store.readImport(id)) };
   const record = bundle.record;
   const stem = `${record.id}.${randomUUID().slice(0, 8)}`;
   const selected = record.target.kind === 'sandbox' ? record.revisions.find(r => r.id === record.selectedRevisionId)?.spec : undefined;

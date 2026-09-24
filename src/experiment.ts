@@ -7,7 +7,9 @@ import { judgedScenario, requireLibraryV1 } from './card/legacy-v1.js';
 import { acceptLibraryV2, requireLibraryV2 } from './card/library.js';
 import { pendingReviewCalls, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from './card/prepare.js';
 import type { CardCommand, LibraryV2 } from './card/schema.js';
-import { applyCommand, prepareCommand, type HostGrant, type Prepared, type Via } from './card/commands.js';
+import { applyCommand, applyLogVersion, prepareCommand, prepareLogVersion, type HostGrant, type Prepared, type PreparedLogVersion, type Via } from './card/commands.js';
+import { calibrateRun } from './card/calibrate.js';
+import type { LogVersionCommand, LogVersionJournal } from './card/calibration.js';
 import { importEvidence, type CardEvidence } from './card/checks.js';
 import { dialogueNumbers, type DialogueNumbers } from './card/view.js';
 import { assessScenarioLibrary, compiledLibraryScenarios, prepareScenarioLibrary, resumeScenarioLibrary } from './scenario-preparation.js';
@@ -108,7 +110,7 @@ function freshDraft(previous: Experiment, scenarioIds?: string[]): Experiment {
   delete record.executionRunId;
   delete record.resultsReviewedAt; delete record.resultsReviewHash; delete record.failureModes;
   delete record.acceptedDraftHash;
-  delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash; delete record.releaseLog;
+  delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash; delete record.releaseLog; delete record.calibration;
   retainAcceptedTests(record);
   record.evaluatorVersion = evaluatorVersion(record.settings);
   record.limitations = previous.limitations.filter(note => !note.startsWith('Scripted mode skipped') && !note.startsWith('Не удалось назвать типы провалов:')
@@ -300,6 +302,20 @@ export class ExperimentLab {
     const decision = recheckDecision({ pendingJobs, remainingCalls, defer: !!options.defer, askedHash: options.explicit ? hash : undefined, libraryHash: hash });
     if (decision.action === 'run') await this.checkCards(id, decision.startHash);
     return { decision, before: experiment };
+  }
+  /** Previews the owner's word on which agent version wrote an import's logs (card/commands.ts); nothing is written. */
+  async prepareLogVersion(command: LogVersionCommand, options: { via: Via; at?: string }): Promise<PreparedLogVersion> {
+    const batch = await this.store.readImport(command.importId);
+    return prepareLogVersion(await this.store.readLogVersions(batch.id), batch, command, options);
+  }
+  /**
+   * Records a previewed declaration with the owner's grant, appended to the import's own journal: no run and no library
+   * changes, so it may be given at any time; the next calibration reads it, a finished run keeps its snapshot.
+   */
+  async applyLogVersion(prepared: PreparedLogVersion, grant: HostGrant): Promise<LogVersionJournal> {
+    const next = applyLogVersion(await this.store.readLogVersions(prepared.command.importId), prepared, grant);
+    await this.store.writeLogVersions(next, prepared.journalHash);
+    return next;
   }
   /** Detached variant library plus its current (empty until accepted) runnable draft: what the variant editor below works on. */
   async readLibrary(id: string): Promise<{ library: LibraryV1; experiment: Experiment }> {
@@ -603,6 +619,7 @@ export class ExperimentLab {
           await this.checkpoint(record, 'evaluating', `Переоценено ${record.trials.length}/${trials.length}. Агент не запускался.`);
         }
         if (runtime) await this.nameFailureModes(record, runtime, ctx);
+        if (runtime) await calibrateRun(record, { runtime, ctx, store: this.store, checkpoint: message => this.checkpoint(record, record.phase, message) });
         await this.checkpoint(record, 'results_review', 'Переоценка готова. Исходные трассы, оценки и ручные решения сохранены в исходном прогоне.');
       }, true);
       return structuredClone(record);
@@ -891,6 +908,8 @@ export class ExperimentLab {
     if (record.trials.some(t => !['invalid', 'cancelled'].includes(t.outcome))) {
       await rememberConnection(this.store.directory, { format: 'agent-lab-connection-1', target: runnableTarget(record.target), targetVersion: record.targetVersion });
     }
+    // The synthetic result is complete; the same situations are now judged on their recorded conversations.
+    await calibrateRun(record, { runtime, ctx, store: this.store, checkpoint: message => this.checkpoint(record, record.phase, message) });
     await this.checkpoint(record, 'results_review', 'Диалоги и оценки готовы. Разберите провалы и проверьте поведение симулятора, прежде чем принимать результат.');
   }
   /**

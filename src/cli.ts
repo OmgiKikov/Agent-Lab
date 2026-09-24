@@ -18,12 +18,14 @@ import { expectationSheet, testPlanLines, trialProofLines } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { buildResultView, exitCodeOf, type ResultView } from './result-view.js';
 import { MAX_WIDTH, plainText, resultScreen, type ResultRow } from './result-text.js';
-import { evidenceBundle, exportArtifacts, resolveVerified } from './artifacts.js';
+import { evidenceBundle, exportArtifacts, importNumbers, resolveVerified } from './artifacts.js';
 import { libraryHash } from './scenario-library.js';
 import { hostGrant, requiredAuthority, wordsOf } from './card/commands.js';
 import { cardCommandSchema } from './card/schema.js';
 import { actionRow, briefRows, changeText, countsText, detailRows, formatNote, listRows, plainSituationText, situationActions, situationData, situationViews, type SituationView } from './card/view.js';
 import { safeLine } from './text.js';
+import { countText } from './plural.js';
+import { logImports } from './card/calibration-scope.js';
 
 /**
  * The rows of the result screen with every text made safe for a terminal before layout: titles, quotes
@@ -70,11 +72,13 @@ async function main() {
     'dialogues-file': { type: 'string' }, trial: { type: 'string', multiple: true },
     yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
     card: { type: 'string' }, choice: { type: 'string' }, text: { type: 'string' }, check: { type: 'boolean' }, resume: { type: 'boolean' }, accept: { type: 'boolean' },
+    'agent-version': { type: 'string' }, unknown: { type: 'boolean' }, import: { type: 'string' },
   } });
   const command = positionals[0];
   if (values.help || !command) {
     process.stdout.write('  agent-lab detect [--directory ПАПКА] [--json]  Что Lab нашёл в папке проекта: агента, логи, материалы, промпт\n');
     process.stdout.write('  agent-lab summary --id RUN [--json]     Сколько ситуаций агент прошёл, что не измерено и почему\n');
+    process.stdout.write('  agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--yes]   Какая версия агента записала логи: только тогда сверка с продом — калибровка\n');
     process.stdout.write('  agent-lab accept --id RUN [--yes]      Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания\n');
     process.stdout.write('Agent Lab — validation set, accuracy и причины провалов вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
     process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  evaluate принимает --connection; build — --dialogues-file (JSON/JSONL).\n\n');
@@ -154,6 +158,28 @@ async function main() {
     } finally { await lab.close(); }
     return;
   }
+  if (command === 'logs') {
+    if (!values.id) throw new Error('Укажите --id RUN.');
+    if (values['agent-version'] !== undefined && values.unknown) throw new Error('Либо --agent-version, либо --unknown.');
+    const lab = new ExperimentLab(directory);
+    const importIds = logImports(await lab.get(values.id));
+    const said = (version: string | null | undefined) => version === undefined ? 'не указана' : version ?? 'неизвестна';
+    if (values['agent-version'] === undefined && !values.unknown) {
+      const rows = await Promise.all(importIds.map(async id => `${id} · ${countText((await lab.store.readImport(id)).dialogues.length, ['разговор', 'разговора', 'разговоров'])}`
+        + ` · версия агента: ${said((await lab.store.readLogVersions(id))?.declarations.at(-1)?.command.version)}`));
+      await writeStdout(`${[...rows.length ? rows : ['У этого прогона нет логов.'], '', 'Указать версию: agent-lab logs --id RUN --agent-version ВЕРСИЯ --yes (или --unknown)'].map(line => safeLine(line)).join('\n')}\n`);
+      return;
+    }
+    const importId = values.import ?? (importIds.length === 1 ? importIds[0] : undefined);
+    if (!importId || !importIds.includes(importId)) throw new Error(`Укажите --import: ${importIds.join(', ') || 'у этого прогона нет логов'}.`);
+    const prepared = await lab.prepareLogVersion({ kind: 'declare_log_version', importId, version: values.unknown ? null : values['agent-version']! }, { via: 'cli-yes' });
+    const change = `Версия агента в логах: было «${said(prepared.change.before)}», стало «${said(prepared.change.after)}».`;
+    if (!values.yes) { await writeStdout(`${safeLine(change)}\nЗаписать: та же команда с --yes.\n`); return; }
+    await lab.init();
+    try { await lab.applyLogVersion(prepared, hostGrant(prepared, 'confirmed')); } finally { await lab.close(); }
+    await writeStdout(`${safeLine(change)} Записано: следующая сверка с продом прочтёт её.\n`);
+    return;
+  }
   if (command === 'doctor') {
     const connection = values.connection ? await readConnection(values.connection) : await rememberedConnection(directory);
     if (!connection?.probe) throw new Error('Укажите --connection с probe.write/read/reset и initialState.');
@@ -170,7 +196,8 @@ async function main() {
     // The source run is read-only context for stability; the same verified path as Pi and the exports:
     // receipts checked against sidecars, source resolved once. The trace journal is not needed here.
     const verified = await resolveVerified(record, store, record.assessmentOf ?? record.parentRunId);
-    const view = buildResultView(verified.record, { before: verified.before });
+    const numbers = verified.record.calibration?.entries.length ? await importNumbers(verified.record, importId => store.readImport(importId)) : undefined;
+    const view = buildResultView(verified.record, { before: verified.before, ...(numbers ? { numbers } : {}) });
     if (values.json) { process.stdout.write(`${JSON.stringify({ ...machineResult(view), warnings: verified.warnings }, null, 2)}\n`); return; }
     process.stdout.write(screenText(view, verified.warnings));
     return;

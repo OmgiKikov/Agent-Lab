@@ -16,6 +16,7 @@ import type { ImportBatch } from './scenario-contracts.js';
 import type { ScenarioLibrary } from './card/schema.js';
 import { readTopicMapFile, writeTopicMapFile } from './miner/files.js';
 import type { TopicMap, TopicMapKey, TopicMapProgress } from './miner/topic-map.js';
+import type { LogVersionJournal } from './card/calibration.js';
 
 type LockOwner = { pid: number; token: string };
 function alive(pid: number): boolean {
@@ -46,6 +47,12 @@ export class ExperimentStore {
   readTopicMap(key: TopicMapKey): Promise<unknown> { return readTopicMapFile(this.directory, key); }
   /** Stores a topic map, or the progress of its build, next to its import. */
   writeTopicMap(value: TopicMap | TopicMapProgress): Promise<void> { return this.writeTransaction(() => writeTopicMapFile(this.directory, value)); }
+  /** Which agent version wrote an import's logs, as the owner declared it (card/calibration.ts); undefined before the first declaration. */
+  readLogVersions(importId: string): Promise<LogVersionJournal | undefined> { return new ScenarioFiles(this.directory).readLogVersions(importId); }
+  /** Appends a declaration to its import's journal, if the journal is still the one it was prepared on. */
+  writeLogVersions(journal: LogVersionJournal, expectedHash: string | null): Promise<void> {
+    return this.writeTransaction(() => new ScenarioFiles(this.directory).writeLogVersions(journal, expectedHash));
+  }
   readLibrary(id: string, hash?: string): Promise<ScenarioLibrary> { return new ScenarioFiles(this.directory).readLibrary(id, hash); }
   writeLibrary(library: ScenarioLibrary, expectedHash?: string): Promise<void> {
     return this.writeTransaction(() => new ScenarioFiles(this.directory).writeLibrary(library, expectedHash));
@@ -206,23 +213,26 @@ export class ExperimentStore {
     // The existing evidence journal also survives interruption during assessment.
     appendFileSync(join(this.directory, `${id}.trace.jsonl`), `${JSON.stringify({ trialId, judgeAudit: judgeAuditSchema.parse(audit) })}\n`, { mode: 0o600, flush: true });
   }
-  /** Full audit of one trial's judgment in `{id}.judge/{trialId}.json`, replaced atomically on every call. */
-  private judgeAuditPath(id: string, trialId: string): string {
+  /**
+   * Full audit of one judgment, replaced atomically on every call: a trial's in `{id}.judge/{trialId}.json`, an
+   * expectation judged on its recorded conversation (card/log-judge.ts) in `{id}.calibration/{key}.json`.
+   */
+  private auditPath(id: string, folder: 'judge' | 'calibration', name: string): string {
     this.path(id);
-    if (!isIdentifier(trialId)) throw new Error('Invalid trial ID');
-    return join(this.directory, `${id}.judge`, `${trialId}.json`);
+    if (!isIdentifier(name)) throw new Error(folder === 'judge' ? 'Invalid trial ID' : 'Invalid calibration key');
+    return join(this.directory, `${id}.${folder}`, `${name}.json`);
   }
   // Synchronous on purpose: onJudgment is synchronous, and a crash must leave the last complete audit on disk.
-  writeJudgeAudit(id: string, trialId: string, audit: JudgeAudit): void {
+  private writeAudit(id: string, folder: 'judge' | 'calibration', name: string, audit: JudgeAudit): void {
     if (!this.lockToken) throw new Error('Для записи оценки откройте лабораторию как писатель.');
     // The path check comes first: an unsafe id must be refused before anything touches the disk.
-    const target = this.judgeAuditPath(id, trialId);
+    const target = this.auditPath(id, folder, name);
     const content = JSON.stringify(judgeAuditSchema.parse(audit));
-    mkdirSync(join(this.directory, `${id}.judge`), { recursive: true, mode: 0o700 });
+    mkdirSync(join(this.directory, `${id}.${folder}`), { recursive: true, mode: 0o700 });
     writeFileAtomicSync(target, content);
   }
-  async readJudgeAudit(id: string, trialId: string): Promise<JudgeAudit | null> {
-    const target = this.judgeAuditPath(id, trialId);
+  private async readAudit(id: string, folder: 'judge' | 'calibration', name: string): Promise<JudgeAudit | null> {
+    const target = this.auditPath(id, folder, name);
     let file;
     try { file = await open(target, 'r'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
@@ -231,4 +241,8 @@ export class ExperimentStore {
       return judgeAuditSchema.parse(JSON.parse(await file.readFile('utf8')));
     } finally { await file.close(); }
   }
+  writeJudgeAudit(id: string, trialId: string, audit: JudgeAudit): void { this.writeAudit(id, 'judge', trialId, audit); }
+  readJudgeAudit(id: string, trialId: string): Promise<JudgeAudit | null> { return this.readAudit(id, 'judge', trialId); }
+  writeCalibrationAudit(id: string, key: string, audit: JudgeAudit): void { this.writeAudit(id, 'calibration', key, audit); }
+  readCalibrationAudit(id: string, key: string): Promise<JudgeAudit | null> { return this.readAudit(id, 'calibration', key); }
 }

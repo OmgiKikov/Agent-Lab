@@ -50,7 +50,7 @@ export const GLYPH = {
 export const ROLE_TONE: Record<Exclude<ResultRole, 'blank'>, { tone: Tone; bold: boolean }> = {
   'accuracy:good': { tone: 'success', bold: true }, 'accuracy:warn': { tone: 'warning', bold: true },
   'accuracy:bad': { tone: 'error', bold: true }, 'accuracy:none': { tone: 'text', bold: true }, alarm: { tone: 'error', bold: true },
-  trust: { tone: 'muted', bold: false }, 'trust:small': { tone: 'warning', bold: false }, reality: { tone: 'muted', bold: false },
+  trust: { tone: 'muted', bold: false }, 'trust:small': { tone: 'warning', bold: false }, reality: { tone: 'muted', bold: false }, calibration: { tone: 'muted', bold: false },
   heading: { tone: 'accent', bold: true }, item: { tone: 'text', bold: false }, 'item:muted': { tone: 'muted', bold: false },
   failed: { tone: 'error', bold: true }, quote: { tone: 'text', bold: false }, muted: { tone: 'muted', bold: false },
   next: { tone: 'text', bold: false }, 'next:first': { tone: 'accent', bold: false }, good: { tone: 'success', bold: false },

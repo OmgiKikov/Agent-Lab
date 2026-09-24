@@ -6,7 +6,8 @@ import { experimentSchema, fingerprint, type Experiment } from './contracts.js';
 import { libraryHash, verifiedAcceptance } from './scenario-library.js';
 import { writeFileAtomic } from './fs-atomic.js';
 import { isIdentifier, isSha256 } from './ids.js';
-import { LibraryConflict } from './errors.js';
+import { LibraryConflict, StaleRevisionError } from './errors.js';
+import { logVersionJournalSchema, type LogVersionJournal } from './card/calibration.js';
 
 const identifier = (id: string) => {
   if (!isIdentifier(id)) throw new Error('Некорректный идентификатор сценариев');
@@ -34,6 +35,28 @@ export class ScenarioFiles {
     }
     await atomicJson(join(this.directory, 'imports'), `${identifier(batch.id)}.json`, batch);
     return batch;
+  }
+  /** The owner's declarations of which agent version wrote an import's logs (card/calibration.ts); undefined before the first one. */
+  async readLogVersions(importId: string): Promise<LogVersionJournal | undefined> {
+    const raw = await readFile(join(this.directory, 'imports', `${identifier(importId)}.declarations.json`), 'utf8').catch(error => { if (!missing(error)) throw error; });
+    if (raw === undefined) return undefined;
+    const journal = logVersionJournalSchema.parse(JSON.parse(raw));
+    if (journal.importId !== importId) throw new Error('Журнал версий логов не совпадает с импортом');
+    return journal;
+  }
+  /**
+   * Writes a journal that is the stored one plus one declaration: the stored one must still be the one the
+   * declaration was prepared on (`expectedHash`, null before the first), and every declaration in it stays as it was.
+   */
+  async writeLogVersions(raw: LogVersionJournal, expectedHash: string | null): Promise<void> {
+    const journal = logVersionJournalSchema.parse(raw);
+    const current = await this.readLogVersions(journal.importId);
+    const currentHash = current ? fingerprint(current) : null;
+    if (currentHash !== expectedHash) throw new StaleRevisionError(expectedHash ?? 'none', currentHash ?? 'none', 'Версию логов уже изменили: покажу, что записано сейчас.');
+    const kept = current?.declarations ?? [];
+    if (current && current.contentHash !== journal.contentHash || journal.declarations.length !== kept.length + 1
+      || fingerprint(journal.declarations.slice(0, kept.length)) !== fingerprint(kept)) throw new Error('Журнал версий логов только дописывается.');
+    await atomicJson(join(this.directory, 'imports'), `${identifier(journal.importId)}.declarations.json`, journal);
   }
   async readLibrary(id: string, hash?: string): Promise<ScenarioLibrary> {
     if (hash !== undefined && !isSha256(hash)) throw new Error('Некорректный хеш библиотеки');

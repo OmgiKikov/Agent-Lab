@@ -4,7 +4,7 @@ import {
   checkSchema, EXPECTATIONS_PROTOCOL, failureModeSchema, fingerprint, requirementSchema, REQUIREMENT_LIMIT, SIMULATOR_PROTOCOL, sourceSelectionSchema, userTurnSchema, VERSION, verbatimSpan, worldSchema,
   type CallContext, type FailureMode, type GroundingInput, type Requirement, type Runtime, type ScenarioProposalsInput, type Settings, type Source,
 } from './contracts.js';
-import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT } from './judge.js';
+import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } from './judge.js';
 import { FOCUSED_REQUIREMENT_LIMIT } from './limits.js';
 import { callModel, type Model } from './llm/model-call.js';
 import { AUTH_HELP, resolveModels } from './llm/models.js';
@@ -15,6 +15,7 @@ import {
 } from './prompts.js';
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
 import { cardReviewSchema } from './card/review.js';
+import { judgeLogged, logProtocolHash } from './card/log-judge.js';
 import { buildTopicMap } from './miner/topic-map.js';
 import { scenarioProposalSchema, semanticFindingSchema } from './scenario-contracts.js';
 import { SCENARIO_OUTPUT_BYTES, SCENARIO_REQUEST_BYTES, SEMANTIC_BATCH_FIELDS, SEMANTIC_REASON_CHARS, workInputIssue } from './scenario-work.js';
@@ -158,6 +159,14 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   const models = await resolveModels(runtime, settings, signal);
   const run = <O>(task: StructuredTask<O>, input: unknown, ctx: CallContext): Promise<O> => runStructured(runtime, models, task, input, ctx);
   const builder = { provider: models.builder.provider, id: models.builder.id };
+  const judge = models.judge;
+  // One judge for the synthetic attempts and for the recorded conversations: the same model, sampling and transport.
+  const judgeModel = { provider: judge.provider, id: judge.id, configurationHash: judgeConfiguration(judge), transport: models.judgeTransport };
+  const respond = (ctx: CallContext): Respond => async (prompt, data, recordPartial) => (await callModel(runtime, judge, {
+    system: prompt, messages: [{ role: 'user', content: data, timestamp: Date.now() }], maxTokens: 16384,
+    ...(judge.reasoning ? { reasoning: true } : { temperature: 0 }),
+    ...(models.judgeTransport.structured ? { responseFormat: JUDGE_RESPONSE_FORMAT } : {}),
+  }, ctx, recordPartial)).text;
   return {
     generatorTransport: 'pi-model',
     // The logs' topics are the builder's work, like the situations prepared from them.
@@ -237,14 +246,10 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       return result.modes.map(mode => mode.promptQuotes ? { ...mode, promptQuotes: mode.promptQuotes.map(quote => verbatimSpan(input.prompt!, quote)!) } : mode);
     },
     async assess(input, ctx) {
-      const judge = models.judge;
-      return assessRepeated(input, { provider: judge.provider, id: judge.id, configurationHash: judgeConfiguration(judge), transport: models.judgeTransport }, ctx,
-        async (prompt, data, recordPartial) => (await callModel(runtime, judge, {
-          system: prompt, messages: [{ role: 'user', content: data, timestamp: Date.now() }], maxTokens: 16384,
-          ...(judge.reasoning ? { reasoning: true } : { temperature: 0 }),
-          ...(models.judgeTransport.structured ? { responseFormat: JUDGE_RESPONSE_FORMAT } : {}),
-        }, ctx, recordPartial)).text);
+      return assessRepeated(input, judgeModel, ctx, respond(ctx));
     },
+    logJudge: { provider: judge.provider, model: judge.id, protocolHash: logProtocolHash(judgeModel.configurationHash),
+      assess: (request, ctx) => judgeLogged(request, judgeModel, ctx, respond(ctx)) },
     async selectUserAction(input, ctx) {
       // The answer is an enum of exactly the moves allowed now, so a move outside the policy cannot be returned.
       return run({ id: 'user-action', label: 'Действие пользователя', role: 'simulator', instructions: USER_CONTROLLER_ROLE, output: userDecisionSchema(input.actions) }, input, ctx);
