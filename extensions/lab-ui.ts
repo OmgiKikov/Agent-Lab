@@ -87,6 +87,7 @@ const STOP_LABELS: Readonly<Record<string, Stopped['reason']>> = {
 };
 const PROVIDER: Record<ProviderFailureKind, string> = {
   'rate limit': 'Провайдер модели ограничил частоту запросов. Подождите минуту и повторите.',
+  overloaded: 'Провайдер модели перегружен или временно недоступен. Повторите через минуту.',
   'insufficient credit': 'У провайдера модели закончились средства. Пополните счёт или выберите другую модель (/model).',
   'access denied': 'Провайдер модели отказал в доступе. Проверьте ключ и права на модель (/login).',
   timeout: 'Модель не ответила вовремя. Повторите позже.',
@@ -96,6 +97,7 @@ const PROVIDER: Record<ProviderFailureKind, string> = {
   deadline: 'Модель не ответила за отведённое время. Повторите позже.',
   unavailable: 'Модель недоступна. Проверьте ключ и права на модель (/login, /model).',
   empty: 'Модель вернула пустой ответ. Повторите.',
+  length: 'Ответ модели упёрся в предел длины. Повторите или выберите модель с большим пределом ответа (/model).',
 };
 const AGENT: Record<AgentRequestFailed['kind'], string> = {
   unreachable: 'Агент не отвечает. Проверьте, что он запущен и доступен, и повторите.',

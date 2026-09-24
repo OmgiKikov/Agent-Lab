@@ -63,7 +63,7 @@ export function chatSession(runtime: Runtime, options: { inlineRunMs?: number; i
     on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, handler); },
     sendMessage: (message: Sent['message'], sendOptions: Sent['options']) => { sent.push({ message, options: sendOptions }); }, sendUserMessage() {},
     getActiveTools: () => [...active.names], setActiveTools: (names: string[]) => { active.names = [...names]; },
-  } as unknown as ExtensionAPI, { createLab: options.createLab ?? (directory => new ExperimentLab(directory, runtime)), gateway: { connect: async () => ({ failure: 'not configured' }) },
+  } as unknown as ExtensionAPI, { createLab: options.createLab ?? (directory => new ExperimentLab(directory, runtime)), gateway: { connect: async () => ({ failure: { kind: 'not configured' as const } }) },
     ...(options.inlineRunMs === undefined ? {} : { inlineRunMs: options.inlineRunMs }), ...(options.inlineCheckMs === undefined ? {} : { inlineCheckMs: options.inlineCheckMs }),
     ...(options.inlineBuildMs === undefined ? {} : { inlineBuildMs: options.inlineBuildMs }) });
   const call = (tool: string, id: string, params: unknown, ctx: ExtensionContext, signal?: AbortSignal) => tools.get(tool)!.execute(id, params as never, signal, undefined, ctx);
