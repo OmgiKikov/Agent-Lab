@@ -21,8 +21,8 @@ export interface CustomerMoves {
   blocked: string[];
 }
 
-/** The part of a controller event this reads; anything else in the event is not needed and not checked here. */
-const controllerEvent = z.object({ protocol: z.literal(USER_CONTROLLER_PROTOCOL), decision: z.object({ actionId: z.string() }), accepted: z.literal(true) });
+/** The part of a controller event its readers need (here and card/calibration-view.ts); anything else in the event is not needed and not checked. */
+export const controllerEvent = z.object({ protocol: z.literal(USER_CONTROLLER_PROTOCOL), decision: z.object({ actionId: z.string() }), accepted: z.literal(true) });
 
 /** The moves of one conversation, in order, as kinds of the actions its definition declares; an action it does not declare is skipped. */
 export function trialMoves(scenario: Scenario, trial: Trial): MoveKind[] {

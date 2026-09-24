@@ -53,9 +53,10 @@ type Judged = 'pass' | 'fail' | 'unknown';
  * one check) replaces the recorded result, with two exceptions: a one-key «не могу сказать» is
  * doubt, not a verdict, so the recorded result stays and the owner's hesitation can never quietly
  * take a failure out of the headline (a full review that says `unknown` still overrides); and
- * «invalid» takes the target out of the judgment altogether (`invalid: true`, no result).
+ * «invalid» takes the target out of the judgment altogether (`invalid: true`, no result). The owner's verdict on
+ * a logged conversation (card/calibration.ts LogReview) follows the same rule.
  */
-export function humanOverride(review: HumanReview | undefined, recorded: Judged | undefined): { invalid: boolean; result: Judged | undefined } {
+export function humanOverride(review: Pick<HumanReview, 'verdict' | 'source'> | undefined, recorded: Judged | undefined): { invalid: boolean; result: Judged | undefined } {
   if (review?.verdict === 'invalid') return { invalid: true, result: undefined };
   if (!review || (review.source === 'quick' && review.verdict === 'unknown')) return { invalid: false, result: recorded };
   return { invalid: false, result: review.verdict };
