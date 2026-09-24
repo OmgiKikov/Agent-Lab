@@ -11,10 +11,11 @@ import { assessTrial, evaluateTrial } from '../src/evaluation.js';
 import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { proposalCall } from '../src/card/proposal.js';
-import { checkSchema, experimentSchema, fingerprint, SANDBOX_RETIRED, type Scenario, type Source, type Target, type Trial, type World } from '../src/contracts.js';
+import { checkSchema, experimentSchema, fingerprint, SANDBOX_RETIRED, settingsSchema, type Scenario, type Source, type Target, type Trial, type World } from '../src/contracts.js';
 import { goalAttainment, replyQuality, simulatorFidelity, type JudgeAudit, type MetricAssessment, type Rubric } from '../src/assessment.js';
 import type { CallContext, DialogueMessage, Runtime } from '../src/runtime.js';
 import { appointmentAgent, legacyDemoRuntime } from './helpers/demo-record.js';
+import { compiledCard, requirements as cardRequirements } from './helpers/cards.js';
 
 function context(signal = new AbortController().signal): CallContext {
   return { signal, timeoutMs: 1000, beforeCall() { signal.throwIfAborted(); }, addUsage() {} };
@@ -444,6 +445,8 @@ test('static and scripted user modes never call the simulator and stop within th
   const bounded = await run({ ...scripted, user: { ...scripted.user, maxFollowUps: 1 } }, 'scripted');
   assert.equal(bounded.outcome, 'invalid');
   assert.equal(bounded.events.filter(e => e.type === 'user').length, 0, 'unreachable scripted messages are rejected before calling the agent');
+  assert.equal(bounded.invalidCause, 'turn_limit', 'a script over the limit is the test\'s own refusal, never «агент не ответил»');
+  assert.ok(bounded.reason.startsWith('сценарий теста:'), bounded.reason);
   const noScript = await run({ ...clarify, user: { ...clarify.user, script: undefined } }, 'scripted');
   assert.equal(noScript.events.filter(e => e.type === 'user').length, 1);
   assert.equal(noScript.outcome, 'fail');
@@ -466,12 +469,18 @@ test('external module targets are graded on reported records and events', async 
   const unreported = await run(direct, silent);
   assert.equal(unreported.outcome, 'invalid');
   assert.match(unreported.reason, /не сообщил итоговое состояние/);
+  assert.equal(unreported.invalidCause, 'measurement', 'the agent answered; the connection did not show the state the checks need');
   assert.equal(unreported.finalState.records.A101!.time, '09:00');
   const broken = join(directory, 'broken.mjs');
   await writeFile(broken, 'export function createSession() { return { async respond() { throw new Error("adapter boom"); } }; }\n');
   const invalid = await run(direct, broken);
   assert.equal(invalid.outcome, 'invalid');
   assert.match(invalid.reason, /ответ испытуемого: .*adapter boom/);
+  assert.equal(invalid.invalidCause, 'agent', 'OD-1: the agent\'s side failed to answer');
+  const empty = join(directory, 'empty.mjs');
+  await writeFile(empty, 'export function createSession() { return { async respond() { return "  "; } }; }\n');
+  const silentReply = await run(direct, empty);
+  assert.deepEqual([silentReply.outcome, silentReply.invalidCause, silentReply.reason], ['invalid', 'agent', 'Испытуемый вернул пустой ответ.'], 'OD-1: silence stays «агент не ответил»');
   const unavailable = join(directory, 'unavailable.mjs');
   await writeFile(unavailable, `export function createSession() { return { async respond() { return {
     reply: 'Нет данных для ответа.', measurementError: 'В фикстуре отсутствует lookup_record.',
@@ -487,6 +496,25 @@ test('external module targets are graded on reported records and events', async 
   assert.deepEqual(infrastructure.events.map(e => e.type), ['user', 'tool_call', 'tool_result', 'assistant', 'error']);
   assert.equal(infrastructure.events[3]!.text, 'Нет данных для ответа.');
   assert.match(infrastructure.reason, /В фикстуре отсутствует lookup_record/);
+  assert.equal(infrastructure.invalidCause, 'measurement', 'the adapter\'s typed measurementError decides the cause, never the error text');
+});
+
+test('HN-4: a compiled card the Lab refuses before contacting the agent names the Lab\'s cause; a session that fails to open stays the agent\'s', async () => {
+  const scenario = compiledCard();
+  let contacted = 0;
+  const target = await httpAgent(() => { contacted += 1; return 'Здравствуйте.'; });
+  const runtime: Runtime = { ...legacyDemoRuntime(), async selectUserAction() { return { actionId: 'leave' }; } };
+  // The card's required path takes two customer turns; settings never allow fewer than two, so one is set past the schema to reach the refusal.
+  const compiled = (maxTurns: number, to: Target) => evaluateTrial({ requirements: cardRequirements, runtime, revision, scenario, repeat: 0, manifestHash: 'h', sources: [],
+    settings: { ...settingsSchema.parse({}), maxTurns }, ctx: context(), userMode: 'reactive', target: to });
+  const over = await compiled(1, target);
+  assert.deepEqual([over.outcome, over.invalidCause], ['invalid', 'turn_limit']);
+  assert.ok(over.reason.startsWith('контроллер симулятора:'), over.reason);
+  assert.equal(contacted, 0, 'the agent is never contacted');
+  const unopened = await compiled(4, { kind: 'module', path: join(tmpdir(), 'agent-lab-no-such-agent', 'agent.mjs'), exportName: 'createSession' });
+  assert.equal(unopened.outcome, 'invalid');
+  assert.ok(unopened.reason.startsWith('открытие сессии с испытуемым:'), unopened.reason);
+  assert.equal(unopened.invalidCause, 'agent');
 });
 
 test('reactive dialogues record simulator checks that never change the objective outcome', async () => {

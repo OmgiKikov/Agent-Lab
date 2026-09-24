@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Trial, type ValidationExclusion } from '../src/contracts.js';
+import { emptyUsage, experimentSchema, settingsSchema, type Experiment, type HumanReview, type Trial, type ValidationExclusion } from '../src/contracts.js';
 import { goalAttainment, promptCompliance, replyQuality, simulatorFidelity, type JudgeAudit, type MetricAssessment } from '../src/assessment.js';
 import { buildResultView, exclusionCounts, exitCodeOf, NOT_MEASURED_TEXT, SMALL_SAMPLE, unmeasuredControl, wilson, type ResultView } from '../src/result-view.js';
 import { accuracyRow, alarmRow, causeRows, disagreementRows, errorListRows, headRows, MAX_WIDTH, nextRows, nextStepText, plainText, resultScreen, runLine, trustParts, trustSegments, unmeasuredRows } from '../src/result-text.js';
@@ -20,6 +20,7 @@ import { embeddedBefore, evidenceBundle } from '../src/artifacts.js';
 import { sealJudgeReceipt } from '../src/judge.js';
 import { sourceIdentity } from '../src/normalize.js';
 import { COUNTING_RULES } from '../src/outcomes.js';
+import { decisions } from '../src/inbox.js';
 
 const world = { records: {}, writableFields: [], transientFailures: 0 };
 type Card = Experiment['scenarios'][number];
@@ -92,7 +93,8 @@ function acquiringShape(): Experiment {
 }
 /** The first block of the acquiring run: the number and the one trust line under it. */
 const ACQUIRING_HEAD = [
-  'Точность агента: 0% — справился в 0 из 9 ситуаций',
+  // 4 of the 13 counted situations are not measured (31%, above NOT_MEASURED_WARN_ABOVE): the headline names them (HN-3).
+  'Точность агента: 0% — справился в 0 из 9 ситуаций, ещё 4 не измерено',
   // The acquiring run has 9 usable goal failures queued for review and no pass in the sample (the
   // only recorded pass, deviated1, is unusable), so the judge part is there before the first mark (F6, CR-01).
   'Вероятно, от 0% до 30% (95%) · мало данных · не измерено 4 — чаще всего клиент в симуляции отошёл от ситуации (2) · судью ещё не проверяли',
@@ -277,7 +279,7 @@ test('a quick «не согласен» moves the headline and is counted agains
   const { stdout, stored } = await quickMarked('pass', 'Проверка: судья не учёл уточнение клиента.');
   const view = buildResultView(stored);
   assert.equal(stdout, `${screen(view)}\n`);
-  assert.equal(head(view)[0], 'Точность агента: 11% — справился в 1 из 9 ситуаций');
+  assert.equal(head(view)[0], 'Точность агента: 11% — справился в 1 из 9 ситуаций, ещё 4 не измерено');
   assert.ok(trustParts(view).includes('с судьёй согласны 0 из 1'), trustParts(view).join(' · '));
   assert.equal(view.agreement.failures.checked, 1);
   assert.equal(view.agreement.failures.agreed, 0);
@@ -322,8 +324,9 @@ function expectReason(code: NotMeasuredCode, subject: Card, trials: Trial[], ove
 }
 
 test('every reason code has a Russian label and the list keeps its fixed order', () => {
-  assert.equal(NOT_MEASURED_CODES.length, 20);
+  assert.equal(NOT_MEASURED_CODES.length, 21);
   assert.equal(NOT_MEASURED_CODES.indexOf('judge_unavailable'), NOT_MEASURED_CODES.indexOf('judge_error') + 1);
+  assert.equal(NOT_MEASURED_CODES.indexOf('measurement_error'), NOT_MEASURED_CODES.indexOf('service_reply') + 1);
   assert.deepEqual(Object.keys(NOT_MEASURED_TEXT), [...NOT_MEASURED_CODES]);
   assert.ok(Object.values(NOT_MEASURED_TEXT).every(label => /^[а-яё]/u.test(label)));
 });
@@ -383,6 +386,17 @@ test('typed causes are read before the recorded text', () => {
   expectReason('service_reply', card('c'), [attempt('c', { outcome: 'invalid', reason: 'Разговор не завершился в отведённое число реплик.', invalidCause: 'service_reply', assessments: undefined })]);
   expectReason('judge_unavailable', card('c'), [attempt('c', { assessmentError: 'Judge response rejected; original responses and errors are preserved in judgeAudit', assessmentFailure: 'unavailable' })]);
   expectReason('judge_error', card('c'), [attempt('c', { assessmentError: 'Pi request deadline exceeded', assessmentFailure: 'rejected' })]);
+});
+
+test('reason measurement_error: the connection answered but did not show what the checks need — never «агент не ответил»', () => {
+  const trial = attempt('c', { outcome: 'invalid', reason: 'проверка наблюдений: Состояние внешний агент не сообщил.', invalidCause: 'measurement', assessments: undefined });
+  assert.equal(experimentSchema.parse(run([card('c')], [trial])).trials[0]!.invalidCause, 'measurement', 'the appended cause parses');
+  const view = expectReason('measurement_error', card('c'), [trial]);
+  assert.ok(trustParts(view).includes('не измерено 1 — подключение не показало, что нужно для проверки'));
+  const inbox = decisions({ run: { record: run([card('c'), card('decided')], [trial, attempt('decided', { goal: 'fail' })]), view } });
+  const agent = inbox.find(item => item.key.endsWith(':agent'));
+  assert.equal(agent?.text, '1 ситуация не измерена: подключение не показало, что нужно для проверки — проверьте связь с агентом.');
+  assert.ok(agent?.choices.some(choice => choice.label === 'Проверить связь с агентом'));
 });
 
 test('reason human_invalid: a person marked the dialogue or the goal verdict invalid', () => {
@@ -877,7 +891,7 @@ function acquiringRulesShape(): Experiment {
 
 test('the acquiring run under the new rule reads 0 of 10, with requests met 0 of 9 and rules broken 10 of 10', () => {
   const view = buildResultView(acquiringRulesShape());
-  assert.equal(accuracyRow(view).text, 'Точность агента: 0% — справился в 0 из 10 ситуаций');
+  assert.equal(accuracyRow(view).text, 'Точность агента: 0% — справился в 0 из 10 ситуаций, ещё 3 не измерено', '3 of 13 not measured: the headline names them');
   assert.deepEqual(view.breakdown, { goal: { met: 0, decided: 9 }, rules: { broken: 10, decided: 10, commonRule: null, commonRuleCount: 0 }, withoutRules: 0 });
   assert.equal(view.notMeasured.total, 3);
   assert.deepEqual(view.notMeasured.reasons.map(reason => [reason.code, reason.count]), [['simulator_deviated', 2], ['simulator_unclear', 1]]);

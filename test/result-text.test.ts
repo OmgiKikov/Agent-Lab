@@ -6,7 +6,7 @@ import { goalAttainment, promptCompliance, replyQuality, simulatorFidelity, type
 import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView, COUNTING_RULES, NOT_MEASURED_TEXT, type ResultView } from '../src/result-view.js';
 import {
-  accuracyParts, accuracyRow, alarmRow, causeRows, chatBlock, disagreementRows, failureRows, fitRows, GOOD_FROM, headRows, MAX_WIDTH, MIXED_FROM, nextRows, plainText,
+  accuracyParts, accuracyRow, alarmRow, causeRows, chatBlock, disagreementRows, failureRows, fitRows, GOOD_FROM, headRows, MAX_WIDTH, MIXED_FROM, nextRows, NOT_MEASURED_WARN_ABOVE, plainText,
   realityParts, resultScreen, runLine, topicRows, trustParts, trustSegments, whenText, type ResultRow,
 } from '../src/result-text.js';
 import { assertPlainCopy } from './helpers/copy-check.js';
@@ -194,6 +194,31 @@ test('the colour level reads the rounded percent the row prints: 80 and up good,
     assert.equal(accuracyParts(v).level, level, `${passed}/${passed + failed}`);
     assert.equal(accuracyRow(v).role, `accuracy:${level}`);
   }
+});
+
+test('HN-3: above 10% of counted situations not measured the number is never good, and the headline says how many', () => {
+  assert.equal(NOT_MEASURED_WARN_ABOVE, 10);
+  const thin = view(scored(5, 1, { unmeasured: 4 }));
+  assert.deepEqual(accuracyParts(thin), { lead: 'Точность агента:', value: '83%', tail: '— справился в 5 из 6 ситуаций, ещё 4 не измерено', level: 'warn' });
+  assert.equal(accuracyRow(thin).role, 'accuracy:warn');
+  const edge = view(scored(9, 0, { unmeasured: 1 }));
+  assert.deepEqual([accuracyParts(edge).level, accuracyParts(edge).tail], ['good', '— справился в 9 из 9 ситуаций'], 'exactly 10% is not above it');
+  const over = view(scored(8, 0, { unmeasured: 1 }));
+  assert.deepEqual([accuracyParts(over).level, accuracyParts(over).tail], ['warn', '— справился в 8 из 8 ситуаций, ещё 1 не измерено'], '1 of 9 is 11%');
+  const bad = view(scored(1, 3, { unmeasured: 2 }));
+  assert.equal(accuracyParts(bad).level, 'bad', 'a bad number stays bad');
+  assert.ok(accuracyParts(bad).tail.endsWith(', ещё 2 не измерено'), accuracyParts(bad).tail);
+  for (const record of [scored(9, 0, { control: 'unknown' }), scored(9, 0, { pending: 5 })]) {
+    assert.deepEqual([accuracyParts(view(record)).level, accuracyParts(view(record)).tail], ['good', '— справился в 9 из 9 ситуаций'], 'controls and pending never count');
+  }
+});
+
+test('OD-1 in the number: a situation whose only attempt got an empty reply is not measured, never failed', () => {
+  const silent = attempt('s', { outcome: 'invalid', invalidCause: 'agent', reason: 'Испытуемый вернул пустой ответ.' });
+  delete silent.assessments;
+  const v = view(run([card('p'), card('s')], [attempt('p'), silent]));
+  assert.deepEqual([v.headline.passed, v.headline.decided], [1, 1]);
+  assert.deepEqual(v.notMeasured.reasons.map(reason => [reason.code, reason.count]), [['agent_error', 1]]);
 });
 
 test('without a decided situation the row has no number, the level none and a tail that says why', () => {
@@ -483,7 +508,8 @@ test('nextRows: the judge review agrees the verb with the count — «1 ошиб
 test('resultScreen: head, topics, causes, then on the CLI and in the board details every error, the unmeasured and the disagreements, the run line and «Дальше» last', () => {
   const v = view(rich());
   const first = (rows: ResultRow[], label: string) => blocks(rows, label).map(block => block[0]!.text);
-  const head = 'Точность агента: 67% — справился в 4 из 6 ситуаций';
+  // 1 of the 7 counted situations is not measured (14%, above NOT_MEASURED_WARN_ABOVE): the headline names it.
+  const head = 'Точность агента: 67% — справился в 4 из 6 ситуаций, ещё 1 не измерено';
   const runText = 'Прогон сегодня в 14:05 · 7 ситуаций · $0.14';
   assert.deepEqual(first(resultScreen(v, { surface: 'board', now: NOW }), 'board'), [head, 'По темам', 'Почему ошибается', runText, 'Дальше']);
   const full = [head, 'По темам', 'Почему ошибается', 'Все ошибки', 'Не измерено', 'Вы не согласились с судьёй', runText, 'Дальше'];
@@ -566,7 +592,7 @@ test('chatBlock expanded: the head with the reality line, every cause with its e
   const v = view(rich());
   const rows = chatBlock(v, { expanded: true });
   assert.deepEqual(rows.map(row => [row.role, row.indent, row.text]), [
-    ['accuracy:warn', 0, 'Точность агента: 67% — справился в 4 из 6 ситуаций'],
+    ['accuracy:warn', 0, 'Точность агента: 67% — справился в 4 из 6 ситуаций, ещё 1 не измерено'],
     ['trust:small', 2, trustParts(v).join(' · ')],
     ['reality', 2, 'С учётом частоты тем — около 56% (темы известны у 10 из 12 разговоров)'],
     ['blank', 0, ''],

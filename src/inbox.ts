@@ -80,7 +80,8 @@ const subjectOf = (view: SituationView) => `Ситуация ${view.number} · $
 
 /** Where a conversation was not measured, grouped by whose side it failed on: each side asks a different decision. */
 const SIDE: Partial<Record<NotMeasuredCode, 'agent' | 'client' | 'judge'>> = {
-  agent_error: 'agent', service_reply: 'agent', reset_unconfirmed: 'agent',
+  // The fix of a measurement error lives in the agent's connection; its label names the real problem, never «агент не ответил».
+  agent_error: 'agent', service_reply: 'agent', measurement_error: 'agent', reset_unconfirmed: 'agent',
   simulator_deviated: 'client', simulator_unclear: 'client', simulator_error: 'client', turn_limit: 'client',
   judge_error: 'judge', judge_unavailable: 'judge', judge_stopped: 'judge',
 };

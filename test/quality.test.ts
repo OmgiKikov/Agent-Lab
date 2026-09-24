@@ -294,8 +294,9 @@ test('the report counts the same non-control situations by the same rule as the 
   assert.deepEqual(view.notMeasured.reasons.map(reason => reason.scenarioIds), [['unsure']]);
   assert.deepEqual(view.control.cards.map(card => [card.scenarioId, card.outcome]), [['ctl', 'pass']], 'the control is decided by its goal alone and never counted');
   assert.equal(view.control.alarm, null);
-  assert.equal(accuracyRow(view).text, 'Точность агента: 33% — справился в 1 из 3 ситуаций');
-  assert.match(plainText(resultScreen(view, { surface: 'cli' }), 100), /Точность агента: 33% — справился в 1 из 3 ситуаций/);
+  // 1 of the 4 counted situations is not measured (25%, above NOT_MEASURED_WARN_ABOVE): the headline names it.
+  assert.equal(accuracyRow(view).text, 'Точность агента: 33% — справился в 1 из 3 ситуаций, ещё 1 не измерено');
+  assert.match(plainText(resultScreen(view, { surface: 'cli' }), 100), /Точность агента: 33% — справился в 1 из 3 ситуаций, ещё 1 не измерено/);
   const html = htmlReport(r);
   assert.ok(html.includes('33%') && html.includes('справился в 1 из 3 ситуаций'), 'the report prints the same number');
 });

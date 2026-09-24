@@ -17,3 +17,7 @@ export const maskedThrough = (content: string): boolean => MASK_ONLY.test(conten
 
 /** A message hidden by masking symbols: a `*` or `#` and not one letter or digit left. */
 export const hiddenBySymbols = (content: string): boolean => /[*#]/u.test(content) && !/[\p{L}\p{N}]/u.test(content);
+
+/** A message that still reads but has values masked inside it («прошло # оплат на * рублей»): an agent would get words no customer wrote. */
+export const partlyMasked = (content: string): boolean =>
+  /[\p{L}\p{N}]/u.test(content) && /(?:^|[^\p{L}\p{N}])(?:[*#]+|<[^<>]{1,40}>|\[(?:redacted|masked|скрыто|удалено)\])(?:$|[^\p{L}\p{N}])/iu.test(content);

@@ -2,7 +2,7 @@ import { internalPromptRule, type Experiment, type Scenario, type Trial } from '
 import type { MetricAssessment } from './assessment.js';
 import { verbatimSpanAt } from './verbatim.js';
 import { headlineRule, type CountedExpectation } from './card/expectations.js';
-import { agentMetricResult, automaticTrialResult, expectationResult } from './outcomes.js';
+import { agentMetricResult, automaticTrialResult, expectationResult, measurementUsable } from './outcomes.js';
 import { AGREED_RATIONALE_PREFIX } from './judge.js';
 import { pluralForm } from './plural.js';
 import { oneLine } from './text.js';
@@ -176,7 +176,8 @@ export function violatedRuleNumber(record: Experiment, trial: Trial): number | n
 
 /**
  * The explanation of one failed situation, or null when the record holds no failed attempt
- * for it. `trial` picks the attempt (a cause example); otherwise the first attempt whose goal
+ * for it. `trial` picks the attempt (a cause example); otherwise, among the usable attempts only
+ * (so the explained failure is always one the number counts), the first attempt whose goal
  * failed is used, then the first whose prompt-rule check failed. An attempt where the goal and
  * the prompt-rule check both failed is «оба»; a legacy card without the goal rubric keeps the
  * phase-2 kinds.
@@ -187,8 +188,8 @@ export function failureExplanation(record: Experiment, scenario: Scenario, trial
   const hasGoal = agentMetrics.includes(GOAL);
   const goalFailed = (item: Trial) => hasGoal ? agentMetricResult(item, GOAL, reviews) === 'fail' : automaticTrialResult(scenario, item, reviews) === 'fail';
   const rulesFailed = (item: Trial) => agentMetricResult(item, COMPLIANCE, reviews) === 'fail';
-  const attempts = record.trials.filter(item => item.scenarioId === scenario.id);
-  const chosen = trial ?? attempts.find(goalFailed) ?? attempts.find(rulesFailed);
+  const usable = record.trials.filter(item => item.scenarioId === scenario.id && measurementUsable(scenario, item, reviews));
+  const chosen = trial ?? usable.find(goalFailed) ?? usable.find(rulesFailed);
   if (!chosen || chosen.scenarioId !== scenario.id) return null;
   const kind = hasGoal && goalFailed(chosen) && rulesFailed(chosen) ? 'both' : goalFailed(chosen) ? 'goal' : rulesFailed(chosen) ? 'rules' : null;
   if (!kind) return null;

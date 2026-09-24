@@ -1,3 +1,4 @@
+import { CARD_CUSTOMER_PROTOCOL, customerReplyProblem, customerReplySchema } from './card-customer.js';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
 import { EXPECTATIONS_PROTOCOL, failureModeSchema, fingerprint, SIMULATOR_PROTOCOL, VERSION, type FailureMode, type Settings } from './contracts.js';
@@ -12,7 +13,7 @@ import { gatewayStatus, type GatewayStatus } from './giga-transport.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
 import { plantError } from './judge-check-task.js';
 import {
-  CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
+  CARD_CUSTOMER_ROLE, CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
 } from './prompts.js';
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
 import { cardReviewSchema } from './card/review.js';
@@ -35,7 +36,8 @@ import { USER_CONTROLLER_PROTOCOL, userDecisionSchema } from './user-controller.
  * definition), how card expectations are judged, and the models. Runs compare only under the same version.
  */
 export const evaluatorVersion = (settings: Settings): string => fingerprint({ protocol: VERSION, judge: JUDGE_PROTOCOL, simulator: { role: SIMULATOR_ROLE, protocol: SIMULATOR_PROTOCOL },
-  controller: { role: USER_CONTROLLER_ROLE, protocol: USER_CONTROLLER_PROTOCOL, decision: 'action-enum-v1' }, expectations: EXPECTATIONS_PROTOCOL,
+  controller: { role: USER_CONTROLLER_ROLE, protocol: USER_CONTROLLER_PROTOCOL, decision: 'action-enum-v1' },
+  customer: { role: CARD_CUSTOMER_ROLE, protocol: CARD_CUSTOMER_PROTOCOL }, expectations: EXPECTATIONS_PROTOCOL,
   provider: settings.provider, model: settings.model, roles: settings.roles ?? {}, judgeModel: settings.judge });
 
 const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, message: userTurnSchema.shape.message.optional() })
@@ -168,6 +170,12 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
     async selectUserAction(input, ctx) {
       // The answer is an enum of exactly the moves allowed now, so a move outside the policy cannot be returned.
       return run({ id: 'user-action', label: 'Действие пользователя', role: 'simulator', instructions: USER_CONTROLLER_ROLE, output: userDecisionSchema(input.actions) }, input, ctx);
+    },
+    async speakAsCustomer(input, ctx) {
+      // The check sends an invented value or an early leave back to the model with the exact reason; the agent never sees it.
+      return run({ id: 'card-customer', label: 'Реплика клиента', role: 'simulator', instructions: CARD_CUSTOMER_ROLE, output: customerReplySchema,
+        check: reply => customerReplyProblem(reply, input.brief, input.messages, input.turned) },
+        { brief: input.brief, messages: input.messages.map(({ role, content }) => ({ role, content })), turn: input.turn }, ctx);
     },
     async userTurn(input, ctx) {
       const reply = await run({ id: 'user-turn', label: 'Реплика пользователя', role: 'simulator', instructions: SIMULATOR_ROLE, output: simulatorReplySchema }, {

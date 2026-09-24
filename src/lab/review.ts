@@ -75,9 +75,12 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
         const started = performance.now();
         for (const event of trial.events) lab.store.appendTrace(record.id, trial.id, event);
         if (!['invalid', 'cancelled'].includes(original.outcome)) {
+          // Whether the saved facts were graded again: only a grading refusal (or a stop) can take the attempt out of the measurement.
+          let graded = false;
           try {
             trial.checks = [];
             trial.checks = grade(scenario, trial);
+            graded = true;
             trial.simulatorChecks = simulatorChecks(scenario, trial);
             // Preserve execution failures (empty answer / turn budget), independent of new criteria.
             const executionFailed = original.outcome === 'fail' && original.checks.every(c => c.passed);
@@ -92,9 +95,11 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
           } catch (error) {
             trial.assessmentError = (error instanceof Error ? error.message : String(error)).slice(0, 4000);
             trial.assessmentFailure = judgeFailure(error, ctx.signal);
-            if (!trial.checks.length || ctx.signal.aborted) trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';
-            // The saved facts could not be graded again (a reset or a state the agent never confirmed): the agent's side, not the judge's.
-            if (trial.outcome === 'invalid') trial.invalidCause = 'agent';
+            // A stop cancels the attempt. The saved facts that could not be graded again (a reset or a state the connection never
+            // showed) make it invalid with the cause 'measurement' — the agent was not even called. A judge failure after grading
+            // keeps the graded outcome and its typed failure, as a live run does, so the result names the judge.
+            if (!graded || ctx.signal.aborted) trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';
+            if (trial.outcome === 'invalid') trial.invalidCause = 'measurement';
           }
         }
         trial.elapsedMs = Math.round(performance.now() - started);

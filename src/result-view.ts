@@ -35,6 +35,7 @@ export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
   simulator_error: 'сбой клиента, которого играет Lab',
   agent_error: 'агент не ответил',
   service_reply: 'вместо агента ответил стенд',
+  measurement_error: 'подключение не показало, что нужно для проверки',
   attempts_mismatch: 'запись разговоров неполная',
   judge_error: 'судья ответил не по формату',
   judge_unavailable: 'судья не ответил — сбой связи или лимит запросов',

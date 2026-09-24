@@ -9,7 +9,7 @@ import { acceptLibraryV2, requireLibraryV2 } from '../card/library.js';
 import { notContinuable, pendingReviewCalls, preparationParallel, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from '../card/prepare.js';
 import type { CardCommand, LibraryV2 } from '../card/schema.js';
 import { dialogueNumbers, type DialogueNumbers } from '../card/view.js';
-import { probeToolChannel, TOOL_PROBE_OPENING } from '../connection.js';
+import { probeToolChannel, rememberedConnection, TOOL_PROBE_OPENING } from '../connection.js';
 import { createInputSchema, emptyUsage, fingerprint, isRunnable, type CardExecution, type CreateInput, type Experiment } from '../contracts.js';
 import { LibraryConflict } from '../errors.js';
 import { logSample, preparationConsent, situationCount } from '../miner/plan.js';
@@ -111,8 +111,10 @@ export function acceptCards(lab: Lab, id: string, expectedHash: string, cardIds:
     if (experiment.phase !== 'review') throw new Error('Утвердить ситуации можно только в черновике.');
     if (fingerprint(experiment.requirements) !== fingerprint(library.requirements) || fingerprint(experiment.sources) !== fingerprint(library.sources)) throw new Error('Правила изменились после подготовки ситуаций.');
     const environment = toolEnvironment(experiment);
+    const profile = (isRunnable(experiment.target) ? experiment.target.customerProfile : undefined)
+      ?? (await rememberedConnection(lab.store.directory))?.target.customerProfile;
     const accepted = acceptLibraryV2(library, expectedHash, cardIds, { evidence: await storedEvidence(lab.store, library), maxTurns: experiment.settings.maxTurns,
-      ...(environment ? { environment } : {}) });
+      ...(environment ? { environment } : {}), ...(profile?.length ? { profile } : {}) });
     experiment.librarySnapshot = accepted.library; experiment.scenarios = accepted.scenarios;
     delete experiment.selectedScenarioIds;
     const acceptedAt = new Date().toISOString();

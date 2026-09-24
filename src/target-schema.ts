@@ -17,10 +17,20 @@ const releaseSchema = z.strictObject({
 }).optional();
 /** Substrings of a reply that mean the stand, not the agent, answered («нет ответа от смежной системы»): such a dialogue is not measured. */
 const serviceReplies = z.array(text.max(300)).max(20).optional();
+/**
+ * The test customer of the stand, as the owner declares it: what every simulated customer knows about their own
+ * account (terminal number, shop, INN…) and names when the agent asks. A bank agent identifies its customer first;
+ * without these the simulated customer can only say «не знаю», and the conversation fails on the stand, not on the agent.
+ */
+export const customerProfileSchema = z.array(z.strictObject({
+  label: text.max(120), value: z.union([text.max(300), z.number(), z.boolean()]), askedAs: text.max(200).optional(),
+})).max(20).optional();
+export type CustomerProfile = NonNullable<z.infer<typeof customerProfileSchema>>;
+const customerProfile = customerProfileSchema;
 /** A field of a retired feature: old connections and records still parse, nothing reads it. */
 const retired = z.unknown().optional();
 const httpTargetSchema = z.strictObject({
-  kind: z.literal('http'), diagnosticCapabilities: retired, promptFile, serviceReplies, url: z.string().url().max(2000),
+  kind: z.literal('http'), diagnosticCapabilities: retired, promptFile, serviceReplies, customerProfile, url: z.string().url().max(2000),
   headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/, 'Header values must name environment variables')).default({}),
   timeoutMs: z.number().int().min(1000).max(600000).default(60000),
   release: releaseSchema,
@@ -28,14 +38,14 @@ const httpTargetSchema = z.strictObject({
   request: requestTemplateSchema.optional(),
 }).refine(target => !(target.request && target.promptFile), { message: 'Агент в своём формате запроса не получает промпт из файла: уберите promptFile или request.', path: ['promptFile'] });
 const moduleTargetSchema = z.strictObject({
-  kind: z.literal('module'), diagnosticCapabilities: retired, promptFile, serviceReplies, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
+  kind: z.literal('module'), diagnosticCapabilities: retired, promptFile, serviceReplies, customerProfile, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
   exportName: z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{0,99}$/).default('createSession'),
   timeoutMs: z.number().int().min(1000).max(600000).optional(),
   release: releaseSchema,
 });
 /** A local process (for example `python3 agent.py`) speaking one JSON request/reply per line over stdin/stdout. */
 const commandTargetSchema = z.strictObject({
-  kind: z.literal('command'), diagnosticCapabilities: retired, promptFile, serviceReplies, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
+  kind: z.literal('command'), diagnosticCapabilities: retired, promptFile, serviceReplies, customerProfile, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
   cwd: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required').optional(),
   timeoutMs: z.number().int().min(1000).max(600000).default(60000),
   release: releaseSchema,

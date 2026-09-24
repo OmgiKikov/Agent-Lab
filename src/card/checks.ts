@@ -1,6 +1,7 @@
 import type { Requirement, Source } from '../contracts.js';
 import { countText } from '../plural.js';
 import type { ImportBatch } from '../scenario-contracts.js';
+import { partlyMasked } from '../masking.js';
 import { clip } from '../text.js';
 import { requiredUserTurns } from '../user-controller.js';
 import { compilePolicy } from './compile.js';
@@ -90,7 +91,9 @@ export type CheckFinding =
   /** An expectation cites a rule that is not in the materials word for word. */
   | { check: 'requirements-grounded'; requirementId: string }
   /** The customer's policy does not build (`needed` null) or needs more messages than a run allows. */
-  | { check: 'controller-compiles'; needed: number | null };
+  | { check: 'controller-compiles'; needed: number | null }
+  /** The opening still has de-identification marks where the customer wrote values: the agent would read words no customer wrote. */
+  | { check: 'masked-opening' };
 
 export interface CheckContext {
   evidence: CardEvidence;
@@ -176,7 +179,8 @@ function controllerFindings(card: Card, maxTurns: number): CheckFinding[] {
 /** Every deterministic finding on a card, in the order of the brief: facts, coverage, rules, the customer's policy. */
 export function cardFindings(card: Card, context: CheckContext): CheckFinding[] {
   return [...factFindings(card, context.evidence), ...coverageFindings(card),
-    ...(context.materials ? requirementFindings(card, context.materials) : []), ...controllerFindings(card, context.maxTurns)];
+    ...(context.materials ? requirementFindings(card, context.materials) : []), ...controllerFindings(card, context.maxTurns),
+    ...(partlyMasked(card.client.writes) ? [{ check: 'masked-opening' } as const] : [])];
 }
 
 /**
@@ -202,6 +206,7 @@ export function problemText(finding: CheckFinding, card: Card, requirements: rea
       const quote = requirements.find(item => item.id === finding.requirementId)?.quote;
       return quote ? `Правила «${clip(quote, 80)}» нет в ваших материалах.` : 'Ожидание ссылается на правило, которого нет в наборе.';
     }
+    case 'masked-opening': return 'В первой реплике клиента вместо значений стоят знаки обезличивания (# или *): агент получил бы бессмыслицу, которой не было в проде. Впишите значения своими словами.';
     case 'controller-compiles': return finding.needed === null ? 'Поведение клиента в этой ситуации не складывается в разговор.'
       : `Клиенту нужно ${countText(finding.needed, ['реплика', 'реплики', 'реплик'])}, чтобы пройти ситуацию, а в прогоне их меньше.`;
   }

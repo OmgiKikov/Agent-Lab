@@ -217,7 +217,7 @@ test('the report reads in the order a customer asks: number, trust, topics, caus
   assert.deepEqual(report.head.map(block => block.kind), ['accuracy', 'trust', 'trust']);
   const [accuracy, trust, reality] = report.head;
   assert.ok(accuracy?.kind === 'accuracy');
-  assert.deepEqual([accuracy.lead, accuracy.value, accuracy.tail, accuracy.level], ['Точность агента:', '67%', '— справился в 2 из 3 ситуаций', 'warn']);
+  assert.deepEqual([accuracy.lead, accuracy.value, accuracy.tail, accuracy.level], ['Точность агента:', '67%', '— справился в 2 из 3 ситуаций, ещё 1 не измерено', 'warn']);
   assert.ok(accuracy.band, 'the interval band is drawn under the number');
   assert.deepEqual(accuracy.band.range.map(share => Math.round(share * 100)), [21, 94]);
   assert.equal(Math.round((accuracy.band.weighted ?? 0) * 100), 70);

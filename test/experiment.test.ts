@@ -1235,6 +1235,34 @@ test('a stored run of old-format cards repeats on a new agent version through th
   assert.deepEqual([headlineOf(fixed).passed, headlineOf(fixed).decided], [2, 2]);
 });
 
+test('HN-4: a reassessment that cannot grade the saved facts names the measurement; a judge failure after grading names the judge', async t => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/legacy-demo-run.json', import.meta.url), 'utf8')) as Experiment;
+  // An external agent's attempts stored without an observation block: reassessment reads them as state missing, tools partial.
+  const ungradable = experimentSchema.parse({ ...fixture, id: randomUUID(), target: appointmentAgent(),
+    trials: fixture.trials.map(({ observation: _observation, ...trial }) => trial) });
+  const { lab } = await setup(t);
+  await lab.store.save(ungradable);
+  const pending = await lab.reassess(ungradable.id, { codeOnly: true }); await lab.waitForIdle();
+  const refused = await lab.get(pending.id);
+  assert.equal(refused.phase, 'results_review', refused.error ?? '');
+  assert.deepEqual(refused.trials.map(trial => [trial.outcome, trial.invalidCause]), [['invalid', 'measurement'], ['invalid', 'measurement']]);
+  assert.deepEqual(deriveRun(refused).situations.map(item => [item.outcome, item.reason]), [['unknown', 'measurement_error'], ['unknown', 'measurement_error']],
+    'the agent was not even called: never «агент не ответил»');
+
+  // Cards without exact checks, judged again by a judge that does not answer: the graded outcome stays, the judge is named.
+  const judgeless: Runtime = { async assess() { throw new Error('Pi provider response incomplete: rate limit'); } };
+  const { lab: judged } = await setup(t, judgeless);
+  const unchecked = experimentSchema.parse({ ...fixture, id: randomUUID(), scenarios: fixture.scenarios.map(scenario => ({ ...scenario, checks: [] })),
+    trials: fixture.trials.map(trial => ({ ...trial, checks: [] })) });
+  await judged.store.save(unchecked);
+  const again = await judged.reassess(unchecked.id); await judged.waitForIdle();
+  const result = await judged.get(again.id);
+  assert.equal(result.phase, 'results_review', result.error ?? '');
+  // The recorded dialogues failed in execution (the preserved outcome); the judge failure never turns them into «не ответил».
+  assert.deepEqual(result.trials.map(trial => [trial.outcome, trial.invalidCause, trial.assessmentFailure]), [['fail', undefined, 'unavailable'], ['fail', undefined, 'unavailable']]);
+  assert.deepEqual(deriveRun(result).situations.map(item => item.reason), ['judge_unavailable', 'judge_unavailable']);
+});
+
 test('a retired sandbox or compare record opens and reassesses but never runs again, and a new draft cannot name the sandbox', async t => {
   const parsed = createInputSchema.safeParse({ ...demoInput(), target: { kind: 'sandbox' } });
   assert.equal(parsed.success, false);
