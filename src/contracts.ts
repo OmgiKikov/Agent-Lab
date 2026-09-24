@@ -445,6 +445,7 @@ export const draftPatchSchema = z.strictObject({
 export const reassessmentSchema = z.strictObject({
   criteria: z.array(z.strictObject({ scenarioId: identifier, successCriteria: text.max(3000).optional(),
     checks: z.array(checkSchema).max(12).optional(), metrics: z.array(rubricSchema).max(8).optional(),
+    references: z.array(referenceSchema).max(4).optional(),
   })).max(200).refine(v => unique(v.map(c => c.scenarioId)), 'Duplicate scenario criteria').default([]),
   trialIds: z.array(identifier).min(1).max(3000).refine(unique, 'Duplicate trial IDs').optional(),
   judge: settingsSchema.shape.judge, codeOnly: z.boolean().default(false),
