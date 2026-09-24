@@ -142,6 +142,8 @@ export interface ResultView {
   calibration?: CalibrationView;
   /** The judge checked with planted errors and untouched controls (judge-check.ts); absent when this run was never checked. Never changes the headline. */
   judgeCheck?: JudgeCheckSummary;
+  /** The judge is the model that built the situations: the verdicts are not independent of the cards. */
+  sameModelJudge?: true;
   /** What the customer Lab played did (customer-moves.ts); absent when no conversation recorded a controlled move. Never changes the headline. */
   customer?: CustomerMoves;
   /**
@@ -352,6 +354,10 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});
   const customer = customerMoves(run);
   const judgeCheck = judgeCheckSummary(options.judgeCheck, record);
+  // Older records may carry no judge setting at all: nothing is claimed about them.
+  const judgeSetting = record.settings?.judge as { provider: string; model: string } | undefined;
+  const builder = record.settings?.roles?.builder ?? { provider: record.settings?.provider, model: record.settings?.model };
+  if (judgeSetting && record.trials.length && builder.provider === judgeSetting.provider && builder.model === judgeSetting.model) view.sameModelJudge = true;
   return { ...view, ...(calibration ? { calibration } : {}), ...(judgeCheck ? { judgeCheck } : {}), ...(customer ? { customer } : {}), next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
 }
 

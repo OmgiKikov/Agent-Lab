@@ -5,7 +5,7 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-
 import { Type } from 'typebox';
 import { z } from 'zod';
 import { preparationCeiling } from '../src/card/budget.js';
-import { createInputSchema, DEFAULT_JUDGE, isRunnable, materialSources, SCENARIO_LIMIT, settingsSchema, type Experiment } from '../src/contracts.js';
+import { createInputSchema, isRunnable, judgeFor, materialSources, SCENARIO_LIMIT, settingsSchema, type Experiment } from '../src/contracts.js';
 import { rememberedConnection } from '../src/connection.js';
 import { demoInput } from '../src/demo.js';
 import { detectProject, targetLabel, type ProjectDetection } from '../src/detect.js';
@@ -227,13 +227,16 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   // The conversations a preparation may try: the sample and the replacements of picks that make no situation.
   const tried = Math.min(40, 3 * count);
   const connection = await rememberedConnection(directory);
+  const session = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
+  // What Pi can reach right now, from its own registry: no runtime is started for it.
+  const judge = judgeFor(ctx.modelRegistry?.getAvailable().map(model => ({ provider: model.provider, id: model.id })) ?? [], session);
   let input: z.infer<typeof createInputSchema>;
   try {
     input = createInputSchema.parse({
       task: params.task, mode: 'live', workflow: 'evaluate', materials: expanded.materials, scenarioCount: libraryImport ? 0 : count,
       target: connection?.target ?? { kind: 'unconnected' }, ...(connection?.targetVersion ? { targetVersion: connection.targetVersion } : {}),
       ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}),
-      settings: settingsSchema.parse({ provider: ctx.model?.provider ?? '', model: ctx.model?.id ?? '', judge: DEFAULT_JUDGE, repeats: 1,
+      settings: settingsSchema.parse({ provider: ctx.model?.provider ?? '', model: ctx.model?.id ?? '', judge, repeats: 1,
         ...(libraryImport ? { maxCalls: Math.max(140, 2 * tried + 19 * count + 20), maxDurationMs: Math.min(14_400_000, Math.max(180_000, 180_000 * tried)),
           // A proposal that reads the agent's prompts and articles whole routinely exceeds the two-minute default per call.
           timeoutMs: 600_000, maxTurns: 6, userModes: ['reactive'] }

@@ -123,6 +123,7 @@ export function trustSegments(view: ResultView): { text: string; warn: boolean }
   if (agreement.checked) add(`с судьёй согласны ${agreement.agreed} из ${agreement.checked}`);
   else if (view.reviewed.situations) add(`вы проверили ${countText(view.reviewed.situations, ['ситуацию', 'ситуации', 'ситуаций'])}`);
   else if (agreement.queueFailures.length + agreement.sampledPasses.length) add('судью ещё не проверяли');
+  if (view.sameModelJudge) add('судья — та же модель, что готовила ситуации', true);
   if (view.reviewed.contradicted) add(`ваши отметки расходятся с итогом: ${view.reviewed.contradicted}`, true);
   const unstable = unstableCount(view);
   if (unstable) add(`нестабильно ${unstable}`);

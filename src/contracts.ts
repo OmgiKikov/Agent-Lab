@@ -28,6 +28,16 @@ const checkpointReceiptSchema = z.strictObject({ protocolHash: z.string(), input
 
 export const VERSION = '6';
 export const DEFAULT_JUDGE = { provider: 'openrouter', model: 'openai/gpt-5.6-sol', upstream: 'openai' } as const;
+/**
+ * The judge of a new draft made in the chat: the independent default judge when Pi can reach it, otherwise the
+ * session's own model (a work network that reaches only its internal model gateway). The result then says that the
+ * judge is the model that built the situations, never hides it.
+ */
+export function judgeFor(available: readonly { provider: string; id: string }[], session: { provider: string; id: string } | undefined):
+  { provider: string; model: string; upstream?: string } {
+  const reachable = available.some(model => model.provider === DEFAULT_JUDGE.provider && model.id === DEFAULT_JUDGE.model);
+  return reachable || !session ? { ...DEFAULT_JUDGE } : { provider: session.provider, model: session.id };
+}
 const TOOL_NAMES = ['search_materials', 'lookup_record', 'update_record'] as const;
 const text = z.string().trim().min(1);
 const dialogueContent = z.string().min(1).max(8000).refine(v => !!v.trim(), 'Empty dialogue content');
