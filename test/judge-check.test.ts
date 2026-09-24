@@ -137,7 +137,8 @@ test('the sample is fixed by the run: the same run gives the same verdicts, and 
 
 const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 async function agentLab(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const child = spawn(process.execPath, ['--import', 'tsx', cli, ...args], { env: { ...process.env, AGENT_LAB_SESSION: '' } });
+  const { AGENT_LAB_SESSION: _chat, ...outside } = process.env;
+  const child = spawn(process.execPath, ['--import', 'tsx', cli, ...args], { env: outside });
   let stdout = '', stderr = '';
   child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
   const code = await new Promise<number | null>(resolve => child.on('close', resolve));

@@ -8,6 +8,7 @@ import { initTheme, type ExtensionAPI, type ExtensionContext, type ToolDefinitio
 import { stripTerminalSequences, type Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
 import { ownerMessages } from '../extensions/conversation.ts';
+import { saidWordForWord } from '../extensions/situation-tools.ts';
 import { callText } from '../extensions/render/feed.ts';
 import type { CardReviewRequest, ReviewVerdict } from '../src/card/review.js';
 import type { Card, LibraryV2 } from '../src/card/schema.js';
@@ -206,23 +207,90 @@ test('what the customer knows is the owner\'s decision: the native dialog shows 
   } finally { await shutdown(); await fixture.cleanup(); }
 });
 
-test('the customer\'s words the owner wrote are recorded as they are, with no dialog; words the model chose wait for the owner', { timeout: 60000 }, async () => {
+test('the customer\'s words the owner wrote still wait for «Записать»: the dialog marks them as the owner\'s, and only then they are recorded as theirs', { timeout: 60000 }, async () => {
   const fixture = await draft('chat-words-');
   const { tools, shutdown } = registered();
   try {
     const writes = 'Добрый день! Номер терминала: 1234, хочу вернуть деньги';
-    const { ctx, selects } = terminal(fixture.cwd, [`Пусть во второй ситуации клиент пишет: «${writes}»`], { picks: ['Не записывать'] });
+    const { ctx, selects } = terminal(fixture.cwd, [`Пусть во второй ситуации клиент пишет: «${writes}»`], { picks: ['Записать', 'Не записывать'] });
     const edit = tools.get('agent_lab_edit')!;
     const own = json(await edit.execute('own', { situation: 2, changes: [{ kind: 'client', writes }] }, undefined, undefined, ctx));
-    assert.equal(own.applied, true); assert.equal(selects.length, 0, 'the owner\'s own words need no dialog');
+    assert.equal(own.applied, true); assert.equal(selects.length, 1, 'the owner\'s own words are confirmed like any change');
+    assert.ok(selects[0]!.title.includes(`стало ««${writes}»»`), selects[0]!.title);
+    assert.match(selects[0]!.title, /\n\nФормулировка — ваши слова из разговора\.\n\nЗаписать это от вашего имени\?$/);
     const record = await fixture.read();
     assert.deepEqual([cardNumbered(record, 2).client.writes, cardNumbered(record, 2).client.writesSource.kind], [writes, 'owner']);
     assert.deepEqual([libraryOf(record).receipts.at(-1)!.ownerWords, libraryOf(record).receipts.at(-1)!.via], [writes, 'pi-confirm']);
     const proposed = json(await edit.execute('model', { situation: 2, changes: [{ kind: 'client', leaves: 'получил номер заявки на возврат' }] }, undefined, undefined, ctx));
     assert.equal(proposed.declined, true);
-    assert.match(selects[0]!.title, /Уходит: было «получил инструкцию по возврату или понял, что агент не поможет», стало «получил номер заявки на возврат»/);
+    assert.match(selects[1]!.title, /Уходит: было «получил инструкцию по возврату или понял, что агент не поможет», стало «получил номер заявки на возврат»/);
+    assert.doesNotMatch(selects[1]!.title, /ваши слова/, 'words the model chose are never called the owner\'s');
     assert.equal(cardNumbered(await fixture.read(), 2).client.leaves, 'получил инструкцию по возврату или понял, что агент не поможет');
   } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('a fragment of the owner\'s sentence never passes as their decision: the duty it would turn inside out waits for «Записать»; a letter inside a word is not their words; without a terminal nothing is written', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-fragment-');
+  const { tools, shutdown } = registered();
+  try {
+    const said = 'Агент не должен обещать возврат денег, если клиент не назвал номер терминала';
+    const { ctx, selects } = terminal(fixture.cwd, [said], { picks: ['Не записывать', 'Записать'] });
+    const edit = tools.get('agent_lab_edit')!;
+    const receipts = libraryOf(await fixture.read()).receipts.length;
+    // «обещать возврат денег» stands in the owner's sentence word for word — and would make the agent do what the owner forbade.
+    const flipped = json(await edit.execute('flip', { situation: 1, changes: [{ kind: 'duty', duty: 'e2', text: 'обещать возврат денег' }] }, undefined, undefined, ctx));
+    assert.equal(flipped.declined, true);
+    assert.equal(selects.length, 1, 'the owner is asked, words of theirs or not');
+    assert.match(selects[0]!.title, /Агент должен: было «объяснить, как оформить возврат», стало «обещать возврат денег»/);
+    assert.equal(libraryOf(await fixture.read()).receipts.length, receipts, 'declined: nothing written');
+    assert.equal(cardNumbered(await fixture.read(), 1).agentMust[1]!.text, 'объяснить, как оформить возврат');
+    // «а» stands only inside «Агент»: confirmed, the change is recorded as a confirmation, never as the owner's words.
+    const stray = json(await edit.execute('stray', { situation: 1, changes: [{ kind: 'client', leaves: 'а' }] }, undefined, undefined, ctx));
+    assert.equal(stray.applied, true); assert.equal(selects.length, 2);
+    assert.doesNotMatch(selects[1]!.title, /ваши слова/);
+    assert.equal(libraryOf(await fixture.read()).receipts.at(-1)!.ownerWords, undefined);
+    // Without a terminal even the owner's own words are refused, in their words, and the model is handed no command line.
+    const headless = { ...ctx, hasUI: false, mode: 'print' } as ExtensionContext;
+    const written = libraryOf(await fixture.read()).receipts.length;
+    const refused = await edit.execute('headless', { situation: 1, changes: [{ kind: 'duty', duty: 'e2', text: 'обещать возврат денег' }] }, undefined, undefined, headless).catch(error => error as Error);
+    assert.ok(refused instanceof Error); assert.match(refused.message, /интерактивном терминале Pi/); assert.doesNotMatch(refused.message, /--yes|agent-lab cards/);
+    assert.equal(libraryOf(await fixture.read()).receipts.length, written, 'headless: nothing written');
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('a duty\'s condition is a decision the dialog shows, even when its words stay or come from the owner', { timeout: 60000 }, async () => {
+  const fixture = await draft('chat-condition-');
+  const { tools, shutdown } = registered();
+  try {
+    const said = 'Пусть агент всегда должен объяснить, как оформить заявление на возврат';
+    const { ctx, selects } = terminal(fixture.cwd, [said], { picks: ['Не записывать', 'Записать'] });
+    const edit = tools.get('agent_lab_edit')!;
+    const condition = /Агент должен: объяснить, как оформить (заявление на )?возврат — когда: было «клиент назвал номер терминала», стало «всегда»/;
+    // The condition alone: its line is in the dialog — before, the dialog showed nothing while the judge's duty changed.
+    const dropped = json(await edit.execute('drop', { situation: 1, changes: [{ kind: 'duty', duty: 'e2', appliesWhen: null }] }, undefined, undefined, ctx));
+    assert.equal(dropped.declined, true); assert.match(selects[0]!.title, condition);
+    // The owner's words with the condition dropped: still one dialog with both lines; the words are kept as theirs, the grant is a confirmation.
+    const both = json(await edit.execute('both', { situation: 1, changes: [{ kind: 'duty', duty: 'e2', text: 'объяснить, как оформить заявление на возврат', appliesWhen: null }] }, undefined, undefined, ctx));
+    assert.equal(both.applied, true); assert.equal(selects.length, 2, 'new words never carry a dropped condition past the owner');
+    assert.match(selects[1]!.title, /Агент должен: было «объяснить, как оформить возврат», стало «объяснить, как оформить заявление на возврат»/);
+    assert.match(selects[1]!.title, condition);
+    const record = await fixture.read();
+    const duty = cardNumbered(record, 1).agentMust[1]!;
+    assert.deepEqual([duty.text, duty.appliesWhen], ['объяснить, как оформить заявление на возврат', undefined]);
+    assert.equal(libraryOf(record).receipts.at(-1)!.ownerWords, 'объяснить, как оформить заявление на возврат');
+  } finally { await shutdown(); await fixture.cleanup(); }
+});
+
+test('words stand in the owner\'s message only as whole words, after the one normalisation', () => {
+  const said = 'Агент не должен обещать возврат денег, если клиент не назвал  НОМЕР терминала';
+  assert.equal(saidWordForWord(said, 'обещать возврат денег'), true);
+  assert.equal(saidWordForWord(said, 'номер терминала'), true, 'case and spacing do not matter');
+  assert.equal(saidWordForWord(said, 'Агент не'), true);
+  assert.equal(saidWordForWord(said, 'а'), false, 'a letter inside a word is not a word');
+  assert.equal(saidWordForWord(said, 'ещать возв'), false, 'pieces of words are not words');
+  assert.equal(saidWordForWord('Номер5678', '5678'), false);
+  assert.equal(saidWordForWord('Номер: 5678.', '5678'), true, 'punctuation ends a word');
+  assert.equal(saidWordForWord(said, '   '), false);
 });
 
 test('a situation\'s question is a decision: the owner answers in a native dialog of the question itself, and the answer is kept with its basis', { timeout: 60000 }, async () => {
