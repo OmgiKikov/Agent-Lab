@@ -1,67 +1,85 @@
 ---
-last_mapped_commit: 015fee98766cc2082001fdfce3a329a31329d4cf
-last_mapped_at: 2026-09-16
+last_mapped_commit: fd07c336134b6bfe7bf48c8be0119c1b14dec56b
+last_mapped_at: 2026-09-24
 ---
 # Testing Patterns
 
-**Analysis Date:** 2026-09-16
+**Analysis Date:** 2026-09-24
 
 ## Test Framework
 
 **Runner:**
 
-- Node.js built-in `node:test` module (no external test framework)
-- Version: Node.js 22.19.0+
-- Config: `tsx --test test/*.test.ts` (via npm script)
+- Node.js built-in `node:test`, run through tsx (`tsx --test test/*.test.ts`)
+- Node.js 22.19.0+
+- 803 tests in 67 files at `fd07c336`, all green
 
 **Assertion Library:**
 
-- `node:assert/strict` - strict mode enforcement, all tests use `assert.deepEqual()`, `assert.equal()`, `assert.match()`, `assert.rejects()`
+- `node:assert/strict`: `assert.equal`, `assert.deepEqual`, `assert.match`, `assert.rejects`, `assert.throws`
 
 **Run Commands:**
 
 ```bash
-npm test              # = npm run build && tsx --test test/*.test.ts
-npm run typecheck     # build + strict tsc over extensions/*.ts
+npm test                                   # build dist/ + tsx --test test/*.test.ts
+npm run typecheck                          # build + strict tsc over extensions/*.ts (noUnusedLocals)
+npx tsx --test test/card-review.test.ts    # one file
+npx tsx --test --test-name-pattern="grant" test/card-commands.test.ts   # tests by name
 ```
 
-**Warning:** `npm run build` (and therefore `npm test`) first deletes `dist/` (`package.json` `build` script). The Pi extension imports `dist/`, so running tests in a worktree where a live Pi session is using Agent Lab breaks that session. Run reviews and test suites from a `git archive HEAD` snapshot instead.
+`npm test` and `npm run build` recreate `dist/`. A live Pi session is not affected: the extension imports `src/` directly (jiti); `dist/` serves only the `agent-lab` binary and `examples/scenario-lab-demo.mjs`.
+
+**Not type-checked:** tsx only transpiles, and `npm run typecheck` covers `src/` and `extensions/`. A strict `tsc` over `test/*.ts test/helpers/*.ts` reports 91 errors today (41 in `test/workflow.test.ts`); tests pass regardless.
+
+**CI:** `.github/workflows/check.yml` runs `npm ci`, `npm test`, `npm run typecheck`, `npm pack --dry-run` and `evaluate` of `examples/regression-suite.json`.
 
 **Test Output:**
 
-- TAP (Test Anything Protocol) format from Node.js test runner
-- No coverage reporting configured (no codecov or coverage commands visible)
+- TAP from the Node.js runner; no coverage reporting configured
 
 ## Test File Organization
 
 **Location:**
 
-- Tests co-located with source in parallel `test/` directory
-- Pattern: `src/contracts.ts` → `test/contracts.test.ts`
-- Test fixtures in `test/fixtures/` (e.g., `test/fixtures/score/`)
-- Test helpers in `test/helpers/` (e.g., `test/helpers/demo-record.ts`)
-- Live tests (local-only, not committed) in `test/live/*pilot*`
+- `test/*.test.ts` — one file per concern, named after it: `card-proposal`, `card-review`, `card-commands`, `miner-sample`, `spreadsheet-import`, `calibration-judge`, `result-text`, `workspace`, `extension`, …
+- `test/helpers/` — shared builders and fakes (below)
+- `test/fixtures/` — frozen records of older formats and small agents
+- `test/live/` — paid checks against a real model, run only on purpose; local pilots on private data are gitignored
 
 **Naming:**
 
-- Test files: `.test.ts` suffix
-- Helper modules: also `.ts`, exported functions
-- Fixture directories: `score/`, `stdio-agent.mjs` for example agents
+- Test titles are sentences stating the rule: `'no grant, no change: a model\'s flag, a copy of a grant, a grant for another preview or words where a confirmation is needed'`
 
 **Structure:**
 
 ```
 test/
-├── *.test.ts               # Test suites, one per source module
+├── *.test.ts
 ├── helpers/
-│   └── demo-record.ts      # Reusable factory functions
+│   ├── pi-session.ts     # fake `pi` registering the real extension; scripted owner in native dialogs
+│   ├── pi-fixture.ts     # offline provider on a real ModelRuntime (SDK stream protocol, scripted replies)
+│   ├── card-prep.ts      # invented refund dialogues + deterministic runtime for grounding, proposals, review, customer, judge
+│   ├── card-library.ts   # a reviewed two-card draft without a store
+│   ├── cards.ts          # a brief-format card and runs of its compiled definition
+│   ├── calibration.ts    # scripted judge of recorded conversations through the real two-vote protocol
+│   ├── miner.ts          # synthetic import with a topic answer key and a deterministic runner
+│   ├── workspace.ts      # synthetic folders for /agent-lab and `openWorkspace`
+│   ├── demo-record.ts    # records of the retired built-in demo, made by the code that could still make them
+│   ├── library-v1.ts     # the frozen first-format library run
+│   ├── xlsx.ts, zip.ts   # synthetic .xlsx workbooks and ZIP/.docx archives
+│   ├── strict-schema.ts  # why a provider's strict structured output would refuse a schema
+│   └── copy-check.ts     # owner-facing text is plain Russian
 ├── fixtures/
-│   ├── score/              # Test data (JSON, JSONL)
-│   │   ├── task.json
-│   │   ├── reference.jsonl
-│   │   ├── manifest.json
-│   └── stdio-agent.mjs     # Example target for testing
-└── live/                   # Local-only live tests (not tracked)
+│   ├── recorded-run.json, legacy-demo-run.json (+ .trace.jsonl), legacy-demo-draft.json
+│   ├── library-v1/                 # accepted first-format library, run, trace, judge audits
+│   ├── pre-harness-judgments.json  # receipts written before the src/llm core
+│   ├── rag-evidence-controls.json, score/
+│   └── appointment-agent.mjs, board-chat-agent.mjs, stdio-agent.mjs
+└── live/
+    ├── product-eval.ts (+ -cases.ts, -session.ts)   # owner phrases → tool and state, real model
+    ├── scenario-lab.ts                              # card path on real model roles, deterministic agent
+    ├── rag-evidence.ts                              # judge controls for RAG evidence separation
+    └── simulator-stop.ts (+ .synthetic.json)        # simulator stop regression
 ```
 
 ## Test Structure
@@ -71,354 +89,111 @@ test/
 ```typescript
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { functionUnderTest } from '../src/module.js';
 
-test('description of what is tested', () => {
-  assert.equal(functionUnderTest(), expectedValue);
+test('a blocked claim leaves the card unusable, and no owner answer lifts it', () => {
+  // build from helpers, act through the public API, assert on the record or the view
 });
 
-test('another case', async t => {
-  const resource = await setup();
-  t.after(() => cleanup());
-  assert.equal(result, expected);
+test('library writes share writer ownership, atomic readers and same-hash CAS admits one winner', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'agent-lab-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  // ...
 });
 ```
 
 **Patterns:**
 
-- **Simple synchronous test:**
-  ```typescript
-  test('hidden literals are initial-state leaves', () => {
-    assert.deepEqual(hiddenLiterals(scenario()).sort(), ['12345678', 'active', 'fraud_hold_77']);
-  });
-  ```
-
-- **Async test with cleanup:**
-  ```typescript
-  test('CLI export reads snapshots without interrupting a live writer', { timeout: 15000 }, async t => {
-    const dir = await directory(t);
-    const lab = new ExperimentLab(dir);
-    await lab.init();
-    t.after(() => lab.close());
-    // ... test logic
-  });
-  ```
-
-- **Test with setup helpers:**
-  ```typescript
-  async function directory(t: TestContext) {
-    const dir = await mkdtemp(join(tmpdir(), 'agent-lab-store-'));
-    t.after(() => rm(dir, { recursive: true, force: true }));
-    return dir;
-  }
-  ```
+- Pure derivations are tested directly: `deriveRun`, `buildResultView`, `resultScreen`, `situationViews`, `representativeSample`, `consentText`
+- Engine flows go through `ExperimentLab` on a temporary data folder with a deterministic runtime (`createDemoRuntime`, `cardRuntime` from `card-prep.ts`)
+- Chat tools are called through the real extension registered on a fake `pi`; native dialogs are answered by a scripted owner; rendered rows are checked for owner words (no ids, hashes, JSON or tool names)
+- The workspace component is drawn at several widths (40–160 columns) on synthetic folders
+- CLI tests spawn `process.execPath --import tsx src/cli.ts <command> … --data-dir DIR` and assert on stdout, exit code and written files
 
 ## Mocking
 
 **Framework:**
 
-- No external mocking library (no sinon, jest, or nock)
-- Manual object construction and function replacement for mocks
+- No mocking library; fakes are real objects with scripted answers
 
 **Patterns:**
 
-**Test Data Factories:**
-
-```typescript
-const world = { records: { card_1: { last4: '4321', status: 'active' } }, writableFields: ['status'] };
-
-function scenario(user: Partial<Scenario['user']> = {}): Scenario {
-  return { 
-    id: 's', familyId: 's', title: 's', 
-    user: { goal: 'Block the lost card', ...user }, 
-    // ... other fields
-  };
-}
-
-function trial(turns: string[], userMode: Trial['userMode'] = 'reactive'): Trial {
-  const events: TraceEvent[] = [];
-  turns.forEach((text, i) => {
-    if (i % 2 === 0) events.push({ seq: events.length, type: 'user', text });
-    else events.push({ seq: events.length, type: 'assistant', text });
-  });
-  return { id: 't', revisionId: 'r', scenarioId: 's', events, // ... };
-}
-```
-
-**Manual Type-Safe Object Construction:**
-
-```typescript
-const rubric = (id: string) => ({
-  id, name: id, subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f',
-});
-
-const review = (verdict: HumanReview['verdict'], metricId: string, at = '2026-09-15T10:00:00Z'): HumanReview => ({
-  id: `h-${metricId}-${verdict}-${at}`, createdAt: at, metricId, verdict, note: 'n',
-});
-```
-
-**Subprocess Spawning for Integration:**
-
-```typescript
-const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, dir], { stdio: ['pipe', 'pipe', 'pipe'] });
-```
+- Model roles: deterministic runtimes and runners that answer through the same output contract the harness enforces (per-call schema, then the domain check), or an offline provider on a real `ModelRuntime` (`pi-fixture.ts`)
+- Agents under test: small module and stdio agents in `test/fixtures/`, `examples/scenario-lab-target.mjs`
+- Owner: scripted `ctx.ui.select` / `editor` / `input` answers in `pi-session.ts`
+- Concurrency: barriers instead of timing — the parallel-run test holds every dialogue at the simulator until all have started
 
 **What to Mock:**
 
-- Temporary directories: use `mkdtemp()` and clean with `t.after(() => rm(...))`
-- External processes: use `spawn()` or `spawnSync()` for integration tests
-- Test-specific data: factory functions (`scenario()`, `trial()`, `review()`)
-- File system: real temp directories (no fs mocking)
+- Model replies, the owner's dialog answers, the agent's replies
 
 **What NOT to Mock:**
 
-- Internal module functions (test via public API)
-- Zod schema validation (let Zod work; test contract compliance)
-- Node.js built-in modules (use real file system, real processes)
+- The file system (real temporary folders), zod validation, the store's lock and atomic writes, child processes for command and module agents
 
 ## Fixtures and Factories
 
-**Test Data:**
+**Compatibility fixtures:**
 
-Located in `test/helpers/demo-record.ts`:
+- Records of older formats are frozen JSON written by the code that made them: `recorded-run.json`, `legacy-demo-run.json`, `library-v1/`, `pre-harness-judgments.json`
+- Golden tests prove each parses to itself, renders the same result, keeps its hashes and receipts verifying, re-assesses from recorded evidence and repeats on a new agent version
+- A fixture is never regenerated with today's code; a new format gets a new fixture
 
-```typescript
-export async function demoEvaluateRecord(prefix = 'agent-lab-demo-record-') {
-  const directory = await mkdtemp(join(tmpdir(), prefix));
-  const lab = new ExperimentLab(join(directory, 'runs'), createDemoRuntime());
-  await lab.init();
-  const base = demoEvaluationInput();
-  const input = createInputSchema.parse({ ...base, scenarioCount: 2,
-    settings: { ...base.settings, maxCalls: 20, maxDurationMs: 180000 } });
-  const draft = await lab.create(input); 
-  await lab.waitForIdle();
-  await lab.start(draft.id, { approved: true, reviewer: 'automated' }); 
-  await lab.waitForIdle();
-  return { lab, directory, record: await lab.get(draft.id) };
-}
-```
+**Synthetic data only:**
 
-**Location:**
-
-- Fixtures: `test/fixtures/score/` for reference datasets (JSON/JSONL), `test/fixtures/stdio-agent.mjs` for example agents
-- Helpers: `test/helpers/` for reusable factory and setup functions
-- Inline factories in test files for simple cases
-
-**Pattern:**
-
-```typescript
-// Helper creates reusable setup
-async function directory(t: TestContext) {
-  const dir = await mkdtemp(join(tmpdir(), 'agent-lab-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  return dir;
-}
-
-// Test uses it
-test('feature works', async t => {
-  const dir = await directory(t);
-  // ... use dir, automatically cleaned by t.after()
-});
-```
+- Every test uses invented conversations and rules; the owner's real logs and records never enter the repository
 
 ## Coverage
 
 **Requirements:**
 
-- No enforced coverage target (no .nycrc or coverage config)
-- No coverage reporting (no codecov, coveralls, or local HTML reports)
-- Coverage checked manually if needed
-
-**How to Run Coverage:**
-
-```bash
-npm run build && npx tsx --test --experimental-test-coverage test/*.test.ts
-
-# not wired into package.json; nothing in the repo runs this
-
-```
+- No coverage target or report; coverage is argued per rule — each trust invariant has named tests (`docs/code-review-2026-09-23.md`, section «Инварианты доверия и чем они доказаны»)
 
 ## Test Types
 
 **Unit Tests:**
 
-- Pure function testing: `valueTokens()`, `hiddenLiterals()`, `simulatorChecks()`
-- Schema validation: Zod schemas applied to test data
-- Data transformation: `dialogueToScenario()`, `dialogueToTrial()`
-- Scope: single module or closely related functions
-- Example: `simulator.test.ts` tests `hiddenLiterals()` and `simulatorChecks()` together
+- Pure modules: counting (`run.test.ts`, `card-expectations.test.ts`), result wording (`result-text.test.ts`), situation projection (`card-view.test.ts`), sampling and coverage (`miner-*.test.ts`), spreadsheet reading (`spreadsheet-*.test.ts`), checks and review (`card-proposal.test.ts`, `card-review.test.ts`)
 
 **Integration Tests:**
 
-- Multi-module flows: `ExperimentLab` with `ExperimentStore`, scenario creation through evaluation
-- CLI invocation: spawn the CLI with args and assert output
-- File system operations: real temp dirs, real JSON files
-- Subprocess coordination: multiple parallel processes claiming a lock
-- Example: `store.test.ts` tests reader/writer locking, `reference-dataset.test.ts` tests full import → score flow
+- `ExperimentLab` with the store: preparation, acceptance, run, repeat, reassessment, calibration, suites (`experiment.test.ts`, `card-prepare.test.ts`, `calibration-judge.test.ts`, `suite-logs.test.ts`)
+- Concurrency: real processes competing for the writer lock (`store.test.ts`)
+- Chat and workspace end to end on the teaching example (`extension.test.ts`, `workspace-command.test.ts`, `product-flow.test.ts`)
 
-**E2E Tests:**
+**E2E and Live:**
 
-- Not used; integration tests cover end-to-end CLI and workflow testing
-- Some live tests in `test/live/*pilot*` (local-only, not committed) for manual agent testing
-
-**Example Integration Test:**
-
-```typescript
-test('CLI export and diff read snapshots without interrupting a live writer', { timeout: 15000 }, async t => {
-  const dir = await directory(t);
-  const lab = new ExperimentLab(dir); 
-  await lab.init(); 
-  t.after(() => lab.close());
-  const draft = await lab.create(demoEvaluationInput()); 
-  await lab.waitForIdle();
-  const before = await lab.get(draft.id);
-  const lock = await readFile(join(dir, '.lock'), 'utf8');
-  const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
-  const call = async (args: string[]) => {
-    const child = spawn(process.execPath, ['--import', 'tsx', cli, '--data-dir', dir, ...args]);
-    // ...
-  };
-  const exported = await call(['export', '--id', before.id]);
-  assert.equal(exported.code, 0, exported.stderr);
-});
-```
+- `node examples/scenario-lab-demo.mjs --verify` — the whole teaching path on the built `dist/`, no model
+- `test/live/*.ts` — real model, invented data, explicit `--run`; `test/product-eval.test.ts` only checks that the eval cases, their projects and the scorer hold together
 
 ## Common Patterns
 
 **Async Testing:**
 
 ```typescript
-// await async operation, assert result
-test('readData parses JSON files', async () => {
-  const result = await readData('test.json', 'golden');
-  assert.ok(result.length > 0);
-});
-
-// assert rejection
-test('readData throws on oversized file', async () => {
-  await assert.rejects(
-    readData('huge.json', 'golden'),
-    /превышает 4 МБ/
-  );
-});
-
-// complex async setup with t.after cleanup
-test('complex workflow', async t => {
-  const lab = new ExperimentLab(dir);
-  await lab.init();
-  t.after(() => lab.close());
-  const draft = await lab.create(input);
-  await lab.waitForIdle();
-  assert.equal(draft.id, expect);
+test('a paid call that died in flight is never repeated: its dialogue is left out, the others go on', async () => {
+  // prepare with a runtime that fails one call, resume, assert the call count and the record
 });
 ```
 
 **Error Testing:**
 
 ```typescript
-// Direct rejection test
-test('fabrication flags values absent from card', () => {
-  const invented = simulatorChecks(scenario(), trial(['I lost my card', 'Card 9999, expiry 12/28', 'Done']));
-  assert.equal(check(invented, 'simulator_fabrication')?.passed, false);
-  assert.match(check(invented, 'simulator_fabrication')!.evidence, /9999/);
-});
-
-// Function call error testing
-test('invalid fingerprint throws with user-facing message', async () => {
-  await assert.rejects(
-    targetFingerprint(target),
-    error => /Не найден файл агента/.test(String(error)) && !/ENOENT|stat '/.test(String(error))
-  );
-});
-
-// Validation schema error testing
-test('schema validation catches invalid input', () => {
-  assert.throws(() => {
-    createInputSchema.parse({ ...base, repeats: 10 }); // repeats max is 5
-  }, /[Zod error]/);
-});
+// Typed errors by class, owner-facing messages by their words.
+await assert.rejects(store.writeLogVersions(second.next, fingerprint(stored)), StaleRevisionError, 'a declaration prepared on an older journal is refused');
+await assert.rejects(lab.applyLogVersion(again, hostGrant(again, 'words')), CommandRefused);
+await assert.rejects(lab.convertV1Draft(record.id), /Прогон старого формата не переносится/);
 ```
 
-**Subprocess Testing:**
+**Owner-words check:**
 
 ```typescript
-test('CLI score imports reference evidence', async t => {
-  const data = await mkdtemp(join(tmpdir(), 'agent-lab-reference-'));
-  t.after(() => rm(data, { recursive: true, force: true }));
-  const result = spawnSync(process.execPath, [resolve('dist/cli.js'), 'score',
-    '--input', resolve(directory, 'reference.jsonl'), '--task', resolve(directory, 'task.json'),
-    '--code-only', '--json', '--data-dir', data,
-  ], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-  const output = JSON.parse(result.stdout);
-  assert.equal(output.imported, 12);
-});
-```
-
-**Concurrent Process Testing:**
-
-```typescript
-test('simultaneous processes recover dead writer lock', { timeout: 15000 }, async t => {
-  const children = Array.from({ length: 4 }, () => spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, dir]));
-  t.after(() => { for (const child of children) child.kill(); });
-  const next = children.map(lines);
-  const exits = children.map(child => new Promise<number | null>(resolve => child.on('close', resolve)));
-  
-  // Send signals to all processes
-  children.forEach(child => child.stdin.write('start\n'));
-  const results = await Promise.all(next.map(read => read()));
-  
-  // Assert only one process succeeded
-  assert.equal(results.filter(line => line === 'locked').length, 1, results.join('\n'));
-  assert.equal(results.filter(line => line.startsWith('blocked:')).length, 3, results.join('\n'));
-});
-```
-
-**Type-Safe Test Assertions:**
-
-```typescript
-// Verify type inference from factory
-test('trial events match expected structure', () => {
-  const t = trial(['hello', 'hi', 'thanks']);
-  assert.equal(t.events[0]!.type, 'user');
-  assert.equal(t.events[1]!.type, 'assistant');
-  assert.deepEqual(t.events.map(e => e.type), ['user', 'assistant', 'user']);
-});
+assert.doesNotMatch(shown, /[{}"]|[a-f0-9]{16}|agent_lab_/, `${name}: «${shown}»`);
 ```
 
 ## Test Timeout
 
-**Usage:**
-
-```typescript
-test('slow async operation', { timeout: 15000 }, async t => {
-  // Test that may take up to 15 seconds
-});
-```
-
-**Default:** 30 seconds per test (Node.js default)
-
-## Running Specific Tests
-
-**Via command line:**
-
-```bash
-npm test -- --grep "pattern to match"
-npm test -- test/contracts.test.ts  # Single file
-```
-
-**Local-only live tests:**
-
-```bash
-
-# Tests in test/live/*pilot* are not committed
-
-# They test against real agents and must be run locally
-
-# See .gitignore for exclusion
-
-```
+- `node:test` sets no per-test timeout by default; flows that prepare, run or spawn processes set one explicitly, from `{ timeout: 15000 }` to `{ timeout: 180000 }` (most often 60000)
 
 ---
 
-*Testing analysis: 2026-09-16*
+*Testing analysis: 2026-09-24*
