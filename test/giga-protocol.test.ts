@@ -126,7 +126,7 @@ test('an object parameter that already lists its own properties keeps its struct
 });
 
 test('a union of literal values is declared as an enum', () => {
-  // TypeBox описывает перечисление как anyOf из const; шлюз anyOf не принимает, а enum — да.
+  // TypeBox describes an enumeration as anyOf of const values; the gateway refuses anyOf but accepts enum.
   const payload = buildChatRequest('GigaChat-3-Pro', {
     messages: [{ role: 'user', content: 'save', timestamp: 1 }],
     tools: [{ name: 'agent_lab_suite', description: 'Suites', parameters: { type: 'object', properties: {
@@ -138,8 +138,8 @@ test('a union of literal values is declared as an enum', () => {
 });
 
 test('keys outside the accepted schema subset are dropped from a declaration', () => {
-  // functions/validate отвергает лишние ключи JSON Schema; ограничения длины и шаблоны всё равно
-  // проверяет сам инструмент при вызове, поэтому их снятие не расширяет допустимые аргументы.
+  // functions/validate refuses extra JSON Schema keys; the tool itself checks length limits and patterns when called
+  // anyway, so dropping them does not widen the arguments it accepts.
   const payload = buildChatRequest('GigaChat-3-Pro', {
     messages: [{ role: 'user', content: 'inspect', timestamp: 1 }],
     tools: [{ name: 'agent_lab_inspect', description: 'Inspect', parameters: {
@@ -154,8 +154,8 @@ test('keys outside the accepted schema subset are dropped from a declaration', (
 });
 
 test('a parameter the gateway cannot express becomes a JSON-encoded string', () => {
-  // Ссылки на $defs, объединения разнотипных схем и вложенные объекты без собственных properties
-  // шлюз выразить не может; параметр объявляется строкой и расшифровывается при разборе ответа.
+  // References to $defs, unions of different types and nested objects without properties of their own cannot be
+  // expressed to the gateway; such a parameter is declared as a string and decoded when the answer is parsed.
   const payload = buildChatRequest('GigaChat-3-Pro', {
     messages: [{ role: 'user', content: 'edit', timestamp: 1 }],
     tools: [{ name: 'agent_lab_edit', description: 'Edit a draft', parameters: { type: 'object', properties: {
@@ -271,8 +271,8 @@ test('an unrecognized finish reason fails the model call instead of being report
 });
 
 test('a function call in the content wins over an unfamiliar finish reason label', () => {
-  // За шлюзом стоят и сторонние модели: их метка остановки для вызова инструмента может
-  // отличаться от function_call, а сам вызов в контенте — более надёжный признак.
+  // Third-party models stand behind the gateway too: their stop label for a tool call may differ from function_call,
+  // and the call in the content is the more reliable sign.
   const message = parseChatResponse(model, {
     finish_reason: 'tool_calls',
     messages: [{ role: 'assistant', tools_state_id: 'state-5',
@@ -295,7 +295,7 @@ test('cached prompt tokens are reported separately so the caller does not count 
     finish_reason: 'stop', messages: [{ role: 'assistant', content: [{ text: 'ok' }] }],
     usage: { input_tokens: 17, input_tokens_details: { cached_tokens: 2 }, output_tokens: 3, total_tokens: 20 },
   });
-  // src/pi.ts складывает input + cacheRead + cacheWrite, поэтому кэш вычтен из input.
+  // src/llm/model-call.ts adds input + cacheRead + cacheWrite, so the cached tokens are taken out of input.
   assert.deepEqual(message.usage, {
     input: 15, output: 3, cacheRead: 2, cacheWrite: 0, totalTokens: 20,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
