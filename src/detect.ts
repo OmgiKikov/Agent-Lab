@@ -9,7 +9,7 @@ import { IMPORT_DIALOGUE_LIMIT, IMPORT_FILE_BYTES, MATERIAL_CHARS } from './limi
 import { MATERIAL_EXTENSIONS, materialText } from './materials.js';
 import { codePrompts, jsonPrompts, MIN_PROMPT_CHARS, type PromptCandidate } from './prompt-candidates.js';
 import { countText, pluralForm } from './plural.js';
-import { importBatch } from './scenario-library.js';
+import { logImport, sampleWords } from './scenario-library.js';
 import { codeFacts, FACTORY, languageOf } from './source-facts.js';
 import { proposeTableBytes } from './spreadsheet/import.js';
 import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
@@ -133,18 +133,13 @@ class Reader {
   }
 }
 
-/** Rows the import accepts, counted with the import's own rules; a log longer than one import batch is counted batch by batch. */
+/** Rows the import accepts, counted with the import's own reading of the whole file: a conversation id is taken once in it. */
 function dialogueCount(raw: unknown): { dialogues: number; rejected: number } | undefined {
   const rows = Array.isArray(raw) ? raw : isRecord(raw) && Array.isArray(raw.dialogues) ? raw.dialogues : undefined;
   if (!rows?.length) return undefined;
-  let dialogues = 0, rejected = 0;
-  try {
-    for (let start = 0; start < rows.length; start += IMPORT_DIALOGUE_LIMIT) {
-      const slice = rows.slice(start, start + IMPORT_DIALOGUE_LIMIT);
-      const batch = importBatch(isRecord(raw) ? { ...raw, dialogues: slice } : slice);
-      dialogues += batch.dialogues.length; rejected += batch.rejected.length;
-    }
-  } catch { return undefined; } // the import refuses the file as a whole: not a log Lab can take
+  let verdicts: (string[] | undefined)[];
+  try { ({ verdicts } = logImport(raw)); } catch { return undefined; } // the import refuses the file as a whole: not a log Lab can take
+  const rejected = verdicts.filter(Boolean).length, dialogues = verdicts.length - rejected;
   return dialogues ? { dialogues, rejected } : undefined;
 }
 
@@ -356,12 +351,16 @@ export function targetLabel(target: RunnableTarget, root: string): string {
   return target.kind === 'module' ? `модуль ${shownFile(target.path, root)}` : target.url;
 }
 
-/** One log in the proposal: how many conversations, how many rows did not fit, and for a table, that its reading is confirmed at import. */
+/**
+ * One log in the proposal: how many conversations, how many rows did not fit, the sample one import takes of a longer
+ * log, and for a table, that its reading is confirmed at import.
+ */
 function logLine(log: LogFile): string {
   const counted = `${log.complete ? '' : 'в начале файла '}${countText(log.dialogues, ['разговор', 'разговора', 'разговоров'])}`
-    + (log.rejected ? `, ${countText(log.rejected, ['запись', 'записи', 'записей'])} ${pluralForm(log.rejected, ['не подошла', 'не подошли', 'не подошли'])}` : '');
+    + (log.rejected ? `, ${countText(log.rejected, ['запись', 'записи', 'записей'])} ${pluralForm(log.rejected, ['не подошла', 'не подошли', 'не подошли'])}` : '')
+    + (log.complete && log.table !== 'question' && log.dialogues > IMPORT_DIALOGUE_LIMIT ? `; в одну загрузку входит ${IMPORT_DIALOGUE_LIMIT}: ${sampleWords(IMPORT_DIALOGUE_LIMIT, log.dialogues)}` : '');
   if (log.table) return `  ${log.file} — таблица, ${counted}; ${log.table === 'ready' ? 'как её читать, Lab покажет перед загрузкой' : 'перед загрузкой Lab спросит, как её читать'}`;
-  return `  ${log.file} — ${counted}${log.complete ? '' : `; дальше не читался: файл больше ${IMPORT_FILE_BYTES / 1_000_000} МБ`}`;
+  return `  ${log.file} — ${counted}${log.complete ? '' : `; дальше Lab не смотрел: файл больше ${IMPORT_FILE_BYTES / 1_000_000} МБ, целиком его Lab прочитает при загрузке`}`;
 }
 
 const ORIGIN_TEXT: Record<PromptCandidate['origin'], string> = { file: 'файл', code: 'строка в коде', json: 'поле JSON' };

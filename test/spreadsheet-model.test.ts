@@ -9,6 +9,7 @@ import { ExperimentLab } from '../src/experiment.js';
 import { questionAnswers } from '../src/spreadsheet/answers.js';
 import { importTable } from '../src/spreadsheet/dialogues.js';
 import { tableEvidence } from '../src/spreadsheet/evidence.js';
+import { readExactly, type CompleteReading } from '../src/spreadsheet/exact.js';
 import { readReadingFiles } from '../src/spreadsheet/files.js';
 import { planTableReading, proposeReading, proposeTableImport, readConfirmedTable, readingConsent } from '../src/spreadsheet/import.js';
 import { proposalLines } from '../src/spreadsheet/lines.js';
@@ -211,6 +212,22 @@ test('one message per row: every value of the role column must get a role; the m
   assert.deepEqual(proposal.mapping.layout, { kind: 'message_per_row', role: { index: 1, header: 'author' },
     roles: [{ value: 'client', role: 'user' }, { value: 'bot', role: 'assistant' }, { value: 'operator', role: 'system' }], order: { index: 3, header: 'ts' } });
   assert.deepEqual([proposal.preview.dialogues, proposal.preview.usable], [3, 3]);
+});
+
+test('a reading that drops the export\'s copies is checked as it reads: copies never count against it, a long conversation is the data', () => {
+  // Fifteen conversations wrote one exchange thirty times: 62 messages as written, over the 60 an import keeps only with the copies.
+  const copied = (i: number) => spoken(`CLIENT Вопрос ${i}`, ...Array.from({ length: 30 }, () => ['CLIENT Здравствуйте', 'AGENT Добрый день! Чем помочь?']).flat(), 'AGENT Оформил возврат');
+  // Five conversations really are longer than an import keeps: seventy different messages.
+  const long = (i: number) => spoken(...Array.from({ length: 70 }, (_, k) => k % 2 ? `AGENT Ответ ${k} по заказу ${i}` : `CLIENT Вопрос ${k} по заказу ${i}`));
+  const rows: CellSpec[][] = [['Id диалога', 'Дата', 'Текст', 'agentCode'], ...Array.from({ length: 50 }, (_, k): CellSpec[] =>
+    [idOf(k + 1), '09.09.2026', k < 15 ? copied(k + 1) : k < 20 ? long(k + 1) : conversation(k + 1), AGENTS[k % 3]!])];
+  const bytes = xlsxFile([{ name: 'Данные', rows }]), file = tableFileOf('export.xlsx', bytes);
+  const outcome = readExactly(readWorkbook(bytes, file), file, { ...RIGHT, collapseRepeats: true } as CompleteReading, 'export_copies');
+  assert.ok('proposal' in outcome && outcome.proposal.status === 'ready', JSON.stringify(outcome));
+  const { mapping, preview } = outcome.proposal as Extract<TableProposal, { status: 'ready' }>;
+  assert.equal(mapping.collapseRepeats, true);
+  assert.deepEqual([preview.dialogues, preview.usable, preview.rejected], [50, 45, [{ reason: 'Пустые события или превышен лимит событий', count: 5 }]]);
+  assert.ok(preview.repeats && preview.repeats.dialogues >= 15, JSON.stringify(preview.repeats));
 });
 
 test('what the model is shown stays small: a few rows, long cells cut, and the cut named', () => {

@@ -121,8 +121,8 @@ export const topicMapProgressSchema = z.strictObject({
 }).superRefine(consistent);
 export type TopicMapProgress = z.infer<typeof topicMapProgressSchema>;
 
-/** The part of an import batch a map reads: its identity and its conversations. */
-export type MinerImport = Pick<ImportBatch, 'id' | 'contentHash' | 'dialogues'>;
+/** The part of an import batch a map reads: its identity, its conversations and the table of masks they were read by. */
+export type MinerImport = Pick<ImportBatch, 'id' | 'contentHash' | 'dialogues' | 'maskVersion'>;
 /** The model that answers a map's calls: a map is bound to it. */
 export type BuilderModel = Pick<Model, 'provider' | 'id'>;
 /** A conversation as the miner reads it: only the customer's own messages. */
@@ -193,7 +193,8 @@ function partition(batch: MinerImport): { usable: Conversation[]; excluded: Vali
   for (const dialogue of batch.dialogues) {
     const messages = dialogue.events.flatMap(event => event.type === 'message' && (event.role === 'user' || event.role === 'assistant') && event.content !== undefined
       ? [{ role: event.role, content: event.content }] : []);
-    const issue = validationDialogueIssue({ messages });
+    // An import stored before the table of masks keeps its first reading, so its stored map still accounts for it.
+    const issue = validationDialogueIssue({ messages }, batch.maskVersion ?? 1);
     if (issue) excluded.push({ dialogueId: dialogue.id, ...issue });
     else usable.push({ dialogueId: dialogue.id, customer: messages.flatMap(message => message.role === 'user' ? [message.content] : []) });
   }

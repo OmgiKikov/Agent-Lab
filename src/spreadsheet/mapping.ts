@@ -60,6 +60,11 @@ export const tableMappingSchema = z.strictObject({
   filter: z.strictObject({ column, values: z.array(cellValue).min(1).max(FILTER_VALUES) }).optional(),
   /** Only when the owner chose it: a block of messages written again right after itself is read once (repeats.ts). */
   collapseRepeats: z.literal(true).optional(),
+  /**
+   * The table of masking marks the conversations are read by (masking.ts): it decides which are usable, so the sample
+   * of a long sheet. A mapping confirmed before the table has none and keeps reading its import the first way.
+   */
+  maskVersion: z.literal(2).optional(),
 }).superRefine((mapping, ctx) => {
   const layout = mapping.layout;
   const columns = [mapping.id.index, mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : [],

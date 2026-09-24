@@ -46,31 +46,65 @@ const MARKER_CHARS = 40;
 /** Characters that end or open a phrase in ordinary text: an uppercase word after them says nothing about structure. */
 const PROSE = new Set(['.', ',', '!', '?', ':', ';', '(', ')', '"', '\'', '«', '»', '„', '“', '”', '-', '–', '—', '…']);
 
-const isLetter = (char: string) => char.toLowerCase() !== char.toUpperCase();
-const isWordChar = (char: string | undefined): boolean => char !== undefined && (isLetter(char) || (char >= '0' && char <= '9') || char === '_');
-const isSpace = (char: string | undefined) => char === ' ' || char === '\t' || char === '\n' || char === '\r' || char === ' ';
+/**
+ * The readings below look at every character of a column, so they read UTF-16 units by their codes: a one-character
+ * string and a case conversion per character kept a 4 MB workbook busy for seconds. What a unit is — an uppercase
+ * letter, another letter (one with a case), no letter — is computed once per unit. `charCodeAt` past the text is NaN,
+ * which is neither a letter nor a space.
+ */
+const UNITS = new Uint8Array(0x10000);
+const UPPER = 1, LOWER = 2, NO_LETTER = 3;
+function unitKind(code: number): number {
+  let kind = UNITS[code];
+  if (kind === undefined) return NO_LETTER;
+  if (!kind) {
+    const char = String.fromCharCode(code);
+    UNITS[code] = kind = char.toLowerCase() === char.toUpperCase() ? NO_LETTER : char === char.toUpperCase() ? UPPER : LOWER;
+  }
+  return kind;
+}
+const digitOrUnderscore = (code: number): boolean => code >= 48 && code <= 57 || code === 95;
+const wordCode = (code: number): boolean => digitOrUnderscore(code) || unitKind(code) !== NO_LETTER;
+const spaceCode = (code: number): boolean => code === 32 || code === 9 || code === 10 || code === 13;
+const isLetter = (char: string): boolean => char.length === 1 ? unitKind(char.charCodeAt(0)) !== NO_LETTER : char.toLowerCase() !== char.toUpperCase();
+const isWordChar = (char: string | undefined): boolean => char !== undefined && (char.length === 1 ? wordCode(char.charCodeAt(0)) : isLetter(char));
 const sum = (counts: Iterable<number>) => { let total = 0; for (const count of counts) total += count; return total; };
 
-/** A word of uppercase letters (any alphabet), digits and underscores with at least one letter: how exports tag who speaks. */
+/**
+ * A word of uppercase letters (any alphabet), digits and underscores with at least one letter: how exports tag who
+ * speaks. Words come from wordAt, a unit at a time, so every character of one is a single unit.
+ */
 function isMarkerToken(token: string): boolean {
   if (token.length < 2 || token.length > MARKER_CHARS) return false;
   let letters = 0;
-  for (const char of token) {
-    if (!isWordChar(char)) return false;
-    if (isLetter(char)) { if (char !== char.toUpperCase()) return false; letters++; }
+  for (let i = 0; i < token.length; i++) {
+    const code = token.charCodeAt(i);
+    if (digitOrUnderscore(code)) continue;
+    if (unitKind(code) !== UPPER) return false;
+    letters++;
   }
   return letters > 0;
 }
+/** Whether the word at `at` could be a marker at all: one that opens with a lowercase letter never is. */
+const mayBeMarker = (text: string, at: number): boolean => unitKind(text.charCodeAt(at)) !== LOWER;
 
-const wordAt = (text: string, at: number): string => { let end = at; while (isWordChar(text[end])) end++; return text.slice(at, end); };
-const skipSpace = (text: string, at: number): number => { while (isSpace(text[at])) at++; return at; };
-/** Where a word starts after a space: without a separator, the only places after the text's start where a message may begin. */
-const opensAfterSpace = (text: string, at: number) => isSpace(text[at - 1]) && !isSpace(text[at]);
+const wordEnd = (text: string, at: number): number => { while (wordCode(text.charCodeAt(at))) at++; return at; };
+const wordAt = (text: string, at: number): string => text.slice(at, wordEnd(text, at));
+const skipSpace = (text: string, at: number): number => { while (spaceCode(text.charCodeAt(at))) at++; return at; };
+
+/** The first units of a list of markers, once per list: most places start no marker, and one comparison says so. */
+const FIRST_UNITS = new WeakMap<readonly string[], ReadonlySet<number> | null>();
+function firstUnits(markers: readonly string[]): ReadonlySet<number> | null {
+  let first = FIRST_UNITS.get(markers);
+  if (first === undefined) FIRST_UNITS.set(markers, first = markers.some(marker => !marker) ? null : new Set(markers.map(marker => marker.charCodeAt(0))));
+  return first;
+}
 
 /** The marker that starts at `at` as a whole word, the longest when one marker is the beginning of another. */
 function markerAt(text: string, at: number, markers: readonly string[]): string | undefined {
+  if (firstUnits(markers)?.has(text.charCodeAt(at)) === false) return undefined;
   let found: string | undefined;
-  for (const marker of markers) if (text.startsWith(marker, at) && (!isWordChar(marker.at(-1)) || !isWordChar(text[at + marker.length])) && marker.length > (found?.length ?? 0)) found = marker;
+  for (const marker of markers) if (text.startsWith(marker, at) && (!isWordChar(marker.at(-1)) || !wordCode(text.charCodeAt(at + marker.length))) && marker.length > (found?.length ?? 0)) found = marker;
   return found;
 }
 
@@ -89,10 +123,15 @@ function eachBoundary(text: string, separator: string | undefined, from: number,
     }
     return;
   }
-  for (let at = Math.max(from, skipSpace(text, 0) + 1); at < text.length; at++) {
-    if (!opensAfterSpace(text, at)) continue;
+  const start = Math.max(from, skipSpace(text, 0) + 1);
+  let before = text.charCodeAt(start - 1);
+  for (let at = start; at < text.length; at++) {
+    const code = text.charCodeAt(at);
+    // A place opens after a space: the unit before it is one, and it is not.
+    if (!spaceCode(before) || spaceCode(code)) { before = code; continue; }
     const past = visit(at, at);
     if (past !== undefined) at = past - 1;
+    before = text.charCodeAt(at);
   }
 }
 
@@ -124,15 +163,17 @@ function countMarkers(texts: readonly string[], separator: string | undefined): 
   const counts = new Map<string, MarkerCount>();
   for (const text of texts) {
     const seen = new Set<string>();
-    const count = (token: string) => {
+    const count = (at: number) => {
+      if (!mayBeMarker(text, at)) return;
+      const token = wordAt(text, at);
       if (!isMarkerToken(token)) return;
       let entry = counts.get(token);
       if (!entry) counts.set(token, entry = { token, messages: 0, dialogues: 0 });
       entry.messages++;
       if (!seen.has(token)) { seen.add(token); entry.dialogues++; }
     };
-    count(wordAt(text, skipSpace(text, 0)));
-    eachBoundary(text, separator, 0, at => { count(wordAt(text, at)); });
+    count(skipSpace(text, 0));
+    eachBoundary(text, separator, 0, at => { count(at); });
   }
   return [...counts.values()].sort((a, b) => b.messages - a.messages || a.token.localeCompare(b.token));
 }
@@ -152,11 +193,15 @@ export function candidateTokens(texts: readonly string[], limit: number): Candid
   for (const text of texts) {
     const seen = new Set<string>();
     for (let at = 0; at < text.length; at++) {
-      if (!isWordChar(text[at]) || isWordChar(text[at - 1])) continue;
-      const word = wordAt(text, at);
-      const label = word.length >= 2 && word.length < MARKER_CHARS && [...word].some(isLetter) && text[at + word.length] === ':';
+      const code = text.charCodeAt(at);
+      if (!wordCode(code) || wordCode(text.charCodeAt(at - 1))) continue;
+      const end = wordEnd(text, at), colon = text.charCodeAt(end) === 58;
+      // A word that opens with a lowercase letter and stands before no colon is neither; it is not cut out of the text.
+      if (!colon && unitKind(code) === LOWER) { at = end - 1; continue; }
+      const word = text.slice(at, end);
+      const label = colon && word.length >= 2 && word.length < MARKER_CHARS && [...word].some(isLetter);
       const token = isMarkerToken(word) ? word : label ? `${word}:` : undefined;
-      at += word.length - 1;
+      at = end - 1;
       if (!token) continue;
       let entry = counts.get(token);
       if (!entry) counts.set(token, entry = { token, occurrences: 0, texts: 0 });
@@ -190,8 +235,7 @@ function ledTexts(texts: readonly string[], markers: readonly string[]): number 
  * a separator, a marker is an uppercase word after it often enough to be structure; without one, a word the
  * texts open (the start of a text is a boundary in every reading) or one that half of the conversations hold.
  */
-function readingOf(texts: readonly string[], separator: string | undefined, leading: ReadonlyMap<string, number>): MarkerStructure | undefined {
-  const counts = countMarkers(texts, separator);
+function readingOf(texts: readonly string[], separator: string | undefined, leading: ReadonlyMap<string, number>, counts = countMarkers(texts, separator)): MarkerStructure | undefined {
   const total = sum(counts.map(item => item.messages));
   const markers = counts.filter(separator === undefined
     ? item => (leading.get(item.token) ?? 0) >= MIN_MARKER_MESSAGES || item.dialogues >= texts.length * SPACED_MARKER_SHARE
@@ -209,12 +253,14 @@ function plausible(reading: MarkerStructure): boolean {
 
 /**
  * Whether the reading's separator stands before most markers: of the markers' words that follow a space inside
- * the texts — where a message would start without a separator — most follow the separator too.
+ * the texts — where a message would start without a separator — most follow the separator too. `spaced` counts the
+ * markers' messages read with no separator; detection has counted every uppercase word so already.
  */
-function separatesMarkers(texts: readonly string[], reading: MarkerStructure): boolean {
+function separatesMarkers(texts: readonly string[], reading: MarkerStructure,
+  spaced: ReadonlyMap<string, number> = boundaryCounts(texts, undefined, reading.markers.map(item => item.token))): boolean {
   const separated = sum(reading.markers.map(item => item.messages)) - reading.led;
-  const spaced = sum(boundaryCounts(texts, undefined, reading.markers.map(item => item.token)).values()) - reading.led;
-  return separated >= spaced * SEPARATOR_SHARE;
+  const around = sum(reading.markers.map(item => spaced.get(item.token) ?? 0)) - reading.led;
+  return separated >= around * SEPARATOR_SHARE;
 }
 
 /**
@@ -231,13 +277,73 @@ export function detectMarkers(texts: readonly string[], given?: string | null): 
   }
   if (sum(leading.values()) < texts.length / 2) return undefined;
   if (given !== undefined) return readingOf(texts, given ?? undefined, leading);
+  // Every uppercase word counted with no separator, once: the separators are checked against it, and it is the last reading.
+  let counted: MarkerCount[] | undefined;
+  const unseparated = () => counted ??= countMarkers(texts, undefined);
   const opening = likelySeparators(texts, new Set(leading.keys()));
   for (const separator of opening.length ? opening : likelySeparators(texts)) {
     const reading = readingOf(texts, separator, leading);
-    if (reading && plausible(reading) && separatesMarkers(texts, reading)) return reading;
+    if (reading && plausible(reading) && separatesMarkers(texts, reading, new Map(unseparated().map(item => [item.token, item.messages])))) return reading;
   }
-  const spaced = readingOf(texts, undefined, leading);
+  const spaced = readingOf(texts, undefined, leading, unseparated());
   return spaced && plausible(spaced) ? spaced : undefined;
+}
+
+/** How many messages each named marker starts, and in how many texts, the most frequent first. */
+function namedCounts(texts: readonly string[], separator: string | undefined, markers: readonly string[]): MarkerCount[] {
+  const counts = new Map(markers.map(token => [token, { token, messages: 0, dialogues: 0 }]));
+  for (const text of texts) {
+    const seen = new Set<string>();
+    const count = (at: number) => {
+      const marker = markerAt(text, at, markers);
+      if (!marker) return;
+      const entry = counts.get(marker)!;
+      entry.messages++;
+      if (!seen.has(marker)) { seen.add(marker); entry.dialogues++; }
+    };
+    count(skipSpace(text, 0));
+    eachBoundary(text, separator, 0, at => { count(at); });
+  }
+  return [...counts.values()].sort((a, b) => b.messages - a.messages || a.token.localeCompare(b.token));
+}
+
+/** The characters before the named markers inside the texts, as likelySeparators counts them before uppercase words. */
+function charsBefore(texts: readonly string[], markers: readonly string[]): string[] {
+  const before = new Map<string, number>();
+  for (const text of texts) {
+    for (let at = skipSpace(text, 0) + 1; at < text.length; at++) {
+      if (wordCode(text.charCodeAt(at - 1))) continue;
+      const marker = markerAt(text, at, markers);
+      if (!marker) continue;
+      let back = at - 1;
+      while (back >= 0 && (text[back] === ' ' || text[back] === '\t' || text[back] === '\r')) back--;
+      const char = text[back];
+      if (char !== undefined && (char === '\n' || !isWordChar(char) && !PROSE.has(char))) before.set(char, (before.get(char) ?? 0) + 1);
+      at += marker.length - 1;
+    }
+  }
+  return [...before].filter(([, count]) => count >= 2).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([char]) => char);
+}
+
+/**
+ * The structure of texts under the markers the owner named, in any case or form («Клиент:», «Оператор:»): Lab's own
+ * detection looks for uppercase words, and the owner's word is taken as given. The separator is the owner's (null:
+ * none), else the character before most of the named markers, else none. Undefined when the named markers lead fewer
+ * than half of the texts — they do not open its conversations — or start no second message anywhere.
+ */
+export function namedStructure(texts: readonly string[], markers: readonly string[], given?: string | null): MarkerStructure | undefined {
+  const led = ledTexts(texts, markers);
+  if (!markers.length || led < texts.length / 2) return undefined;
+  const reading = (separator: string | undefined): MarkerStructure | undefined => {
+    const counts = namedCounts(texts, separator, markers);
+    return sum(counts.map(item => item.messages)) > led ? { ...separator === undefined ? {} : { separator }, markers: counts, led } : undefined;
+  };
+  if (given !== undefined) return reading(given ?? undefined);
+  for (const separator of charsBefore(texts, markers)) {
+    const candidate = reading(separator);
+    if (candidate && separatesMarkers(texts, candidate)) return candidate;
+  }
+  return reading(undefined);
 }
 
 /**
@@ -248,19 +354,21 @@ export function detectMarkers(texts: readonly string[], given?: string | null): 
  */
 function likelySeparators(texts: readonly string[], tokens?: ReadonlySet<string>): string[] {
   const before = new Map<string, number>();
+  const first = tokens && new Set([...tokens].map(token => token.charCodeAt(0)));
   for (const text of texts) {
-    let at = skipSpace(text, 0);
-    at += wordAt(text, at).length;
+    let at = wordEnd(text, skipSpace(text, 0));
     while (at < text.length) {
-      if (!isWordChar(text[at])) { at++; continue; }
-      const word = wordAt(text, at);
-      if (tokens ? tokens.has(word) : isMarkerToken(word)) {
+      const code = text.charCodeAt(at);
+      if (!wordCode(code)) { at++; continue; }
+      const end = wordEnd(text, at);
+      // Only a word that may be one is cut out of the text and looked up.
+      if (first ? first.has(code) && tokens!.has(text.slice(at, end)) : unitKind(code) !== LOWER && isMarkerToken(text.slice(at, end))) {
         let back = at - 1;
         while (back >= 0 && (text[back] === ' ' || text[back] === '\t' || text[back] === '\r' || text[back] === ' ')) back--;
         const char = text[back];
         if (char !== undefined && (char === '\n' || !isWordChar(char) && !PROSE.has(char))) before.set(char, (before.get(char) ?? 0) + 1);
       }
-      at += word.length;
+      at = end;
     }
   }
   return [...before].filter(([, count]) => count >= 2).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([char]) => char);
