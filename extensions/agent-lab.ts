@@ -19,12 +19,14 @@ import { verdictOutput } from './model-output.ts';
 import { activateStep } from './steps.ts';
 import type { LabHost } from './host.ts';
 import { isInteractive, NeedsOwner } from './lab-ui.ts';
+import { createGateway, type GatewayOptions } from './gateway.ts';
 
 /*
  * Agent Lab inside Pi: nine tools, of which the model sees only those of the step the project is at (steps.ts), the
  * /agent-lab workspace, and the messages long work reports back with. What the model is told comes from one source,
  * the agent-builder skill (skills/agent-builder/SKILL.md): its body joins the system prompt of an Agent Lab session;
- * everything a tool itself can say is in that tool's description.
+ * everything a tool itself can say is in that tool's description. The owner's personal model gateway (provider giga)
+ * is registered here too and connected with `/agent-lab gateway` (gateway.ts).
  */
 
 /** The one instruction source, read once: the skill without its frontmatter. */
@@ -36,8 +38,14 @@ interface AgentLabOptions {
   inlineRunMs?: number; inlineCheckMs?: number; inlineBuildMs?: number; createLab?: (directory: string) => ExperimentLab;
   /** How the workspace opens a saved report; the system's browser by default. */
   openReport?: (path: string) => Promise<void>;
+  gateway?: GatewayOptions;
 }
-export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}) {
+/**
+ * Everything is registered synchronously; the returned promise is the gateway's startup connection, which Pi awaits
+ * so that its models are in the first /model list.
+ */
+export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}): Promise<void> {
+  const gateway = createGateway(pi, options.gateway);
   const operations = new SessionOperations(options.createLab);
   const reading = (directory: string): ExperimentLab => operations.reader(directory);
   /** The model gets the tools of the step the project's records are at; unreadable records leave the tools as they are. */
@@ -78,7 +86,9 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     ctx.ui.setTitle(`Agent Lab · ${ctx.cwd.split('/').at(-1)}`);
     ctx.ui.setHeader((_tui, theme) => new Text(`${theme.bold('Agent Lab')} — насколько хорош ваш агент.\n${theme.fg('muted', safeText(ctx.cwd))}`, 1, 1));
     ctx.ui.setWidget('agent-lab-start', ['Напишите обычными словами, например: «проверь агента в этой папке, логи — logs.xlsx».',
-      '/agent-lab — рабочее пространство агента · /agent-lab demo — учебный пример без модели и ключей.']);
+      '/agent-lab — рабочее пространство агента · /agent-lab demo — учебный пример без модели и ключей.',
+      // A refused gateway is otherwise only in stderr, which the terminal does not show, and looks like an unexplained «no api key».
+      ...[gateway.note()].filter((line): line is string => !!line)]);
   });
   pi.on('before_agent_start', async (event, ctx) => {
     await step(resolve(ctx.cwd, '.agent-lab'));
@@ -91,6 +101,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   registerDecideTool(tools, host);
   registerRunTool(tools, host);
   registerResultTools(tools, host);
-  registerBoardCommand(pi, host, options.openReport ? { openReport: options.openReport } : {});
+  registerBoardCommand(pi, host, { gateway: gateway.command, ...(options.openReport ? { openReport: options.openReport } : {}) });
   pi.on('session_shutdown', () => operations.shutdown());
+  return gateway.ready;
 }

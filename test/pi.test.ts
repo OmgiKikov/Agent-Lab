@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import { createPiRuntime, getPiStatus } from '../src/pi.js';
 import { REPAIR_ATTEMPTS } from '../src/llm/structured.js';
 import { CARD_ROLE } from '../src/prompts.js';
-import { judgeInput, observableSources } from '../src/judge.js';
+import { judgeInput, JUDGE_RESPONSE_FORMAT, observableSources } from '../src/judge.js';
+import { createGigaProvider, GIGA_PROVIDER_ID } from '../src/giga-provider.js';
 import { DEFAULT_JUDGE, emptyUsage, settingsSchema, targetSchema, type Scenario, type Trial } from '../src/contracts.js';
 import { promptCompliance } from '../src/assessment.js';
 import { loggedMessages } from '../src/card/checks.js';
@@ -329,6 +330,34 @@ test(`OpenRouter ${judge.model} sends the pinned provider and isolated rubric on
     assert.deepEqual(requests[2]!.body.messages, requests[3]!.body.messages);
     assert.notDeepEqual(requests[0]!.body.messages, requests[2]!.body.messages);
   } finally { globalThis.fetch = originalFetch; await f.close(); }
+});
+
+test('a judge on the internal gateway gets the strict response schema on its own wire, translated into model_options', async () => {
+  const f = await fixture(() => { throw new Error('The planner provider must not assess'); });
+  const bodies: any[] = [];
+  // The real giga provider over a transport stand-in: the catalog, then one chat answer per vote.
+  const provider = await createGigaProvider({}, async (path, body) => {
+    if (path === '/v1/models') return { status: 200, text: JSON.stringify({ data: [{ id: 'giga-judge', type: 'chat' }] }) };
+    bodies.push(body);
+    const answer = JSON.stringify({ assessments: [{ metricId: 'goal', passCondition: 'met', failCondition: 'not_met', rationale: 'The instruction is present.', evidence: [1], citations: [{ seq: 1, quote: 'Instruction' }] }] });
+    return { status: 200, text: JSON.stringify({ finish_reason: 'stop', messages: [{ role: 'assistant', content: [{ text: answer }] }], usage: { input_tokens: 10, output_tokens: 5 } }) };
+  });
+  assert.ok(provider);
+  f.runtime.registerProvider(GIGA_PROVIDER_ID, provider);
+  try {
+    const adapter = await createPiRuntime({ ...settings, judge: { provider: GIGA_PROVIDER_ID, model: 'giga-judge' } }, f.runtime);
+    const scenario = { ...plainCard(0), split: 'dev' as const, metrics: [reviewFields.metrics[0]!] };
+    const trial: Trial = { id: 'trial', revisionId: 'revision', scenarioId: scenario.id, familyId: scenario.familyId, repeat: 0, split: 'dev', userMode: 'static',
+      manifestHash: 'hash', outcome: 'ungraded', reason: '', checks: [], events: [{ seq: 0, type: 'user', text: 'Help' }, { seq: 1, type: 'assistant', text: 'Instruction' }],
+      initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1 };
+    const { ctx } = callContext();
+    assert.equal((await adapter.assess!({ scenario, trial, sources: [] }, ctx))[0]!.result, 'pass');
+    assert.equal(bodies.length, 2);
+    for (const body of bodies) {
+      assert.equal(body.response_format, undefined);
+      assert.deepEqual(body.model_options.response_format, { type: 'json_schema', schema: JUDGE_RESPONSE_FORMAT.json_schema.schema, strict: true });
+    }
+  } finally { await f.close(); }
 });
 
 test('the simulator receives knows, answers and cannotKnow but never the external world', async () => {

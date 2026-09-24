@@ -11,6 +11,19 @@ dist/
 .env
 .DS_Store
 
+# Real certificates and keys are never committed; the test-only loopback pair lives under test/fixtures.
+/certs/
+*.pem
+*.key
+*.cer
+*.crt
+*.p12
+*.pfx
+*.jks
+*.der
+!test/fixtures/*.pem
+!test/fixtures/*.key
+
 # Local pilot evidence and runners depend on material outside this public repository.
 /docs/RELIABILITY.md
 /docs/aigw-audit/
@@ -23,4 +36,6 @@ dist/
 /test/live/judge-pilot.ts
 # exported OpenCode transcripts
 session-*.md
+.cache
+__pycache__/
 .gstack/

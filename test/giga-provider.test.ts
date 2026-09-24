@@ -1,0 +1,346 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import { missingGigaVariables, readGigaConfig, requestOptions, unreadableGigaFiles } from '../src/giga-transport.js';
+import { connectGateway, createGigaProvider, registerGigaProvider } from '../src/giga-provider.js';
+import type { GigaModel } from '../src/giga-protocol.js';
+
+const catalogBody = JSON.stringify({ data: [
+  { id: 'GigaChat-3-Pro', type: 'chat' }, { id: 'glm-5.2', type: 'chat' }, { id: 'Embeddings', type: 'embeddings' },
+] });
+
+const answerBody = JSON.stringify({
+  model: 'GigaChat-3-Pro:3.1.0', created_at: 1789463335, finish_reason: 'stop',
+  messages: [{ role: 'assistant', content: [{ text: 'Hello' }] }],
+  usage: { input_tokens: 17, input_tokens_details: { cached_tokens: 2 }, output_tokens: 3, total_tokens: 20 },
+});
+
+async function providerWith(replies: { status: number; text: string }[]) {
+  const sent: { path: string; body?: unknown }[] = [];
+  const provider = await createGigaProvider({}, async (path, body) => {
+    sent.push({ path, body });
+    return replies[sent.length - 1] ?? { status: 500, text: 'no reply configured' };
+  });
+  return { provider: provider!, sent };
+}
+
+async function certDirectory() {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-giga-'));
+  await writeFile(join(directory, 'cert.pem'), 'test-cert');
+  await writeFile(join(directory, 'key.pem'), 'test-key');
+  await writeFile(join(directory, 'ca.pem'), 'test-ca');
+  return directory;
+}
+
+test('returns a complete configuration with a normalized url when all required variables are set', async () => {
+  const directory = await certDirectory();
+  const complete = {
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example/v1/',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
+  };
+  const config = readGigaConfig(complete);
+  assert.equal(config?.baseUrl, 'https://gateway.example');
+  assert.equal(config?.cert.toString(), 'test-cert');
+  assert.equal(config?.key.toString(), 'test-key');
+  assert.equal(config?.ca, undefined);
+  assert.equal(config?.rejectUnauthorized, true);
+
+  const urlNormalizationCases: Array<{ label: string; url: string; expected: string }> = [
+    { label: 'v1 suffix with trailing slash', url: 'https://gateway.example/v1/', expected: 'https://gateway.example' },
+    { label: 'v2 suffix', url: 'https://gateway.example/v2', expected: 'https://gateway.example' },
+    { label: 'bare host without a version', url: 'https://gateway.example', expected: 'https://gateway.example' },
+    { label: 'host with only a trailing slash', url: 'https://gateway.example/', expected: 'https://gateway.example' },
+  ];
+  for (const { label, url, expected } of urlNormalizationCases) {
+    const cased = readGigaConfig({ ...complete, AGENT_LAB_GATEWAY_URL: url });
+    assert.equal(cased?.baseUrl, expected, label);
+  }
+});
+
+test('returns undefined when a required variable is missing', async () => {
+  const directory = await certDirectory();
+  const complete = {
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example/v1/',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
+  };
+  for (const missing of ['AGENT_LAB_GATEWAY_URL', 'AGENT_LAB_GATEWAY_CERT_PATH', 'AGENT_LAB_GATEWAY_KEY_PATH'] as const) {
+    assert.equal(readGigaConfig({ ...complete, [missing]: undefined }), undefined, `${missing} is required`);
+  }
+});
+
+test('loads an optional CA and disables certificate verification when insecure mode is set', async () => {
+  const directory = await certDirectory();
+  const complete = {
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example/v1/',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
+  };
+  const relaxed = readGigaConfig({ ...complete, AGENT_LAB_GATEWAY_CA_PATH: join(directory, 'ca.pem'), AGENT_LAB_GATEWAY_INSECURE: '1' });
+  assert.equal(relaxed?.ca?.toString(), 'test-ca');
+  assert.equal(relaxed?.rejectUnauthorized, false);
+});
+
+test('ignores the GigaChat variables that belong to the agent under test', () => {
+  // Проверяемый агент ходит в GigaChat своими сертификатами и держит их в GIGACHAT_*.
+  // Agent Lab запускает его дочерним процессом, поэтому обе пары живут в одном окружении:
+  // подхватить чужие значения означало бы пойти в свой шлюз не тем сертификатом.
+  assert.equal(readGigaConfig({
+    GIGACHAT_URL: 'https://other-service.example',
+    GIGACHAT_CERT_PATH: '/agent/cert.pem',
+    GIGACHAT_KEY: '/agent/key.pem',
+    GIGACHAT_VERIFY_PATH: '/agent/chain.pem',
+  }), undefined);
+});
+
+test('names the variables that keep the gateway unconfigured', () => {
+  // Без этого отсутствие провайдера выглядит как общий отказ авторизации Pi, и непонятно,
+  // чинить окружение или доступ к моделям.
+  assert.deepEqual(missingGigaVariables({}), ['AGENT_LAB_GATEWAY_URL', 'AGENT_LAB_GATEWAY_CERT_PATH', 'AGENT_LAB_GATEWAY_KEY_PATH']);
+  assert.deepEqual(missingGigaVariables({ AGENT_LAB_GATEWAY_URL: 'https://gateway.example', AGENT_LAB_GATEWAY_KEY_PATH: '/key.pem' }), ['AGENT_LAB_GATEWAY_CERT_PATH']);
+  assert.deepEqual(missingGigaVariables({
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example', AGENT_LAB_GATEWAY_CERT_PATH: '/cert.pem', AGENT_LAB_GATEWAY_KEY_PATH: '/key.pem',
+  }), []);
+});
+
+test('names the configured files it cannot read', async () => {
+  // Во внутренних проектах пути к сертификатам записаны относительно корня их репозитория;
+  // запущенный из другого каталога Agent Lab их не находит, и это нужно назвать прямо.
+  const directory = await certDirectory();
+  assert.deepEqual(unreadableGigaFiles({
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: 'certs/tls.key',
+    AGENT_LAB_GATEWAY_CA_PATH: join(directory, 'ca.pem'),
+  }), ['AGENT_LAB_GATEWAY_KEY_PATH']);
+  assert.deepEqual(unreadableGigaFiles({}), []);
+});
+
+test('a configured but unreadable certificate path fails loudly', async () => {
+  const directory = await certDirectory();
+  assert.throws(() => readGigaConfig({
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'absent.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
+  }), /absent\.pem/);
+});
+
+test('request options carry the client certificate and honour the verification switch', async () => {
+  const directory = await certDirectory();
+  const config = readGigaConfig({
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example/v1',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'cert.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
+    AGENT_LAB_GATEWAY_CA_PATH: join(directory, 'ca.pem'),
+  })!;
+
+  const post = requestOptions(config, '/v2/chat/completions', '{"model":"x"}', 60000);
+  assert.equal(post.hostname, 'gateway.example');
+  assert.equal(post.path, '/v2/chat/completions');
+  assert.equal(post.method, 'POST');
+  assert.equal(post.rejectUnauthorized, true);
+  assert.equal(post.cert?.toString(), 'test-cert');
+  assert.equal(post.key?.toString(), 'test-key');
+  assert.equal(post.ca?.toString(), 'test-ca');
+  assert.equal((post.headers as Record<string, unknown> | undefined)?.['Content-Type'], 'application/json');
+  // Транспортная аутентификация: заголовка авторизации быть не должно.
+  assert.equal(Object.keys(post.headers ?? {}).some(name => name.toLowerCase() === 'authorization'), false);
+
+  const get = requestOptions(config, '/v1/models', undefined, 60000);
+  assert.equal(get.method, 'GET');
+  assert.deepEqual(get.headers, {});
+});
+
+test('the catalog of the gateway becomes the model list', async () => {
+  const paths: string[] = [];
+  const provider = await createGigaProvider({}, async path => { paths.push(path); return { status: 200, text: catalogBody }; });
+  assert.deepEqual(paths, ['/v1/models']);
+  assert.deepEqual(provider?.models?.map(model => model.id), ['GigaChat-3-Pro', 'glm-5.2']);
+  // Судья фиксирован на 16384 выходных токенах; меньший лимит молча обрезал бы вердикт.
+  assert.ok((provider?.models?.[0]?.maxTokens ?? 0) >= 16384);
+  assert.deepEqual(provider?.models?.[0]?.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+});
+
+test('an unreadable certificate path degrades to no provider instead of crashing the run', async () => {
+  const directory = await certDirectory();
+  const env = {
+    AGENT_LAB_GATEWAY_URL: 'https://gateway.example',
+    AGENT_LAB_GATEWAY_CERT_PATH: join(directory, 'absent.pem'),
+    AGENT_LAB_GATEWAY_KEY_PATH: join(directory, 'key.pem'),
+  };
+  await assert.doesNotReject(createGigaProvider(env));
+  assert.equal(await createGigaProvider(env), undefined);
+});
+
+test('the catalog request carries a bounded deadline even without a run signal', async () => {
+  let capturedSignal: AbortSignal | undefined;
+  await createGigaProvider({}, async (_path, _body, signal) => { capturedSignal = signal; return { status: 200, text: catalogBody }; });
+  assert.ok(capturedSignal instanceof AbortSignal);
+  assert.equal(capturedSignal?.aborted, false);
+});
+
+test('an already aborted run signal is honoured by the catalog request', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let capturedSignal: AbortSignal | undefined;
+  await createGigaProvider({}, async (_path, _body, signal) => { capturedSignal = signal; return { status: 200, text: catalogBody }; }, controller.signal);
+  assert.equal(capturedSignal?.aborted, true);
+});
+
+test('without configuration or with an unusable catalog no provider is produced', async () => {
+  assert.equal(await createGigaProvider({}), undefined);
+  assert.equal(await createGigaProvider({}, async () => ({ status: 403, text: 'denied' })), undefined);
+  assert.equal(await createGigaProvider({}, async () => ({ status: 200, text: 'not json' })), undefined);
+  assert.equal(await createGigaProvider({}, async () => ({ status: 200, text: '{"data":[]}' })), undefined);
+  assert.equal(await createGigaProvider({}, async () => { throw new Error('network down'); }), undefined);
+});
+
+async function capturedStderr(run: () => Promise<unknown>): Promise<string[]> {
+  const lines: string[] = [];
+  const original = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: unknown) => { lines.push(String(chunk)); return true; }) as typeof process.stderr.write;
+  try { await run(); } finally { process.stderr.write = original; }
+  return lines;
+}
+
+test('each catalog failure is reported to stderr by category only, never a path or a response body', async () => {
+  const cases: { category: string; run: () => Promise<unknown> }[] = [
+    { category: 'bad configuration', run: () => createGigaProvider({
+      AGENT_LAB_GATEWAY_URL: 'https://gateway.example', AGENT_LAB_GATEWAY_CERT_PATH: '/no/such/cert.pem', AGENT_LAB_GATEWAY_KEY_PATH: '/no/such/key.pem',
+    }) },
+    { category: 'connection UNABLE_TO_VERIFY_LEAF_SIGNATURE', run: () => createGigaProvider({}, async () => {
+      throw Object.assign(new Error('unable to verify the first certificate'), { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' });
+    }) },
+    { category: 'timeout or aborted', run: () => createGigaProvider({}, async () => { throw new Error('Giga request timed out'); }) },
+    { category: 'HTTP 403', run: () => createGigaProvider({}, async () => ({ status: 403, text: 'top secret denial body' })) },
+    { category: 'bad JSON', run: () => createGigaProvider({}, async () => ({ status: 200, text: 'not json' })) },
+    { category: 'empty catalog', run: () => createGigaProvider({}, async () => ({ status: 200, text: '{"data":[]}' })) },
+  ];
+  for (const { category, run } of cases) {
+    const lines = await capturedStderr(run);
+    assert.equal(lines.length, 1, category);
+    assert.match(lines[0]!, new RegExp(`\\(${category}\\)`), category);
+    assert.doesNotMatch(lines[0]!, /top secret|no\/such|cert\.pem|first certificate|Giga request/, category);
+  }
+});
+
+test('a completed answer is delivered as start and done events', async () => {
+  const { provider, sent } = await providerWith([{ status: 200, text: catalogBody }, { status: 200, text: answerBody }]);
+  const model = { id: 'GigaChat-3-Pro', api: 'giga-v2', provider: 'giga' } as GigaModel;
+  const stream = provider.streamSimple!(model, { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, { temperature: 0 });
+
+  const events: string[] = [];
+  for await (const event of stream) events.push(event.type);
+  assert.deepEqual(events, ['start', 'done']);
+
+  const message = await stream.result();
+  assert.deepEqual(message.content, [{ type: 'text', text: 'Hello' }]);
+  assert.equal(message.usage.input, 15);
+  assert.equal(sent[1]?.path, '/v2/chat/completions');
+  assert.deepEqual(sent[1]?.body, { model: 'GigaChat-3-Pro', messages: [{ role: 'user', content: [{ text: 'Hi' }] }],
+    model_options: { temperature: 0, reasoning: { effort: 'off' } } });
+});
+
+test('the judge payload hook is applied and normalized into model options', async () => {
+  const { provider, sent } = await providerWith([{ status: 200, text: catalogBody }, { status: 200, text: answerBody }]);
+  const model = { id: 'GigaChat-3-Pro', api: 'giga-v2', provider: 'giga' } as GigaModel;
+  const options = {
+    onPayload: (payload: Record<string, unknown>) => ({ ...payload, response_format: { type: 'json_schema', json_schema: { name: 'verdict', strict: true, schema: { type: 'object' } } } }),
+  } as never;
+  await provider.streamSimple!(model, { messages: [{ role: 'user', content: 'grade', timestamp: 1 }] }, options).result();
+
+  // The judge's schema lands next to the reasoning switch instead of replacing model_options.
+  assert.deepEqual((sent[1]?.body as { model_options?: unknown }).model_options,
+    { reasoning: { effort: 'off' }, response_format: { type: 'json_schema', schema: { type: 'object' }, strict: true } });
+});
+
+test('a gateway error surfaces as a failed model call, not as a parse error', async () => {
+  const { provider } = await providerWith([{ status: 200, text: catalogBody }, { status: 429, text: '{"status":429,"message":"Too many requests"}' }]);
+  const model = { id: 'GigaChat-3-Pro', api: 'giga-v2', provider: 'giga' } as GigaModel;
+  await assert.rejects(
+    provider.streamSimple!(model, { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, {}).result(),
+    /429/,
+  );
+});
+
+test('a gateway error message carries the status but never the response body', async () => {
+  const { provider } = await providerWith([{ status: 200, text: catalogBody }, { status: 500, text: 'echo of the secret prompt' }]);
+  const model = { id: 'GigaChat-3-Pro', api: 'giga-v2', provider: 'giga' } as GigaModel;
+  await assert.rejects(
+    provider.streamSimple!(model, { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, {}).result(),
+    (error: Error) => /HTTP 500/.test(error.message) && !/secret prompt/.test(error.message),
+  );
+});
+
+test('a failed model request names its category on stderr, because pi.ts sanitizes the error itself', async () => {
+  const model = { id: 'GigaChat-3-Pro', api: 'giga-v2', provider: 'giga' } as GigaModel;
+  const statusLines = await capturedStderr(async () => {
+    const { provider } = await providerWith([{ status: 200, text: catalogBody }, { status: 500, text: 'echo of the secret prompt' }]);
+    await provider.streamSimple!(model, { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, {}).result().catch(() => {});
+  });
+  assert.deepEqual(statusLines, ['giga: запрос к модели GigaChat-3-Pro не прошёл (HTTP 500)\n']);
+
+  const timeoutLines = await capturedStderr(async () => {
+    const provider = await createGigaProvider({}, async path =>
+      path === '/v1/models' ? { status: 200, text: catalogBody } : Promise.reject(new Error('Giga request timed out')));
+    await provider!.streamSimple!(model, { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, {}).result().catch(() => {});
+  });
+  // A timeout reads as "access revoked" through pi.ts's generic message; the category says otherwise.
+  assert.deepEqual(timeoutLines, ['giga: запрос к модели GigaChat-3-Pro не прошёл (timeout)\n']);
+});
+
+test('a successful status with a non-JSON body fails cleanly without echoing the body', async () => {
+  const { provider } = await providerWith([{ status: 200, text: catalogBody }, { status: 200, text: '<html>secret proxy page</html>' }]);
+  const model = { id: 'GigaChat-3-Pro', api: 'giga-v2', provider: 'giga' } as GigaModel;
+  await assert.rejects(
+    provider.streamSimple!(model, { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, {}).result(),
+    (error: Error) => /non-JSON/.test(error.message) && !/secret proxy page/.test(error.message),
+  );
+});
+
+test('a registered provider exposes its models through the Pi runtime', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-giga-runtime-'));
+  const runtime = await ModelRuntime.create({
+    authPath: join(directory, 'auth.json'), modelsPath: null,
+    modelsStorePath: join(directory, 'models-store.json'), allowModelNetwork: false, refreshOnCreate: false,
+  });
+  try {
+    await registerGigaProvider(runtime, {}, async () => ({ status: 200, text: catalogBody }));
+    assert.equal(runtime.getModel('giga', 'GigaChat-3-Pro')?.id, 'GigaChat-3-Pro');
+    assert.deepEqual((await runtime.getAvailable('giga')).map(model => model.id), ['GigaChat-3-Pro', 'glm-5.2']);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('registration is silent when the gateway is not configured', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-giga-empty-'));
+  const runtime = await ModelRuntime.create({
+    authPath: join(directory, 'auth.json'), modelsPath: null,
+    modelsStorePath: join(directory, 'models-store.json'), allowModelNetwork: false, refreshOnCreate: false,
+  });
+  try {
+    await registerGigaProvider(runtime, {});
+    assert.equal(runtime.getModel('giga', 'GigaChat-3-Pro'), undefined);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('connecting names why the gateway is unavailable', async () => {
+  const outcomes = await Promise.all([
+    connectGateway({}),
+    connectGateway({}, async () => ({ status: 403, text: 'denied' })),
+    connectGateway({}, async () => { throw Object.assign(new Error('x'), { code: 'ENOTFOUND' }); }),
+  ]);
+  assert.deepEqual(outcomes.map(outcome => 'failure' in outcome ? outcome.failure : 'connected'), ['not configured', 'HTTP 403', 'connection ENOTFOUND']);
+});
+
+test('a connected gateway lists its chat models', async () => {
+  const connection = await connectGateway({}, async () => ({ status: 200, text: catalogBody }));
+  assert.deepEqual('models' in connection ? connection.models : [], ['GigaChat-3-Pro', 'glm-5.2']);
+});
