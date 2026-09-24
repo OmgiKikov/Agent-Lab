@@ -235,13 +235,12 @@ test('провалы прогона получают имена, а сорван
   assert.ok(survived.limitations.some(l => /Не удалось назвать типы провалов.*судья недоступен/.test(l)));
 });
 
-test('unresolved business questions block approval until new materials produce a new experiment', async t => {
-  const runtime = createDemoRuntime(); const ground = runtime.groundRequirements!;
-  runtime.groundRequirements = async (...args) => ({ ...await ground(...args), questions: ['Which timezone applies?'] });
-  const { lab } = await setup(t, runtime);
-  const accepted = await acceptedDemoDraft(lab);
-  const draft = await lab.get(accepted.id);
-  assert.deepEqual(draft.questions, ['Which timezone applies?']);
+test('unresolved business questions block a first-format draft until new materials produce a new experiment', async t => {
+  // A first-format draft's rules were read once for the whole set, so an open question leaves every card unsettled.
+  // Card sets are reviewed card by card instead (card-prepare.test.ts: open grounding questions do not block them).
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const draft = { ...await legacyDraft(lab, { count: 1 }), questions: ['Which timezone applies?'] };
+  await lab.store.save(draft);
   await assert.rejects(lab.start(draft.id, { approved: true, expectedHash: draftHash(draft) }), /ответьте на бизнес-вопросы/);
   assert.equal((await lab.get(draft.id)).phase, 'review');
 });

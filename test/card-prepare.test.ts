@@ -80,6 +80,23 @@ test('from logs to the number: import → cards → review → acceptance → ru
   });
 });
 
+test('open grounding questions do not block an accepted card set: each card was reviewed and asked on its own', async () => {
+  await withLab(cardRuntime(received()), async lab => {
+    const draft = await lab.create(cardInput());
+    await lab.waitForIdle();
+    const { library } = await lab.readCards(draft.id);
+    const accepted = await lab.acceptCards(draft.id, libraryHash(library), library.cards.map(card => card.id));
+    // Grounding a large knowledge base per dialogue leaves questions like these on the record (the owner's live run had 12).
+    const withQuestions = { ...accepted.experiment, questions: ['Какой канал обслуживания у клиента?'] };
+    await lab.store.save(withQuestions);
+    await lab.start(draft.id, { approved: true, expectedHash: draftHash(withQuestions) });
+    await lab.waitForIdle();
+    const finished = await lab.get(draft.id);
+    assert.equal(finished.phase, 'results_review', finished.error ?? '');
+    assert.deepEqual(finished.questions, withQuestions.questions, 'the questions stay on the record for the owner');
+  });
+});
+
 test('a resume continues every unit from its next step: a card made before the budget ran out is only reviewed', async () => {
   const seen = received();
   const runtime = cardRuntime(seen);

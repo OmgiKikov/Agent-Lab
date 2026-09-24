@@ -167,7 +167,10 @@ export async function start(lab: Lab, id: string, options: StartOptions): Promis
     if (options.requireAccepted && record.acceptedDraftHash !== draftHash(record)) {
       throw new Error('Сначала подтвердите ожидания ситуаций: они изменились или ещё не подтверждены.');
     }
-    if (record.questions.length) throw new Error('Сначала ответьте на бизнес-вопросы из черновика: добавьте ответы в материалы и подготовьте новый эксперимент.');
+    // Grounding's open questions gate a first-format draft, whose rules were read once for the whole set. Cards are
+    // reviewed one by one and each doubt becomes that card's own owner question, so an accepted card set runs; the
+    // questions stay on the record for the owner.
+    if (record.questions.length && record.librarySnapshot?.formatVersion !== 2) throw new Error('Сначала ответьте на бизнес-вопросы из черновика: добавьте ответы в материалы и подготовьте новый эксперимент.');
     // A control delivers only its opening, so its script never has to fit.
     if (record.settings.userModes.includes('scripted')) for (const scenario of record.scenarios.filter(s => !record.positiveControlScenarioIds?.includes(s.id))) {
       const issue = scriptIssue(scenario.user, record.settings.maxTurns);
