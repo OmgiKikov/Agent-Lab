@@ -104,8 +104,8 @@ test('task-only execution records automated review and labels expectations provi
 
 test('shutdown during the initial checkpoint waits, keeps the lock, and never starts model work', async t => {
   const runtime = createDemoRuntime(); let calls = 0;
-  const ground = runtime.groundRequirements!;
-  runtime.groundRequirements = async (...args) => { calls++; return ground(...args); };
+  const propose = runtime.proposeCard!;
+  runtime.proposeCard = async (...args) => { calls++; return propose(...args); };
   const { lab, directory } = await setup(t, runtime);
   const entered = deferred(); const release = deferred();
   const save = lab.store.save.bind(lab.store); let first = true;

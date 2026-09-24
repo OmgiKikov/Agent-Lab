@@ -63,25 +63,23 @@ const createInput = (batch: ReturnType<typeof batchOf>, extra: Record<string, un
 
 interface Seen { proposals: CardProposalRequest[]; topicCalls: string[] }
 /**
- * Every role by a fixed rule: topics from the answer key of `logged` (a topic call can fail like a provider), one rule
- * grounded, a card per conversation titled «<its topic> — <conversation>» from the one topic the harness offers, every
+ * Every role by a fixed rule: topics from the answer key of `logged` (a topic call can fail like a provider), the one rule
+ * cited, a card per conversation titled «<its topic> — <conversation>» from the one topic the harness offers, every
  * claim ready, a customer who leaves after the first reply, and a judge that fails only the titles `fails` names.
  */
 function minerRuntime(logged: readonly Logged[], options: { failTopicAt?: number; reject?: (request: CardProposalRequest) => boolean; fails?: (title: string) => boolean } = {}) {
   const seen: Seen = { proposals: [], topicCalls: [] };
   const topics = scriptedRunner(logged, options.failTopicAt ? { failAt: options.failTopicAt } : {});
-  const must = [{ text: 'ответить на вопрос клиента по существу', requirementIds: ['answer_rule'], appliesWhen: null, observation: 'reply' as const }];
   const runtime: Runtime = {
     topicMap: { builder: BUILDER, build: (plan, ctx, onProgress) => buildTopicMap(plan, { builder: BUILDER, ctx, onProgress,
       run: (task, input, callCtx) => { seen.topicCalls.push(task.label); return topics.run(task, input, callCtx); } }) },
-    async groundRequirements(input, ctx) {
-      ctx.beforeCall();
-      return { requirements: [{ id: 'answer_rule', sourceId: input.sources[0]!.id, text: 'Отвечать по существу вопроса клиента.', quote: RULE, critical: true }], questions: [] };
-    },
     async proposeCard(request, ctx): Promise<CardProposal> {
       ctx.beforeCall(); seen.proposals.push(structuredClone(request));
       if (options.reject?.(request)) throw new StructuredTaskError('Ситуация из диалога: ответ модели не прошёл проверку.');
       const { source } = request.call;
+      // The one duty cites the one rule, the whole support policy.
+      const must = [{ text: 'ответить на вопрос клиента по существу', basis: [{ sourceId: request.call.sources[0].id, quote: RULE, rule: 'Отвечать по существу вопроса клиента.', kind: 'behavior' as const }],
+        appliesWhen: null, observation: 'reply' as const }];
       if (source.kind === 'rules') return { title: `По правилам ${request.written.length + 1}`, topic: 'Вопросы клиентов', wants: 'Получить ответ',
         writes: request.written.length ? 'Подскажите, как у вас всё устроено?' : 'Подскажите, пожалуйста.', leaves: 'получил ответ', agentMust: must };
       const topic = request.topics[0] ?? 'Без темы';
@@ -121,10 +119,10 @@ test('the consent names the topic map\'s calls, the ceiling, the promise and eve
   await withLab(minerRuntime(logged).runtime, async lab => {
     const consent = await preparationConsent(lab.store, { input: createInput(batch), situations: 15 });
     assert.deepEqual({ ...consent, excluded: consent.excluded.map(item => [item.dialogueId, item.kind]) }, {
-      conversations: 92, usable: 90, promised: 15, topicMapCalls: 4, promptCalls: 0, callCeiling: 110,
+      conversations: 92, usable: 90, promised: 15, topicMapCalls: 4, prompts: { count: 0, bytes: 0 }, callCeiling: 109, asksAgent: true,
       excluded: [['no id', 'unreadable'], ['masked1', 'masked']],
     }, 'one proposal and three batches of 30; the unreadable row and the masked conversation reach no model');
-    assert.equal(consent.callCeiling, 4 + 1 + 15 * (5 + 2), 'the ceiling is the preparation\'s own: the map, the rules read once, and per situation its proposal allowance and its review — not the draft\'s limit of 150');
+    assert.equal(consent.callCeiling, 4 + 15 * (5 + 2), 'the ceiling is the preparation\'s own: the map, and per situation its proposal allowance and its review — not the draft\'s limit of 150');
     assert.match(consent.excluded[0]!.reason, /Некорректный id диалога/);
     assert.equal(consent.excluded[1]!.reason, 'реплика клиента целиком скрыта обезличиванием');
     const all = await preparationConsent(lab.store, { input: createInput(batch), situations: 200 });
@@ -142,7 +140,7 @@ test('a preparation stops at the ceiling its consent stated, not at the draft\'s
   runtime.proposeCard = async (_request, ctx) => { for (;;) ctx.beforeCall(); };
   await withLab(runtime, async lab => {
     const consent = await preparationConsent(lab.store, { input: createInput(batch), situations: 2 });
-    assert.equal(consent.callCeiling, 2 + 1 + 2 * (5 + 2));
+    assert.equal(consent.callCeiling, 2 + 2 * (5 + 2));
     const draft = await lab.create(createInput(batch), { situations: 2 });
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);

@@ -235,7 +235,7 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
       ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}),
       settings: settingsSchema.parse({ provider: ctx.model?.provider ?? '', model: ctx.model?.id ?? '', judge: DEFAULT_JUDGE, repeats: 1,
         ...(libraryImport ? { maxCalls: Math.max(140, 2 * tried + 19 * count + 20), maxDurationMs: Math.min(14_400_000, Math.max(180_000, 180_000 * tried)),
-          // Grounding many materials with a small model routinely exceeds the two-minute default per call.
+          // A proposal that reads the agent's prompts and articles whole routinely exceeds the two-minute default per call.
           timeoutMs: 600_000, maxTurns: 6, userModes: ['reactive'] }
           : { maxCalls: Math.max(20, 10 * count + 10), maxDurationMs: 180_000 }) }),
     });

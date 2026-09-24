@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fitScenarioSources, promptGroundingPlan, selectScenarioSources } from '../src/scenario-sources.js';
-import { serializedBytes, workInputIssue } from '../src/limits.js';
+import { fitScenarioSources, selectScenarioSources } from '../src/scenario-sources.js';
+import { serializedBytes } from '../src/limits.js';
 import type { Source } from '../src/contracts.js';
 import type { CallContext, SourceSelectionInput } from '../src/runtime.js';
 
@@ -54,18 +54,4 @@ test('unsupported revision remains empty and byte limits do not cut procedures t
   assert.deepEqual(fitScenarioSources(['settings', 'settings', 'unknown', 'connect'], [{ ...sources[0]!, content: 'я'.repeat(51000) }, sources[1]!]), [sources[1]]);
   const selected = await selectScenarioSources(input, sources, { selectSources: async request => ({ sourceIds: request.reading ? [] : ['settings'] }) }, ctx);
   assert.deepEqual(selected, []);
-});
-
-test('the agent\'s prompts are grounded in as few calls as fit, in order; a prompt too large for one call is left out with the reason', () => {
-  const prompt = (index: number, chars: number): Source => ({ id: `p${index}`, name: `prompt ${index}`, content: 'п'.repeat(chars), hash: `h${index}`, kind: 'prompt' });
-  const prompts = Array.from({ length: 40 }, (_, index) => prompt(index + 1, 9000));
-  const huge = prompt(99, 130_000);
-  const plan = promptGroundingPlan('Проверить', [sources[0]!, ...prompts.slice(0, 20), huge, ...prompts.slice(20)]);
-  assert.deepEqual(plan.chunks.flat().map(source => source.id), prompts.map(source => source.id), 'every prompt once, in the record\'s order, no article');
-  assert.ok(plan.chunks.length > 1 && plan.chunks.length < prompts.length, `${plan.chunks.length} chunks`);
-  assert.ok(plan.chunks.every(chunk => !workInputIssue({ task: 'Проверить', sources: chunk })), 'each chunk fits one call');
-  assert.ok(plan.chunks.slice(0, -1).every((chunk, index) => workInputIssue({ task: 'Проверить', sources: [...chunk, plan.chunks[index + 1]![0]!] })), 'a chunk takes prompts while they fit');
-  assert.deepEqual(plan.skipped.map(item => item.source.id), ['p99']);
-  assert.match(plan.skipped[0]!.reason, /^Промпт «prompt 99» не помещается в один запрос/);
-  assert.deepEqual(promptGroundingPlan('Проверить', sources), { chunks: [], skipped: [] });
 });

@@ -2,15 +2,20 @@ import { z } from 'zod';
 import { fingerprint, type Requirement, type Source } from '../contracts.js';
 import { text } from '../ids.js';
 import { MODEL_REQUEST_BYTES } from '../limits.js';
+import { requirementKindSchema, type RequirementKind } from '../scenario-contracts.js';
+import { verbatimSpan } from '../verbatim.js';
 import { cardFindings, PLAUSIBLE_VALUE_WORDS, type CardEvidence, type CheckFinding, type LoggedMessage } from './checks.js';
 import { cardSchema, disclosureSchema, turnSchema, type Card } from './schema.js';
 
 /*
  * A card as the model proposes it and as the harness binds it (docs/design/card-v2-spec.md §2.1–2.3). The model returns content only;
- * every reference in its answer is an enum built for this one call — a customer message by its index, a rule by
- * its id, a channel the connection offers — so an unknown reference cannot even be written. The harness copies
- * the opening and the turn from the messages word for word and gives the ids, the number, the sources and the
- * account of the later messages. A binding slip goes back to the model with its exact reason (the structured
+ * every reference in its answer is an enum built for this one call — a customer message by its index, a source by
+ * its id, a channel the connection offers — so an unknown reference cannot even be written. Each duty cites its basis
+ * directly: a sentence of the agent's prompt or of an article, copied from a source of this call, and the kind of rule
+ * it is. The harness finds every quote verbatim, holds its kind to the owner's rulebook and turns each cited sentence
+ * into a library requirement whose id is a digest of the source and the sentence, so two cards citing one sentence
+ * share one rule. It copies the opening and the turn from the messages word for word and gives the ids, the number and
+ * the account of the later messages. A binding slip goes back to the model with its exact reason (the structured
  * task's check), inside the per-source allowance of the preparation.
  */
 
@@ -25,7 +30,10 @@ export interface ProposalCall {
   customerEvents: number[];
   /** The customer's messages after the first one, each accounted for once. */
   laterEvents: number[];
-  requirementIds: [string, ...string[]];
+  /** What the model reads for this situation, the agent's prompts first: every basis cites one of them, its quote verbatim. */
+  sources: [CallSource, ...CallSource[]];
+  /** What the owner's rulebook binds: whole kinds, and single rules of another kind by their source and quote. */
+  binds: { kinds: RequirementKind[]; rules: { sourceId: string; quote: string }[] };
   /** Always the reply; a tool log or the state only where the connection confirmed it can be observed. */
   observations: ['reply', ...Observation[]];
   /** The agent's tools the connection named, offered with the tool channel: a tool expectation names one of them in plain words. */
@@ -34,13 +42,18 @@ export interface ProposalCall {
   maxTurns: number;
 }
 
-export function proposalCall(input: { source: ProposalCall['source']; messages: LoggedMessage[]; requirements: readonly Pick<Requirement, 'id'>[];
-  confirmedObservations?: ('tool' | 'state')[]; tools?: string[]; maxTurns: number }): ProposalCall {
-  const [first, ...rest] = input.requirements.map(requirement => requirement.id);
-  if (first === undefined) throw new Error('Ситуация строится только на правилах владельца, а их для неё нет.');
+export type CallSource = Pick<Source, 'id' | 'name' | 'content' | 'kind'>;
+
+/** Behaviour and knowledge bind the bot unless the owner said otherwise (card/rulebook.ts DEFAULT_RULEBOOK). */
+const DEFAULT_BINDS: ProposalCall['binds'] = { kinds: ['behavior', 'knowledge'], rules: [] };
+
+export function proposalCall(input: { source: ProposalCall['source']; messages: LoggedMessage[]; sources: readonly CallSource[];
+  binds?: ProposalCall['binds']; confirmedObservations?: ('tool' | 'state')[]; tools?: string[]; maxTurns: number }): ProposalCall {
+  const [first, ...rest] = input.sources.map(({ id, name, content, kind }): CallSource => ({ id, name, content, ...(kind ? { kind } : {}) }));
+  if (first === undefined) throw new Error('Ситуация строится только на материалах владельца, а их для неё нет.');
   const customer = input.messages.filter(message => message.role === 'user').map(message => message.index);
   return { source: input.source, messages: input.messages, customerEvents: customer, laterEvents: customer.slice(1),
-    requirementIds: [first, ...rest], observations: ['reply', ...(input.confirmedObservations ?? [])],
+    sources: [first, ...rest], binds: input.binds ?? DEFAULT_BINDS, observations: ['reply', ...(input.confirmedObservations ?? [])],
     ...(input.tools?.length ? { tools: [...input.tools] } : {}), maxTurns: input.maxTurns };
 }
 
@@ -50,8 +63,15 @@ export const KNOWS_LIMIT = 8;
 
 const coverageAnswer = z.strictObject({ as: z.enum(['fact', 'turn', 'stop', 'ignored']), reason: text(200).nullable() });
 
+/** A duty's basis: a sentence of a source of this call, the rule it states in one line, and the kind of that rule. */
+function basisProposal(call: ProposalCall) {
+  const ids = call.sources.map(source => source.id) as [string, ...string[]];
+  return z.strictObject({ sourceId: z.enum(ids, { error: 'Not a supplied source: cite only ids from sources.' }), quote: text(1500),
+    rule: text(300), kind: requirementKindSchema });
+}
+
 function expectationProposal(call: ProposalCall) {
-  return z.strictObject({ text: text(300), requirementIds: z.array(z.enum(call.requirementIds)).min(1).max(3),
+  return z.strictObject({ text: text(300), basis: z.array(basisProposal(call)).min(1).max(3),
     appliesWhen: text(300).nullable(), observation: z.enum(call.observations) });
 }
 
@@ -96,6 +116,61 @@ export const proposalBounds = (call: ProposalCall) => {
 
 const said = (call: ProposalCall, index: number): string => call.messages.find(message => message.index === index)?.content ?? '';
 
+type Basis = CardProposal['agentMust'][number]['basis'][number];
+
+/**
+ * Where a basis quote is verbatim, in the source's own characters: its cited source, or else exactly one other source of
+ * the call, which then owns it — the sentence was copied right and the source named wrong.
+ */
+function located(basis: Basis, call: ProposalCall): { sourceId: string; quote: string } | undefined {
+  const cited = call.sources.find(source => source.id === basis.sourceId);
+  const exact = cited && verbatimSpan(cited.content, basis.quote);
+  if (cited && exact) return { sourceId: cited.id, quote: exact };
+  const found = call.sources.flatMap(source => {
+    const span = source.id === basis.sourceId ? undefined : verbatimSpan(source.content, basis.quote);
+    return span ? [{ sourceId: source.id, quote: span }] : [];
+  });
+  return found.length === 1 ? found[0] : undefined;
+}
+
+/** The id of the rule one cited sentence stands for: the same sentence of the same source is the same rule in every card. */
+export const citationId = (sourceId: string, quote: string): string => `rule_${fingerprint({ sourceId, quote }).slice(0, 24)}`;
+
+/**
+ * The rules each duty of a proposal rests on, as the library stores them. A cited sentence is a rule a user can see kept
+ * or broken in a reply — the proposal may cite nothing else (CARD_ROLE) — so `observable` is stated, never guessed.
+ */
+function dutyRequirements(proposal: CardProposal, call: ProposalCall): Requirement[][] {
+  return proposal.agentMust.map(duty => duty.basis.map(basis => {
+    const at = located(basis, call);
+    if (!at) throw new Error('Основание ожидания не найдено дословно в материалах.');
+    return { id: citationId(at.sourceId, at.quote), text: basis.rule, sourceId: at.sourceId, quote: at.quote, critical: true, observable: true, kind: basis.kind };
+  }));
+}
+
+/** The rules a proposal cites, once each: what a preparation adds to the library beside its card. */
+export function proposalRequirements(proposal: CardProposal, call: ProposalCall): Requirement[] {
+  const unique = new Map<string, Requirement>();
+  for (const requirement of dutyRequirements(proposal, call).flat()) if (!unique.has(requirement.id)) unique.set(requirement.id, requirement);
+  return [...unique.values()];
+}
+
+/** Why a basis cannot back a duty: its quote is not in the sources, or its kind of rule is outside the owner's rulebook. */
+function basisSlips(proposal: CardProposal, call: ProposalCall): string[] {
+  const slips: string[] = [];
+  proposal.agentMust.forEach((duty, i) => duty.basis.forEach((basis, j) => {
+    const at = located(basis, call);
+    const name = `agentMust[${i}].basis[${j}]`;
+    if (!at) {
+      const source = call.sources.find(item => item.id === basis.sourceId);
+      slips.push(`${name}: the quote is not a verbatim substring of "${source?.name ?? basis.sourceId}". Copy the exact characters from the source instead of paraphrasing; a shorter contiguous fragment is safer than a long one.`);
+    } else if (!call.binds.kinds.includes(basis.kind) && !call.binds.rules.some(rule => rule.sourceId === at.sourceId && rule.quote === at.quote)) {
+      slips.push(`${name} is a rule of kind ${basis.kind}, and the owner's rulebook binds the agent only by ${call.binds.kinds.join(', ')}: cite a rule of those kinds, or drop this duty.`);
+    }
+  }));
+  return slips;
+}
+
 /** What a card's id digests: a proposal without plausible facts reads as one written before they existed, so the same answer is the same card. */
 function proposalIdentity(proposal: CardProposal): object {
   if (!('plausibleKnows' in proposal) || proposal.plausibleKnows.length) return proposal;
@@ -110,7 +185,8 @@ function proposalIdentity(proposal: CardProposal): object {
  * opening itself. The id is a digest of the source and the proposal; the number is the library's next one.
  */
 export function bindProposal(proposal: CardProposal, call: ProposalCall, number: number): Card {
-  const agentMust = proposal.agentMust.map((item, index) => ({ id: `e${index + 1}`, text: item.text, requirementIds: [...new Set(item.requirementIds)],
+  const cited = dutyRequirements(proposal, call);
+  const agentMust = proposal.agentMust.map((item, index) => ({ id: `e${index + 1}`, text: item.text, requirementIds: [...new Set(cited[index]!.map(requirement => requirement.id))],
     ...(item.appliesWhen !== null ? { appliesWhen: item.appliesWhen } : {}), observation: item.observation }));
   const common = { id: `card_${fingerprint({ source: call.source, proposal: proposalIdentity(proposal) })}`, number, title: proposal.title, topic: proposal.topic, agentMust, revision: 1 };
   if ('writes' in proposal) {
@@ -197,7 +273,7 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
         before_opening: `${key}: message ${finding.eventIndex} comes before the opening (writesEvent ${opening}), so it is "ignored" with a reason, or "fact".`,
       }[finding.problem];
     }
-    case 'requirements-grounded': return `Requirement ${finding.requirementId} is not grounded in the supplied materials: cite another requirement.`;
+    case 'requirements-grounded': return `The quote of rule ${finding.requirementId} is not in its source: copy the exact characters of the source.`;
     case 'controller-compiles': return finding.needed === null ? 'The customer\'s facts, turn and exit do not form a finite conversation: simplify the turn and the facts.'
       : `The customer needs ${finding.needed} messages to finish this situation, but a run allows ${call.maxTurns}: drop the turn or merge facts.`;
   }
@@ -208,23 +284,17 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
  * deterministic check, otherwise every reason at once, so one repair fixes them all.
  */
 export function cardProposalProblem(proposal: CardProposal, call: ProposalCall): string | undefined {
-  if (!('writes' in proposal)) {
-    const slips = bindingSlips(proposal, call);
-    if (slips.length) return slips.join(' ');
-  }
+  const slips = [...basisSlips(proposal, call), ...'writes' in proposal ? [] : bindingSlips(proposal, call)];
+  if (slips.length) return slips.join(' ');
   const card = bindProposal(proposal, call, 1);
   const findings = cardFindings(card, { evidence: callEvidence(call), maxTurns: call.maxTurns });
   return findings.length ? findings.map(finding => repairText(finding, card, call)).join(' ') : undefined;
 }
 
-/** One proposal call: what the harness binds against and what the model reads. */
+/** One proposal call: what the harness binds against — its sources among it — and what the model reads. */
 export interface CardProposalRequest {
   task: string;
   call: ProposalCall;
-  /** The owner's rules this situation is read against, quotes verbatim. */
-  requirements: Pick<Requirement, 'id' | 'text' | 'quote'>[];
-  /** The articles read for it; a source that is the agent's own prompt is labelled. */
-  articles: Pick<Source, 'id' | 'name' | 'content' | 'kind'>[];
   /** Topics the library already has: the same topic is written the same way. */
   topics: string[];
   /** Titles of the situations already written from the owner's rules: the next one is a different situation. */
@@ -237,8 +307,9 @@ export function proposalPayload(request: CardProposalRequest) {
   return {
     task: request.task, mode: call.source.kind,
     ...(call.source.kind === 'dialogue' ? { dialogue: { messages: call.messages } } : {}),
-    requirements: request.requirements,
-    articles: request.articles.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })),
+    // A source that is the agent's own prompt is labelled; the rulebook says which kinds of rule may back a duty.
+    sources: call.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })),
+    rulebook: { binds: call.binds.kinds },
     topics: request.topics, ...(request.written.length ? { written: request.written } : {}),
     target: { observations: call.observations, ...(call.tools ? { tools: call.tools } : {}) },
   };

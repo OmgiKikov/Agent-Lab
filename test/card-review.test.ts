@@ -22,7 +22,7 @@ const batch = importBatch([...dialogues, { id: 'long', messages: long }]);
 const evidence = importEvidence([batch]);
 const rule = { ...refundRule, sourceId: 'source-1' };
 const call = (dialogueId: string) => proposalCall({ source: { kind: 'dialogue', batchId: batch.id, dialogueId },
-  messages: loggedMessages(batch.dialogues.find(dialogue => dialogue.id === dialogueId)!), requirements: [rule], maxTurns: 6 });
+  messages: loggedMessages(batch.dialogues.find(dialogue => dialogue.id === dialogueId)!), sources: [{ id: 'source-1', name: 'Правила возвратов', content: policy }], maxTurns: 6 });
 
 function draft(cards: [string, DialogueProposal][], content = policy): LibraryV2 {
   let library = createLibraryV2({ id: 'library_review', imports: [{ id: batch.id, contentHash: batch.contentHash }],
@@ -182,7 +182,7 @@ test('the reviewer reads the whole dialogue and every rule read for it; a review
   assert.equal(rest.length, 0);
   assert.deepEqual(request!.aliases, ['goal', 'fact_f1', 'expectation_e1', 'expectation_e2', 'coverage', 'leak']);
   assert.deepEqual(request!.payload.dialogue!.messages.map(message => message.role), ['user', 'assistant', 'user', 'assistant', 'user'], 'the agent\'s replies too');
-  assert.deepEqual(request!.payload.requirements.map(item => item.id), ['refund_rule']);
+  assert.deepEqual(request!.payload.requirements.map(item => item.id), [refundRule.id]);
   assert.deepEqual(request!.payload.card.knows[0], { id: 'f1', label: 'Номер терминала', value: '5678', disclosure: 'on_request', askedAs: 'номер терминала', from: 2, owner: null });
   assert.doesNotMatch(JSON.stringify(request!.payload), /card_|receipt|basisHash|fixture\/reviewer/, 'no ids, receipts or earlier answers');
 

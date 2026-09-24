@@ -96,7 +96,7 @@ export interface CheckContext {
   evidence: CardEvidence;
   /** A run's limit on the customer's messages, the opening included. */
   maxTurns: number;
-  /** The rules and materials expectations cite; absent while a proposal is repaired, whose rules were grounded verbatim just before. */
+  /** The rules and materials expectations cite; absent while a proposal is repaired, whose quotes are found verbatim before it binds. */
   materials?: { requirements: readonly Pick<Requirement, 'id' | 'sourceId' | 'quote'>[]; sources: readonly Pick<Source, 'id' | 'content'>[] };
 }
 

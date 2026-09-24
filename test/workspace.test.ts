@@ -60,7 +60,7 @@ test('the workspace opens on the decisions that wait for the owner: one phrase a
   const { screen, press, actions } = await openWorkspace(rich.directory);
   const text = screen(100);
   assert.match(text, /^ Агент: агент поддержки +версия baseline-v1$/m);
-  assert.match(text, /^ Нужно ваше решение: 2 {2}· {2}Ситуации 13 {2}· {2}Прогоны 2 {2}· {2}Проблемы 2$/m);
+  assert.match(text, /^ Нужно ваше решение: 2 {2}· {2}Ситуации 13 {2}· {2}Свод правил {2}· {2}Прогоны 2 {2}· {2}Проблемы 2$/m);
   assert.match(text, /^ 2 решения ждут вас\. Запуску готовых ситуаций они не мешают\.$/m);
   // The unusable situation first — it spoils the measurement —, then the question about another one.
   assert.match(text, /^ › Ситуация \d+ · Подключение терминала — нет сети\n {4}В ваших материалах нет правила о подключении терминала — судье не с чем сравнить ответ\.\n {4}1 Добавить правило {2}· {2}2 Исключить из запуска$/m);
@@ -79,6 +79,8 @@ test('the areas go by ←→: the situations lead with the coverage of the logs,
   assert.match(situations, /^ 11 ситуаций покрывают 5 из 5 тем — 100% диалогов$/m);
   assert.match(situations, /^ Ситуации прогона .+; изменения пойдут в новый черновик, прогон не меняется\.$/m);
   assert.match(situations, /^ › 1 {2}.+ +✓ готова\n {6}Клиент: «.+»\n {6}Агент должен: .+\n {6}1 Изменить {2}· {2}2 Добавить похожую {2}· {2}3 Не проверять$/m);
+  // The rules the cards cite are typed, so «Свод правил» stands between the situations and the runs.
+  assert.match(press(KEYS.right), /^ Свод правил: бота судят по 3 из 3 правил$/m);
   const runs = press(KEYS.right);
   assert.match(runs, /^ Точность агента: 64% — справился в 7 из 11 ситуаций$/m);
   assert.match(runs, /^ По темам +справился +доля диалогов$/m);
@@ -321,9 +323,9 @@ test('situations can be prepared before the agent is connected; Lab finds it in 
 });
 
 test('the consent to prepare from logs says what is read, what is left out and why, and the ceiling of the spending', () => {
-  const consent: PreparationConsent = { conversations: 40, usable: 36, promised: 15, topicMapCalls: 3, promptCalls: 0, callCeiling: 140,
+  const consent: PreparationConsent = { conversations: 40, usable: 36, promised: 15, topicMapCalls: 3, prompts: { count: 0, bytes: 0 }, callCeiling: 140,
     excluded: [{ dialogueId: 'd1', kind: 'masked', reason: '' }, { dialogueId: 'd2', kind: 'masked', reason: '' }, { dialogueId: 'd3', kind: 'unreadable', reason: '' },
-      { dialogueId: 'd4', kind: 'length', reason: '' }] };
+      { dialogueId: 'd4', kind: 'length', reason: '' }], asksAgent: false };
   const text = consentText(consent, 'logs.jsonl');
   assert.equal(text.question, 'Собрать 15 ситуаций из logs.jsonl?');
   assert.deepEqual(text.lines, [

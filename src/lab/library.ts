@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { preparationCeiling } from '../card/budget.js';
+import { preparationCeiling, promptsOversize } from '../card/budget.js';
 import type { LogVersionCommand, LogVersionJournal } from '../card/calibration.js';
 import { importEvidence, type CardEvidence } from '../card/checks.js';
 import { applyCommand, applyLogVersion as appendLogVersion, prepareCommand, prepareLogVersion as previewLogVersion, type HostGrant, type Prepared, type PreparedLogVersion, type Via } from '../card/commands.js';
 import { convertedPreparation, convertV1Library, type Conversion } from '../card/convert.js';
 import { convertible, libraryV1Of } from '../card/legacy-v1.js';
 import { acceptLibraryV2, requireLibraryV2 } from '../card/library.js';
-import { pendingReviewCalls, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from '../card/prepare.js';
+import { notContinuable, pendingReviewCalls, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from '../card/prepare.js';
 import type { CardCommand, LibraryV2 } from '../card/schema.js';
 import { dialogueNumbers, type DialogueNumbers } from '../card/view.js';
 import { probeToolChannel, TOOL_PROBE_OPENING } from '../connection.js';
@@ -37,9 +37,9 @@ export interface CreateOptions {
 }
 
 /**
- * A new draft is always a card library (card/prepare.ts): requirements grounded in the owner's materials, situations
+ * A new draft is always a card library (card/prepare.ts): situations citing the owner's materials verbatim,
  * proposed from real dialogues — at most `situations` of them, the representative sample of the logs' topics
- * (miner/plan.ts) — or from the requirements alone.
+ * (miner/plan.ts) — or from the materials alone.
  */
 export async function create(lab: Lab, raw: CreateInput, options: CreateOptions = {}): Promise<Experiment> {
   lab.operations.ensureIdle();
@@ -47,6 +47,9 @@ export async function create(lab: Lab, raw: CreateInput, options: CreateOptions 
   const originalImport = raw.originalImport ?? (raw.dialogues?.length ? importBatch(raw.dialogues) : undefined);
   const input = createInputSchema.parse({ ...raw, ...(originalImport ? { originalImport } : {}) });
   const record = newRecord(input);
+  // Every proposal reads all the agent's prompts: prompts no request can hold refuse the preparation before any call.
+  const prompts = promptsOversize(record.task, record.sources);
+  if (prompts) throw new Error(prompts);
   await lab.operations.launch(record, async (ctx, operation) => {
     if (input.originalImport) {
       const batch = await lab.store.writeImport(input.originalImport);
@@ -206,7 +209,8 @@ export function resumePreparation(lab: Lab, id: string, expectedHash: string): P
     const experiment = await lab.get(id);
     const progress = experiment.preparationProgress;
     if (!progress?.pending.length) throw new Error('Необработанных источников нет.');
-    if (progress.protocol !== 'cards-v1') throw new Error('Это подготовка старого формата: её не продолжить. Продолжите черновик в новом формате.');
+    const refusal = notContinuable(progress);
+    if (refusal) throw new Error(refusal);
     if (!experiment.librarySnapshot) throw new Error('Черновик библиотеки не сохранён; продолжить нельзя.');
     if (libraryHash(experiment.librarySnapshot) !== expectedHash || libraryHash(await lab.store.readLibrary(experiment.librarySnapshot.id)) !== expectedHash) throw new LibraryConflict('Библиотека изменилась: хеш устарел.');
     if (experiment.phase !== 'review' && experiment.phase !== 'interrupted') throw new Error('Продолжить можно только незавершённую подготовку.');

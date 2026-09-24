@@ -139,7 +139,7 @@ export const TOOL_PROBE_OPENING = 'Здравствуйте! Подскажит�
  * read the same channel.
  */
 export async function probeToolChannel(target: RunnableTarget, opening: string, signal: AbortSignal): Promise<ToolChannel> {
-  const settings = settingsSchema.parse({ repeats: 1, maxTurns: 1, maxCalls: 1, userModes: ['static'], maxDurationMs: 180000 });
+  const settings = settingsSchema.parse({ repeats: 1, maxTurns: 2, maxCalls: 5, userModes: ['static'], maxDurationMs: 180000 });
   const spec = { name: 'Tool probe', instructions: 'Use the external connection.', tools: [] };
   const revision = { id: fingerprint(spec), spec, parentId: null, hypothesis: 'Tool probe', createdAt: new Date().toISOString() };
   const scenario: Scenario = { id: 'probe-tools', familyId: 'probe', split: 'dev', title: 'Какие инструменты показывает агент', tier: 'smoke', provenance: 'curated',

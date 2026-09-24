@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { cardFindings, contains, loggedMessages, normalizeText, unusableFindings, type CardEvidence } from '../src/card/checks.js';
-import { bindProposal, cardProposalProblem, cardProposalSchema, proposalCall, type DialogueProposal, type ProposalCall } from '../src/card/proposal.js';
+import { bindProposal, cardProposalProblem, cardProposalSchema, citationId, proposalCall, proposalPayload, proposalRequirements, type DialogueProposal, type ProposalCall } from '../src/card/proposal.js';
 import { cardSchema, type Card } from '../src/card/schema.js';
 import { importBatch } from '../src/scenario-library.js';
 import { strictSchemaProblems } from './helpers/strict-schema.js';
-import { dialogues, proposals, refundRule, rulesProposal } from './helpers/card-prep.js';
+import { dialogues, policy, proposals, refundBasis, refundRule, rulesProposal } from './helpers/card-prep.js';
 
 /*
  * C7: the model proposes a card through a schema built for the one call, the harness binds it — the opening and
@@ -22,8 +22,9 @@ const batch = importBatch([...dialogues, { id: 'greeting', messages: [
   { role: 'user', content: 'Не знаю его. А можно просто отменить покупку?' },
 ] }]);
 const rule = { ...refundRule, sourceId: 'source-1' };
+const materials = [{ id: 'source-1', name: 'Правила возвратов', content: policy }];
 const callFor = (dialogueId: string, maxTurns = 6): ProposalCall => proposalCall({ source: { kind: 'dialogue', batchId: batch.id, dialogueId },
-  messages: loggedMessages(batch.dialogues.find(dialogue => dialogue.id === dialogueId)!), requirements: [rule], maxTurns });
+  messages: loggedMessages(batch.dialogues.find(dialogue => dialogue.id === dialogueId)!), sources: materials, maxTurns });
 const evidence = (call: ProposalCall): CardEvidence => ({ messages: (batchId, dialogueId) => call.source.kind === 'dialogue' && batchId === call.source.batchId && dialogueId === call.source.dialogueId ? call.messages : undefined });
 const late = callFor('late');
 const with_ = (change: (proposal: DialogueProposal) => void): DialogueProposal => {
@@ -40,7 +41,8 @@ test('the answer\'s schema is built for the call: a message, rule or channel out
   assert.ok(refused(proposal => { proposal.writesEvent = 1; }), 'the agent\'s message is not an opening');
   assert.ok(refused(proposal => { proposal.knows[0]!.from = 3; }), 'a fact comes from a customer message');
   assert.ok(refused(proposal => { proposal.knows[0]!.from = 7; }), 'no such message');
-  assert.ok(refused(proposal => { proposal.agentMust[0]!.requirementIds = ['refund_rule', 'invented_rule']; }), 'a rule outside the call');
+  assert.ok(refused(proposal => { proposal.agentMust[0]!.basis = [{ ...refundBasis[0]!, sourceId: 'invented_source' }]; }), 'a source outside the call');
+  assert.ok(refused(proposal => { proposal.agentMust[0]!.basis = []; }), 'a duty rests on at least one sentence');
   assert.ok(refused(proposal => { proposal.agentMust[0]!.observation = 'tool' as 'reply'; }), 'a channel the connection did not confirm');
   assert.ok(refused(proposal => { delete proposal.coverage['4']; }), 'a later message left out of the account');
   assert.ok(refused(proposal => { proposal.coverage['0'] = { as: 'ignored', reason: 'приветствие' }; }), 'the first message is not a later one');
@@ -49,11 +51,11 @@ test('the answer\'s schema is built for the call: a message, rule or channel out
   assert.deepEqual(strictSchemaProblems(schema), [], 'the schema is ready for a provider\'s strict structured output');
   const json = JSON.stringify(z.toJSONSchema(schema));
   assert.match(json, /"writesEvent":\{"type":"number","enum":\[0,2,4\]\}/);
-  assert.match(json, /"requirementIds":\{[^{]*"items":\{"type":"string","enum":\["refund_rule"\]\}/);
+  assert.match(json, /"sourceId":\{"type":"string","enum":\["source-1"\]\}/);
   assert.match(json, /"coverage":\{"type":"object","properties":\{"2":.*"required":\["2","4"\],"additionalProperties":false/);
   const single = callFor('known');
   assert.deepEqual(z.toJSONSchema(cardProposalSchema(single)).properties?.turn, { type: 'null' }, 'one customer message: no turn to point at');
-  const rules = proposalCall({ source: { kind: 'rules', unit: 'rules_1' }, messages: [], requirements: [rule], maxTurns: 6 });
+  const rules = proposalCall({ source: { kind: 'rules', unit: 'rules_1' }, messages: [], sources: materials, maxTurns: 6 });
   const shape = Object.keys((z.toJSONSchema(cardProposalSchema(rules)) as { properties: object }).properties);
   assert.deepEqual(shape, ['title', 'topic', 'wants', 'writes', 'leaves', 'agentMust'], 'from the rules alone: the model writes the opening; no facts, turn or account');
 });
@@ -78,7 +80,7 @@ test('binding copies the opening and the turn word for word, and gives ids, the 
   const proposal: DialogueProposal = { title: 'Возврат без номера — клиент меняет решение', topic: 'Возврат оплаты', wants: 'Вернуть оплату', writesEvent: 2,
     knows: [{ label: 'Номер терминала', value: null, disclosure: 'unknown', from: 4, askedAs: 'номер терминала' }, { label: 'Покупка оплачена картой', value: true, disclosure: 'on_request', from: null, askedAs: null }], plausibleKnows: [],
     leaves: 'получил ответ про отмену покупки', turn: { kind: 'change_intent', after: 'агент попросил номер терминала', from: 4 },
-    agentMust: [{ text: 'объяснить, как оформить возврат', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' }],
+    agentMust: [{ text: 'объяснить, как оформить возврат', basis: refundBasis, appliesWhen: null, observation: 'reply' }],
     coverage: { 2: { as: 'ignored', reason: 'это первая реплика' }, 4: { as: 'turn', reason: null } } };
   assert.equal(cardProposalProblem(proposal, greeting), undefined);
   const turned = bindProposal(proposal, greeting, 1);
@@ -88,10 +90,10 @@ test('binding copies the opening and the turn word for word, and gives ids, the 
   assert.deepEqual(turned.client.knows[1]!.source, { kind: 'unconfirmed' }, 'a fact no message states waits for the owner');
   assert.deepEqual(turned.coverage.map(entry => [entry.event.eventIndex, entry.as]), [[4, 'turn']], 'the opening is not accounted for twice');
 
-  const rules = proposalCall({ source: { kind: 'rules', unit: 'rules_1' }, messages: [], requirements: [rule], maxTurns: 6 });
+  const rules = proposalCall({ source: { kind: 'rules', unit: 'rules_1' }, messages: [], sources: materials, maxTurns: 6 });
   const fromRules = bindProposal(rulesProposal(1), rules, 2);
   assert.deepEqual([fromRules.origin, fromRules.client.writesSource, fromRules.client.knows, fromRules.coverage],
-    [{ kind: 'rules', requirementIds: ['refund_rule'] }, { kind: 'model' }, [], []]);
+    [{ kind: 'rules', requirementIds: [refundRule.id] }, { kind: 'model' }, [], []]);
 });
 
 /** A bound card with one change, checked against the dialogue it came from. */
@@ -134,8 +136,59 @@ test('a proposal that does not bind is answered with every reason, in the words 
   assert.match(reasons, /coverage\["2"\] is "turn", but "turn\.from" is not 2\./);
   assert.match(cardProposalProblem(with_(proposal => { proposal.knows[0]!.disclosure = 'initial'; }), late)!, /knows\[0\] "Номер терминала" is "initial", so it is said in the opening: its "from" must be writesEvent 0/);
   const long = importBatch([{ id: 'long', messages: [{ role: 'user', content: 'Очень длинно. '.repeat(250) }, { role: 'assistant', content: 'Слушаю.' }] }]);
-  const call = proposalCall({ source: { kind: 'dialogue', batchId: long.id, dialogueId: 'long' }, messages: loggedMessages(long.dialogues[0]!), requirements: [rule], maxTurns: 6 });
+  const call = proposalCall({ source: { kind: 'dialogue', batchId: long.id, dialogueId: 'long' }, messages: loggedMessages(long.dialogues[0]!), sources: materials, maxTurns: 6 });
   assert.match(cardProposalProblem({ ...proposals.known, knows: [] }, call)!, /longer than 3000 characters and cannot be the opening/);
+});
+
+// The agent's prompt and an article of its knowledge base, as a proposal reads them.
+const prompt = { id: 'source-1', name: 'reply_prompt', kind: 'prompt' as const, content: 'Ты вежливый ассистент банка.\nНе обещай перезвонить, если можешь ответить сразу.\nОтвечай на «вы».' };
+const article = { id: 'source-2', name: 'Возвраты', content: `${policy}\nОператор проверяет платёж в АБС и переводит звонок на отдел возвратов.` };
+const cited = (quote: string, sourceId = 'source-1', kind: 'behavior' | 'knowledge' | 'operator_procedure' = 'behavior') => ({ sourceId, quote, rule: 'Правило ответа.', kind });
+const citing = (...basis: ReturnType<typeof cited>[]): DialogueProposal => ({ ...structuredClone(proposals.late), agentMust: [{ text: 'ответить сразу, не обещая перезвонить', basis, appliesWhen: null, observation: 'reply' }] });
+const direct = (binds?: ProposalCall['binds']) => proposalCall({ source: late.source, messages: late.messages, sources: [prompt, article], maxTurns: 6, ...(binds ? { binds } : {}) });
+
+test('a duty cites the agent\'s prompt and an article directly: each sentence becomes a rule of its own source, verbatim', () => {
+  const call = direct();
+  const proposal = citing(cited('Не обещай перезвонить, если можешь ответить сразу.'), cited(refundRule.quote, 'source-2', 'knowledge'));
+  assert.equal(cardProposalProblem(proposal, call), undefined);
+  const payload = proposalPayload({ task: 'Возвраты', call, topics: [], written: [] });
+  assert.deepEqual(payload.sources.map(source => source.name), ['reply_prompt (промпт агента)', 'Возвраты'], 'the prompt is named as the agent\'s own');
+  assert.deepEqual(payload.rulebook, { binds: ['behavior', 'knowledge'] });
+  assert.equal('requirements' in payload, false, 'no rules are written out before the proposal');
+  const rules = proposalRequirements(proposal, call);
+  assert.deepEqual(rules.map(({ sourceId, quote, kind, observable }) => ({ sourceId, quote, kind, observable })), [
+    { sourceId: 'source-1', quote: 'Не обещай перезвонить, если можешь ответить сразу.', kind: 'behavior', observable: true },
+    { sourceId: 'source-2', quote: refundRule.quote, kind: 'knowledge', observable: true }]);
+  assert.deepEqual(bindProposal(proposal, call, 1).agentMust[0]!.requirementIds, rules.map(item => item.id));
+  // A model normalises typography and may name the wrong source: the stored quote is the source's own characters, in the source that holds it.
+  const loose = proposalRequirements(citing(cited('Отвечай на "вы".', 'source-2')), call);
+  assert.deepEqual(loose.map(({ sourceId, quote }) => [sourceId, quote]), [['source-1', 'Отвечай на «вы».']]);
+});
+
+test('two cards citing one sentence share one rule: its id is the digest of the source and the sentence', () => {
+  const call = direct();
+  const first = proposalRequirements(citing(cited('Отвечай на «вы».')), call);
+  const second = proposalRequirements({ ...citing(cited('Отвечай на "вы".')), title: 'Другая ситуация' }, call);
+  assert.equal(first[0]!.id, second[0]!.id);
+  assert.equal(first[0]!.id, citationId('source-1', 'Отвечай на «вы».'));
+  assert.notEqual(citationId('source-2', 'Отвечай на «вы».'), first[0]!.id, 'the same words in another source are another rule');
+  const twice = proposalRequirements({ ...citing(cited('Отвечай на «вы».')), agentMust: [...citing(cited('Отвечай на «вы».')).agentMust, ...citing(cited('Отвечай на «вы».')).agentMust] }, call);
+  assert.equal(twice.length, 1, 'a card citing the sentence for two duties adds it once');
+});
+
+test('a quote that is not in its source is answered with the exact reason, and never binds', () => {
+  const call = direct();
+  const paraphrase = citing(cited('Не надо обещать перезвон, если ответ известен.'));
+  assert.match(cardProposalProblem(paraphrase, call)!, /agentMust\[0\]\.basis\[0\]: the quote is not a verbatim substring of "reply_prompt"\. Copy the exact characters/);
+  assert.throws(() => bindProposal(paraphrase, call, 1), /не найдено дословно/);
+});
+
+test('a kind of rule outside the owner\'s rulebook cannot back a duty, unless the owner included that very rule', () => {
+  const procedure = citing(cited('Оператор проверяет платёж в АБС и переводит звонок на отдел возвратов.', 'source-2', 'operator_procedure'));
+  assert.match(cardProposalProblem(procedure, direct())!, /agentMust\[0\]\.basis\[0\] is a rule of kind operator_procedure, and the owner's rulebook binds the agent only by behavior, knowledge: cite a rule of those kinds, or drop this duty\./);
+  const included = { kinds: ['behavior', 'knowledge'] as ('behavior' | 'knowledge')[], rules: [{ sourceId: 'source-2', quote: 'Оператор проверяет платёж в АБС и переводит звонок на отдел возвратов.' }] };
+  assert.equal(cardProposalProblem(procedure, direct(included)), undefined, 'a rule the owner included binds whatever its kind');
+  assert.equal(cardProposalProblem(procedure, direct({ kinds: ['behavior', 'knowledge', 'operator_procedure'], rules: [] })), undefined, 'operator instructions bind when the owner says so');
 });
 
 test('text is compared exactly, after NFKC, case and spacing: no tokenizer, no fuzzy match', () => {
