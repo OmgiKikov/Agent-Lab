@@ -8,7 +8,7 @@ import { ExperimentLab } from './experiment.js';
 import type { CreateOptions, PreparationOptions } from './lab/library.js';
 import { draftHash } from './lab/record.js';
 import { demoInput } from './demo.js';
-import { createInputSchema, materialSources, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Settings } from './contracts.js';
+import { createInputSchema, isRunnable, materialSources, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Settings } from './contracts.js';
 import { compareRuns } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { detectionLines, detectProject, promptLine } from './detect.js';
@@ -557,7 +557,7 @@ async function buildConsent(input: CreateInput, logs: string, directory: string,
   }
   const situations = input.scenarioCount || 1;
   const callCeiling = preparationCeiling({ task: input.task, sources: materialSources(input.materials), situations, fromLogs: false });
-  return { ...rulesConsentText(situations, callCeiling), situations, callCeiling };
+  return { ...rulesConsentText(situations, callCeiling, isRunnable(input.target)), situations, callCeiling };
 }
 
 /** How many situations are prepared at once (`--parallel`); the same draft whatever the number. */

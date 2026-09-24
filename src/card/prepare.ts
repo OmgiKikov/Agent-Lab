@@ -258,7 +258,9 @@ class Preparation {
       rules: this.library.requirements.filter(requirement => rulebook.included.includes(requirement.id)).map(({ sourceId, quote }) => ({ sourceId, quote })) };
     const messages = dialogue ? loggedMessages(dialogue) : [];
     const call = (sources: readonly Source[]) => proposalCall({ source: dialogue && batch ? { kind: 'dialogue', batchId: batch.id, dialogueId: unit } : { kind: 'rules', unit },
-      messages, sources, binds, maxTurns: record.settings.maxTurns });
+      messages, sources, binds, maxTurns: record.settings.maxTurns,
+      // The tool channel the probe before the preparation confirmed: its tools may be what a duty is observed on.
+      ...(record.toolChannel?.confirmed ? { confirmedObservations: ['tool' as const], tools: record.toolChannel.tools } : {}) });
     if (!read.length) return { excluded: 'Для этой ситуации нет материалов владельца.' };
     if (call(read).laterEvents.length > LATER_MESSAGES) return { excluded: `После первой реплики клиент пишет ещё больше ${LATER_MESSAGES} раз — для одной ситуации это слишком много.` };
     // A sampled conversation's topic is the map's: the model is offered it alone, and the card takes it as the map words it.

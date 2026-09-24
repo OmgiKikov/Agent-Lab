@@ -1,4 +1,4 @@
-import { materialSources, type CreateInput, type Settings, type ValidationExclusion } from '../contracts.js';
+import { isRunnable, materialSources, type CreateInput, type Settings, type ValidationExclusion } from '../contracts.js';
 import type { CallContext, Runtime } from '../runtime.js';
 import { preparationCeiling, promptLoad, promptsOversize } from '../card/budget.js';
 import type { CardPreparation, LibraryV2 } from '../card/schema.js';
@@ -70,6 +70,8 @@ export interface PreparationConsent {
   callCeiling: number;
   /** Conversations no situation is made from, with the reason; none of them reaches a model. */
   excluded: LeftOut[];
+  /** The draft has a connected agent: Lab sends it one message to learn whether its tool calls can be judged (connection.ts). */
+  asksAgent: boolean;
 }
 
 /**
@@ -93,7 +95,7 @@ export async function preparationConsent(store: Pick<ExperimentStore, 'readTopic
     conversations: batch.dialogues.length + batch.rejected.length, usable: dialogueIds.length, promised, topicMapCalls,
     prompts: promptLoad(sources),
     callCeiling: preparationCeiling({ task: input.task, sources, situations: promised, fromLogs: true, topicMapCalls }),
-    excluded: leftOut(batch, excluded),
+    excluded: leftOut(batch, excluded), asksAgent: isRunnable(input.target),
   };
 }
 
@@ -109,6 +111,9 @@ const LEFT_OUT_TEXT: Record<LeftOut['kind'], string> = {
   unreadable: 'запись не читается', length: 'нет реплик клиента или их больше 16', masked: 'реплика клиента скрыта обезличиванием',
   customer_data: 'нужны данные клиента', unconfirmed: 'в правилах нет ожидаемого ответа',
 };
+
+/** What the preparation asks of the agent: nothing, or the one probe of its tools — a call to the agent, not to a model. */
+const agentWords = (asksAgent: boolean): string => asksAgent ? 'Lab один раз спросит агента, какие инструменты он показывает' : 'агент не запускается';
 
 /**
  * The consent in the owner's words: one question and the lines under it — what is read, how many situations at
@@ -126,17 +131,17 @@ export function consentText(consent: PreparationConsent, source: string): { ques
       `В логах ${countText(consent.conversations, CONVERSATIONS)}, подходят ${consent.usable}. Ситуаций будет не больше ${consent.promised} — по одной на разговор, из всех тем логов.`,
       ...(reasons.length ? [`Не войдут ${countText(consent.excluded.length, CONVERSATIONS)}: ${reasons.join(' · ')}.`] : []),
       ...(prompts.count ? [`Промпты агента — ${countText(prompts.count, PROMPTS)}, ${Math.ceil(prompts.bytes / 1000)} КБ — читаются целиком с каждым разговором.`] : []),
-      `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели на всю подготовку${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}. ${REVISION_TEXT} Это потолок, а не прогноз; агент не запускается.`,
+      `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели на всю подготовку${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}. ${REVISION_TEXT} Это потолок, а не прогноз; ${agentWords(consent.asksAgent)}.`,
     ],
   };
 }
 
 /** The consent of a preparation from the owner's rules alone, in the same words: how many situations, and the ceiling of the spending. */
-export function rulesConsentText(situations: number, callCeiling: number): { question: string; lines: string[] } {
+export function rulesConsentText(situations: number, callCeiling: number, asksAgent = false): { question: string; lines: string[] } {
   return {
     question: `Собрать ${countText(situations, SITUATIONS_ACC)} по вашим правилам?`,
     lines: ['Логов нет: ситуации строятся только по правилам — без выдуманных разговоров и личных данных клиента.',
-      `Расход — не больше ${countText(callCeiling, CALLS)} модели на всю подготовку. ${REVISION_TEXT} Это потолок, а не прогноз; агент не запускается.`],
+      `Расход — не больше ${countText(callCeiling, CALLS)} модели на всю подготовку. ${REVISION_TEXT} Это потолок, а не прогноз; ${agentWords(asksAgent)}.`],
   };
 }
 

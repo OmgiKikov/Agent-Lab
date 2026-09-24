@@ -5,7 +5,7 @@ import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLin
 import type { FailureExplanation } from './explain.js';
 import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText } from './plural.js';
-import { accuracyParts, alarmRow, DUNNO_MARK, dunnoMark, judgeCheckText, noErrorsText, realityParts, trustSegments } from './result-text.js';
+import { accuracyParts, alarmRow, DUNNO_MARK, dunnoMark, judgeCheckText, noErrorsText, realityParts, toolExpectationsText, trustSegments } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
 import { situationBrief, situationNumber } from './card/view.js';
 import { ruleBarText } from './card/rulebook.js';
@@ -89,6 +89,7 @@ function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
     ...(view.bar ? [`${ruleBarText(view.bar)}.`] : []),
     `${countText(scope.cards, SITUATIONS)} · ${countText(scope.dialogues, ['разговор', 'разговора', 'разговоров'])} · клиента играет Lab${scope.judgeModel ? ` · судья — ${scope.judgeModel}` : ''}${scope.target ? ` · версия агента ${scope.target}` : ''}${scope.costUsd ? ` · $${scope.costUsd.toFixed(2)}` : ''}`,
     ...coverageSentence(view),
+    ...(toolExpectationsText(view) ? [`${toolExpectationsText(view)}.`] : []),
     ...(breakdown.goal.decided ? [`Запрос выполнен: ${breakdown.goal.met} из ${breakdown.goal.decided}.${breakdown.rules.decided ? ` Правила промпта нарушены: ${breakdown.rules.broken} из ${breakdown.rules.decided}.` : ''}`] : []),
     agreement.checked ? `С решениями судьи вы согласились в ${agreement.agreed} из ${agreement.checked} проверенных случаев.`
       : view.reviewed.situations ? `Вы сами проверили ${countText(view.reviewed.situations, ['ситуацию', 'ситуации', 'ситуаций'])}.`

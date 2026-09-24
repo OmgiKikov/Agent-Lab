@@ -36,6 +36,8 @@ export interface ProposalCall {
   binds: { kinds: RequirementKind[]; rules: { sourceId: string; quote: string }[] };
   /** Always the reply; a tool log or the state only where the connection confirmed it can be observed. */
   observations: ['reply', ...Observation[]];
+  /** The agent's tools the connection named, offered with the tool channel: a tool expectation names one of them in plain words. */
+  tools?: string[];
   /** The run's limit on the customer's messages: the card's required way must fit it. */
   maxTurns: number;
 }
@@ -46,12 +48,13 @@ export type CallSource = Pick<Source, 'id' | 'name' | 'content' | 'kind'>;
 const DEFAULT_BINDS: ProposalCall['binds'] = { kinds: ['behavior', 'knowledge'], rules: [] };
 
 export function proposalCall(input: { source: ProposalCall['source']; messages: LoggedMessage[]; sources: readonly CallSource[];
-  binds?: ProposalCall['binds']; confirmedObservations?: ('tool' | 'state')[]; maxTurns: number }): ProposalCall {
+  binds?: ProposalCall['binds']; confirmedObservations?: ('tool' | 'state')[]; tools?: string[]; maxTurns: number }): ProposalCall {
   const [first, ...rest] = input.sources.map(({ id, name, content, kind }): CallSource => ({ id, name, content, ...(kind ? { kind } : {}) }));
   if (first === undefined) throw new Error('Ситуация строится только на материалах владельца, а их для неё нет.');
   const customer = input.messages.filter(message => message.role === 'user').map(message => message.index);
   return { source: input.source, messages: input.messages, customerEvents: customer, laterEvents: customer.slice(1),
-    sources: [first, ...rest], binds: input.binds ?? DEFAULT_BINDS, observations: ['reply', ...(input.confirmedObservations ?? [])], maxTurns: input.maxTurns };
+    sources: [first, ...rest], binds: input.binds ?? DEFAULT_BINDS, observations: ['reply', ...(input.confirmedObservations ?? [])],
+    ...(input.tools?.length ? { tools: [...input.tools] } : {}), maxTurns: input.maxTurns };
 }
 
 /** Plausible profile facts one card may add, and the card's facts in all: the brief stays one screen. */
@@ -315,7 +318,7 @@ export function proposalPayload(request: CardProposalRequest) {
     sources: call.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })),
     rulebook: { binds: call.binds.kinds },
     topics: request.topics, ...(request.written.length ? { written: request.written } : {}),
-    target: { observations: call.observations },
+    target: { observations: call.observations, ...(call.tools ? { tools: call.tools } : {}) },
     ...(request.revision ? { revise: request.revision } : {}),
   };
 }

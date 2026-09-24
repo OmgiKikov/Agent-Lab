@@ -123,7 +123,7 @@ test('the consented ceiling holds each situation\'s revision, and the consent sa
   assert.equal(PROPOSAL_ATTEMPTS, 6, 'five calls to write the card and one to revise it');
   assert.equal(one, PROPOSAL_ATTEMPTS + 2 * 2, 'the allowance, the card\'s review and its revision\'s');
   assert.equal(preparationCeiling({ task: 'Проверить', sources, situations: 3, fromLogs: false }), 3 * (PROPOSAL_ATTEMPTS + 4));
-  const consent = consentText({ conversations: 2, usable: 2, promised: 2, excluded: [], callCeiling: 21, topicMapCalls: 0, prompts: { count: 0, bytes: 0 } }, 'логов');
+  const consent = consentText({ conversations: 2, usable: 2, promised: 2, excluded: [], callCeiling: 21, topicMapCalls: 0, prompts: { count: 0, bytes: 0 }, asksAgent: false }, 'логов');
   assert.match(consent.lines.at(-1)!, /одна переделка каждой ситуации/);
   assert.match(rulesConsentText(2, 21).lines.at(-1)!, /одна переделка каждой ситуации/);
 });

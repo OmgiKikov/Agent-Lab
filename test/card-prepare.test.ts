@@ -369,10 +369,10 @@ test('the consent\'s ceiling holds per situation its choice of articles, its pro
     'materials that fit one call are read whole: no choice of articles');
   const prompts = promptLoad(sources);
   assert.equal(prompts.count, 10);
-  const text = consentText({ conversations: 2, usable: 2, promised: 2, topicMapCalls: 2, prompts, callCeiling: 30, excluded: [] }, 'logs.jsonl');
+  const text = consentText({ conversations: 2, usable: 2, promised: 2, topicMapCalls: 2, prompts, callCeiling: 30, excluded: [], asksAgent: false }, 'logs.jsonl');
   assert.deepEqual(text.lines.slice(-2), [`Промпты агента — 10 промптов, ${Math.ceil(prompts.bytes / 1000)} КБ — читаются целиком с каждым разговором.`,
     'Расход — не больше 30 вызовов модели на всю подготовку, из них 2 — на разметку тем. Сюда входит одна переделка каждой ситуации, которую не пропустила проверка. Это потолок, а не прогноз; агент не запускается.']);
-  const none = consentText({ conversations: 2, usable: 2, promised: 2, topicMapCalls: 0, prompts: { count: 0, bytes: 0 }, callCeiling: 14, excluded: [] }, 'logs.jsonl');
+  const none = consentText({ conversations: 2, usable: 2, promised: 2, topicMapCalls: 0, prompts: { count: 0, bytes: 0 }, callCeiling: 14, excluded: [], asksAgent: false }, 'logs.jsonl');
   assert.ok(!none.lines.some(line => line.startsWith('Промпты')), 'no prompts, no line');
 });
 
