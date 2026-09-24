@@ -5,7 +5,7 @@ import type { Conversion } from './card/convert.js';
 import type { CardCommand, LibraryV2 } from './card/schema.js';
 import type { DialogueNumbers } from './card/view.js';
 import type { Connection } from './connection.js';
-import type { CreateInput, DraftPatch, Experiment, HumanReviewInput, ReassessmentInput } from './contracts.js';
+import type { CreateInput, DraftPatch, Experiment, HumanReviewInput, ReassessmentInput, Settings } from './contracts.js';
 import type { Runtime } from './runtime.js';
 import { createDemoRuntime } from './demo.js';
 import { captureGeneratorEvidence } from './generator-evidence.js';
@@ -99,6 +99,9 @@ export class ExperimentLab {
     this.operations.shutdown();
     try { await this.initializing; await this.operations.settled(); } finally { await this.store.close(); }
   }
+
+  /** The models of a step outside any run — reading a spreadsheet of logs before preparing: the injected runtime, else Pi's for `settings`. */
+  modelRuntime(settings: Settings): Promise<Runtime> { return this.injectedRuntime ? Promise.resolve(this.injectedRuntime) : createPiRuntime(settings); }
 
   private async runtime(record: Experiment): Promise<Runtime> {
     const runtime = this.injectedRuntime ?? (record.mode === 'demo' ? createDemoRuntime() : await createPiRuntime(record.settings));

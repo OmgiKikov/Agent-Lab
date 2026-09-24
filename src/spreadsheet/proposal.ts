@@ -1,25 +1,29 @@
 import { isIdentifier } from '../ids.js';
 import { countText } from '../plural.js';
+import { analyzeSheet, filledValues, isNumeric, type SheetAnalysis } from './analysis.js';
 import type { CsvDialect } from './csv.js';
 import { importTable, parseOrder, type TablePreview } from './dialogues.js';
 import {
-  HEADER_SCAN, LABEL_LIMIT, columnLabel, findColumn, tableChoicesSchema, tableMappingSchema, toColumn,
-  type ColumnInfo, type Role, type TableChoices, type TableFilter, type TableLayout, type TableMapping,
+  LABEL_LIMIT, columnLabel, findColumn, tableChoicesSchema, tableMappingSchema, toColumn,
+  type ColumnInfo, type ReadingBasis, type Role, type TableChoices, type TableLayout, type TableMapping,
 } from './mapping.js';
 import { boundaryCounts, detectMarkers, type MarkerStructure } from './markers.js';
-import { columnSelection, conversationRows, listedValues, selectableColumns, type ValueCount } from './selection.js';
-import { cellOf, columnLetter, type Sheet } from './sheet.js';
+import { frequentCopies } from './repeats.js';
+import { conversationRows, selectableColumns, whereOutcome, type ValueCount } from './selection.js';
+import type { Sheet } from './sheet.js';
 import type { TableFile, Workbook } from './workbook.js';
 
 /*
- * What Lab proposes for a spreadsheet of logs, for the owner to confirm — never read silently. Every
- * choice comes from the data: the text column whose cells are led by role markers, or the column of a few
- * role values; the id column whose values identify conversations. A choice the owner made is checked
- * against the data and refused with the reason when it cannot be right. What Lab cannot settle alone
- * (a marker it does not know) becomes one question. Which conversations to evaluate is the owner's alone:
- * Lab offers the columns of categories, and a column the owner names asks which of its values to keep.
- * So is dropping exchanges an export copied: Lab asks once when copies are frequent, never drops them itself.
- * The proposal is the typed value the chat question and the command line both render.
+ * Lab's own reading of a spreadsheet of logs, by the frequencies of its words and values — the fallback when no
+ * model is configured, when none of the model's proposals passed the checks, or when the owner's changes leave the
+ * model's reading (import.ts); Lab's model proposes the reading otherwise (reading-task.ts, exact.ts). Either way the
+ * owner confirms — nothing is read silently. Every choice comes from the data: the text column whose cells are led
+ * by role markers, or the column of a few role values; the id column whose values identify conversations. A choice
+ * the owner made is checked against the data and refused with the reason when it cannot be right. What Lab cannot
+ * settle alone (a marker it does not know) becomes one question. Which conversations to evaluate is the owner's
+ * alone: Lab offers the columns of categories, and a column the owner names asks which of its values to keep. So is
+ * dropping exchanges an export copied: Lab asks once when copies are frequent, never drops them itself. The proposal
+ * is the typed value the chat question and the command line both render.
  */
 
 /** The one thing Lab asks before it can propose a complete reading. */
@@ -52,6 +56,8 @@ interface ProposalBase {
   /** The header row as the owner counts rows (1 is the first). */
   headerRow: number;
   columns: ColumnInfo[];
+  /** Who proposed the reading: set by the import (import.ts) for what the owner is shown; Lab's own reading alone (detection) carries none. */
+  basis?: ReadingBasis;
 }
 export type TableProposal = ProposalBase & (
   /** `selectable`: the columns of categories the conversations could be chosen by (selection.ts). */
@@ -73,9 +79,6 @@ const UNIQUE = 0.9;
 const ORDER_AGREES = 0.9;
 /** A role value longer than this is text, not a role. */
 const ROLE_CHARS = 40;
-/** Copies are asked about when this share of the conversations, and at least REPEATS_MIN of them, hold some: an export's habit, not a client saying the same twice. */
-const REPEATS_ASKED = 0.05;
-const REPEATS_MIN = 2;
 /** Role words exports use. Lab proposes them; the owner confirms. Anything else is asked. */
 const KNOWN_ROLES: ReadonlyMap<string, Role> = new Map([
   ...['client', 'customer', 'user', 'human', 'клиент', 'пользователь', 'абонент'].map(word => [word, 'user'] as const),
@@ -107,14 +110,16 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
   const reading = tableMappingSchema.parse({ version: 1, source: workbook.csv ? { format: 'csv', ...workbook.csv } : { format: 'xlsx', sheet: sheet.name },
     headerRow: analysis.header + 1, ...outcome.mapping });
   const conversations = conversationRows(sheet, reading, analysis.rows);
-  const selection = choose(analysis, reading, conversations, chosen.where);
-  if ('reason' in selection) return { ...base, status: 'refused', choice: 'where', reason: selection.reason };
-  if ('question' in selection) return { ...base, status: 'question', question: selection.question, found: conversations.length };
+  // decide() refused a column that is not there.
+  const where = chosen.where && { column: findColumn(chosen.where.column, analysis.columns)!, ...chosen.where.values ? { values: chosen.where.values } : {} };
+  const selection = whereOutcome(sheet, reading, conversations, where);
+  if ('issue' in selection) return { ...base, status: 'refused', choice: 'where', reason: selection.issue };
+  if ('ask' in selection) return { ...base, status: 'question', question: { kind: 'where', ...selection.ask }, found: conversations.length };
   const asWritten = selection.filter ? tableMappingSchema.parse({ ...reading, filter: selection.filter }) : reading;
   const preview = importTable(sheet, asWritten).preview;
   // Copies are counted over the conversations the owner chose; frequent ones become the question, and only the owner's yes drops them.
   const considered = preview.selected ?? preview.dialogues;
-  if (chosen.collapseRepeats === undefined && preview.repeats && preview.repeats.dialogues >= Math.max(REPEATS_MIN, considered * REPEATS_ASKED)) {
+  if (chosen.collapseRepeats === undefined && preview.repeats && frequentCopies(preview.repeats.dialogues, considered)) {
     return { ...base, status: 'question', question: { kind: 'repeats', ...preview.repeats, of: considered }, found: considered };
   }
   const mapping = chosen.collapseRepeats ? tableMappingSchema.parse({ ...asWritten, collapseRepeats: true }) : asWritten;
@@ -122,37 +127,12 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
     selectable: selectableColumns(sheet, reading, conversations, analysis.columns) };
 }
 
-interface Analysis {
-  sheet: Sheet;
-  /** The header row, counted from 0. */
-  header: number;
-  /** Rows below the header with anything in them. */
-  rows: number[];
-  columns: ColumnInfo[];
-  /** Trimmed cells of each column, one per row of `rows`. */
-  values: string[][];
+/** A sheet as Lab's own reading sees it: the shared analysis, and the marker structure of each column once it was looked for. */
+interface Analysis extends SheetAnalysis {
   markers: Map<number, MarkerStructure | undefined>;
 }
+const analyze = (sheet: Sheet): Analysis => ({ ...analyzeSheet(sheet), markers: new Map() });
 
-/** The header is the first row, among the first HEADER_SCAN, with two or more distinct names; a title above the table is skipped. */
-function analyze(sheet: Sheet): Analysis {
-  let header = 0;
-  for (let row = 0; row < Math.min(sheet.rows.length, HEADER_SCAN); row++) {
-    const names = (sheet.rows[row] ?? []).map(cell => cell.trim()).filter(Boolean);
-    if (names.length >= 2 && new Set(names).size === names.length) { header = row; break; }
-  }
-  const rows: number[] = [];
-  let width = sheet.rows[header]?.length ?? 0;
-  for (let row = header + 1; row < sheet.rows.length; row++) if (sheet.rows[row]!.some(cell => cell.trim())) { rows.push(row); width = Math.max(width, sheet.rows[row]!.length); }
-  const values = Array.from({ length: width }, (_, column) => rows.map(row => cellOf(sheet, row, column).trim()));
-  const columns = values.map((cells, index) => {
-    const filled = cells.filter(Boolean);
-    return { index, letter: columnLetter(index), header: cellOf(sheet, header, index).trim(), filled: filled.length, distinct: new Set(filled).size };
-  });
-  return { sheet, header, rows, columns, values, markers: new Map() };
-}
-
-const filledValues = (a: Analysis, column: ColumnInfo) => a.values[column.index]!.filter(Boolean);
 const label = (column: ColumnInfo) => quoted(columnLabel(column));
 
 /** The marker structure of a column's texts, with the owner's separator when given (null: none between messages). */
@@ -178,7 +158,7 @@ function markerColumn(a: Analysis, separator?: string | null): { column: ColumnI
 /** Why a column cannot tell who writes a message; undefined when it can. */
 function roleColumnIssue(a: Analysis, column: ColumnInfo): string | undefined {
   if (column.distinct > LABEL_LIMIT) return `В колонке ${label(column)} ${countText(column.distinct, ['разное значение', 'разных значения', 'разных значений'])} — это не роль того, кто пишет.`;
-  if (column.filled && numeric(a, column)) return `В колонке ${label(column)} числа или даты — это не роль того, кто пишет.`;
+  if (column.filled && isNumeric(a, column)) return `В колонке ${label(column)} числа или даты — это не роль того, кто пишет.`;
   if (column.distinct < 2) return `В колонке ${label(column)} ${column.distinct ? 'одно значение' : 'нет значений'} — по ней не отличить клиента от агента.`;
   if (filledValues(a, column).some(value => value.length > ROLE_CHARS)) return `В колонке ${label(column)} длинные тексты — это не роль того, кто пишет.`;
   return undefined;
@@ -209,39 +189,15 @@ function decide(a: Analysis, c: TableChoices): Outcome {
   return { question: { kind: 'text', columns: textColumns(a) }, found: 0 };
 }
 
-/**
- * The owner's choice of conversations, checked against the sheet once the reading is complete: the column they
- * named must give each conversation one value (selection.ts); a column alone asks which values to keep; named
- * values must be values of that column, and the filter keeps them in the order of their conversations, the most
- * first, so one choice is one mapping.
- */
-function choose(a: Analysis, reading: TableMapping, conversations: readonly number[][], where: TableChoices['where']):
-  { filter?: TableFilter } | { question: TableQuestion } | { reason: string } {
-  if (!where) return {};
-  // decide() refused a column that is not there.
-  const column = findColumn(where.column, a.columns)!;
-  const split = columnSelection(a.sheet, reading, conversations, column);
-  if ('issue' in split) return { reason: split.issue };
-  if (!where.values) {
-    const listed = listedValues(column, split.values);
-    return 'issue' in listed ? { reason: listed.issue } : { question: { kind: 'where', column, ...listed } };
-  }
-  const absent = where.values.find(value => !split.values.some(item => item.value === value));
-  if (absent !== undefined) return { reason: absent ? `В колонке ${label(column)} нет значения ${quoted(absent)}.` : `В колонке ${label(column)} нет пустых ячеек.` };
-  const wanted = new Set(where.values);
-  return { filter: { column: toColumn(column), values: split.values.flatMap(item => wanted.has(item.value) ? [item.value] : []) } };
-}
-
 const noMarkers = (column: ColumnInfo) => `В колонке ${label(column)} нет разговоров: строки не начинаются с метки роли — слова заглавными буквами, вроде CLIENT или AGENT.`;
 /** Why the owner's separator — or the owner's word that there is none — does not read the column `column`, or any column. */
 const noSeparated = (separator: string | null, column?: ColumnInfo) => separator === null
   ? `${column ? `В колонке ${label(column)}` : 'Ни в одной колонке'} нет разговоров из нескольких сообщений, каждое из которых начинается с метки роли.`
   : `${column ? `В колонке ${label(column)}` : 'Ни в одной колонке'} сообщения не отделены знаком ${quoted(separator)} с меткой роли после него.`;
 /** Columns that may hold text, the longest texts first: numbers and dates are not messages. */
-const textColumns = (a: Analysis) => a.columns.filter(column => column.filled && !numeric(a, column))
+const textColumns = (a: Analysis) => a.columns.filter(column => column.filled && !isNumeric(a, column))
   .map(column => ({ column, length: filledValues(a, column).reduce((sum, value) => sum + value.length, 0) / column.filled }))
   .sort((x, y) => y.length - x.length).slice(0, 10).map(item => item.column);
-const numeric = (a: Analysis, column: ColumnInfo) => filledValues(a, column).filter(value => parseOrder(value)).length >= column.filled * FILLED;
 
 /** One conversation per row: the text column and its markers, then the id column. */
 function rowLayout(a: Analysis, c: TableChoices): Outcome {
@@ -292,7 +248,7 @@ function messageLayout(a: Analysis, c: TableChoices): Outcome {
   const text = c.text ? findColumn(c.text, a.columns)! : textColumns(a).find(column => column.index !== id.index && column.index !== role.index);
   if (!text) return { question: { kind: 'text', columns: textColumns(a) }, found: id.distinct };
   const textIssue = [id.index, role.index].includes(text.index) ? `Колонка ${label(text)} уже выбрана как ${text.index === id.index ? 'id разговора' : 'роль'}.`
-    : numeric(a, text) ? `В колонке ${label(text)} числа или даты, а не текст сообщений.` : undefined;
+    : isNumeric(a, text) ? `В колонке ${label(text)} числа или даты, а не текст сообщений.` : undefined;
   if (textIssue) return { refused: 'text', reason: textIssue };
   let order: ColumnInfo | undefined;
   if (c.order) {

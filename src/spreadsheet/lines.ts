@@ -1,7 +1,6 @@
 import { countText } from '../plural.js';
 import type { ImportBatch } from '../scenario-contracts.js';
-import type { TablePreview } from './dialogues.js';
-import { ROLE_WORDS, columnLabel, type TableMapping } from './mapping.js';
+import { ROLE_WORDS, columnLabel, type ReadingBasis } from './mapping.js';
 import type { TableProposal, TableQuestion } from './proposal.js';
 
 /*
@@ -32,6 +31,17 @@ function headLine(proposal: TableProposal): string {
   const where = proposal.csv ? `разделитель ${delimiterName(proposal.csv.delimiter)} · ${ENCODING_NAMES[proposal.csv.encoding]}` : `лист ${quoted(proposal.sheet)}`;
   const rows = proposal.status === 'ready' ? proposal.preview.rows : undefined;
   return [`Таблица ${proposal.file.name}`, where, ...rows === undefined ? [] : [countText(rows, ROWS)]].join(' · ');
+}
+
+const ROWS_READ: [string, string, string] = ['строку', 'строки', 'строк'];
+/** Who proposed the reading, under the first line: the model and how much of the table it read, or Lab by itself and why. */
+function basisLine(basis: ReadingBasis): string {
+  if (basis.kind === 'model') return `Разметку предложила модель Lab — она прочитала ${countText(basis.rows, ROWS_READ)} таблицы; по этой разметке Lab сам прочитал и проверил каждую строку.`;
+  switch (basis.why) {
+    case 'no_model': return 'Разметку Lab предположил сам, без модели, — по частоте слов в таблице; проверьте её.';
+    case 'model_failed': return 'Модель Lab не нашла разметку, которая сходится с таблицей, — Lab предположил её сам, по частоте слов; проверьте её.';
+    case 'owner': return 'С вашими поправками разметка модели Lab не сходится с таблицей — остальное Lab предположил сам, по частоте слов; проверьте.';
+  }
 }
 
 /** The question in one sentence, with the answers the owner can give. */
@@ -79,7 +89,7 @@ function readingLines({ mapping, preview, selectable }: ReadyProposal): string[]
  * What the import will hold: the owner's choice of conversations and how many it keeps of the sheet's, how many
  * of those fit and why the rest do not, and the sample when there are more than one import takes.
  */
-function outcomeLines(mapping: TableMapping, preview: TablePreview): string[] {
+function outcomeLines({ mapping, preview, basis }: ReadyProposal): string[] {
   const considered = preview.selected ?? preview.dialogues;
   const rejected = considered - preview.usable;
   const reasons = preview.rejected.slice(0, 4).map(item => `${item.reason.charAt(0).toLowerCase()}${item.reason.slice(1)} — ${item.count}`);
@@ -89,6 +99,9 @@ function outcomeLines(mapping: TableMapping, preview: TablePreview): string[] {
   if (repeats) lines.push(mapping.collapseRepeats
     ? `  Повторы убраны: ${countText(repeats.messages, MESSAGES)} в ${countText(repeats.dialogues, CONVERSATIONS_IN)} — каждый обмен остался один раз.`
     : `  В ${countText(repeats.dialogues, CONVERSATIONS_IN)} обмен повторяется подряд (копий — ${countText(repeats.messages, MESSAGES)}); Lab читает их как написано.`);
+  // The model's verdict is said only while the copies are its decision; the owner's own choice needs no reason.
+  const verdict = basis?.kind === 'model' ? basis.repeats : undefined;
+  if (repeats && verdict && verdict !== 'none') lines.push(verdict === 'export_copies' ? '  Так решила модель Lab: это копии, которые сделала выгрузка.' : '  Так решила модель Lab: клиенты и правда повторялись.');
   lines.push(`  ${countText(considered, CONVERSATIONS)}: подходят ${preview.usable}${rejected ? `, не подошли ${rejected} (${reasons.join(' · ')}${preview.rejected.length > 4 ? ' · …' : ''})` : ''}.`);
   if (preview.taken < preview.usable) lines.push(`  В одну загрузку входит ${countText(preview.taken, CONVERSATIONS)}: Lab возьмёт ${preview.taken} из ${preview.usable} подходящих — по хешу содержимого, без отбора по исходу.`);
   return lines;
@@ -97,10 +110,11 @@ function outcomeLines(mapping: TableMapping, preview: TablePreview): string[] {
 /** The whole proposal as the terminal shows it; the caller adds how to answer. */
 export function proposalLines(proposal: TableProposal): string[] {
   if (proposal.status === 'refused') return [headLine(proposal), '', proposal.reason];
-  if (proposal.status === 'question') return [headLine(proposal), '', questionText(proposal.question, proposal.found),
+  const head = [headLine(proposal), ...proposal.basis ? [basisLine(proposal.basis)] : []];
+  if (proposal.status === 'question') return [...head, '', questionText(proposal.question, proposal.found),
     ...proposal.question.kind === 'where' ? [...whereChoices(proposal.question).map((choice, i) => `  ${i + 1}. ${choice}`),
       ...proposal.question.more ? [`  …${moreValuesLine(proposal.question.more)}`] : []] : []];
-  return [headLine(proposal), '', 'Как Lab прочитает таблицу', ...readingLines(proposal), '', 'Что получится', ...outcomeLines(proposal.mapping, proposal.preview)];
+  return [...head, '', 'Как Lab прочитает таблицу', ...readingLines(proposal), '', 'Что получится', ...outcomeLines(proposal)];
 }
 
 /** After the owner confirmed: what was stored. */

@@ -62,13 +62,15 @@ export const prepareParameters = Type.Object({
     where: Type.Optional(Type.Object({
       column: Type.String({ minLength: 1, maxLength: 200 }),
       values: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 120 }), { minItems: 1, maxItems: 30, description: 'Only values the owner named, as written in the table.' })),
-    }, { ...closed, description: 'Only when the owner wants some of the conversations: the column whose values choose them. Without values the host asks the owner which to keep.' })),
-  }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet or chose which of its conversations to evaluate: the sheet, the column of the conversation id, the column of the text, the conversations kept (where). A column is a header or a letter.' })),
+    }, { ...closed, description: 'Only when the owner named the column whose values choose the conversations to evaluate. Without values the host asks the owner which to keep.' })),
+    request: Type.Optional(Type.String({ minLength: 1, maxLength: 500, description: 'The owner\'s own words about which conversations to evaluate, when they did not name the column (e.g. «только те, где отвечал один агент эквайринга»): Lab\'s model finds the column and its values in the table.' })),
+    collapseRepeats: Type.Optional(Type.Boolean({ description: 'Only after the owner said what to do with exchanges the export repeated: true — read each once, false — keep them as written.' })),
+  }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet or chose which of its conversations to evaluate: the sheet, the column of the conversation id, the column of the text, the conversations kept (where, or request in the owner\'s words), the repeated exchanges. A column is a header or a letter.' })),
   suite: Type.Optional(path('A saved set of situations (.evals/*.json) to load into a fresh draft instead of preparing: free, nothing runs.')),
   demo: Type.Optional(Type.Literal(true, { description: 'The built-in teaching example: no model, no keys, one minute.' })),
 }, closed);
 type PrepareParams = { task?: string; logs?: string; withoutLogs?: true; situations?: number; materials?: string[]; prompts?: string[]; rules?: string;
-  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] } }; suite?: string; demo?: true };
+  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean }; suite?: string; demo?: true };
 
 /** A path the owner or the model named: `~/…` is the owner's home, anything else is relative to the project. */
 export function projectPath(named: string, cwd: string): string {
@@ -167,14 +169,20 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   let libraryImport: Awaited<ReturnType<typeof readDialogueImport>> | undefined;
   if (logs !== 'rules') {
     if (TABLE_EXTENSIONS.has(extname(logs).toLowerCase())) {
-      const { sheet, id, text, where } = params.table ?? {};
+      const { sheet, id, text, where, request: words, collapseRepeats } = params.table ?? {};
       // The owner's corrections, said in words; which conversations to keep is asked natively when no value was named.
-      const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}) };
-      if (Object.keys(choices).length || !await confirmedBefore(logs, directory)) {
-        requireInteractive(ctx, 'Как читать таблицу, решает владелец в интерактивном терминале Pi. Без него: agent-lab import --file … --yes.');
+      const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}), ...(collapseRepeats === undefined ? {} : { collapseRepeats }) };
+      if (Object.keys(choices).length || words || !await confirmedBefore(logs, directory)) {
+        requireInteractive(ctx, 'Как читать таблицу, решает владелец в интерактивном терминале Pi. Без него: agent-lab import --file … --input задача.json --yes.');
         const owned = await host.open(ctx.cwd);
         let imported: Awaited<ReturnType<typeof importTable>>;
-        try { await owned.lab.init(); imported = await importTable(ctx, owned.lab.store, logs, choices); } finally { await owned.close(); }
+        try {
+          await owned.lab.init();
+          // The chat's model reads the table, as it prepares the situations after it; without one Lab reads it by itself and says so.
+          const settings = ctx.model && settingsSchema.parse({ provider: ctx.model.provider, model: ctx.model.id });
+          const reader = settings && (await owned.lab.modelRuntime(settings)).tableReading;
+          imported = await importTable(ctx, owned.lab.store, logs, choices, reader && settings ? { reader, timeoutMs: settings.timeoutMs, signal, ...(words ? { words } : {}) } : undefined);
+        } finally { await owned.close(); }
         if ('declined' in imported) return declined(host, callId, 'Таблицу не загружаю: вы не подтвердили, как её читать. Ничего не потрачено.');
         if ('refused' in imported) return host.feedResult(callId, { refused: imported.refused, instruction: 'Nothing was read. Tell the owner why in one sentence; they may name the sheet or a column (table).' },
           { tone: 'warning', rows: [row(safeText(imported.refused))] }, 'Таблица не прочитана');

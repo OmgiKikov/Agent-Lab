@@ -137,6 +137,37 @@ function countMarkers(texts: readonly string[], separator: string | undefined): 
   return [...counts.values()].sort((a, b) => b.messages - a.messages || a.token.localeCompare(b.token));
 }
 
+/** A word Lab's model may choose as a marker: how often it stands at a word boundary of a column's texts, and in how many texts. */
+export interface CandidateToken { token: string; occurrences: number; texts: number }
+
+/**
+ * The words a column's texts could mark messages with, for Lab's model to choose from: every uppercase word (CLIENT,
+ * AGENT, БОТ) and every «Клиент:» label — a word right before a colon, the colon included — that starts at a word
+ * boundary: the text's start, or after any character that is not part of a word, so the AGENT of ACQUIRING_AGENT is
+ * none. Only words standing in two texts or more: structure repeats, a one-off word is content. The most frequent
+ * first, at most `limit`.
+ */
+export function candidateTokens(texts: readonly string[], limit: number): CandidateToken[] {
+  const counts = new Map<string, CandidateToken>();
+  for (const text of texts) {
+    const seen = new Set<string>();
+    for (let at = 0; at < text.length; at++) {
+      if (!isWordChar(text[at]) || isWordChar(text[at - 1])) continue;
+      const word = wordAt(text, at);
+      const label = word.length >= 2 && word.length < MARKER_CHARS && [...word].some(isLetter) && text[at + word.length] === ':';
+      const token = isMarkerToken(word) ? word : label ? `${word}:` : undefined;
+      at += word.length - 1;
+      if (!token) continue;
+      let entry = counts.get(token);
+      if (!entry) counts.set(token, entry = { token, occurrences: 0, texts: 0 });
+      entry.occurrences++;
+      if (!seen.has(token)) { seen.add(token); entry.texts++; }
+    }
+  }
+  return [...counts.values()].filter(item => item.texts >= Math.min(2, texts.length))
+    .sort((a, b) => b.occurrences - a.occurrences || (a.token < b.token ? -1 : a.token > b.token ? 1 : 0)).slice(0, limit);
+}
+
 /** How many messages each of `markers` starts — markers the owner named, in any case or form. */
 export function boundaryCounts(texts: readonly string[], separator: string | undefined, markers: readonly string[]): Map<string, number> {
   const counts = new Map(markers.map(marker => [marker, 0]));

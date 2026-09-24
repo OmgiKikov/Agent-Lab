@@ -7,13 +7,13 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab } from './experiment.js';
 import { draftHash } from './lab/record.js';
 import { demoInput } from './demo.js';
-import { createInputSchema, materialSources, SCENARIO_LIMIT, type CreateInput } from './contracts.js';
+import { createInputSchema, materialSources, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Settings } from './contracts.js';
 import { compareRuns } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { detectionLines, detectProject } from './detect.js';
 import { readDialogueImport, importDialogues } from './imports.js';
 import { expandMaterials } from './materials.js';
-import { getPiStatus } from './pi.js';
+import { createPiRuntime, getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { expectationSheet, testPlanLines, trialProofLines } from './quality.js';
 import { ExperimentStore } from './store.js';
@@ -28,11 +28,13 @@ import { actionRow, briefRows, changeText, countsText, detailRows, formatNote, l
 import { safeLine } from './text.js';
 import { countText } from './plural.js';
 import { logImports } from './card/calibration-scope.js';
-import { confirmTableImport, proposeTableImport } from './spreadsheet/import.js';
+import { confirmTableImport, planTableReading, proposeReading, proposeTableImport, readingConsent } from './spreadsheet/import.js';
+import type { TableProposal } from './spreadsheet/proposal.js';
+import { READING_CALLS } from './spreadsheet/reading-task.js';
 import { importedLine, proposalLines } from './spreadsheet/lines.js';
 import { importHints, tableChoicesOf } from './cli/import-flags.js';
 import { preparationCeiling } from './card/budget.js';
-import { consentText, preparationConsent, rulesConsentText, situationCount } from './miner/plan.js';
+import { builderOf, consentText, preparationConsent, rulesConsentText, situationCount } from './miner/plan.js';
 
 /*
  * `agent-lab`: one table of commands over the operations Pi's tools use (experiment.ts). A command that writes or
@@ -129,22 +131,56 @@ async function detect({ values }: CommandInput): Promise<void> {
   await writeStdout(values.json ? `${JSON.stringify(detection, null, 2)}\n` : `${detectionLines(detection).map(safeLine).join('\n')}\n`);
 }
 
+/** The settings of the task file `input`: its builder model reads tables, as it prepares the situations from them. */
+async function taskSettings(input: string): Promise<Settings> {
+  const raw = JSON.parse(await readFile(input, 'utf8')) as { settings?: unknown };
+  const settings = settingsSchema.parse(raw.settings ?? {});
+  if (!settings.provider || !settings.model) throw new Error(`В ${basename(input)} не выбрана модель: укажите settings.provider и settings.model.`);
+  return settings;
+}
+
 async function importTable({ values, directory }: CommandInput): Promise<void> {
   if (!values.file) throw new Error('Укажите таблицу: agent-lab import --file логи.xlsx');
+  const file = values.file, choices = tableChoicesOf(values);
+  const show = async (proposal: TableProposal, next: string[]) => writeStdout(values.json ? `${JSON.stringify(proposal, null, 2)}\n`
+    : `${[...proposalLines(proposal), '', ...next].map(line => safeLine(line)).join('\n')}\n`);
+  // The model of the task file (--input) proposes the reading: a paid step, asked like the others. Its proposal is kept, so what
+  // the owner saw is what --yes stores. Without a task file Lab reads the table by itself and says so.
+  const settings = values.input ? await taskSettings(values.input) : undefined;
+  const plan = settings && await planTableReading(file, builderOf(settings));
+  let proposed = plan && await new ExperimentStore(directory).readProposedReading(plan.key);
+  if (settings && plan && !proposed) {
+    const consent = readingConsent(plan);
+    if (!values.yes) {
+      await writeStdout(values.json ? `${JSON.stringify({ question: consent.question, lines: consent.lines, rows: plan.rows, calls: READING_CALLS }, null, 2)}\n`
+        : `${[consent.question, '', ...consent.lines, '', 'Предложить: та же команда с --yes. Без него ничего не записано и не потрачено.'].map(line => safeLine(line)).join('\n')}\n`);
+      return;
+    }
+    const { tableReading } = await createPiRuntime(settings);
+    if (!tableReading) throw new Error('Модель задачи не предлагает разметку таблиц.');
+    await asWriter(directory, async lab => {
+      proposed = await proposeReading(plan, tableReading, { timeoutMs: settings.timeoutMs });
+      await lab.store.writeProposedReading(proposed);
+    });
+    // A reading the owner has not seen yet is never stored by the same --yes that paid for it.
+    const fresh = await proposeTableImport(file, choices, proposed);
+    await show(fresh, importHints(fresh));
+    process.exitCode = 1;
+    return;
+  }
   // Reads only, until the owner says --yes to a complete proposal; the answer to a question is a flag of the same command.
-  const proposal = await proposeTableImport(values.file, tableChoicesOf(values));
-  const lines = proposalLines(proposal);
+  const proposal = await proposeTableImport(file, choices, proposed);
   if (proposal.status !== 'ready' || !values.yes) {
-    await writeStdout(values.json ? `${JSON.stringify(proposal, null, 2)}\n` : `${[...lines, '', ...importHints(proposal)].map(line => safeLine(line)).join('\n')}\n`);
+    await show(proposal, importHints(proposal));
     if (proposal.status === 'refused' || values.yes) process.exitCode = 1;
     return;
   }
   const lab = new ExperimentLab(directory);
   await lab.init();
   try {
-    const { batch } = await confirmTableImport(lab.store, values.file, proposal);
+    const { batch } = await confirmTableImport(lab.store, file, proposal);
     await writeStdout(values.json ? `${JSON.stringify({ importId: batch.id, dialogues: batch.dialogues.length, proposal }, null, 2)}\n`
-      : `${[...lines, '', importedLine(batch), `Дальше: agent-lab build --input задача.json --dialogues-file ${values.file}`].map(line => safeLine(line)).join('\n')}\n`);
+      : `${[...proposalLines(proposal), '', importedLine(batch), `Дальше: agent-lab build --input ${values.input ?? 'задача.json'} --dialogues-file ${file}`].map(line => safeLine(line)).join('\n')}\n`);
   } finally { await lab.close(); }
 }
 
@@ -484,7 +520,7 @@ async function repeat({ values, directory }: CommandInput): Promise<void> {
 /** Every command in the order `--help` lists them: first the owner's path, then what scripts and CI use. */
 const COMMANDS: Readonly<Record<string, Command>> = {
   detect: { help: ['agent-lab detect [--directory ПАПКА] [--json]   Что Lab нашёл в папке проекта: агента, логи, материалы, промпт'], run: detect },
-  import: { help: ['agent-lab import --file логи.xlsx [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--yes] [--json]   Как Lab прочитает таблицу логов (.xlsx, .csv) и какие разговоры возьмёт; --yes загружает её'], run: importTable },
+  import: { help: ['agent-lab import --file логи.xlsx [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--yes] [--json]   Как читать таблицу логов (.xlsx, .csv): с --input разметку предлагает модель задачи, Lab проверяет каждую строку; --yes — сначала на вызов модели, затем на загрузку'], run: importTable },
   build: { help: ['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--situations N] [--connection подключение.json] [--yes]   Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --yes готовит их'], run: prepare },
   prepare: { help: [], run: prepare },
   cards: { help: [

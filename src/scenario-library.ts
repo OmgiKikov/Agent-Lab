@@ -28,6 +28,11 @@ function canonical(value: unknown): string {
 const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** Why a conversation is refused when de-identification hid every customer message: the data, not the way it was read. */
+export const MASKED_REASON = 'Пользовательские реплики полностью замаскированы';
+/** Why a conversation is refused when the customer wrote nothing: they opened it and left, or the reading missed them. */
+export const NO_CUSTOMER_REASON = 'Нет пользовательских реплик';
+
 /**
  * No inference: ingest source evidence verbatim and give every retained event a stable index.
  * `known` holds reasons a reader of another format already found for rows (by index): a spreadsheet row
@@ -66,8 +71,8 @@ export function importBatch(raw: unknown, known: ReadonlyMap<number, string> = n
       else retained.push(validated.data);
     });
     const userEvents = retained.filter(event => event.type === 'message' && event.role === 'user');
-    if (!userEvents.length && issue === undefined) reasons.push('Нет пользовательских реплик');
-    if (userEvents.length && userEvents.every(event => maskedThrough(event.content ?? ''))) reasons.push('Пользовательские реплики полностью замаскированы');
+    if (!userEvents.length && issue === undefined) reasons.push(NO_CUSTOMER_REASON);
+    if (userEvents.length && userEvents.every(event => maskedThrough(event.content ?? ''))) reasons.push(MASKED_REASON);
     const observation = record(row) ? row.observation ?? (rich ? 'unknown' : 'partial') : 'unknown';
     if (!['complete', 'partial', 'unknown'].includes(String(observation))) reasons.push('Некорректная полнота наблюдения');
     if (reasons.length) batch.rejected.push({ index, ...(dialogueId ? { id: dialogueId.slice(0, 200) } : {}), reasons: [...new Set(reasons)].slice(0, 20), original: row });

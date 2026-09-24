@@ -6,6 +6,7 @@ import type { CardReview, CardReviewRequest } from './card/review.js';
 import type { FailureMode, Requirement, Scenario, Source, TraceEvent, Trial, Usage } from './contracts.js';
 import { identifierSchema as identifier } from './ids.js';
 import type { BuilderModel, TopicMap, TopicMapPlan, TopicMapProgress } from './miner/topic-map.js';
+import type { TableReader } from './spreadsheet/reading-task.js';
 import type { AllowedUserAction, UserDecision, UserView } from './user-controller.js';
 
 /*
@@ -66,5 +67,7 @@ export interface Runtime {
   selectSources?(input: SourceSelectionInput, ctx: CallContext): Promise<SourceSelection>;
   /** The topic map of an import (miner/topic-map.ts), built by `builder` from a plan made for it; each finished step reaches `onProgress` before the next call. */
   topicMap?: { builder: BuilderModel; build(plan: TopicMapPlan, ctx: CallContext, onProgress: (progress: TopicMapProgress) => Promise<void>): Promise<TopicMap> };
+  /** How a spreadsheet of logs reads (spreadsheet/reading-task.ts): proposed by `builder` from a few rows, checked on every row. */
+  tableReading?: TableReader;
   failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
 }

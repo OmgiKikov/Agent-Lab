@@ -113,7 +113,22 @@ export function findColumn(choice: string, columns: readonly ColumnInfo[]): Colu
   return index === undefined ? undefined : columns.find(item => item.index === index);
 }
 
+/** What Lab's model concluded about copied exchanges; `none` — it saw no block written again right after itself. */
+export const REPEAT_JUDGEMENTS = ['export_copies', 'said_again', 'none'] as const;
+export type RepeatJudgement = typeof REPEAT_JUDGEMENTS[number];
+
 const count = z.number().int().nonnegative();
+/**
+ * Who proposed a reading: Lab's model — which one, the key its proposal is stored under, how many rows of the table it
+ * read, and its verdict on copied exchanges while that was still its decision — or Lab by itself: no model was
+ * configured, none of the model's proposals passed the checks, or the owner's changes left the model's reading.
+ */
+export const readingBasisSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('model'), model: text(300), key: sha256Schema, rows: count, repeats: z.enum(REPEAT_JUDGEMENTS).optional() }),
+  z.strictObject({ kind: z.literal('lab'), why: z.enum(['no_model', 'model_failed', 'owner']) }),
+]);
+export type ReadingBasis = z.infer<typeof readingBasisSchema>;
+
 /** One confirmation of how a file reads into an import: the exact file, the mapping, and what the owner was shown. */
 export const tableReadingSchema = z.strictObject({
   file: z.strictObject({ name: text(260), bytes: z.number().int().positive(), sha256: sha256Schema, format: z.enum(TABLE_FORMATS) }),
@@ -126,6 +141,8 @@ export const tableReadingSchema = z.strictObject({
   sheet: z.strictObject({ dialogues: count, selected: count.optional(), usable: count, taken: count,
     rejected: z.array(z.strictObject({ reason: text(2000), count: z.number().int().positive() })).max(100),
     repeats: z.strictObject({ dialogues: count, messages: count }).optional() }),
+  /** Who proposed the reading the owner confirmed; absent in readings confirmed before Lab's model proposed them. */
+  proposedBy: readingBasisSchema.optional(),
 });
 export type TableReading = z.infer<typeof tableReadingSchema>;
 /** The readings confirmed for one import: two files, or two mappings, may produce the very same conversations. */

@@ -6,11 +6,13 @@ import { test, type TestContext } from 'node:test';
 import type { ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { TOOL } from '../extensions/steps.ts';
 import { ExperimentLab } from '../src/experiment.js';
+import type { Runtime } from '../src/runtime.js';
 import { questionAnswers, withAnswer } from '../src/spreadsheet/answers.js';
 import { proposeTableImport } from '../src/spreadsheet/import.js';
 import { proposalLines, whereChoices } from '../src/spreadsheet/lines.js';
 import { ExperimentStore } from '../src/store.js';
 import { cardRuntime, dialogues, policy } from './helpers/card-prep.js';
+import { fixture } from './helpers/pi-fixture.js';
 import { output, registered } from './helpers/pi-session.js';
 import { xlsxFile, type CellSpec } from './helpers/xlsx.js';
 
@@ -25,9 +27,9 @@ async function folder(t: TestContext): Promise<string> {
   t.after(() => rm(cwd, { recursive: true, force: true }));
   return cwd;
 }
-/** The chat with the deterministic card runtime; `picks` answer the native dialogs in order, recorded in `asked`. */
-function chat(t: TestContext, cwd: string, picks: (string | undefined)[]) {
-  const session = registered(undefined, { createLab: directory => new ExperimentLab(directory, cardRuntime()) });
+/** The chat with the deterministic card runtime, or `runtime`; `picks` answer the native dialogs in order, recorded in `asked`. */
+function chat(t: TestContext, cwd: string, picks: (string | undefined)[], runtime: Runtime = cardRuntime()) {
+  const session = registered(undefined, { createLab: directory => new ExperimentLab(directory, runtime) });
   t.after(session.shutdown);
   const asked: { title: string; options: string[] }[] = [];
   const ctx = { cwd, mode: 'tui', hasUI: true, model: { provider: 'fixture', id: 'fixture-model' },
@@ -214,4 +216,27 @@ test('the rules come from the project when none are named; a project without any
   const found = chat(t, cwd, ['Не сейчас']);
   await found.prepare({ task: 'Проверить возвраты', logs: 'logs.jsonl' });
   assert.match(found.asked[0]!.title, /\nПравила: prompts\/system\.md — 1 документ\.\n/);
+});
+
+test('Lab\'s model reads the spreadsheet in the chat: its consent is asked natively, the reading shows it, and a second look costs no call', async t => {
+  const cwd = await folder(t);
+  await writeFile(join(cwd, 'export.xlsx'), xlsxFile([{ name: 'Данные', rows: refundRows }]));
+  const reading = { sheet: 'Данные', id: 'Id диалога', text: 'Текст', repeats: 'none',
+    layout: { kind: 'dialogue_per_row', separator: '`', markers: [{ token: 'CLIENT', role: 'user' }, { token: 'AGENT', role: 'assistant' }] } };
+  const model = await fixture(() => JSON.stringify(reading));
+  t.after(() => model.close());
+  const picks = ['Предложить', 'Не сейчас', 'Прочитать так', 'Не сейчас'];
+  const { prepare, asked } = chat(t, cwd, picks, { ...cardRuntime(), tableReading: model.adapter.tableReading! });
+  assert.equal((await prepare({ ...request, logs: 'export.xlsx' })).cancelled, true, 'the reading was declined: nothing is imported');
+  assert.equal(asked[0]!.title, ['Предложить, как читать таблицу export.xlsx?', '',
+    'Модель Lab прочитает названия и частые значения колонок и 2 строки таблицы — не больше 2 вызовов модели.',
+    'По её разметке Lab сам прочитает и проверит каждую строку; таблица загрузится, только когда вы подтвердите разметку.'].join('\n'));
+  assert.deepEqual(asked[0]!.options, ['Предложить', 'Не сейчас']);
+  assert.match(asked[1]!.title, /^Прочитать таблицу так\?\n\nТаблица export\.xlsx · лист «Данные» · 2 строки\nРазметку предложила модель Lab — она прочитала 2 строки таблицы;/);
+  assert.equal(model.requests.length, 1);
+  // Asked again: the stored proposal is shown at once — no consent, no call.
+  await prepare({ ...request, logs: 'export.xlsx' });
+  assert.deepEqual(asked.slice(2).map(item => item.title.split('\n')[0]), ['Прочитать таблицу так?', 'Собрать 2 ситуации из export.xlsx?']);
+  assert.equal(model.requests.length, 1);
+  assert.ok((await readdir(join(cwd, '.agent-lab', 'imports'))).some(file => file.startsWith('proposed-')), 'the proposal is kept next to the imports');
 });

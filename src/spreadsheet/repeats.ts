@@ -32,3 +32,9 @@ export function withoutRepeats<T extends Said>(messages: readonly T[]): T[] {
   }
   return kept;
 }
+
+/** Copies in this share of the conversations, and in at least COPIES_MIN of them, are an export's habit, not a client saying the same twice. */
+const COPIES_SHARE = 0.05;
+const COPIES_MIN = 2;
+/** Whether `copied` of the `considered` conversations holding copies is frequent enough to be decided on, not passed over. */
+export const frequentCopies = (copied: number, considered: number): boolean => copied >= Math.max(COPIES_MIN, considered * COPIES_SHARE);

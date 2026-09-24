@@ -14,7 +14,8 @@ import { LockedError } from './errors.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import type { ScenarioLibrary } from './card/schema.js';
 import { readTopicMapFile, writeTopicMapFile } from './miner/files.js';
-import { writeReadingFile } from './spreadsheet/files.js';
+import { readProposedFile, writeProposedFile, writeReadingFile } from './spreadsheet/files.js';
+import type { ProposedReading } from './spreadsheet/reading-task.js';
 import type { TableReading } from './spreadsheet/mapping.js';
 import type { TopicMap, TopicMapKey, TopicMapProgress } from './miner/topic-map.js';
 import type { LogVersionJournal } from './card/calibration.js';
@@ -249,6 +250,9 @@ export class ExperimentStore {
       return stored;
     });
   }
+  /** What Lab's model proposed for a spreadsheet under `key` (spreadsheet/files.ts); undefined when it proposed nothing yet. */
+  readProposedReading(key: string): Promise<ProposedReading | undefined> { return readProposedFile(this.directory, key); }
+  writeProposedReading(proposed: ProposedReading): Promise<void> { return this.writeTransaction(() => writeProposedFile(this.directory, proposed)); }
   /** The topic map of an import stored under `key`, finished or still being built (miner/files.ts); undefined when there is none. */
   readTopicMap(key: TopicMapKey): Promise<unknown> { return readTopicMapFile(this.directory, key); }
   /** Stores a topic map, or the progress of its build, next to its import. */

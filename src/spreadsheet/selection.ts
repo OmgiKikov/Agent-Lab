@@ -1,5 +1,5 @@
 import { countText } from '../plural.js';
-import { FILTER_VALUES, VALUE_CHARS, columnLabel, type ColumnInfo, type TableFilter, type TableMapping } from './mapping.js';
+import { FILTER_VALUES, VALUE_CHARS, columnLabel, toColumn, type ColumnInfo, type TableFilter, type TableMapping } from './mapping.js';
 import { cellOf, type Sheet } from './sheet.js';
 
 /*
@@ -107,6 +107,31 @@ export function selectableColumns(sheet: Sheet, mapping: Reading, conversations:
     const selection = columnSelection(sheet, mapping, conversations, column);
     return 'values' in selection && !texts(selection.values) && selection.values.length >= 2 && selection.values.length < conversations.length;
   });
+}
+
+/** The owner's choice of conversations: a column of the sheet, and the values to keep when they were named. */
+export interface WhereChoice { column: ColumnInfo; values?: readonly string[] }
+
+/**
+ * The owner's choice of conversations, checked against the sheet once the reading is complete: the column must give
+ * each conversation one value; a column alone asks which values to keep (`ask`); named values must be values of that
+ * column, and the filter keeps them in the order of their conversations, the most first, so one choice is one mapping.
+ */
+export function whereOutcome(sheet: Sheet, mapping: Reading, conversations: readonly number[][], where: WhereChoice | undefined):
+  { filter?: TableFilter } | { ask: { column: ColumnInfo; values: ValueCount[]; more: number } } | { issue: string } {
+  if (!where) return {};
+  const { column, values } = where;
+  const split = columnSelection(sheet, mapping, conversations, column);
+  if ('issue' in split) return split;
+  if (!values) {
+    const listed = listedValues(column, split.values);
+    return 'issue' in listed ? listed : { ask: { column, ...listed } };
+  }
+  const label = quoted(columnLabel(column));
+  const absent = values.find(value => !split.values.some(item => item.value === value));
+  if (absent !== undefined) return { issue: absent ? `В колонке ${label} нет значения ${quoted(absent)}.` : `В колонке ${label} нет пустых ячеек.` };
+  const wanted = new Set(values);
+  return { filter: { column: toColumn(column), values: split.values.flatMap(item => wanted.has(item.value) ? [item.value] : []) } };
 }
 
 /** The conversations the owner's filter keeps, in the order of the sheet. */

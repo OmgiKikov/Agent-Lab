@@ -30,7 +30,12 @@ export interface StructuredTask<O> {
    * carrying the original input and only the latest rejected draft, so failed drafts never pile up in context.
    */
   readonly bounded?: { outputBytes: number; requestBytes: number };
+  /** Fewer requests than REPAIR_ATTEMPTS: a small step whose owner agreed to exactly that many calls. */
+  readonly attempts?: number;
 }
+
+/** One structured task answered by its role's model: runStructured bound to a runtime and its model table, or a test's stand-in. */
+export type TaskRunner = <O>(task: StructuredTask<O>, input: unknown, ctx: CallContext) => Promise<O>;
 
 /**
  * Repairing a nearly correct object is a much easier task for a model than writing one from scratch, so a
@@ -90,8 +95,9 @@ export async function runStructured<O>(runtime: ModelRuntime, models: ModelTable
   ctx.onGeneratorTransport?.({ role: task.id, provider: model.provider, model: model.id, api: model.api, effectiveTemperature: 'provider-default' });
   let messages = [userMessage(JSON.stringify(input))];
   let rejection = '';
+  const attempts = Math.min(task.attempts ?? REPAIR_ATTEMPTS, REPAIR_ATTEMPTS);
   try {
-    for (let attempt = 1; attempt <= REPAIR_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       const reply = await callModel(runtime, model, { ...request, messages }, ctx,
         text => ctx.onGeneratorOutput?.({ role: task.id, text, attempt, incomplete: true }));
       ctx.onGeneratorOutput?.({ role: task.id, text: reply.text, attempt });
@@ -109,7 +115,7 @@ export async function runStructured<O>(runtime: ModelRuntime, models: ModelTable
           ? { previousReply: reply.text } : { previousReplyOmitted: 'Rejected reply exceeds the output limit; regenerate compactly from the original evidence.' }) }))]
         : [...messages, reply.message, userMessage(repair)];
     }
-    throw new StructuredTaskError(`модель ${REPAIR_ATTEMPTS} раза подряд вернула ответ, который не проходит проверку. Последняя причина: ${rejection}`);
+    throw new StructuredTaskError(`модель ${attempts} раза подряд вернула ответ, который не проходит проверку. Последняя причина: ${rejection}`);
   } catch (error) {
     throw labelled(task.label, error);
   }
