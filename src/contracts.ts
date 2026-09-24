@@ -4,7 +4,7 @@ import { expectationSchema, preparationProgressSchema, scenarioLibrarySchema, ty
 import { calibrationSchema, calibrationSettingSchema, type Calibration } from './card/calibration.js';
 import { judgeAuditSchema, judgeReceiptSchema, metricAssessmentSchema, rubricSchema, stage, type JudgeAudit, type JudgeReceipt, type MetricAssessment } from './assessment.js';
 import { createHash } from 'node:crypto';
-import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS } from './limits.js';
+import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS, RECORD_REQUIREMENT_LIMIT } from './limits.js';
 import { z } from 'zod';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 import { PHASES, type Phase } from './phases.js';
@@ -274,7 +274,9 @@ export const createInputSchema = z.strictObject({
 export type CreateInput = z.infer<typeof createInputSchema>;
 
 const preparationSchema = z.strictObject({
-  requirements: z.array(requirementSchema).min(1).max(REQUIREMENT_LIMIT),
+  // A record keeps the union of what every dialogue's articles yielded (RECORD_REQUIREMENT_LIMIT); REQUIREMENT_LIMIT
+  // bounds one grounding call only. A large knowledge base makes more than one call's worth on a single record.
+  requirements: z.array(requirementSchema).min(1).max(RECORD_REQUIREMENT_LIMIT),
   questions: z.array(text.max(2000)).max(12),
   scenarios: z.array(scenarioSchema).max(200),
 });
