@@ -8,7 +8,7 @@ import { replacementFor, unitTopic, type LogSample } from '../miner/plan.js';
 import { countText } from '../plural.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import { libraryHash } from '../scenario-library.js';
-import { selectScenarioSources } from '../scenario-sources.js';
+import { fixedPrompts, selectScenarioSources } from '../scenario-sources.js';
 import type { ExperimentStore } from '../store.js';
 import { clip } from '../text.js';
 import { PROPOSAL_ATTEMPTS } from './budget.js';
@@ -168,19 +168,21 @@ class Preparation {
   /** A large knowledge base is read per dialogue: the articles it needs from the table of contents, then the rules that decide it. */
   private async readFor(unit: string, dialogue: ImportBatch['dialogues'][number]): Promise<Reading | { excluded: string }> {
     const { record, progress } = this;
-    const knowledge = record.sources.filter(source => source.kind !== 'prompt'), prompts = record.sources.filter(source => source.kind === 'prompt');
+    const prompts = fixedPrompts(record.sources.filter(source => source.kind === 'prompt'));
+    // Articles, and the agent's prompts when there are too many to read with every dialogue: chosen per dialogue alike.
+    const selectable = record.sources.filter(source => !prompts.includes(source));
     const messages = loggedMessages(dialogue);
     let chosen = progress.sourceSelection?.find(row => row.dialogueId === unit)?.sourceIds;
     if (!chosen) {
       const selected = await this.call(unit, 'select', ctx => selectScenarioSources({ task: record.task, limit: SOURCES_PER_DIALOGUE,
-        catalog: knowledge.map(({ id, name, content }) => ({ id, name, chars: content.length })),
-        dialogue: { id: unit, messages: messages.map(({ role, content }) => ({ role, content })) } }, knowledge, prompts, this.runtime, ctx));
+        catalog: selectable.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, chars: content.length })),
+        dialogue: { id: unit, messages: messages.map(({ role, content }) => ({ role, content })) } }, selectable, prompts, this.runtime, ctx));
       chosen = selected.map(source => source.id);
       progress.sourceSelection = [...(progress.sourceSelection ?? []), { dialogueId: unit, sourceIds: chosen }];
       await this.publish();
     }
     if (!chosen.length) return { excluded: 'Не удалось подобрать статьи под этот разговор в пределах запроса. Это не доказывает, что правила в базе нет.' };
-    const sources = [...prompts, ...chosen.flatMap(id => knowledge.find(source => source.id === id) ?? [])];
+    const sources = [...prompts, ...chosen.flatMap(id => selectable.find(source => source.id === id) ?? [])];
     let focus = progress.focus?.find(row => row.dialogueId === unit)?.requirementIds;
     if (!focus) {
       // The same article can answer different questions: the rules are grounded for this customer's messages only.

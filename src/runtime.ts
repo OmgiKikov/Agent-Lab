@@ -40,7 +40,7 @@ export interface GroundingInput {
 export interface Grounding { requirements: Requirement[]; questions: string[] }
 export interface SourceSelectionInput {
   task: string;
-  /** Knowledge articles only, titles and sizes; prompt sources are always included and are not offered. */
+  /** Articles by title and size, and the agent's prompts when too many to include with every dialogue (scenario-sources.ts fixedPrompts). */
   catalog: Array<{ id: string; name: string; chars: number }>;
   dialogue: { id: string; messages: DialogueMessage[] };
   limit: number;

@@ -253,6 +253,30 @@ test('an answer the harness cannot bind is never kept, whatever the runtime says
   });
 });
 
+test('many prompts of the agent are chosen per dialogue beside the articles, never crowding them out of the request', async () => {
+  const runtime = cardRuntime();
+  const catalogs: string[][] = [];
+  runtime.selectSources = async (input, ctx) => {
+    ctx.beforeCall(); catalogs.push(input.catalog.map(item => item.name));
+    return { sourceIds: ['source-1', 'source-4'] };
+  };
+  const ground = runtime.groundRequirements!;
+  const grounded: string[][] = [];
+  runtime.groundRequirements = async (request, ctx) => { grounded.push(request.sources.map(source => source.id)); return ground(request, ctx); };
+  // 40 canned replies of 600 characters: far more than half of one dialogue's reading budget.
+  const prompts = Array.from({ length: 40 }, (_, index) => ({ name: `reply_${index + 1}`, content: `Ответ клиенту номер ${index + 1}. ${'Сообщите сроки. '.repeat(40)}`, kind: 'prompt' as const }));
+  const materials = [{ name: 'Правила возвратов', content: policy },
+    { name: 'Доставка', content: 'Условия доставки по городу и области. '.repeat(1200) }, { name: 'Гарантия', content: 'Гарантийный ремонт и обслуживание. '.repeat(1200) }, ...prompts];
+  await withLab(runtime, async lab => {
+    const draft = await lab.create(cardInput({ materials }));
+    await lab.waitForIdle();
+    const progress = progressOf(await lab.get(draft.id));
+    assert.deepEqual(progress.excluded, [], 'no dialogue is left without articles');
+    assert.ok(catalogs.length > 0 && catalogs.every(names => names.includes('reply_1 (промпт агента)') && names.includes('Доставка')), 'the prompts are offered in the catalog, marked');
+    assert.ok(grounded.every(ids => ids.join() === 'source-1,source-4'), 'a dialogue reads the article and the prompt chosen for it, not all 40 prompts');
+  });
+});
+
 test('a large knowledge base is read per dialogue: the articles and the rules chosen for a dialogue are kept and never paid for twice', async () => {
   const seen = received();
   const runtime = cardRuntime(seen);

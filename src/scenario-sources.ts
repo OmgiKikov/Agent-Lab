@@ -2,6 +2,16 @@ import type { Source } from './contracts.js';
 import type { CallContext, Runtime, SourceSelectionInput } from './runtime.js';
 import { SELECTED_SOURCE_BYTES, SELECTED_SOURCE_CHARS, SOURCES_PER_DIALOGUE, serializedBytes, workInputIssue } from './limits.js';
 
+/**
+ * The agent's prompts every dialogue of a preparation reads in full: all of them while they take at most half of one
+ * dialogue's reading budget. A larger set (a real agent keeps dozens of prompts and canned replies in its code) is
+ * fixed for no dialogue: each prompt is offered in the catalog beside the articles and chosen for the dialogue it
+ * decides, so the prompts can never crowd the articles out of the request.
+ */
+export function fixedPrompts(prompts: Source[]): Source[] {
+  return serializedBytes(prompts) <= SELECTED_SOURCE_BYTES / 2 ? prompts : [];
+}
+
 /** Whole articles only: selection never silently truncates a procedure or exception. */
 export function fitScenarioSources(ids: string[], knowledge: Source[], prompts: Source[]): Source[] {
   const chosen: Source[] = [];

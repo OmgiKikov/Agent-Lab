@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fitScenarioSources, selectScenarioSources } from '../src/scenario-sources.js';
+import { fitScenarioSources, fixedPrompts, selectScenarioSources } from '../src/scenario-sources.js';
 import { serializedBytes } from '../src/limits.js';
 import type { Source } from '../src/contracts.js';
 import type { CallContext, SourceSelectionInput } from '../src/runtime.js';
@@ -54,4 +54,13 @@ test('unsupported revision remains empty and byte limits do not cut procedures t
   assert.deepEqual(fitScenarioSources(['settings', 'settings', 'unknown', 'connect'], [{ ...sources[0]!, content: 'я'.repeat(17000) }, sources[1]!], []), [sources[1]]);
   const selected = await selectScenarioSources(input, sources, [], { selectSources: async request => ({ sourceIds: request.reading ? [] : ['settings'] }) }, ctx);
   assert.deepEqual(selected, []);
+});
+
+test('the agent\'s prompts are read with every dialogue only while they take at most half of its reading budget', () => {
+  const prompt = (index: number, chars: number): Source => ({ id: `p${index}`, name: `prompt ${index}`, content: 'п'.repeat(chars), hash: `h${index}`, kind: 'prompt' });
+  const few = [prompt(1, 2000), prompt(2, 2000)];
+  assert.deepEqual(fixedPrompts(few), few);
+  const many = Array.from({ length: 20 }, (_, index) => prompt(index, 1000));
+  assert.ok(serializedBytes(many) > 16_000);
+  assert.deepEqual(fixedPrompts(many), [], 'too many to fix: each is chosen per dialogue');
 });
