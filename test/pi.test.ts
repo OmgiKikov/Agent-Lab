@@ -636,6 +636,19 @@ test('grounding for one dialogue asks for the rules that decide that dialogue on
   assert.ok(focused.task.output.safeParse({ requirements: Array.from({ length: FOCUSED_REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `r${i}`, text: 'x', sourceId: 's', quote: 'x', critical: true, observable: true, kind: 'behavior' })), questions: [] }).success === false);
 });
 
+test('a dialogue offered the agent\'s rules names those that decide it, only among the offered ids; without them the call is as it was', () => {
+  const plain = groundingRequest({ task: 't', sources: [], focus: { dialogueId: 'd', customerMessages: ['Когда доставка?'] } });
+  const offered = groundingRequest({ task: 't', sources: [], focus: { dialogueId: 'd', customerMessages: ['Когда доставка?'],
+    agentRules: [{ id: 'agent_1', text: 'Сообщить сроки.' }, { id: 'agent_2', text: 'Отвечать на «вы».' }] } });
+  assert.ok(offered.task.instructions.startsWith(plain.task.instructions) && offered.task.instructions.length > plain.task.instructions.length, 'the agent-rules clause is appended to the focus clause');
+  assert.equal('agentRules' in plain.payload, false);
+  assert.deepEqual(offered.payload.agentRules, [{ id: 'agent_1', text: 'Сообщить сроки.' }, { id: 'agent_2', text: 'Отвечать на «вы».' }]);
+  assert.equal(offered.task.output.safeParse({ requirements: [], questions: [], agentRuleIds: ['agent_2'] }).success, true, 'the agent rules alone may decide the dialogue');
+  assert.equal(offered.task.output.safeParse({ requirements: [], questions: [], agentRuleIds: ['agent_3'] }).success, false, 'an id that was not offered');
+  assert.equal(offered.task.output.safeParse({ requirements: [], questions: [] }).success, false, 'the answer names its agent rules, none included');
+  assert.equal(plain.task.output.safeParse({ requirements: [], questions: [] }).success, false, 'without agent rules a dialogue still needs its own rule');
+});
+
 test('a missing JSON closer is a failed attempt; only the next complete response supplies fields', async () => {
   const valid = JSON.stringify({ requirements: [{ id: 'req_1', text: 'The agent answers acquiring questions.', sourceId: 'source-1', quote: 'answers acquiring questions', critical: true, observable: true, kind: 'behavior' }], questions: [] });
   const raw = valid.slice(0, -1);

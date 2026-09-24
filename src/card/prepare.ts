@@ -1,14 +1,14 @@
 import { Stopped } from '../errors.js';
 import { fingerprint, internalPromptRule, type AgentSpec, type Experiment, type Requirement, type Source } from '../contracts.js';
 import type { CallContext, Grounding, GroundingInput, Runtime } from '../runtime.js';
-import { SOURCES_PER_DIALOGUE, workInputIssue } from '../limits.js';
+import { AGENT_RULE_CHARS, SOURCES_PER_DIALOGUE, workInputIssue } from '../limits.js';
 import { StructuredTaskError } from '../llm/structured.js';
 import { withTrafficTopic } from '../miner/cards.js';
 import { replacementFor, unitTopic, type LogSample } from '../miner/plan.js';
 import { countText } from '../plural.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import { libraryHash } from '../scenario-library.js';
-import { fixedPrompts, selectScenarioSources } from '../scenario-sources.js';
+import { promptGroundingPlan, selectScenarioSources } from '../scenario-sources.js';
 import type { ExperimentStore } from '../store.js';
 import { clip } from '../text.js';
 import { PROPOSAL_ATTEMPTS } from './budget.js';
@@ -23,7 +23,9 @@ import type { Card, CardPreparation, LibraryV2 } from './schema.js';
  * Preparing situations — from dialogues of an import, or from the owner's rules alone (docs/design/card-v2-spec.md §8, C9):
  *
  *   plan: units ─► grounding of the whole policy, once, when the materials fit one call
- *   each unit:  articles (large knowledge base) ─► the rules for this dialogue ─► proposal ─► binding + checks ─► review
+ *         or else the agent's prompts alone, once, in chunks ─► the agent's rules, offered to every dialogue
+ *   each unit:  articles (large knowledge base) ─► the rules for this dialogue + the agent's rules that decide it
+ *               ─► proposal ─► binding + checks ─► review
  *
  * Every finished step is saved with the draft, so a resume continues a unit from its next step and never pays for a
  * finished one again. A paid call names its unit and step first; a call that dies in flight leaves the name behind,
@@ -165,36 +167,95 @@ class Preparation {
     return this.runtime.groundRequirements(request, ctx);
   }
 
-  /** A large knowledge base is read per dialogue: the articles it needs from the table of contents, then the rules that decide it. */
+  /**
+   * The agent's prompts on the per-dialogue path: grounded alone, once, before any dialogue, one chunk per call
+   * (scenario-sources.ts promptGroundingPlan). Every finished chunk is saved; a resume continues from the next one.
+   */
+  private async groundPrompts(): Promise<void> {
+    const { record, progress } = this;
+    const plan = promptGroundingPlan(record.task, record.sources);
+    if (!plan.chunks.length && !plan.skipped.length) return;
+    // A checkpoint written before this step existed plans it on its resume; the draft's own limit bounds that resume.
+    const state = progress.promptGrounding ??= { chunks: plan.chunks.length, done: 0, requirementIds: [],
+      ...(plan.skipped.length ? { skipped: plan.skipped.map(({ source, reason }) => ({ sourceId: source.id, reason: clip(reason, 2000) })) } : {}) };
+    while (state.done < state.chunks) {
+      this.ctx.signal.throwIfAborted();
+      const chunk = plan.chunks[state.done]!;
+      try {
+        const grounded = await this.call(undefined, 'ground', ctx => this.ground({ task: record.task, sources: chunk }, ctx));
+        record.questions = [...new Set([...record.questions, ...grounded.questions])].slice(0, 12);
+        const ids = mergeRequirements(record, grounded.requirements, chunk).map(requirement => requirement.id);
+        state.requirementIds = [...new Set([...state.requirementIds, ...ids])];
+        this.library = withRequirements(this.library, record.requirements);
+      } catch (error) {
+        this.ctx.signal.throwIfAborted();
+        // An answer that never passed its checks leaves these prompts out, with the reason; the other chunks go on.
+        if (!(error instanceof StructuredTaskError)) throw error;
+        state.skipped = [...state.skipped ?? [], ...chunk.map(source => ({ sourceId: source.id, reason: clip(`Правила промпта «${source.name}» не прочитаны: ${error.message}`, 2000) }))];
+      }
+      state.done++;
+      await this.publish();
+    }
+  }
+
+  /** The agent's rules one dialogue may be decided by: from its prompts, seen by the customer, and inside the owner's rulebook. */
+  private agentRules(): Requirement[] {
+    const ids = new Set(this.progress.promptGrounding?.requirementIds ?? []);
+    const rulebook = rulebookOf(this.library);
+    return this.record.requirements.filter(requirement => ids.has(requirement.id) && !internalPromptRule(this.record.sources, requirement) && bindsBot(rulebook, requirement));
+  }
+
+  /**
+   * A large knowledge base is read per dialogue: the articles it needs from the table of contents, then the rules that
+   * decide it — from those articles, and among the agent's rules grounded once from its prompts.
+   */
   private async readFor(unit: string, dialogue: ImportBatch['dialogues'][number]): Promise<Reading | { excluded: string }> {
     const { record, progress } = this;
-    const prompts = fixedPrompts(record.sources.filter(source => source.kind === 'prompt'));
-    // Articles, and the agent's prompts when there are too many to read with every dialogue: chosen per dialogue alike.
-    const selectable = record.sources.filter(source => !prompts.includes(source));
+    // The prompts were grounded once for every dialogue (groundPrompts): the catalog is the articles alone.
+    const articles = record.sources.filter(source => source.kind !== 'prompt');
     const messages = loggedMessages(dialogue);
+    const offered = this.agentRules();
     let chosen = progress.sourceSelection?.find(row => row.dialogueId === unit)?.sourceIds;
     if (!chosen) {
-      const selected = await this.call(unit, 'select', ctx => selectScenarioSources({ task: record.task, limit: SOURCES_PER_DIALOGUE,
-        catalog: selectable.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, chars: content.length })),
-        dialogue: { id: unit, messages: messages.map(({ role, content }) => ({ role, content })) } }, selectable, prompts, this.runtime, ctx));
+      const selected = !articles.length ? [] : await this.call(unit, 'select', ctx => selectScenarioSources({ task: record.task, limit: SOURCES_PER_DIALOGUE,
+        catalog: articles.map(({ id, name, content }) => ({ id, name, chars: content.length })),
+        dialogue: { id: unit, messages: messages.map(({ role, content }) => ({ role, content })) } }, articles, this.runtime, ctx));
       chosen = selected.map(source => source.id);
       progress.sourceSelection = [...(progress.sourceSelection ?? []), { dialogueId: unit, sourceIds: chosen }];
       await this.publish();
     }
-    if (!chosen.length) return { excluded: 'Не удалось подобрать статьи под этот разговор в пределах запроса. Это не доказывает, что правила в базе нет.' };
-    const sources = [...prompts, ...chosen.flatMap(id => selectable.find(source => source.id === id) ?? [])];
-    let focus = progress.focus?.find(row => row.dialogueId === unit)?.requirementIds;
-    if (!focus) {
+    if (!chosen.length && !offered.length) return { excluded: 'Не удалось подобрать статьи под этот разговор в пределах запроса. Это не доказывает, что правила в базе нет.' };
+    // Looked up in the record: a row saved before the prompts were grounded once may name a prompt chosen for this dialogue.
+    let sources = chosen.flatMap(id => record.sources.find(source => source.id === id) ?? []);
+    let row = progress.focus?.find(item => item.dialogueId === unit);
+    if (!row) {
       // The same article can answer different questions: the rules are grounded for this customer's messages only.
-      const grounded = await this.call(unit, 'ground', ctx => this.ground({ task: record.task, sources,
-        focus: { dialogueId: unit, customerMessages: messages.filter(message => message.role === 'user').map(message => message.content) } }, ctx));
+      const customerMessages = messages.filter(message => message.role === 'user').map(message => message.content);
+      let agentRules = offered.map(({ id, text }) => ({ id, text: clip(text, AGENT_RULE_CHARS) }));
+      const request = (): GroundingInput => ({ task: record.task, sources, focus: { dialogueId: unit, customerMessages, ...(agentRules.length ? { agentRules } : {}) } });
+      // Over the request's cap the last articles give way first, then the agent's rules from the end of their order: the
+      // customer's messages are the dialogue itself and are never cut. The articles kept are the dialogue's reading.
+      while (sources.length && workInputIssue(request())) sources = sources.slice(0, -1);
+      while (agentRules.length && workInputIssue(request())) agentRules = agentRules.slice(0, -1);
+      const oversize = workInputIssue(request());
+      if (oversize) return { excluded: oversize };
+      if (!sources.length && !agentRules.length) return { excluded: 'Статьи и правила агента не помещаются в запрос вместе с сообщениями клиента.' };
+      if (sources.length < chosen.length) {
+        const kept = sources.map(source => source.id);
+        progress.sourceSelection = (progress.sourceSelection ?? []).map(item => item.dialogueId === unit ? { dialogueId: unit, sourceIds: kept } : item);
+      }
+      const grounded = await this.call(unit, 'ground', ctx => this.ground(request(), ctx));
       record.questions = [...new Set([...record.questions, ...grounded.questions])].slice(0, 12);
-      focus = mergeRequirements(record, grounded.requirements, sources).map(requirement => requirement.id);
-      progress.focus = [...(progress.focus ?? []), { dialogueId: unit, requirementIds: focus }];
+      const focus = mergeRequirements(record, grounded.requirements, sources).map(requirement => requirement.id);
+      // The runtime's answer is not taken on trust: only rules that were offered count.
+      const allowed = new Set(agentRules.map(rule => rule.id));
+      const agentRuleIds = [...new Set(grounded.agentRuleIds ?? [])].filter(id => allowed.has(id));
+      row = { dialogueId: unit, requirementIds: focus, ...(agentRuleIds.length ? { agentRuleIds } : {}) };
+      progress.focus = [...(progress.focus ?? []), row];
       this.library = withRequirements(this.library, record.requirements);
       await this.publish();
     }
-    const ids = new Set(focus);
+    const ids = new Set([...row.requirementIds, ...row.agentRuleIds ?? []]);
     return { sources, requirements: record.requirements.filter(requirement => ids.has(requirement.id)) };
   }
 
@@ -205,7 +266,8 @@ class Preparation {
     // An internal rule of the agent's prompt (a machine output format) is recorded but never becomes an expectation; a rule
     // outside the owner's rulebook (an operator instruction the owner did not include) stays in the library and is never offered.
     const rulebook = rulebookOf(this.library);
-    const judged = reading.requirements.filter(requirement => !internalPromptRule(reading.sources, requirement));
+    // The sources of a rule are the record's: the agent's rules cite prompts the dialogue's reading does not carry again.
+    const judged = reading.requirements.filter(requirement => !internalPromptRule(this.record.sources, requirement));
     const rules = judged.filter(requirement => bindsBot(rulebook, requirement));
     if (!rules.length) return { excluded: judged.length ? 'Этот разговор решают только правила вне свода правил (например, инструкции для операторов), а по ним бота не судят.'
       : 'Правила владельца не решают этот разговор, а ситуация без правила не строится.' };
@@ -275,7 +337,8 @@ class Preparation {
   }
 
   /**
-   * A paid call that died in flight is never repeated. The grounding of the whole policy cannot be done without; a unit
+   * A paid call that died in flight is never repeated. The grounding of the whole policy, or of a chunk of the agent's
+   * prompts, cannot be done without; a unit
    * without its card is left out; a card whose review died keeps what was made and waits for an explicit check.
    */
   settleInterrupted(): void {
@@ -306,7 +369,10 @@ class Preparation {
         this.library = withRequirements(this.library, record.requirements);
         progress.groundingComplete = true;
         await this.publish();
-      } else if (!whole) progress.sourceSelection ??= [];
+      } else if (!whole) {
+        progress.sourceSelection ??= [];
+        await this.groundPrompts();
+      }
       // A replacement joins the pending units while the run goes on; a unit whose step failed unsent stays pending for a resume.
       const tried = new Set<string>();
       const next = () => progress.pending.find(id => !tried.has(id));

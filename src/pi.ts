@@ -5,7 +5,7 @@ import { verbatimSpan } from './verbatim.js';
 import { requirementKindSchema } from './scenario-contracts.js';
 import { sourceSelectionSchema, userTurnSchema, type CallContext, type GroundingInput, type Runtime } from './runtime.js';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } from './judge.js';
-import { FOCUSED_REQUIREMENT_LIMIT, workInputIssue } from './limits.js';
+import { AGENT_RULES_PER_DIALOGUE, FOCUSED_REQUIREMENT_LIMIT, workInputIssue } from './limits.js';
 import { callModel, type Model } from './llm/model-call.js';
 import { AUTH_HELP, resolveModels } from './llm/models.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
@@ -38,12 +38,26 @@ export const evaluatorVersion = (settings: Settings): string => fingerprint({ pr
 const OBSERVABLE = 'true when a user can see this rule kept or broken in the agent\'s reply; false only for an internal interface of the agent\'s prompt, such as its machine output format: recorded, never judged';
 const KIND = 'behavior: how the bot must act or speak (usually from its prompts); knowledge: a fact about the product or its terms the bot\'s answer must get right; operator_procedure: steps a human operator performs, or a script written for operators';
 const groundedRequirementSchema = requirementSchema.extend({ observable: z.boolean().describe(OBSERVABLE), kind: requirementKindSchema.describe(KIND) });
-const groundingSchemaFor = (limit: number) => z.strictObject({
-  requirements: z.array(groundedRequirementSchema).min(1).max(limit, { error: `Return at most ${limit} requirements: merge closely related rules into one requirement with one exact quote, and keep the rules a user can see violated in a reply` }),
+/** A focused call offered the agent's rules may find every deciding rule among them, so its own requirements may be none. */
+const groundingSchemaFor = (limit: number, agentRules = false) => z.strictObject({
+  requirements: z.array(groundedRequirementSchema).min(agentRules ? 0 : 1).max(limit, { error: `Return at most ${limit} requirements: merge closely related rules into one requirement with one exact quote, and keep the rules a user can see violated in a reply` }),
   questions: z.array(z.string().trim().min(1).max(2000)).max(12),
 });
-type Grounded = z.infer<ReturnType<typeof groundingSchemaFor>>;
+type Grounded = z.infer<ReturnType<typeof groundingSchemaFor>> & { agentRuleIds?: string[] };
+/** The answer's shape: with agent rules offered, it also names the ones that decide the dialogue — an enum of exactly those ids. */
+function groundingOutput(limit: number, agentRuleIds: readonly string[]): z.ZodType<Grounded> {
+  if (!agentRuleIds.length) return groundingSchemaFor(limit);
+  return groundingSchemaFor(limit, true).extend({
+    agentRuleIds: z.array(z.enum(agentRuleIds as [string, ...string[]], { error: 'Not an offered agent rule: return only ids from agentRules.' }))
+      .max(AGENT_RULES_PER_DIALOGUE, { error: `Return at most ${AGENT_RULES_PER_DIALOGUE} agent rules, the most decisive first.` }),
+  });
+}
 const FOCUS_CLAUSE = `customerMessages holds what one real customer wrote in a dialogue these requirements must decide (the old agent's replies are withheld: they are not rules). Extract only the rules that determine the correct agent behaviour for that customer (the answer, the mandatory steps, what must not be said); skip rules the dialogue never touches. Start with the original request; later reactions to an instruction do not prove the service already exists. Preserve unknown product/channel/prerequisites as conditions and allow appropriate clarification or qualified alternatives. Do not require every channel or an unrequested follow-on operation. Return at most ${FOCUSED_REQUIREMENT_LIMIT} requirements.`;
+/**
+ * Appended to FOCUS_CLAUSE when the agent's own rules are offered. Neither clause is inside a stored hash: they are the
+ * builder's instructions, journalled with each call, never part of a draft's, a card's or an evaluator's hash.
+ */
+const AGENT_RULES_CLAUSE = `agentRules lists the agent's own rules, already extracted once from its prompts (id and the start of the rule's text); its prompts are not supplied again. In agentRuleIds return the ids of those that decide this customer's dialogue (at most ${AGENT_RULES_PER_DIALOGUE}, the most decisive first; none when no agent rule applies). Do not restate an agent rule as a requirement: extract requirements only from the supplied sources, and none when the agent rules already decide the dialogue.`;
 
 /** Where a requirement's quote is verbatim: its cited source, or else exactly one other supplied source, which then owns it. */
 function located(requirement: Requirement, sources: readonly Source[]): { sourceId: string; quote: string } | undefined {
@@ -69,10 +83,11 @@ function groundingProblem(value: Grounded, sources: readonly Source[]): string |
 /** One grounding call: the whole policy of the supplied sources, or, with a focus, only the rules that decide one customer's dialogue. */
 export function groundingRequest(input: GroundingInput) {
   const limit = input.focus ? FOCUSED_REQUIREMENT_LIMIT : REQUIREMENT_LIMIT;
+  const agentRules = input.focus?.agentRules ?? [];
   const task: StructuredTask<Grounded> = {
     id: 'ground-requirements', label: 'Требования', role: 'builder',
-    instructions: input.focus ? `${REQUIREMENTS_ROLE}\n${FOCUS_CLAUSE}` : REQUIREMENTS_ROLE,
-    output: groundingSchemaFor(limit),
+    instructions: input.focus ? [REQUIREMENTS_ROLE, FOCUS_CLAUSE, ...(agentRules.length ? [AGENT_RULES_CLAUSE] : [])].join('\n') : REQUIREMENTS_ROLE,
+    output: groundingOutput(limit, agentRules.map(rule => rule.id)),
     check: value => groundingProblem(value, input.sources),
   };
   return {
@@ -81,6 +96,7 @@ export function groundingRequest(input: GroundingInput) {
       task: input.task,
       sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, ...(kind ? { kind } : {}) })),
       ...(input.focus ? { customerMessages: [...input.focus.customerMessages] } : {}),
+      ...(agentRules.length ? { agentRules: agentRules.map(({ id, text }) => ({ id, text })) } : {}),
     },
   };
 }
@@ -185,7 +201,8 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       const { task, payload } = groundingRequest(input);
       const grounded = await run(task, payload, ctx);
       // Every quote is stored in its source's own characters, attributed to the source that holds it.
-      return { questions: grounded.questions, requirements: grounded.requirements.map(requirement => ({ ...requirement, ...located(requirement, input.sources)! })) };
+      return { questions: grounded.questions, requirements: grounded.requirements.map(requirement => ({ ...requirement, ...located(requirement, input.sources)! })),
+        ...(grounded.agentRuleIds ? { agentRuleIds: [...new Set(grounded.agentRuleIds)] } : {}) };
     },
     async failureModes(input, ctx) {
       const ids = input.failures.map(failure => failure.trialId);

@@ -34,13 +34,20 @@ export const userTurnSchema = z.strictObject({ done: z.boolean(), message: z.str
 export type UserTurn = z.infer<typeof userTurnSchema>;
 export interface GroundingInput {
   task: string; sources: Source[];
-  /** Ground only the rules that decide one dialogue: the customer's own messages, never the old agent's replies. */
-  focus?: { dialogueId: string; customerMessages: string[] };
+  /**
+   * Ground only the rules that decide one dialogue: the customer's own messages, never the old agent's replies. The
+   * agent's rules, grounded once from its prompts, are offered by id and a clipped text: the call names those that decide it.
+   */
+  focus?: { dialogueId: string; customerMessages: string[]; agentRules?: { id: string; text: string }[] };
 }
-export interface Grounding { requirements: Requirement[]; questions: string[] }
+export interface Grounding {
+  requirements: Requirement[]; questions: string[];
+  /** A focused call offered agent rules: the ones that decide this dialogue, each one of the offered ids. */
+  agentRuleIds?: string[];
+}
 export interface SourceSelectionInput {
   task: string;
-  /** Articles by title and size, and the agent's prompts when too many to include with every dialogue (scenario-sources.ts fixedPrompts). */
+  /** Articles by title and size; the agent's prompts are never in it — they are grounded once for every dialogue (card/prepare.ts). */
   catalog: Array<{ id: string; name: string; chars: number }>;
   dialogue: { id: string; messages: DialogueMessage[] };
   limit: number;

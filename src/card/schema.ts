@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from '../ids.js';
-import { FOCUSED_REQUIREMENT_LIMIT, MATERIAL_LIMIT } from '../limits.js';
+import { AGENT_RULES_PER_DIALOGUE, FOCUSED_REQUIREMENT_LIMIT, MATERIAL_LIMIT, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
 import { cardTopicSchema, sampleSchema, topicsKnown, trafficSchema } from '../miner/schema.js';
 import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema, preparationProgressSchema as variantPreparationSchema, requirementKindSchema } from '../scenario-contracts.js';
 
@@ -213,7 +213,16 @@ const cardPreparationSchema = z.strictObject({
   requestedCount: z.number().int().min(1).max(200).optional(),
   /** The logs' sample the units are drawn from: a unit that makes no situation gives its seat to the next one of its topic. */
   sample: sampleSchema.optional(),
-  /** A call in flight; a stage without a unit is the one grounding of the whole policy. */
+  /**
+   * A large knowledge base with the agent's prompts: the prompts alone, grounded once before the dialogues in `chunks`
+   * calls, `done` of them finished; the rules they yielded, offered to every dialogue; a prompt too large for one call, with why.
+   */
+  promptGrounding: z.strictObject({
+    chunks: z.number().int().nonnegative().max(MATERIAL_LIMIT), done: z.number().int().nonnegative().max(MATERIAL_LIMIT),
+    requirementIds: ids(RECORD_REQUIREMENT_LIMIT),
+    skipped: z.array(z.strictObject({ sourceId: id, reason: text(2000) })).max(MATERIAL_LIMIT).optional(),
+  }).refine(value => value.done <= value.chunks, 'More prompt groundings done than planned').optional(),
+  /** A call in flight; a stage without a unit is the grounding of the whole policy, or of one chunk of the agent's prompts. */
   activeDialogueId: id.optional(),
   activeStage: z.enum(['select', 'ground', 'propose', 'review']).optional(),
   elapsedMs: z.number().int().nonnegative().optional(),
@@ -221,8 +230,8 @@ const cardPreparationSchema = z.strictObject({
   generationAttempts: z.array(z.strictObject({ dialogueId: id, calls: z.number().int().nonnegative() })).max(300).optional(),
   /** A large knowledge base: the articles chosen for each dialogue from the table of contents. */
   sourceSelection: z.array(z.strictObject({ dialogueId: id, sourceIds: ids(40) })).max(300).optional(),
-  /** A large knowledge base: the rules grounded for each dialogue, by requirement id. */
-  focus: z.array(z.strictObject({ dialogueId: id, requirementIds: ids(FOCUSED_REQUIREMENT_LIMIT) })).max(300).optional(),
+  /** A large knowledge base: the rules grounded for each dialogue, by requirement id, and the agent's rules (promptGrounding) chosen as deciding it. */
+  focus: z.array(z.strictObject({ dialogueId: id, requirementIds: ids(FOCUSED_REQUIREMENT_LIMIT), agentRuleIds: ids(AGENT_RULES_PER_DIALOGUE).optional() })).max(300).optional(),
   /** The card each unit made. */
   cards: z.array(z.strictObject({ dialogueId: id, cardId: id })).max(300).optional(),
 });

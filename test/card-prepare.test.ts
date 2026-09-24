@@ -3,18 +3,21 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fingerprint, type Experiment } from '../src/contracts.js';
-import type { Runtime } from '../src/runtime.js';
+import { fingerprint, materialSources, type Experiment } from '../src/contracts.js';
+import type { GroundingInput, Runtime } from '../src/runtime.js';
+import { preparationCeiling, promptGroundingCalls } from '../src/card/budget.js';
+import type { DialogueProposal } from '../src/card/proposal.js';
 import { compileCard } from '../src/card/compile.js';
 import { pendingReviewCalls, storedEvidence } from '../src/card/prepare.js';
-import type { CardPreparation, LibraryV2 } from '../src/card/schema.js';
+import { preparationProgressSchema, type CardPreparation, type LibraryV2 } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { draftHash } from '../src/lab/record.js';
 import { scenarioSources } from '../src/judge.js';
+import { consentText } from '../src/miner/plan.js';
 import { buildResultView } from '../src/result-view.js';
 import { libraryHash, verifyAcceptedRun } from '../src/scenario-library.js';
-import { cardInput, cardRuntime, policy, proposals, type Received } from './helpers/card-prep.js';
+import { cardInput, cardRuntime, policy, proposals, refundRule, type Received } from './helpers/card-prep.js';
 
 /*
  * C9: preparing cards — the dialogues to prepare, the rules read for them, a proposal, binding and checks, the
@@ -253,28 +256,116 @@ test('an answer the harness cannot bind is never kept, whatever the runtime says
   });
 });
 
-test('many prompts of the agent are chosen per dialogue beside the articles, never crowding them out of the request', async () => {
-  const runtime = cardRuntime();
-  const catalogs: string[][] = [];
-  runtime.selectSources = async (input, ctx) => {
-    ctx.beforeCall(); catalogs.push(input.catalog.map(item => item.name));
-    return { sourceIds: ['source-1', 'source-4'] };
+/** A large knowledge base beside 40 of the agent's prompts: canned replies of about 3 KB each, far more than one call holds. */
+const promptMaterials = [{ name: 'Правила возвратов', content: policy },
+  { name: 'Доставка', content: 'Условия доставки по городу и области. '.repeat(1200) }, { name: 'Гарантия', content: 'Гарантийный ремонт и обслуживание. '.repeat(1200) },
+  ...Array.from({ length: 40 }, (_, index) => ({ name: `reply_${index + 1}`, content: `Ответ клиенту номер ${index + 1}. ${'Сообщите сроки. '.repeat(100)}`, kind: 'prompt' as const }))];
+
+/**
+ * The fixture runtime on the prompts: a chunk of prompts yields one rule per prompt, a dialogue's grounding finds the
+ * refund rule in its article and names the first agent rule offered, and the proposal cites that agent rule in its second duty.
+ */
+function promptRuntime(seen: Received) {
+  const runtime = cardRuntime(seen);
+  const chunks: string[][] = [], focused: GroundingInput[] = [], catalogs: string[][] = [];
+  runtime.selectSources = async (input, ctx) => { ctx.beforeCall(); catalogs.push(input.catalog.map(item => item.name)); return { sourceIds: ['source-1'] }; };
+  runtime.groundRequirements = async (input, ctx) => {
+    ctx.beforeCall();
+    if (!input.focus) {
+      chunks.push(input.sources.map(source => source.id));
+      return { questions: [], requirements: input.sources.map(source => ({ id: `agent_${source.name}`, text: `Сообщить сроки (${source.name}).`, quote: source.content.slice(0, 20),
+        sourceId: source.id, critical: true, observable: true, kind: 'behavior' as const })) };
+    }
+    focused.push(structuredClone(input));
+    return { requirements: [{ ...refundRule, sourceId: input.sources[0]!.id }], questions: [], agentRuleIds: [input.focus.agentRules![0]!.id, 'not_offered'] };
   };
-  const ground = runtime.groundRequirements!;
-  const grounded: string[][] = [];
-  runtime.groundRequirements = async (request, ctx) => { grounded.push(request.sources.map(source => source.id)); return ground(request, ctx); };
-  // 40 canned replies of 600 characters: far more than half of one dialogue's reading budget.
-  const prompts = Array.from({ length: 40 }, (_, index) => ({ name: `reply_${index + 1}`, content: `Ответ клиенту номер ${index + 1}. ${'Сообщите сроки. '.repeat(40)}`, kind: 'prompt' as const }));
-  const materials = [{ name: 'Правила возвратов', content: policy },
-    { name: 'Доставка', content: 'Условия доставки по городу и области. '.repeat(1200) }, { name: 'Гарантия', content: 'Гарантийный ремонт и обслуживание. '.repeat(1200) }, ...prompts];
+  const propose = runtime.proposeCard!;
+  runtime.proposeCard = async (request, ctx) => {
+    const proposal = await propose(request, ctx) as DialogueProposal;
+    const agent = request.requirements.find(requirement => requirement.id.startsWith('agent_'));
+    return agent ? { ...proposal, agentMust: proposal.agentMust.map((duty, index) => index === 1 ? { ...duty, requirementIds: [agent.id] } : duty) } : proposal;
+  };
+  return { runtime, chunks, focused, catalogs };
+}
+const promptIds = (record: Experiment) => record.sources.filter(source => source.kind === 'prompt').map(source => source.id);
+
+test('the agent\'s prompts are grounded once, in chunks, and every dialogue is offered the agent\'s rules: a card cites one', async () => {
+  const seen = received();
+  const { runtime, chunks, focused, catalogs } = promptRuntime(seen);
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput({ materials }));
+    const draft = await lab.create(cardInput({ materials: promptMaterials }));
     await lab.waitForIdle();
-    const progress = progressOf(await lab.get(draft.id));
-    assert.deepEqual(progress.excluded, [], 'no dialogue is left without articles');
-    assert.ok(catalogs.length > 0 && catalogs.every(names => names.includes('reply_1 (промпт агента)') && names.includes('Доставка')), 'the prompts are offered in the catalog, marked');
-    assert.ok(grounded.every(ids => ids.join() === 'source-1,source-4'), 'a dialogue reads the article and the prompt chosen for it, not all 40 prompts');
+    const record = await lab.get(draft.id);
+    assert.equal(record.error, null);
+    const progress = progressOf(record);
+    assert.deepEqual(progress.excluded, [], 'no dialogue is left out');
+    assert.deepEqual(chunks.flat(), promptIds(record), 'every prompt is read once, in order, with no article');
+    assert.ok(chunks.length > 1 && chunks.length < 40, `${chunks.length} calls for 40 prompts`);
+    assert.deepEqual([progress.promptGrounding?.chunks, progress.promptGrounding?.done, progress.promptGrounding?.requirementIds.length], [chunks.length, chunks.length, 40]);
+    assert.equal(promptGroundingCalls(record.task, record.sources), chunks.length, 'the consent counts exactly these calls');
+    assert.ok(catalogs.length > 0 && catalogs.every(names => names.includes('Доставка') && !names.some(name => name.startsWith('reply_'))), 'the catalog is the articles alone');
+    assert.deepEqual(focused.map(input => input.sources.map(source => source.id)), [['source-1'], ['source-1']], 'a dialogue reads its article, not the prompts again');
+    assert.ok(focused.every(input => input.focus!.agentRules!.length === 40 && input.focus!.agentRules!.every(rule => rule.id.startsWith('agent_') && rule.text.length <= 200)));
+    assert.deepEqual(progress.focus, [{ dialogueId: 'late', requirementIds: ['refund_rule'], agentRuleIds: ['agent_reply_1'] },
+      { dialogueId: 'known', requirementIds: ['refund_rule'], agentRuleIds: ['agent_reply_1'] }], 'only an offered agent rule is kept');
+    assert.deepEqual(seen.proposals.map(request => [request.requirements.map(item => item.id), request.articles.map(item => item.id)]),
+      [[['agent_reply_1', 'refund_rule'], ['source-1']], [['agent_reply_1', 'refund_rule'], ['source-1']]], 'the proposal gets the agent rule, not the prompt text');
+    const { library } = await lab.readCards(draft.id);
+    assert.deepEqual(library.cards.map(card => card.agentMust.map(duty => duty.requirementIds)), [[['refund_rule'], ['agent_reply_1']], [['refund_rule'], ['agent_reply_1']]]);
   });
+});
+
+test('a resume continues the agent\'s prompts from the next chunk; a chunk that died in flight is never repeated silently', async () => {
+  const seen = received();
+  const { runtime, chunks } = promptRuntime(seen);
+  await withLab(runtime, async lab => {
+    const draft = await lab.create(cardInput({ materials: promptMaterials }), { callCeiling: 1 });
+    await lab.waitForIdle();
+    const stopped = await lab.get(draft.id);
+    assert.match(stopped.error ?? '', /budget exhausted/);
+    assert.deepEqual([progressOf(stopped).promptGrounding?.done, progressOf(stopped).activeStage, chunks.length], [1, undefined, 1], 'the budget stops before the next chunk is sent');
+    await lab.resumePreparation(draft.id, libraryHash(await raiseBudget(lab, draft.id)));
+    await lab.waitForIdle();
+    const resumed = await lab.get(draft.id);
+    assert.equal(resumed.error, null);
+    assert.deepEqual(chunks.flat(), promptIds(resumed), 'the first chunk is not read again');
+    assert.equal(progressOf(resumed).promptGrounding?.requirementIds.length, 40);
+  });
+
+  const ground = runtime.groundRequirements!;
+  let sent = 0;
+  runtime.groundRequirements = async (input, ctx) => {
+    if (!input.focus && ++sent === 2) { ctx.beforeCall(); throw new Error('Provider disconnected after accepting the request'); }
+    return ground(input, ctx);
+  };
+  await withLab(runtime, async lab => {
+    const draft = await lab.create(cardInput({ materials: promptMaterials }));
+    await lab.waitForIdle();
+    const stopped = await lab.get(draft.id);
+    assert.deepEqual([progressOf(stopped).activeStage, progressOf(stopped).activeDialogueId, progressOf(stopped).promptGrounding?.done], ['ground', undefined, 1]);
+    await lab.resumePreparation(draft.id, libraryHash((await lab.readCards(draft.id)).library));
+    await lab.waitForIdle();
+    assert.match((await lab.get(draft.id)).error ?? '', /чтения правил владельца/);
+    assert.equal(sent, 2, 'the chunk whose cost is unknown is not sent again');
+  });
+});
+
+test('a checkpoint written before the prompts were grounded once parses as it was stored', () => {
+  const stored = { protocol: 'cards-v1', inputHash: 'a'.repeat(64), status: 'partial', pending: ['known'], processed: ['late'], excluded: [], groundingComplete: false,
+    sourceSelection: [{ dialogueId: 'late', sourceIds: ['source-1', 'source-4'] }], focus: [{ dialogueId: 'late', requirementIds: ['refund_rule'] }] };
+  assert.deepEqual(preparationProgressSchema.parse(stored), stored);
+});
+
+test('the consent\'s ceiling holds the calls that read the agent\'s prompts, and the consent names them', () => {
+  const sources = materialSources(promptMaterials);
+  const articles = sources.filter(source => source.kind !== 'prompt');
+  const calls = promptGroundingCalls('Проверить', sources);
+  assert.ok(calls > 1);
+  assert.equal(preparationCeiling({ task: 'Проверить', sources, situations: 2, fromLogs: true }), preparationCeiling({ task: 'Проверить', sources: articles, situations: 2, fromLogs: true }) + calls);
+  assert.equal(preparationCeiling({ task: 'Проверить', sources, situations: 2, fromLogs: false }), preparationCeiling({ task: 'Проверить', sources: articles, situations: 2, fromLogs: false }), 'without logs no dialogue is read, nor the prompts for one');
+  assert.equal(promptGroundingCalls('Проверить', materialSources([{ name: 'Правила возвратов', content: policy }, { name: 'prompt', content: 'Отвечайте вежливо.', kind: 'prompt' }])), 0, 'materials that fit one call are read whole');
+  const text = consentText({ conversations: 2, usable: 2, promised: 2, topicMapCalls: 2, promptCalls: calls, callCeiling: 30, excluded: [] }, 'logs.jsonl');
+  assert.equal(text.lines.at(-1), `Расход — не больше 30 вызовов модели на всю подготовку, из них 2 — на разметку тем, ${calls} — на правила из промптов агента. Это потолок, а не прогноз; агент не запускается.`);
 });
 
 test('a large knowledge base is read per dialogue: the articles and the rules chosen for a dialogue are kept and never paid for twice', async () => {

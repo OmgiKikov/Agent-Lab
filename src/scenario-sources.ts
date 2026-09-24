@@ -3,20 +3,29 @@ import type { CallContext, Runtime, SourceSelectionInput } from './runtime.js';
 import { SELECTED_SOURCE_BYTES, SELECTED_SOURCE_CHARS, SOURCES_PER_DIALOGUE, serializedBytes, workInputIssue } from './limits.js';
 
 /**
- * The agent's prompts every dialogue of a preparation reads in full: all of them while they take at most half of one
- * dialogue's reading budget. A larger set (a real agent keeps dozens of prompts and canned replies in its code) is
- * fixed for no dialogue: each prompt is offered in the catalog beside the articles and chosen for the dialogue it
- * decides, so the prompts can never crowd the articles out of the request.
+ * The agent's prompts on the per-dialogue path (a knowledge base too large for one call): they are its general rules,
+ * which every dialogue needs, so they are grounded once, before the dialogues, in as few calls as fit — greedy chunks
+ * in the record's order. A prompt too large for a call alone is never read in part: it is left out with the reason.
  */
-export function fixedPrompts(prompts: Source[]): Source[] {
-  return serializedBytes(prompts) <= SELECTED_SOURCE_BYTES / 2 ? prompts : [];
+export interface PromptGroundingPlan { chunks: Source[][]; skipped: { source: Source; reason: string }[] }
+
+export function promptGroundingPlan(task: string, sources: readonly Source[]): PromptGroundingPlan {
+  const plan: PromptGroundingPlan = { chunks: [], skipped: [] };
+  for (const prompt of sources.filter(source => source.kind === 'prompt')) {
+    const alone = workInputIssue({ task, sources: [prompt] });
+    if (alone) { plan.skipped.push({ source: prompt, reason: `Промпт «${prompt.name}» не помещается в один запрос: ${alone}` }); continue; }
+    const last = plan.chunks.at(-1);
+    if (last && !workInputIssue({ task, sources: [...last, prompt] })) last.push(prompt);
+    else plan.chunks.push([prompt]);
+  }
+  return plan;
 }
 
 /** Whole articles only: selection never silently truncates a procedure or exception. */
-export function fitScenarioSources(ids: string[], knowledge: Source[], prompts: Source[]): Source[] {
+export function fitScenarioSources(ids: string[], knowledge: Source[]): Source[] {
   const chosen: Source[] = [];
   let chars = SELECTED_SOURCE_CHARS;
-  let bytes = SELECTED_SOURCE_BYTES - serializedBytes(prompts);
+  let bytes = SELECTED_SOURCE_BYTES;
   for (const id of new Set(ids)) {
     const source = knowledge.find(s => s.id === id);
     if (!source || chosen.length >= SOURCES_PER_DIALOGUE || source.content.length > chars || serializedBytes(source) > bytes) continue;
@@ -26,14 +35,14 @@ export function fitScenarioSources(ids: string[], knowledge: Source[], prompts: 
 }
 
 /** Independent reference reading, using customer evidence rather than the tested agent's suggested solution. */
-export async function selectScenarioSources(input: SourceSelectionInput, knowledge: Source[], prompts: Source[],
+export async function selectScenarioSources(input: SourceSelectionInput, knowledge: Source[],
   runtime: Pick<Runtime, 'selectSources'>, ctx: CallContext): Promise<Source[]> {
   if (!runtime.selectSources) throw new Error('Выбор статей недоступен.');
   const request = { ...input, dialogue: { ...input.dialogue, messages: input.dialogue.messages.filter(m => m.role === 'user') } };
   const issue = workInputIssue(request);
   if (issue) throw new Error(issue);
   const selection = await runtime.selectSources(request, ctx);
-  const chosen = fitScenarioSources(selection.sourceIds, knowledge, prompts);
+  const chosen = fitScenarioSources(selection.sourceIds, knowledge);
   if (!chosen.length) return [];
   const reading = { sources: [] as Source[], selectedSourceIds: chosen.map(s => s.id), unreadSourceIds: chosen.map(s => s.id) };
   for (const source of chosen) {
@@ -48,5 +57,5 @@ export async function selectScenarioSources(input: SourceSelectionInput, knowled
   // that read a broad setup article must not displace it: the revision orders what it keeps, and the goal article it
   // left out stays in front — as alternative reference evidence, never as an established condition of the situation.
   const goal = chosen[0]!.id;
-  return fitScenarioSources(revised.sourceIds.includes(goal) ? revised.sourceIds : [goal, ...revised.sourceIds], knowledge, prompts);
+  return fitScenarioSources(revised.sourceIds.includes(goal) ? revised.sourceIds : [goal, ...revised.sourceIds], knowledge);
 }

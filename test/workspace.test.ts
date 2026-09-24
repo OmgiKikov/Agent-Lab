@@ -321,7 +321,7 @@ test('situations can be prepared before the agent is connected; Lab finds it in 
 });
 
 test('the consent to prepare from logs says what is read, what is left out and why, and the ceiling of the spending', () => {
-  const consent: PreparationConsent = { conversations: 40, usable: 36, promised: 15, topicMapCalls: 3, callCeiling: 140,
+  const consent: PreparationConsent = { conversations: 40, usable: 36, promised: 15, topicMapCalls: 3, promptCalls: 0, callCeiling: 140,
     excluded: [{ dialogueId: 'd1', kind: 'masked', reason: '' }, { dialogueId: 'd2', kind: 'masked', reason: '' }, { dialogueId: 'd3', kind: 'unreadable', reason: '' },
       { dialogueId: 'd4', kind: 'length', reason: '' }] };
   const text = consentText(consent, 'logs.jsonl');

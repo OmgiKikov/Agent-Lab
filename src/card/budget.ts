@@ -1,5 +1,6 @@
 import type { Source } from '../contracts.js';
 import { workInputIssue } from '../limits.js';
+import { promptGroundingPlan } from '../scenario-sources.js';
 
 /*
  * What a preparation of situations may spend. Each unit (a logged conversation, or one situation from the rules) has
@@ -17,15 +18,25 @@ const READING_CALLS = 3;
 const REVIEW_CALLS = 2;
 
 /**
- * The most model calls a preparation makes: the topic map's calls, the policy read once when it fits one request,
- * and for each situation promised the reading of a large knowledge base for its conversation, its proposal allowance
- * and the review of its card. Requests are counted as the topic map's are — each answer passing the first time — and
- * only the proposal allowance holds its repairs; a preparation whose repairs reach the ceiling stops there with what it
- * made, and continues on the owner's word. A conversation that makes no situation spends out of the same ceiling, so
- * the preparation never spends more than it promised. A resume is bounded by the draft's limit.
+ * Calls that read the agent's prompts alone, once for every conversation, when a knowledge base too large for one
+ * request is read per conversation (scenario-sources.ts promptGroundingPlan): one per chunk of prompts.
+ */
+export function promptGroundingCalls(task: string, sources: readonly Source[]): number {
+  return workInputIssue({ task, sources }) ? promptGroundingPlan(task, sources).chunks.length * POLICY_CALLS : 0;
+}
+
+/**
+ * The most model calls a preparation makes: the topic map's calls, the policy read once when it fits one request (or
+ * else, from logs, the agent's prompts read once in chunks), and for each situation promised the reading of a large
+ * knowledge base for its conversation, its proposal allowance and the review of its card. Requests are counted as the
+ * topic map's are — each answer passing the first time — and only the proposal allowance holds its repairs; a
+ * preparation whose repairs reach the ceiling stops there with what it made, and continues on the owner's word. A
+ * conversation that makes no situation spends out of the same ceiling, so the preparation never spends more than it
+ * promised. A resume is bounded by the draft's limit.
  */
 export function preparationCeiling(input: { task: string; sources: readonly Source[]; situations: number; fromLogs: boolean; topicMapCalls?: number }): number {
   const whole = !workInputIssue({ task: input.task, sources: input.sources });
   const reading = whole || !input.fromLogs ? 0 : READING_CALLS;
-  return (input.topicMapCalls ?? 0) + (whole ? POLICY_CALLS : 0) + input.situations * (reading + PROPOSAL_ATTEMPTS + REVIEW_CALLS);
+  const prompts = input.fromLogs ? promptGroundingCalls(input.task, input.sources) : 0;
+  return (input.topicMapCalls ?? 0) + (whole ? POLICY_CALLS : 0) + prompts + input.situations * (reading + PROPOSAL_ATTEMPTS + REVIEW_CALLS);
 }

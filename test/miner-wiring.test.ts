@@ -121,7 +121,7 @@ test('the consent names the topic map\'s calls, the ceiling, the promise and eve
   await withLab(minerRuntime(logged).runtime, async lab => {
     const consent = await preparationConsent(lab.store, { input: createInput(batch), situations: 15 });
     assert.deepEqual({ ...consent, excluded: consent.excluded.map(item => [item.dialogueId, item.kind]) }, {
-      conversations: 92, usable: 90, promised: 15, topicMapCalls: 4, callCeiling: 110,
+      conversations: 92, usable: 90, promised: 15, topicMapCalls: 4, promptCalls: 0, callCeiling: 110,
       excluded: [['no id', 'unreadable'], ['masked1', 'masked']],
     }, 'one proposal and three batches of 30; the unreadable row and the masked conversation reach no model');
     assert.equal(consent.callCeiling, 4 + 1 + 15 * (5 + 2), 'the ceiling is the preparation\'s own: the map, the rules read once, and per situation its proposal allowance and its review — not the draft\'s limit of 150');
