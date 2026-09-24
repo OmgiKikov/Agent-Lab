@@ -9,9 +9,12 @@ import { cellOf, type Sheet } from './sheet.js';
  * mapping stores the choice, so the same file always gives the same conversations, and the import's sample is
  * drawn from the chosen ones only.
  *
- * A column can choose conversations when it holds categories: at most FILTER_VALUES values, none longer than
- * VALUE_CHARS — never the conversations' text — and one value per conversation. A value is the cell as
- * written: `['A', 'B']` is one value, never a list to take apart.
+ * Any column the mapping does not read as the conversation can choose them, as long as each conversation writes one
+ * value in it. The owner names the values to keep, or Lab asks: «Какие разговоры оценивать?» lists the FILTER_VALUES
+ * most frequent values and says how many more there are, so an export with dozens of agent combinations is still
+ * chosen by the one value that matters. A column of texts is never listed — its values are what customers wrote —
+ * but a value the owner names (at most VALUE_CHARS) is looked for there too. A value is the cell as written:
+ * `['A', 'B']` is one value, never a list to take apart.
  */
 
 /** A value of a column and how many conversations have it. */
@@ -22,7 +25,6 @@ type Reading = Omit<TableMapping, 'filter'>;
 
 const quoted = (text: string) => `«${text}»`;
 const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
-const VALUES: [string, string, string] = ['разное значение', 'разных значения', 'разных значений'];
 
 /**
  * The rows of every conversation of the sheet, in the order of the sheet: a row each when a row holds a whole
@@ -65,8 +67,8 @@ function partOf(mapping: Reading, index: number): string | undefined {
 const byConversations = (a: ValueCount, b: ValueCount) => b.dialogues - a.dialogues || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0);
 
 /**
- * How the conversations split by a column — or why the column cannot choose them: the mapping already reads
- * it, the rows of one conversation write two values in it, it holds more than FILTER_VALUES values, or texts.
+ * How the conversations split by a column, every value with its conversations, the most first — or why the column
+ * cannot choose them: the mapping already reads it, or the rows of one conversation write two values in it.
  */
 export function columnSelection(sheet: Sheet, mapping: Reading, conversations: readonly number[][], column: ColumnInfo): { values: ValueCount[] } | { issue: string } {
   const label = quoted(columnLabel(column));
@@ -80,9 +82,19 @@ export function columnSelection(sheet: Sheet, mapping: Reading, conversations: r
     else counts.set(value, (counts.get(value) ?? 0) + 1);
   }
   if (mixed) return { issue: `В колонке ${label} у ${countText(mixed, CONVERSATIONS_OF)} разные значения в разных строках — по ней не отобрать разговоры целиком.` };
-  if (counts.size > FILTER_VALUES) return { issue: `В колонке ${label} ${countText(counts.size, VALUES)} — по ней разговоры не отобрать: подходит колонка, где значений не больше ${FILTER_VALUES}.` };
-  if ([...counts.keys()].some(value => value.length > VALUE_CHARS)) return { issue: `В колонке ${label} длинные тексты — по ним разговоры не отбирают.` };
   return { values: [...counts].map(([value, dialogues]) => ({ value, dialogues })).sort(byConversations) };
+}
+
+/** A column of texts: some value longer than a category's, so its values are what was written, never listed. */
+const texts = (values: readonly ValueCount[]) => values.some(item => item.value.length > VALUE_CHARS);
+
+/**
+ * What «Какие разговоры оценивать?» lists for a column: its FILTER_VALUES most frequent values and how many more
+ * there are, which the owner names in words — or why nothing is listed: the column holds texts.
+ */
+export function listedValues(column: ColumnInfo, values: readonly ValueCount[]): { values: ValueCount[]; more: number } | { issue: string } {
+  if (texts(values)) return { issue: `В колонке ${quoted(columnLabel(column))} длинные тексты — по ним разговоры не отбирают.` };
+  return { values: values.slice(0, FILTER_VALUES), more: Math.max(0, values.length - FILTER_VALUES) };
 }
 
 /**
@@ -93,7 +105,7 @@ export function selectableColumns(sheet: Sheet, mapping: Reading, conversations:
   return columns.filter(column => {
     if (!column.filled) return false;
     const selection = columnSelection(sheet, mapping, conversations, column);
-    return 'values' in selection && selection.values.length >= 2 && selection.values.length < conversations.length;
+    return 'values' in selection && !texts(selection.values) && selection.values.length >= 2 && selection.values.length < conversations.length;
   });
 }
 

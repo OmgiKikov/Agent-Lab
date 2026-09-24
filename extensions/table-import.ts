@@ -15,7 +15,8 @@ import { ask } from './lab-ui.ts';
  * A spreadsheet of logs in the chat (chunk I): Lab proposes how to read it; a question it cannot settle alone
  * becomes one native numbered choice; the whole reading is shown once more and only the owner's «Прочитать так»
  * stores the import. The host calls confirmTableImport, never the model; the model only names the file and,
- * when the owner corrected something in words, the sheet or a column.
+ * when the owner said so in words, the sheet, a column, or the column (and values) that choose the conversations
+ * to evaluate — «Какие разговоры оценивать?» is then one more native numbered choice.
  *
  *   propose ──question──► native choice ──► propose again with the answer … ──ready──► «Прочитать так?» ──► stored
  */

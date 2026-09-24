@@ -7,10 +7,9 @@ import { REPAIR_ATTEMPTS } from '../src/llm/structured.js';
 import { FOCUSED_REQUIREMENT_LIMIT } from '../src/limits.js';
 import { REQUIREMENTS_ROLE } from '../src/prompts.js';
 import { judgeInput, observableSources } from '../src/judge.js';
-import { ExperimentLab } from '../src/experiment.js';
 import { DEFAULT_JUDGE, emptyUsage, REQUIREMENT_LIMIT, settingsSchema, targetSchema, type Scenario, type Trial } from '../src/contracts.js';
 import { promptCompliance } from '../src/assessment.js';
-import { callContext, fixture, fixtureSettings as settings, type Options, type Reply, type Request } from './helpers/pi-fixture.js';
+import { callContext, fixture, fixtureSettings as settings } from './helpers/pi-fixture.js';
 
 test('invalid role configuration fails before any paid builder request and names configuration separately from authentication', async () => {
   const f = await fixture(() => '{}');
@@ -33,19 +32,9 @@ const reviewFields = {
 };
 function plainCard(index: number): Omit<Scenario, 'split'> {
   return {
-    ...reviewFields, id: `card_${index}`, familyId: 'support', title: `Support question ${index}`, requirementIds: ['req_1'], provenance: 'synthetic',
+    ...reviewFields, id: `card_${index}`, familyId: 'support', title: `Support question ${index}`, requirementIds: ['req_1'], provenance: 'synthetic', tier: 'regression',
     user: { goal: 'Learn how to contact support', facts: 'I need help', persona: 'Customer seeking support', characteristics: ['Concise'], behavior: 'Ask once', opening: 'How do I contact support?', maxFollowUps: 0 },
     initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [],
-  };
-}
-
-/** Scripted replies by step. A repair attempt replays the same answer, so a rejected
- * output stays rejected until the attempt bound is reached. */
-function scripted(outputs: unknown[]): (request: Request, index: number, options?: Options) => Reply {
-  let step = -1;
-  return request => {
-    if (!/Your previous answer was rejected/.test(JSON.stringify(request.messages ?? []))) step += 1;
-    return JSON.stringify(outputs[step]);
   };
 }
 
@@ -78,7 +67,7 @@ test('a model call reads no discovered resources and the simulator receives only
     await writeFile(join(f.directory, '.pi', 'extensions', 'leak.ts'), "process.env.AGENT_LAB_EXTENSION_LOADED='yes'; export default function() {};");
     process.chdir(f.directory);
     const { ctx, usage } = callContext();
-    const output = await f.adapter.userTurn({
+    const output = await f.adapter.userTurn!({
       user: {
         goal: 'Reschedule', facts: 'Record ID A; desired time 11:00', behavior: 'Provide the ID and time when asked', opening: 'Move my appointment', maxFollowUps: 1,
         persona: 'Appointment holder', characteristics: ['Answers concisely'],
@@ -113,8 +102,8 @@ test('simulator preserves a final user message separately from stopping without 
       user: { goal: 'Move my appointment', facts: 'Record ID A', behavior: 'Provide the ID when asked, then end', opening: 'Move my appointment', maxFollowUps: 1 },
       messages: [{ role: 'assistant' as const, content: 'What is the record ID?' }], turn: 1,
     };
-    assert.deepEqual(await f.adapter.userTurn(input, callContext().ctx), replies[0]);
-    assert.deepEqual(await f.adapter.userTurn(input, callContext().ctx), { done: true, message: '' });
+    assert.deepEqual(await f.adapter.userTurn!(input, callContext().ctx), replies[0]);
+    assert.deepEqual(await f.adapter.userTurn!(input, callContext().ctx), { done: true, message: '' });
     assert.match(f.requests[0]?.systemPrompt ?? '', /done:true with a nonempty message means deliver this final user message, receive the target response, then end/);
     assert.match(f.requests[0]?.systemPrompt ?? '', /done:true with an empty message means stop now without another target response/);
   } finally { await f.close(); }
@@ -138,12 +127,12 @@ test('a structured answer wrapped in a markdown fence is not repaired into JSON'
   const fenced = await fixture(() => '```json\n{"message":"Move it to 11:00","done":false}\n```');
   try {
     const input = { user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 };
-    await assert.rejects(fenced.adapter.userTurn(input, callContext().ctx), /не проходит проверку.*not a single JSON object/s);
+    await assert.rejects(fenced.adapter.userTurn!(input, callContext().ctx), /не проходит проверку.*not a single JSON object/s);
   } finally { await fenced.close(); }
 
   const prose = await fixture(() => 'Here you go: {"message":"hi","done":false}');
   try {
-    await assert.rejects(prose.adapter.userTurn({ user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 }, callContext().ctx), /не проходит проверку.*not a single JSON object/s);
+    await assert.rejects(prose.adapter.userTurn!({ user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 }, callContext().ctx), /не проходит проверку.*not a single JSON object/s);
   } finally { await prose.close(); }
 });
 
@@ -188,7 +177,7 @@ test('deadline and external cancellation reach the actual SDK provider stream', 
     try {
       const controller = new AbortController();
       const { ctx, usage } = callContext({ timeoutMs: cancel ? 1000 : 25, signal: controller.signal });
-      const pending = f.adapter.userTurn({ user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 }, ctx);
+      const pending = f.adapter.userTurn!({ user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 }, ctx);
       const timer = cancel ? setTimeout(() => controller.abort(new Error('User cancelled')), 25) : undefined;
       await assert.rejects(pending, cancel ? /User cancelled/ : /deadline exceeded/);
       if (timer) clearTimeout(timer);
@@ -306,7 +295,7 @@ test('role overrides select the actual SDK model independently for simulation an
   try {
     const adapter = await createPiRuntime(settingsSchema.parse({ ...settings, roles: { judge: { provider: settings.provider, model: 'role-model' } } }), f.runtime);
     const scenario = { ...plainCard(0), split: 'dev' as const, metrics: [reviewFields.metrics[0]!] };
-    await adapter.userTurn({ user: scenario.user, messages: [{ role: 'user', content: 'Help' }, { role: 'assistant', content: 'Here is help' }], turn: 0 }, callContext().ctx);
+    await adapter.userTurn!({ user: scenario.user, messages: [{ role: 'user', content: 'Help' }, { role: 'assistant', content: 'Here is help' }], turn: 0 }, callContext().ctx);
     const trial: Trial = { id: 't', scenarioId: scenario.id, familyId: scenario.familyId, revisionId: 'r', userMode: 'static', repeat: 0, split: 'dev',
       manifestHash: 'hash', outcome: 'ungraded', reason: '', checks: [], initialState: scenario.initialState, finalState: scenario.initialState,
       usage: emptyUsage(), elapsedMs: 1, events: [{ seq: 0, type: 'user', text: 'Help' }, { seq: 1, type: 'assistant', text: 'Here is help' }] };
@@ -365,7 +354,7 @@ test('the simulator receives knows, answers and cannotKnow but never the externa
   const f = await fixture(() => JSON.stringify({ message: 'It ends with 4321.', done: false }));
   try {
     const { ctx } = callContext();
-    const reply = await f.adapter.userTurn({ user: { goal: 'Block the lost card', facts: 'Card ends with 4321', behavior: 'Answer once', opening: 'Block my card', maxFollowUps: 1,
+    const reply = await f.adapter.userTurn!({ user: { goal: 'Block the lost card', facts: 'Card ends with 4321', behavior: 'Answer once', opening: 'Block my card', maxFollowUps: 1,
       knows: ['Last four digits 4321'], cannotKnow: ['Why the hold exists'], answers: [{ ifAsked: 'digits', reply: 'It ends with 4321.' }],
       initialState: { external: { secret: 'EXTERNAL_WORLD_SENTINEL' } } } as never, messages: [{ role: 'assistant', content: 'Which card?' }], turn: 1 }, ctx);
     assert.equal(reply.message, 'It ends with 4321.');
@@ -652,7 +641,7 @@ test('structural recovery never supplies a truncated string or a missing schema 
       const { ctx } = callContext(), rejections: unknown[] = [], outputs: unknown[] = [];
       ctx.onGeneratorValidation = value => rejections.push(value);
       ctx.onGeneratorOutput = value => outputs.push(value);
-      await assert.rejects(f.adapter.userTurn({ user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 }, ctx), /не проходит проверку/);
+      await assert.rejects(f.adapter.userTurn!({ user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 }, ctx), /не проходит проверку/);
       assert.equal(outputs.length, REPAIR_ATTEMPTS);
       assert.equal(rejections.length, REPAIR_ATTEMPTS);
       assert.ok(rejections.every((r: any) => r.accepted === false && r.reason));

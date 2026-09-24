@@ -9,7 +9,7 @@ import { oneLine } from './text.js';
 
 /*
  * The words of a result, the only copy. The chat block, the board, the CLI summary and the report
- * all say the same lines in the same order (ui-spec §4.7, §4.10, §8.5):
+ * all say the same lines in the same order (docs/design/ui-spec.md §4.7, §4.10, §8.5):
  *
  *   Точность агента: 72% — справился в 18 из 25 ситуаций          ← the answer, coloured by level
  *   Вероятно, от 52% до 86% (95%) · не измерено 2 — … · …          ← one trust line
@@ -36,13 +36,18 @@ export interface ResultRow {
 }
 export type Surface = 'chat' | 'board' | 'cli';
 
-/** From this rounded percent the agent does well; below MIXED_FROM it does badly (ui-spec §4.7 colours). */
+/** From this rounded percent the agent does well; below MIXED_FROM it does badly (docs/design/ui-spec.md §4.7 colours). */
 export const GOOD_FROM = 80;
 export const MIXED_FROM = 50;
-/** Wider terminals keep the 100-column layout with margins (ui-spec §6). */
+/** Wider terminals keep the 100-column layout with margins (docs/design/ui-spec.md §6). */
 export const MAX_WIDTH = 100;
 
 const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
+/** The participle agrees with the count: «проверена 1 ситуация», «проверены 3 ситуации», «проверено 5 ситуаций». */
+const CHECKED: [string, string, string] = ['проверена', 'проверены', 'проверено'];
+/** The one sentence of a result in which nothing failed: how much was checked, and that it promises nothing about live customers. */
+export const noErrorsText = (decided: number): string =>
+  `Ошибок нет. Это не гарантия для живых клиентов: ${pluralForm(decided, CHECKED)} ${countText(decided, SITUATIONS)}.`;
 /** Genitive after «из»: «1 из 1 ситуации», «9 из 13 ситуаций». */
 const SITUATIONS_OF: [string, string, string] = ['ситуации', 'ситуаций', 'ситуаций'];
 const ERRORS: [string, string, string] = ['ошибка', 'ошибки', 'ошибок'];
@@ -148,7 +153,7 @@ export function headRows(view: ResultView): ResultRow[] {
 }
 
 /**
- * «Сверка с продом» (card-v2 §10.4–10.5): what was not compared and why, each situation where the synthetic
+ * «Сверка с продом» (docs/design/card-v2-spec.md §10.4–10.5): what was not compared and why, each situation where the synthetic
  * customer and the logged one led to different verdicts — the expectation, both verdicts, what the customers'
  * paths suggest and where both conversations are — and what the agreement does not prove.
  */
@@ -214,8 +219,7 @@ function exampleRows(example: FailureExplanation, indent: number): ResultRow[] {
  */
 export function causeRows(view: ResultView, options: { examples?: boolean } = {}): ResultRow[] {
   if (!view.failures.length) {
-    return view.headline.decided ? [{ role: 'good', indent: 0,
-      text: `Ошибок нет. Это не гарантия для живых клиентов: проверено ${countText(view.headline.decided, SITUATIONS)}.` }] : [];
+    return view.headline.decided ? [{ role: 'good', indent: 0, text: noErrorsText(view.headline.decided) }] : [];
   }
   const rows: ResultRow[] = [{ role: 'heading', indent: 0, text: 'Почему ошибается' }];
   if (view.topCauses.length) {
@@ -361,7 +365,7 @@ export function runLine(view: ResultView, now?: Date): ResultRow {
 }
 
 /**
- * The result screen of the board and the CLI (ui-spec §4.7, §8.5): the head, the topics, the causes,
+ * The result screen of the board and the CLI (docs/design/ui-spec.md §4.7, §8.5): the head, the topics, the causes,
  * then — on the CLI and under the board's details — every error, the unmeasured situations, the
  * owner's disagreements and the calibration against production; the run line and «Дальше» last.
  * Blocks are separated by one blank row, never two.
@@ -375,7 +379,7 @@ export function resultScreen(view: ResultView, options: { surface: 'board' | 'cl
 }
 
 /**
- * The chat block (ui-spec §4.10). Collapsed: the number, the trust line, the calibration line and the causes in one row.
+ * The chat block (docs/design/ui-spec.md §4.10). Collapsed: the number, the trust line, the calibration line and the causes in one row.
  * Expanded: the number, the trust and reality lines, every cause with its example, the unmeasured
  * situations and «Дальше». The host adds the ctrl+o hint under the last row.
  */

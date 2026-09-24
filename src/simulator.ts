@@ -2,11 +2,13 @@ import { isCardExecution, simulatorWasUsed, type Scenario, type SimulatorCheck, 
 import { valueTokens } from './verbatim.js';
 
 /*
- * Heuristic checks over the simulated user's own replies. They answer three questions the judge is
+ * Heuristic checks over the simulated user's own replies. They answer three questions the judge
  * can miss: did the user say a value only the backend knows (leak), did it
  * say a value that exists nowhere in its card or the conversation (fabrication, a heuristic),
  * did it repeat itself (loop). Results describe the simulator, never the agent, and are never
- * shown to the judge so that they cannot bias its verdict.
+ * shown to the judge so that they cannot bias its verdict. They belong to the free simulator of first-format cards
+ * (SIMULATOR_PROTOCOL, part of the evaluator version) and run again when a stored run is re-assessed, so how they
+ * read text is frozen; a card's customer says only harness text and is never checked.
  */
 // ponytail: literal boundaries detect suspicious mentions, not their meaning; human review resolves context.
 function mentions(text: string, value: string): boolean {

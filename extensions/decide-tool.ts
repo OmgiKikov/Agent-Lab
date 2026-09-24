@@ -17,7 +17,7 @@ import type { Feed } from './render/feed.ts';
 import { TOOL } from './steps.ts';
 
 /*
- * «Что ждёт моего решения?» in the chat (ui-spec §8.7): the same queue as the workspace's, derived from the records.
+ * «Что ждёт моего решения?» in the chat (docs/design/ui-spec.md §8.7): the same queue as the workspace's, derived from the records.
  * The model names a decision by its key and may say which answer the owner gave in words; the owner always picks in
  * a native dialog of the decision itself, and only that pick is recorded. Nothing here decides for the owner.
  */

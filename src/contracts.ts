@@ -127,7 +127,7 @@ export const worldSchema = z.strictObject({
   records: z.record(identifier, z.record(identifier, scalarSchema)).refine(v => Object.keys(v).length <= 30, 'Too many records'),
   writableFields: z.array(identifier).max(16),
   transientFailures: z.number().int().min(0).max(2).default(0),
-  /** Opaque state for the agent's own test environment (cards, contracts, tool fixtures). The sandbox ignores it; adapters must apply and confirm it. */
+  /** Opaque state for the agent's own test environment (cards, contracts, tool fixtures): its adapter applies it and confirms that with resetConfirmed. */
   external: z.record(z.string().max(120), z.json()).optional(),
 }).superRefine((v, ctx) => {
   if (v.external !== undefined && JSON.stringify(v.external).length > 20000) ctx.addIssue({ code: 'custom', message: 'External state exceeds 20,000 characters', path: ['external'] });
@@ -334,7 +334,7 @@ export interface Comparison {
 const judgeSnapshotSchema = z.strictObject({ protocolHash: text, inputHash: text });
 export const humanReviewInputSchema = z.strictObject({
   trialId: identifier, metricId: identifier.optional(), checkId: identifier.optional(),
-  verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000), reviewedDialogue: z.literal(true).optional(),
+  verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000),
   durationMs: z.number().int().nonnegative().max(3600000).optional(),
   /** A one-key agreement mark on a metric that decided the situation (outcomes.ts markTargets). */
   source: z.literal('quick').optional(),
@@ -345,11 +345,14 @@ export const humanReviewInputSchema = z.strictObject({
   /** The counting rule a quick mark was given under (COUNTING_RULES); filled by the lab, never trusted from a caller. */
   countingRules: text.optional(),
 }).refine(v => !(v.metricId && v.checkId), 'Review either one metric, one check, or the whole trial')
-  .refine(v => !v.reviewedDialogue || (!v.metricId && !v.checkId), 'Only a whole-dialogue verdict can mark a complete review')
   .refine(v => v.source !== 'quick' || (!!v.metricId && v.verdict !== 'invalid'), 'Быстрая отметка ставится на одну оценку судьи.');
 export type HumanReviewInput = z.infer<typeof humanReviewInputSchema>;
-export type HumanReview = HumanReviewInput & { id: string; createdAt: string };
-const humanReviewSchema = humanReviewInputSchema.safeExtend({ id: identifier, createdAt: text });
+/**
+ * A stored verdict. `reviewedDialogue` marked, before cards, a whole-dialogue review whose note cited an event as `#N`.
+ * Nothing reads the mark and nothing writes it any more, so stored reviews keep it verbatim and no note is ever parsed.
+ */
+export type HumanReview = HumanReviewInput & { id: string; createdAt: string; reviewedDialogue?: true };
+const humanReviewSchema = humanReviewInputSchema.safeExtend({ id: identifier, createdAt: text, reviewedDialogue: z.literal(true).optional() });
 /** What a draft may still change: run settings, the connection and the agent label. Situations change only in the library. */
 export const draftPatchSchema = z.strictObject({
   agent: agentSchema.optional(), settings: settingsPatchSchema.optional(),
@@ -375,7 +378,7 @@ export interface AcceptedTest {
 export interface SourceIdentity {
   libraryHash?: string; importHash?: string;
   targetFingerprint?: string; targetVersion?: string; evaluatorVersion?: string; manifestHash: string | null;
-  /** Fingerprint of the baseline agent definition (the sandbox agent or the reviewed external spec). */
+  /** Fingerprint of the agent definition the source run evaluated (normalize.ts agentIdentity): the external agent's label, or a stored sandbox run's built-in agent. */
   agent: string;
   /** Fingerprint of the configured judge (provider, model, upstream). */
   judge: string;
@@ -493,16 +496,6 @@ export function validateFailureModes(modes: FailureMode[], trials: Trial[], prom
   }
 }
 
-function validateReviewReferences(reviews: HumanReview[], trials: Trial[], path: (string | number)[], ctx: z.RefinementCtx): void {
-  reviews.forEach((review, index) => {
-    if (!review.reviewedDialogue) return;
-    const trial = trials.find(candidate => candidate.id === review.trialId);
-    if (!trial || ![...review.note.matchAll(/#(\d+)\b/g)].some(match => trial.events.some(event => event.seq === Number(match[1])))) {
-      ctx.addIssue({ code: 'custom', path: [...path, index, 'note'], message: 'Полный разбор должен ссылаться на событие текущего диалога.' });
-    }
-  });
-}
-
 export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   generatorConfig: retired, generatorIdentity: retired,
   runKind: z.enum(['evaluation', 'diagnostic', 'generator']).optional(),
@@ -552,8 +545,6 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   record.ownerExpectationScenarioIds?.forEach((id, index) => {
     if (!scenarioIds.has(id)) ctx.addIssue({ code: 'custom', path: ['ownerExpectationScenarioIds', index], message: 'Изменённое ожидание должно относиться к ситуации этого набора.' });
   });
-  validateReviewReferences(record.humanReviews, record.trials, ['humanReviews'], ctx);
-  if (record.sourceEvidence) validateReviewReferences(record.sourceEvidence.humanReviews, record.sourceEvidence.trials, ['sourceEvidence', 'humanReviews'], ctx);
 });
 
 /** Stable JSON content identity; array order remains significant. */

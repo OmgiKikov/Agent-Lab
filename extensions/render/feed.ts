@@ -4,7 +4,7 @@ import { safeText } from '../../src/text.js';
 import { GLYPH, renderRows, type PaintTheme, type Row, type Tone } from './theme.ts';
 
 /*
- * One Agent Lab action in the chat, the way Claude Code draws a tool (ui-spec §4.10):
+ * One Agent Lab action in the chat, the way Claude Code draws a tool (docs/design/ui-spec.md §4.10):
  *
  *   [action] Собираю ситуации из logs.jsonl              what is being done, the sign tinted by how it ended
  *     [branch] 12 ситуаций: 9 готовы · 2 ждут ответа     the answer, one to three lines

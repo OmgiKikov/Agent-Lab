@@ -55,6 +55,10 @@ const DEMO_READY: ReviewVerdict = { status: 'ready', reason: 'Учебный п�
 /** The judge's reading of each duty: the stored example's checkpoints and a card's expectations name the same two duties. */
 const DUTY: Record<string, 'ask' | 'explain'> = { ask_once: 'ask', refund_explanation: 'explain', e1: 'ask', e2: 'explain' };
 
+/**
+ * The teaching judge and customer play a model reading the replies — a repeated question in other words still counts —
+ * over the example's own invented dialogues; they never read an owner's data and measure nothing.
+ */
 const asksNumber = (text: string) => /(?:уточните|сообщите|назовите|укажите|какой|номер.*\?).*номер|номер.*терминал.*\?/i.test(text);
 const DEMO_ONLY = 'Учебный пример поддерживает только свои два диалога и правило владельца. Для своих материалов выберите живой режим с моделью.';
 

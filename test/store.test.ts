@@ -174,7 +174,7 @@ test('a quick agreement mark survives a reload with its judge verdict and judge 
   const record = await lab.get(created.id);
   const trial = record.trials[0]!;
   const scenario = record.scenarios.find(candidate => candidate.id === trial.scenarioId)!;
-  const metricId = scenario.metrics.find(metric => metric.subject === 'agent')!.id;
+  const metricId = scenario.metrics!.find(metric => metric.subject === 'agent')!.id;
   const mark = { id: 'mark-1', createdAt: '2026-09-17T00:00:00Z', trialId: trial.id, metricId,
     verdict: 'fail' as const, note: 'Согласен с судьёй.', durationMs: 1200,
     source: 'quick' as const, judgeVerdict: 'fail' as const, judge: { protocolHash: 'protocol-10', inputHash: 'input-1' } };

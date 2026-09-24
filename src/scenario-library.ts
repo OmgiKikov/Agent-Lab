@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { isIdentifier } from './ids.js';
 import { IMPORT_DIALOGUE_LIMIT } from './limits.js';
+import { maskedThrough } from './masking.js';
 import { fingerprint, type Experiment } from './contracts.js';
 import type { LibraryV2, ScenarioLibrary } from './card/schema.js';
 import { importBatchSchema, type ImportBatch, type LibraryV1 } from './scenario-contracts.js';
@@ -66,7 +67,7 @@ export function importBatch(raw: unknown, known: ReadonlyMap<number, string> = n
     });
     const userEvents = retained.filter(event => event.type === 'message' && event.role === 'user');
     if (!userEvents.length && issue === undefined) reasons.push('Нет пользовательских реплик');
-    if (userEvents.length && userEvents.every(event => /^(?:\s|\*|x|х|\[(?:redacted|masked|скрыто|удалено)\]|<[^>]+>)+$/i.test(event.content ?? ''))) reasons.push('Пользовательские реплики полностью замаскированы');
+    if (userEvents.length && userEvents.every(event => maskedThrough(event.content ?? ''))) reasons.push('Пользовательские реплики полностью замаскированы');
     const observation = record(row) ? row.observation ?? (rich ? 'unknown' : 'partial') : 'unknown';
     if (!['complete', 'partial', 'unknown'].includes(String(observation))) reasons.push('Некорректная полнота наблюдения');
     if (reasons.length) batch.rejected.push({ index, ...(dialogueId ? { id: dialogueId.slice(0, 200) } : {}), reasons: [...new Set(reasons)].slice(0, 20), original: row });

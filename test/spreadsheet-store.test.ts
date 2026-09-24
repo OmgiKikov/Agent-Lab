@@ -107,7 +107,7 @@ test('from a spreadsheet to the number: the same conversations as in JSON prepar
     await confirmTableImport(lab.store, path, await proposeTableImport(path));
     const { originalImport, dialogues: projected } = await readDialogueImport(path, { directory: data });
     assert.deepEqual(projected, dialogues.map(item => ({ ...item, outcome: 'unknown' })), 'the conversations are the ones the JSON fixtures hold');
-    const draft = await lab.create(cardInput({ originalImport, dialogues: projected }), { cards: true });
+    const draft = await lab.create(cardInput({ originalImport, dialogues: projected }));
     await lab.waitForIdle();
     const { library, experiment } = await lab.readCards(draft.id);
     assert.equal(experiment.phase, 'review', experiment.error ?? '');

@@ -12,7 +12,7 @@ import { detectProject, targetLabel, type ProjectDetection } from '../src/detect
 import type { ExperimentLab } from '../src/experiment.js';
 import { readDialogueImport } from '../src/imports.js';
 import { expandMaterials } from '../src/materials.js';
-import { consentText, DEFAULT_SITUATIONS, preparationConsent } from '../src/miner/plan.js';
+import { consentText, DEFAULT_SITUATIONS, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
 import { countText } from '../src/plural.js';
 import { TABLE_EXTENSIONS } from '../src/spreadsheet/workbook.js';
 import { safeText } from '../src/text.js';
@@ -25,7 +25,7 @@ import { TOOL } from './steps.ts';
 import { confirmedBefore, importTable } from './table-import.ts';
 
 /*
- * «Проверь агента, логи — выгрузка.xlsx» (ui-spec §4.10): logs, the owner's rules and the agent become a draft of
+ * «Проверь агента, логи — выгрузка.xlsx» (docs/design/ui-spec.md §4.10): logs, the owner's rules and the agent become a draft of
  * situations. Lab looks through the project folder for what the request did not name — the logs, the rules, how
  * the agent is started — and asks only what it cannot settle: which log file of several, how to read a spreadsheet.
  * Every paid preparation passes one consent the host asks natively — what is read, how many situations at most,
@@ -45,8 +45,6 @@ export interface PrepareHost {
 
 /** Situations prepared from the owner's rules alone when the owner names no number. */
 const RULES_SITUATIONS = 5;
-const SITUATIONS_ACC: [string, string, string] = ['ситуацию', 'ситуации', 'ситуаций'];
-const CALLS: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
 const DOCUMENTS: [string, string, string] = ['документ', 'документа', 'документов'];
 const closed = { additionalProperties: false } as const;
 const path = (description: string) => Type.String({ minLength: 1, maxLength: 1000, description });
@@ -61,12 +59,16 @@ export const prepareParameters = Type.Object({
   rules: Type.Optional(Type.String({ minLength: 1, maxLength: 20000, description: 'Rules the owner wrote in this conversation, in their own words.' })),
   table: Type.Optional(Type.Object({
     sheet: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })), id: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), text: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
-  }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet: the sheet, the column of the conversation id, the column of the text (a header or a letter).' })),
+    where: Type.Optional(Type.Object({
+      column: Type.String({ minLength: 1, maxLength: 200 }),
+      values: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 120 }), { minItems: 1, maxItems: 30, description: 'Only values the owner named, as written in the table.' })),
+    }, { ...closed, description: 'Only when the owner wants some of the conversations: the column whose values choose them. Without values the host asks the owner which to keep.' })),
+  }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet or chose which of its conversations to evaluate: the sheet, the column of the conversation id, the column of the text, the conversations kept (where). A column is a header or a letter.' })),
   suite: Type.Optional(path('A saved set of situations (.evals/*.json) to load into a fresh draft instead of preparing: free, nothing runs.')),
   demo: Type.Optional(Type.Literal(true, { description: 'The built-in teaching example: no model, no keys, one minute.' })),
 }, closed);
 type PrepareParams = { task?: string; logs?: string; withoutLogs?: true; situations?: number; materials?: string[]; prompts?: string[]; rules?: string;
-  table?: { sheet?: string; id?: string; text?: string }; suite?: string; demo?: true };
+  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] } }; suite?: string; demo?: true };
 
 /** A path the owner or the model named: `~/…` is the owner's home, anything else is relative to the project. */
 export function projectPath(named: string, cwd: string): string {
@@ -165,7 +167,9 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   let libraryImport: Awaited<ReturnType<typeof readDialogueImport>> | undefined;
   if (logs !== 'rules') {
     if (TABLE_EXTENSIONS.has(extname(logs).toLowerCase())) {
-      const choices = { ...(params.table?.sheet ? { sheet: params.table.sheet } : {}), ...(params.table?.id ? { id: params.table.id } : {}), ...(params.table?.text ? { text: params.table.text } : {}) };
+      const { sheet, id, text, where } = params.table ?? {};
+      // The owner's corrections, said in words; which conversations to keep is asked natively when no value was named.
+      const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}) };
       if (Object.keys(choices).length || !await confirmedBefore(logs, directory)) {
         requireInteractive(ctx, 'Как читать таблицу, решает владелец в интерактивном терминале Pi. Без него: agent-lab import --file … --yes.');
         const owned = await host.open(ctx.cwd);
@@ -206,11 +210,7 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   const consent = libraryImport ? await preparationConsent(host.reading(directory).store, { input, situations: count }) : undefined;
   // The ceiling the owner agrees to is the one the preparation stops at: it goes to the lab with the consent.
   const callCeiling = consent?.callCeiling ?? preparationCeiling({ task: input.task, sources: materialSources(input.materials), situations: count, fromLogs: false });
-  const plan = consent ? consentText(consent, basename(logs)) : {
-    question: `Собрать ${countText(count, SITUATIONS_ACC)} по вашим правилам?`,
-    lines: ['Логов нет: ситуации строятся только по правилам — без выдуманных разговоров и личных данных клиента.',
-      `Расход — не больше ${countText(callCeiling, CALLS)} модели на всю подготовку. Это потолок, а не прогноз; агент не запускается.`],
-  };
+  const plan = consent ? consentText(consent, basename(logs)) : rulesConsentText(count, callCeiling);
   const sources = [...(params.rules ? ['ваши слова из разговора'] : []), ...[...files.promptFiles, ...files.materialFiles].map(file => shownPath(file, ctx.cwd))];
   const agent = connection ? `Агент: ${targetLabel(connection.target, ctx.cwd)}.`
     : found?.agents[0] ? `Агента Lab подключит перед прогоном — в папке нашёл: ${targetLabel(found.agents[0].target, found.root)}.` : 'Как запускать агента, Lab спросит перед прогоном.';

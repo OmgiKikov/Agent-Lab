@@ -7,7 +7,7 @@ import { projectedExpectations, projectedLetter } from './legacy-v1.js';
 import type { Card, EventRef, LibraryV2 } from './schema.js';
 
 /*
- * What a calibration covers (card-v2 §10.1–10.2, §10.6), decided from the stored cards and logs alone:
+ * What a calibration covers (docs/design/card-v2-spec.md §10.1–10.2, §10.6), decided from the stored cards and logs alone:
  *
  *   situation ──its situation is its log's?──► no: excluded (not_from_log | situation_edited)
  *             └─ yes ──per expectation──► the log cannot show it: skipped (no_agent_reply | channel_unobserved), 0 calls
@@ -41,7 +41,7 @@ export function cardExclusion(card: Card): Exclusion | undefined {
   return fromLog ? undefined : 'situation_edited';
 }
 
-/** Whether a card is calibrated against its log (card-v2 §10.1). */
+/** Whether a card is calibrated against its log (docs/design/card-v2-spec.md §10.1). */
 export const calibratable = (card: Card): boolean => cardExclusion(card) === undefined;
 
 /**
@@ -154,7 +154,7 @@ export function calibrationCalls(situations: readonly LogSituation[], dialogue: 
 }
 
 /**
- * The version under test (card-v2 §10.2): the one the adapter reported in every attempt that reached the agent;
+ * The version under test (docs/design/card-v2-spec.md §10.2): the one the adapter reported in every attempt that reached the agent;
  * otherwise the version the owner declared for the run; otherwise unknown. An adapter that reported two versions
  * tested no single version, and a declaration the adapter contradicts is not taken: both are unknown.
  */

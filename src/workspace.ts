@@ -5,7 +5,7 @@ import { targetLabel } from './detect.js';
 import { oneLine } from './text.js';
 
 /*
- * The agent's workspace (ui-spec §8): every run of one agent in the project folder, grouped and read from the
+ * The agent's workspace (docs/design/ui-spec.md §8): every run of one agent in the project folder, grouped and read from the
  * records alone — the set of situations being worked on, the runs with results, the work going on now. The owner
  * names an agent by its own name or by how it is started; ids and paths inside the project never show.
  *

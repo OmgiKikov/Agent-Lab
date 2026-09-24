@@ -11,7 +11,7 @@ import { agentsScreen, allRunsScreen, areasOf, header, helpScreen, inboxScreen, 
   situationScreen, situationsScreen, startScreen, type Area, type Hint, type Line, type ResultPick, type Screen, type SpaceData, type Step } from './workspace-screens.ts';
 
 /*
- * The agent's workspace (ui-spec §8): `/agent-lab` opens it on what needs the owner — the decisions if any wait,
+ * The agent's workspace (docs/design/ui-spec.md §8): `/agent-lab` opens it on what needs the owner — the decisions if any wait,
  * otherwise the newest result —; before the first result it walks the three steps Ситуации › Прогон › Результат.
  * Eight keys, the same everywhere: ↑↓ Enter Esc ←→ 1–3 a d ?, with silent synonyms (Tab, j/k, PgUp/PgDn, q).
  * The component only reads and navigates; everything that writes or spends goes back to the command as an action,
@@ -443,7 +443,7 @@ export class LabWorkspace implements Component {
     return lines.slice(0, height).map(line => visibleWidth(line) > width ? truncateToWidth(line, width, '…') : line);
   }
 
-  /** One row of key hints: the key dim, what it does muted (ui-spec §5); never more than five keys. */
+  /** One row of key hints: the key dim, what it does muted (docs/design/ui-spec.md §5); never more than five keys. */
   private footer(hints: Hint[], width: number): string[] {
     const text = hints.slice(0, 5).map(hint => `${this.theme.fg('dim', hint.key)} ${this.theme.fg('muted', hint.text)}`).join(this.theme.fg('muted', ' · '));
     return [` ${text}`].map(line => visibleWidth(line) > width ? truncateToWidth(line, width, '…') : line);

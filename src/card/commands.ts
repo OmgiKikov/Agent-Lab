@@ -11,7 +11,7 @@ import { cardStatus } from './status.js';
 import { briefChanges, cardSituation, type BriefChange } from './view.js';
 
 /*
- * The owner's commands on a draft of cards (card-v2 §5): one layer for the chat, the board and the CLI. An
+ * The owner's commands on a draft of cards (docs/design/card-v2-spec.md §5): one layer for the chat, the board and the CLI. An
  * adapter only gathers the input and shows the result; everything a command means is decided here.
  *
  *   command ──prepare (pure)──► Prepared: the exact next library, «было → стало», the cards it touches,
@@ -406,7 +406,7 @@ const previewOf = (prepared: Pick<PreparedLogVersion, 'journalHash' | 'command' 
   fingerprint({ journal: prepared.journalHash, command: prepared.command, next: fingerprint(prepared.next) });
 
 /**
- * Prepares the owner's word on which agent version wrote an import's logs (card-v2 §10.2): the next journal of
+ * Prepares the owner's word on which agent version wrote an import's logs (docs/design/card-v2-spec.md §10.2): the next journal of
  * the import with one more declaration. Pure; nothing is written. The declaration lives beside the import and
  * never in a library, so declaring after an acceptance changes no library hash and no acceptance; a run keeps
  * a snapshot of what it used, so its result never moves with a later declaration.

@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { readFile, mkdtemp, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { test } from 'node:test';
-import { createInputSchema, dialogueSchema, emptyUsage, scenarioSchema, type Dialogue, type Scenario, type Trial } from '../src/contracts.js';
+import { createInputSchema, dialogueSchema, emptyUsage, scenarioSchema, type Dialogue, type Scenario, type TraceEvent, type Trial } from '../src/contracts.js';
 import { goalAttainment, replyQuality } from '../src/assessment.js';
 import { verbatimSpan } from '../src/verbatim.js';
 import { judgeInput } from '../src/judge.js';
@@ -125,7 +123,7 @@ test('the Phase 2 reference corpus is versioned, exact, grounded and label-free'
     assert.equal(trial.outcome, 'ungraded', `${entry.id}: stored outcome is evidence metadata, not a score label`);
     assert.equal(trial.assessments, undefined, `${entry.id}: semantic judgments need an owner/model run`);
     const input = judgeInput({ scenario, sources: [], trial });
-    assert.equal(input.scenario.goalObservation, 'reply', `${entry.id}: recorded replies have a harness-owned evidence channel`);
+    assert.equal('goalObservation' in input.scenario ? input.scenario.goalObservation : undefined, 'reply', `${entry.id}: recorded replies have a harness-owned evidence channel`);
     assert.match(String(input.evaluationScope), /action-dependent pass conditions remain unclear/);
 
     const followUps = dialogue.messages.filter(message => message.role === 'user').length - 1;
@@ -136,7 +134,8 @@ test('the Phase 2 reference corpus is versioned, exact, grounded and label-free'
       assert.equal(scenario.user.script, undefined);
     }
     if (entry.assertions.noObservedActionEvidence) {
-      assert.equal(trial.events.some(event => event.type === 'tool_call' || event.type === 'tool_result' || event.state !== undefined), false, entry.id);
+      // The assertion above narrowed the recorded events to messages; the question is asked of any event.
+      assert.equal(trial.events.some((event: TraceEvent) => event.type === 'tool_call' || event.type === 'tool_result' || event.state !== undefined), false, entry.id);
       assert.match(entry.reviewConstraint ?? '', /remains unknown/);
     }
     if (entry.assertions.importedInstructionIsEvidenceOnly) {

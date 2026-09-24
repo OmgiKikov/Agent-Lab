@@ -91,7 +91,8 @@ export async function preparationConsent(store: Pick<ExperimentStore, 'readTopic
 }
 
 const CONVERSATIONS: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
-const CALLS: [string, string, string] = ['вызов', 'вызова', 'вызовов'];
+/** The count after «не больше»: «не больше 21 вызова», «не больше 115 вызовов». */
+const CALLS: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
 const SITUATIONS_ACC: [string, string, string] = ['ситуацию', 'ситуации', 'ситуаций'];
 /** Why a conversation makes no situation, in the owner's words. */
 const LEFT_OUT_TEXT: Record<LeftOut['kind'], string> = {
@@ -115,6 +116,15 @@ export function consentText(consent: PreparationConsent, source: string): { ques
       ...(reasons.length ? [`Не войдут ${countText(consent.excluded.length, CONVERSATIONS)}: ${reasons.join(' · ')}.`] : []),
       `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели на всю подготовку${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}. Это потолок, а не прогноз; агент не запускается.`,
     ],
+  };
+}
+
+/** The consent of a preparation from the owner's rules alone, in the same words: how many situations, and the ceiling of the spending. */
+export function rulesConsentText(situations: number, callCeiling: number): { question: string; lines: string[] } {
+  return {
+    question: `Собрать ${countText(situations, SITUATIONS_ACC)} по вашим правилам?`,
+    lines: ['Логов нет: ситуации строятся только по правилам — без выдуманных разговоров и личных данных клиента.',
+      `Расход — не больше ${countText(callCeiling, CALLS)} модели на всю подготовку. Это потолок, а не прогноз; агент не запускается.`],
   };
 }
 

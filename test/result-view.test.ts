@@ -959,7 +959,7 @@ test('with nothing unmeasured there is no «Не измерено» block, and n
   assert.deepEqual(unmeasuredRows(buildResultView(run([card('a')], [], { phase: 'review' }))), []);
   assert.deepEqual(rowsToLines(causeRows(measured)), ['Почему ошибается', '  1  Ситуация f0']);
   const clean = buildResultView(scored(2, 0));
-  assert.deepEqual(causeRows(clean), [{ role: 'good', indent: 0, text: 'Ошибок нет. Это не гарантия для живых клиентов: проверено 2 ситуации.' }]);
+  assert.deepEqual(causeRows(clean), [{ role: 'good', indent: 0, text: 'Ошибок нет. Это не гарантия для живых клиентов: проверены 2 ситуации.' }]);
   assert.deepEqual(errorListRows(clean), []);
   assert.deepEqual(causeRows(buildResultView(scored(0, 0, 2))), [], 'nothing decided, nothing to say about errors');
 });

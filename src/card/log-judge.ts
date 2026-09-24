@@ -8,7 +8,7 @@ import { LOGGED_MODE, logJudgmentReceiptSchema, type LogJudgeRequest, type LogJu
 import type { Expectation } from './expectations.js';
 
 /*
- * The judge on a recorded conversation (card-v2 §10.3): judgment (b) of an expectation, next to judgment (a) on
+ * The judge on a recorded conversation (docs/design/card-v2-spec.md §10.3): judgment (b) of an expectation, next to judgment (a) on
  * the synthetic attempt. Same JUDGE_PROMPT, same two-vote protocol (judge.ts castVotes); only the input differs.
  * The input is the logged dialogue as it was recorded — no brief of the customer (the log is the situation; the
  * card's reading of it is not whispered to the judge), no simulator, no stand state — and the rubric is the log
@@ -168,7 +168,7 @@ function sameVotes(audit: JudgeAudit, votes: readonly Vote[]): boolean {
 }
 
 /**
- * Whether a receipt of judgment (b) stands, without judging or compiling anything again (card-v2 §10.3): it is a
+ * Whether a receipt of judgment (b) stands, without judging or compiling anything again (docs/design/card-v2-spec.md §10.3): it is a
  * receipt of the log judge, of this run's accepted definition and of its own key; it is complete and its votes
  * give its result. With `sidecar`, the audit on disk must also be the one it seals, its stored input must hash
  * to the receipt's input hash and its answers must read again to the same votes. A synthetic attempt's

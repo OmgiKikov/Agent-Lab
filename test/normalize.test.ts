@@ -1,16 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { createInputSchema, DEFAULT_GOAL_OBSERVATION, DEFAULT_JUDGE } from '../src/contracts.js';
-import type { Runtime } from '../src/runtime.js';
-import { ExperimentLab } from '../src/experiment.js';
-import { buildResultView } from '../src/result-view.js';
+import { DEFAULT_GOAL_OBSERVATION } from '../src/contracts.js';
 import { goalObservationDefault, withDefaultGoalObservation } from '../src/normalize.js';
 
 test('the default evidence channel fills only external cards that did not choose one', () => {
-  const legacy = { id: 'card' };
+  const legacy: { id: string; goalObservation?: 'reply' | 'tool' | 'state' } = { id: 'card' };
   assert.equal(withDefaultGoalObservation({ id: 'card', goalObservation: 'tool' as const }, 'command').goalObservation, 'tool');
   for (const kind of ['command', 'http', 'module'] as const) assert.equal(withDefaultGoalObservation<{ goalObservation?: 'reply' | 'tool' | 'state' }>(legacy, kind).goalObservation, 'reply');
   assert.equal(withDefaultGoalObservation(legacy, 'sandbox'), legacy);

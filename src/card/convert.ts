@@ -10,7 +10,7 @@ import { pendingReviewCalls, preparationInputHash } from './prepare.js';
 import { cardSchema, type Card, type CardPreparation, type LibraryV2, type PreparationProgress } from './schema.js';
 
 /*
- * «Продолжить в новом формате» (card-v2 §6, choice A): a draft of the first library format goes on as a new draft
+ * «Продолжить в новом формате» (docs/design/card-v2-spec.md §6, choice A): a draft of the first library format goes on as a new draft
  * of cards; the old draft stays as it was. Each variant becomes one card by fixed rules and says nothing the variant
  * did not: the opening is the logged customer message it equals, a fact keeps the message it came from or waits for
  * the owner's word, each duty the judge decided becomes an expectation with its rule and its condition — the way old

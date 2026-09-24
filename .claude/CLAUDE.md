@@ -72,7 +72,7 @@ Agent Lab — пакет для Pi, который прогоняет насто
 - Model credentials live in Pi (`/login` or a provider key); the default judge is `openrouter` / `openai/gpt-5.6-sol` pinned to the `openai` upstream
 - No `.env` file is read for configuration; project detection reads `.env` variable names only
 - `tsconfig.json` - `strict`, `noUncheckedIndexedAccess`, ES2023, NodeNext, declarations and source maps, `rootDir: src`
-- `npm run typecheck` adds `--noUnusedLocals` and type-checks `extensions/*.ts` with `--allowImportingTsExtensions`
+- `npm run typecheck` builds, then type-checks `extensions/` and `test/` through `tsconfig.check.json` (extends `tsconfig.json`, adds `noEmit` and `allowImportingTsExtensions`)
 
 ## File Organization
 
@@ -143,7 +143,7 @@ Agent Lab — пакет для Pi, который прогоняет насто
 - Semicolons, 2-space indentation, single quotes
 - Long lines are tolerated for data and prompt text; code lines stay readable
 - No ESLint or Prettier configuration
-- TypeScript `strict`, `noUncheckedIndexedAccess`; `npm run typecheck` adds `noUnusedLocals`
+- TypeScript `strict`, `noUncheckedIndexedAccess`, `noUnusedLocals`; `npm run typecheck` applies the same to `extensions/` and `test/` (`tsconfig.check.json`)
 - `strict: true`, `noUncheckedIndexedAccess: true`
 - ES2023 target with NodeNext module resolution
 - Generated `.d.ts` declaration files and source maps

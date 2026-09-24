@@ -5,7 +5,7 @@ import { emptyUsage, type Scenario, type TraceEvent, type Trial } from '../src/c
 
 const world = { records: { card_1: { last4: '4321', status: 'active', reason: 'FRAUD_HOLD_77' } }, writableFields: ['status'], transientFailures: 0, external: { sbe: { tools: { cards: { tid: '12345678' } } } } };
 function scenario(user: Partial<Scenario['user']> = {}): Scenario {
-  return { id: 's', familyId: 's', title: 's', requirementIds: [], provenance: 'curated', split: 'dev', initialState: world, checks: [],
+  return { id: 's', familyId: 's', title: 's', requirementIds: [], provenance: 'curated', tier: 'regression', split: 'dev', initialState: world, checks: [],
     user: { goal: 'Block the lost card', facts: 'The card ends with 4321.', behavior: 'Answer once', opening: 'I lost my card, please block it', maxFollowUps: 2,
       knows: ['Last four digits 4321'], cannotKnow: ['Why the backend holds the card'], answers: [{ ifAsked: 'last four digits', reply: 'It ends with 4321.' }], ...user } };
 }

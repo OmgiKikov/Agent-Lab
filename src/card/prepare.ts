@@ -19,7 +19,7 @@ import { claimReceipts, pendingClaims, reviewRequests, ReviewTooLarge, type Card
 import type { Card, CardPreparation, LibraryV2 } from './schema.js';
 
 /*
- * Preparing situations — from dialogues of an import, or from the owner's rules alone (card-v2 C9):
+ * Preparing situations — from dialogues of an import, or from the owner's rules alone (docs/design/card-v2-spec.md §8, C9):
  *
  *   plan: units ─► grounding of the whole policy, once, when the materials fit one call
  *   each unit:  articles (large knowledge base) ─► the rules for this dialogue ─► proposal ─► binding + checks ─► review

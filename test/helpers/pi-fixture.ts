@@ -65,7 +65,8 @@ export async function fixture(reply: (request: Request, index: number, options?:
           ...('errorMessage' in shaped && shaped.errorMessage ? { errorMessage: shaped.errorMessage } : {}), timestamp: Date.now(),
         };
       })();
-      // The SDK consumes the public stream iterator/result protocol. No network or model output is mocked above it.
+      // The SDK consumes only the public stream protocol, the iterator and result(); the class's private queue is not part
+      // of it, so the stand-in is converted through unknown. No network or model output is mocked above it.
       return {
         result: () => finished,
         async *[Symbol.asyncIterator]() {
@@ -73,7 +74,7 @@ export async function fixture(reply: (request: Request, index: number, options?:
           yield { type: 'start', partial: message };
           yield { type: 'done', reason: message.stopReason, message };
         },
-      } as ReturnType<ModelRuntime['streamSimple']>;
+      } as unknown as ReturnType<ModelRuntime['streamSimple']>;
     },
   });
   return {

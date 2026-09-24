@@ -6,7 +6,7 @@ import { messageAt, type CardEvidence, type LoggedMessage } from './checks.js';
 import type { Card, ClaimReceipt, EventRef, LibraryV2 } from './schema.js';
 
 /*
- * The semantic claims of a card (card-v2 §2.5). Each is one question to an independent reviewer with its own
+ * The semantic claims of a card (docs/design/card-v2-spec.md §2.5). Each is one question to an independent reviewer with its own
  * basis — exactly the content the answer depends on — and is addressed by it: key = digest(kind, subject, basis).
  * A receipt answers its key for the whole library, so a similar card with the same fact reuses its parent's
  * answer, and an edit asks again exactly the claims whose basis it changed. The reviewer reads the brief, the full

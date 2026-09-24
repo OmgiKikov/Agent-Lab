@@ -93,7 +93,7 @@ test('в разговоре судьи 1–3 сохраняют согласие
     assert.match(session.frames[1]!, /1–3 ответить · a спросить Lab · ↑↓ листать · Esc назад/);
     const disagreed = await inspect();
     assert.equal(disagreed.humanReviews.length, 1, JSON.stringify(disagreed.humanReviews));
-    const mark = disagreed.humanReviews[0];
+    const mark = disagreed.humanReviews[0]!;
     assert.equal(mark.source, 'quick');
     assert.equal(mark.note, 'Проверка: судья не учёл уточнение клиента.');
     assert.equal(mark.judgeVerdict, 'fail');

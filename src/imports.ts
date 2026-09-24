@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { dialogueSchema, type Dialogue, type ValidationExclusion } from './contracts.js';
 import { IMPORT_FILE_BYTES } from './limits.js';
+import { hiddenBySymbols } from './masking.js';
 import { readConfirmedTable } from './spreadsheet/import.js';
 import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
 
@@ -14,7 +15,7 @@ import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
 export function validationDialogueIssue(dialogue: Pick<Dialogue, 'messages'>): Omit<ValidationExclusion, 'dialogueId'> | undefined {
   const users = dialogue.messages.filter(message => message.role === 'user');
   if (!users.length || users.length > 16) return { kind: 'length', reason: 'нужны 1–16 реплик клиента' };
-  if (users.some(message => /[*#]/u.test(message.content) && !/[\p{L}\p{N}]/u.test(message.content))) return { kind: 'masked', reason: 'реплика клиента целиком скрыта обезличиванием' };
+  if (users.some(message => hiddenBySymbols(message.content))) return { kind: 'masked', reason: 'реплика клиента целиком скрыта обезличиванием' };
   return undefined;
 }
 

@@ -24,6 +24,7 @@ lyon/
 │   ├── assessment.ts             # Rubrics, assessments, judge audits and receipts, their validation
 │   ├── runtime.ts                # Runtime, CallContext, TargetSession: what the engine asks of the world
 │   ├── verbatim.ts               # Verbatim quote matching, value tokens
+│   ├── masking.ts                # De-identification marks of exports: the one place that reads them
 │   ├── store.ts                  # ExperimentStore: storage only (records, lock, journals, sidecars, publication)
 │   ├── scenario-store.ts         # File areas of the store: imports, libraries, log-version journals, publications
 │   ├── card/                     # Situations (card v2): schema, proposal, checks, review, status, commands,
@@ -55,7 +56,7 @@ lyon/
 ├── skills/agent-builder/SKILL.md # The one instruction source of an Agent Lab session
 ├── test/                         # node:test via tsx; fixtures/ (library-v1 goldens, recorded runs), helpers/, live/
 ├── examples/                     # Teaching agent, sample agents, connection and CI examples
-├── docs/                         # Audits, reviews, verification guide
+├── docs/                         # Audits, reviews, verification guide; design/ — the UI and card-format specs comments cite
 └── .agent-lab/                   # Runtime data (git-ignored, private)
 ```
 

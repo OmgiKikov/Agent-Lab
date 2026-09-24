@@ -7,7 +7,7 @@ import { expandHint, hintLines, lineBody } from './feed.ts';
 import { GLYPH, paint, renderRows, type PaintTheme, type Tone } from './theme.ts';
 
 /*
- * The result of a run in the chat (ui-spec §4.10): the same rows the workspace and the CLI lay out, under the
+ * The result of a run in the chat (docs/design/ui-spec.md §4.10): the same rows the workspace and the CLI lay out, under the
  * branch sign of the action that produced it. The session file (0644) holds only ids (REV-01): the view is kept in memory
  * while Pi runs; a reopened session says so in one line and the owner asks for the result again.
  */

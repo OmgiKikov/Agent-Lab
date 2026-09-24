@@ -8,7 +8,7 @@ const rubric = (id: string) => ({
   id, name: id, subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f',
 });
 const scenario: Scenario = {
-  id: 'card', familyId: 'card', title: 'Card', split: 'dev', provenance: 'synthetic', requirementIds: [],
+  id: 'card', familyId: 'card', title: 'Card', split: 'dev', provenance: 'synthetic', tier: 'regression', requirementIds: [],
   user: { goal: 'g', facts: 'f', behavior: 'b', opening: 'o', maxFollowUps: 0 }, checks: [],
   initialState: { records: {}, writableFields: [], transientFailures: 0 },
   metrics: [rubric('goal_attainment'), rubric('prompt_compliance')],

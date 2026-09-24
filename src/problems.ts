@@ -6,7 +6,7 @@ import type { NotMeasuredCode } from './run.js';
 import { oneLine } from './text.js';
 
 /*
- * «Проблемы» (ui-spec §8.6): what repeats, not a one-off error — the same cause in two or more situations of the
+ * «Проблемы» (docs/design/ui-spec.md §8.6): what repeats, not a one-off error — the same cause in two or more situations of the
  * newest run, or a situation that keeps failing run after run. A problem in the agent is a cause of its failures;
  * a problem in the test is the customer Lab plays leaving the situation, so the conversation cannot be judged.
  * Every observation is a verified quote of the agent's recorded reply; nothing here is guessed — a hypothesis and a

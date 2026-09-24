@@ -11,7 +11,7 @@ import type { Card, LibraryV2 } from './schema.js';
 import { cardStatuses, type CardStatus, type CardStatusKind, type QuestionChoice } from './status.js';
 
 /*
- * A situation as the owner reads it (ui-spec §3), one projection for every stored format, drawn the same
+ * A situation as the owner reads it (docs/design/ui-spec.md §3), one projection for every stored format, drawn the same
  * way in the chat, on the board, in the CLI and in the customer report:
  *
  *   card      (the card format)            ──┐
@@ -170,7 +170,7 @@ function variantSource(library: LibraryV1, variant: ScenarioVariant): string {
 }
 
 /**
- * The brief of a first-format variant (card-v2 §6). A fact known before the conversation is said at once when
+ * The brief of a first-format variant (docs/design/card-v2-spec.md §6). A fact known before the conversation is said at once when
  * the opening already holds it, otherwise when asked; a doubtful one is «?»; one the customer learned only in
  * the old conversation was never theirs at the start of a run, so it is not listed. The duties are the
  * required checkpoints — of the compiled definition when the variant ran.
@@ -205,7 +205,7 @@ const QUALITY: Record<ScenarioVariant['quality'], CardStatusKind> = { ready: 're
 const COVERED = { conditional_action: 'ответ по условию', initial_fact: 'личный факт', omitted: 'не влияет на проверку' } as const;
 
 /**
- * A first-format variant through the brief (card-v2 §6), read-only: its stored quality is the status, its
+ * A first-format variant through the brief (docs/design/card-v2-spec.md §6), read-only: its stored quality is the status, its
  * checker's first open question is the question — with no answers here, since the first format is only read.
  */
 export function projectV1Variant(library: LibraryV1, variant: ScenarioVariant, number: number): SituationView {
@@ -389,7 +389,7 @@ export interface RowOptions {
   narrow?: boolean;
 }
 
-/** One situation in a list (ui-spec §3.2): the number, the title and the chip; what the customer writes; the first duty or why it cannot be a test. */
+/** One situation in a list (docs/design/ui-spec.md §3.2): the number, the title and the chip; what the customer writes; the first duty or why it cannot be a test. */
 export function listRows(view: SituationView, options: RowOptions & { selected?: boolean } = {}): SituationRow[] {
   const mark = options.selected ? '›' : ' ';
   const third = view.status === 'unusable' ? { role: 'problem' as const, text: view.problems[0] ?? 'Не подходит для теста.' }
@@ -403,7 +403,7 @@ export function listRows(view: SituationView, options: RowOptions & { selected?:
 }
 
 /**
- * One open situation (ui-spec §4.3–4.5): the title with its chip and source; the customer, labels in one column;
+ * One open situation (docs/design/ui-spec.md §4.3–4.5): the title with its chip and source; the customer, labels in one column;
  * what the agent must do, each duty with its rule (a rule shared with the duty above is not repeated); then why
  * it cannot be a test, and the one open question with its numbered answers.
  */
@@ -437,7 +437,7 @@ export function briefRows(view: SituationView, options: RowOptions = {}): Situat
   ];
 }
 
-/** The open question (ui-spec §3.4): one sentence and 2–3 numbered answers; an older format's question is only shown. */
+/** The open question (docs/design/ui-spec.md §3.4): one sentence and 2–3 numbered answers; an older format's question is only shown. */
 export function questionRows(view: SituationView): SituationRow[] {
   const { question } = view;
   if (!question) return [];
@@ -454,7 +454,7 @@ export function detailRows(view: SituationView): SituationRow[] {
       text: `${(item.label === view.details[index - 1]?.label ? '' : item.label).padEnd(column)}${item.text}`, hang: column }))];
 }
 
-/** What an owner can do with a card from its screen (ui-spec §4.3–4.5, §8.4): its question's answers first, then its own actions. */
+/** What an owner can do with a card from its screen (docs/design/ui-spec.md §4.3–4.5, §8.4): its question's answers first, then its own actions. */
 export type SituationAction =
   | { kind: 'answer'; choice: QuestionChoice }
   | { kind: 'edit' | 'similar' | 'remove' | 'rule'; label: string };

@@ -49,9 +49,9 @@ export class ExperimentLab {
     await this.store.init();
     try {
       for (const record of await this.store.list()) if (isRunning(record.phase)) {
-        moveTo(record, 'interrupted'); record.message = 'The previous process stopped. Partial evidence has been preserved.';
+        moveTo(record, 'interrupted'); record.message = 'Предыдущий процесс остановился. Собранные данные сохранены.';
         record.usage.costUsd = null;
-        record.limitations.push('The process stopped between checkpoints; observed call and token counts may be incomplete.');
+        record.limitations.push('Процесс остановился между сохранениями: число вызовов и токенов может быть неполным.');
         record.error = record.message; record.updatedAt = new Date().toISOString(); await this.store.save(record);
       }
       this.operations.open();

@@ -15,7 +15,7 @@ import { GLYPH, ROLE_TONE, type Tone } from './render/theme.ts';
 import { agreementTarget, type Answer } from './judge-review.ts';
 
 /*
- * The screens of the agent's workspace (ui-spec §4, §8), as lines ready to paint: the header with the areas — or the
+ * The screens of the agent's workspace (docs/design/ui-spec.md §4, §8), as lines ready to paint: the header with the areas — or the
  * steps of a first run —, the answer of the screen first, then its list or its open object, and one row of key hints.
  * Situations are laid out by the shared projection (src/card/view.ts), results by result-text.ts, so the workspace
  * says exactly what the chat and the CLI say. Pure: no I/O, no painting; widths are the terminal's columns.
@@ -94,7 +94,7 @@ const room = (width: number) => Math.max(20, Math.min(width, MAX_WIDTH));
 
 const AREA_LABEL: Record<Exclude<Area, 'inbox'>, string> = { situations: 'Ситуации', runs: 'Прогоны', problems: 'Проблемы' };
 
-/** «Агент: агент поддержки» with the version on the right from 100 columns up (ui-spec §6: narrower, the label goes). */
+/** «Агент: агент поддержки» with the version on the right from 100 columns up (docs/design/ui-spec.md §6: narrower, the label goes). */
 function titleLine(title: string, right: string | null, width: number): Line[] {
   return wsLines([ws('answer', title, 1, { clip: true, ...(right && width >= MAX_WIDTH ? { right: { role: 'muted', text: right } } : {}) })], room(width));
 }
@@ -146,7 +146,7 @@ const FOOT = {
   list: [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, { key: 'Esc', text: 'назад' }],
 } satisfies Record<string, Hint[]>;
 
-/** «Нужно ваше решение» (ui-spec §8.3): one decision in three lines — what it is about, one phrase, the actions. */
+/** «Нужно ваше решение» (docs/design/ui-spec.md §8.3): one decision in three lines — what it is about, one phrase, the actions. */
 export function inboxScreen(data: SpaceData, selected: number, width: number): Screen {
   const latest = data.runs[0];
   const result = latest && accuracyParts(latest.view);
@@ -170,7 +170,7 @@ export function inboxScreen(data: SpaceData, selected: number, width: number): S
 const lowerFirst = (text: string) => text.charAt(0).toLocaleLowerCase('ru') + text.slice(1);
 
 /**
- * «Ситуации»: before the first result (ui-spec §4.2) the counts lead — what is ready, what waits for the owner —; in the
+ * «Ситуации»: before the first result (docs/design/ui-spec.md §4.2) the counts lead — what is ready, what waits for the owner —; in the
  * workspace (§8.4) the coverage of the logs' topics does. Then three lines a situation; the selected one's question and
  * actions under it.
  */
@@ -213,7 +213,7 @@ export function runActions(data: SpaceData): string[] {
 export type ResultPick = { kind: 'failure'; trialId: string } | { kind: 'review' };
 
 /**
- * One run's result (ui-spec §4.7, §8.5): the number and its trust, the topics, why it errs — each cause a row the
+ * One run's result (docs/design/ui-spec.md §4.7, §8.5): the number and its trust, the topics, why it errs — each cause a row the
  * cursor can open —, whether the judge still waits for the owner, then the run and its actions. `details`: every
  * error, what was not measured and the owner's disagreements too.
  */
@@ -264,7 +264,7 @@ export function resultScreen(data: SpaceData, run: { record: Experiment; view: R
 /** The spinner of the progress row: the frames of Pi's own Loader; the workspace turns it while work goes on. */
 export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
 
-/** The progress row of work going on (ui-spec §4.6): the line and the bar come from the record; a bar only when there is room for one. */
+/** The progress row of work going on (docs/design/ui-spec.md §4.6): the line and the bar come from the record; a bar only when there is room for one. */
 export function progressLines(progress: NonNullable<SpaceData['progress']>, width: number): Line[] {
   const frame = progress.frame ?? 0;
   const text = ` ${progress.text}`;
@@ -274,7 +274,7 @@ export function progressLines(progress: NonNullable<SpaceData['progress']>, widt
     ...(bar >= 10 ? [{ text: '  ' }, { text: GLYPH.barFill.repeat(filled), tone: 'accent' as const }, { text: GLYPH.barTrack.repeat(bar - filled), tone: 'muted' as const }] : [])]];
 }
 
-/** «Проблемы» (ui-spec §8.6): the repeating problems, in the agent first, then in the test. */
+/** «Проблемы» (docs/design/ui-spec.md §8.6): the repeating problems, in the agent first, then in the test. */
 export function problemsScreen(data: SpaceData, selected: number, width: number): Screen {
   const w = room(width);
   const body: Line[] = [...wsLines([ws('answer', problemsLine(data.problems)),
@@ -300,7 +300,7 @@ export function problemsScreen(data: SpaceData, selected: number, width: number)
 
 /* ───────────────────────────── the first run ───────────────────────────── */
 
-/** «Прогон» before the first result (ui-spec §4.6): what will run, the agent, the time and the spending, what stays out; or how it goes. */
+/** «Прогон» before the first result (docs/design/ui-spec.md §4.6): what will run, the agent, the time and the spending, what stays out; or how it goes. */
 export function runStepScreen(data: SpaceData, width: number): Screen {
   const w = room(width);
   if (data.progress) return { head: [], body: [...progressLines(data.progress, w), ...wsLines([ws('muted', 'Первые ответы уже видны в «Результате». Доску можно закрыть — прогон продолжится.', 3)], w)],
@@ -329,7 +329,7 @@ export function runStepScreen(data: SpaceData, width: number): Screen {
 
 /* ───────────────────────────── open objects ───────────────────────────── */
 
-/** One situation open (ui-spec §4.3–4.5): its brief, its question or its actions, and «d» when asked. */
+/** One situation open (docs/design/ui-spec.md §4.3–4.5): its brief, its question or its actions, and «d» when asked. */
 export function situationScreen(view: SituationView, options: { details: boolean; running: boolean; editable: boolean }, width: number): Screen {
   const actions = options.editable ? situationActions(view) : [];
   const rows = [...briefRows(view, { running: options.running, narrow: width < 70 }),
@@ -347,7 +347,7 @@ const NOT_ASKED = { control: 'Контрольная ситуация: в про
   undecided: 'Судья не вынес решения: соглашаться не с чем.' } as const;
 
 /**
- * One conversation the judge decided (ui-spec §4.8): a failure as expected → the agent's words → the rule → the
+ * One conversation the judge decided (docs/design/ui-spec.md §4.8): a failure as expected → the agent's words → the rule → the
  * conversation; a pass drawn for a double-check the same way. Then the question to the owner, or their answer.
  */
 export function judgedScreen(run: { record: Experiment; view: ResultView }, trialId: string, answer: Answer | undefined, place: { at: number; of: number } | undefined, width: number): Screen {
@@ -380,7 +380,7 @@ export function judgedScreen(run: { record: Experiment; view: ResultView }, tria
   return { head: [], body, foot: [...(target?.kind === 'ready' ? [{ key: '1–3', text: 'ответить' }] : []), { key: 'a', text: 'спросить Lab' }, { key: '↑↓', text: 'листать' }, { key: 'Esc', text: 'назад' }] };
 }
 
-/** «Все прогоны» (ui-spec §8.5): each run by its date, version and result, with the result before it. */
+/** «Все прогоны» (docs/design/ui-spec.md §8.5): each run by its date, version and result, with the result before it. */
 export function allRunsScreen(data: SpaceData, selected: number, width: number): Screen {
   const w = room(width);
   const body: Line[] = [...wsLines([ws('answer', 'Все прогоны')], w), blank];
@@ -402,7 +402,7 @@ export function allRunsScreen(data: SpaceData, selected: number, width: number):
   return { head: [], body, foot: FOOT.list, items, ...(anchor !== undefined ? { anchor } : {}) };
 }
 
-/** One problem open (ui-spec §8.6): its size and topics, what the agent said, the conversation to open. */
+/** One problem open (docs/design/ui-spec.md §8.6): its size and topics, what the agent said, the conversation to open. */
 export function problemScreen(problem: Problem, number: number, width: number): Screen {
   const w = room(width);
   const facts = [countText(problem.situations.length, ['ситуация', 'ситуации', 'ситуаций']), ...(problem.runsInRow > 1 ? [`в ${problem.runsInRow} прогонах подряд`] : []),
@@ -419,7 +419,7 @@ export function problemScreen(problem: Problem, number: number, width: number): 
   return { head: [], body, foot: [...(problem.trialId ? [{ key: '1–3', text: 'действие' }] : []), { key: 'a', text: 'спросить Lab' }, { key: '↑↓', text: 'листать' }, { key: 'Esc', text: 'назад' }] };
 }
 
-/** The eight keys (ui-spec §5). */
+/** The eight keys (docs/design/ui-spec.md §5). */
 export function helpScreen(width: number): Screen {
   const key = (keys: string, text: string) => ws('text', `${keys.padEnd(9)}${text}`, 4, { hang: 9 });
   return { head: [], body: wsLines([ws('answer', 'Клавиши'), ws('blank', ''),
@@ -436,7 +436,7 @@ export function helpScreen(width: number): Screen {
     ws('muted', 'Судья — модель, которая читает разговор и решает, справился ли агент.')], room(width)), foot: [{ key: 'Esc', text: 'назад' }] };
 }
 
-/** The folder with nothing in it yet (ui-spec §4.9): what Lab does, and the two ways to begin. */
+/** The folder with nothing in it yet (docs/design/ui-spec.md §4.9): what Lab does, and the two ways to begin. */
 export function startScreen(selected: number, width: number): Screen {
   const choice = (index: number, label: string, note: string) => ws(index === selected ? 'selected' : 'text', `${index === selected ? '›' : ' '} ${label.padEnd(30)}${note}`, 1, { clip: true });
   return { head: wsLines([ws('answer', 'Agent Lab — насколько хорош ваш агент')], room(width)),
@@ -445,7 +445,7 @@ export function startScreen(selected: number, width: number): Screen {
     anchor: 2, foot: [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'начать' }, { key: 'Esc', text: 'закрыть' }] };
 }
 
-/** Several agents in one folder (ui-spec §8.2): each with its version, its latest result and the decisions it waits for. */
+/** Several agents in one folder (docs/design/ui-spec.md §8.2): each with its version, its latest result and the decisions it waits for. */
 export function agentsScreen(spaces: readonly { space: AgentSpace; result: string | null; decisions: number }[], selected: number, width: number, now: Date): Screen {
   const w = room(width);
   const body: Line[] = [];

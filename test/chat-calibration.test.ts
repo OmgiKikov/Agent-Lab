@@ -15,7 +15,7 @@ import { cardInput, cardRuntime } from './helpers/card-prep.js';
 import { CLOSE, noticeOf, output, registered, workspaceSession } from './helpers/pi-session.js';
 
 /*
- * The logs' agent version (card-v2 §10.2) as the owner's decision: a run that compared its situations with logs of an
+ * The logs' agent version (docs/design/card-v2-spec.md §10.2) as the owner's decision: a run that compared its situations with logs of an
  * undeclared version asks which agent wrote them — one decision in the workspace's queue and one step in the chat —
  * and the answer is recorded only from the owner's pick. The run keeps what it used; the next comparison reads it.
  */

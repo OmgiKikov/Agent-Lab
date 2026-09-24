@@ -24,7 +24,7 @@ import type { Feed } from './render/feed.ts';
 import { TOOL } from './steps.ts';
 
 /*
- * Starting, accepting, following and stopping a run (ui-spec §4.6). One native dialog starts a run — it accepts a
+ * Starting, accepting, following and stopping a run (docs/design/ui-spec.md §4.6). One native dialog starts a run — it accepts a
  * card draft's ready situations and connects the agent in the same dialog —; a finished run is run again as a repeat
  * of its accepted set; a long run continues in the session and its result arrives as a message. Nothing here starts
  * a run, spends or connects an agent without the owner's pick in that dialog.

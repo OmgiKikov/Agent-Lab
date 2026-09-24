@@ -22,7 +22,7 @@ import { situationRows } from './render/situation.ts';
 import { TOOL } from './steps.ts';
 
 /*
- * The chat's hands on a draft of situations (card-v2 §5): one read tool and one change tool, a thin adapter over the
+ * The chat's hands on a draft of situations (docs/design/card-v2-spec.md §5): one read tool and one change tool, a thin adapter over the
  * owner commands of src/card/commands.ts. The model names a situation by its number and a fact or a duty by the id the
  * read tool showed (f2, e1); it never carries hashes or passes an approval. What the host needs from the owner comes
  * from the owner: the words of a wording verbatim in their own messages, anything else a native dialog showing the
@@ -64,7 +64,7 @@ export function statusText(view: SituationView, running = false): string {
 }
 
 /**
- * The situations in the chat (ui-spec §4.10): the counts, then who waits for an answer or how much of the logs'
+ * The situations in the chat (docs/design/ui-spec.md §4.10): the counts, then who waits for an answer or how much of the logs'
  * topics the ready ones cover; every situation in three lines on expand. `next` is the last summary row when the
  * caller has a step to name.
  */

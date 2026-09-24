@@ -426,9 +426,9 @@ test('causeRows without recorded causes: the first three failures by title and �
   assert.deepEqual(texts(causeRows(view(scored(1, 3)))), ['Почему ошибается', '1  Провал 1', '2  Провал 2', '3  Провал 3']);
   const explained = causeRows(view(scored(0, 2)), { examples: true });
   assert.deepEqual(explained.map(row => [row.role, row.indent]), [['heading', 0], ['item', 2], ['quote', 5], ['item', 2], ['quote', 5]], 'the title is the item itself');
-  assert.deepEqual(causeRows(view(scored(3, 0))), [{ role: 'good', indent: 0, text: 'Ошибок нет. Это не гарантия для живых клиентов: проверено 3 ситуации.' }]);
-  assert.equal(causeRows(view(scored(1, 0)))[0]!.text, 'Ошибок нет. Это не гарантия для живых клиентов: проверено 1 ситуация.');
-  assert.equal(causeRows(view(scored(21, 0)))[0]!.text, 'Ошибок нет. Это не гарантия для живых клиентов: проверено 21 ситуация.');
+  assert.deepEqual(causeRows(view(scored(3, 0))), [{ role: 'good', indent: 0, text: 'Ошибок нет. Это не гарантия для живых клиентов: проверены 3 ситуации.' }]);
+  assert.equal(causeRows(view(scored(1, 0)))[0]!.text, 'Ошибок нет. Это не гарантия для живых клиентов: проверена 1 ситуация.');
+  assert.equal(causeRows(view(scored(21, 0)))[0]!.text, 'Ошибок нет. Это не гарантия для живых клиентов: проверена 21 ситуация.');
   assert.deepEqual(causeRows(view(scored(0, 0, { unmeasured: 2 }))), [], 'nothing decided proves nothing');
 });
 
@@ -554,7 +554,7 @@ test('chatBlock collapsed: the number, the trust line and the causes in one row 
     ['Чаще всего: Не называет срок возврата (3)', 'Не уточняет модель терминала (1)', 'Отвечает вне инструкций (1)']);
   // Nothing failed: the honest sentence instead of the causes.
   const clean = chatBlock(view(marked(scored(3, 0))), { expanded: false });
-  assert.deepEqual(clean.at(-1), { role: 'good', indent: 2, text: 'Ошибок нет. Это не гарантия для живых клиентов: проверено 3 ситуации.' });
+  assert.deepEqual(clean.at(-1), { role: 'good', indent: 2, text: 'Ошибок нет. Это не гарантия для живых клиентов: проверены 3 ситуации.' });
   // The alarm and the number stay at the edge; everything under them is indented.
   const alarmed = chatBlock(view(scored(3, 1, { control: 'fail' })), { expanded: false });
   assert.deepEqual(alarmed.map(row => [row.role, row.indent]), [['alarm', 0], ['accuracy:warn', 0], ['trust:small', 2], ['muted', 2]]);

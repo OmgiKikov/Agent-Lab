@@ -58,7 +58,11 @@ export interface FailureExplanation {
 
 const GOAL = 'goal_attainment';
 const COMPLIANCE = 'prompt_compliance';
-/** A «…» span of the judge's rationale long enough to identify a rule. */
+/**
+ * A «…» span of the judge's rationale long enough to identify a rule. The stored prompt-rule rubric asks the judge to
+ * quote the violated rule verbatim in its rationale (assessment.ts promptCompliance); that rubric and its judgments sit
+ * inside stored hashes and carry no rule id, so the quote is the only link. A card names its rules by id instead.
+ */
 const QUOTED_SPAN = /«([^«»]{12,})»/g;
 /**
  * How close a span must be before it may name a rule. Twelve characters is a coincidence in Russian

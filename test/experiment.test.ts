@@ -13,7 +13,7 @@ import { ExperimentLab } from '../src/experiment.js';
 import { draftHash, measurementHash, resultHash } from '../src/lab/record.js';
 import { ExperimentStore } from '../src/store.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
-import { SANDBOX_RETIRED, createInputSchema, experimentSchema, fingerprint, runnableTarget, validatePreparation, type Experiment, type Target } from '../src/contracts.js';
+import { SANDBOX_RETIRED, createInputSchema, experimentSchema, fingerprint, runnableTarget, validatePreparation, type Experiment, type HumanReviewInput, type Target } from '../src/contracts.js';
 import { metricApplies } from '../src/assessment.js';
 import type { Runtime } from '../src/runtime.js';
 import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
@@ -99,7 +99,7 @@ test('task-only execution records automated review and labels expectations provi
   const result = await runDraft(lab, await externalDraft(lab), 'automated');
   assert.equal(result.phase, 'results_review', result.error ?? '');
   assert.equal(result.reviewMode, 'automated');
-  assert.match(result.limitations.join(' '), /without human validation/);
+  assert.match(result.limitations.join(' '), /проверены автоматически, без человека/);
 });
 
 test('shutdown during the initial checkpoint waits, keeps the lock, and never starts model work', async t => {
@@ -268,7 +268,7 @@ test('confirming the expectations is recorded as exactly that, never as a human 
   // The run dialog confirms expectations; the verdicts do not exist yet, so nothing here says a
   // person checked them. The limitation must say so instead of disappearing.
   assert.match(result.limitations.join(' '), /Владелец подтвердил ожидания ситуаций перед запуском\. Определения карточек и оценки судьи человеком не проверялись\./);
-  assert.doesNotMatch(result.limitations.join(' '), /without human validation/);
+  assert.doesNotMatch(result.limitations.join(' '), /проверены автоматически, без человека/);
   // An old record parses and keeps the two modes it could already hold.
   assert.equal(experimentSchema.parse({ ...result, reviewMode: 'human' }).reviewMode, 'human');
   assert.equal(experimentSchema.parse({ ...result, reviewMode: 'automated' }).reviewMode, 'automated');
@@ -458,9 +458,9 @@ test('one user card requires exact human approval, runs the agent once, then pre
   const priorResultHash = resultHash(result);
   await assert.rejects(lab.addHumanReview(result.id, { trialId: 'missing', verdict: 'invalid', note: 'Wrong user.' }), /Такого диалога/);
   await assert.rejects(lab.addHumanReview(result.id, { trialId: originalTrial.id, metricId: 'missing', verdict: 'fail', note: 'Wrong metric.' }), /Такой рубрики/);
-  await assert.rejects(lab.addHumanReview(result.id, { trialId: originalTrial.id, verdict: 'fail', note: 'No event reference.', reviewedDialogue: true }), /ссылаться на событие/);
-  const foreignSeq = Math.max(...originalTrial.events.map(event => event.seq)) + 1;
-  await assert.rejects(lab.addHumanReview(result.id, { trialId: originalTrial.id, verdict: 'fail', note: `Reviewed #${foreignSeq}.`, reviewedDialogue: true }), /ссылаться на событие/);
+  // A whole-dialogue mark is not taken any more: nothing reads it, and a note is never parsed for event numbers.
+  const marked = { trialId: originalTrial.id, verdict: 'fail', note: 'Reviewed #1.', reviewedDialogue: true } as unknown as HumanReviewInput;
+  await assert.rejects(lab.addHumanReview(result.id, marked), /reviewedDialogue/);
   const annotated = await lab.addHumanReview(result.id, {
     trialId: originalTrial.id, metricId: result.scenarios[0]!.metrics![0]!.id, verdict: 'unknown', note: 'Need the real pilot before accepting this estimate.',
   });
@@ -549,7 +549,7 @@ test('a missing target yields a recoverable explanation and a rejected connectio
   assert.equal(failed.usage.calls, 0);
   const next = await lab.create(createInputSchema.parse({ ...demoInput(), workflow: 'evaluate', scenarioCount: 1 })); await lab.waitForIdle();
   const draft = await lab.get(next.id);
-  await assert.rejects(lab.updateDraft(draft.id, draftHash(draft), { target: input.target }), /Не найден файл агента/);
+  await assert.rejects(lab.updateDraft(draft.id, draftHash(draft), { target: runnableTarget(input.target) }), /Не найден файл агента/);
   assert.equal(draftHash(await lab.get(draft.id)), draftHash(draft));
 });
 

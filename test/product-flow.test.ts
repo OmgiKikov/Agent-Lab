@@ -6,21 +6,16 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
-import { fileURLToPath } from 'node:url';
 import { ExperimentLab } from '../src/experiment.js';
 import { draftHash, resultHash } from '../src/lab/record.js';
 import { createDemoRuntime, demoInput, demoTarget } from '../src/demo.js';
-import { createInputSchema, draftPatchSchema, fingerprint, scriptIssue, type Experiment } from '../src/contracts.js';
-import { goalAttainment } from '../src/assessment.js';
-import type { Runtime } from '../src/runtime.js';
-import { listSuites } from '../src/connection.js';
+import { createInputSchema, draftPatchSchema, scriptIssue, type Experiment } from '../src/contracts.js';
 import { awaitingVerdict, compareRuns } from '../src/comparison.js';
 import { automaticTrialResult } from '../src/outcomes.js';
 import { buildResultView, exitCodeOf } from '../src/result-view.js';
 import { acceptedDemoDraft, demoCard } from './helpers/demo-record.js';
 import { evaluateTrial } from '../src/evaluation.js';
 import { htmlReport } from '../src/report.js';
-import { trialProofLines } from '../src/quality.js';
 
 test('a failed case becomes a reusable regression test without changing provenance or inventing review', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-product-'));

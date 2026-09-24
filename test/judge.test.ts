@@ -8,7 +8,7 @@ import { emptyUsage, fingerprint, type Requirement, type Scenario, type Source, 
 import { goalAttainment, RAG_METRIC_IDS, RAG_RUBRICS, ragEvidenceComplete, replyQuality, simulatorFidelity, validateAssessments, type JudgeAudit } from '../src/assessment.js';
 import { ExperimentStore } from '../src/store.js';
 
-const scenario: Scenario = { id: 'card', familyId: 'family', title: 'A fixed input', split: 'dev', provenance: 'synthetic', requirementIds: [],
+const scenario: Scenario = { id: 'card', familyId: 'family', title: 'A fixed input', split: 'dev', provenance: 'synthetic', tier: 'regression', requirementIds: [],
   user: { goal: 'Receive an instruction', facts: 'Known facts', behavior: 'Stop after the instruction', opening: 'Help', maxFollowUps: 0 },
   checks: [], initialState: { records: {}, writableFields: [], transientFailures: 0 },
   metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'Original task', passCriteria: 'Instruction supplied', failCriteria: 'A refusal is supplied' }, simulatorFidelity] };
@@ -252,9 +252,9 @@ test('judge input withholds case labels, prior grades, unobserved state and unde
     user: { ...scenario.user, script: ['UNDELIVERED'], maxFollowUps: 1 } },
     trial: { ...trial, outcome: 'fail', finalState: { ...trial.finalState, records: { SECRET_STATE: { time: '11:00' } } } } });
   assert.doesNotMatch(JSON.stringify(data), /EXPECTED_FAIL|PRIOR_VERDICT_SECRET|UNDELIVERED|SECRET_STATE/);
-  assert.equal(data.trial.finalState, null);
+  assert.equal('finalState' in data.trial ? data.trial.finalState : 'absent', null);
   assert.match(data.evaluationScope, /action-dependent.*unclear/i);
-  assert.deepEqual(data.scenario.user.script, []);
+  assert.deepEqual('user' in data.scenario ? data.scenario.user.script : 'absent', []);
   const observed = judgeInput({ ...input, trial: { ...trial, events: [{ seq: 2, type: 'tool_result', text: 'Update succeeded',
     tool: 'update_record', result: { ok: false, error: 'Write rejected' } }] } });
   assert.deepEqual(JSON.parse(observed.trial.events[0]!.content), {
@@ -273,7 +273,7 @@ test('missing action evidence cannot be replaced by agent self-attestation while
   const missing = judgeInput({ ...input, scenario: actionScenario, trial: { ...trial,
     ...actionTrial,
   } });
-  assert.equal(missing.trial.finalState, null);
+  assert.equal('finalState' in missing.trial ? missing.trial.finalState : 'absent', null);
   assert.match(missing.evaluationScope, /agent prose proves only what was said/i);
   assert.match(missing.evaluationScope, /action-dependent.*unclear/i);
   assert.deepEqual(missing.scenario.metrics?.map(metric => metric.id), ['goal_attainment', 'reply_quality']);
@@ -368,12 +368,12 @@ test('missing action evidence cannot be replaced by agent self-attestation while
   assert.equal(forbiddenTool[0]!.result, 'unknown', 'a tool forbidden by a zero-count check cannot prove goal success');
 
   for (const state of ['reported', 'sandbox'] as const) {
-    const observedTrial = { ...trial,
+    const observedTrial: Trial = { ...trial,
       observation: { state, tools: state === 'sandbox' ? 'sandbox' : 'complete' },
       finalState: { records: { request: { status: 'created' } }, writableFields: [], transientFailures: 0 },
     };
     const observed = judgeInput({ ...input, scenario: actionScenario, trial: observedTrial });
-    assert.notEqual(observed.trial.finalState, null);
+    assert.notEqual('finalState' in observed.trial ? observed.trial.finalState : null, null);
     assert.doesNotMatch(observed.evaluationScope, /action-dependent.*unclear/i);
     const unsupported = await assessRepeated({ ...input, scenario: { ...actionScenario, metrics: [{ ...goalAttainment }] }, trial: observedTrial }, model,
       { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => JSON.stringify({ assessments: [{

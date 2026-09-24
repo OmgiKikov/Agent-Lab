@@ -120,30 +120,22 @@ test('a quick mark carries the counting rule it was given under; an old review w
   assert.equal(humanReviewInputSchema.safeParse({ ...stamped, countingRule: 'goal-and-rules-v2' }).success, false, 'an unknown key still fails: the object stays strict');
 });
 
-test('only a whole-dialogue verdict can mark an explicit complete review', () => {
+test('an old review\'s whole-dialogue mark parses verbatim; a new review cannot claim one, and no note is parsed for events', () => {
   const legacy = { trialId: 't1', verdict: 'unknown' as const, note: '#1: legacy review' };
-  const complete = { ...legacy, reviewedDialogue: true as const };
   assert.ok(humanReviewInputSchema.safeParse(legacy).success);
-  assert.ok(humanReviewInputSchema.safeParse(complete).success);
-  assert.equal(humanReviewInputSchema.safeParse({ ...complete, metricId: 'goal' }).success, false);
-  assert.equal(humanReviewInputSchema.safeParse({ ...complete, checkId: 'state' }).success, false);
+  assert.equal(humanReviewInputSchema.safeParse({ ...legacy, reviewedDialogue: true }).success, false, 'the input takes no whole-dialogue mark');
 
   const trial = { id: 't1', revisionId: 'r', scenarioId: 's', familyId: 'f', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'pass', reason: '', checks: [], events: [{ seq: 1, type: 'assistant', text: 'ok' }],
     initialState: { records: {}, writableFields: [], transientFailures: 0 }, finalState: { records: {}, writableFields: [], transientFailures: 0 }, usage: emptyUsage(), elapsedMs: 1 };
-  const persisted = { ...complete, id: 'h1', createdAt: '2026-09-15T10:00:00Z' };
+  const persisted = { ...legacy, reviewedDialogue: true as const, id: 'h1', createdAt: '2026-09-15T10:00:00Z' };
   const record = { ...legacyRecord(), trials: [trial] };
-  assert.ok(experimentSchema.safeParse({ ...record, humanReviews: [persisted] }).success);
-  assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, note: 'без ссылки' }] }).success, false);
-  assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, note: '#999: чужое событие' }] }).success, false);
-  assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, trialId: 'missing' }] }).success, false);
-  assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, metricId: 'goal' }] }).success, false);
-  assert.equal(experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, checkId: 'state' }] }).success, false);
-
+  for (const note of ['#1: legacy review', 'без ссылки', '#999: чужое событие']) {
+    const parsed = experimentSchema.safeParse({ ...record, humanReviews: [{ ...persisted, note }] });
+    assert.ok(parsed.success, note);
+    assert.deepEqual(parsed.data.humanReviews[0], { ...persisted, note }, 'kept as stored, whatever its note says');
+  }
   const sourceEvidence = { runId: 'source', trials: [trial], humanReviews: [persisted] };
   assert.ok(experimentSchema.safeParse({ ...record, sourceEvidence }).success);
-  assert.equal(experimentSchema.safeParse({ ...record, sourceEvidence: { ...sourceEvidence, humanReviews: [{ ...persisted, note: 'без ссылки' }] } }).success, false);
-  assert.equal(experimentSchema.safeParse({ ...record, sourceEvidence: { ...sourceEvidence, humanReviews: [{ ...persisted, note: '#999: чужое событие' }] } }).success, false);
-  assert.equal(experimentSchema.safeParse({ ...record, sourceEvidence: { ...sourceEvidence, humanReviews: [{ ...persisted, trialId: 'missing' }] } }).success, false);
   const attempts = Array.from({ length: 600 }, (_, index) => ({ ...trial, id: `source-${index}`, repeat: index % 5 }));
   assert.ok(experimentSchema.safeParse({ ...record, sourceEvidence: { runId: 'source', trials: attempts, humanReviews: [] } }).success);
   assert.equal(experimentSchema.safeParse({ ...record, sourceEvidence: { runId: 'source', trials: [...attempts, { ...trial, id: 'source-600' }], humanReviews: [] } }).success, false);

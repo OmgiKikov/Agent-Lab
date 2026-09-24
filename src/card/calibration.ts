@@ -6,7 +6,7 @@ import type { ImportBatch } from '../scenario-contracts.js';
 import type { Expectation } from './expectations.js';
 
 /*
- * Sim-to-real calibration (card-v2 §10): the stored shapes. The owner's thesis is that synthetic customers in
+ * Sim-to-real calibration (docs/design/card-v2-spec.md §10): the stored shapes. The owner's thesis is that synthetic customers in
  * situations taken from real logs give an accuracy close to production. Each expectation of a situation from a
  * log is therefore judged twice: (a) on the synthetic run, as every expectation is, and (b) on the recorded
  * conversation itself — the real customer and the real agent's replies, with no agent, simulator or stand

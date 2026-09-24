@@ -5,7 +5,7 @@ import { planClaims, type Claim, type ClaimKind } from './review.js';
 import type { Card, CardCommand, ClaimReceipt, LibraryV2 } from './schema.js';
 
 /*
- * The status of a card and the one question the owner is asked (card-v2 §2.6). Both are derived, never stored:
+ * The status of a card and the one question the owner is asked (docs/design/card-v2-spec.md §2.6). Both are derived, never stored:
  * from the card, the reviewer's receipts and the owner's receipts. The question and its answers are harness
  * templates in the owner's words; every answer is a typed command built in advance, so a choice never has to be
  * interpreted. The first open question is the only one shown: after the answer the next one, if any, appears.

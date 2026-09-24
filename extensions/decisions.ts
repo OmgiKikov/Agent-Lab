@@ -19,7 +19,7 @@ import type { Background } from './background.ts';
 import type { LabLease, SessionOperations } from './operations.ts';
 
 /*
- * «Нужно ваше решение» (ui-spec §8.3) in both surfaces. The queue is derived from the records (src/inbox.ts); what a
+ * «Нужно ваше решение» (docs/design/ui-spec.md §8.3) in both surfaces. The queue is derived from the records (src/inbox.ts); what a
  * pick does is decided here, once, for the workspace and the chat. The surface asks the owner first — a key on the
  * board, a native dialog in the chat — and then these functions do what the pick means through the same operations
  * and owner commands; nothing here asks again or decides for the owner.

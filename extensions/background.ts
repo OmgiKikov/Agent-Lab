@@ -33,7 +33,7 @@ export const STOP_HINT = 'остановить — напишите «стоп»
 export type Prepared = { output: Record<string, unknown>; feed?: Feed; note?: string };
 
 /**
- * The one row of long work above the input (ui-spec §4.6): Pi's `Loader` with a line from the running record and
+ * The one row of long work above the input (docs/design/ui-spec.md §4.6): Pi's `Loader` with a line from the running record and
  * how to stop it; the status bar carries the same line without the hint.
  */
 export class ProgressRow {

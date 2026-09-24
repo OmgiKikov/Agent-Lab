@@ -45,13 +45,13 @@ export function embeddedBefore(record: Experiment, parentId: string): Experiment
     }
   }
   before.parentRunId = source.parentRunId;
-  before.phase = 'results_review'; before.message = 'Portable baseline reconstructed from the saved suite evidence.';
+  before.phase = 'results_review'; before.message = 'Исходный прогон восстановлен из сохранённого набора.';
   before.trials = structuredClone(source.trials); before.humanReviews = structuredClone(source.humanReviews);
   before.manifestHash = source.identity?.manifestHash ?? before.trials[0]?.manifestHash ?? null;
   before.reviewedAt ??= before.createdAt; before.reviewMode ??= 'automated';
   before.usage = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: null };
   before.error = null;
-  before.limitations = [...before.limitations, 'Portable baseline contains the saved attempts and current frozen definition, not the unavailable original run metadata.'];
+  before.limitations = [...before.limitations, 'Восстановленный прогон содержит сохранённые попытки и определения ситуаций из набора, но не остальные данные исходного прогона.'];
   delete before.sourceEvidence; delete before.failureModes; delete before.releaseLog;
   delete before.assessmentOf; delete before.assessmentTrialIds; delete before.evidenceHash;
   return markReconstructedSource(before);

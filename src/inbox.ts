@@ -9,7 +9,7 @@ import type { NotMeasuredCode } from './run.js';
 import { clip, oneLine } from './text.js';
 
 /*
- * «Нужно ваше решение» (ui-spec §8.3): only what Lab cannot decide itself and what changes what is measured — one
+ * «Нужно ваше решение» (docs/design/ui-spec.md §8.3): only what Lab cannot decide itself and what changes what is measured — one
  * plain phrase and two or three actions. The queue is never stored: it is derived from the records each time, so a
  * decision disappears by itself once the record no longer calls for it. What spoils the measurement comes first,
  * then the questions about situations, then spending. Disputed situations never block running the ready ones.
@@ -113,7 +113,7 @@ function unmeasured(run: NonNullable<InboxInput['run']>, when: string): Decision
 }
 
 /**
- * The logs' agent version (card-v2 §10.2): a run compared its situations with logs whose version nobody named, so the
+ * The logs' agent version (docs/design/card-v2-spec.md §10.2): a run compared its situations with logs whose version nobody named, so the
  * agreement with production is only a comparison. One decision per such import, until the owner names the version —
  * the next calibration reads it; a finished run keeps what it used.
  */

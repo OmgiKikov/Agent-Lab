@@ -117,9 +117,6 @@ export function addHumanReview(lab: Lab, id: string, raw: HumanReviewInput): Pro
     const input = humanReviewInputSchema.parse(raw);
     const trial = record.trials.find(t => t.id === input.trialId);
     if (!trial) throw new Error('Такого диалога в этом эксперименте нет.');
-    if (input.reviewedDialogue && ![...input.note.matchAll(/#(\d+)\b/g)].some(match => trial.events.some(event => event.seq === Number(match[1])))) {
-      throw new Error('Полный разбор должен ссылаться на событие текущего диалога.');
-    }
     const objectiveCheck = input.checkId && trial.checks.some(c => c.id === input.checkId);
     const simulatorCheck = input.checkId && trial.simulatorChecks?.some(c => c.id === input.checkId);
     if (objectiveCheck && simulatorCheck) throw new Error('ID проверки неоднозначен: он занят объективной проверкой и проверкой симулятора.');

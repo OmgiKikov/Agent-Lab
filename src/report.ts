@@ -5,7 +5,7 @@ import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLin
 import type { FailureExplanation } from './explain.js';
 import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText } from './plural.js';
-import { accuracyParts, alarmRow, realityParts, trustSegments } from './result-text.js';
+import { accuracyParts, alarmRow, noErrorsText, realityParts, trustSegments } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
 import { situationBrief, situationNumber } from './card/view.js';
 import { oneLine } from './text.js';
@@ -48,8 +48,7 @@ function chipOf(card: ResultCard, view: ResultView): CardItem['chip'] {
 /** «Почему ошибается»: each cause with up to three of its failures quoted; without causes, the failures themselves. */
 function causesBlock(view: ResultView): Block[] {
   if (!view.failures.length) {
-    return view.headline.decided ? [{ kind: 'paragraph', muted: false,
-      text: `Ошибок нет. Это не гарантия для живых клиентов: проверено ${countText(view.headline.decided, SITUATIONS)}.` }] : [];
+    return view.headline.decided ? [{ kind: 'paragraph', muted: false, text: noErrorsText(view.headline.decided) }] : [];
   }
   const items = view.topCauses.length
     ? view.topCauses.map(cause => ({ title: oneLine(cause.name), count: countText(cause.count, SITUATIONS),

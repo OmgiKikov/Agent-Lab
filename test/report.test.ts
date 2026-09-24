@@ -191,6 +191,7 @@ function contentOf(report: Report): string[] {
         ...item.brief.must.flatMap(must => [must.text, ...(must.rule ? [must.rule] : [])]), ...item.dialogue.map(turn => turn.text)]);
       case 'failures': return block.items.flatMap(item => [item.title, item.expected, ...(item.said ? [item.said] : []),
         ...(item.rule ? [item.rule.quote, item.rule.source] : []), ...item.dialogue.map(turn => turn.text)]);
+      case 'disagreements': return block.items.flatMap(item => [item.title, ...item.expectations, item.hint, item.conversations, ...item.dialogue.map(turn => turn.text)]);
       case 'list': return block.items;
       case 'paragraph': return [block.text];
     }
@@ -382,7 +383,7 @@ test('an old-format situation reads as a brief built from its card', () => {
   assertInOrder(markdown, ['- Хочет: Сменить адрес доставки заказа A-2051', '- Знает: Новый адрес — ул. Ленина, 5 — если спросят', '**Агент должен**',
     `1. Сменить адрес доставки и подтвердить новый адрес — правило: «${ADDRESS_QUOTE}»`], 'Markdown');
   for (const text of [html, markdown]) {
-    assert.match(text, /Ошибок нет\. Это не гарантия для живых клиентов: проверено 1 ситуация\./);
+    assert.match(text, /Ошибок нет\. Это не гарантия для живых клиентов: проверена 1 ситуация\./);
     assert.equal(text.includes('Уходит'), false, 'an old card does not say when the client leaves');
   }
 });

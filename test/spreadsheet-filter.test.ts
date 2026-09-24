@@ -46,7 +46,7 @@ test('which conversations to evaluate: the owner names a column of categories, L
   const asked = propose({ where: { column: 'agentCode' } });
   assert.equal(asked.status, 'question');
   assert.deepEqual(asked.status === 'question' && [asked.question, asked.found], [{ kind: 'where', column: asked.columns[4], values: [
-    { value: SINGLE, dialogues: 398 }, { value: PAIR, dialogues: 300 }, { value: ADVISOR, dialogues: 120 }, { value: REVERSED, dialogues: 48 }] }, 866]);
+    { value: SINGLE, dialogues: 398 }, { value: PAIR, dialogues: 300 }, { value: ADVISOR, dialogues: 120 }, { value: REVERSED, dialogues: 48 }], more: 0 }, 866]);
   const lines = proposalLines(asked);
   assert.deepEqual(lines, [
     'Таблица logs.xlsx · лист «Данные»', '',
@@ -95,10 +95,9 @@ test('several values are kept together; one choice is one mapping, whatever orde
   assert.equal(fingerprint(again.mapping), fingerprint(both.mapping));
 });
 
-test('only a column of categories chooses conversations: a column read as the conversation, one of one-off values or of texts is refused with the reason', () => {
+test('a column read as the conversation cannot choose it, and a column of texts is never listed: each is refused with the reason', () => {
   assert.deepEqual(refusal(propose({ where: { column: 'Текст' } })), ['where', 'Колонка «Текст» уже выбрана как текст разговора.']);
   assert.deepEqual(refusal(propose({ where: { column: 'A', values: [idOf(1)] } })), ['where', 'Колонка «Id диалога» уже выбрана как id разговора.']);
-  assert.deepEqual(refusal(propose({ where: { column: 'Время' } })), ['where', 'В колонке «Время» 866 разных значений — по ней разговоры не отобрать: подходит колонка, где значений не больше 30.']);
   assert.deepEqual(refusal(propose({ where: { column: 'Канал' } })), ['where', 'Колонки «Канал» нет в листе «Данные». Есть: «Id диалога», «Дата», «Время», «Текст», «agentCode», «Оператор».']);
   const notes = (i: number) => `Оператор подключился после ${i % 3 + 1}-й реплики клиента; клиент недоволен ожиданием и просит перезвонить ему позже, когда вопрос будет решён`;
   const rows: CellSpec[][] = [['Id', 'Текст', 'Заметка'], ...Array.from({ length: 12 }, (_, k): CellSpec[] => [`d${k + 1}`, conversation(k + 1), notes(k)])];
@@ -121,6 +120,32 @@ test('Lab offers the columns of categories; the same file and the same choice re
   assert.deepEqual([again.id, again.contentHash], [first.id, first.contentHash]);
   assert.deepEqual({ ...again, createdAt: '' }, { ...first, createdAt: '' });
   assert.notEqual(importTable(SHEET, all.mapping).batch.id, first.id, 'the chosen conversations are another import than the whole sheet');
+});
+
+/** The owner's real export: 57 combinations of agents in `agentCode`, the acquiring agent alone in 398 of 866 conversations. */
+function export57(): CellSpec[][] {
+  const others = Array.from({ length: 56 }, (_, j) => `['ACQUIRING_AGENT', 'AGENT_${String(j + 1).padStart(2, '0')}']`);
+  const agents = [...Array<string>(398).fill(SINGLE), ...others.flatMap((value, j) => Array<string>(j < 20 ? 9 : 8).fill(value))];
+  return [['Id диалога', 'Текст', 'agentCode'], ...agents.map((_, k): CellSpec[] => [idOf(k + 1), conversation(k + 1), agents[(k * 7) % agents.length]!])];
+}
+
+test('a column of many values still chooses: a value the owner names is kept with its count, and the question lists the most frequent and how many more', () => {
+  const bytes = xlsxFile([{ name: 'Данные', rows: export57() }]), file = tableFileOf('logs.xlsx', bytes);
+  const wide = (choices: TableChoices) => proposeTable(readWorkbook(bytes, file), file, choices);
+  const named = ready(wide({ where: { column: 'agentCode', values: [SINGLE] } }));
+  assert.deepEqual([named.preview.dialogues, named.preview.selected], [866, 398]);
+  assert.ok(proposalLines(named).includes(`  Отбор: «agentCode» = «${SINGLE}» — 398 из 866 разговоров.`), proposalLines(named).join('\n'));
+  assert.deepEqual(refusal(wide({ where: { column: 'agentCode', values: ["['NO_SUCH_AGENT']"] } })), ['where', "В колонке «agentCode» нет значения «['NO_SUCH_AGENT']»."]);
+
+  const asked = wide({ where: { column: 'agentCode' } });
+  assert.ok(asked.status === 'question' && asked.question.kind === 'where', asked.status);
+  assert.deepEqual([asked.question.values.length, asked.question.more, asked.question.values[0]], [30, 27, { value: SINGLE, dialogues: 398 }]);
+  const lines = proposalLines(asked);
+  assert.equal(lines[2], 'Какие разговоры оценивать? Lab видит 866 разговоров; в колонке «agentCode» у них 57 разных значений — выберите одно или несколько; ниже 30 самых частых.');
+  assert.equal(lines[3], `  1. «${SINGLE}» — 398 разговоров`);
+  assert.equal(lines.at(-1), '  …ещё 27 значений — назовите нужное сами');
+  assert.equal(lines.length, 3 + 30 + 1, 'thirty numbered answers and one line for the rest');
+  assert.ok(ready(wide({})).selectable.some(column => column.header === 'agentCode'), 'a column of many categories is offered too');
 });
 
 /** One message per row, with a column that names each conversation's channel on its rows. */

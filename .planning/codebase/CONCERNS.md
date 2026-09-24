@@ -28,23 +28,13 @@ Every item below was checked against the source at `fd07c33`; line numbers refer
 - Impact: the number the owner agrees to is not the number the preparation can actually spend.
 - Fix approach: a computed preparation ceiling (topic-map calls + situations × per-dialogue allowance + review calls) used as that preparation's budget.
 
-**Regular expressions still read human or model text in a few places:**
+**Regular expressions that still read human or model text — each kept for a reason (P):**
 
-- Issue: about 15 of 76 regex sites read text as data: article titles matched to the words of a question with a Russian stop list (`src/scenario-sources.ts:38-39`), «…» spans of a judge rationale naming a rule (`src/explain.ts:60`), `#N` event references in a review note (`src/contracts.ts:689`, `src/experiment.ts:568`), value tokens (`src/contracts.ts:37`), hidden-value search in simulator messages (`src/simulator.ts:13`), masking markers (`src/imports.ts:17`, `src/scenario-library.ts:62`), and the legacy machine-format detector kept only for requirements stored without `observable` (`src/contracts.ts:121`). Four more are in the deterministic teaching runtime (`src/demo.ts`).
-- Impact: these are the remaining exceptions to the "no regex over human or model text" rule; wording changes can move their results.
-- Fix approach: typed fields at the source (as `observable` did for requirements), per-call enums, or exact comparison after one normalisation.
-
-**English limitation lines in new records:**
-
-- Issue: every new record starts with four English `limitations` (`src/experiment.ts:175-179`); more are appended on interruption (`:138`), automated review (`:649`) and scripted skips (`:770`).
-- Impact: not shown on owner screens, but carried into the JSON snapshot and suites.
-- Fix approach: Russian wording, or typed limitation codes rendered at the edge.
-
-**Comments cite specifications outside the repository:**
-
-- Issue: 83 comment references in 39 files point to `ui-spec §…` and `card-v2 §…`, documents kept outside the repository.
-- Impact: a reader of the repository cannot follow the reason a comment cites.
-- Fix approach: state the reason in the comment itself, or bring the relevant decisions into `docs/`.
+- Kept, frozen protocols of stored records: the «…» quote a stored prompt-rule judgment gives of the violated rule (`src/explain.ts` QUOTED_SPAN — the rubric asks for it and carries no rule id), the legacy machine-format detector for requirements stored without `observable` (`src/contracts.ts`), and the free simulator's leak, fabrication and loop checks with their value tokens (`src/simulator.ts`, `src/verbatim.ts`), which are part of `SIMULATOR_PROTOCOL` and run again when a stored run is re-assessed.
+- Kept, an external format: de-identification marks of exports, one documented table in `src/masking.ts` (it decides which rows a stored import holds and what a stored topic map left out).
+- Kept, the teaching runtime (`src/demo.ts`): it plays a model on its own invented dialogues and measures nothing.
+- Replaced in P: the stop-list match of article titles to the customer's words (`src/scenario-sources.ts` — the first answer's goal article is kept structurally) and `#N` event references parsed from review notes (the whole-dialogue mark is no longer taken; stored ones stay verbatim).
+- Impact: a new rule that reads text must be a typed field, a per-call enum or an exact comparison; the kept sites change only with a new protocol version.
 
 ## Known Bugs
 
@@ -55,18 +45,13 @@ Every item below was checked against the source at `fd07c33`; line numbers refer
 - Trigger: a hook such as `./deploy.sh` that runs `uvicorn … &` without redirecting its output.
 - Workaround: redirect the background process's stdio (`> log 2>&1 &`) and detach it (`setsid`/`nohup`).
 
-**Wrong agreement in the no-errors sentence:**
-
-- Symptoms: «Ошибок нет. Это не гарантия для живых клиентов: проверено 1 ситуация.»
-- Files: `src/result-text.ts:218`, `src/report.ts:52` (the participle does not follow the count).
-
 ## Security Considerations
 
-**Owner consent in the chat is host-owned, but Pi's own tools stay active:**
+**Owner consent outside `agent-lab chat`:**
 
-- Risk: Lab's tools take no settings, consent, hash or verdict, and every decision is a native dialog. Pi's built-in tools (read, bash, edit, write) stay active in an Agent Lab chat (`extensions/steps.ts`), and the CLI treats `--yes` as the owner's consent; a model that ran `agent-lab … --yes` through bash would bypass the native dialog.
-- Current mitigation: the skill forbids deciding for the owner and tells the model to name CLI commands for the owner to run; whether a shell command needs the user's approval depends on Pi's settings.
-- Recommendations: verify Pi's command approval in the Agent Lab session, or hand the chat a Lab-specific tool set without shell access.
+- Risk: Pi's built-in tools (read, bash, edit, write) stay active next to Lab's (`extensions/steps.ts`). Inside `agent-lab chat` the CLI refuses every `--yes` (`src/cli.ts`: `agent-lab chat` gives Pi `AGENT_LAB_SESSION=1`, and Pi's shell passes its environment to every command), so a model cannot consent through bash. A Pi started otherwise with the extension loaded (`npm run pi`, a package install) does not set the variable.
+- Current mitigation: the skill says the CLI is never the way to spend or decide inside the chat; whether a shell command needs the user's approval depends on Pi's settings.
+- Recommendations: start the product through `agent-lab chat`.
 
 **CLI `run` of a draft without a library starts without acceptance:**
 
@@ -151,11 +136,6 @@ Every item below was checked against the source at `fd07c33`; line numbers refer
 - Risk: the chat may pick the wrong tool for an owner's phrase although every unit test passes.
 - Priority: High
 
-**Test code is not type-checked:**
-
-- What's not tested: `tsc` over `test/` reports 91 errors (41 in `test/workflow.test.ts`); tsx only transpiles.
-- Priority: Medium
-
 **Noisy command adapter:**
 
 - What's not tested: a command adapter that prints debug lines to stdout.
@@ -170,6 +150,10 @@ Every item below was checked against the source at `fd07c33`; line numbers refer
 - Judge audits moved to private sidecars with receipts on the trial.
 - Accepted runs are verified by stored hashes, never recompiled; a card draft cannot start without a verified acceptance.
 - Release hooks are killed at their deadline even when a grandchild holds the pipes (`test/targets.test.ts:310`).
+- (P) `npm run typecheck` checks `extensions/` and all of `test/` with the strictness of `src/` (`tsconfig.check.json`); the 135 errors are fixed.
+- (P) The design specifications live in `docs/design/`; every comment cites a file and a section, and `test/design-references.test.ts` checks each citation.
+- (P) New records carry no English boilerplate `limitations`; the remaining notes are Russian. «Ошибок нет…» agrees with its count.
+- (P) `agent-lab build` shows the preparation consent and prepares only on `--yes` within its ceiling; `--situations N` sets the count. The chat chooses a spreadsheet's conversations natively (`table.where`), and a column with more than 30 values is listed by its 30 most frequent.
 
 ---
 

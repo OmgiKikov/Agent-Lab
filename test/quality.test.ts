@@ -13,7 +13,7 @@ const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFail
 const goal = { id: 'goal', name: 'Цель выполнена', subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' };
 const format = { id: 'format', name: 'Формат ответа', subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' };
 function scenario(id: string, checks = true): Scenario {
-  return { id, familyId: id, title: `Карточка ${id}`, requirementIds: [], provenance: 'curated', user: { goal: 'g', facts: 'f', behavior: 'b', opening: 'o', maxFollowUps: 1 },
+  return { id, familyId: id, title: `Карточка ${id}`, requirementIds: [], provenance: 'curated', tier: 'regression', user: { goal: 'g', facts: 'f', behavior: 'b', opening: 'o', maxFollowUps: 1 },
     initialState: world, checks: checks ? [{ id: 'time', kind: 'state_equals', description: 'Время изменено', recordId: 'r', field: 't', value: '1' }] : [], metrics: [goal, format], split: 'dev' };
 }
 function trial(id: string, scenarioId: string, outcome: Trial['outcome'], goalResult: 'pass' | 'fail' | 'unknown', formatResult: 'pass' | 'fail' | 'unknown' = 'pass', userMode: Trial['userMode'] = 'static'): Trial {
@@ -27,7 +27,7 @@ function record(overrides: Partial<Experiment> = {}): Experiment {
   return { schemaVersion: '1', id: 'exp', task: 't', mode: 'live', workflow: 'evaluate', createdAt: 'now', updatedAt: 'now', phase: 'results_review', message: '',
     sources: [], settings: settingsSchema.parse({ userModes: ['static'], repeats: 1 }), target: { kind: 'sandbox' }, requirements: [], questions: [], goldenCases: [], dialogues: [], profiles: [],
     scenarios: [scenario('a'), scenario('b'), scenario('c')], revisions: [], selectedRevisionId: null, manifestHash: 'h', reviewedAt: null, reviewMode: 'human', controlConsumedAt: null,
-    trials: [], comparisons: [], iterations: [], usage: { ...emptyUsage(), calls: 6, costUsd: 0.27 }, error: null, limitations: [], humanReviews: [], ...overrides };
+    trials: [], comparisons: [], iterations: [], usage: { ...emptyUsage(), calls: 6, costUsd: 0.27 }, error: null, notes: '', limitations: [], humanReviews: [], ...overrides };
 }
 const review = (trialId: string, metricId: string, verdict: HumanReview['verdict']): HumanReview => ({
   id: `h-${trialId}-${metricId}-${verdict}`, trialId, metricId, verdict, note: 'n', createdAt: '2026-09-15T10:00:00Z',
@@ -97,8 +97,8 @@ test('acceptance projection rejects ambiguous drafts and names tool/state observ
   assert.match(state.lines.join('\n'), /Наблюдение\n  итоговое состояние$/m);
 });
 
-const ruleSource = { id: 'src_rules', name: 'Правила возврата', content: 'Первая строка.\nВерните деньги через терминал.\nТретья строка.\nЧетвёртая строка.\nПятая строка.' };
-const promptSource = { id: 'src_prompt', name: 'Промпт агента', content: 'Отвечайте вежливо.\nresponse_format: json\nЕщё строка.\nИ ещё строка.', kind: 'prompt' as const };
+const ruleSource = { id: 'src_rules', name: 'Правила возврата', hash: 'rules-hash', content: 'Первая строка.\nВерните деньги через терминал.\nТретья строка.\nЧетвёртая строка.\nПятая строка.' };
+const promptSource = { id: 'src_prompt', name: 'Промпт агента', hash: 'prompt-hash', content: 'Отвечайте вежливо.\nresponse_format: json\nЕщё строка.\nИ ещё строка.', kind: 'prompt' as const };
 const rulesRecord = (overrides: Partial<Experiment> = {}): Experiment => record({
   phase: 'review', reviewMode: null, sources: [ruleSource, promptSource],
   requirements: [

@@ -8,7 +8,9 @@
  * Value-like tokens: runs of letters/digits/`:./-` that contain a digit and are at least three
  * characters long after trailing punctuation is trimmed, lower-cased. `4321`, `A103`, `14:00`,
  * `202-7` and `11.03.2024` are tokens; `two cards` has none. Used by the answers rule and by
- * the fabrication heuristic, so both sides of the simulator agree on what a "value" is.
+ * the fabrication heuristic, so both sides of the simulator agree on what a "value" is. Both belong to first-format
+ * cards and the free simulator, whose checks are part of SIMULATOR_PROTOCOL and are recomputed when a stored run is
+ * re-assessed: the definition is frozen. A card's facts are typed and its customer's words are harness text.
  */
 const VALUE_TOKEN = /[A-Za-zА-Яа-яЁё0-9:./-]+/g;
 export function valueTokens(text: string): Set<string> {

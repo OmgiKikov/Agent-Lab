@@ -66,7 +66,7 @@ test('renderRows keeps every word of a 600-character quote inside 40–160 colum
 });
 
 test('paint puts the weight inside the colour and takes both from the role when the row names none', () => {
-  // The answer of result-text.ts, coloured by level (ui-spec §6).
+  // The answer of result-text.ts, coloured by level (docs/design/ui-spec.md §6).
   assert.equal(paint({ text: 'Точность агента: 86%', role: 'accuracy:good' }, dark), '<fg:success><b>Точность агента: 86%</b></fg>');
   assert.equal(paint({ text: 'Точность агента: 86%', role: 'accuracy:good' }, light), '[fg:success][b]Точность агента: 86%[/b][/fg]');
   assert.equal(paint({ text: 'Точность агента: 72%', role: 'accuracy:warn' }, dark), '<fg:warning><b>Точность агента: 72%</b></fg>');
@@ -93,7 +93,7 @@ test('paint puts the weight inside the colour and takes both from the role when 
   for (const [role, { tone }] of Object.entries(ROLE_TONE)) assert.ok(TONES.includes(tone), `${role}: «${tone}»`);
 });
 
-test('the glyph registry holds the few signs of ui-spec §6 and the chat\'s ● and └, each one column wide', () => {
+test('the glyph registry holds the few signs of docs/design/ui-spec.md §6 and the chat\'s ● and └, each one column wide', () => {
   assert.deepEqual([GLYPH.pass, GLYPH.fail, GLYPH.unmeasured, GLYPH.selected, GLYPH.more], ['✓', '✗', '?', '›', '↓']);
   assert.deepEqual([GLYPH.action, GLYPH.branch, GLYPH.barFill, GLYPH.barTrack, GLYPH.arrow], ['●', '└', '━', '─', '→']);
   // The old board's signs are gone: selection is «›», a waiting or control mark is a word.

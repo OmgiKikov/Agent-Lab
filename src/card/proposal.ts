@@ -5,7 +5,7 @@ import { cardFindings, type CardEvidence, type CheckFinding, type LoggedMessage 
 import { cardSchema, disclosureSchema, turnSchema, type Card } from './schema.js';
 
 /*
- * A card as the model proposes it and as the harness binds it (card-v2 §2.1–2.3). The model returns content only;
+ * A card as the model proposes it and as the harness binds it (docs/design/card-v2-spec.md §2.1–2.3). The model returns content only;
  * every reference in its answer is an enum built for this one call — a customer message by its index, a rule by
  * its id, a channel the connection offers — so an unknown reference cannot even be written. The harness copies
  * the opening and the turn from the messages word for word and gives the ids, the number, the sources and the

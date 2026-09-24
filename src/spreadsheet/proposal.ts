@@ -7,7 +7,7 @@ import {
   type ColumnInfo, type Role, type TableChoices, type TableFilter, type TableLayout, type TableMapping,
 } from './mapping.js';
 import { boundaryCounts, detectMarkers, type MarkerStructure } from './markers.js';
-import { columnSelection, conversationRows, selectableColumns, type ValueCount } from './selection.js';
+import { columnSelection, conversationRows, listedValues, selectableColumns, type ValueCount } from './selection.js';
 import { cellOf, columnLetter, type Sheet } from './sheet.js';
 import type { TableFile, Workbook } from './workbook.js';
 
@@ -31,8 +31,11 @@ export type TableQuestion =
   | { kind: 'marker'; column: ColumnInfo; token: string; messages: number }
   /** Who writes the messages with this value in the role column? */
   | { kind: 'role'; column: ColumnInfo; value: string; messages: number }
-  /** Какие разговоры оценивать? The values of the column the owner chose, each with its conversations, the most first; the answer is one or several of them. */
-  | { kind: 'where'; column: ColumnInfo; values: ValueCount[] };
+  /**
+   * Какие разговоры оценивать? The most frequent values of the column the owner chose, each with its conversations, the
+   * most first; `more` values are not listed, and the owner names one of those in words. The answer is one or several values.
+   */
+  | { kind: 'where'; column: ColumnInfo; values: ValueCount[]; more: number };
 
 interface ProposalBase {
   file: TableFile;
@@ -191,8 +194,9 @@ function decide(a: Analysis, c: TableChoices): Outcome {
 
 /**
  * The owner's choice of conversations, checked against the sheet once the reading is complete: the column they
- * named must hold categories (selection.ts); a column alone asks which values to keep; named values must be
- * values of that column, and the filter keeps them in the order the question lists them, so one choice is one mapping.
+ * named must give each conversation one value (selection.ts); a column alone asks which values to keep; named
+ * values must be values of that column, and the filter keeps them in the order of their conversations, the most
+ * first, so one choice is one mapping.
  */
 function choose(a: Analysis, reading: TableMapping, conversations: readonly number[][], where: TableChoices['where']):
   { filter?: TableFilter } | { question: TableQuestion } | { reason: string } {
@@ -201,7 +205,10 @@ function choose(a: Analysis, reading: TableMapping, conversations: readonly numb
   const column = findColumn(where.column, a.columns)!;
   const split = columnSelection(a.sheet, reading, conversations, column);
   if ('issue' in split) return { reason: split.issue };
-  if (!where.values) return { question: { kind: 'where', column, values: split.values } };
+  if (!where.values) {
+    const listed = listedValues(column, split.values);
+    return 'issue' in listed ? { reason: listed.issue } : { question: { kind: 'where', column, ...listed } };
+  }
   const absent = where.values.find(value => !split.values.some(item => item.value === value));
   if (absent !== undefined) return { reason: absent ? `В колонке ${label(column)} нет значения ${quoted(absent)}.` : `В колонке ${label(column)} нет пустых ячеек.` };
   const wanted = new Set(where.values);

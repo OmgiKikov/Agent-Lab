@@ -8,7 +8,7 @@ import { actionRow, briefChanges, briefRows, changeText, countsText, detailRows,
 import { cardDraft, READY, type CardDraft } from './helpers/card-library.js';
 
 /*
- * C12: one projection of a situation for every surface (ui-spec §3). A card of the card format, a variant of
+ * C12: one projection of a situation for every surface (docs/design/ui-spec.md §3). A card of the card format, a variant of
  * the first library format and a scenario of a record made before libraries all read as the same brief; the
  * status chip, the one question with its numbered answers, the reasons a situation cannot be a test and «d».
  */

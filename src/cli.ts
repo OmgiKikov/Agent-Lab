@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab } from './experiment.js';
 import { draftHash } from './lab/record.js';
 import { demoInput } from './demo.js';
-import { createInputSchema } from './contracts.js';
+import { createInputSchema, materialSources, SCENARIO_LIMIT, type CreateInput } from './contracts.js';
 import { compareRuns } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { detectionLines, detectProject } from './detect.js';
@@ -31,12 +31,18 @@ import { logImports } from './card/calibration-scope.js';
 import { confirmTableImport, proposeTableImport } from './spreadsheet/import.js';
 import { importedLine, proposalLines } from './spreadsheet/lines.js';
 import { importHints, tableChoicesOf } from './cli/import-flags.js';
+import { preparationCeiling } from './card/budget.js';
+import { consentText, preparationConsent, rulesConsentText, situationCount } from './miner/plan.js';
 
 /*
  * `agent-lab`: one table of commands over the operations Pi's tools use (experiment.ts). A command that writes or
  * spends opens the data folder as its one writer and takes the owner's word as --yes, where the chat asks natively;
  * a command that only reads never takes the writer's lock, so it may run beside a live run. `chat` — and no command
  * in a terminal — opens Pi with the Agent Lab extension.
+ *
+ * Inside that chat the owner's word belongs to the chat: `agent-lab chat` gives Pi AGENT_LAB_SESSION, Pi's shell
+ * passes its whole environment to every command it runs, and the chat asks each consent and decision in a native
+ * dialog. A command run from the chat's shell — by the model or by the owner's `!` — therefore never takes --yes.
  */
 
 const FLAGS = {
@@ -51,7 +57,7 @@ const FLAGS = {
   'agent-version': { type: 'string' }, unknown: { type: 'boolean' }, import: { type: 'string' },
   file: { type: 'string' }, sheet: { type: 'string' }, 'id-column': { type: 'string' }, 'text-column': { type: 'string' }, separator: { type: 'string' },
   markers: { type: 'string' }, 'role-column': { type: 'string' }, roles: { type: 'string' }, 'order-column': { type: 'string' }, 'row-order': { type: 'boolean' },
-  where: { type: 'string' },
+  where: { type: 'string' }, situations: { type: 'string' },
 } as const;
 type Flags = ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>['values'];
 
@@ -87,6 +93,11 @@ const writeStdout = (value: string): Promise<void> => new Promise((resolve, reje
   process.stdout.once('error', onError);
   process.stdout.write(value, finish);
 });
+
+/** Set by `agent-lab chat` for Pi, and so present in every command Pi's shell runs in that chat. */
+const IN_CHAT = process.env.AGENT_LAB_SESSION === '1';
+const CHAT_ASKS = 'Из чата Agent Lab команда с --yes не выполняется: в чате согласие на расход и решения спрашивает сам чат. '
+  + 'Скажите обычными словами, что сделать, — Lab спросит вас. Ничего не записано и не потрачено.';
 
 /** Opens the data folder as its one writer for `work`; Ctrl+C closes it, and the work going on stops with its evidence kept. */
 async function asWriter(directory: string, work: (lab: ExperimentLab) => Promise<void>): Promise<void> {
@@ -359,31 +370,63 @@ async function evaluate({ values, directory }: CommandInput): Promise<void> {
   });
 }
 
-/** A new draft from a task file (or the teaching example): prepared to the end, the same way the chat prepares it. */
-async function prepareDraft(lab: ExperimentLab, values: Flags, directory: string, demo: boolean): Promise<string> {
-  if (!demo && !values.input) throw new Error('Provide --input task.json');
-  let raw = demo ? demoInput() : JSON.parse(await readFile(values.input!, 'utf8'));
-  if (!demo && (raw.materialFiles || raw.promptFiles)) {
+/** A new draft's input from a task file: the materials read whole, the connection, the logs as an import. Reads only. */
+async function taskInput(values: Flags, directory: string): Promise<{ input: CreateInput; logs: string }> {
+  if (!values.input) throw new Error('Укажите задачу: agent-lab build --input задача.json');
+  let raw = JSON.parse(await readFile(values.input, 'utf8'));
+  if (raw.materialFiles || raw.promptFiles) {
     // Articles and prompts named by path are read by Lab itself: whole files, no model in between, no item limit of a tool call.
     const { materialFiles, promptFiles, ...task } = raw;
-    const expanded = await expandMaterials({ materials: task.materials, materialFiles, promptFiles }, dirname(resolve(values.input!)));
+    const expanded = await expandMaterials({ materials: task.materials, materialFiles, promptFiles }, dirname(resolve(values.input)));
     for (const item of expanded.skipped) process.stderr.write(`Пропущен ${item.file}: ${item.reason}\n`);
     process.stderr.write(`Прочитано материалов из файлов: ${expanded.read}.\n`);
     raw = { ...task, materials: expanded.materials };
   }
-  const connection = demo ? undefined : values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
+  const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
   const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file'], { directory }) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
+  // From the rules alone, --situations is the number of situations the rules are written into.
+  const rules = !libraryImport && values.situations !== undefined ? Number(values.situations) : undefined;
+  if (rules !== undefined && !(Number.isInteger(rules) && rules >= 1 && rules <= SCENARIO_LIMIT)) throw new Error(`По правилам без логов Lab готовит от 1 до ${SCENARIO_LIMIT} ситуаций за раз.`);
   const input = createInputSchema.parse({ ...raw, ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
-    ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}) });
-  const prepared = await lab.create(input); await lab.waitForIdle();
+    ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}),
+    ...(rules !== undefined ? { scenarioCount: rules } : {}) });
+  return { input, logs: basename(values['dialogues-file'] ?? values.input) };
+}
+
+/**
+ * What a preparation promises and may spend — the consent the chat asks natively, in the same words: how many
+ * situations at most, what is left out and why, the ceiling of the spending. The ceiling goes to the preparation
+ * with the owner's --yes, so the number agreed to is the number it stops at.
+ */
+async function buildConsent(input: CreateInput, logs: string, directory: string, values: Flags): Promise<{ question: string; lines: string[]; situations: number; callCeiling: number }> {
+  if (input.originalImport) {
+    const consent = await preparationConsent(new ExperimentStore(directory), { input, situations: situationCount(values.situations === undefined ? undefined : Number(values.situations)) });
+    return { ...consentText(consent, logs), situations: consent.promised, callCeiling: consent.callCeiling };
+  }
+  const situations = input.scenarioCount || 1;
+  const callCeiling = preparationCeiling({ task: input.task, sources: materialSources(input.materials), situations, fromLogs: false });
+  return { ...rulesConsentText(situations, callCeiling), situations, callCeiling };
+}
+
+/** Prepares `input` to the end, the same way the chat prepares it, within the consent's count and ceiling when there is one. */
+async function prepareDraft(lab: ExperimentLab, input: CreateInput, options: { situations?: number; callCeiling?: number } = {}): Promise<string> {
+  const prepared = await lab.create(input, options); await lab.waitForIdle();
   const current = await lab.get(prepared.id);
-  if (current.phase !== 'review') throw new Error(current.error ?? 'Preparation failed');
+  if (current.phase !== 'review') throw new Error(current.error ?? 'Подготовка не завершилась.');
   return current.id;
 }
 
+/** `build`: the consent in the owner's words; only --yes prepares, within the count and the ceiling it states. */
 async function prepare({ values, directory }: CommandInput): Promise<void> {
+  const { input, logs } = await taskInput(values, directory);
+  const consent = await buildConsent(input, logs, directory, values);
+  if (!values.yes) {
+    await writeStdout(values.json ? `${JSON.stringify({ question: consent.question, lines: consent.lines, situations: consent.situations, callCeiling: consent.callCeiling }, null, 2)}\n`
+      : `${[consent.question, '', ...consent.lines, '', 'Собрать: та же команда с --yes. Без него ничего не записано и не потрачено.'].map(line => safeLine(line)).join('\n')}\n`);
+    return;
+  }
   await asWriter(directory, async lab => {
-    const id = await prepareDraft(lab, values, directory, false);
+    const id = await prepareDraft(lab, input, { situations: consent.situations, callCeiling: consent.callCeiling });
     process.stdout.write(`${JSON.stringify(await lab.get(id), null, 2)}\n`);
   });
 }
@@ -405,7 +448,8 @@ async function runDraft(lab: ExperimentLab, id: string, values: Flags): Promise<
 
 async function demo({ values, directory }: CommandInput): Promise<void> {
   await asWriter(directory, async lab => {
-    const id = await prepareDraft(lab, values, directory, true);
+    // Free: no model, no keys — the teaching example needs no consent.
+    const id = await prepareDraft(lab, demoInput());
     // The teaching example takes the owner's path: answer its one question («Да» — the customer knew the number), then accept every ready situation.
     const context = await lab.cardContext(id);
     for (const view of situationViews(context.experiment, { evidence: context.evidence, maxTurns: context.experiment.settings.maxTurns })) if (view.question?.id) {
@@ -440,7 +484,7 @@ async function repeat({ values, directory }: CommandInput): Promise<void> {
 const COMMANDS: Readonly<Record<string, Command>> = {
   detect: { help: ['agent-lab detect [--directory ПАПКА] [--json]   Что Lab нашёл в папке проекта: агента, логи, материалы, промпт'], run: detect },
   import: { help: ['agent-lab import --file логи.xlsx [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--yes] [--json]   Как Lab прочитает таблицу логов (.xlsx, .csv) и какие разговоры возьмёт; --yes загружает её'], run: importTable },
-  build: { help: ['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--connection подключение.json]   Подготовить ситуации без чата'], run: prepare },
+  build: { help: ['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--situations N] [--connection подключение.json] [--yes]   Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --yes готовит их'], run: prepare },
   prepare: { help: [], run: prepare },
   cards: { help: [
     'agent-lab cards --id RUN [--card N] [--json]   Ситуации: что пишет и знает клиент, что должен агент, статус и вопрос',
@@ -470,7 +514,7 @@ const HELP = [
   '  agent-lab chat [опции Pi]          Напишите задачу обычными словами', '',
   ...Object.values(COMMANDS).flatMap(command => command.help.map(line => `  ${line}`)), '',
   'evaluate, run и reassess: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.',
-  '--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.', '',
+  '--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается. Из чата Agent Lab --yes не принимается: там согласие спрашивает сам чат.', '',
 ].join('\n');
 
 async function main(): Promise<void> {
@@ -479,6 +523,7 @@ async function main(): Promise<void> {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: FLAGS });
   const name = positionals[0];
   if (values.help || !name) { process.stdout.write(HELP); return; }
+  if (values.yes && IN_CHAT) throw new Error(CHAT_ASKS);
   const command = COMMANDS[name];
   if (!command) throw new Error(`Unknown command: ${name}`);
   await command.run({ values, directory: values['data-dir'] ?? resolve('.agent-lab') });

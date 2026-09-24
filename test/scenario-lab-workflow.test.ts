@@ -3,6 +3,7 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import type { TraceEvent } from '../src/contracts.js';
 
 /* The shipped teaching example (examples/scenario-lab-demo.mjs) and its deterministic agent, judge and runtime. */
 
@@ -63,9 +64,12 @@ test('demo direct invocation through a symlink path prints an isolated review dr
 test('the teaching judge fails a repeated question in other words and a missing refund instruction', async () => {
   const { demoScenarioRuntime } = await import('../examples/scenario-lab-demo.mjs');
   const runtime = demoScenarioRuntime();
+  const ctx = { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} };
   const assess = async (id: string, replies: string[]) => {
-    const events = [{ seq: 0, type: 'user', text: 'Номер терминала: 1234. Помогите с возвратом.' }, ...replies.map((text, i) => ({ seq: i + 1, type: 'assistant', text }))];
-    return (await runtime.assess({ scenario: { metrics: [{ id }] }, sources: [], trial: { events } }))[0].result;
+    const events: TraceEvent[] = [{ seq: 0, type: 'user', text: 'Номер терминала: 1234. Помогите с возвратом.' }, ...replies.map((text, i): TraceEvent => ({ seq: i + 1, type: 'assistant', text }))];
+    // The teaching judge reads only the metric ids and the events; the rest of a card and a trial is not built here.
+    const input = { scenario: { metrics: [{ id }] }, sources: [], trial: { events } } as unknown as Parameters<NonNullable<typeof runtime.assess>>[0];
+    return (await runtime.assess!(input, ctx))[0]!.result;
   };
   assert.equal(await assess('ask_once', ['Какой у вас номер терминала?']), 'fail');
   assert.equal(await assess('refund_explanation', ['Спасибо, номер записан.']), 'fail');

@@ -7,7 +7,7 @@ import { compilePolicy } from './compile.js';
 import type { Card, EventRef } from './schema.js';
 
 /*
- * The deterministic checks of a card (card-v2 §2.4): references and exact text, never meaning. A value is in a
+ * The deterministic checks of a card (docs/design/card-v2-spec.md §2.4): references and exact text, never meaning. A value is in a
  * message when the message contains it after one normalisation — NFKC, Russian lower case, every run of spaces as
  * one — with no tokenizer, no fuzzy quote search and no regular expression over what people or models wrote.
  * Whether a fact is really the customer's or a rule really applies is the reviewer's claim (review.ts); these

@@ -120,11 +120,12 @@ test('trusted observation events let exact checks of a first-format card prove a
   s.initialState = { records: { item: { status: 'pending' } }, writableFields: ['status'], transientFailures: 0 };
   const view = s.execution!.evaluatorView;
   if (!('checkpoints' in view)) throw new Error('a first-format card');
-  const checks = [{ id: 'no_mutation', kind: 'tool_not_called', tool: 'update_record', description: 'При корректном отказе изменений нет' } as const,
-    { id: 'same_state', kind: 'state_equals', recordId: 'item', field: 'status', value: 'pending', description: 'Состояние не изменилось' } as const];
-  view.checkpoints = [{ ...view.checkpoints[0]!, observation: 'tool', check: checks[0] }, { ...view.checkpoints[0]!, id: 'state_unchanged', observation: 'state', check: checks[1] }];
+  // Two separate constants: an array literal would give each the other's keys as optional undefined, which no JSON value holds.
+  const noMutation = { id: 'no_mutation', kind: 'tool_not_called', tool: 'update_record', description: 'При корректном отказе изменений нет' } as const;
+  const sameState = { id: 'same_state', kind: 'state_equals', recordId: 'item', field: 'status', value: 'pending', description: 'Состояние не изменилось' } as const;
+  view.checkpoints = [{ ...view.checkpoints[0]!, observation: 'tool', check: noMutation }, { ...view.checkpoints[0]!, id: 'state_unchanged', observation: 'state', check: sameState }];
   // As the first-format compiler wrote them: a required checkpoint's exact check is also a check of the card.
-  s.checks = [...checks];
+  s.checks = [noMutation, sameState];
   // The agent reports its records, a confirmed reset and complete tool events: the trusted observation the checkpoints need.
   const agent = await httpAgent(body => ({ reply: 'Нет данных для изменения', records: (body.initialState as { records: unknown }).records, resetConfirmed: true, eventsComplete: true }));
   const runtime = { async selectUserAction() { return { actionId: 'finish' }; },

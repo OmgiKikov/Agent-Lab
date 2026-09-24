@@ -34,7 +34,7 @@ test('each kind of fact compiles to its own move: told when asked, told together
 });
 
 test('a change of intent must happen before the customer leaves; a report may be skipped', () => {
-  const walk = (turn?: Parameters<typeof briefCard>[0]['turn']) => {
+  const walk = (turn?: NonNullable<Parameters<typeof briefCard>[0]>['turn']) => {
     const { policy, facts } = compilePolicy(briefCard({ turn }));
     return createUserState(policy, facts);
   };

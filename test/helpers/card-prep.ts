@@ -1,3 +1,4 @@
+import type { z } from 'zod';
 import { createInputSchema, type CreateInput, type Requirement } from '../../src/contracts.js';
 import type { MetricAssessment } from '../../src/assessment.js';
 import type { Runtime } from '../../src/runtime.js';
@@ -49,7 +50,8 @@ export const proposals: Record<'late' | 'known', DialogueProposal> = {
 export const rulesProposal = (index: number): RulesProposal => ({ title: `Возврат без логов ${index}`, topic: 'Возврат оплаты', wants: 'Узнать, как вернуть оплату',
   writes: index === 1 ? 'Как вернуть оплату за покупку?' : 'Хочу вернуть деньги за покупку, что делать?', leaves: 'получил инструкцию по возврату', agentMust: [duties(null)[1]!] });
 
-export function cardInput(overrides: Partial<CreateInput> = {}): CreateInput {
+/** The fixture task; `overrides` are schema input, so a dialogue without an outcome takes the schema's default. */
+export function cardInput(overrides: Partial<z.input<typeof createInputSchema>> = {}): CreateInput {
   return createInputSchema.parse({ task: 'Проверить возвраты', mode: 'live', target: demoTarget(), scenarioCount: 0,
     materials: [{ name: 'Правила возвратов', content: policy }], dialogues,
     settings: { provider: 'deterministic', model: 'fixture', repeats: 1, maxTurns: 3, maxCalls: 60, userModes: ['reactive'] }, ...overrides });

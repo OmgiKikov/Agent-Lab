@@ -129,7 +129,7 @@ test('an accepted card library is verified by its sealed definition hashes, neve
 });
 
 test('the proposal parts are strict-output ready: per-call enums of events, ids and closed nullable objects', () => {
-  // The per-call schema of a card proposal (card-v2 §2.2) is composed of these parts; nulls stand for absent values.
+  // The per-call schema of a card proposal (docs/design/card-v2-spec.md §2.2) is composed of these parts; nulls stand for absent values.
   const call = { customerEvents: [0, 2], laterEvents: [2], requirementIds: ['refund_rule'] as [string, ...string[]], observations: ['reply'] as ['reply'] };
   const proposal = z.strictObject({
     title: text(160), wants: text(300), writesEvent: z.literal(call.customerEvents),

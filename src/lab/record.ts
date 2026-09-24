@@ -68,13 +68,8 @@ export function newRecord(input: CreateInput): Experiment {
     target: input.target, goldenCases: [], dialogues: input.dialogues, profiles: [], notes: '',
     evaluatorVersion: evaluatorVersion(input.settings),
     ...(input.targetVersion ? { targetVersion: input.targetVersion } : {}),
-    limitations: [
-      'External agent state and tool events are reported by its adapter. Isolation and reset of external services are the responsibility of that adapter.',
-      'Scenario expectations are grounded automatically and should be spot-checked; text matching checks measure literal content, not semantic correctness.',
-      'Synthetic simulations do not establish performance with real users. Model rubric assessments are provisional; human review is reserved for disputes and calibration claims.',
-      'Model costs are observed usage estimates; unknown costs remain unknown. Call limits are not hard provider billing caps.',
-      ...(input.mode === 'demo' ? ['Учебный пример: пользователь, судья и подготовка — детерминированные заготовки без модели; это не измерение качества модели.'] : []),
-    ],
+    // Only what is particular to this record: what every run's number does not prove is said by its trust line.
+    limitations: input.mode === 'demo' ? ['Учебный пример: пользователь, судья и подготовка — детерминированные заготовки без модели; это не измерение качества модели.'] : [],
   };
 }
 

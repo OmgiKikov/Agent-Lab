@@ -53,7 +53,7 @@ last_mapped_at: 2026-09-24
 **Linting:**
 
 - No ESLint or Prettier configuration
-- TypeScript `strict`, `noUncheckedIndexedAccess`; `npm run typecheck` adds `noUnusedLocals`
+- TypeScript `strict`, `noUncheckedIndexedAccess`, `noUnusedLocals`; `npm run typecheck` applies the same to `extensions/` and `test/` (`tsconfig.check.json`)
 
 **TypeScript Configuration (`tsconfig.json`):**
 

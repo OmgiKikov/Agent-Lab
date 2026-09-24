@@ -27,7 +27,7 @@ import { rememberView, VERDICT_KIND, type VerdictDetails } from './render/verdic
 import { TOOL } from './steps.ts';
 
 /*
- * Reading what exists (ui-spec §4.10) and the owner's word on the judge: what the project holds and what Lab found in
+ * Reading what exists (docs/design/ui-spec.md §4.10) and the owner's word on the judge: what the project holds and what Lab found in
  * its folder, a run's result, one situation of a run explained, and «судья прав?». The reads never approve, run or
  * spend; the owner's answer about the judge comes only from their native dialog.
  */

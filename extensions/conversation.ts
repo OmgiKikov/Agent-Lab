@@ -21,7 +21,7 @@ import { GLYPH, type Row } from './render/theme.ts';
  *   a stored record ──► the summary rows of one action in the chat, details on expand
  *
  * Situations themselves are drawn by the shared projection (src/card/view.ts), results by result-text.ts.
- * On screen a run is named by its date and its agent, never by an id (ui-spec §2); the model names it by its id.
+ * On screen a run is named by its date and its agent, never by an id (docs/design/ui-spec.md §2); the model names it by its id.
  */
 
 export { agentLine, agentName } from '../src/workspace.js';
@@ -80,7 +80,7 @@ export function scenarioPlan(record: Experiment): LaunchPlan {
 }
 
 /**
- * The run dialog (ui-spec §4.6): what runs, the agent and where Lab found it, the judge's ceiling and next to it what the
+ * The run dialog (docs/design/ui-spec.md §4.6): what runs, the agent and where Lab found it, the judge's ceiling and next to it what the
  * comparison with production costs, the time limit, what stays out.
  */
 export function launchLines(record: Experiment, plan: LaunchPlan, cwd?: string, extra: { calibration?: string | null; note?: string } = {}): string[] {
@@ -104,7 +104,7 @@ const minutesSince = (iso: string | null | undefined, now: number): string | und
 const spent = (record: Experiment): string | undefined => record.mode !== 'demo' && record.usage.costUsd ? `$${record.usage.costUsd.toFixed(2)}` : undefined;
 
 /**
- * The one progress row of long work (ui-spec §4.6), from the stored record only — finished and planned
+ * The one progress row of long work (docs/design/ui-spec.md §4.6), from the stored record only — finished and planned
  * conversations, time, spending; nothing estimated. A preparation says how far it got: the topic map's step
  * while the logs' topics are mapped, then the conversations turned into situations.
  */
@@ -151,7 +151,7 @@ const OUTCOME_WORD: Record<string, string> = { pass: 'справился', fail:
 /** The judge's own reason: our fixed consensus sentence in front of it is bookkeeping, not the reason. */
 const judgeReason = (rationale: string): string => oneLine(rationale.startsWith(AGREED_RATIONALE_PREFIX) ? rationale.slice(AGREED_RATIONALE_PREFIX.length) : rationale);
 
-/** The turns of a recorded conversation, signed «Клиент» and «Агент» in one column; never the event numbers (ui-spec §2). */
+/** The turns of a recorded conversation, signed «Клиент» and «Агент» in one column; never the event numbers (docs/design/ui-spec.md §2). */
 export function turnRows(trial: Trial, indent = 0): Row[] {
   return trial.events.filter(event => (event.type === 'user' || event.type === 'assistant') && oneLine(event.text ?? ''))
     .map(event => ({ text: `${(event.type === 'user' ? 'Клиент' : 'Агент').padEnd(9)}${oneLine(event.text)}`, indent, hang: indent + 9 }));
@@ -177,7 +177,7 @@ function judgedRows(record: Experiment, trial: Trial): Row[] {
 }
 
 /**
- * One failure (E7, ui-spec §4.10): the situation, what was expected and what the agent said, the owner's rule
+ * One failure (E7, docs/design/ui-spec.md §4.10): the situation, what was expected and what the agent said, the owner's rule
  * and whether the judge still waits for the owner's word; the whole conversation on expand.
  */
 export function failureFeed(record: Experiment, view: ResultView, index: number): Feed | null {

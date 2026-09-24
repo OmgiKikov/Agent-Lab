@@ -180,7 +180,7 @@ export async function start(lab: Lab, id: string, options: StartOptions): Promis
     }
     record.reviewedAt = new Date().toISOString();
     record.reviewMode = options.reviewer ?? 'human';
-    if (record.reviewMode === 'automated') record.limitations.push('Generated scenario expectations were checked automatically, without human validation. Spot-check disputes; decisive automatic results remain usable as provisional evidence.');
+    if (record.reviewMode === 'automated') record.limitations.push('Ожидания ситуаций проверены автоматически, без человека: спорные вердикты стоит посмотреть, однозначные годятся как предварительный результат.');
     // The owner confirmed the expectations, and nothing else. The verdicts are produced after this
     // point, so no confirmation here can mean a person checked them: say so instead of going quiet.
     if (record.reviewMode === 'expectations') record.limitations.push('Владелец подтвердил ожидания ситуаций перед запуском. Определения карточек и оценки судьи человеком не проверялись.');
@@ -304,7 +304,8 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
  * Naming the failure precisely is what turns an evaluation into an improvement loop, so the
  * failed dialogues of a finished run are clustered and named — a single failure gets a name
  * too, because one named failure is already a fix to try. When the prompt of the agent is
- * known (a promptFile, or the sandbox instructions), the cluster may quote the fragment that
+ * known (the prompt among the owner's materials, the connection's promptFile, or a stored sandbox run's built-in
+ * instructions when it is re-assessed), the cluster may quote the fragment that
  * governed the broken behaviour; quotes are checked verbatim. A failed clustering must not
  * lose a completed run: it is recorded as a limitation instead.
  */

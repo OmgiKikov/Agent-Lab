@@ -34,14 +34,9 @@ export async function selectScenarioSources(input: SourceSelectionInput, knowled
   // Exactly one revision; the journal preserves both title selection and the supplied article texts.
   const revised = await runtime.selectSources({ ...request, reading }, ctx);
   if (!revised.sourceIds.length) return [];
-  // Keep direct title matches as alternative reference evidence, not as established scenario conditions.
-  // A broad setup article must not displace the article naming the original connection question.
-  const words = (value: string) => value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-  const stop = new Set(['как', 'что', 'где', 'мне', 'я', 'в', 'на', 'по', 'с', 'и', 'ли', 'пожалуйста']);
-  const goal = [...new Set(words(request.dialogue.messages[0]?.content ?? '').filter(w => !stop.has(w)))];
-  const direct = goal.length >= 2 ? knowledge.filter(s => {
-    const title = new Set(words(s.name));
-    return goal.every(w => title.has(w));
-  }).slice(0, 2).map(s => s.id) : [];
-  return fitScenarioSources([...direct, ...revised.sourceIds], knowledge, prompts);
+  // The first answer names the article for the customer's original goal first (SOURCE_SELECTION_ROLE). A revision
+  // that read a broad setup article must not displace it: the revision orders what it keeps, and the goal article it
+  // left out stays in front — as alternative reference evidence, never as an established condition of the situation.
+  const goal = chosen[0]!.id;
+  return fitScenarioSources(revised.sourceIds.includes(goal) ? revised.sourceIds : [goal, ...revised.sourceIds], knowledge, prompts);
 }

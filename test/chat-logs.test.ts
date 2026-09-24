@@ -96,6 +96,28 @@ test('a spreadsheet in the chat: Lab\'s question is one native numbered choice, 
   assert.match(asked[3]!.title, /^Собрать 5 ситуаций из export\.xlsx\?/);
 });
 
+test('«Какие разговоры оценивать?» from the chat: the model names the column the owner meant, the host asks for the values natively, and only the owner confirms the reading', async t => {
+  const cwd = await folder(t);
+  const agents = ["['ACQUIRING_AGENT']", "['ACQUIRING_AGENT', 'AGENT_GIGACHAT']"];
+  const rows: CellSpec[][] = [[...refundRows[0]!, 'agentCode'], ...refundRows.slice(1).map((row, i): CellSpec[] => [...row, agents[i % 2]!])];
+  await writeFile(join(cwd, 'export.xlsx'), xlsxFile([{ name: 'Данные', rows }]));
+  const question = await proposeTableImport(join(cwd, 'export.xlsx'), { where: { column: 'agentCode' } });
+  assert.ok(question.status === 'question' && question.question.kind === 'where', question.status);
+  const labels = whereChoices(question.question).map((label, i) => `${i + 1}  ${label}`);
+  const single = labels.find(label => label.includes(`«${agents[0]}»`))!;
+  const { prepare, asked } = chat(t, cwd, [single, 'Прочитать так', 'Не сейчас', 'Прочитать так', 'Не сейчас']);
+  assert.equal((await prepare({ ...request, logs: 'export.xlsx', table: { where: { column: 'agentCode' } } })).cancelled, true);
+  assert.equal(asked[0]!.title, proposalLines(question).join('\n'), 'the question in the owner\'s words: the values and their conversations');
+  assert.deepEqual(asked[0]!.options, [...labels, 'Не сейчас']);
+  assert.match(asked[1]!.title, /^Прочитать таблицу так\?/);
+  assert.ok(asked[1]!.title.includes(`  Отбор: «agentCode» = «${agents[0]}» — 1 из 2 разговоров.`), asked[1]!.title);
+  assert.match(asked[2]!.title, /^Собрать 1 ситуацию из export\.xlsx\?\n\nВ логах 1 разговор, подходят 1\./, 'the consent counts the chosen conversations only');
+  // Values the owner named in words skip the question, never the confirmation of the whole reading.
+  await prepare({ ...request, logs: 'export.xlsx', table: { where: { column: 'agentCode', values: [agents[1]!] } } });
+  assert.deepEqual(asked.slice(3).map(item => item.title.split('\n')[0]), ['Прочитать таблицу так?', 'Собрать 1 ситуацию из export.xlsx?']);
+  assert.ok(asked[3]!.title.includes(`  Отбор: «agentCode» = «${agents[1]}» — 1 из 2 разговоров.`), asked[3]!.title);
+});
+
 test('from a spreadsheet to situations: the reading, one consent, then the situations of its conversations', async t => {
   const cwd = await folder(t);
   await writeFile(join(cwd, 'refunds.xlsx'), xlsxFile([{ name: 'Данные', rows: refundRows }]));

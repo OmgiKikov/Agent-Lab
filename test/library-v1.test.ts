@@ -88,7 +88,9 @@ test('an accepted first-format run is verified by its stored hashes: the receipt
   // to write the card again — the stored hashes are the whole proof.
   const older = structuredClone(record);
   const accepted = older.scenarios[0]!;
-  accepted.execution!.controllerHash = 'a'.repeat(64);
+  const execution = accepted.execution;
+  assert.ok(execution && 'controllerHash' in execution, 'a first-format card');
+  execution.controllerHash = 'a'.repeat(64);
   older.acceptedTests = older.acceptedTests!.map(entry => entry.scenarioId === accepted.id ? { ...entry, definitionHash: fingerprint(accepted) } : entry);
   verifyAcceptedRun(older);
   const foreign = structuredClone(record);

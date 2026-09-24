@@ -5,7 +5,7 @@ import type { ResultRole } from '../../src/result-text.js';
 import { safeText } from '../../src/text.js';
 
 /*
- * The one place that paints (ui-spec §6). Every row of the chat, the workspace and the progress row goes
+ * The one place that paints (docs/design/ui-spec.md §6). Every row of the chat, the workspace and the progress row goes
  * through `renderRows`: escaping, word wrap and colour happen here and nowhere else. Only the semantic
  * tokens of Pi's `Theme` are used, and width is never measured by hand: wrapping works through pi-tui's
  * `wrapTextWithAnsi`, a list line is laid out by the shared `layoutRows`.
@@ -34,7 +34,7 @@ export interface Row {
 export type PaintTheme = Pick<Theme, 'fg' | 'bold' | 'bg'>;
 
 /**
- * Every glyph a Lab row may draw (ui-spec §6, the chat of §4.10), each next to its word so a row reads
+ * Every glyph a Lab row may draw (docs/design/ui-spec.md §6, the chat of §4.10), each next to its word so a row reads
  * with colours off. No literal glyph appears elsewhere in extensions/render.
  */
 export const GLYPH = {
@@ -46,7 +46,7 @@ export const GLYPH = {
   barFill: '━', barTrack: '─',
 } as const;
 
-/** Result rows (src/result-text.ts) by role: the answer coloured by level, the trust line muted, headings in accent (ui-spec §6). */
+/** Result rows (src/result-text.ts) by role: the answer coloured by level, the trust line muted, headings in accent (docs/design/ui-spec.md §6). */
 export const ROLE_TONE: Record<Exclude<ResultRole, 'blank'>, { tone: Tone; bold: boolean }> = {
   'accuracy:good': { tone: 'success', bold: true }, 'accuracy:warn': { tone: 'warning', bold: true },
   'accuracy:bad': { tone: 'error', bold: true }, 'accuracy:none': { tone: 'text', bold: true }, alarm: { tone: 'error', bold: true },

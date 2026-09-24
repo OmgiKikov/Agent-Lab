@@ -3,7 +3,7 @@ import type { Row, Tone } from './theme.ts';
 
 /*
  * A situation's rows (src/card/view.ts) in the chat and on the board: each role gets its theme token
- * (ui-spec §6) — the chip by its status, the headings in accent, the source, the rules and the reasons
+ * (docs/design/ui-spec.md §6) — the chip by its status, the headings in accent, the source, the rules and the reasons
  * muted, the question as a warning, «d» dim. Layout stays in src; this only names the colours.
  */
 

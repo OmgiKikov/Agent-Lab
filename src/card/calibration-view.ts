@@ -10,7 +10,7 @@ import { logJudgmentComplete, notExercised } from './log-judge.js';
 import type { DialogueNumbers } from './view.js';
 
 /*
- * The calibration of a run as the owner reads it (card-v2 §10.4–10.5), built from the record alone, next to the
+ * The calibration of a run as the owner reads it (docs/design/card-v2-spec.md §10.4–10.5), built from the record alone, next to the
  * number and never moving it:
  *
  *   situation of a log ──expectations decided on both sides (E′)──► none: not compared, with the first reason
@@ -160,7 +160,7 @@ function comparePaths(synthetic: Step[], log: Step[], facts: ReadonlyMap<string,
     first: at === undefined ? null : `в синтетике — ${said(a[at])}, в логе — ${said(b[at])}` };
 }
 
-/** The deterministic hint of a disagreement (card-v2 §10.5). */
+/** The deterministic hint of a disagreement (docs/design/card-v2-spec.md §10.5). */
 function hintOf(first: string | null, mode: CalibrationView['mode']): string {
   if (first) return `Синтетический клиент повёл себя иначе, чем реальный: ${first}. Это дрейф симулятора или ситуации.`;
   return mode === 'calibration' ? 'Клиент тот же — различается ответ агента: проверьте окружение стенда или шум судьи.'

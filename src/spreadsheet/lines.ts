@@ -17,6 +17,7 @@ const MESSAGES: [string, string, string] = ['сообщение', 'сообще�
 /** «398 из 866 разговоров»: the count after «из». */
 const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
 const VALUES: [string, string, string] = ['разное значение', 'разных значения', 'разных значений'];
+const MORE_VALUES: [string, string, string] = ['значение', 'значения', 'значений'];
 const ENCODING_NAMES = { 'utf-8': 'UTF-8', 'utf-16le': 'UTF-16', 'windows-1251': 'Windows-1251' } as const;
 const quoted = (text: string) => `«${text}»`;
 /** A value of a column of categories as written; an empty cell has no text to quote. */
@@ -38,13 +39,16 @@ export function questionText(question: TableQuestion, found: number): string {
     case 'id': return `${found ? `Lab видит ${countText(found, CONVERSATIONS)}. ` : ''}В какой колонке id разговора? Подходят: ${question.columns.map(column => quoted(columnLabel(column))).join(', ')}.`;
     case 'marker': return `Lab видит ${countText(found, CONVERSATIONS)}, но не знает, кто пишет сообщения с меткой ${question.token} в колонке ${quoted(columnLabel(question.column))} (${countText(question.messages, MESSAGES)}): клиент, агент, служебное — или это не метка, а слово в тексте?`;
     case 'role': return `Lab видит ${countText(found, CONVERSATIONS)}, но не знает, кто пишет сообщения со значением ${quoted(question.value)} в колонке ${quoted(columnLabel(question.column))} (${countText(question.messages, MESSAGES)}): клиент, агент или служебное?`;
-    case 'where': return `Какие разговоры оценивать? Lab видит ${countText(found, CONVERSATIONS)}; в колонке ${quoted(columnLabel(question.column))} у них ${countText(question.values.length, VALUES)} — выберите одно или несколько.`;
+    case 'where': return `Какие разговоры оценивать? Lab видит ${countText(found, CONVERSATIONS)}; в колонке ${quoted(columnLabel(question.column))} у них ${countText(question.values.length + question.more, VALUES)}`
+      + ` — выберите одно или несколько${question.more ? `; ниже ${question.values.length} самых частых` : ''}.`;
   }
 }
 
 /** The answers of «Какие разговоры оценивать?» in the order of `question.values`: each value as written and its conversations. The chat numbers them as its choices do. */
 export const whereChoices = (question: Extract<TableQuestion, { kind: 'where' }>): string[] =>
   question.values.map(item => `${shownValue(item.value)} — ${countText(item.dialogues, CONVERSATIONS)}`);
+/** The line under the listed values when there are more: the owner names any of them in words. */
+export const moreValuesLine = (more: number): string => `ещё ${countText(more, MORE_VALUES)} — назовите нужное сами`;
 
 type ReadyProposal = Extract<TableProposal, { status: 'ready' }>;
 
@@ -85,7 +89,8 @@ function outcomeLines(mapping: TableMapping, preview: TablePreview): string[] {
 export function proposalLines(proposal: TableProposal): string[] {
   if (proposal.status === 'refused') return [headLine(proposal), '', proposal.reason];
   if (proposal.status === 'question') return [headLine(proposal), '', questionText(proposal.question, proposal.found),
-    ...proposal.question.kind === 'where' ? whereChoices(proposal.question).map((choice, i) => `  ${i + 1}. ${choice}`) : []];
+    ...proposal.question.kind === 'where' ? [...whereChoices(proposal.question).map((choice, i) => `  ${i + 1}. ${choice}`),
+      ...proposal.question.more ? [`  …${moreValuesLine(proposal.question.more)}`] : []] : []];
   return [headLine(proposal), '', 'Как Lab прочитает таблицу', ...readingLines(proposal), '', 'Что получится', ...outcomeLines(proposal.mapping, proposal.preview)];
 }
 

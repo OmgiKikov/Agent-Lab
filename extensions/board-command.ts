@@ -46,7 +46,7 @@ async function ownWords(ctx: ExtensionCommandContext, title: string, current: st
 }
 
 /**
- * «Изменить» (ui-spec §4.5): a native menu of what to change, then the change itself — the customer's words and the
+ * «Изменить» (docs/design/ui-spec.md §4.5): a native menu of what to change, then the change itself — the customer's words and the
  * duties in the owner's own words, what the customer knows as the owner's pick.
  */
 async function editCommand(ctx: ExtensionCommandContext, view: SituationView): Promise<{ command: CardCommand; words?: string } | undefined> {

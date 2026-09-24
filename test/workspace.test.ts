@@ -25,7 +25,7 @@ import { cardInput, cardRuntime } from './helpers/card-prep.js';
 import { demoFolder, KEYS, openWorkspace, richFolder, storedFolder } from './helpers/workspace.js';
 
 /*
- * The agent's workspace (ui-spec §8) on synthetic folders: it opens on what needs the owner, says everything in the
+ * The agent's workspace (docs/design/ui-spec.md §8) on synthetic folders: it opens on what needs the owner, says everything in the
  * owner's words — no ids, hashes or JSON —, fits every width, keeps five keys in its footer, and its decisions, problems
  * and agents are derived from the records alone. Stored first-format runs open through the same screens.
  */
@@ -45,7 +45,7 @@ const footerOf = (screen: string) => screen.split('\n').at(-2)!.trim();
 
 /**
  * What any workspace screen must hold to: the width, the owner's words, at most five keys. Only «d — как это
- * проверяется», the developer's view of a situation, names its record by id and version (ui-spec §3.5).
+ * проверяется», the developer's view of a situation, names its record by id and version (docs/design/ui-spec.md §3.5).
  */
 function assertClean(screen: string, width: number, ids: readonly string[], where: string, developer = false): void {
   for (const line of screen.split('\n')) assert.ok(visibleWidth(line) <= width, `${where} at ${width}: «${line}» is wider than the terminal`);

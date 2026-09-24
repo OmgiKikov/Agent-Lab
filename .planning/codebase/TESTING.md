@@ -22,14 +22,14 @@ last_mapped_at: 2026-09-24
 
 ```bash
 npm test                                   # build dist/ + tsx --test test/*.test.ts
-npm run typecheck                          # build + strict tsc over extensions/*.ts (noUnusedLocals)
+npm run typecheck                          # build + tsc -p tsconfig.check.json: extensions/ and test/ as strictly as src/
 npx tsx --test test/card-review.test.ts    # one file
 npx tsx --test --test-name-pattern="grant" test/card-commands.test.ts   # tests by name
 ```
 
 `npm test` and `npm run build` recreate `dist/`. A live Pi session is not affected: the extension imports `src/` directly (jiti); `dist/` serves only the `agent-lab` binary and `examples/scenario-lab-demo.mjs`.
 
-**Not type-checked:** tsx only transpiles, and `npm run typecheck` covers `src/` and `extensions/`. A strict `tsc` over `test/*.ts test/helpers/*.ts` reports 91 errors today (41 in `test/workflow.test.ts`); tests pass regardless.
+**Type-checked:** tsx only transpiles, so `npm run typecheck` checks `extensions/`, `test/`, `test/helpers/` and `test/live/` through `tsconfig.check.json`, which extends the `src/` config (strict, `noUncheckedIndexedAccess`, `noUnusedLocals`); a type error in a test fails it.
 
 **CI:** `.github/workflows/check.yml` runs `npm ci`, `npm test`, `npm run typecheck`, `npm pack --dry-run` and `evaluate` of `examples/regression-suite.json`.
 

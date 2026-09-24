@@ -21,7 +21,7 @@ export function legacyResult(result: AgentToolResult<unknown>, options: ToolRend
 interface RowState { tone?: Tone }
 
 /**
- * Every Agent Lab tool draws its own row, Claude-Code-like (ui-spec §4.10): «● what is being done», then its
+ * Every Agent Lab tool draws its own row, Claude-Code-like (docs/design/ui-spec.md §4.10): «● what is being done», then its
  * summary under └ and details on ctrl+o. Pi's coloured box is not used: the row is the component.
  */
 export const displayFor = (name: string): Pick<ToolDefinition, 'renderShell' | 'renderCall' | 'renderResult'> => ({
@@ -48,7 +48,7 @@ export function requireInteractive(ctx: Pick<ExtensionContext, 'hasUI' | 'mode'>
 }
 
 /**
- * A native question with Russian answers instead of Yes/No (ui-spec §2): true only when the owner picked `yes`.
+ * A native question with Russian answers instead of Yes/No (docs/design/ui-spec.md §2): true only when the owner picked `yes`.
  * `body` is shown under the question; both are escaped here.
  */
 export async function ask(ctx: Pick<ExtensionContext, 'ui'>, question: string, body: string[], yes: string, no = 'Не сейчас'): Promise<boolean> {

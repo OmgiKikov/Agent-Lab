@@ -31,7 +31,7 @@ export function judgeSettingsIdentity(settings: Settings): string {
   return fingerprint({ provider: judge.provider, model: judge.model, upstream: upstream ?? null });
 }
 
-/** The agent definition a run evaluated; a sandbox agent is not part of `target`. */
+/** The agent definition a run evaluated: the label of an external agent, or the built-in agent of a stored sandbox run, which `target` does not name. */
 export function agentIdentity(record: Experiment): string {
   return fingerprint(record.revisions[0]?.spec ?? null);
 }

@@ -13,7 +13,7 @@ import { launchLines, scenarioPlan, type LaunchPlan } from './conversation.ts';
 import { NeedsOwner } from './lab-ui.ts';
 
 /*
- * One dialog starts a run, the same from the chat and from the workspace (ui-spec §4.6, the owner's decision of
+ * One dialog starts a run, the same from the chat and from the workspace (docs/design/ui-spec.md §4.6, the owner's decision of
  * 23.09): a draft of cards is accepted with its ready situations in the very dialog that starts it; a repeat of an
  * accepted set just starts; a draft of a record made before libraries confirms its expectations with the run. The
  * acceptance and the start stay two facts in the record. Questions never block the ready situations.

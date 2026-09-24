@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Offline reference adapter: real SQLite state per dialogue; no LLM or external services.
 
-The supplied prompt is the version under test. 'Allow updates after lookup.' enables
-the one known operation. This deterministic fixture demonstrates the prompt workflow,
-not an improvement in model quality. No third-party packages are needed.
+It is the agent of the checked-in CI example (regression-suite.json, regression-ci.yml) and of the
+connection check (connection.json): deterministic, so a failure there is never a model's. When a
+connection names a promptFile, Lab sends its text as "prompt" and expects its hash back as
+"promptHash"; the phrase 'Allow updates after lookup.' in it enables the one write operation.
+No third-party packages are needed.
 """
 import hashlib
 import json

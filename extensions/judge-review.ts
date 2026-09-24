@@ -10,7 +10,7 @@ import { headlineRule } from '../src/card/expectations.js';
 import { clip, oneLine } from '../src/text.js';
 
 /*
- * «Проверить, прав ли судья» (ui-spec §4.8): the owner's own word on the judge's decision about one situation — the
+ * «Проверить, прав ли судья» (docs/design/ui-spec.md §4.8): the owner's own word on the judge's decision about one situation — the
  * failures the judge recorded first, then a few passes drawn for a double-check. A mark exists only because the owner
  * picked an answer in the workspace or in a native dialog, and a disagreement only with the owner's own reason; no
  * tool and no model ever writes one. Shared by the workspace and the chat.
@@ -61,7 +61,7 @@ function disputable(scenario: Experiment['scenarios'][number] | undefined, trial
 export const REVIEW_DONE = 'Все ответы даны — проверка судьи завершена.';
 
 /**
- * «Проверить, прав ли судья» ends by itself (ui-spec §5): once every conversation of the queue carries a decided answer
+ * «Проверить, прав ли судья» ends by itself (docs/design/ui-spec.md §5): once every conversation of the queue carries a decided answer
  * and nothing else waits for the owner, the review is recorded as done — bound to the results as they are now. A doubt
  * («не знаю») keeps it open. True when this call ended it.
  */

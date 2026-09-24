@@ -77,7 +77,7 @@ last_mapped_at: 2026-09-24
 **Build:**
 
 - `tsconfig.json` - `strict`, `noUncheckedIndexedAccess`, ES2023, NodeNext, declarations and source maps, `rootDir: src`
-- `npm run typecheck` adds `--noUnusedLocals` and type-checks `extensions/*.ts` with `--allowImportingTsExtensions`
+- `npm run typecheck` builds, then type-checks `extensions/` and `test/` through `tsconfig.check.json` (extends `tsconfig.json`, adds `noEmit` and `allowImportingTsExtensions`)
 
 ## File Organization
 
@@ -118,7 +118,7 @@ last_mapped_at: 2026-09-24
 
 ```bash
 npm run build        # Clean dist/ then tsc
-npm run typecheck    # build + strict tsc over extensions/*.ts
+npm run typecheck    # build + tsc -p tsconfig.check.json (extensions/ and test/)
 npm test             # build + tsx --test test/*.test.ts
 npm run demo         # tsx src/cli.ts demo — the teaching example without a model
 npm start            # build + node dist/cli.js chat

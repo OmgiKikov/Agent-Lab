@@ -10,7 +10,7 @@ import { calibrationCalls, cardLogSituation, logSkip, runLogSituations, testedVe
 import { calibrationKey, logJudgeInputV1, logJudgmentComplete } from './log-judge.js';
 
 /*
- * The calibration step of a run (card-v2 §10.3–10.6): after the synthetic attempts are judged, every expectation
+ * The calibration step of a run (docs/design/card-v2-spec.md §10.3–10.6): after the synthetic attempts are judged, every expectation
  * of every situation from a log is judged once more on the recorded conversation — judge calls only; no agent,
  * simulator or stand is started.
  *
@@ -163,7 +163,7 @@ async function judgeAll(record: Experiment, pending: readonly Job[], judge: LogJ
 }
 
 /**
- * The launch dialog's line about calibration (card-v2 §10.6): «Сверка с продом: до 60 вызовов судьи; агент и
+ * The launch dialog's line about calibration (docs/design/card-v2-spec.md §10.6): «Сверка с продом: до 60 вызовов судьи; агент и
  * симулятор не участвуют» — the most judge calls it may make before a re-ask, out of the run's own limit. Null
  * when the run will not calibrate: the owner turned it off, the teaching example (its judge reads no logs), or
  * nothing of a log to judge. `cardIds` are the cards of a draft accepted with the run; otherwise the run's situations.
