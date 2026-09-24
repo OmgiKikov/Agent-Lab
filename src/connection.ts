@@ -7,6 +7,7 @@ import type { Runtime } from './runtime.js';
 import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
 import { sourceIdentity } from './normalize.js';
+import { observabilityLevel } from './observability.js';
 import { preflightTarget, templateExchange, type TemplateTarget } from './targets.js';
 import { atPointer, replyStructure } from './http-template.js';
 import { writeFileAtomic } from './fs-atomic.js';
@@ -127,6 +128,7 @@ export async function doctor(connection: Connection, signal = new AbortControlle
       && trials.every(t => t.observation?.resetConfirmed === true && t.observation.tools === 'complete' && !!t.observation.version)
       && trials[0]!.observation?.version === trials[1]!.observation?.version;
     return { format: 'agent-lab-doctor-1', passed, createdAt: new Date().toISOString(), target: connection.target, trials,
+      observability: observabilityLevel(trials),
       message: passed ? 'История и сброс прошли заданную проверку; адаптер сообщил версию и полную трассу в заявленной области инструментов.'
         : 'Проверьте ответы, итоговое состояние, resetConfirmed, eventsComplete и стабильную version.',
       limitation: 'Это проверка заданного поведения. Состояние и полноту событий сообщает адаптер; его реализацию нужно сверять с тестовой системой.' };

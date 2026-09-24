@@ -132,6 +132,7 @@ export const externalReplySchema = z.union([
     /** Exact chunks supplied to the model for this reply; Agent Lab persists them as cited trace evidence. */
     retrievals: z.array(z.strictObject({
       source: z.string().trim().min(1).max(500),
+      chunkId: z.string().trim().min(1).max(500).optional(),
       content: z.string().min(1).max(12000).refine(value => !!value.trim(), 'Empty retrieval chunk'),
       score: z.number().finite().optional(),
       documentId: z.string().trim().min(1).max(500).optional(),

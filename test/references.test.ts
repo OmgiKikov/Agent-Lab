@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { grade } from '../src/evaluation.js';
+import { observabilityLevel } from '../src/observability.js';
+import { externalReplySchema } from '../src/targets.js';
 import { describeCheck, emptyUsage, referenceSchema, REFERENCE_METRIC_ID, scenarioSchema, unconfirmedReferences, validatePreparation, withReferenceCriteria, type Check, type Scenario, type TraceEvent, type Trial } from '../src/contracts.js';
 
 const baseCard = {
@@ -129,4 +131,19 @@ test('reference tokens pass only when every value is in the replies', () => {
   const noValue: TraceEvent = { seq: 2, type: 'observation' };
   assert.equal(grade(gradedCard([check]), trialWith(dialogue(noValue, 'Комиссия 1.5%, приём до 15:00.')))[0]!.passed, true);
   assert.equal(grade(gradedCard([check]), trialWith(dialogue(noValue, 'Комиссия 2%, приём до 15:00.')))[0]!.passed, false);
+});
+
+test('adapter may report a chunk id', () => {
+  const reply = externalReplySchema.parse({ reply: 'ok', retrievals: [{ source: 'ACQ-123', chunkId: 'c7', content: 'x' }], retrievalsComplete: true });
+  assert.equal(typeof reply === 'string' ? undefined : reply.retrievals?.[0]?.chunkId, 'c7');
+});
+
+test('observability level is read from what the probe actually returned', () => {
+  const replyOnly = { ...trialWith(dialogue({ seq: 2, type: 'observation' })), observation: { state: 'missing' as const, tools: 'partial' as const } };
+  assert.deepEqual(observabilityLevel([replyOnly]), { level: 0, reply: true, tools: false, retrievals: false, state: false });
+  const rag = trialWith(dialogue(retrieval([{ source: 'A', content: 'x' }], true)));
+  assert.deepEqual(observabilityLevel([rag]), { level: 2, reply: true, tools: true, retrievals: true, state: false });
+  const full = { ...rag, observation: { state: 'reported' as const, tools: 'complete' as const, resetConfirmed: true } };
+  assert.equal(observabilityLevel([full, rag]).level, 2, 'every probe dialogue must show the channel');
+  assert.equal(observabilityLevel([full]).level, 3);
 });
