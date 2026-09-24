@@ -1,7 +1,9 @@
 import { EXPECTATIONS_PROTOCOL, scenarioSchema, type CardExecution, type Requirement, type Scenario } from '../contracts.js';
 import type { Rubric } from '../assessment.js';
 import type { BehaviorPolicy } from '../scenario-contracts.js';
+import type { CustomerProfile } from '../target-schema.js';
 import { clip } from '../text.js';
+import { normalizeText } from './checks.js';
 import { USER_CONTROLLER_PROTOCOL, type UserView } from '../user-controller.js';
 import type { Card } from './schema.js';
 
@@ -17,6 +19,8 @@ import type { Card } from './schema.js';
  */
 
 type Fact = Card['client']['knows'][number];
+/** A fact as the customer tells it: a card's own, or one of the stand's test customer. */
+type Told = Pick<Fact, 'id' | 'label' | 'value' | 'disclosure' | 'askedAs'>;
 type Expectation = Card['agentMust'][number];
 type Action = BehaviorPolicy['actions'][number];
 
@@ -27,7 +31,7 @@ export const EXPECTATION_LETTERS = ['А', 'Б', 'В', 'Г', 'Д', 'Е', 'Ж', '�
 export const expectationLetter = (id: string): string => EXPECTATION_LETTERS[Number(id.slice(1)) - 1] ?? id;
 
 /** What the customer says when naming a fact. */
-const statement = (fact: Fact): string => fact.value === undefined ? fact.label : `${fact.label}: ${fact.value}`;
+const statement = (fact: Told): string => fact.value === undefined ? fact.label : `${fact.label}: ${fact.value}`;
 
 interface CompiledPolicy { policy: BehaviorPolicy; facts: UserView['facts']; missing: string[] }
 
@@ -56,13 +60,15 @@ function followUps(card: Card, facts: number, maxTurns: number | undefined): num
  * finite search removes `leave` until then); a `report` turn may be skipped. `maxTurns` is the run's limit on
  * the customer's messages, when the caller knows it.
  */
-export function compilePolicy(card: Card, maxTurns?: number): CompiledPolicy {
-  const { turn, leaves } = card.client;
-  const knows = card.client.knows.filter(fact => fact.source.kind !== 'plausible' || fact.source.receiptId !== undefined);
+export function compilePolicy(card: Card, maxTurns?: number, profile: CustomerProfile = []): CompiledPolicy {
+  const { turn } = card.client;
+  const own = card.client.knows.filter(fact => fact.source.kind !== 'plausible' || fact.source.receiptId !== undefined);
+  const knows = [...own, ...profileFacts(own, profile)];
+  const leaves = profile.length ? `${card.client.leaves}; или агент передаёт вопрос оператору либо прямо говорит, что помочь не может` : card.client.leaves;
   const known = knows.filter(fact => fact.disclosure !== 'unknown');
   const unknown = knows.filter(fact => fact.disclosure === 'unknown');
   const onRequest = known.filter(fact => fact.disclosure === 'on_request');
-  const asked = (fact: Fact) => fact.askedAs ?? fact.label;
+  const asked = (fact: Told) => fact.askedAs ?? fact.label;
   const actions: Action[] = [
     // No payload: the controller says the fact's statement, which the harness rendered.
     ...known.map((fact): Action => ({ id: `tell_${fact.id}`, kind: 'answer', factIds: [fact.id], ifAsked: asked(fact) })),
@@ -85,6 +91,16 @@ export function compilePolicy(card: Card, maxTurns?: number): CompiledPolicy {
     facts: known.map(fact => ({ id: fact.id, statement: statement(fact), ...(fact.value !== undefined ? { value: fact.value } : {}) })),
     missing: unknown.map(fact => fact.label),
   };
+}
+
+/**
+ * The stand's test customer (the connection's `customerProfile`) as facts the customer names on request, after the
+ * card's own: what any real customer knows about their own account. A label the card already holds stays the card's.
+ */
+function profileFacts(own: readonly Told[], profile: CustomerProfile): Told[] {
+  return profile.filter(item => !own.some(fact => normalizeText(fact.label) === normalizeText(item.label))).map((item, index): Told => ({
+    id: `p${index + 1}`, label: item.label, value: item.value, disclosure: 'on_request', ...(item.askedAs !== undefined ? { askedAs: item.askedAs } : {}),
+  }));
 }
 
 /** A text that the rubric templates end with their own full stop. */
@@ -132,6 +148,8 @@ export interface CompileContext {
   environment?: CardExecution['environmentView'];
   /** The run's limit on the customer's messages: a long logged conversation gives the customer no more than fit in it. */
   maxTurns?: number;
+  /** The stand's test customer from the connection: what every customer knows about their own account. */
+  profile?: CustomerProfile;
 }
 
 /**
@@ -139,7 +157,7 @@ export interface CompileContext {
  * criteria and no card-wide goal rubric), so one expectation never colours the verdict of another.
  */
 export function compileCard(card: Card, context: CompileContext): Scenario {
-  const { policy, facts, missing } = compilePolicy(card, context.maxTurns);
+  const { policy, facts, missing } = compilePolicy(card, context.maxTurns, context.profile);
   const cited = [...new Set(card.agentMust.flatMap(expectation => expectation.requirementIds))];
   const requirements = cited.map(id => context.requirements.find(requirement => requirement.id === id));
   if (requirements.some(requirement => !requirement)) throw new Error(`Ситуация №${card.number}: ожидание ссылается на правило, которого нет в наборе.`);

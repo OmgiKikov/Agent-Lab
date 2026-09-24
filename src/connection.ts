@@ -66,6 +66,10 @@ export async function rememberedConnection(directory: string): Promise<Connectio
 export async function rememberConnection(directory: string, connection: Connection): Promise<void> {
   const previous = await rememberedConnection(directory);
   if (!connection.probe && previous?.probe && fingerprint(previous.target) === fingerprint(connection.target)) connection = { ...connection, probe: previous.probe };
+  // The stand's test customer is the owner's word about the stand, not about one draft: a draft made before it was
+  // declared must not erase it when its connection is remembered again.
+  const kept = previous && 'customerProfile' in previous.target ? previous.target.customerProfile : undefined;
+  if (kept?.length && !('customerProfile' in connection.target && connection.target.customerProfile?.length)) connection = { ...connection, target: { ...connection.target, customerProfile: kept } as Connection['target'] };
   const path = resolve(directory, 'connection.local.json');
   await mkdir(dirname(path), { recursive: true });
   await writeFileAtomic(path, JSON.stringify(connectionSchema.parse({ ...connection, verifiedAt: new Date().toISOString() }), null, 2) + '\n');

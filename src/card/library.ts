@@ -5,6 +5,7 @@ import { libraryHash, snapshotDigest, verifiedAcceptance } from '../scenario-lib
 import { compileCard } from './compile.js';
 import { cardSchema, libraryV2Schema, type Card, type ClaimReceipt, type LibraryV2, type ScenarioLibrary } from './schema.js';
 import { cardStatuses, type StatusContext } from './status.js';
+import type { CustomerProfile } from '../target-schema.js';
 
 /*
  * The card library as data: a draft grows one card at a time with the reviewer's receipts beside it, and an
@@ -85,7 +86,7 @@ export function recordClaims(library: LibraryV2, receipts: readonly ClaimReceipt
  * definitions keeps its receipt; another one is a new revision.
  */
 export function acceptLibraryV2(library: LibraryV2, expectedHash: string, cardIds: string[],
-  context: Omit<StatusContext, 'library'> & { environment?: CardExecution['environmentView'] }): { library: LibraryV2; scenarios: Scenario[] } {
+  context: Omit<StatusContext, 'library'> & { environment?: CardExecution['environmentView']; profile?: CustomerProfile }): { library: LibraryV2; scenarios: Scenario[] } {
   if (libraryHash(library) !== expectedHash) throw new LibraryConflict('Библиотека изменилась: хеш устарел.');
   if (!cardIds.length || cardIds.length > 200 || new Set(cardIds).size !== cardIds.length) throw new Error('Выберите ситуации без повторов.');
   const statuses = cardStatuses({ ...context, library });
@@ -97,7 +98,7 @@ export function acceptLibraryV2(library: LibraryV2, expectedHash: string, cardId
   });
   const compiled = cards.map(card => {
     const { split: _split, ...scenario } = compileCard(card, { requirements: library.requirements, maxTurns: context.maxTurns,
-      ...(context.environment ? { environment: context.environment } : {}) });
+      ...(context.environment ? { environment: context.environment } : {}), ...(context.profile?.length ? { profile: context.profile } : {}) });
     return scenario;
   });
   const scenarios = validatePreparation({ requirements: library.requirements, questions: [], scenarios: compiled }, library.sources).scenarios;
