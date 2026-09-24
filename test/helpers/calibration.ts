@@ -1,5 +1,5 @@
 import { fingerprint, type Experiment, type Scenario, type Trial } from '../../src/contracts.js';
-import { logJudgmentReceiptSchema, type Calibration, type LogJudge, type LogJudgmentReceipt } from '../../src/card/calibration.js';
+import { logJudgmentReceiptSchema, logReviewSchema, type Calibration, type LogJudge, type LogJudgmentReceipt, type LogReview } from '../../src/card/calibration.js';
 import { importEvidence, loggedMessages } from '../../src/card/checks.js';
 import { applyCommand, hostGrant, prepareCommand } from '../../src/card/commands.js';
 import { acceptLibraryV2, addCard, createLibraryV2 } from '../../src/card/library.js';
@@ -87,6 +87,15 @@ const proposalOf = (i: number): DialogueProposal => {
 export interface LoggedRun { record: Experiment; batch: ImportBatch; library: LibraryV2; scenarios: Scenario[] }
 type Verdict = 'pass' | 'fail' | 'unknown';
 
+/** One move of the customer Lab plays, as evaluation.ts records it. */
+export const controllerMove = (actionId: string) => ({ protocol: 'controlled-user-v1', decision: { actionId }, accepted: true, from: 'talk', to: actionId === 'leave' ? 'done' : 'talk' });
+
+/** An attempt of cards.ts whose customer left after the agent's first reply, the move recorded as the controller records it. */
+export function loggedAttempt(id: string, scenario: Scenario, results: Record<string, Verdict>, repeat = 0, extra: Partial<Trial> = {}): Trial {
+  const trial = cardAttempt(id, scenario, results, repeat, extra);
+  return { ...trial, events: trial.events.map(event => event.type === 'simulator' ? { ...event, result: controllerMove('leave') } : event) };
+}
+
 /**
  * A finished run of `count` cards made from an invented export, accepted as a preparation accepts them (card №k from
  * dialogue d{k-1}); the cards listed in `edited` had their customer changed by the owner before acceptance. Each
@@ -111,27 +120,41 @@ export function loggedRun(count: number, synthetic: (number: number) => { e1: Ve
   }
   const accepted = acceptLibraryV2(library, libraryHash(library), library.cards.map(card => card.id), { evidence, maxTurns: 3 });
   const scenarios = accepted.scenarios;
-  const trials: Trial[] = scenarios.map((scenario, index) => cardAttempt(`attempt_${index + 1}`, scenario, synthetic(index + 1)));
+  const trials: Trial[] = scenarios.map((scenario, index) => loggedAttempt(`attempt_${index + 1}`, scenario, synthetic(index + 1)));
   const record = cardRun(scenarios, trials, 1, { id: 'calibrated_run', librarySnapshot: accepted.library, originalImport: { id: batch.id, contentHash: batch.contentHash },
     acceptedTests: scenarios.map(scenario => ({ testId: `test_${scenario.id.slice(5, 21)}`, scenarioId: scenario.id, definitionHash: fingerprint(scenario), acceptedAt: '2026-09-23T12:00:00.000Z' })) });
   return { record, batch, library: accepted.library, scenarios };
 }
 
-/** What the log judge said about one expectation: a verdict, a log that never got there, two votes apart, or nothing asked. */
-export type LogVerdict = 'pass' | 'fail' | 'not_reached' | 'split' | 'no_agent_reply' | 'channel_unobserved';
+/**
+ * What the log judge said about one expectation: a verdict, a log that never got there, two votes apart, nothing asked,
+ * a judge whose request failed (`failed`, an incomplete receipt), two votes that decided without citing the channel
+ * (`unsupported`), two votes that could not tell (`unclear`), or a receipt of another definition (`foreign`).
+ */
+export type LogVerdict = 'pass' | 'fail' | 'not_reached' | 'split' | 'no_agent_reply' | 'channel_unobserved' | 'failed' | 'unsupported' | 'unclear' | 'foreign';
 
 /** A receipt of the log judge as the calibration stores it, keyed the product's own way. */
 export function logReceipt(run: LoggedRun, number: number, expectationId: 'e1' | 'e2', verdict: LogVerdict): LogJudgmentReceipt {
   const scenario = run.scenarios[number - 1]!;
-  const identity = { cardId: scenario.id, expectationId, definitionHash: fingerprint(scenario), importId: run.batch.id, importContentHash: run.batch.contentHash, dialogueId: `d${number - 1}` };
+  const identity = { cardId: scenario.id, expectationId, definitionHash: verdict === 'foreign' ? 'f'.repeat(64) : fingerprint(scenario), importId: run.batch.id,
+    importContentHash: run.batch.contentHash, dialogueId: `d${number - 1}` };
   const protocolHash = logProtocolHash();
-  const vote = (pass: 'met' | 'not_met', fail: 'met' | 'not_met', result: Verdict) => ({ pass, fail, result });
-  const votes = verdict === 'pass' ? [vote('met', 'not_met', 'pass'), vote('met', 'not_met', 'pass')] : verdict === 'fail' ? [vote('not_met', 'met', 'fail'), vote('not_met', 'met', 'fail')]
-    : verdict === 'not_reached' ? [vote('not_met', 'not_met', 'unknown'), vote('not_met', 'not_met', 'unknown')] : verdict === 'split' ? [vote('met', 'not_met', 'pass'), vote('not_met', 'met', 'fail')] : [];
+  type Condition = 'met' | 'not_met' | 'unclear';
+  const vote = (pass: Condition, fail: Condition, result: Verdict) => ({ pass, fail, result });
+  const votes = verdict === 'pass' || verdict === 'foreign' ? [vote('met', 'not_met', 'pass'), vote('met', 'not_met', 'pass')] : verdict === 'fail' ? [vote('not_met', 'met', 'fail'), vote('not_met', 'met', 'fail')]
+    : verdict === 'not_reached' ? [vote('not_met', 'not_met', 'unknown'), vote('not_met', 'not_met', 'unknown')] : verdict === 'split' ? [vote('met', 'not_met', 'pass'), vote('not_met', 'met', 'fail')]
+    : verdict === 'unsupported' ? [vote('met', 'not_met', 'unknown'), vote('not_met', 'met', 'unknown')] : verdict === 'unclear' ? [vote('unclear', 'unclear', 'unknown'), vote('unclear', 'unclear', 'unknown')]
+    : verdict === 'failed' ? [vote('met', 'not_met', 'pass'), { error: true as const }] : [];
   const skipped = verdict === 'no_agent_reply' || verdict === 'channel_unobserved' ? verdict : undefined;
   return logJudgmentReceiptSchema.parse({ mode: 'logged-v1', key: calibrationKey({ ...identity, protocolHash }), ...identity, protocolHash, inputHash: fingerprint({ identity }),
     ...(skipped ? { skipped } : { auditHash: fingerprint({ audit: identity }) }), provider: 'fixture', model: 'log-judge', votes,
-    result: verdict === 'pass' || verdict === 'fail' ? verdict : 'unknown', complete: true });
+    result: verdict === 'foreign' ? 'pass' : verdict === 'pass' || verdict === 'fail' ? verdict : 'unknown', complete: verdict !== 'failed' });
+}
+
+/** The owner's verdict on one receipt, `log:{key}`, as a lab operation records it: what the owner saw is read from the receipt. */
+export function logReview(receipt: LogJudgmentReceipt, verdict: LogReview['verdict'], source?: 'quick'): LogReview {
+  return logReviewSchema.parse({ id: `review_${receipt.key.slice(0, 12)}_${verdict}`, createdAt: '2026-09-24T12:00:00.000Z', key: receipt.key, verdict,
+    note: 'Прочитал разговор из логов сам.', ...(source ? { source } : {}), judgeVerdict: receipt.result, judge: { protocolHash: receipt.protocolHash, inputHash: receipt.inputHash } });
 }
 
 /**

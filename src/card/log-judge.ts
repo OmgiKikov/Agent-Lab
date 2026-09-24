@@ -125,6 +125,30 @@ export const notExercised = (votes: readonly Vote[]): boolean => {
   return held.length === 2 && held.every(vote => vote.pass === 'not_met' && vote.fail === 'not_met');
 };
 
+/** A vote whose two conditions decided — one met, the other not — and whose result is unknown: its verdict cited no event of the expectation's channel (parseLogVote). */
+const unsupported = (vote: Vote): boolean => vote.result === 'unknown'
+  && (vote.pass === 'met' && vote.fail === 'not_met' || vote.pass === 'not_met' && vote.fail === 'met');
+
+/** Why a receipt of judgment (b) decided nothing. */
+export type LogUndecided = NonNullable<LogJudgmentReceipt['skipped']> | 'judge_failed' | 'not_exercised_in_log' | 'judge_split' | 'no_evidence' | 'judge_unclear';
+
+/**
+ * Why one receipt decided nothing, read from what it recorded and never from the judge's words: the log could not
+ * show the expectation (no call was made), the judge gave no usable answer (a request failed or its answers could
+ * not be read — the receipt is incomplete), both votes found the conversation never got there, the two votes
+ * differ, both decided without citing an event of the expectation's channel, or the judge could not tell — as the
+ * synthetic side tells the same cases apart (expectations.ts undecidedExpectation). Undefined when it decided.
+ */
+export function logUndecided(receipt: Pick<LogJudgmentReceipt, 'skipped' | 'complete' | 'votes' | 'result'>): LogUndecided | undefined {
+  if (receipt.skipped) return receipt.skipped;
+  if (!receipt.complete) return 'judge_failed';
+  if (receipt.result !== 'unknown') return undefined;
+  if (notExercised(receipt.votes)) return 'not_exercised_in_log';
+  const held = receipt.votes.filter(cast);
+  if (held[0]?.result !== held[1]?.result) return 'judge_split';
+  return held.length && held.every(unsupported) ? 'no_evidence' : 'judge_unclear';
+}
+
 /**
  * Judgment (b): two votes on one expectation over one recorded conversation, a malformed answer asked once
  * more. The audit is reported on every change through `ctx.onJudgment` under the request's key. A stop (the

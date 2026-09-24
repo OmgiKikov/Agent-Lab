@@ -19,7 +19,8 @@ import { calibrationKey, logJudgeInputV1, logJudgmentComplete } from './log-judg
  * A key is judged once: a repeat or a reassessment with the same cards, logs and judge copies the receipt and
  * its sidecar from the run it came from and pays nothing. The calls come out of the run's own limit: when that
  * cannot cover them the calibration is skipped whole, before any call, with the reason. Whatever happens here
- * — a stop, a failed request, a broken import — the synthetic result stands: this step never throws.
+ * — a stop, a failed request, a broken import — the synthetic result stands: this step never throws, and the
+ * calibration records why it did not finish as a typed cause (`unfinished`), never as a sentence to decode.
  */
 
 type CalibrationStore = Pick<ExperimentStore, 'get' | 'readImport' | 'readLogVersions' | 'readCalibrationAudit' | 'writeCalibrationAudit'>;
@@ -27,16 +28,27 @@ type CalibrationStore = Pick<ExperimentStore, 'get' | 'readImport' | 'readLogVer
 /** Expectations judged at once: two votes each, so four keep eight requests in flight, as one attempt's judgment does. */
 const CALIBRATION_CONCURRENCY = 4;
 
+/** The logs could not be read, or are no longer the ones the situations were made from: nothing of them is judged. */
+class LogsUnavailable extends Error {}
+
 /** The imports of the situations that have a log, read once and checked against the content the cards were made from. */
 async function logBatches(store: Pick<ExperimentStore, 'readImport'>, situations: readonly LogSituation[]): Promise<Map<string, ImportBatch>> {
   const batches = new Map<string, ImportBatch>();
   for (const log of situations.flatMap(situation => situation.exclusion || !situation.log ? [] : [situation.log])) {
     if (batches.has(log.importId)) continue;
-    const batch = await store.readImport(log.importId);
-    if (batch.contentHash !== log.importContentHash) throw new Error('Импорт логов не совпадает с тем, из которого сделаны ситуации.');
+    let batch: ImportBatch;
+    try { batch = await store.readImport(log.importId); } catch (error) { throw new LogsUnavailable(error instanceof Error ? error.message : String(error)); }
+    if (batch.contentHash !== log.importContentHash) throw new LogsUnavailable('Импорт логов не совпадает с тем, из которого сделаны ситуации.');
     batches.set(log.importId, batch);
   }
   return batches;
+}
+
+/** Why a calibration stopped on `error`: the run's stop or its budget, the logs, or a failure of the calibration itself. */
+function unfinishedCause(error: unknown, signal: AbortSignal): NonNullable<Calibration['unfinished']> {
+  if (error instanceof Stopped) return error.reason === 'budget' ? 'budget' : 'stopped';
+  if (signal.aborted) return 'stopped';
+  return error instanceof LogsUnavailable ? 'logs' : 'failed';
 }
 
 interface Job { key: string; request: LogJudgeRequest; skipped?: LogJudgmentReceipt['skipped']; identity: Omit<LogJudgmentReceipt, 'mode' | 'key' | 'protocolHash' | 'inputHash' | 'auditHash' | 'provider' | 'model' | 'skipped' | 'votes' | 'result' | 'complete'> }
@@ -125,7 +137,7 @@ export async function calibrateRun(record: Experiment, work: CalibrationWork): P
     await judgeAll(record, pending, judge, work, receipt => { done.set(receipt.key, receipt); publish(); }, done.size);
   } catch (error) {
     // A broken import or store stops only the calibration; the run's result is kept as it was.
-    calibration.unfinished = 'stopped';
+    calibration.unfinished ??= unfinishedCause(error, work.ctx.signal);
     record.limitations.push(`Сверка с продом не завершена: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
@@ -151,7 +163,8 @@ async function judgeAll(record: Experiment, pending: readonly Job[], judge: LogJ
         finished++;
         await work.checkpoint(`Сверяю с продом: ${finished} из ${total} · агент и клиент не запускаются`);
       } catch (error) {
-        calibration.unfinished = error instanceof Stopped && error.reason === 'budget' ? 'budget' : 'stopped';
+        // The first cause holds: the workers that stop after it only follow it.
+        calibration.unfinished ??= unfinishedCause(error, work.ctx.signal);
         if (!(error instanceof Stopped) && !work.ctx.signal.aborted) throw error;
       }
     }
