@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { assessTrial, evaluateTrial } from '../src/evaluation.js';
 import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
-import { createDemoRuntime } from '../src/demo.js';
+import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { proposalCall } from '../src/card/proposal.js';
 import { checkSchema, experimentSchema, fingerprint, SANDBOX_RETIRED, type Scenario, type Source, type Target, type Trial, type World } from '../src/contracts.js';
 import { goalAttainment, replyQuality, simulatorFidelity, type JudgeAudit, type MetricAssessment, type Rubric } from '../src/assessment.js';
@@ -75,9 +75,10 @@ test('a stored sandbox card cannot run again: the retired built-in agent is refu
 
 test('the built-in demo refuses foreign materials and dialogues instead of simulating a custom preparation', async () => {
   const runtime = createDemoRuntime();
-  await assert.rejects(runtime.groundRequirements!({ task: 'An unrelated task', sources: [{ id: 'source-1', name: 'Other policy', content: 'Another rule.', hash: 'h' }] }, context()), /Учебный пример поддерживает только/);
-  await assert.rejects(runtime.proposeCard!({ task: 't', requirements: [], articles: [], topics: [], written: [],
-    call: proposalCall({ source: { kind: 'dialogue', batchId: 'batch', dialogueId: 'foreign' }, messages: [], requirements: [{ id: 'rule' }], maxTurns: 3 }) }, context()), /Учебный пример поддерживает только/);
+  const request = (dialogueId: string, content: string) => ({ task: 't', topics: [], written: [],
+    call: proposalCall({ source: { kind: 'dialogue', batchId: 'batch', dialogueId }, messages: [], sources: [{ id: 'source-1', name: 'Policy', content }], maxTurns: 3 }) });
+  await assert.rejects(runtime.proposeCard!(request('late', 'Another rule.'), context()), /Учебный пример поддерживает только/, 'foreign materials');
+  await assert.rejects(runtime.proposeCard!(request('foreign', demoInput().materials[0]!.content), context()), /Учебный пример поддерживает только/, 'a foreign dialogue');
 });
 
 test('the free simulator of an old validation card answers the current clarification and sees only this conversation', async () => {

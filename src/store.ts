@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync, watch } from 'node:fs';
 import { mkdir, open, readFile, readdir, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { judgeAuditSchema, type JudgeAudit } from './assessment.js';
+import { judgeCheckSchema, type JudgeCheck } from './judge-check.js';
 import { experimentSchema, fingerprint, type Experiment, type TraceEvent } from './contracts.js';
 import { writeFileAtomic, writeFileAtomicSync } from './fs-atomic.js';
 import type { GeneratorEvidence } from './generator-evidence.js';
@@ -31,6 +32,7 @@ import type { LogVersionJournal } from './card/calibration.js';
  */
 
 type LockOwner = { pid: number; token: string };
+type AuditFolder = 'judge' | 'calibration' | 'judge-check';
 function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
   catch (error) {
@@ -209,15 +211,16 @@ export class ExperimentStore {
   }
   /**
    * Full audit of one judgment, replaced atomically on every call: a trial's in `{id}.judge/{trialId}.json`, an
-   * expectation judged on its recorded conversation (card/log-judge.ts) in `{id}.calibration/{key}.json`.
+   * expectation judged on its recorded conversation (card/log-judge.ts) in `{id}.calibration/{key}.json`, a copy judged
+   * by a judge check (judge-check.ts) in `{id}.judge-check/{name}.json`.
    */
-  private auditPath(id: string, folder: 'judge' | 'calibration', name: string): string {
+  private auditPath(id: string, folder: AuditFolder, name: string): string {
     this.path(id);
-    if (!isIdentifier(name)) throw new Error(folder === 'judge' ? 'Invalid trial ID' : 'Invalid calibration key');
+    if (!isIdentifier(name)) throw new Error(folder === 'judge' ? 'Invalid trial ID' : folder === 'calibration' ? 'Invalid calibration key' : 'Invalid judge check item');
     return join(this.directory, `${id}.${folder}`, `${name}.json`);
   }
   // Synchronous on purpose: onJudgment is synchronous, and a crash must leave the last complete audit on disk.
-  private writeAudit(id: string, folder: 'judge' | 'calibration', name: string, audit: JudgeAudit): void {
+  private writeAudit(id: string, folder: AuditFolder, name: string, audit: JudgeAudit): void {
     if (!this.lockToken) throw new Error('Для записи оценки откройте лабораторию как писатель.');
     // The path check comes first: an unsafe id must be refused before anything touches the disk.
     const target = this.auditPath(id, folder, name);
@@ -225,7 +228,7 @@ export class ExperimentStore {
     mkdirSync(join(this.directory, `${id}.${folder}`), { recursive: true, mode: 0o700 });
     writeFileAtomicSync(target, content);
   }
-  private async readAudit(id: string, folder: 'judge' | 'calibration', name: string): Promise<JudgeAudit | null> {
+  private async readAudit(id: string, folder: AuditFolder, name: string): Promise<JudgeAudit | null> {
     const target = this.auditPath(id, folder, name);
     let file;
     try { file = await open(target, 'r'); }
@@ -239,6 +242,23 @@ export class ExperimentStore {
   readJudgeAudit(id: string, trialId: string): Promise<JudgeAudit | null> { return this.readAudit(id, 'judge', trialId); }
   writeCalibrationAudit(id: string, key: string, audit: JudgeAudit): void { this.writeAudit(id, 'calibration', key, audit); }
   readCalibrationAudit(id: string, key: string): Promise<JudgeAudit | null> { return this.readAudit(id, 'calibration', key); }
+  writeJudgeCheckAudit(id: string, name: string, audit: JudgeAudit): void { this.writeAudit(id, 'judge-check', name, audit); }
+  readJudgeCheckAudit(id: string, name: string): Promise<JudgeAudit | null> { return this.readAudit(id, 'judge-check', name); }
+  /** A run's judge check (judge-check.ts), beside the run and never inside it: `{id}.judge-check.json`, replaced whole. */
+  writeJudgeCheck(check: JudgeCheck): Promise<void> {
+    return this.writeTransaction(async () => {
+      const validated = judgeCheckSchema.parse(check);
+      await writeFileAtomic(this.checkPath(validated.runId), JSON.stringify(validated, null, 2));
+    });
+  }
+  /** The run's judge check; null when the run was never checked. */
+  async readJudgeCheck(id: string): Promise<JudgeCheck | null> {
+    let raw: string;
+    try { raw = await readFile(this.checkPath(id), 'utf8'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
+    return judgeCheckSchema.parse(JSON.parse(raw));
+  }
+  private checkPath(id: string): string { this.path(id); return join(this.directory, `${id}.judge-check.json`); }
 
   /* ── file areas: imports, the owners' declarations, topic maps, libraries ── */
   readImport(id: string): Promise<ImportBatch> { return new ScenarioFiles(this.directory).readImport(id); }

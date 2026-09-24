@@ -13,6 +13,7 @@ import { buildCalibration, type CalibrationView } from './card/calibration-view.
 import { customerMoves, type CustomerMoves } from './customer-moves.js';
 import type { DialogueNumbers } from './card/view.js';
 import { ruleBar, type RuleBar } from './card/rulebook.js';
+import { judgeCheckSummary, type JudgeCheck, type JudgeCheckSummary } from './judge-check.js';
 
 export { COUNTING_RULES } from './outcomes.js';
 
@@ -139,6 +140,8 @@ export interface ResultView {
   agreement: JudgeAgreement;
   /** The same situations judged on their recorded conversations (card/calibration-view.ts); absent without a calibration. Never changes the headline. */
   calibration?: CalibrationView;
+  /** The judge checked with planted errors and untouched controls (judge-check.ts); absent when this run was never checked. Never changes the headline. */
+  judgeCheck?: JudgeCheckSummary;
   /** What the customer Lab played did (customer-moves.ts); absent when no conversation recorded a controlled move. Never changes the headline. */
   customer?: CustomerMoves;
   /**
@@ -276,8 +279,11 @@ function clarityOf(record: Experiment, counted: readonly ResultCard[]): ResultVi
   return { clear: tally(counted.filter(card => !vague.has(card.scenarioId))), vague: tally(counted.filter(card => vague.has(card.scenarioId))) };
 }
 
-/** `numbers` places the logged dialogues of a card run in their imports («диалог №17»); without it a disagreement names the dialogue without its number. */
-export function buildResultView(input: Experiment, options: { before?: Experiment; numbers?: DialogueNumbers } = {}): ResultView {
+/**
+ * `numbers` places the logged dialogues of a card run in their imports («диалог №17»); without it a disagreement names the dialogue without its number.
+ * `judgeCheck` is the run's sidecar as the store read it; a check of another run is ignored.
+ */
+export function buildResultView(input: Experiment, options: { before?: Experiment; numbers?: DialogueNumbers; judgeCheck?: JudgeCheck | null } = {}): ResultView {
   const run = deriveRun(input);
   const { record } = run;
   const found = stabilityOf(input, options.before);
@@ -338,7 +344,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   if (clarity) view.clarity = clarity;
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});
   const customer = customerMoves(run);
-  return { ...view, ...(calibration ? { calibration } : {}), ...(customer ? { customer } : {}), next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
+  const judgeCheck = judgeCheckSummary(options.judgeCheck, record);
+  return { ...view, ...(calibration ? { calibration } : {}), ...(judgeCheck ? { judgeCheck } : {}), ...(customer ? { customer } : {}), next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
 }
 
 /**

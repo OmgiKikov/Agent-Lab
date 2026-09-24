@@ -57,16 +57,6 @@ function richRuntime(logged: Logged[]): Runtime {
   const topicOf = new Map(logged.map(item => [item.id, item.topic]));
   return {
     topicMap: { builder: BUILDER, build: (plan, ctx, onProgress) => buildTopicMap(plan, { builder: BUILDER, ctx, onProgress, run: topics.run }) },
-    async groundRequirements(input, ctx) {
-      ctx.beforeCall();
-      const [refund, status, tariff] = RULES.split('\n');
-      const source = input.sources[0]!.id;
-      return { requirements: [
-        { id: 'refund_rule', sourceId: source, text: 'Номер не спрашивается повторно; возврат объясняется.', quote: refund!, critical: true },
-        { id: 'status_rule', sourceId: source, text: 'Статус и срок называются сразу.', quote: status!, critical: true },
-        { id: 'tariff_rule', sourceId: source, text: 'Предлагается тариф дешевле с разницей в цене.', quote: tariff!, critical: true },
-      ], questions: [] };
-    },
     async proposeCard(request, ctx): Promise<CardProposal> {
       ctx.beforeCall();
       const { source } = request.call;
@@ -74,10 +64,14 @@ function richRuntime(logged: Logged[]): Runtime {
       const topic = topicOf.get(source.dialogueId) ?? 'Возврат оплаты';
       const index = Number(source.dialogueId.slice(1)) - 1;
       const title = topic === OTHER ? 'Другое — где ближайшее отделение' : `${topic} — ${TITLES[topic]?.[index] ?? source.dialogueId}`;
-      const duty = (text: string, rule: string) => ({ text, requirementIds: [rule], appliesWhen: null, observation: 'reply' as const });
-      const must = topic === 'Статус заявки' ? [duty('назвать статус заявки и срок ответа', 'status_rule')]
-        : topic === 'Смена тарифа' ? [duty('предложить тариф дешевле и назвать разницу в цене', 'tariff_rule')]
-          : [duty('не спрашивать номер терминала ещё раз, если клиент его уже назвал', 'refund_rule'), duty('объяснить, как оформить возврат', 'refund_rule')];
+      // Each duty cites its line of the rules, the folder's one material.
+      const [refund, status, tariff] = RULES.split('\n');
+      const duty = (text: string, quote: string, rule: string) => ({ text, basis: [{ sourceId: request.call.sources[0].id, quote, rule, kind: 'behavior' as const }],
+        appliesWhen: null, observation: 'reply' as const });
+      const refunds = 'Номер не спрашивается повторно; возврат объясняется.';
+      const must = topic === 'Статус заявки' ? [duty('назвать статус заявки и срок ответа', status!, 'Статус и срок называются сразу.')]
+        : topic === 'Смена тарифа' ? [duty('предложить тариф дешевле и назвать разницу в цене', tariff!, 'Предлагается тариф дешевле с разницей в цене.')]
+          : [duty('не спрашивать номер терминала ещё раз, если клиент его уже назвал', refund!, refunds), duty('объяснить, как оформить возврат', refund!, refunds)];
       return { title, topic: topic === OTHER ? 'Другое' : topic, wants: `Получить помощь: ${topic.toLocaleLowerCase('ru')}`, clarity: 'clear', writesEvent: request.call.customerEvents[0]!, knows: [], plausibleKnows: [],
         leaves: 'получил ответ или понял, что агент не поможет', turn: null, agentMust: must, coverage: {} };
     },

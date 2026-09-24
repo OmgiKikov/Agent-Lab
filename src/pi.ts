@@ -1,16 +1,16 @@
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
-import { EXPECTATIONS_PROTOCOL, failureModeSchema, fingerprint, requirementSchema, REQUIREMENT_LIMIT, SIMULATOR_PROTOCOL, VERSION, type FailureMode, type Requirement, type Settings, type Source } from './contracts.js';
+import { EXPECTATIONS_PROTOCOL, failureModeSchema, fingerprint, SIMULATOR_PROTOCOL, VERSION, type FailureMode, type Settings } from './contracts.js';
 import { verbatimSpan } from './verbatim.js';
-import { requirementKindSchema } from './scenario-contracts.js';
-import { sourceSelectionSchema, userTurnSchema, type CallContext, type GroundingInput, type Runtime } from './runtime.js';
+import { sourceSelectionSchema, userTurnSchema, type CallContext, type Runtime } from './runtime.js';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } from './judge.js';
-import { AGENT_RULES_PER_DIALOGUE, FOCUSED_REQUIREMENT_LIMIT, MODEL_REQUEST_BYTES, workInputIssue } from './limits.js';
+import { MODEL_REQUEST_BYTES, workInputIssue } from './limits.js';
 import { callModel, type Model } from './llm/model-call.js';
 import { AUTH_HELP, resolveModels } from './llm/models.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
+import { plantError } from './judge-check-task.js';
 import {
-  CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
+  CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
 } from './prompts.js';
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
 import { cardReviewSchema } from './card/review.js';
@@ -34,72 +34,6 @@ import { USER_CONTROLLER_PROTOCOL, userDecisionSchema } from './user-controller.
 export const evaluatorVersion = (settings: Settings): string => fingerprint({ protocol: VERSION, judge: JUDGE_PROTOCOL, simulator: { role: SIMULATOR_ROLE, protocol: SIMULATOR_PROTOCOL },
   controller: { role: USER_CONTROLLER_ROLE, protocol: USER_CONTROLLER_PROTOCOL, decision: 'action-enum-v1' }, expectations: EXPECTATIONS_PROTOCOL,
   provider: settings.provider, model: settings.model, roles: settings.roles ?? {}, judgeModel: settings.judge });
-
-const OBSERVABLE = 'true when a user can see this rule kept or broken in the agent\'s reply; false only for an internal interface of the agent\'s prompt, such as its machine output format: recorded, never judged';
-const KIND = 'behavior: how the bot must act or speak (usually from its prompts); knowledge: a fact about the product or its terms the bot\'s answer must get right; operator_procedure: steps a human operator performs, or a script written for operators';
-const groundedRequirementSchema = requirementSchema.extend({ observable: z.boolean().describe(OBSERVABLE), kind: requirementKindSchema.describe(KIND) });
-/** A focused call offered the agent's rules may find every deciding rule among them, so its own requirements may be none. */
-const groundingSchemaFor = (limit: number, agentRules = false) => z.strictObject({
-  requirements: z.array(groundedRequirementSchema).min(agentRules ? 0 : 1).max(limit, { error: `Return at most ${limit} requirements: merge closely related rules into one requirement with one exact quote, and keep the rules a user can see violated in a reply` }),
-  questions: z.array(z.string().trim().min(1).max(2000)).max(12),
-});
-type Grounded = z.infer<ReturnType<typeof groundingSchemaFor>> & { agentRuleIds?: string[] };
-/** The answer's shape: with agent rules offered, it also names the ones that decide the dialogue — an enum of exactly those ids. */
-function groundingOutput(limit: number, agentRuleIds: readonly string[]): z.ZodType<Grounded> {
-  if (!agentRuleIds.length) return groundingSchemaFor(limit);
-  return groundingSchemaFor(limit, true).extend({
-    agentRuleIds: z.array(z.enum(agentRuleIds as [string, ...string[]], { error: 'Not an offered agent rule: return only ids from agentRules.' }))
-      .max(AGENT_RULES_PER_DIALOGUE, { error: `Return at most ${AGENT_RULES_PER_DIALOGUE} agent rules, the most decisive first.` }),
-  });
-}
-const FOCUS_CLAUSE = `customerMessages holds what one real customer wrote in a dialogue these requirements must decide (the old agent's replies are withheld: they are not rules). Extract only the rules that determine the correct agent behaviour for that customer (the answer, the mandatory steps, what must not be said); skip rules the dialogue never touches. Start with the original request; later reactions to an instruction do not prove the service already exists. Preserve unknown product/channel/prerequisites as conditions and allow appropriate clarification or qualified alternatives. Do not require every channel or an unrequested follow-on operation. Return at most ${FOCUSED_REQUIREMENT_LIMIT} requirements.`;
-/**
- * Appended to FOCUS_CLAUSE when the agent's own rules are offered. Neither clause is inside a stored hash: they are the
- * builder's instructions, journalled with each call, never part of a draft's, a card's or an evaluator's hash.
- */
-const AGENT_RULES_CLAUSE = `agentRules lists the agent's own rules, already extracted once from its prompts (id and the start of the rule's text); its prompts are not supplied again. In agentRuleIds return the ids of those that decide this customer's dialogue (at most ${AGENT_RULES_PER_DIALOGUE}, the most decisive first; none when no agent rule applies). Do not restate an agent rule as a requirement: extract requirements only from the supplied sources, and none when the agent rules already decide the dialogue.`;
-
-/** Where a requirement's quote is verbatim: its cited source, or else exactly one other supplied source, which then owns it. */
-function located(requirement: Requirement, sources: readonly Source[]): { sourceId: string; quote: string } | undefined {
-  const cited = sources.find(source => source.id === requirement.sourceId);
-  const exact = cited && verbatimSpan(cited.content, requirement.quote);
-  if (cited && exact) return { sourceId: cited.id, quote: exact };
-  const elsewhere = sources.filter(source => source.id !== requirement.sourceId && verbatimSpan(source.content, requirement.quote));
-  return elsewhere.length === 1 ? { sourceId: elsewhere[0]!.id, quote: verbatimSpan(elsewhere[0]!.content, requirement.quote)! } : undefined;
-}
-function groundingProblem(value: Grounded, sources: readonly Source[]): string | undefined {
-  if (new Set(value.requirements.map(r => r.id)).size !== value.requirements.length) return 'Two requirements share an id; give every requirement a unique id.';
-  const missing: string[] = [];
-  for (const requirement of value.requirements) {
-    const source = sources.find(candidate => candidate.id === requirement.sourceId);
-    if (!source) return `Requirement ${requirement.id} cites source ${requirement.sourceId}, which was not supplied.`;
-    if (!located(requirement, sources)) missing.push(`${requirement.id} (not in "${source.name}")`);
-  }
-  return missing.length
-    ? `These quotes are not verbatim substrings of their sources: ${missing.join('; ')}. Copy the exact characters from the source instead of paraphrasing; a shorter contiguous fragment is safer than a long one. Keep every other requirement as it is.`
-    : undefined;
-}
-
-/** One grounding call: the whole policy of the supplied sources, or, with a focus, only the rules that decide one customer's dialogue. */
-export function groundingRequest(input: GroundingInput) {
-  const limit = input.focus ? FOCUSED_REQUIREMENT_LIMIT : REQUIREMENT_LIMIT;
-  const agentRules = input.focus?.agentRules ?? [];
-  const task: StructuredTask<Grounded> = {
-    id: 'ground-requirements', label: 'Требования', role: 'builder',
-    instructions: input.focus ? [REQUIREMENTS_ROLE, FOCUS_CLAUSE, ...(agentRules.length ? [AGENT_RULES_CLAUSE] : [])].join('\n') : REQUIREMENTS_ROLE,
-    output: groundingOutput(limit, agentRules.map(rule => rule.id)),
-    check: value => groundingProblem(value, input.sources),
-  };
-  return {
-    limit, task,
-    payload: {
-      task: input.task,
-      sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, ...(kind ? { kind } : {}) })),
-      ...(input.focus ? { customerMessages: [...input.focus.customerMessages] } : {}),
-      ...(agentRules.length ? { agentRules: agentRules.map(({ id, text }) => ({ id, text })) } : {}),
-    },
-  };
-}
 
 const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, message: userTurnSchema.shape.message.optional() })
   .refine(v => v.done || !!v.message?.trim(), 'A continuing user turn needs a message')
@@ -184,7 +118,8 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       const payload = proposalPayload(input);
       const oversize = workInputIssue(payload);
       if (oversize) throw new Error(oversize);
-      // A binding slip goes back with its exact reason; the answer's references are enums of this call.
+      // A binding slip, a quote not found verbatim or a kind of rule outside the rulebook goes back with its exact reason;
+      // the answer's references are enums of this call.
       return run<CardProposal>({
         id: 'card-proposal', label: input.call.source.kind === 'rules' ? 'Ситуация по правилам владельца' : 'Ситуация из диалога', role: 'builder', instructions: CARD_ROLE,
         output: cardProposalSchema(input.call), check: value => cardProposalProblem(value, input.call), bounded: proposalBounds(input.call),
@@ -196,13 +131,6 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       const reviewed = await run({ id: 'card-review', label: 'Проверка ситуации', role: 'judge', instructions: CARD_REVIEW_ROLE,
         output: cardReviewSchema(input.aliases), bounded: reviewBounds(input.aliases.length) }, input.payload, ctx);
       return { verdicts: reviewed.claims, model: `${models.judge.provider}/${models.judge.id}` };
-    },
-    async groundRequirements(input, ctx) {
-      const { task, payload } = groundingRequest(input);
-      const grounded = await run(task, payload, ctx);
-      // Every quote is stored in its source's own characters, attributed to the source that holds it.
-      return { questions: grounded.questions, requirements: grounded.requirements.map(requirement => ({ ...requirement, ...located(requirement, input.sources)! })),
-        ...(grounded.agentRuleIds ? { agentRuleIds: [...new Set(grounded.agentRuleIds)] } : {}) };
     },
     async failureModes(input, ctx) {
       const ids = input.failures.map(failure => failure.trialId);
@@ -220,6 +148,8 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
     },
     logJudge: { provider: judge.provider, model: judge.id, protocolHash: logProtocolHash(judgeModel.configurationHash),
       assess: (request, ctx) => judgeLogged(request, judgeModel, ctx, respond(ctx)) },
+    // The errors a judge check plants are the builder's work too; the run's own judge then reads them.
+    plantError: { builder, plant: (request, ctx) => plantError(request, { run, ctx }) },
     async selectUserAction(input, ctx) {
       // The answer is an enum of exactly the moves allowed now, so a move outside the policy cannot be returned.
       return run({ id: 'user-action', label: 'Действие пользователя', role: 'simulator', instructions: USER_CONTROLLER_ROLE, output: userDecisionSchema(input.actions) }, input, ctx);

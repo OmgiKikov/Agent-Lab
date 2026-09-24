@@ -104,7 +104,7 @@ test('a first-format draft goes on as a new card draft that is checked, answered
   assert.notEqual(draft.id, record.id);
   assert.equal(draft.phase, 'review'); assert.equal(draft.usage.calls, 0); assert.deepEqual(draft.scenarios, []); assert.deepEqual(draft.trials, []);
   assert.deepEqual([draft.task, draft.sources, draft.requirements, draft.originalImport], [record.task, record.sources, record.requirements, record.originalImport]);
-  assert.equal(draft.preparationProgress?.protocol, 'cards-v1'); assert.equal(draft.preparationProgress?.status, 'complete');
+  assert.equal(draft.preparationProgress?.protocol, 'cards-v2', 'the converted draft is this Lab\'s own'); assert.equal(draft.preparationProgress?.status, 'complete');
   assert.equal((draft.librarySnapshot as LibraryV2).cards.length, 2);
   assert.deepEqual((await views(lab, draft.id)).map(view => view.status), ['checking', 'checking'], 'nothing is ready before the reviewer has read the new cards');
   // The paid check is its own step, on the owner's word.

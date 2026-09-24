@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { Experiment } from '../src/contracts.js';
 import type { Runtime } from '../src/runtime.js';
 import { preparationCeiling, PROPOSAL_ATTEMPTS } from '../src/card/budget.js';
-import type { DialogueProposal } from '../src/card/proposal.js';
+import { citationId, type DialogueProposal } from '../src/card/proposal.js';
 import { storedEvidence } from '../src/card/prepare.js';
 import { cardSchema, preparationProgressSchema, type CardPreparation } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
@@ -29,7 +29,7 @@ async function withLab(runtime: Runtime, work: (lab: ExperimentLab) => Promise<v
   const lab = new ExperimentLab(directory, runtime);
   try { await lab.init(); await work(lab); } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 }
-const received = (): Received => ({ proposals: [], reviews: [], grounding: 0 });
+const received = (): Received => ({ proposals: [], reviews: [] });
 const progressOf = (record: Experiment) => record.preparationProgress as CardPreparation;
 const lateOf = (seen: Received) => seen.proposals.filter(request => request.call.source.kind === 'dialogue' && request.call.source.dialogueId === 'late');
 async function statuses(lab: ExperimentLab, id: string) {
@@ -121,16 +121,18 @@ test('the consented ceiling holds each situation\'s revision, and the consent sa
   const sources = [{ id: 'source-1', name: 'Правила', content: policy, hash: 'h' }];
   const one = preparationCeiling({ task: 'Проверить', sources, situations: 1, fromLogs: false });
   assert.equal(PROPOSAL_ATTEMPTS, 6, 'five calls to write the card and one to revise it');
-  assert.equal(one, 1 + PROPOSAL_ATTEMPTS + 2 * 2, 'the policy once, the allowance, the card\'s review and its revision\'s');
-  assert.equal(preparationCeiling({ task: 'Проверить', sources, situations: 3, fromLogs: false }), 1 + 3 * (PROPOSAL_ATTEMPTS + 4));
-  const consent = consentText({ conversations: 2, usable: 2, promised: 2, excluded: [], callCeiling: 21, topicMapCalls: 0, promptCalls: 0 } as never, 'логов');
+  assert.equal(one, PROPOSAL_ATTEMPTS + 2 * 2, 'the allowance, the card\'s review and its revision\'s');
+  assert.equal(preparationCeiling({ task: 'Проверить', sources, situations: 3, fromLogs: false }), 3 * (PROPOSAL_ATTEMPTS + 4));
+  const consent = consentText({ conversations: 2, usable: 2, promised: 2, excluded: [], callCeiling: 21, topicMapCalls: 0, prompts: { count: 0, bytes: 0 } }, 'логов');
   assert.match(consent.lines.at(-1)!, /одна переделка каждой ситуации/);
   assert.match(rulesConsentText(2, 21).lines.at(-1)!, /одна переделка каждой ситуации/);
 });
 
 /** The `late` customer cannot say what they want: the card says so, and its duty is to clarify, citing the owner's rule. */
+const clarifyQuote = 'Если номера нет, уточните номер терминала.';
 const vagueLate: DialogueProposal = { ...proposals.late, clarity: 'vague', wants: 'Не может сформулировать, в чём дело: упоминает возврат, номер терминала не назвал',
-  agentMust: [{ text: 'уточнить номер терминала, не угадывая порядок возврата', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' },
+  agentMust: [{ text: 'уточнить номер терминала, не угадывая порядок возврата', appliesWhen: null, observation: 'reply',
+    basis: [{ sourceId: 'source-1', quote: clarifyQuote, rule: 'Без номера терминала агент сначала уточняет его.', kind: 'behavior' }] },
     proposals.late.agentMust[1]!] };
 
 test('a vague customer is a situation: its card is marked vague, its duty cites a rule, and the result counts it apart', async () => {
@@ -144,7 +146,8 @@ test('a vague customer is a situation: its card is marked vague, its duty cites 
     const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const { library } = await lab.readCards(draft.id);
-    assert.deepEqual(library.cards.map(card => [card.clarity, card.agentMust[0]!.requirementIds]), [['vague', ['refund_rule']], [undefined, ['refund_rule']]],
+    assert.deepEqual(library.cards.map(card => [card.clarity, card.agentMust[0]!.requirementIds]),
+      [['vague', [citationId('source-1', clarifyQuote)]], [undefined, [citationId('source-1', proposals.known.agentMust[0]!.basis[0]!.quote)]]],
       'a clear request is written as every card before the field was');
     assert.deepEqual(await statuses(lab, draft.id), ['ready', 'ready']);
     const accepted = await lab.acceptCards(draft.id, libraryHash(library), library.cards.map(card => card.id));

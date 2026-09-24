@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { fingerprint, type Experiment } from './contracts.js';
 import { isRunning } from './phases.js';
+import type { JudgeCheck } from './judge-check.js';
 import type { ExperimentStore } from './store.js';
 import { compareRuns, markReconstructedSource, type RunComparison } from './comparison.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
@@ -78,7 +79,7 @@ async function resolveSource(record: Experiment, store: Pick<ExperimentStore, 'g
   }
 }
 
-type BundleStore = Pick<ExperimentStore, 'get' | 'traceJournal'> & Partial<Pick<ExperimentStore, 'readJudgeAudit' | 'readImport'>>;
+type BundleStore = Pick<ExperimentStore, 'get' | 'traceJournal'> & Partial<Pick<ExperimentStore, 'readJudgeAudit' | 'readImport' | 'readJudgeCheck'>>;
 
 /**
  * A receipt is sealed with the hash of the full audit in `{runId}.judge/{trialId}.json`. When that
@@ -130,6 +131,13 @@ export async function resolveVerified(record: Experiment, store: Pick<Experiment
   return result;
 }
 
+/** The run's judge check (judge-check.ts) for the view; a file that cannot be read is left out and said in words, never shown half-trusted. */
+export async function readJudgeCheck(store: Partial<Pick<ExperimentStore, 'readJudgeCheck'>>, id: string, warnings: string[]): Promise<JudgeCheck | null> {
+  if (!store.readJudgeCheck) return null;
+  try { return await store.readJudgeCheck(id); }
+  catch { warnings.push('Проверку судьи подброшенными ошибками не удалось прочитать: она не показана.'); return null; }
+}
+
 /** Resolve the persisted relationship once, independently of navigation and export format. */
 export async function evidenceBundle(record: Experiment, store: BundleStore, beforeId?: string): Promise<EvidenceBundle> {
   const parent = beforeId ?? record.parentRunId;
@@ -137,8 +145,9 @@ export async function evidenceBundle(record: Experiment, store: BundleStore, bef
   const snapshot = verified.record;
   // Only a calibration's disagreements need the dialogues' places in their imports: other bundles read no import.
   const numbers = store.readImport && snapshot.calibration?.entries.length ? await importNumbers(snapshot, store.readImport.bind(store)) : undefined;
+  const judgeCheck = await readJudgeCheck(store, snapshot.id, verified.warnings);
   // Stability is checked against the resolved source run; the headline itself never depends on it.
-  const bundle: EvidenceBundle = { record: snapshot, view: buildResultView(snapshot, { before: verified.before, ...(numbers ? { numbers } : {}) }), warnings: [...verified.warnings], traceJournal: '',
+  const bundle: EvidenceBundle = { record: snapshot, view: buildResultView(snapshot, { before: verified.before, ...(numbers ? { numbers } : {}), judgeCheck }), warnings: [...verified.warnings], traceJournal: '',
     ...(numbers ? { dialogueNumbers: numbers } : {}) };
   if (parent) {
     bundle.comparisonSource = { kind: verified.embedded ? 'embedded' : beforeId && beforeId !== snapshot.parentRunId ? 'selected' : 'parent', beforeId: parent, afterId: snapshot.id };

@@ -40,7 +40,7 @@ function plausibleDraft() {
   let library = createLibraryV2({ id: 'library_plausible', imports: [{ id: batch.id, contentHash: batch.contentHash }], sources, requirements: rules, createdAt: '2026-09-24T10:00:00.000Z' });
   for (const dialogue of batch.dialogues) {
     const key = dialogue.id as 'late' | 'known';
-    const call = proposalCall({ source: { kind: 'dialogue', batchId: batch.id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), requirements: rules, maxTurns: 6 });
+    const call = proposalCall({ source: { kind: 'dialogue', batchId: batch.id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), sources, maxTurns: 6 });
     const plausibleKnows = [{ ...EQUIPMENT, label: key === 'late' ? EQUIPMENT.label : 'тип  оборудования' }];
     library = addCard(library, bindProposal({ ...proposals[key], plausibleKnows }, call, library.nextNumber), { dialogueId: dialogue.id, batchId: batch.id, sourceIds: ['source-1'] });
   }
@@ -56,7 +56,7 @@ test('a proposal binds its plausible facts after the logged ones: named on reque
   assert.deepEqual(late.client.knows.map(fact => [fact.id, fact.label, fact.disclosure, fact.source.kind]),
     [['f1', 'Номер терминала', 'on_request', 'dialogue'], ['f2', 'Тип оборудования', 'on_request', 'plausible']]);
   const dialogue = importBatch(dialogues).dialogues[0]!;
-  const call = proposalCall({ source: { kind: 'dialogue', batchId: importBatch(dialogues).id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), requirements: [refundRule], maxTurns: 6 });
+  const call = proposalCall({ source: { kind: 'dialogue', batchId: importBatch(dialogues).id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), sources: [{ id: 'source-1', name: 'Правила возвратов', content: policy }], maxTurns: 6 });
   const { plausibleKnows: _none, clarity: _clear, ...earlier } = proposals.late;
   assert.equal(bindProposal(proposals.late, call, 1).id, `card_${fingerprint({ source: call.source, proposal: earlier })}`,
     'a card with no plausible facts and a clear request keeps the id its answer had before those fields existed');
@@ -65,7 +65,7 @@ test('a proposal binds its plausible facts after the logged ones: named on reque
 
 test('a plausible fact with a number, a code or a long text is refused with the exact reason, and so is a brief of more than eight facts', () => {
   const dialogue = importBatch(dialogues).dialogues[0]!;
-  const call = proposalCall({ source: { kind: 'dialogue', batchId: importBatch(dialogues).id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), requirements: [refundRule], maxTurns: 6 });
+  const call = proposalCall({ source: { kind: 'dialogue', batchId: importBatch(dialogues).id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), sources: [{ id: 'source-1', name: 'Правила возвратов', content: policy }], maxTurns: 6 });
   const refused = (value: string) => cardProposalProblem({ ...proposals.late, plausibleKnows: [{ label: 'Номер договора', value, askedAs: null }] }, call);
   const reason = 'plausibleKnows[0] "Номер договора": the value "Д-20931" is a number, a code or a long text.';
   assert.ok(refused('Д-20931')?.startsWith(reason), refused('Д-20931'));

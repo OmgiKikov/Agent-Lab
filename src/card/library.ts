@@ -29,7 +29,7 @@ const draftOnly = (library: LibraryV2): void => {
   if (library.acceptance) throw new Error('Утверждённые ситуации не меняются: подготовьте новый черновик.');
 };
 
-/** The rules the draft's cards are read against, kept equal to the record's as grounding adds a dialogue's rules. */
+/** The rules the draft's cards are read against, kept equal to the record's as each card adds the sentences it cites. */
 export function withRequirements(library: LibraryV2, requirements: readonly Requirement[]): LibraryV2 {
   if (fingerprint(library.requirements) === fingerprint(requirements)) return library;
   draftOnly(library);

@@ -125,7 +125,7 @@ export const preparationProgressSchema = z.strictObject({
 /** A library's materials and requirements; both library formats keep them in this shape. */
 export const librarySourcesSchema = z.array(z.strictObject({ id, name: text(180), content: text(MATERIAL_CHARS), hash: text(200), kind: z.enum(['knowledge', 'prompt']).optional() })).max(MATERIAL_LIMIT);
 /**
- * What kind of rule a requirement is, as the grounding call typed it: `behavior` — how the bot must act or speak, usually
+ * What kind of rule a requirement is, as the preparation typed it: `behavior` — how the bot must act or speak, usually
  * from its own prompts; `knowledge` — a fact about the product or its terms that the bot's answer must get right;
  * `operator_procedure` — steps a human operator performs, or a script written for operators. Which kinds bind the bot
  * is the owner's rulebook (card/rulebook.ts). Requirements grounded before the field existed lack it and bind as before.

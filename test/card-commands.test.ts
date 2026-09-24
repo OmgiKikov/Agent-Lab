@@ -15,6 +15,7 @@ import { CommandRefused, StaleRevisionError, UnknownReference } from '../src/err
 import { libraryHash } from '../src/scenario-library.js';
 import { cardDraft, cardNumbered, READY, reviewed, type CardDraft } from './helpers/card-library.js';
 import { cardRun } from './helpers/cards.js';
+import { refundRule } from './helpers/card-prep.js';
 import { ExperimentStore } from '../src/store.js';
 
 /*
@@ -94,7 +95,7 @@ test('duties: wording is the owner\'s words, the rules must exist, the last duty
   assert.equal(next.receipts.at(-1)!.ownerWords, 'объяснить, куда подать заявление на возврат');
   assert.equal(late(next).agentMust[1]!.appliesWhen, 'клиент назвал номер терминала', 'what was not named stays');
   assert.throws(() => prepare(draft.library, { kind: 'edit_expectation', cardId: card.id, expectationId: 'e1', requirementIds: ['no_such_rule'] }, draft),
-    (error: unknown) => error instanceof UnknownReference && error.what === 'requirement' && error.allowed[0]!.startsWith('refund_rule'));
+    (error: unknown) => error instanceof UnknownReference && error.what === 'requirement' && error.allowed[0]!.startsWith(refundRule.id));
   assert.throws(() => prepare(draft.library, { kind: 'edit_expectation', cardId: card.id, expectationId: 'e3', text: 'x' }, draft),
     (error: unknown) => error instanceof UnknownReference && error.what === 'expectation');
   const one = confirmed(prepare(draft.library, { kind: 'remove_expectation', cardId: card.id, expectationId: 'e1' }, draft));
