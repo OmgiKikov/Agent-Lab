@@ -10,7 +10,7 @@ import { acceptLibraryV2 } from '../src/card/library.js';
 import { planClaims } from '../src/card/review.js';
 import type { CardCommand, LibraryV2 } from '../src/card/schema.js';
 import { cardStatus, cardStatuses } from '../src/card/status.js';
-import { changeText } from '../src/card/view.js';
+import { briefRows, cardSituation, changeText, plainSituationText, situationData } from '../src/card/view.js';
 import { CommandRefused, StaleRevisionError, UnknownReference } from '../src/errors.js';
 import { libraryHash } from '../src/scenario-library.js';
 import { cardDraft, cardNumbered, READY, reviewed, type CardDraft } from './helpers/card-library.js';
@@ -174,6 +174,34 @@ test('the customer\'s words: a new opening must keep what the customer says at o
   const next = applyCommand(draft.library, prepared, hostGrant(prepared, 'words'));
   assert.deepEqual([known(next).client.writes, known(next).client.writesSource.kind, known(next).client.leaves], [writes, 'owner', 'получил инструкцию']);
   assert.deepEqual(changes(prepared), [`Пишет: было ««Номер терминала: 1234. Помогите с возвратом.»», стало ««${writes}»»`, 'Уходит: было «получил инструкцию по возврату или понял, что агент не поможет», стало «получил инструкцию»']);
+});
+
+test('whether the customer can say what they want: the owner sees it in the brief and changes it with a confirmation; the reviewer is asked the new claim alone', () => {
+  const draft = cardDraft();
+  const card = late(draft.library);
+  const command = { kind: 'edit_client' as const, cardId: card.id, clarity: 'vague' as const };
+  assert.equal(requiredAuthority(command), 'owner-confirm', 'a decision about the customer');
+  assert.equal(requiredAuthority({ ...command, wants: 'Не может сказать, в чём дело' }), 'owner-confirm', 'words beside it never make it a wording');
+  const prepared = prepare(draft.library, command, draft, { ownerWords: 'невнятный' });
+  assert.deepEqual(changes(prepared), ['Запрос: было «внятный», стало «невнятный: клиент не говорит прямо, чего хочет»']);
+  const clarity = planClaims(late(prepared.next), { library: prepared.next, evidence: draft.evidence }).find(claim => claim.kind === 'clarity')!;
+  assert.deepEqual(prepared.recheck, [clarity.key], 'the mark is the basis of its own claim only: every other answer stands');
+  assert.throws(() => applyCommand(draft.library, prepared, hostGrant(prepared, 'words')), CommandRefused);
+  const next = confirmed(prepared);
+  assert.deepEqual([late(next).clarity, late(next).client.wants, late(next).revision], ['vague', card.client.wants, 2]);
+  assert.deepEqual(next.receipts.at(-1)!.command, command);
+  const view = cardSituation(next, late(next));
+  assert.match(plainSituationText(briefRows(view), 100), /\n {4}Запрос {3}невнятный: клиент не говорит прямо, чего хочет\n/);
+  assert.equal(situationData(view).clarity, 'vague', 'the chat reads the mark too');
+  assert.doesNotMatch(plainSituationText(briefRows(cardSituation(draft.library, card)), 100), /Запрос/, 'a clear request reads as before');
+
+  const lifted = prepare(next, { kind: 'edit_client', cardId: card.id, clarity: 'clear' }, draft);
+  assert.deepEqual(changes(lifted), ['Запрос: было «невнятный: клиент не говорит прямо, чего хочет», стало «внятный»']);
+  assert.equal('clarity' in late(lifted.next), false, 'a clear request is the absence of the mark, as on every card before it');
+  assert.throws(() => prepare(draft.library, { kind: 'edit_client', cardId: card.id, clarity: 'clear' }, draft), /Так уже записано/);
+  // In one series with the words: the stricter authority of the two.
+  const series = prepare(draft.library, { kind: 'edit_card', cardId: card.id, changes: [{ kind: 'edit_client', wants: 'Не может сказать, в чём дело: упоминает возврат', clarity: 'vague' }] }, draft);
+  assert.equal(series.authority, 'owner-confirm');
 });
 
 test('a turn is a later message of the dialogue word for word, or the owner\'s words; removing it marks its message changed', () => {

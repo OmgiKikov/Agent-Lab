@@ -5,13 +5,13 @@ import { MODEL_REQUEST_BYTES } from '../limits.js';
 import { requirementKindSchema, type RequirementKind } from '../scenario-contracts.js';
 import { verbatimSpan } from '../verbatim.js';
 import { cardFindings, filledMessage, PLAUSIBLE_VALUE_WORDS, type CardEvidence, type CheckFinding, type LoggedMessage } from './checks.js';
-import { cardSchema, disclosureSchema, turnSchema, type Card } from './schema.js';
+import { cardSchema, disclosureSchema, toolNameSchema, turnSchema, type Card, type EventRef } from './schema.js';
 import { fillSlip, maskSlots, slotAnswersSchema, slotFills, slotPayload, type FillAnswer, type MaskSlot } from './unmask.js';
 
 /*
  * A card as the model proposes it and as the harness binds it (docs/design/card-v2-spec.md §2.1–2.3). The model returns content only;
  * every reference in its answer is an enum built for this one call — a customer message by its index, a source by
- * its id, a channel the connection offers — so an unknown reference cannot even be written. Each duty cites its basis
+ * its id, a channel the connection offers, a tool it named — so an unknown reference cannot even be written. Each duty cites its basis
  * directly: a sentence of the agent's prompt or of an article, copied from a source of this call, and the kind of rule
  * it is. The harness finds every quote verbatim, holds its kind to the owner's rulebook and turns each cited sentence
  * into a library requirement whose id is a digest of the source and the sentence, so two cards citing one sentence
@@ -37,7 +37,7 @@ export interface ProposalCall {
   binds: { kinds: RequirementKind[]; rules: { sourceId: string; quote: string }[] };
   /** Always the reply; a tool log or the state only where the connection confirmed it can be observed. */
   observations: ['reply', ...Observation[]];
-  /** The agent's tools the connection named, offered with the tool channel: a tool expectation names one of them in plain words. */
+  /** The agent's tools the connection named, offered with the tool channel: a duty observed on the tools names its tool among them (an enum of the call). */
   tools?: string[];
   /** The run's limit on the customer's messages: the card's required way must fit it. */
   maxTurns: number;
@@ -76,9 +76,25 @@ function basisProposal(call: ProposalCall) {
     rule: text(300), kind: requirementKindSchema });
 }
 
-function expectationProposal(call: ProposalCall) {
-  return z.strictObject({ text: text(300), basis: z.array(basisProposal(call)).min(1).max(3),
-    appliesWhen: text(300).nullable(), observation: z.enum(call.observations) });
+/**
+ * A duty as the model proposes it. `tool` is asked only where the call offers the tool channel: the tool whose result
+ * proves a duty observed on the tools, or null — for any other duty, and for one no single tool proves.
+ */
+export interface DutyProposal {
+  text: string; basis: z.infer<ReturnType<typeof basisProposal>>[]; appliesWhen: string | null; observation: Observation;
+  tool?: string | null;
+}
+
+/** The tool of a duty: one the connection listed — an enum of this call — or, where it listed none, a name of its own. An answer without the field names none. */
+function toolProposal(call: ProposalCall): z.ZodType<string | null> {
+  const [first, ...rest] = call.tools ?? [];
+  const name: z.ZodType<string> = first === undefined ? toolNameSchema : z.enum([first, ...rest], { error: 'Not a tool of this connection: name one of target.tools, or null.' });
+  return name.nullable().default(null);
+}
+
+function expectationProposal(call: ProposalCall): z.ZodType<DutyProposal> {
+  const duty = { text: text(300), basis: z.array(basisProposal(call)).min(1).max(3), appliesWhen: text(300).nullable(), observation: z.enum(call.observations) };
+  return call.observations.includes('tool') ? z.strictObject({ ...duty, tool: toolProposal(call) }) : z.strictObject(duty);
 }
 
 /** A card from one dialogue. Absent values are null, never missing, so the schema also serves a provider's strict structured output. */
@@ -182,38 +198,37 @@ function basisSlips(proposal: CardProposal, call: ProposalCall): string[] {
 }
 
 /**
- * What a card's id digests: a proposal without plausible facts, or with a clear request, reads as one written before
- * those fields existed, so the same answer is the same card.
+ * The messages a dialogue card reads — its opening, its turn, its facts' — as the card holds them: the values the proposal
+ * wrote over their masking marks in place, every other character as logged. The binding and its checks read the same.
  */
-function proposalIdentity(proposal: CardProposal): object {
-  if (!('plausibleKnows' in proposal)) return proposal;
-  const { plausibleKnows, clarity, masked, ...earlier } = proposal;
-  return { ...earlier, ...(plausibleKnows.length ? { plausibleKnows } : {}), ...(clarity === 'vague' ? { clarity } : {}), ...(masked ? { masked } : {}) };
+function readMessages(proposal: DialogueProposal, call: ProposalCall) {
+  if (call.source.kind !== 'dialogue') throw new Error('Предложение по диалогу пришло на ситуацию из правил.');
+  const { batchId, dialogueId } = call.source;
+  const event = (eventIndex: number): EventRef => ({ batchId, dialogueId, eventIndex });
+  const read = new Set([proposal.writesEvent, ...(proposal.turn ? [proposal.turn.from] : []), ...proposal.knows.flatMap(fact => fact.from === null ? [] : [fact.from])]);
+  const filled = slotFills(call.masked.filter(slot => read.has(slot.event.eventIndex)), proposal.masked ?? {});
+  return { origin: { batchId, dialogueId }, event, filled, says: (index: number) => filledMessage(said(call, index), filled, event(index)) };
 }
 
 /**
  * The card a proposal stands for: ids e1…, f1…; the opening and the turn copied from their messages; a fact with
  * no message behind it `unconfirmed` (the owner is asked); the plausible profile facts after the logged ones, named on
  * request and `plausible` until the owner decides their label; the account of every later customer message but the
- * opening itself. The id is a digest of the source and the proposal; the number is the library's next one.
+ * opening itself; a duty observed on the tools with the tool it named. The id is a digest of the source and the
+ * proposal — a card is bound once and keeps its id, so nothing ever derives it again; the number is the library's next one.
  */
 export function bindProposal(proposal: CardProposal, call: ProposalCall, number: number): Card {
   const cited = dutyRequirements(proposal, call);
   const agentMust = proposal.agentMust.map((item, index) => ({ id: `e${index + 1}`, text: item.text, requirementIds: [...new Set(cited[index]!.map(requirement => requirement.id))],
-    ...(item.appliesWhen !== null ? { appliesWhen: item.appliesWhen } : {}), observation: item.observation }));
-  const common = { id: `card_${fingerprint({ source: call.source, proposal: proposalIdentity(proposal) })}`, number, title: proposal.title, topic: proposal.topic, agentMust, revision: 1 };
+    ...(item.appliesWhen !== null ? { appliesWhen: item.appliesWhen } : {}), observation: item.observation,
+    ...(item.observation === 'tool' && typeof item.tool === 'string' ? { tool: item.tool } : {}) }));
+  const common = { id: `card_${fingerprint({ source: call.source, proposal })}`, number, title: proposal.title, topic: proposal.topic, agentMust, revision: 1 };
   if ('writes' in proposal) {
     if (call.source.kind !== 'rules') throw new Error('Предложение без реплик клиента пришло на диалог.');
     return cardSchema.parse({ ...common, origin: { kind: 'rules', requirementIds: [...new Set(agentMust.flatMap(item => item.requirementIds))] },
       client: { wants: proposal.wants, writes: proposal.writes, writesSource: { kind: 'model' }, knows: [], leaves: proposal.leaves }, coverage: [] });
   }
-  if (call.source.kind !== 'dialogue') throw new Error('Предложение по диалогу пришло на ситуацию из правил.');
-  const { batchId, dialogueId } = call.source;
-  const event = (eventIndex: number) => ({ batchId, dialogueId, eventIndex });
-  // The values written over the marks of the messages the card reads — its opening, its turn, its facts' — and those messages as they then read.
-  const read = new Set([proposal.writesEvent, ...(proposal.turn ? [proposal.turn.from] : []), ...proposal.knows.flatMap(fact => fact.from === null ? [] : [fact.from])]);
-  const filled = slotFills(call.masked.filter(slot => read.has(slot.event.eventIndex)), proposal.masked ?? {});
-  const says = (index: number) => filledMessage(said(call, index), filled, event(index));
+  const { origin, event, filled, says } = readMessages(proposal, call);
   const logged = proposal.knows.map((fact, index) => ({ id: `f${index + 1}`, label: fact.label, ...(fact.value !== null ? { value: fact.value } : {}),
     disclosure: fact.disclosure, ...(fact.askedAs !== null ? { askedAs: fact.askedAs } : {}),
     source: fact.from === null ? { kind: 'unconfirmed' } : { kind: 'dialogue', event: event(fact.from) } }));
@@ -227,7 +242,7 @@ export function bindProposal(proposal: CardProposal, call: ProposalCall, number:
     if (!answer) throw new Error(`Нет учёта реплики клиента ${index}.`);
     return { event: event(index), as: answer.as, ...(answer.reason !== null ? { reason: answer.reason } : {}) };
   });
-  return cardSchema.parse({ ...common, origin: { kind: 'dialogue', batchId, dialogueId },
+  return cardSchema.parse({ ...common, origin: { kind: 'dialogue', ...origin },
     client: { wants: proposal.wants, writes: says(proposal.writesEvent), writesSource: { kind: 'dialogue', event: event(proposal.writesEvent) },
       knows, leaves: proposal.leaves, ...(turn ? { turn } : {}) }, coverage, ...(proposal.clarity === 'vague' ? { clarity: 'vague' } : {}),
     ...(filled.length ? { filled } : {}) });
@@ -238,12 +253,29 @@ const callEvidence = (call: ProposalCall): CardEvidence => ({
   messages: (batchId, dialogueId) => call.source.kind === 'dialogue' && call.source.batchId === batchId && call.source.dialogueId === dialogueId ? call.messages : undefined,
 });
 
-/** What the binding itself cannot hold: a message too long for its field, an ignored message without a reason. */
+/** The characters a card's opening and its turn hold at most (schema.ts `client.writes`, `turn.says`). */
+const OPENING_CHARS = 3000;
+const TURN_CHARS = 1000;
+
+/**
+ * What the binding itself cannot hold: an ignored message without a reason, or a message too long for its field as the
+ * card reads it — with the proposal's values over its masking marks in place, so a length is never first found by the
+ * card's schema, which would stop the step instead of asking for a repair.
+ */
 function bindingSlips(proposal: DialogueProposal, call: ProposalCall): string[] {
   const slips: string[] = [];
   if (proposal.knows.length + proposal.plausibleKnows.length > KNOWS_LIMIT) slips.push(`knows and plausibleKnows hold ${proposal.knows.length + proposal.plausibleKnows.length} facts together; at most ${KNOWS_LIMIT}: drop the least useful plausible ones.`);
-  if (said(call, proposal.writesEvent).trim().length > 3000) slips.push(`Customer message ${proposal.writesEvent} is longer than 3000 characters and cannot be the opening: choose another writesEvent.`);
-  if (proposal.turn && said(call, proposal.turn.from).trim().length > 1000) slips.push(`Customer message ${proposal.turn.from} is longer than 1000 characters and cannot be the turn: set "turn" to null or choose another message.`);
+  const { says } = readMessages(proposal, call);
+  const tooLong = (index: number, limit: number, field: string, instead: string): string | undefined => {
+    const read = says(index).trim().length;
+    if (read <= limit) return undefined;
+    return said(call, index).trim().length > limit ? `Customer message ${index} is longer than ${limit} characters and cannot be ${field}: ${instead}.`
+      : `Customer message ${index} reads ${read} characters with your values for its masking marks in place, and ${field} holds at most ${limit}: write shorter values for its marks in "masked", or ${instead}.`;
+  };
+  const opening = tooLong(proposal.writesEvent, OPENING_CHARS, 'the opening', 'choose another writesEvent');
+  if (opening) slips.push(opening);
+  const turn = proposal.turn && tooLong(proposal.turn.from, TURN_CHARS, 'the turn', 'set "turn" to null or choose another message');
+  if (turn) slips.push(turn);
   for (const index of call.laterEvents) {
     const answer = proposal.coverage[String(index)];
     if (index !== proposal.writesEvent && answer?.as === 'ignored' && answer.reason === null) slips.push(`coverage["${index}"] is "ignored": give a short reason.`);
@@ -255,6 +287,12 @@ function bindingSlips(proposal: DialogueProposal, call: ProposalCall): string[] 
   return slips;
 }
 
+/** A tool is named only by a duty observed on the tools: the harness checks it there alone. */
+function toolSlips(proposal: CardProposal): string[] {
+  return proposal.agentMust.flatMap((duty, i) => typeof duty.tool === 'string' && duty.observation !== 'tool'
+    ? [`agentMust[${i}] is observed on "${duty.observation}" and names the tool "${duty.tool}": set "tool" to null, or observe the duty on "tool" when only the tool log proves it.`] : []);
+}
+
 /** A finding in the words of the proposal the model wrote: its fields, indexes and message numbers. */
 function repairText(finding: CheckFinding, card: Card, call: ProposalCall): string {
   const opening = card.client.writesSource.kind === 'dialogue' ? card.client.writesSource.event.eventIndex : undefined;
@@ -264,7 +302,7 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
     const index = card.client.knows.findIndex(item => item.id === factId);
     const item = card.client.knows[index]!;
     const name = index < logged ? `knows[${index}] "${item.label}"` : `plausibleKnows[${index - logged}] "${item.label}"`;
-    return { name, value: JSON.stringify(item.value), from: item.source.kind === 'dialogue' ? item.source.event.eventIndex : null };
+    return { name, value: JSON.stringify(item.value), from: item.source.kind === 'dialogue' ? item.source.event.eventIndex : null, plausible: index >= logged };
   };
   switch (finding.check) {
     // The harness writes the masked values in; a mark is left only past the slots one call offers, which no repair changes.
@@ -272,12 +310,14 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
     case 'masked-fact': return `${fact(finding.factId).name}: the value ${fact(finding.factId).value} is a masking mark. Write the value you gave for its mark in "masked", as the message reads with it, or null.`;
     case 'fact-from-event': {
       const { name, value, from } = fact(finding.factId);
-      return `${name}: the value ${value} is not in customer message ${from}. Copy the value exactly as the customer wrote it and point "from" at a message that contains it, or set "from" to null.`;
+      return `${name}: the value ${value} is not in customer message ${from} as whole words. Copy the value exactly as the customer wrote it, never a piece of a longer word or number, and point "from" at a message that contains it, or set "from" to null.`;
     }
     case 'initial-in-opening': return `${fact(finding.factId).name} is "initial", so it is said in the opening: its "from" must be writesEvent ${opening}. Otherwise choose "on_request" or "unknown".`;
     case 'hidden-not-in-opening': {
-      const { name, value } = fact(finding.factId);
-      return `${name} is not "initial", but its value ${value} is already in the opening (message ${opening}): mark it "initial", or choose an opening without it.`;
+      const { name, value, from, plausible } = fact(finding.factId);
+      // The same words may stand in the opening for something else: the model is offered the true way out first, never pushed to «initial».
+      if (plausible) return `${name}: its value ${value} stands in the opening (message ${opening}). If the opening states this very fact, it is a knows item ("initial", "from": ${opening}); otherwise drop it.`;
+      return `${name} is not "initial", but its value ${value} stands as whole words in the opening (message ${opening}). If those words there mean something else, write the value together with the words that make it this fact, exactly as the customer wrote them${from === null ? '' : ` in message ${from}`} (e.g. "3 покупки", not "3"). Only if the opening itself states this fact, mark it "initial" with "from": ${opening}.`;
     }
     case 'unknown-never-said': {
       const { name, value } = fact(finding.factId);
@@ -309,8 +349,9 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
  * deterministic check, otherwise every reason at once, so one repair fixes them all.
  */
 export function cardProposalProblem(proposal: CardProposal, call: ProposalCall): string | undefined {
-  const slips = [...basisSlips(proposal, call), ...'writes' in proposal ? [] : bindingSlips(proposal, call)];
+  const slips = [...basisSlips(proposal, call), ...toolSlips(proposal), ...'writes' in proposal ? [] : bindingSlips(proposal, call)];
   if (slips.length) return slips.join(' ');
+  // Every bound of the stored card an answer can break is a slip above: binding never stops the step with a schema error.
   const card = bindProposal(proposal, call, 1);
   // A mark left past the call's slots is not the model's slip: the card's check shows it, and the owner or a later fill settles it.
   const findings = cardFindings(card, { evidence: callEvidence(call), maxTurns: call.maxTurns }).filter(finding => finding.check !== 'masked-opening' && finding.check !== 'masked-turn');

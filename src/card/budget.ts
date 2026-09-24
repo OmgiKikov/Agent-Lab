@@ -1,5 +1,6 @@
 import type { Source } from '../contracts.js';
 import { MODEL_INPUT_BYTES, serializedBytes, workInputIssue } from '../limits.js';
+import { TASK_ATTEMPTS } from '../llm/structured.js';
 
 /*
  * What a preparation of situations may spend. Each unit (a logged conversation, or one situation from the rules) has
@@ -7,11 +8,14 @@ import { MODEL_INPUT_BYTES, serializedBytes, workInputIssue } from '../limits.js
  * anything is paid and enforced as that preparation's budget, so the promise and the stop are the same number.
  */
 
+/** Revisions of a card the reviewer blocked (card/prepare.ts): one, whatever it gives. */
+const REVISIONS = 1;
 /**
- * Proposal calls one unit may spend over all resumes, repairs included: five to write its card, and one more for the
- * one revision of a card the reviewer blocked (card/prepare.ts).
+ * Proposal calls one unit may spend over all resumes, repairs included: every request one proposal task may make
+ * (its first answer and its repairs, llm/structured.ts TASK_ATTEMPTS) to write its card, and at least one more for each
+ * revision of a card the reviewer blocked.
  */
-export const PROPOSAL_ATTEMPTS = 6;
+export const PROPOSAL_ATTEMPTS = TASK_ATTEMPTS + REVISIONS;
 /** Calls a conversation spends choosing articles of a knowledge base too large for one request: from the titles, then on reading them. */
 const READING_CALLS = 2;
 /** Review requests one card makes at most: its story and its duties apart when together they do not fit one request. */

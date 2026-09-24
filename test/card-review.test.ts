@@ -4,7 +4,7 @@ import { fingerprint } from '../src/contracts.js';
 import { importEvidence, loggedMessages } from '../src/card/checks.js';
 import { addCard, createLibraryV2, recordClaims } from '../src/card/library.js';
 import { bindProposal, proposalCall, type DialogueProposal } from '../src/card/proposal.js';
-import { cardReviewSchema, claimReceipts, pendingClaims, planClaims, reviewRequests, type ReviewVerdict } from '../src/card/review.js';
+import { cardReviewSchema, claimReceipts, laterMessages, pendingClaims, planClaims, reviewRequests, type ReviewVerdict } from '../src/card/review.js';
 import { libraryV2Schema, type Card, type LibraryV2 } from '../src/card/schema.js';
 import { cardStatus, cardStatuses, type CardStatus } from '../src/card/status.js';
 import { importBatch } from '../src/scenario-library.js';
@@ -116,6 +116,69 @@ test('one question at a time, with two or three answers, each a typed command; a
   library = replaced(library, card, settle(library, card.id, duty.id));
   assert.deepEqual(status(library), { status: 'ready', problems: [] });
   assert.equal(asked.length, 3);
+});
+
+test('a vague mark is a claim of its own: asked only of a vague card, blocked it leaves the card unusable, doubted the owner keeps or lifts it', () => {
+  let library = draft([['late', { ...proposals.late, clarity: 'vague' }]]);
+  const card = library.cards[0]!;
+  assert.deepEqual(planClaims(card, { library, evidence }).map(claim => claim.alias), ['goal', 'clarity', 'fact_f1', 'expectation_e1', 'expectation_e2', 'coverage', 'leak']);
+  const clear = draft([['late', proposals.late]]);
+  assert.ok(!planClaims(clear.cards[0]!, { library: clear, evidence }).some(claim => claim.kind === 'clarity'), 'a clear card keeps the claims, and the answers, it had');
+  const [request] = reviewRequests(card, pendingClaims(card, { library, evidence }), { library, evidence });
+  assert.equal(request!.payload.card.clarity, 'vague', 'the reviewer reads the mark');
+  assert.deepEqual(request!.payload.claims[1], { alias: 'clarity', kind: 'clarity', subject: '' });
+  const reason = 'Клиент прямо просит помочь с возвратом.';
+  assert.deepEqual(status(answered(library, card, { clarity: { status: 'blocked', reason } })), { status: 'unusable', problems: [reason] });
+
+  library = answered(library, card, { clarity: { status: 'needs_owner', reason } });
+  const question = status(library).question!;
+  assert.equal(question.text, `Клиент так и не говорит прямо, чего хочет? Проверяющий сомневается: ${reason}`);
+  assert.deepEqual(question.choices.map(choice => [choice.label, choice.command, choice.needsText]), [
+    ['Да, запрос невнятный', { kind: 'settle_claim', cardId: card.id, key: claimKey(library, card, 'clarity') }, undefined],
+    ['Нет, запрос понятен', { kind: 'edit_client', cardId: card.id, clarity: 'clear' }, undefined],
+    ['Нет, сказать, чего хочет клиент', { kind: 'edit_client', cardId: card.id, wants: card.client.wants, clarity: 'clear' }, true]]);
+  assert.equal(status(replaced(library, card, settle(library, card.id, question.id))).status, 'ready', 'kept: the mark stands as the owner said');
+  const lifted = structuredClone(card);
+  delete lifted.clarity;
+  assert.equal(status(replaced(library, lifted), lifted).status, 'ready', 'lifted: a clear card, every other answer kept');
+});
+
+test('a doubt about the account asks about the message the reviewer named, with its reason, and settles exactly that; one that names none guesses none', () => {
+  // The number is not needed: its message is left out, and the customer stops on «Спасибо!».
+  const account: DialogueProposal = { ...proposals.late, knows: [], agentMust: [proposals.late.agentMust[0]!],
+    coverage: { 2: { as: 'ignored', reason: 'номер не нужен' }, 4: { as: 'stop', reason: null } } };
+  const library = draft([['late', account]]);
+  const card = library.cards[0]!;
+  const key = claimKey(library, card, 'coverage');
+  const reason = 'После «Спасибо!» клиент мог ждать ответа о сроке возврата.';
+  const named = answered(library, card, { coverage: { status: 'needs_owner', reason, message: 4 } });
+  assert.equal(named.claims.find(receipt => receipt.kind === 'coverage')!.message, 4, 'the receipt keeps the message the reviewer named');
+  const question = status(named).question!;
+  assert.equal(question.text, `В диалоге клиент ещё писал: «Спасибо!». Это важно для проверки? Проверяющий сомневается: ${reason}`, 'the named message, not the first one left out');
+  assert.deepEqual(question.choices.map(choice => [choice.label, choice.command]), [
+    ['Нет', { kind: 'settle_claim', cardId: card.id, key }],
+    ['Да, это поворот', { kind: 'set_turn', cardId: card.id, turn: { kind: 'report', after: 'агент ответил на предыдущую реплику', says: 'Спасибо!', event: { batchId: batch.id, dialogueId: 'late', eventIndex: 4 } } }]]);
+  assert.equal(status(replaced(named, card, settle(named, card.id, question.id))).status, 'ready');
+
+  const general = answered(library, card, { coverage: { status: 'needs_owner', reason: 'Неясно, где клиент уходит.' } });
+  assert.equal(general.claims.find(receipt => receipt.kind === 'coverage')!.message, undefined);
+  const whole = status(general).question!;
+  assert.equal(whole.text, 'Поздние реплики клиента учтены неверно? Проверяющий сомневается: Неясно, где клиент уходит.', 'no message is guessed');
+  assert.deepEqual(whole.choices.map(choice => [choice.label, choice.command.kind]), [['Нет, всё верно', 'settle_claim'], ['Убрать ситуацию', 'remove_card']]);
+  const confirmed = answered(library, card, { coverage: { status: 'ready', reason: 'Учтено верно.', message: 4 } });
+  assert.equal(confirmed.claims.find(receipt => receipt.kind === 'coverage')!.message, undefined, 'a claim without a doubt keeps no message');
+
+  // The reviewer names a message by an enum of the card's later messages: another cannot even be written.
+  const [request] = reviewRequests(card, pendingClaims(card, { library, evidence }), { library, evidence });
+  assert.deepEqual(laterMessages(request!), [2, 4]);
+  const schema = cardReviewSchema(request!.aliases, laterMessages(request!));
+  const verdicts = (coverage: object) => ({ claims: Object.fromEntries(request!.aliases.map(alias => [alias, alias === 'coverage' ? coverage : ready])) });
+  assert.equal(schema.safeParse(verdicts({ ...ready, message: 4 })).success, true);
+  assert.equal(schema.safeParse(verdicts({ ...ready, message: 3 })).success, false);
+  assert.equal((schema.parse(verdicts(ready)).claims.coverage as ReviewVerdict).message, null, 'an answer without the field names none');
+  assert.deepEqual(strictSchemaProblems(schema), []);
+  assert.equal(cardReviewSchema(['goal', 'coverage'], [2, 4]).safeParse({ claims: { goal: { ...ready, message: 2 }, coverage: ready } }).success, false, 'only the account names a message');
+  assert.deepEqual(laterMessages({ aliases: ['goal'], payload: request!.payload }), [], 'a call without the account asks for none');
 });
 
 test('an expectation that is the card\'s only duty cannot be removed from it: two answers', () => {
