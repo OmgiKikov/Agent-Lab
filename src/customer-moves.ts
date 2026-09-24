@@ -45,7 +45,11 @@ export function trialMoves(scenario: Scenario, trial: Trial): MoveKind[] {
  */
 export const dunnoThenLeft = (moves: readonly MoveKind[]): boolean => moves.includes('missing') && moves.at(-1) === 'finish';
 
-/** The customer's moves over a run's counted situations; null when no conversation recorded a controlled move. */
+/**
+ * The customer's moves over a run's counted situations; null when no conversation recorded a controlled move. A
+ * conversation that ran into the run's limit on the customer's messages (`trial.turnLimit`) ended because the talk ran
+ * out, not because the customer gave up, so its last move never marks the situation as blocked by «не знаю».
+ */
 export function customerMoves(run: RunDerivation): CustomerMoves | null {
   const counts: Record<MoveKind, number> = { answer: 0, missing: 0, turn: 0, finish: 0, other: 0 };
   let recorded = false;
@@ -58,7 +62,7 @@ export function customerMoves(run: RunDerivation): CustomerMoves | null {
       if (!moves.length) continue;
       recorded = true;
       for (const move of moves) counts[move]++;
-      if (failed.has(trial.id) && dunnoThenLeft(moves)) blocked.add(situation.scenario.id);
+      if (failed.has(trial.id) && !trial.turnLimit && dunnoThenLeft(moves)) blocked.add(situation.scenario.id);
     }
   }
   return recorded ? { ...counts, blocked: [...blocked] } : null;

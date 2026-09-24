@@ -20,7 +20,7 @@ import { agentMetricResult, automaticTrialResult, expectationResult, GOAL_METRIC
  * attempts guard only «справился»; edition 1 asked for every attempt to be usable before reading any verdict, so
  * a stored run keeps the result it was counted with.
  *
- * Reasons are typed where the failure happened (`trial.invalidCause`, `trial.assessmentFailure`).
+ * Reasons are typed where the failure happened (`trial.invalidCause`, `trial.assessmentFailure`, `trial.turnLimit`).
  * Records written before those fields carry only the harness's own fixed sentences; the decoders
  * below read them and nothing else reads text. Pure: no I/O, no wording.
  */
@@ -286,11 +286,14 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids:
   if (simulator.checks.some(usable => !usable) || simulator.fidelity.includes('fail')) codes.push('simulator_deviated');
   // Without any judgment the vote is missing because the judge never ran: that is `not_judged`, not an unsure judge.
   if (trial.assessments && simulator.fidelity.some(result => result !== 'pass' && result !== 'fail')) codes.push('simulator_unclear');
+  // A conversation cut at the run's limit on the customer's messages was judged as it went: what the judge could not
+  // decide in it is undecided because the conversation did not fit the limit.
+  const unsure = (code: NotMeasuredCode): NotMeasuredCode => trial.turnLimit && (code === 'judge_split' || code === 'judge_unclear') ? 'turn_limit' : code;
   for (const expectation of expectations) {
     const result = expectationResult(trial, expectation, record.humanReviews);
     if (result === 'pass' || result === 'fail') continue;
     const review = latest.get(`${trial.id}|metric:${expectation.id}`);
-    codes.push(review?.verdict === 'invalid' ? 'human_invalid' : review?.verdict === 'unknown' && review.source !== 'quick' ? 'human_unknown' : undecidedExpectation(trial, expectation));
+    codes.push(review?.verdict === 'invalid' ? 'human_invalid' : review?.verdict === 'unknown' && review.source !== 'quick' ? 'human_unknown' : unsure(undecidedExpectation(trial, expectation)));
   }
   for (const id of ids) {
     const result = agentMetricResult(trial, id, record.humanReviews);
@@ -300,7 +303,7 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids:
     const metricReview = latest.get(`${trial.id}|metric:${id}`);
     if (metricReview?.verdict === 'unknown' && metricReview.source !== 'quick') codes.push('human_unknown');
     else if (!assessment) codes.push('not_judged');
-    else codes.push(({ split: 'judge_split', unsupported: 'no_evidence', judged: 'judge_unclear' } as const)[judgeBasis(assessment)]);
+    else codes.push(unsure(({ split: 'judge_split', unsupported: 'no_evidence', judged: 'judge_unclear' } as const)[judgeBasis(assessment)]));
   }
   return codes;
 }
@@ -325,7 +328,7 @@ export function cardVerdict(record: Experiment, scenario: Scenario, rule: 'headl
   else if (!attemptsMatch(record, scenario, trials)) codes.add('attempts_mismatch');
   const expectations = counting.kind === 'expectations' ? counting.expectations : [];
   for (const trial of trials) for (const code of trialReasons(record, scenario, trial, ids, expectations)) codes.add(code);
-  return { outcome, reason: NOT_MEASURED_CODES.find(code => codes.has(code)) ?? 'judge_unclear' };
+  return { outcome, reason: NOT_MEASURED_CODES.find(code => codes.has(code)) ?? (trials.some(trial => trial.turnLimit) ? 'turn_limit' : 'judge_unclear') };
 }
 
 export interface AttemptDerivation {

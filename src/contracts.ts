@@ -331,6 +331,13 @@ export interface Trial {
   /** Why the judge left the attempt without a judgment, typed where it failed. Records written before it carry only `assessmentError`. */
   assessmentFailure?: AssessmentFailure;
   /**
+   * The customer had written every message the run allows, so the conversation ended at that limit and not by the
+   * customer's own choice: an observation, judged as it went, never a failed measurement (evaluation.ts). What the
+   * judge could not decide in it is «не измерено» for this reason (run.ts). Absent on every other conversation and in
+   * older records.
+   */
+  turnLimit?: true;
+  /**
    * The edition of the counting rules this attempt is read by (card/expectations.ts COUNTING_VERSION), written when a
    * run or a re-assessment records it. Absent in attempts recorded before editions existed: they keep edition 1, so a
    * stored result never moves.
@@ -486,6 +493,7 @@ export const trialSchema = z.strictObject({
   judgeReceipt: judgeReceiptSchema.optional(),
   invalidCause: z.enum(INVALID_CAUSES).optional(),
   assessmentFailure: z.enum(ASSESSMENT_FAILURES).optional(),
+  turnLimit: z.literal(true).optional(),
   countingVersion: z.literal(2).optional(),
 });
 const comparisonSchema = z.strictObject({

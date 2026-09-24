@@ -216,9 +216,16 @@ test('simulator protocol/provider errors are invalid; exhausting target turns is
   assert.match(invalid.reason, /реплика симулированного пользователя/);
   const failed = await evaluate(legacy, working, { ...legacyDemoRuntime(), async userTurn() { throw new Error('Provider offline'); } });
   assert.equal(failed.outcome, 'invalid');
-  const neverDone = await evaluate(legacy, working, { ...legacyDemoRuntime(), async userTurn() { return { message: 'Please confirm again.', done: false }; } });
-  assert.equal(neverDone.outcome, 'invalid');
-  assert.match(neverDone.reason, /не завершился в отведённое число реплик/);
+  // A customer who never says it is done runs into the run's limit: the talk ends there and is graded as it went.
+  const talkative: Runtime = { ...legacyDemoRuntime(), async userTurn() { return { message: 'Please confirm again.', done: false }; } };
+  for (const [target, outcome] of [[working, 'pass'], [withoutUpdate, 'fail']] as const) {
+    const neverDone = await evaluate(legacy, target, talkative);
+    assert.equal(neverDone.outcome, outcome, neverDone.reason);
+    assert.equal(neverDone.invalidCause, undefined, 'the limit is an observation, not a failed measurement');
+    assert.equal(neverDone.turnLimit, true);
+    assert.equal(neverDone.events.filter(event => event.type === 'user').length, settings.maxTurns, 'every message the run allows was delivered');
+    assert.match(neverDone.reason, /Клиенту не хватило реплик/);
+  }
   // A runtime without the free simulator cannot continue an old card: the dialogue is unmeasured, never an agent failure.
   const { userTurn: _userTurn, ...withoutSimulator } = legacyDemoRuntime();
   const unsupported = await evaluate(legacy, working, withoutSimulator);
