@@ -7,11 +7,15 @@ Agent Lab строит карточки бизнес-сценариев из р�
 
     python3 harnesses/agent-oc/import-dialogues.py \\
         --input "/путь/agent_oc/data/размеченные логи 1607_2007.xlsx" \\
-        --output dialogues.jsonl --multi-turn-only --limit 60
+        --multi-turn-only
 
 Рядом пишется `<output>.meta.json`: поверхность, полномочия, ЕПК и коды ответов по каждому
 диалогу. В схему Agent Lab эти поля не входят, но по ним карточка настраивается на нужный канал
 (запись `session` в `initialState`) и прослеживается до строки разметки.
+
+Оба файла — прод-данные. По умолчанию они ложатся в `.agent-lab/agent-oc/` текущего каталога
+(папки 0700, файлы 0600), как данные самого Lab. Путь внутри git-репозитория, который git не
+игнорирует, скрипт отвергает и ничего не пишет: иначе ЕПК и диалоги уйдут в коммит.
 
 `outcome` ставится только там, где код ответа говорит сам за себя: `200` — успех, `404` и `500-3` —
 провал. Все `202-*` остаются `unknown`: отказ по теме или перевод на оператора может быть и верным
@@ -24,7 +28,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -43,7 +49,43 @@ _UNSAFE_ID = re.compile(r"[^a-zA-Z0-9_-]")
 
 MAX_MESSAGES = 60
 MAX_CONTENT = 8000
-MAX_DIALOGUES = 200
+# Прод-данные ложатся туда же, где Lab держит свои: каталог игнорируется git, права только владельца.
+DEFAULT_OUTPUT = Path(".agent-lab") / "agent-oc" / "dialogues.jsonl"
+
+
+def untracked_refusal(path: Path) -> Optional[str]:
+    """Почему нельзя писать прод-данные в `path`: он внутри git-репозитория и git его не игнорирует. None — можно."""
+    folder = path.resolve().parent
+    while not folder.exists():
+        folder = folder.parent
+    try:
+        top = subprocess.run(["git", "-C", str(folder), "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return None  # без git коммита не будет
+    if top.returncode != 0:
+        return None  # не внутри репозитория
+    # Отслеживаемый файл git не игнорирует никогда: данные поверх него ушли бы в коммит его изменением.
+    ignored = subprocess.run(["git", "-C", top.stdout.strip(), "check-ignore", "-q", str(path.resolve())], check=False)
+    if ignored.returncode == 0:
+        return None
+    return (f"{path} — внутри git-репозитория {top.stdout.strip()}, и git этот путь не игнорирует: прод-диалоги и ЕПК "
+            f"ушли бы в коммит. Уберите --output (по умолчанию {DEFAULT_OUTPUT}) или добавьте путь в .gitignore.")
+
+
+def write_private(path: Path, text: str) -> None:
+    """Файл только для владельца (0600) в папках только для владельца (0700) — как данные Lab в .agent-lab."""
+    missing: List[Path] = []
+    folder = path.parent
+    while not folder.exists():
+        missing.append(folder)
+        folder = folder.parent
+    for created in reversed(missing):
+        created.mkdir(mode=0o700)
+        os.chmod(created, 0o700)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        stream.write(text)
 
 
 def parse_history(history: str) -> List[Dict[str, str]]:
@@ -118,7 +160,7 @@ def convert(args: argparse.Namespace) -> Tuple[List[Dict[str, Any]], Dict[str, A
             "expected_answer": str(row.get("Ожидаемый ответ") or "").strip(),
             "date": str(row.get("date") or "").strip(),
         }
-        if len(dialogues) >= args.limit:
+        if args.limit and len(dialogues) >= args.limit:
             break
     return dialogues, meta
 
@@ -126,25 +168,30 @@ def convert(args: argparse.Namespace) -> Tuple[List[Dict[str, Any]], Dict[str, A
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--input", required=True, help="Файл разметки .xlsx")
-    parser.add_argument("--output", required=True, help="Путь к .jsonl для --dialogues-file")
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT,
+                        help=f"Путь к .jsonl для --dialogues-file; по умолчанию {DEFAULT_OUTPUT}. Не внутри git-репозитория без .gitignore.")
     parser.add_argument("--sheet", action="append", help="Лист разметки; можно повторять. По умолчанию все.")
     parser.add_argument("--status", action="append", help="Оставить только эти коды ответа; можно повторять.")
-    parser.add_argument("--limit", type=int, default=MAX_DIALOGUES, help=f"Не больше {MAX_DIALOGUES} (предел Agent Lab).")
+    parser.add_argument("--limit", type=int, default=0, help="Только первые N подошедших диалогов. По умолчанию все: "
+                        "из длинного лога Agent Lab сам берёт 300 по хешу содержимого, а первые N сдвигают выборку во времени.")
     parser.add_argument("--multi-turn-only", action="store_true", help="Только диалоги, где клиент писал больше одного раза.")
     args = parser.parse_args()
 
-    if args.limit > MAX_DIALOGUES:
-        parser.error(f"Agent Lab принимает не больше {MAX_DIALOGUES} диалогов за раз.")
+    output: Path = args.output
+    meta_path = output.with_suffix(output.suffix + ".meta.json")
+    for path in (output, meta_path):
+        refusal = untracked_refusal(path)
+        if refusal:
+            print(f"Не пишу: {refusal}", file=sys.stderr)
+            return 2
 
     dialogues, meta = convert(args)
     if not dialogues:
         print("Под фильтры не попал ни один диалог.", file=sys.stderr)
         return 1
 
-    output = Path(args.output)
-    output.write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in dialogues), encoding="utf-8")
-    meta_path = output.with_suffix(output.suffix + ".meta.json")
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_private(output, "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in dialogues))
+    write_private(meta_path, json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
 
     characters = sum(len(message["content"]) for item in dialogues for message in item["messages"])
     print(f"{output}: диалогов {len(dialogues)}, символов {characters}")
