@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { calibrateRun } from '../card/calibrate.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from '../connection.js';
-import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isRunnable, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type Revision, type Scenario, type UserMode } from '../contracts.js';
+import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isRunnable, runnableTarget, scriptIssue, settingsSchema, unconfirmedReferences, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type Revision, type Scenario, type UserMode } from '../contracts.js';
 import type { CallContext, Runtime } from '../runtime.js';
 import { evaluateTrial } from '../evaluation.js';
 import { scenarioSources } from '../judge.js';
@@ -60,6 +60,8 @@ export function acceptDraft(lab: Lab, id: string, expectedHash: string): Promise
     if (record.workflow !== 'evaluate') throw new Error('Принять тест можно только в workflow evaluate.');
     if (record.phase !== 'review') throw new Error('Принять можно только незапущенный черновик.');
     if (!record.scenarios.length) throw new Error('Подтверждать нечего: в черновике нет ситуаций.');
+    const pendingReferences = unconfirmedReferences(record.scenarios);
+    if (pendingReferences.length) throw new Error(`Подтвердите или удалите эталоны, предложенные моделью: ${pendingReferences.join(', ')}.`);
     const currentHash = draftHash(record);
     if (expectedHash !== currentHash) throw new Error('Черновик изменился, пока вы смотрели. Проверьте ожидания ещё раз.');
     // One confirmation covers every situation of the draft; an entry whose definition did not change keeps its identity and date.
@@ -160,6 +162,8 @@ export async function start(lab: Lab, id: string, options: StartOptions): Promis
     if (record.workflow !== 'evaluate') throw new Error('Сравнение с автоматическим улучшением агента больше не запускается: такой прогон можно только открыть. Для новой проверки подготовьте библиотеку сценариев.');
     runnableTarget(record.target);
     if (!options.approved) throw new Error('Набор карточек замораживается только после вашего подтверждения.');
+    const pendingReferences = unconfirmedReferences(record.scenarios);
+    if (pendingReferences.length) throw new Error(`Подтвердите или удалите эталоны, предложенные моделью: ${pendingReferences.join(', ')}.`);
     if (options.expectedHash !== draftHash(record)) {
       throw new Error('Нужно подтверждение именно этой версии черновика. Откройте свежие тесты и план запуска.');
     }
