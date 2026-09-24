@@ -11,10 +11,9 @@ import { assessTrial, evaluateTrial } from '../src/evaluation.js';
 import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
 import { createDemoRuntime } from '../src/demo.js';
 import { proposalCall } from '../src/card/proposal.js';
-import {
-  checkSchema, experimentSchema, fingerprint, goalAttainment, replyQuality, SANDBOX_RETIRED, simulatorFidelity,
-  type CallContext, type DialogueMessage, type JudgeAudit, type MetricAssessment, type Rubric, type Runtime, type Scenario, type Source, type Target, type Trial, type World,
-} from '../src/contracts.js';
+import { checkSchema, experimentSchema, fingerprint, SANDBOX_RETIRED, type Scenario, type Source, type Target, type Trial, type World } from '../src/contracts.js';
+import { goalAttainment, replyQuality, simulatorFidelity, type JudgeAudit, type MetricAssessment, type Rubric } from '../src/assessment.js';
+import type { CallContext, DialogueMessage, Runtime } from '../src/runtime.js';
 import { appointmentAgent, legacyDemoRuntime } from './helpers/demo-record.js';
 
 function context(signal = new AbortController().signal): CallContext {

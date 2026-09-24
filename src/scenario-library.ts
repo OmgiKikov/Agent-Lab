@@ -12,9 +12,16 @@ import { importBatchSchema, type ImportBatch, type LibraryV1 } from './scenario-
  * Nothing here writes a library: cards are made in card/, and a first-format library is only ever read.
  */
 
+/**
+ * Keys in one collation on every machine. The process's own locale would order a spreadsheet's Cyrillic and Latin
+ * column headers differently under ru and en-US, and the same file would get another hash and import id. Every hash
+ * stored before the collation was pinned has ASCII keys, which both locales order alike, so they keep verifying.
+ */
+const keyOrder = (a: string, b: string): number => a.localeCompare(b, 'en-US');
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value !== null && typeof value === 'object') return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+  if (value !== null && typeof value === 'object') return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => keyOrder(a, b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
   return JSON.stringify(value);
 }
 const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');

@@ -7,7 +7,8 @@ import { access, mkdtemp, rm, readFile, readdir, writeFile, mkdir, cp } from 'no
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { ExperimentLab, draftHash } from '../src/experiment.js';
+import { ExperimentLab } from '../src/experiment.js';
+import { draftHash } from '../src/lab/record.js';
 import { evaluateTrial } from '../src/evaluation.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { createInputSchema, DEFAULT_JUDGE, fingerprint, settingsSchema } from '../src/contracts.js';

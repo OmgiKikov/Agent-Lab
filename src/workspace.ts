@@ -1,4 +1,5 @@
-import { isRunning, type Experiment } from './contracts.js';
+import type { Experiment } from './contracts.js';
+import { isRunning } from './phases.js';
 import { EXTERNAL_AGENT } from './card/prepare.js';
 import { targetLabel } from './detect.js';
 import { oneLine } from './text.js';

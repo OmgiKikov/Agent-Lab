@@ -12,7 +12,8 @@ import { logVersionJournalSchema, type LogVersionJournal } from '../src/card/cal
 import { cardSchema, type Card } from '../src/card/schema.js';
 import { fingerprint, type Experiment, type Trial } from '../src/contracts.js';
 import { CommandRefused, StaleRevisionError } from '../src/errors.js';
-import { draftHash, ExperimentLab } from '../src/experiment.js';
+import { ExperimentLab } from '../src/experiment.js';
+import { draftHash } from '../src/lab/record.js';
 import { importBatch, libraryHash, verifyAcceptedRun } from '../src/scenario-library.js';
 import { libraryV1Schema, scenarioVariantSchema } from '../src/scenario-contracts.js';
 import { ExperimentStore } from '../src/store.js';

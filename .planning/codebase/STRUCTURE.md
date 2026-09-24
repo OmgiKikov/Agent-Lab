@@ -1,290 +1,142 @@
 ---
-last_mapped_commit: 015fee98766cc2082001fdfce3a329a31329d4cf
-last_mapped_at: 2026-09-16
+last_mapped_commit: fd07c33b
+last_mapped_at: 2026-09-24
 ---
 # Codebase Structure
 
-**Analysis Date:** 2026-09-16
+**Analysis Date:** 2026-09-24 (chunk G1: engine split into `src/lab/`, contracts split, CLI command table)
 
 ## Directory Layout
 
 ```
 lyon/
-├── src/                          # Core library source (TypeScript)
-│   ├── cli.ts                    # CLI entry point (dist/cli.js)
-│   ├── experiment.ts             # Lab orchestration, phase machine
-│   ├── contracts.ts              # Data schemas (Zod)
-│   ├── store.ts                  # Persistent storage, locks
-│   ├── evaluation.ts             # Trial execution, check grading
-│   ├── targets.ts                # External agent adapters
-│   ├── simulator.ts              # Simulator helper checks
-│   ├── judge.ts                  # LLM rubric assessment
-│   ├── pi.ts                     # Pi runtime factories
-│   ├── demo.ts                   # Demo data + sandbox example
-│   ├── comparison.ts             # Run statistics, delta
-│   ├── quality.ts                # Accuracy, failure clustering
-│   ├── outcomes.ts               # Trial result logic
-│   ├── report.ts                 # HTML/Markdown/JSON export
-│   ├── artifacts.ts              # Evidence bundling
-│   ├── connection.ts             # Target config, health check
-│   ├── prompts.ts                # Role prompts (builder, simulator, judge)
-│   ├── prompt-edit.ts            # Proposal evaluation
-│   ├── imports.ts                # JSON/JSONL reading
-│   ├── target-version.ts         # Agent version fingerprinting
-│   └── module-worker.mjs         # ESM module loader
-├── extensions/
-│   ├── agent-lab.ts              # Pi extension tools
-│   └── cards.ts                  # UI card rendering
-├── skills/
-│   └── agent-builder/
-│       └── SKILL.md              # Pi skill definition
-├── test/                         # Test files (tsx)
-│   ├── *.test.ts                 # Parallel test suites
-│   └── fixtures/                 # Test data
-├── examples/
-│   ├── demo.json                 # Built-in example scenario
-│   ├── connection.json           # Sample connection config
-│   └── ...
-├── dist/                         # Compiled JavaScript (build output)
-│   ├── cli.js                    # Executable CLI
-│   └── ...
-├── .agent-lab/                   # Runtime storage (git-ignored)
-│   ├── {run-id}.json             # Atomic experiment record
-│   ├── {run-id}.trace.jsonl      # Trial events + audit logs
-│   ├── .lock                     # Write-lock file
-│   └── connection.json           # Remembered connection (optional)
-├── .planning/codebase/           # Documentation (this directory)
-│   ├── ARCHITECTURE.md           # System design, layers, flows
-│   ├── STRUCTURE.md              # This file
-│   └── ...
-├── package.json                  # npm metadata + scripts
-├── tsconfig.json                 # TypeScript config
-├── README.md                     # User guide
-└── .gitignore                    # Ignores dist/, node_modules/, .agent-lab/
-
+├── src/                          # The library (TypeScript, strict, ESM)
+│   ├── experiment.ts             # ExperimentLab — the engine's one entry (delegates to lab/)
+│   ├── phases.ts                 # Typed phase table: PHASES, PHASE_TABLE, isRunning, moveTo, stoppedPhase (leaf)
+│   ├── lab/                      # The engine, split by operation
+│   │   ├── record.ts             # draftHash, resultHash, measurementHash; newRecord, freshDraft
+│   │   ├── operation.ts          # OperationRunner: one operation at a time, budget, checkpoints, followers
+│   │   ├── context.ts            # Lab: what the operations share (store, runner, runtime, live reads)
+│   │   ├── library.ts            # create, check, commands, accept, resume, convert, log-version declarations
+│   │   ├── run.ts                # updateDraft, acceptDraft, repeat, suites, start (the dialogue pool)
+│   │   └── review.ts             # reassess, addHumanReview, reviewResults
+│   ├── contracts.ts              # The stored record: Experiment, Scenario, Trial, settings, checks (Zod)
+│   ├── assessment.ts             # Rubrics, assessments, judge audits and receipts, their validation
+│   ├── runtime.ts                # Runtime, CallContext, TargetSession: what the engine asks of the world
+│   ├── verbatim.ts               # Verbatim quote matching, value tokens
+│   ├── store.ts                  # ExperimentStore: storage only (records, lock, journals, sidecars, publication)
+│   ├── scenario-store.ts         # File areas of the store: imports, libraries, log-version journals, publications
+│   ├── card/                     # Situations (card v2): schema, proposal, checks, review, status, commands,
+│   │                             #   compile, library, prepare, budget, view, legacy-v1, convert, calibration*
+│   ├── miner/                    # Scenario Miner: topic map, sample, coverage, plan (consent), files
+│   ├── spreadsheet/              # .xlsx/.csv logs: xlsx, xml, csv, proposal, mapping, markers, selection, import
+│   ├── llm/                      # model-call, structured tasks, role→model table
+│   ├── cli.ts                    # agent-lab: the command table (dist/cli.js)
+│   ├── cli/import-flags.ts       # `agent-lab import` flags → the owner's table choices
+│   ├── evaluation.ts             # One trial: world, target session, controlled customer, checks
+│   ├── targets.ts                # HTTP / module / command adapters, release hook, prompt file
+│   ├── judge.ts                  # The judge: votes, receipts, audits
+│   ├── pi.ts, prompts.ts         # The Pi runtime: every role as a typed task; role prompts
+│   ├── demo.ts                   # The deterministic teaching example
+│   ├── run.ts                    # deriveRun: the one derivation of a run's result
+│   ├── result-view.ts            # ResultView: the one result model
+│   ├── result-text.ts            # The words of a result, for every surface
+│   ├── report.ts, blocks.ts, report-style.ts   # The customer report (HTML/Markdown/JSON)
+│   ├── inbox.ts, problems.ts, workspace.ts     # Decisions, recurring problems, the agent's workspace
+│   └── …                         # comparison, quality, outcomes, explain, coverage, agreement, detect, imports,
+│                                 #   materials, connection, suite, scenario-library, ids, text, errors, limits
+├── extensions/                   # Pi: nine tools by step, the /agent-lab workspace, long work in the session
+│   ├── agent-lab.ts              # Registration, steps, system prompt from SKILL.md
+│   ├── prepare-tool.ts, situation-tools.ts, decide-tool.ts, run-tool.ts, result-tools.ts
+│   ├── operations.ts             # The session's writer lease and long work; followRecord
+│   ├── background.ts             # Long work handed to the session; progress row; result messages
+│   ├── workspace.ts, workspace-screens.ts, board-command.ts   # /agent-lab
+│   └── render/                   # feed, verdict block, situation rows, theme
+├── skills/agent-builder/SKILL.md # The one instruction source of an Agent Lab session
+├── test/                         # node:test via tsx; fixtures/ (library-v1 goldens, recorded runs), helpers/, live/
+├── examples/                     # Teaching agent, sample agents, connection and CI examples
+├── docs/                         # Audits, reviews, verification guide
+└── .agent-lab/                   # Runtime data (git-ignored, private)
 ```
 
 ## Directory Purposes
 
-**`src/`:**
+**`src/lab/`:** the engine. Every operation on records lives here, one module per kind of operation; `experiment.ts`
+is the facade the surfaces call. A new operation goes into the module of its kind and gets a one-line method on
+`ExperimentLab`.
 
-- Purpose: Core library; all business logic
-- Contains: TypeScript modules (contract definitions, orchestration, evaluation, analysis)
-- Key files: experiment.ts (orchestrator), contracts.ts (schemas), cli.ts (CLI)
+**`src/card/`:** everything about a situation of the card format, from the model's proposal to its compiled,
+sealed definition and its calibration against production logs. First-format libraries are read through
+`legacy-v1.ts` and continued through `convert.ts`.
 
-**`extensions/`:**
+**`src/miner/`:** the logs' topics, the representative sample and coverage; `plan.ts` holds the preparation's consent.
 
-- Purpose: Pi coding agent integration
-- Contains: Extension tools (build, run, inspect, etc.) and UI card rendering
-- Key files: agent-lab.ts (eight tools), cards.ts (Pi TUI integration)
+**`src/spreadsheet/`:** spreadsheet exports read without dependencies, through a mapping the owner confirms.
 
-**`skills/agent-builder/`:**
+**`src/llm/`:** one request per model call and the structured-task harness; `pi.ts` builds the runtime from it.
 
-- Purpose: Conversational framework for Agent Lab within Pi
-- Contains: SKILL.md (prompt-based guidance, markdown format)
-- Key files: SKILL.md (single file; loaded by Pi)
+**`extensions/`:** the Pi surface only: tools, dialogs and rendering over `ExperimentLab`.
 
-**`test/`:**
+**`.agent-lab/`:** one data folder per project:
 
-- Purpose: Test suites
-- Contains: Test files using Node.js native test runner (tsx --test)
-- Key files: *.test.ts files (parallel execution)
-
-**`examples/`:**
-
-- Purpose: Sample data and documentation
-- Contains: Demo scenarios, connection config templates, prompt examples
-- Key files: demo.json (built-in scenario data)
-
-**`dist/`:**
-
-- Purpose: Compiled JavaScript output
-- Contains: Transpiled TypeScript from src/
-- Generated by: `npm run build` (never commit)
-- Key files: dist/cli.js (executable), dist/experiment.js, dist/contracts.js
-
-**`.agent-lab/`:**
-
-- Purpose: Local runtime storage
-- Contains: Experiment records (JSON), trial traces (JSONL), lock file
-- Structure: One `.json` per run ID; one `.trace.jsonl` per run ID; shared `.lock`
-- Committed: No (git-ignored)
+```
+.agent-lab/
+├── {runId}.json                  # The record (atomic replace)
+├── {runId}.trace.jsonl           # Trial events and final judge audits (append-only)
+├── {runId}.generator.jsonl       # Every builder call, hashed (append-only)
+├── {runId}.judge/{trialId}.json  # Full judge audit of a trial (sidecar)
+├── {runId}.calibration/{key}.json# Judge audit on a logged conversation (sidecar)
+├── imports/{importId}.json       # Verbatim import batch (content-addressed, immutable)
+├── imports/{importId}.mapping.json          # How a spreadsheet was read, as the owner confirmed it
+├── imports/{importId}.topics-{key}.json     # Topic map and its build progress
+├── imports/{importId}.declarations.json     # The owner's word on which agent version wrote the logs (append-only)
+├── libraries/{libraryId}/{hash}.json        # Library revisions; current.json points at the head
+├── publications/{runId}.json     # Intent of a library + record write, finished on the next open
+├── connection.local.json         # The remembered connection
+├── .lock / .recovery             # The writer's lock and its recovery gate
+```
 
 ## Key File Locations
 
-**Entry Points:**
+**Entry points:** `src/cli.ts` (→ `dist/cli.js`), `extensions/agent-lab.ts`, `skills/agent-builder/SKILL.md`.
 
-- `dist/cli.js`: CLI executable (from `src/cli.ts`)
-- `extensions/agent-lab.ts`: Pi extension entry point
-- `src/cli.ts`: CLI argument parsing and command dispatch
+**Engine:** `src/experiment.ts`, `src/lab/*.ts`, the phase table `src/phases.ts`.
 
-**Configuration:**
+**Stored shapes:** `src/contracts.ts` (record), `src/assessment.ts` (judgment), `src/card/schema.ts` (cards),
+`src/scenario-contracts.ts` (imports, first library format), `src/card/calibration.ts`, `src/miner/schema.ts`.
 
-- `package.json`: npm metadata, bin entry, build scripts
-- `tsconfig.json`: TypeScript compiler options
-- `.gitignore`: Ignores build outputs, runtime storage, node_modules
+**Result:** `src/run.ts` → `src/result-view.ts` → `src/result-text.ts`, `src/report.ts`.
 
-**Core Logic:**
+**Storage:** `src/store.ts`, `src/scenario-store.ts`, `src/fs-atomic.ts`.
 
-- `src/experiment.ts`: Phase machine, orchestration (1175 lines)
-- `src/contracts.ts`: All TypeScript schemas via Zod (1013 lines)
-- `src/evaluation.ts`: Trial execution, event recording, check grading (305 lines)
-- `src/judge.ts`: LLM rubric assessment, audit trail (206 lines)
-- `src/pi.ts`: Runtime factories for builder/simulator/judge (739 lines)
-- `src/targets.ts`: Adapters for HTTP/module/command/sandbox (332 lines)
-- `src/comparison.ts`: Statistical analysis, delta computation (644 lines)
-- `src/quality.ts`: Accuracy calculation, failure modes (573 lines)
-
-**Schemas & Contracts:**
-
-- `src/contracts.ts`: Single source of truth for all types
-
-**Data Persistence:**
-
-- `src/store.ts`: Atomic experiment I/O, lock management (139 lines)
-- `.agent-lab/{id}.json`: Experiment record (atomic per run)
-- `.agent-lab/{id}.trace.jsonl`: Trial events + judge audits (append-only)
-
-**Testing & Examples:**
-
-- `test/*.test.ts`: Test files (run with `npm test`)
-- `examples/demo.json`: Built-in demo data
-- `examples/connection.json`: Sample connection config
-
-**Roles & Prompts:**
-
-- `src/prompts.ts`: Role definitions (REQUIREMENTS_ROLE, GOALS_ROLE, SIMULATOR_ROLE, ASSESS_ROLE, etc.)
-- `src/pi.ts`: Runtime factories that use these roles
+**Compatibility goldens:** `test/fixtures/library-v1/`, `test/fixtures/recorded-run.json`, `test/fixtures/legacy-demo-run.json`.
 
 ## Naming Conventions
 
-**Files:**
-
-- Modules: lowercase + hyphen, e.g., `agent-lab.ts`, `prompt-edit.ts`
-- Tests: `*.test.ts` suffix, same name as module under test
-- Compiled: No change in name; compilation to `dist/` only
-
-**Directories:**
-
-- Feature modules: lowercase (e.g., `test/`, `examples/`)
-- Package directories: match package structure (e.g., `dist/` for compiled output)
-
-**Identifiers (TypeScript):**
-
-- Types: PascalCase (e.g., `Experiment`, `Trial`, `Scenario`)
-- Functions: camelCase (e.g., `evaluateTrial()`, `grade()`, `compareRuns()`)
-- Constants: UPPER_SNAKE_CASE (e.g., `MAX_PARALLEL`, `SCENARIO_LIMIT`, `VERSION`)
-- Zod schemas: camelCase + "Schema" suffix (e.g., `experimentSchema`, `trialSchema`)
-
-**Data/Identifiers in JSON:**
-
-- Experiment IDs: UUID or random alphanumeric slug
-- Trial IDs: UUID
-- Scenario IDs: Fingerprint-derived (deterministic hash) or UUID
-- Revision IDs: SHA256(spec) — deterministic, same agent spec = same ID
+- Files: lowercase with hyphens; a folder groups one concern (`lab/`, `card/`, `miner/`, `spreadsheet/`, `llm/`).
+- Tests: `test/<module>.test.ts`; helpers in `test/helpers/`; live checks with a real model in `test/live/` (not in CI).
+- Identifiers: PascalCase types, camelCase functions, `…Schema` for Zod schemas, UPPER_CASE constants.
+- Imports: relative with `.js` extensions; type-only imports as `import type`.
 
 ## Where to Add New Code
 
-**New Feature (e.g., new check type):**
-
-- Add schema to `src/contracts.ts` (checkSchema discriminated union)
-- Add grading logic to `src/evaluation.ts` (grade() function)
-- Add tests to `test/evaluation.test.ts`
-- Export from contracts if public API
-
-**New Target Type (e.g., gRPC adapter):**
-
-- Add to `targetSchema` discriminated union in `src/contracts.ts`
-- Implement session lifecycle in `src/targets.ts` (openExternalTarget)
-- Add preflightTarget logic for health check
-- Update CLI help text in `src/cli.ts`
-
-**New LLM Rubric (e.g., safety_guardrails):**
-
-- Add to `assessmentRubrics` const in `src/contracts.ts`
-- Add grading logic to judge (new role in `src/prompts.ts`, assessment logic in `src/judge.ts`)
-- Link to metrics (metricApplies logic in `src/contracts.ts`)
-- Test in `src/judge.ts` tests
-
-**New CLI Command:**
-
-- Add positional command name to parseArgs in `src/cli.ts`
-- Implement handler function (e.g., command === 'my-command' → ...)
-- Add help text near top of file
-- Export from cli if reusable
-
-**New Pi Tool:**
-
-- Add tool registration in `extensions/agent-lab.ts` (pi.registerTool)
-- Implement execute() handler
-- Define parameters schema (Type.Object from Typebox)
-- Add tool name to system prompt in agent-lab.ts before_agent_start hook
-
-**New Report Format:**
-
-- Add exporter to `src/report.ts` (e.g., csvReport, jsonSchemaReport)
-- Call from CLI `export` command
-- Add format option to `agent_lab_inspect` tool
-
-**New Data Analysis Metric:**
-
-- Add to quality.ts (e.g., new property on QualitySummary)
-- Update schema in `src/contracts.ts` if persisting in run record
-- Update reporting in `src/report.ts` and `src/quality.ts` (display logic)
+- **A new operation on records:** the `src/lab/` module of its kind; save through `operations.checkpoint` or
+  `operations.publishLibrary` so followers hear of it; move phases only with `moveTo`; one method on `ExperimentLab`.
+- **A new phase or transition:** `src/phases.ts` (`PHASES`, `PHASE_TABLE`) — the stored enum reads it; a leaf
+  module, so the record, the result modules and the engine all read the same table.
+- **A new owner command on situations:** `src/card/commands.ts` (prepare/apply with a host grant), then the chat tool,
+  the board and the CLI `cards` command call it through `ExperimentLab.prepareCardCommand`/`applyCardCommand`.
+- **A new CLI command:** a function and one entry in `COMMANDS` in `src/cli.ts` (its help lines come from the entry).
+- **A new Pi tool:** a `register*` module in `extensions/`, its name in `extensions/steps.ts` for the step it belongs to.
+- **A new result line:** `src/run.ts`/`src/result-view.ts` for the fact, `src/result-text.ts` for the words.
+- **A new stored field:** optional in its schema, so old records keep parsing; never inside an existing hash.
 
 ## Special Directories
 
-**`dist/`:**
-
-- Purpose: Compiled JavaScript output
-- Generated: By `npm run build` (via tsc)
-- Committed: No (git-ignored by default)
-- Cleanup: `npm run build` deletes entire dist/ before recompiling
-
-**`.agent-lab/`:**
-
-- Purpose: Runtime storage for experiments, trials, traces
-- Generated: By ExperimentLab during execution
-- Committed: No (git-ignored)
-- Lock file: `.lock` (JSON with pid + token) prevents concurrent write access
-- Recovery: `.recovery` file used during startup to detect stale locks
-
-**`.context/`, `.superpowers/`, `.evals/`:**
-
-- Purpose: Development aids (context snapshots, evaluation suites, etc.)
-- Generated: By various tools during development
-- Committed: Optional (project-dependent)
-
-## Build & Development Flow
-
-**Build:**
-
-```bash
-npm run build              # Delete dist/, compile src/ → dist/
-npm run typecheck          # Full strict type checking
-```
-
-**Development:**
-
-```bash
-npm start                  # npm run build && node dist/cli.js chat
-npm run pi                 # Launch Pi extension directly
-npm test                   # npm run build && run tests
-```
-
-**Testing:**
-
-- Uses Node.js native test runner (tsx --test)
-- Files: `test/*.test.ts`
-- Run: `npm test` (runs build first, then tests)
-
-**Package & Distribution:**
-
-```bash
-npm pack --dry-run         # Preview package contents
-npm publish                # (on npm registry)
-```
+- `dist/`: build output of `src/` (`npm run build`), used only by the `agent-lab` binary; Pi loads `src/` directly.
+- `.agent-lab/`: private runtime data, never committed; production dialogues stay here.
+- `.planning/`, `.context/`: planning artifacts and private working notes.
 
 ---
 
-*Structure analysis: 2026-09-16*
+*Structure analysis: 2026-09-24*

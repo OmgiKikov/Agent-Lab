@@ -3,7 +3,8 @@ import { mkdtemp, readFile, mkdir, writeFile, readdir, realpath } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ExperimentLab, draftHash } from '../dist/experiment.js';
+import { ExperimentLab } from '../dist/experiment.js';
+import { draftHash } from '../dist/lab/record.js';
 import { createInputSchema } from '../dist/contracts.js';
 import { createDemoRuntime, demoInput, demoTarget } from '../dist/demo.js';
 import { hostGrant } from '../dist/card/commands.js';

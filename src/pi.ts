@@ -1,9 +1,8 @@
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
-import {
-  EXPECTATIONS_PROTOCOL, failureModeSchema, fingerprint, requirementSchema, REQUIREMENT_LIMIT, SIMULATOR_PROTOCOL, sourceSelectionSchema, userTurnSchema, VERSION, verbatimSpan,
-  type CallContext, type FailureMode, type GroundingInput, type Requirement, type Runtime, type Settings, type Source,
-} from './contracts.js';
+import { EXPECTATIONS_PROTOCOL, failureModeSchema, fingerprint, requirementSchema, REQUIREMENT_LIMIT, SIMULATOR_PROTOCOL, VERSION, type FailureMode, type Requirement, type Settings, type Source } from './contracts.js';
+import { verbatimSpan } from './verbatim.js';
+import { sourceSelectionSchema, userTurnSchema, type CallContext, type GroundingInput, type Runtime } from './runtime.js';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } from './judge.js';
 import { FOCUSED_REQUIREMENT_LIMIT, workInputIssue } from './limits.js';
 import { callModel, type Model } from './llm/model-call.js';

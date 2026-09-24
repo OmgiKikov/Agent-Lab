@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type MetricAssessment, type Trial } from '../src/contracts.js';
+import { emptyUsage, settingsSchema, type Experiment, type Trial } from '../src/contracts.js';
+import { goalAttainment, replyQuality, simulatorFidelity, type MetricAssessment } from '../src/assessment.js';
 import { topicView } from '../src/coverage.js';
 import { buildResultView } from '../src/result-view.js';
 import { realityParts } from '../src/result-text.js';

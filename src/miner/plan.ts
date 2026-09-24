@@ -1,4 +1,6 @@
-import type { CallContext, Runtime, Settings, ValidationExclusion } from '../contracts.js';
+import { materialSources, type CreateInput, type Settings, type ValidationExclusion } from '../contracts.js';
+import type { CallContext, Runtime } from '../runtime.js';
+import { preparationCeiling } from '../card/budget.js';
 import type { CardPreparation, LibraryV2 } from '../card/schema.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import type { ExperimentStore } from '../store.js';
@@ -14,7 +16,7 @@ import { planTopicMap, reusableTopicMap, topicMapKey, usableConversations, type 
  * the import's topic map is reused or built, and the representative sample of the requested count becomes the
  * preparation's units:
  *
- *   consent: map calls · call ceiling · situations promised · conversations left out, each with its reason
+ *   consent: map calls · the preparation's ceiling · situations promised · conversations left out, each with its reason
  *   map:     stored under the same key ─► reused, no call · build in progress ─► continued · each step stored first
  *   units:   the sample's picks; a pick that makes no situation ─► the next untried conversation of its topic
  *
@@ -53,7 +55,8 @@ function leftOut(batch: ImportBatch, unusable: readonly ValidationExclusion[]): 
 /**
  * What the owner agrees to before logs become situations: one value every surface renders as it is. Spending has
  * two numbers: the calls of the topic map when every answer passes — none when a stored map of these logs is
- * reused — and the ceiling the whole preparation stops at, the map included: the run's call budget.
+ * reused — and the ceiling the whole preparation stops at, the map included (card/budget.ts). The draft's own call
+ * limit stays the run's budget.
  */
 export interface PreparationConsent {
   /** Logged conversations in the import, every row counted, and those a situation can be made from. */
@@ -67,17 +70,22 @@ export interface PreparationConsent {
   excluded: LeftOut[];
 }
 
-/** The consent of preparing `situations` situations from `batch` under `settings`, reading what the store already holds of its map. */
-export async function preparationConsent(store: ExperimentStore, input: { batch: ImportBatch; settings: Settings; situations?: number }): Promise<PreparationConsent> {
-  const { batch, settings } = input;
-  const builder = builderOf(settings);
+/**
+ * The consent of preparing `situations` situations from the logs of `input` (its import) under its settings and
+ * rules, reading what the store already holds of the logs' topic map.
+ */
+export async function preparationConsent(store: Pick<ExperimentStore, 'readTopicMap'>, request: { input: CreateInput; situations?: number }): Promise<PreparationConsent> {
+  const { input } = request;
+  const batch = input.originalImport;
+  if (!batch) throw new Error('Согласие на подготовку из логов нужно только тогда, когда логи есть.');
+  const builder = builderOf(input.settings);
   const stored = await store.readTopicMap(topicMapKey(batch, builder));
   const { dialogueIds, excluded } = usableConversations(batch);
+  const promised = Math.min(situationCount(request.situations), dialogueIds.length);
+  const topicMapCalls = reusableTopicMap(stored, batch, builder) ? 0 : planTopicMap(batch, builder, stored).calls;
   return {
-    conversations: batch.dialogues.length + batch.rejected.length, usable: dialogueIds.length,
-    promised: Math.min(situationCount(input.situations), dialogueIds.length),
-    topicMapCalls: reusableTopicMap(stored, batch, builder) ? 0 : planTopicMap(batch, builder, stored).calls,
-    callCeiling: settings.maxCalls,
+    conversations: batch.dialogues.length + batch.rejected.length, usable: dialogueIds.length, promised, topicMapCalls,
+    callCeiling: preparationCeiling({ task: input.task, sources: materialSources(input.materials), situations: promised, fromLogs: true, topicMapCalls }),
     excluded: leftOut(batch, excluded),
   };
 }

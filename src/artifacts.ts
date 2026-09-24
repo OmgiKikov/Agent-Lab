@@ -1,7 +1,8 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { fingerprint, isRunning, type Experiment } from './contracts.js';
+import { fingerprint, type Experiment } from './contracts.js';
+import { isRunning } from './phases.js';
 import type { ExperimentStore } from './store.js';
 import { compareRuns, markReconstructedSource, type RunComparison } from './comparison.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';

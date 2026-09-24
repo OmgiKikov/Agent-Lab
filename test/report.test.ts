@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { emptyUsage, experimentSchema, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type MetricAssessment, type Trial } from '../src/contracts.js';
+import { emptyUsage, experimentSchema, settingsSchema, type Experiment, type Trial } from '../src/contracts.js';
+import { goalAttainment, replyQuality, simulatorFidelity, type MetricAssessment } from '../src/assessment.js';
 import { evidenceBundle, type EvidenceBundle } from '../src/artifacts.js';
 import { toHtml, toMarkdown, type Block, type Report } from '../src/blocks.js';
 import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';

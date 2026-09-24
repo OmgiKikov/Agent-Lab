@@ -1,6 +1,8 @@
 import { headlineRule, undecidedExpectation, type CountedExpectation } from './card/expectations.js';
 import { directChecks } from './checkpoints.js';
-import { fingerprint, isRunning, type AssessmentFailure, type Experiment, type InvalidCause, type MetricAssessment, type Scenario, type Trial } from './contracts.js';
+import { fingerprint, type AssessmentFailure, type Experiment, type InvalidCause, type Scenario, type Trial } from './contracts.js';
+import type { MetricAssessment } from './assessment.js';
+import { isRunning } from './phases.js';
 import { Stopped } from './errors.js';
 import { GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentMetricResult, automaticTrialResult, expectationResult, GOAL_METRIC_ID, headlineMetricIds, headlineTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, RULES_METRIC_ID, simulatorVerdicts } from './outcomes.js';

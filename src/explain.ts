@@ -1,4 +1,6 @@
-import { internalPromptRule, type Experiment, type MetricAssessment, type Scenario, type Trial, verbatimSpanAt } from './contracts.js';
+import { internalPromptRule, type Experiment, type Scenario, type Trial } from './contracts.js';
+import type { MetricAssessment } from './assessment.js';
+import { verbatimSpanAt } from './verbatim.js';
 import { headlineRule, type CountedExpectation } from './card/expectations.js';
 import { agentMetricResult, automaticTrialResult, expectationResult } from './outcomes.js';
 import { AGREED_RATIONALE_PREFIX } from './judge.js';
@@ -12,8 +14,8 @@ import { oneLine } from './text.js';
  * against the record (the reply against its event, a rule quote against its source); a part
  * that fails its check is replaced by a named «не подтверждено» row, never guessed.
  * Pure: no I/O, no escaping, raw text; every surface escapes at its own boundary. Imports only
- * contracts.js, outcomes.js, card/expectations.js, judge.js and plural.js; it must not import
- * experiment.ts, quality.ts or result-view.ts.
+ * contracts.js, assessment.js, verbatim.js, card/expectations.js, outcomes.js, judge.js, plural.js
+ * and text.js; it must not import the engine (experiment.ts, lab/), quality.ts or result-view.ts.
  */
 export const UNVERIFIED = 'объяснение не подтверждено цитатой';
 /**

@@ -1,4 +1,5 @@
-import { isCardExecution, simulatorWasUsed, valueTokens, type Scenario, type SimulatorCheck, type Trial } from './contracts.js';
+import { isCardExecution, simulatorWasUsed, type Scenario, type SimulatorCheck, type Trial } from './contracts.js';
+import { valueTokens } from './verbatim.js';
 
 /*
  * Heuristic checks over the simulated user's own replies. They answer three questions the judge is

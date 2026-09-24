@@ -3,11 +3,9 @@ import { judgedScenario } from './card/legacy-v1.js';
 import { directChecks } from './checkpoints.js';
 import { createUserState, allowedUserActions, advanceUser, requiredUserTurns, userDecisionSchema } from './user-controller.js';
 import { randomUUID } from 'node:crypto';
-import {
-  addUsage, assessmentRubrics, emptyUsage, isCardExecution, judgeAuditSchema, runnableTarget, userTurnSchema, scriptIssue, metricApplies, RAG_METRIC_IDS, validateAssessments,
-  type CallContext, type CheckResult, type DialogueMessage, type JudgeAudit, type MetricAssessment, type Requirement, type Revision,
-  type Runtime, type Scenario, type Settings, type Source, type Target, type TargetSession, type TraceEvent, type Trial, type UserMode,
-} from './contracts.js';
+import { addUsage, emptyUsage, isCardExecution, runnableTarget, scriptIssue, type CheckResult, type Requirement, type Revision, type Scenario, type Settings, type Source, type Target, type TraceEvent, type Trial, type UserMode } from './contracts.js';
+import { assessmentRubrics, judgeAuditSchema, metricApplies, RAG_METRIC_IDS, validateAssessments, type JudgeAudit, type MetricAssessment } from './assessment.js';
+import { userTurnSchema, type CallContext, type DialogueMessage, type Runtime, type TargetSession } from './runtime.js';
 import { hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
 import { openExternalTarget } from './targets.js';
 import { simulatorChecks } from './simulator.js';

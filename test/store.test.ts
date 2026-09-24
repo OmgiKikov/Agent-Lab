@@ -7,9 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import test, { type TestContext } from 'node:test';
 import { ExperimentStore } from '../src/store.js';
-import { ExperimentLab, draftHash } from '../src/experiment.js';
+import { ExperimentLab } from '../src/experiment.js';
+import { draftHash } from '../src/lab/record.js';
 import { demoInput } from '../src/demo.js';
-import { type JudgeAudit } from '../src/contracts.js';
+import type { JudgeAudit } from '../src/assessment.js';
 import { acceptedDemoDraft, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 
 async function directory(t: TestContext) {

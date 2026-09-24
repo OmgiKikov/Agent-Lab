@@ -3,7 +3,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createPiRuntime } from '../../src/pi.js';
-import { emptyUsage, settingsSchema, simulatorFidelity, type CallContext, type Scenario, type TraceEvent, type Trial } from '../../src/contracts.js';
+import { emptyUsage, settingsSchema, type Scenario, type TraceEvent, type Trial } from '../../src/contracts.js';
+import { simulatorFidelity } from '../../src/assessment.js';
+import type { CallContext } from '../../src/runtime.js';
 
 const [provider, model] = process.argv.slice(2);
 assert(provider && model, 'Usage: node --import tsx test/live/simulator-stop.ts PROVIDER MODEL');

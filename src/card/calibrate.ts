@@ -1,4 +1,5 @@
-import { fingerprint, type CallContext, type Experiment, type Runtime } from '../contracts.js';
+import { fingerprint, type Experiment } from '../contracts.js';
+import type { CallContext, Runtime } from '../runtime.js';
 import { Stopped } from '../errors.js';
 import { observableSources, scenarioSources } from '../judge.js';
 import { pluralForm } from '../plural.js';

@@ -4,7 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources, scenarioSources, sealJudgeReceipt, JUDGE_PROTOCOL } from '../src/judge.js';
-import { emptyUsage, fingerprint, goalAttainment, RAG_METRIC_IDS, RAG_RUBRICS, ragEvidenceComplete, replyQuality, simulatorFidelity, validateAssessments, type JudgeAudit, type Requirement, type Scenario, type Source, type Trial } from '../src/contracts.js';
+import { emptyUsage, fingerprint, type Requirement, type Scenario, type Source, type Trial } from '../src/contracts.js';
+import { goalAttainment, RAG_METRIC_IDS, RAG_RUBRICS, ragEvidenceComplete, replyQuality, simulatorFidelity, validateAssessments, type JudgeAudit } from '../src/assessment.js';
 import { ExperimentStore } from '../src/store.js';
 
 const scenario: Scenario = { id: 'card', familyId: 'family', title: 'A fixed input', split: 'dev', provenance: 'synthetic', requirementIds: [],

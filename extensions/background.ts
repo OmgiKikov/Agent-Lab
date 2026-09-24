@@ -16,8 +16,9 @@ import { situationFeed, situationsFeed } from './situation-tools.ts';
 /*
  * Long work never holds the conversation (quality bar 5): a run, a preparation and a check of changed situations
  * belong to the Pi session, not to the row or the workspace that started them. While they go, one row above the
- * input says how far they got — Pi's spinner and a line from the stored record — and the status bar says the
- * same; their result arrives as a message drawn like any action: «● Прогон завершён» and its summary.
+ * input says how far they got — Pi's spinner and a line from the record, redrawn at each change the work reports —
+ * and the status bar says the same; their result arrives as a message drawn like any action: «● Прогон завершён»
+ * and its summary.
  */
 
 export const RUN_MESSAGE = 'agent-lab-run';
@@ -32,7 +33,7 @@ export const STOP_HINT = 'остановить — напишите «стоп»
 export type Prepared = { output: Record<string, unknown>; feed?: Feed; note?: string };
 
 /**
- * The one row of long work above the input (ui-spec §4.6): Pi's `Loader` with a line from the stored record and
+ * The one row of long work above the input (ui-spec §4.6): Pi's `Loader` with a line from the running record and
  * how to stop it; the status bar carries the same line without the hint.
  */
 export class ProgressRow {
@@ -122,12 +123,12 @@ export class Background {
 
   /**
    * A started run or preparation belongs to the Pi session: the conversation stays free, the row above the input
-   * comes from the stored record, and the result arrives as a message. Closing Pi still ends the work it owns.
+   * follows the running record, and the result arrives as a message. Closing Pi still ends the work it owns.
    */
   detach(ctx: ExtensionContext, owned: LabLease, id: string, origin: SessionOperation['origin'], prepared?: (finished: Experiment) => Promise<Prepared>): SessionOperation {
     const progress = new ProgressRow(ctx, prepared ? BUILD_MESSAGE : RUN_MESSAGE, STOP_HINT);
     return this.host.operations.present(owned, { kind: prepared ? 'preparation' : 'run', id, origin,
-      progress: async job => progress.show(progressText(await job.lab.get(id))),
+      progress: record => progress.show(progressText(record)),
       complete: async job => {
         const finished = await owned.lab.get(id);
         if (prepared) {
@@ -171,8 +172,7 @@ export class Background {
     const progress = new ProgressRow(ctx, CHECK_MESSAGE);
     let usedBefore: number | undefined;
     this.host.operations.present(owned, { kind: 'assessment', id, origin: 'chat',
-      progress: async () => {
-        const record = await owned.lab.get(id);
+      progress: record => {
         usedBefore ??= record.usage.calls;
         progress.show(`Проверяю изменённые ситуации · вызовов модели: ${record.usage.calls - usedBefore}`);
       },

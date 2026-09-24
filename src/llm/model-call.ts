@@ -1,5 +1,6 @@
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent';
-import type { CallContext, Usage } from '../contracts.js';
+import type { Usage } from '../contracts.js';
+import type { CallContext } from '../runtime.js';
 
 /*
  * One request to a model, and nothing else. Structured tasks, the judge and the user simulator are

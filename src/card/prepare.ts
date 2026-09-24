@@ -1,5 +1,6 @@
 import { Stopped } from '../errors.js';
-import { fingerprint, internalPromptRule, type AgentSpec, type CallContext, type Experiment, type Grounding, type GroundingInput, type Requirement, type Runtime, type Source } from '../contracts.js';
+import { fingerprint, internalPromptRule, type AgentSpec, type Experiment, type Requirement, type Source } from '../contracts.js';
+import type { CallContext, Grounding, GroundingInput, Runtime } from '../runtime.js';
 import { SOURCES_PER_DIALOGUE, workInputIssue } from '../limits.js';
 import { StructuredTaskError } from '../llm/structured.js';
 import { withTrafficTopic } from '../miner/cards.js';
@@ -10,6 +11,7 @@ import { libraryHash } from '../scenario-library.js';
 import { selectScenarioSources } from '../scenario-sources.js';
 import type { ExperimentStore } from '../store.js';
 import { clip } from '../text.js';
+import { PROPOSAL_ATTEMPTS } from './budget.js';
 import { importEvidence, loggedMessages, type CardEvidence } from './checks.js';
 import { addCard, createLibraryV2, recordClaims, requireLibraryV2, withRequirements } from './library.js';
 import { bindProposal, cardProposalProblem, cardProposalSchema, proposalCall, proposalPayload, type CardProposalRequest } from './proposal.js';
@@ -29,8 +31,6 @@ import type { Card, CardPreparation, LibraryV2 } from './schema.js';
  */
 
 const PROTOCOL = 'cards-v1';
-/** Proposal calls one unit may spend over all resumes, repairs included. */
-const PROPOSAL_ATTEMPTS = 5;
 /** Later customer messages one card can account for. */
 const LATER_MESSAGES = 60;
 const CARD_LIMIT = 200;
@@ -79,8 +79,11 @@ export type CardPlan =
   /** Situations from the owner's rules alone, when there are no logs. */
   | { kind: 'rules'; count: number };
 
+/** Where a preparation saves its draft after every step: the store's publication, told to whoever follows the work (lab/operation.ts). */
+export type DraftPublisher = Pick<ExperimentStore, 'publishLibrary'>;
+
 /** The messages the store holds for a library's imports: what its cards cite. */
-export async function storedEvidence(store: ExperimentStore, library: LibraryV2): Promise<CardEvidence> {
+export async function storedEvidence(store: Pick<ExperimentStore, 'readImport'>, library: LibraryV2): Promise<CardEvidence> {
   return importEvidence(await Promise.all(library.imports.map(item => store.readImport(item.id))));
 }
 
@@ -100,14 +103,14 @@ class Preparation {
   /** Units whose step failed before any call was sent: they stay pending for a resume. */
   private readonly unsent: { unit: string; message: string }[] = [];
   constructor(private readonly record: Experiment, private readonly progress: CardPreparation, private readonly batch: ImportBatch | undefined,
-    private library: LibraryV2, private readonly runtime: Runtime, private readonly ctx: CallContext, private readonly store: ExperimentStore,
+    private library: LibraryV2, private readonly runtime: Runtime, private readonly ctx: CallContext, private readonly publisher: DraftPublisher,
     private published: string | undefined) {
     this.evidence = importEvidence(batch ? [batch] : []);
   }
 
   private async publish(): Promise<void> {
     this.record.librarySnapshot = this.library;
-    await this.store.publishLibrary(this.record, this.library, this.published);
+    await this.publisher.publishLibrary(this.record, this.library, this.published);
     this.published = libraryHash(this.library);
   }
 
@@ -325,7 +328,7 @@ class Preparation {
 }
 
 /** Prepares a new draft of cards from the plan: the library is published after every step. */
-export async function prepareCards(record: Experiment, plan: CardPlan, agent: AgentSpec | undefined, runtime: Runtime, ctx: CallContext, store: ExperimentStore): Promise<void> {
+export async function prepareCards(record: Experiment, plan: CardPlan, agent: AgentSpec | undefined, runtime: Runtime, ctx: CallContext, publisher: DraftPublisher): Promise<void> {
   const batch = plan.kind === 'dialogues' ? plan.batch : undefined;
   const sample = plan.kind === 'dialogues' ? plan.sample : undefined;
   const units = plan.kind === 'dialogues' ? plan.sample.picked : Array.from({ length: plan.count }, (_, index) => `rules_${index + 1}`);
@@ -339,11 +342,11 @@ export async function prepareCards(record: Experiment, plan: CardPlan, agent: Ag
   ensureAgentRevision(record, agent);
   const library = createLibraryV2({ id: `library_${record.id}`, imports: batch ? [{ id: batch.id, contentHash: batch.contentHash }] : [], sources: record.sources, requirements: [],
     ...(sample?.traffic ? { traffic: [sample.traffic] } : {}) });
-  await new Preparation(record, progress, batch, library, runtime, ctx, store, undefined).run();
+  await new Preparation(record, progress, batch, library, runtime, ctx, publisher, undefined).run();
 }
 
 /** Continues a card preparation from its saved steps. A call that died in flight is never repeated. */
-export async function resumeCards(record: Experiment, batch: ImportBatch | undefined, runtime: Runtime, ctx: CallContext, store: ExperimentStore): Promise<void> {
+export async function resumeCards(record: Experiment, batch: ImportBatch | undefined, runtime: Runtime, ctx: CallContext, publisher: DraftPublisher): Promise<void> {
   const progress = record.preparationProgress;
   if (progress?.protocol !== PROTOCOL) throw new Error('Эту подготовку нельзя продолжить: нет сохранённого плана.');
   if (progress.inputHash !== preparationInputHash(record, PROTOCOL)) throw new Error('Входы или модель подготовки изменились. Подготовьте новый черновик.');
@@ -351,16 +354,16 @@ export async function resumeCards(record: Experiment, batch: ImportBatch | undef
   if (!record.librarySnapshot) throw new Error('Черновик ситуаций не сохранён; продолжить нельзя.');
   const library = requireLibraryV2(record.librarySnapshot);
   if (library.acceptance) throw new Error('Утверждённые ситуации не меняются: подготовьте новый черновик.');
-  await new Preparation(record, progress, batch, structuredClone(library), runtime, ctx, store, libraryHash(library)).run();
+  await new Preparation(record, progress, batch, structuredClone(library), runtime, ctx, publisher, libraryHash(library)).run();
 }
 
 /** The owner's explicit check: every claim of every card no receipt answers yet, in card order. */
-export async function reviewCards(record: Experiment, batch: ImportBatch | undefined, runtime: Runtime, ctx: CallContext, store: ExperimentStore): Promise<void> {
+export async function reviewCards(record: Experiment, batch: ImportBatch | undefined, runtime: Runtime, ctx: CallContext, publisher: DraftPublisher): Promise<void> {
   const progress = record.preparationProgress;
   if (progress?.protocol !== PROTOCOL || !record.librarySnapshot) throw new Error('Проверять нечего: у черновика нет ситуаций нового формата.');
   const library = requireLibraryV2(record.librarySnapshot);
   if (library.acceptance) throw new Error('Утверждённые ситуации не меняются: подготовьте новый черновик.');
-  const preparation = new Preparation(record, progress, batch, structuredClone(library), runtime, ctx, store, libraryHash(library));
+  const preparation = new Preparation(record, progress, batch, structuredClone(library), runtime, ctx, publisher, libraryHash(library));
   preparation.settleInterrupted();
   for (const card of [...library.cards].sort((a, b) => a.number - b.number)) {
     ctx.signal.throwIfAborted();

@@ -1,4 +1,6 @@
-import { assessmentEventContent, fingerprint, RAG_RUBRICS, type Rubric, type Runtime, type TraceEvent, type Trial } from './contracts.js';
+import { fingerprint, type TraceEvent, type Trial } from './contracts.js';
+import { assessmentEventContent, RAG_RUBRICS, type Rubric } from './assessment.js';
+import type { Runtime } from './runtime.js';
 
 type Input = Parameters<NonNullable<Runtime['assess']>>[0];
 

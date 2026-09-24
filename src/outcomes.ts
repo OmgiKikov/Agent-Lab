@@ -1,6 +1,8 @@
 import { countingRuleOf, GOAL_METRIC_ID, headlineRule, recordedExpectationResult, type CountedExpectation, type CountingRule } from './card/expectations.js';
 import { requiredCheckpointResult } from './checkpoints.js';
-import { metricApplies, simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type Trial, isRunning } from './contracts.js';
+import { simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type Trial } from './contracts.js';
+import { metricApplies } from './assessment.js';
+import { isRunning } from './phases.js';
 
 /*
  * Outcome helpers shared by comparison.ts (verdict, evidence, run delta) and simulator.ts
@@ -159,7 +161,7 @@ export { GOAL_METRIC_ID, RULES_METRIC_ID } from './card/expectations.js';
  * the request was met and, where the card carries the prompt-rule check, no rule was broken. The
  * previous rule was `goal-v1` (goal only). Every quick mark was stamped with this name before cards
  * had their own rules (`countingRuleFor`); it is derived when a result is shown, never stored on a
- * run record. It lives here because experiment.ts needs it and must not import result-view.ts.
+ * run record. It lives here because the lab (lab/review.ts) needs it and must not import result-view.ts.
  */
 export const COUNTING_RULES = 'goal-and-rules-v2';
 

@@ -7,7 +7,8 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { evaluateTrial } from '../src/evaluation.js';
 import { headlineTrialResult } from '../src/outcomes.js';
-import { settingsSchema, targetSchema, type Runtime } from '../src/contracts.js';
+import { settingsSchema, targetSchema } from '../src/contracts.js';
+import type { Runtime } from '../src/runtime.js';
 import { briefCard, compiledCard, requirements } from './helpers/cards.js';
 
 /*

@@ -2,7 +2,8 @@
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { ExperimentLab, draftHash } from '../../src/experiment.js';
+import { ExperimentLab } from '../../src/experiment.js';
+import { draftHash } from '../../src/lab/record.js';
 import { libraryHash } from '../../src/scenario-library.js';
 import { createInputSchema } from '../../src/contracts.js';
 import { situationViews } from '../../src/card/view.js';

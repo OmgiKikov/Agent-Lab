@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { experimentSchema, fingerprint } from '../src/contracts.js';
 import { importBatch, libraryHash, verifiedAcceptance, verifyAcceptedRun } from '../src/scenario-library.js';
 import { libraryV1File, storedLibraryV1 } from './helpers/library-v1.js';
@@ -64,4 +67,19 @@ test('an accepted first-format run is checked by its stored definition hashes: a
   assert.equal(JSON.stringify(record), before, 'verification reads the record and never rewrites it');
   record.scenarios[0]!.user.opening = 'Изменённый вход';
   assert.throws(() => verifyAcceptedRun(record), /отличается от утверждённой/);
+});
+
+test('the hashes a store keeps do not depend on the language of the machine: stored ones verify, mixed-script keys hash alike everywhere', async () => {
+  const helper = fileURLToPath(new URL('./helpers/locale-hashes.ts', import.meta.url));
+  const hashesIn = async (locale: string) => {
+    const { stdout } = await promisify(execFile)(process.execPath, ['--import', 'tsx', helper], { env: { ...process.env, LC_ALL: locale, LANG: locale } });
+    return JSON.parse(stdout) as Record<'collation' | 'library' | 'receipt' | 'import' | 'spreadsheet', string>;
+  };
+  const [russian, english] = await Promise.all([hashesIn('ru_RU.UTF-8'), hashesIn('en_US.UTF-8')]);
+  assert.deepEqual([russian.collation, english.collation], ['ru-RU', 'en-US'], 'the two processes collate differently: Cyrillic first in one, Latin in the other');
+  const { collation: _ru, ...inRussian } = russian, { collation: _en, ...inEnglish } = english;
+  assert.deepEqual(inRussian, inEnglish, 'a spreadsheet import keeps Cyrillic and Latin column headers as keys: the same file gets the same id on every machine');
+  const library = storedLibraryV1();
+  assert.deepEqual([inRussian.library, inRussian.receipt, inRussian.import], [library.acceptance!.libraryHash, library.acceptance!.snapshotHash, library.imports[0]!.contentHash],
+    'every stored hash keeps verifying');
 });

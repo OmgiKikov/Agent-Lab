@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { CallContext, Requirement, Source } from '../contracts.js';
+import type { Requirement, Source } from '../contracts.js';
+import type { CallContext } from '../runtime.js';
 import { identifierSchema as id, sha256Schema as hash, text } from '../ids.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import type { Expectation } from './expectations.js';

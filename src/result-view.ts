@@ -1,5 +1,6 @@
 import { countingRuleOf, headlineRule } from './card/expectations.js';
-import { isRunning, type Experiment, type Scenario, type ValidationExclusion } from './contracts.js';
+import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
+import { isRunning } from './phases.js';
 import { agentMetricResult, COUNTING_RULES, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
 import { judgeModel, stabilityAfterReassess, stabilityBetweenRuns, type Stability } from './comparison.js';

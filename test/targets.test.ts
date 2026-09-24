@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { externalReplySchema, openExternalTarget, preflightTarget, runRelease } from '../src/targets.js';
-import { type CallContext, type TraceEvent, type World } from '../src/contracts.js';
+import type { TraceEvent, World } from '../src/contracts.js';
+import type { CallContext } from '../src/runtime.js';
 
 function context(signal = new AbortController().signal) {
   const events: Omit<TraceEvent, 'seq'>[] = [];

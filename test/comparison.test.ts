@@ -8,7 +8,8 @@ import { embeddedBefore } from '../src/artifacts.js';
 import { suiteEvidence } from '../src/connection.js';
 import { automaticTrialResult, COUNTING_RULES, isAgentFailure } from '../src/outcomes.js';
 import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources, sealJudgeReceipt, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
-import { emptyUsage, fingerprint, goalAttainment, promptCompliance, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type JudgeAudit, type MetricAssessment, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
+import { emptyUsage, fingerprint, settingsSchema, type Experiment, type HumanReview, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
+import { goalAttainment, promptCompliance, replyQuality, simulatorFidelity, type JudgeAudit, type MetricAssessment } from '../src/assessment.js';
 
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
 const metrics = [

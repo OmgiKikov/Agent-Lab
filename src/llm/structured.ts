@@ -1,6 +1,6 @@
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
-import type { CallContext } from '../contracts.js';
+import type { CallContext } from '../runtime.js';
 import { DATA_BOUNDARY } from '../prompts.js';
 import { callModel, ProviderFailure, type ChatMessage } from './model-call.js';
 import { jsonMode, type ModelRole, type ModelTable } from './models.js';

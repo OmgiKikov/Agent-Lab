@@ -5,7 +5,8 @@ import { behaviorPolicySchema } from '../src/scenario-contracts.js';
 import { storedRunV1 } from './helpers/library-v1.js';
 import { evaluateTrial } from '../src/evaluation.js';
 import { headlineTrialResult } from '../src/outcomes.js';
-import { settingsSchema, targetSchema, type Runtime, type Scenario } from '../src/contracts.js';
+import { settingsSchema, targetSchema, type Scenario } from '../src/contracts.js';
+import type { Runtime } from '../src/runtime.js';
 
 /** An external agent over HTTP inside the test process: `reply` answers each delivered message; `sent` is what reached the agent. */
 async function httpAgent(reply: (body: { message: string; initialState: unknown }) => unknown) {

@@ -1,7 +1,8 @@
 import { resolve } from 'node:path';
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type, type Static } from 'typebox';
-import { isRunning, runnableTarget, type Experiment, type RunnableTarget } from '../src/contracts.js';
+import { runnableTarget, type Experiment, type RunnableTarget } from '../src/contracts.js';
+import { isRunning } from '../src/phases.js';
 import { resolveTarget } from '../src/connection.js';
 import { situationNumber, situationViews } from '../src/card/view.js';
 import type { ExperimentLab } from '../src/experiment.js';
@@ -16,7 +17,7 @@ import { ProgressRow, RUN_MESSAGE, STOP_HINT, type Background } from './backgrou
 import { progressText, row, runStamp, runWhen, stoppedLines } from './conversation.ts';
 import { ask, displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import { cardPlan, launchRun, type LaunchAgent } from './launch.ts';
-import type { LabLease, SessionOperations } from './operations.ts';
+import { followRecord, type LabLease, type SessionOperations } from './operations.ts';
 import { projectPath } from './prepare-tool.ts';
 import { recordFor } from './records.ts';
 import type { Feed } from './render/feed.ts';
@@ -147,8 +148,7 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
   found: Experiment, numbers: number[] | undefined, agent: LaunchAgent & { folder?: string }): Promise<AgentToolResult<unknown>> {
   const owned = await host.open(ctx.cwd, 'wait');
   let detached = false;
-  let timer: ReturnType<typeof setInterval> | undefined;
-  let polling: Promise<void> = Promise.resolve();
+  let unfollow: (() => void) | undefined;
   const progressRow = new ProgressRow(ctx, RUN_MESSAGE);
   try {
     await owned.lab.init();
@@ -177,13 +177,13 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
     if (!started) return host.feedResult(callId, { run: draft.id, cancelled: true, instruction: 'The owner did not start the run. The situations are kept; do not ask to start again unless the owner does.' },
       { tone: 'warning', rows: [row('Не запускаю: вы отказались. Ситуации сохранены, агент не запускался.')] }, note);
     // The run has started: from here an Esc, even one pressed while it was starting, hands it to the session.
-    const update = async () => {
-      const current = await owned.lab.get(draft.id);
-      progressRow.show(progressText(current));
-      onUpdate?.({ content: [{ type: 'text', text: safeText(progressText(current)) }], details: { id: current.id } });
-    };
-    await update();
-    timer = setInterval(() => { polling = polling.then(update).catch(() => {}); }, 750);
+    // Its row and the row above the input are redrawn from the live record at each change the run reports.
+    let shown = '';
+    unfollow = followRecord(owned.lab, draft.id, current => {
+      const text = progressText(current);
+      progressRow.show(text);
+      if (text !== shown) { shown = text; onUpdate?.({ content: [{ type: 'text', text: safeText(text) }], details: { id: current.id } }); }
+    });
     // A short run ends in this row. A long one, or Esc, hands the run to the session: interrupting the action never stops the run.
     const inline = await new Promise<boolean>(settle => {
       const wait = setTimeout(() => settle(false), host.inlineRunMs);
@@ -191,7 +191,7 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
       if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
       void owned.lab.waitForIdle().then(() => settle(true), () => settle(true)).finally(() => { clearTimeout(wait); signal.removeEventListener('abort', onAbort); });
     });
-    clearInterval(timer); timer = undefined; await polling; progressRow.clear();
+    unfollow(); unfollow = undefined; progressRow.clear();
     if (!inline) {
       const record = await owned.lab.get(draft.id);
       detached = true;
@@ -205,7 +205,7 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
     const { output, details } = await host.verdictOutput(await owned.lab.get(draft.id), owned.lab);
     return { content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details };
   } finally {
-    clearInterval(timer); await polling;
+    unfollow?.();
     if (!detached) { progressRow.clear(); await owned.close(); }
   }
 }
@@ -223,7 +223,8 @@ async function progress(host: RunHost, callId: string, ctx: ExtensionContext, id
   const feed: Feed = { rows: running ? [row(progressText(record), 'text', true), row(`Идёт в фоне; ${STOP_HINT}.`, 'muted')]
     : [row(`Сейчас ничего не идёт: ${runWhen(record)} — ${record.trials.length ? 'прогон завершён' : 'черновик'}.`, 'muted')] };
   return host.feedResult(callId, { run: record.id, running, working: record.phase === 'preparing' ? 'preparation' : running ? 'run' : null, inThisSession: !!job && job.id === record.id,
-    ...(record.phase === 'preparing' ? {} : { finished: record.trials.length, planned: plannedTrials(record) }), calls: record.usage.calls, callLimit: record.settings.maxCalls }, feed, note);
+    // A preparation stops at the ceiling its consent stated; the draft's limit is the run's budget, so only a run names it.
+    ...(record.phase === 'preparing' ? {} : { finished: record.trials.length, planned: plannedTrials(record), callLimit: record.settings.maxCalls }), calls: record.usage.calls }, feed, note);
 }
 
 /** Stops the work of this session — only the work that is going on — and says what was kept. */

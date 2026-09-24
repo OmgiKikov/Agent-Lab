@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { z } from 'zod';
-import { emptyUsage, goalAttainment, promptCompliance, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type MetricAssessment, type Trial } from '../src/contracts.js';
+import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Trial } from '../src/contracts.js';
+import { goalAttainment, promptCompliance, replyQuality, simulatorFidelity, type MetricAssessment } from '../src/assessment.js';
 import { Stopped } from '../src/errors.js';
 import { AGREED_RATIONALE_PREFIX, GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { humanOverride } from '../src/outcomes.js';

@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import {
-  SANDBOX_RETIRED, runnableTargetSchema, createInputSchema, dialogueSchema, draftPatchSchema, emptyUsage, fingerprint, humanReviewInputSchema, internalPromptRule, observableRule, validateFailureModes, experimentSchema, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, verbatimSpan, verbatimSpanAt, worldSchema,
-} from '../src/contracts.js';
+import { SANDBOX_RETIRED, runnableTargetSchema, createInputSchema, dialogueSchema, draftPatchSchema, emptyUsage, fingerprint, humanReviewInputSchema, internalPromptRule, observableRule, validateFailureModes, experimentSchema, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, worldSchema } from '../src/contracts.js';
+import { valueTokens, verbatimSpan, verbatimSpanAt } from '../src/verbatim.js';
 import { validationDialogueIssue } from '../src/imports.js';
 
 const source = { id: 'source-1', name: 'policy', content: 'Rule one: read before update.', hash: 'h' };

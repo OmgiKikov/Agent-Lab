@@ -1,11 +1,11 @@
 import { fingerprint, type Experiment, type HumanReview, type Scenario, type Trial } from './contracts.js';
-import { isRunning } from './contracts.js';
+import { isRunning } from './phases.js';
 import { headlineTrialResult, latestHumanReviews, markTargets, markUnderCurrentRule, measurementUsable, observedRecord, recordedResult } from './outcomes.js';
 
 /*
  * How often the owner agreed with the judge, counted on what the judge actually recorded.
  * Pure: no I/O, no escaping (each surface escapes at its own boundary). It imports only
- * contracts.js and outcomes.js — never experiment.ts, quality.ts, comparison.ts or
+ * contracts.js, phases.js and outcomes.js — never the engine, quality.ts, comparison.ts or
  * result-view.ts — so result-view.ts can use it without a cycle.
  *
  * The count never reads the human-overridden result: agreeing with a verdict must not be able to

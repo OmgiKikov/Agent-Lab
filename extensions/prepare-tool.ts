@@ -4,7 +4,8 @@ import { basename, extname, join, relative, resolve } from 'node:path';
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { z } from 'zod';
-import { createInputSchema, DEFAULT_JUDGE, SCENARIO_LIMIT, settingsSchema, type Experiment } from '../src/contracts.js';
+import { preparationCeiling } from '../src/card/budget.js';
+import { createInputSchema, DEFAULT_JUDGE, materialSources, SCENARIO_LIMIT, settingsSchema, type Experiment } from '../src/contracts.js';
 import { rememberedConnection } from '../src/connection.js';
 import { demoInput } from '../src/demo.js';
 import { detectProject, targetLabel, type ProjectDetection } from '../src/detect.js';
@@ -18,7 +19,7 @@ import { safeText } from '../src/text.js';
 import { preparedAnswer, STOP_HINT, type Background } from './background.ts';
 import { progressText, row, runStamp } from './conversation.ts';
 import { ask, displayFor, isInteractive, NeedsOwner, requireInteractive } from './lab-ui.ts';
-import type { LabLease, SessionOperations } from './operations.ts';
+import { followRecord, type LabLease, type SessionOperations } from './operations.ts';
 import type { Feed } from './render/feed.ts';
 import { TOOL } from './steps.ts';
 import { confirmedBefore, importTable } from './table-import.ts';
@@ -202,18 +203,20 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
 
   // The one gate of a paid preparation, asked last: a request that cannot start never asks the owner for money.
   requireInteractive(ctx, 'Подготовка ситуаций тратит вызовы модели: согласие даётся в интерактивном терминале Pi. Без него: agent-lab build --input задача.json.');
-  const consent = libraryImport ? await preparationConsent(host.reading(directory).store, { batch: libraryImport.originalImport, settings: input.settings, situations: count }) : undefined;
+  const consent = libraryImport ? await preparationConsent(host.reading(directory).store, { input, situations: count }) : undefined;
+  // The ceiling the owner agrees to is the one the preparation stops at: it goes to the lab with the consent.
+  const callCeiling = consent?.callCeiling ?? preparationCeiling({ task: input.task, sources: materialSources(input.materials), situations: count, fromLogs: false });
   const plan = consent ? consentText(consent, basename(logs)) : {
     question: `Собрать ${countText(count, SITUATIONS_ACC)} по вашим правилам?`,
     lines: ['Логов нет: ситуации строятся только по правилам — без выдуманных разговоров и личных данных клиента.',
-      `Расход — не больше ${countText(input.settings.maxCalls, CALLS)} модели на всю подготовку. Это потолок, а не прогноз; агент не запускается.`],
+      `Расход — не больше ${countText(callCeiling, CALLS)} модели на всю подготовку. Это потолок, а не прогноз; агент не запускается.`],
   };
   const sources = [...(params.rules ? ['ваши слова из разговора'] : []), ...[...files.promptFiles, ...files.materialFiles].map(file => shownPath(file, ctx.cwd))];
   const agent = connection ? `Агент: ${targetLabel(connection.target, ctx.cwd)}.`
     : found?.agents[0] ? `Агента Lab подключит перед прогоном — в папке нашёл: ${targetLabel(found.agents[0].target, found.root)}.` : 'Как запускать агента, Lab спросит перед прогоном.';
   const lines = [...plan.lines, `Правила: ${sources.slice(0, 4).join(', ')}${sources.length > 4 ? ` и ещё ${sources.length - 4}` : ''} — ${countText(expanded.materials.length, DOCUMENTS)}.`, agent];
   if (!await ask(ctx, plan.question, lines, 'Собрать ситуации')) return declined(host, callId, 'Не собираю: вы отказались. Ничего не потрачено.');
-  return prepare(host, callId, ctx, signal, onUpdate, input, { situations: consent?.promised ?? count, notes });
+  return prepare(host, callId, ctx, signal, onUpdate, input, { situations: consent?.promised ?? count, callCeiling, notes });
 }
 
 /**
@@ -221,30 +224,29 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
  * long run does: in the terminal Esc interrupts the action, not the work.
  */
 async function prepare(host: PrepareHost, callId: string, ctx: ExtensionContext, signal: AbortSignal, onUpdate: ((update: AgentToolResult<unknown>) => void) | undefined,
-  input: z.infer<typeof createInputSchema>, options: { situations?: number; notes: string[] }): Promise<AgentToolResult<unknown>> {
+  input: z.infer<typeof createInputSchema>, options: { situations?: number; callCeiling?: number; notes: string[] }): Promise<AgentToolResult<unknown>> {
   const owned = await host.open(ctx.cwd);
   const { lab, close } = owned;
   // Only a terminal can take a preparation over: the hand-over draws its progress and delivers its result through `ctx.ui` and a message.
   const interactive = isInteractive(ctx) && !!ctx.ui;
   let handedOver = false;
   let id: string | undefined;
-  let polling: Promise<void> = Promise.resolve();
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let unfollow: (() => void) | undefined;
   let lastProgress = '';
-  const progress = async () => {
-    if (!id || !onUpdate) return;
-    const text = safeText(progressText(await lab.get(id)));
-    if (text !== lastProgress) { lastProgress = text; onUpdate({ content: [{ type: 'text', text }], details: { id } }); }
+  /** The row of this call says how far the preparation got: redrawn from the live record at each change it reports. */
+  const progress = (record: Experiment) => {
+    if (!onUpdate) return;
+    const text = safeText(progressText(record));
+    if (text !== lastProgress) { lastProgress = text; onUpdate({ content: [{ type: 'text', text }], details: { id: record.id } }); }
   };
   const cancel = () => { if (id) void lab.cancel(id).catch(() => {}); };
   const notes = options.notes.length ? { materials: options.notes } : {};
   try {
     await lab.init(); signal.addEventListener('abort', cancel, { once: true }); signal.throwIfAborted();
     if (interactive) signal.removeEventListener('abort', cancel);
-    id = (await lab.create(input, options.situations ? { situations: options.situations } : {})).id;
+    id = (await lab.create(input, { ...(options.situations ? { situations: options.situations } : {}), ...(options.callCeiling ? { callCeiling: options.callCeiling } : {}) })).id;
     if (signal.aborted && !interactive) cancel();
-    await progress();
-    timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);
+    unfollow = followRecord(lab, id, progress);
     const inline = !interactive ? (await lab.waitForIdle(), true) : await new Promise<boolean>(settle => {
       const wait = setTimeout(() => settle(false), host.inlineBuildMs);
       const onAbort = () => settle(false);
@@ -253,7 +255,7 @@ async function prepare(host: PrepareHost, callId: string, ctx: ExtensionContext,
       void lab.waitForIdle().then(() => settle(true), () => settle(true)).finally(() => { clearTimeout(wait); signal.removeEventListener('abort', onAbort); });
     });
     if (!inline) {
-      clearInterval(timer); timer = undefined; await polling;
+      unfollow(); unfollow = undefined;
       const record = await lab.get(id);
       handedOver = true;
       // The record ends with an error exactly when the preparation was cut short: stopped, out of calls or out of time.
@@ -261,9 +263,8 @@ async function prepare(host: PrepareHost, callId: string, ctx: ExtensionContext,
       return host.feedResult(callId, { run: id, background: true, instruction: 'The preparation continues in the background and its situations arrive as a message. Tell the owner in one short sentence and end your turn; do not poll. Reads still work; changes and runs wait until it ends. Stop it only when the owner asks: agent_lab_run action:"stop".' },
         { rows: [row('Готовлю ситуации в фоне — они придут сюда сообщением.', 'text', true), row(`Разговор свободен; ${STOP_HINT}.`, 'muted')] }, `Подготовка · ${runStamp(record)}`);
     }
-    await progress();
     const finished: Experiment = await lab.get(id);
     const done = await preparedAnswer(lab, finished, signal.aborted && !interactive);
     return host.feedResult(callId, { ...done.output, ...notes }, done.feed ?? { rows: [row('Подготовка завершена.')] }, done.note ?? 'Подготовка');
-  } finally { clearInterval(timer); signal.removeEventListener('abort', cancel); await polling; if (!handedOver) await close(); }
+  } finally { unfollow?.(); signal.removeEventListener('abort', cancel); if (!handedOver) await close(); }
 }

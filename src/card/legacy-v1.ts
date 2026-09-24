@@ -1,4 +1,5 @@
-import { EXPECTATIONS_PROTOCOL, isCardExecution, isRunning, type CardExecution, type Experiment, type Scenario, type Trial, type VariantExecution } from '../contracts.js';
+import { EXPECTATIONS_PROTOCOL, isCardExecution, type CardExecution, type Experiment, type Scenario, type Trial, type VariantExecution } from '../contracts.js';
+import { isRunning } from '../phases.js';
 import type { LibraryV1, ScenarioVariant } from '../scenario-contracts.js';
 import { EXPECTATION_LETTERS, expectationRubric } from './compile.js';
 import type { ScenarioLibrary } from './schema.js';

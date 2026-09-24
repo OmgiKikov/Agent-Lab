@@ -10,8 +10,9 @@ import { forgetViews, isVerdictDetails, MISSING_RESULT, rememberView, renderAgen
 import type { PaintTheme } from '../extensions/render/theme.ts';
 import { forgetFeeds, rememberFeed } from '../extensions/render/feed.ts';
 import { messageBlock, RUN_MESSAGE } from '../extensions/background.ts';
-import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type MetricAssessment, type Trial } from '../src/contracts.js';
-import { resultHash } from '../src/experiment.js';
+import { emptyUsage, settingsSchema, type Experiment, type Trial } from '../src/contracts.js';
+import { goalAttainment, replyQuality, simulatorFidelity, type MetricAssessment } from '../src/assessment.js';
+import { resultHash } from '../src/lab/record.js';
 import { ExperimentStore } from '../src/store.js';
 import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { accuracyRow, chatBlock, fitRows, nextRows } from '../src/result-text.js';

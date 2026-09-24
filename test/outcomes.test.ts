@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { emptyUsage, RAG_METRIC_IDS, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
+import { emptyUsage, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
+import { RAG_METRIC_IDS } from '../src/assessment.js';
 import { agentMetricResult, agentRubricResult, automaticTrialResult, COUNTING_RULES, headlineMetricIds, headlineTrialResult, latestHumanReviews, markTargets, markUnderCurrentRule, primaryMetricId, recordedResult, trialAssessmentComplete } from '../src/outcomes.js';
 
 const rubric = (id: string) => ({

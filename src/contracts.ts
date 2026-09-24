@@ -1,14 +1,20 @@
-import { USER_CONTROLLER_PROTOCOL, userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
+import { USER_CONTROLLER_PROTOCOL, userViewSchema } from './user-controller.js';
 import { checkpointSchema, importBatchSchema } from './scenario-contracts.js';
 import { expectationSchema, preparationProgressSchema, scenarioLibrarySchema, type PreparationProgress, type ScenarioLibrary } from './card/schema.js';
-import { calibrationSchema, calibrationSettingSchema, type Calibration, type LogJudge } from './card/calibration.js';
-import type { CardProposal, CardProposalRequest } from './card/proposal.js';
-import type { CardReview, CardReviewRequest } from './card/review.js';
-import type { BuilderModel, TopicMap, TopicMapPlan, TopicMapProgress } from './miner/topic-map.js';
+import { calibrationSchema, calibrationSettingSchema, type Calibration } from './card/calibration.js';
+import { judgeAuditSchema, judgeReceiptSchema, metricAssessmentSchema, rubricSchema, stage, type JudgeAudit, type JudgeReceipt, type MetricAssessment } from './assessment.js';
 import { createHash } from 'node:crypto';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS } from './limits.js';
 import { z } from 'zod';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
+import { PHASES, type Phase } from './phases.js';
+import { valueTokens } from './verbatim.js';
+
+/*
+ * The stored record: a run of situations against an agent — its sources and rules, its situations, every dialogue
+ * with its evidence and verdicts, people's reviews, and the settings it was measured under. Old records open without
+ * migration: a retired field stays readable, and nothing reads it.
+ */
 
 /* The stored verdicts of the checkpoint judge of first-format runs (checkpoints.ts reads them); nothing writes them any more. */
 const checkpointDecisionSchema = z.strictObject({
@@ -28,21 +34,6 @@ const dialogueContent = z.string().min(1).max(8000).refine(v => !!v.trim(), 'Emp
 const unique = <T>(values: T[]) => new Set(values).size === values.length;
 /** A field of a retired feature: old records still parse, nothing reads it. */
 const retired = z.unknown().optional();
-/**
- * Value-like tokens: runs of letters/digits/`:./-` that contain a digit and are at least three
- * characters long after trailing punctuation is trimmed, lower-cased. `4321`, `A103`, `14:00`,
- * `202-7` and `11.03.2024` are tokens; `two cards` has none. Used by the answers rule and by
- * the fabrication heuristic, so both sides of the simulator agree on what a "value" is.
- */
-const VALUE_TOKEN = /[A-Za-zА-Яа-яЁё0-9:./-]+/g;
-export function valueTokens(text: string): Set<string> {
-  const tokens = new Set<string>();
-  for (const raw of text.match(VALUE_TOKEN) ?? []) {
-    const token = raw.replace(/[.,:]+$/, '').toLocaleLowerCase();
-    if (token.length >= 3 && /\d/.test(token)) tokens.add(token);
-  }
-  return tokens;
-}
 export const scalarSchema = z.union([z.string().max(8000), z.number().finite(), z.boolean(), z.null()]);
 export const agentSchema = z.strictObject({
   name: text.max(120),
@@ -103,6 +94,11 @@ export interface ReleaseLog { command: string; exitCode: number | null; signal: 
 const releaseLogSchema = z.strictObject({ command: z.string().max(8000), exitCode: z.number().int().nullable(), signal: z.string().max(40).nullable(), stdout: z.string().max(4000), stderr: z.string().max(4000), startedAt: text, durationMs: z.number().nonnegative() });
 
 export interface Source { id: string; name: string; content: string; hash: string; kind?: SourceKind }
+/** A record's sources: the owner's materials in the order given, numbered, each with the hash of its text. */
+export function materialSources(materials: readonly z.infer<typeof materialSchema>[]): Source[] {
+  return materials.map((material, index) => ({ id: `source-${index + 1}`, name: material.name, content: material.content, hash: fingerprint(material.content),
+    ...(material.kind ? { kind: material.kind } : {}) }));
+}
 /** Requirements per run: the budget is stated to the model, and an overshoot is answered with what to do. */
 export const REQUIREMENT_LIMIT = 80;
 /** Generated cards per run; owner cards come on top. */
@@ -137,13 +133,6 @@ export const worldSchema = z.strictObject({
   if (v.external !== undefined && JSON.stringify(v.external).length > 20000) ctx.addIssue({ code: 'custom', message: 'External state exceeds 20,000 characters', path: ['external'] });
 });
 export type World = z.infer<typeof worldSchema>;
-/**
- * Which job of the agent this criterion is about. A dialogue is a chain of jobs — understand
- * the request, look things up, act, compose the answer, validate it — and a single end-to-end
- * verdict cannot say which link broke. The label changes nothing in measurement and everything
- * in diagnosis: results are grouped by it. Optional, because a one-step agent has one job.
- */
-const stage = { stage: text.max(80).optional() };
 const checkBase = { id: identifier, description: text.max(1000), ...stage };
 const toolIdentifier = z.string().regex(/^[A-Za-z_][A-Za-z0-9_.:/-]{0,199}$/);
 export const checkSchema = z.discriminatedUnion('kind', [
@@ -169,109 +158,10 @@ export function describeCheck(check: Check): string {
   if (check.kind === 'tool_count') return `${check.tool}: от ${check.min} до ${check.max} попыток вызова`;
   return 'Перед каждым изменением — успешное чтение той же записи';
 }
-const rubricSchema = z.strictObject({
-  id: identifier, name: text.max(120), subject: z.enum(['agent', 'simulator']),
-  description: text.max(2000), passCriteria: text.max(2000), failCriteria: text.max(2000), ...stage,
-});
-export type Rubric = z.infer<typeof rubricSchema>;
-export const simulatorFidelity: Rubric = {
-  id: 'user_fidelity', name: 'Верность симулятора', subject: 'simulator',
-  description: 'Соблюдение заданных фактов, цели, поведения и лимита реплик; персона и характеристики учитываются только если заданы.',
-  passCriteria: 'Пользователь следует карточке, отвечает на необходимые уточнения только известными фактами и соблюдает каждое условие остановки. Если карточка требует закончить после достаточной инструкции, дальнейших реплик нет. Не оценивает агента и не выдумывает его ответы или результаты инструментов.',
-  failCriteria: 'Пользователь придумывает факты, знает скрытые ответы или состояние, меняет роль, оценивает агента, пропускает обязательное уточнение или продолжает разговор вопреки карточке. Новый вопрос после достаточной инструкции нарушает требование закончить, даже если все сообщённые факты верны. Неудача агента сама по себе не является провалом симулятора.',
-};
-/** Added by the harness to generated external cards when a source is the agent's own prompt: «по правилам промпта он этого сказать не мог». */
-export const promptCompliance: Rubric = {
-  id: 'prompt_compliance', name: 'Соблюдение правил промпта', subject: 'agent',
-  description: 'Ответ соблюдает явные правила собственного промпта агента (источник с пометкой «промпт агента»): формат ответа, обязательные элементы, запреты. Проверяются только правила, которые пользователь может наблюдать в ответе; внутренние инструкции по инструментам и машинный формат ответа (JSON, именованные поля, обёртка) не оцениваются: клиент их не видит.',
-  passCriteria: 'Каждое явное правило промпта, применимое к этому диалогу, соблюдено: формат, обязательные элементы и запреты выполнены. Если ни одно правило не применимо к доставленным репликам, условие выполнено.',
-  failCriteria: 'Хотя бы одно явное правило промпта нарушено: неверный формат или структура, пропущен обязательный элемент, сказано запрещённое, дан ответ вне разрешённого периметра. В rationale процитируйте нарушенное правило дословно из источника-промпта и реплику, которая его нарушает.',
-};
-export const goalAttainment: Rubric = {
-  id: 'goal_attainment', name: 'Достижение цели', subject: 'agent',
-  description: 'Достиг ли пользователь заявленной цели по наблюдаемым фактам диалога.',
-  passCriteria: 'Цель достигнута; если требовалось действие, его результат подтверждён наблюдаемым состоянием или событием инструмента.',
-  failCriteria: 'Наблюдаемые факты показывают, что цель не достигнута или достигнута неверно. Одно заявление агента о ненаблюдавшемся действии не доказывает ни успех, ни провал.',
-};
-export const replyQuality: Rubric = {
-  id: 'reply_quality', name: 'Качество ответа', subject: 'agent',
-  description: 'Насколько ответ корректен, уместен, заземлён и исполним для пользователя независимо от результата внешнего действия.',
-  passCriteria: 'Ответ корректен по материалам владельца, отвечает на запрос и, если следующий шаг нужен, даёт его без выдуманных фактов.',
-  failCriteria: 'Ответ неверен, не по существу, неисполняем, противоречит материалам владельца или выдаёт неподтверждённое за факт.',
-};
-/** Diagnostic-only RAG rubrics. They are added to a judge run only when the adapter reports retrieval events. */
-const ragContextRecall: Rubric = {
-  id: 'rag_context_recall', name: 'RAG · нужное знание найдено', subject: 'agent',
-  description: 'Достаточно ли переданного агенту контекста по приложенным требованиям владельца; это не полнота поиска по всей базе знаний.',
-  passCriteria: 'Найденные RAG-фрагменты содержат все существенные факты и правила, необходимые для корректного ответа на доставленный запрос пользователя.',
-  failCriteria: 'В найденных RAG-фрагментах отсутствует хотя бы один существенный факт или правило, без которого нельзя корректно выполнить доставленный запрос пользователя.',
-};
-const ragContextRelevance: Rubric = {
-  id: 'rag_context_relevance', name: 'RAG · найденное по делу', subject: 'agent',
-  description: 'Насколько найденные RAG-фрагменты относятся к доставленному запросу пользователя.',
-  passCriteria: 'Найденные RAG-фрагменты относятся к доставленному запросу и не состоят преимущественно из посторонней информации.',
-  failCriteria: 'Найденные RAG-фрагменты не относятся к доставленному запросу или преимущественно состоят из посторонней информации, мешающей использовать нужное знание.',
-};
-const ragContextFaithfulness: Rubric = {
-  id: 'rag_context_faithfulness', name: 'RAG · ответ подтверждён найденным', subject: 'agent',
-  description: 'Подтверждаются ли утверждения ответа о правилах, условиях и процедурах найденными RAG-фрагментами. Результаты инструментов и текущее состояние конкретной заявки эта метрика не проверяет.',
-  passCriteria: 'Ответ содержит проверяемые утверждения о правилах, условиях или процедурах; каждое из них подтверждается найденными RAG-фрагментами и не противоречит им.',
-  failCriteria: 'Ответ содержит хотя бы одно утверждение о правилах, условиях или процедурах, которое не подтверждается найденными RAG-фрагментами или противоречит им.',
-};
 const validationExclusionSchema = z.strictObject({
   dialogueId: identifier, kind: z.enum(['customer_data', 'masked', 'length', 'unconfirmed']), reason: text.max(1000),
 });
 export type ValidationExclusion = z.infer<typeof validationExclusionSchema>;
-export const RAG_RUBRICS = [ragContextRecall, ragContextRelevance, ragContextFaithfulness] as const;
-export const RAG_METRIC_IDS = new Set<string>(RAG_RUBRICS.map(metric => metric.id));
-const assessmentFindingSchema = z.strictObject({
-  criterion: text.max(2000), result: z.enum(['pass', 'fail', 'unknown']), rationale: text.max(1000),
-  citations: z.array(z.strictObject({ seq: z.number().int().nonnegative(), quote: z.string().min(1).max(2000) })).max(6),
-});
-export const metricAssessmentSchema = z.strictObject({
-  metricId: identifier, result: z.enum(['pass', 'fail', 'unknown']),
-  // Up to 16 delivered replies, each with its own user request, retrieval and answer citation.
-  rationale: text.max(4000), evidence: z.array(z.number().int().nonnegative()).max(48),
-  findings: z.array(assessmentFindingSchema).min(1).max(12).optional(),
-  citations: z.array(z.strictObject({ seq: z.number().int().nonnegative(), quote: z.string().min(1).max(2000) })).max(48).optional(),
-});
-export type MetricAssessment = z.infer<typeof metricAssessmentSchema>;
-/** The fixed opening belongs to the card, not to the reactive actor. */
-export function metricApplies(metric: Rubric, trial: Pick<Trial, 'userMode' | 'events'>): boolean {
-  if (RAG_METRIC_IDS.has(metric.id)) return ragEvidenceComplete(trial, metric.id === 'rag_context_faithfulness' ? 'model_context' : 'retrieval');
-  return metric.id !== 'user_fidelity' || metric.subject !== 'simulator'
-    || trial.userMode === 'reactive' && trial.events.some(event => event.type === 'simulator');
-}
-export const judgeAuditSchema = z.strictObject({
-  protocolHash: text, inputHash: text, provider: text, model: text,
-  configurationHash: text.optional(),
-  transport: z.strictObject({ api: text, upstream: text.optional(), structured: z.boolean() }).optional(),
-  prompt: text, input: text,
-  attempts: z.array(z.strictObject({
-    metricId: identifier.optional(), input: text.optional(),
-    startedAt: text, raw: z.string().optional(), error: text.optional(),
-    assessments: z.array(metricAssessmentSchema).optional(),
-    /** A malformed answer the judge was asked to give again: kept for the record, not counted as a vote. */
-    superseded: z.literal(true).optional(),
-  })).max(48),
-  notApplicable: z.array(identifier),
-});
-export type JudgeAudit = z.infer<typeof judgeAuditSchema>;
-/**
- * The small trace a judgment leaves on the trial when the full audit lives in the sidecar
- * `{runId}.judge/{trialId}.json`. It alone never proves a judgment: the verifier re-derives the
- * input hash from the record and re-aggregates these votes against the recorded assessments.
- */
-export const judgeReceiptSchema = z.strictObject({
-  protocolHash: text, inputHash: text, provider: text, model: text,
-  configurationHash: text.optional(),
-  transport: z.strictObject({ api: text, upstream: text.optional(), structured: z.boolean() }).optional(),
-  auditHash: text,
-  votes: z.array(z.strictObject({ metricId: identifier, result: z.enum(['pass', 'fail', 'unknown']).optional(), error: z.boolean().optional() })).max(48),
-  notApplicable: z.array(identifier),
-  complete: z.boolean(),
-});
-export type JudgeReceipt = z.infer<typeof judgeReceiptSchema>;
 const userSchema = z.strictObject({
   goal: text.max(3000), facts: text.max(5000), behavior: text.max(2000), opening: text.max(3000),
   maxFollowUps: z.number().int().min(0).max(15).optional(),
@@ -404,9 +294,6 @@ export interface TraceEvent {
   seq: number; type: 'user' | 'assistant' | 'simulator' | 'observation' | 'retrieval' | 'tool_call' | 'tool_result' | 'error';
   text?: string; tool?: string; args?: unknown; result?: unknown; state?: World;
 }
-export const assessmentEventContent = (event: TraceEvent): string =>
-  event.text !== undefined && [event.tool, event.args, event.result, event.state].every(value => value === undefined) ? event.text
-    : JSON.stringify({ text: event.text, tool: event.tool, args: event.args, result: event.result, state: event.state });
 export interface CheckResult { id: string; description: string; passed: boolean; evidence: string }
 export const SIMULATOR_PROTOCOL = 'simulator-2';
 export const SIMULATOR_CHECK_IDS = ['simulator_leak', 'simulator_fabrication', 'simulator_loop'] as const;
@@ -434,76 +321,7 @@ export type InvalidCause = typeof INVALID_CAUSES[number];
 /** Why an attempt has no judgment: only code checks were re-run, the run was stopped, the model provider did not answer, or the judge's answers were rejected. */
 export const ASSESSMENT_FAILURES = ['code_only', 'stopped', 'unavailable', 'rejected'] as const;
 export type AssessmentFailure = typeof ASSESSMENT_FAILURES[number];
-/** Keep RAG diagnosis outside the frozen card: it appears only when the target exposes retrieval evidence. */
-export function assessmentRubrics(scenario: Pick<Scenario, 'metrics'>, trial: Pick<Trial, 'events'>): Rubric[] {
-  // These IDs are harness-owned diagnostics; a card cannot replace their criteria with a reference answer.
-  const metrics = (scenario.metrics ?? []).map(metric => RAG_RUBRICS.find(rubric => rubric.id === metric.id) ?? metric);
-  if (!trial.events.some(event => event.type === 'retrieval')) return metrics;
-  for (const rubric of RAG_RUBRICS) if (!metrics.some(metric => metric.id === rubric.id)) metrics.push(rubric);
-  return metrics;
-}
-/** Absence of a chunk is evidence only when the adapter confirms the full context for every delivered reply. */
-export function ragEvidenceComplete(trial: Pick<Trial, 'events'>, scope: 'retrieval' | 'model_context' = 'model_context'): boolean {
-  let complete = false, replies = 0;
-  for (const event of trial.events) {
-    if (event.type === 'user') complete = false;
-    if (event.type === 'retrieval') {
-      const value = event.result as { complete?: unknown; chunks?: unknown; stage?: unknown } | undefined;
-      const stage = value?.stage ?? 'model_context';
-      complete = value?.complete === true && Array.isArray(value.chunks)
-        && (stage === 'model_context' || scope === 'retrieval' && stage === 'retrieved');
-    }
-    if (event.type === 'assistant') { if (!complete) return false; replies++; complete = false; }
-  }
-  return replies > 0;
-}
 export const simulatorWasUsed = (trial: Trial) => trial.userMode === 'reactive' && trial.events.some(e => e.type === 'simulator');
-/** Quotes may refer to decoded chunk text, including line breaks escaped by the JSON event envelope. */
-function eventContainsQuote(event: TraceEvent, quote: string): boolean {
-  if (assessmentEventContent(event).includes(quote)) return true;
-  if (event.type !== 'retrieval') return false;
-  const chunks = (event.result as { chunks?: unknown } | undefined)?.chunks;
-  return Array.isArray(chunks) && chunks.some(chunk => typeof chunk?.content === 'string' && chunk.content.includes(quote));
-}
-export function validateAssessments(metrics: Rubric[], events: TraceEvent[], raw: unknown): MetricAssessment[] {
-  const assessments = z.array(metricAssessmentSchema).parse(raw);
-  const metricIds = new Set(metrics.map(metric => metric.id));
-  if (metricIds.size !== metrics.length || assessments.length !== metricIds.size
-    || new Set(assessments.map(a => a.metricId)).size !== metricIds.size || assessments.some(a => !metricIds.has(a.metricId))) {
-    throw new Error('Assessment must cover every requested metric exactly once');
-  }
-  const eventIds = new Set(events.map(event => event.seq));
-  for (const assessment of assessments) {
-    if (assessment.evidence.some(seq => !eventIds.has(seq))) throw new Error(`Assessment ${assessment.metricId} cites a nonexistent trace event`);
-    if (assessment.result !== 'unknown' && !assessment.evidence.length) throw new Error(`Assessment ${assessment.metricId} needs trace evidence for pass/fail`);
-    if (assessment.citations) {
-      const cited = new Set(assessment.citations.map(c => c.seq));
-      if (cited.size !== assessment.evidence.length || assessment.evidence.some(seq => !cited.has(seq))) throw new Error('Evidence must match quoted citations.');
-      for (const citation of assessment.citations) {
-        const event = events.find(e => e.seq === citation.seq);
-        if (!event || !eventContainsQuote(event, citation.quote)) throw new Error(`Citation #${citation.seq} is not a verbatim quote from that event's content.`);
-      }
-    }
-    if (!assessment.findings) continue; // Historical assessments retain their original evidence format.
-    const metric = metrics.find(m => m.id === assessment.metricId)!;
-    for (const finding of assessment.findings) {
-      if (![metric.description, metric.passCriteria, metric.failCriteria].some(text => text.includes(finding.criterion))) {
-        throw new Error('Each criterion must be copied verbatim from the supplied rubric; do not invent requirements.');
-      }
-      if (finding.result !== 'unknown' && !finding.citations.length) throw new Error('Every pass/fail finding needs a quoted trace event.');
-      for (const citation of finding.citations) {
-        const event = events.find(e => e.seq === citation.seq);
-        if (!event || !eventContainsQuote(event, citation.quote)) throw new Error(`Citation #${citation.seq} is not a verbatim quote from that event's content.`);
-      }
-    }
-    const expected = assessment.findings.some(f => f.result === 'fail') ? 'fail' : assessment.findings.some(f => f.result === 'unknown') ? 'unknown' : 'pass';
-    const cited = new Set(assessment.findings.flatMap(f => f.citations.map(c => c.seq)));
-    if (assessment.result !== expected || cited.size !== assessment.evidence.length || assessment.evidence.some(seq => !cited.has(seq))) {
-      throw new Error('Assessment result and evidence must match its findings.');
-    }
-  }
-  return assessments;
-}
 export interface Comparison {
   baselineId: string; candidateId: string; manifestHash: string; split: 'dev' | 'control';
   plannedPairs: number; validPairs: number; invalidPairs: number; families: number;
@@ -546,13 +364,6 @@ export const reassessmentSchema = z.strictObject({
 });
 export type ReassessmentInput = z.input<typeof reassessmentSchema>;
 export type DraftPatch = z.infer<typeof draftPatchSchema>;
-export type Phase = 'preparing' | 'review' | 'evaluating' | 'results_review' | 'baseline' | 'improving' | 'control' | 'complete' | 'cancelled' | 'error' | 'interrupted';
-/**
- * A process owns the record and it still changes. baseline, improving and control belong to the
- * retired compare workflow: an old record left in one of them is unfinished work, never a result.
- */
-export const RUNNING_PHASES: ReadonlySet<Phase> = new Set<Phase>(['preparing', 'evaluating', 'baseline', 'improving', 'control']);
-export const isRunning = (phase: Phase): boolean => RUNNING_PHASES.has(phase);
 export interface AcceptedTest {
   testId: string; scenarioId: string; definitionHash: string; acceptedAt: string;
 }
@@ -700,7 +511,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   preparationProgress: preparationProgressSchema.optional(),
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
-  phase: z.enum(['preparing', 'review', 'evaluating', 'results_review', 'baseline', 'improving', 'control', 'complete', 'cancelled', 'error', 'interrupted']), message: z.string(),
+  phase: z.enum(PHASES), message: z.string(),
   sources: z.array(z.strictObject({ id: identifier, name: text, content: text, hash: text, kind: sourceKindSchema.optional() })).max(MATERIAL_LIMIT), settings: settingsSchema,
   target: targetSchema.default({ kind: 'sandbox' }),
   requirements: z.array(requirementSchema), questions: z.array(z.string()), scenarios: z.array(scenarioSchema.extend({ split: z.enum(['dev', 'control']) })),
@@ -744,118 +555,8 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   validateReviewReferences(record.humanReviews, record.trials, ['humanReviews'], ctx);
   if (record.sourceEvidence) validateReviewReferences(record.sourceEvidence.humanReviews, record.sourceEvidence.trials, ['sourceEvidence', 'humanReviews'], ctx);
 });
-export interface CallContext {
-  onGeneratorTransport?(transport:{role:string;provider:string;model:string;api:string;requestedTemperature?:number;effectiveTemperature:number|'provider-default'}):void;
-  onGeneratorOutput?(response:{role:string;text:string;attempt?:number;incomplete?:boolean}):void;
-  onGeneratorValidation?(validation:{attempt:number;accepted:boolean;reason?:string;outcome?:'syntax'|'schema'|'domain'}):void;
-  signal: AbortSignal; timeoutMs: number;
-  beforeCall(): void;
-  addUsage(usage: Omit<Usage, 'calls'>): void;
-  onTrace?(trialId: string, event: TraceEvent): void;
-  onTargetEvent?(event: Omit<TraceEvent, 'seq'>): void;
-  /** Called on every audit change; final is true exactly once, after the last vote of this judgment settled. */
-  onJudgment?(trialId: string, audit: JudgeAudit, final?: boolean): void;
-}
-export interface DialogueMessage { role: 'user' | 'assistant'; content: string }
-export interface TargetSession { respond(message: string): Promise<string>; close(): Promise<void> }
-export const userTurnSchema = z.strictObject({ done: z.boolean(), message: z.string().max(6000) }).refine(v => v.done || v.message.trim().length > 0, 'Empty user message');
-export type UserTurn = z.infer<typeof userTurnSchema>;
-export interface GroundingInput {
-  task: string; sources: Source[];
-  /** Ground only the rules that decide one dialogue: the customer's own messages, never the old agent's replies. */
-  focus?: { dialogueId: string; customerMessages: string[] };
-}
-export interface Grounding { requirements: Requirement[]; questions: string[] }
-export interface SourceSelectionInput {
-  task: string;
-  /** Knowledge articles only, titles and sizes; prompt sources are always included and are not offered. */
-  catalog: Array<{ id: string; name: string; chars: number }>;
-  dialogue: { id: string; messages: DialogueMessage[] };
-  limit: number;
-  /** A bounded second reading can revise the title-based shortlist. Unread articles are not certified as checked. */
-  reading?: { sources: Source[]; selectedSourceIds: string[]; unreadSourceIds: string[] };
-}
-export const sourceSelectionSchema = z.strictObject({ sourceIds: z.array(identifier).max(40) });
-export type SourceSelection = z.infer<typeof sourceSelectionSchema>;
-export interface Runtime {
-  generatorTransport?:'pi-model'|'deterministic-test';
-  /** The controlled customer's next move: one of `actions`, the moves allowed right now. The harness renders the message. */
-  selectUserAction?(input: { user: UserView; state: string; actions: AllowedUserAction[]; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserDecision>;
-  /** One card from one dialogue or from the owner's rules alone; every reference in the answer is an enum of this call. */
-  proposeCard?(input: CardProposalRequest, ctx: CallContext): Promise<CardProposal>;
-  /** The independent reviewer's verdict on each listed claim of one card, and the model that gave it. */
-  reviewCard?(input: CardReviewRequest, ctx: CallContext): Promise<CardReview>;
-  /** Owner requirements with exact quotes from the supplied sources, and the business questions they leave open. */
-  groundRequirements?(input: GroundingInput, ctx: CallContext): Promise<Grounding>;
-  /** The free LLM user of scenarios without an `execution` block: recorded runs made before the scenario library. */
-  userTurn?(input: { user: Scenario['user']; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserTurn>;
-  assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial }, ctx: CallContext): Promise<MetricAssessment[]>;
-  /** The same judge on a recorded conversation (card/log-judge.ts): one expectation, two votes, a receipt of its own. */
-  logJudge?: LogJudge;
-  /** Which articles of a large knowledge base one dialogue needs: the model reads the table of contents, never the bodies. */
-  selectSources?(input: SourceSelectionInput, ctx: CallContext): Promise<SourceSelection>;
-  /** The topic map of an import (miner/topic-map.ts), built by `builder` from a plan made for it; each finished step reaches `onProgress` before the next call. */
-  topicMap?: { builder: BuilderModel; build(plan: TopicMapPlan, ctx: CallContext, onProgress: (progress: TopicMapProgress) => Promise<void>): Promise<TopicMap> };
-  failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
-}
 
 /** Stable JSON content identity; array order remains significant. */
-/**
- * A model copies a source but normalises its typography: straight quotes for «», a hyphen for a
- * dash, -> for →, е for ё, one space for a line break. Such a quote is still the source's own words.
- * Find it and hand back the source's exact characters, so every stored quote is verbatim.
- * Words, order and case must match; a paraphrase is still rejected.
- */
-const LOOSE_CHARACTERS: Record<string, string> = {
-  '«': '"', '»': '"', '“': '"', '”': '"', '„': '"', '‹': "'", '›': "'", '‘': "'", '’': "'",
-  '–': '-', '—': '-', '−': '-', '→': '>', 'ё': 'е', 'Ё': 'Е', '\u00a0': ' ',
-};
-/** A list marker after whitespace («- », «• », «1. ») is layout, not words; a model drops it or keeps it inline when it quotes. */
-const LIST_MARKER = /^(?:[-*•–—]|\d{1,2}[.)])\s/u;
-function foldTypography(text: string): { text: string; starts: number[]; ends: number[] } {
-  const out: string[] = [], starts: number[] = [], ends: number[] = [];
-  for (let i = 0; i < text.length; i++) {
-    const raw = text[i]!;
-    let ch = LOOSE_CHARACTERS[raw] ?? raw, width = 1;
-    if (raw === '-' && text[i + 1] === '>') { ch = '>'; width = 2; }
-    if ((!out.length || out[out.length - 1] === ' ') && !/\s/.test(raw)) {
-      const marker = LIST_MARKER.exec(text.slice(i, i + 4));
-      if (marker) { ch = ' '; width = marker[0].length; }
-    }
-    if (/\s/.test(ch)) {
-      if (out.length && out[out.length - 1] === ' ') { ends[ends.length - 1] = i + width; i += width - 1; continue; }
-      ch = ' ';
-    }
-    out.push(ch); starts.push(i); ends.push(i + width); i += width - 1;
-  }
-  return { text: out.join(''), starts, ends };
-}
-/**
- * The source's own characters behind a quote, together with the offset the match was actually made
- * at. Callers that need the place (a line number, a sort key) take `offset` from here instead of
- * searching the source again for the returned text: a re-search answers «the first copy of these
- * characters», which is a different question from «where this requirement's quote was found».
- */
-export function verbatimSpanAt(content: string, quote: string): { span: string; offset: number } | undefined {
-  const direct = content.indexOf(quote);
-  if (direct >= 0) return { span: quote, offset: direct };
-  const source = foldTypography(content);
-  const needle = foldTypography(quote).text.trim();
-  if (!needle) return undefined;
-  // A quote that starts mid-sentence gets capitalised; only its first letter may differ in case.
-  const first = needle[0]!, swapped = first === first.toLowerCase() ? first.toUpperCase() : first.toLowerCase();
-  for (const candidate of [needle, ...(swapped !== first ? [swapped + needle.slice(1)] : [])]) {
-    const at = source.text.indexOf(candidate);
-    if (at >= 0) {
-      const start = source.starts[at]!;
-      return { span: content.slice(start, source.ends[at + candidate.length - 1]!), offset: start };
-    }
-  }
-  return undefined;
-}
-export function verbatimSpan(content: string, quote: string): string | undefined {
-  return verbatimSpanAt(content, quote)?.span;
-}
 export function fingerprint(value: unknown): string {
   const normalize = (v: unknown): unknown => Array.isArray(v) ? v.map(normalize)
     : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, x]) => [k, normalize(x)])) : v;

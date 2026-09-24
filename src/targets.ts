@@ -5,7 +5,8 @@ import { delimiter, extname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { fingerprint, isRunnable, scalarSchema, usageSchema, type CallContext, type DialogueMessage, type ReleaseHook, type ReleaseLog, type RunnableTarget, type Target, type TargetSession, type World } from './contracts.js';
+import { fingerprint, isRunnable, scalarSchema, usageSchema, type ReleaseHook, type ReleaseLog, type RunnableTarget, type Target, type World } from './contracts.js';
+import type { CallContext, DialogueMessage, TargetSession } from './runtime.js';
 import { targetEntryPath } from './target-version.js';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 

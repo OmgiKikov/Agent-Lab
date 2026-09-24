@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fitScenarioSources, selectScenarioSources } from '../src/scenario-sources.js';
 import { serializedBytes } from '../src/limits.js';
-import type { CallContext, Source, SourceSelectionInput } from '../src/contracts.js';
+import type { Source } from '../src/contracts.js';
+import type { CallContext, SourceSelectionInput } from '../src/runtime.js';
 
 const ctx = { signal: new AbortController().signal } as CallContext;
 const sources: Source[] = [

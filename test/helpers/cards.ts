@@ -1,4 +1,5 @@
-import { settingsSchema, type Experiment, type MetricAssessment, type Requirement, type Scenario, type Trial } from '../../src/contracts.js';
+import { settingsSchema, type Experiment, type Requirement, type Scenario, type Trial } from '../../src/contracts.js';
+import type { MetricAssessment } from '../../src/assessment.js';
 import { compileCard } from '../../src/card/compile.js';
 import { cardSchema, type Card } from '../../src/card/schema.js';
 

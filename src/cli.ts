@@ -4,7 +4,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
-import { ExperimentLab, draftHash } from './experiment.js';
+import { ExperimentLab } from './experiment.js';
+import { draftHash } from './lab/record.js';
 import { demoInput } from './demo.js';
 import { createInputSchema } from './contracts.js';
 import { compareRuns } from './comparison.js';
@@ -29,8 +30,38 @@ import { countText } from './plural.js';
 import { logImports } from './card/calibration-scope.js';
 import { confirmTableImport, proposeTableImport } from './spreadsheet/import.js';
 import { importedLine, proposalLines } from './spreadsheet/lines.js';
-import { ROLES, ROLE_WORDS, columnLabel, tableChoicesSchema, type MarkerRole, type TableChoices } from './spreadsheet/mapping.js';
-import type { TableProposal } from './spreadsheet/proposal.js';
+import { importHints, tableChoicesOf } from './cli/import-flags.js';
+
+/*
+ * `agent-lab`: one table of commands over the operations Pi's tools use (experiment.ts). A command that writes or
+ * spends opens the data folder as its one writer and takes the owner's word as --yes, where the chat asks natively;
+ * a command that only reads never takes the writer's lock, so it may run beside a live run. `chat` — and no command
+ * in a terminal — opens Pi with the Agent Lab extension.
+ */
+
+const FLAGS = {
+  'data-dir': { type: 'string' }, input: { type: 'string' }, id: { type: 'string' }, output: { type: 'string' },
+  task: { type: 'string' }, operation: { type: 'string' }, 'expected-hash': { type: 'string' },
+  before: { type: 'string' }, after: { type: 'string' }, help: { type: 'boolean', short: 'h' },
+  format: { type: 'string', default: 'json' }, json: { type: 'boolean' },
+  connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
+  'dialogues-file': { type: 'string' }, trial: { type: 'string', multiple: true },
+  yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
+  card: { type: 'string' }, choice: { type: 'string' }, text: { type: 'string' }, check: { type: 'boolean' }, resume: { type: 'boolean' }, accept: { type: 'boolean' }, convert: { type: 'boolean' },
+  'agent-version': { type: 'string' }, unknown: { type: 'boolean' }, import: { type: 'string' },
+  file: { type: 'string' }, sheet: { type: 'string' }, 'id-column': { type: 'string' }, 'text-column': { type: 'string' }, separator: { type: 'string' },
+  markers: { type: 'string' }, 'role-column': { type: 'string' }, roles: { type: 'string' }, 'order-column': { type: 'string' }, 'row-order': { type: 'boolean' },
+  where: { type: 'string' },
+} as const;
+type Flags = ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>['values'];
+
+/** What a command gets: the owner's flags and the data folder they point at. */
+interface CommandInput { values: Flags; directory: string }
+interface Command {
+  /** What `agent-lab --help` says about the command, in the owner's words. */
+  help: readonly string[];
+  run(input: CommandInput): Promise<void>;
+}
 
 /**
  * The rows of the result screen with every text made safe for a terminal before layout: titles, quotes
@@ -57,398 +88,399 @@ const writeStdout = (value: string): Promise<void> => new Promise((resolve, reje
   process.stdout.write(value, finish);
 });
 
-/** The owner's words for who writes a message, as `--markers` and `--roles` take them. */
-const ROLE_BY_WORD: Readonly<Record<string, MarkerRole>> = {
-  клиент: 'user', client: 'user', user: 'user', агент: 'assistant', agent: 'assistant', assistant: 'assistant',
-  служебное: 'system', system: 'system', текст: 'text', text: 'text',
-};
-/** `CLIENT=клиент,AGENT=агент` → pairs; a value may itself hold `=`, the role word is after the last one. */
-function rolePairs(text: string, flag: string, allowText: boolean): { label: string; role: MarkerRole }[] {
-  return text.split(',').map(pair => {
-    const at = pair.lastIndexOf('='), label = pair.slice(0, at).trim(), role = ROLE_BY_WORD[pair.slice(at + 1).trim().toLowerCase()];
-    if (at < 1 || !label || !role || role === 'text' && !allowText) throw new Error(`${flag}: ожидается ${allowText ? 'МЕТКА' : 'ЗНАЧЕНИЕ'}=клиент|агент|служебное${allowText ? '|текст' : ''}, через запятую.`);
-    return { label, role };
-  });
-}
-/**
- * `--where "КОЛОНКА=ЗНАЧЕНИЕ|ЗНАЧЕНИЕ"` → the column and the exact values to keep; the column alone asks which
- * of its values to keep. The column ends at the first `=`: a value may hold `=`, and `|` parts the values, as
- * list-like values (`['A', 'B']`) hold commas. An empty value keeps the conversations whose cell is empty.
- */
-function whereChoice(text: string): NonNullable<TableChoices['where']> {
-  const at = text.indexOf('=');
-  const column = (at < 0 ? text : text.slice(0, at)).trim();
-  if (!column) throw new Error('--where: ожидается КОЛОНКА=ЗНАЧЕНИЕ, несколько значений — через |; одна КОЛОНКА покажет её значения.');
-  return at < 0 ? { column } : { column, values: text.slice(at + 1).split('|').map(value => value.trim()) };
-}
-/** The owner's choices from the command line; each overrides what Lab would propose. */
-function tableChoicesOf(values: Record<string, string | boolean | string[] | undefined>): TableChoices {
-  const text = (key: string) => typeof values[key] === 'string' ? values[key] as string : undefined;
-  // A shell passes \n and \t literally; the owner means the characters.
-  const separator = text('separator')?.replace('\\n', '\n').replace('\\t', '\t');
-  return tableChoicesSchema.parse({
-    ...text('sheet') ? { sheet: text('sheet') } : {}, ...text('id-column') ? { id: text('id-column') } : {},
-    ...text('text-column') ? { text: text('text-column') } : {}, ...separator ? { separator } : {},
-    ...text('markers') ? { markers: rolePairs(text('markers')!, '--markers', true).map(({ label, role }) => ({ token: label, role })) } : {},
-    ...text('role-column') ? { role: text('role-column') } : {},
-    ...text('roles') ? { roles: rolePairs(text('roles')!, '--roles', false).map(({ label, role }) => ({ value: label, role })) } : {},
-    ...text('order-column') ? { order: text('order-column') } : values['row-order'] ? { order: null } : {},
-    ...text('where') ? { where: whereChoice(text('where')!) } : {},
-  });
-}
-/** How to answer the proposal from the command line. */
-function importHints(proposal: TableProposal): string[] {
-  const words = ROLES.map(role => ROLE_WORDS[role]).join('|');
-  if (proposal.status === 'refused') return ['Поправьте выбор и повторите команду.'];
-  if (proposal.status === 'ready') return ['Загрузить: та же команда с --yes.',
-    'Поправить: --sheet, --id-column, --text-column; метки — --markers CLIENT=клиент,AGENT=агент и --separator; сообщение в строке — --role-column, --roles, --order-column или --row-order.',
-    ...!proposal.mapping.filter && proposal.selectable.length ? ['Отобрать разговоры: --where "КОЛОНКА" покажет её значения, --where "КОЛОНКА=ЗНАЧЕНИЕ|ЗНАЧЕНИЕ" оставит только их.'] : []];
-  const question = proposal.question;
-  switch (question.kind) {
-    case 'marker': return [`Ответ: та же команда с --markers ${question.token}=${words}|текст.`];
-    case 'role': return [`Ответ: та же команда с --roles "${question.value}=${words}".`];
-    case 'id': return ['Ответ: та же команда с --id-column КОЛОНКА.'];
-    case 'text': return ['Ответ: та же команда с --text-column КОЛОНКА.'];
-    case 'where': return [`Ответ: та же команда с --where "${columnLabel(question.column)}=${question.values[0]?.value ?? ''}" — значение как написано в таблице; несколько — через |. Все разговоры — без --where.`];
-  }
-}
-
-async function main() {
-  const args = process.argv.slice(2);
-  if (args[0] === 'chat' || (!args.length && process.stdin.isTTY)) {
-    const root = fileURLToPath(new URL('../', import.meta.url));
-    const piRoot = dirname(dirname(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'))));
-    // The Agent Lab session gets the agent-builder skill's text as its instructions (extensions/agent-lab.ts); listed
-    // as a skill as well, it would only invite the model to read the same text twice.
-    const child = spawn(process.execPath, [resolve(piRoot, 'dist/bundle/cli.js'), '--no-extensions', '--no-skills', '-e', resolve(root, 'extensions/agent-lab.ts'),
-      ...args.slice(args[0] === 'chat' ? 1 : 0)],
-    { stdio: 'inherit', env: { ...process.env, AGENT_LAB_SESSION: '1' } });
-    process.exitCode = await new Promise<number>((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve(code ?? (signal ? 130 : 1))); });
-    return;
-  }
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    'data-dir': { type: 'string' }, input: { type: 'string' }, id: { type: 'string' }, output: { type: 'string' },
-    task: { type: 'string' }, operation: { type: 'string' }, 'expected-hash': { type: 'string' },
-    before: { type: 'string' }, after: { type: 'string' }, help: { type: 'boolean', short: 'h' },
-    format: { type: 'string', default: 'json' }, json: { type: 'boolean' },
-    connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
-    'dialogues-file': { type: 'string' }, trial: { type: 'string', multiple: true },
-    yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
-    card: { type: 'string' }, choice: { type: 'string' }, text: { type: 'string' }, check: { type: 'boolean' }, resume: { type: 'boolean' }, accept: { type: 'boolean' }, convert: { type: 'boolean' },
-    'agent-version': { type: 'string' }, unknown: { type: 'boolean' }, import: { type: 'string' },
-    file: { type: 'string' }, sheet: { type: 'string' }, 'id-column': { type: 'string' }, 'text-column': { type: 'string' }, separator: { type: 'string' },
-    markers: { type: 'string' }, 'role-column': { type: 'string' }, roles: { type: 'string' }, 'order-column': { type: 'string' }, 'row-order': { type: 'boolean' },
-    where: { type: 'string' },
-  } });
-  const command = positionals[0];
-  if (values.help || !command) {
-    process.stdout.write('  agent-lab detect [--directory ПАПКА] [--json]  Что Lab нашёл в папке проекта: агента, логи, материалы, промпт\n');
-    process.stdout.write('  agent-lab import --file логи.xlsx [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--yes] [--json]  Как Lab прочитает таблицу логов (.xlsx, .csv) и какие разговоры возьмёт; --yes загружает её\n');
-    process.stdout.write('  agent-lab summary --id RUN [--json]     Сколько ситуаций агент прошёл, что не измерено и почему\n');
-    process.stdout.write('  agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--yes]   Какая версия агента записала логи: только тогда сверка с продом — калибровка\n');
-    process.stdout.write('  agent-lab accept --id RUN [--yes]      Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания\n');
-    process.stdout.write('Agent Lab — validation set, accuracy и причины провалов вашего агента.\n\n  agent-lab                         Диалог в текущем проекте\n  agent-lab chat [опции Pi]          Напишите задачу обычными словами\n  agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]\n  agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4]\n\nevaluate: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.\n--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.\n\n');
-    process.stdout.write('  agent-lab doctor --connection connection.json --yes\n  agent-lab suites --directory .evals\n  agent-lab reassess --id RUN [--input criteria.json] --yes\n  agent-lab reassess --id RUN --code-only\n  evaluate принимает --connection; build — --dialogues-file (JSON/JSONL).\n\n');
-    process.stdout.write('  agent-lab cards --id RUN [--card N] [--json]           Ситуации: что пишет и знает клиент, что должен агент, статус и вопрос\n'
-      + '  agent-lab cards --id RUN --card N --choice a|b|c [--text «…»] --yes   Ответ на вопрос ситуации\n'
-      + '  agent-lab cards --id RUN --input команда.json [--yes]   Команда владельца; без --yes — только «было → стало»\n'
-      + '  agent-lab cards --id RUN --check|--resume|--accept --yes   Проверить ситуации · продолжить подготовку · утвердить готовые\n'
-      + '  agent-lab cards --id RUN --convert     Черновик старого формата — продолжить в новом формате; старый останется как есть\n');
-    process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID] · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
-  }
-  if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
-  if (command === 'detect') {
-    // Read-only: nothing is started, imported or written; a .env file contributes variable names only.
-    const detection = await detectProject(values.directory ?? process.cwd());
-    await writeStdout(values.json ? `${JSON.stringify(detection, null, 2)}\n` : `${detectionLines(detection).map(safeLine).join('\n')}\n`);
-    return;
-  }
-  const directory = values['data-dir'] ?? resolve('.agent-lab');
-  if (command === 'import') {
-    if (!values.file) throw new Error('Укажите таблицу: agent-lab import --file логи.xlsx');
-    // Reads only, until the owner says --yes to a complete proposal; the answer to a question is a flag of the same command.
-    const proposal = await proposeTableImport(values.file, tableChoicesOf(values));
-    const lines = proposalLines(proposal);
-    if (proposal.status !== 'ready' || !values.yes) {
-      await writeStdout(values.json ? `${JSON.stringify(proposal, null, 2)}\n` : `${[...lines, '', ...importHints(proposal)].map(line => safeLine(line)).join('\n')}\n`);
-      if (proposal.status === 'refused' || values.yes) process.exitCode = 1;
-      return;
-    }
-    const lab = new ExperimentLab(directory);
-    await lab.init();
-    try {
-      const { batch } = await confirmTableImport(lab.store, values.file, proposal);
-      await writeStdout(values.json ? `${JSON.stringify({ importId: batch.id, dialogues: batch.dialogues.length, proposal }, null, 2)}\n`
-        : `${[...lines, '', importedLine(batch), `Дальше: agent-lab build --input задача.json --dialogues-file ${values.file}`].map(line => safeLine(line)).join('\n')}\n`);
-    } finally { await lab.close(); }
-    return;
-  }
-  if (command === 'suites') { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); return; }
-  if (command === 'cards') {
-    if (!values.id) throw new Error('Укажите --id RUN.');
-    const lab = new ExperimentLab(directory);
-    const situations = async (id: string) => {
-      const record = await lab.get(id);
-      if (record.librarySnapshot?.formatVersion !== 2) return { record, views: situationViews(record, { maxTurns: record.settings.maxTurns }) };
-      const context = await lab.cardContext(id);
-      return { record: context.experiment, views: situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns }) };
-    };
-    /** The list, or one situation with its question and its actions — the same rows the chat and the board draw. JSON carries each situation's id: a command file names its card by it. */
-    const show = async (id: string, changes: string[] = []) => {
-      const { record, views } = await situations(id);
-      const number = values.card === undefined ? undefined : Number(values.card);
-      const view = number === undefined ? undefined : views.find(item => item.number === number);
-      if (number !== undefined && !view) throw new Error(`Ситуации №${values.card} нет. Есть: ${views.map(item => item.number).join(', ')}.`);
-      if (values.json) { await writeStdout(`${JSON.stringify({ runId: id, counts: countsText(views), ...(changes.length ? { changes } : {}), ...(view ? { situation: { id: view.id, ...situationData(view), details: view.details } } : { situations: views.map(item => ({ id: item.id, ...situationData(item) })) }) }, null, 2)}\n`); return; }
-      const actions = view && !view.question ? situationActions(view) : [];
-      const rows = view ? [...briefRows(view), ...(actions.length ? [{ role: 'blank' as const, indent: 0, text: '' }, actionRow(actions)] : []), { role: 'blank' as const, indent: 0, text: '' }, ...detailRows(view)]
-        : views.flatMap(item => listRows(item));
-      const head = view ? [] : [countsText(views), ...(formatNote(record) ? [formatNote(record)!] : []), ''];
-      await writeStdout(`${[...changes, ...(changes.length ? [''] : []), ...head.map(line => line && ` ${safeLine(line)}`), plainSituationText(rows.map(row => ({ ...row, text: safeLine(row.text) })), process.stdout.columns ?? 100)].join('\n')}\n`);
-    };
-    if (values.convert) {
-      // Free and deterministic: the new draft's situations wait for a check the owner starts with --check --yes.
-      await lab.init();
-      try {
-        const converted = await lab.convertV1Draft(values.id);
-        const text = conversionText(converted);
-        if (values.json) { await writeStdout(`${JSON.stringify({ runId: converted.experiment.id, convertedFrom: values.id, left: converted.left, checkCalls: converted.calls }, null, 2)}\n`); return; }
-        await writeStdout(`${[text.summary, ...text.left, text.check, `Проверить: agent-lab cards --id ${converted.experiment.id} --check --yes`, ''].map(line => safeLine(line)).join('\n')}\n`);
-        await show(converted.experiment.id);
-      } finally { await lab.close(); }
-      return;
-    }
-    if (!values.input && !values.choice && !values.check && !values.resume && !values.accept) { await show(values.id); return; }
-    await lab.init();
-    try {
-      const target = values.check || values.resume || values.accept ? { id: values.id } : await lab.editableCards(values.id);
-      if (target.id !== values.id) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка идёт в черновик ${target.id}.\n`);
-      if (values.resume || values.check || values.accept) {
-        if (!values.yes) throw new Error(values.accept ? 'Утверждение фиксирует готовые ситуации для прогона; укажите --yes. Агент не запускается.' : 'Это расходует вызовы модели в пределах лимита; укажите --yes.');
-        const { record, views } = await situations(target.id);
-        if (values.resume) { if (!record.librarySnapshot) throw new Error('Продолжать нечего.'); await lab.resumePreparation(target.id, libraryHash(record.librarySnapshot)); await lab.waitForIdle(); }
-        else if (values.check) { await lab.recheckCards(target.id, { explicit: true }); await lab.waitForIdle(); }
-        else {
-          const ready = views.filter(view => view.status === 'ready');
-          if (!ready.length) throw new Error('Утверждать нечего: ни одна ситуация не готова.');
-          await lab.acceptCards(target.id, libraryHash((await lab.cardContext(target.id)).library), ready.map(view => view.id));
-        }
-        await show(target.id); return;
-      }
-      let command: ReturnType<typeof cardCommandSchema.parse>;
-      if (values.choice) {
-        const view: SituationView | undefined = (await situations(target.id)).views.find(item => item.number === Number(values.card));
-        if (!view?.question?.id) throw new Error(`У ситуации ${values.card ?? '(укажите --card N)'} нет открытого вопроса.`);
-        if (!['a', 'b', 'c'].includes(values.choice)) throw new Error('--choice: a, b или c — ответ из списка вопроса.');
-        command = { kind: 'answer_question', cardId: view.id, questionId: view.question.id, choice: values.choice as 'a' | 'b' | 'c', ...(values.text ? { text: values.text } : {}) };
-      } else command = cardCommandSchema.parse(JSON.parse(await readFile(values.input!, 'utf8')));
-      // The command file and the text on the command line are the owner's own: their words, confirmed by --yes.
-      const words = wordsOf(command).join('\n');
-      const prepared = await lab.prepareCardCommand(target.id, command, { via: 'cli-yes', ...(words && words.length <= 1000 ? { ownerWords: words } : {}) });
-      const changes = prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`));
-      if (!values.yes) {
-        await writeStdout(`${[...changes, '', ...(prepared.recheck.length ? ['После записи Lab проверит изменённое заново.'] : []), 'Записать: та же команда с --yes.'].map(line => safeLine(line)).join('\n')}\n`);
-        return;
-      }
-      await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, requiredAuthority(prepared.command) === 'owner-words' && words ? 'words' : 'confirmed'));
-      const check = await lab.recheckCards(target.id);
-      if (check.decision.action === 'run') await lab.waitForIdle();
-      await show(target.id, changes.map(line => safeLine(line)));
-    } finally { await lab.close(); }
-    return;
-  }
-  if (command === 'logs') {
-    if (!values.id) throw new Error('Укажите --id RUN.');
-    if (values['agent-version'] !== undefined && values.unknown) throw new Error('Либо --agent-version, либо --unknown.');
-    const lab = new ExperimentLab(directory);
-    const importIds = logImports(await lab.get(values.id));
-    const said = (version: string | null | undefined) => version === undefined ? 'не указана' : version ?? 'неизвестна';
-    if (values['agent-version'] === undefined && !values.unknown) {
-      const rows = await Promise.all(importIds.map(async id => `${id} · ${countText((await lab.store.readImport(id)).dialogues.length, ['разговор', 'разговора', 'разговоров'])}`
-        + ` · версия агента: ${said((await lab.store.readLogVersions(id))?.declarations.at(-1)?.command.version)}`));
-      await writeStdout(`${[...rows.length ? rows : ['У этого прогона нет логов.'], '', 'Указать версию: agent-lab logs --id RUN --agent-version ВЕРСИЯ --yes (или --unknown)'].map(line => safeLine(line)).join('\n')}\n`);
-      return;
-    }
-    const importId = values.import ?? (importIds.length === 1 ? importIds[0] : undefined);
-    if (!importId || !importIds.includes(importId)) throw new Error(`Укажите --import: ${importIds.join(', ') || 'у этого прогона нет логов'}.`);
-    const prepared = await lab.prepareLogVersion({ kind: 'declare_log_version', importId, version: values.unknown ? null : values['agent-version']! }, { via: 'cli-yes' });
-    const change = `Версия агента в логах: было «${said(prepared.change.before)}», стало «${said(prepared.change.after)}».`;
-    if (!values.yes) { await writeStdout(`${safeLine(change)}\nЗаписать: та же команда с --yes.\n`); return; }
-    await lab.init();
-    try { await lab.applyLogVersion(prepared, hostGrant(prepared, 'confirmed')); } finally { await lab.close(); }
-    await writeStdout(`${safeLine(change)} Записано: следующая сверка с продом прочтёт её.\n`);
-    return;
-  }
-  if (command === 'doctor') {
-    const connection = values.connection ? await readConnection(values.connection) : await rememberedConnection(directory);
-    if (!connection?.probe) throw new Error('Укажите --connection с probe.write/read/reset и initialState.');
-    if (!values.yes) { process.stdout.write(JSON.stringify({ target: connection.target, probe: connection.probe, requests: 3 }, null, 2) + '\n'); throw new Error('Для трёх пробных запросов укажите --yes.'); }
-    const result = await doctor(connection);
-    if (result.passed) await rememberConnection(directory, connection);
-    if (values.output) await writeFile(values.output, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-    process.stdout.write(JSON.stringify(result, null, 2) + '\n'); process.exitCode = result.passed ? 0 : 2; return;
-  }
-  if (command === 'summary') {
-    if (!values.id) throw new Error('Укажите --id RUN');
-    const store = new ExperimentStore(directory);
-    const record = await store.get(values.id);
-    // The source run is read-only context for stability; the same verified path as Pi and the exports:
-    // receipts checked against sidecars, source resolved once. The trace journal is not needed here.
-    const verified = await resolveVerified(record, store, record.assessmentOf ?? record.parentRunId);
-    const numbers = verified.record.calibration?.entries.length ? await importNumbers(verified.record, importId => store.readImport(importId)) : undefined;
-    const view = buildResultView(verified.record, { before: verified.before, ...(numbers ? { numbers } : {}) });
-    if (values.json) { process.stdout.write(`${JSON.stringify({ ...machineResult(view), warnings: verified.warnings }, null, 2)}\n`); return; }
-    process.stdout.write(screenText(view, verified.warnings));
-    return;
-  }
-  // Reading an atomic snapshot must not take the writer lock or mark another process interrupted.
-  if (command === 'export' || command === 'diff') {
-    const store = new ExperimentStore(directory);
-    if (command === 'export') {
-      if (!values.id) throw new Error('Укажите прогон: --id EXPERIMENT_ID');
-      if (!['json', 'html', 'markdown'].includes(values.format!)) throw new Error('Формат экспорта: json, html или markdown.');
-      const bundle = await evidenceBundle(await store.get(values.id), store, values.before);
-      const content = values.format === 'html' ? htmlReport(bundle) : values.format === 'markdown' ? markdownReport(bundle) : jsonReport(bundle);
-      if (values.output) await writeFile(values.output, content, { mode: 0o600 }); else process.stdout.write(`${content}\n`);
-    } else {
-      if (!values.before || !values.after) throw new Error('Укажите два прогона: --before RUN_ID --after RUN_ID');
-      const [before, after] = await Promise.all([store.get(values.before), store.get(values.after)]);
-      const diff = compareRuns(before, after);
-      if (values.json) process.stdout.write(`${JSON.stringify(diff, null, 2)}\n`);
-      else process.stdout.write([
-        diff.headline, '',
-        ...(diff.regressed.length ? ['Сломалось:', ...diff.regressed.map(r => `  ✗ ${safeLine(r.title)}`), ''] : []),
-        ...(diff.fixed.length ? ['Исправлено:', ...diff.fixed.map(r => `  ✓ ${safeLine(r.title)}`), ''] : []),
-        ...(diff.incomparable.length ? ['Несравнимо:', ...diff.incomparable.map(r => `  ? ${safeLine(r.title)} (попытка ${r.repeat + 1}): ${safeLine(r.reason)}`), ''] : []),
-        ...(diff.notes.length ? ['Оговорки:', ...diff.notes.map(n => `  · ${safeLine(n)}`), ''] : []),
-      ].join('\n') + '\n');
-      if (!diff.comparable) process.exitCode = 2;
-    }
-    return;
-  }
-  if (!['demo', 'prepare', 'build', 'repeat', 'run', 'accept', 'save-suite', 'evaluate', 'reassess'].includes(command)) throw new Error(`Unknown command: ${command}`);
-  if (command === 'evaluate' && (!values.input || !values.yes)) throw new Error('Для запуска сохранённых тестов укажите --input suite.json --yes. Лимиты и подключение берутся из файла.');
+/** Opens the data folder as its one writer for `work`; Ctrl+C closes it, and the work going on stops with its evidence kept. */
+async function asWriter(directory: string, work: (lab: ExperimentLab) => Promise<void>): Promise<void> {
   const lab = new ExperimentLab(directory);
   await lab.init();
   const cancel = () => { void lab.close().catch(error => { process.stderr.write(`${safeLine(error.message)}\n`); process.exitCode = 1; }); };
   process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
-  try {
-    let id = values.id;
-    if (command === 'accept') {
-      if (!id) throw new Error('Укажите --id RUN.');
-      const record = await lab.get(id);
-      if (record.scenarios.length > 1) {
-        const sheet = expectationSheet(record);
-        await writeStdout(values.json
-          ? `${JSON.stringify({ type: 'test_proposal', text: sheet.lines.join('\n'), lines: sheet.lines, draftHash: sheet.draftHash })}\n`
-          : `${sheet.lines.map(safeLine).join('\n')}\n`);
-        if (!values.yes) {
-          await writeStdout(values.json
-            ? `${JSON.stringify({ type: 'next_step', command: `agent-lab accept --id ${id} --yes` })}\n`
-            : `\nПодтвердить все ожидания: agent-lab accept --id ${id} --yes\n`);
-          return;
-        }
-        const confirmed = await lab.acceptDraft(id, sheet.draftHash);
-        await writeStdout(values.json
-          ? `${JSON.stringify({ type: 'accepted', id: confirmed.id, acceptedDraftHash: confirmed.acceptedDraftHash, agentRun: false })}\n`
-          : `\nОжидания подтверждены: ${sheet.countText}.\n`);
-        return;
-      }
-      const projection = testPlanLines(record);
-      await writeStdout(values.json
-        ? `${JSON.stringify({ type: 'test_proposal', text: projection.lines.join('\n'), lines: projection.lines, draftHash: projection.draftHash })}\n`
-        : `${projection.lines.join('\n')}\n`);
-      if (!values.yes) {
-        await writeStdout(values.json
-          ? `${JSON.stringify({ type: 'next_step', command: `agent-lab accept --id ${id} --yes` })}\n`
-          : `\nЧтобы принять этот тест: agent-lab accept --id ${id} --yes\n`);
-        return;
-      }
-      const accepted = await lab.acceptDraft(id, projection.draftHash);
-      await writeStdout(values.json
-        ? `${JSON.stringify({ type: 'accepted', id: accepted.id, acceptedDraftHash: accepted.acceptedDraftHash, agentRun: false })}\n`
-        : `\nТест принят: ${accepted.acceptedDraftHash}. Агент не запускался.\n`);
-      return;
-    }
-    if (command === 'reassess') {
-      if (!id || (!values.yes && !values['code-only'])) throw new Error('Укажите --id RUN и --yes (модель) или --code-only (без модели).');
-      const patch = values.input ? JSON.parse(await readFile(values.input, 'utf8')) : {};
-      const draft = await lab.reassess(id, { ...patch, ...(values.trial ? { trialIds: values.trial } : {}), ...(values['code-only'] ? { codeOnly: true } : {}) });
-      await lab.waitForIdle();
-      const record = await lab.get(draft.id);
-      const bundle = await evidenceBundle(record, lab.store);
-      const result = machineResult(bundle.view);
-      process.stdout.write(JSON.stringify({ id: record.id, phase: record.phase, assessmentOf: record.assessmentOf,
-        evaluatorVersion: record.evaluatorVersion, artifacts: await exportArtifacts(bundle, directory), ...result }, null, 2) + '\n');
-      process.exitCode = result.exitCode; return;
-    }
-    if (command === 'save-suite') {
-      if (!id || !values.output) throw new Error('Укажите --id RUN --output .evals/regression.json.');
-      process.stdout.write(`${await lab.saveSuite(id, values.output, values.case)}\n`); return;
-    }
-    if (command === 'evaluate') {
-      const draft = await lab.loadSuite(values.input!, values.case, values.connection ? await readConnection(values.connection) : undefined);
-      await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft), ...(values.parallel ? { parallel: Number(values.parallel) } : {}) });
-      await lab.waitForIdle();
-      const record = await lab.get(draft.id);
-      const bundle = await evidenceBundle(record, lab.store, values.before);
-      const artifacts = await exportArtifacts(bundle, lab.store.directory);
-      const result = machineResult(bundle.view);
-      process.exitCode = result.exitCode;
-      process.stdout.write(JSON.stringify({ id: record.id, ...result, comparison: bundle.comparison, artifacts }, null, 2) + '\n');
-      return;
-    }
-    if (command === 'demo' || command === 'prepare' || command === 'build') {
-      if (command !== 'demo' && !values.input) throw new Error('Provide --input task.json');
-      let raw = command === 'demo' ? demoInput() : JSON.parse(await readFile(values.input!, 'utf8'));
-      if (command !== 'demo' && (raw.materialFiles || raw.promptFiles)) {
-        // Articles and prompts named by path are read by Lab itself: whole files, no model in between, no item limit of a tool call.
-        const { materialFiles, promptFiles, ...task } = raw;
-        const expanded = await expandMaterials({ materials: task.materials, materialFiles, promptFiles }, dirname(resolve(values.input!)));
-        for (const item of expanded.skipped) process.stderr.write(`Пропущен ${item.file}: ${item.reason}\n`);
-        process.stderr.write(`Прочитано материалов из файлов: ${expanded.read}.\n`);
-        raw = { ...task, materials: expanded.materials };
-      }
-      const connection = command === 'demo' ? undefined : values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
-      const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file'], { directory }) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
-      const input = createInputSchema.parse({ ...raw, ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
-        ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}) });
-      const prepared = await lab.create(input); id = prepared.id; await lab.waitForIdle();
-      const current = await lab.get(id);
-      if (current.phase !== 'review') throw new Error(current.error ?? 'Preparation failed');
-      if (command === 'prepare' || command === 'build') { process.stdout.write(`${JSON.stringify(current, null, 2)}\n`); return; }
-      // The teaching example takes the owner's path: answer its one question («Да» — the customer knew the number), then accept every ready situation.
-      const context = await lab.cardContext(id);
-      for (const view of situationViews(context.experiment, { evidence: context.evidence, maxTurns: context.experiment.settings.maxTurns })) if (view.question?.id) {
-        const answer = await lab.prepareCardCommand(id, { kind: 'answer_question', cardId: view.id, questionId: view.question.id, choice: 'a' }, { via: 'cli-yes' });
-        await lab.applyCardCommand(id, answer, hostGrant(answer, 'confirmed'));
-      }
-      const answered = await lab.cardContext(id);
-      const ready = situationViews(answered.experiment, { evidence: answered.evidence, maxTurns: answered.experiment.settings.maxTurns }).filter(view => view.status === 'ready');
-      await lab.acceptCards(id, libraryHash(answered.library), ready.map(view => view.id));
-    }
-    if (!id) throw new Error('Укажите прогон: --id EXPERIMENT_ID');
-    if (command === 'repeat') {
-      const record = await lab.repeat(id, values.case, values.control);
-      process.stdout.write(`${JSON.stringify({ id: record.id, phase: record.phase, parentRunId: record.parentRunId, targetVersion: record.targetVersion,
-        positiveControlScenarioIds: record.positiveControlScenarioIds, nextStep: 'Откройте /agent-lab в Pi, проверьте версию агента и подтвердите запуск.' }, null, 2)}\n`);
-    } else if (command === 'run' || command === 'demo') {
-      const draft = await lab.get(id);
-      if (command === 'run' && !values.yes) throw new Error('Для запуска согласованных тестов укажите --yes.');
-      await lab.start(id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft), ...(values.parallel ? { parallel: Number(values.parallel) } : {}) }); await lab.waitForIdle();
-      const result = await lab.get(id);
-      // The source run is read-only context for stability, as in `summary`.
-      const verified = await resolveVerified(result, lab.store, result.parentRunId);
-      const view = buildResultView(verified.record, { before: verified.before });
-      process.stdout.write(`${JSON.stringify({ id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode,
-        ...(result.workflow === 'evaluate' ? { ...machineResult(view), proofs: result.trials.map(trial => trialProofLines(result, trial.id)) } : { view }),
-        comparison: result.comparisons.at(-1), ...(verified.warnings.length ? { warnings: verified.warnings } : {}), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
-      if (result.workflow === 'evaluate') process.exitCode = exitCodeOf(view);
-      if (!['complete', 'results_review'].includes(result.phase)) throw new Error(result.error ?? 'Experiment did not complete');
-    } else throw new Error(`Unknown command: ${command}`);
-  } finally {
+  try { await work(lab); } finally {
     process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
     await lab.close();
   }
+}
+
+/** Pi with the Agent Lab extension, in this terminal. */
+async function chat(args: string[]): Promise<void> {
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  const piRoot = dirname(dirname(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'))));
+  // The Agent Lab session gets the agent-builder skill's text as its instructions (extensions/agent-lab.ts); listed
+  // as a skill as well, it would only invite the model to read the same text twice.
+  const child = spawn(process.execPath, [resolve(piRoot, 'dist/bundle/cli.js'), '--no-extensions', '--no-skills', '-e', resolve(root, 'extensions/agent-lab.ts'), ...args],
+    { stdio: 'inherit', env: { ...process.env, AGENT_LAB_SESSION: '1' } });
+  process.exitCode = await new Promise<number>((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve(code ?? (signal ? 130 : 1))); });
+}
+
+async function detect({ values }: CommandInput): Promise<void> {
+  // Read-only: nothing is started, imported or written; a .env file contributes variable names only.
+  const detection = await detectProject(values.directory ?? process.cwd());
+  await writeStdout(values.json ? `${JSON.stringify(detection, null, 2)}\n` : `${detectionLines(detection).map(safeLine).join('\n')}\n`);
+}
+
+async function importTable({ values, directory }: CommandInput): Promise<void> {
+  if (!values.file) throw new Error('Укажите таблицу: agent-lab import --file логи.xlsx');
+  // Reads only, until the owner says --yes to a complete proposal; the answer to a question is a flag of the same command.
+  const proposal = await proposeTableImport(values.file, tableChoicesOf(values));
+  const lines = proposalLines(proposal);
+  if (proposal.status !== 'ready' || !values.yes) {
+    await writeStdout(values.json ? `${JSON.stringify(proposal, null, 2)}\n` : `${[...lines, '', ...importHints(proposal)].map(line => safeLine(line)).join('\n')}\n`);
+    if (proposal.status === 'refused' || values.yes) process.exitCode = 1;
+    return;
+  }
+  const lab = new ExperimentLab(directory);
+  await lab.init();
+  try {
+    const { batch } = await confirmTableImport(lab.store, values.file, proposal);
+    await writeStdout(values.json ? `${JSON.stringify({ importId: batch.id, dialogues: batch.dialogues.length, proposal }, null, 2)}\n`
+      : `${[...lines, '', importedLine(batch), `Дальше: agent-lab build --input задача.json --dialogues-file ${values.file}`].map(line => safeLine(line)).join('\n')}\n`);
+  } finally { await lab.close(); }
+}
+
+async function cards({ values, directory }: CommandInput): Promise<void> {
+  if (!values.id) throw new Error('Укажите --id RUN.');
+  const lab = new ExperimentLab(directory);
+  const situations = async (id: string) => {
+    const record = await lab.get(id);
+    if (record.librarySnapshot?.formatVersion !== 2) return { record, views: situationViews(record, { maxTurns: record.settings.maxTurns }) };
+    const context = await lab.cardContext(id);
+    return { record: context.experiment, views: situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns }) };
+  };
+  /** The list, or one situation with its question and its actions — the same rows the chat and the board draw. JSON carries each situation's id: a command file names its card by it. */
+  const show = async (id: string, changes: string[] = []) => {
+    const { record, views } = await situations(id);
+    const number = values.card === undefined ? undefined : Number(values.card);
+    const view = number === undefined ? undefined : views.find(item => item.number === number);
+    if (number !== undefined && !view) throw new Error(`Ситуации №${values.card} нет. Есть: ${views.map(item => item.number).join(', ')}.`);
+    if (values.json) { await writeStdout(`${JSON.stringify({ runId: id, counts: countsText(views), ...(changes.length ? { changes } : {}), ...(view ? { situation: { id: view.id, ...situationData(view), details: view.details } } : { situations: views.map(item => ({ id: item.id, ...situationData(item) })) }) }, null, 2)}\n`); return; }
+    const actions = view && !view.question ? situationActions(view) : [];
+    const rows = view ? [...briefRows(view), ...(actions.length ? [{ role: 'blank' as const, indent: 0, text: '' }, actionRow(actions)] : []), { role: 'blank' as const, indent: 0, text: '' }, ...detailRows(view)]
+      : views.flatMap(item => listRows(item));
+    const head = view ? [] : [countsText(views), ...(formatNote(record) ? [formatNote(record)!] : []), ''];
+    await writeStdout(`${[...changes, ...(changes.length ? [''] : []), ...head.map(line => line && ` ${safeLine(line)}`), plainSituationText(rows.map(row => ({ ...row, text: safeLine(row.text) })), process.stdout.columns ?? 100)].join('\n')}\n`);
+  };
+  if (values.convert) {
+    // Free and deterministic: the new draft's situations wait for a check the owner starts with --check --yes.
+    await lab.init();
+    try {
+      const converted = await lab.convertV1Draft(values.id);
+      const text = conversionText(converted);
+      if (values.json) { await writeStdout(`${JSON.stringify({ runId: converted.experiment.id, convertedFrom: values.id, left: converted.left, checkCalls: converted.calls }, null, 2)}\n`); return; }
+      await writeStdout(`${[text.summary, ...text.left, text.check, `Проверить: agent-lab cards --id ${converted.experiment.id} --check --yes`, ''].map(line => safeLine(line)).join('\n')}\n`);
+      await show(converted.experiment.id);
+    } finally { await lab.close(); }
+    return;
+  }
+  if (!values.input && !values.choice && !values.check && !values.resume && !values.accept) { await show(values.id); return; }
+  await lab.init();
+  try {
+    const target = values.check || values.resume || values.accept ? { id: values.id } : await lab.editableCards(values.id);
+    if (target.id !== values.id) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка идёт в черновик ${target.id}.\n`);
+    if (values.resume || values.check || values.accept) {
+      if (!values.yes) throw new Error(values.accept ? 'Утверждение фиксирует готовые ситуации для прогона; укажите --yes. Агент не запускается.' : 'Это расходует вызовы модели в пределах лимита; укажите --yes.');
+      const { record, views } = await situations(target.id);
+      if (values.resume) { if (!record.librarySnapshot) throw new Error('Продолжать нечего.'); await lab.resumePreparation(target.id, libraryHash(record.librarySnapshot)); await lab.waitForIdle(); }
+      else if (values.check) { await lab.recheckCards(target.id, { explicit: true }); await lab.waitForIdle(); }
+      else {
+        const ready = views.filter(view => view.status === 'ready');
+        if (!ready.length) throw new Error('Утверждать нечего: ни одна ситуация не готова.');
+        await lab.acceptCards(target.id, libraryHash((await lab.cardContext(target.id)).library), ready.map(view => view.id));
+      }
+      await show(target.id); return;
+    }
+    let command: ReturnType<typeof cardCommandSchema.parse>;
+    if (values.choice) {
+      const view: SituationView | undefined = (await situations(target.id)).views.find(item => item.number === Number(values.card));
+      if (!view?.question?.id) throw new Error(`У ситуации ${values.card ?? '(укажите --card N)'} нет открытого вопроса.`);
+      if (!['a', 'b', 'c'].includes(values.choice)) throw new Error('--choice: a, b или c — ответ из списка вопроса.');
+      command = { kind: 'answer_question', cardId: view.id, questionId: view.question.id, choice: values.choice as 'a' | 'b' | 'c', ...(values.text ? { text: values.text } : {}) };
+    } else command = cardCommandSchema.parse(JSON.parse(await readFile(values.input!, 'utf8')));
+    // The command file and the text on the command line are the owner's own: their words, confirmed by --yes.
+    const words = wordsOf(command).join('\n');
+    const prepared = await lab.prepareCardCommand(target.id, command, { via: 'cli-yes', ...(words && words.length <= 1000 ? { ownerWords: words } : {}) });
+    const changes = prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`));
+    if (!values.yes) {
+      await writeStdout(`${[...changes, '', ...(prepared.recheck.length ? ['После записи Lab проверит изменённое заново.'] : []), 'Записать: та же команда с --yes.'].map(line => safeLine(line)).join('\n')}\n`);
+      return;
+    }
+    await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, requiredAuthority(prepared.command) === 'owner-words' && words ? 'words' : 'confirmed'));
+    const check = await lab.recheckCards(target.id);
+    if (check.decision.action === 'run') await lab.waitForIdle();
+    await show(target.id, changes.map(line => safeLine(line)));
+  } finally { await lab.close(); }
+}
+
+async function logs({ values, directory }: CommandInput): Promise<void> {
+  if (!values.id) throw new Error('Укажите --id RUN.');
+  if (values['agent-version'] !== undefined && values.unknown) throw new Error('Либо --agent-version, либо --unknown.');
+  const lab = new ExperimentLab(directory);
+  const importIds = logImports(await lab.get(values.id));
+  const said = (version: string | null | undefined) => version === undefined ? 'не указана' : version ?? 'неизвестна';
+  if (values['agent-version'] === undefined && !values.unknown) {
+    const rows = await Promise.all(importIds.map(async id => `${id} · ${countText((await lab.store.readImport(id)).dialogues.length, ['разговор', 'разговора', 'разговоров'])}`
+      + ` · версия агента: ${said((await lab.store.readLogVersions(id))?.declarations.at(-1)?.command.version)}`));
+    await writeStdout(`${[...rows.length ? rows : ['У этого прогона нет логов.'], '', 'Указать версию: agent-lab logs --id RUN --agent-version ВЕРСИЯ --yes (или --unknown)'].map(line => safeLine(line)).join('\n')}\n`);
+    return;
+  }
+  const importId = values.import ?? (importIds.length === 1 ? importIds[0] : undefined);
+  if (!importId || !importIds.includes(importId)) throw new Error(`Укажите --import: ${importIds.join(', ') || 'у этого прогона нет логов'}.`);
+  const prepared = await lab.prepareLogVersion({ kind: 'declare_log_version', importId, version: values.unknown ? null : values['agent-version']! }, { via: 'cli-yes' });
+  const change = `Версия агента в логах: было «${said(prepared.change.before)}», стало «${said(prepared.change.after)}».`;
+  if (!values.yes) { await writeStdout(`${safeLine(change)}\nЗаписать: та же команда с --yes.\n`); return; }
+  await lab.init();
+  try { await lab.applyLogVersion(prepared, hostGrant(prepared, 'confirmed')); } finally { await lab.close(); }
+  await writeStdout(`${safeLine(change)} Записано: следующая сверка с продом прочтёт её.\n`);
+}
+
+async function checkConnection({ values, directory }: CommandInput): Promise<void> {
+  const connection = values.connection ? await readConnection(values.connection) : await rememberedConnection(directory);
+  if (!connection?.probe) throw new Error('Укажите --connection с probe.write/read/reset и initialState.');
+  if (!values.yes) { process.stdout.write(JSON.stringify({ target: connection.target, probe: connection.probe, requests: 3 }, null, 2) + '\n'); throw new Error('Для трёх пробных запросов укажите --yes.'); }
+  const result = await doctor(connection);
+  if (result.passed) await rememberConnection(directory, connection);
+  if (values.output) await writeFile(values.output, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n'); process.exitCode = result.passed ? 0 : 2;
+}
+
+async function summary({ values, directory }: CommandInput): Promise<void> {
+  if (!values.id) throw new Error('Укажите --id RUN');
+  // Reading an atomic snapshot never takes the writer lock or marks another process interrupted.
+  const store = new ExperimentStore(directory);
+  const record = await store.get(values.id);
+  // The source run is read-only context for stability; the same verified path as Pi and the exports:
+  // receipts checked against sidecars, source resolved once. The trace journal is not needed here.
+  const verified = await resolveVerified(record, store, record.assessmentOf ?? record.parentRunId);
+  const numbers = verified.record.calibration?.entries.length ? await importNumbers(verified.record, importId => store.readImport(importId)) : undefined;
+  const view = buildResultView(verified.record, { before: verified.before, ...(numbers ? { numbers } : {}) });
+  if (values.json) { process.stdout.write(`${JSON.stringify({ ...machineResult(view), warnings: verified.warnings }, null, 2)}\n`); return; }
+  process.stdout.write(screenText(view, verified.warnings));
+}
+
+async function exportRun({ values, directory }: CommandInput): Promise<void> {
+  if (!values.id) throw new Error('Укажите прогон: --id EXPERIMENT_ID');
+  if (!['json', 'html', 'markdown'].includes(values.format!)) throw new Error('Формат экспорта: json, html или markdown.');
+  const store = new ExperimentStore(directory);
+  const bundle = await evidenceBundle(await store.get(values.id), store, values.before);
+  const content = values.format === 'html' ? htmlReport(bundle) : values.format === 'markdown' ? markdownReport(bundle) : jsonReport(bundle);
+  if (values.output) await writeFile(values.output, content, { mode: 0o600 }); else process.stdout.write(`${content}\n`);
+}
+
+async function diff({ values, directory }: CommandInput): Promise<void> {
+  if (!values.before || !values.after) throw new Error('Укажите два прогона: --before RUN_ID --after RUN_ID');
+  const store = new ExperimentStore(directory);
+  const [before, after] = await Promise.all([store.get(values.before), store.get(values.after)]);
+  const compared = compareRuns(before, after);
+  if (values.json) process.stdout.write(`${JSON.stringify(compared, null, 2)}\n`);
+  else process.stdout.write([
+    compared.headline, '',
+    ...(compared.regressed.length ? ['Сломалось:', ...compared.regressed.map(r => `  ✗ ${safeLine(r.title)}`), ''] : []),
+    ...(compared.fixed.length ? ['Исправлено:', ...compared.fixed.map(r => `  ✓ ${safeLine(r.title)}`), ''] : []),
+    ...(compared.incomparable.length ? ['Несравнимо:', ...compared.incomparable.map(r => `  ? ${safeLine(r.title)} (попытка ${r.repeat + 1}): ${safeLine(r.reason)}`), ''] : []),
+    ...(compared.notes.length ? ['Оговорки:', ...compared.notes.map(n => `  · ${safeLine(n)}`), ''] : []),
+  ].join('\n') + '\n');
+  if (!compared.comparable) process.exitCode = 2;
+}
+
+/** A draft of a set made before libraries: its expectations as one sheet, or one test's definition; --yes confirms them. */
+async function accept({ values, directory }: CommandInput): Promise<void> {
+  await asWriter(directory, async lab => {
+    const id = values.id;
+    if (!id) throw new Error('Укажите --id RUN.');
+    const record = await lab.get(id);
+    if (record.scenarios.length > 1) {
+      const sheet = expectationSheet(record);
+      await writeStdout(values.json
+        ? `${JSON.stringify({ type: 'test_proposal', text: sheet.lines.join('\n'), lines: sheet.lines, draftHash: sheet.draftHash })}\n`
+        : `${sheet.lines.map(safeLine).join('\n')}\n`);
+      if (!values.yes) {
+        await writeStdout(values.json
+          ? `${JSON.stringify({ type: 'next_step', command: `agent-lab accept --id ${id} --yes` })}\n`
+          : `\nПодтвердить все ожидания: agent-lab accept --id ${id} --yes\n`);
+        return;
+      }
+      const confirmed = await lab.acceptDraft(id, sheet.draftHash);
+      await writeStdout(values.json
+        ? `${JSON.stringify({ type: 'accepted', id: confirmed.id, acceptedDraftHash: confirmed.acceptedDraftHash, agentRun: false })}\n`
+        : `\nОжидания подтверждены: ${sheet.countText}.\n`);
+      return;
+    }
+    const projection = testPlanLines(record);
+    await writeStdout(values.json
+      ? `${JSON.stringify({ type: 'test_proposal', text: projection.lines.join('\n'), lines: projection.lines, draftHash: projection.draftHash })}\n`
+      : `${projection.lines.join('\n')}\n`);
+    if (!values.yes) {
+      await writeStdout(values.json
+        ? `${JSON.stringify({ type: 'next_step', command: `agent-lab accept --id ${id} --yes` })}\n`
+        : `\nЧтобы принять этот тест: agent-lab accept --id ${id} --yes\n`);
+      return;
+    }
+    const accepted = await lab.acceptDraft(id, projection.draftHash);
+    await writeStdout(values.json
+      ? `${JSON.stringify({ type: 'accepted', id: accepted.id, acceptedDraftHash: accepted.acceptedDraftHash, agentRun: false })}\n`
+      : `\nТест принят: ${accepted.acceptedDraftHash}. Агент не запускался.\n`);
+  });
+}
+
+async function reassess({ values, directory }: CommandInput): Promise<void> {
+  await asWriter(directory, async lab => {
+    const id = values.id;
+    if (!id || (!values.yes && !values['code-only'])) throw new Error('Укажите --id RUN и --yes (модель) или --code-only (без модели).');
+    const patch = values.input ? JSON.parse(await readFile(values.input, 'utf8')) : {};
+    const draft = await lab.reassess(id, { ...patch, ...(values.trial ? { trialIds: values.trial } : {}), ...(values['code-only'] ? { codeOnly: true } : {}) });
+    await lab.waitForIdle();
+    const record = await lab.get(draft.id);
+    const bundle = await evidenceBundle(record, lab.store);
+    const result = machineResult(bundle.view);
+    process.stdout.write(JSON.stringify({ id: record.id, phase: record.phase, assessmentOf: record.assessmentOf,
+      evaluatorVersion: record.evaluatorVersion, artifacts: await exportArtifacts(bundle, directory), ...result }, null, 2) + '\n');
+    process.exitCode = result.exitCode;
+  });
+}
+
+async function saveSuite({ values, directory }: CommandInput): Promise<void> {
+  await asWriter(directory, async lab => {
+    if (!values.id || !values.output) throw new Error('Укажите --id RUN --output .evals/regression.json.');
+    process.stdout.write(`${await lab.saveSuite(values.id, values.output, values.case)}\n`);
+  });
+}
+
+async function evaluate({ values, directory }: CommandInput): Promise<void> {
+  if (!values.input || !values.yes) throw new Error('Для запуска сохранённых тестов укажите --input suite.json --yes. Лимиты и подключение берутся из файла.');
+  const input = values.input;
+  await asWriter(directory, async lab => {
+    const draft = await lab.loadSuite(input, values.case, values.connection ? await readConnection(values.connection) : undefined);
+    await lab.start(draft.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft), ...(values.parallel ? { parallel: Number(values.parallel) } : {}) });
+    await lab.waitForIdle();
+    const record = await lab.get(draft.id);
+    const bundle = await evidenceBundle(record, lab.store, values.before);
+    const artifacts = await exportArtifacts(bundle, lab.store.directory);
+    const result = machineResult(bundle.view);
+    process.exitCode = result.exitCode;
+    process.stdout.write(JSON.stringify({ id: record.id, ...result, comparison: bundle.comparison, artifacts }, null, 2) + '\n');
+  });
+}
+
+/** A new draft from a task file (or the teaching example): prepared to the end, the same way the chat prepares it. */
+async function prepareDraft(lab: ExperimentLab, values: Flags, directory: string, demo: boolean): Promise<string> {
+  if (!demo && !values.input) throw new Error('Provide --input task.json');
+  let raw = demo ? demoInput() : JSON.parse(await readFile(values.input!, 'utf8'));
+  if (!demo && (raw.materialFiles || raw.promptFiles)) {
+    // Articles and prompts named by path are read by Lab itself: whole files, no model in between, no item limit of a tool call.
+    const { materialFiles, promptFiles, ...task } = raw;
+    const expanded = await expandMaterials({ materials: task.materials, materialFiles, promptFiles }, dirname(resolve(values.input!)));
+    for (const item of expanded.skipped) process.stderr.write(`Пропущен ${item.file}: ${item.reason}\n`);
+    process.stderr.write(`Прочитано материалов из файлов: ${expanded.read}.\n`);
+    raw = { ...task, materials: expanded.materials };
+  }
+  const connection = demo ? undefined : values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
+  const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file'], { directory }) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
+  const input = createInputSchema.parse({ ...raw, ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
+    ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}) });
+  const prepared = await lab.create(input); await lab.waitForIdle();
+  const current = await lab.get(prepared.id);
+  if (current.phase !== 'review') throw new Error(current.error ?? 'Preparation failed');
+  return current.id;
+}
+
+async function prepare({ values, directory }: CommandInput): Promise<void> {
+  await asWriter(directory, async lab => {
+    const id = await prepareDraft(lab, values, directory, false);
+    process.stdout.write(`${JSON.stringify(await lab.get(id), null, 2)}\n`);
+  });
+}
+
+/** Runs an accepted draft to its result, as a script reads it: the view, its exit code and the proof of every dialogue. */
+async function runDraft(lab: ExperimentLab, id: string, values: Flags): Promise<void> {
+  const draft = await lab.get(id);
+  await lab.start(id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft), ...(values.parallel ? { parallel: Number(values.parallel) } : {}) }); await lab.waitForIdle();
+  const result = await lab.get(id);
+  // The source run is read-only context for stability, as in `summary`.
+  const verified = await resolveVerified(result, lab.store, result.parentRunId);
+  const view = buildResultView(verified.record, { before: verified.before });
+  process.stdout.write(`${JSON.stringify({ id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode,
+    ...(result.workflow === 'evaluate' ? { ...machineResult(view), proofs: result.trials.map(trial => trialProofLines(result, trial.id)) } : { view }),
+    comparison: result.comparisons.at(-1), ...(verified.warnings.length ? { warnings: verified.warnings } : {}), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
+  if (result.workflow === 'evaluate') process.exitCode = exitCodeOf(view);
+  if (!['complete', 'results_review'].includes(result.phase)) throw new Error(result.error ?? 'Experiment did not complete');
+}
+
+async function demo({ values, directory }: CommandInput): Promise<void> {
+  await asWriter(directory, async lab => {
+    const id = await prepareDraft(lab, values, directory, true);
+    // The teaching example takes the owner's path: answer its one question («Да» — the customer knew the number), then accept every ready situation.
+    const context = await lab.cardContext(id);
+    for (const view of situationViews(context.experiment, { evidence: context.evidence, maxTurns: context.experiment.settings.maxTurns })) if (view.question?.id) {
+      const answer = await lab.prepareCardCommand(id, { kind: 'answer_question', cardId: view.id, questionId: view.question.id, choice: 'a' }, { via: 'cli-yes' });
+      await lab.applyCardCommand(id, answer, hostGrant(answer, 'confirmed'));
+    }
+    const answered = await lab.cardContext(id);
+    const ready = situationViews(answered.experiment, { evidence: answered.evidence, maxTurns: answered.experiment.settings.maxTurns }).filter(view => view.status === 'ready');
+    await lab.acceptCards(id, libraryHash(answered.library), ready.map(view => view.id));
+    await runDraft(lab, id, values);
+  });
+}
+
+async function run({ values, directory }: CommandInput): Promise<void> {
+  await asWriter(directory, async lab => {
+    if (!values.id) throw new Error('Укажите прогон: --id EXPERIMENT_ID');
+    if (!values.yes) throw new Error('Для запуска согласованных тестов укажите --yes.');
+    await runDraft(lab, values.id, values);
+  });
+}
+
+async function repeat({ values, directory }: CommandInput): Promise<void> {
+  await asWriter(directory, async lab => {
+    if (!values.id) throw new Error('Укажите прогон: --id EXPERIMENT_ID');
+    const record = await lab.repeat(values.id, values.case, values.control);
+    process.stdout.write(`${JSON.stringify({ id: record.id, phase: record.phase, parentRunId: record.parentRunId, targetVersion: record.targetVersion,
+      positiveControlScenarioIds: record.positiveControlScenarioIds, nextStep: 'Откройте /agent-lab в Pi, проверьте версию агента и подтвердите запуск.' }, null, 2)}\n`);
+  });
+}
+
+/** Every command in the order `--help` lists them: first the owner's path, then what scripts and CI use. */
+const COMMANDS: Readonly<Record<string, Command>> = {
+  detect: { help: ['agent-lab detect [--directory ПАПКА] [--json]   Что Lab нашёл в папке проекта: агента, логи, материалы, промпт'], run: detect },
+  import: { help: ['agent-lab import --file логи.xlsx [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--yes] [--json]   Как Lab прочитает таблицу логов (.xlsx, .csv) и какие разговоры возьмёт; --yes загружает её'], run: importTable },
+  build: { help: ['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--connection подключение.json]   Подготовить ситуации без чата'], run: prepare },
+  prepare: { help: [], run: prepare },
+  cards: { help: [
+    'agent-lab cards --id RUN [--card N] [--json]   Ситуации: что пишет и знает клиент, что должен агент, статус и вопрос',
+    'agent-lab cards --id RUN --card N --choice a|b|c [--text «…»] --yes   Ответ на вопрос ситуации',
+    'agent-lab cards --id RUN --input команда.json [--yes]   Команда владельца; без --yes — только «было → стало»',
+    'agent-lab cards --id RUN --check|--resume|--accept --yes   Проверить ситуации · продолжить подготовку · утвердить готовые',
+    'agent-lab cards --id RUN --convert   Черновик старого формата — продолжить в новом формате; старый останется как есть'], run: cards },
+  accept: { help: ['agent-lab accept --id RUN [--yes]   Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания'], run: accept },
+  run: { help: ['agent-lab run --id RUN --yes [--parallel 4]   Прогнать утверждённые ситуации'], run },
+  repeat: { help: ['agent-lab repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID]   Новый черновик тех же ситуаций'], run: repeat },
+  demo: { help: ['agent-lab demo   Учебный пример целиком, без модели и ключей'], run: demo },
+  summary: { help: ['agent-lab summary --id RUN [--json]   Сколько ситуаций агент прошёл, что не измерено и почему'], run: summary },
+  logs: { help: ['agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--yes]   Какая версия агента записала логи: только тогда сверка с продом — калибровка'], run: logs },
+  reassess: { help: ['agent-lab reassess --id RUN [--input criteria.json] --yes | --code-only   Оценить записанные разговоры заново: судьёй или только точными проверками'], run: reassess },
+  export: { help: ['agent-lab export --id RUN --format html|markdown|json [--output отчёт.html]   Отчёт для заказчика'], run: exportRun },
+  diff: { help: ['agent-lab diff --before RUN --after RUN [--json]   Что сломалось и что исправилось между двумя прогонами'], run: diff },
+  'save-suite': { help: ['agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]   Сохранить набор ситуаций в файл'], run: saveSuite },
+  evaluate: { help: ['agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4] [--connection подключение.json]   Прогнать сохранённый набор (CI)'], run: evaluate },
+  suites: { help: ['agent-lab suites [--directory .evals]   Сохранённые наборы'], run: async ({ values }) => { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); } },
+  doctor: { help: ['agent-lab doctor --connection подключение.json --yes   Три пробных запроса к агенту: запись, чтение, сброс'], run: checkConnection },
+  status: { help: ['agent-lab status   Модели и ключи, которые видит Pi'], run: async () => { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); } },
+};
+
+const HELP = [
+  'Agent Lab — насколько хорош ваш агент: точность на ситуациях из реальных логов и причины провалов.', '',
+  '  agent-lab                         Диалог в текущем проекте',
+  '  agent-lab chat [опции Pi]          Напишите задачу обычными словами', '',
+  ...Object.values(COMMANDS).flatMap(command => command.help.map(line => `  ${line}`)), '',
+  'evaluate, run и reassess: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.',
+  '--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается.', '',
+].join('\n');
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  if (args[0] === 'chat' || (!args.length && process.stdin.isTTY)) { await chat(args.slice(args[0] === 'chat' ? 1 : 0)); return; }
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: FLAGS });
+  const name = positionals[0];
+  if (values.help || !name) { process.stdout.write(HELP); return; }
+  const command = COMMANDS[name];
+  if (!command) throw new Error(`Unknown command: ${name}`);
+  await command.run({ values, directory: values['data-dir'] ?? resolve('.agent-lab') });
 }
 void main().catch(error => { process.stderr.write(`Agent Lab: ${safeLine(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = process.argv[2] === 'evaluate' ? 2 : 1; });

@@ -1,4 +1,5 @@
-import { isRunning, type Experiment } from '../src/contracts.js';
+import type { Experiment } from '../src/contracts.js';
+import { isRunning } from '../src/phases.js';
 import { accuracyParts, whenText } from '../src/result-text.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
 import { plannedTrials } from '../src/run.js';

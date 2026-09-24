@@ -261,7 +261,7 @@ export function resultScreen(data: SpaceData, run: { record: Experiment; view: R
   return { head: [], body, picks, items, ...(anchor !== undefined ? { anchor } : {}), foot: FOOT.area };
 }
 
-/** The spinner of the progress row; the workspace turns it on every refresh. */
+/** The spinner of the progress row: the frames of Pi's own Loader; the workspace turns it while work goes on. */
 export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
 
 /** The progress row of work going on (ui-spec §4.6): the line and the bar come from the record; a bar only when there is room for one. */

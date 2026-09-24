@@ -2,7 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ModelRuntime, type ProviderConfig } from '@earendil-works/pi-coding-agent';
-import { emptyUsage, settingsSchema, type CallContext } from '../../src/contracts.js';
+import { emptyUsage, settingsSchema } from '../../src/contracts.js';
+import type { CallContext } from '../../src/runtime.js';
 import { createPiRuntime } from '../../src/pi.js';
 
 /*

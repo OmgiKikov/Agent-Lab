@@ -1,12 +1,11 @@
-import type { GeneratorEvidence } from './generator-evidence.js';
-import { fingerprint } from './contracts.js';
-import { writeFileAtomic, writeFileAtomicSync } from './fs-atomic.js';
-import { mkdir, open, readFile, readdir, unlink } from 'node:fs/promises';
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { experimentSchema, judgeAuditSchema, type Experiment, type TraceEvent, type JudgeAudit } from './contracts.js';
-
+import { appendFileSync, mkdirSync, watch } from 'node:fs';
+import { mkdir, open, readFile, readdir, unlink } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { judgeAuditSchema, type JudgeAudit } from './assessment.js';
+import { experimentSchema, fingerprint, type Experiment, type TraceEvent } from './contracts.js';
+import { writeFileAtomic, writeFileAtomicSync } from './fs-atomic.js';
+import type { GeneratorEvidence } from './generator-evidence.js';
 import { libraryHash } from './scenario-library.js';
 import { ScenarioFiles } from './scenario-store.js';
 import { oneLine } from './text.js';
@@ -20,6 +19,15 @@ import type { TableReading } from './spreadsheet/mapping.js';
 import type { TopicMap, TopicMapKey, TopicMapProgress } from './miner/topic-map.js';
 import type { LogVersionJournal } from './card/calibration.js';
 
+/*
+ * Storage, and only storage, of one data folder: a record per run as one atomic JSON file, the writer's lock, the
+ * append-only journals and sidecars of every dialogue and judgment, the content-addressed file areas the records
+ * point at (imports, libraries, the owners' declarations, topic maps, spreadsheet readings) and the publication
+ * journal that finishes a library write interrupted halfway. Every write goes through the one writer's queue; every
+ * read works without the lock. What a phase allows, what a command changes and what a run may spend is decided in
+ * lab/, never here.
+ */
+
 type LockOwner = { pid: number; token: string };
 function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
@@ -29,73 +37,19 @@ function alive(pid: number): boolean {
     throw error;
   }
 }
+
 export class ExperimentStore {
   readonly directory: string;
   diagnostics: { id: string; message: string }[] = [];
   private lockToken: string | null = null;
   private writerQueue: Promise<unknown> = Promise.resolve();
-  private async writeTransaction<T>(work: () => Promise<T>): Promise<T> {
-    const pending = this.writerQueue.then(async () => {
-      if (!this.lockToken) throw new Error('Для изменения записи откройте лабораторию как писатель.');
-      await this.recoverPendingPublications();
-      return work();
-    });
-    this.writerQueue = pending.catch(() => {});
-    return pending;
-  }
-  readImport(id: string): Promise<ImportBatch> { return new ScenarioFiles(this.directory).readImport(id); }
-  writeImport(batch: ImportBatch): Promise<ImportBatch> { return this.writeTransaction(() => new ScenarioFiles(this.directory).writeImport(batch)); }
-  /** A spreadsheet's import and the reading the owner confirmed for it, side by side (spreadsheet/files.ts). */
-  writeTableImport(batch: ImportBatch, reading: TableReading): Promise<ImportBatch> {
-    return this.writeTransaction(async () => {
-      const stored = await new ScenarioFiles(this.directory).writeImport(batch);
-      await writeReadingFile(this.directory, stored.id, stored.contentHash, reading);
-      return stored;
-    });
-  }
-  /** The topic map of an import stored under `key`, finished or still being built (miner/files.ts); undefined when there is none. */
-  readTopicMap(key: TopicMapKey): Promise<unknown> { return readTopicMapFile(this.directory, key); }
-  /** Stores a topic map, or the progress of its build, next to its import. */
-  writeTopicMap(value: TopicMap | TopicMapProgress): Promise<void> { return this.writeTransaction(() => writeTopicMapFile(this.directory, value)); }
-  /** Which agent version wrote an import's logs, as the owner declared it (card/calibration.ts); undefined before the first declaration. */
-  readLogVersions(importId: string): Promise<LogVersionJournal | undefined> { return new ScenarioFiles(this.directory).readLogVersions(importId); }
-  /** Appends a declaration to its import's journal, if the journal is still the one it was prepared on. */
-  writeLogVersions(journal: LogVersionJournal, expectedHash: string | null): Promise<void> {
-    return this.writeTransaction(() => new ScenarioFiles(this.directory).writeLogVersions(journal, expectedHash));
-  }
-  readLibrary(id: string, hash?: string): Promise<ScenarioLibrary> { return new ScenarioFiles(this.directory).readLibrary(id, hash); }
-  writeLibrary(library: ScenarioLibrary, expectedHash?: string): Promise<void> {
-    return this.writeTransaction(() => new ScenarioFiles(this.directory).writeLibrary(library, expectedHash));
-  }
-  /** Finish durable publication intents before accepting another mutation; readers remain lock-free. */
-  recoverPublications(): Promise<void> { return this.writeTransaction(async () => {}); }
-  private async recoverPendingPublications(): Promise<void> {
-    const files = new ScenarioFiles(this.directory);
-    for (const { record, expectedHash } of await files.pendingPublications()) {
-      const library = record.librarySnapshot!;
-      const current = await files.readLibrary(library.id).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
-      if (!current || libraryHash(current) !== libraryHash(library)) await files.writeLibrary(library, expectedHash);
-      await this.saveRecord(record);
-      await files.finishPublication(record.id);
-    }
-  }
-  publishLibrary(record: Experiment, library: ScenarioLibrary, expectedHash?: string): Promise<void> {
-    return this.writeTransaction(async () => {
-      const next = experimentSchema.parse({ ...record, librarySnapshot: library });
-      const files = new ScenarioFiles(this.directory);
-      await files.checkLibraryWrite(library, expectedHash);
-      await files.retainLibrary(library);
-      await files.writePublication(next, expectedHash);
-      await files.writeLibrary(library, expectedHash ?? libraryHash(library));
-      await this.saveRecord(next);
-      await files.finishPublication(next.id);
-    });
-  }
   constructor(directory: string) { this.directory = resolve(directory); }
   private path(id: string): string {
     if (!isIdentifier(id)) throw new Error('Invalid experiment ID');
     return join(this.directory, `${id}.json`);
   }
+
+  /* ── the writer: the lock and the queue every write goes through ── */
   private async owner(): Promise<LockOwner | null> {
     const lockPath = join(this.directory, '.lock');
     let raw: unknown;
@@ -156,6 +110,17 @@ export class ExperimentStore {
     const owner = await this.owner();
     if (owner?.token === token) await unlink(lockPath);
   }
+  private async writeTransaction<T>(work: () => Promise<T>): Promise<T> {
+    const pending = this.writerQueue.then(async () => {
+      if (!this.lockToken) throw new Error('Для изменения записи откройте лабораторию как писатель.');
+      await this.recoverPendingPublications();
+      return work();
+    });
+    this.writerQueue = pending.catch(() => {});
+    return pending;
+  }
+
+  /* ── records ── */
   save(record: Experiment): Promise<void> { return this.writeTransaction(() => this.saveRecord(record)); }
   private async saveRecord(record: Experiment): Promise<void> {
     if (!this.lockToken) throw new Error('Для изменения записи откройте лабораторию как писатель.');
@@ -187,6 +152,23 @@ export class ExperimentStore {
     });
     return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
+  /**
+   * Calls `changed` with a record's id whenever its file is written — by this process or another — until the returned
+   * stop: a reader follows another process's work without asking the disk again and again. A folder the system
+   * cannot watch never calls it.
+   */
+  watch(changed: (id: string) => void): () => void {
+    try {
+      const watcher = watch(this.directory, (_event, name) => {
+        const id = typeof name === 'string' && name.endsWith('.json') ? name.slice(0, -5) : undefined;
+        if (id !== undefined && isIdentifier(id)) changed(id);
+      });
+      watcher.on('error', () => watcher.close());
+      return () => watcher.close();
+    } catch { return () => {}; }
+  }
+
+  /* ── journals and sidecars ── */
   appendTrace(id: string, trialId: string, event: TraceEvent): void {
     if (!this.lockToken) throw new Error('Для записи трассы откройте лабораторию как писатель.');
     this.path(id);
@@ -255,4 +237,56 @@ export class ExperimentStore {
   readJudgeAudit(id: string, trialId: string): Promise<JudgeAudit | null> { return this.readAudit(id, 'judge', trialId); }
   writeCalibrationAudit(id: string, key: string, audit: JudgeAudit): void { this.writeAudit(id, 'calibration', key, audit); }
   readCalibrationAudit(id: string, key: string): Promise<JudgeAudit | null> { return this.readAudit(id, 'calibration', key); }
+
+  /* ── file areas: imports, the owners' declarations, topic maps, libraries ── */
+  readImport(id: string): Promise<ImportBatch> { return new ScenarioFiles(this.directory).readImport(id); }
+  writeImport(batch: ImportBatch): Promise<ImportBatch> { return this.writeTransaction(() => new ScenarioFiles(this.directory).writeImport(batch)); }
+  /** A spreadsheet's import and the reading the owner confirmed for it, side by side (spreadsheet/files.ts). */
+  writeTableImport(batch: ImportBatch, reading: TableReading): Promise<ImportBatch> {
+    return this.writeTransaction(async () => {
+      const stored = await new ScenarioFiles(this.directory).writeImport(batch);
+      await writeReadingFile(this.directory, stored.id, stored.contentHash, reading);
+      return stored;
+    });
+  }
+  /** The topic map of an import stored under `key`, finished or still being built (miner/files.ts); undefined when there is none. */
+  readTopicMap(key: TopicMapKey): Promise<unknown> { return readTopicMapFile(this.directory, key); }
+  /** Stores a topic map, or the progress of its build, next to its import. */
+  writeTopicMap(value: TopicMap | TopicMapProgress): Promise<void> { return this.writeTransaction(() => writeTopicMapFile(this.directory, value)); }
+  /** Which agent version wrote an import's logs, as the owner declared it (card/calibration.ts); undefined before the first declaration. */
+  readLogVersions(importId: string): Promise<LogVersionJournal | undefined> { return new ScenarioFiles(this.directory).readLogVersions(importId); }
+  /** Appends a declaration to its import's journal, if the journal is still the one it was prepared on. */
+  writeLogVersions(journal: LogVersionJournal, expectedHash: string | null): Promise<void> {
+    return this.writeTransaction(() => new ScenarioFiles(this.directory).writeLogVersions(journal, expectedHash));
+  }
+  readLibrary(id: string, hash?: string): Promise<ScenarioLibrary> { return new ScenarioFiles(this.directory).readLibrary(id, hash); }
+  writeLibrary(library: ScenarioLibrary, expectedHash?: string): Promise<void> {
+    return this.writeTransaction(() => new ScenarioFiles(this.directory).writeLibrary(library, expectedHash));
+  }
+
+  /* ── publication: a library and its record written together, finished after a crash ── */
+  /** Finish durable publication intents before accepting another mutation; readers remain lock-free. */
+  recoverPublications(): Promise<void> { return this.writeTransaction(async () => {}); }
+  private async recoverPendingPublications(): Promise<void> {
+    const files = new ScenarioFiles(this.directory);
+    for (const { record, expectedHash } of await files.pendingPublications()) {
+      const library = record.librarySnapshot!;
+      const current = await files.readLibrary(library.id).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
+      if (!current || libraryHash(current) !== libraryHash(library)) await files.writeLibrary(library, expectedHash);
+      await this.saveRecord(record);
+      await files.finishPublication(record.id);
+    }
+  }
+  publishLibrary(record: Experiment, library: ScenarioLibrary, expectedHash?: string): Promise<void> {
+    return this.writeTransaction(async () => {
+      const next = experimentSchema.parse({ ...record, librarySnapshot: library });
+      const files = new ScenarioFiles(this.directory);
+      await files.checkLibraryWrite(library, expectedHash);
+      await files.retainLibrary(library);
+      await files.writePublication(next, expectedHash);
+      await files.writeLibrary(library, expectedHash ?? libraryHash(library));
+      await this.saveRecord(next);
+      await files.finishPublication(next.id);
+    });
+  }
 }

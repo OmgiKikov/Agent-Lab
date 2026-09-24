@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { emptyUsage, fingerprint, settingsSchema, type Experiment, type HumanReview, type JudgeReceipt, type MetricAssessment, type Trial } from '../src/contracts.js';
+import { emptyUsage, fingerprint, settingsSchema, type Experiment, type HumanReview, type Trial } from '../src/contracts.js';
+import type { JudgeReceipt, MetricAssessment } from '../src/assessment.js';
 import { agreementSample, judgeAgreement, PASS_SAMPLE } from '../src/agreement.js';
 import { COUNTING_RULES } from '../src/outcomes.js';
 

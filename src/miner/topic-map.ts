@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import type { CallContext, ValidationExclusion } from '../contracts.js';
+import type { ValidationExclusion } from '../contracts.js';
+import type { CallContext } from '../runtime.js';
 import { identifierSchema, sha256Schema } from '../ids.js';
 import { validationDialogueIssue } from '../imports.js';
 import { IMPORT_DIALOGUE_LIMIT } from '../limits.js';

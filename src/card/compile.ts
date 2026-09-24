@@ -1,4 +1,5 @@
-import { EXPECTATIONS_PROTOCOL, scenarioSchema, type CardExecution, type Requirement, type Rubric, type Scenario } from '../contracts.js';
+import { EXPECTATIONS_PROTOCOL, scenarioSchema, type CardExecution, type Requirement, type Scenario } from '../contracts.js';
+import type { Rubric } from '../assessment.js';
 import type { BehaviorPolicy } from '../scenario-contracts.js';
 import { clip } from '../text.js';
 import { USER_CONTROLLER_PROTOCOL, type UserView } from '../user-controller.js';

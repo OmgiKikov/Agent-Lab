@@ -1,5 +1,5 @@
 import type { Experiment, Trial } from '../src/contracts.js';
-import { assessmentRubrics } from '../src/contracts.js';
+import { assessmentRubrics } from '../src/assessment.js';
 import type { RunComparison } from '../src/comparison.js';
 import { plannedTrials } from '../src/run.js';
 import { judgedScenario } from '../src/card/legacy-v1.js';

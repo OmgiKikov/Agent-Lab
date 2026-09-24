@@ -8,7 +8,8 @@ import { FOCUSED_REQUIREMENT_LIMIT } from '../src/limits.js';
 import { REQUIREMENTS_ROLE } from '../src/prompts.js';
 import { judgeInput, observableSources } from '../src/judge.js';
 import { ExperimentLab } from '../src/experiment.js';
-import { DEFAULT_JUDGE, emptyUsage, promptCompliance, REQUIREMENT_LIMIT, settingsSchema, targetSchema, type Scenario, type Trial } from '../src/contracts.js';
+import { DEFAULT_JUDGE, emptyUsage, REQUIREMENT_LIMIT, settingsSchema, targetSchema, type Scenario, type Trial } from '../src/contracts.js';
+import { promptCompliance } from '../src/assessment.js';
 import { callContext, fixture, fixtureSettings as settings, type Options, type Reply, type Request } from './helpers/pi-fixture.js';
 
 test('invalid role configuration fails before any paid builder request and names configuration separately from authentication', async () => {

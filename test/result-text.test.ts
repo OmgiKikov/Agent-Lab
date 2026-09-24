@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
-import { emptyUsage, goalAttainment, promptCompliance, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type HumanReview, type MetricAssessment, type Requirement, type Source, type Trial } from '../src/contracts.js';
+import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Requirement, type Source, type Trial } from '../src/contracts.js';
+import { goalAttainment, promptCompliance, replyQuality, simulatorFidelity, type MetricAssessment } from '../src/assessment.js';
 import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView, COUNTING_RULES, NOT_MEASURED_TEXT, type ResultView } from '../src/result-view.js';
 import {

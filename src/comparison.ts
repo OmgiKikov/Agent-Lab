@@ -1,7 +1,8 @@
 import { judgedByCheckpoints } from './card/legacy-v1.js';
 import { hasCompleteJudgment, observableSources, scenarioSources } from './judge.js';
 import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
-import { fingerprint, metricApplies, simulatorWasUsed, type Experiment, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
+import { fingerprint, simulatorWasUsed, type Experiment, type Scenario, type SourceIdentity, type Tier, type Trial, type UserMode } from './contracts.js';
+import { metricApplies } from './assessment.js';
 import { automaticTrialResult, headlineMetricIds, headlineTrialResult, isAgentFailure, latestHumanReviews, markTargets, markUnderCurrentRule, measured, observedRecord, RULES_METRIC_ID } from './outcomes.js';
 import { attemptKey, expectedAttemptRows, headlineCardOutcome, plannedTrials, runCompleteness } from './run.js';
 import { judgeAgreement } from './agreement.js';

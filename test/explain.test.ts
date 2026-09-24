@@ -5,7 +5,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { emptyUsage, goalAttainment, promptCompliance, settingsSchema, type Experiment, type MetricAssessment, type Requirement, type Source, type Trial } from '../src/contracts.js';
+import { emptyUsage, settingsSchema, type Experiment, type Requirement, type Source, type Trial } from '../src/contracts.js';
+import { goalAttainment, promptCompliance, type MetricAssessment } from '../src/assessment.js';
 import { exampleRows, failureExplanation, ruleRegister, rowsToLines, UNVERIFIED } from '../src/explain.js';
 // Phase-3 evidence is read through the namespace, so a missing export fails an assertion, not the module link.
 import * as explain from '../src/explain.js';

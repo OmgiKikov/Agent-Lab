@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { addUsage, emptyUsage, fingerprint, type CallContext, type Runtime } from './contracts.js';
+import { addUsage, emptyUsage, fingerprint } from './contracts.js';
+import type { CallContext, Runtime } from './runtime.js';
 
 /**
  * The calls a journal names. Stored journals are read as written: `prepare` is how journals written before

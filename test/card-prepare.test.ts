@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fingerprint, type Experiment, type Runtime } from '../src/contracts.js';
+import { fingerprint, type Experiment } from '../src/contracts.js';
+import type { Runtime } from '../src/runtime.js';
 import { compileCard } from '../src/card/compile.js';
 import { pendingReviewCalls, storedEvidence } from '../src/card/prepare.js';
 import type { CardPreparation, LibraryV2 } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
-import { draftHash, ExperimentLab } from '../src/experiment.js';
+import { ExperimentLab } from '../src/experiment.js';
+import { draftHash } from '../src/lab/record.js';
 import { scenarioSources } from '../src/judge.js';
 import { buildResultView } from '../src/result-view.js';
 import { libraryHash, verifyAcceptedRun } from '../src/scenario-library.js';
@@ -32,7 +34,7 @@ async function statuses(lab: ExperimentLab, id: string) {
   const { library, experiment } = await lab.readCards(id);
   return [...cardStatuses({ library, evidence: await storedEvidence(lab.store, library), maxTurns: experiment.settings.maxTurns }).values()].map(item => item.status);
 }
-/** A stopped preparation's draft with a larger budget, as the owner raises it before continuing. */
+/** A stopped preparation's draft with a larger limit, as the owner raises it before continuing: a resume is bounded by the draft's limit. */
 async function raiseBudget(lab: ExperimentLab, id: string): Promise<LibraryV2> {
   const draft = await lab.get(id);
   await lab.updateDraft(id, draftHash(draft), { settings: { maxCalls: 40 } });
@@ -82,13 +84,13 @@ test('a resume continues every unit from its next step: a card made before the b
   const seen = received();
   const runtime = cardRuntime(seen);
   const propose = runtime.proposeCard!;
-  // The first proposal needs three repairs, so the run's five calls end right before its review.
+  // The first proposal needs three repairs, so the preparation's five calls end right before its review.
   runtime.proposeCard = async (request, ctx) => {
     if (!seen.proposals.length) for (let repair = 0; repair < 3; repair++) ctx.beforeCall();
     return propose(request, ctx);
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput({ settings: { ...cardInput().settings, maxCalls: 5 } }));
+    const draft = await lab.create(cardInput(), { callCeiling: 5 });
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
     assert.match(stopped.error ?? '', /budget exhausted/);
@@ -145,9 +147,9 @@ test('each dialogue has one allowance of proposal calls, repairs included, and a
     return propose(request, ctx);
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput({ settings: { ...cardInput().settings, maxCalls: 5 } }));
+    const draft = await lab.create(cardInput(), { callCeiling: 5 });
     await lab.waitForIdle();
-    assert.equal(spent, 4, 'the run\'s budget ran out first');
+    assert.equal(spent, 4, 'the preparation\'s ceiling ran out first');
     await lab.resumePreparation(draft.id, libraryHash(await raiseBudget(lab, draft.id)));
     await lab.waitForIdle();
     const resumed = await lab.get(draft.id);

@@ -4,14 +4,16 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
-import { ExperimentLab, draftHash } from '../src/experiment.js';
+import { ExperimentLab } from '../src/experiment.js';
+import { draftHash } from '../src/lab/record.js';
 import { appointmentAgent, legacyDemoMetrics, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
 import { htmlReport, jsonReport, markdownReport } from '../src/report.js';
 import { FONT_STYLESHEET, REPORT_SCRIPT } from '../src/report-style.js';
 import { buildResultView } from '../src/result-view.js';
 import { sealJudgeReceipt } from '../src/judge.js';
-import type { Experiment, JudgeAudit } from '../src/contracts.js';
+import type { Experiment } from '../src/contracts.js';
+import type { JudgeAudit } from '../src/assessment.js';
 
 async function setup(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-artifacts-'));

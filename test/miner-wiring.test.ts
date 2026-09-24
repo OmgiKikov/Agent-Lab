@@ -3,14 +3,17 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createInputSchema, experimentSchema, fingerprint, settingsSchema, type MetricAssessment, type Runtime } from '../src/contracts.js';
+import { createInputSchema, experimentSchema, fingerprint, settingsSchema } from '../src/contracts.js';
+import type { MetricAssessment } from '../src/assessment.js';
+import type { Runtime } from '../src/runtime.js';
 import { storedEvidence } from '../src/card/prepare.js';
 import type { CardProposal, CardProposalRequest } from '../src/card/proposal.js';
 import { addCard } from '../src/card/library.js';
 import { cardSchema, libraryV2Schema, type Card, type CardPreparation } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { createDemoRuntime, demoInput, demoTarget } from '../src/demo.js';
-import { draftHash, ExperimentLab } from '../src/experiment.js';
+import { ExperimentLab } from '../src/experiment.js';
+import { draftHash } from '../src/lab/record.js';
 import { importDialogues } from '../src/imports.js';
 import { StructuredTaskError } from '../src/llm/structured.js';
 import { cardTrafficTopic, situationCoverage } from '../src/miner/cards.js';
@@ -116,17 +119,35 @@ test('the consent names the topic map\'s calls, the ceiling, the promise and eve
   const logged = logs([['Возврат оплаты', 50], ['Статус заявки', 30], ['Смена тарифа', 10]]);
   const batch = batchOf(logged, [MASKED_ROW, UNREADABLE_ROW]);
   await withLab(minerRuntime(logged).runtime, async lab => {
-    const consent = await preparationConsent(lab.store, { batch, settings: createInput(batch).settings, situations: 15 });
+    const consent = await preparationConsent(lab.store, { input: createInput(batch), situations: 15 });
     assert.deepEqual({ ...consent, excluded: consent.excluded.map(item => [item.dialogueId, item.kind]) }, {
-      conversations: 92, usable: 90, promised: 15, topicMapCalls: 4, callCeiling: 150,
+      conversations: 92, usable: 90, promised: 15, topicMapCalls: 4, callCeiling: 110,
       excluded: [['no id', 'unreadable'], ['masked1', 'masked']],
     }, 'one proposal and three batches of 30; the unreadable row and the masked conversation reach no model');
+    assert.equal(consent.callCeiling, 4 + 1 + 15 * (5 + 2), 'the ceiling is the preparation\'s own: the map, the rules read once, and per situation its proposal allowance and its review — not the draft\'s limit of 150');
     assert.match(consent.excluded[0]!.reason, /Некорректный id диалога/);
     assert.equal(consent.excluded[1]!.reason, 'реплика клиента целиком скрыта обезличиванием');
-    const all = await preparationConsent(lab.store, { batch, settings: createInput(batch).settings, situations: 200 });
+    const all = await preparationConsent(lab.store, { input: createInput(batch), situations: 200 });
     assert.equal(all.promised, 90, 'never more situations than usable conversations');
-    assert.equal((await preparationConsent(lab.store, { batch, settings: createInput(batch).settings })).promised, 15, 'fifteen when the owner names no number');
-    await assert.rejects(preparationConsent(lab.store, { batch, settings: createInput(batch).settings, situations: 0 }), /от 1 до 200/);
+    assert.equal((await preparationConsent(lab.store, { input: createInput(batch) })).promised, 15, 'fifteen when the owner names no number');
+    await assert.rejects(preparationConsent(lab.store, { input: createInput(batch), situations: 0 }), /от 1 до 200/);
+  });
+});
+
+test('a preparation stops at the ceiling its consent stated, not at the draft\'s limit, which stays the run\'s budget', async () => {
+  const logged = TEN();
+  const batch = batchOf(logged);
+  const { runtime } = minerRuntime(logged);
+  // The model never gets a proposal right: every attempt is charged, none is accepted, and each conversation gives its seat to the next.
+  runtime.proposeCard = async (_request, ctx) => { for (;;) ctx.beforeCall(); };
+  await withLab(runtime, async lab => {
+    const consent = await preparationConsent(lab.store, { input: createInput(batch), situations: 2 });
+    assert.equal(consent.callCeiling, 2 + 1 + 2 * (5 + 2));
+    const draft = await lab.create(createInput(batch), { situations: 2 });
+    await lab.waitForIdle();
+    const stopped = await lab.get(draft.id);
+    assert.match(stopped.error ?? '', /budget exhausted/);
+    assert.deepEqual([stopped.usage.calls, stopped.settings.maxCalls], [consent.callCeiling, 150], 'the promise and the stop are one number');
   });
 });
 
@@ -135,7 +156,7 @@ test('the promise is what is prepared: the representative sample of every topic,
   const batch = batchOf(logged);
   const { runtime, seen } = minerRuntime(logged);
   await withLab(runtime, async (lab, directory) => {
-    const consent = await preparationConsent(lab.store, { batch, settings: createInput(batch).settings, situations: 5 });
+    const consent = await preparationConsent(lab.store, { input: createInput(batch), situations: 5 });
     assert.deepEqual([consent.promised, consent.topicMapCalls], [5, 2]);
     const draft = await lab.create(createInput(batch), { situations: 5 });
     await lab.waitForIdle();
@@ -234,7 +255,7 @@ test('the topic map is paid for once: a build cut short continues from its last 
   const { runtime } = broken;
   await withLab(runtime, async lab => {
     const mapCalls = async (extra: Record<string, unknown> = {}) =>
-      (await preparationConsent(lab.store, { batch, settings: createInput(batch, extra).settings, situations: 3 })).topicMapCalls;
+      (await preparationConsent(lab.store, { input: createInput(batch, extra), situations: 3 })).topicMapCalls;
     assert.equal(await mapCalls(), 4);
     const failed = await lab.create(createInput(batch), { situations: 3 });
     await lab.waitForIdle();

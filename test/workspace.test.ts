@@ -3,16 +3,19 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import { visibleWidth } from '@earendil-works/pi-tui';
+import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { judgedScreen } from '../extensions/workspace-screens.ts';
+import { workspaceView } from '../extensions/board-command.ts';
+import { LabWorkspace, newState, type WorkspaceView } from '../extensions/workspace.ts';
 import { launchRun } from '../extensions/launch.ts';
 import { NeedsOwner } from '../extensions/lab-ui.ts';
 import { EXTERNAL_AGENT } from '../src/card/prepare.js';
 import { hostGrant } from '../src/card/commands.js';
 import { situationViews } from '../src/card/view.js';
 import { createInputSchema, runnableTarget, UNCONNECTED, type Experiment } from '../src/contracts.js';
-import { ExperimentLab, draftHash } from '../src/experiment.js';
+import { ExperimentLab } from '../src/experiment.js';
+import { draftHash } from '../src/lab/record.js';
 import { decisions } from '../src/inbox.js';
 import { consentText, type PreparationConsent } from '../src/miner/plan.js';
 import { recurringProblems } from '../src/problems.js';
@@ -166,6 +169,41 @@ test('before the first result the workspace walks Ситуации › Прог�
     press(KEYS.enter);
     assert.deepEqual(actions, [{ type: 'run' }]);
   } finally { await rm(demo.cwd, { recursive: true, force: true }); }
+});
+
+test('while work goes on the workspace follows it: a reported change reads it again, no timer does, and the end of the work ends the following', async t => {
+  const folder = await demoFolder();
+  t.after(() => rm(folder.cwd, { recursive: true, force: true }));
+  const state = newState();
+  const quiet = await workspaceView(new ExperimentLab(folder.directory), state, undefined);
+  // The same folder as it looks while a run goes on: its records with the progress row of the work.
+  const going: WorkspaceView = { ...quiet, data: { ...quiet.data!, progress: { text: 'Прогон: 1 из 4 разговоров', share: 0.25, stoppable: false } } };
+  const views = [going, going, quiet];
+  let reads = 0, stops = 0;
+  let report: (() => void) | undefined;
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+  const plain = { fg: (_tone: string, text: string) => text, bold: (text: string) => text };
+  let draws = 0;
+  const board = new LabWorkspace(going, state, plain as never, () => {}, () => { draws++; }, () => 44, async () => views[reads++] ?? quiet,
+    changed => { report = changed; return () => { stops++; }; });
+  const spinner = () => board.render(100).map(line => stripTerminalSequences(line)).find(line => line.includes('Прогон: 1 из 4 разговоров'))!.trim()[0];
+  const settled = async () => { for (let turn = 0; turn < 5; turn++) await new Promise(resolve => setImmediate(resolve)); };
+  const before = spinner();
+  t.mock.timers.tick(80);
+  assert.notEqual(spinner(), before, 'the spinner turns on its own clock, the pace of Pi\'s Loader');
+  t.mock.timers.tick(60_000);
+  await settled();
+  assert.equal(reads, 0, 'a minute without a change reads nothing: the clock only draws, no timer asks again and again');
+  report!(); report!();
+  await settled();
+  assert.deepEqual([reads, stops], [2, 0], 'a change reported during a read is read once more after it — never lost, never read twice at once; the work still goes on');
+  report!();
+  await settled();
+  assert.deepEqual([reads, stops], [3, 1], 'the work is over: the workspace stops following');
+  const drawn = draws;
+  t.mock.timers.tick(60_000);
+  assert.equal(draws, drawn, 'and its spinner stops with it');
+  board.dispose();
 });
 
 test('stored first-format runs open on their result, their situations only read, their failures explained the same way', async () => {

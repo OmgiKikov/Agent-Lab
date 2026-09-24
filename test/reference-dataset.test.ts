@@ -4,18 +4,9 @@ import { readFile, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import {
-  createInputSchema,
-  dialogueSchema,
-  emptyUsage,
-  goalAttainment,
-  replyQuality,
-  scenarioSchema,
-  verbatimSpan,
-  type Dialogue,
-  type Scenario,
-  type Trial,
-} from '../src/contracts.js';
+import { createInputSchema, dialogueSchema, emptyUsage, scenarioSchema, type Dialogue, type Scenario, type Trial } from '../src/contracts.js';
+import { goalAttainment, replyQuality } from '../src/assessment.js';
+import { verbatimSpan } from '../src/verbatim.js';
 import { judgeInput } from '../src/judge.js';
 
 /*

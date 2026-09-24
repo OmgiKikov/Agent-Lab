@@ -1,4 +1,6 @@
-import { createInputSchema, type CreateInput, type MetricAssessment, type Requirement, type Runtime } from '../../src/contracts.js';
+import { createInputSchema, type CreateInput, type Requirement } from '../../src/contracts.js';
+import type { MetricAssessment } from '../../src/assessment.js';
+import type { Runtime } from '../../src/runtime.js';
 import { demoTarget } from '../../src/demo.js';
 import type { CardProposal, CardProposalRequest, DialogueProposal, RulesProposal } from '../../src/card/proposal.js';
 import type { CardReviewRequest, ReviewVerdict } from '../../src/card/review.js';

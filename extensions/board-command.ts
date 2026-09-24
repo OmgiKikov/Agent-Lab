@@ -7,7 +7,7 @@ import { cardStatuses } from '../src/card/status.js';
 import { convertible } from '../src/card/legacy-v1.js';
 import { pendingReviewCalls } from '../src/card/prepare.js';
 import { situationViews, type SituationAction, type SituationView } from '../src/card/view.js';
-import { isRunning } from '../src/contracts.js';
+import { isRunning } from '../src/phases.js';
 import { demoInput } from '../src/demo.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
 import type { ExperimentLab } from '../src/experiment.js';
@@ -26,7 +26,7 @@ import { recordMark } from './judge-review.ts';
 import { ask, boardDiscussionContext, inputError, requireInteractive } from './lab-ui.ts';
 import { cardPlan, launchRun } from './launch.ts';
 import type { SessionOperation } from './operations.ts';
-import { newState, showWorkspace, type WorkspaceAction, type WorkspaceState, type WorkspaceView } from './workspace.ts';
+import { newState, showWorkspace, type WorkspaceAction, type WorkspaceChanges, type WorkspaceState, type WorkspaceView } from './workspace.ts';
 import type { SpaceData } from './workspace-screens.ts';
 
 /*
@@ -139,6 +139,22 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
   };
 }
 
+/**
+ * What makes an open workspace read itself again: a record written by any process — a checkpoint of a run, a step of
+ * a preparation — and a new progress line of this session's own work, which it may say before it saves anything.
+ */
+function workspaceChanges(reader: ExperimentLab, job: SessionOperation | undefined): WorkspaceChanges {
+  return changed => {
+    const stops = [reader.store.watch(() => changed())];
+    let line = '';
+    if (job) stops.push(job.lab.follow(record => {
+      const next = progressText(record);
+      if (next !== line) { line = next; changed(); }
+    }));
+    return () => { for (const stop of stops) stop(); };
+  };
+}
+
 /** The folder's agents, and the open one's workspace. */
 export async function workspaceView(reader: ExperimentLab, state: WorkspaceState, job: SessionOperation | undefined): Promise<WorkspaceView> {
   const now = new Date();
@@ -195,7 +211,8 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
       while (true) {
         const job = operations.current(directory);
         const view = await workspaceView(reading(), state, job);
-        const action: WorkspaceAction = pending ?? await showWorkspace(ctx, view, state, () => workspaceView(reading(), state, operations.current(directory)));
+        const action: WorkspaceAction = pending ?? await showWorkspace(ctx, view, state, () => workspaceView(reading(), state, operations.current(directory)),
+          workspaceChanges(reading(), operations.current(directory)));
         pending = undefined;
         state.notice = undefined;
         if (action.type === 'close') break;

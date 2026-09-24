@@ -1,10 +1,11 @@
 import type { Experiment, Trial } from './contracts.js';
-import { assessmentEventContent, describeCheck, internalPromptRule } from './contracts.js';
+import { describeCheck, internalPromptRule } from './contracts.js';
+import { assessmentEventContent } from './assessment.js';
 import { automaticTrialResult } from './outcomes.js';
 import { pluralForm } from './plural.js';
 import { oneLine, safeText } from './text.js';
 import { ruleRegister, ruleText, UNVERIFIED } from './explain.js';
-import { draftHash } from './experiment.js';
+import { draftHash } from './lab/record.js';
 import { judgedScenario } from './card/legacy-v1.js';
 
 /*

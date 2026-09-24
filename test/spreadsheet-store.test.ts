@@ -5,8 +5,9 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Runtime } from '../src/contracts.js';
-import { draftHash, ExperimentLab } from '../src/experiment.js';
+import type { Runtime } from '../src/runtime.js';
+import { ExperimentLab } from '../src/experiment.js';
+import { draftHash } from '../src/lab/record.js';
 import { readDialogueImport } from '../src/imports.js';
 import { IMPORT_FILE_BYTES } from '../src/limits.js';
 import { buildResultView } from '../src/result-view.js';

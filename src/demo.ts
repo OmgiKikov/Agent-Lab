@@ -1,5 +1,7 @@
 import { fileURLToPath } from 'node:url';
-import { createInputSchema, type CreateInput, type MetricAssessment, type RunnableTarget, type Runtime } from './contracts.js';
+import { createInputSchema, type CreateInput, type RunnableTarget } from './contracts.js';
+import type { MetricAssessment } from './assessment.js';
+import type { Runtime } from './runtime.js';
 import type { DialogueProposal } from './card/proposal.js';
 import type { ReviewVerdict } from './card/review.js';
 import { buildTopicMap, type TopicTaskRunner } from './miner/topic-map.js';

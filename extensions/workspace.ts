@@ -67,15 +67,26 @@ export type WorkspaceAction =
   | { type: 'ask'; about: string; runId?: string; situation?: { number: number; id: string }; trialId?: string };
 
 const ANSWERS: Answer[] = ['agree', 'disagree', 'unsure'];
+/** How often the spinner of work going on turns: the pace of Pi's own Loader, so the chat and the workspace turn alike. */
+const SPIN_MS = 80;
 /** The letter keys as the Russian layout types them. */
 const RUSSIAN: Record<string, string> = { 'в': 'd', 'ф': 'a', 'й': 'q', 'о': 'j', 'л': 'k' };
+
+/**
+ * How an open workspace hears that what it shows has changed: `changed` is called at every change — a record written
+ * by this session or another, a new progress line of this session's work — until the returned stop is called.
+ */
+export type WorkspaceChanges = (changed: () => void) => () => void;
 
 export class LabWorkspace implements Component {
   private scroll = 0;
   private frame = 0;
-  private timer?: ReturnType<typeof setInterval>;
+  private unfollow?: () => void;
+  private spinning?: ReturnType<typeof setInterval>;
   private disposed = false;
   private loading = false;
+  /** A change came while the workspace was reading itself: it reads itself once more when that read ends. */
+  private stale = false;
   private viewedTrial?: string;
   private viewedAt = performance.now();
   /** What the last render laid out: the keys act on what the owner sees. */
@@ -83,15 +94,25 @@ export class LabWorkspace implements Component {
 
   constructor(private view: WorkspaceView, private readonly state: WorkspaceState, private readonly theme: Pick<Theme, 'fg' | 'bold'>,
     private readonly done: (action: WorkspaceAction) => void, private readonly redraw: () => void, private readonly rows: () => number = () => 32,
-    private readonly load?: () => Promise<WorkspaceView>) {
+    private readonly load?: () => Promise<WorkspaceView>, changes?: WorkspaceChanges) {
     if (view.data && state.space && !state.area && !state.step) this.land(view.data);
-    if (this.load && (view.data?.progress || view.data?.space.active)) this.timer = setInterval(() => { void this.refresh(); }, 750);
+    // Work going on is followed, not polled: the workspace reads itself again when the work reports a change. Only its
+    // spinner turns on a clock, and that clock draws — it never reads.
+    if (this.load && changes && (view.data?.progress || view.data?.space.active)) {
+      this.unfollow = changes(() => this.changed());
+      this.spinning = setInterval(() => { this.frame++; this.redraw(); }, SPIN_MS);
+    }
   }
 
   /** Where a workspace opens: the steps before the first result; after it, the decisions if any wait, else the newest result. */
   private land(data: SpaceData): void {
     if (!data.space.runs.length) this.state.step = data.progress ? 'run' : 'situations';
     else this.state.area = data.decisions.length ? 'inbox' : 'runs';
+  }
+
+  private changed(): void {
+    if (this.loading) this.stale = true;
+    else void this.refresh();
   }
 
   private async refresh(): Promise<void> {
@@ -102,17 +123,20 @@ export class LabWorkspace implements Component {
       if (this.disposed) return;
       const finished = this.view.data?.progress && !fresh.data?.progress;
       this.view = fresh;
-      this.frame++;
       // A first run that has just produced its result shows it; what was said about the work going on is over.
       if (finished && this.state.step) this.state.step = 'result';
       if (finished) this.state.notice = undefined;
-      if (!fresh.data?.progress && !fresh.data?.space.active) { clearInterval(this.timer); this.timer = undefined; }
+      if (!fresh.data?.progress && !fresh.data?.space.active) this.stopFollowing();
       this.redraw();
-    } catch { /* the last snapshot stays on screen; the next tick tries again */ }
-    finally { this.loading = false; }
+    } catch { /* the last snapshot stays on screen; the next change tries again */ }
+    finally {
+      this.loading = false;
+      if (this.stale && !this.disposed) { this.stale = false; void this.refresh(); }
+    }
   }
 
-  dispose(): void { this.disposed = true; clearInterval(this.timer); }
+  private stopFollowing(): void { this.unfollow?.(); this.unfollow = undefined; clearInterval(this.spinning); this.spinning = undefined; }
+  dispose(): void { this.disposed = true; this.stopFollowing(); }
   invalidate(): void {}
 
   private finish(action: WorkspaceAction): void { this.readUntil(undefined); this.dispose(); this.done(action); }
@@ -426,8 +450,8 @@ export class LabWorkspace implements Component {
   }
 }
 
-export function showWorkspace(ctx: ExtensionContext, view: WorkspaceView, state: WorkspaceState, load?: () => Promise<WorkspaceView>): Promise<WorkspaceAction> {
+export function showWorkspace(ctx: ExtensionContext, view: WorkspaceView, state: WorkspaceState, load?: () => Promise<WorkspaceView>, changes?: WorkspaceChanges): Promise<WorkspaceAction> {
   return ctx.ui.custom<WorkspaceAction>((tui, theme, _keys, done) =>
-    new LabWorkspace(view, state, theme, done, () => tui.requestRender(), () => tui.terminal.rows, load),
+    new LabWorkspace(view, state, theme, done, () => tui.requestRender(), () => tui.terminal.rows, load, changes),
   { overlay: true, overlayOptions: { width: '100%', maxHeight: '100%', anchor: 'top-left', margin: 0 } });
 }

@@ -1,4 +1,5 @@
-import { isRunning, type Experiment } from './contracts.js';
+import type { Experiment } from './contracts.js';
+import { isRunning } from './phases.js';
 import { libraryHash } from './scenario-library.js';
 
 export const draftIsBusy = (record: DraftRecord): boolean => isRunning(record.phase);

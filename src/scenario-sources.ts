@@ -1,4 +1,5 @@
-import type { CallContext, Runtime, Source, SourceSelectionInput } from './contracts.js';
+import type { Source } from './contracts.js';
+import type { CallContext, Runtime, SourceSelectionInput } from './runtime.js';
 import { SELECTED_SOURCE_BYTES, SELECTED_SOURCE_CHARS, SOURCES_PER_DIALOGUE, serializedBytes, workInputIssue } from './limits.js';
 
 /** Whole articles only: selection never silently truncates a procedure or exception. */
