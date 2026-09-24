@@ -164,3 +164,59 @@ test('agent-lab import shows the proposal in counts, answers questions through f
   assert.equal(files.filter(file => file.endsWith('.mapping.json')).length, 1);
   assert.deepEqual((await readConfirmedTable(operator, data)).dialogues.length, 6);
 });
+
+/** Conversations answered by one agent alone and by two: the export lists the agents in one cell, as written. */
+const SINGLE = "['ACQUIRING_AGENT']", PAIR = "['ACQUIRING_AGENT', 'AGENT_GIGACHAT']";
+const agents = (): CellSpec[][] => [['Id диалога', 'Текст', 'agentCode'], ...Array.from({ length: 12 }, (_, k): CellSpec[] => [`d${k + 1}`, conversation(k + 1), (k + 1) % 3 ? SINGLE : PAIR])];
+
+test('the owner\'s choice of conversations is stored with the reading: the same file reads back to the same chosen conversations', async t => {
+  const root = await folder(t), data = join(root, 'data');
+  const path = await workbook(root, 'agents.xlsx', agents());
+  const chosen = await proposeTableImport(path, { where: { column: 'agentCode', values: [SINGLE] } });
+  const { batch, reading } = await withLab(data, lab => confirmTableImport(lab.store, path, chosen));
+  assert.deepEqual(batch.dialogues.map(item => item.id), ['d1', 'd2', 'd4', 'd5', 'd7', 'd8', 'd10', 'd11']);
+  assert.deepEqual([reading.mapping.filter, reading.sheet], [{ column: { index: 2, header: 'agentCode' }, values: [SINGLE] },
+    { dialogues: 12, selected: 8, usable: 8, taken: 8, rejected: [] }]);
+  const stored = importReadingsSchema.parse(JSON.parse(await readFile(join(data, 'imports', `${batch.id}.mapping.json`), 'utf8')));
+  assert.deepEqual(stored.readings[0]!.mapping.filter, reading.mapping.filter);
+  const again = await readConfirmedTable(path, data);
+  assert.deepEqual([again.id, again.contentHash, again.dialogues.length], [batch.id, batch.contentHash, 8]);
+
+  // Every conversation of the same file is another import; the file then reads the way it was confirmed last.
+  await pause();
+  const all = await withLab(data, async lab => confirmTableImport(lab.store, path, await proposeTableImport(path)));
+  assert.notEqual(all.batch.id, batch.id);
+  assert.deepEqual([all.reading.sheet.selected, (await readConfirmedTable(path, data)).dialogues.length], [undefined, 12]);
+});
+
+test('agent-lab import --where asks which values to keep, refuses a column that cannot choose, and imports only the chosen conversations', { timeout: 60000 }, async t => {
+  const root = await folder(t), data = join(root, 'data');
+  const logs = await workbook(root, 'agents.xlsx', agents());
+  const offered = await agentLab(['import', '--file', logs, '--data-dir', data]);
+  assert.ok(offered.stdout.includes('  Разговоры можно отобрать по колонке «agentCode».'), offered.stdout);
+  assert.ok(offered.stdout.includes('Отобрать разговоры: --where "КОЛОНКА" покажет её значения, --where "КОЛОНКА=ЗНАЧЕНИЕ|ЗНАЧЕНИЕ" оставит только их.'), offered.stdout);
+
+  const asked = await agentLab(['import', '--file', logs, '--data-dir', data, '--where', 'agentCode', '--yes']);
+  assert.equal(asked.code, 1, 'a question is not a confirmation');
+  const lines = asked.stdout.split('\n');
+  for (const line of ['Какие разговоры оценивать? Lab видит 12 разговоров; в колонке «agentCode» у них 2 разных значения — выберите одно или несколько.',
+    "  1. «['ACQUIRING_AGENT']» — 8 разговоров", "  2. «['ACQUIRING_AGENT', 'AGENT_GIGACHAT']» — 4 разговора",
+    `Ответ: та же команда с --where "agentCode=${SINGLE}" — значение как написано в таблице; несколько — через |. Все разговоры — без --where.`]) assert.ok(lines.includes(line), `${line}\n---\n${asked.stdout}`);
+  await assert.rejects(readdir(data), { code: 'ENOENT' }, 'nothing is written before a complete proposal is confirmed');
+
+  const refused = await agentLab(['import', '--file', logs, '--data-dir', data, '--where', 'Текст=CLIENT']);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stdout, /Колонка «Текст» уже выбрана как текст разговора\./);
+  const blank = await agentLab(['import', '--file', logs, '--data-dir', data, '--where', '=x']);
+  assert.equal(blank.code, 1);
+  assert.match(blank.stderr, /--where: ожидается КОЛОНКА=ЗНАЧЕНИЕ, несколько значений — через \|; одна КОЛОНКА покажет её значения\./);
+
+  const imported = await agentLab(['import', '--file', logs, '--data-dir', data, '--where', `agentCode=${PAIR}|${SINGLE}`, '--yes']);
+  assert.equal(imported.code, 0, imported.stderr);
+  assert.ok(imported.stdout.includes(`  Отбор: «agentCode» = «${SINGLE}» или «${PAIR}» — 12 из 12 разговоров.`), imported.stdout);
+  const only = await agentLab(['import', '--file', logs, '--data-dir', data, '--where', `agentCode=${PAIR}`, '--yes']);
+  assert.equal(only.code, 0, only.stderr);
+  assert.ok(only.stdout.includes(`  Отбор: «agentCode» = «${PAIR}» — 4 из 12 разговоров.`), only.stdout);
+  assert.match(only.stdout, /Загружено: 4 разговора\./);
+  assert.deepEqual((await readConfirmedTable(logs, data)).dialogues.map(item => item.id), ['d3', 'd6', 'd9', 'd12']);
+});

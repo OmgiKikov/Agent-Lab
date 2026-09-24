@@ -7,9 +7,11 @@ import { TABLE_FORMATS } from './workbook.js';
 /*
  * How a spreadsheet of logs is read, as the owner confirmed it: which sheet, which column is the
  * conversation id, which holds the text, and how messages are told apart — role markers inside one
- * text per conversation, or one message per row with a role column and an optional order column.
- * Lab proposes every choice from the file; nothing is read until the owner confirms. The confirmed
- * mapping is stored next to the import with the file's hash, so the same file always reads the same.
+ * text per conversation, or one message per row with a role column and an optional order column —
+ * and, when the owner chose so, which conversations to evaluate: those with given values in one
+ * column (selection.ts). Lab proposes every choice from the file; nothing is read until the owner
+ * confirms. The confirmed mapping is stored next to the import with the file's hash, so the same
+ * file always reads the same.
  */
 
 export const ROLES = ['user', 'assistant', 'system'] as const;
@@ -22,10 +24,16 @@ export const ROLE_WORDS: Readonly<Record<MarkerRole, string>> = { user: 'кли�
 export const HEADER_SCAN = 20;
 /** More distinct markers or role values than this is not a way of telling who speaks. */
 export const LABEL_LIMIT = 12;
+/** A column that chooses conversations holds categories: at most this many values, each one a numbered answer of one question. */
+export const FILTER_VALUES = 30;
+/** A category is a code or a short label; a longer value is text, and its values are never listed. */
+export const VALUE_CHARS = 120;
 
 const role = z.enum(ROLES);
 const column = z.strictObject({ index: z.number().int().min(0).max(SHEET_COLUMNS - 1), header: z.string().max(1000) });
 export type Column = z.infer<typeof column>;
+/** A value of a column that chooses conversations: the cell as written, the spaces around it aside; '' is an empty cell. */
+const cellValue = z.string().trim().max(VALUE_CHARS);
 
 export const tableMappingSchema = z.strictObject({
   version: z.literal(1),
@@ -45,22 +53,29 @@ export const tableMappingSchema = z.strictObject({
     z.strictObject({ kind: z.literal('message_per_row'), role: column,
       roles: z.array(z.strictObject({ value: text(80), role })).min(2).max(LABEL_LIMIT), order: column.optional() }),
   ]),
+  /** Only the conversations with one of these values in this column go into the import: the owner's choice of what to evaluate. */
+  filter: z.strictObject({ column, values: z.array(cellValue).min(1).max(FILTER_VALUES) }).optional(),
 }).superRefine((mapping, ctx) => {
   const layout = mapping.layout;
-  const columns = [mapping.id.index, mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : []];
+  const columns = [mapping.id.index, mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : [],
+    ...mapping.filter ? [mapping.filter.column.index] : []];
   if (new Set(columns).size !== columns.length) ctx.addIssue({ code: 'custom', message: 'One column cannot play two parts' });
   const labels = layout.kind === 'dialogue_per_row' ? layout.markers.map(item => ({ label: item.token, role: item.role })) : layout.roles.map(item => ({ label: item.value, role: item.role }));
   if (new Set(labels.map(item => item.label)).size !== labels.length) ctx.addIssue({ code: 'custom', message: 'Duplicate markers or role values' });
   if (!labels.some(item => item.role === 'user') || !labels.some(item => item.role === 'assistant')) ctx.addIssue({ code: 'custom', message: 'A conversation needs a customer and an agent' });
+  if (mapping.filter && new Set(mapping.filter.values).size !== mapping.filter.values.length) ctx.addIssue({ code: 'custom', message: 'Duplicate filter values' });
 });
 export type TableMapping = z.infer<typeof tableMappingSchema>;
 export type TableLayout = TableMapping['layout'];
+export type TableFilter = NonNullable<TableMapping['filter']>;
 
 const columnChoice = z.string().trim().min(1).max(200);
 /**
  * The owner's own choices, each overriding what Lab would propose: from the command line or from the
  * chat. A column is named by its header or its letter. Markers and role values are decided one by one:
- * those not named keep Lab's proposal. `order: null` orders messages by the rows of the sheet.
+ * those not named keep Lab's proposal. `order: null` orders messages by the rows of the sheet. `where`
+ * chooses the conversations to evaluate: a column alone asks which of its values to keep; a column with
+ * values keeps the conversations whose cell is exactly one of them.
  */
 export const tableChoicesSchema = z.strictObject({
   sheet: z.string().trim().min(1).max(100).optional(),
@@ -71,6 +86,7 @@ export const tableChoicesSchema = z.strictObject({
   role: columnChoice.optional(),
   roles: z.array(z.strictObject({ value: z.string().trim().min(1).max(80), role })).min(1).max(20).optional(),
   order: columnChoice.nullable().optional(),
+  where: z.strictObject({ column: columnChoice, values: z.array(cellValue).min(1).max(FILTER_VALUES).optional() }).optional(),
 });
 export type TableChoices = z.infer<typeof tableChoicesSchema>;
 
@@ -96,7 +112,8 @@ export const tableReadingSchema = z.strictObject({
   file: z.strictObject({ name: text(260), bytes: z.number().int().positive(), sha256: sha256Schema, format: z.enum(TABLE_FORMATS) }),
   mapping: tableMappingSchema,
   confirmedAt: z.iso.datetime(),
-  sheet: z.strictObject({ dialogues: count, usable: count, taken: count,
+  /** `dialogues`: every conversation of the sheet; `selected`: those the owner's filter kept, when there is one; usable and taken are among them. */
+  sheet: z.strictObject({ dialogues: count, selected: count.optional(), usable: count, taken: count,
     rejected: z.array(z.strictObject({ reason: text(2000), count: z.number().int().positive() })).max(100) }),
 });
 export type TableReading = z.infer<typeof tableReadingSchema>;

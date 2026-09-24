@@ -29,7 +29,7 @@ import { countText } from './plural.js';
 import { logImports } from './card/calibration-scope.js';
 import { confirmTableImport, proposeTableImport } from './spreadsheet/import.js';
 import { importedLine, proposalLines } from './spreadsheet/lines.js';
-import { ROLES, ROLE_WORDS, tableChoicesSchema, type MarkerRole, type TableChoices } from './spreadsheet/mapping.js';
+import { ROLES, ROLE_WORDS, columnLabel, tableChoicesSchema, type MarkerRole, type TableChoices } from './spreadsheet/mapping.js';
 import type { TableProposal } from './spreadsheet/proposal.js';
 
 /**
@@ -70,6 +70,17 @@ function rolePairs(text: string, flag: string, allowText: boolean): { label: str
     return { label, role };
   });
 }
+/**
+ * `--where "КОЛОНКА=ЗНАЧЕНИЕ|ЗНАЧЕНИЕ"` → the column and the exact values to keep; the column alone asks which
+ * of its values to keep. The column ends at the first `=`: a value may hold `=`, and `|` parts the values, as
+ * list-like values (`['A', 'B']`) hold commas. An empty value keeps the conversations whose cell is empty.
+ */
+function whereChoice(text: string): NonNullable<TableChoices['where']> {
+  const at = text.indexOf('=');
+  const column = (at < 0 ? text : text.slice(0, at)).trim();
+  if (!column) throw new Error('--where: ожидается КОЛОНКА=ЗНАЧЕНИЕ, несколько значений — через |; одна КОЛОНКА покажет её значения.');
+  return at < 0 ? { column } : { column, values: text.slice(at + 1).split('|').map(value => value.trim()) };
+}
 /** The owner's choices from the command line; each overrides what Lab would propose. */
 function tableChoicesOf(values: Record<string, string | boolean | string[] | undefined>): TableChoices {
   const text = (key: string) => typeof values[key] === 'string' ? values[key] as string : undefined;
@@ -82,6 +93,7 @@ function tableChoicesOf(values: Record<string, string | boolean | string[] | und
     ...text('role-column') ? { role: text('role-column') } : {},
     ...text('roles') ? { roles: rolePairs(text('roles')!, '--roles', false).map(({ label, role }) => ({ value: label, role })) } : {},
     ...text('order-column') ? { order: text('order-column') } : values['row-order'] ? { order: null } : {},
+    ...text('where') ? { where: whereChoice(text('where')!) } : {},
   });
 }
 /** How to answer the proposal from the command line. */
@@ -89,13 +101,15 @@ function importHints(proposal: TableProposal): string[] {
   const words = ROLES.map(role => ROLE_WORDS[role]).join('|');
   if (proposal.status === 'refused') return ['Поправьте выбор и повторите команду.'];
   if (proposal.status === 'ready') return ['Загрузить: та же команда с --yes.',
-    'Поправить: --sheet, --id-column, --text-column; метки — --markers CLIENT=клиент,AGENT=агент и --separator; сообщение в строке — --role-column, --roles, --order-column или --row-order.'];
+    'Поправить: --sheet, --id-column, --text-column; метки — --markers CLIENT=клиент,AGENT=агент и --separator; сообщение в строке — --role-column, --roles, --order-column или --row-order.',
+    ...!proposal.mapping.filter && proposal.selectable.length ? ['Отобрать разговоры: --where "КОЛОНКА" покажет её значения, --where "КОЛОНКА=ЗНАЧЕНИЕ|ЗНАЧЕНИЕ" оставит только их.'] : []];
   const question = proposal.question;
   switch (question.kind) {
     case 'marker': return [`Ответ: та же команда с --markers ${question.token}=${words}|текст.`];
     case 'role': return [`Ответ: та же команда с --roles "${question.value}=${words}".`];
     case 'id': return ['Ответ: та же команда с --id-column КОЛОНКА.'];
     case 'text': return ['Ответ: та же команда с --text-column КОЛОНКА.'];
+    case 'where': return [`Ответ: та же команда с --where "${columnLabel(question.column)}=${question.values[0]?.value ?? ''}" — значение как написано в таблице; несколько — через |. Все разговоры — без --where.`];
   }
 }
 
@@ -122,11 +136,12 @@ async function main() {
     'agent-version': { type: 'string' }, unknown: { type: 'boolean' }, import: { type: 'string' },
     file: { type: 'string' }, sheet: { type: 'string' }, 'id-column': { type: 'string' }, 'text-column': { type: 'string' }, separator: { type: 'string' },
     markers: { type: 'string' }, 'role-column': { type: 'string' }, roles: { type: 'string' }, 'order-column': { type: 'string' }, 'row-order': { type: 'boolean' },
+    where: { type: 'string' },
   } });
   const command = positionals[0];
   if (values.help || !command) {
     process.stdout.write('  agent-lab detect [--directory ПАПКА] [--json]  Что Lab нашёл в папке проекта: агента, логи, материалы, промпт\n');
-    process.stdout.write('  agent-lab import --file логи.xlsx [--yes] [--json]  Как Lab прочитает таблицу логов (.xlsx, .csv); --yes загружает её\n');
+    process.stdout.write('  agent-lab import --file логи.xlsx [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--yes] [--json]  Как Lab прочитает таблицу логов (.xlsx, .csv) и какие разговоры возьмёт; --yes загружает её\n');
     process.stdout.write('  agent-lab summary --id RUN [--json]     Сколько ситуаций агент прошёл, что не измерено и почему\n');
     process.stdout.write('  agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--yes]   Какая версия агента записала логи: только тогда сверка с продом — калибровка\n');
     process.stdout.write('  agent-lab accept --id RUN [--yes]      Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания\n');

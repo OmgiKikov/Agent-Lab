@@ -44,7 +44,7 @@ export async function confirmTableImport(store: ExperimentStore, path: string, p
   const { batch, preview } = readWithMapping(bytes, file, proposal.mapping);
   if (!batch.dialogues.length) throw new Error('Загружать нечего: ни один разговор из таблицы не подошёл.');
   const reading = tableReadingSchema.parse({ file, mapping: proposal.mapping, confirmedAt: new Date().toISOString(),
-    sheet: { dialogues: preview.dialogues, usable: preview.usable, taken: preview.taken, rejected: preview.rejected } });
+    sheet: { dialogues: preview.dialogues, ...preview.selected === undefined ? {} : { selected: preview.selected }, usable: preview.usable, taken: preview.taken, rejected: preview.rejected } });
   return { batch: await store.writeTableImport(batch, reading), reading };
 }
 

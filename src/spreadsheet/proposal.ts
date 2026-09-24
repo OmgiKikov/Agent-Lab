@@ -4,9 +4,10 @@ import type { CsvDialect } from './csv.js';
 import { importTable, parseOrder, type TablePreview } from './dialogues.js';
 import {
   HEADER_SCAN, LABEL_LIMIT, columnLabel, findColumn, tableChoicesSchema, tableMappingSchema, toColumn,
-  type ColumnInfo, type Role, type TableChoices, type TableLayout, type TableMapping,
+  type ColumnInfo, type Role, type TableChoices, type TableFilter, type TableLayout, type TableMapping,
 } from './mapping.js';
 import { boundaryCounts, detectMarkers, type MarkerStructure } from './markers.js';
+import { columnSelection, conversationRows, selectableColumns, type ValueCount } from './selection.js';
 import { cellOf, columnLetter, type Sheet } from './sheet.js';
 import type { TableFile, Workbook } from './workbook.js';
 
@@ -15,8 +16,9 @@ import type { TableFile, Workbook } from './workbook.js';
  * choice comes from the data: the text column whose cells are led by role markers, or the column of a few
  * role values; the id column whose values identify conversations. A choice the owner made is checked
  * against the data and refused with the reason when it cannot be right. What Lab cannot settle alone
- * (a marker it does not know) becomes one question. The proposal is the typed value the chat question and
- * the command line both render.
+ * (a marker it does not know) becomes one question. Which conversations to evaluate is the owner's alone:
+ * Lab offers the columns of categories, and a column the owner names asks which of its values to keep.
+ * The proposal is the typed value the chat question and the command line both render.
  */
 
 /** The one thing Lab asks before it can propose a complete reading. */
@@ -28,7 +30,9 @@ export type TableQuestion =
   /** Who writes the messages this marker starts in the text column: клиент, агент, служебное — or is it not a marker? */
   | { kind: 'marker'; column: ColumnInfo; token: string; messages: number }
   /** Who writes the messages with this value in the role column? */
-  | { kind: 'role'; column: ColumnInfo; value: string; messages: number };
+  | { kind: 'role'; column: ColumnInfo; value: string; messages: number }
+  /** Какие разговоры оценивать? The values of the column the owner chose, each with its conversations, the most first; the answer is one or several of them. */
+  | { kind: 'where'; column: ColumnInfo; values: ValueCount[] };
 
 interface ProposalBase {
   file: TableFile;
@@ -41,7 +45,8 @@ interface ProposalBase {
   columns: ColumnInfo[];
 }
 export type TableProposal = ProposalBase & (
-  | { status: 'ready'; mapping: TableMapping; preview: TablePreview }
+  /** `selectable`: the columns of categories the conversations could be chosen by (selection.ts). */
+  | { status: 'ready'; mapping: TableMapping; preview: TablePreview; selectable: ColumnInfo[] }
   /** `found`: conversations Lab already sees in the sheet. */
   | { status: 'question'; question: TableQuestion; found: number }
   | { status: 'refused'; choice: keyof TableChoices; reason: string });
@@ -87,9 +92,14 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
   const outcome = decide(analysis, chosen);
   if ('refused' in outcome) return { ...base, status: 'refused', choice: outcome.refused, reason: outcome.reason };
   if ('question' in outcome) return { ...base, status: 'question', question: outcome.question, found: outcome.found };
-  const mapping = tableMappingSchema.parse({ version: 1, source: workbook.csv ? { format: 'csv', ...workbook.csv } : { format: 'xlsx', sheet: sheet.name },
+  const reading = tableMappingSchema.parse({ version: 1, source: workbook.csv ? { format: 'csv', ...workbook.csv } : { format: 'xlsx', sheet: sheet.name },
     headerRow: analysis.header + 1, ...outcome.mapping });
-  return { ...base, status: 'ready', mapping, preview: importTable(sheet, mapping).preview };
+  const conversations = conversationRows(sheet, reading, analysis.rows);
+  const selection = choose(analysis, reading, conversations, chosen.where);
+  if ('reason' in selection) return { ...base, status: 'refused', choice: 'where', reason: selection.reason };
+  if ('question' in selection) return { ...base, status: 'question', question: selection.question, found: conversations.length };
+  const mapping = selection.filter ? tableMappingSchema.parse({ ...reading, filter: selection.filter }) : reading;
+  return { ...base, status: 'ready', mapping, preview: importTable(sheet, mapping).preview, selectable: selectableColumns(sheet, reading, conversations, analysis.columns) };
 }
 
 interface Analysis {
@@ -167,8 +177,7 @@ function decide(a: Analysis, c: TableChoices): Outcome {
   const markersWanted = c.markers !== undefined || c.separator !== undefined;
   const rolesWanted = c.role !== undefined || c.roles !== undefined || c.order !== undefined;
   if (markersWanted && rolesWanted) return { refused: 'role', reason: 'Выберите одно: метки ролей в тексте разговора или колонку с ролью того, кто пишет.' };
-  for (const key of ['id', 'text', 'role', 'order'] as const) {
-    const name = c[key];
+  for (const [key, name] of [['id', c.id], ['text', c.text], ['role', c.role], ['order', c.order], ['where', c.where?.column]] as const) {
     if (name && !findColumn(name, a.columns)) return { refused: key, reason: `Колонки ${quoted(name)} нет в листе ${quoted(a.sheet.name)}. Есть: ${a.columns.filter(column => column.filled).map(label).join(', ')}.` };
   }
   if (markersWanted) return rowLayout(a, c);
@@ -178,6 +187,25 @@ function decide(a: Analysis, c: TableChoices): Outcome {
   if (roleColumns(a).length) return messageLayout(a, c);
   if (text) return { refused: 'text', reason: noMarkers(text) };
   return { question: { kind: 'text', columns: textColumns(a) }, found: 0 };
+}
+
+/**
+ * The owner's choice of conversations, checked against the sheet once the reading is complete: the column they
+ * named must hold categories (selection.ts); a column alone asks which values to keep; named values must be
+ * values of that column, and the filter keeps them in the order the question lists them, so one choice is one mapping.
+ */
+function choose(a: Analysis, reading: TableMapping, conversations: readonly number[][], where: TableChoices['where']):
+  { filter?: TableFilter } | { question: TableQuestion } | { reason: string } {
+  if (!where) return {};
+  // decide() refused a column that is not there.
+  const column = findColumn(where.column, a.columns)!;
+  const split = columnSelection(a.sheet, reading, conversations, column);
+  if ('issue' in split) return { reason: split.issue };
+  if (!where.values) return { question: { kind: 'where', column, values: split.values } };
+  const absent = where.values.find(value => !split.values.some(item => item.value === value));
+  if (absent !== undefined) return { reason: absent ? `В колонке ${label(column)} нет значения ${quoted(absent)}.` : `В колонке ${label(column)} нет пустых ячеек.` };
+  const wanted = new Set(where.values);
+  return { filter: { column: toColumn(column), values: split.values.flatMap(item => wanted.has(item.value) ? [item.value] : []) } };
 }
 
 const noMarkers = (column: ColumnInfo) => `В колонке ${label(column)} нет разговоров: строки не начинаются с метки роли — слова заглавными буквами, вроде CLIENT или AGENT.`;
