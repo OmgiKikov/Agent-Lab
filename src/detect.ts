@@ -10,7 +10,7 @@ import { MATERIAL_EXTENSIONS, materialText } from './materials.js';
 import { codePrompts, jsonPrompts, MIN_PROMPT_CHARS, type PromptCandidate } from './prompt-candidates.js';
 import { countText, pluralForm } from './plural.js';
 import { importBatch } from './scenario-library.js';
-import { codeFacts, FACTORY, languageOf } from './source-facts.js';
+import { codeFacts, codeHasWord, FACTORY, languageOf } from './source-facts.js';
 import { proposeTableBytes } from './spreadsheet/import.js';
 import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
 
@@ -21,16 +21,19 @@ import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
  * reads, within fixed caps: it never runs or imports a file, never follows a link out of the folder,
  * and never keeps a secret (a .env file yields variable names; a local address loses its credentials
  * and query). Every finding names the file it came from; the owner confirms before anything runs.
+ * The agent is recognised by evidence of a contract, never by a name alone: a module by createSession and the
+ * respond of the session it returns, a local address only under a key that names the agent — never a model
+ * server's (Ollama, LM Studio and the like) — and an address is always the owner's pick, never a sure candidate.
  */
 
 /** One observation behind an agent candidate, made in `file` (relative to the project root). */
 export type AgentEvidence =
   | { kind: 'connection'; file: string }                              // a saved Agent Lab connection
   | { kind: 'script'; file: string; name: string; command: string }  // package.json: scripts.start = python agent.py
-  | { kind: 'factory'; file: string }                                 // exports createSession, the module contract
+  | { kind: 'factory'; file: string }                                 // exports createSession returning a session with respond
   | { kind: 'json_lines'; file: string }                              // reads requests from stdin line by line, answers JSON
   | { kind: 'protocol_fields'; file: string }                         // names the fields of an Agent Lab request
-  | { kind: 'url'; file: string; url: string }                        // a local address in a config file
+  | { kind: 'url'; file: string; url: string }                        // a local address under a key that names the agent
   | { kind: 'interpreter'; file: string };                            // the project's own Python environment: .venv/bin/python
 export type Confidence = 'high' | 'medium' | 'low';
 /** A connection target ready for use (absolute paths) and why Lab believes it is the agent. */
@@ -66,6 +69,15 @@ const RUN_SCRIPTS = new Set(['start', 'agent', 'bot', 'serve']);
 /** Characters of shell syntax (chains, pipes, variables, quoting): such a script is not one plain command. */
 const SHELL = '&|;<>$`"\'()*';
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]']);
+/** Words of a config key that name the agent itself. */
+const AGENT_WORDS = new Set(['agent', 'bot', 'chatbot', 'assistant']);
+/** Words of a config key that name a model server or a model client: such an address is the agent's model, not the agent. */
+const MODEL_WORDS = new Set(['llm', 'llms', 'model', 'models', 'ollama', 'openai', 'lmstudio', 'vllm', 'llama', 'llamacpp', 'gpt', 'gigachat', 'anthropic', 'mistral',
+  'embedding', 'embeddings', 'completion', 'completions', 'inference', 'tgi', 'kobold', 'koboldcpp', 'gpt4all', 'localai', 'jan']);
+/** Ports model servers listen on by default: Ollama, LM Studio, Jan, GPT4All, KoboldCpp. */
+const MODEL_PORTS = new Set(['11434', '1234', '1337', '4891', '5001']);
+/** API paths of model servers: OpenAI-compatible and Ollama's. */
+const MODEL_PATHS = ['/v1/chat/completions', '/v1/completions', '/v1/embeddings', '/v1/models', '/api/generate', '/api/embed', '/api/tags', '/api/pull', '/api/show'];
 /** Where a project keeps its own Python, relative to the root: the agent runs with the packages installed there, not with whatever python is on PATH. */
 const PYTHON_ENVIRONMENTS = ['.venv/bin/python', 'venv/bin/python', '.venv/Scripts/python.exe', 'venv/Scripts/python.exe'];
 /** A plain interpreter name a package script or a Python agent is started with. */
@@ -157,14 +169,66 @@ function tableLog(file: string, path: string, bytes: Buffer): LogFile | undefine
   return proposal.status === 'question' && proposal.found ? { file, dialogues: proposal.found, rejected: 0, complete: true, table: 'question' } : undefined;
 }
 
-/** An http(s) address on this machine, without credentials, query or fragment: those may carry secrets. */
+/** An http(s) address on this machine, without credentials, query or fragment: those may carry secrets. Never a model server's. */
 function localUrl(value: string): string | undefined {
   const url = value.startsWith('http://') || value.startsWith('https://') ? URL.parse(value) : null;
-  return url && LOCAL_HOSTS.has(url.hostname) ? `${url.protocol}//${url.host}${url.pathname}` : undefined;
+  if (!url || !LOCAL_HOSTS.has(url.hostname) || MODEL_PORTS.has(url.port)) return undefined;
+  const path = url.pathname.endsWith('/') ? url.pathname.slice(0, -1) : url.pathname;
+  if (path === '/v1' || MODEL_PATHS.some(prefix => path === prefix || path.startsWith(`${prefix}/`))) return undefined;
+  return `${url.protocol}//${url.host}${url.pathname}`;
 }
-/** String values of a parsed config; nesting deeper than any real config is not descended into. */
-const stringLeaves = (value: unknown, depth = 0): string[] => typeof value === 'string' ? [value] : depth > 32 ? []
-  : Array.isArray(value) ? value.flatMap(item => stringLeaves(item, depth + 1)) : isRecord(value) ? Object.values(value).flatMap(item => stringLeaves(item, depth + 1)) : [];
+/** The words of a config key: `agent_url`, `agentUrl`, `AGENT-URL` → agent, url. A key is structure, not text. */
+function keyWords(key: string): string[] {
+  const words: string[] = [];
+  let word = '';
+  for (let i = 0; i < key.length; i++) {
+    const char = key[i]!, lower = char.toLowerCase(), upper = char.toUpperCase();
+    const letter = lower !== upper, digit = char >= '0' && char <= '9';
+    if (!letter && !digit) { if (word) words.push(word); word = ''; continue; }
+    // camelCase: a capital after a small letter or a digit begins a word.
+    const previous = key[i - 1];
+    if (word && char === upper && letter && previous !== undefined && (previous >= '0' && previous <= '9' || previous !== previous.toUpperCase())) { words.push(word); word = ''; }
+    word += lower;
+  }
+  if (word) words.push(word);
+  return words;
+}
+/** A config value is the agent's address when a key on its way names the agent and none names a model. */
+function agentKeys(keys: readonly string[]): boolean {
+  const words = keys.flatMap(keyWords);
+  return words.some(word => AGENT_WORDS.has(word)) && !words.some(word => MODEL_WORDS.has(word));
+}
+/** String values of a parsed config with the keys on their way; nesting deeper than any real config is not descended into. */
+const stringLeaves = (value: unknown, keys: string[] = []): { keys: string[]; value: string }[] => typeof value === 'string' ? [{ keys, value }] : keys.length > 32 ? []
+  : Array.isArray(value) ? value.flatMap(item => stringLeaves(item, keys)) : isRecord(value) ? Object.entries(value).flatMap(([key, item]) => stringLeaves(item, [...keys, key])) : [];
+const unquote = (value: string) => value.length > 1 && (value[0] === '"' || value[0] === "'") && value.at(-1) === value[0] ? value.slice(1, -1) : value;
+/**
+ * `key: value` (YAML, nesting by indentation), `key = value` and `[section]` (TOML, INI) values with the keys on their
+ * way. A config's syntax is structure; a line it does not know is skipped, never guessed.
+ */
+function configValues(text: string): { keys: string[]; value: string }[] {
+  const out: { keys: string[]; value: string }[] = [];
+  const nesting: { indent: number; key: string }[] = [];
+  let section: string[] = [];
+  for (const raw of text.split('\n')) {
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) { section = trimmed.slice(1, -1).split('.').map(part => unquote(part.trim())); nesting.length = 0; continue; }
+    const indent = raw.length - raw.trimStart().length;
+    while (nesting.length && nesting.at(-1)!.indent >= indent) nesting.pop();
+    const item = trimmed.startsWith('- ') ? trimmed.slice(2).trim() : trimmed;
+    const colon = item.indexOf(': '), equals = item.indexOf('=');
+    const at = equals > 0 && (colon < 0 || equals < colon) ? equals : colon > 0 ? colon : item.endsWith(':') ? item.length - 1 : -1;
+    const keys = [...section, ...nesting.map(level => level.key)];
+    if (at < 0) { if (item !== trimmed) out.push({ keys, value: unquote(item) }); continue; }
+    const key = unquote(item.slice(0, at).trim()), rest = item.slice(at + 1).trim();
+    if (!rest) { nesting.push({ indent, key }); continue; }
+    // A quoted value ends at its closing quote; an unquoted one where a comment begins.
+    const value = rest[0] === '"' || rest[0] === "'" ? rest.slice(1, Math.max(1, rest.indexOf(rest[0], 1))) : rest.split(' #')[0]!.trim();
+    out.push({ keys: [...keys, key], value });
+  }
+  return out;
+}
 
 /** Scripts that start one file with an interpreter (`python agent.py`); shell syntax is never interpreted. Start scripts come first. */
 function packageScripts(manifest: unknown, file: Entry): Script[] {
@@ -184,25 +248,59 @@ async function projectPython(root: string): Promise<string | undefined> {
   return undefined;
 }
 
-/** Variable names only: the text after `=` is dropped on the spot, so a secret never reaches the result. */
+/**
+ * The variable names of a .env file, read the way dotenv reads it: `[export] NAME=value`, a value quoted with ', " or `
+ * running over several lines, an unquoted PEM block (-----BEGIN … -----END) as one value, # comments. Every value is
+ * skipped as it is read, so neither a secret nor a line inside one (the tail of a key) ever reaches the result; a
+ * name is only a valid variable name.
+ */
+export function envFileNames(text: string): string[] {
+  const names = new Set<string>();
+  const lineEnd = (from: number) => { const end = text.indexOf('\n', from); return end < 0 ? text.length : end; };
+  let i = 0;
+  while (i < text.length) {
+    const end = lineEnd(i);
+    const line = text.slice(i, end).trim();
+    const statement = line.startsWith('export ') ? line.slice('export '.length).trimStart() : line;
+    const at = statement.indexOf('=');
+    const name = at < 0 ? '' : statement.slice(0, at).trim();
+    if (!line || line.startsWith('#') || at < 0 || !/^[A-Za-z_][A-Za-z0-9_]{0,99}$/.test(name)) { i = end + 1; continue; }
+    names.add(name);
+    let j = text.indexOf('=', i) + 1;
+    while (text[j] === ' ' || text[j] === '\t') j++;
+    const quote = text[j];
+    if (quote === '"' || quote === "'" || quote === '`') {
+      // A quoted value may run over lines; inside double quotes a backslash escapes the next character.
+      let k = j + 1;
+      while (k < text.length && text[k] !== quote) k += quote === '"' && text[k] === '\\' ? 2 : 1;
+      i = lineEnd(Math.min(k + 1, text.length)) + 1;
+    } else if (text.startsWith('-----BEGIN', j)) {
+      const close = text.indexOf('-----END', j);
+      i = close < 0 ? text.length : lineEnd(close) + 1;
+    } else i = end + 1;
+  }
+  return [...names];
+}
+
+/** Variable names only: the values are skipped as they are read, so a secret never reaches the result. */
 async function envNames(files: Entry[], reader: Reader): Promise<ProjectDetection['env']> {
   const names = new Set<string>();
-  for (const file of files) for (const line of (await reader.text(file.path, LIMITS.textBytes) ?? '').split('\n')) {
-    const at = line.indexOf('=');
-    const name = at < 0 ? '' : line.slice(0, at).trim();
-    const bare = name.startsWith('export ') ? name.slice('export '.length).trim() : name;
-    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(bare)) names.add(bare);
-  }
+  for (const file of files) for (const name of envFileNames(await reader.text(file.path, LIMITS.textBytes) ?? '')) names.add(name);
   return { files: files.map(file => file.rel), names: [...names].sort() };
 }
 
 /** The files a target starts: its module, or those of its command arguments. */
 const entryFiles = (target: RunnableTarget, root: string): string[] =>
   target.kind === 'module' ? [target.path] : target.kind === 'command' ? target.args.map(arg => resolve(target.cwd ?? root, arg)) : [];
-/** Sure only when a file speaks Lab's contract; a bare JSON-lines loop may expect other fields; a script or an address alone shows nothing of the protocol. */
+/**
+ * Sure only when a file speaks Lab's contract whole: a module's createSession with its respond, or a JSON-lines loop,
+ * and the fields of a Lab request besides; either alone may expect other fields. A script or an address alone shows
+ * nothing of the protocol. Whatever is not sure is the owner's pick.
+ */
 function confidence(evidence: AgentEvidence[]): Confidence {
   const kinds = new Set(evidence.map(item => item.kind));
-  return kinds.has('connection') || kinds.has('factory') || kinds.has('json_lines') && kinds.has('protocol_fields') ? 'high' : kinds.has('json_lines') ? 'medium' : 'low';
+  const contract = kinds.has('factory') || kinds.has('json_lines');
+  return kinds.has('connection') || contract && kinds.has('protocol_fields') ? 'high' : contract ? 'medium' : 'low';
 }
 
 /** Looks through the project folder and proposes the agent connection, the logs, the materials and the prompt. Read-only. */
@@ -217,8 +315,9 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
     const known = drafts.get(key), parsed = known ? undefined : runnableTargetSchema.safeParse(target);
     if (known) known.evidence.push(...evidence); else if (parsed?.success) drafts.set(key, { target: parsed.data, evidence });
   };
-  const addUrls = (values: string[], file: Entry) => {
-    for (const url of new Set(values.flatMap(value => localUrl(value) ?? []))) add(`url:${url}`, { kind: 'http', url }, [{ kind: 'url', file: file.rel, url }]);
+  const addUrls = (values: { keys: string[]; value: string }[], file: Entry) => {
+    const urls = values.flatMap(item => agentKeys(item.keys) ? localUrl(item.value) ?? [] : []);
+    for (const url of new Set(urls)) add(`url:${url}`, { kind: 'http', url }, [{ kind: 'url', file: file.rel, url }]);
   };
   const logs: LogFile[] = [], scripts: Script[] = [], prompts: PromptCandidate[] = [];
 
@@ -249,8 +348,8 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
       const log = bytes && tableLog(file.rel, file.path, bytes);
       if (log) logs.push(log);
     } else if (CONFIGS.has(ext) && config && !basename(file.path).includes('-lock.')) {
-      // YAML, TOML and INI are not parsed: a value is anything between spaces, quotes, `=` and commas, kept only if it is a local address.
-      addUrls((await reader.text(file.path, LIMITS.textBytes))?.split(/[\s"'=,]+/) ?? [], file);
+      // YAML, TOML and INI are read line by line for their keys: an address counts only under a key that names the agent.
+      addUrls(configValues(await reader.text(file.path, LIMITS.textBytes) ?? ''), file);
     }
   }
 
@@ -269,11 +368,13 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
     prompts.push(...found.candidates); constants.push({ file: file.rel, names: found.constants });
     for (const system of found.systemNames) systemNames.add(system);
     const facts = codeFacts(source, language), script = scripts.find(item => item.entry === file.path);
-    if (!facts.factory && !facts.jsonLines) continue;
+    // A module is the agent by its contract, not by a name: Next.js keeps a createSession for its logins, with no respond.
+    const factory = facts.factory && codeHasWord(source, language, 'respond');
+    if (!factory && !facts.jsonLines) continue;
     const started = interpreter(script ? script.argv[0]! : language === 'python' ? 'python3' : 'node');
-    const evidence: AgentEvidence[] = [...(script ? [script.evidence] : []), { kind: facts.factory ? 'factory' : 'json_lines', file: file.rel },
-      ...(facts.protocol ? [{ kind: 'protocol_fields' as const, file: file.rel }] : []), ...(facts.factory ? [] : started.evidence)];
-    add(`file:${file.path}`, facts.factory ? { kind: 'module', path: file.path }
+    const evidence: AgentEvidence[] = [...(script ? [script.evidence] : []), { kind: factory ? 'factory' : 'json_lines', file: file.rel },
+      ...(facts.protocol ? [{ kind: 'protocol_fields' as const, file: file.rel }] : []), ...(factory ? [] : started.evidence)];
+    add(`file:${file.path}`, factory ? { kind: 'module', path: file.path }
       : script ? { kind: 'command', command: started.command, args: script.argv.slice(1), cwd: script.cwd }
       : { kind: 'command', command: started.command, args: [file.rel], cwd: root }, evidence);
   }
@@ -373,6 +474,8 @@ export function promptLine(prompt: PromptCandidate): string {
 const PROMPTS_SHOWN = 20;
 
 const CONFIDENCE_NOTE: Record<Confidence, string> = { high: '', medium: ' — похоже на агента; формат запросов Lab проверит при подключении', low: ' — возможно, агент; как он отвечает, не видно' };
+/** An address is connected from the owner's curl: Lab does not know the request the agent there expects. */
+const ADDRESS_NOTE = ' — возможно, агент; подключу по вашему curl-запросу к нему';
 const SHOWN = 3;
 
 /** The proposal as plain lines for the terminal; the caller makes each line safe to print. */
@@ -382,7 +485,7 @@ export function detectionLines(detection: ProjectDetection): string[] {
   return [
     `Agent Lab посмотрел папку «${basename(root)}» — ничего не запускал и не менял.`, '',
     'Агент',
-    ...agents.length ? agents.slice(0, SHOWN).flatMap(agent => [`  ${agent.confidence === 'high' ? '✓' : '?'} ${targetLabel(agent.target, root)}${CONFIDENCE_NOTE[agent.confidence]}`,
+    ...agents.length ? agents.slice(0, SHOWN).flatMap(agent => [`  ${agent.confidence === 'high' ? '✓' : '?'} ${targetLabel(agent.target, root)}${agent.target.kind === 'http' && !agent.evidence.some(item => item.kind === 'connection') ? ADDRESS_NOTE : CONFIDENCE_NOTE[agent.confidence]}`,
       ...agent.evidence.map(item => `      ${evidenceText(item)}`)]) : ['  не нашёл — Lab спросит, как запускать агента'],
     ...more(agents.length), '',
     'Логи с разговорами',

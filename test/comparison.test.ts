@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { sourceIdentity } from '../src/normalize.js';
-import { awaitingVerdict, compareRuns, humanFindings, judgeModel, stabilityAfterReassess, stabilityBetweenRuns } from '../src/comparison.js';
+import { awaitingVerdict, compareRuns, humanFindings, judgeModel, stabilityAfterReassess, stabilityBetweenRuns, VERSION_UNKNOWN } from '../src/comparison.js';
 import { cardOutcome, cardVerdict, goalCardOutcome, headlineCardOutcome, plannedTrials } from '../src/run.js';
 import { buildResultView, exitCodeOf } from '../src/result-view.js';
 import { embeddedBefore } from '../src/artifacts.js';
@@ -985,4 +985,26 @@ test('the CI exit code follows the headline: a reply-quality failure alone exits
   assert.equal(exit({ A: { goal: 'fail', rules: 'pass' }, B: { goal: 'pass', rules: 'unknown' } }), 2, 'an unmeasured situation outranks a failure');
   assert.equal(exit({ A: { goal: 'pass', rules: 'pass' } }, { phase: 'evaluating' }), 2, 'an unfinished run');
   assert.equal(exit({ A: { goal: 'pass', rules: 'pass' }, C: { goal: 'fail', rules: 'pass' } }, { positiveControlScenarioIds: ['C'] }), 2, 'a failed control raises the alarm');
+});
+
+test('a repeat of an agent whose version nobody knows is not called unstable: the code behind the address may have been fixed', () => {
+  const http = { kind: 'http' as const, url: 'https://agent.example.test/chat', headersEnv: {}, timeoutMs: 60000 };
+  const address = `http:${'a'.repeat(64)}`;
+  const source = ruledRecord(RULED_SOURCE, { A: { goal: 'fail', rules: 'none' }, B: { goal: 'pass', rules: 'none' } }, { target: http, targetFingerprint: address });
+  const repeat = ruledRecord(RULED_REPEAT, { A: { goal: 'pass', rules: 'none' }, B: { goal: 'pass', rules: 'none' } },
+    { target: http, targetFingerprint: address, parentRunId: RULED_SOURCE }, { reply: 'another reply' });
+  // The same address, redeployed behind it: neither «unstable» nor «fixed by a new version» — the version is unknown.
+  const stability = stabilityBetweenRuns(source, repeat);
+  assert.deepEqual([stability.skipped, stability.checked, stability.unstable], [VERSION_UNKNOWN, 0, []]);
+  // Records with no fingerprint at all are no different: unknown is never the same.
+  const bare = stabilityBetweenRuns({ ...source, targetFingerprint: undefined }, { ...repeat, targetFingerprint: undefined });
+  assert.equal(bare.skipped, VERSION_UNKNOWN);
+  // The owner's name for the version makes it known: the same name, and a flip is instability again.
+  const named = stabilityBetweenRuns({ ...source, targetVersion: 'v1' }, { ...repeat, targetVersion: 'v1' });
+  assert.equal(named.skipped, null);
+  assert.deepEqual(named.unstable.map(row => row.scenarioId), ['A']);
+  assert.equal(stabilityBetweenRuns({ ...source, targetVersion: 'v1' }, { ...repeat, targetVersion: 'v2' }).skipped, 'агент изменился между прогонами');
+  // The comparison of the two runs says the version is unknown instead of crediting a new one.
+  const diff = compareRuns(source, repeat);
+  assert.ok(diff.notes.some(note => note.startsWith('Версия агента неизвестна хотя бы в одном прогоне')), diff.notes.join('\n'));
 });
