@@ -200,3 +200,12 @@ test('text is compared exactly, after NFKC, case and spacing: no tokenizer, no f
   assert.ok(!contains('Ёлка', 'елка'), 'no letter is folded into another');
   assert.ok(!contains('Номер терминала', 'Номер терминала: 5678'));
 });
+
+test('an opening with de-identification marks where values stood keeps the card out of a run until the owner writes them in', () => {
+  const card = structuredClone(bindProposal(proposals.late, late, 1));
+  card.client.writes = 'Добрый день, вчера прошло # оплат на * рублей, а в выписке их нет';
+  const found = unusableFindings(card, { evidence: evidence(late), maxTurns: 6 });
+  assert.ok(found.some(finding => finding.check === 'masked-opening'), 'the agent would read words no customer wrote');
+  card.client.writes = 'Добрый день, вчера прошло 2 оплаты на 700 рублей, а в выписке их нет';
+  assert.ok(!unusableFindings(card, { evidence: evidence(late), maxTurns: 6 }).some(finding => finding.check === 'masked-opening'));
+});

@@ -250,6 +250,7 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
     return { name, value: JSON.stringify(item.value), from: item.source.kind === 'dialogue' ? item.source.event.eventIndex : null };
   };
   switch (finding.check) {
+    case 'masked-opening': return 'The opening has de-identification marks: keep it; the owner writes the values in.';
     case 'fact-from-event': {
       const { name, value, from } = fact(finding.factId);
       return `${name}: the value ${value} is not in customer message ${from}. Copy the value exactly as the customer wrote it and point "from" at a message that contains it, or set "from" to null.`;
@@ -292,7 +293,8 @@ export function cardProposalProblem(proposal: CardProposal, call: ProposalCall):
   const slips = [...basisSlips(proposal, call), ...'writes' in proposal ? [] : bindingSlips(proposal, call)];
   if (slips.length) return slips.join(' ');
   const card = bindProposal(proposal, call, 1);
-  const findings = cardFindings(card, { evidence: callEvidence(call), maxTurns: call.maxTurns });
+  // A masked opening is how the log was de-identified, not a slip of the model: the owner writes the values in later.
+  const findings = cardFindings(card, { evidence: callEvidence(call), maxTurns: call.maxTurns }).filter(finding => finding.check !== 'masked-opening');
   return findings.length ? findings.map(finding => repairText(finding, card, call)).join(' ') : undefined;
 }
 
