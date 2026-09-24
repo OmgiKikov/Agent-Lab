@@ -16,6 +16,7 @@ import type { ScenarioLibrary } from './card/schema.js';
 import { readTopicMapFile, writeTopicMapFile } from './miner/files.js';
 import { readProposedFile, writeProposedFile, writeReadingFile } from './spreadsheet/files.js';
 import type { ProposedReading } from './spreadsheet/reading-task.js';
+import { readPurposeFile, writePurposeFile, type PurposeProposal } from './prompt-purpose.js';
 import type { TableReading } from './spreadsheet/mapping.js';
 import type { TopicMap, TopicMapKey, TopicMapProgress } from './miner/topic-map.js';
 import type { LogVersionJournal } from './card/calibration.js';
@@ -23,7 +24,7 @@ import type { LogVersionJournal } from './card/calibration.js';
 /*
  * Storage, and only storage, of one data folder: a record per run as one atomic JSON file, the writer's lock, the
  * append-only journals and sidecars of every dialogue and judgment, the content-addressed file areas the records
- * point at (imports, libraries, the owners' declarations, topic maps, spreadsheet readings) and the publication
+ * point at (imports, libraries, the owners' declarations, topic maps, spreadsheet readings, prompt purposes) and the publication
  * journal that finishes a library write interrupted halfway. Every write goes through the one writer's queue; every
  * read works without the lock. What a phase allows, what a command changes and what a run may spend is decided in
  * lab/, never here.
@@ -253,6 +254,9 @@ export class ExperimentStore {
   /** What Lab's model proposed for a spreadsheet under `key` (spreadsheet/files.ts); undefined when it proposed nothing yet. */
   readProposedReading(key: string): Promise<ProposedReading | undefined> { return readProposedFile(this.directory, key); }
   writeProposedReading(proposed: ProposedReading): Promise<void> { return this.writeTransaction(() => writeProposedFile(this.directory, proposed)); }
+  /** What Lab's model proposed about the purposes of a set of prompts under `key` (prompt-purpose.ts); undefined when it proposed nothing yet. */
+  readPromptPurposes(key: string): Promise<PurposeProposal | undefined> { return readPurposeFile(this.directory, key); }
+  writePromptPurposes(proposal: PurposeProposal): Promise<void> { return this.writeTransaction(() => writePurposeFile(this.directory, proposal)); }
   /** The topic map of an import stored under `key`, finished or still being built (miner/files.ts); undefined when there is none. */
   readTopicMap(key: TopicMapKey): Promise<unknown> { return readTopicMapFile(this.directory, key); }
   /** Stores a topic map, or the progress of its build, next to its import. */

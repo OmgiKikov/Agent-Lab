@@ -6,6 +6,7 @@ import type { CardReview, CardReviewRequest } from './card/review.js';
 import type { FailureMode, Requirement, Scenario, Source, TraceEvent, Trial, Usage } from './contracts.js';
 import { identifierSchema as identifier } from './ids.js';
 import type { BuilderModel, TopicMap, TopicMapPlan, TopicMapProgress } from './miner/topic-map.js';
+import type { PurposeReader } from './prompt-purpose.js';
 import type { TableReader } from './spreadsheet/reading-task.js';
 import type { AllowedUserAction, UserDecision, UserView } from './user-controller.js';
 
@@ -69,5 +70,7 @@ export interface Runtime {
   topicMap?: { builder: BuilderModel; build(plan: TopicMapPlan, ctx: CallContext, onProgress: (progress: TopicMapProgress) => Promise<void>): Promise<TopicMap> };
   /** How a spreadsheet of logs reads (spreadsheet/reading-task.ts): proposed by `builder` from a few rows, checked on every row. */
   tableReading?: TableReader;
+  /** Which of the agent's prompts write the reply to the customer (prompt-purpose.ts): proposed by `builder` from each prompt's beginning, confirmed by the owner. */
+  promptPurposes?: PurposeReader;
   failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
 }

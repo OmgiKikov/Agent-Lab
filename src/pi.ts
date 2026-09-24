@@ -17,6 +17,7 @@ import { cardReviewSchema } from './card/review.js';
 import { judgeLogged, logProtocolHash } from './card/log-judge.js';
 import { buildTopicMap } from './miner/topic-map.js';
 import { readTableWithModel } from './spreadsheet/reading-task.js';
+import { readPurposesWithModel } from './prompt-purpose.js';
 import { USER_CONTROLLER_PROTOCOL, userDecisionSchema } from './user-controller.js';
 
 /*
@@ -147,6 +148,8 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
     topicMap: { builder, build: (plan, ctx, onProgress) => buildTopicMap(plan, { builder, run, ctx, onProgress }) },
     // So is the reading of a spreadsheet of those logs: the builder proposes it, the harness applies and checks it.
     tableReading: { builder, read: (request, ctx) => readTableWithModel(request, { run, ctx }) },
+    // And which of the agent's prompts write the reply to the customer: a proposal the owner confirms.
+    promptPurposes: { builder, read: (batch, ctx) => readPurposesWithModel(batch, { run, ctx }) },
     async selectSources(input, ctx) {
       const ids = input.catalog.map(item => item.id);
       const known = new Set(ids);

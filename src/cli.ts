@@ -13,6 +13,8 @@ import { doctor, listSuites, readConnection, rememberedConnection, rememberConne
 import { detectionLines, detectProject, promptLine } from './detect.js';
 import { readDialogueImport, importDialogues } from './imports.js';
 import { expandMaterials, promptMaterials } from './materials.js';
+import type { PromptCandidate } from './prompt-candidates.js';
+import { proposedPrompts, proposePurposes, purposeConsentLine, purposeKey, purposeLine, type PurposeProposal } from './prompt-purpose.js';
 import { createPiRuntime, getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { expectationSheet, testPlanLines, trialProofLines } from './quality.js';
@@ -61,7 +63,7 @@ const FLAGS = {
   file: { type: 'string' }, sheet: { type: 'string' }, 'id-column': { type: 'string' }, 'text-column': { type: 'string' }, separator: { type: 'string' },
   markers: { type: 'string' }, 'role-column': { type: 'string' }, roles: { type: 'string' }, 'order-column': { type: 'string' }, 'row-order': { type: 'boolean' },
   where: { type: 'string' }, 'no-separator': { type: 'boolean' }, 'collapse-repeats': { type: 'boolean' }, 'keep-repeats': { type: 'boolean' },
-  situations: { type: 'string' }, 'prompts-from': { type: 'string' }, prompt: { type: 'string', multiple: true },
+  situations: { type: 'string' }, 'prompts-from': { type: 'string' }, prompt: { type: 'string', multiple: true }, prompts: { type: 'string' },
   'operator-rules': { type: 'string' }, 'bind-rule': { type: 'string', multiple: true }, 'unbind-rule': { type: 'string', multiple: true },
 } as const;
 type Flags = ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>['values'];
@@ -434,9 +436,13 @@ async function taskInput(values: Flags, directory: string): Promise<{ input: Cre
     process.stderr.write(`Прочитано материалов из файлов: ${expanded.read}.\n`);
     raw = { ...task, materials: expanded.materials };
   }
-  if (values.prompt?.length) {
-    // The prompts the owner picked among those Lab finds in the project folder: verbatim, as materials of the agent's prompt.
-    const chosen = await pickedPrompts(values['prompts-from'] ?? process.cwd(), values.prompt);
+  if (values.prompt?.length || values.prompts !== undefined) {
+    // The prompts the owner picked among those Lab finds in the project folder — named one by one, or the ones Lab's
+    // stored proposal ticked — verbatim, as materials of the agent's prompt.
+    const folder = values['prompts-from'] ?? process.cwd();
+    const named = values.prompt?.length ? await pickedPrompts(folder, values.prompt) : [];
+    const suggested = values.prompts === undefined ? [] : await suggestedPrompts(folder, values.prompts, settingsSchema.parse(raw.settings ?? {}), directory);
+    const chosen = [...named, ...suggested.filter(prompt => !named.some(item => item.id === prompt.id))];
     process.stderr.write(`Промпты агента: ${chosen.map(prompt => prompt.id).join(', ')}.\n`);
     raw = { ...raw, materials: [...raw.materials ?? [], ...promptMaterials(chosen).map(({ name, content, kind }) => ({ name, content, kind }))] };
   }
@@ -461,13 +467,53 @@ async function pickedPrompts(folder: string, ids: readonly string[]) {
   });
 }
 
-/** `build --prompts-from` without `--prompt`: the prompts Lab found, for the owner to pick; nothing is written or spent. */
-async function promptChoice(folder: string): Promise<string[]> {
+/**
+ * `--prompts suggested`: the prompts Lab's stored proposal marked «ответ клиенту», for the same prompts and the same builder
+ * model. It never proposes anew: a proposal is paid for only by `build --prompts-from` with --yes, which the owner saw.
+ */
+async function suggestedPrompts(folder: string, word: string, settings: Settings, directory: string): Promise<PromptCandidate[]> {
+  if (word !== 'suggested') throw new Error('--prompts принимает одно слово: suggested — промпты, которые Lab отметил как ответ клиенту.');
+  const { prompts } = await detectProject(folder);
+  const proposal = settings.provider && settings.model ? await new ExperimentStore(directory).readPromptPurposes(purposeKey(prompts, builderOf(settings))) : undefined;
+  if (!proposal) throw new Error(`Lab ещё не предлагал, какие промпты в ${folder} пишут ответ клиенту, или они изменились с тех пор. Сначала: agent-lab build --input задача.json --prompts-from ${folder} --yes.`);
+  const picked = proposedPrompts(prompts, proposal).filter(item => item.suggested).map(item => item.candidate);
+  if (!picked.length) throw new Error('Ни один промпт Lab не отметил как ответ клиенту. Выберите сами: --prompt ФАЙЛ#ИМЯ.');
+  return picked;
+}
+
+/**
+ * `build --prompts-from` without `--prompt`: the prompts Lab found, for the owner to pick. With a model in the task file
+ * Lab offers to read their beginnings and mark the ones that write the reply to the customer; --yes pays for exactly
+ * that proposal and stores it, so the next look and `--prompts suggested` are free. Nothing else is written or spent.
+ */
+async function promptChoice(folder: string, values: Flags, directory: string): Promise<string[]> {
   const { prompts } = await detectProject(folder);
   if (!prompts.length) return [`В ${folder} Lab не нашёл промптов агента: ни файлов с «prompt» в имени, ни строк-промптов в коде, ни полей промптов в JSON.`];
-  return ['Промпты агента в папке — какие из них задают, что и как бот отвечает клиенту, выбираете вы:', '',
+  const raw = values.input ? JSON.parse(await readFile(values.input, 'utf8')) as { settings?: unknown } : {};
+  const parsed = settingsSchema.parse(raw.settings ?? {});
+  const settings = parsed.provider && parsed.model ? parsed : undefined;
+  const key = settings && purposeKey(prompts, builderOf(settings));
+  let proposal: PurposeProposal | undefined = key ? await new ExperimentStore(directory).readPromptPurposes(key) : undefined;
+  if (settings && !proposal && values.yes) {
+    const reader = (await createPiRuntime(settings)).promptPurposes;
+    if (!reader) throw new Error('Модель задачи не определяет назначение промптов.');
+    await asWriter(directory, async lab => {
+      proposal = await proposePurposes(prompts, reader, { timeoutMs: settings.timeoutMs });
+      await lab.store.writePromptPurposes(proposal);
+    });
+  }
+  if (!proposal) return ['Промпты агента в папке — какие из них задают, что и как бот отвечает клиенту, выбираете вы:', '',
     ...prompts.map(prompt => `  ${promptLine(prompt)}`), '',
+    ...(settings ? [`${purposeConsentLine(prompts)} Повторите с --yes.`] : []),
     'Взять выбранные: та же команда с --prompt ФАЙЛ#ИМЯ (флаг повторяется). Они станут правилами поведения бота; ничего не записано и не потрачено.'];
+  const proposed = proposedPrompts(prompts, proposal);
+  const ticked = proposed.filter(item => item.suggested).length;
+  return ['Промпты агента в папке — Lab отметил ✓ те, что пишут ответ клиенту; решаете вы:', '',
+    ...proposed.flatMap(item => [`  ${item.suggested ? '✓' : '○'} ${promptLine(item.candidate)}`, `      ${purposeLine(item)}`]), '',
+    ...(proposal.failure ? ['Часть промптов модель не разобрала: их назначение не определено.'] : []),
+    ticked ? `Взять отмеченные (${ticked}): та же команда с --prompts suggested. Выбрать самим: --prompt ФАЙЛ#ИМЯ (флаг повторяется).`
+      : 'Ни один промпт не отмечен как ответ клиенту. Выбрать самим: та же команда с --prompt ФАЙЛ#ИМЯ (флаг повторяется).',
+    'Выбранные станут правилами поведения бота. Кроме этого предложения, ничего не записано и не потрачено.'];
 }
 
 /**
@@ -495,7 +541,9 @@ async function prepareDraft(lab: ExperimentLab, input: CreateInput, options: { s
 
 /** `build`: the consent in the owner's words; only --yes prepares, within the count and the ceiling it states. */
 async function prepare({ values, directory }: CommandInput): Promise<void> {
-  if (values['prompts-from'] && !values.prompt?.length) { await writeStdout(`${(await promptChoice(values['prompts-from'])).map(line => safeLine(line)).join('\n')}\n`); return; }
+  if (values['prompts-from'] && !values.prompt?.length && values.prompts === undefined) {
+    await writeStdout(`${(await promptChoice(values['prompts-from'], values, directory)).map(line => safeLine(line)).join('\n')}\n`); return;
+  }
   const { input, logs } = await taskInput(values, directory);
   const consent = await buildConsent(input, logs, directory, values);
   if (!values.yes) {
@@ -563,7 +611,8 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   detect: { help: ['agent-lab detect [--directory ПАПКА] [--json]   Что Lab нашёл в папке проекта: агента, логи, материалы, промпт'], run: detect },
   import: { help: ['agent-lab import --file логи.xlsx [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--yes] [--json]   Как читать таблицу логов (.xlsx, .csv): с --input разметку предлагает модель задачи, Lab проверяет каждую строку; --yes — сначала на вызов модели, затем на загрузку'], run: importTable },
   build: { help: ['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--situations N] [--connection подключение.json] [--yes]   Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --yes готовит их',
-    'agent-lab build --input задача.json --prompts-from ПАПКА [--prompt ФАЙЛ#ИМЯ ...] [--yes]   Промпты агента из его кода и JSON: без --prompt — список на выбор, с ним — выбранные станут правилами поведения бота'], run: prepare },
+    'agent-lab build --input задача.json --prompts-from ПАПКА [--yes]   Промпты агента из его кода и JSON на выбор; с --yes модель задачи отметит те, что пишут ответ клиенту',
+    'agent-lab build --input задача.json --prompts-from ПАПКА --prompt ФАЙЛ#ИМЯ ... | --prompts suggested [--yes]   Выбранные промпты (или отмеченные Lab) станут правилами поведения бота'], run: prepare },
   prepare: { help: [], run: prepare },
   cards: { help: [
     'agent-lab cards --id RUN [--card N] [--json]   Ситуации: что пишет и знает клиент, что должен агент, статус и вопрос',

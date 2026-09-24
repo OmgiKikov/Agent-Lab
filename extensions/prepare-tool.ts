@@ -24,7 +24,7 @@ import { followRecord, type LabLease, type SessionOperations } from './operation
 import type { Feed } from './render/feed.ts';
 import { TOOL } from './steps.ts';
 import { confirmedBefore, importTable } from './table-import.ts';
-import { choosePrompts } from './prompt-choice.ts';
+import { choosePromptsWithLab } from './prompt-choice.ts';
 
 /*
  * «Проверь агента, логи — выгрузка.xlsx» (docs/design/ui-spec.md §4.10): logs, the owner's rules and the agent become a draft of
@@ -173,7 +173,12 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
     prompts = byId.map(id => found?.prompts.find(prompt => prompt.id === id) ?? unknownPrompt(id, found));
   } else {
     if (found?.prompts.length) requireInteractive(ctx, 'Какие промпты — правила ответа бота, выбирает владелец в интерактивном терминале Pi. Без него: agent-lab build --prompts-from ПАПКА --prompt ФАЙЛ#ИМЯ.');
-    const picked = found?.prompts.length ? await choosePrompts(ctx, found.prompts) : [];
+    let picked: PromptCandidate[] | 'declined' = [];
+    if (found?.prompts.length) {
+      // The writer's lease for the length of the choice: a proposal Lab's model makes is stored for the next look.
+      const owned = await host.open(ctx.cwd);
+      try { await owned.lab.init(); picked = await choosePromptsWithLab(ctx, owned.lab, found.prompts, signal); } finally { await owned.close(); }
+    }
     if (picked === 'declined') return declined(host, callId, 'Не собираю: промпты не выбраны. Ничего не потрачено.');
     prompts = picked;
   }
