@@ -14,6 +14,7 @@ import { oneLine } from './text.js';
  * all say the same lines in the same order (docs/design/ui-spec.md §4.7, §4.10, §8.5):
  *
  *   Точность агента: 72% — справился в 18 из 25 ситуаций          ← the answer, coloured by level
+ *     (…, ещё 4 не измерено — above NOT_MEASURED_WARN_ABOVE %, never coloured good)
  *   Вероятно, от 52% до 86% (95%) · не измерено 2 — … · …          ← one trust line
  *   С учётом частоты тем — около 70%                              ← only when topics are known
  *   По темам / Почему ошибается / Дальше                          ← rows with a right-hand counter
@@ -41,6 +42,11 @@ export type Surface = 'chat' | 'board' | 'cli';
 /** From this rounded percent the agent does well; below MIXED_FROM it does badly (docs/design/ui-spec.md §4.7 colours). */
 export const GOOD_FROM = 80;
 export const MIXED_FROM = 50;
+/**
+ * Percent of counted situations (decided + not measured; controls and pending never count) strictly above which
+ * a measurement is thin: the number is never «good» and the headline names how many were not measured (OD-3).
+ */
+export const NOT_MEASURED_WARN_ABOVE = 10;
 /** Wider terminals keep the 100-column layout with margins (docs/design/ui-spec.md §6). */
 export const MAX_WIDTH = 100;
 
@@ -80,8 +86,12 @@ export function accuracyParts(view: ResultView): { lead: string; value: string |
     return { lead, value: null, tail, level: 'none' };
   }
   const { passed, decided } = view.headline;
-  return { lead, value: `${value}%`, tail: `— справился в ${passed} из ${decided} ${pluralForm(decided, SITUATIONS_OF)}`,
-    level: value >= GOOD_FROM ? 'good' : value >= MIXED_FROM ? 'warn' : 'bad' };
+  const unmeasured = view.notMeasured.total;
+  // Integer arithmetic: more than NOT_MEASURED_WARN_ABOVE percent of the counted situations were not measured.
+  const thin = unmeasured * 100 > NOT_MEASURED_WARN_ABOVE * (decided + unmeasured);
+  const level: Level = value >= GOOD_FROM ? 'good' : value >= MIXED_FROM ? 'warn' : 'bad';
+  return { lead, value: `${value}%`, tail: `— справился в ${passed} из ${decided} ${pluralForm(decided, SITUATIONS_OF)}${thin ? `, ещё ${unmeasured} не измерено` : ''}`,
+    level: thin && level === 'good' ? 'warn' : level };
 }
 
 /** The answer of the result screen, the same everywhere. */

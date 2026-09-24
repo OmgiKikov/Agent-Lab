@@ -2,8 +2,9 @@ import { judgeFailure, SERVICE_REPLY_REASON } from './run.js';
 import { judgedScenario } from './card/legacy-v1.js';
 import { directChecks } from './checkpoints.js';
 import { createUserState, allowedUserActions, advanceUser, requiredUserTurns, userDecisionSchema } from './user-controller.js';
+import { CARD_CUSTOMER_PROTOCOL, customerBrief, customerReplyProblem, customerReplySchema, deliveredMessage, type CustomerBrief } from './card-customer.js';
 import { randomUUID } from 'node:crypto';
-import { addUsage, emptyUsage, isCardExecution, runnableTarget, scriptIssue, type CheckResult, type Requirement, type Revision, type Scenario, type Settings, type Source, type Target, type TraceEvent, type Trial, type UserMode } from './contracts.js';
+import { addUsage, emptyUsage, isCardExecution, runnableTarget, scriptIssue, type CheckResult, type InvalidCause, type Requirement, type Revision, type Scenario, type Settings, type Source, type Target, type TraceEvent, type Trial, type UserMode } from './contracts.js';
 import { assessmentRubrics, judgeAuditSchema, metricApplies, RAG_METRIC_IDS, validateAssessments, type JudgeAudit, type MetricAssessment } from './assessment.js';
 import { userTurnSchema, type CallContext, type DialogueMessage, type Runtime, type TargetSession } from './runtime.js';
 import { hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
@@ -163,10 +164,16 @@ export async function evaluateTrial(input: {
   };
   let session: TargetSession | undefined;
   let stage = 'target session';
+  // The Lab's own refusal before the agent is contacted: its cause is set right before the throw, never read from the text.
+  let refusal: InvalidCause | undefined;
+  // The adapter reported a measurementError (a typed field onReply sees before applyReply throws).
+  let measurementReported = false;
   let stopped = false;
   let finalUserReply = false;
   let reportedState = false;
   let controlled: ReturnType<typeof createUserState> | undefined;
+  // A card's customer in their own words (card-customer.ts), when the runtime can play one; otherwise the move controller.
+  let free: { brief: CustomerBrief; turned: boolean; said: number } | undefined;
   // A card judged on tools or state needs the observed state recorded after every agent reply.
   const execution = scenario.execution;
   const observesBeyondReply = !!execution && (isCardExecution(execution) ? execution.evaluatorView.expectations : execution.evaluatorView.checkpoints)
@@ -175,16 +182,22 @@ export async function evaluateTrial(input: {
     ctx.signal.throwIfAborted();
     if (scenario.execution) {
       stage = 'контроллер симулятора';
+      refusal = 'simulator';
       if (userMode !== 'reactive') throw new Error('Управляемая политика требует реактивного режима; статический и сценарный режимы её не исполняют.');
-      if (!runtime.selectUserAction) throw new Error('Среда не поддерживает контроллер пользователя.');
+      if (isCardExecution(scenario.execution) && runtime.speakAsCustomer) free = { brief: customerBrief(scenario.execution.userView), turned: false, said: 0 };
+      else if (!runtime.selectUserAction) throw new Error('Среда не поддерживает контроллер пользователя.');
       const { policy, facts } = scenario.execution.userView;
+      refusal = 'turn_limit';
       if (!control && requiredUserTurns(policy, facts) > settings.maxTurns) throw new Error('Обязательный путь пользователя не помещается в лимит реплик.');
-      controlled = createUserState(policy, facts);
+      refusal = undefined;
+      if (!free) controlled = createUserState(policy, facts);
     }
     if (userMode === 'scripted' && !control) {
       const issue = scriptIssue(scenario.user, settings.maxTurns);
-      if (issue) { stage = 'сценарий теста'; throw new Error(issue); }
+      if (issue) { stage = 'сценарий теста'; refusal = 'turn_limit'; throw new Error(issue); }
     }
+    // From here on a failure is the agent's side: the session is opened under its own stage, not the controller's.
+    stage = 'target session';
     onStage?.('target');
     let responseCount = 0;
     let usageComplete = true;
@@ -200,6 +213,7 @@ export async function evaluateTrial(input: {
           if (trial.externalUsage) trial.externalUsage.costUsd = null;
         }
         if (typeof reply === 'string') return;
+        if (reply.measurementError !== undefined) measurementReported = true;
         if (reply.eventScope) observation.toolScope = observation.toolScope ? observation.toolScope.filter(tool => reply.eventScope!.includes(tool)) : [...reply.eventScope];
         if (reply.sessionId !== undefined && reply.sessionId !== trial.id || reply.turn !== undefined && reply.turn !== responseCount) throw new Error('Адаптер вернул неверный идентификатор сессии или номер хода.');
         if (responseCount === 1) observation.resetConfirmed = reply.resetConfirmed;
@@ -241,6 +255,22 @@ export async function evaluateTrial(input: {
       }
       stage = 'user simulation';
       onStage?.('user');
+      if (free) {
+        // The customer leaves on their own words' budget: past the card's follow-ups they have nothing more to say.
+        if (free.said >= free.brief.maxFollowUps && !(free.brief.turn?.required && !free.turned)) { stopped = true; break; }
+        ctx.signal.throwIfAborted();
+        const reply = customerReplySchema.parse(await runtime.speakAsCustomer!({ brief: structuredClone(free.brief), messages: structuredClone(messages), turn, turned: free.turned }, userCtx));
+        ctx.signal.throwIfAborted();
+        const problem = customerReplyProblem(reply, free.brief, messages, free.turned);
+        if (problem) throw new Error(`Симулятор нарушил карточку: ${problem}`);
+        emit({ type: 'simulator', result: { protocol: CARD_CUSTOMER_PROTOCOL, move: reply.move, message: reply.message } });
+        if (reply.move === 'leave') { stopped = true; break; }
+        if (reply.move === 'turn') free.turned = true;
+        free.said++;
+        if (turn + 1 >= settings.maxTurns) { stopped = true; break; }
+        userMessage = deliveredMessage(reply, free.brief);
+        continue;
+      }
       if (controlled) {
         // The answer must be one of the moves allowed now (an enum); the message comes from the move itself.
         const actions = allowedUserActions(controlled, response);
@@ -284,10 +314,17 @@ export async function evaluateTrial(input: {
       : ' Состояние внешний агент не сообщил.';
   } catch (error) {
     if (persistenceFailed) throw persistenceError;
+    // A dialogue that already broke on the agent's side (an empty or a service reply) keeps its own reason and cause
+    // when grading then refuses its facts: the agent's silence is what happened (OD-1), not the missing observation.
+    const brokeFirst = !ctx.signal.aborted && stage === 'проверка наблюдений' && trial.invalidCause !== undefined;
     trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';
-    trial.reason = ctx.signal.aborted ? 'Диалог остановлен.' : `${stages[stage] ?? stage}: ${error instanceof Error ? error.message : 'неизвестный сбой'}`;
-    if (trial.outcome === 'invalid') trial.invalidCause = stage === 'user simulation' ? 'simulator' : 'agent';
-    else delete trial.invalidCause;
+    if (!brokeFirst) trial.reason = ctx.signal.aborted ? 'Диалог остановлен.' : `${stages[stage] ?? stage}: ${error instanceof Error ? error.message : 'неизвестный сбой'}`;
+    // The cause, by where the dialogue broke (HN-4): the Lab's own refusal before the agent was contacted; a measurement
+    // the adapter reported it could not make, or the recorded facts refused by grading ('measurement'); the simulated
+    // customer; otherwise the agent's side failed to answer — silence stays the agent's (OD-1), never a fail.
+    if (trial.outcome !== 'invalid') delete trial.invalidCause;
+    else if (!brokeFirst) trial.invalidCause = refusal ?? (measurementReported || stage === 'проверка наблюдений' ? 'measurement'
+      : stage === 'user simulation' ? 'simulator' : 'agent');
     emit({ type: 'error', text: trial.reason });
   } finally {
     try { await session?.close(); }

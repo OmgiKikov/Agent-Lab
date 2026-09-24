@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { Scenario, Trial } from './contracts.js';
 import type { RunDerivation } from './run.js';
 import { USER_CONTROLLER_PROTOCOL } from './user-controller.js';
+import { CARD_CUSTOMER_PROTOCOL, CUSTOMER_MOVES } from './card-customer.js';
 
 /*
  * What the customer Lab plays did in a run, read from the recorded moves of the controlled customer: how often
@@ -24,11 +25,17 @@ export interface CustomerMoves {
 /** The part of a controller event this reads; anything else in the event is not needed and not checked here. */
 const controllerEvent = z.object({ protocol: z.literal(USER_CONTROLLER_PROTOCOL), decision: z.object({ actionId: z.string() }), accepted: z.literal(true) });
 
+/** A move of the customer who speaks in their own words (card-customer.ts): its kind is the move the harness checked. */
+const freeEvent = z.object({ protocol: z.literal(CARD_CUSTOMER_PROTOCOL), move: z.enum(CUSTOMER_MOVES) });
+const FREE_KIND: Record<typeof CUSTOMER_MOVES[number], MoveKind> = { answer: 'answer', dunno: 'missing', clarify: 'other', turn: 'turn', leave: 'finish' };
+
 /** The moves of one conversation, in order, as kinds of the actions its definition declares; an action it does not declare is skipped. */
 export function trialMoves(scenario: Scenario, trial: Trial): MoveKind[] {
   const actions = scenario.execution?.userView.policy.actions ?? [];
   return trial.events.flatMap(event => {
     if (event.type !== 'simulator') return [];
+    const spoken = freeEvent.safeParse(event.result);
+    if (spoken.success) return [FREE_KIND[spoken.data.move]];
     const parsed = controllerEvent.safeParse(event.result);
     const action = parsed.success ? actions.find(item => item.id === parsed.data.decision.actionId) : undefined;
     if (!action) return [];

@@ -326,13 +326,22 @@ export interface Trial {
   assessments?: MetricAssessment[]; assessmentError?: string; judgeAudit?: JudgeAudit; judgeReceipt?: JudgeReceipt;
   observation?: { state: 'sandbox' | 'reported' | 'missing'; tools: 'sandbox' | 'complete' | 'partial'; resetConfirmed?: boolean; version?: string; toolScope?: string[] };
   externalUsage?: Usage;
-  /** Why the dialogue could not be measured, typed where it broke. Records written before it carry only `reason` (run.ts decodes them). */
+  /**
+   * Why the dialogue could not be measured, typed where it broke. Records written before it carry only `reason` (run.ts
+   * decodes them); records written before 'measurement' existed keep the cause they were stored with, without migration.
+   */
   invalidCause?: InvalidCause;
   /** Why the judge left the attempt without a judgment, typed where it failed. Records written before it carry only `assessmentError`. */
   assessmentFailure?: AssessmentFailure;
 }
-/** Where a dialogue broke: the turn budget ran out, the simulated client failed, the agent or its connection failed, or a service text stood in for the agent's reply. */
-export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply'] as const;
+/**
+ * Where a dialogue broke: the turn budget ran out, the simulated client failed, the agent or its connection failed
+ * to answer, a service text stood in for the agent's reply, or `measurement`: the agent's side answered but the
+ * measurement could not be made — the adapter reported a measurementError, or the connection did not show the
+ * state, tool log, reset or observed field the checks need. Values are only ever appended, never renamed or
+ * reordered, so every stored cause stays valid.
+ */
+export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply', 'measurement'] as const;
 export type InvalidCause = typeof INVALID_CAUSES[number];
 /** Why an attempt has no judgment: only code checks were re-run, the run was stopped, the model provider did not answer, or the judge's answers were rejected. */
 export const ASSESSMENT_FAILURES = ['code_only', 'stopped', 'unavailable', 'rejected'] as const;

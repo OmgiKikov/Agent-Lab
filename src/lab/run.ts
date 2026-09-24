@@ -315,7 +315,7 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
 
 /** The stand, not the agent, broke the conversation: the adapter or the agent's service threw (an `error` event), not an empty reply. */
 export function standFailed(trial: Experiment['trials'][number]): boolean {
-  return trial.outcome === 'invalid' && trial.invalidCause === 'agent' && trial.events.some(event => event.type === 'error');
+  return trial.outcome === 'invalid' && (trial.invalidCause === 'agent' || trial.invalidCause === 'measurement') && trial.events.some(event => event.type === 'error');
 }
 
 /**

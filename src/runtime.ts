@@ -10,6 +10,7 @@ import type { BuilderModel, TopicMap, TopicMapPlan, TopicMapProgress } from './m
 import type { PurposeReader } from './prompt-purpose.js';
 import type { TableReader } from './spreadsheet/reading-task.js';
 import type { AllowedUserAction, UserDecision, UserView } from './user-controller.js';
+import type { CustomerBrief, CustomerReply } from './card-customer.js';
 
 /*
  * What the engine asks of the world outside it: a model for every role (Runtime), the agent under test (TargetSession),
@@ -48,6 +49,8 @@ export interface Runtime {
   generatorTransport?:'pi-model'|'deterministic-test';
   /** The controlled customer's next move: one of `actions`, the moves allowed right now. The harness renders the message. */
   selectUserAction?(input: { user: UserView; state: string; actions: AllowedUserAction[]; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserDecision>;
+  /** A card's customer in their own words (card-customer.ts): the next move and message; the harness checks it before the agent sees it. */
+  speakAsCustomer?(input: { brief: CustomerBrief; messages: DialogueMessage[]; turn: number; turned: boolean }, ctx: CallContext): Promise<CustomerReply>;
   /** One card from one dialogue or from the owner's rules alone; every reference in the answer is an enum of this call. */
   proposeCard?(input: CardProposalRequest, ctx: CallContext): Promise<CardProposal>;
   /** The independent reviewer's verdict on each listed claim of one card, and the model that gave it. */
