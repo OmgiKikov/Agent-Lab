@@ -11,12 +11,13 @@ import { detectionLines, detectProject, evidenceText, targetLabel, type ProjectD
 import type { ExperimentLab } from '../src/experiment.js';
 import { resultHash } from '../src/lab/record.js';
 import { countText } from '../src/plural.js';
+import { suiteHoldsLogs, suiteSavedText } from '../src/suite.js';
 import { accuracyRow } from '../src/result-text.js';
 import { buildResultView } from '../src/result-view.js';
 import { clip, oneLine, safeText } from '../src/text.js';
 import { comparisonFeed, dialogueFeed, failureFeed, progressText, row, runStamp, statusFeed } from './conversation.ts';
-import { chatQueue } from './decisions.ts';
-import { recordMark, type Answer } from './judge-review.ts';
+import { busyFor, chatQueue, writer } from './decisions.ts';
+import { agreementTarget, judgeWord, markRefusal, recordMark, type Answer } from './judge-review.ts';
 import { displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import { resultOutput } from './model-output.ts';
 import type { LabLease, SessionOperations } from './operations.ts';
@@ -111,7 +112,7 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
   });
   pi.registerTool({
     ...displayFor(TOOL.results), name: TOOL.results, label: 'The result of a run',
-    description: 'Read-only. The result of a run (the newest by default): the accuracy with its trust line and the comparison with production, the causes, every failure by its situation number, what was not measured. compare: this repeat against the run it repeats. report: saves the one-page report for the customer and says where. save: saves the run\'s situations as a suite file for CI (a path such as .evals/regression.json); nothing runs.',
+    description: 'Read-only. The result of a run (the newest by default): the accuracy with its trust line and the comparison with production, the causes, every failure by its situation number, what was not measured. compare: this repeat against the run it repeats. report: saves the one-page report for the customer and says where. save: saves the run\'s situations as a suite file (a path such as .evals/regression.json); nothing runs. A suite made from logs holds the customers\' conversations: it stays on the owner\'s machine, out of Git.',
     parameters: Type.Object({ run: runRef, compare: Type.Optional(Type.Literal(true)), report: Type.Optional(Type.Literal(true)),
       save: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, description: 'Where to save the suite file.' })) }, closed),
     executionMode: 'sequential',
@@ -124,8 +125,17 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
         const note = `Результат · ${runStamp(record)}`;
         if (params.save) {
           const file = await lab.saveSuite(record.id, projectPath(params.save, ctx.cwd));
-          return host.feedResult(callId, { run: record.id, suite: file, ci: `agent-lab evaluate --input ${JSON.stringify(file)} --yes` },
-            { rows: [row(`Набор сохранён: ${safeText(file.replace(`${ctx.cwd}/`, ''))}`, 'text', true), row('Его можно добавить в Git и запускать после каждой правки агента.', 'muted')] }, 'Набор сохранён');
+          const shown = file.replace(`${ctx.cwd}/`, '');
+          // A suite made from the logs holds the customers' conversations: the owner is told to keep it out of Git, in the
+          // same words as `agent-lab save-suite`. Only a suite without them gets the command for CI — in the owner's row alone.
+          const logs = suiteHoldsLogs(record);
+          const advice = suiteSavedText(record);
+          return host.feedResult(callId, { run: record.id, suite: file, holdsLogs: logs, advice,
+            instruction: logs ? 'The suite holds conversations from the owner\'s logs. Tell the owner in one sentence, as advice says: keep it out of Git and do not share it.'
+              : 'Tell the owner in one sentence that the suite can go into Git and run in their CI after every change of the agent; the command is shown to them.' },
+          { ...(logs ? { tone: 'warning' as const } : {}),
+            rows: [row(`Набор сохранён: ${safeText(shown)}`, 'text', true), row(advice, logs ? 'warning' : 'muted'),
+              ...(logs ? [] : [row(safeText(`В CI: agent-lab evaluate --input ${JSON.stringify(shown)} --yes`), 'muted')])] }, 'Набор сохранён');
         }
         if (!record.trials.length) return host.feedResult(callId, { run: record.id, result: null, instruction: 'This run has no result yet.' },
           { tone: 'warning', rows: [row('У этого прогона ещё нет результата.')] }, note);
@@ -198,29 +208,34 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
       const directory = resolve(ctx.cwd, '.agent-lab');
       try {
         requireInteractive(ctx, 'Ответ о решении судьи даёте вы — в интерактивном терминале Pi.');
+        // Work going on in this session holds the writer's lease: said before the question, so the owner's answer is never lost.
+        const busy = await busyFor(host.operations, directory);
+        if (busy) throw new Error(busy);
         const record = recordFor(await host.reading(directory).list(), params.run, 'results');
         if (isRunning(record.phase)) throw new Error('Прогон ещё идёт: ответить о решении судьи можно, когда он завершится.');
         const scenario = scenarioNumbered(record, params.situation);
         const view = buildResultView(record);
         const trial = attemptOf(record, scenario.id, view.failures.find(failure => failure.scenarioId === scenario.id)?.trialId);
         if (!trial) throw new NeedsOwner('unknown_reference', `У ситуации №${params.situation} нет записанного разговора.`, [], `У ситуации ${params.situation} нет записанного разговора.`);
-        const verdict = view.cards.find(card => card.scenarioId === scenario.id)?.outcome;
+        // The owner is asked about the judge's own decision, never a verdict their earlier marks already turned; and only
+        // where there is one: a control, an unmeasured situation or an undecided judge is said so before any question.
+        const target = agreementTarget(record, trial);
+        const refused = markRefusal(target);
+        if (refused || target?.kind !== 'ready') return host.feedResult(callId, { run: record.id, marked: false, reason: refused ?? null, instruction: 'Nothing was asked or written. Tell the owner why in one sentence.' },
+          { tone: 'warning', rows: [row(refused ?? 'Ответ не записан.')] }, 'Ответ о судье');
         const options = ['Да, судья прав', 'Нет, судья ошибся', 'Не знаю'];
-        const picked = await ctx.ui.select(safeText(`«${oneLine(scenario.title)}» — судья решил: ${verdict === 'fail' ? 'не справился' : 'справился'}. Судья прав?`), options);
+        const picked = await ctx.ui.select(safeText(`«${oneLine(scenario.title)}» — судья решил: ${judgeWord(target.judgeVerdict)}. Судья прав?`), options);
         if (!picked) return host.feedResult(callId, { run: record.id, marked: false }, { tone: 'warning', rows: [row('Ответ не записан.')] }, 'Ответ о судье');
         const answer: Answer = picked === options[0] ? 'agree' : picked === options[1] ? 'disagree' : 'unsure';
-        const { lab, close } = await host.open(ctx.cwd);
-        try {
-          await lab.init();
-          const notice = await recordMark(ctx, lab, await lab.get(record.id), trial.id, answer);
-          if (!notice) return host.feedResult(callId, { run: record.id, marked: false }, { tone: 'warning', rows: [row('Ответ не записан.')] }, 'Ответ о судье');
-          const after = await lab.get(record.id);
-          const agreement = judgeAgreement(after);
-          const fresh = buildResultView(after);
-          return host.feedResult(callId, { run: record.id, situation: params.situation, answer, headline: accuracyRow(fresh).text, waiting: agreement.unmarked.length },
-            { rows: [row(safeText(notice), 'text', true), row(safeText(accuracyRow(fresh).text), 'muted'),
-              row(agreement.unmarked.length ? `Ждут вашего ответа: ${agreement.unmarked.length}.` : 'Все решения судьи, которые стоило проверить, проверены.', 'muted')] }, `Ответ о судье · ${runStamp(record)}`);
-        } finally { await close(); }
+        // The judge's decision the owner was shown goes with the answer: a judgment that moved since is refused, never overwritten.
+        const notice = await writer(host.operations, host.open, ctx.cwd, directory)(async lab => recordMark(ctx, lab, await lab.get(record.id), trial.id, answer, { seen: target.judgeVerdict }));
+        if (!notice) return host.feedResult(callId, { run: record.id, marked: false }, { tone: 'warning', rows: [row('Ответ не записан.')] }, 'Ответ о судье');
+        const after = await host.reading(directory).get(record.id);
+        const agreement = judgeAgreement(after);
+        const fresh = buildResultView(after);
+        return host.feedResult(callId, { run: record.id, situation: params.situation, answer, headline: accuracyRow(fresh).text, waiting: agreement.unmarked.length },
+          { rows: [row(safeText(notice), 'text', true), row(safeText(accuracyRow(fresh).text), 'muted'),
+            row(agreement.unmarked.length ? `Ждут вашего ответа: ${agreement.unmarked.length}.` : 'Все решения судьи, которые стоило проверить, проверены.', 'muted')] }, `Ответ о судье · ${runStamp(record)}`);
       } catch (error) { return host.askOwner(callId, error); }
     },
   });

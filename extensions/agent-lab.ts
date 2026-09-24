@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { stripFrontmatter, type ExtensionAPI, type ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { fileURLToPath } from 'node:url';
+import { stripFrontmatter, type AgentToolResult, type ExtensionAPI, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { Text } from '@earendil-works/pi-tui';
 import type { TSchema } from 'typebox';
 import { ExperimentLab } from '../src/experiment.js';
@@ -19,7 +20,7 @@ import { SessionOperations } from './operations.ts';
 import { verdictOutput } from './model-output.ts';
 import { activateStep } from './steps.ts';
 import type { LabHost } from './host.ts';
-import { isInteractive, NeedsOwner } from './lab-ui.ts';
+import { inputError, isInteractive, NeedsOwner } from './lab-ui.ts';
 import { createGateway, type GatewayOptions } from './gateway.ts';
 
 /*
@@ -28,12 +29,35 @@ import { createGateway, type GatewayOptions } from './gateway.ts';
  * the agent-builder skill (skills/agent-builder/SKILL.md): its body joins the system prompt of an Agent Lab session;
  * everything a tool itself can say is in that tool's description. The owner's personal model gateway (provider giga)
  * is registered here too and connected with `/agent-lab gateway` (gateway.ts).
+ *
+ * Whatever goes wrong in a tool reaches the owner and the model once, in the owner's words (lab-ui.ts inputError); long
+ * work outlives a session Pi replaces and reports to the next one (operations.ts).
  */
 
 /** The one instruction source, read once: the skill without its frontmatter. */
 const GUIDE = new URL('../skills/agent-builder/SKILL.md', import.meta.url);
 let guide: Promise<string> | undefined;
-const guideText = (): Promise<string> => guide ??= readFile(GUIDE, 'utf8').then(text => stripFrontmatter(text).trim());
+const guideText = (): Promise<string> => guide ??= readFile(GUIDE, 'utf8').then(text => absoluteLinks(stripFrontmatter(text).trim(), GUIDE));
+
+/**
+ * The skill's relative links made absolute. In the system prompt a relative path is read from the owner's project,
+ * where `../../examples/…` names nothing; the files it links ship with this package, beside the skill.
+ */
+function absoluteLinks(text: string, base: URL): string {
+  let out = '', at = 0;
+  for (let open = text.indexOf('](', at); open >= 0; open = text.indexOf('](', at)) {
+    const close = text.indexOf(')', open + 2);
+    if (close < 0) break;
+    const target = text.slice(open + 2, close);
+    const relative = target.length > 0 && !target.includes(':') && !target.startsWith('/') && !target.startsWith('#');
+    out += `${text.slice(at, open + 2)}${relative ? fileURLToPath(new URL(target, base)) : target})`;
+    at = close + 1;
+  }
+  return out + text.slice(at);
+}
+
+/** Pi replaces the session on these: the work going on moves to the next session instead of stopping. Quitting ends it. */
+const REPLACED: ReadonlySet<string> = new Set(['new', 'resume', 'fork', 'reload']);
 
 interface AgentLabOptions {
   inlineRunMs?: number; inlineCheckMs?: number; inlineBuildMs?: number; createLab?: (directory: string) => ExperimentLab;
@@ -55,13 +79,13 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   };
   const feedResult = (callId: string, output: unknown, feed: Feed, note: string) =>
     ({ content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details: rememberFeed(callId, feed, note) });
-  /** An owner question becomes an ordinary result: the row shows what to clarify, the model is told not to guess. */
+  /** An owner question becomes an ordinary result: the row shows the owner's question, the model is told not to guess. */
   const askOwner = (callId: string, error: unknown) => {
     if (!(error instanceof NeedsOwner)) throw error;
     const message = safeText(error.message);
     return feedResult(callId, { status: error.code, mutated: false, message, options: error.options,
       instruction: 'Nothing was written. Put this question to the owner in plain words; do not pick an option or invent a value yourself.' },
-      { tone: 'warning', rows: [row(safeText(error.ownerText ?? message))] }, 'Нужно уточнение');
+      { tone: 'warning', rows: [row(safeText(error.ownerText))] }, 'Нужно уточнение');
   };
   const background = new Background(pi, { operations, verdictOutput, refresh: step });
   const host: LabHost = {
@@ -73,15 +97,27 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     open: (cwd, pendingCheck = 'cancel') => operations.acquire(resolve(cwd, '.agent-lab'), pendingCheck),
     backgroundCheck: (ctx, owned, id, card) => background.check(ctx, owned, id, card),
   };
-  /** Every Lab tool, once it has answered, hands the model the tools of the step it moved the project to. */
+  /**
+   * Every Lab tool, once it has answered, hands the model the tools of the step it moved the project to. What it
+   * throws reaches the owner and the model in the owner's words: an owner question as an ordinary result, anything
+   * else through the one translator — never a stack, an English diagnostic or a raw issue dump.
+   */
   const tools: Pick<ExtensionAPI, 'registerTool'> = {
     registerTool: <P extends TSchema, D, S>(tool: ToolDefinition<P, D, S>) => pi.registerTool({ ...tool,
       async execute(callId, params, signal, onUpdate, ctx) {
-        try { return await tool.execute(callId, params, signal, onUpdate, ctx); } finally { await step(resolve(ctx.cwd, '.agent-lab')); }
+        try { return await tool.execute(callId, params, signal, onUpdate, ctx); }
+        catch (error) {
+          if (error instanceof NeedsOwner) return askOwner(callId, error) as AgentToolResult<D>;
+          // An action the owner interrupted stays Pi's own to report.
+          if (signal?.aborted && (error === signal.reason || error instanceof Error && error.name === 'AbortError')) throw error;
+          throw new Error(inputError(error));
+        } finally { await step(resolve(ctx.cwd, '.agent-lab')); }
       } }),
   };
   registerMessageRenderers(pi);
   pi.on('session_start', async (_event, ctx) => {
+    // Work a replaced session of this Pi left going continues here: its row, its result.
+    background.adopt(ctx);
     await step(resolve(ctx.cwd, '.agent-lab'));
     if (process.env.AGENT_LAB_SESSION !== '1' || !isInteractive(ctx)) return;
     ctx.ui.setTitle(`Agent Lab · ${ctx.cwd.split('/').at(-1)}`);
@@ -104,6 +140,6 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   registerResultTools(tools, host);
   registerConnectTool(tools, host);
   registerBoardCommand(pi, host, { gateway: gateway.command, ...(options.openReport ? { openReport: options.openReport } : {}) });
-  pi.on('session_shutdown', () => operations.shutdown());
+  pi.on('session_shutdown', event => operations.shutdown(REPLACED.has(event?.reason ?? 'quit')));
   return gateway.ready;
 }

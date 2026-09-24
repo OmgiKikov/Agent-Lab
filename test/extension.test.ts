@@ -86,7 +86,14 @@ test('one instruction source: an Agent Lab session gets the skill\'s body, which
     const prompt = (await beforeAgentStart({ systemPrompt: 'BASE' }, { cwd, ui: {} } as unknown as ExtensionContext))!.systemPrompt;
     const skill = await readFile(new URL('../skills/agent-builder/SKILL.md', import.meta.url), 'utf8');
     const body = skill.slice(skill.indexOf('\n---', 3) + 4).trim();
-    assert.equal(prompt, `BASE\n\n${body}`, 'the system prompt gets the skill without its frontmatter, and nothing else');
+    // In the system prompt a path is read from the owner's project: the skill's relative links come absolute, and live.
+    const adapter = fileURLToPath(new URL('../examples/echo-agent.py', import.meta.url));
+    assert.ok(body.includes('](../../examples/echo-agent.py)'), 'the skill itself links the adapter contract relative to its file');
+    assert.equal(prompt, `BASE\n\n${body.replace('](../../examples/echo-agent.py)', `](${adapter})`)}`, 'the system prompt gets the skill without its frontmatter, and nothing else');
+    const links = [...prompt.matchAll(/\]\(([^)]+)\)/g)].map(match => match[1]!);
+    assert.ok(links.length > 0);
+    for (const link of links) { assert.ok(link.startsWith('/'), `${link}: a link the model can open`); await access(link); }
+    assert.doesNotMatch(prompt, /agent-lab [a-z-]+ [^`\n]*--yes/, 'the model is never handed a command line that consents for the owner');
     const named = [...new Set(skill.match(/agent_lab_[a-z_]+/g) ?? [])];
     assert.ok(named.length >= 2);
     for (const name of named) assert.ok(tools.has(name), `the skill names ${name}, which is not registered`);
@@ -161,6 +168,12 @@ test('headless, reads and the free teaching example work; everything the owner d
     await assert.rejects(call(TOOL.prepare, { task: 'Проверить агента', withoutLogs: true, rules: 'Отвечать по правилам возврата: номер терминала не спрашивать повторно.' }), /интерактивном терминале Pi/,
       'a paid preparation needs the owner\'s consent: headless it never starts');
     await assert.rejects(command(prepared.run, ctx as never), /интерактивном терминале Pi/);
+    // What the model reads of a refusal says what the owner does, and never hands it a command line that consents for them.
+    for (const [name, params] of [[TOOL.run, {}], [TOOL.run, { action: 'accept' }], [TOOL.decide, { decision: waiting.decision, choice: 1 }],
+      [TOOL.edit, { situation: 1, changes: [{ kind: 'fact', fact: 'f1', when: 'unknown' }] }], [TOOL.prepare, { task: 'Проверить агента', withoutLogs: true, rules: 'Номер терминала не спрашивать повторно.' }]] as const) {
+      const refused = await call(name, params).catch(error => error as Error);
+      assert.ok(refused instanceof Error, name); assert.doesNotMatch(refused.message, /--yes/, `${name}: ${refused.message}`);
+    }
     assert.equal(JSON.stringify(await store.get(prepared.run)), before, 'nothing was written');
     assert.equal((await store.list()).length, 1, 'no preparation was started');
     await assert.rejects(access(join(cwd, '.agent-lab', '.lock')));

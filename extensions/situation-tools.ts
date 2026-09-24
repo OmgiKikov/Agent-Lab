@@ -2,8 +2,9 @@ import { resolve } from 'node:path';
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type, type Static } from 'typebox';
 import type { Experiment } from '../src/contracts.js';
-import { contains, type CardEvidence } from '../src/card/checks.js';
-import { hostGrant, requiredAuthority, wordsOf, type HostGrant, type Prepared } from '../src/card/commands.js';
+import { normalizeText, type CardEvidence } from '../src/card/checks.js';
+import { hostGrant, wordsOf, type HostGrant, type Prepared } from '../src/card/commands.js';
+import { identifierPattern } from '../src/ids.js';
 import { convertible } from '../src/card/legacy-v1.js';
 import { cardChangeSchema, type CardCommand, type LibraryV2 } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
@@ -15,7 +16,7 @@ import type { ExperimentLab } from '../src/experiment.js';
 import { situationCoverage } from '../src/miner/cards.js';
 import { clip, safeText } from '../src/text.js';
 import { ownerMessages, row, runStamp } from './conversation.ts';
-import { displayFor, isInteractive, NeedsOwner, requireInteractive } from './lab-ui.ts';
+import { displayFor, isInteractive, NeedsOwner, recordErrorText, requireInteractive } from './lab-ui.ts';
 import { situationOutput, situationsOutput } from './model-output.ts';
 import type { LabLease, SessionOperations } from './operations.ts';
 import { recordFor } from './records.ts';
@@ -26,10 +27,11 @@ import { TOOL } from './steps.ts';
 /*
  * The chat's hands on a draft of situations (docs/design/card-v2-spec.md §5): one read tool and one change tool, a thin adapter over the
  * owner commands of src/card/commands.ts. The model names a situation by its number and a fact or a duty by the id the
- * read tool showed (f2, e1); it never carries hashes or passes an approval. What the host needs from the owner comes
- * from the owner: the words of a wording verbatim in their own messages, anything else a native dialog showing the
- * exact change. A changed situation is checked again within the agreed calls — in the row of the change when that is
- * quick, as a later message when it is not. Answers to a situation's question go through the decisions (decide-tool).
+ * read tool showed (f2, e1); it never carries hashes or passes an approval. Every change is the owner's only after
+ * «Записать» in a native dialog that shows it exactly; words the owner wrote in their own messages never stand in for
+ * that dialog — they only let its receipt say the wording is the owner's. A changed situation is checked again within
+ * the agreed calls — in the row of the change when that is quick, as a later message when it is not. Answers to a
+ * situation's question go through the decisions (decide-tool).
  */
 
 export interface SituationHost {
@@ -109,13 +111,15 @@ const when = Type.Enum(['initial', 'on_request', 'unknown'], { description: 'ini
 const turn = Type.Union([Type.Object({ kind: Type.Enum(['change_intent', 'report']), after: Type.String({ minLength: 1, maxLength: 300 }),
   says: Type.String({ minLength: 1, maxLength: 1000 }) }, closed), Type.Null()], { description: 'The customer\'s late turn: says it after the agent does `after`; null: none.' });
 
-const ruleIds = Type.Array(Type.String({ minLength: 1, maxLength: 80 }), { minItems: 1, maxItems: 20 });
+/** A requirement id as the lab stores it (ids.ts): the model is held to the stored shape before any command is built. */
+const ruleId = Type.String({ pattern: identifierPattern });
+const ruleIds = Type.Array(ruleId, { minItems: 1, maxItems: 20 });
 /** One change of one situation, or of the set's rulebook: what the model may ask the owner's draft to become. */
 const change = Type.Union([
   Type.Object({ kind: Type.Literal('fact'), fact: Type.Optional(factId), label: text(120, 'What the fact is, e.g. «Номер терминала»; without fact, a new one.'),
     value: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 120 }), Type.Number(), Type.Boolean()])), when: Type.Optional(when), remove: Type.Optional(Type.Literal(true)) }, closed),
   Type.Object({ kind: Type.Literal('duty'), duty: Type.String({ pattern: '^e[0-9]{1,2}$', description: 'A duty id (e1…).' }), text: text(300, 'What the agent must do, as an infinitive.'),
-    rules: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 80 }), { minItems: 1, maxItems: 3, description: 'Requirement ids of the owner rules it rests on.' })),
+    rules: Type.Optional(Type.Array(ruleId, { minItems: 1, maxItems: 3, description: 'Requirement ids of the owner rules it rests on.' })),
     appliesWhen: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 300 }), Type.Null()], { description: 'When it applies; null: always.' })), remove: Type.Optional(Type.Literal(true)) }, closed),
   Type.Object({ kind: Type.Literal('client'), wants: text(300, 'What the customer wants.'), writes: text(3000, 'Their exact first message.'), leaves: text(300, 'When they leave.') }, closed),
   Type.Object({ kind: Type.Literal('turn'), turn }, closed),
@@ -157,7 +161,8 @@ export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, h
             situationsFeed(record, views, running, topics), `Ситуации · ${runStamp(record)}`);
         }
         const view = views.find(item => item.number === params.situation);
-        if (!view) throw new NeedsOwner('unknown_reference', `Ситуации №${params.situation} нет. Спросите владельца, какая нужна.`, views.map(item => `${item.number}. ${item.brief.title}`).slice(0, 15));
+        if (!view) throw new NeedsOwner('unknown_reference', `Ситуации №${params.situation} нет. Спросите владельца, какая нужна.`, views.map(item => `${item.number}. ${item.brief.title}`).slice(0, 15),
+          `Ситуации ${params.situation} нет — какую открыть?`);
         return host.feedResult(callId, situationOutput(record, view, { readOnly, ...(params.details ? { details: view.details } : {}) }),
           situationFeed(view, { running, ...(params.details ? { details: true } : {}) }), `Ситуация ${view.number} · ${runStamp(record)}`);
       } catch (error) { return host.askOwner(callId, error); }
@@ -165,18 +170,27 @@ export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, h
   });
   pi.registerTool({
     ...displayFor(TOOL.edit), name: TOOL.edit, label: 'Change a situation',
-    description: 'Changes one situation of the draft, or the rulebook of the whole set; the owner confirms the exact change in a native dialog unless the new wording is verbatim from their own message. Each item of changes has a kind: rules — which rules bind the bot: operatorInstructions (instructions for human operators as a whole), bind/unbind (single requirement ids the bot must or no longer must follow), no situation; fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen; remove; one duty always stays); client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that; unmask — Lab writes plausible values where the de-identified log left marks (#, *): offer it when a situation is unusable for that reason. Fact, duty, client and turn changes of one situation that fit only together (a refusal says «передайте вместе с …») go in one call: checked once, confirmed once. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several situations changed in one message: later:true on every one but the last.',
+    description: 'Changes one situation of the draft, or the rulebook of the whole set; the owner confirms every change in a native dialog that shows it exactly — wording taken word for word from the owner\'s own message is marked as theirs, never written without that dialog. Each item of changes has a kind: rules — which rules bind the bot: operatorInstructions (instructions for human operators as a whole), bind/unbind (single requirement ids the bot must or no longer must follow), no situation; fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen; remove; one duty always stays); client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that; unmask — Lab writes plausible values where the de-identified log left marks (#, *): offer it when a situation is unusable for that reason. Fact, duty, client and turn changes of one situation that fit only together (a refusal says «передайте вместе с …») go in one call: checked once, confirmed once. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several situations changed in one message: later:true on every one but the last.',
     parameters: editParameters,
     executionMode: 'sequential',
     execute: (callId, params, signal, _onUpdate, ctx) => changeSituation(host, callId, ctx, signal, params),
   });
 }
 
+/** A change named something the draft does not hold: what the owner is asked. */
+const UNKNOWN_WORDS: Record<UnknownReference['what'], string> = {
+  card: 'Такой ситуации в черновике нет — какую вы имели в виду?',
+  fact: 'У этой ситуации нет такого факта — какой вы имели в виду?',
+  expectation: 'У этой ситуации нет такого пункта «агент должен» — какой вы имели в виду?',
+  choice: 'У этого вопроса нет такого ответа — какой вы выбираете?',
+  requirement: 'Такого правила в ваших материалах нет — какое вы имели в виду?',
+};
+
 /** What followed a change: the situation checked again (here, or later as a message), or why not now. */
 type CheckState = { status: 'none' | 'done' | 'running' | 'skipped' } | { status: 'needs_budget'; pendingJobs: number; remainingCalls: number } | { status: 'failed'; message: string };
 const CHECK_TEXT = (check: CheckState): string | undefined => check.status === 'running' ? 'Проверяю изменённую ситуацию в фоне — итог придёт сюда отдельным сообщением. Можно продолжать.'
   : check.status === 'skipped' ? 'Проверю после последней правки серии.'
-  : check.status === 'needs_budget' ? `Чтобы проверить изменённую ситуацию, нужно вызовов модели: ${check.pendingJobs}, а в лимите осталось ${check.remainingCalls}. Поднять лимит — решение владельца (agent_lab_decide).`
+  : check.status === 'needs_budget' ? `Чтобы проверить изменённую ситуацию, нужно вызовов модели: ${check.pendingJobs}, а в лимите осталось ${check.remainingCalls}. Поднять лимит — ваше решение: скажите «подними лимит».`
   : check.status === 'failed' ? `Проверка не завершилась: ${check.message} Правка сохранена.` : undefined;
 
 /** The situation the model named, in the draft a change goes to; a finished run is never changed, its change goes into a fresh draft of the same set. */
@@ -192,23 +206,47 @@ async function draftSituation(lab: ExperimentLab, record: Experiment, number: nu
   return { target, context, view };
 }
 
+/** Whether a character belongs to a word: a letter of any cased script or a digit. */
+const wordChar = (char: string | undefined): boolean => char !== undefined && (char.toLocaleLowerCase('ru') !== char.toLocaleUpperCase('ru') || (char >= '0' && char <= '9'));
+
 /**
- * The owner's decision on a command. A wording the owner wrote in their own message is theirs as it stands;
- * anything else — a decision about the customer, or words the model chose — is shown as the exact change in a
- * native dialog, and only «Записать» makes it the owner's.
+ * Whether `text` stands in `message` word for word: after the one normalisation (card/checks.ts) and never inside a
+ * longer word — «обещать возврат» is in «не должен обещать возврат денег», «а» is not in «Агент».
+ */
+export function saidWordForWord(message: string, text: string): boolean {
+  const said = normalizeText(message), words = normalizeText(text);
+  if (!words) return false;
+  for (let at = said.indexOf(words); at >= 0; at = said.indexOf(words, at + 1)) {
+    const cutBefore = wordChar(said[at - 1]) && wordChar(words[0]);
+    const cutAfter = wordChar(said[at + words.length]) && wordChar(words.at(-1));
+    if (!cutBefore && !cutAfter) return true;
+  }
+  return false;
+}
+
+/** Why a change is not written without a terminal: the owner's own way on, never a command line that would consent for them. */
+const DECIDES_IN_TERMINAL = 'Изменение ситуации записывается только после вашего «Записать» в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не записано.';
+
+/**
+ * The owner's decision on a command: the exact change in a native dialog, and only «Записать» makes it the owner's.
+ * Words the owner wrote in their own messages never replace that dialog — a quoted fragment can turn a rule inside
+ * out. When every wording of the change stands word for word in what the owner wrote, the dialog says so, and after
+ * «Записать» the receipt keeps them as the owner's words.
  */
 async function decide(ctx: ExtensionContext, lab: ExperimentLab, id: string, command: CardCommand, heading: string): Promise<{ prepared: Prepared; grant: HostGrant } | undefined> {
   const words = wordsOf(command);
   const said = ownerMessages(ctx);
-  const verbatim = requiredAuthority(command) === 'owner-words' && words.length > 0 && words.every(text => said.some(message => contains(message, text)));
+  const theirs = words.length > 0 && words.every(text => said.some(message => saidWordForWord(message, text)));
   const joined = words.join('\n');
-  const prepared = await lab.prepareCardCommand(id, command, { via: 'pi-confirm', ...(verbatim && joined.length <= 1000 ? { ownerWords: joined } : {}) });
-  if (verbatim) return { prepared, grant: hostGrant(prepared, 'words') };
-  requireInteractive(ctx, 'Это решение владельца: его подтверждают в интерактивном терминале Pi. Без него: agent-lab cards --id RUN --input команда.json --yes.');
+  const prepared = await lab.prepareCardCommand(id, command, { via: 'pi-confirm', ...(theirs && joined.length <= 1000 ? { ownerWords: joined } : {}) });
+  requireInteractive(ctx, DECIDES_IN_TERMINAL);
   const lines = [...prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`)),
     ...(prepared.rulebook ? rulebookChangeLines(prepared.rulebook.before, prepared.rulebook.after, prepared.next.requirements, prepared.rulebook.flagged) : [])];
-  const picked = await ctx.ui.select(safeText([heading, ...(lines.length ? ['', ...lines] : []), '', 'Записать это от вашего имени?'].join('\n')), ['Записать', 'Не записывать']);
-  return picked === 'Записать' ? { prepared, grant: hostGrant(prepared, 'confirmed') } : undefined;
+  const picked = await ctx.ui.select(safeText([heading, ...(lines.length ? ['', ...lines] : []),
+    ...(theirs ? ['', 'Формулировка — ваши слова из разговора.'] : []), '', 'Записать это от вашего имени?'].join('\n')), ['Записать', 'Не записывать']);
+  if (picked !== 'Записать') return undefined;
+  // Confirmed natively either way; the basis names the owner's words only where the change is nothing but a wording.
+  return { prepared, grant: hostGrant(prepared, theirs && prepared.authority === 'owner-words' ? 'words' : 'confirmed') };
 }
 
 /** The claims a change opened are checked within the agreed calls: here when it is quick, as a later message when it is not, or later on the owner's word. */
@@ -226,7 +264,8 @@ async function recheck(host: SituationHost, ctx: ExtensionContext, owned: LabLea
   });
   if (!inline) { host.backgroundCheck(ctx, owned, id, number); return { status: 'running' }; }
   const after = await owned.lab.get(id);
-  return after.phase === 'review' && !after.error ? { status: before.usage.calls === after.usage.calls ? 'none' : 'done' } : { status: 'failed', message: safeText(after.error ?? after.message) };
+  return after.phase === 'review' && !after.error ? { status: before.usage.calls === after.usage.calls ? 'none' : 'done' }
+    : { status: 'failed', message: recordErrorText(after.error ?? after.message) ?? 'причина не записана.' };
 }
 
 /**
@@ -371,7 +410,9 @@ async function changeSituation(host: SituationHost, callId: string, ctx: Extensi
       { tone: 'warning', rows: [row(safeText(error.message))] }, 'Не записано');
     if (error instanceof LibraryConflict) return host.feedResult(callId, { applied: false, stale: true, message: error.message, instruction: 'The draft changed since it was read. Read it again with agent_lab_cards and decide on the fresh state.' },
       { tone: 'warning', rows: [row(safeText(error.message)), row('Ничего не записано.', 'muted')] }, 'Ситуации изменились');
-    if (error instanceof UnknownReference) return host.askOwner(callId, new NeedsOwner('unknown_reference', `${error.message} Есть: ${error.allowed.slice(0, 12).join('; ')}.`, error.allowed.slice(0, 12)));
+    // The model reads what there is, by the ids a change names; the owner reads the question in their words, never an id.
+    if (error instanceof UnknownReference) return host.askOwner(callId, new NeedsOwner('unknown_reference', `${error.message} Есть: ${error.allowed.slice(0, 12).join('; ')}.`, error.allowed.slice(0, 12),
+      UNKNOWN_WORDS[error.what]));
     return host.askOwner(callId, error);
   }
 }

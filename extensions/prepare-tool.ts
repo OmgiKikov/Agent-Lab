@@ -19,7 +19,7 @@ import { TABLE_EXTENSIONS } from '../src/spreadsheet/workbook.js';
 import { safeText } from '../src/text.js';
 import { preparedAnswer, STOP_HINT, type Background } from './background.ts';
 import { progressText, row, runStamp } from './conversation.ts';
-import { ask, displayFor, isInteractive, NeedsOwner, requireInteractive } from './lab-ui.ts';
+import { ask, displayFor, isInteractive, NeedsOwner, requireInteractive, zodText } from './lab-ui.ts';
 import { followRecord, type LabLease, type SessionOperations } from './operations.ts';
 import type { Feed } from './render/feed.ts';
 import { TOOL } from './steps.ts';
@@ -86,10 +86,16 @@ function shownPath(file: string, cwd: string): string {
   return file.startsWith(`${home}/`) ? `~/${file.slice(home.length + 1)}` : file;
 }
 
-/** A schema error in the owner's language: which field and what is wrong, never a raw issue dump. */
-function plainInputError(error: unknown): Error {
+/**
+ * A schema error in the owner's language: which field and what is wrong, never a raw issue dump. A call limit the
+ * settings cannot hold means more situations than one preparation can take: a refusal in the owner's words, before
+ * anything is written.
+ */
+export function plainInputError(error: unknown): Error {
   if (!(error instanceof z.ZodError)) return error instanceof Error ? error : new Error(String(error));
-  return new Error(`Не удалось подготовить проверку: ${error.issues.slice(0, 6).map(issue => `${issue.path.join('.') || 'вход'} — ${issue.message}`).join('; ')}. Ничего не запущено и не потрачено.`);
+  const limit = error.issues.find(issue => issue.code === 'too_big' && issue.path.at(-1) === 'maxCalls');
+  if (limit?.code === 'too_big') return new Error(`Столько ситуаций за один раз не подготовить: на них не хватит предельного лимита вызовов модели (${limit.maximum}). Назовите меньше ситуаций — остальные можно добавить следующей подготовкой. Ничего не запущено и не потрачено.`);
+  return new Error(`Не удалось подготовить проверку: ${zodText(error)}. Ничего не запущено и не потрачено.`);
 }
 
 export function registerPrepareTool(pi: Pick<ExtensionAPI, 'registerTool'>, host: PrepareHost): void {
@@ -143,7 +149,8 @@ async function logsOf(ctx: ExtensionContext, found: ProjectDetection | undefined
 /** A prompt id the request named that Lab did not find: the model named it wrong, the owner is asked. */
 function unknownPrompt(id: string, found: ProjectDetection | undefined): never {
   const known = (found?.prompts ?? []).slice(0, 12).map(prompt => prompt.id);
-  throw new NeedsOwner('unknown_reference', `Промпта ${id} Lab в проекте не нашёл.${known.length ? ` Есть: ${known.join('; ')}.` : ''} Спросите владельца, какой нужен.`, known);
+  throw new NeedsOwner('unknown_reference', `Промпта ${id} Lab в проекте не нашёл.${known.length ? ` Есть: ${known.join('; ')}.` : ''} Спросите владельца, какой нужен.`, known,
+    'Такого промпта Lab в проекте не нашёл — какой из найденных задаёт ответ клиенту?');
 }
 
 const declined = (host: PrepareHost, callId: string, text: string) =>
@@ -172,7 +179,7 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   if (named) {
     prompts = byId.map(id => found?.prompts.find(prompt => prompt.id === id) ?? unknownPrompt(id, found));
   } else {
-    if (found?.prompts.length) requireInteractive(ctx, 'Какие промпты — правила ответа бота, выбирает владелец в интерактивном терминале Pi. Без него: agent-lab build --prompts-from ПАПКА --prompt ФАЙЛ#ИМЯ.');
+    if (found?.prompts.length) requireInteractive(ctx, 'Какие промпты — правила ответа бота, выбираете вы в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) — или назовите промпты сами. Ничего не потрачено.');
     let picked: PromptCandidate[] | 'declined' = [];
     if (found?.prompts.length) {
       // The writer's lease for the length of the choice: a proposal Lab's model makes is stored for the next look.
@@ -201,7 +208,7 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
       // The owner's corrections, said in words; which conversations to keep is asked natively when no value was named.
       const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}), ...(collapseRepeats === undefined ? {} : { collapseRepeats }) };
       if (Object.keys(choices).length || words || !await confirmedBefore(logs, directory)) {
-        requireInteractive(ctx, 'Как читать таблицу, решает владелец в интерактивном терминале Pi. Без него: agent-lab import --file … --input задача.json --yes.');
+        requireInteractive(ctx, 'Как читать таблицу, решаете вы в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не прочитано и не потрачено.');
         const owned = await host.open(ctx.cwd);
         let imported: Awaited<ReturnType<typeof importTable>>;
         try {
@@ -245,7 +252,7 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   } catch (error) { throw plainInputError(error); }
 
   // The one gate of a paid preparation, asked last: a request that cannot start never asks the owner for money.
-  requireInteractive(ctx, 'Подготовка ситуаций тратит вызовы модели: согласие даётся в интерактивном терминале Pi. Без него: agent-lab build --input задача.json.');
+  requireInteractive(ctx, 'Подготовка ситуаций тратит вызовы модели: согласие на расход даёте вы в интерактивном терминале Pi. Откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не потрачено.');
   const consent = libraryImport ? await preparationConsent(host.reading(directory).store, { input, situations: count }) : undefined;
   // The ceiling the owner agrees to is the one the preparation stops at: it goes to the lab with the consent.
   const callCeiling = consent?.callCeiling ?? preparationCeiling({ task: input.task, sources: materialSources(input.materials), situations: count, fromLogs: false });

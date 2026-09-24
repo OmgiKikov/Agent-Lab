@@ -191,10 +191,11 @@ test('the consent says what is read and what it may cost; the whole import is ke
   await writeFile(join(cwd, 'logs.jsonl'), rows.join('\n') + '\n');
   const create = ExperimentLab.prototype.create;
   let captured: Parameters<ExperimentLab['create']> | undefined;
-  ExperimentLab.prototype.create = async function(...args) { captured = args; throw new Error('captured'); };
+  // A refusal worded for the owner reaches them as it is; the stub stops the preparation right after the consent.
+  ExperimentLab.prototype.create = async function(...args) { captured = args; throw new Error('Вход перехвачен тестом.'); };
   t.after(() => { ExperimentLab.prototype.create = create; });
   const { prepare, asked } = chat(t, cwd, ['Собрать ситуации']);
-  await assert.rejects(prepare({ ...request, logs: 'logs.jsonl' }), /captured/);
+  await assert.rejects(prepare({ ...request, logs: 'logs.jsonl' }), /^Error: Вход перехвачен тестом\.$/);
   const [input, options] = captured!;
   assert.equal(input.originalImport!.dialogues.length, 300, 'the whole outcome-blind export is kept as the import');
   assert.equal(input.dialogues!.length, 200, 'the legacy projection is bounded');
