@@ -57,7 +57,8 @@ const FLAGS = {
   'agent-version': { type: 'string' }, unknown: { type: 'boolean' }, import: { type: 'string' },
   file: { type: 'string' }, sheet: { type: 'string' }, 'id-column': { type: 'string' }, 'text-column': { type: 'string' }, separator: { type: 'string' },
   markers: { type: 'string' }, 'role-column': { type: 'string' }, roles: { type: 'string' }, 'order-column': { type: 'string' }, 'row-order': { type: 'boolean' },
-  where: { type: 'string' }, situations: { type: 'string' },
+  where: { type: 'string' }, 'no-separator': { type: 'boolean' }, 'collapse-repeats': { type: 'boolean' }, 'keep-repeats': { type: 'boolean' },
+  situations: { type: 'string' },
 } as const;
 type Flags = ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>['values'];
 
@@ -483,7 +484,7 @@ async function repeat({ values, directory }: CommandInput): Promise<void> {
 /** Every command in the order `--help` lists them: first the owner's path, then what scripts and CI use. */
 const COMMANDS: Readonly<Record<string, Command>> = {
   detect: { help: ['agent-lab detect [--directory ПАПКА] [--json]   Что Lab нашёл в папке проекта: агента, логи, материалы, промпт'], run: detect },
-  import: { help: ['agent-lab import --file логи.xlsx [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--yes] [--json]   Как Lab прочитает таблицу логов (.xlsx, .csv) и какие разговоры возьмёт; --yes загружает её'], run: importTable },
+  import: { help: ['agent-lab import --file логи.xlsx [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--yes] [--json]   Как Lab прочитает таблицу логов (.xlsx, .csv) и какие разговоры возьмёт; --yes загружает её'], run: importTable },
   build: { help: ['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--situations N] [--connection подключение.json] [--yes]   Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --yes готовит их'], run: prepare },
   prepare: { help: [], run: prepare },
   cards: { help: [

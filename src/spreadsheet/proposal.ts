@@ -18,6 +18,7 @@ import type { TableFile, Workbook } from './workbook.js';
  * against the data and refused with the reason when it cannot be right. What Lab cannot settle alone
  * (a marker it does not know) becomes one question. Which conversations to evaluate is the owner's alone:
  * Lab offers the columns of categories, and a column the owner names asks which of its values to keep.
+ * So is dropping exchanges an export copied: Lab asks once when copies are frequent, never drops them itself.
  * The proposal is the typed value the chat question and the command line both render.
  */
 
@@ -35,7 +36,12 @@ export type TableQuestion =
    * Какие разговоры оценивать? The most frequent values of the column the owner chose, each with its conversations, the
    * most first; `more` values are not listed, and the owner names one of those in words. The answer is one or several values.
    */
-  | { kind: 'where'; column: ColumnInfo; values: ValueCount[]; more: number };
+  | { kind: 'where'; column: ColumnInfo; values: ValueCount[]; more: number }
+  /**
+   * В N из M разговоров один и тот же обмен повторяется подряд — убрать повторы? `dialogues` of the `of` conversations
+   * considered hold a block of messages again right after itself; `messages` are such copies.
+   */
+  | { kind: 'repeats'; dialogues: number; of: number; messages: number };
 
 interface ProposalBase {
   file: TableFile;
@@ -67,6 +73,9 @@ const UNIQUE = 0.9;
 const ORDER_AGREES = 0.9;
 /** A role value longer than this is text, not a role. */
 const ROLE_CHARS = 40;
+/** Copies are asked about when this share of the conversations, and at least REPEATS_MIN of them, hold some: an export's habit, not a client saying the same twice. */
+const REPEATS_ASKED = 0.05;
+const REPEATS_MIN = 2;
 /** Role words exports use. Lab proposes them; the owner confirms. Anything else is asked. */
 const KNOWN_ROLES: ReadonlyMap<string, Role> = new Map([
   ...['client', 'customer', 'user', 'human', 'клиент', 'пользователь', 'абонент'].map(word => [word, 'user'] as const),
@@ -101,8 +110,16 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
   const selection = choose(analysis, reading, conversations, chosen.where);
   if ('reason' in selection) return { ...base, status: 'refused', choice: 'where', reason: selection.reason };
   if ('question' in selection) return { ...base, status: 'question', question: selection.question, found: conversations.length };
-  const mapping = selection.filter ? tableMappingSchema.parse({ ...reading, filter: selection.filter }) : reading;
-  return { ...base, status: 'ready', mapping, preview: importTable(sheet, mapping).preview, selectable: selectableColumns(sheet, reading, conversations, analysis.columns) };
+  const asWritten = selection.filter ? tableMappingSchema.parse({ ...reading, filter: selection.filter }) : reading;
+  const preview = importTable(sheet, asWritten).preview;
+  // Copies are counted over the conversations the owner chose; frequent ones become the question, and only the owner's yes drops them.
+  const considered = preview.selected ?? preview.dialogues;
+  if (chosen.collapseRepeats === undefined && preview.repeats && preview.repeats.dialogues >= Math.max(REPEATS_MIN, considered * REPEATS_ASKED)) {
+    return { ...base, status: 'question', question: { kind: 'repeats', ...preview.repeats, of: considered }, found: considered };
+  }
+  const mapping = chosen.collapseRepeats ? tableMappingSchema.parse({ ...asWritten, collapseRepeats: true }) : asWritten;
+  return { ...base, status: 'ready', mapping, preview: mapping === asWritten ? preview : importTable(sheet, mapping).preview,
+    selectable: selectableColumns(sheet, reading, conversations, analysis.columns) };
 }
 
 interface Analysis {
@@ -138,8 +155,8 @@ function analyze(sheet: Sheet): Analysis {
 const filledValues = (a: Analysis, column: ColumnInfo) => a.values[column.index]!.filter(Boolean);
 const label = (column: ColumnInfo) => quoted(columnLabel(column));
 
-/** The marker structure of a column's texts, with the owner's separator when given. */
-function structureOf(a: Analysis, column: ColumnInfo, separator?: string): MarkerStructure | undefined {
+/** The marker structure of a column's texts, with the owner's separator when given (null: none between messages). */
+function structureOf(a: Analysis, column: ColumnInfo, separator?: string | null): MarkerStructure | undefined {
   const texts = filledValues(a, column);
   if (texts.length < a.rows.length * TEXT_FILLED) return undefined;
   if (separator === undefined && !a.markers.has(column.index)) a.markers.set(column.index, detectMarkers(texts));
@@ -148,7 +165,7 @@ function structureOf(a: Analysis, column: ColumnInfo, separator?: string): Marke
 }
 
 /** The column whose texts hold the most messages led by markers. */
-function markerColumn(a: Analysis, separator?: string): { column: ColumnInfo; structure: MarkerStructure } | undefined {
+function markerColumn(a: Analysis, separator?: string | null): { column: ColumnInfo; structure: MarkerStructure } | undefined {
   let best: { column: ColumnInfo; structure: MarkerStructure; messages: number } | undefined;
   for (const column of a.columns) {
     const structure = structureOf(a, column, separator);
@@ -216,6 +233,10 @@ function choose(a: Analysis, reading: TableMapping, conversations: readonly numb
 }
 
 const noMarkers = (column: ColumnInfo) => `В колонке ${label(column)} нет разговоров: строки не начинаются с метки роли — слова заглавными буквами, вроде CLIENT или AGENT.`;
+/** Why the owner's separator — or the owner's word that there is none — does not read the column `column`, or any column. */
+const noSeparated = (separator: string | null, column?: ColumnInfo) => separator === null
+  ? `${column ? `В колонке ${label(column)}` : 'Ни в одной колонке'} нет разговоров из нескольких сообщений, каждое из которых начинается с метки роли.`
+  : `${column ? `В колонке ${label(column)}` : 'Ни в одной колонке'} сообщения не отделены знаком ${quoted(separator)} с меткой роли после него.`;
 /** Columns that may hold text, the longest texts first: numbers and dates are not messages. */
 const textColumns = (a: Analysis) => a.columns.filter(column => column.filled && !numeric(a, column))
   .map(column => ({ column, length: filledValues(a, column).reduce((sum, value) => sum + value.length, 0) / column.filled }))
@@ -228,12 +249,10 @@ function rowLayout(a: Analysis, c: TableChoices): Outcome {
   if (c.text) {
     text = findColumn(c.text, a.columns)!;
     structure = structureOf(a, text, c.separator);
-    if (!structure) return { refused: c.separator === undefined ? 'text' : 'separator', reason: c.separator === undefined ? noMarkers(text)
-      : `В колонке ${label(text)} сообщения не отделены знаком ${quoted(c.separator)} с меткой роли после него.` };
+    if (!structure) return { refused: c.separator === undefined ? 'text' : 'separator', reason: c.separator === undefined ? noMarkers(text) : noSeparated(c.separator, text) };
   } else {
     const found = markerColumn(a, c.separator);
-    if (!found) return c.separator === undefined ? { question: { kind: 'text', columns: textColumns(a) }, found: 0 }
-      : { refused: 'separator', reason: `Ни в одной колонке сообщения не отделены знаком ${quoted(c.separator)} с меткой роли после него.` };
+    if (!found) return c.separator === undefined ? { question: { kind: 'text', columns: textColumns(a) }, found: 0 } : { refused: 'separator', reason: noSeparated(c.separator) };
     ({ column: text, structure } = found);
   }
   const texts = filledValues(a, text);
@@ -256,7 +275,7 @@ function rowLayout(a: Analysis, c: TableChoices): Outcome {
   if (!id) return { question: { kind: 'id', columns: idOptions(a, [text]) }, found: texts.length };
   const why = rowIdIssue(a, id, text);
   if (why) return { refused: 'id', reason: why };
-  const layout: TableLayout = { kind: 'dialogue_per_row', separator: structure.separator, markers };
+  const layout: TableLayout = { kind: 'dialogue_per_row', ...structure.separator === undefined ? {} : { separator: structure.separator }, markers };
   return { mapping: { id: toColumn(id), text: toColumn(text), layout } };
 }
 

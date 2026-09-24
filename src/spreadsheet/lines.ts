@@ -16,6 +16,8 @@ const ROWS: [string, string, string] = ['строка', 'строки', 'стр�
 const MESSAGES: [string, string, string] = ['сообщение', 'сообщения', 'сообщений'];
 /** «398 из 866 разговоров»: the count after «из». */
 const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
+/** «в 120 разговорах». */
+const CONVERSATIONS_IN: [string, string, string] = ['разговоре', 'разговорах', 'разговорах'];
 const VALUES: [string, string, string] = ['разное значение', 'разных значения', 'разных значений'];
 const MORE_VALUES: [string, string, string] = ['значение', 'значения', 'значений'];
 const ENCODING_NAMES = { 'utf-8': 'UTF-8', 'utf-16le': 'UTF-16', 'windows-1251': 'Windows-1251' } as const;
@@ -41,6 +43,8 @@ export function questionText(question: TableQuestion, found: number): string {
     case 'role': return `Lab видит ${countText(found, CONVERSATIONS)}, но не знает, кто пишет сообщения со значением ${quoted(question.value)} в колонке ${quoted(columnLabel(question.column))} (${countText(question.messages, MESSAGES)}): клиент, агент или служебное?`;
     case 'where': return `Какие разговоры оценивать? Lab видит ${countText(found, CONVERSATIONS)}; в колонке ${quoted(columnLabel(question.column))} у них ${countText(question.values.length + question.more, VALUES)}`
       + ` — выберите одно или несколько${question.more ? `; ниже ${question.values.length} самых частых` : ''}.`;
+    case 'repeats': return `В ${question.dialogues} из ${countText(question.of, CONVERSATIONS_OF)} один и тот же обмен повторяется подряд — убрать повторы?`
+      + ` Копий — ${countText(question.messages, MESSAGES)}; каждый обмен останется один раз.`;
   }
 }
 
@@ -58,7 +62,8 @@ function readingLines({ mapping, preview, selectable }: ReadyProposal): string[]
   const counted = (label: string) => countText(preview.messages.find(item => item.label === label)?.count ?? 0, MESSAGES);
   const lines = layout.kind === 'dialogue_per_row'
     ? [`  Один разговор — одна строка; id разговора — колонка ${quoted(columnLabel(mapping.id))}.`,
-      `  Текст — колонка ${quoted(columnLabel(mapping.text))}: сообщения отделены ${shown(layout.separator)}, каждое начинается с метки:`,
+      layout.separator === undefined ? `  Текст — колонка ${quoted(columnLabel(mapping.text))}: сообщения ничем не отделены — новое начинается с каждой метки:`
+        : `  Текст — колонка ${quoted(columnLabel(mapping.text))}: сообщения отделены ${shown(layout.separator)}, каждое начинается с метки:`,
       ...layout.markers.map(marker => `    ${marker.token} — ${ROLE_WORDS[marker.role]} · ${counted(marker.token)}`)]
     : [`  Одно сообщение — одна строка; id разговора — колонка ${quoted(columnLabel(mapping.id))}.`,
       `  Кто пишет — колонка ${quoted(columnLabel(layout.role))}:`,
@@ -80,6 +85,10 @@ function outcomeLines(mapping: TableMapping, preview: TablePreview): string[] {
   const reasons = preview.rejected.slice(0, 4).map(item => `${item.reason.charAt(0).toLowerCase()}${item.reason.slice(1)} — ${item.count}`);
   const lines = mapping.filter && preview.selected !== undefined
     ? [`  Отбор: ${quoted(columnLabel(mapping.filter.column))} = ${mapping.filter.values.map(shownValue).join(' или ')} — ${preview.selected} из ${countText(preview.dialogues, CONVERSATIONS_OF)}.`] : [];
+  const repeats = preview.repeats;
+  if (repeats) lines.push(mapping.collapseRepeats
+    ? `  Повторы убраны: ${countText(repeats.messages, MESSAGES)} в ${countText(repeats.dialogues, CONVERSATIONS_IN)} — каждый обмен остался один раз.`
+    : `  В ${countText(repeats.dialogues, CONVERSATIONS_IN)} обмен повторяется подряд (копий — ${countText(repeats.messages, MESSAGES)}); Lab читает их как написано.`);
   lines.push(`  ${countText(considered, CONVERSATIONS)}: подходят ${preview.usable}${rejected ? `, не подошли ${rejected} (${reasons.join(' · ')}${preview.rejected.length > 4 ? ' · …' : ''})` : ''}.`);
   if (preview.taken < preview.usable) lines.push(`  В одну загрузку входит ${countText(preview.taken, CONVERSATIONS)}: Lab возьмёт ${preview.taken} из ${preview.usable} подходящих — по хешу содержимого, без отбора по исходу.`);
   return lines;

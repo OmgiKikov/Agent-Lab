@@ -27,6 +27,7 @@ export function questionAnswers(question: TableQuestion): TableAnswer[] {
       const labels = whereChoices(question);
       return question.values.map((item, index) => ({ label: labels[index]!, choices: { where: { column: columnLabel(question.column), values: [item.value] } } }));
     }
+    case 'repeats': return [{ label: 'убрать повторы — каждый обмен один раз', choices: { collapseRepeats: true } }, { label: 'оставить как написано', choices: { collapseRepeats: false } }];
   }
 }
 

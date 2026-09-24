@@ -4,6 +4,7 @@ import type { ImportBatch } from '../scenario-contracts.js';
 import { importBatch } from '../scenario-library.js';
 import { columnLabel, type Column, type Role, type TableMapping } from './mapping.js';
 import { splitMessages } from './markers.js';
+import { withoutRepeats } from './repeats.js';
 import { conversationRows, selectedConversations } from './selection.js';
 import { cellOf, columnLetter, type Sheet } from './sheet.js';
 
@@ -12,7 +13,8 @@ import { cellOf, columnLetter, type Sheet } from './sheet.js';
  * (src/scenario-library.ts importBatch), so the miner, preparation, calibration and every screen read
  * spreadsheet logs exactly as they read JSON ones. The import's own rules decide what is usable; a
  * problem only the spreadsheet can see (no marker, an unknown role) is handed to it as the row's reason.
- * Every other column of a conversation travels with it verbatim, as the fields of a JSON row do.
+ * Every other column of a conversation travels with it verbatim, as the fields of a JSON row do. When the
+ * owner chose to drop copied exchanges (repeats.ts), a conversation's row says how many messages went.
  *
  * The owner's filter (selection.ts) comes first: the conversations it leaves out are not read at all.
  * One import holds IMPORT_DIALOGUE_LIMIT conversations. A longer log gives a sample of its usable
@@ -48,6 +50,11 @@ export interface TablePreview {
   messages: { label: string; role: Role; count: number }[];
   /** The other columns, kept with each conversation as written. */
   kept: string[];
+  /**
+   * Conversations where a block of messages stands again right after itself, and the messages that are such copies:
+   * what the owner's collapseRepeats drops, or dropped. Absent when there are none.
+   */
+  repeats?: { dialogues: number; messages: number };
 }
 
 /** One conversation on its way into the import: the row the import reads, and the reason the sheet already shows. */
@@ -55,6 +62,8 @@ interface SheetDialogue {
   raw: Record<string, unknown>;
   issue?: string;
   labels: { label: string; role: Role }[];
+  /** Messages that are copies of the block right before them: dropped when the owner chose so, counted either way. */
+  repeats: number;
   /** What the conversation is — its id and messages, not its place in the sheet: the order of the sample. */
   key: () => string;
 }
@@ -86,11 +95,13 @@ export function importTable(sheet: Sheet, mapping: TableMapping): { batch: Impor
     const entry = messages.get(label) ?? { label, role, count: 0 };
     entry.count++; messages.set(label, entry);
   }
+  const repeated = dialogues.filter(item => item.repeats);
+  const repeats = { dialogues: repeated.length, messages: repeated.reduce((total, item) => total + item.repeats, 0) };
   return { batch, preview: {
     rows: rows.length, dialogues: conversations.length, ...mapping.filter ? { selected: chosen.length } : {}, usable: usable.length, taken: batch.dialogues.length,
     rejected: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)),
     messages: [...messages.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
-    kept: kept.map(item => item.key),
+    kept: kept.map(item => item.key), ...repeats.dialogues ? { repeats } : {},
   } };
 }
 
@@ -122,6 +133,17 @@ function keptCells(sheet: Sheet, row: number, kept: readonly KeptColumn[]): Reco
 
 const cellText = (sheet: Sheet, row: number, column: Column) => cellOf(sheet, row, column.index);
 
+/**
+ * A conversation's messages as the import takes them: as written, or with copied blocks dropped when the owner
+ * chose so — then its row says how many went (`droppedRepeats`), so the evidence shows the sheet held more.
+ * `repeats` counts the copies either way.
+ */
+function collapsed<T extends { role?: string; content: string }>(mapping: TableMapping, written: T[]): { messages: T[]; repeats: number; dropped: { droppedRepeats?: number } } {
+  const once = withoutRepeats(written);
+  const repeats = written.length - once.length;
+  return mapping.collapseRepeats ? { messages: once, repeats, dropped: repeats ? { droppedRepeats: repeats } : {} } : { messages: written, repeats, dropped: {} };
+}
+
 /** One conversation per row: `conversations` holds each conversation's one row (selection.ts conversationRows). */
 function rowDialogues(sheet: Sheet, mapping: TableMapping, conversations: readonly number[][], kept: readonly KeptColumn[]): SheetDialogue[] {
   if (mapping.layout.kind !== 'dialogue_per_row') return [];
@@ -135,13 +157,13 @@ function rowDialogues(sheet: Sheet, mapping: TableMapping, conversations: readon
     const base = { id, row: row + 1, ...columns ? { columns } : {} };
     const duplicate = id !== '' && seen.has(id) ? ROW_ISSUES.duplicate : undefined;
     seen.add(id);
-    if (!text.trim()) return { raw: base, issue: duplicate ?? ROW_ISSUES.noText, labels: [], key: contentKey(id, [], []) };
+    if (!text.trim()) return { raw: base, issue: duplicate ?? ROW_ISSUES.noText, labels: [], repeats: 0, key: contentKey(id, [], []) };
     const split = splitMessages(text, separator, tokens);
-    if (!split) return { raw: { ...base, text }, issue: duplicate ?? ROW_ISSUES.noMarker, labels: [], key: contentKey(id, [], []) };
-    const messages = split.map(message => ({ role: roleOf.get(message.marker)!, content: message.content, marker: message.marker }));
+    if (!split) return { raw: { ...base, text }, issue: duplicate ?? ROW_ISSUES.noMarker, labels: [], repeats: 0, key: contentKey(id, [], []) };
+    const { messages, repeats, dropped } = collapsed(mapping, split.map(message => ({ role: roleOf.get(message.marker)!, content: message.content, marker: message.marker })));
     const issue = duplicate ?? (messages.some(message => !message.content) ? ROW_ISSUES.emptyMessage : undefined);
     const labels = messages.map(message => ({ label: message.marker, role: message.role }));
-    return { raw: { ...base, messages }, ...issue ? { issue } : {}, labels, key: contentKey(id, messages, labels) };
+    return { raw: { ...base, messages, ...dropped }, ...issue ? { issue } : {}, labels, repeats, key: contentKey(id, messages, labels) };
   });
 }
 
@@ -156,15 +178,15 @@ function messageDialogues(sheet: Sheet, mapping: TableMapping, conversations: re
     // A message without its place, or a column mixing numbers and dates, leaves the order unknown: never guessed.
     const unordered = layout.order !== undefined && (ordered.some(item => item.key === undefined) || new Set(ordered.map(item => item.key?.kind)).size > 1);
     if (!unordered) ordered.sort((a, b) => (a.key?.value ?? 0) - (b.key?.value ?? 0) || a.row - b.row);
-    const messages = ordered.map(({ row }) => {
+    const { messages, repeats, dropped } = collapsed(mapping, ordered.map(({ row }) => {
       const value = cellText(sheet, row, layout.role).trim(), role = roleOf.get(value), columns = keptCells(sheet, row, kept);
       return { ...role ? { role } : {}, content: cellText(sheet, row, mapping.text).trim(), row: row + 1, value,
         ...layout.order ? { order: cellText(sheet, row, layout.order) } : {}, ...columns ? { columns } : {} };
-    });
+    }));
     const issue = messages.some(message => !message.role) ? ROW_ISSUES.unknownRole : unordered ? ROW_ISSUES.noOrder
       : messages.some(message => !message.content) ? ROW_ISSUES.emptyMessage : undefined;
     const labels = messages.flatMap(message => message.role ? [{ label: message.value, role: message.role }] : []);
-    return { raw: { id, rows: group.map(row => row + 1), messages }, ...issue ? { issue } : {}, labels, key: contentKey(id, messages, labels) };
+    return { raw: { id, rows: group.map(row => row + 1), messages, ...dropped }, ...issue ? { issue } : {}, labels, repeats, key: contentKey(id, messages, labels) };
   });
 }
 

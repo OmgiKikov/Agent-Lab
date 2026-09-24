@@ -46,8 +46,11 @@ export const tableMappingSchema = z.strictObject({
   id: column,
   text: column,
   layout: z.discriminatedUnion('kind', [
-    /** One conversation per row: its whole text in one cell, each message after the separator starting with a marker. */
-    z.strictObject({ kind: z.literal('dialogue_per_row'), separator: z.string().min(1).max(8),
+    /**
+     * One conversation per row: its whole text in one cell, each message starting with a marker — after the
+     * separator, or, with none, wherever a marker opens the text or follows a space (markers.ts).
+     */
+    z.strictObject({ kind: z.literal('dialogue_per_row'), separator: z.string().min(1).max(8).optional(),
       markers: z.array(z.strictObject({ token: text(40), role })).min(2).max(LABEL_LIMIT) }),
     /** One message per row: who writes it in a role column; order by a column of numbers or dates, or by the rows themselves. */
     z.strictObject({ kind: z.literal('message_per_row'), role: column,
@@ -55,6 +58,8 @@ export const tableMappingSchema = z.strictObject({
   ]),
   /** Only the conversations with one of these values in this column go into the import: the owner's choice of what to evaluate. */
   filter: z.strictObject({ column, values: z.array(cellValue).min(1).max(FILTER_VALUES) }).optional(),
+  /** Only when the owner chose it: a block of messages written again right after itself is read once (repeats.ts). */
+  collapseRepeats: z.literal(true).optional(),
 }).superRefine((mapping, ctx) => {
   const layout = mapping.layout;
   const columns = [mapping.id.index, mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : [],
@@ -73,20 +78,22 @@ const columnChoice = z.string().trim().min(1).max(200);
 /**
  * The owner's own choices, each overriding what Lab would propose: from the command line or from the
  * chat. A column is named by its header or its letter. Markers and role values are decided one by one:
- * those not named keep Lab's proposal. `order: null` orders messages by the rows of the sheet. `where`
- * chooses the conversations to evaluate: a column alone asks which of its values to keep; a column with
- * values keeps the conversations whose cell is exactly one of them.
+ * those not named keep Lab's proposal. `separator: null` says nothing stands between messages: each
+ * starts at a marker. `order: null` orders messages by the rows of the sheet. `where` chooses the
+ * conversations to evaluate: a column alone asks which of its values to keep; a column with values keeps
+ * the conversations whose cell is exactly one of them. `collapseRepeats` answers «убрать повторы?».
  */
 export const tableChoicesSchema = z.strictObject({
   sheet: z.string().trim().min(1).max(100).optional(),
   id: columnChoice.optional(),
   text: columnChoice.optional(),
-  separator: z.string().min(1).max(8).optional(),
+  separator: z.string().min(1).max(8).nullable().optional(),
   markers: z.array(z.strictObject({ token: z.string().trim().min(1).max(40), role: z.enum([...ROLES, 'text']) })).min(1).max(20).optional(),
   role: columnChoice.optional(),
   roles: z.array(z.strictObject({ value: z.string().trim().min(1).max(80), role })).min(1).max(20).optional(),
   order: columnChoice.nullable().optional(),
   where: z.strictObject({ column: columnChoice, values: z.array(cellValue).min(1).max(FILTER_VALUES).optional() }).optional(),
+  collapseRepeats: z.boolean().optional(),
 });
 export type TableChoices = z.infer<typeof tableChoicesSchema>;
 
@@ -112,9 +119,13 @@ export const tableReadingSchema = z.strictObject({
   file: z.strictObject({ name: text(260), bytes: z.number().int().positive(), sha256: sha256Schema, format: z.enum(TABLE_FORMATS) }),
   mapping: tableMappingSchema,
   confirmedAt: z.iso.datetime(),
-  /** `dialogues`: every conversation of the sheet; `selected`: those the owner's filter kept, when there is one; usable and taken are among them. */
+  /**
+   * `dialogues`: every conversation of the sheet; `selected`: those the owner's filter kept, when there is one; usable
+   * and taken are among them. `repeats`: with the owner's collapseRepeats, the conversations and messages copies left.
+   */
   sheet: z.strictObject({ dialogues: count, selected: count.optional(), usable: count, taken: count,
-    rejected: z.array(z.strictObject({ reason: text(2000), count: z.number().int().positive() })).max(100) }),
+    rejected: z.array(z.strictObject({ reason: text(2000), count: z.number().int().positive() })).max(100),
+    repeats: z.strictObject({ dialogues: count, messages: count }).optional() }),
 });
 export type TableReading = z.infer<typeof tableReadingSchema>;
 /** The readings confirmed for one import: two files, or two mappings, may produce the very same conversations. */

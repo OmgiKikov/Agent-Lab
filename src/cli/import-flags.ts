@@ -35,14 +35,17 @@ export function tableChoicesOf(values: Record<string, string | boolean | string[
   const text = (key: string) => typeof values[key] === 'string' ? values[key] as string : undefined;
   // A shell passes \n and \t literally; the owner means the characters.
   const separator = text('separator')?.replace('\\n', '\n').replace('\\t', '\t');
+  if (separator && values['no-separator']) throw new Error('Выберите одно: --separator ЗНАК или --no-separator.');
+  if (values['collapse-repeats'] && values['keep-repeats']) throw new Error('Выберите одно: --collapse-repeats или --keep-repeats.');
   return tableChoicesSchema.parse({
     ...text('sheet') ? { sheet: text('sheet') } : {}, ...text('id-column') ? { id: text('id-column') } : {},
-    ...text('text-column') ? { text: text('text-column') } : {}, ...separator ? { separator } : {},
+    ...text('text-column') ? { text: text('text-column') } : {}, ...separator ? { separator } : values['no-separator'] ? { separator: null } : {},
     ...text('markers') ? { markers: rolePairs(text('markers')!, '--markers', true).map(({ label, role }) => ({ token: label, role })) } : {},
     ...text('role-column') ? { role: text('role-column') } : {},
     ...text('roles') ? { roles: rolePairs(text('roles')!, '--roles', false).map(({ label, role }) => ({ value: label, role })) } : {},
     ...text('order-column') ? { order: text('order-column') } : values['row-order'] ? { order: null } : {},
     ...text('where') ? { where: whereChoice(text('where')!) } : {},
+    ...values['collapse-repeats'] ? { collapseRepeats: true } : values['keep-repeats'] ? { collapseRepeats: false } : {},
   });
 }
 /** How to answer the proposal from the command line. */
@@ -50,8 +53,9 @@ export function importHints(proposal: TableProposal): string[] {
   const words = ROLES.map(role => ROLE_WORDS[role]).join('|');
   if (proposal.status === 'refused') return ['Поправьте выбор и повторите команду.'];
   if (proposal.status === 'ready') return ['Загрузить: та же команда с --yes.',
-    'Поправить: --sheet, --id-column, --text-column; метки — --markers CLIENT=клиент,AGENT=агент и --separator; сообщение в строке — --role-column, --roles, --order-column или --row-order.',
-    ...!proposal.mapping.filter && proposal.selectable.length ? ['Отобрать разговоры: --where "КОЛОНКА" покажет её значения, --where "КОЛОНКА=ЗНАЧЕНИЕ|ЗНАЧЕНИЕ" оставит только их.'] : []];
+    'Поправить: --sheet, --id-column, --text-column; метки — --markers CLIENT=клиент,AGENT=агент и --separator ЗНАК или --no-separator; сообщение в строке — --role-column, --roles, --order-column или --row-order.',
+    ...!proposal.mapping.filter && proposal.selectable.length ? ['Отобрать разговоры: --where "КОЛОНКА" покажет её значения, --where "КОЛОНКА=ЗНАЧЕНИЕ|ЗНАЧЕНИЕ" оставит только их.'] : [],
+    ...proposal.preview.repeats && !proposal.mapping.collapseRepeats ? ['Убрать повторы обменов: --collapse-repeats.'] : []];
   const question = proposal.question;
   switch (question.kind) {
     case 'marker': return [`Ответ: та же команда с --markers ${question.token}=${words}|текст.`];
@@ -59,5 +63,6 @@ export function importHints(proposal: TableProposal): string[] {
     case 'id': return ['Ответ: та же команда с --id-column КОЛОНКА.'];
     case 'text': return ['Ответ: та же команда с --text-column КОЛОНКА.'];
     case 'where': return [`Ответ: та же команда с --where "${columnLabel(question.column)}=${question.values[0]?.value ?? ''}" — значение как написано в таблице; несколько — через |. Все разговоры — без --where.`];
+    case 'repeats': return ['Ответ: та же команда с --collapse-repeats — убрать повторы, или с --keep-repeats — оставить как написано.'];
   }
 }
