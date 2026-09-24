@@ -21,8 +21,9 @@ import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { expectationSheet, testPlanLines, trialProofLines } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { buildResultView, exitCodeOf, type ResultView } from './result-view.js';
-import { MAX_WIDTH, plainText, resultScreen, type ResultRow } from './result-text.js';
-import { evidenceBundle, exportArtifacts, importNumbers, resolveVerified } from './artifacts.js';
+import { judgeCheckText, MAX_WIDTH, plainText, resultScreen, type ResultRow } from './result-text.js';
+import { judgeCheckPlan, judgeCheckSummary } from './judge-check.js';
+import { evidenceBundle, exportArtifacts, importNumbers, readJudgeCheck, resolveVerified } from './artifacts.js';
 import { libraryHash } from './scenario-library.js';
 import { hostGrant, requiredAuthority, wordsOf } from './card/commands.js';
 import { conversionText } from './card/convert.js';
@@ -65,6 +66,7 @@ const FLAGS = {
   markers: { type: 'string' }, 'role-column': { type: 'string' }, roles: { type: 'string' }, 'order-column': { type: 'string' }, 'row-order': { type: 'boolean' },
   where: { type: 'string' }, 'no-separator': { type: 'boolean' }, 'collapse-repeats': { type: 'boolean' }, 'keep-repeats': { type: 'boolean' },
   situations: { type: 'string' }, 'prompts-from': { type: 'string' }, prompt: { type: 'string', multiple: true }, prompts: { type: 'string' },
+  planted: { type: 'string' }, controls: { type: 'string' },
   'operator-rules': { type: 'string' }, 'bind-rule': { type: 'string', multiple: true }, 'unbind-rule': { type: 'string', multiple: true },
 } as const;
 type Flags = ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>['values'];
@@ -316,7 +318,8 @@ async function summary({ values, directory }: CommandInput): Promise<void> {
   // receipts checked against sidecars, source resolved once. The trace journal is not needed here.
   const verified = await resolveVerified(record, store, record.assessmentOf ?? record.parentRunId);
   const numbers = verified.record.calibration?.entries.length ? await importNumbers(verified.record, importId => store.readImport(importId)) : undefined;
-  const view = buildResultView(verified.record, { before: verified.before, ...(numbers ? { numbers } : {}) });
+  const judgeCheck = await readJudgeCheck(store, record.id, verified.warnings);
+  const view = buildResultView(verified.record, { before: verified.before, ...(numbers ? { numbers } : {}), judgeCheck });
   if (values.json) { process.stdout.write(`${JSON.stringify({ ...machineResult(view), warnings: verified.warnings }, null, 2)}\n`); return; }
   process.stdout.write(screenText(view, verified.warnings));
 }
@@ -399,6 +402,31 @@ async function reassess({ values, directory }: CommandInput): Promise<void> {
     process.stdout.write(JSON.stringify({ id: record.id, phase: record.phase, assessmentOf: record.assessmentOf,
       evaluatorVersion: record.evaluatorVersion, artifacts: await exportArtifacts(bundle, directory), ...result }, null, 2) + '\n');
     process.exitCode = result.exitCode;
+  });
+}
+
+/**
+ * Checks the judge of a finished run without a person: planted errors in copies of its dialogues and untouched
+ * controls. Without --yes it says what it would sample and the call ceiling, and spends nothing.
+ */
+async function checkJudgeCommand({ values, directory }: CommandInput): Promise<void> {
+  const id = values.id;
+  if (!id) throw new Error('Укажите прогон: --id RUN');
+  const options = { ...(values.planted ? { planted: Number(values.planted) } : {}), ...(values.controls ? { controls: Number(values.controls) } : {}) };
+  if (!values.yes) {
+    const plan = judgeCheckPlan(await new ExperimentStore(directory).get(id), options);
+    process.stdout.write(`${[
+      `Проверка судьи: ${countText(plan.planted.length, ['подброшенная ошибка', 'подброшенные ошибки', 'подброшенных ошибок'])} и ${countText(plan.controls.length, ['контрольная копия', 'контрольные копии', 'контрольных копий'])} разговоров, которые судья засчитал.`,
+      `Не больше ${countText(plan.calls, ['вызова', 'вызовов', 'вызовов'])} модели: ошибку пишет модель задачи, оценивает судья прогона. Агент и клиент не запускаются, прогон не меняется.`,
+      'Чтобы проверить, повторите с --yes.'].join('\n')}\n`);
+    return;
+  }
+  await asWriter(directory, async lab => {
+    const check = await lab.checkJudge(id, options);
+    const text = judgeCheckText({ judgeCheck: judgeCheckSummary(check, { id })! })!;
+    process.stdout.write(values.json ? `${JSON.stringify(check, null, 2)}\n`
+      : `${[safeLine(text.text), ...check.items.filter(item => item.kind === 'planted' && item.result !== null && item.result !== 'fail')
+        .map(item => `  пропущено: ${safeLine(item.whatWasBroken ?? '')}`), `Вызовов модели: ${check.usage.calls}.`].join('\n')}\n`);
   });
 }
 
@@ -634,6 +662,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   summary: { help: ['agent-lab summary --id RUN [--json]   Сколько ситуаций агент прошёл, что не измерено и почему'], run: summary },
   logs: { help: ['agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--yes]   Какая версия агента записала логи: только тогда сверка с продом — калибровка'], run: logs },
   reassess: { help: ['agent-lab reassess --id RUN [--input criteria.json] --yes | --code-only   Оценить записанные разговоры заново: судьёй или только точными проверками'], run: reassess },
+  'check-judge': { help: ['agent-lab check-judge --id RUN [--planted 10] [--controls 10] [--yes]   Проверить судью без человека: поймает ли он подброшенные ошибки; без --yes — только сколько вызовов'], run: checkJudgeCommand },
   export: { help: ['agent-lab export --id RUN --format html|markdown|json [--output отчёт.html]   Отчёт для заказчика'], run: exportRun },
   diff: { help: ['agent-lab diff --before RUN --after RUN [--json]   Что сломалось и что исправилось между двумя прогонами'], run: diff },
   'save-suite': { help: ['agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]   Сохранить набор ситуаций в файл'], run: saveSuite },

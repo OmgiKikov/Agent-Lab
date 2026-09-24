@@ -2,14 +2,27 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createPiRuntime, getPiStatus, groundingRequest } from '../src/pi.js';
+import { createPiRuntime, getPiStatus } from '../src/pi.js';
 import { REPAIR_ATTEMPTS } from '../src/llm/structured.js';
-import { FOCUSED_REQUIREMENT_LIMIT } from '../src/limits.js';
-import { REQUIREMENTS_ROLE } from '../src/prompts.js';
+import { CARD_ROLE } from '../src/prompts.js';
 import { judgeInput, observableSources } from '../src/judge.js';
-import { DEFAULT_JUDGE, emptyUsage, REQUIREMENT_LIMIT, settingsSchema, targetSchema, type Scenario, type Trial } from '../src/contracts.js';
+import { DEFAULT_JUDGE, emptyUsage, settingsSchema, targetSchema, type Scenario, type Trial } from '../src/contracts.js';
 import { promptCompliance } from '../src/assessment.js';
+import { loggedMessages } from '../src/card/checks.js';
+import { proposalCall, type CallSource, type CardProposalRequest, type DialogueProposal } from '../src/card/proposal.js';
+import { importBatch } from '../src/scenario-library.js';
 import { callContext, fixture, fixtureSettings as settings } from './helpers/pi-fixture.js';
+import { dialogues, policy, proposals } from './helpers/card-prep.js';
+
+const lateBatch = importBatch(dialogues);
+/** One proposal request over the invented refund dialogue «late», reading `sources`. */
+function proposalRequest(sources: CallSource[] = [{ id: 'source-1', name: 'Правила', content: policy }]): CardProposalRequest {
+  return { task: 'Возвраты', topics: [], written: [],
+    call: proposalCall({ source: { kind: 'dialogue', batchId: lateBatch.id, dialogueId: 'late' }, messages: loggedMessages(lateBatch.dialogues[0]!), sources, maxTurns: 6 }) };
+}
+/** The careful proposal of «late» with every duty resting on `basis`, or each duty on its own basis. */
+const citingLate = (...basis: DialogueProposal['agentMust'][number]['basis']): DialogueProposal => ({ ...structuredClone(proposals.late),
+  agentMust: proposals.late.agentMust.map(duty => ({ ...duty, basis })) });
 
 test('invalid role configuration fails before any paid builder request and names configuration separately from authentication', async () => {
   const f = await fixture(() => '{}');
@@ -113,7 +126,7 @@ test('the call budget stops a repair before another provider request, and malfor
   const f = await fixture(() => 'This is not JSON');
   try {
     const { ctx, usage } = callContext({ limit: 1 });
-    await assert.rejects(f.adapter.groundRequirements!({ task: 'Check rules', sources: [{ id: 'source_1', name: 'rules.md', content: 'Reply formally.', hash: 'h' }] }, ctx), /Call budget exhausted/);
+    await assert.rejects(f.adapter.selectSources!({ task: 'Check rules', catalog: [{ id: 'source_1', name: 'rules.md', chars: 15 }], dialogue: { id: 'd', messages: [] }, limit: 3 }, ctx), /Call budget exhausted/);
     assert.equal(usage.calls, 1);
     assert.equal(f.requests.length, 1, 'the repair attempt is refused before it reaches the provider');
   } finally { await f.close(); }
@@ -134,38 +147,6 @@ test('a structured answer wrapped in a markdown fence is not repaired into JSON'
   try {
     await assert.rejects(prose.adapter.userTurn!({ user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 }, callContext().ctx), /не проходит проверку.*not a single JSON object/s);
   } finally { await prose.close(); }
-});
-
-test('grounding asks the model for requirements only: one request, no cards and no agent', async () => {
-  // Nothing here may be invented by the model: the owner brought the agent, and the situations come from the library.
-  const f = await fixture(() => JSON.stringify({
-    requirements: [{ id: 'req_1', text: 'The agent answers acquiring questions.', sourceId: 'source-1', quote: 'answers acquiring questions', critical: true, observable: true, kind: 'behavior' }],
-    questions: [],
-  }));
-  try {
-    const grounded = await f.adapter.groundRequirements!({
-      task: 'Evaluate the owner agent',
-      sources: [{ id: 'source-1', name: 'perimeter.md', content: 'The agent answers acquiring questions and nothing else.', hash: 'h' }],
-    }, callContext().ctx);
-    assert.deepEqual(Object.keys(grounded).sort(), ['questions', 'requirements']);
-    assert.equal(grounded.requirements[0]!.quote, 'answers acquiring questions');
-    assert.equal(f.requests.length, 1);
-  } finally { await f.close(); }
-});
-
-test('two requirements with one id go back to the model instead of failing the preparation', async () => {
-  const content = 'Rule one: reply formally. Rule two: numbered steps.';
-  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'source_1', quote, critical: true, observable: true, kind: 'behavior' });
-  const outputs = [
-    { requirements: [req('req_1', 'reply formally'), req('req_1', 'numbered steps')], questions: [] },
-    { requirements: [req('req_1', 'reply formally'), req('req_2', 'numbered steps')], questions: [] },
-  ];
-  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
-  try {
-    const grounded = await f.adapter.groundRequirements!({ task: 'Check rules', sources: [{ id: 'source_1', name: 'rules.md', content, hash: 'h' }] }, callContext().ctx);
-    assert.deepEqual(grounded.requirements.map(r => r.id), ['req_1', 'req_2']);
-    assert.match(JSON.stringify(f.requests[1]?.messages), /share an id/);
-  } finally { await f.close(); }
 });
 
 test('deadline and external cancellation reach the actual SDK provider stream', async () => {
@@ -254,32 +235,32 @@ test('кластер провалов ссылается только на пе�
   } finally { await g.close(); }
 });
 
-test('a rejected answer is repaired from the stated reason instead of losing the run', async () => {
-  const quote = 'Support is available by email.';
-  const source = { id: 'source_1', name: 'Policy', content: quote, hash: 'hash' };
+test('a quote that is not verbatim is repaired from the stated reason instead of losing the situation', async () => {
+  const quote = 'Если номер терминала уже указан, не запрашивайте его повторно';
+  const cite = (text: string) => ({ sourceId: 'source-1', quote: text, rule: 'Номер не спрашивается повторно.', kind: 'behavior' as const });
   // First the model paraphrases the source, which is the most common real rejection.
-  const outputs = [
-    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote: 'Support can be reached by email.', critical: true, observable: true, kind: 'behavior' }], questions: [] },
-    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true, observable: true, kind: 'behavior' }], questions: [] },
-  ];
+  const outputs = [citingLate(cite('Если номер терминала уже назван, его не запрашивают снова')), citingLate(cite(quote))];
   const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
   try {
-    const grounded = await f.adapter.groundRequirements!({ task: 'Evaluate support answers', sources: [source] }, callContext().ctx);
-    assert.equal(grounded.requirements[0]?.quote, quote);
+    const answer = await f.adapter.proposeCard!(proposalRequest(), callContext().ctx);
+    assert.deepEqual(answer, outputs[1]);
     assert.equal(f.requests.length, 2, 'one rejected answer, one repair');
-    const repair = JSON.stringify(f.requests[1]?.messages ?? []);
-    assert.match(repair, /Your previous answer was rejected/);
-    assert.match(repair, /verbatim substring/, 'the model is told exactly what to fix');
+    // A proposal carries a whole dialogue, so its repair starts afresh: the evidence, the reason and the latest draft.
+    const { repair } = JSON.parse(String(f.requests[1]!.messages[0]!.content)) as { repair: string };
+    assert.match(repair, /agentMust\[0\]\.basis\[0\]: the quote is not a verbatim substring of "Правила"/, 'the model is told exactly what to fix');
+    assert.match(repair, /agentMust\[1\]\.basis\[0\]/, 'every quote that misses is named, so one repair fixes them all');
+    assert.match(repair, /shorter contiguous fragment/);
   } finally { await f.close(); }
 });
 
 test('a source marked as the agent prompt reaches the builder and the judge labelled', async () => {
   const prompt = 'Отвечай только по эквайрингу. Всегда заканчивай ответ вопросом «Чем ещё помочь?». Никогда не называй внутренние системы.';
-  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'Every reply ends with «Чем ещё помочь?»', sourceId: 'prompt_1', quote: 'Всегда заканчивай ответ вопросом «Чем ещё помочь?»', critical: true, observable: true, kind: 'behavior' }], questions: [] }));
+  const f = await fixture(() => JSON.stringify(citingLate({ sourceId: 'prompt_1', quote: 'Всегда заканчивай ответ вопросом «Чем ещё помочь?»', rule: 'Ответ заканчивается вопросом «Чем ещё помочь?».', kind: 'behavior' })));
   try {
     const promptSource = { id: 'prompt_1', name: 'system.md', content: prompt, hash: 'hash', kind: 'prompt' as const };
-    await f.adapter.groundRequirements!({ task: 'Проверить агента эквайринга', sources: [promptSource, { id: 'kb_1', name: 'Статья', content: 'Тариф виден в СберБизнес.', hash: 'h2' }] }, callContext().ctx);
-    assert.match(f.requests[0]?.systemPrompt ?? '', /kind: prompt\) is the agent's own instructions, not a business policy/);
+    await f.adapter.proposeCard!(proposalRequest([promptSource, { id: 'kb_1', name: 'Статья', content: 'Тариф виден в СберБизнес.' }]), callContext().ctx);
+    assert.match(f.requests[0]?.systemPrompt ?? '', /the agent's own prompts \(named «промпт агента»\)/);
+    assert.match(f.requests[0]?.systemPrompt ?? '', /A prompt says what the agent was told, not what it does/);
     assert.match(JSON.stringify(f.requests[0]?.messages), /system\.md \(промпт агента\)/);
     assert.doesNotMatch(JSON.stringify(f.requests[0]?.messages), /Статья \(промпт агента\)/);
     const card: Scenario = { ...plainCard(0), split: 'dev', checks: [], metrics: [{ ...promptCompliance }] };
@@ -385,52 +366,23 @@ test('failure clusters may quote only a supplied prompt, verbatim', async () => 
   } finally { await g.close(); }
 });
 
-test('requirements extraction states its budget and asks the model to merge when it overshoots', async () => {
-  const quote = 'Reply in the formal register and never redirect the user to a phone line.';
-  const many = Array.from({ length: REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `req_${i}`, text: `Observable rule ${i}`, sourceId: 'prompt_1', quote, critical: false, observable: true, kind: 'behavior' }));
-  const outputs = [{ requirements: many, questions: [] }, { requirements: many.slice(0, 2), questions: [] }];
-  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
-  try {
-    const grounded = await f.adapter.groundRequirements!({
-      task: 'Check the agent against its own prompt',
-      sources: [{ id: 'prompt_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' }],
-    }, callContext().ctx);
-    assert.equal(grounded.requirements.length, 2);
-    // The budget is stated up front, and an overshoot is answered with what to do, not with a schema dump.
-    assert.match(f.requests[0]?.systemPrompt ?? '', new RegExp(`at most ${REQUIREMENT_LIMIT} requirements`));
-    const repair = JSON.stringify(f.requests[1]?.messages);
-    assert.match(repair, new RegExp(`at most ${REQUIREMENT_LIMIT} requirements`));
-    assert.match(repair, /merge closely related rules/i);
-    assert.doesNotMatch(repair, /Too big/);
-  } finally { await f.close(); }
-});
-
-test('requirement quotes are matched through the typography a model normalises, then stored in the source\'s own characters', async () => {
-  const content = 'Раздел «Эквайринг» → «Мои точки продаж» → карточка точки → «Тариф».';
-  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'Where the tariff is shown', sourceId: 'source_1', quote: 'Раздел "Эквайринг" -> "Мои точки продаж"', critical: true, observable: true, kind: 'behavior' }], questions: [] }));
-  try {
-    const grounded = await f.adapter.groundRequirements!({ task: 'Check tariff answers', sources: [{ id: 'source_1', name: 'idp/tariff_view.md', content, hash: 'h' }] }, callContext().ctx);
-    assert.equal(f.requests.length, 1, 'normalised typography costs no repair attempt');
-    assert.equal(grounded.requirements[0]!.quote, 'Раздел «Эквайринг» → «Мои точки продаж»');
-  } finally { await f.close(); }
-});
-
 test('raw line breaks are rejected and a new valid provider reply preserves the exact source text', async () => {
   const quote = 'Rule one.\nRule two.';
-  const sources = [{ id: 'source_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' as const }];
-  const valid = JSON.stringify({ requirements: [{ id: 'req_1', text: 'Two rules', sourceId: 'source_1', quote, critical: true, observable: true, kind: 'behavior' }], questions: [] });
-  const rawNewline = '{"requirements":[{"id":"req_1","text":"Two rules","sourceId":"source_1","quote":"Rule one.\nRule two.","critical":true}],"questions":[]}';
+  const sources = [{ id: 'source_1', name: 'prompt.md', content: quote, kind: 'prompt' as const }];
+  const valid = JSON.stringify(citingLate({ sourceId: 'source_1', quote, rule: 'Two rules', kind: 'behavior' }));
+  const rawNewline = valid.replace('Rule one.\\nRule two.', 'Rule one.\nRule two.');
+  assert.notEqual(rawNewline, valid);
   const f = await fixture((_request, index) => index === 0 ? rawNewline : valid);
   try {
-    const grounded = await f.adapter.groundRequirements!({ task: 'Check rules', sources }, callContext().ctx);
+    const answer = await f.adapter.proposeCard!(proposalRequest(sources), callContext().ctx) as DialogueProposal;
     assert.equal(f.requests.length, 2);
     assert.match(JSON.stringify(f.requests[1]?.messages), /not a single JSON object/);
-    assert.equal(grounded.requirements[0]!.quote, quote);
+    assert.equal(answer.agentMust[0]!.basis[0]!.quote, quote);
   } finally { await f.close(); }
-  const g = await fixture((_request, index) => index === 0 ? 'Here are the requirements: {"requirements": [}' : valid);
+  const g = await fixture((_request, index) => index === 0 ? 'Here is the card: {"title": [}' : valid);
   try {
-    const grounded = await g.adapter.groundRequirements!({ task: 'Check rules', sources }, callContext({ limit: 2 }).ctx);
-    assert.equal(grounded.requirements[0]!.quote, quote);
+    const answer = await g.adapter.proposeCard!(proposalRequest(sources), callContext({ limit: 2 }).ctx) as DialogueProposal;
+    assert.equal(answer.agentMust[0]!.basis[0]!.quote, quote);
     const repair = JSON.stringify(g.requests[1]?.messages);
     assert.match(repair, /not a single JSON object/);
     assert.match(repair, /Unexpected|position|token/i);
@@ -439,86 +391,30 @@ test('raw line breaks are rejected and a new valid provider reply preserves the 
 
 test('unescaped quotes require a new valid provider reply and are never rewritten locally', async () => {
   const quote = 'Удали данные из "СберДруг", "ДРУГ", "ЦКР" и не упоминай "историю вопросов".';
-  const broken = '{"requirements":[{"id":"req_1","text":"No "СберДруг", "ДРУГ" data in a reply","sourceId":"source_1","quote":"Удали данные из "СберДруг", "ДРУГ", "ЦКР" и не упоминай "историю вопросов".","critical":true}],"questions":[]}';
-  const outputs = [broken, JSON.stringify({ requirements: [{ id: 'req_1', text: 'No \"СберДруг\", \"ДРУГ\" data in a reply', sourceId: 'source_1', quote, critical: true, observable: true, kind: 'behavior' }], questions: [] })];
-  const f = await fixture((_request, index) => outputs[index]!);
+  const valid = JSON.stringify(citingLate({ sourceId: 'source_1', quote, rule: 'Не называть "СберДруг" и "ДРУГ" в ответе.', kind: 'behavior' }));
+  const broken = valid.replaceAll('\\"', '"');
+  const f = await fixture((_request, index) => index === 0 ? broken : valid);
   try {
-    const grounded = await f.adapter.groundRequirements!({ task: 'Check internal names', sources: [{ id: 'source_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
+    const answer = await f.adapter.proposeCard!(proposalRequest([{ id: 'source_1', name: 'prompt.md', content: quote, kind: 'prompt' }]), callContext().ctx) as DialogueProposal;
     assert.equal(f.requests.length, 2);
     assert.match(JSON.stringify(f.requests[1]?.messages), /not a single JSON object/);
-    assert.equal(grounded.requirements[0]!.quote, quote);
-    assert.equal(grounded.requirements[0]!.text, 'No "СберДруг", "ДРУГ" data in a reply');
+    assert.equal(answer.agentMust[0]!.basis[0]!.quote, quote);
+    assert.equal(answer.agentMust[0]!.basis[0]!.rule, 'Не называть "СберДруг" и "ДРУГ" в ответе.');
     assert.match(f.requests[0]?.systemPrompt ?? '', /inside strings/i);
   } finally { await f.close(); }
 });
 
-test('a rejection names every requirement whose quote is not in its source, so one repair fixes them all', async () => {
-  const content = 'Rule one: reply formally. Rule two: never send the user to a phone line. Rule three: numbered steps.';
-  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'source_1', quote, critical: true, observable: true, kind: 'behavior' });
-  const outputs = [
-    { requirements: [req('req_1', 'reply formally'), req('req_2', 'never phone the user'), req('req_3', 'numbered lists')], questions: [] },
-    { requirements: [req('req_1', 'reply formally'), req('req_2', 'never send the user to a phone line'), req('req_3', 'numbered steps')], questions: [] },
-  ];
-  const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
-  try {
-    const grounded = await f.adapter.groundRequirements!({ task: 'Check rules', sources: [{ id: 'source_1', name: 'prompt.md', content, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
-    assert.equal(grounded.requirements.length, 3);
-    assert.equal(f.requests.length, 2, 'one repair fixes every named quote');
-    const repair = JSON.stringify(f.requests[1]?.messages);
-    assert.match(repair, /req_2/);
-    assert.match(repair, /req_3/);
-    assert.match(repair, /shorter/i);
-  } finally { await f.close(); }
-});
-
-test('a quote that lives in another supplied source is re-attributed to it instead of being rejected', async () => {
-  const rules = 'Удали из ответа служебную информацию: данные из "СберДруг", "ЦКР".';
-  const articles = 'Терминал блокируется по инициативе банка.';
-  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'No internal names', sourceId: 'article_1', quote: 'данные из "СберДруг", "ЦКР"', critical: true, observable: true, kind: 'behavior' }], questions: [] }));
-  try {
-    const grounded = await f.adapter.groundRequirements!({ task: 'Check internal names',
-      sources: [{ id: 'article_1', name: 'block.md', content: articles, hash: 'a' }, { id: 'prompt_1', name: 'prompt.md', content: rules, hash: 'p', kind: 'prompt' }] }, callContext().ctx);
-    assert.equal(f.requests.length, 1);
-    assert.equal(grounded.requirements[0]!.sourceId, 'prompt_1');
-    assert.equal(grounded.requirements[0]!.quote, 'данные из "СберДруг", "ЦКР"');
-  } finally { await f.close(); }
-});
-
-test('the grounding call types every rule — the bot\'s behaviour, knowledge, an operator\'s procedure — and a rule without a kind goes back for repair', async () => {
-  const kb = 'Тариф виден в разделе «Эквайринг». Оператор проверяет терминал в АС Мониторинг перед ответом.';
-  const req = (id: string, quote: string, kind?: string) => ({ id, text: id, sourceId: 'kb_1', quote, critical: true, observable: true, ...(kind ? { kind } : {}) });
-  const untyped = { requirements: [req('tariff', 'Тариф виден в разделе «Эквайринг».')], questions: [] };
-  const typed = { requirements: [req('tariff', 'Тариф виден в разделе «Эквайринг».', 'knowledge'), req('check', 'Оператор проверяет терминал в АС Мониторинг перед ответом.', 'operator_procedure')], questions: [] };
-  const outputs = [untyped, typed];
-  const f = await fixture(() => JSON.stringify(outputs.shift()));
-  try {
-    const grounded = await f.adapter.groundRequirements!({ task: 'Проверить агента эквайринга', sources: [{ id: 'kb_1', name: 'Статья', content: kb, hash: 'h' }] }, callContext().ctx);
-    assert.equal(f.requests.length, 2, 'a requirement without a kind is repaired, never guessed');
-    assert.deepEqual(grounded.requirements.map(r => [r.id, r.kind]), [['tariff', 'knowledge'], ['check', 'operator_procedure']]);
-    const system = f.requests[0]?.systemPrompt ?? '';
-    assert.match(system, /operator_procedure/);
-    assert.match(system, /Scripts for operators in a knowledge base are operator_procedure unless they state what the customer must be told/);
-  } finally { await f.close(); }
-});
-
-test('a machine output-format instruction in the agent prompt is typed as unobservable by the grounding call and never reaches the judge', async () => {
+test('a proposal may cite only what a user can see; a stored rule typed unobservable never reaches the judge', async () => {
+  assert.match(CARD_ROLE, /never a machine output format of a prompt \(return JSON, a named field, an envelope\)/);
+  assert.match(CARD_ROLE, /Cite only kinds listed in rulebook\.binds/);
   const prompt = 'Отвечай на «вы». ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}. Никогда не направляй в поддержку.';
+  // Requirements a preparation grounded before the proposal cited the materials: one of them typed as the prompt's machine format.
   const req = (id: string, quote: string, observable: boolean) => ({ id, text: id, sourceId: 'prompt_1', quote, critical: true, observable, kind: 'behavior' as const });
-  const reply = { requirements: [req('formal', 'Отвечай на «вы»', true), req('json', 'ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}', false),
-    req('no_support', 'Никогда не направляй в поддержку', true)], questions: [] };
-  const f = await fixture(() => JSON.stringify(reply));
-  try {
-    const source = { id: 'prompt_1', name: 'prompt.md', content: prompt, hash: 'h', kind: 'prompt' as const };
-    const grounded = await f.adapter.groundRequirements!({ task: 'Check the agent against its prompt', sources: [source] }, callContext().ctx);
-    assert.equal(f.requests.length, 1, 'a typed classification costs no repair');
-    assert.deepEqual(grounded.requirements.map(r => [r.id, r.observable]), [['formal', true], ['json', false], ['no_support', true]]);
-    assert.match(f.requests[0]?.systemPrompt ?? '', /machine output format/i);
-    assert.match(f.requests[0]?.systemPrompt ?? '', /"observable":\{"type":"boolean"/, 'the answer schema asks for the classification');
-    const [judged] = observableSources([source], grounded.requirements);
-    assert.match(judged!.content, /Отвечай на «вы»/);
-    assert.match(judged!.content, /Никогда не направляй в поддержку/);
-    assert.doesNotMatch(judged!.content, /JSON/);
-  } finally { await f.close(); }
+  const stored = [req('formal', 'Отвечай на «вы»', true), req('json', 'ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}', false), req('no_support', 'Никогда не направляй в поддержку', true)];
+  const [judged] = observableSources([{ id: 'prompt_1', name: 'prompt.md', content: prompt, hash: 'h', kind: 'prompt' }], stored);
+  assert.match(judged!.content, /Отвечай на «вы»/);
+  assert.match(judged!.content, /Никогда не направляй в поддержку/);
+  assert.doesNotMatch(judged!.content, /JSON/);
 });
 
 test('the controlled user answers with one allowed action id and the expectation judge reads what the customer never sees', async () => {
@@ -623,44 +519,18 @@ test('a first-format checkpoint with an exact check is graded directly, never ju
   }
 });
 
-test('grounding for one dialogue asks for the rules that decide that dialogue only, with a smaller cap than a whole-policy grounding', () => {
-  const whole = groundingRequest({ task: 't', sources: [] });
-  const focused = groundingRequest({ task: 't', sources: [], focus: { dialogueId: 'd', customerMessages: ['Как вернуть деньги?'] } });
-  assert.equal(whole.limit, REQUIREMENT_LIMIT);
-  assert.equal(focused.limit, FOCUSED_REQUIREMENT_LIMIT);
-  assert.equal(whole.task.instructions, REQUIREMENTS_ROLE);
-  assert.ok(focused.task.instructions.startsWith(REQUIREMENTS_ROLE) && /customerMessages/.test(focused.task.instructions.slice(REQUIREMENTS_ROLE.length)), 'the focus clause is appended, the base role is unchanged');
-  assert.deepEqual(focused.payload.customerMessages, ['Как вернуть деньги?']);
-  assert.equal('customerMessages' in whole.payload, false);
-  assert.equal('dialogues' in focused.payload, false, 'the old agent’s replies never reach the grounding call');
-  assert.ok(focused.task.output.safeParse({ requirements: Array.from({ length: FOCUSED_REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `r${i}`, text: 'x', sourceId: 's', quote: 'x', critical: true, observable: true, kind: 'behavior' })), questions: [] }).success === false);
-});
-
-test('a dialogue offered the agent\'s rules names those that decide it, only among the offered ids; without them the call is as it was', () => {
-  const plain = groundingRequest({ task: 't', sources: [], focus: { dialogueId: 'd', customerMessages: ['Когда доставка?'] } });
-  const offered = groundingRequest({ task: 't', sources: [], focus: { dialogueId: 'd', customerMessages: ['Когда доставка?'],
-    agentRules: [{ id: 'agent_1', text: 'Сообщить сроки.' }, { id: 'agent_2', text: 'Отвечать на «вы».' }] } });
-  assert.ok(offered.task.instructions.startsWith(plain.task.instructions) && offered.task.instructions.length > plain.task.instructions.length, 'the agent-rules clause is appended to the focus clause');
-  assert.equal('agentRules' in plain.payload, false);
-  assert.deepEqual(offered.payload.agentRules, [{ id: 'agent_1', text: 'Сообщить сроки.' }, { id: 'agent_2', text: 'Отвечать на «вы».' }]);
-  assert.equal(offered.task.output.safeParse({ requirements: [], questions: [], agentRuleIds: ['agent_2'] }).success, true, 'the agent rules alone may decide the dialogue');
-  assert.equal(offered.task.output.safeParse({ requirements: [], questions: [], agentRuleIds: ['agent_3'] }).success, false, 'an id that was not offered');
-  assert.equal(offered.task.output.safeParse({ requirements: [], questions: [] }).success, false, 'the answer names its agent rules, none included');
-  assert.equal(plain.task.output.safeParse({ requirements: [], questions: [] }).success, false, 'without agent rules a dialogue still needs its own rule');
-});
-
 test('a missing JSON closer is a failed attempt; only the next complete response supplies fields', async () => {
-  const valid = JSON.stringify({ requirements: [{ id: 'req_1', text: 'The agent answers acquiring questions.', sourceId: 'source-1', quote: 'answers acquiring questions', critical: true, observable: true, kind: 'behavior' }], questions: [] });
+  const valid = JSON.stringify(proposals.late);
   const raw = valid.slice(0, -1);
   assert.throws(() => JSON.parse(raw));
   const f = await fixture((_request, index) => index === 0 ? raw : valid);
   try {
     const seen: unknown[] = [], { ctx, usage } = callContext();
     ctx.onGeneratorOutput = response => seen.push(response);
-    const grounded = await f.adapter.groundRequirements!({ task: 'Evaluate the owner agent', sources: [{ id: 'source-1', name: 'perimeter.md', content: 'The agent answers acquiring questions and nothing else.', hash: 'h' }] }, ctx);
-    assert.equal(grounded.requirements[0]!.quote, 'answers acquiring questions');
+    const answer = await f.adapter.proposeCard!(proposalRequest(), ctx);
+    assert.deepEqual(answer, proposals.late);
     assert.equal(usage.calls, 2);
-    assert.deepEqual(seen, [{ role: 'ground-requirements', text: raw, attempt: 1 }, { role: 'ground-requirements', text: valid, attempt: 2 }]);
+    assert.deepEqual(seen, [{ role: 'card-proposal', text: raw, attempt: 1 }, { role: 'card-proposal', text: valid, attempt: 2 }]);
   } finally { await f.close(); }
 });
 
@@ -708,27 +578,20 @@ test('bounded schema retries retain the evidence and latest rejected draft witho
 });
 
 test('a card proposal that does not bind goes back with its exact reason, and the repaired answer is taken', async () => {
-  const { importBatch } = await import('../src/scenario-library.js');
-  const { loggedMessages } = await import('../src/card/checks.js');
-  const { proposalCall } = await import('../src/card/proposal.js');
-  const { CARD_ROLE } = await import('../src/prompts.js');
-  const { dialogues, policy, proposals, refundRule } = await import('./helpers/card-prep.js');
-  const batch = importBatch(dialogues);
-  const rule = { ...refundRule, sourceId: 'source-1' };
-  const call = proposalCall({ source: { kind: 'dialogue', batchId: batch.id, dialogueId: 'late' }, messages: loggedMessages(batch.dialogues[0]!), requirements: [rule], maxTurns: 6 });
   // The first answer names the terminal number with a digit the customer never wrote.
   const broken = { ...proposals.late, knows: [{ ...proposals.late.knows[0]!, value: '5679' }] };
   const f = await fixture((_request, index) => JSON.stringify(index === 0 ? broken : proposals.late));
   try {
     const { ctx, usage } = callContext();
-    const answer = await f.adapter.proposeCard!({ task: 'Возвраты', call, requirements: [{ id: rule.id, text: rule.text, quote: rule.quote }], articles: [{ id: 'source-1', name: 'Правила', content: policy }], topics: [], written: [] }, ctx);
+    const answer = await f.adapter.proposeCard!(proposalRequest(), ctx);
     assert.deepEqual(answer, proposals.late);
     assert.equal(usage.calls, 2, 'one proposal and one repair');
     const system = f.requests[0]!.systemPrompt!;
     assert.ok(system.startsWith(CARD_ROLE));
     assert.match(system, /"writesEvent":\{"type":"number","enum":\[0,2,4\]\}/, 'a message is referred to by an index of this call');
-    assert.match(system, /"enum":\["refund_rule"\]/, 'a rule by an id of this call');
-    assert.doesNotMatch(system, /"id":|"number":|"quote":\{/, 'ids, numbers and quotes belong to the harness');
+    assert.match(system, /"sourceId":\{"type":"string","enum":\["source-1"\]\}/, 'a basis cites a source of this call');
+    assert.match(system, /"kind":\{"type":"string","enum":\["behavior","knowledge","operator_procedure"\]\}/, 'and names the kind of its rule');
+    assert.doesNotMatch(system, /"id":|"number":|"requirementIds"/, 'ids, numbers and the rules\' ids belong to the harness');
     const repair = JSON.parse(String(f.requests[1]!.messages[0]!.content)) as { repair: string; previousReply: string };
     assert.match(repair.repair, /knows\[0\] "Номер терминала": the value "5679" is not in customer message 2\./);
     assert.match(repair.previousReply, /"5679"/, 'the repair starts afresh from the evidence and the latest draft only');

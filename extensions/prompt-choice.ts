@@ -8,7 +8,7 @@ import { clip, oneLine, safeText } from '../src/text.js';
 
 /*
  * Which of the prompts Lab found are the bot's rules: the owner's choice, in one native list they tick through. A ticked
- * prompt becomes a material of kind `prompt`: its rules are grounded as the rules of the bot's behaviour (docs:
+ * prompt becomes a material of kind `prompt`: every situation reads it whole and cites its rules of the bot's behaviour (docs:
  * «правила поведения бота»). With the chat's model the same list offers, once, to let Lab read the prompts' beginnings
  * and mark the ones that write the reply to the customer (prompt-purpose.ts): the proposal ticks them and gives every
  * line its purpose and reason, and the owner still confirms or changes each tick. A proposal made before for the same

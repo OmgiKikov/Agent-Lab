@@ -77,7 +77,6 @@ function scripted(seen: Received, delays: Record<string, number> = {}, hang: str
     try { await sleep(ms, signal); return await answer(); } finally { state.now--; }
   };
   const runtime: Runtime = { ...base,
-    async groundRequirements(input, ctx) { const grounded = await base.groundRequirements!(input, ctx); state.sent++; return grounded; },
     async proposeCard(request, ctx) {
       const id = request.call.source.kind === 'dialogue' ? request.call.source.dialogueId : '';
       charged(ctx); seen.proposals.push(structuredClone(request));
@@ -92,7 +91,7 @@ function scripted(seen: Received, delays: Record<string, number> = {}, hang: str
   return { runtime, state };
 }
 
-const received = (): Received => ({ proposals: [], reviews: [], grounding: 0 });
+const received = (): Received => ({ proposals: [], reviews: [] });
 const progressOf = (record: Experiment) => record.preparationProgress as CardPreparation;
 const origins = (library: LibraryV2) => [...library.cards].sort((a, b) => a.number - b.number)
   .map(card => [card.number, card.origin.kind === 'dialogue' ? card.origin.dialogueId : card.origin.kind]);

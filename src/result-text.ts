@@ -3,6 +3,7 @@ import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLin
 import { ruleBarText } from './card/rulebook.js';
 import type { Experiment } from './contracts.js';
 import type { FailureExplanation } from './explain.js';
+import type { JudgeCheckSummary } from './judge-check.js';
 import { sharePercent } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
 import type { NextStep, ResultView } from './result-view.js';
@@ -158,15 +159,38 @@ export function realityParts(view: ResultView): string[] {
   return [`С учётом частоты тем — около ${percent(topics.weighted)}${known}`];
 }
 
-/** The first block of every surface: alarm, number, trust line, reality line, and how the synthetic customers compare with production. */
+/** Where a judge check leaves the judge untrusted: the warning after its counts. */
+const DISTRUST_TEXT: Record<NonNullable<JudgeCheckSummary['distrust']>, string> = {
+  misses: 'судье нельзя доверять: пропускает подброшенные ошибки',
+  false_alarms: 'судье нельзя доверять: находит ошибки в верных ответах',
+};
+const PLANTED: [string, string, string] = ['подброшенной ошибки', 'подброшенных ошибок', 'подброшенных ошибок'];
+
+/**
+ * «Судья поймал 9 из 10 подброшенных ошибок, ложных тревог 0 из 10» — the judge checked without a person
+ * (judge-check.ts), with the warning when it misses planted errors or fails correct replies. Null without a check.
+ */
+export function judgeCheckText(view: Pick<ResultView, 'judgeCheck'>): { text: string; warn: boolean } | null {
+  const check = view.judgeCheck;
+  if (!check) return null;
+  const parts = [`Судья поймал ${check.detected} из ${check.planted} ${pluralForm(check.planted, PLANTED)}`,
+    ...(check.controls ? [`ложных тревог ${check.falseAlarms} из ${check.controls}`] : [])];
+  const text = `${parts.join(', ')}${check.distrust ? ` — ${DISTRUST_TEXT[check.distrust]}` : ''}`;
+  return { text, warn: check.distrust !== null };
+}
+
+/** The first block of every surface: alarm, number, trust line, reality line, the judge check, and how the synthetic customers compare with production. */
 export function headRows(view: ResultView): ResultRow[] {
   const trust = trustParts(view);
   const reality = realityParts(view);
+  const checked = judgeCheckText(view);
   return [
     ...[alarmRow(view)].filter((row): row is ResultRow => row !== null),
     accuracyRow(view),
     ...(trust.length ? [{ role: view.headline.smallSample ? 'trust:small' : 'trust', indent: 0, text: trust.join(' · '), parts: trust } as ResultRow] : []),
     ...(reality.length ? [{ role: 'reality', indent: 0, text: reality.join(' · '), parts: reality } as ResultRow] : []),
+    // How far the judge itself can be trusted, measured without a person: a warning is an alarm, like a failed control.
+    ...(checked ? [{ role: checked.warn ? 'alarm' : 'calibration', indent: 0, text: checked.text } as ResultRow] : []),
     // The answer to «can the number be trusted against production»: it stays under the number even where the reality line folds away.
     ...(view.calibration ? [{ role: 'calibration', indent: 0, text: view.calibration.text } as ResultRow] : []),
   ];

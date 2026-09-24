@@ -26,7 +26,7 @@ export function cardDraft(options: { verdict?: (claim: Claim, card: Card) => Rev
   const requirements = [{ ...refundRule, sourceId: 'source-1' }];
   let library = createLibraryV2({ id: 'library_cards', imports: [{ id: batch.id, contentHash: batch.contentHash }], sources, requirements, createdAt: '2026-09-23T10:00:00.000Z' });
   for (const dialogue of batch.dialogues) {
-    const call = proposalCall({ source: { kind: 'dialogue', batchId: batch.id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), requirements, maxTurns: 3 });
+    const call = proposalCall({ source: { kind: 'dialogue', batchId: batch.id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), sources, maxTurns: 3 });
     const card = bindProposal(proposals[dialogue.id as 'late' | 'known'], call, library.nextNumber);
     library = addCard(library, card, { dialogueId: dialogue.id, batchId: batch.id, sourceIds: ['source-1'] });
   }

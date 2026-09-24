@@ -5,7 +5,7 @@ import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLin
 import type { FailureExplanation } from './explain.js';
 import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText } from './plural.js';
-import { accuracyParts, alarmRow, DUNNO_MARK, dunnoMark, noErrorsText, realityParts, trustSegments } from './result-text.js';
+import { accuracyParts, alarmRow, DUNNO_MARK, dunnoMark, judgeCheckText, noErrorsText, realityParts, trustSegments } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
 import { situationBrief, situationNumber } from './card/view.js';
 import { ruleBarText } from './card/rulebook.js';
@@ -75,6 +75,12 @@ function coverageSentence(view: ResultView): string[] {
   return [`${line}.${uncovered ? ` ${uncovered}.` : ''}`];
 }
 
+/** How the judge was checked without a person, in one sentence of the fine print. */
+function judgeCheckBasis(check: NonNullable<ResultView['judgeCheck']>): string {
+  const unjudged = check.unjudged ? ` Без вердикта остались ${check.unjudged}: они не считаются ни пойманными, ни пропущенными.` : '';
+  return `Судью проверили без человека: в копию разговора, который он засчитал, Lab подбрасывал одну явную ошибку в ответ агента, и тот же судья оценивал копию заново; ${check.controls ? 'контрольные копии оставались без изменений' : 'контрольных копий не было'}. Исходные разговоры и оценки не менялись.${unjudged}`;
+}
+
 /** How the number was made and what it rests on, in plain sentences for the fine print. */
 function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
   const { agreement, breakdown, coverage, scope, stability } = view;
@@ -87,6 +93,7 @@ function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
     agreement.checked ? `С решениями судьи вы согласились в ${agreement.agreed} из ${agreement.checked} проверенных случаев.`
       : view.reviewed.situations ? `Вы сами проверили ${countText(view.reviewed.situations, ['ситуацию', 'ситуации', 'ситуаций'])}.`
       : agreement.queueFailures.length + agreement.sampledPasses.length ? 'Решения судьи ещё не проверялись человеком.' : '',
+    ...(view.judgeCheck ? [judgeCheckBasis(view.judgeCheck)] : []),
     ...(view.reviewed.contradicted ? [`В ${countText(view.reviewed.contradicted, ['ситуации', 'ситуациях', 'ситуациях'])} ваша отметка по всему разговору расходится с итогом: итог считается по ожиданиям ситуации, отметка по всему разговору в число не входит.`] : []),
     ...(coverage.excluded.length ? [`Из ${coverage.examined} разговоров в набор вошли ${coverage.included}; не вошли: ${coverage.excluded.map(item => `${item.label} — ${item.count}`).join(', ')}.`] : []),
     ...(stability?.skipped ? [`Стабильность не проверена: ${stability.skipped}.`] : stability?.unstable.length
@@ -136,6 +143,7 @@ export function runReport(bundle: EvidenceBundle): Report {
   const accuracy = accuracyParts(view);
   const trust = trustSegments(view);
   const reality = realityParts(view);
+  const judgeChecked = judgeCheckText(view);
   const alarm = alarmRow(view);
   const trials = new Map(record.trials.map(trial => [trial.id, trial]));
   const byScenario = (id: string) => record.trials.filter(trial => trial.scenarioId === id);
@@ -165,6 +173,7 @@ export function runReport(bundle: EvidenceBundle): Report {
         band: view.headline.range && view.headline.accuracy !== null ? { point: view.headline.accuracy, range: view.headline.range, weighted: view.topics?.weighted ?? null } : null },
       ...(trust.length ? [{ kind: 'trust' as const, parts: trust }] : []),
       ...(reality.length ? [{ kind: 'trust' as const, parts: reality.map(text => ({ text, warn: false })) }] : []),
+      ...(judgeChecked ? [{ kind: 'trust' as const, parts: [judgeChecked] }] : []),
       ...(view.calibration ? [{ kind: 'trust' as const, parts: [{ text: view.calibration.text, warn: false }] }] : []),
     ],
     blocks: [

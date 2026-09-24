@@ -14,6 +14,8 @@ import * as library from './lab/library.js';
 import { OperationRunner, type Follower } from './lab/operation.js';
 import { isRunning, moveTo } from './phases.js';
 import * as review from './lab/review.js';
+import * as judgeCheck from './lab/judge-check.js';
+import type { JudgeCheck, JudgeCheckPlan } from './judge-check.js';
 import * as run from './lab/run.js';
 import { createPiRuntime } from './pi.js';
 import { ExperimentStore } from './store.js';
@@ -28,6 +30,7 @@ import { ExperimentStore } from './store.js';
  *   library.ts    situations: prepare, check, change by the owner's commands, accept
  *   run.ts        a run: the draft it starts from, the owner's confirmation, the dialogues
  *   review.ts     results: a re-assessment, a person's verdicts
+ *   judge-check.ts the judge checked with planted errors and untouched controls, beside the run
  */
 export class ExperimentLab {
   readonly store: ExperimentStore;
@@ -90,6 +93,10 @@ export class ExperimentLab {
   reassess(id: string, raw?: ReassessmentInput, options?: { carryUsage?: boolean }): Promise<Experiment> { return review.reassess(this.lab, id, raw, options); }
   addHumanReview(id: string, raw: HumanReviewInput): Promise<Experiment> { return review.addHumanReview(this.lab, id, raw); }
   reviewResults(id: string, expectedHash: string): Promise<Experiment> { return review.reviewResults(this.lab, id, expectedHash); }
+  /** How many calls a judge check of a finished run would take, and what it samples; spends nothing. */
+  planJudgeCheck(id: string, options?: judgeCheck.JudgeCheckOptions): Promise<JudgeCheckPlan> { return judgeCheck.planJudgeCheck(this.lab, id, options); }
+  /** Plants errors into copies of the run's dialogues and re-judges them: the result is the run's sidecar, the run never changes. */
+  checkJudge(id: string, options?: judgeCheck.JudgeCheckOptions): Promise<JudgeCheck> { return judgeCheck.checkJudge(this.lab, id, options); }
 
   /** Stops the operation running `id`; what it recorded is kept. */
   async cancel(id: string): Promise<Experiment> { return this.operations.cancel(id); }

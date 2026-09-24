@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from '../ids.js';
-import { AGENT_RULES_PER_DIALOGUE, FOCUSED_REQUIREMENT_LIMIT, MATERIAL_LIMIT, MAX_PREPARATION_PARALLEL, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
+import { MATERIAL_LIMIT, MAX_PREPARATION_PARALLEL, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
 import { cardTopicSchema, sampleSchema, topicsKnown, trafficSchema } from '../miner/schema.js';
 import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema, preparationProgressSchema as variantPreparationSchema, requirementKindSchema } from '../scenario-contracts.js';
 
@@ -202,35 +202,44 @@ const preparationStageSchema = z.enum(['select', 'ground', 'propose', 'review'])
  * for it and the card made from it. A paid call names its unit and step before it is sent and clears them when
  * it returns, so a crash leaves them behind and a resume never repeats a call whose cost is unknown. The owner
  * reads the same counts as in the first format (processed, pending, excluded).
+ *
+ * `cards-v1` grounded the owner's rules before the proposals (`groundingComplete`, `promptGrounding`, `focus`); `cards-v2`
+ * cites the materials straight from each proposal and writes none of those. They stay declared, with the bounds they
+ * were written under, so a `cards-v1` checkpoint parses as it was stored.
  */
+const V1_FOCUSED_REQUIREMENTS = 12;
+const V1_AGENT_RULES = 8;
 const cardPreparationSchema = z.strictObject({
-  protocol: z.literal('cards-v1'),
+  protocol: z.enum(['cards-v1', 'cards-v2']),
   /** What the plan was made from: a resume on changed inputs is refused. */
   inputHash: hash,
   status: z.enum(['preparing', 'complete', 'partial', 'cancelled']),
   pending: ids(300), processed: ids(300),
   excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000) })).max(300),
-  /** The whole policy was grounded in one call (a knowledge base small enough to read at once). */
-  groundingComplete: z.boolean(),
+  /** `cards-v1`: the whole policy was grounded in one call (a knowledge base small enough to read at once). */
+  groundingComplete: z.boolean().optional(),
   /** Situations asked for — from the owner's rules alone, or from the logs' sample: never more are made. */
   requestedCount: z.number().int().min(1).max(200).optional(),
   /** The logs' sample the units are drawn from: a unit that makes no situation gives its seat to the next one of its topic. */
   sample: sampleSchema.optional(),
   /**
-   * A large knowledge base with the agent's prompts: the prompts alone, grounded once before the dialogues in `chunks`
-   * calls, `done` of them finished; the rules they yielded, offered to every dialogue; a prompt too large for one call, with why.
+   * `cards-v1`, a large knowledge base with the agent's prompts: the prompts alone, grounded once before the dialogues in
+   * `chunks` calls, `done` of them finished; the rules they yielded; a prompt too large for one call, with why.
    */
   promptGrounding: z.strictObject({
     chunks: z.number().int().nonnegative().max(MATERIAL_LIMIT), done: z.number().int().nonnegative().max(MATERIAL_LIMIT),
     requirementIds: ids(RECORD_REQUIREMENT_LIMIT),
     skipped: z.array(z.strictObject({ sourceId: id, reason: text(2000) })).max(MATERIAL_LIMIT).optional(),
   }).refine(value => value.done <= value.chunks, 'More prompt groundings done than planned').optional(),
-  /** A call in flight, as a checkpoint written before units were prepared at once names it; read only to settle such a record. */
+  /**
+   * A call in flight, as a checkpoint written before units were prepared at once names it; read only to settle such a
+   * record. `ground` is a `cards-v1` stage: without a unit, the grounding of the whole policy or of a chunk of the agent's prompts.
+   */
   activeDialogueId: id.optional(),
   activeStage: preparationStageSchema.optional(),
   /**
-   * The calls in flight, one per unit worked on at once; a stage without a unit is the grounding of the whole policy, or
-   * of one chunk of the agent's prompts, which runs alone.
+   * The calls in flight, one per unit worked on at once; a review without a unit is a step of the owner's explicit
+   * check of a card no unit names.
    */
   active: z.array(z.strictObject({ dialogueId: id.optional(), stage: preparationStageSchema })).min(1).max(MAX_PREPARATION_PARALLEL).optional(),
   elapsedMs: z.number().int().nonnegative().optional(),
@@ -238,8 +247,8 @@ const cardPreparationSchema = z.strictObject({
   generationAttempts: z.array(z.strictObject({ dialogueId: id, calls: z.number().int().nonnegative() })).max(300).optional(),
   /** A large knowledge base: the articles chosen for each dialogue from the table of contents. */
   sourceSelection: z.array(z.strictObject({ dialogueId: id, sourceIds: ids(40) })).max(300).optional(),
-  /** A large knowledge base: the rules grounded for each dialogue, by requirement id, and the agent's rules (promptGrounding) chosen as deciding it. */
-  focus: z.array(z.strictObject({ dialogueId: id, requirementIds: ids(FOCUSED_REQUIREMENT_LIMIT), agentRuleIds: ids(AGENT_RULES_PER_DIALOGUE).optional() })).max(300).optional(),
+  /** `cards-v1`, a large knowledge base: the rules grounded for each dialogue, by requirement id, and the agent's rules (promptGrounding) chosen as deciding it. */
+  focus: z.array(z.strictObject({ dialogueId: id, requirementIds: ids(V1_FOCUSED_REQUIREMENTS), agentRuleIds: ids(V1_AGENT_RULES).optional() })).max(300).optional(),
   /** The card each unit made. */
   cards: z.array(z.strictObject({ dialogueId: id, cardId: id })).max(300).optional(),
 });

@@ -174,7 +174,7 @@ test('a preparation from the owner\'s rules alone is paid, so it asks one consen
   const [consent] = asked;
   assert.equal(consent!.title, ['Собрать 2 ситуации по вашим правилам?', '',
     'Логов нет: ситуации строятся только по правилам — без выдуманных разговоров и личных данных клиента.',
-    'Расход — не больше 15 вызовов модели на всю подготовку. Это потолок, а не прогноз; агент не запускается.',
+    'Расход — не больше 14 вызовов модели на всю подготовку. Это потолок, а не прогноз; агент не запускается.',
     'Правила: ваши слова из разговора — 1 документ.', 'Как запускать агента, Lab спросит перед прогоном.'].join('\n'));
   assert.deepEqual(consent!.options, ['Собрать ситуации', 'Не сейчас']);
   const prepared = await prepare({ ...request, withoutLogs: true, situations: 2 });
@@ -198,12 +198,12 @@ test('the consent says what is read and what it may cost; the whole import is ke
   const [input, options] = captured!;
   assert.equal(input.originalImport!.dialogues.length, 300, 'the whole outcome-blind export is kept as the import');
   assert.equal(input.dialogues!.length, 200, 'the legacy projection is bounded');
-  assert.deepEqual(options, { situations: 15, callCeiling: 115 }, 'the ceiling the owner agreed to goes to the lab, which stops the preparation there');
+  assert.deepEqual(options, { situations: 15, callCeiling: 114 }, 'the ceiling the owner agreed to goes to the lab, which stops the preparation there');
   const { settings } = input;
   assert.deepEqual([settings!.maxCalls, settings!.timeoutMs, settings!.maxTurns, settings!.userModes, settings!.repeats], [385, 600000, 6, ['reactive'], 1]);
   assert.match(asked[0]!.title, /^Собрать 15 ситуаций из logs\.jsonl\?\n\nВ логах 300 разговоров, подходят 300\. Ситуаций будет не больше 15/);
-  assert.match(asked[0]!.title, /не больше 115 вызовов модели на всю подготовку, из них 9 — на разметку тем/,
-    'the preparation\'s own ceiling: the map, the rules read once, per situation its proposal allowance and review — the draft\'s limit of 385 is the run\'s');
+  assert.match(asked[0]!.title, /не больше 114 вызовов модели на всю подготовку, из них 9 — на разметку тем/,
+    'the preparation\'s own ceiling: the map, per situation its proposal allowance and review — the draft\'s limit of 385 is the run\'s');
   assert.doesNotMatch(asked[0]!.title, /validation set|outcome-blind/i, 'the owner is asked in plain words');
 });
 

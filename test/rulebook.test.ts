@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { evidenceBundle } from '../src/artifacts.js';
 import { hostGrant } from '../src/card/commands.js';
 import { storedEvidence } from '../src/card/prepare.js';
-import { cardProposalSchema } from '../src/card/proposal.js';
+import { withRequirements } from '../src/card/library.js';
+import { cardProposalProblem } from '../src/card/proposal.js';
 import { bindsBot, DEFAULT_RULEBOOK, rulebookLines, rulebookOf, rulebookView, shownRulebook, withKind, withRules } from '../src/card/rulebook.js';
 import { libraryV2Schema, type CardCommand } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
@@ -23,23 +24,30 @@ import { cardInput, cardRuntime, policy, proposals, refundRule, type Received } 
 import { openWorkspace } from './helpers/workspace.js';
 
 /*
- * W1 «Свод правил»: the grounding types every rule; the rulebook says which kinds bind the bot. An operator procedure the
- * owner did not include stays in the library but is never offered to the proposal and cannot be cited; including it —
+ * W1 «Свод правил»: every rule a card cites is typed; the rulebook says which kinds bind the bot. A proposal citing an
+ * operator procedure the owner did not include is refused; an operator rule a draft holds cannot be cited; including it —
  * one rule or the whole kind — is an owner command with a receipt and a new revision; taking it back sends the cards that
  * cite it to the owner. A result names the bar it was judged by. Stored libraries without kinds read exactly as before.
  */
 
 const OPERATOR_QUOTE = 'Если номера нет, уточните номер терминала.';
 const operatorRule: Omit<Requirement, 'sourceId'> = { id: 'op_rule', text: 'Оператор уточняет номер терминала, если его нет.', quote: OPERATOR_QUOTE, critical: false, kind: 'operator_procedure' };
-const received = (): Received => ({ proposals: [], reviews: [], grounding: 0 });
+const received = (): Received => ({ proposals: [], reviews: [] });
 
-/** The fixture runtime whose grounding typed its rules: the refund rule is the bot's behaviour, the other an operator's step. */
-function typedRuntime(seen: Received): Runtime {
-  return { ...cardRuntime(seen), async groundRequirements(input, ctx) {
-    ctx.beforeCall(); seen.grounding++;
-    const sourceId = input.sources[0]!.id;
-    return { requirements: [{ ...refundRule, kind: 'behavior', sourceId }, { ...operatorRule, sourceId }], questions: [] };
-  } };
+/** The operator's step beside the refund rule, as a preparation that grounded the whole policy first (cards-v1) stored it: in the draft, cited by no card. */
+async function withOperatorRule(lab: ExperimentLab, id: string): Promise<void> {
+  const { library, experiment } = await lab.readCards(id);
+  const requirements = [...library.requirements, { ...operatorRule, sourceId: 'source-1' }];
+  const next = withRequirements(library, requirements);
+  await lab.store.publishLibrary({ ...experiment, requirements, librarySnapshot: next }, next, libraryHash(library));
+}
+
+/** The draft's rules as a preparation made before rules had kinds stored them. */
+async function withoutKinds(lab: ExperimentLab, id: string): Promise<void> {
+  const { library, experiment } = await lab.readCards(id);
+  const requirements = library.requirements.map(({ kind: _kind, ...rule }) => rule);
+  const next = withRequirements(library, requirements);
+  await lab.store.publishLibrary({ ...experiment, requirements, librarySnapshot: next }, next, libraryHash(library));
 }
 
 async function withLab(runtime: Runtime, work: (lab: ExperimentLab) => Promise<void>): Promise<void> {
@@ -57,18 +65,18 @@ async function command(lab: ExperimentLab, id: string, raw: Parameters<Experimen
   return { prepared, library: applied.library };
 }
 
-test('an operator procedure the owner did not include is never offered and cannot be cited; included, it binds; taken back, its cards return to the owner', async () => {
+test('an operator procedure the owner did not include cannot be cited; included, it binds; taken back, its cards return to the owner', async () => {
   const seen = received();
-  await withLab(typedRuntime(seen), async lab => {
+  await withLab(cardRuntime(seen), async lab => {
     const draft = await lab.create(cardInput());
     await lab.waitForIdle();
+    assert.ok(seen.proposals.length === 2 && seen.proposals.every(request => request.call.binds.kinds.join() === 'behavior,knowledge'), 'the proposal is told which kinds bind the bot');
+    const citing = { ...proposals.late, agentMust: [{ ...proposals.late.agentMust[0]!, basis: [{ sourceId: 'source-1', quote: OPERATOR_QUOTE, rule: operatorRule.text, kind: 'operator_procedure' as const }] }] };
+    assert.match(cardProposalProblem(citing, seen.proposals[0]!.call) ?? '', /rule of kind operator_procedure, and the owner's rulebook binds the agent only by behavior, knowledge/, 'the model cannot cite a rule outside the rulebook');
+    await withOperatorRule(lab, draft.id);
     const { library } = await lab.readCards(draft.id);
-    assert.deepEqual(library.requirements.map(item => [item.id, item.kind]), [['refund_rule', 'behavior'], ['op_rule', 'operator_procedure']], 'the kinds are stored with the rules');
+    assert.deepEqual(library.requirements.map(item => [item.id, item.kind]), [[refundRule.id, 'behavior'], ['op_rule', 'operator_procedure']], 'the kinds are stored with the rules');
     assert.equal(library.rulebook, undefined, 'a new draft keeps the default rulebook implicit');
-    assert.ok(seen.proposals.length === 2 && seen.proposals.every(request => request.requirements.map(item => item.id).join() === 'refund_rule'
-      && request.call.requirementIds.join() === 'refund_rule'), 'the proposal is offered only the rules that bind the bot');
-    const citing = { ...proposals.late, agentMust: [{ ...proposals.late.agentMust[0]!, requirementIds: ['op_rule'] }] };
-    assert.equal(cardProposalSchema(seen.proposals[0]!.call).safeParse(citing).success, false, 'the model cannot cite a rule outside the rulebook');
     assert.deepEqual(rulebookLines(rulebookView(library)), [
       'Свод правил: бота судят по 1 из 2 правил',
       '  ✓ правила поведения бота: 1 — входят',
@@ -113,9 +121,15 @@ test('an operator procedure the owner did not include is never offered and canno
 });
 
 test('a result names the bar it was judged by; a run whose rules have no kinds names none', async () => {
-  for (const typed of [true, false]) await withLab(typed ? typedRuntime(received()) : cardRuntime(received()), async lab => {
+  for (const typed of [true, false]) await withLab(cardRuntime(received()), async lab => {
     const draft = await lab.create(cardInput());
     await lab.waitForIdle();
+    if (!typed) {
+      // Rules changed under the cards: the reviewer answers their duties again.
+      await withoutKinds(lab, draft.id);
+      await lab.checkCards(draft.id, libraryHash((await lab.readCards(draft.id)).library));
+      await lab.waitForIdle();
+    }
     const { library } = await lab.readCards(draft.id);
     const accepted = await lab.acceptCards(draft.id, libraryHash(library), library.cards.map(card => card.id));
     verifyAcceptedRun(accepted.experiment);
@@ -146,6 +160,7 @@ test('stored records and libraries without kinds parse unchanged and bind every 
   await withLab(cardRuntime(received()), async lab => {
     const draft = await lab.create(cardInput());
     await lab.waitForIdle();
+    await withoutKinds(lab, draft.id);
     const raw = JSON.parse(JSON.stringify((await lab.readCards(draft.id)).library));
     const parsed = libraryV2Schema.parse(raw);
     assert.equal(fingerprint(parsed), fingerprint(raw));
@@ -159,9 +174,10 @@ test('stored records and libraries without kinds parse unchanged and bind every 
 test('the workspace shows «Свод правил» beside the situations, and one key lets operator instructions in', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-rulebook-board-'));
   try {
-    const lab = new ExperimentLab(directory, typedRuntime(received()));
+    const lab = new ExperimentLab(directory, cardRuntime(received()));
     await lab.init();
-    await lab.create(cardInput()); await lab.waitForIdle();
+    const draft = await lab.create(cardInput()); await lab.waitForIdle();
+    await withOperatorRule(lab, draft.id);
     await lab.close();
     const { screen, press, actions } = await openWorkspace(directory, state => { state.area = 'rules'; });
     const text = screen(100);

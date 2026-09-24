@@ -96,10 +96,11 @@ export function loggedRun(count: number, synthetic: (number: number) => { e1: Ve
   const batch = importBatch(Array.from({ length: count }, (_, i) => loggedDialogue(i)));
   const evidence = importEvidence([batch]);
   const requirements = [{ ...refundRule, sourceId: 'source-1' }];
+  const sources = [{ id: 'source-1', name: 'Правила возвратов', content: policy, hash: fingerprint(policy) }];
   let library = createLibraryV2({ id: 'library_logs', imports: [{ id: batch.id, contentHash: batch.contentHash }], createdAt: '2026-09-23T10:00:00.000Z',
-    sources: [{ id: 'source-1', name: 'Правила возвратов', content: policy, hash: fingerprint(policy) }], requirements });
+    sources, requirements });
   for (const [i, dialogue] of batch.dialogues.entries()) {
-    const call = proposalCall({ source: { kind: 'dialogue', batchId: batch.id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), requirements, maxTurns: 3 });
+    const call = proposalCall({ source: { kind: 'dialogue', batchId: batch.id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), sources, maxTurns: 3 });
     library = addCard(library, bindProposal(proposalOf(i), call, library.nextNumber), { dialogueId: dialogue.id, batchId: batch.id, sourceIds: ['source-1'] });
   }
   library = reviewed(library, evidence);
