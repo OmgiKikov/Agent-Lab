@@ -55,6 +55,12 @@ export interface SituationView {
   brief: Brief;
   /** The ids a command names, parallel to `brief.knows` and `brief.must` (f1, e2); null where there is none to name. */
   refs: { knows: (string | null)[]; must: (string | null)[] };
+  /**
+   * A card's terms the brief does not print but a change can move, parallel to `refs`: every rule of a duty, when it
+   * applies and how it is observed; the agent's question a fact answers (its label unless the card names another); what
+   * the customer's late turn does. «Было → стало» compares them, so a change the owner confirms is never shown as none.
+   */
+  terms?: { must: DutyTerms[]; knows: { askedAs: string }[]; turn: string | null };
   status: CardStatusKind;
   /** The one open question. A card's answers carry their ready-made commands; an older format's question has no answers here. */
   question?: { id: string | null; text: string; choices: QuestionChoice[] };
@@ -66,6 +72,9 @@ export interface SituationView {
   /** «d — как это проверяется»: key and value lines for whoever wants to see how the brief is run and judged. */
   details: { label: string; text: string }[];
 }
+
+/** A duty's terms: every rule it rests on (id and quote), the condition it applies under (null: always), how it is observed. */
+export interface DutyTerms { rules: { id: string; quote: string }[]; when: string | null; observed: string }
 
 /** Where each logged dialogue stands in its import: «из диалога №17». */
 export type DialogueNumbers = (batchId: string, dialogueId: string) => number | undefined;
@@ -130,6 +139,18 @@ export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumb
 
 const OBSERVED = { reply: 'по ответу агента', tool: 'по вызовам инструментов', state: 'по состоянию системы' } as const;
 const ACCOUNTED = { fact: 'факт', turn: 'поворот', stop: 'здесь клиент уходит', ignored: 'не влияет на проверку', changed: 'изменено' } as const;
+const TURN_KIND = { change_intent: 'меняет намерение', report: 'сообщает, что видит' } as const;
+
+/** The terms of a card a change can move while its brief reads the same (SituationView.terms). */
+function cardTerms(library: LibraryV2, card: Card): NonNullable<SituationView['terms']> {
+  const quotes = new Map(library.requirements.map(item => [item.id, oneLine(item.quote)]));
+  return {
+    must: card.agentMust.map(expectation => ({ rules: expectation.requirementIds.map(id => ({ id, quote: quotes.get(id) ?? '' })),
+      when: expectation.appliesWhen === undefined ? null : oneLine(expectation.appliesWhen), observed: OBSERVED[expectation.observation] })),
+    knows: card.client.knows.map(fact => ({ askedAs: oneLine(fact.askedAs ?? fact.label) })),
+    turn: card.client.turn ? TURN_KIND[card.client.turn.kind] : null,
+  };
+}
 
 /** How a card is run and judged: the customer's program, where each fact comes from, the account of later messages, the duties. */
 function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefined): SituationView['details'] {
@@ -166,7 +187,7 @@ function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefine
 export function cardSituation(library: LibraryV2, card: Card, status?: CardStatus, numbers?: DialogueNumbers, maxTurns?: number): SituationView {
   return {
     format: 'card', id: card.id, number: card.number, brief: cardBrief(library, card, numbers),
-    refs: { knows: card.client.knows.map(fact => fact.id), must: card.agentMust.map(expectation => expectation.id) },
+    refs: { knows: card.client.knows.map(fact => fact.id), must: card.agentMust.map(expectation => expectation.id) }, terms: cardTerms(library, card),
     // Without the imports at hand the status is not known; a card is read then as it was accepted: ready.
     status: status?.status ?? 'ready',
     ...(status?.question ? { question: { id: status.question.id, text: status.question.text, choices: status.question.choices } } : {}),
@@ -357,8 +378,8 @@ export function countsText(views: readonly SituationView[]): string {
   const parts = [
     countText(count('ready'), ['готова', 'готовы', 'готовы']),
     ...(count('needs_owner') ? [countText(count('needs_owner'), ['ждёт вашего ответа', 'ждут вашего ответа', 'ждут вашего ответа'])] : []),
-    ...(count('unusable') ? [`${count('unusable')} не подходит для теста`] : []),
-    ...(count('checking') ? [`${count('checking')} ещё не проверены`] : []),
+    ...(count('unusable') ? [countText(count('unusable'), ['не подходит для теста', 'не подходят для теста', 'не подходят для теста'])] : []),
+    ...(count('checking') ? [countText(count('checking'), ['ещё не проверена', 'ещё не проверены', 'ещё не проверены'])] : []),
   ];
   return `${countText(views.length, ['ситуация', 'ситуации', 'ситуаций'])}: ${parts.join(' · ')}`;
 }
@@ -493,7 +514,9 @@ export interface BriefChange { field: string; before: string | null; after: stri
 
 /**
  * What changed between two states of one situation, line by line of the brief: a fact and a duty are matched
- * by their id, so a changed disclosure reads «было «?», стало «если спросят»» on the same fact.
+ * by their id, so a changed disclosure reads «было «?», стало «если спросят»» on the same fact. A card's terms the
+ * brief does not print — a duty's rules, its condition and how it is observed, the agent's question a fact answers,
+ * what the late turn does — get lines of their own: whatever the owner confirms is shown.
  */
 export function briefChanges(before: SituationView | undefined, after: SituationView | undefined): BriefChange[] {
   if (!before || !after) return [{ field: 'Ситуация', before: before ? `№${before.number} ${before.brief.title}` : null, after: after ? `№${after.number} ${after.brief.title}` : null }];
@@ -502,18 +525,41 @@ export function briefChanges(before: SituationView | undefined, after: Situation
   text('Название', before.brief.title, after.brief.title);
   text('Хочет', before.brief.wants, after.brief.wants);
   text('Пишет', `«${before.brief.writes}»`, `«${after.brief.writes}»`);
+  const byId = <T>(items: readonly T[], ids: readonly (string | null)[]) => new Map(items.flatMap((item, index) => ids[index] ? [[ids[index]!, item] as const] : []));
   const paired = <T>(field: string, a: T[], b: T[], idsA: (string | null)[], idsB: (string | null)[], show: (item: T) => string) => {
-    const byId = (items: T[], ids: (string | null)[]) => new Map(items.flatMap((item, index) => ids[index] ? [[ids[index]!, item] as const] : []));
     const was = byId(a, idsA), now = byId(b, idsB);
     for (const [id, item] of was) text(field, show(item), now.has(id) ? show(now.get(id)!) : null);
     for (const [id, item] of now) if (!was.has(id)) text(field, null, show(item));
   };
   paired('Знает', before.brief.knows, after.brief.knows, before.refs.knows, after.refs.knows, fact => `${fact.what} — ${fact.when}`);
+  if (before.terms && after.terms) {
+    const was = byId(before.terms.knows, before.refs.knows);
+    for (const [index, id] of after.refs.knows.entries()) {
+      const a = id ? was.get(id) : undefined, b = after.terms.knows[index];
+      if (a && b) text(`Знает: ${after.brief.knows[index]!.what} — если спросят`, a.askedAs, b.askedAs);
+    }
+  }
   text('Уходит', before.brief.leaves, after.brief.leaves);
-  text('Поворот', before.brief.turn, after.brief.turn);
+  text('Поворот', turnLine(before), turnLine(after));
   paired('Агент должен', before.brief.must, after.brief.must, before.refs.must, after.refs.must, duty => duty.text);
+  if (before.terms && after.terms) {
+    const was = byId(before.terms.must, before.refs.must);
+    for (const [index, id] of after.refs.must.entries()) {
+      const a = id ? was.get(id) : undefined, b = after.terms.must[index];
+      if (!a || !b) continue;
+      const duty = `Агент должен: ${after.brief.must[index]!.text}`;
+      if (a.rules.map(rule => rule.id).join(' ') !== b.rules.map(rule => rule.id).join(' ')) changes.push({ field: `${duty} — правило`, before: rulesText(a), after: rulesText(b) });
+      text(`${duty} — когда`, a.when ?? 'всегда', b.when ?? 'всегда');
+      text(`${duty} — проверяется`, a.observed, b.observed);
+    }
+  }
   return changes;
 }
+
+/** The late turn as a change shows it: what the customer does, after what and with which words — «меняет намерение после «…»: «…»». */
+const turnLine = (view: SituationView): string | null => view.brief.turn === null ? null : view.terms?.turn ? `${view.terms.turn} ${view.brief.turn}` : view.brief.turn;
+/** A duty's rules in one line, each quote kept to its beginning and end. */
+const rulesText = (terms: DutyTerms): string => terms.rules.map(rule => quoteText(rule.quote, 120)).join(' · ') || 'нет правила';
 
 /** A change in one line: «Знает: номер терминала: 5678 — было «?», стало «если спросят»». */
 export function changeText(change: BriefChange): string {
