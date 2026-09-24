@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { ExperimentLab } from './experiment.js';
+import type { CreateOptions, PreparationOptions } from './lab/library.js';
 import { draftHash } from './lab/record.js';
 import { demoInput } from './demo.js';
 import { createInputSchema, materialSources, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Settings } from './contracts.js';
@@ -232,7 +233,7 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     if (values.resume || values.check || values.accept) {
       if (!values.yes) throw new Error(values.accept ? 'Утверждение фиксирует готовые ситуации для прогона; укажите --yes. Агент не запускается.' : 'Это расходует вызовы модели в пределах лимита; укажите --yes.');
       const { record, views } = await situations(target.id);
-      if (values.resume) { if (!record.librarySnapshot) throw new Error('Продолжать нечего.'); await lab.resumePreparation(target.id, libraryHash(record.librarySnapshot)); await lab.waitForIdle(); }
+      if (values.resume) { if (!record.librarySnapshot) throw new Error('Продолжать нечего.'); await lab.resumePreparation(target.id, libraryHash(record.librarySnapshot), preparationFlags(values)); await lab.waitForIdle(); }
       else if (values.check) { await lab.recheckCards(target.id, { explicit: true }); await lab.waitForIdle(); }
       else {
         const ready = views.filter(view => view.status === 'ready');
@@ -531,8 +532,13 @@ async function buildConsent(input: CreateInput, logs: string, directory: string,
   return { ...rulesConsentText(situations, callCeiling), situations, callCeiling };
 }
 
+/** How many situations are prepared at once (`--parallel`); the same draft whatever the number. */
+function preparationFlags(values: Flags): PreparationOptions {
+  return values.parallel === undefined ? {} : { parallel: Number(values.parallel) };
+}
+
 /** Prepares `input` to the end, the same way the chat prepares it, within the consent's count and ceiling when there is one. */
-async function prepareDraft(lab: ExperimentLab, input: CreateInput, options: { situations?: number; callCeiling?: number } = {}): Promise<string> {
+async function prepareDraft(lab: ExperimentLab, input: CreateInput, options: CreateOptions = {}): Promise<string> {
   const prepared = await lab.create(input, options); await lab.waitForIdle();
   const current = await lab.get(prepared.id);
   if (current.phase !== 'review') throw new Error(current.error ?? 'Подготовка не завершилась.');
@@ -552,7 +558,7 @@ async function prepare({ values, directory }: CommandInput): Promise<void> {
     return;
   }
   await asWriter(directory, async lab => {
-    const id = await prepareDraft(lab, input, { situations: consent.situations, callCeiling: consent.callCeiling });
+    const id = await prepareDraft(lab, input, { situations: consent.situations, callCeiling: consent.callCeiling, ...preparationFlags(values) });
     process.stdout.write(`${JSON.stringify(await lab.get(id), null, 2)}\n`);
   });
 }
@@ -610,7 +616,7 @@ async function repeat({ values, directory }: CommandInput): Promise<void> {
 const COMMANDS: Readonly<Record<string, Command>> = {
   detect: { help: ['agent-lab detect [--directory ПАПКА] [--json]   Что Lab нашёл в папке проекта: агента, логи, материалы, промпт'], run: detect },
   import: { help: ['agent-lab import --file логи.xlsx [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--yes] [--json]   Как читать таблицу логов (.xlsx, .csv): с --input разметку предлагает модель задачи, Lab проверяет каждую строку; --yes — сначала на вызов модели, затем на загрузку'], run: importTable },
-  build: { help: ['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--situations N] [--connection подключение.json] [--yes]   Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --yes готовит их',
+  build: { help: ['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--situations N] [--connection подключение.json] [--parallel 4] [--yes]   Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --yes готовит их',
     'agent-lab build --input задача.json --prompts-from ПАПКА [--yes]   Промпты агента из его кода и JSON на выбор; с --yes модель задачи отметит те, что пишут ответ клиенту',
     'agent-lab build --input задача.json --prompts-from ПАПКА --prompt ФАЙЛ#ИМЯ ... | --prompts suggested [--yes]   Выбранные промпты (или отмеченные Lab) станут правилами поведения бота'], run: prepare },
   prepare: { help: [], run: prepare },
@@ -618,7 +624,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     'agent-lab cards --id RUN [--card N] [--json]   Ситуации: что пишет и знает клиент, что должен агент, статус и вопрос',
     'agent-lab cards --id RUN --card N --choice a|b|c [--text «…»] --yes   Ответ на вопрос ситуации',
     'agent-lab cards --id RUN --input команда.json [--yes]   Команда владельца; без --yes — только «было → стало»',
-    'agent-lab cards --id RUN --check|--resume|--accept --yes   Проверить ситуации · продолжить подготовку · утвердить готовые',
+    'agent-lab cards --id RUN --check|--resume|--accept --yes [--parallel 4]   Проверить ситуации · продолжить подготовку · утвердить готовые',
     'agent-lab cards --id RUN [--operator-rules on|off] [--bind-rule ID] [--unbind-rule ID] [--yes]   Свод правил: входят ли инструкции для операторов, отдельные правила, обязательные для бота',
     'agent-lab cards --id RUN --convert   Черновик старого формата — продолжить в новом формате; старый останется как есть'], run: cards },
   accept: { help: ['agent-lab accept --id RUN [--yes]   Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания'], run: accept },

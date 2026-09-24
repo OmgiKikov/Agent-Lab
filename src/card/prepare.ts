@@ -1,7 +1,6 @@
-import { Stopped } from '../errors.js';
 import { fingerprint, internalPromptRule, type AgentSpec, type Experiment, type Requirement, type Source } from '../contracts.js';
 import type { CallContext, Grounding, GroundingInput, Runtime } from '../runtime.js';
-import { AGENT_RULE_CHARS, SOURCES_PER_DIALOGUE, workInputIssue } from '../limits.js';
+import { AGENT_RULE_CHARS, MAX_PREPARATION_PARALLEL, PREPARATION_PARALLEL, SOURCES_PER_DIALOGUE, workInputIssue } from '../limits.js';
 import { StructuredTaskError } from '../llm/structured.js';
 import { withTrafficTopic } from '../miner/cards.js';
 import { replacementFor, unitTopic, type LogSample } from '../miner/plan.js';
@@ -31,6 +30,14 @@ import type { Card, CardPreparation, LibraryV2 } from './schema.js';
  * finished one again. A paid call names its unit and step first; a call that dies in flight leaves the name behind,
  * and a resume never repeats it, because its cost is unknown. Each unit has one allowance of proposal calls, repairs
  * included, that survives a resume.
+ *
+ * Several units are worked on at once (`parallel`), taken in plan order; the grounding before them runs alone. The
+ * draft does not depend on which unit finishes first: each unit's card step — its card, or why it makes none, with
+ * the replacement it calls in — lands in the order the units were taken, so the cards are numbered in plan order.
+ *
+ *   unit 1: read ──► propose ──► card №1 ──► review
+ *   unit 2: read ──► propose ─ waits for unit 1 ─► card №2 ──► review
+ *   unit 3: read ─ waits for unit 2 ─► propose (it is offered the cards made before it) ──► card №3 ──► review
  */
 
 const PROTOCOL = 'cards-v1';
@@ -99,22 +106,69 @@ export function pendingReviewCalls(library: LibraryV2, evidence: CardEvidence): 
 }
 
 type Stage = NonNullable<CardPreparation['activeStage']>;
+type InFlight = NonNullable<CardPreparation['active']>[number];
 type Reading = { sources: Source[]; requirements: Requirement[] };
+
+/** Units worked on at once, as the owner asks for them: one to MAX_PREPARATION_PARALLEL. */
+export function preparationParallel(value: number | undefined): number {
+  const parallel = value ?? PREPARATION_PARALLEL;
+  if (!Number.isInteger(parallel) || parallel < 1 || parallel > MAX_PREPARATION_PARALLEL) throw new Error(`Одновременно можно готовить от 1 до ${MAX_PREPARATION_PARALLEL} ситуаций.`);
+  return parallel;
+}
 
 class Preparation {
   private readonly evidence: CardEvidence;
   /** Units whose step failed before any call was sent: they stay pending for a resume. */
   private readonly unsent: { unit: string; message: string }[] = [];
+  /** The units taken, in plan order, each with the moment its card step has landed. */
+  private readonly turns: { unit: string; landed: Promise<void> }[] = [];
+  /** The last save asked for: units at work never write the draft at the same time. */
+  private saving: Promise<void> = Promise.resolve();
   constructor(private readonly record: Experiment, private readonly progress: CardPreparation, private readonly batch: ImportBatch | undefined,
     private library: LibraryV2, private readonly runtime: Runtime, private readonly ctx: CallContext, private readonly publisher: DraftPublisher,
-    private published: string | undefined) {
+    private published: string | undefined, private readonly parallel = 1) {
     this.evidence = importEvidence(batch ? [batch] : []);
   }
 
-  private async publish(): Promise<void> {
-    this.record.librarySnapshot = this.library;
-    await this.publisher.publishLibrary(this.record, this.library, this.published);
-    this.published = libraryHash(this.library);
+  /**
+   * Saves one at a time, in the order they were asked for: every step is still saved and told to the followers. Each
+   * save writes the draft as it is when its turn comes, and the next one expects exactly that library.
+   */
+  private publish(): Promise<void> {
+    const save = this.saving.then(async () => {
+      const library = this.library;
+      this.record.librarySnapshot = library;
+      await this.publisher.publishLibrary(this.record, library, this.published);
+      this.published = libraryHash(library);
+    });
+    this.saving = save.catch(() => undefined);
+    return save;
+  }
+
+  /** Takes a unit in plan order; the returned function says its card step has landed. */
+  private take(unit: string): () => void {
+    let land!: () => void;
+    this.turns.push({ unit, landed: new Promise<void>(resolve => { land = resolve; }) });
+    return land;
+  }
+
+  /** Resolves once every unit taken before `unit` has landed its card step; at once for a unit the pool never took. */
+  private async inTurn(unit: string): Promise<void> {
+    const index = this.turns.findIndex(turn => turn.unit === unit);
+    await Promise.all(this.turns.slice(0, Math.max(index, 0)).map(turn => turn.landed));
+  }
+
+  /** The unit still has a call whose cost is unknown. */
+  private inFlight(unit: string): boolean {
+    return this.progress.active?.some(entry => entry.dialogueId === unit) ?? false;
+  }
+
+  /**
+   * A proposal is offered what the cards made before it hold — their topics, or the titles already written from the
+   * owner's rules — unless the logs' map names the unit's topic: such a unit proposes only after the units before it.
+   */
+  private readsEarlierCards(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined): boolean {
+    return !(dialogue && this.batch && unitTopic(this.progress, this.library, this.batch.id, unit));
   }
 
   private finish(unit: string): void {
@@ -143,21 +197,32 @@ class Preparation {
 
   /** One paid step. Its unit and stage are saved before the call and cleared when it returns, or when it failed with no charge in doubt. */
   private async call<T>(unit: string | undefined, stage: Stage, work: (ctx: CallContext) => Promise<T>): Promise<T> {
-    const progress = this.progress;
-    if (unit === undefined) delete progress.activeDialogueId; else progress.activeDialogueId = unit;
-    progress.activeStage = stage;
+    const entry: InFlight = unit === undefined ? { stage } : { dialogueId: unit, stage };
+    (this.progress.active ??= []).push(entry);
     await this.publish();
-    const spent = this.record.usage.calls;
-    const clear = () => { delete progress.activeDialogueId; delete progress.activeStage; };
+    const base = stage === 'propose' && unit !== undefined ? this.allowance(unit) : this.ctx;
+    // This step's own requests: the other units' calls move the record's count beside it. The check and the count of
+    // the shared ceiling stay one synchronous step, so units at work together never pass it.
+    let sent = 0, refused = false;
+    const ctx: CallContext = { ...base, beforeCall: () => {
+      try { base.beforeCall(); } catch (error) { refused = true; throw error; }
+      sent++;
+    } };
+    const clear = () => {
+      const active = (this.progress.active ?? []).filter(item => item !== entry);
+      if (active.length) this.progress.active = active; else delete this.progress.active;
+    };
     try {
-      const result = await work(stage === 'propose' && unit !== undefined ? this.allowance(unit) : this.ctx);
+      const result = await work(ctx);
+      // The card is numbered where it lands: the answer waits, still named in flight, for the units taken before it.
+      if (stage === 'propose' && unit !== undefined) await this.inTurn(unit);
       clear();
       return result;
     } catch (error) {
-      // No call sent: nothing was charged. Complete replies that failed the contract were charged and counted, and the budget
-      // stops a step only before its next request is sent: nothing is unknown in either case.
-      const budget = this.ctx.signal.reason instanceof Stopped && this.ctx.signal.reason.reason === 'budget';
-      if (this.record.usage.calls === spent || error instanceof StructuredTaskError || budget) clear();
+      // No call sent: nothing was charged. Complete replies that failed the contract were charged and counted, and a step
+      // the budget refused had its earlier requests answered: nothing is unknown in any of these. A request cut off in
+      // flight — by a cancel, or by the budget another unit ran out — stays named.
+      if (!sent || refused || error instanceof StructuredTaskError) clear();
       throw error;
     }
   }
@@ -319,7 +384,8 @@ class Preparation {
     }
   }
 
-  private async prepareUnit(unit: string, whole: boolean): Promise<void> {
+  /** `landed`: the unit's card step is done, and the units after it may land theirs. */
+  private async prepareUnit(unit: string, whole: boolean, landed: () => void): Promise<void> {
     const dialogue = this.batch?.dialogues.find(item => item.id === unit);
     const made = this.progress.cards?.find(item => item.dialogueId === unit);
     let card = made && this.library.cards.find(item => item.id === made.cardId);
@@ -327,10 +393,13 @@ class Preparation {
     if (made && !card) { this.finish(unit); await this.publish(); return; }
     if (!card) {
       const reading = whole || !dialogue ? { sources: this.record.sources, requirements: this.record.requirements } : await this.readFor(unit, dialogue);
+      if (!('excluded' in reading) && this.readsEarlierCards(unit, dialogue)) await this.inTurn(unit);
       const proposed = 'excluded' in reading ? reading : await this.propose(unit, dialogue, reading);
-      if ('excluded' in proposed) { this.exclude(unit, proposed.excluded); await this.publish(); return; }
+      // A unit left out calls in its replacement: in plan order too, so the next units are the same whoever finishes first.
+      if ('excluded' in proposed) { await this.inTurn(unit); this.exclude(unit, proposed.excluded); landed(); await this.publish(); return; }
       card = proposed;
     }
+    landed();
     await this.review(card, unit);
     this.finish(unit);
     await this.publish();
@@ -342,12 +411,16 @@ class Preparation {
    * without its card is left out; a card whose review died keeps what was made and waits for an explicit check.
    */
   settleInterrupted(): void {
-    const { activeDialogueId: unit, activeStage: stage } = this.progress;
-    if (!stage) return;
-    if (stage === 'ground' && unit === undefined) throw new Error('Подготовка остановилась во время чтения правил владельца. Стоимость этого вызова неизвестна, и он не повторяется молча: подготовьте новый черновик.');
-    if (unit !== undefined && stage === 'review') this.finish(unit);
-    else if (unit !== undefined) this.exclude(unit, 'Подготовка прервалась во время платного вызова: его стоимость неизвестна, поэтому этот источник не разбирается повторно.');
-    delete this.progress.activeDialogueId; delete this.progress.activeStage;
+    const { activeDialogueId, activeStage, active = [] } = this.progress;
+    // A checkpoint written before units were worked on at once names its one call in the two single fields.
+    const calls: InFlight[] = [...active, ...activeStage ? [activeDialogueId === undefined ? { stage: activeStage } : { dialogueId: activeDialogueId, stage: activeStage }] : []];
+    if (calls.some(call => call.stage === 'ground' && call.dialogueId === undefined)) throw new Error('Подготовка остановилась во время чтения правил владельца. Стоимость этого вызова неизвестна, и он не повторяется молча: подготовьте новый черновик.');
+    for (const { dialogueId: unit, stage } of calls) {
+      if (unit === undefined) continue;
+      if (stage === 'review') this.finish(unit);
+      else this.exclude(unit, 'Подготовка прервалась во время платного вызова: его стоимость неизвестна, поэтому этот источник не разбирается повторно.');
+    }
+    delete this.progress.activeDialogueId; delete this.progress.activeStage; delete this.progress.active;
   }
 
   async run(): Promise<void> {
@@ -376,18 +449,26 @@ class Preparation {
       // A replacement joins the pending units while the run goes on; a unit whose step failed unsent stays pending for a resume.
       const tried = new Set<string>();
       const next = () => progress.pending.find(id => !tried.has(id));
-      for (let unit = next(); unit !== undefined; unit = next()) {
-        tried.add(unit);
-        ctx.signal.throwIfAborted();
-        try { await this.prepareUnit(unit, whole); }
-        catch (error) {
-          ctx.signal.throwIfAborted();
-          // One source's unusable answer never hides the others. A call that died in flight stops the preparation.
-          if (error instanceof StructuredTaskError) { this.exclude(unit, error.message); await this.publish(); continue; }
-          if (progress.activeDialogueId !== undefined) throw error;
-          this.unsent.push({ unit, message: error instanceof Error ? error.message : String(error) });
+      const failures: unknown[] = [];
+      const worker = async (): Promise<void> => {
+        for (let unit = next(); unit !== undefined && !failures.length; unit = next()) {
+          tried.add(unit);
+          const landed = this.take(unit);
+          try {
+            ctx.signal.throwIfAborted();
+            await this.prepareUnit(unit, whole, landed);
+          } catch (error) {
+            ctx.signal.throwIfAborted();
+            // One source's unusable answer never hides the others. A call that died in flight stops the preparation.
+            if (error instanceof StructuredTaskError) { await this.inTurn(unit); this.exclude(unit, error.message); landed(); await this.publish(); continue; }
+            if (this.inFlight(unit)) throw error;
+            this.unsent.push({ unit, message: error instanceof Error ? error.message : String(error) });
+          } finally { landed(); }
         }
-      }
+      };
+      // A failure stops the taking of new units; the preparation ends once the units at work have landed what they can.
+      await Promise.all(Array.from({ length: this.parallel }, () => worker().catch(error => { failures.push(error); })));
+      if (failures.length) throw failures[0];
       progress.status = progress.pending.length ? 'partial' : 'complete';
       await this.publish();
       const [first] = this.unsent;
@@ -400,8 +481,8 @@ class Preparation {
   }
 }
 
-/** Prepares a new draft of cards from the plan: the library is published after every step. */
-export async function prepareCards(record: Experiment, plan: CardPlan, agent: AgentSpec | undefined, runtime: Runtime, ctx: CallContext, publisher: DraftPublisher): Promise<void> {
+/** Prepares a new draft of cards from the plan, `parallel` units at once: the library is published after every step. */
+export async function prepareCards(record: Experiment, plan: CardPlan, agent: AgentSpec | undefined, runtime: Runtime, ctx: CallContext, publisher: DraftPublisher, parallel = 1): Promise<void> {
   const batch = plan.kind === 'dialogues' ? plan.batch : undefined;
   const sample = plan.kind === 'dialogues' ? plan.sample : undefined;
   const units = plan.kind === 'dialogues' ? plan.sample.picked : Array.from({ length: plan.count }, (_, index) => `rules_${index + 1}`);
@@ -415,11 +496,11 @@ export async function prepareCards(record: Experiment, plan: CardPlan, agent: Ag
   ensureAgentRevision(record, agent);
   const library = createLibraryV2({ id: `library_${record.id}`, imports: batch ? [{ id: batch.id, contentHash: batch.contentHash }] : [], sources: record.sources, requirements: [],
     ...(sample?.traffic ? { traffic: [sample.traffic] } : {}) });
-  await new Preparation(record, progress, batch, library, runtime, ctx, publisher, undefined).run();
+  await new Preparation(record, progress, batch, library, runtime, ctx, publisher, undefined, parallel).run();
 }
 
-/** Continues a card preparation from its saved steps. A call that died in flight is never repeated. */
-export async function resumeCards(record: Experiment, batch: ImportBatch | undefined, runtime: Runtime, ctx: CallContext, publisher: DraftPublisher): Promise<void> {
+/** Continues a card preparation from its saved steps, `parallel` units at once. A call that died in flight is never repeated. */
+export async function resumeCards(record: Experiment, batch: ImportBatch | undefined, runtime: Runtime, ctx: CallContext, publisher: DraftPublisher, parallel = 1): Promise<void> {
   const progress = record.preparationProgress;
   if (progress?.protocol !== PROTOCOL) throw new Error('Эту подготовку нельзя продолжить: нет сохранённого плана.');
   if (progress.inputHash !== preparationInputHash(record, PROTOCOL)) throw new Error('Входы или модель подготовки изменились. Подготовьте новый черновик.');
@@ -427,7 +508,7 @@ export async function resumeCards(record: Experiment, batch: ImportBatch | undef
   if (!record.librarySnapshot) throw new Error('Черновик ситуаций не сохранён; продолжить нельзя.');
   const library = requireLibraryV2(record.librarySnapshot);
   if (library.acceptance) throw new Error('Утверждённые ситуации не меняются: подготовьте новый черновик.');
-  await new Preparation(record, progress, batch, structuredClone(library), runtime, ctx, publisher, libraryHash(library)).run();
+  await new Preparation(record, progress, batch, structuredClone(library), runtime, ctx, publisher, libraryHash(library), parallel).run();
 }
 
 /** The owner's explicit check: every claim of every card no receipt answers yet, in card order. */

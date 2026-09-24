@@ -104,18 +104,19 @@ test('a resume continues every unit from its next step: a card made before the b
   const seen = received();
   const runtime = cardRuntime(seen);
   const propose = runtime.proposeCard!;
-  // The first proposal needs three repairs, so the preparation's five calls end right before its review.
+  // The first proposal needs three repairs, so the preparation's five calls end right before its review. One unit at a
+  // time: the second dialogue's step never starts beside the first.
   runtime.proposeCard = async (request, ctx) => {
     if (!seen.proposals.length) for (let repair = 0; repair < 3; repair++) ctx.beforeCall();
     return propose(request, ctx);
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput(), { callCeiling: 5 });
+    const draft = await lab.create(cardInput(), { callCeiling: 5, parallel: 1 });
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
     assert.match(stopped.error ?? '', /budget exhausted/);
     const progress = progressOf(stopped);
-    assert.deepEqual([progress.pending, progress.activeDialogueId, progress.generationAttempts], [['late', 'known'], undefined, [{ dialogueId: 'late', calls: 4 }]],
+    assert.deepEqual([progress.pending, progress.active, progress.generationAttempts], [['late', 'known'], undefined, [{ dialogueId: 'late', calls: 4 }]],
       'the budget stops a step before its next request: nothing is in doubt');
     assert.deepEqual(await statuses(lab, draft.id), ['checking']);
     const library = await raiseBudget(lab, draft.id);
@@ -139,12 +140,13 @@ test('a paid call that died in flight is never repeated: its dialogue is left ou
     return propose(request, ctx);
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput());
+    // One unit at a time: the second dialogue waits for the resume (card-prepare-parallel.test.ts covers several at once).
+    const draft = await lab.create(cardInput(), { parallel: 1 });
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
     assert.equal(stopped.phase, 'review');
     assert.match(stopped.error ?? '', /Provider disconnected/);
-    assert.deepEqual([progressOf(stopped).activeDialogueId, progressOf(stopped).activeStage], ['late', 'propose'], 'the call is named before it is sent');
+    assert.deepEqual(progressOf(stopped).active, [{ dialogueId: 'late', stage: 'propose' }], 'the call is named before it is sent');
     await lab.resumePreparation(draft.id, libraryHash((await lab.readCards(draft.id)).library));
     await lab.waitForIdle();
     const resumed = await lab.get(draft.id);
@@ -207,7 +209,7 @@ test('the grounding of the whole policy that died in flight cannot be continued:
     const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
-    assert.deepEqual([progressOf(stopped).activeStage, progressOf(stopped).activeDialogueId], ['ground', undefined]);
+    assert.deepEqual(progressOf(stopped).active, [{ stage: 'ground' }]);
     await lab.resumePreparation(draft.id, libraryHash((await lab.readCards(draft.id)).library));
     await lab.waitForIdle();
     assert.match((await lab.get(draft.id)).error ?? '', /чтения правил владельца/);
@@ -225,7 +227,8 @@ test('a review that died in flight keeps its card unchecked; only the owner\'s e
     return review(request, ctx);
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput());
+    // One unit at a time: the second dialogue is prepared on the resume, after the first one's review died.
+    const draft = await lab.create(cardInput(), { parallel: 1 });
     await lab.waitForIdle();
     await lab.resumePreparation(draft.id, libraryHash((await lab.readCards(draft.id)).library));
     await lab.waitForIdle();
@@ -323,7 +326,7 @@ test('a resume continues the agent\'s prompts from the next chunk; a chunk that 
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
     assert.match(stopped.error ?? '', /budget exhausted/);
-    assert.deepEqual([progressOf(stopped).promptGrounding?.done, progressOf(stopped).activeStage, chunks.length], [1, undefined, 1], 'the budget stops before the next chunk is sent');
+    assert.deepEqual([progressOf(stopped).promptGrounding?.done, progressOf(stopped).active, chunks.length], [1, undefined, 1], 'the budget stops before the next chunk is sent');
     await lab.resumePreparation(draft.id, libraryHash(await raiseBudget(lab, draft.id)));
     await lab.waitForIdle();
     const resumed = await lab.get(draft.id);
@@ -342,7 +345,7 @@ test('a resume continues the agent\'s prompts from the next chunk; a chunk that 
     const draft = await lab.create(cardInput({ materials: promptMaterials }));
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
-    assert.deepEqual([progressOf(stopped).activeStage, progressOf(stopped).activeDialogueId, progressOf(stopped).promptGrounding?.done], ['ground', undefined, 1]);
+    assert.deepEqual([progressOf(stopped).active, progressOf(stopped).promptGrounding?.done], [[{ stage: 'ground' }], 1]);
     await lab.resumePreparation(draft.id, libraryHash((await lab.readCards(draft.id)).library));
     await lab.waitForIdle();
     assert.match((await lab.get(draft.id)).error ?? '', /чтения правил владельца/);

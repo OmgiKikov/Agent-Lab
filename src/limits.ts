@@ -19,6 +19,9 @@ export const FOCUSED_REQUIREMENT_LIMIT = 12;
 /** The agent's own rules (grounded once from its prompts) one dialogue's grounding call may name as deciding it, and how much of each rule's text it is shown. */
 export const AGENT_RULES_PER_DIALOGUE = 8;
 export const AGENT_RULE_CHARS = 200;
+/** Units of a preparation worked on at once: the provider takes parallel calls, and a unit mostly waits on its model. */
+export const PREPARATION_PARALLEL = 4;
+export const MAX_PREPARATION_PARALLEL = 8;
 /** The largest dialogue file Lab reads whole; a bigger log needs a smaller sample first. */
 export const IMPORT_FILE_BYTES = 4_000_000;
 /** Dialogues one import batch takes. */
