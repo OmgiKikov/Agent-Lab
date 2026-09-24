@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { docxText } from '../src/docx.js';
-import { expandMaterials, readMaterialFiles } from '../src/materials.js';
+import { expandMaterials, materialText, readMaterialFiles } from '../src/materials.js';
 import { MATERIAL_PART_CHARS } from '../src/limits.js';
 import { docxFile, docxHtmlChunk } from './helpers/zip.js';
 
@@ -63,6 +63,27 @@ test('readMaterialFiles turns a folder of articles into materials: docx, md and 
       ['/схема.png', 'формат не поддерживается: только .docx, .md, .txt, .html'],
       ['/Тарифы (копия).txt', 'дубликат «Тарифы»'],
     ]);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('a document saved in Windows-1251 or UTF-16 is read in its encoding; garbled text never becomes a rule', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'materials-'));
+  try {
+    const rule = 'Комиссия за эквайринг — 1,6% от оборота торговой точки, возврат за 30 дней.';
+    const cp1251 = (text: string) => Buffer.from([...text].map(char => { const code = char.charCodeAt(0);
+      return code < 0x80 ? code : code === 0x401 ? 0xa8 : code === 0x451 ? 0xb8 : code === 0x2014 ? 0x97 : code >= 0x410 && code <= 0x44f ? code - 0x350 : 0x3f; }));
+    await writeFile(join(directory, 'Тарифы.txt'), cp1251(`Тарифы. ${rule}`));
+    await writeFile(join(directory, 'Возвраты.html'), cp1251(`<html><head><meta charset="windows-1251"></head><body><p>${rule}</p></body></html>`));
+    await writeFile(join(directory, 'Правила.md'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`# Правила\n\n${rule}`, 'utf16le')]));
+    await writeFile(join(directory, 'Испорчено.txt'), `Комиссия: ${'�'.repeat(6)} 1% — так выглядит текст, однажды прочитанный не в своей кодировке.`);
+    await writeFile(join(directory, 'Картинка.txt'), Buffer.concat([Buffer.from('PNG'), Buffer.alloc(60)]));
+    const { materials, skipped } = await readMaterialFiles([directory], 'knowledge');
+    assert.deepEqual(materials.map(item => [item.name, item.content]), [['Возвраты', rule], ['Правила', `# Правила\n\n${rule}`], ['Тарифы', `Тарифы. ${rule}`]]);
+    assert.deepEqual(skipped.map(item => [item.file.replace(directory, ''), item.reason]), [
+      ['/Испорчено.txt', 'в тексте испорченные знаки «�» — сохраните файл заново в UTF-8 из исходного документа'],
+      ['/Картинка.txt', 'это не текст: в файле нулевые байты — сохраните его как текст в UTF-8'],
+    ]);
+    assert.equal(materialText('prompt.txt', cp1251(rule)), rule, 'a prompt file the detector offers is read the same way');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
