@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { calibrateRun } from '../card/calibrate.js';
+import { COUNTING_VERSION } from '../card/expectations.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from '../connection.js';
 import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isRunnable, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type Revision, type Scenario, type UserMode } from '../contracts.js';
 import type { CallContext, Runtime } from '../runtime.js';
@@ -278,6 +279,8 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
             : event.type === 'tool_result' ? 'инструмент завершён' : event.type === 'retrieval' ? 'RAG-контекст получен' : 'сбой диалога';
           lab.operations.say(record, `${progress()} · ${stage}`);
         } }, userMode, target: record.target });
+      // Every attempt of this run is counted by the rules of today's edition; a stored run keeps its own.
+      trial.countingVersion = COUNTING_VERSION;
       record.trials.push(trial);
       if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) {
         const note = 'Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.';

@@ -106,6 +106,21 @@ test('repeats that disagree make a situation flaky; it still fails, and only its
   assert.deepEqual(ids(derived.failedAttempts), ['t-mixed-1'], 'the passing repeat is not a failure');
 });
 
+test('edition 2: a usable failure of one repeat decides the situation although the other repeat broke; edition 1 keeps it undecided', () => {
+  const broken = (id: string) => attempt(id, {}, { repeat: 1, outcome: 'invalid', invalidCause: 'agent', reason: 'ответ испытуемого: HTTP 500', assessments: undefined });
+  // An old generated card that broke a prompt rule, and a legacy card decided by its strict result.
+  const cards = [card('goal', { metrics: RULED }), card('legacy', { metrics: [{ ...replyQuality }] })];
+  const trials = [attempt('goal', { prompt_compliance: 'fail' }), broken('goal'), attempt('legacy', {}, { assessments: [vote('reply_quality', 'fail')] }), broken('legacy')];
+  const stored = deriveRun(run(cards, trials, twoRepeats));
+  assert.deepEqual(stored.situations.map(item => [item.outcome, item.reason ?? null, item.goal, item.rules]),
+    [['unknown', 'agent_error', 'unknown', 'unknown'], ['unknown', 'agent_error', 'none', 'none']], 'a stored run keeps the result it was counted with');
+  assert.deepEqual(stored.failedAttempts, []);
+  const now = deriveRun(run(cards, trials.map(trial => ({ ...trial, countingVersion: 2 as const })), twoRepeats));
+  assert.deepEqual(now.situations.map(item => [item.outcome, item.reason ?? null, item.goal, item.rules]),
+    [['fail', null, 'unknown', 'fail'], ['fail', null, 'none', 'none']], 'the goal was never shown met in every repeat; the rule was broken');
+  assert.deepEqual(ids(now.failedAttempts), ['t-goal', 't-legacy']);
+});
+
 test('a control is decided by its goal alone and is never among the failed attempts', () => {
   const ruled = deriveRun(run([card('ctl', { metrics: RULED }), card('twin', { metrics: RULED }), card('bad')], [
     attempt('ctl', { prompt_compliance: 'fail' }), attempt('twin', { prompt_compliance: 'fail' }), attempt('bad', { [GOAL]: 'fail' }),

@@ -1,12 +1,14 @@
+import { COUNTING_VERSION, countingVersionOf } from './card/expectations.js';
 import { fingerprint, type Experiment, type HumanReview, type Scenario, type Trial } from './contracts.js';
 import { isRunning } from './phases.js';
 import { headlineTrialResult, latestHumanReviews, markTargets, markUnderCurrentRule, measurementUsable, observedRecord, recordedResult } from './outcomes.js';
+import { headlineCardOutcome } from './run.js';
 
 /*
  * How often the owner agreed with the judge, counted on what the judge actually recorded.
  * Pure: no I/O, no escaping (each surface escapes at its own boundary). It imports only
- * contracts.js, phases.js and outcomes.js — never the engine, quality.ts, comparison.ts or
- * result-view.ts — so result-view.ts can use it without a cycle.
+ * contracts.js, phases.js, card/expectations.js, outcomes.js and run.js — never the engine, quality.ts,
+ * comparison.ts or result-view.ts — so result-view.ts can use it without a cycle.
  *
  * The count never reads the human-overridden result: agreeing with a verdict must not be able to
  * change the verdict it is measured against, or agreement would always be 100%.
@@ -74,13 +76,26 @@ interface Situation { trial: Trial; scenario: Scenario; metricIds: string[]; bas
  * Usable non-control situations the judge decided by the headline rule, in record order; `base`
  * is the recorded verdict and `metricIds` the metrics a mark answers. A situation the headline
  * shows as «не измерено» is not a situation here either (CR-01): the queue, the sample and the
- * count hold exactly what the number counts.
+ * count hold exactly what the number counts. From the counting rules' edition 2 that holds with
+ * repeats too: a usable attempt of a situation the headline leaves undecided (another attempt could
+ * not be measured) is not asked about. A run counted by edition 1 keeps the queue it always showed.
  */
 function situations(record: Experiment): Situation[] {
   const controls = new Set(record.positiveControlScenarioIds ?? []);
+  // Whether a situation's attempts may be asked about: from edition 2, not when the headline leaves it «не измерено».
+  const asked = new Map<string, boolean>();
+  const counted = (scenario: Scenario): boolean => {
+    let known = asked.get(scenario.id);
+    if (known === undefined) {
+      const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
+      known = countingVersionOf(trials) !== COUNTING_VERSION || headlineCardOutcome(record, scenario).outcome !== 'unknown';
+      asked.set(scenario.id, known);
+    }
+    return known;
+  };
   return record.trials.flatMap(trial => {
     const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-    if (!scenario || controls.has(scenario.id) || !measurementUsable(scenario, trial, record.humanReviews)) return [];
+    if (!scenario || controls.has(scenario.id) || !measurementUsable(scenario, trial, record.humanReviews) || !counted(scenario)) return [];
     const targets = markTargets(scenario, trial);
     if (!targets) return [];
     return [{ trial, scenario, metricIds: targets.metricIds, base: targets.verdict }];

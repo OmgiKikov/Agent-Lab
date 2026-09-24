@@ -1,4 +1,4 @@
-import { headlineRule, undecidedExpectation, type CountedExpectation } from './card/expectations.js';
+import { COUNTING_VERSION, countingVersionOf, headlineRule, undecidedExpectation, type CountedExpectation } from './card/expectations.js';
 import { directChecks } from './checkpoints.js';
 import { fingerprint, type AssessmentFailure, type Experiment, type InvalidCause, type Scenario, type Trial } from './contracts.js';
 import type { MetricAssessment } from './assessment.js';
@@ -15,7 +15,12 @@ import { agentMetricResult, automaticTrialResult, expectationResult, GOAL_METRIC
  *   trials ──usable? human override──► attempt verdict ──every attempt, fail-first──► situation verdict
  *                                                        └─ undecided ──► one reason code (NOT_MEASURED_CODES)
  *
- * Reasons are typed where the failure happened (`trial.invalidCause`, `trial.assessmentFailure`).
+ * The attempts are read in the edition of the counting rules they were recorded under (card/expectations.ts):
+ * from edition 2 a usable failure of any attempt decides the situation, and the plan and usability of the other
+ * attempts guard only «справился»; edition 1 asked for every attempt to be usable before reading any verdict, so
+ * a stored run keeps the result it was counted with.
+ *
+ * Reasons are typed where the failure happened (`trial.invalidCause`, `trial.assessmentFailure`, `trial.turnLimit`).
  * Records written before those fields carry only the harness's own fixed sentences; the decoders
  * below read them and nothing else reads text. Pure: no I/O, no wording.
  */
@@ -108,8 +113,9 @@ function expectedAttempts(record: Experiment): Set<string> {
 /** The phases in which a run's attempts are final. */
 const FINISHED: ReadonlySet<Experiment['phase']> = new Set(['results_review', 'complete']);
 
-/** What keeps a run's saved attempts from describing the planned run; empty when they do. */
-export function runCompleteness(record: Experiment, allowPartial = false): string[] {
+/** Whether a run's saved attempts describe the planned run: it is over, no attempt is repeated or foreign, none is missing or unmeasured. */
+interface AttemptsState { finished: boolean; intact: boolean; whole: boolean }
+function attemptsState(record: Experiment): AttemptsState {
   const expected = expectedAttempts(record);
   const seen = new Set<string>();
   const ids = new Set<string>();
@@ -128,45 +134,66 @@ export function runCompleteness(record: Experiment, allowPartial = false): strin
     if (!measured(trial)) unmeasured = true;
     seen.add(key); ids.add(trial.id);
   }
+  return { finished: FINISHED.has(record.phase), intact: !invalid && expected.size > 0,
+    whole: !unmeasured && seen.size === expected.size && record.trials.length === expected.size };
+}
+
+/** What keeps a run's saved attempts from describing the planned run; empty when they do. */
+export function runCompleteness(record: Experiment, allowPartial = false): string[] {
+  const state = attemptsState(record);
   const notes: string[] = [];
-  if (!FINISHED.has(record.phase)) notes.push('Прогон не завершён.');
-  if (invalid || !expected.size) notes.push('Есть повторяющиеся или несовместимые попытки.');
-  if (!allowPartial && (unmeasured || seen.size !== expected.size || record.trials.length !== expected.size)) notes.push('Есть пропущенные или невалидные попытки.');
+  if (!state.finished) notes.push('Прогон не завершён.');
+  if (!state.intact) notes.push('Есть повторяющиеся или несовместимые попытки.');
+  if (!allowPartial && !state.whole) notes.push('Есть пропущенные или невалидные попытки.');
   return notes;
 }
 
-/** The strict card result of a legacy card without the goal rubric: the full card must be complete. */
+/**
+ * The strict card result of a legacy card without the goal rubric: the full card must be complete. From edition 2 a
+ * usable failure decides as soon as the attempts are the card's own; a finished, complete run guards only a pass.
+ */
 export function cardOutcome(record: Experiment, scenario: Scenario, allowPartial = false): Verdict {
   const trials = record.trials.filter(t => t.scenarioId === scenario.id);
-  if (!trials.length || runCompleteness({ ...record, scenarios: [scenario], trials }, allowPartial).length) return 'unknown';
+  if (!trials.length) return 'unknown';
+  const state = attemptsState({ ...record, scenarios: [scenario], trials });
   const outcomes = trials.map(t => automaticTrialResult(scenario, t, record.humanReviews));
-  return outcomes.includes('fail') ? 'fail' : outcomes.every(o => o === 'pass') ? 'pass' : 'unknown';
+  if (countingVersionOf(trials) === COUNTING_VERSION && state.intact && outcomes.includes('fail')) return 'fail';
+  if (!state.finished || !state.intact || !allowPartial && !state.whole) return 'unknown';
+  return failFirst(outcomes);
+}
+
+/** Every attempt belongs to this card's family, split and plan. */
+function attemptsBelong(record: Experiment, scenario: Scenario, trials: Trial[]): boolean {
+  return trials.length > 0 && !trials.some(trial => trial.familyId !== scenario.familyId || trial.split !== scenario.split
+    || record.manifestHash && trial.manifestHash !== record.manifestHash);
+}
+
+/** The planned `mode:repeat` keys of a card, and the keys its attempts hold, one per attempt. */
+function attemptKeys(record: Experiment, scenario: Scenario, trials: Trial[]): { expected: Set<string>; seen: string[] } {
+  const modes = record.settings.userModes.filter(mode => mode !== 'scripted' || scenario.user.script !== undefined);
+  return { expected: new Set(modes.flatMap(mode => Array.from({ length: record.settings.repeats }, (_, repeat) => `${mode}:${repeat}`))),
+    seen: trials.map(trial => `${trial.userMode}:${trial.repeat}`) };
 }
 
 /**
- * The attempt gate every headline metric passes through: the expected `mode:repeat` set equals the
+ * The attempt gate every headline verdict passes through: the expected `mode:repeat` set equals the
  * seen set and the counts (skipped when `partial`, which still requires at least one attempt), and
  * every attempt belongs to this card's family, split and plan. Usability is not part of it.
  */
 function attemptsMatch(record: Experiment, scenario: Scenario, trials: Trial[], partial = false): boolean {
-  if (!trials.length) return false;
-  const modes = record.settings.userModes.filter(mode => mode !== 'scripted' || scenario.user.script !== undefined);
-  const expected = new Set(modes.flatMap(mode => Array.from({ length: record.settings.repeats }, (_, repeat) => `${mode}:${repeat}`)));
-  const seen = new Set(trials.map(trial => `${trial.userMode}:${trial.repeat}`));
-  if (!partial && (!expected.size || trials.length !== expected.size || seen.size !== expected.size || [...expected].some(key => !seen.has(key)))) return false;
-  return !trials.some(trial => trial.familyId !== scenario.familyId || trial.split !== scenario.split
-    || record.manifestHash && trial.manifestHash !== record.manifestHash);
+  if (!attemptsBelong(record, scenario, trials)) return false;
+  if (partial) return true;
+  const { expected, seen } = attemptKeys(record, scenario, trials);
+  const distinct = new Set(seen);
+  return expected.size > 0 && trials.length === expected.size && distinct.size === expected.size && [...expected].every(key => distinct.has(key));
 }
 
-/**
- * One headline metric over the card: unknown unless the attempts match and every one of them is a
- * usable measurement, then fail-first over the attempts. Both headline metrics go through this
- * same gate, so an unusable card is unknown before any fail is read.
- */
-function metricCardOutcome(record: Experiment, scenario: Scenario, metricId: string, partial = false): Verdict {
-  const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
-  if (!attemptsMatch(record, scenario, trials, partial) || trials.some(trial => !measurementUsable(scenario, trial, record.humanReviews))) return 'unknown';
-  return failFirst(trials.map(trial => agentMetricResult(trial, metricId, record.humanReviews) ?? 'unknown'));
+/** The attempts are the card's own and none of them repeats a planned key or falls outside the plan; some may still be missing. */
+function attemptsIntact(record: Experiment, scenario: Scenario, trials: Trial[], partial: boolean): boolean {
+  if (!attemptsBelong(record, scenario, trials)) return false;
+  if (partial) return true;
+  const { expected, seen } = attemptKeys(record, scenario, trials);
+  return new Set(seen).size === seen.length && seen.every(key => expected.has(key));
 }
 
 /** One part of a card's verdict: an expectation (label А, Б, В…, with its words), a legacy card's goal or prompt rules, or a card's exact checks. */
@@ -175,13 +202,36 @@ type HeadlineOutcome = { outcome: Verdict; goal: Verdict | 'none'; rules: Verdic
 const failFirst = (results: Verdict[]): Verdict => results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
 
 /**
+ * One verdict — a headline metric, an expectation, the exact checks or the whole card — over a card's attempts, in
+ * the edition they were recorded under. Edition 2 reads the usable attempts first: a failure in any of them decides
+ * once the attempts are the card's own, and a pass needs every planned attempt, usable and passed. Edition 1 gates
+ * first: unknown unless the attempts match the plan and every one of them is usable, then fail-first.
+ */
+function countedOutcome(record: Experiment, scenario: Scenario, trials: Trial[], partial: boolean, read: (trial: Trial) => Verdict): Verdict {
+  const usable = (trial: Trial) => measurementUsable(scenario, trial, record.humanReviews);
+  if (countingVersionOf(trials) === COUNTING_VERSION) {
+    if (!attemptsIntact(record, scenario, trials, partial)) return 'unknown';
+    const results = trials.map(trial => usable(trial) ? read(trial) : 'unknown');
+    if (results.includes('fail')) return 'fail';
+    return attemptsMatch(record, scenario, trials, partial) ? failFirst(results) : 'unknown';
+  }
+  if (!attemptsMatch(record, scenario, trials, partial) || !trials.every(usable)) return 'unknown';
+  return failFirst(trials.map(read));
+}
+
+/** One headline metric over the card, counted like every part of a headline verdict (`countedOutcome`). */
+function metricCardOutcome(record: Experiment, scenario: Scenario, metricId: string, partial = false): Verdict {
+  const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
+  return countedOutcome(record, scenario, trials, partial, trial => agentMetricResult(trial, metricId, record.humanReviews) ?? 'unknown');
+}
+
+/**
  * A card counted by its expectations: each expectation is fail-first over the attempts (its part), and the
  * card passes only when every expectation passed in every attempt. Its exact checks, where it has them, are
- * one more part of the same AND. The attempt and usability gate comes first, as for every headline card.
+ * one more part of the same AND. Every part is counted over the attempts like the card itself (`countedOutcome`).
  */
 function expectationsCardOutcome(record: Experiment, scenario: Scenario, trials: Trial[], expectations: CountedExpectation[], partial: boolean): HeadlineOutcome {
-  const gated = attemptsMatch(record, scenario, trials, partial) && trials.every(trial => measurementUsable(scenario, trial, record.humanReviews));
-  const over = (result: (trial: Trial) => Verdict): Verdict => gated ? failFirst(trials.map(result)) : 'unknown';
+  const over = (result: (trial: Trial) => Verdict): Verdict => countedOutcome(record, scenario, trials, partial, result);
   const parts: CardPart[] = expectations.map(expectation => ({ id: expectation.id, label: expectation.letter, text: expectation.text,
     outcome: over(trial => expectationResult(trial, expectation, record.humanReviews) ?? 'unknown') }));
   if (scenario.checks.length) parts.push({ id: 'checks', label: 'Точные проверки', outcome: over(trial => trial.outcome === 'pass' ? 'pass' : trial.outcome === 'fail' ? 'fail' : 'unknown') });
@@ -192,9 +242,10 @@ function expectationsCardOutcome(record: Experiment, scenario: Scenario, trials:
  * The headline card result by the card's counting rule (card/expectations.ts headlineRule). A card counted
  * by its expectations passes only when every expectation passed in every attempt. An old generated card is
  * counted by goal attainment and, when it has it, prompt compliance: it passes only when both pass in every
- * attempt, fails when either fails in any attempt, and stays unknown otherwise. Every part passes the same
- * attempt and usability gate before any fail is read, so an unusable card is «не измерено» whatever its parts
- * say. A legacy card without the goal rubric keeps the strict card outcome, with no parts. Reply quality and
+ * attempt, fails when either fails in any attempt, and stays unknown otherwise. Every part is counted over the
+ * attempts in their edition: from edition 2 a usable failure decides the part, and an unusable attempt only keeps
+ * it from passing; in edition 1 an unusable attempt left every part «не измерено» whatever the others said.
+ * A legacy card without the goal rubric keeps the strict card outcome, with no parts. Reply quality and
  * the RAG rubrics never enter. `parts` name the verdict's parts in the owner's words (А, Б, В; Цель, Правила промпта).
  */
 export function headlineCardOutcome(record: Experiment, scenario: Scenario, options: { partial?: boolean } = {}): HeadlineOutcome {
@@ -235,11 +286,14 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids:
   if (simulator.checks.some(usable => !usable) || simulator.fidelity.includes('fail')) codes.push('simulator_deviated');
   // Without any judgment the vote is missing because the judge never ran: that is `not_judged`, not an unsure judge.
   if (trial.assessments && simulator.fidelity.some(result => result !== 'pass' && result !== 'fail')) codes.push('simulator_unclear');
+  // A conversation cut at the run's limit on the customer's messages was judged as it went: what the judge could not
+  // decide in it is undecided because the conversation did not fit the limit.
+  const unsure = (code: NotMeasuredCode): NotMeasuredCode => trial.turnLimit && (code === 'judge_split' || code === 'judge_unclear') ? 'turn_limit' : code;
   for (const expectation of expectations) {
     const result = expectationResult(trial, expectation, record.humanReviews);
     if (result === 'pass' || result === 'fail') continue;
     const review = latest.get(`${trial.id}|metric:${expectation.id}`);
-    codes.push(review?.verdict === 'invalid' ? 'human_invalid' : review?.verdict === 'unknown' && review.source !== 'quick' ? 'human_unknown' : undecidedExpectation(trial, expectation));
+    codes.push(review?.verdict === 'invalid' ? 'human_invalid' : review?.verdict === 'unknown' && review.source !== 'quick' ? 'human_unknown' : unsure(undecidedExpectation(trial, expectation)));
   }
   for (const id of ids) {
     const result = agentMetricResult(trial, id, record.humanReviews);
@@ -249,7 +303,7 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids:
     const metricReview = latest.get(`${trial.id}|metric:${id}`);
     if (metricReview?.verdict === 'unknown' && metricReview.source !== 'quick') codes.push('human_unknown');
     else if (!assessment) codes.push('not_judged');
-    else codes.push(({ split: 'judge_split', unsupported: 'no_evidence', judged: 'judge_unclear' } as const)[judgeBasis(assessment)]);
+    else codes.push(unsure(({ split: 'judge_split', unsupported: 'no_evidence', judged: 'judge_unclear' } as const)[judgeBasis(assessment)]));
   }
   return codes;
 }
@@ -274,7 +328,7 @@ export function cardVerdict(record: Experiment, scenario: Scenario, rule: 'headl
   else if (!attemptsMatch(record, scenario, trials)) codes.add('attempts_mismatch');
   const expectations = counting.kind === 'expectations' ? counting.expectations : [];
   for (const trial of trials) for (const code of trialReasons(record, scenario, trial, ids, expectations)) codes.add(code);
-  return { outcome, reason: NOT_MEASURED_CODES.find(code => codes.has(code)) ?? 'judge_unclear' };
+  return { outcome, reason: NOT_MEASURED_CODES.find(code => codes.has(code)) ?? (trials.some(trial => trial.turnLimit) ? 'turn_limit' : 'judge_unclear') };
 }
 
 export interface AttemptDerivation {

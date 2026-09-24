@@ -1011,6 +1011,8 @@ async function agreementRecord(lab: ExperimentLab, goal: 'pass' | 'fail' | 'unkn
   await lab.store.save(record);
   return { record, trial, scenario };
 }
+/** The rule a quick mark on such a run is stamped with: its attempts are recorded under today's edition of the goal-and-rules rule. */
+const MARK_RULE = 'goal-and-rules-v3';
 
 test('the lab, not the caller, records which judgment a quick mark refers to', async t => {
   const { lab } = await setup(t, legacyDemoRuntime());
@@ -1073,7 +1075,7 @@ test('a double failure needs a stamped mark on both metrics before it counts onc
   // The lab stamps the counting rule; a caller value is overwritten, never trusted (CTX-20, CTX-23).
   const first = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail', judgeVerdict: 'fail',
     countingRules: 'goal-v1', note: 'Быстрая отметка: согласен с судьёй.' });
-  assert.equal(first.humanReviews.at(-1)!.countingRules, COUNTING_RULES, 'the lab fills the counting rule and overwrites the caller value');
+  assert.equal(first.humanReviews.at(-1)!.countingRules, MARK_RULE, 'the lab fills the counting rule and overwrites the caller value');
   const half = judgeAgreement(first);
   assert.equal(half.checked, 0, 'one mark on a double failure is not a checked situation (CR-02)');
   assert.deepEqual(half.unmarked, [trial.id], 'the situation stays in the queue until its second metric is answered');
@@ -1081,7 +1083,7 @@ test('a double failure needs a stamped mark on both metrics before it counts onc
   assert.ok(trustParts(buildResultView(first)).includes('судью ещё не проверяли'), trustParts(buildResultView(first)).join(' · '));
 
   const second = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'fail', judgeVerdict: 'fail', note: 'Быстрая отметка: согласен с судьёй.' });
-  assert.equal(second.humanReviews.at(-1)!.countingRules, COUNTING_RULES);
+  assert.equal(second.humanReviews.at(-1)!.countingRules, MARK_RULE);
   const whole = judgeAgreement(second);
   assert.deepEqual([whole.checked, whole.agreed, whole.unsure, whole.stale, whole.staleRule], [1, 1, 0, 0, 0]);
   assert.deepEqual(whole.failures, { agreed: 1, checked: 1 });
@@ -1096,7 +1098,7 @@ test('a double failure needs a stamped mark on both metrics before it counts onc
   await reopened.init();
   try {
     const loaded = await reopened.get(record.id);
-    assert.deepEqual(loaded.humanReviews.map(item => [item.metricId, item.countingRules]), [['goal_attainment', COUNTING_RULES], ['prompt_compliance', COUNTING_RULES]]);
+    assert.deepEqual(loaded.humanReviews.map(item => [item.metricId, item.countingRules]), [['goal_attainment', MARK_RULE], ['prompt_compliance', MARK_RULE]]);
     assert.equal(judgeAgreement(loaded).checked, 1);
   } finally { await reopened.close(); }
 });
@@ -1108,7 +1110,7 @@ test('a quick mark lands only on a metric that decided the situation: one failed
   await assert.rejects(lab.addHumanReview(goalOnly.record.id, { trialId: goalOnly.trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'pass', note: 'не та оценка' }),
     /^Error: Отметку согласия можно поставить только на оценку, из-за которой ситуация решена\.$/);
   const marked = await lab.addHumanReview(goalOnly.record.id, { trialId: goalOnly.trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail', note: 'согласен' });
-  assert.equal(marked.humanReviews.at(-1)!.countingRules, COUNTING_RULES);
+  assert.equal(marked.humanReviews.at(-1)!.countingRules, MARK_RULE);
   assert.equal(judgeAgreement(marked).checked, 1, 'a goal-only failure is checked by its one mark');
 
   // Goal pass + rules pass: a two-metric pass has two targets (CTX-25).

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { calibrateRun } from '../card/calibrate.js';
+import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
 import { awaitingVerdict } from '../comparison.js';
 import { suiteEvidence } from '../connection.js';
@@ -68,6 +69,8 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
       for (const original of trials) {
         ctx.signal.throwIfAborted();
         const trial = structuredClone(original);
+        // A re-assessment is a new result: its attempts are counted by today's edition of the rules, the source run by its own.
+        trial.countingVersion = COUNTING_VERSION;
         const scenario = record.scenarios.find(s => s.id === trial.scenarioId)!;
         trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.assessmentFailure; delete trial.judgeAudit; delete trial.judgeReceipt; delete trial.checkpoints; delete trial.checkpointReceipt;
         trial.manifestHash = record.manifestHash!;
