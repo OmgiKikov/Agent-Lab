@@ -112,11 +112,28 @@ export function hiddenMessage(content: string, version: MaskVersion = MASK_VERSI
 }
 
 /**
+ * Whether a message may hold a mark at all, by one pass over its codes: a character marks are written with, a run of
+ * three x, or nothing but x and spaces (which the first import reading took for a mask). False settles every reading.
+ */
+function mayHoldMark(content: string): boolean {
+  let run = 0, onlyX = true;
+  for (let i = 0; i < content.length; i++) {
+    const code = content.charCodeAt(i);
+    if (code === 42 || code === 35 || code === 60 || code === 91) return true; // * # < [
+    if (code === 120 || code === 88 || code === 0x445 || code === 0x425) { if (++run >= 3) return true; continue; } // x X х Х
+    run = 0;
+    if (code > 32 && code !== 0xa0 && code < 0x1680) onlyX = false; // any other space keeps the full reading below
+  }
+  return onlyX;
+}
+
+/**
  * Whether the first readings and the table read a customer's message alike — for the import and for the miner. An
  * import records the table it was read by only when some message is read otherwise: an import of messages both read
  * alike is the very import the first readings made of them, stored or not, and its topic map is the same.
  */
-export const readAlike = (content: string): boolean => maskedThrough(content, 1) === maskedThrough(content, 2) && hiddenMessage(content, 1) === hiddenMessage(content, 2);
+export const readAlike = (content: string): boolean => !mayHoldMark(content)
+  || maskedThrough(content, 1) === maskedThrough(content, 2) && hiddenMessage(content, 1) === hiddenMessage(content, 2);
 
 /** A value that is a mark again, or holds a character marks are written with: never a value written in for a mark. */
 export const holdsMark = (value: string): boolean => maskedSpans(value).length > 0 || [...value].some(char => MARK_CHARACTERS.has(char));

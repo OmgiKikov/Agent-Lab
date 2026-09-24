@@ -107,19 +107,28 @@ function markerAt(text: string, at: number, markers: readonly string[]): string 
   for (const marker of markers) if (text.startsWith(marker, at) && (!isWordChar(marker.at(-1)) || !wordCode(text.charCodeAt(at + marker.length))) && marker.length > (found?.length ?? 0)) found = marker;
   return found;
 }
+/** The units one of `markers` may start with, as a test eachBoundary passes places by. */
+function startsOf(markers: readonly string[]): ((code: number) => boolean) | undefined {
+  const first = firstUnits(markers);
+  return first ? code => first.has(code) : undefined;
+}
+/** A unit an uppercase word may open with: an uppercase letter, a digit or `_`. */
+const tokenStart = (code: number): boolean => digitOrUnderscore(code) || unitKind(code) === UPPER;
 
 /**
  * Calls `visit` at every place of `text` from `from` on where a message may begin: right after each
  * separator (spaces skipped), or, without one, at each word that follows a space — never the text's first
  * word, which starts the text in every reading. `visit` returns how far the search may jump (past a marker
  * it found), or nothing to go on. `end` is where the message before that place ends: at the separator, or
- * at the place itself.
+ * at the place itself. A place whose first unit `opens` refuses is passed over as if `visit` found nothing
+ * there: most words of a conversation start no marker, and one comparison says so.
  */
-function eachBoundary(text: string, separator: string | undefined, from: number, visit: (at: number, end: number) => number | void): void {
+function eachBoundary(text: string, separator: string | undefined, from: number, visit: (at: number, end: number) => number | void, opens?: (code: number) => boolean): void {
   if (separator !== undefined) {
     for (let at = text.indexOf(separator, from); at !== -1;) {
       const next = skipSpace(text, at + separator.length);
-      at = text.indexOf(separator, visit(next, at) ?? at + separator.length);
+      const past = opens && !opens(text.charCodeAt(next)) ? undefined : visit(next, at);
+      at = text.indexOf(separator, past ?? at + separator.length);
     }
     return;
   }
@@ -128,7 +137,7 @@ function eachBoundary(text: string, separator: string | undefined, from: number,
   for (let at = start; at < text.length; at++) {
     const code = text.charCodeAt(at);
     // A place opens after a space: the unit before it is one, and it is not.
-    if (!spaceCode(before) || spaceCode(code)) { before = code; continue; }
+    if (!spaceCode(before) || spaceCode(code) || opens && !opens(code)) { before = code; continue; }
     const past = visit(at, at);
     if (past !== undefined) at = past - 1;
     before = text.charCodeAt(at);
@@ -150,7 +159,7 @@ export function splitMessages(text: string, separator: string | undefined, marke
     if (!marker) return undefined;
     bounds.push({ marker, from: at + marker.length, end });
     return at + marker.length;
-  });
+  }, startsOf(markers));
   return bounds.map((bound, i) => {
     const end = bounds[i + 1]?.end ?? text.length;
     const from = text[bound.from] === ':' ? bound.from + 1 : bound.from;
@@ -173,7 +182,7 @@ function countMarkers(texts: readonly string[], separator: string | undefined): 
       if (!seen.has(token)) { seen.add(token); entry.dialogues++; }
     };
     count(skipSpace(text, 0));
-    eachBoundary(text, separator, 0, at => { count(at); });
+    eachBoundary(text, separator, 0, at => { count(at); }, tokenStart);
   }
   return [...counts.values()].sort((a, b) => b.messages - a.messages || a.token.localeCompare(b.token));
 }
@@ -217,9 +226,10 @@ export function candidateTokens(texts: readonly string[], limit: number): Candid
 export function boundaryCounts(texts: readonly string[], separator: string | undefined, markers: readonly string[]): Map<string, number> {
   const counts = new Map(markers.map(marker => [marker, 0]));
   const count = (text: string, at: number) => { const marker = markerAt(text, at, markers); if (marker) counts.set(marker, counts.get(marker)! + 1); };
+  const opens = startsOf(markers);
   for (const text of texts) {
     count(text, skipSpace(text, 0));
-    eachBoundary(text, separator, 0, at => { count(text, at); });
+    eachBoundary(text, separator, 0, at => { count(text, at); }, opens);
   }
   return counts;
 }
@@ -292,6 +302,7 @@ export function detectMarkers(texts: readonly string[], given?: string | null): 
 /** How many messages each named marker starts, and in how many texts, the most frequent first. */
 function namedCounts(texts: readonly string[], separator: string | undefined, markers: readonly string[]): MarkerCount[] {
   const counts = new Map(markers.map(token => [token, { token, messages: 0, dialogues: 0 }]));
+  const opens = startsOf(markers);
   for (const text of texts) {
     const seen = new Set<string>();
     const count = (at: number) => {
@@ -302,7 +313,7 @@ function namedCounts(texts: readonly string[], separator: string | undefined, ma
       if (!seen.has(marker)) { seen.add(marker); entry.dialogues++; }
     };
     count(skipSpace(text, 0));
-    eachBoundary(text, separator, 0, at => { count(at); });
+    eachBoundary(text, separator, 0, at => { count(at); }, opens);
   }
   return [...counts.values()].sort((a, b) => b.messages - a.messages || a.token.localeCompare(b.token));
 }

@@ -38,6 +38,43 @@ export const EVENTS_REASON = 'Пустые события или превыше�
 
 /** A row read: kept or refused, and whether its customer's messages read alike under both tables of masks (masking.ts readAlike). */
 type ReadRow = ({ dialogue: ImportBatch['dialogues'][number] } | { rejected: ImportBatch['rejected'][number] }) & { alike: boolean };
+type ImportedEvent = ImportBatch['dialogues'][number]['events'][number];
+
+const EVENT_SCHEMA = importBatchSchema.shape.dialogues.element.shape.events.element;
+const EVENT_TYPES: ReadonlySet<unknown> = new Set(['message', 'tool', 'retrieval', 'state']);
+const EVENT_ROLES: ReadonlySet<unknown> = new Set(['user', 'assistant', 'tool', 'system']);
+
+/**
+ * JSON as a parser or a sheet reader makes it — finite numbers, strings, booleans, null, arrays without holes, plain
+ * objects of string keys — which the event schema's `json` always takes as it is. Anything else is left to the schema,
+ * and so is a `__proto__` key: the schema drops it, and the length it checks is then that of the rest.
+ */
+function plainJson(value: unknown, depth = 0): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object' || depth > 32) return false;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) if (!plainJson(value[i], depth + 1)) return false;
+    return true;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length || Object.hasOwn(value, '__proto__')) return false;
+  for (const key of Object.keys(value)) if (!plainJson((value as Record<string, unknown>)[key], depth + 1)) return false;
+  return true;
+}
+
+/**
+ * An event as the import keeps it, or undefined when the event schema refuses it. A plain event is checked here by the
+ * schema's own rules — a long log read event by event through the schema spent most of its time there — and any
+ * other one by the schema itself, so the verdict is the schema's either way.
+ */
+function importedEvent(candidate: { index: number; type: unknown; role?: string; content?: string; data: unknown }): ImportedEvent | undefined {
+  const { type, role, content, data } = candidate;
+  if (EVENT_TYPES.has(type) && (role === undefined || EVENT_ROLES.has(role)) && (content === undefined || content.length >= 1 && content.length <= 8000 && content.trim() !== '')
+    && plainJson(data)) return JSON.stringify(data).length <= 500_000 ? candidate as ImportedEvent : undefined;
+  const validated = EVENT_SCHEMA.safeParse(candidate);
+  return validated.success ? validated.data : undefined;
+}
 
 /**
  * One row of a log by the import's rules: its id (once per log: `seen` holds the ids of the rows before it), its
@@ -61,9 +98,9 @@ function readRow(row: unknown, index: number, seen: Set<string>, known: string |
     const type = rich ? event.type : 'message';
     if (!['message', 'tool', 'retrieval', 'state'].includes(String(type))) { reasons.push(`Событие ${eventIndex}: неизвестный тип`); return; }
     const candidate = { index: eventIndex, type, ...(typeof event.role === 'string' ? { role: event.role } : {}), ...(typeof event.content === 'string' ? { content: event.content } : {}), data: event };
-    const validated = importBatchSchema.shape.dialogues.element.shape.events.element.safeParse(candidate);
-    if (!validated.success || type === 'message' && (event.role !== 'user' && event.role !== 'assistant' && event.role !== 'system' || typeof event.content !== 'string')) reasons.push(`Событие ${eventIndex}: некорректная роль или пустое содержимое`);
-    else retained.push(validated.data);
+    const kept = importedEvent(candidate);
+    if (!kept || type === 'message' && (event.role !== 'user' && event.role !== 'assistant' && event.role !== 'system' || typeof event.content !== 'string')) reasons.push(`Событие ${eventIndex}: некорректная роль или пустое содержимое`);
+    else retained.push(kept);
   });
   const userEvents = retained.filter(event => event.type === 'message' && event.role === 'user');
   if (!userEvents.length && known === undefined) reasons.push(NO_CUSTOMER_REASON);
@@ -72,7 +109,7 @@ function readRow(row: unknown, index: number, seen: Set<string>, known: string |
   if (!['complete', 'partial', 'unknown'].includes(String(observation))) reasons.push('Некорректная полнота наблюдения');
   // JSON as read: importBatch checks every row it keeps, and the batch before it is returned.
   const original = row as z.infer<ReturnType<typeof z.json>>;
-  const alike = userEvents.every(event => readAlike(event.content ?? ''));
+  const alike = maskVersion === 1 || userEvents.every(event => readAlike(event.content ?? ''));
   return reasons.length ? { rejected: { index, ...(dialogueId ? { id: dialogueId.slice(0, 200) } : {}), reasons: [...new Set(reasons)].slice(0, 20), original }, alike }
     : { dialogue: { id: dialogueId!, events: retained, observation: observation as 'complete' | 'partial' | 'unknown', original }, alike };
 }
