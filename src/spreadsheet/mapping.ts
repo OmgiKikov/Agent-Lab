@@ -24,6 +24,8 @@ export const ROLE_WORDS: Readonly<Record<MarkerRole, string>> = { user: 'кли�
 export const HEADER_SCAN = 20;
 /** More distinct markers or role values than this is not a way of telling who speaks. */
 export const LABEL_LIMIT = 12;
+/** A role value longer than this is text, not a role. */
+export const ROLE_CHARS = 40;
 /** «Какие разговоры оценивать?» lists at most this many values of a column, the most frequent, each a numbered answer; the owner names at most this many to keep. */
 export const FILTER_VALUES = 30;
 /** A category is a code or a short label; a longer value is text: a column with one is never listed, and no named value is longer. */

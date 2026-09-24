@@ -230,6 +230,24 @@ test('a reading that drops the export\'s copies is checked as it reads: copies n
   assert.ok(preview.repeats && preview.repeats.dialogues >= 15, JSON.stringify(preview.repeats));
 });
 
+test('what the reading is not made of leaves as counts and shape: no customer\'s name or phone reaches the model, even when the owner asks in words', () => {
+  const NAMES = Array.from({ length: 20 }, (_, k) => `Клиентова Мария ${String.fromCharCode(0x410 + k)}.`);
+  const phone = (i: number) => `+7 900 ${String(1000000 + i * 7919).slice(1)}`;
+  const rows: CellSpec[][] = [['Id диалога', 'Текст', 'ФИО клиента', 'Телефон', 'Канал'], ...Array.from({ length: 40 }, (_, k): CellSpec[] =>
+    [idOf(k + 1), conversation(k + 1), NAMES[k % 20]!, phone(k + 1), ['чат', 'почта', 'звонок'][k % 3]!])];
+  const bytes = xlsxFile([{ name: 'Данные', rows }]);
+  for (const words of [undefined, 'только разговоры из чата']) {
+    const evidence = tableEvidence(readWorkbook(bytes, tableFileOf('export.xlsx', bytes)), words);
+    const column = (name: string) => evidence.sheets[0]!.columns.find(item => item.name === name)!;
+    assert.deepEqual([column('ФИО клиента').kind, column('ФИО клиента').values, column('ФИО клиента').shape], ['categories', undefined, { letters: true, digits: false, spaces: true, symbols: '.' }]);
+    assert.deepEqual([column('Телефон').values, column('Телефон').shape], [undefined, { letters: false, digits: true, spaces: true, symbols: '+' }]);
+    assert.deepEqual(column('Канал').values?.map(item => item.value), ['чат', 'звонок', 'почта'], 'a column that could say who writes or choose conversations comes with its values');
+    const sent = JSON.stringify(evidence);
+    for (const secret of [...NAMES, phone(1), phone(40)]) assert.ok(!sent.includes(secret), secret);
+    assert.deepEqual(Object.keys(evidence.sheets[0]!.sample[0]!.cells), ['Текст', 'Канал'], 'a sample row shows the cells a reading is made of, nothing else');
+  }
+});
+
 test('what the model is shown stays small: a few rows, long cells cut, and the cut named', () => {
   const long = (i: number) => spoken(...Array.from({ length: 60 }, (_, k) => k % 2 ? `AGENT Ответ ${k} по заказу ${i}` : `CLIENT Вопрос ${k} по заказу ${i}`));
   const rows: CellSpec[][] = [['Id', 'Текст'], ...Array.from({ length: 300 }, (_, k): CellSpec[] => [`d${k}`, long(k)])];

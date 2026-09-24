@@ -5,7 +5,7 @@ import type { CsvDialect } from './csv.js';
 import { parseOrder, type TablePreview } from './dialogues.js';
 import { applyReading, proposalBase, sheetMapping } from './exact.js';
 import {
-  LABEL_LIMIT, columnLabel, findColumn, tableChoicesSchema, tableMappingSchema, toColumn,
+  LABEL_LIMIT, ROLE_CHARS, columnLabel, findColumn, tableChoicesSchema, tableMappingSchema, toColumn,
   type ColumnInfo, type ReadingBasis, type Role, type TableChoices, type TableLayout, type TableMapping,
 } from './mapping.js';
 import { boundaryCounts, detectMarkers, namedStructure, type MarkerStructure } from './markers.js';
@@ -78,8 +78,6 @@ const ID_SHAPE = 0.9;
 const UNIQUE = 0.9;
 /** An order column Lab proposes itself agrees with the order of the rows in nearly every conversation. */
 const ORDER_AGREES = 0.9;
-/** A role value longer than this is text, not a role. */
-const ROLE_CHARS = 40;
 /** Role words exports use. Lab proposes them; the owner confirms. Anything else is asked. */
 const KNOWN_ROLES: ReadonlyMap<string, Role> = new Map([
   ...['client', 'customer', 'user', 'human', 'клиент', 'пользователь', 'абонент'].map(word => [word, 'user'] as const),
