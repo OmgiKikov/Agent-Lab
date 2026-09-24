@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +16,9 @@ import { demoInput } from '../src/demo.js';
 
 const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 async function agentLab(args: string[], env: NodeJS.ProcessEnv = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const child = spawn(process.execPath, ['--import', 'tsx', cli, ...args], { env: { ...process.env, AGENT_LAB_SESSION: '', ...env } });
+  // Outside a chat the variable is absent: present with any value, an empty one too, it is a command from the chat.
+  const { AGENT_LAB_SESSION: _chat, ...outside } = process.env;
+  const child = spawn(process.execPath, ['--import', 'tsx', cli, ...args], { env: { ...outside, ...env } });
   let stdout = '', stderr = '';
   child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
   const code = await new Promise<number | null>(resolve => child.on('close', resolve));
@@ -67,4 +69,30 @@ test('inside an Agent Lab chat no command takes --yes: the chat asks the owner i
   const shown = await agentLab(['build', '--input', task, '--data-dir', data], chat);
   assert.equal(shown.code, 0, 'reading what a preparation would cost is not a decision');
   assert.match(shown.stdout, /^Собрать 2 ситуации из task\.json\?/);
+  // Emptying the variable is still a command from the chat: only its absence is outside it.
+  for (const value of ['', '0']) {
+    const emptied = await agentLab(['build', '--input', task, '--yes', '--data-dir', data], { AGENT_LAB_SESSION: value });
+    assert.notEqual(emptied.code, 0, `AGENT_LAB_SESSION=«${value}»`); assert.match(emptied.stderr, /^Agent Lab: Из чата Agent Lab команда с --yes не выполняется/);
+  }
+  await assert.rejects(readdir(data), { code: 'ENOENT' }, 'nothing was written');
+});
+
+test('agent-lab chat opens Pi with a private mask: the session files that keep the customers\' words are the owner\'s alone', { timeout: 60000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-lab-chat-mask-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  // A probe loaded before Pi itself: in the process `agent-lab chat` starts (the one given AGENT_LAB_SESSION), it writes what
+  // that process was started with and ends it before Pi opens a terminal.
+  const probe = join(root, 'probe.mjs'), seen = join(root, 'seen.json');
+  await writeFile(probe, `import { writeFileSync } from 'node:fs';
+if (process.env.AGENT_LAB_SESSION === '1') {
+  const mask = process.umask(0o077); process.umask(mask);
+  writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ mask, entry: process.argv[1] }));
+  process.exit(0);
+}
+`);
+  const started = await agentLab(['chat', '--version'], { NODE_OPTIONS: `--import ${probe}` });
+  assert.equal(started.code, 0, started.stderr);
+  const { mask, entry } = JSON.parse(await readFile(seen, 'utf8')) as { mask: number; entry: string };
+  assert.match(entry, /pi-coding-agent[\\/]dist[\\/]bundle[\\/]cli\.js$/, 'the probe ran in Pi\'s own process');
+  assert.equal(mask.toString(8), '77', 'what Pi writes in this chat is readable by the owner alone');
 });
