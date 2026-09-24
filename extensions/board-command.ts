@@ -183,16 +183,20 @@ async function openFile(path: string): Promise<void> {
 export interface BoardOptions {
   /** How a report is opened; the system's browser by default. */
   openReport?: (path: string) => Promise<void>;
+  /** `/agent-lab gateway [off]`: the personal model gateway, connected without a model. */
+  gateway?: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 }
 
 /** The /agent-lab command. */
 export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: BoardOptions = {}): void {
   const { open, operations, background } = host;
   pi.registerCommand('agent-lab', {
-    description: 'Рабочее пространство агента: /agent-lab, /agent-lab demo или /agent-lab /путь/к/проекту',
+    description: 'Рабочее пространство агента: /agent-lab, /agent-lab demo или /agent-lab /путь/к/проекту. /agent-lab gateway — подключить шлюз моделей',
     async handler(args, ctx) {
       requireInteractive(ctx, 'Рабочее пространство открывается в интерактивном терминале Pi.');
       const request = args.trim();
+      const [word, ...rest] = request.split(' ');
+      if (word === 'gateway' && options.gateway) { await options.gateway(rest.join(' ').trim(), ctx); return; }
       const directory = resolve(ctx.cwd, '.agent-lab');
       // Reading never takes the writer's lock: another session may own the folder, and its work stays visible here.
       const reading = () => operations.reader(directory);

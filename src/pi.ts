@@ -7,6 +7,8 @@ import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } f
 import { MODEL_REQUEST_BYTES, workInputIssue } from './limits.js';
 import { callModel, type Model } from './llm/model-call.js';
 import { AUTH_HELP, resolveModels } from './llm/models.js';
+import { GIGA_PROVIDER_ID, registerGigaProvider } from './giga-provider.js';
+import { gatewayStatus, type GatewayStatus } from './giga-transport.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
 import { plantError } from './judge-check-task.js';
 import {
@@ -60,18 +62,25 @@ function promptQuoteProblem(modes: readonly FailureMode[], prompt: string | unde
 const judgeConfiguration = (judge: Model) => fingerprint({ api: judge.api, baseUrl: judge.baseUrl, compat: judge.compat,
   temperature: judge.reasoning ? 'default' : 0, thinking: judge.reasoning ? 'medium' : 'off' });
 
+/**
+ * The models Pi sees, and what the personal model gateway (provider giga) lacks when it is missing: without its
+ * variables or readable files the provider simply does not appear, which from outside looks like a refused login.
+ */
 export async function getPiStatus(injectedRuntime?: ModelRuntime): Promise<{
-  models: Array<{ provider: string; id: string; name: string }>; error?: string;
+  models: Array<{ provider: string; id: string; name: string }>; giga: GatewayStatus & { registered?: boolean }; error?: string;
 }> {
+  const giga = gatewayStatus();
   try {
     const signal = AbortSignal.timeout(10000);
     const runtime = injectedRuntime ?? await ModelRuntime.create({ allowModelNetwork: false, signal });
+    if (!injectedRuntime) await registerGigaProvider(runtime, undefined, undefined, signal);
     const available = await runtime.getAvailable(undefined, { signal });
     return {
       models: available.map(m => ({ provider: m.provider, id: m.id, name: m.name })),
+      giga: { ...giga, registered: available.some(m => m.provider === GIGA_PROVIDER_ID) },
       ...(available.length ? {} : { error: AUTH_HELP }),
     };
-  } catch { return { models: [], error: `Не удалось прочитать список доступных моделей. ${AUTH_HELP}` }; }
+  } catch { return { models: [], giga, error: `Не удалось прочитать список доступных моделей. ${AUTH_HELP}` }; }
 }
 
 /** The optional SDK runtime is the integration seam for custom providers and offline SDK checks. */
@@ -81,6 +90,9 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   let runtime: ModelRuntime;
   try { runtime = injectedRuntime ?? await ModelRuntime.create({ allowModelNetwork: false, signal }); }
   catch { throw new Error(`Не удалось инициализировать Pi. ${AUTH_HELP}`); }
+  // The internal gateway cannot be declared in models.json (it authenticates by a client certificate), so a runtime
+  // Lab creates itself registers it; an injected runtime carries the providers its creator registered.
+  if (!injectedRuntime) await registerGigaProvider(runtime, undefined, undefined, signal);
   const models = await resolveModels(runtime, settings, signal);
   const run = <O>(task: StructuredTask<O>, input: unknown, ctx: CallContext): Promise<O> => runStructured(runtime, models, task, input, ctx);
   const builder = { provider: models.builder.provider, id: models.builder.id };

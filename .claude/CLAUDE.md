@@ -33,7 +33,7 @@ Agent Lab — пакет для Pi, который прогоняет насто
 
 - TypeScript 5.9.3 - Full codebase (`src/`, `extensions/`, `test/`), ESM, `strict`
 - JavaScript (ESM) - `src/module-worker.mjs` (runs a module adapter in its own process), `examples/*.mjs`
-- Python - Example command adapters (`examples/echo-agent.py`, `examples/stateful-agent.py` with SQLite state)
+- Python - Example command adapters (`examples/echo-agent.py`, `examples/stateful-agent.py` with SQLite state); agent harnesses beside the core (`harnesses/`, outside the npm package)
 - YAML - CI (`.github/workflows/check.yml`, `examples/regression-ci.yml`)
 
 ## Runtime

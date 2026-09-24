@@ -1,5 +1,6 @@
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { Settings } from '../contracts.js';
+import { GIGA_PROVIDER_ID } from '../giga-provider.js';
 import type { Model } from './model-call.js';
 
 /*
@@ -12,6 +13,9 @@ import type { Model } from './model-call.js';
  * A judge on OpenRouter goes through the Chat Completions adapter, for every judge-role task (rubric votes,
  * votes on logged conversations, the card review): routing options such as a pinned upstream belong to that
  * adapter, and the catalog would otherwise pick a vendor-native endpoint that ignores them.
+ *
+ * The judge's strict response schema reaches the wire where the transport honours it: OpenRouter's Chat Completions,
+ * and the internal gateway (provider giga), which translates the same hook into its own model options.
  */
 
 export type ModelRole = 'builder' | 'judge' | 'simulator';
@@ -75,6 +79,6 @@ export async function resolveModels(runtime: ModelRuntime, settings: Settings, s
   const judgeModel = openRouter ? openRouterChat(judge, upstream) : judge;
   return {
     builder, simulator, judge: judgeModel,
-    judgeTransport: { api: judgeModel.api, ...(upstream ? { upstream } : {}), structured: openRouter },
+    judgeTransport: { api: judgeModel.api, ...(upstream ? { upstream } : {}), structured: openRouter || judge.provider === GIGA_PROVIDER_ID },
   };
 }

@@ -38,7 +38,8 @@ export function registered(onUserMessage?: (message: unknown) => void, options: 
     sendUserMessage: (message: unknown, options: { deliverAs: string; expandPromptTemplates: boolean }) => { assert.equal(options.deliverAs, 'followUp'); assert.equal(options.expandPromptTemplates, false); userMessages.push(message); onUserMessage?.(message); },
     getActiveTools: () => [...active.names],
     setActiveTools: (names: string[]) => { active.names = [...names]; },
-  } as unknown as ExtensionAPI, options);
+  // The owner's personal model gateway is never reached from these tests: gateway.test.ts covers it.
+  } as unknown as ExtensionAPI, { gateway: { connect: async () => ({ failure: 'not configured' }) }, ...options });
   assert.ok(shutdown); assert.ok(command); assert.ok(beforeAgentStart); assert.ok(sessionStart);
   return { tools, shutdown, command, beforeAgentStart, sessionStart, contexts, userMessages, active };
 }
