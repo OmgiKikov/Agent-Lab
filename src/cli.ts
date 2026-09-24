@@ -104,8 +104,10 @@ async function main() {
   if (args[0] === 'chat' || (!args.length && process.stdin.isTTY)) {
     const root = fileURLToPath(new URL('../', import.meta.url));
     const piRoot = dirname(dirname(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'))));
+    // The Agent Lab session gets the agent-builder skill's text as its instructions (extensions/agent-lab.ts); listed
+    // as a skill as well, it would only invite the model to read the same text twice.
     const child = spawn(process.execPath, [resolve(piRoot, 'dist/bundle/cli.js'), '--no-extensions', '--no-skills', '-e', resolve(root, 'extensions/agent-lab.ts'),
-      '--skill', resolve(root, 'skills/agent-builder/SKILL.md'), ...args.slice(args[0] === 'chat' ? 1 : 0)],
+      ...args.slice(args[0] === 'chat' ? 1 : 0)],
     { stdio: 'inherit', env: { ...process.env, AGENT_LAB_SESSION: '1' } });
     process.exitCode = await new Promise<number>((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve(code ?? (signal ? 130 : 1))); });
     return;

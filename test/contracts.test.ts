@@ -3,28 +3,24 @@ import { test } from 'node:test';
 import {
   SANDBOX_RETIRED, runnableTargetSchema, createInputSchema, dialogueSchema, draftPatchSchema, emptyUsage, fingerprint, humanReviewInputSchema, internalPromptRule, observableRule, validateFailureModes, experimentSchema, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, valueTokens, verbatimSpan, verbatimSpanAt, worldSchema,
 } from '../src/contracts.js';
-import { selectValidationDialogues } from '../src/imports.js';
+import { validationDialogueIssue } from '../src/imports.js';
 
 const source = { id: 'source-1', name: 'policy', content: 'Rule one: read before update.', hash: 'h' };
 const requirement = { id: 'req_1', text: 'Read before update', sourceId: 'source-1', quote: 'read before update', critical: true };
 const metric = { id: 'm', name: 'M', subject: 'agent' as const, description: 'd', passCriteria: 'p', failCriteria: 'f' };
 const user = { goal: 'g', facts: 'f', behavior: 'b', opening: 'o', maxFollowUps: 0, persona: 'P', characteristics: ['c'] };
 
-test('validation sampling is stable, outcome-blind and keeps only replayable dialogues', () => {
+test('a logged dialogue becomes a situation only when it can be replayed: 1–16 customer messages, none masked whole', () => {
   const dialogues = Array.from({ length: 30 }, (_, index) => dialogueSchema.parse({ id: `sample_${index}`, outcome: index % 2 ? 'success' : 'failure',
     messages: [{ role: 'user', content: `Вопрос ${index}` }, { role: 'assistant', content: `Ответ ${index}` }] }));
-  const first = selectValidationDialogues(dialogues).map(dialogue => dialogue.id);
-  const relabelled = selectValidationDialogues(dialogues.map(dialogue => ({ ...dialogue, outcome: dialogue.outcome === 'success' ? 'failure' as const : 'success' as const }))).map(dialogue => dialogue.id);
-  assert.equal(first.length, 15);
-  assert.deepEqual(relabelled, first);
-  assert.deepEqual(selectValidationDialogues([...dialogues].reverse()).map(dialogue => dialogue.id), first);
+  assert.ok(dialogues.every(dialogue => validationDialogueIssue(dialogue) === undefined), 'the outcome of a logged dialogue plays no part');
   const tooLong = dialogueSchema.parse({ id: 'too_long', messages: Array.from({ length: 17 }, (_, index) => ({ role: 'user' as const, content: `m${index}` })) });
-  assert.deepEqual(selectValidationDialogues([tooLong]), []);
+  assert.equal(validationDialogueIssue(tooLong)?.kind, 'length');
   const base = { task: 'validate', materials: [{ name: 'policy', content: 'Rule.' }], mode: 'live' as const, dialogues: dialogues.slice(0, 15), scenarioCount: 0, target };
   assert.equal(createInputSchema.safeParse({ ...base, settings: { userModes: ['reactive'] } }).success, true);
   const masked = (content: string) => dialogueSchema.parse({ id: 'masked', messages: [{ role: 'user', content }] });
-  assert.deepEqual(selectValidationDialogues([masked('*** # # ...')]), []);
-  assert.equal(selectValidationDialogues([masked('Терминал **** не работает')]).length, 1);
+  assert.equal(validationDialogueIssue(masked('*** # # ...'))?.kind, 'masked');
+  assert.equal(validationDialogueIssue(masked('Терминал **** не работает')), undefined, 'a partly masked message still says something');
 });
 function card(overrides: Record<string, unknown> = {}) {
   return {

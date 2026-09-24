@@ -6,7 +6,7 @@ import { after, before, test } from 'node:test';
 import { visibleWidth } from '@earendil-works/pi-tui';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { judgedScreen } from '../extensions/workspace-screens.ts';
-import { connectAgent, launchRun } from '../extensions/launch.ts';
+import { launchRun } from '../extensions/launch.ts';
 import { NeedsOwner } from '../extensions/lab-ui.ts';
 import { EXTERNAL_AGENT } from '../src/card/prepare.js';
 import { hostGrant } from '../src/card/commands.js';
@@ -240,7 +240,7 @@ test('the agents of a folder are grouped by how they are reached; situations pre
   assert.equal(agentName({ ...unnamed, target: { kind: 'unconnected' } } as Experiment), 'агент ещё не подключён');
 });
 
-test('situations can be prepared before the agent is connected; the connection is asked for right before the run', async t => {
+test('situations can be prepared before the agent is connected; Lab finds it in the folder and connects it only with «Запустить»', async t => {
   const cwd = await mkdtemp(join(tmpdir(), 'agent-lab-unconnected-'));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   assert.equal(createInputSchema.parse(cardInput({ target: { kind: 'unconnected' } })).target.kind, 'unconnected');
@@ -257,19 +257,28 @@ test('situations can be prepared before the agent is connected; the connection i
     // Nothing in the folder says how to start the agent: the owner is asked in words, nothing runs.
     await assert.rejects(launchRun(ctx(options => options[0]), lab, prepared), (error: unknown) => error instanceof NeedsOwner
       && error.ownerText === 'Агент ещё не подключён, а в папке проекта Lab не нашёл, как его запускать. Как его запускать — команда, файл модуля или адрес?');
-    // A module the folder holds is offered; the owner picks it, and the run dialog follows — declined here.
+    // A module that declares Lab's contract is surely the agent: it goes straight into the plan, and a declined plan connects nothing.
     await writeFile(join(cwd, 'agent.mjs'), 'export async function createSession({ initialState }) {\n  return { async respond(message) { return { reply: message, records: initialState.records }; } };\n}\n');
-    assert.equal(await connectAgent(ctx(() => undefined), lab, prepared), undefined, 'stepping back connects nothing');
-    const run = await launchRun(ctx(options => options.includes('Запустить') ? 'Не сейчас' : options[0]), lab, prepared);
-    assert.equal(run, undefined);
-    const [connect, launch] = asked.slice(-2);
-    assert.match(connect!.title, /^Как запустить агента\?\n\nСитуации готовы, а агент ещё не подключён\. Lab нашёл в папке проекта — ничего не запускал и не менял:$/);
-    assert.deepEqual(connect!.options.at(-1), 'Не сейчас');
-    assert.match(connect!.options[0]!, /^модуль agent\.mjs — agent\.mjs: объявляет createSession/);
-    assert.match(launch!.title, /^Принять \d+ ситуаци[юи] и запустить\?/);
+    assert.equal(await launchRun(ctx(options => options.includes('Запустить') ? 'Не сейчас' : options[0]), lab, prepared), undefined);
+    const plan = asked.at(-1)!;
+    assert.match(plan.title, /^Принять \d+ ситуаци[юи] и запустить\?/);
+    assert.match(plan.title, /\nАгент: модуль agent\.mjs\nLab нашёл его в папке проекта: agent\.mjs: объявляет createSession/);
+    assert.equal(asked.length, 1, 'one sure agent needs no question of its own');
+    assert.equal((await lab.get(draft.id)).target.kind, 'unconnected', 'a declined plan connects nothing');
+    // Several ways to start an agent: the owner picks one first; stepping back connects nothing.
+    await writeFile(join(cwd, 'bot.mjs'), 'export function createSession() { return { async respond() { return { reply: \'ok\' }; } }; }\n');
+    assert.equal(await launchRun(ctx(() => undefined), lab, prepared), undefined);
+    const pick = asked.at(-1)!;
+    assert.match(pick.title, /^Как запустить агента\?\n\nСитуации готовы, а агент ещё не подключён\. Lab нашёл в папке проекта — ничего не запускал и не менял:$/);
+    assert.deepEqual(pick.options.at(-1), 'Не сейчас');
+    // The pick and «Запустить»: the connection becomes part of what the owner confirmed, and the run starts on it.
+    const started = await launchRun(ctx(options => options.includes('Запустить') ? 'Запустить' : options.find(option => option.startsWith('модуль agent.mjs'))), lab, prepared);
+    assert.ok(started);
+    await lab.waitForIdle();
     const connected = await lab.get(draft.id);
-    assert.equal(connected.target.kind, 'module');
+    assert.equal(connected.target.kind === 'module' && connected.target.path, join(cwd, 'agent.mjs'));
     assert.notEqual(draftHash(connected), draftHash(prepared), 'the connection is part of what is confirmed');
+    assert.ok(connected.trials.length > 0);
   } finally { await lab.close(); }
 });
 

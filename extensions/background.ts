@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext, Theme } from '@earendil-works/pi-c
 import { Loader } from '@earendil-works/pi-tui';
 import type { Experiment } from '../src/contracts.js';
 import type { ExperimentLab } from '../src/experiment.js';
-import { countsText, situationData, situationEntry, situationViews } from '../src/card/view.js';
+import { countsText, situationViews } from '../src/card/view.js';
 import { safeText } from '../src/text.js';
 import { progressText, row, runStamp, stoppedLines } from './conversation.ts';
 import { ActionBlock, ActionBody, ActionHead, expandHint, feedFor, feedTone, isFeedDetails, lineBody, rememberFeed, type Feed } from './render/feed.ts';
@@ -10,8 +10,8 @@ import { isVerdictDetails, renderAgentLabResult } from './render/verdict-block.t
 import type { Tone } from './render/theme.ts';
 import { inputError, legacyResult } from './lab-ui.ts';
 import type { LabLease, SessionOperation, SessionOperations } from './operations.ts';
-import { situationFeed, situationsFeed } from './card-tools.ts';
-import { summary } from './summary.ts';
+import { situationItem, situationOutput, situationsOutput } from './model-output.ts';
+import { situationFeed, situationsFeed } from './situation-tools.ts';
 
 /*
  * Long work never holds the conversation (quality bar 5): a run, a preparation and a check of changed situations
@@ -90,11 +90,10 @@ async function viewsOf(lab: ExperimentLab, record: Experiment) {
  * agent did not run; every situation on expand.
  */
 export async function preparedAnswer(lab: ExperimentLab, record: Experiment, interrupted: boolean): Promise<Prepared> {
-  const output = summary(record, lab.store.directory);
   const note = `Ситуации · ${runStamp(record)}`;
   if (record.librarySnapshot?.formatVersion !== 2 || record.phase !== 'review') {
     const failed = [record.error ? `Подготовка не завершена: ${safeText(record.error)}` : 'Подготовка не завершена.'];
-    return { output, feed: { title: 'Подготовка остановлена', tone: 'warning', rows: failed.map(line => row(line, 'warning')) }, note };
+    return { output: { run: record.id, prepared: false, error: record.error ?? record.message }, feed: { title: 'Подготовка остановлена', tone: 'warning', rows: failed.map(line => row(line, 'warning')) }, note };
   }
   const { context, views } = await viewsOf(lab, record);
   const ready = views.filter(view => view.status === 'ready').length;
@@ -106,13 +105,15 @@ export async function preparedAnswer(lab: ExperimentLab, record: Experiment, int
   const feed = situationsFeed(context.experiment, views, false, { library: context.library, evidence: context.evidence }, next);
   feed.title = interrupted ? 'Подготовка остановлена' : 'Ситуации готовы';
   if (interrupted) feed.tone = 'warning';
-  return { output: { ...output, counts: countsText(views), situations: views.map(situationEntry) }, feed, note };
+  return { output: situationsOutput(context.experiment, views, { ...(unconnected ? { agentConnected: false } : {}), ...(interrupted ? { interrupted: true } : {}) }), feed, note };
 }
 
 export interface BackgroundHost {
   operations: SessionOperations;
   /** The result of a finished run: the model's JSON and the details its block is drawn from. */
   verdictOutput(record: Experiment, lab: ExperimentLab): Promise<{ output: unknown; details: unknown }>;
+  /** Hands the model the tools of the step the records of `directory` are at now: long work that ends may move the project to the next step. */
+  refresh(directory: string): Promise<void>;
 }
 
 /** The session's hand-overs of long work: a run or a preparation that outlives its row, a check of changed situations. */
@@ -133,6 +134,7 @@ export class Background {
           // A stop the owner asked for is answered in its own row; every other ending reports back.
           if (job.quiet) return;
           const answer = await prepared(finished);
+          await this.host.refresh(owned.directory);
           this.pi.sendMessage({ customType: BUILD_MESSAGE, display: true, content: JSON.stringify(answer.output),
             details: rememberFeed(`build:${id}:${finished.updatedAt}`, answer.feed ?? { rows: [row('Подготовка завершена.')] }, answer.note ?? 'Подготовка ситуаций') },
           { deliverAs: 'followUp', triggerTurn: true });
@@ -140,11 +142,12 @@ export class Background {
         }
         const complete = finished.phase === 'results_review' || finished.phase === 'complete';
         if (origin === 'board') { ctx.ui.notify?.(complete ? 'Прогон завершён: результат — в /agent-lab.' : 'Прогон остановлен. Записанные разговоры сохранены.', 'info'); return; }
+        await this.host.refresh(owned.directory);
         if (job.quiet) return;
         const announced = complete ? await this.host.verdictOutput(finished, owned.lab) : undefined;
         const stopped = stoppedLines(finished);
         this.pi.sendMessage({ customType: RUN_MESSAGE, display: true,
-          content: JSON.stringify(announced?.output ?? { id, phase: finished.phase, error: finished.error, trialCount: finished.trials.length, message: stopped.join(' ') }),
+          content: JSON.stringify(announced?.output ?? { run: id, stopped: true, saved: finished.trials.length, error: finished.error, message: stopped.join(' ') }),
           details: announced && isVerdictDetails(announced.details) ? announced.details
             : rememberFeed(`run:${id}:${finished.updatedAt}`, { title: 'Прогон остановлен', tone: 'warning',
               rows: [...stopped.map(line => row(line)), ...(finished.error ? [row(safeText(finished.error), 'muted')] : [])] }, `Прогон · ${runStamp(finished)}`),
@@ -182,7 +185,7 @@ export class Background {
         const feed: Feed = failed ? { title: 'Проверка не завершилась', tone: 'warning', rows: [row(`Проверка не завершилась: ${safeText(record.error ?? record.message)}`, 'warning')] }
           : view ? { ...situationFeed(view), title: `Ситуация ${view.number} проверена` } : { ...situationsFeed(record, views), title: 'Ситуации проверены' };
         this.pi.sendMessage({ customType: CHECK_MESSAGE, display: true,
-          content: JSON.stringify({ status: failed ? 'check_failed' : 'check_finished', runId: id, ...(view ? { situation: situationData(view) } : { counts: countsText(views) }),
+          content: JSON.stringify({ status: failed ? 'check_failed' : 'check_finished', ...(view ? situationOutput(record, view) : { run: id, counts: countsText(views), waiting: views.filter(item => item.status === 'needs_owner').map(situationItem) }),
             instruction: 'The background check of changed situations finished. Mention it only if the owner has something to decide.' }),
           details: rememberFeed(`check:${id}:${record.updatedAt}`, feed, `Проверка ситуаций · ${runStamp(record)}`),
         }, { deliverAs: 'followUp', triggerTurn: failed || (view ? view.status !== 'ready' : views.some(item => item.status === 'needs_owner')) });

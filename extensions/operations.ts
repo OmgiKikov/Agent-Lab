@@ -30,6 +30,19 @@ export class SessionOperations {
   constructor(private readonly createLab = (directory: string) => new ExperimentLab(directory)) {}
 
   current(directory: string): SessionOperation | undefined { return this.job?.directory === directory ? this.job : undefined; }
+  /**
+   * Why no new work can start on `directory` in this session now, in the owner's words; undefined when the writer's
+   * lease is free or held only by a check of that folder's changed situations, which new work cancels (acquire).
+   */
+  busy(directory: string): string | undefined {
+    const active = this.job;
+    if (!this.lease || active?.kind === 'assessment' && active.directory === directory) return undefined;
+    return active?.kind === 'preparation'
+      ? 'Сейчас идёт подготовка ситуаций. Готовые ситуации, разговоры и результаты можно смотреть; правки и новый запуск — после её завершения или остановки.'
+      : active?.kind === 'run'
+        ? 'Сейчас идёт прогон. Ситуации, разговоры и результаты можно смотреть; правки и новый запуск — после его завершения или остановки.'
+        : 'Уже идёт другая работа Agent Lab. Готовые результаты можно смотреть; новый запуск — после её завершения.';
+  }
   reader(directory: string): ExperimentLab { return this.lease?.directory === directory ? this.lease.lab : this.createLab(directory); }
 
   async acquire(directory: string, pendingAssessment: 'cancel' | 'wait' = 'cancel'): Promise<LabLease> {
@@ -38,14 +51,8 @@ export class SessionOperations {
       if (pendingAssessment === 'cancel') { check.quiet = true; await check.lab.cancel(check.id).catch(() => {}); }
       await check.done;
     }
-    if (this.lease) {
-      const active = this.job;
-      throw new Error(active?.kind === 'preparation'
-        ? 'Сейчас идёт подготовка ситуаций. Готовые ситуации, разговоры и результаты можно смотреть; правки и новый запуск — после её завершения или остановки.'
-        : active?.kind === 'run'
-          ? 'Сейчас идёт прогон. Ситуации, разговоры и результаты можно смотреть; правки и новый запуск — после его завершения или остановки.'
-          : 'Уже идёт другая работа Agent Lab. Готовые результаты можно смотреть; новый запуск — после её завершения.');
-    }
+    const busy = this.busy(directory);
+    if (busy) throw new Error(busy);
     const lab = this.createLab(directory);
     let closing: Promise<void> | undefined;
     const lease: LabLease = { directory, lab, close: () => closing ??= lab.close().finally(() => { if (this.lease === lease) this.lease = undefined; }) };

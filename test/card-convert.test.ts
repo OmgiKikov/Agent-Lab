@@ -179,16 +179,21 @@ test('the chat and the CLI carry a first-format draft over, say what did not go 
   await old.lab.close();
   await rm(old.directory, { recursive: true, force: true });
   const { tools, shutdown } = registered();
-  const ctx = { cwd, hasUI: false, mode: 'print' } as never;
+  // The chat carries a draft over as the owner's decision: listed with its one answer, picked in a native dialog.
+  const picked: string[] = [];
+  const ctx = { cwd, hasUI: true, mode: 'tui', ui: { select: async (title: string, options: string[]) => { picked.push(title); return options[0]; } } } as never;
+  const decide = tools.get('agent_lab_decide')!;
   try {
-    const result = await tools.get('agent_lab_card_convert')!.execute('convert', { id: old.record.id }, undefined, undefined, ctx);
-    const answer = output(result);
-    assert.equal(answer.convertedFrom, old.record.id);
-    assert.equal(answer.counts, '2 ситуации: 0 готовы · 2 ещё не проверены');
-    assert.equal(answer.checkCalls, 2);
-    assert.match(answer.instruction, /agent_lab_card_check/);
-    const again = output(await tools.get('agent_lab_card_convert')!.execute('convert', { id: answer.runId }, undefined, undefined, ctx));
-    assert.equal(again.refused, 'Переносить нечего: это не черновик старого формата.');
+    const listed = output(await decide.execute('list', {}, undefined, undefined, ctx));
+    const convert = listed.decisions.find((decision: { key: string }) => decision.key.startsWith('convert:'));
+    assert.deepEqual(convert.answers.map((answer: { label: string }) => answer.label), ['Продолжить в новом формате'], 'opening the situations is not a decision');
+    const answer = output(await decide.execute('convert', { decision: convert.key }, undefined, undefined, ctx));
+    assert.equal(answer.decided, true);
+    assert.equal(answer.notice, 'В новый формат перенесены 2 ситуации. Старый черновик остался как есть. Новые ситуации ещё не проверены: проверка — до 2 вызовов модели.');
+    assert.match(picked[0]!, /^Ситуации старого формата\n\nИх можно посмотреть, но не изменить/);
+    // The new draft is what the project works on now: its situations wait for the check, which is the owner's next decision.
+    assert.ok(answer.left.some((decision: { key: string }) => decision.key.startsWith('check:')), JSON.stringify(answer.left));
+    assert.ok(!answer.left.some((decision: { key: string }) => decision.key.startsWith('convert:')), 'nothing of the old format is offered again for the new draft');
   } finally { await shutdown(); }
   // The CLI: the same words, and the check is the owner's next command.
   const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));

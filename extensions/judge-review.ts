@@ -1,12 +1,12 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import type { Experiment, HumanReviewInput, Trial } from '../src/contracts.js';
+import type { Experiment, Trial } from '../src/contracts.js';
 import { agreementSample, judgeAgreement } from '../src/agreement.js';
 import { awaitingVerdict } from '../src/comparison.js';
 import { resultHash, type ExperimentLab } from '../src/experiment.js';
 import { markTargets, measurementUsable } from '../src/outcomes.js';
 import { cardVerdict, headlineCardOutcome } from '../src/run.js';
 import { headlineRule } from '../src/card/expectations.js';
-import { clip, oneLine, safeText } from '../src/text.js';
+import { clip, oneLine } from '../src/text.js';
 
 /*
  * «Проверить, прав ли судья» (ui-spec §4.8): the owner's own word on the judge's decision about one situation — the
@@ -36,9 +36,6 @@ export function agreementTarget(record: Experiment, trial: Trial | undefined): A
   if (!targets) return { kind: 'undecided' };
   return { kind: 'ready', metricIds: targets.metricIds, judgeVerdict: targets.verdict, sampled: agreementSample(record).includes(trial.id) };
 }
-
-/** The conversations that wait for the owner's word, in the order to take them: the judge's failures, then the drawn passes. */
-export const reviewQueue = (record: Experiment): string[] => judgeAgreement(record).unmarked;
 
 export type Answer = 'agree' | 'disagree' | 'unsure';
 const WORD: Record<Answer, string> = { agree: 'согласен с судьёй', disagree: 'не согласен с судьёй', unsure: 'не знаю' };
@@ -139,38 +136,4 @@ function markNotice(record: Experiment, after: Experiment, scenario: Experiment[
   const still = parts.goal === 'fail' && parts.rules === 'fail' ? 'запрос не выполнен, нарушены правила промпта' : parts.goal === 'fail' ? 'запрос не выполнен'
     : parts.rules === 'fail' ? 'нарушены правила промпта' : 'другие ожидания не выполнены';
   return `Отмечено: не согласен · «${title}». Ситуация остаётся «не справился»: ${still}.`;
-}
-
-/**
- * A detailed verdict on one conversation (the chat's agent_lab_review): what it is about — the whole conversation or
- * one judgment —, the verdict and the owner's explanation, all from native dialogs. A verdict on the whole
- * conversation must cite one of its turns (#N), so a complete review is anchored in what was said.
- */
-export async function humanAnnotation(ctx: Pick<ExtensionContext, 'ui'>, record: Experiment, trial: Trial, readingMs = 0): Promise<HumanReviewInput[] | undefined> {
-  const started = performance.now();
-  const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
-  const targets: { label: string; ids: { metricId?: string; checkId?: string } }[] = [
-    { label: 'Весь разговор', ids: {} },
-    ...(scenario?.metrics ?? []).map(m => ({ label: `Оценка судьи: ${safeText(m.name)}`, ids: { metricId: m.id } })),
-    ...(trial.simulatorChecks ?? []).map(c => ({ label: `Клиент в симуляции: ${safeText(c.description)}`, ids: { checkId: c.id } })),
-    ...trial.checks.map(c => ({ label: `Точная проверка: ${safeText(c.description)}`, ids: { checkId: c.id } })),
-  ];
-  const choice = await ctx.ui.select('О чём ваша оценка?', targets.map(t => t.label));
-  const target = targets.find(t => t.label === choice);
-  if (!target) return;
-  const simulator = !!target.ids.checkId && trial.simulatorChecks?.some(c => c.id === target.ids.checkId) || !!target.ids.metricId && scenario?.metrics?.some(m => m.id === target.ids.metricId && m.subject === 'simulator');
-  const choices = [{ value: 'fail', label: simulator ? 'Ошибся клиент в симуляции' : 'Ошибся агент' }, { value: 'invalid', label: 'Ошибся тест' }, { value: 'unknown', label: 'Данных недостаточно' },
-    { value: 'pass', label: simulator ? 'Клиент держался ситуации' : 'Агент справился' }] as const;
-  const answer = await ctx.ui.select('Ваша оценка · оценка судьи сохранится отдельно', choices.map(v => v.label));
-  const verdict = choices.find(v => v.label === answer)?.value;
-  if (!verdict) return;
-  const note = await ctx.ui.editor('Пояснение · укажите реплики #N и причину', '');
-  if (note === undefined) return;
-  const wholeDialogue = !target.ids.metricId && !target.ids.checkId;
-  if (wholeDialogue && ![...note.matchAll(/#(\d+)\b/g)].some(match => trial.events.some(event => event.seq === Number(match[1])))) {
-    ctx.ui.notify?.('Оценка всего разговора не сохранена: укажите в пояснении номер реплики этого разговора, например #1.', 'warning');
-    return;
-  }
-  return [{ trialId: trial.id, ...target.ids, verdict, note, ...(wholeDialogue ? { reviewedDialogue: true as const } : {}),
-    durationMs: Math.min(3600000, Math.round(performance.now() - started + readingMs)) }];
 }

@@ -1,5 +1,6 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { describeCheck, type Experiment } from '../src/contracts.js';
+import { calibrationConsent } from '../src/card/calibrate.js';
+import { describeCheck, type Experiment, type RunnableTarget } from '../src/contracts.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
 import { detectProject, evidenceText, targetLabel, type AgentCandidate } from '../src/detect.js';
 import { draftHash, type ExperimentLab } from '../src/experiment.js';
@@ -16,8 +17,9 @@ import { NeedsOwner } from './lab-ui.ts';
  * accepted set just starts; a draft of a record made before libraries confirms its expectations with the run. The
  * acceptance and the start stay two facts in the record. Questions never block the ready situations.
  *
- * Situations may be prepared before the agent is connected: then the connection is asked for right before this
- * dialog — Lab proposes what it found in the project folder, the owner picks, nothing runs until the dialog.
+ * Situations may be prepared before the agent is connected. The agent is then the one the owner named, or the one Lab
+ * finds in the project folder — one sure candidate goes straight into the plan, several are the owner's pick — and it
+ * is connected only when the owner says «Запустить»: a declined dialog writes nothing.
  */
 
 /** The two answers of every run dialog. */
@@ -49,14 +51,6 @@ function runScope(record: Experiment): string[] {
     `  Ожидается: ${safeText(s.successCriteria)}`, ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)].join('\n'));
 }
 
-/** The plan of a run of the situations a record already holds: a repeat of an accepted set, or an older record's draft with its expectations first. */
-export function runPlan(record: Experiment, cwd?: string): string {
-  const scope = record.librarySnapshot ? [] : runScope(record);
-  const confirmed = !!record.librarySnapshot || record.acceptedDraftHash === draftHash(record);
-  return [...scope, ...(scope.length ? [''] : []), ...launchLines(record, scenarioPlan(record), cwd).map(line => safeText(line)),
-    ...(confirmed ? [] : ['Запуск подтверждает ожидания ситуаций выше. Оценки судьи вы не проверяли.'])].join('\n');
-}
-
 /** The plan of a card draft's run: its ready situations; the ones waiting for the owner, unusable or unchecked stay out. */
 export function cardPlan(record: Experiment, views: readonly SituationView[]): LaunchPlan {
   const ready = views.filter(view => view.status === 'ready');
@@ -81,51 +75,76 @@ function candidateLabel(candidate: AgentCandidate, root: string): string {
   return safeText(`${targetLabel(candidate.target, root)}${candidate.evidence[0] ? ` — ${evidenceText(candidate.evidence[0])}` : ''}`);
 }
 
+/** The agent Lab found for a run, and the line of the plan that says where it was found. */
+export interface FoundAgent { target: RunnableTarget; note: string }
+
 /**
- * The connection of a draft whose situations were prepared before the agent was connected: Lab proposes the ways to
- * start it that it found in the project folder (read-only: nothing is run or imported), the owner picks one, and the
- * draft is connected — checked and fingerprinted — before the run dialog. Undefined when the owner stepped back.
+ * How to start an agent that is not connected yet, from what the folder `cwd` shows (read-only: nothing is run or
+ * imported). One candidate Lab is sure of is proposed in the plan itself; several, or unsure ones, are the owner's
+ * pick. Undefined when the owner stepped back; nothing found is a question to the owner.
  */
-export async function connectAgent(ctx: ExtensionContext, lab: ExperimentLab, draft: Experiment, cwd = ctx.cwd): Promise<Experiment | undefined> {
-  const found = await detectProject(cwd).then(detection => detection.agents.slice(0, OFFERED), () => []);
-  if (!found.length) throw new NeedsOwner('needs_owner_input', `${NO_AGENT} Спросите владельца, как его запускать (команда, файл модуля или адрес), подключите через agent_lab_edit (target) и снова вызовите agent_lab_run.`, [],
+export async function findAgent(ctx: Pick<ExtensionContext, 'ui'>, cwd: string): Promise<FoundAgent | undefined> {
+  const detection = await detectProject(cwd).catch(() => undefined);
+  const found = detection?.agents.slice(0, OFFERED) ?? [];
+  if (!found.length) throw new NeedsOwner('needs_owner_input', `${NO_AGENT} Спросите владельца, как его запускать (команда, файл модуля или адрес), и вызовите agent_lab_run с agent.`, [],
     `${NO_AGENT} Как его запускать — команда, файл модуля или адрес?`);
-  const labels = found.map(candidate => candidateLabel(candidate, cwd));
+  const root = detection!.root;
+  const note = (candidate: AgentCandidate) => safeText(`Lab нашёл его в папке проекта: ${candidate.evidence.map(evidenceText).join('; ')}.`);
+  if (found.length === 1 && found[0]!.confidence === 'high') return { target: found[0]!.target, note: note(found[0]!) };
+  const labels = found.map(candidate => candidateLabel(candidate, root));
   const picked = await ctx.ui.select(safeText(['Как запустить агента?', '', 'Ситуации готовы, а агент ещё не подключён. Lab нашёл в папке проекта — ничего не запускал и не менял:'].join('\n')),
     [...labels, NOT_NOW]);
   const chosen = found[labels.indexOf(picked ?? '')];
-  if (!chosen) return undefined;
-  return lab.updateDraft(draft.id, draftHash(draft), { target: chosen.target });
+  return chosen ? { target: chosen.target, note: note(chosen) } : undefined;
 }
+
+/** How the run reaches the agent: a new connection the owner named or Lab found, and the owner's name for its version. */
+export interface LaunchAgent { target?: RunnableTarget; version?: string; note?: string }
 
 /**
  * Asks the owner and starts the run of a draft; undefined when they said «Не сейчас». A card draft is accepted in
- * the same dialog; its situations that are not ready stay out and wait for the owner. A draft without a connected
- * agent is connected first.
+ * the same dialog; its situations that are not ready stay out and wait for the owner. `agent` is a connection the
+ * owner named for this run; without one, a draft whose agent is not connected yet gets the one Lab finds in `cwd`.
+ * The connection is written only with «Запустить», and becomes part of what the owner confirmed.
  */
-export async function launchRun(ctx: ExtensionContext, lab: ExperimentLab, start: Experiment, cwd = ctx.cwd): Promise<Experiment | undefined> {
-  const draft = start.target.kind === 'unconnected' ? await connectAgent(ctx, lab, start, cwd) : start;
-  if (!draft) return undefined;
-  const library = draft.librarySnapshot;
+export async function launchRun(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, lab: ExperimentLab, start: Experiment, agent: LaunchAgent = {}, cwd = ctx.cwd): Promise<Experiment | undefined> {
+  const found = !agent.target && start.target.kind === 'unconnected' ? await findAgent(ctx, cwd) : undefined;
+  if (!agent.target && start.target.kind === 'unconnected' && !found) return undefined;
+  const target = agent.target ?? found?.target;
+  const note = agent.note ?? found?.note;
+  const connect = target || agent.version ? { ...(target ? { target } : {}), ...(agent.version ? { targetVersion: agent.version } : {}) } : undefined;
+  /** The draft as the plan names it: with the agent it will be connected to. */
+  const shown = (record: Experiment): Experiment => connect ? { ...record, ...connect } : record;
+  /** The draft to start: the connection written first, when there is one, so the start and the acceptance see it. */
+  const connected = async (): Promise<Experiment> => connect ? lab.updateDraft(start.id, draftHash(start), connect) : start;
+  const library = start.librarySnapshot;
   if (library?.formatVersion === 2 && !library.acceptance) {
-    const context = await lab.cardContext(draft.id);
+    const context = await lab.cardContext(start.id);
     const views = situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns });
     const ready = views.filter(view => view.status === 'ready');
-    if (!ready.length) throw new NeedsOwner('needs_owner_input', 'Запускать нечего: ни одна ситуация не готова. Покажите владельцу вопросы по ситуациям — ответ делает ситуацию готовой.', [],
+    if (!ready.length) throw new NeedsOwner('needs_owner_input', 'Запускать нечего: ни одна ситуация не готова. Покажите владельцу вопросы по ситуациям (agent_lab_decide) — ответ делает ситуацию готовой.', [],
       'Запускать нечего: ни одна ситуация ещё не готова — ответьте на их вопросы.');
-    const lines = launchLines(context.experiment, cardPlan(context.experiment, views), cwd);
+    const calibration = await calibrationConsent(lab.store, context.experiment, ready.map(view => view.id));
+    const lines = launchLines(shown(context.experiment), cardPlan(context.experiment, views), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}) });
     const picked = await ctx.ui.select(safeText([`Принять ${countText(ready.length, SITUATIONS)} и запустить?`, '', ...lines,
       'Вместе с запуском Lab утвердит эти ситуации — повтор пойдёт по ним же.'].join('\n')), [LAUNCH, NOT_NOW]);
     if (picked !== LAUNCH) return undefined;
+    const draft = await connected();
     const { experiment } = await lab.acceptCards(draft.id, libraryHash(context.library), ready.map(view => view.id));
     return lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: draftHash(experiment), parallel: runParallel(experiment), requireAccepted: true });
   }
-  if (library && !library.acceptance) throw new NeedsOwner('needs_owner_input', 'Это черновик старого формата: его ситуации можно посмотреть, но не утвердить. Предложите владельцу продолжить их в новом формате (agent_lab_card_convert).', [],
+  if (library && !library.acceptance) throw new NeedsOwner('needs_owner_input', 'Это черновик старого формата: его ситуации можно посмотреть, но не утвердить. Предложите владельцу продолжить их в новом формате (решение в agent_lab_decide).', [],
     'Это черновик старого формата: его ситуации нельзя утвердить. Их можно продолжить в новом формате — старый черновик останется как есть.');
-  const hash = draftHash(draft);
-  const confirmed = draft.acceptedDraftHash === hash;
-  const picked = await ctx.ui.select(safeText([library || confirmed ? 'Запустить прогон?' : 'Подтвердить ожидания и запустить?', '', runPlan(draft, cwd)].join('\n')), [LAUNCH, NOT_NOW]);
+  const confirmed = start.acceptedDraftHash === draftHash(start);
+  const calibration = await calibrationConsent(lab.store, start);
+  const scope = library ? [] : runScope(start);
+  const plan = [...scope, ...(scope.length ? [''] : []), ...launchLines(shown(start), scenarioPlan(start), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}) }),
+    ...(library || confirmed ? [] : ['Запуск подтверждает ожидания ситуаций выше. Оценки судьи вы не проверяли.'])];
+  const picked = await ctx.ui.select(safeText([library || confirmed ? 'Запустить прогон?' : 'Подтвердить ожидания и запустить?', '', ...plan].join('\n')), [LAUNCH, NOT_NOW]);
   if (picked !== LAUNCH) return undefined;
-  if (!confirmed) await lab.acceptDraft(draft.id, hash);
+  const draft = await connected();
+  const hash = draftHash(draft);
+  // A new connection is a new version of the draft: the expectations the owner confirmed in this dialog are confirmed on it.
+  if (draft.acceptedDraftHash !== hash) await lab.acceptDraft(draft.id, hash);
   return lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: hash, parallel: runParallel(draft), requireAccepted: true });
 }

@@ -1,0 +1,306 @@
+import { resolve } from 'node:path';
+import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { Type, type Static } from 'typebox';
+import type { Experiment } from '../src/contracts.js';
+import { contains, type CardEvidence } from '../src/card/checks.js';
+import { hostGrant, requiredAuthority, wordsOf, type HostGrant, type Prepared } from '../src/card/commands.js';
+import { convertible } from '../src/card/legacy-v1.js';
+import type { CardCommand, LibraryV2 } from '../src/card/schema.js';
+import { cardStatuses } from '../src/card/status.js';
+import { briefRows, changeText, chip, countsText, detailRows, formatNote, listRows, situationViews, type SituationView } from '../src/card/view.js';
+import { CommandRefused, LibraryConflict, UnknownReference } from '../src/errors.js';
+import type { ExperimentLab } from '../src/experiment.js';
+import { situationCoverage } from '../src/miner/cards.js';
+import { clip, safeText } from '../src/text.js';
+import { ownerMessages, row, runStamp } from './conversation.ts';
+import { displayFor, isInteractive, NeedsOwner, requireInteractive } from './lab-ui.ts';
+import { situationOutput, situationsOutput } from './model-output.ts';
+import type { LabLease, SessionOperations } from './operations.ts';
+import { recordFor } from './records.ts';
+import type { Feed } from './render/feed.ts';
+import { situationRows } from './render/situation.ts';
+import { TOOL } from './steps.ts';
+
+/*
+ * The chat's hands on a draft of situations (card-v2 §5): one read tool and one change tool, a thin adapter over the
+ * owner commands of src/card/commands.ts. The model names a situation by its number and a fact or a duty by the id the
+ * read tool showed (f2, e1); it never carries hashes or passes an approval. What the host needs from the owner comes
+ * from the owner: the words of a wording verbatim in their own messages, anything else a native dialog showing the
+ * exact change. A changed situation is checked again within the agreed calls — in the row of the change when that is
+ * quick, as a later message when it is not. Answers to a situation's question go through the decisions (decide-tool).
+ */
+
+export interface SituationHost {
+  inlineCheckMs: number;
+  operations: SessionOperations;
+  open: (cwd: string, pendingCheck?: 'cancel' | 'wait') => Promise<LabLease>;
+  reading: (directory: string) => ExperimentLab;
+  feedResult: (callId: string, output: unknown, feed: Feed, note: string) => AgentToolResult<unknown>;
+  askOwner: (callId: string, error: unknown) => AgentToolResult<unknown>;
+  /** A check too long for the row of its change: it goes on in the session and reports back as a message. */
+  backgroundCheck: (ctx: ExtensionContext, owned: LabLease, id: string, card: number | undefined) => void;
+}
+
+/** What the coverage of the logs' topics is read from: a card draft and the imports its cards cite. */
+export interface CoverageSource { library: LibraryV2; evidence: CardEvidence }
+
+/** The situations of a record with their status now; a card draft reads its imports for that. `running`: a check of them is going on. */
+export async function situationsNow(lab: ExperimentLab, record: Experiment, running = false): Promise<{ record: Experiment; views: SituationView[]; running: boolean; topics?: CoverageSource }> {
+  if (record.librarySnapshot?.formatVersion !== 2) return { record, views: situationViews(record, { maxTurns: record.settings.maxTurns }), running: false };
+  const { experiment, library, evidence, numbers } = await lab.cardContext(record.id);
+  return { record: experiment, views: situationViews(experiment, { evidence, numbers, maxTurns: experiment.settings.maxTurns }), running, topics: { library, evidence } };
+}
+
+/** «15 ситуаций покрывают 9 из 11 тем — 94% диалогов» and the topics without a ready situation; undefined without the logs' topics. */
+function coverageOf(source: CoverageSource | undefined, maxTurns: number): { line: string; uncovered: string | undefined } | undefined {
+  if (!source) return undefined;
+  return situationCoverage(source.library, cardStatuses({ library: source.library, evidence: source.evidence, maxTurns }));
+}
+
+/** A situation's status as the answer of a change: «Ситуация 2 готова». */
+export function statusText(view: SituationView, running = false): string {
+  const status = view.status === 'checking' && running ? 'проверяется' : { ready: 'готова', needs_owner: 'ждёт вашего ответа', unusable: 'не подходит для теста', checking: 'ждёт проверки' }[view.status];
+  return `Ситуация ${view.number} ${status}${view.version && view.status === 'ready' ? ` · версия ${view.version}` : ''}`;
+}
+
+/**
+ * The situations in the chat (ui-spec §4.10): the counts, then who waits for an answer or how much of the logs'
+ * topics the ready ones cover; every situation in three lines on expand. `next` is the last summary row when the
+ * caller has a step to name.
+ */
+export function situationsFeed(record: Experiment, views: SituationView[], running = false, topics?: CoverageSource, next?: string): Feed {
+  const waiting = views.filter(view => view.status === 'needs_owner');
+  const note = formatNote(record);
+  const coverage = coverageOf(topics, record.settings.maxTurns);
+  const waitingLine = waiting.length ? `Ждут ответа: ${waiting.slice(0, 3).map(view => `${view.number} ${clip(view.brief.title, 60)}`).join(' · ')}${waiting.length > 3 ? ` · ещё ${waiting.length - 3}` : ''}` : undefined;
+  const lines = [waitingLine, coverage?.line, note].filter((line): line is string => !!line);
+  return {
+    tone: waiting.length ? 'warning' : 'success',
+    rows: [row(countsText(views), 'text', true), ...lines.slice(0, next ? 1 : 2).map(line => row(line, 'muted')), ...(next ? [row(next, 'muted')] : [])],
+    // The coverage line may already stand in the summary; its uncovered topics are named on expand.
+    more: [...(coverage?.uncovered ? [row(coverage.uncovered, 'muted'), row('')] : []), ...situationRows(views.flatMap(view => listRows(view, { running })))],
+    expand: `все ${views.length}: что пишет клиент и что должен агент`,
+  };
+}
+
+/** One situation in the chat: its title and status, what the customer writes and the first duty, its question; the whole brief — and «d» when asked — on expand. */
+export function situationFeed(view: SituationView, options: { running?: boolean; details?: boolean } = {}): Feed {
+  const { brief } = view;
+  return {
+    tone: view.status === 'ready' ? 'success' : 'warning',
+    rows: [row(`${view.number}  ${brief.title} · ${chip(view, options.running).text}`, 'text', true),
+      row(`Клиент: «${clip(brief.writes, 120)}» · Агент должен: ${clip(brief.must[0]?.text ?? '—', 120)}`),
+      ...(view.question ? [row(`Вопрос: ${view.question.text}`, 'warning')] : view.problems[0] ? [row(`Не подходит: ${view.problems[0]}`, 'muted')] : [])],
+    more: situationRows([...briefRows(view, { running: options.running }), ...(options.details ? [{ role: 'blank' as const, indent: 0, text: '' }, ...detailRows(view)] : [])]),
+    expand: 'вся ситуация',
+  };
+}
+
+const closed = { additionalProperties: false } as const;
+const runRef = Type.Optional(Type.String({ minLength: 1, maxLength: 100, description: 'The run or draft id from an earlier Agent Lab result. Omit for the one the project works on now.' }));
+const number = Type.Integer({ minimum: 1, maximum: 999, description: 'The situation number, as shown.' });
+const text = (max: number, description: string) => Type.Optional(Type.String({ minLength: 1, maxLength: max, description }));
+const factId = Type.String({ pattern: '^f[0-9]{1,3}$', description: 'A fact id shown by agent_lab_cards.' });
+const when = Type.Enum(['initial', 'on_request', 'unknown'], { description: 'initial: says it in the first message; on_request: only when the agent asks; unknown: does not know it.' });
+const turn = Type.Union([Type.Object({ kind: Type.Enum(['change_intent', 'report']), after: Type.String({ minLength: 1, maxLength: 300, description: 'After what the agent does.' }),
+  says: Type.String({ minLength: 1, maxLength: 1000, description: 'What the customer says then.' }) }, closed), Type.Null()], { description: 'The customer\'s late turn; null: none.' });
+
+/** One change of one situation: what the model may ask the owner's draft to become. */
+const change = Type.Union([
+  Type.Object({ kind: Type.Literal('fact'), fact: Type.Optional(factId), label: text(120, 'What the fact is, e.g. «Номер терминала»; without fact, a new one.'),
+    value: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 120 }), Type.Number(), Type.Boolean()])), when: Type.Optional(when), remove: Type.Optional(Type.Literal(true)) }, closed),
+  Type.Object({ kind: Type.Literal('duty'), duty: Type.String({ pattern: '^e[0-9]{1,2}$', description: 'A duty id shown by agent_lab_cards.' }), text: text(300, 'What the agent must do, as an infinitive.'),
+    rules: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 80 }), { minItems: 1, maxItems: 3, description: 'Requirement ids of the owner rules it rests on.' })),
+    appliesWhen: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 300 }), Type.Null()], { description: 'When it applies; null: always.' })), remove: Type.Optional(Type.Literal(true)) }, closed),
+  Type.Object({ kind: Type.Literal('client'), wants: text(300, 'What the customer wants.'), writes: text(3000, 'Their exact first message.'), leaves: text(300, 'When they leave.') }, closed),
+  Type.Object({ kind: Type.Literal('turn'), turn }, closed),
+  Type.Object({ kind: Type.Literal('similar'), differs: Type.Union([
+    Type.Object({ kind: Type.Literal('when'), fact: factId, when, writes: text(3000, 'A new first message without the value.') }, closed),
+    Type.Object({ kind: Type.Literal('opening'), writes: Type.String({ minLength: 1, maxLength: 3000 }) }, closed),
+    Type.Object({ kind: Type.Literal('turn'), turn }, closed),
+  ], { description: 'The one difference; the original stays as it is.' }), title: text(160, 'By default the original\'s with the difference.') }, closed),
+  Type.Object({ kind: Type.Literal('remove') }, closed),
+]);
+const editParameters = Type.Object({ run: runRef, situation: number, change, later: Type.Optional(Type.Literal(true, { description: 'Check after the last change of a series, not now.' })) }, closed);
+type ChangeRequest = Static<typeof change>;
+
+export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, host: SituationHost): void {
+  pi.registerTool({
+    ...displayFor(TOOL.cards), name: TOOL.cards, label: 'Show situations',
+    description: 'Read-only. The situations of the draft (or of a run): number, title, status (ready, needs_owner, unusable, checking) and, for one waiting for the owner, its question with numbered answers and the decision key agent_lab_decide answers it with. situation: one situation whole — what the customer wants, writes first, knows (fact ids f1…) and when they leave; what the agent must do (duty ids e1…), each with the owner\'s rule; details: also how it is run and judged. Read a situation before changing it.',
+    parameters: Type.Object({ run: runRef, situation: Type.Optional(number), details: Type.Optional(Type.Boolean()) }, closed),
+    executionMode: 'sequential',
+    async execute(callId, params, signal, _onUpdate, ctx) {
+      signal?.throwIfAborted();
+      const directory = resolve(ctx.cwd, '.agent-lab');
+      try {
+        const lab = host.reading(directory);
+        const found = recordFor(await lab.list(), params.run, 'situations');
+        const job = host.operations.current(directory);
+        const { record, views, running, topics } = await situationsNow(lab, found, job?.kind === 'assessment' && job.id === found.id);
+        const readOnly = record.librarySnapshot?.formatVersion !== 2 || record.phase !== 'review' || record.trials.length > 0;
+        if (params.situation === undefined) {
+          return host.feedResult(callId, situationsOutput(record, views, { readOnly }), situationsFeed(record, views, running, topics), `Ситуации · ${runStamp(record)}`);
+        }
+        const view = views.find(item => item.number === params.situation);
+        if (!view) throw new NeedsOwner('unknown_reference', `Ситуации №${params.situation} нет. Спросите владельца, какая нужна.`, views.map(item => `${item.number}. ${item.brief.title}`).slice(0, 15));
+        return host.feedResult(callId, situationOutput(record, view, { readOnly, ...(params.details ? { details: view.details } : {}) }),
+          situationFeed(view, { running, ...(params.details ? { details: true } : {}) }), `Ситуация ${view.number} · ${runStamp(record)}`);
+      } catch (error) { return host.askOwner(callId, error); }
+    },
+  });
+  pi.registerTool({
+    ...displayFor(TOOL.edit), name: TOOL.edit, label: 'Change a situation',
+    description: 'Changes one situation of the draft; the owner confirms the exact change in a native dialog unless the new wording is verbatim from their own message. change.kind: fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen; remove; one duty always stays); client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several changes in one message: later:true on every one but the last.',
+    parameters: editParameters,
+    executionMode: 'sequential',
+    execute: (callId, params, signal, _onUpdate, ctx) => changeSituation(host, callId, ctx, signal, params),
+  });
+}
+
+/** What followed a change: the situation checked again (here, or later as a message), or why not now. */
+type CheckState = { status: 'none' | 'done' | 'running' | 'skipped' } | { status: 'needs_budget'; pendingJobs: number; remainingCalls: number } | { status: 'failed'; message: string };
+const CHECK_TEXT = (check: CheckState): string | undefined => check.status === 'running' ? 'Проверяю изменённую ситуацию в фоне — итог придёт сюда отдельным сообщением. Можно продолжать.'
+  : check.status === 'skipped' ? 'Проверю после последней правки серии.'
+  : check.status === 'needs_budget' ? `Чтобы проверить изменённую ситуацию, нужно вызовов модели: ${check.pendingJobs}, а в лимите осталось ${check.remainingCalls}. Поднять лимит — решение владельца (agent_lab_decide).`
+  : check.status === 'failed' ? `Проверка не завершилась: ${check.message} Правка сохранена.` : undefined;
+
+/** The situation the model named, in the draft a change goes to; a finished run is never changed, its change goes into a fresh draft of the same set. */
+async function draftSituation(lab: ExperimentLab, record: Experiment, number: number) {
+  if (record.librarySnapshot?.formatVersion !== 2) throw new CommandRefused(convertible(record) ? 'Это черновик старого формата: его ситуации не меняются. Их можно продолжить в новом формате (решение «Продолжить в новом формате»), а старый черновик останется как есть.'
+    : record.librarySnapshot ? 'Это ситуации старого формата: их можно посмотреть и повторить принятые, но не изменить.'
+    : 'Ситуации этого прогона записаны до наборов ситуаций: их можно посмотреть и повторить, но не изменить.');
+  const target = await lab.editableCards(record.id);
+  const context = await lab.cardContext(target.id);
+  const views = situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns });
+  const view = views.find(item => item.number === number);
+  if (!view) throw new UnknownReference('card', views.map(item => `№${item.number} ${clip(item.brief.title, 60)}`), `Ситуации №${number} в черновике нет.`);
+  return { target, context, view };
+}
+
+/**
+ * The owner's decision on a command. A wording the owner wrote in their own message is theirs as it stands;
+ * anything else — a decision about the customer, or words the model chose — is shown as the exact change in a
+ * native dialog, and only «Записать» makes it the owner's.
+ */
+async function decide(ctx: ExtensionContext, lab: ExperimentLab, id: string, command: CardCommand, heading: string): Promise<{ prepared: Prepared; grant: HostGrant } | undefined> {
+  const words = wordsOf(command);
+  const said = ownerMessages(ctx);
+  const verbatim = requiredAuthority(command) === 'owner-words' && words.length > 0 && words.every(text => said.some(message => contains(message, text)));
+  const joined = words.join('\n');
+  const prepared = await lab.prepareCardCommand(id, command, { via: 'pi-confirm', ...(verbatim && joined.length <= 1000 ? { ownerWords: joined } : {}) });
+  if (verbatim) return { prepared, grant: hostGrant(prepared, 'words') };
+  requireInteractive(ctx, 'Это решение владельца: его подтверждают в интерактивном терминале Pi. Без него: agent-lab cards --id RUN --input команда.json --yes.');
+  const lines = prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`));
+  const picked = await ctx.ui.select(safeText([heading, ...(lines.length ? ['', ...lines] : []), '', 'Записать это от вашего имени?'].join('\n')), ['Записать', 'Не записывать']);
+  return picked === 'Записать' ? { prepared, grant: hostGrant(prepared, 'confirmed') } : undefined;
+}
+
+/** The claims a change opened are checked within the agreed calls: here when it is quick, as a later message when it is not, or later on the owner's word. */
+async function recheck(host: SituationHost, ctx: ExtensionContext, owned: LabLease, id: string, number: number | undefined, later: boolean, signal: AbortSignal | undefined): Promise<CheckState> {
+  const { decision, before } = await owned.lab.recheckCards(id, { defer: later });
+  if (decision.action === 'not_needed') return { status: 'none' };
+  if (decision.action === 'skipped') return { status: 'skipped' };
+  if (decision.action === 'needs_budget') return { status: 'needs_budget', pendingJobs: decision.pendingJobs, remainingCalls: decision.remainingCalls };
+  const interactive = isInteractive(ctx) && !!ctx.ui;
+  const inline = !interactive ? (await owned.lab.waitForIdle(), true) : await new Promise<boolean>(settle => {
+    const timer = setTimeout(() => settle(false), host.inlineCheckMs);
+    const onAbort = () => settle(false);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    void owned.lab.waitForIdle().then(() => settle(true), () => settle(true)).finally(() => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); });
+  });
+  if (!inline) { host.backgroundCheck(ctx, owned, id, number); return { status: 'running' }; }
+  const after = await owned.lab.get(id);
+  return after.phase === 'review' && !after.error ? { status: before.usage.calls === after.usage.calls ? 'none' : 'done' } : { status: 'failed', message: safeText(after.error ?? after.message) };
+}
+
+/** The command a change stands for, with the heading of its dialog; refused with the reason when the change cannot be made as asked. */
+function commandOf(request: ChangeRequest, view: SituationView, library: LibraryV2): { command: CardCommand; heading: string } {
+  const title = `Ситуация ${view.number} «${view.brief.title}»`;
+  switch (request.kind) {
+    case 'fact': {
+      const card = library.cards.find(item => item.id === view.id)!;
+      const fact = request.fact === undefined ? undefined : card.client.knows.find(item => item.id === request.fact);
+      if (request.fact !== undefined && !fact) throw new UnknownReference('fact', card.client.knows.map(item => `${item.id} ${item.label}`), `У ситуации №${view.number} нет факта ${request.fact}.`);
+      const heading = `${title}: что знает клиент`;
+      if (request.remove) {
+        if (!fact) throw new CommandRefused('Скажите, какой факт убрать.');
+        return { command: { kind: 'remove_fact', cardId: card.id, factId: fact.id }, heading };
+      }
+      if (request.label !== undefined || request.value !== undefined) {
+        const disclosed = request.when ?? fact?.disclosure;
+        if (!disclosed) throw new CommandRefused('Скажите, когда клиент называет новый факт: сразу, если спросят, или не знает.');
+        return { command: { kind: 'set_fact', cardId: card.id, ...(fact ? { factId: fact.id } : {}), label: request.label ?? fact!.label,
+          ...(request.value !== undefined ? { value: request.value } : fact?.value !== undefined ? { value: fact.value } : {}), disclosure: disclosed }, heading };
+      }
+      if (!fact || !request.when) throw new CommandRefused('Скажите, что изменить в факте: когда клиент его называет, его текст или убрать его.');
+      return { command: { kind: 'set_fact_disclosure', cardId: card.id, factId: fact.id, disclosure: request.when }, heading };
+    }
+    case 'duty': {
+      const heading = `${title}: что должен агент`;
+      return request.remove ? { command: { kind: 'remove_expectation', cardId: view.id, expectationId: request.duty }, heading }
+        : { command: { kind: 'edit_expectation', cardId: view.id, expectationId: request.duty, ...(request.text !== undefined ? { text: request.text } : {}),
+          ...(request.rules ? { requirementIds: request.rules } : {}), ...(request.appliesWhen !== undefined ? { appliesWhen: request.appliesWhen } : {}) }, heading };
+    }
+    case 'client': return { command: { kind: 'edit_client', cardId: view.id, ...(request.wants !== undefined ? { wants: request.wants } : {}),
+      ...(request.writes !== undefined ? { writes: request.writes } : {}), ...(request.leaves !== undefined ? { leaves: request.leaves } : {}) }, heading: `${title}: клиент` };
+    case 'turn': return { command: { kind: 'set_turn', cardId: view.id, turn: request.turn }, heading: `${title}: поворот` };
+    case 'similar': {
+      const { differs } = request;
+      return { heading: `Похожая на ситуацию ${view.number} «${view.brief.title}»`, command: { kind: 'add_similar', parentId: view.id, ...(request.title !== undefined ? { title: request.title } : {}),
+        change: differs.kind === 'when' ? { kind: 'disclosure', factId: differs.fact, disclosure: differs.when, ...(differs.writes !== undefined ? { writes: differs.writes } : {}) } : differs } };
+    }
+    case 'remove': return { command: { kind: 'remove_card', cardId: view.id }, heading: `Убрать ситуацию ${view.number} «${view.brief.title}» из черновика?` };
+  }
+}
+
+/**
+ * One change of one situation: the draft, the owner's decision, the new revision, the check, and an answer with
+ * «было → стало» and the situation's status now.
+ */
+async function changeSituation(host: SituationHost, callId: string, ctx: ExtensionContext, signal: AbortSignal | undefined, params: Static<typeof editParameters>): Promise<AgentToolResult<unknown>> {
+  const { run, situation, change: request, later } = params;
+  const directory = resolve(ctx.cwd, '.agent-lab');
+  let handedOver = false;
+  try {
+    const found = recordFor(await host.reading(directory).list(), run, 'situations');
+    const owned = await host.open(ctx.cwd);
+    try {
+      await owned.lab.init();
+      const { target, context, view } = await draftSituation(owned.lab, found, situation);
+      const built = commandOf(request, view, context.library);
+      const decided = await decide(ctx, owned.lab, target.id, built.command, built.heading);
+      if (!decided) return host.feedResult(callId, { applied: false, declined: true, instruction: 'The owner did not confirm. Nothing was written; do not ask again unless they do.' },
+        { tone: 'warning', rows: [row('Не записано: вы не подтвердили.')] }, `Ситуация ${view.number} не изменена`);
+      await owned.lab.applyCardCommand(target.id, decided.prepared, decided.grant);
+      // A new situation (a similar one) is read by its id: its number is new.
+      const subject = built.command.kind === 'add_similar' ? decided.prepared.scope[0]! : view.id;
+      const removed = built.command.kind === 'remove_card';
+      const check = removed ? { status: 'none' as const } : await recheck(host, ctx, owned, target.id, view.number, !!later, signal);
+      handedOver = check.status === 'running';
+      const fresh = await host.reading(directory).cardContext(target.id);
+      const after = situationViews(fresh.experiment, { evidence: fresh.evidence, numbers: fresh.numbers, maxTurns: fresh.experiment.settings.maxTurns }).find(item => item.id === subject);
+      const changes = decided.prepared.diff.flatMap(item => item.changes.map(changeText));
+      const copied = target.copiedFrom && target.copiedFrom !== target.id;
+      const headline = removed ? `Ситуация ${view.number} убрана из черновика; исходные разговоры и прошлые прогоны не тронуты.`
+        : after ? statusText(after, check.status === 'running') : `Ситуация ${view.number} изменена.`;
+      // The answer first, then what changed; the rest of what the owner may need to know shares the last line.
+      const tail = [copied ? 'прошлый прогон не меняется: правка — в черновике того же набора' : '', CHECK_TEXT(check) ?? ''].filter(Boolean).join('; ');
+      const feed: Feed = { tone: removed || after?.status === 'ready' ? 'success' : 'warning',
+        rows: [row(headline, 'text', true), ...changes.slice(0, 2).map(text => row(text)), ...(changes.length > 2 ? [row(`и ещё ${changes.length - 2}`, 'muted')] : []),
+          ...(tail ? [row(tail.charAt(0).toLocaleUpperCase('ru') + tail.slice(1), 'muted')] : [])],
+        ...(after ? { more: situationRows(briefRows(after, { running: check.status === 'running' })), expand: 'вся ситуация' } : {}) };
+      const output = after ? situationOutput(fresh.experiment, after, { applied: true, changes, check }) : { run: target.id, applied: true, changes, check };
+      return host.feedResult(callId, { ...output, ...(copied ? { unchangedRun: target.copiedFrom, instruction: 'The finished run never changes, so the change went into a fresh draft of the same set. Say so in one phrase and keep working on this draft.' } : {}),
+        ...(check.status === 'running' ? { checkNote: 'The check continues in the background and reports back as a message. Do not wait for it or poll; further changes are fine.' } : {}) },
+        feed, `Ситуация ${after?.number ?? view.number} · ${runStamp(found)}`);
+    } finally { if (!handedOver) await owned.close(); }
+  } catch (error) {
+    if (error instanceof CommandRefused) return host.feedResult(callId, { applied: false, refused: error.message, instruction: 'Nothing was written. Tell the owner why in one sentence; do not repeat the same call.' },
+      { tone: 'warning', rows: [row(safeText(error.message))] }, 'Не записано');
+    if (error instanceof LibraryConflict) return host.feedResult(callId, { applied: false, stale: true, message: error.message, instruction: 'The draft changed since it was read. Read it again with agent_lab_cards and decide on the fresh state.' },
+      { tone: 'warning', rows: [row(safeText(error.message)), row('Ничего не записано.', 'muted')] }, 'Ситуации изменились');
+    if (error instanceof UnknownReference) return host.askOwner(callId, new NeedsOwner('unknown_reference', `${error.message} Есть: ${error.allowed.slice(0, 12).join('; ')}.`, error.allowed.slice(0, 12)));
+    return host.askOwner(callId, error);
+  }
+}

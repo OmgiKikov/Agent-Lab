@@ -20,22 +20,27 @@ export function registered(onUserMessage?: (message: unknown) => void, options: 
   const tools = new Map<string, ToolDefinition>();
   const contexts: { content: string; display: boolean }[] = [];
   const userMessages: unknown[] = [];
+  /** The tools the model sees, as Pi keeps them: its own four first, then whatever the extension activates. */
+  const active = { names: ['read', 'bash', 'edit', 'write'] };
   let shutdown!: () => Promise<void>;
   let command!: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
   let beforeAgentStart!: (event: { systemPrompt: string }, ctx: ExtensionContext) => Promise<{ systemPrompt: string } | undefined>;
+  let sessionStart!: (event: unknown, ctx: ExtensionContext) => Promise<void>;
   agentLab({
     registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
     registerCommand: (name: string, options: { handler: typeof command }) => { assert.equal(name, 'agent-lab'); command = options.handler; },
     on: (name: string, handler: () => Promise<void>) => {
       if (name === 'session_shutdown') shutdown = handler;
       else if (name === 'before_agent_start') beforeAgentStart = handler as typeof beforeAgentStart;
-      else assert.equal(name, 'session_start');
+      else { assert.equal(name, 'session_start'); sessionStart = handler as typeof sessionStart; }
     },
     sendMessage: (message: { content: string; display: boolean }, options: { deliverAs: string }) => { assert.equal(options.deliverAs, 'followUp'); contexts.push(message); },
     sendUserMessage: (message: unknown, options: { deliverAs: string; expandPromptTemplates: boolean }) => { assert.equal(options.deliverAs, 'followUp'); assert.equal(options.expandPromptTemplates, false); userMessages.push(message); onUserMessage?.(message); },
+    getActiveTools: () => [...active.names],
+    setActiveTools: (names: string[]) => { active.names = [...names]; },
   } as unknown as ExtensionAPI, options);
-  assert.ok(shutdown); assert.ok(command); assert.ok(beforeAgentStart);
-  return { tools, shutdown, command, beforeAgentStart, contexts, userMessages };
+  assert.ok(shutdown); assert.ok(command); assert.ok(beforeAgentStart); assert.ok(sessionStart);
+  return { tools, shutdown, command, beforeAgentStart, sessionStart, contexts, userMessages, active };
 }
 export function output(result: Awaited<ReturnType<ToolDefinition['execute']>>) {
   return JSON.parse(result.content.filter(c => c.type === 'text').map(c => c.text).join('\n'));

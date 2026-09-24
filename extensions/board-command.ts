@@ -2,32 +2,30 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
-import { hostGrant } from '../src/card/commands.js';
 import type { CardCommand } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
-import { conversionText } from '../src/card/convert.js';
 import { convertible } from '../src/card/legacy-v1.js';
 import { pendingReviewCalls } from '../src/card/prepare.js';
 import { situationViews, type SituationAction, type SituationView } from '../src/card/view.js';
-import { isRunning, type Experiment } from '../src/contracts.js';
+import { isRunning } from '../src/contracts.js';
 import { demoInput } from '../src/demo.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
-import { draftHash, type ExperimentLab } from '../src/experiment.js';
+import type { ExperimentLab } from '../src/experiment.js';
 import { decisions, type DecisionChoice } from '../src/inbox.js';
 import { situationCoverage } from '../src/miner/cards.js';
 import { recurringProblems } from '../src/problems.js';
 import { accuracyParts } from '../src/result-text.js';
 import { buildResultView } from '../src/result-view.js';
 import { plannedTrials } from '../src/run.js';
-import { libraryHash } from '../src/scenario-library.js';
 import { agentSpaces, type AgentSpace } from '../src/workspace.js';
 import { safeText } from '../src/text.js';
 import { progressText, scenarioPlan } from './conversation.ts';
+import { applySituationCommand, logsOf, settle, writer, type DecisionSurface } from './decisions.ts';
 import type { LabHost } from './host.ts';
 import { recordMark } from './judge-review.ts';
 import { ask, boardDiscussionContext, inputError, requireInteractive } from './lab-ui.ts';
 import { cardPlan, launchRun } from './launch.ts';
-import type { LabLease, SessionOperation } from './operations.ts';
+import type { SessionOperation } from './operations.ts';
 import { newState, showWorkspace, type WorkspaceAction, type WorkspaceState, type WorkspaceView } from './workspace.ts';
 import type { SpaceData } from './workspace-screens.ts';
 
@@ -134,7 +132,8 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
   return {
     space, ...(set ? { set } : {}), runs, now,
     // A first-format draft is not editable, but it has one decision: to go on in the new format.
-    decisions: decisions({ ...(set && (set.editable || convertible(set.record)) ? { draft: { record: set.record, views: set.views, pendingCalls } } : {}), ...(finished[0] ? { run: finished[0] } : {}), now }),
+    decisions: decisions({ ...(set && (set.editable || convertible(set.record)) ? { draft: { record: set.record, views: set.views, pendingCalls } } : {}), ...(finished[0] ? { run: finished[0] } : {}),
+      logs: finished[0] ? await logsOf(reader.store, finished[0].record) : [], now }),
     problems: recurringProblems(finished),
     ...(active ? { progress: { text: progressText(active, now.getTime()), share, stoppable: job?.id === active.id } } : {}),
   };
@@ -190,21 +189,9 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
         if (space) { state.space = space.key; if (found[0]!.trials.length) { state.area = 'runs'; state.stack = [{ kind: 'run', runId: found[0]!.id }]; } }
       }
       const inform = (text: string, tone: 'success' | 'warning' | 'error' | 'text' = 'success') => { state.notice = { text: safeText(text), tone }; };
-      /**
-       * A write needs the writer's lease; long work hands it to the session (`handOver`), which releases it when the work
-       * ends; everything else gives it back at once. The session knows its lease by identity, so the lease itself is handed over.
-       */
-      const writing = async <T>(work: (lab: ExperimentLab, handOver: (start: (lease: LabLease) => void) => void) => Promise<T>, pendingCheck: 'cancel' | 'wait' = 'cancel'): Promise<T> => {
-        // A run that has just ended is still handing over its result: a write waits for that instead of failing.
-        const finishing = operations.current(directory);
-        if (finishing && finishing.kind !== 'assessment' && !isRunning((await finishing.lab.get(finishing.id)).phase)) await finishing.done;
-        const lease = await open(ctx.cwd, pendingCheck);
-        let kept = false;
-        try {
-          await lease.lab.init();
-          return await work(lease.lab, start => { start(lease); kept = true; });
-        } finally { if (!kept) await lease.close(); }
-      };
+      // A write needs the writer's lease; long work hands it to the session, which releases it when the work ends.
+      const writing = writer(operations, open, ctx.cwd, directory);
+      const surface: DecisionSurface = { ctx, origin: 'board', writing, background };
       while (true) {
         const job = operations.current(directory);
         const view = await workspaceView(reading(), state, job);
@@ -216,7 +203,7 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
           if (action.type === 'new') {
             const words = request.startsWith('/') || request.startsWith('~') ? `Проверь агента в ${request}` : await ctx.ui.editor('Какого агента проверить и где лежат логи · своими словами', '');
             if (!words?.trim()) continue;
-            handoff = { request: words, context: { task: 'Prepare a new Agent Lab draft. Ask once for optional real dialogue logs or an explicit choice to start without them; honor the answer already given in this conversation. Read the authorized local agent project and relevant materials; the agent may be connected later — Lab asks right before the run. Use agent_lab_build, then explain the situations found in plain language and use agent_lab_run when the user asked to check the agent. Do not claim human review. Follow the agent-builder skill.' } };
+            handoff = { request: words, context: { task: 'Prepare situations for the owner\'s agent with agent_lab_prepare: Lab finds the logs, the rules and how the agent starts in the project folder and asks the owner natively what it cannot settle. The agent may be connected later — Lab asks right before the run. Then say in plain words what was found and offer agent_lab_run for the ready situations. Never claim a review the owner did not make.' } };
             break;
           }
           if (action.type === 'demo') {
@@ -253,7 +240,7 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             }
             const decided = await situationCommand(ctx, chosen, situation);
             if (!decided) continue;
-            inform(await applyCommand(record, situation, decided));
+            inform(await applySituationCommand(surface, record, situation, decided));
             continue;
           }
           if (action.type === 'decide') {
@@ -313,25 +300,6 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
         pi.sendUserMessage(handoff.request, { deliverAs: 'followUp', expandPromptTemplates: false });
       }
 
-      /**
-       * Applies a situation's command with the owner's grant and checks the situation again — in the background when that
-       * takes calls. A run that happened never changes: a change of its situations goes into a fresh draft of the same set.
-       */
-      async function applyCommand(record: Experiment, situation: SituationView, decided: { command: CardCommand; words?: string }): Promise<string> {
-        return writing(async (lab, handOver) => {
-          const target = await lab.editableCards(record.id);
-          const copied = target.copiedFrom && target.copiedFrom !== target.id ? ' Правка — в новом черновике того же набора; прошлый прогон не меняется.' : '';
-          const prepared = await lab.prepareCardCommand(target.id, decided.command, { via: 'board', ...(decided.words ? { ownerWords: decided.words } : {}) });
-          // The key press and the pick in the native dialog are the owner's decision; text they typed is their own words.
-          await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, decided.words ? 'words' : 'confirmed'));
-          if (decided.command.kind === 'remove_card') return `Ситуация ${situation.number} убрана из черновика.${copied}`;
-          const check = await lab.recheckCards(target.id);
-          if (check.decision.action === 'run') { handOver(lease => background.check(ctx, lease, target.id, situation.number)); return `Ситуация ${situation.number}: записано. Проверяю её — итог появится здесь и в чате.${copied}`; }
-          return check.decision.action === 'needs_budget' ? `Записано. На проверку не хватает лимита: нужно вызовов ${check.decision.pendingJobs}, осталось ${check.decision.remainingCalls}.${copied}`
-            : `Ситуация ${situation.number}: записано.${copied}`;
-        });
-      }
-
       /** One choice in the queue of decisions; 'handoff' when it went to the conversation. */
       async function decide(choice: DecisionChoice, data: SpaceData): Promise<string | 'handoff' | undefined> {
         const action = choice.action;
@@ -341,7 +309,7 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             const situation = data.set?.views.find(view => view.number === action.situation);
             if (!situation || !record) return undefined;
             const decided = await situationCommand(ctx, action.kind === 'answer' ? { kind: 'answer', choice: action.choice } : { kind: 'remove', label: choice.label }, situation);
-            return decided ? `Решено: ${await applyCommand(record, situation, decided)}` : undefined;
+            return decided ? `Решено: ${await applySituationCommand(surface, record, situation, decided)}` : undefined;
           }
           case 'add_rule': {
             const situation = data.set?.views.find(view => view.number === action.situation);
@@ -351,47 +319,24 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             return 'handoff';
           }
           case 'check_connection':
-            handoff = { request: 'Проверь подключение к агенту', context: { task: 'The owner asked from the workspace to check the connection to the agent: use agent_lab_connection (check) with the remembered connection, or ask how to start the agent.' } };
+            handoff = { request: 'Проверь подключение к агенту', context: { task: 'The owner asked from the workspace to check the connection to the agent: show what was not measured with agent_lab_explain and ask the owner whether the agent runs and how it is started; a new way to start it goes to agent_lab_run as agent.' } };
             return 'handoff';
           case 'raise_limit':
+            // A higher limit is spending: the key alone does not raise it, the owner confirms the number.
             if (!await ask(ctx, `Поднять лимит до ${action.to} вызовов модели?`, ['Лимит нужен, чтобы проверить изменённые ситуации; потраченное не сбрасывается.'], 'Поднять лимит')) return undefined;
-            return writing(async (lab, handOver) => {
-              const draft = await lab.get(action.runId);
-              await lab.updateDraft(draft.id, draftHash(draft), { settings: { maxCalls: action.to } });
-              const check = await lab.recheckCards(draft.id, { explicit: true });
-              if (check.decision.action === 'run') handOver(lease => background.check(ctx, lease, draft.id, undefined));
-              return `Решено: лимит поднят до ${action.to}. Проверяю ситуации — итог появится здесь и в чате.`;
-            });
-          case 'check_situations':
-            return writing(async (lab, handOver) => {
-              const check = await lab.recheckCards(action.runId, { explicit: true });
-              if (check.decision.action !== 'run') return 'Проверять нечего: все ситуации проверены.';
-              handOver(lease => background.check(ctx, lease, action.runId, undefined));
-              return 'Проверяю ситуации — итог появится здесь и в чате.';
-            });
-          case 'resume_preparation':
-            return writing(async (lab, handOver) => {
-              const draft = await lab.get(action.runId);
-              if (!draft.librarySnapshot) throw new Error('Нет сохранённой подготовки, которую можно продолжить.');
-              await lab.resumePreparation(draft.id, libraryHash(draft.librarySnapshot));
-              handOver(lease => background.preparation(ctx, lease, draft.id));
-              return 'Продолжаю подготовку с сохранённого места — ситуации придут в чат.';
-            });
-          case 'convert_draft':
-            return writing(async lab => {
-              const text = conversionText(await lab.convertV1Draft(action.runId));
-              return [text.summary, ...text.left.slice(0, 1), text.check].join(' ');
-            });
+            return settle(surface, action, data.runs.map(run => run.record));
           case 'reassess': {
             const run = data.runs.find(item => item.record.id === action.runId)?.record;
             if (!run || !await ask(ctx, `Переоценить ${run.trials.length} записанных разговоров судьёй?`,
               ['Агент не запускается: судья заново оценивает записанные разговоры; результат будет отдельным прогоном.', `Не больше ${run.settings.maxCalls} вызовов модели.`], 'Переоценить')) return undefined;
-            return writing(async (lab, handOver) => {
-              const next = await lab.reassess(run.id, {});
-              handOver(lease => background.detach(ctx, lease, next.id, 'board'));
-              return 'Судья оценивает разговоры заново — новый результат появится в «Прогонах».';
-            });
+            return settle(surface, action, data.runs.map(item => item.record));
           }
+          case 'name_log_version': {
+            const version = (await ctx.ui.editor('Какая версия агента записала логи · как вы её называете', ''))?.trim();
+            return version ? settle(surface, { kind: 'declare_log_version', importId: action.importId, version }, data.runs.map(run => run.record)) : undefined;
+          }
+          case 'check_situations': case 'resume_preparation': case 'convert_draft': case 'declare_log_version':
+            return settle(surface, action, data.runs.map(run => run.record));
           case 'open_situation': case 'open_situations': case 'open_conversation': return undefined;
         }
       }

@@ -35,8 +35,8 @@ test('history remains readable while another instance owns the data directory', 
   try {
     session.state.steps = [CLOSE];
     await command(running.id.slice(0, 8), session.ctx);
-    const inspected = output(await tools.get('agent_lab_inspect')!.execute('read', { id: running.id }, undefined, undefined, session.ctx));
-    assert.equal(inspected.phase, 'evaluating');
+    const read = output(await tools.get('agent_lab_cards')!.execute('read', { run: running.id }, undefined, undefined, { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext));
+    assert.equal(read.run, running.id, 'the chat reads the run another instance is writing');
     // The run opens on its own screen, the work going on above what it has recorded so far.
     assert.match(session.screens[0]!, /Прогон: \d+ из \d+ разговор/);
     assert.equal(session.selectCalls.length, 0, 'leaving a reader asks nothing');
@@ -78,10 +78,9 @@ test('a run started in the workspace outlives it and releases ownership after co
 
 test('в разговоре судьи 1–3 сохраняют согласие, несогласие с причиной и сомнение', { timeout: 120000 }, async () => {
   const fixture = await boardFixture('agent-lab-board-agree-');
-  const { tools, shutdown, command } = registered();
+  const { shutdown, command } = registered();
   const session = workspaceSession(fixture.cwd);
-  const inspect = async () => output(await tools.get('agent_lab_inspect')!.execute('board', { id: fixture.record.id }, undefined, undefined,
-    { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext));
+  const inspect = async () => new ExperimentStore(join(fixture.cwd, '.agent-lab')).get(fixture.record.id);
   const titleOf = (trialId: string) => fixture.record.scenarios.find(card => card.id === fixture.record.trials.find(trial => trial.id === trialId)!.scenarioId)!.title;
   try {
     // The run opens on its result; Enter opens the first cause's conversation; «2» — «нет, судья ошибся» — always asks why.
@@ -110,7 +109,7 @@ test('в разговоре судьи 1–3 сохраняют согласие
     await command(fixture.record.id, session.ctx);
     const unsure = await inspect();
     assert.equal(unsure.humanReviews.length, 2);
-    const doubt = unsure.humanReviews.at(-1);
+    const doubt = unsure.humanReviews.at(-1)!;
     assert.equal(doubt.source, 'quick'); assert.equal(doubt.verdict, 'unknown');
     assert.equal(doubt.note, 'Быстрая отметка: не могу сказать.');
     assert.equal(noticeOf(session.screens.at(-1)!), `Отмечено: не знаю · «${titleOf(doubt.trialId)}».`);
@@ -140,11 +139,10 @@ const markAction = (record: Experiment, trialId: string, answer: string, over: R
 
 test('повтор ответа, длинная причина и сменившаяся оценка судьи ничего не пишут и названы словами', { timeout: 120000 }, async () => {
   const fixture = await boardFixture('agent-lab-board-edges-');
-  const { tools, shutdown, command } = registered();
+  const { shutdown, command } = registered();
   const session = workspaceSession(fixture.cwd);
   const notices: string[] = [];
-  const inspect = async () => output(await tools.get('agent_lab_inspect')!.execute('edges', { id: fixture.record.id }, undefined, undefined,
-    { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext));
+  const inspect = async () => new ExperimentStore(join(fixture.cwd, '.agent-lab')).get(fixture.record.id);
   const target = judgedSituations(fixture.record).find(item => item.judgeVerdict === 'fail');
   assert.ok(target, 'у демо-прогона есть провал, с которым можно не согласиться');
   /** One opening that answers the same conversation, so an answer can be given twice. */
@@ -241,12 +239,11 @@ const GOAL_AND_RULES_OPTIONS = ['Запрос выполнен — судья о
 test('на двойном провале «нет» спрашивает, с чем именно, и пишет ответ на каждую оценку', { timeout: 180000 }, async () => {
   const fixture = await boardFixture('agent-lab-board-both-', goalAndRules);
   const unchanged = await boardFixture('agent-lab-board-both-still-', record => { goalAndRules(record); record.settings.repeats = 2; });
-  const { tools, shutdown, command } = registered();
+  const { shutdown, command } = registered();
   const session = workspaceSession(fixture.cwd);
   const notices: string[] = [];
   type Review = { trialId: string; metricId: string; verdict: string; note: string; countingRules?: string; durationMs?: number };
-  const inspect = async (of = fixture) => output(await tools.get('agent_lab_inspect')!.execute('both', { id: of.record.id }, undefined, undefined,
-    { cwd: of.cwd, hasUI: false, mode: 'print' } as ExtensionContext)).humanReviews as Review[];
+  const inspect = async (of = fixture) => (await new ExperimentStore(join(of.cwd, '.agent-lab')).get(of.record.id)).humanReviews as Review[];
   const titleOf = (trialId: string) => fixture.record.scenarios.find(item => item.id === fixture.record.trials.find(trial => trial.id === trialId)!.scenarioId)!.title;
   const situations = judgedSituations(fixture.record);
   assert.equal(situations.length, 2);
@@ -351,12 +348,11 @@ test('на двойном провале «нет» спрашивает, с ч�
 
 test('проверка судьи завершается сама, когда даны все ответы; «не знаю» держит её открытой, новый ответ открывает снова', { timeout: 120000 }, async () => {
   const fixture = await boardFixture('agent-lab-board-finalize-');
-  const { tools, shutdown, command } = registered();
+  const { shutdown, command } = registered();
   const session = workspaceSession(fixture.cwd);
   const queue = judgeAgreement(fixture.record).unmarked;
   assert.ok(queue.length > 1, 'the demo run waits for several answers');
-  const phase = async () => output(await tools.get('agent_lab_inspect')!.execute('phase', { id: fixture.record.id }, undefined, undefined,
-    { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext)).phase;
+  const phase = async () => (await new ExperimentStore(join(fixture.cwd, '.agent-lab')).get(fixture.record.id)).phase;
   try {
     // A doubt on the first, agreement on the rest: the review stays open.
     session.state.steps = [markAction(fixture.record, queue[0]!, 'unsure'), ...queue.slice(1).map(id => markAction(fixture.record, id, 'agree')), CLOSE];
@@ -429,9 +425,7 @@ test('в рабочем пространстве запуск старого ч�
     assert.ok(plan.endsWith('Запуск подтверждает ожидания ситуаций выше. Оценки судьи вы не проверяли.'));
   }
   // The confirmation seals every card's definition, so a set not made from production logs also shows the opening and the exact checks.
-  const scope = output(await tools.get('agent_lab_inspect')!.execute('scope', { id: first.id }, undefined, undefined, session.ctx));
-  type ScopeCard = { user: { opening: string }; checks: unknown[]; provenance: string; title: string };
-  const cards = scope.scenarios as ScopeCard[];
+  const cards = (await new ExperimentStore(join(directory, '.agent-lab')).get(first.id)).scenarios;
   assert.ok(cards.length > 1 && cards.every(s => s.provenance !== 'production'), 'демо-набор не из логов');
   assert.match(plans[1]!, /Что вы подтверждаете дословно:/);
   for (const scenario of cards) assert.ok(plans[1]!.includes(`Запрос: ${scenario.user.opening}`), scenario.title);
@@ -439,14 +433,14 @@ test('в рабочем пространстве запуск старого ч�
   assert.equal(startCalls.length, 1, 'отказ ничего не запускает');
   assert.equal(startCalls[0]!.requireAccepted, true);
   assert.equal(startCalls[0]!.reviewer, 'expectations', 'подтверждены ожидания, а не результаты');
-  const ran = output(await tools.get('agent_lab_inspect')!.execute('ran', { id: first.id }, undefined, undefined, session.ctx));
-  assert.equal(ran.acceptedDraftHash, ran.draftHash, 'подтверждение записано перед запуском');
-  assert.ok(ran.trialCount > 0);
+  const ran = await new ExperimentStore(join(directory, '.agent-lab')).get(first.id);
+  assert.ok(ran.acceptedDraftHash, 'подтверждение записано перед запуском');
+  assert.ok(ran.trials.length > 0);
 
   // Expectations confirmed in the chat are not asked again; a refused start is said in the workspace.
   const second = await legacyDraftIn(other, { count: 2 });
   const chat = { cwd: other, mode: 'tui', hasUI: true, ui: { select: async (_title: string, options: string[]) => options[0] } } as unknown as ExtensionContext;
-  assert.equal(output(await tools.get('agent_lab_accept')!.execute('accept', { id: second.id }, undefined, undefined, chat)).accepted, true);
+  assert.equal(output(await tools.get('agent_lab_run')!.execute('accept', { action: 'accept', run: second.id }, undefined, undefined, chat)).accepted, true);
   refuse = true;
   const later = workspaceSession(other);
   later.state.steps = [[KEY.right, KEY.enter], CLOSE];

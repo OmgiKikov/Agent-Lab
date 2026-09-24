@@ -1,6 +1,7 @@
 import type { Dirent } from 'node:fs';
 import { open, readdir, readFile, stat } from 'node:fs/promises';
-import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CONNECTION_FORMAT, readConnection } from './connection.js';
 import { runnableTargetSchema, type RunnableTarget } from './contracts.js';
 import { parseImportText } from './imports.js';
@@ -27,7 +28,8 @@ export type AgentEvidence =
   | { kind: 'factory'; file: string }                                 // exports createSession, the module contract
   | { kind: 'json_lines'; file: string }                              // reads requests from stdin line by line, answers JSON
   | { kind: 'protocol_fields'; file: string }                         // names the fields of an Agent Lab request
-  | { kind: 'url'; file: string; url: string };                       // a local address in a config file
+  | { kind: 'url'; file: string; url: string }                        // a local address in a config file
+  | { kind: 'interpreter'; file: string };                            // the project's own Python environment: .venv/bin/python
 export type Confidence = 'high' | 'medium' | 'low';
 /** A connection target ready for use (absolute paths) and why Lab believes it is the agent. */
 export interface AgentCandidate { target: RunnableTarget; confidence: Confidence; evidence: AgentEvidence[] }
@@ -60,6 +62,10 @@ const RUN_SCRIPTS = new Set(['start', 'agent', 'bot', 'serve']);
 /** Characters of shell syntax (chains, pipes, variables, quoting): such a script is not one plain command. */
 const SHELL = '&|;<>$`"\'()*';
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]']);
+/** Where a project keeps its own Python, relative to the root: the agent runs with the packages installed there, not with whatever python is on PATH. */
+const PYTHON_ENVIRONMENTS = ['.venv/bin/python', 'venv/bin/python', '.venv/Scripts/python.exe', 'venv/Scripts/python.exe'];
+/** A plain interpreter name a package script or a Python agent is started with. */
+const PYTHONS = new Set(['python', 'python3']);
 const RANK: Record<Confidence, number> = { high: 0, medium: 1, low: 2 };
 
 interface Entry { path: string; rel: string; depth: number }
@@ -162,6 +168,12 @@ function packageScripts(manifest: unknown, file: Entry): Script[] {
   }).sort((a, b) => Number(!RUN_SCRIPTS.has(a.evidence.name)) - Number(!RUN_SCRIPTS.has(b.evidence.name)));
 }
 
+/** The project's own Python, when it keeps one; only its existence is checked — nothing is run or read. */
+async function projectPython(root: string): Promise<string | undefined> {
+  for (const file of PYTHON_ENVIRONMENTS) if (await stat(join(root, file)).then(info => info.isFile(), () => false)) return file;
+  return undefined;
+}
+
 /** Variable names only: the text after `=` is dropped on the spot, so a secret never reaches the result. */
 async function envNames(files: Entry[], reader: Reader): Promise<ProjectDetection['env']> {
   const names = new Set<string>();
@@ -230,6 +242,10 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
     }
   }
 
+  // A Python agent is started with the project's own environment when it keeps one.
+  const python = await projectPython(root);
+  const interpreter = (command: string): { command: string; evidence: AgentEvidence[] } => python && PYTHONS.has(command)
+    ? { command: join(root, python), evidence: [{ kind: 'interpreter', file: python }] } : { command, evidence: [] };
   for (const file of walked.files) {
     const language = languageOf(file.path), name = basename(file.path);
     if (!language || name.includes('.test.') || name.includes('.spec.')) continue;
@@ -237,15 +253,18 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
     if (source === undefined) continue;
     const facts = codeFacts(source, language), script = scripts.find(item => item.entry === file.path);
     if (!facts.factory && !facts.jsonLines) continue;
+    const started = interpreter(script ? script.argv[0]! : language === 'python' ? 'python3' : 'node');
     const evidence: AgentEvidence[] = [...(script ? [script.evidence] : []), { kind: facts.factory ? 'factory' : 'json_lines', file: file.rel },
-      ...(facts.protocol ? [{ kind: 'protocol_fields' as const, file: file.rel }] : [])];
+      ...(facts.protocol ? [{ kind: 'protocol_fields' as const, file: file.rel }] : []), ...(facts.factory ? [] : started.evidence)];
     add(`file:${file.path}`, facts.factory ? { kind: 'module', path: file.path }
-      : script ? { kind: 'command', command: script.argv[0], args: script.argv.slice(1), cwd: script.cwd }
-      : { kind: 'command', command: language === 'python' ? 'python3' : 'node', args: [file.rel], cwd: root }, evidence);
+      : script ? { kind: 'command', command: started.command, args: script.argv.slice(1), cwd: script.cwd }
+      : { kind: 'command', command: started.command, args: [file.rel], cwd: root }, evidence);
   }
   // A start script whose file shows no protocol is still how the owner runs the program: offered, with low confidence.
-  for (const script of scripts) if (RUN_SCRIPTS.has(script.evidence.name) && !drafts.has(`file:${script.entry}`))
-    add(`file:${script.entry}`, { kind: 'command', command: script.argv[0], args: script.argv.slice(1), cwd: script.cwd }, [script.evidence]);
+  for (const script of scripts) if (RUN_SCRIPTS.has(script.evidence.name) && !drafts.has(`file:${script.entry}`)) {
+    const started = interpreter(script.argv[0]!);
+    add(`file:${script.entry}`, { kind: 'command', command: started.command, args: script.argv.slice(1), cwd: script.cwd }, [script.evidence, ...started.evidence]);
+  }
   // A saved connection absorbs what the files it starts showed, so one agent is proposed once.
   for (const [key, draft] of drafts) if (key.startsWith('connection:')) for (const entry of entryFiles(draft.target, root)) {
     const same = drafts.get(`file:${entry}`);
@@ -285,13 +304,23 @@ export function evidenceText(evidence: AgentEvidence): string {
     case 'json_lines': return `${evidence.file}: читает запросы из stdin построчно и отвечает JSON`;
     case 'protocol_fields': return `${evidence.file}: знает поля запроса Agent Lab (sessionId, initialState)`;
     case 'url': return `${evidence.file}: адрес ${evidence.url}`;
+    case 'interpreter': return `${evidence.file}: окружение Python проекта — агент запустится с его пакетами`;
   }
 }
 
-/** How the owner recognises the agent: its start command, its module or its address. */
+/** A file as the owner finds it: inside `root` relative to it, elsewhere from ~ or whole — never a chain of «../». */
+function shownFile(file: string, root: string): string {
+  // The filesystem root is no project folder: a path relative to it would only lose its leading «/».
+  const inside = dirname(root) === root ? '' : relative(root, file);
+  if (inside && !inside.startsWith('..') && !isAbsolute(inside)) return inside;
+  const home = homedir();
+  return file.startsWith(`${home}${sep}`) ? `~${file.slice(home.length)}` : file;
+}
+
+/** How the owner recognises the agent: its start command, its module or its address; files are shown from where the agent starts. */
 export function targetLabel(target: RunnableTarget, root: string): string {
-  if (target.kind === 'command') return [target.command, ...target.args].join(' ');
-  return target.kind === 'module' ? `модуль ${relative(root, target.path)}` : target.url;
+  if (target.kind === 'command') return [target.command, ...target.args].map(part => isAbsolute(part) ? shownFile(part, target.cwd ?? root) : part).join(' ');
+  return target.kind === 'module' ? `модуль ${shownFile(target.path, root)}` : target.url;
 }
 
 /** One log in the proposal: how many conversations, how many rows did not fit, and for a table, that its reading is confirmed at import. */

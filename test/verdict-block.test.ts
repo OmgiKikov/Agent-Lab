@@ -11,6 +11,8 @@ import type { PaintTheme } from '../extensions/render/theme.ts';
 import { forgetFeeds, rememberFeed } from '../extensions/render/feed.ts';
 import { messageBlock, RUN_MESSAGE } from '../extensions/background.ts';
 import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type MetricAssessment, type Trial } from '../src/contracts.js';
+import { resultHash } from '../src/experiment.js';
+import { ExperimentStore } from '../src/store.js';
 import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { accuracyRow, chatBlock, fitRows, nextRows } from '../src/result-text.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
@@ -36,6 +38,7 @@ function registered() {
     on: (name: string, handler: () => Promise<void>) => { if (name === 'session_shutdown') shutdown = handler; },
     sendMessage: () => {},
     sendUserMessage: () => {},
+    getActiveTools: () => [], setActiveTools: () => {},
   } as unknown as ExtensionAPI);
   assert.ok(shutdown);
   return { tools, shutdown };
@@ -45,13 +48,13 @@ const output = (result: ToolResult) => JSON.parse(result.content.filter(c => c.t
 
 /** A finished demo run through the chat path: prepare the situations, then run the ready one — accepted in the run's own dialog. */
 async function demoRun(directory: string, tools: Map<string, ToolDefinition>) {
-  const ctx = { cwd: directory, mode: 'tui', hasUI: true, ui: { confirm: async () => true, select: async (_title: string, options: string[]) => options[0] } } as unknown as ExtensionContext;
+  const ctx = { cwd: directory, mode: 'tui', hasUI: true, ui: { select: async (_title: string, options: string[]) => options[0] } } as unknown as ExtensionContext;
   const call = async (name: string, params: unknown) => tools.get(name)!.execute('fixture', params, undefined, undefined, ctx);
-  const built = output(await call('agent_lab_build', { mode: 'demo' }));
+  const built = output(await call('agent_lab_prepare', { demo: true }));
   // The demo's second situation waits for the owner's answer; the ready one is accepted and run in one dialog.
-  const result = await call('agent_lab_run', { id: built.id });
-  const scenarios = output(await call('agent_lab_inspect', { id: built.id })).scenarios as { title: string; user: { opening: string } }[];
-  return { result, run: output(result), scenarios };
+  const result = await call('agent_lab_run', {});
+  const record = await new ExperimentStore(join(directory, '.agent-lab')).get(built.run);
+  return { result, run: output(result), record, scenarios: record.scenarios };
 }
 
 /** Pi's own tool row for the registered tool, with the result applied; the stripped, trimmed, non-empty lines. */
@@ -66,8 +69,8 @@ test('после agent_lab_run Pi рисует блок-вердикт из deta
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-verdict-block-'));
   const { tools, shutdown } = registered();
   t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
-  const { result, run } = await demoRun(directory, tools);
-  assert.equal(run.phase, 'results_review');
+  const { result, run, record } = await demoRun(directory, tools);
+  assert.equal(record.phase, 'results_review');
 
   // The session holds a kind, a version and two ids: no view, no text (REV-01, T-04-03).
   const details = result.details as VerdictDetails;
@@ -75,18 +78,18 @@ test('после agent_lab_run Pi рисует блок-вердикт из deta
   assert.equal(details.kind, VERDICT_KIND);
   assert.deepEqual(Object.keys(details).sort(), ['kind', 'resultKey', 'runId', 'version']);
   assert.equal(details.version, 1);
-  assert.equal(details.runId, run.id);
-  assert.equal(details.resultKey, `${run.id}:${run.resultHash}`);
-  // The model gets today's JSON plus the one new field that tells it the block is already shown (C-119).
+  assert.equal(details.runId, run.run);
+  assert.equal(details.resultKey, `${record.id}:${resultHash(record)}`);
+  // The model reads the result screen's lines and the one field that tells it the block is already shown (C-119).
   assert.equal(run.shownToOwner, SHOWN_TO_OWNER);
-  assert.ok(Array.isArray(run.resultLines) && run.resultLines.length > 0);
+  assert.ok(Array.isArray(run.lines) && run.lines.length > 0);
 
   // Pi's real tool row draws the block: the first chat row under the call row, the number among the rows.
   initTheme('dark', false);
   const view = viewFor(details);
   assert.ok(view, 'the view produced with the result is remembered for the block');
-  assert.ok(run.resultLines.some((line: string) => line.trim() === accuracyRow(view).text), 'the model reads the same number');
-  assert.equal(run.nextStep, nextRows(view, 'chat')[0]?.text);
+  assert.ok(run.lines.some((line: string) => line.trim() === accuracyRow(view).text), 'the model reads the same number');
+  assert.equal(run.next, nextRows(view, 'chat')[0]?.text);
   const { raw, lines } = toolRow(tools.get('agent_lab_run')!, result, 80);
   assert.equal(lines[0], '● Запускаю прогон', 'the action\'s own row, Claude-Code-like');
   assert.equal(lines[1], `└ ${accuracyRow(view).text}`, 'the number hangs under the action, in one piece');
@@ -97,7 +100,7 @@ test('после agent_lab_run Pi рисует блок-вердикт из deta
   const shown = lines.join('\n');
   assert.doesNotMatch(shown, /shownToOwner/);
   assert.doesNotMatch(shown, /уже показан владельцу/);
-  assert.doesNotMatch(shown, /"resultLines"/);
+  assert.doesNotMatch(shown, /"lines"/);
 });
 
 test('ни текст ситуаций, ни их названия не попадают в details', async t => {
@@ -128,7 +131,7 @@ test('без запомненного вида строка инструмент
   assert.equal(viewFor(result.details as VerdictDetails), null);
   const { raw, lines } = toolRow(tools.get('agent_lab_run')!, result, 80);
   assert.deepEqual(lines, ['● Запускаю прогон', `└ ${MISSING_RESULT}`], 'no id on screen: the owner asks for the result again');
-  assert.ok(!lines.join(' ').includes(run.id.slice(0, 8)));
+  assert.ok(!lines.join(' ').includes(run.run.slice(0, 8)));
   for (const line of raw) assert.ok(visibleWidth(line) <= 80);
 });
 

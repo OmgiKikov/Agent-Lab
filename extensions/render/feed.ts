@@ -143,23 +143,26 @@ export const contentText = (result: AgentToolResult<unknown>): string => safeTex
 /** The line of a tool call in the feed: what is being done, in the owner's words. No argument dump, no ids. */
 export function callText(tool: string, args: Record<string, unknown> | undefined): string {
   const a = args ?? {};
-  const card = typeof a.card === 'number' ? ` ${a.card}` : '';
-  if (tool === 'agent_lab_build') {
-    const file = typeof a.dialoguesFile === 'string' ? ` из ${a.dialoguesFile.split('/').at(-1)}` : ' из логов';
-    return a.mode === 'validate' ? `Собираю ситуации${file}` : a.mode === 'demo' ? 'Готовлю учебный пример' : 'Готовлю ситуации по вашим правилам';
+  const number = typeof a.situation === 'number' ? ` ${a.situation}` : '';
+  switch (tool) {
+    case 'agent_lab_status': return 'Смотрю, что уже есть';
+    case 'agent_lab_prepare': {
+      if (a.demo === true) return 'Готовлю учебный пример';
+      if (typeof a.suite === 'string') return 'Загружаю набор из файла';
+      if (a.withoutLogs === true) return 'Готовлю ситуации по вашим правилам';
+      return typeof a.logs === 'string' ? `Собираю ситуации из ${a.logs.split('/').at(-1)}` : 'Собираю ситуации из логов';
+    }
+    case 'agent_lab_cards': return number ? `Открываю ситуацию${number}` : 'Показываю ситуации';
+    case 'agent_lab_edit': {
+      const kind = (a.change as { kind?: unknown } | undefined)?.kind;
+      return kind === 'similar' ? `Добавляю похожую на ситуацию${number}` : kind === 'remove' ? `Убираю ситуацию${number}`
+        : `Меняю ситуацию${number}: ${kind === 'fact' ? 'что знает клиент' : kind === 'duty' ? 'что должен агент' : kind === 'turn' ? 'поворот' : 'клиент'}`;
+    }
+    case 'agent_lab_decide': return typeof a.decision === 'string' ? 'Записываю ваше решение' : 'Смотрю, что ждёт вашего решения';
+    case 'agent_lab_run': return a.action === 'stop' ? 'Останавливаю' : a.action === 'progress' ? 'Смотрю, как идёт работа' : a.action === 'accept' ? 'Утверждаю ситуации' : 'Запускаю прогон';
+    case 'agent_lab_results': return a.compare === true ? 'Сравниваю с прошлым прогоном' : a.report === true ? 'Сохраняю отчёт для заказчика' : typeof a.save === 'string' ? 'Сохраняю набор в файл' : 'Показываю результат';
+    case 'agent_lab_explain': return `Разбираю ситуацию${number}`;
+    case 'agent_lab_agree': return `Записываю вашу отметку о решении судьи${number ? ` по ситуации${number}` : ''}`;
+    default: return 'Agent Lab';
   }
-  if (tool === 'agent_lab_run') return a.action === 'stop' ? 'Останавливаю' : a.action === 'progress' ? 'Смотрю, как идёт работа' : 'Запускаю прогон';
-  if (tool === 'agent_lab_inspect') return a.failure !== undefined ? `Открываю ошибку ${String(a.failure)}` : a.dialogue || a.trialId ? 'Открываю разговор'
-    : a.compare ? 'Сравниваю с прошлым прогоном' : a.export ? 'Сохраняю отчёт для заказчика' : 'Показываю результат';
-  if (tool === 'agent_lab_cards') return card ? `Открываю ситуацию${card}` : 'Показываю ситуации';
-  const fixed: Record<string, string> = {
-    agent_lab_status: 'Смотрю, что уже есть', agent_lab_card_fact: `Меняю ситуацию${card}: что знает клиент`, agent_lab_card_expectation: `Меняю ситуацию${card}: что должен агент`,
-    agent_lab_card_client: `Меняю ситуацию${card}: клиент`, agent_lab_card_answer: `Записываю ваш ответ по ситуации${card}`, agent_lab_card_similar: `Добавляю похожую на ситуацию${card}`,
-    agent_lab_card_remove: `Убираю ситуацию${card}`, agent_lab_card_check: 'Проверяю ситуации', agent_lab_card_convert: 'Переношу ситуации в новый формат', agent_lab_resume_preparation: 'Продолжаю подготовку ситуаций',
-    agent_lab_edit: 'Меняю настройки прогона', agent_lab_accept: 'Утверждаю ситуации', agent_lab_repeat: 'Готовлю повтор набора',
-    agent_lab_suite: a.action === 'save' ? 'Сохраняю набор в файл' : a.action === 'load' ? 'Загружаю набор из файла' : 'Смотрю сохранённые наборы',
-    agent_lab_connection: a.action === 'check' ? 'Проверяю подключение к агенту' : 'Смотрю подключение к агенту', agent_lab_reassess: 'Переоцениваю сохранённые разговоры',
-    agent_lab_review: 'Показываю разговор для вашей оценки', agent_lab_agree: 'Записываю вашу отметку о решении судьи',
-  };
-  return fixed[tool] ?? 'Agent Lab';
 }

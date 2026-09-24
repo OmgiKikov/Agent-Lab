@@ -2,14 +2,13 @@ import { importBatch } from './scenario-library.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import { readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
-import { z } from 'zod';
-import { dialogueSchema, fingerprint, type Dialogue, type ValidationExclusion } from './contracts.js';
+import { dialogueSchema, type Dialogue, type ValidationExclusion } from './contracts.js';
 import { IMPORT_FILE_BYTES } from './limits.js';
 import { readConfirmedTable } from './spreadsheet/import.js';
 import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
 
 /**
- * Whether a logged dialogue can become a situation at all; the validation set and the scenario miner exclude by it.
+ * Whether a logged dialogue can become a situation at all; the scenario miner excludes by it before anything is spent.
  * Drop the whole dialogue: removing one masked turn would silently change its meaning.
  */
 export function validationDialogueIssue(dialogue: Pick<Dialogue, 'messages'>): Omit<ValidationExclusion, 'dialogueId'> | undefined {
@@ -17,15 +16,6 @@ export function validationDialogueIssue(dialogue: Pick<Dialogue, 'messages'>): O
   if (!users.length || users.length > 16) return { kind: 'length', reason: 'нужны 1–16 реплик клиента' };
   if (users.some(message => /[*#]/u.test(message.content) && !/[\p{L}\p{N}]/u.test(message.content))) return { kind: 'masked', reason: 'реплика клиента целиком скрыта обезличиванием' };
   return undefined;
-}
-
-/** Stable outcome-blind sample; the live simulator later answers from the recorded user facts. */
-export function selectValidationDialogues(dialogues: Dialogue[], count = 15): Dialogue[] {
-  if (!Number.isInteger(count) || count < 1 || count > 40) throw new Error('В validation set может быть от 1 до 40 карточек.');
-  return [...dialogues]
-    .filter(dialogue => !validationDialogueIssue(dialogue))
-    .sort((a, b) => fingerprint({ id: a.id, messages: a.messages }).localeCompare(fingerprint({ id: b.id, messages: b.messages })) || a.id.localeCompare(b.id))
-    .slice(0, count);
 }
 
 /** A JSON document, or JSON Lines: one row per non-empty line. The one reading of an import file, shared with project detection. */
@@ -67,9 +57,4 @@ export async function readDialogueImport(file: string, options: { directory?: st
   if (!options.directory) throw unconfirmedTable(file);
   const originalImport = await readConfirmedTable(file, options.directory);
   return { originalImport, dialogues: dialoguesOf(originalImport) };
-}
-
-/** Strict dialogue rows; library consumers use readDialogueImport. */
-export async function readData(file: string, options: { maxItems?: number } = {}) {
-  return z.array(dialogueSchema).min(1).max(options.maxItems ?? 200).parse(await readRawData(file));
 }

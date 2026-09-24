@@ -171,7 +171,7 @@ test('external state must not pass when the adapter never reported it', async t 
 
 import { doctor, readConnection, listSuites, rememberedConnection } from '../src/connection.js';
 import { compareRuns } from '../src/comparison.js';
-import { readData } from '../src/imports.js';
+import { readDialogueImport } from '../src/imports.js';
 
 test('reassessment never opens the target, preserves original evidence, versions criteria and validates citations', async t => {
   const adapter = runtime();
@@ -231,8 +231,8 @@ test('local JSONL imports keep the dialogue as written and name the broken line'
   const lab = await labFixture(t, runtime());
   const file = join(lab.store.directory, 'dialogues.jsonl');
   await writeFile(file, JSON.stringify({ id: 'real', messages: [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' }] }) + '\n');
-  const imported = await readData(file); assert.equal(imported[0].id, 'real');
-  await writeFile(file, '{bad}\n'); await assert.rejects(readData(file), /строке 1/);
+  const imported = await readDialogueImport(file); assert.equal(imported.originalImport.dialogues[0]!.id, 'real');
+  await writeFile(file, '{bad}\n'); await assert.rejects(readDialogueImport(file), /строке 1/);
 });
 
 test('draft edits cannot touch cards or launder their provenance: situations change only in the library', async t => {

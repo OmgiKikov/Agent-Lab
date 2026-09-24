@@ -9,6 +9,7 @@ import { accuracyParts, whenText } from '../src/result-text.js';
 import { agentLine } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
 import { clip, oneLine } from '../src/text.js';
+import { standing } from './records.ts';
 import type { Feed } from './render/feed.ts';
 import { GLYPH, type Row } from './render/theme.ts';
 
@@ -17,21 +18,13 @@ import { GLYPH, type Row } from './render/theme.ts';
  * ExperimentLab operations the workspace and the CLI use, all pure:
  *
  *   the owner's own messages of the session ──► the words a wording must be found in verbatim
- *   a human reference to a run («второй прогон», task words) ──► one stored run, or candidates
  *   a stored record ──► the summary rows of one action in the chat, details on expand
  *
  * Situations themselves are drawn by the shared projection (src/card/view.ts), results by result-text.ts.
- * On screen a run is named by its date and its agent, never by an id (ui-spec §2).
+ * On screen a run is named by its date and its agent, never by an id (ui-spec §2); the model names it by its id.
  */
 
 export { agentLine, agentName } from '../src/workspace.js';
-
-const SPACED = new Set('«»"\'`.,;:!?()[]{}<>—–-'.split(''));
-const fold = (value: string): string => {
-  let out = '';
-  for (const ch of value.toLocaleLowerCase('ru').replaceAll('ё', 'е')) out += SPACED.has(ch) || /\s/u.test(ch) ? ' ' : ch;
-  return out.trim().split(' ').filter(Boolean).join(' ');
-};
 
 type BranchReader = { sessionManager?: { getBranch?: () => unknown[] } };
 
@@ -51,35 +44,6 @@ export function ownerMessages(ctx: BranchReader): string[] {
       ? content.flatMap(part => part && typeof part === 'object' && (part as { type?: string }).type === 'text' ? [String((part as { text?: unknown }).text ?? '')] : []).join('\n') : '';
     return text.trim() ? [text.trim()] : [];
   });
-}
-
-/* ───────────────────────────── references to runs ───────────────────────────── */
-
-export type Resolved<T> = { kind: 'one'; item: T } | { kind: 'none' } | { kind: 'many'; items: T[] };
-const pick = <T>(items: T[]): Resolved<T> => items.length === 1 ? { kind: 'one', item: items[0]! } : items.length ? { kind: 'many', items } : { kind: 'none' };
-
-/** Match by exact id, id prefix, 1-based position, exact name, then a name fragment. */
-function resolveBy<T>(items: T[], ref: string, id: (item: T) => string, name: (item: T) => string): Resolved<T> {
-  const raw = ref.trim();
-  if (!raw) return { kind: 'none' };
-  const exact = items.filter(item => id(item) === raw);
-  if (exact.length) return pick(exact);
-  const position = /^#?(\d{1,3})$/.exec(raw);
-  if (position) { const item = items[Number(position[1]) - 1]; return item ? { kind: 'one', item } : { kind: 'none' }; }
-  if (/^[A-Za-z0-9_-]{6,80}$/.test(raw)) { const prefixed = items.filter(item => id(item).startsWith(raw)); if (prefixed.length) return pick(prefixed); }
-  const wanted = fold(raw);
-  const same = items.filter(item => fold(name(item)) === wanted);
-  if (same.length) return pick(same);
-  const part = items.filter(item => fold(name(item)).includes(wanted));
-  return pick(part);
-}
-export const resolveRun = (records: Experiment[], ref: string) => resolveBy(records, ref, record => record.id, record => record.task);
-
-/** What to tell the model when a reference does not name exactly one object. */
-export function referenceProblem(what: string, ref: string, resolved: { kind: 'none' } | { kind: 'many'; items: unknown[] }, names: string[]): string {
-  return resolved.kind === 'none'
-    ? `${what} «${clip(ref, 80)}» не найдено. Есть: ${names.slice(0, 12).join('; ') || 'ничего'}. Уточните у владельца, что он имеет в виду.`
-    : `${what} «${clip(ref, 80)}» подходит к нескольким: ${names.slice(0, 12).join('; ')}. Спросите владельца, какой из них нужен; не выбирайте сами.`;
 }
 
 /* ───────────────────────────── names ───────────────────────────── */
@@ -115,12 +79,17 @@ export function scenarioPlan(record: Experiment): LaunchPlan {
     judgeCalls: record.scenarios.reduce((sum, scenario) => sum + votes(scenario) * attempts(scenario), 0), outside: null };
 }
 
-/** The run dialog (ui-spec §4.6): what runs, the agent, the judge's ceiling and the limits, what stays out. */
-export function launchLines(record: Experiment, plan: LaunchPlan, cwd?: string): string[] {
+/**
+ * The run dialog (ui-spec §4.6): what runs, the agent and where Lab found it, the judge's ceiling and next to it what the
+ * comparison with production costs, the time limit, what stays out.
+ */
+export function launchLines(record: Experiment, plan: LaunchPlan, cwd?: string, extra: { calibration?: string | null; note?: string } = {}): string[] {
   return [
     `${countText(plan.situations, SITUATIONS)} · ${countText(plan.conversations, CONVERSATIONS)}: клиента играет Lab, ответы агента оценивает судья.`,
     `Агент: ${agentLine(record, cwd)}`,
+    ...(extra.note ? [extra.note] : []),
     ...(record.mode === 'demo' ? ['Учебный пример: без модели и оплаты.'] : [`Судья: по 2 голоса на каждое ожидание — до ${plan.judgePerAttempt} вызовов на попытку, всего до ${plan.judgeCalls}.`,
+      ...(extra.calibration ? [`${extra.calibration}.`] : []),
       `Займёт не больше ${Math.max(1, Math.round(record.settings.maxDurationMs / 60_000))} мин; платите только за то, что потрачено.`]),
     ...(plan.outside ? [`Не войдут: ${plan.outside}`] : []),
   ];
@@ -158,20 +127,6 @@ export function stoppedLines(record: Experiment): string[] {
 }
 
 /* ───────────────────────────── what exists ───────────────────────────── */
-
-/** A run in one phrase: its result, or where it stands. */
-function standing(record: Experiment, view?: ResultView): string {
-  if (record.trials.length && view) {
-    const { value, tail } = accuracyParts(view);
-    return value ? `точность ${value}` : tail;
-  }
-  if (record.phase === 'preparing') return 'ситуации готовятся';
-  if (record.phase === 'evaluating') return `идёт прогон: ${record.trials.length} из ${countText(plannedTrials(record), CONVERSATIONS_OF)}`;
-  const library = record.librarySnapshot;
-  const size = library?.formatVersion === 2 ? library.cards.length : library?.formatVersion === 1 ? library.variants.length : record.scenarios.length;
-  if (record.phase === 'review') return `ситуации: ${size}${library?.acceptance ? ', утверждены' : ''}`;
-  return record.phase === 'error' || record.phase === 'interrupted' || record.phase === 'cancelled' ? 'остановлен до результата' : `ситуации: ${size}`;
-}
 
 /** What `agent_lab_status` answers: the newest run in one phrase, every run on expand (newest first, by date and agent). */
 export function statusFeed(records: Experiment[], active?: { id: string }, now?: Date): Feed {

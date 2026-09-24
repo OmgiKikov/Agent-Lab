@@ -5,7 +5,7 @@ import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detectionLines, detectProject, evidenceText } from '../src/detect.js';
+import { detectionLines, detectProject, evidenceText, targetLabel } from '../src/detect.js';
 import { xlsxFile } from './helpers/xlsx.js';
 
 /** A temporary project folder with the given files; removed after the test. */
@@ -109,6 +109,28 @@ test('a saved connection is proposed once, together with what the file it starts
     [{ kind: 'command', command: 'python3', args: ['bot/agent.py'], cwd: root, timeoutMs: 60000 }, 'high', ['connection', 'json_lines', 'protocol_fields']],
     [{ kind: 'module', path: join(root, 'lab', 'adapter.mjs'), exportName: 'createSession' }, 'high', ['factory', 'protocol_fields']],
   ]);
+});
+
+test('a Python agent is started with the project\'s own environment when the project keeps one; nothing is run to find it', async t => {
+  const root = await project(t, {
+    'package.json': JSON.stringify({ scripts: { start: 'python agent.py' } }),
+    'agent.py': PYTHON_AGENT,
+    'local/lab_target.py': PYTHON_AGENT,
+    // The interpreter itself is only looked at: a file that would say «ran» if anything executed it.
+    '.venv/bin/python': '#!/bin/sh\necho ran > ran.txt\n',
+  });
+  const detection = await detectProject(root);
+  const python = join(root, '.venv', 'bin', 'python');
+  assert.deepEqual(detection.agents.map(agent => [agent.target.kind === 'command' && [agent.target.command, ...agent.target.args], agent.confidence]), [
+    [[python, 'agent.py'], 'high'], [[python, join('local', 'lab_target.py')], 'high']]);
+  assert.deepEqual(detection.agents[0]!.evidence, [{ kind: 'script', file: 'package.json', name: 'start', command: 'python agent.py' },
+    { kind: 'json_lines', file: 'agent.py' }, { kind: 'protocol_fields', file: 'agent.py' }, { kind: 'interpreter', file: '.venv/bin/python' }]);
+  assert.equal(evidenceText(detection.agents[0]!.evidence[3]!), '.venv/bin/python: окружение Python проекта — агент запустится с его пакетами');
+  // How the owner recognises it: the files from the project, never a chain of «../».
+  assert.equal(targetLabel(detection.agents[0]!.target, root), '.venv/bin/python agent.py');
+  assert.equal(targetLabel({ kind: 'module', path: '/elsewhere/agent.mjs', exportName: 'createSession' }, root), 'модуль /elsewhere/agent.mjs');
+  assert.equal(targetLabel({ kind: 'module', path: '/elsewhere/agent.mjs', exportName: 'createSession' }, '/'), 'модуль /elsewhere/agent.mjs', 'the filesystem root is no project folder');
+  assert.equal(await exists(join(root, 'ran.txt')), false);
 });
 
 test('a start script is offered even when its file shows no protocol, with low confidence; tools and shell chains are not agents', async t => {

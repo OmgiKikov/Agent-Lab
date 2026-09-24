@@ -35,7 +35,11 @@ export type DecisionAction =
   | { kind: 'check_situations'; runId: string }
   | { kind: 'resume_preparation'; runId: string }
   /** A draft of the first format goes on as a new draft of cards; the old one stays as it was. */
-  | { kind: 'convert_draft'; runId: string };
+  | { kind: 'convert_draft'; runId: string }
+  /** The owner's word on which agent version wrote an import's logs: a version, or null — «неизвестна». */
+  | { kind: 'declare_log_version'; importId: string; version: string | null }
+  /** The same word in the owner's own text: the surface asks for it before declaring. */
+  | { kind: 'name_log_version'; importId: string };
 
 export interface DecisionChoice {
   label: string; action: DecisionAction;
@@ -59,8 +63,16 @@ export interface InboxInput {
   draft?: { record: Experiment; views: readonly SituationView[]; pendingCalls: number };
   /** The newest run with a result. */
   run?: { record: Experiment; view: ResultView };
+  /**
+   * The imports the newest run took its situations from, and whether the owner has named the agent version behind
+   * them since: read from each import's journal by the surface. Without it no decision about the logs is derived.
+   */
+  logs?: readonly { importId: string; declared: boolean }[];
   now?: Date;
 }
+
+/** The key of the decision that answers a situation's question: what the chat names it by. */
+export const questionKey = (cardId: string, questionId: string): string => `question:${cardId}:${questionId}`;
 
 const CONVERSATIONS: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
 const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
@@ -100,6 +112,27 @@ function unmeasured(run: NonNullable<InboxInput['run']>, when: string): Decision
   });
 }
 
+/**
+ * The logs' agent version (card-v2 §10.2): a run compared its situations with logs whose version nobody named, so the
+ * agreement with production is only a comparison. One decision per such import, until the owner names the version —
+ * the next calibration reads it; a finished run keeps what it used.
+ */
+function logVersions(record: Experiment, logs: NonNullable<InboxInput['logs']>, when: string): Decision[] {
+  const calibration = record.calibration;
+  if (!calibration) return [];
+  const tested = calibration.testedVersion?.trim();
+  return logs.filter(item => !item.declared && !calibration.logVersions.some(row => row.importId === item.importId)).map(({ importId }): Decision => {
+    const choices: DecisionChoice[] = [
+      { label: 'Назвать версию', action: { kind: 'name_log_version', importId }, settles: true },
+      { label: 'Неизвестна', action: { kind: 'declare_log_version', importId, version: null }, settles: true },
+    ];
+    // The version the run itself tested is the likeliest answer: the logs of a baseline come from the agent as it runs in production.
+    if (tested) choices.unshift({ label: `Та же, что проверяли — ${clip(oneLine(tested), 40)}`, action: { kind: 'declare_log_version', importId, version: tested }, settles: true });
+    return { key: `logs:${importId}`, subject: `Сверка с продом · прогон ${when}`,
+      text: 'Какая версия агента записала логи? Пока она не названа, совпадение с продом — только сравнение, а не калибровка.', choices };
+  });
+}
+
 /** Every decision the records call for now, in the order the owner should take them. */
 export function decisions(input: InboxInput): Decision[] {
   const now = input.now;
@@ -121,7 +154,7 @@ export function decisions(input: InboxInput): Decision[] {
         text: oneLine(view.problems[0] ?? 'Ситуация не подходит для теста.'),
         choices: [{ label: 'Добавить правило', action: { kind: 'add_rule', situation: view.number }, settles: false },
           { label: 'Исключить из запуска', action: { kind: 'remove', cardId: view.id, situation: view.number }, settles: true }] });
-      else if (view.status === 'needs_owner' && view.question?.choices.length) questions.push({ key: `question:${view.id}:${view.question.id}`, subject: subjectOf(view),
+      else if (view.status === 'needs_owner' && view.question?.id && view.question.choices.length) questions.push({ key: questionKey(view.id, view.question.id), subject: subjectOf(view),
         text: oneLine(view.question.text),
         choices: view.question.choices.slice(0, 3).map(choice => ({ label: choice.label, action: { kind: 'answer', cardId: view.id, situation: view.number, choice }, settles: true })) });
     }
@@ -153,6 +186,7 @@ export function decisions(input: InboxInput): Decision[] {
           { label: 'Проверить связь с агентом', action: { kind: 'check_connection' }, settles: false }] });
     }
     measurement.push(...unmeasured(run, when));
+    questions.push(...logVersions(run.record, input.logs ?? [], when));
   }
   return [...measurement, ...questions, ...spending];
 }
