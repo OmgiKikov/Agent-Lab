@@ -1,170 +1,176 @@
 ---
-last_mapped_commit: 015fee98766cc2082001fdfce3a329a31329d4cf
-last_mapped_at: 2026-09-16
+last_mapped_commit: fd07c336134b6bfe7bf48c8be0119c1b14dec56b
+last_mapped_at: 2026-09-24
 ---
 # Codebase Concerns
 
-**Analysis Date:** 2026-09-16
+**Analysis Date:** 2026-09-24
 
-Every item below was checked against the source at HEAD `015fee9`. Line numbers refer to that commit.
+Every item below was checked against the source at `fd07c33`; line numbers refer to that commit. Items that chunk G1 of the cleanup is changing are marked **(G1)**.
 
 ## Tech Debt
 
-**`goalObservation` is optional, and its default lives in several places:**
+**The engine is still one class near the size limit (G1):**
 
-- Issue: `goalObservation` is optional on `Scenario` (`src/contracts.ts:283`). The `'reply'` default is applied in several independent places: `dialogueToScenario` (`src/contracts.ts:431`), `freshDraft` for non-sandbox targets (`src/experiment.ts:69-70`), the build path (`src/experiment.ts:358`, `src/experiment.ts:369`), the hypothesis → test path (`src/experiment.ts:526`) and discovery (`src/experiment.ts:605`). A sandbox card may keep no value at all (`src/experiment.ts:369`).
-- Impact: without the field the judge cannot confirm a goal (`src/judge.ts:98-102`) and turns a pass/fail into `unknown`. `testPlanLines` throws for such a card (`src/quality.ts:109`). Behaviour depends on which path created the card.
-- Fix approach: normalise once, either at import/parse time or by making the field required for non-sandbox targets, and delete the scattered defaults.
+- Issue: `src/experiment.ts` (885 lines) holds the phase machine, preparation, acceptance, runs, repeats, reassessment and calibration hooks; `src/contracts.ts` (931 lines) mixes schemas with validation and conversion helpers. Progress of long work is polled every 750 ms (`extensions/operations.ts:71`, `extensions/prepare-tool.ts:247`, `extensions/run-tool.ts:186`).
+- Impact: both files are close to the 1000-line rule; a change in one workflow is easy to make in the wrong place.
+- Fix approach: split `ExperimentLab` into record, operation runner with events, library, run and review modules with a typed phase table; keep `ExperimentStore` to storage only.
 
-**The judge cannot confirm a failed goal on the `tool`/`state` channels:**
+**Hashes of mixed-script keys depend on the process locale (G1):**
 
-- Issue: `goal_attainment` stays pass/fail only if the cited evidence "confirms" the owner-selected channel (`src/judge.ts:98-102`). For `tool`, confirmation requires a cited successful tool result whose `tool_called` check passed (`src/judge.ts:85-93`). For `state`, all `state_equals` checks must pass (`src/judge.ts:94-97`). These conditions describe success, so a correct `fail` verdict on those channels is rewritten to `unknown` (`src/judge.ts:101-102`).
-- Impact: runs with `tool`/`state` cards cannot count a goal as failed. The verdict shows "no decision" instead of a failure, and the process exit code reflects `unknown` rather than failure.
-- Fix approach: define what evidence confirms a *failed* goal per channel (e.g. a tool error result or a failed `state_equals` check) and apply it only to `fail` results.
+- Issue: `canonical()` sorts object keys with `a.localeCompare(b)` in the process locale (`src/scenario-library.ts:17`). A spreadsheet import keeps its column headers (Cyrillic and Latin) as keys in `original.columns`, so the same file can get different content hashes and import ids on machines with different locales.
+- Impact: an import or suite made on one machine may not verify on another.
+- Fix approach: pin the collation (`'en-US'`); ASCII keys — every hash stored so far — keep their order.
 
-**Two monolithic modules:**
+**The preparation consent promises the run's call budget (G1):**
 
-- Issue: `src/experiment.ts` (1175 lines) mixes build, validate/replay, score, repeat, accept, start and run orchestration. `src/contracts.ts` (1013 lines) mixes schemas with conversion and validation logic (`dialogueToScenario`, `validateObservedGoals`, `goalToScenario`).
-- Impact: the defaults above are hard to find, and changes to one workflow easily affect another.
-- Fix approach: split `experiment.ts` by workflow (prepare/validate, score/reassess, run) behind the existing `Lab` facade before adding more modes.
+- Issue: the consent's ceiling is `settings.maxCalls` (`src/miner/plan.ts:80`), which the chat sets to `max(140, 2 × tried + 19 × count + 20)` (`extensions/prepare-tool.ts:196`) — «не больше 385 вызовов» even for 5 situations.
+- Impact: the number the owner agrees to is not the number the preparation can actually spend.
+- Fix approach: a computed preparation ceiling (topic-map calls + situations × per-dialogue allowance + review calls) used as that preparation's budget.
+
+**Regular expressions still read human or model text in a few places:**
+
+- Issue: about 15 of 76 regex sites read text as data: article titles matched to the words of a question with a Russian stop list (`src/scenario-sources.ts:38-39`), «…» spans of a judge rationale naming a rule (`src/explain.ts:60`), `#N` event references in a review note (`src/contracts.ts:689`, `src/experiment.ts:568`), value tokens (`src/contracts.ts:37`), hidden-value search in simulator messages (`src/simulator.ts:13`), masking markers (`src/imports.ts:17`, `src/scenario-library.ts:62`), and the legacy machine-format detector kept only for requirements stored without `observable` (`src/contracts.ts:121`). Four more are in the deterministic teaching runtime (`src/demo.ts`).
+- Impact: these are the remaining exceptions to the "no regex over human or model text" rule; wording changes can move their results.
+- Fix approach: typed fields at the source (as `observable` did for requirements), per-call enums, or exact comparison after one normalisation.
+
+**English limitation lines in new records:**
+
+- Issue: every new record starts with four English `limitations` (`src/experiment.ts:175-179`); more are appended on interruption (`:138`), automated review (`:649`) and scripted skips (`:770`).
+- Impact: not shown on owner screens, but carried into the JSON snapshot and suites.
+- Fix approach: Russian wording, or typed limitation codes rendered at the edge.
+
+**Comments cite specifications outside the repository:**
+
+- Issue: 83 comment references in 39 files point to `ui-spec §…` and `card-v2 §…`, documents kept outside the repository.
+- Impact: a reader of the repository cannot follow the reason a comment cites.
+- Fix approach: state the reason in the comment itself, or bring the relevant decisions into `docs/`.
 
 ## Known Bugs
 
-**Repeating an old external run makes it incomparable with its parent:**
+**A release hook that starts a background server waits until its timeout, then kills the server:**
 
-- Symptoms: `compareRuns(before, after)` reports "Прогоны несравнимы" for every pair.
-- Files: `src/experiment.ts:69-70` (`freshDraft` adds `goalObservation: 'reply'` to cards that lack it), `src/comparison.ts:551-552` (a changed card fingerprint adds the note "Содержимое карточек изменилось"), `src/comparison.ts:561-566` (any note marks all pairs incomparable).
-- Trigger: repeat a non-sandbox run whose cards were saved without `goalObservation` (records created before the default existed, e.g. the GLM pilot records), then compare the repeat with the original.
-- Workaround: re-assess both runs under the current protocol, or add the field to the old record before repeating. Not covered by tests: `test/comparison.test.ts` never mentions `goalObservation`.
-
-**In validate/replay, a duplicate goal id throws away the whole build after all model calls:**
-
-- Symptoms: the build fails with "Observed goals have duplicate IDs" after every per-dialogue extraction call has already been paid for.
-- Files: `src/pi.ts:619-648` (one model call per dialogue, and the model chooses `goal.id`), `src/experiment.ts:321-344` (batches of `GOAL_BATCH`, then `validateObservedGoals` over the combined list), `src/contracts.ts:386` (throws on a duplicate).
-- Trigger: two dialogues that the model names the same way (for example, the same tariff question).
-- Workaround: none in code. Fix by assigning ids in the harness (e.g. from the dialogue id) or de-duplicating per dialogue before the final check. No test asserts this path.
-- Note: a *shortfall* of testable dialogues no longer discards the build. The build throws only when zero cards remain (`src/experiment.ts:342`); otherwise it records "Измеримы N из запрошенных M" as a limitation (`src/experiment.ts:343`, tested in `test/experiment.test.ts:711`).
-
-**A release hook that starts a background server hangs until timeout, then kills the server:**
-
-- Symptoms: `runRelease` waits for the full `timeoutMs` and returns "Release hook exceeded … ms". The service the hook started is gone.
-- Files: `src/targets.ts:83-106`. The hook is spawned `detached` with piped stdout/stderr (`src/targets.ts:89`). The promise resolves only on `'close'` (`src/targets.ts:103`), which waits for every holder of the pipes to exit. On timeout, `kill()` sends `SIGKILL` to the whole process group (`src/targets.ts:94-98`).
+- Symptoms: `runRelease` waits for `timeoutMs` and returns "Release hook exceeded … ms"; the service it started is gone.
+- Files: `src/targets.ts:85-111` — the hook runs `detached` with piped stdout/stderr, resolves only on `'close'` (every holder of the pipes must exit), and on timeout kills the whole process group.
 - Trigger: a hook such as `./deploy.sh` that runs `uvicorn … &` without redirecting its output.
-- Workaround: the hook must redirect the background process's stdio (`> log 2>&1 &`) and detach it with `setsid`/`nohup`. `test/targets.test.ts:282` covers exit code, output and timeout, but not a lingering child.
+- Workaround: redirect the background process's stdio (`> log 2>&1 &`) and detach it (`setsid`/`nohup`).
+
+**Wrong agreement in the no-errors sentence:**
+
+- Symptoms: «Ошибок нет. Это не гарантия для живых клиентов: проверено 1 ситуация.»
+- Files: `src/result-text.ts:218`, `src/report.ts:52` (the participle does not follow the count).
 
 ## Security Considerations
 
-**Accepting a test and starting a run are not tied together in code:**
+**Owner consent in the chat is host-owned, but Pi's own tools stay active:**
 
-- Risk: the "accept exactly one test, then run" rule lives in the skill prompt. `acceptDraft` (`src/experiment.ts:703-717`) checks the workflow, phase, card count and hash, but not `goalObservation`. `start` (`src/experiment.ts:873-880`) never reads `acceptedTests`, so a direct CLI/API call can run an unaccepted draft.
-- Current mitigation: `start` requires `approved: true` and an `expectedHash` from the caller (`src/cli.ts:337`). The skill shows `testPlanLines` first, which throws without `goalObservation` (`src/quality.ts:109`).
-- Recommendations: if acceptance is a product rule, check `acceptedTests`/`acceptedDraftHash` in `start` and validate `goalObservation` in `acceptDraft`.
+- Risk: Lab's tools take no settings, consent, hash or verdict, and every decision is a native dialog. Pi's built-in tools (read, bash, edit, write) stay active in an Agent Lab chat (`extensions/steps.ts`), and the CLI treats `--yes` as the owner's consent; a model that ran `agent-lab … --yes` through bash would bypass the native dialog.
+- Current mitigation: the skill forbids deciding for the owner and tells the model to name CLI commands for the owner to run; whether a shell command needs the user's approval depends on Pi's settings.
+- Recommendations: verify Pi's command approval in the Agent Lab session, or hand the chat a Lab-specific tool set without shell access.
 
-**Local run data contains real dialogues:**
+**CLI `run` of a draft without a library starts without acceptance:**
 
-- Risk: `.agent-lab/`, the grounding cache (`<store>/grounding/<key>.json`, `src/experiment.ts:307-316`) and trace journals hold production dialogues and full judge inputs.
-- Current mitigation: files are written with mode `0o600` (`src/store.ts:125`, `src/store.ts:137`, `src/experiment.ts:315`), and `.agent-lab/` and `.context/` are gitignored.
-- Recommendations: copy evidence out before archiving a workspace (earlier pilot evidence was lost with a deleted workspace), and never add these paths to the repository.
+- Risk: `start` verifies acceptance for every draft with a library (`verifyAcceptedRun`, `src/scenario-library.ts:135`) and the chat and workspace pass `requireAccepted`; `agent-lab run --yes` on a library-less draft (a repeat of a legacy record) starts with `reviewMode: 'automated'` (`src/experiment.ts:632-649`).
+- Current mitigation: the draft hash must match (`expectedHash`); the record says the expectations were not reviewed by a person.
+
+**Local data contains real conversations:**
+
+- Risk: `.agent-lab/` holds imports, topic maps, trace journals, judge sidecars and exports with production dialogues; a suite saved from a card run carries the import batches it cites (`src/suite.ts`).
+- Current mitigation: files `0600`, folders `0700`; `.agent-lab/` and `.context/` are gitignored in this repository; the import preview shows counts only; the customer report never quotes a logged conversation.
+- Recommendations: never commit a suite made from private logs; add `.agent-lab/` to the agent project's `.gitignore`.
+
+**Model providers receive conversation text:**
+
+- Risk: topic mapping sends customers' words; preparation sends the conversation and chosen materials; the judge sends the run's conversation and, for calibration, the logged one.
+- Current mitigation: only the providers configured in Pi are called; nothing else leaves the machine.
 
 ## Performance Bottlenecks
 
-**CLI `score` does not scale its model-call budget:**
+**No shared request limiter:**
 
-- Problem: `agent-lab score` (`src/cli.ts:279-293`) builds the input from `task.json` without a budget sized to the number of dialogues, so the default ceiling applies whatever the dialogue count.
-- Cause: only the Pi tool scales it: `max(20, 8 × dialogues)` capped at 3000 calls, and `max(3 min, 2 min × dialogues)` capped at 4 h (`extensions/agent-lab.ts:292-293`, used at `extensions/agent-lab.ts:360-361`).
-- Improvement path: move the scaling into `Lab.score` (or share one helper) so the CLI and Pi agree.
-
-**Concurrency is not coordinated across dialogues:**
-
-- Problem: each dialogue runs its judge votes with up to `JUDGE_CONCURRENCY = 8` workers (`src/judge.ts:23`, `src/judge.ts:190`). There are two votes per applicable metric (`src/judge.ts:161`). Dialogues run with `parallel` from 1 (the default) up to `MAX_PARALLEL = 16` (`src/experiment.ts:17`, `src/experiment.ts:874-875`). The upper bound is 16 × 8 = 128 concurrent judge requests, plus target calls.
-- Cause: no shared limiter across dialogues, and no rate-limit backoff beyond one retry on connection failures during goal extraction (`src/experiment.ts:321-327`).
-- Improvement path: a single request limiter per provider; keep `parallel` an execution-only knob, as documented at `src/experiment.ts:872`.
+- Problem: each dialogue's judging runs up to `JUDGE_CONCURRENCY = 8` votes (`src/judge.ts:34`); dialogues run up to `MAX_PARALLEL = 16` from the CLI (`src/experiment.ts:38`) and up to 8 from the chat (`extensions/launch.ts:29-30`). Worst case 128 concurrent judge requests, plus calibration and agent calls.
+- Cause: concurrency is limited per dialogue, not per provider; provider failures are typed and not retried beyond one re-ask of a malformed vote.
+- Improvement path: one limiter per provider shared by judge, calibration and simulator calls.
 
 ## Fragile Areas
 
-**Judge output is all-or-nothing per dialogue:**
+**Judging is all-or-nothing per dialogue:**
 
-- Files: `src/judge.ts:150-196`
-- Why fragile: raw responses are saved before parsing and never repaired (the protocol has `repair: false`, `src/judge.ts:20`). One unparseable or failed vote on any non-RAG metric rejects the whole judgment for that dialogue (`src/judge.ts:193-195`). After the first failure no new votes start.
-- Safe modification: keep the no-repair rule, since it is part of the measurement protocol. Change retry/partial-result policy only together with a `JUDGE_PROTOCOL` version bump, because the protocol hash feeds run comparability (`src/comparison.ts`, judge identities).
-- Test coverage: `test/judge.test.ts`.
+- Files: `src/judge.ts:262-327`
+- Why fragile: raw responses are saved before parsing and never repaired; a malformed vote is asked once more as a fresh request. A transport failure or a second malformed answer on any non-RAG metric rejects the whole judgment of that dialogue, and no new votes start after the first failure.
+- Safe modification: change the retry or partial-result policy only together with a `JUDGE_PROTOCOL` version, because the protocol hash is part of every receipt and of run comparability.
+
+**Prompts inside stored hashes:**
+
+- Files: `JUDGE_PROMPT` (`src/judge.ts`), the controller and simulator roles (`src/prompts.ts`), `logJudgeInputV1` (`src/card/log-judge.ts`)
+- Why fragile: their text feeds judge input hashes, the evaluator version and calibration keys; an in-place edit makes stored receipts stop verifying.
+- Safe modification: a new version or mode next to the old one, pinned by a golden test.
 
 **The command-target protocol treats every stdout line as a reply:**
 
-- Files: `src/targets.ts:257-281`
-- Why fragile: every stdout line resolves the pending request (`src/targets.ts:258`). A stray `print()` in a Python adapter becomes the reply and fails with "Ответ внешнего агента не является корректным JSON" (`src/targets.ts:280-281`). Lines that arrive with no request pending are silently dropped (`takePending()` returns `undefined`). The HTTP target likewise rejects non-JSON bodies (`src/targets.ts:211`).
-- Safe modification: document "stdout is protocol-only, log to stderr" in the adapter examples (`examples/`), or add a line prefix or envelope check.
-- Test coverage: `test/targets.test.ts` uses a well-behaved fixture only.
+- Files: `src/targets.ts:257-289`
+- Why fragile: a stray `print()` in a Python adapter becomes the reply and fails as invalid JSON; lines with no request pending are dropped. Module adapters are safe: their console goes to stderr (`src/module-worker.mjs`).
+- Safe modification: document it in the adapter examples (done in the README), or frame replies.
 
-**Run comparability depends on whole-object fingerprints:**
+**A failure proven by absence is not recorded:**
 
-- Files: `src/experiment.ts:44-47` (`measurementHash` over scenarios, settings, target, sources, …), `src/comparison.ts:542-566`
-- Why fragile: any change to a card, the settings, the evaluator version or the judge protocol makes every pair incomparable. That is intended for real changes, but harmless normalisation (such as the `goalObservation` default) trips it too.
-- Safe modification: normalise records before fingerprinting; add a test for every new default.
+- Files: `src/card/expectations.ts:72-81`, `src/judge.ts:129-150`
+- Why fragile: a verdict on a tool or state expectation stands only when the judge cites a tool result of a complete log or an observed state. «The agent never called the tool» cites neither, so it stays not measured (`no_evidence`); first-format goals on the tool/state channels turn any unsupported verdict into `unknown`.
+- Safe modification: define what evidence proves a failure per channel (a complete tool log without the call) and apply it to `fail` only.
+
+**Run comparability rests on whole-object fingerprints:**
+
+- Files: `src/normalize.ts`, `src/comparison.ts`
+- Why fragile: any change to a card, the settings, the judge or the evaluator version makes pairs incomparable. Defaults are normalised for comparison only (`normalizeScenarioIdentity`); a new default must be added there too.
 
 ## Scaling Limits
 
-**Judge audits inflate the main run record:**
+**One import holds 300 conversations:**
 
-- Current capacity: the audit (full prompt, full input JSON and every attempt, `src/judge.ts:150-157`) is appended to the trace journal (`src/store.ts:137`) and also copied into each trial (`src/evaluation.ts:297`). The record is rewritten on every save.
-- Limit: `store.get` refuses records over 50 MB (`src/store.ts:100`), so a large run becomes unreadable, and `store.list` then reports it only as a diagnostic.
-- Scaling path: keep audits only in the journal and store a hash/reference on the trial.
+- Current capacity: JSON/JSONL ≤4 MB and ≤300 dialogues (`src/limits.ts`); a larger spreadsheet gives a deterministic sample of 300 usable conversations; the topic map proposes at most 15 topics.
+- Limit: traffic shares and coverage describe the sample, not the whole export.
+- Scaling path: several imports, or a larger sampled import with the same hash order.
 
-**Validate budget grows with the requested card count:**
+**Record size:**
 
-- Current capacity: the Pi validate ceiling is `max(140, 2 × dialogues + 19 × validationCount + 20)` calls, and the time limit is `max(3 min, 3 min × dialogues)` (`extensions/agent-lab.ts:300`, `extensions/agent-lab.ts:360-361`).
-- Limit: the 15-card acquiring replay took about 17 minutes and $1.50 on a real agent. Larger sets scale linearly.
-- Scaling path: rerun only failed cards when repeating.
+- Current capacity: `store.get` refuses a record over 50 MB (`src/store.ts:169`). Judge audits live in sidecars, so a record grows with trials and events only.
 
 ## Dependencies at Risk
 
-**Pi SDK pinned to one minor version:**
+**Pi SDK pinned to 0.85.1:**
 
-- Risk: `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` 0.85.1 (see `STACK.md`). The extension (`extensions/agent-lab.ts`) and the model layer (`src/pi.ts`) depend on the SDK's tool, usage and budget APIs.
-- Impact: an SDK upgrade can break budget accounting (`src/pi.ts:146`, `src/pi.ts:174`) without failing unit tests that use fakes.
-- Migration plan: run one live smoke test after any SDK bump.
-
-**The Pi extension imports `dist/`:**
-
-- Risk: `npm test` rebuilds and deletes `dist/`, which the running Pi extension imports.
-- Impact: tests or builds in a shared worktree break a live Pi session.
-- Migration plan: run reviews and tests from a `git archive HEAD` snapshot, not in the live worktree.
+- Risk: `ModelRuntime.completeSimple`, `getAvailable`, the extension API (`setActiveTools`, native dialogs, message renderers) and the resource loader.
+- Impact: an SDK change can break model calls or the chat while unit tests with fakes stay green.
+- Migration plan: run `test/live/product-eval.ts` and `test/live/scenario-lab.ts` after any SDK bump.
 
 ## Test Coverage Gaps
 
-**Repeat → compare with defaulted cards:**
+**Real-model checks:**
 
-- What's not tested: that `repeat` of a record lacking `goalObservation` stays comparable, or is reported as such.
-- Files: `src/experiment.ts:69-70`, `src/comparison.ts:551-566`
-- Risk: the demo's "before/after" screen shows "incomparable".
+- What's not tested: `test/live/product-eval.ts` has never run on a real model; `test/live/scenario-lab.ts` and `test/live/simulator-stop.ts` have not run since the cleanup.
+- Risk: the chat may pick the wrong tool for an owner's phrase although every unit test passes.
 - Priority: High
 
-**Duplicate goal ids in replay:**
+**Test code is not type-checked:**
 
-- What's not tested: two per-dialogue extractions returning the same id.
-- Files: `src/pi.ts:619-648`, `src/experiment.ts:344`
-- Risk: an entire paid build is lost at the last step.
-- Priority: High
-
-**`fail` on the `tool`/`state` channels:**
-
-- What's not tested: a judge `fail` with tool/state evidence staying `fail`.
-- Files: `src/judge.ts:85-102`
-- Risk: tool-based agents can never show a failed goal.
+- What's not tested: `tsc` over `test/` reports 91 errors (41 in `test/workflow.test.ts`); tsx only transpiles.
 - Priority: Medium
 
-**Release hook with a lingering child, and noisy adapter stdout:**
+**Noisy command adapter:**
 
-- What's not tested: a hook that backgrounds a server with inherited pipes, and a command adapter that prints debug lines.
-- Files: `src/targets.ts:83-106`, `src/targets.ts:257-281`
-- Priority: Medium
-
-**Record size growth:**
-
-- What's not tested: a run approaching the 50 MB record limit with judge audits.
-- Files: `src/evaluation.ts:297`, `src/store.ts:100`
+- What's not tested: a command adapter that prints debug lines to stdout.
+- Files: `src/targets.ts:257-289`
 - Priority: Low
+
+## Resolved since the 2026-09-16 map
+
+- The extension imports `src/` (stage 1); `npm test` no longer breaks a live Pi session.
+- The `goalObservation` default lives in one place (`src/normalize.ts`); a repeat of an old record stays comparable (`test/comparison.test.ts`).
+- The validate/replay goal path, offline `score` and the validate budget are gone (stages 2a/2b).
+- Judge audits moved to private sidecars with receipts on the trial.
+- Accepted runs are verified by stored hashes, never recompiled; a card draft cannot start without a verified acceptance.
+- Release hooks are killed at their deadline even when a grandchild holds the pipes (`test/targets.test.ts:310`).
 
 ---
 
-*Concerns audit: 2026-09-16 (checked against source at `015fee9`)*
+*Concerns audit: 2026-09-24 (checked against source at `fd07c33`)*

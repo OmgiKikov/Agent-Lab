@@ -31,75 +31,83 @@ Agent Lab — пакет для Pi, который прогоняет насто
 
 ## Languages
 
-- TypeScript 5.9.3 - Full codebase (src/, extensions/, skills/)
-- JavaScript - Development utilities, Node.js ecosystem
-- Python - Example target agents (`examples/stateful-agent.py`, `examples/echo-agent.py`)
-- Shell - CI/CD pipeline examples (`examples/regression-ci.yml`)
+- TypeScript 5.9.3 - Full codebase (`src/`, `extensions/`, `test/`), ESM, `strict`
+- JavaScript (ESM) - `src/module-worker.mjs` (runs a module adapter in its own process), `examples/*.mjs`
+- Python - Example command adapters (`examples/echo-agent.py`, `examples/stateful-agent.py` with SQLite state)
+- YAML - CI (`.github/workflows/check.yml`, `examples/regression-ci.yml`)
 
 ## Runtime
 
-- Node.js >= 22.19.0
-- Target ES2023 JavaScript output
+- Node.js >= 22.19.0 (`engines`), ES2023 output, NodeNext modules
+- Pi (`@earendil-works/pi-coding-agent`) hosts the chat; the extension is loaded as TypeScript through jiti
 - npm with package-lock.json
 - Lockfile: Present in repository
 
 ## Frameworks
 
-- @earendil-works/pi-coding-agent 0.85.1 - Pi native coding-agent runtime, primary framework
-- @earendil-works/pi-tui 0.85.1 - Terminal UI components for Pi
-- zod 4.5.4 - Runtime TypeScript schema validation and parsing
-- typebox 1.3.7 - JSON schema generation and validation
-- tsc (TypeScript Compiler) - Compilation to dist/
-- tsx 4.20.0 - Development runtime for TypeScript execution
-- node -e inline build script - Custom clean-build process
+- @earendil-works/pi-coding-agent 0.85.1 - Pi runtime: extension API (tools, commands, native dialogs), `ModelRuntime` for model calls, resource loader
+- @earendil-works/pi-tui 0.85.1 - Terminal components and width-aware text helpers (`truncateToWidth`, `visibleWidth`, `stripTerminalSequences`)
+- zod 4.5.4 - Every stored record, import, command and model answer is parsed through zod schemas
+- typebox 1.3.7 - Closed JSON schemas of the nine Pi tool parameter objects
+- tsc (TypeScript 5.9.3) - Compiles `src/` to `dist/` for the `agent-lab` binary
+- tsx 4.20+ (4.23.13 installed) - Runs tests and live scripts from TypeScript
+- `node -e` inline script - Clears `dist/` before `tsc`
 
 ## Key Dependencies
 
-- @earendil-works/pi-coding-agent - Pi ecosystem integration, extension API, coding-agent runtime
-- @earendil-works/pi-tui - Text UI rendering for terminal, terminal sequence handling
-- zod - Schema validation for all data contracts (experiments, scenarios, trials, configurations)
-- typebox - JSON schema generation for structured responses
-- @types/node 22.19.0 - Node.js type definitions
-- Standard library: node:child_process, node:fs/promises, node:path, node:crypto, node:util, node:readline
+- @earendil-works/pi-coding-agent - Extension API, `ModelRuntime.completeSimple` for one-shot model calls (`src/llm/model-call.ts`), provider auth handled by Pi
+- @earendil-works/pi-tui - Terminal rendering of chat rows, the workspace and result screens
+- zod - Data contracts (`src/contracts.ts`, `src/card/schema.ts`, `src/miner/schema.ts`, `src/spreadsheet/mapping.ts`)
+- typebox - Tool parameter schemas in `extensions/*-tool*.ts`
+- @types/node ^22.19.0 - Node.js type definitions
+- No other runtime dependencies: `.docx` and `.xlsx` are read by an own ZIP reader on `node:zlib` (`src/zip.ts`), sheet XML by a small tokenizer, CSV per RFC 4180 (`src/spreadsheet/`)
+- Standard library: node:fs/promises, node:fs, node:path, node:crypto, node:child_process, node:readline, node:util (`parseArgs`), node:url, node:os, node:zlib, node:console
 
 ## Configuration
 
-- AGENT_LAB_SESSION - Internal flag set when running Pi chat mode
-- Custom HTTP headers via environment variables (configurable per target, names defined in connection configuration)
-- No .env file required; all configuration via JSON or command-line
-- tsconfig.json - Strict TypeScript compilation (ES2023, NodeNext modules, strict mode, no unchecked index access)
-- TypeBox types in JSON schema for judge response format validation
+- `AGENT_LAB_SESSION=1` - Set by `agent-lab chat`: the extension adds the skill body to the system prompt and draws its header
+- `AGENT_LAB_PROVIDER` / `AGENT_LAB_MODEL` - Model of the live teaching example and smoke scripts (`examples/scenario-lab-demo.mjs`, `test/live/scenario-lab.ts`)
+- Release hooks receive `AGENT_LAB_RUN_ID`, `AGENT_LAB_TARGET_VERSION`, `AGENT_LAB_PROMPT_FILE`, `AGENT_LAB_PROMPT_HASH`
+- HTTP agent headers name environment variables (`headersEnv`); values are read at request time and never stored
+- Model credentials live in Pi (`/login` or a provider key); the default judge is `openrouter` / `openai/gpt-5.6-sol` pinned to the `openai` upstream
+- No `.env` file is read for configuration; project detection reads `.env` variable names only
+- `tsconfig.json` - `strict`, `noUncheckedIndexedAccess`, ES2023, NodeNext, declarations and source maps, `rootDir: src`
+- `npm run typecheck` adds `--noUnusedLocals` and type-checks `extensions/*.ts` with `--allowImportingTsExtensions`
 
 ## File Organization
 
-- `src/` - Core TypeScript implementation
-- `dist/` - Compiled JavaScript (generated on build)
-- `extensions/` - Pi extension (`agent-lab.ts`) providing CLI and UI integration
-- `skills/` - Pi skills for agent building (`agent-builder/SKILL.md`)
-- `examples/` - Sample agents and configurations (Python, Node.js, JSON)
-- `test/` - Test files (run via tsx --test)
+- `src/` - Engine: records, store, runs, judging, results, CLI (`src/cli.ts`)
+- `src/card/` - Situations (cards): schema, proposal, checks, review, compile, commands, view, calibration
+- `src/llm/` - One typed core for model calls: `model-call.ts`, `structured.ts`, `models.ts`
+- `src/miner/` - Topic map, representative sample, coverage of an import
+- `src/spreadsheet/` - `.xlsx`/`.csv` logs read through an owner-confirmed mapping
+- `extensions/` - Pi extension (`agent-lab.ts`), its nine tools, the `/agent-lab` workspace, `render/`
+- `skills/agent-builder/SKILL.md` - The one instruction source of an Agent Lab chat
+- `examples/` - Reference adapters, a connection, a saved suite, the teaching example, a CI workflow
+- `test/` - `*.test.ts`, `helpers/`, `fixtures/` (frozen records of older formats), `live/` (paid model checks)
+- `dist/` - Compiled JavaScript for the `agent-lab` binary only (generated)
 
 ## Platform Requirements
 
 - Node.js 22.19.0+
-- npm (modern version supporting package-lock.json)
-- TypeScript compiler
-- Node.js 22.19.0+
-- Command-line execution via node dist/cli.js
-- No database server required (file-based storage)
-- Target agent must accept JSON-line protocol or run as HTTP server
-- Binary entry point: `dist/cli.js` (shebang line: `#!/usr/bin/env node`)
-- Published as npm package to registry
-- Available as `agent-lab` command when installed globally
+- npm (package-lock.json)
+- Python 3 for the example command adapters and CI suite
+- Node.js 22.19.0+ and a Pi installation with a configured model
+- No database server: records are JSON files in the project's `.agent-lab/`
+- The agent under test speaks one of three contracts: command (JSON lines), module (`createSession`), HTTP (JSON POST)
+- Binary entry point: `dist/cli.js` (`#!/usr/bin/env node`), published as `agent-lab` (package `pi-agent-lab`)
+- Pi package manifest: `pi.extensions` → `./extensions/agent-lab.ts`, `pi.skills` → `./skills`
+- Shipped files: `dist`, `src`, `extensions`, `skills`, `examples`, `README.md`, `docs/superpowers/scenario-lab-verification.md`
 
 ## Build Process
 
 ## External Runtime Dependencies
 
-- Child process spawning for agent targets (command mode)
-- HTTP client for agent targets (module provided by @earendil-works/pi-coding-agent runtime)
-- File system for experiment storage and logs
-- Standard crypto for hashing and UUID generation
+- Child processes for command targets, module targets (`src/module-worker.mjs`) and release hooks
+- `fetch` for HTTP targets (200 000-byte reply cap)
+- Model providers configured in Pi, reached through `ModelRuntime`
+- File system for records, imports, trace journals, judge sidecars and exports
+- `node:crypto` for SHA-256 content hashes and UUIDs
 
 <!-- GSD:stack-end -->
 
@@ -109,111 +117,114 @@ Agent Lab — пакет для Pi, который прогоняет насто
 
 ## Naming Patterns
 
-- Lowercase with hyphens: `agent-lab.ts`, `prompt-edit.ts`, `target-version.ts`
-- Test files: `.test.ts` suffix (e.g., `simulator.test.ts`, `contracts.test.ts`)
-- One exported module per file, named after primary export
-- camelCase: `valueTokens()`, `selectValidationDialogues()`, `targetFingerprint()`
-- Async functions use camelCase: `readData()`, `targetFingerprint()`
-- Factory/builder functions: `createSession()`, `createInputSchema`, `demoEvaluateRecord()`
-- Predicate/boolean-returning functions: `simulatorUsable()`, `trialAssessmentComplete()`, `validationDialogueIssue()`
-- camelCase throughout: `seenTrialIds`, `baselineId`, `manifestHash`, `trialMap`
+- Lowercase with hyphens: `result-text.ts`, `target-version.ts`, `fs-atomic.ts`
+- Folders group one concern: `src/card/`, `src/llm/`, `src/miner/`, `src/spreadsheet/`, `extensions/render/`
+- Test files: `.test.ts` suffix named after the concern (`card-review.test.ts`, `spreadsheet-import.test.ts`)
+- No file over 1000 lines in `src/` or `extensions/`; split along real seams, not by line count
+- camelCase: `deriveRun()`, `representativeSample()`, `valueTokens()`, `targetFingerprint()`
+- Factory functions: `createSession()`, `createDemoRuntime()`, `createPiRuntime()`
+- Predicates: `simulatorUsable()`, `trialAssessmentComplete()`, `measurementUsable()`, `isRunnable()`
+- Two-step owner commands: `prepare…` builds the preview, `apply…` writes it with a host grant (`prepareCardCommand` / `applyCardCommand`, `prepareLogVersion` / `applyLogVersion`)
+- camelCase throughout: `seenTrialIds`, `acceptedHash`, `trialMap`
 - Local constants: camelCase
-- Loop counters: single letter `i`, `j`, `c`
+- Loop counters: single letter `i`, `j`
 - Destructured imports use exact names from exports
-- Type/Interface: PascalCase: `Scenario`, `Trial`, `UserMode`, `Target`, `ReleaseLog`
-- Schema objects: camelCaseSchema pattern: `scenarioSchema`, `userModeSchema`, `targetSchema`
+- Type/Interface: PascalCase: `Scenario`, `Trial`, `ResultView`, `LibraryV2`, `TableProposal`
+- Schema objects: camelCaseSchema: `scenarioSchema`, `userModeSchema`, `targetSchema`
 - Types inferred from schemas: `type UserMode = z.infer<typeof userModeSchema>`
-- Constants: UPPERCASE: `VERSION`, `DEFAULT_JUDGE`, `TOOL_NAMES`, `REQUIREMENT_LIMIT`, `SCENARIO_LIMIT`
-- Const objects: PascalCase or camelCase depending on role: `stages = { ... }` for lookup tables
-- Zod discriminated unions replace traditional enums: `z.enum(['reactive', 'scripted', 'static'])`
-- Literal types derived from schemas: `z.literal('sandbox')`, `z.literal('http')`
+- Constants: UPPERCASE: `VERSION`, `DEFAULT_JUDGE`, `SCENARIO_LIMIT`, `IMPORT_DIALOGUE_LIMIT`, `NOT_MEASURED_CODES`
+- Tool names come from one table: `TOOL` in `extensions/steps.ts`
+- `z.enum([...])` and `as const` arrays instead of TypeScript enums: `z.enum(['reactive', 'scripted', 'static'])`, `NOT_MEASURED_CODES`
+- Discriminated unions tagged by `kind`: targets (`http`, `module`, `command`, `unconnected`), owner commands, table questions
 
 ## Code Style
 
 - No external formatter (no prettier, no eslint config)
-- TypeScript strict mode enforced (`strict: true` in tsconfig.json)
-- ES2023 target, NodeNext modules
-- Semicolons required (TypeScript default)
-- Indentation: 2 spaces (inferred from source)
-- No ESLint configuration present
-- No Prettier configuration present
-- Rely on TypeScript `strict` mode: `noUncheckedIndexedAccess`, type checking
-- `strict: true` - all strict checks enabled
-- `noUncheckedIndexedAccess: true` - catch record/array access errors
+- Semicolons, 2-space indentation, single quotes
+- Long lines are tolerated for data and prompt text; code lines stay readable
+- No ESLint or Prettier configuration
+- TypeScript `strict`, `noUncheckedIndexedAccess`; `npm run typecheck` adds `noUnusedLocals`
+- `strict: true`, `noUncheckedIndexedAccess: true`
 - ES2023 target with NodeNext module resolution
 - Generated `.d.ts` declaration files and source maps
 
 ## Import Organization
 
-- No path aliases configured; relative imports used: `'./contracts.js'`, `'../src/judge.js'`
-- `.js` extensions required in all import statements (ES modules)
+- No path aliases; relative imports
+- In `src/`, `.js` extensions on every import: `'./contracts.js'`
+- In `extensions/`, engine modules by `.js` (`'../src/experiment.js'`) and sibling extension modules by `.ts` (`'./render/feed.ts'`): Pi loads the extension as TypeScript through jiti, and `dist/` serves only the `agent-lab` binary
+- Type-only imports use `import type` or inline `type` specifiers
 
 ## Error Handling
 
-- `throw new Error(message)` for all error cases
-- Descriptive messages in English and Russian mix: `throw new Error('Укажите --id RUN')`
-- No error codes or error classes; plain Error with full context
-- Messages include what was wrong and what to do: `'Файл импорта превышает 4 МБ. Выберите меньшую выборку.'`
-- Validation errors from Zod passed through with original context
-- Command-line errors include user instructions: `'Для трёх пробных запросов укажите --yes.'`
-- System errors are distinct from user-facing errors
-- No try/catch in most cases; errors propagate
-- test() uses `assert.rejects()` to verify error throwing
+- Plain `throw new Error(message)` for messages people read; the message says what is wrong and what to do: `'Файл импорта превышает 4 МБ. Выберите меньшую выборку.'`
+- Typed errors where a caller reacts by kind, never by matching message text: `LibraryConflict`, `StaleRevisionError`, `CommandRefused`, `UnknownReference`, `LockedError`, `Stopped(reason)` (`src/errors.ts`), `ProviderFailure` (`src/llm/model-call.ts`), `StructuredTaskError` (`src/llm/structured.ts`), `NeedsOwner` (`extensions/lab-ui.ts`)
+- A question to the owner is an error (`NeedsOwner`) that the tool turns into a result: nothing is written and the model is told not to guess
+- Zod validation errors reach the owner in plain words (field and problem), never as a raw issue dump
+- Where a run fails, a typed cause is written into the record (`trial.invalidCause`, `trial.assessmentFailure`); decoders of older reason texts read only records written before those fields
+- Command-line errors include the next step: `'Для трёх пробных запросов укажите --yes.'`
+- `--yes` is the owner's consent on the command line; without it a command previews and writes nothing
+- `async`/`await` throughout; no `.then()` chains
+- Tests assert failures with `assert.rejects()` / `assert.throws()`
 
 ## Comments
 
-- Above complex algorithms: `// With no regressions, the two-sided paired sign test has p = 2 / 2^positiveFamilies.`
-- Before non-obvious value tokens: `// 4321, A103, 14:00, 202-7 and 11.03.2024 are tokens`
-- Explaining tricky regex or state transitions
-- Block comments (`/** ... */`) for exported functions and complex concepts
-- Explain what and why, not line-by-line how
-- Example from `simulator.test.ts`: `/** opening → assistant → (simulator decision → user → assistant)* ; texts alternate exactly as evaluation.ts records them. */`
-- Inline comments for unclear state: `// A label on a passing or simulator criterion does not resolve an agent's failed criteria.`
+- A block comment at the top of a module says what it owns and what it never does, often with an ASCII diagram
+- Above exported functions: what and why, not line-by-line how
+- Before a rule that looks arbitrary: the reason it exists (a stored hash, a trust invariant, an owner decision)
+- `/** … */` on exported functions, types and non-obvious fields
+- Examples: `/** Drop the whole dialogue: removing one masked turn would silently change its meaning. */`, `/** A label on a passing or simulator criterion does not resolve an agent's failed criteria. */`
+
+## Text and Language
+
+- Owner-facing strings are Russian and use the owner's vocabulary: «ситуация», «разговор», «судья», «ошибка», «причина», «не измерено — причина»; never ids, hashes or JSON on a screen
+- Code, identifiers, comments, commit messages and model prompts are English
+- Every text on its way to a terminal crosses `safeText` / `safeLine` (`src/text.ts`); `oneLine` and `clip` shape single lines
+- Russian plurals through `countText` / `pluralForm` (`src/plural.ts`)
+- No regular expressions over human or model text: model answers are bound by per-call enums and schemas, text is compared exactly after one normalisation (NFKC, case, spacing); structural formats (ids, file names, XML, CSV) may use regex
+
+## Model Calls
+
+- One-shot calls go through `callModel` / `runStructured` (`src/llm/`): a `StructuredTask` names its role (builder, judge, simulator), instructions, output schema and domain check, with a bounded repair that states the exact reason
+- Per-call enums: ids a model may answer with (messages, rules, topics, controller moves) are an enum built for that call
+- Prompts that feed a stored hash (judge input, controller and simulator roles) never change in place; a change is a new version or mode
 
 ## Function Design
 
-- Most functions are 10–50 lines
-- No hard limit; prefer clarity over brevity
-- Complex algorithms documented with ASCII diagrams: `trials ──pair by (scenario, repeat)──► family deltas`
-- Use destructuring for multiple related parameters: `{ baselineId, candidateId, manifestHash, repeats, split } = input`
-- Object parameters named descriptively: `input`, `options`, `scenario`, `trial`
-- Defaults via Zod schemas or function defaults
-- Explicit type annotations on all function signatures
-- Return tuples when multiple related values: `[mean, stdDev]`
-- Use descriptive type aliases: `type ManifestCase = { ... }`
-- Null for "not found"; undefined for "not applicable"
+- Most functions are 10–50 lines; no hard limit, clarity first
+- Complex flows get an ASCII diagram in the module header
+- Object parameters named by role: `input`, `options`, `ctx`, `record`
+- Defaults via zod schemas or default parameters
+- Explicit return types on exported functions
+- `null` for "searched but not found"; `undefined` for "not applicable" or an omitted option
+- Views are data only (`ResultView`, `SituationView`); wording lives in one place (`src/result-text.ts`, `src/card/view.ts`) and every surface only lays it out
 
 ## Module Design
 
-- Named exports for all public functions and types
-- One primary export per file is typical but not enforced
-- Example `contracts.ts`: exports 50+ types and functions as a data contract module
-- None used; `extensions/` and `skills/` point directly to files
-- Data contracts in `contracts.ts` (types, schemas, constants)
-- Logic modules (`evaluation.ts`, `judge.ts`, `comparison.ts`) import contracts and implement algorithms
-- CLI handlers in `cli.ts` orchestrate across modules
-- Tests in `test/` mirror source structure: `src/contracts.ts` → `test/contracts.test.ts`
+- Named exports only; helpers used inside one module stay unexported
+- Contracts in `src/contracts.ts`, `src/card/schema.ts`, `src/miner/schema.ts`, `src/target-schema.ts`
+- None; `extensions/` and `skills/` point directly to files
+- Pure derivation modules (`run.ts`, `result-view.ts`, `result-text.ts`, `card/view.ts`, `inbox.ts`, `problems.ts`) do no I/O and no model calls
+- One command layer for every surface: the chat tools, the `/agent-lab` workspace and the CLI call the same `ExperimentLab` operations and owner commands
+- Tests in `test/` are named by concern and use frozen fixtures in `test/fixtures/`
 
 ## Type Usage
 
-- Runtime validation via zod: `const agentSchema = z.strictObject({ ... })`
-- Refinements for custom rules: `.refine(v => !['__proto__', 'prototype', 'constructor'].includes(v), 'Reserved identifier')`
-- Discriminated unions for variants: `z.discriminatedUnion('kind', [...])`
-- Type inference: `export type AgentSpec = z.infer<typeof agentSchema>`
-- Used for fixed structures without schema: `export interface Source { id: string; name: string; content: string; hash: string; kind?: SourceKind }`
-- Preferred over inline types when structure is reused
-- Discriminated unions for tagged variants: `{ kind: 'sandbox' }`, `{ kind: 'http', ... }`, `{ kind: 'module', ... }`
-- Encourages exhaustive pattern matching
+- `z.strictObject({ ... })` for stored and exchanged shapes
+- Fields of retired features stay declared as opaque `retired` values (`z.unknown().optional()`), so old records parse without migration
+- Refinements for rules the type cannot express: `.refine(v => !['__proto__', 'prototype', 'constructor'].includes(v), 'Reserved identifier')`
+- Type inference: `export type Scenario = z.infer<typeof scenarioSchema>`
+- For structures without a runtime schema: `export interface Source { id: string; name: string; content: string; hash: string; kind?: SourceKind }`
+- Discriminated unions for variants, with exhaustive `switch` over `kind`
 
 ## Async Patterns
 
-- `async function methodName(): Promise<ReturnType>`
-- No callback-based APIs; all promise-based
-- `await` used inline; no `.then()` chains
+- `async function name(): Promise<T>`; long work runs in the background and reports through records and messages, never by holding the conversation
+- Writes go through the single writer (`ExperimentLab`) and atomic file replacement (`src/fs-atomic.ts`)
 
 ## Null/Undefined Usage
 
-- `null` for "searched but not found" results in data structures
+- `null` for "searched but not found" and for an unknown cost
 - `undefined` for "optional parameter" or "not applicable"
 - `value ?? fallback` for null/undefined checks
 - Optional chaining: `scenario.initialState?.external`

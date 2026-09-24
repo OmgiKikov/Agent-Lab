@@ -1,84 +1,82 @@
 ---
-last_mapped_commit: 015fee98766cc2082001fdfce3a329a31329d4cf
-last_mapped_at: 2026-09-16
+last_mapped_commit: fd07c336134b6bfe7bf48c8be0119c1b14dec56b
+last_mapped_at: 2026-09-24
 ---
 # External Integrations
 
-**Analysis Date:** 2026-09-16
+**Analysis Date:** 2026-09-24
 
 ## APIs & External Services
 
-**LLM Providers:**
+**LLM Providers (through Pi):**
 
-- OpenRouter - Primary judge model provider (default: openai/gpt-5.6-sol with upstream=openai)
-  - SDK/Client: Built into @earendil-works/pi-coding-agent runtime
-  - Auth: API key via environment variable (configured in HTTP headers map)
-  - Upstream routing: Supports OpenRouter upstream parameter for model routing
+- Every model call goes through Pi's `ModelRuntime.completeSimple` (`src/llm/model-call.ts`): one request, no agent session; the budget is charged before sending and usage is recorded once
+- Roles and models (`src/llm/models.ts`), resolved and access-checked before the first paid call:
+  - builder = `roles.builder` ?? the chat's model — topic map, requirement grounding, situation proposals
+  - simulator = `roles.simulator` ?? the chat's model — picks the customer's next allowed move
+  - judge = `roles.judge` ?? `settings.judge` ?? the chat's model — expectation votes, the card reviewer, votes on logged conversations
+- Default judge: `openrouter` / `openai/gpt-5.6-sol`, sent through the OpenRouter Chat Completions adapter pinned to the `openai` upstream (no fallbacks), JSON mode on
+- Auth: Pi's own credentials (`/login` or a provider key); Agent Lab stores no model keys
+- Failures are typed (`ProviderFailure`) with the labels stored records already carry; a judge that did not answer is «судья не ответил», never «ответил не по формату»
 
-**Agent Target Protocols:**
+**Agent Target Protocols (`src/targets.ts`, `src/target-schema.ts`):**
 
-- HTTP - Remote agent via HTTP endpoint
-  - SDK/Client: HTTP client in Pi runtime
-  - Auth: Custom headers from environment variables (headersEnv map in target configuration)
-  - Timeout: Configurable per-target (default 60s)
-  
-- Command-line - Local process speaking JSON-lines
-  - Protocol: One JSON request/reply per line over stdin/stdout
-  - Spawn: Node.js child_process module
-  - Timeout: Configurable per-target (default 60s)
-  
-- Module - Direct Node.js ES module import
-  - Protocol: Async createSession() function export
-  - Timeout: Configurable per-target
-  - Prompt injection: Optional promptFile for agent instructions
+- Command - a local process per dialogue speaking JSON lines over stdin/stdout
+  - Request: `{"type":"respond","sessionId","scenarioId","initialState","messages":[...],"message"}`, then `{"type":"close"}`
+  - Every stdout line answers the pending request: stdout is protocol only, diagnostics go to stderr
+  - Timeout per request (default 60 s); reply capped at 200 000 bytes
+- Module - a JavaScript module exporting `createSession(input)` (or `exportName`), run in its own Node process per dialogue (`src/module-worker.mjs`, console redirected to stderr)
+- HTTP - `POST` JSON `{sessionId, scenarioId, initialState, messages, message}` (+ `prompt`, `promptHash` with a `promptFile`)
+  - Headers from environment variables named in `headersEnv`; values never stored
+  - Timeout per request (default 60 s); reply capped at 200 000 bytes
+- `unconnected` - a draft prepared before the agent is connected; the connection is asked for in the run dialog
+- `sandbox` - retired: stored records open and reassess, nothing runs it
 
-- Sandbox - Built-in Pi sandbox (no external agent)
-  - Protocol: Internal Pi agent with trusted tools
-  - No external dependencies
+**Agent reply (`externalReplySchema`):**
+
+- A JSON string, or `{reply, events?, records?, retrievals?, retrievalsComplete?, retrievalStage?, resetConfirmed?, eventsComplete?, eventScope?, version?, promptHash?, measurementError?, usage?}`
+- `events` `{tool, args, result}` become tool-call/tool-result trace events; `eventsComplete: true` marks the tool log complete
+- `records` are reported state; `resetConfirmed` confirms `initialState.external` was applied — without it such a dialogue is not measured
+- `retrievals` (≤20 chunks, ≤12 000 chars each, ≤60 000 total) with `retrievalsComplete` and `retrievalStage` (`retrieved` | `model_context`) feed separate RAG diagnostics that do not move the accuracy
+- `measurementError` marks a stand failure: the dialogue is not measured
+- `version` is the tested agent version the calibration compares with the logs' declared version
+- Target `serviceReplies`: substrings that mean the stand, not the agent, answered
 
 ## Data Storage
 
-**File Storage:**
+**File Storage (`.agent-lab/` in the project folder, or `--data-dir`):**
 
-- Experiments: JSON files in `.agent-lab/` (or custom data-dir)
-  - Naming: `{experimentId}.json`
-  - Format: Validated against experimentSchema (v6+ protocol)
-  - Locking: Per-directory .lock file with PID/token for concurrent access control
-  - Recovery: .recovery gate for transaction consistency
-
-- Trace Journals: JSONL files (one event per line)
-  - Naming: `{experimentId}.trace.jsonl`
-  - Format: Append-only log of TraceEvent records
-  - Lifecycle: Created per experiment run
-
-- Artifact Export: JSON, Markdown, HTML formats
-  - Evidence bundles for review and CI/CD
-  - HTML reports with embedded evidence
+- Records: `{id}.json`, one per run or draft, validated against `experimentSchema`, written atomically (`src/fs-atomic.ts`, private temp file, fsync, rename)
+- Trace journals: `{id}.trace.jsonl`, append-only
+- Judge audits: `{id}.judge/{trialId}.json` sidecars, written synchronously and atomically; the trial keeps a verifiable receipt
+- Imports: `imports/<id>.json` (verbatim evidence), `imports/<id>.mapping.json` (owner-confirmed spreadsheet reading with the file hash), `imports/<id>.topics-<key>.json` (topic map and its progress), `imports/<id>.declarations.json` (append-only log-version declarations)
+- Libraries: `libraries/<id>/…` with a journaled publication and CAS on the expected hash
+- Calibration: `{id}.calibration/{key}.json` sidecars (votes on logged conversations, their own receipts)
+- Remembered connection: `connection.local.json`
+- Exports: `exports/<run>.<rand>.report.html` / `.report.md` / `.snapshot.json`
+- Every data file is written with mode `0600`, folders `0700`
+- Locking: one writer per data folder (`.lock` with owner token and dead-writer recovery); readers never take the lock
 
 **Caching:**
 
-- No external cache service (file-based only)
-- Fingerprinting: SHA-256 based content hashing for scenario/trial/result reproducibility
+- No external cache; content hashes (SHA-256 over canonical JSON) identify imports, libraries, definitions, judge inputs and receipts
+- A topic map is reused for the same import, builder model and prompt version; calibration receipts are reused by key on repeats and reassessments
 
 ## Authentication & Identity
 
 **Auth Provider:**
 
-- Custom (environment variables)
-  - Implementation: HTTP headers map environment variable names to actual values
-  - Header names: Configurable per target (alphanumeric + hyphen, max 100 chars)
-  - Variable names: UPPERCASE_SNAKE_CASE, max 100 chars
-  - Required vars checked at preflight validation
+- Model providers: Pi
+- Agent under test: environment variables named in the target (`headersEnv`, UPPERCASE_SNAKE_CASE ≤100 chars; header names ≤100 chars)
 
-**Example Auth Configuration:**
+**Example HTTP target:**
 
 ```json
 {
   "kind": "http",
   "url": "https://api.example.com/agent",
   "headersEnv": {
-    "authorization": "AGENT_API_KEY",
-    "x-custom-header": "CUSTOM_TOKEN"
+    "authorization": "AGENT_API_KEY"
   }
 }
 ```
@@ -87,145 +85,81 @@ last_mapped_at: 2026-09-16
 
 **Error Tracking:**
 
-- Built-in error handling and reporting
-- JudgeAudit schema captures model provider/configuration/attempts
-- Trial errors and reasons logged in experiments
+- Typed not-measured reasons per situation (`NOT_MEASURED_CODES` in `src/run.ts`)
+- Judge audits keep the exact request, raw responses and errors of every attempt; a malformed vote is asked once more as a fresh request
 
 **Logs:**
 
-- Trace events (seq, type, text, tool, args, result, state) saved to JSONL
-- Release hook output captured (stdout/stderr last 4000 chars)
-- Judge attempt history including raw responses and errors
+- Trace events (seq, type, text, tool, args, result, state) in the JSONL journal
+- Release hook output (last 4000 characters of stdout and stderr)
+- Progress of long work is read from the record (one progress row), never estimated
 
 **Diagnostics:**
 
-- Doctor command validates target connectivity and readiness
-- Probe protocol tests read/write/reset cycles for state observation
-- Version tracking for agent under test and test suite
+- `agent-lab doctor --connection c.json --yes`: three probe requests (write, read, reset) against `probe` checks
+- `agent-lab detect`: read-only proposal of the agent, logs, materials and prompt in a folder
+- `agent-lab status`: the models available in Pi
 
 ## CI/CD & Deployment
 
 **Hosting:**
 
-- File system only (no hosting platform required)
-- Agent under test hosted externally via HTTP/Module/Command target
+- File system only; the agent under test is reached through its adapter
 
 **CI Pipeline:**
 
-- Example: `examples/regression-ci.yml` (GitHub Actions YAML)
-- Commands: `agent-lab evaluate`, `agent-lab score`, `agent-lab reassess`
-- Parallel execution: `--parallel N` flag (default respects concurrency limits)
+- `.github/workflows/check.yml`: `npm ci`, `npm test`, `npm run typecheck`, `npm pack --dry-run`, then `evaluate` of `examples/regression-suite.json` with `examples/connection.json` (SQLite adapter, no model keys)
+- Example for users: `examples/regression-ci.yml`
+- `agent-lab evaluate --input suite.json --yes [--parallel N]` exit codes: 0 all passed, 1 an agent failure, 2 not measured / control alarm / unfinished
+- Suites (`agent-lab-suite-1`) of card runs carry the import batches their situations cite, verified on load
 
 **Release Hooks:**
 
-- Optional pre-run deployment: Executes shell command before test
-  - cwd: Working directory for command
-  - command: Executable to run (resolved via PATH)
-  - args: Argument list
-  - timeoutMs: Execution deadline (default 120s)
-- Output captured for audit trail
+- Optional `release` on a target: command, args, cwd, `timeoutMs` (default 120 s), run before the dialogues with `AGENT_LAB_RUN_ID`, `AGENT_LAB_TARGET_VERSION`, `AGENT_LAB_PROMPT_FILE`, `AGENT_LAB_PROMPT_HASH`
+- A non-zero exit stops the run; the adapter's `version` stays the identity of what was tested
 
 ## Environment Configuration
 
 **Required env vars (conditional):**
 
-- LLM provider credentials (via HTTP headers if using OpenRouter judge)
-- Custom agent headers (named in target.headersEnv configuration)
-- PATH must contain executables for command-line targets
+- Variables named in a target's `headersEnv`
+- `PATH` must resolve command-target executables
 
 **Optional env vars:**
 
-- AGENT_LAB_SESSION - Set to '1' when running Pi chat mode
-- Standard Node.js: NODE_ENV, DEBUG, etc.
+- `AGENT_LAB_SESSION=1` - set by `agent-lab chat`
+- `AGENT_LAB_PROVIDER`, `AGENT_LAB_MODEL` - live teaching example and smoke scripts
 
 **Secrets location:**
 
-- Environment variables only (no .env file shipped)
-- Secrets never logged or committed
-- Header values from environment validated at preflight
+- Environment variables and Pi's credential store only; never in records, materials or exports
+- Project detection reads `.env` variable names, never values; a local address loses its credentials and query
 
 ## Webhooks & Callbacks
 
 **Incoming:**
 
-- None (Agent Lab is pull-based only)
+- None
 
 **Outgoing:**
 
-- None (No webhooks triggered)
+- None besides model providers (through Pi) and the agent under test (through its adapter)
 
-**Target Communication:**
+## Spreadsheet and Document Formats
 
-- Request/response over JSON lines (command-line targets)
-- HTTP POST with JSON body (HTTP targets)
-- Direct async function calls (module targets)
-- Internal sandbox (no external calls)
-
-## Communication Protocols
-
-**Judge Protocol (LLM Assessment):**
-
-- Provider: OpenRouter or other LLM via Pi runtime
-- Request: scenario, sources, trial events, evaluation scope
-- Response: JSON schema matching assessmentSchema
-  - One assessment per requested rubric
-  - Evidence citations with event sequence numbers
-  - Pass/fail conditions evaluated independently
-- Error handling: Retries within concurrency limit, attempts logged in JudgeAudit
-- Concurrency: 8 dialogues per batch (judge votes run together)
-
-**Target Adapter Protocol:**
-
-- Request: JSON object with user message and context
-- Response: JSON object with reply, optional retrievals, optional state
-- Trace events: bidirectional (user, assistant, simulator, retrieval, tool_call, tool_result, error)
-- State observation: sandbox | reported | missing
-- Tool scope: adapter-specific tool list
-
-**RAG Protocol (Retrieval Evidence):**
-
-```json
-{
-  "reply": "Answer text",
-  "retrievals": [
-    {"source": "doc#section", "content": "...", "score": 0.9}
-  ],
-  "retrievalsComplete": true
-}
-```
-
-- retrievalsComplete: true = full context assertion for diagnostic rubrics
-- retrievalsComplete: false or missing = unknown/incomplete
-- Up to 20 fragments, 12,000 chars each, 60,000 total
-
-**Comparison Protocol:**
-
-- Pair-wise statistical comparison of baseline vs candidate trials
-- Verdict types: improved, regressed, no_change, insufficient, incomparable
-- Evidence: per-family pass counts, confidence interval calculation
+- `.xlsx`: own ZIP reader (`src/zip.ts`, CRC-checked, size-capped) and a pull tokenizer over sheet XML: shared, inline and rich strings, merged cells
+- `.csv`: RFC 4180; delimiter and encoding proposed by detection, used as confirmed
+- `.docx` materials through the same ZIP reader; `.md`, `.txt`, `.html` read whole
+- JSON/JSONL logs: `[{id, messages:[{role, content}]}]` or `{dialogues:[...]}`, or rich `events` (message, tool, retrieval, state); ≤4 MB and ≤300 dialogues per import
 
 ## Integration Examples
 
-**Python Agent (Command Target):**
+**Python command adapter:** `examples/echo-agent.py` (JSON lines, retrievals documented), `examples/stateful-agent.py` (SQLite state, used by the CI suite)
 
-- File: `examples/stateful-agent.py`
-- Invocation: `python3 stateful-agent.py` (reads JSON, writes JSON lines)
-- State: SQLite backend
-- Probe: Validates read/write/reset via deterministic checks
+**Node module adapter:** `examples/echo-agent.mjs` (`createSession`), `examples/scenario-lab-target.mjs` (teaching agent with a deliberate bug and its fixed version)
 
-**Node.js Module (LLM Agent):**
-
-- File: `examples/llm-stateful-agent.mjs`
-- Export: `createSession()` function
-- Dependencies: LLM client for OpenAI-compatible API
-- Prompt: Loaded from `examples/llm-prompt.md`
-
-**HTTP Endpoint:**
-
-- Connection: `examples/llm-connection.json` (reference architecture)
-- Endpoint: POST /api/chat or similar
-- Headers: Custom auth via environment variables
+**Connection file:** `examples/connection.json` (`agent-lab-connection-1`, command target, `probe`)
 
 ---
 
-*Integration audit: 2026-09-16*
+*Integration audit: 2026-09-24*
