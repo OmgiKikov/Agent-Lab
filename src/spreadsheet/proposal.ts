@@ -78,8 +78,8 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
   const wanted = chosen.sheet;
   const named = wanted === undefined ? undefined : workbook.sheets.find(sheet => sheet.name === wanted) ?? workbook.sheets.find(sheet => sheet.name.toLowerCase() === wanted.toLowerCase());
   // The sheet with conversations, the fullest first; otherwise the fullest sheet.
-  const best = [...workbook.sheets].sort((a, b) => Number(hasStructure(analysisOf(b))) - Number(hasStructure(analysisOf(a))) || analysisOf(b).rows.length - analysisOf(a).rows.length)[0]!;
-  const sheet = named ?? best;
+  const sheet = named ?? workbook.sheets.map(item => ({ sheet: item, structure: hasStructure(analysisOf(item)), rows: analysisOf(item).rows.length }))
+    .sort((x, y) => Number(y.structure) - Number(x.structure) || y.rows - x.rows)[0]!.sheet;
   const analysis = analysisOf(sheet);
   const base: ProposalBase = { file, sheets: workbook.sheets.map(item => item.name), sheet: sheet.name, ...workbook.csv ? { csv: workbook.csv } : {}, headerRow: analysis.header + 1, columns: analysis.columns };
   if (wanted !== undefined && !named) return { ...base, status: 'refused', choice: 'sheet', reason: `Листа ${quoted(wanted)} нет. Есть: ${base.sheets.map(quoted).join(', ')}.` };
@@ -361,7 +361,7 @@ function orderKind(a: Analysis, column: ColumnInfo): 'number' | 'date' | undefin
  */
 function orderColumn(a: Analysis, id: ColumnInfo, taken: number[]): ColumnInfo | undefined {
   const groups = new Map<string, number[]>();
-  a.values[id.index]!.forEach((value, i) => { if (value) groups.set(value, [...groups.get(value) ?? [], i]); });
+  a.values[id.index]!.forEach((value, i) => { if (!value) return; const group = groups.get(value); if (group) group.push(i); else groups.set(value, [i]); });
   const conversations = [...groups.values()].filter(group => group.length > 1);
   return a.columns.filter(column => !taken.includes(column.index) && orderKind(a, column)).find(column => {
     const position = (row: number) => parseOrder(a.values[column.index]![row]!)?.value ?? NaN;

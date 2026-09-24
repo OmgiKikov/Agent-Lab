@@ -19,7 +19,7 @@ import { cellOf, columnLetter, type Sheet } from './sheet.js';
  */
 
 /** Why a conversation of the sheet is not usable, when the spreadsheet itself shows it; fixed wording, so the preview can count them. */
-export const ROW_ISSUES = {
+const ROW_ISSUES = {
   noText: 'Пустой текст разговора',
   noMarker: 'Текст не начинается с метки роли',
   emptyMessage: 'Пустое сообщение',
@@ -149,8 +149,8 @@ function messageDialogues(sheet: Sheet, mapping: TableMapping, rows: number[], k
   for (const row of rows) {
     const id = cellText(sheet, row, mapping.id).trim();
     if (!id && !cellText(sheet, row, layout.role).trim() && !cellText(sheet, row, mapping.text).trim()) continue;
-    const key = id || `\u0000${row}`;
-    groups.set(key, [...groups.get(key) ?? [], row]);
+    const key = id || `\u0000${row}`, group = groups.get(key);
+    if (group) group.push(row); else groups.set(key, [row]);
   }
   return [...groups.values()].map((group): SheetDialogue => {
     const id = cellText(sheet, group[0]!, mapping.id).trim();

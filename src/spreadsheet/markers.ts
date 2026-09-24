@@ -32,7 +32,7 @@ const isWordChar = (char: string | undefined): boolean => char !== undefined && 
 const isSpace = (char: string | undefined) => char === ' ' || char === '\t' || char === '\n' || char === '\r' || char === ' ';
 
 /** A word of uppercase letters (any alphabet), digits and underscores with at least one letter: how exports tag who speaks. */
-export function isMarkerToken(token: string): boolean {
+function isMarkerToken(token: string): boolean {
   if (token.length < 2 || token.length > MARKER_CHARS) return false;
   let letters = 0;
   for (const char of token) {
@@ -77,7 +77,7 @@ export function splitMessages(text: string, separator: string, markers: readonly
 }
 
 /** How often each uppercase word starts a message when messages are separated by `separator`. */
-export function countMarkers(texts: readonly string[], separator: string): MarkerCount[] {
+function countMarkers(texts: readonly string[], separator: string): MarkerCount[] {
   const counts = new Map<string, MarkerCount>();
   for (const text of texts) {
     const seen = new Set<string>();
@@ -106,13 +106,13 @@ export function boundaryCounts(texts: readonly string[], separator: string, mark
 }
 
 /** The markers worth proposing among the counts: frequent enough at boundaries to be the export's structure. */
-export function frequentMarkers(counts: readonly MarkerCount[]): MarkerCount[] {
+function frequentMarkers(counts: readonly MarkerCount[]): MarkerCount[] {
   const total = counts.reduce((sum, item) => sum + item.messages, 0);
   return counts.filter(item => item.messages >= Math.max(MIN_MARKER_MESSAGES, MIN_MARKER_SHARE * total));
 }
 
 /** Texts whose first word is one of `markers`. */
-export function ledTexts(texts: readonly string[], markers: readonly string[]): number {
+function ledTexts(texts: readonly string[], markers: readonly string[]): number {
   return texts.filter(text => markerAt(text, skipSpace(text, 0), markers) !== undefined).length;
 }
 
