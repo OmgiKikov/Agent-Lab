@@ -67,7 +67,7 @@ export async function rememberConnection(directory: string, connection: Connecti
   const previous = await rememberedConnection(directory);
   if (!connection.probe && previous?.probe && fingerprint(previous.target) === fingerprint(connection.target)) connection = { ...connection, probe: previous.probe };
   const path = resolve(directory, 'connection.local.json');
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await writeFileAtomic(path, JSON.stringify(connectionSchema.parse({ ...connection, verifiedAt: new Date().toISOString() }), null, 2) + '\n');
 }
 
@@ -147,12 +147,15 @@ export interface TemplateCheck {
 /**
  * The connection check of an agent in its own format: one test message shows the reply's structure; with the
  * text's path known, a second message in the same conversation must be answered too. There is no reset to check:
- * every dialogue of a run is a new conversation id, and the agent is judged on its replies.
+ * every dialogue of a run is a new conversation id, and the agent is judged on its replies. `reply` is the path, or
+ * how to pick it from the first reply (the chat asks the owner there); undefined leaves it unpicked.
  */
-export async function checkTemplate(target: TemplateTarget, reply: string | undefined, signal = new AbortController().signal): Promise<TemplateCheck> {
+export async function checkTemplate(target: TemplateTarget, reply: string | undefined | ((first: unknown) => Promise<string | undefined>),
+  signal = new AbortController().signal): Promise<TemplateCheck> {
   const conversation = randomUUID();
   const first = await templateExchange(target, { message: TOOL_PROBE_OPENING, conversation }, signal);
   const structure = replyStructure(first);
+  if (typeof reply === 'function') reply = await reply(first);
   if (reply === undefined) return { structure, turns: [], passed: false };
   const length = (document: unknown) => { const text = atPointer(document, reply); return typeof text === 'string' && text.trim() ? text.length : null; };
   const turns = [length(first)];

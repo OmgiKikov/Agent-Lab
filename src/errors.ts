@@ -31,3 +31,8 @@ export class LockedError extends Error {
 export class Stopped extends Error {
   constructor(readonly reason: 'cancelled' | 'closing' | 'time' | 'budget', message: string) { super(message); }
 }
+
+/** An HTTP agent's request did not come back: it was not reached, it took too long, or it answered with an error status. */
+export class AgentRequestFailed extends Error {
+  constructor(readonly kind: 'unreachable' | 'timeout' | 'status', message: string, readonly status?: number) { super(message); }
+}

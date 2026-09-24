@@ -83,7 +83,7 @@ test('a curl command line keeps its quoting, headers and body; substitutions bec
   assert.equal(atPointer(template.body, '/message/conversation_id'), '{{conversation}}');
   assert.equal(atPointer(template.body, '/metadata/dialog/dialog_id'), '{{conversation}}');
   assert.equal(atPointer(template.body, '/message/reply_with'), 'r-1');
-  assert.ok(made.warnings.some(warning => warning.includes('AGENT_LAB_AUTHORIZATION')));
+  assert.ok(made.lines.some(line => line.includes('AGENT_LAB_AUTHORIZATION')));
   assert.ok(made.warnings.some(warning => warning.includes('X-Trace')));
   assert.equal(template.reply, undefined);
 

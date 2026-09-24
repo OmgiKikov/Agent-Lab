@@ -65,7 +65,7 @@ test('the eval plays a phrase through a real Pi session: the model\'s tool call,
     // and the one instruction source in its system prompt.
     const first = offline.requests[0] as { tools?: { name: string }[]; systemPrompt?: string };
     const offered = first.tools?.map(tool => tool.name) ?? [];
-    assert.deepEqual(offered.filter(name => name.startsWith('agent_lab_')), [TOOL.status, TOOL.prepare, TOOL.cards, TOOL.edit, TOOL.decide, TOOL.run]);
+    assert.deepEqual(offered.filter(name => name.startsWith('agent_lab_')), [TOOL.status, TOOL.prepare, TOOL.connect, TOOL.cards, TOOL.edit, TOOL.decide, TOOL.run]);
     assert.ok(offered.includes('read') && offered.includes('bash'), offered.join(', '));
     assert.match(first.systemPrompt ?? '', /Вы — Agent Lab в проекте владельца/);
   } finally { await rm(offline.directory, { recursive: true, force: true }); }

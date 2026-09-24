@@ -37,7 +37,7 @@ export async function connectFromCurl(flags: ConnectFlags): Promise<void> {
     return;
   }
   const output = resolve(flags.output ?? 'connection.json');
-  const preview = [...made.lines, ...warnings];
+  const preview = [...made.lines, ...warnings, ...made.conversation.length ? [] : ['  Укажите поле идентификатора разговора: --conversation /путь.']];
   if (!flags.yes) { write([...preview, '', `Записать в ${output}: та же команда с --yes.`]); return; }
   try { await saveConnection(output, { format: CONNECTION_FORMAT, target: made.target }, false); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`Файл ${output} уже есть: укажите другой --output.`); throw error; }

@@ -20,6 +20,7 @@ import { judgeLogged, logProtocolHash } from './card/log-judge.js';
 import { buildTopicMap } from './miner/topic-map.js';
 import { readTableWithModel } from './spreadsheet/reading-task.js';
 import { readPurposesWithModel } from './prompt-purpose.js';
+import { connectionReaderWith } from './connect.js';
 import { USER_CONTROLLER_PROTOCOL, userDecisionSchema } from './user-controller.js';
 
 /*
@@ -112,6 +113,8 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
     tableReading: { builder, read: (request, ctx) => readTableWithModel(request, { run, ctx }) },
     // And which of the agent's prompts write the reply to the customer: a proposal the owner confirms.
     promptPurposes: { builder, read: (batch, ctx) => readPurposesWithModel(batch, { run, ctx }) },
+    // And where the owner's agent takes the customer's message and puts its answer: a reading the owner confirms.
+    connectionReading: connectionReaderWith(builder, run),
     async selectSources(input, ctx) {
       const ids = input.catalog.map(item => item.id);
       const known = new Set(ids);

@@ -21,13 +21,13 @@ import { markTargets, primaryMetricId } from '../src/outcomes.js';
 import { demoEvaluateRecord, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 import { CLOSE, KEY, legacyDraftIn, noticeOf, output, registered, renderContext, workspaceSession } from './helpers/pi-session.js';
 
-/** The nine tools, in the order they are registered: preparing, the situations, the owner's decisions, the run, reading. */
-const TOOL_NAMES = [TOOL.prepare, TOOL.cards, TOOL.edit, TOOL.decide, TOOL.run, TOOL.status, TOOL.results, TOOL.explain, TOOL.agree];
+/** The ten tools, in the order they are registered: preparing, the situations, the owner's decisions, the run, reading, connecting the agent. */
+const TOOL_NAMES = [TOOL.prepare, TOOL.cards, TOOL.edit, TOOL.decide, TOOL.run, TOOL.status, TOOL.results, TOOL.explain, TOOL.agree, TOOL.connect];
 const tui = (cwd: string, pick: (title: string, options: string[]) => string | undefined = (_title, options) => options[0]) => ({ cwd, mode: 'tui', hasUI: true,
   ui: { select: async (title: string, options: string[]) => pick(title, options), editor: async () => undefined, notify() {}, setStatus() {}, setWidget() {} } }) as unknown as ExtensionContext;
 const headless = (cwd: string) => ({ cwd, hasUI: false, mode: 'print', model: undefined }) as ExtensionContext;
 
-test('nine tools, each with a small closed schema: every value typed, and none takes settings, a consent, a hash, a verdict or a raw command', () => {
+test('ten tools, each with a small closed schema: every value typed, and none takes settings, a consent, a hash, a verdict or a raw command', () => {
   const { tools } = registered();
   assert.deepEqual([...tools.keys()], TOOL_NAMES);
   /** Type.Any, Type.Unknown or an open object would take a value the host cannot check. */
@@ -50,7 +50,7 @@ test('nine tools, each with a small closed schema: every value typed, and none t
       'verdict', 'judgeVerdict', 'quick', 'reviewMode', 'target', 'dialogues', 'command_json'])
       assert.ok(!text.includes(`"${forbidden}"`), `${tool.name} offers ${forbidden}`);
   }
-  // What the model reads about all nine tools on every turn: a fraction of the 26K tokens of schemas the review found.
+  // What the model reads about all ten tools on every turn: a fraction of the 26K tokens of schemas the review found.
   assert.ok(total < 24_000, `${total} bytes of schemas and descriptions`);
 });
 
@@ -59,10 +59,10 @@ test('the model sees the tools of the step the project is at, and Pi\'s own tool
   const { tools, sessionStart, beforeAgentStart, active, shutdown } = registered();
   try {
     await sessionStart({}, headless(cwd));
-    assert.deepEqual(active.names, ['read', 'bash', 'edit', 'write', TOOL.status, TOOL.prepare], 'nothing yet: what exists, and preparing');
+    assert.deepEqual(active.names, ['read', 'bash', 'edit', 'write', TOOL.status, TOOL.prepare, TOOL.connect], 'nothing yet: what exists, preparing, connecting the agent');
     // Preparing moves the project to its situations: the tool that did it hands the model the next step's tools.
     await tools.get(TOOL.prepare)!.execute('demo', { demo: true }, undefined, undefined, headless(cwd));
-    assert.deepEqual(active.names, ['read', 'bash', 'edit', 'write', TOOL.status, TOOL.prepare, TOOL.cards, TOOL.edit, TOOL.decide, TOOL.run]);
+    assert.deepEqual(active.names, ['read', 'bash', 'edit', 'write', TOOL.status, TOOL.prepare, TOOL.connect, TOOL.cards, TOOL.edit, TOOL.decide, TOOL.run]);
     // A result recorded elsewhere (the workspace, another session) is picked up with the owner's next message.
     const demo = await demoEvaluateRecord('agent-lab-steps-run-');
     await demo.lab.close();
@@ -72,7 +72,7 @@ test('the model sees the tools of the step the project is at, and Pi\'s own tool
     active.names = [...active.names.filter(name => !name.startsWith('agent_lab_')), 'grep'];
     await beforeAgentStart({ systemPrompt: '' }, headless(cwd));
     assert.deepEqual(active.names, ['read', 'bash', 'edit', 'write', 'grep',
-      TOOL.status, TOOL.prepare, TOOL.cards, TOOL.edit, TOOL.decide, TOOL.run, TOOL.results, TOOL.explain, TOOL.agree], 'a result: reading it, explaining it, the owner\'s word on the judge');
+      TOOL.status, TOOL.prepare, TOOL.connect, TOOL.cards, TOOL.edit, TOOL.decide, TOOL.run, TOOL.results, TOOL.explain, TOOL.agree], 'a result: reading it, explaining it, the owner\'s word on the judge');
     await rm(demo.directory, { recursive: true, force: true });
   } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); }
 });
@@ -430,7 +430,7 @@ test('the workspace and the chat share one project: a request, a question about 
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('the actual Pi SDK loader imports the nine tools and the skill without discovered resources', async () => {
+test('the actual Pi SDK loader imports the ten tools and the skill without discovered resources', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-loader-'));
   try {
     const loader = new DefaultResourceLoader({

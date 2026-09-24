@@ -2,7 +2,7 @@
  * A curl command line → the request an HTTP agent in its own format expects (http-template.ts).
  *
  *   curl text ──shell words (quotes, \, $(...), $NAME)──► url · method · headers · -d body
- *            ──owner's choices (--message, --conversation)──► http target with a request template
+ *            ──owner's choices (the message field, the conversation fields)──► http target with a request template
  *
  * The parse is of a command line's structure: quoting and substitutions are shell syntax, and header names and
  * JSON keys are structure, so reading them is not reading human text. What a substitution meant is decided by the
@@ -203,25 +203,38 @@ export interface CurlChoices {
   /** JSON pointers of the conversation id fields; by default the keys named like one. */
   conversation?: string[];
 }
-export type CurlConnection =
-  | { kind: 'ask_message'; fields: { pointer: string; length: number }[]; warnings: string[] }
-  | { kind: 'ready'; target: RunnableTarget; lines: string[]; warnings: string[] };
+/** Where in the request a substitution stands: a header by name, a body field by pointer. */
+type Place = { header: string } | { pointer: string };
+/** A part of the request Lab fills in itself on every request: a time, a fresh id or an environment variable. */
+export type Substitution = Place & { by: 'now' | 'uuid' | 'env'; variable?: string };
+const placeText = (place: Place): string => 'header' in place ? `Заголовок ${place.header}` : `Поле ${place.pointer}`;
+/** The request's text fields, to pick the message from; `value` is the curl's own text (the owner's test request, a placeholder where Lab substitutes). */
+export interface CurlFields { kind: 'ask_message'; url: string; fields: { pointer: string; length: number; value: string }[]; warnings: string[] }
+export interface CurlReady { kind: 'ready'; target: RunnableTarget; message: string; conversation: string[]; substitutions: Substitution[]; lines: string[]; warnings: string[] }
+export type CurlConnection = CurlFields | CurlReady;
+
+/** The fields Lab takes for the conversation id when the owner names none: the keys named like one. */
+export const conversationFields = (pointers: readonly string[]): string[] => pointers.filter(pointer => conversationLike(lastKey(pointer)));
 
 /** A curl command and the owner's choices → an http target in the agent's own format, with what Lab did said in plain words. */
+export function connectionFromCurl(source: string): CurlFields;
+export function connectionFromCurl(source: string, choices: CurlChoices & { message: string }): CurlReady;
+export function connectionFromCurl(source: string, choices: CurlChoices): CurlConnection;
 export function connectionFromCurl(source: string, choices: CurlChoices = {}): CurlConnection {
   const request = parseCurl(source);
   const warnings = [...request.warnings];
-  const lines: string[] = [];
+  const substitutions: Substitution[] = [];
   // A substitution's meaning is read from the name it stands under.
-  const resolve = (part: Part, name: string, where: string): string => {
+  const resolve = (part: Part, name: string, place: Place): string => {
+    const where = placeText(place);
     if (part.kind === 'text') return part.value;
     if (part.kind === 'variable') {
-      if (ENV_NAME.test(part.name)) { lines.push(`${where}: из переменной окружения ${part.name} при каждом запросе`); return `{{env:${part.name}}}`; }
+      if (ENV_NAME.test(part.name)) { substitutions.push({ ...place, by: 'env', variable: part.name }); return `{{env:${part.name}}}`; }
       warnings.push(`${where}: переменная $${part.name} оставлена как текст — Lab читает только переменные из заглавных букв.`);
       return `$${part.name}`;
     }
-    if (timeLike(name)) { lines.push(`${where}: текущее время при каждом запросе`); return '{{now}}'; }
-    if (idLike(name)) { lines.push(`${where}: новый id при каждом запросе`); return '{{uuid}}'; }
+    if (timeLike(name)) { substitutions.push({ ...place, by: 'now' }); return '{{now}}'; }
+    if (idLike(name)) { substitutions.push({ ...place, by: 'uuid' }); return '{{uuid}}'; }
     warnings.push(`${where}: ${part.value} оставлено как текст — Lab не выполняет команды.`);
     return part.value;
   };
@@ -234,10 +247,9 @@ export function connectionFromCurl(source: string, choices: CurlChoices = {}): C
     if (secretLike(name)) {
       const variable = `AGENT_LAB_${name.toUpperCase().replaceAll('-', '_')}`;
       headersEnv[name] = variable;
-      warnings.push(`Заголовок ${name} похож на секрет: в файл он не записан. Задайте переменную ${variable} с его значением перед запуском.`);
       continue;
     }
-    headers[name] = value.map(part => resolve(part, name, `Заголовок ${name}`)).join('');
+    headers[name] = value.map(part => resolve(part, name, { header: name })).join('');
   }
 
   // Substitutions inside the JSON body stand in as private-use markers, so the body parses as JSON first.
@@ -252,26 +264,28 @@ export function connectionFromCurl(source: string, choices: CurlChoices = {}): C
     for (const piece of text.split('')) {
       const end = piece.indexOf('');
       if (end < 0) { out += piece; continue; }
-      out += resolve(parts[Number(piece.slice(0, end))]!, lastKey(pointer), `Поле ${pointer}`) + piece.slice(end + 1);
+      out += resolve(parts[Number(piece.slice(0, end))]!, lastKey(pointer), { pointer }) + piece.slice(end + 1);
     }
     return out;
   });
 
   const fields = stringFields(body);
   const known = new Set(fields.map(field => field.pointer));
-  if (choices.message === undefined) return { kind: 'ask_message', fields: fields.map(field => ({ pointer: field.pointer, length: field.value.length })), warnings };
+  if (choices.message === undefined) return { kind: 'ask_message', url: request.url, fields: fields.map(field => ({ pointer: field.pointer, length: field.value.length, value: field.value })), warnings };
   if (!known.has(choices.message)) throw new Error(`В теле запроса нет строкового поля ${choices.message}. Строковые поля: ${[...known].join(', ') || 'нет'}.`);
-  const conversation = choices.conversation ?? fields.filter(field => field.pointer !== choices.message && conversationLike(lastKey(field.pointer))).map(field => field.pointer);
+  const conversation = choices.conversation ?? conversationFields(fields.map(field => field.pointer)).filter(pointer => pointer !== choices.message);
   for (const pointer of conversation) {
     if (!known.has(pointer)) throw new Error(`В теле запроса нет строкового поля ${pointer} для идентификатора разговора.`);
     if (pointer === choices.message) throw new Error('Одно и то же поле не может быть и сообщением клиента, и идентификатором разговора.');
   }
   setAt(body, choices.message, '{{message}}');
   for (const pointer of conversation) setAt(body, pointer, '{{conversation}}');
-  lines.unshift(`Адрес агента: ${request.url}`, `Сообщение клиента → ${choices.message}`,
-    ...(conversation.length ? [`Идентификатор разговора → ${conversation.join(', ')}: новый в каждой ситуации, так агент начинает её с чистого листа`] : []));
-  if (!conversation.length) warnings.push('Поле идентификатора разговора не найдено: агент может смешать ситуации. Укажите его: --conversation /путь.');
+  const lines = [`Адрес агента: ${request.url}`, `Сообщение клиента → ${choices.message}`,
+    ...(conversation.length ? [`Идентификатор разговора → ${conversation.join(', ')}: новый в каждой ситуации, так агент начинает её с чистого листа`] : []),
+    ...substitutions.map(({ by, variable, ...place }) => `${placeText(place)}: ${by === 'now' ? 'текущее время' : by === 'uuid' ? 'новый id' : `из переменной окружения ${variable}`} при каждом запросе`),
+    ...Object.entries(headersEnv).map(([name, variable]) => `Заголовок ${name} похож на секрет: в файл он не записан. Задайте переменную ${variable} с его значением перед запуском.`)];
+  if (!conversation.length) warnings.push('Поле идентификатора разговора не найдено: агент может смешать ситуации.');
   const parsed = runnableTargetSchema.safeParse({ kind: 'http', url: request.url, headersEnv, ...(request.timeoutMs ? { timeoutMs: request.timeoutMs } : {}), request: { body, headers } });
   if (!parsed.success) throw new Error(`Подключение из curl не сложилось: ${parsed.error.issues.map(issue => issue.message).join('; ')}`);
-  return { kind: 'ready', target: parsed.data, lines, warnings };
+  return { kind: 'ready', target: parsed.data, message: choices.message, conversation, substitutions, lines, warnings };
 }
