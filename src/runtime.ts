@@ -4,6 +4,7 @@ import type { LogJudge } from './card/calibration.js';
 import type { ErrorPlanter } from './judge-check-task.js';
 import type { CardProposal, CardProposalRequest } from './card/proposal.js';
 import type { CardReview, CardReviewRequest } from './card/review.js';
+import type { MaskFiller } from './card/unmask.js';
 import type { FailureMode, Scenario, Source, TraceEvent, Trial, Usage } from './contracts.js';
 import { identifierSchema as identifier } from './ids.js';
 import type { BuilderModel, TopicMap, TopicMapPlan, TopicMapProgress } from './miner/topic-map.js';
@@ -60,6 +61,8 @@ export interface Runtime {
   logJudge?: LogJudge;
   /** The builder's planted errors of a judge check (judge-check-task.ts): one agent reply rewritten so one expectation is broken. */
   plantError?: ErrorPlanter;
+  /** The builder's plausible values over the masking marks of one existing card (card/unmask.ts), made into a command the owner confirms. */
+  maskFill?: MaskFiller;
   /** Which articles of a large knowledge base one dialogue needs: the model reads the table of contents, never the bodies. */
   selectSources?(input: SourceSelectionInput, ctx: CallContext): Promise<SourceSelection>;
   /** The topic map of an import (miner/topic-map.ts), built by `builder` from a plan made for it; each finished step reaches `onProgress` before the next call. */

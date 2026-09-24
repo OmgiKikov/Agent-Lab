@@ -157,7 +157,7 @@ test('headless, reads and the free teaching example work; everything the owner d
     await assert.rejects(call(TOOL.run, { action: 'accept' }), /интерактивном терминале Pi/);
     const waiting = output(await call(TOOL.cards, {})).situations.find((item: { decision?: string }) => item.decision);
     await assert.rejects(call(TOOL.decide, { decision: waiting.decision, choice: 1 }), /интерактивном терминале Pi/);
-    await assert.rejects(call(TOOL.edit, { situation: 1, change: { kind: 'fact', fact: 'f1', when: 'unknown' } }), /интерактивном терминале Pi/);
+    await assert.rejects(call(TOOL.edit, { situation: 1, changes: [{ kind: 'fact', fact: 'f1', when: 'unknown' }] }), /интерактивном терминале Pi/);
     await assert.rejects(call(TOOL.prepare, { task: 'Проверить агента', withoutLogs: true, rules: 'Отвечать по правилам возврата: номер терминала не спрашивать повторно.' }), /интерактивном терминале Pi/,
       'a paid preparation needs the owner\'s consent: headless it never starts');
     await assert.rejects(command(prepared.run, ctx as never), /интерактивном терминале Pi/);

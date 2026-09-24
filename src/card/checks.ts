@@ -1,5 +1,6 @@
 import type { Requirement, Source } from '../contracts.js';
 import { countText } from '../plural.js';
+import { maskedSpans, withValues } from '../masking.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import { clip } from '../text.js';
 import { requiredUserTurns } from '../user-controller.js';
@@ -35,6 +36,20 @@ export function importEvidence(batches: readonly ImportBatch[]): CardEvidence {
 export const messageAt = (evidence: CardEvidence, event: EventRef): string | undefined =>
   evidence.messages(event.batchId, event.dialogueId)?.find(message => message.index === event.eventIndex)?.content;
 
+export const sameEvent = (a: EventRef, b: EventRef): boolean => a.batchId === b.batchId && a.dialogueId === b.dialogueId && a.eventIndex === b.eventIndex;
+
+/** A logged message as the card reads it: the values Lab wrote over its masking marks (card/unmask.ts) in their place. */
+export function filledMessage(content: string, filled: Card['filled'], event: EventRef): string {
+  const values = new Map((filled ?? []).filter(item => sameEvent(item.event, event)).map(item => [item.span, item.value] as const));
+  return values.size ? withValues(content, values) : content;
+}
+
+/** The message a card's reference points at, as the card reads it; undefined when the import holds no such message. */
+export function cardMessage(card: Pick<Card, 'filled'>, evidence: CardEvidence, event: EventRef): string | undefined {
+  const content = messageAt(evidence, event);
+  return content === undefined ? undefined : filledMessage(content, card.filled, event);
+}
+
 /** The one form two texts are compared in. */
 export function normalizeText(value: string): string {
   const words: string[] = [];
@@ -54,7 +69,6 @@ export const contains = (text: string, value: string | number): boolean => norma
 type Fact = Card['client']['knows'][number];
 /** A value that can stand in a message: text or a number. A yes/no fact is qualitative — its label says it all. */
 export const quotable = (value: Fact['value']): value is string | number => typeof value === 'string' || typeof value === 'number';
-const sameEvent = (a: EventRef, b: EventRef): boolean => a.batchId === b.batchId && a.dialogueId === b.dialogueId && a.eventIndex === b.eventIndex;
 
 /** The longest value a plausible fact may carry: a word or a short phrase from a small closed set («POS-терминал», «заявка подана»). */
 export const PLAUSIBLE_VALUE_WORDS = 4;
@@ -90,7 +104,15 @@ export type CheckFinding =
   /** An expectation cites a rule that is not in the materials word for word. */
   | { check: 'requirements-grounded'; requirementId: string }
   /** The customer's policy does not build (`needed` null) or needs more messages than a run allows. */
-  | { check: 'controller-compiles'; needed: number | null };
+  | { check: 'controller-compiles'; needed: number | null }
+  /**
+   * A masking mark of the log is still where the customer wrote a value — in the opening, the turn or a fact's value:
+   * the agent would read words no customer wrote. Lab writes plausible values in (card/unmask.ts); this is what is left
+   * when it could not.
+   */
+  | { check: 'masked-opening' }
+  | { check: 'masked-turn' }
+  | { check: 'masked-fact'; factId: string };
 
 export interface CheckContext {
   evidence: CardEvidence;
@@ -107,7 +129,7 @@ function factFindings(card: Card, evidence: CardEvidence): CheckFinding[] {
     const value = quotable(fact.value) ? fact.value : undefined;
     const source = fact.source;
     if (value !== undefined && source.kind === 'dialogue') {
-      const message = messageAt(evidence, source.event);
+      const message = cardMessage(card, evidence, source.event);
       if (message === undefined || !contains(message, value)) found.push({ check: 'fact-from-event', factId: fact.id });
     }
     if (fact.disclosure === 'initial') {
@@ -118,6 +140,7 @@ function factFindings(card: Card, evidence: CardEvidence): CheckFinding[] {
       if (!said) found.push({ check: 'initial-in-opening', factId: fact.id });
     } else if (value !== undefined && contains(writes, value)) found.push({ check: 'hidden-not-in-opening', factId: fact.id });
     if (source.kind === 'plausible' && !plausibleShape(fact.value)) found.push({ check: 'plausible-value', factId: fact.id });
+    if (typeof fact.value === 'string' && maskedSpans(fact.value).length) found.push({ check: 'masked-fact', factId: fact.id });
     if (fact.disclosure === 'unknown' && value !== undefined) {
       if (turn && contains(turn.says, value)) found.push({ check: 'unknown-never-said', factId: fact.id, where: 'turn' });
       if (contains(leaves, value)) found.push({ check: 'unknown-never-said', factId: fact.id, where: 'leaves' });
@@ -173,9 +196,15 @@ function controllerFindings(card: Card, maxTurns: number): CheckFinding[] {
   return needed > maxTurns ? [{ check: 'controller-compiles', needed }] : [];
 }
 
-/** Every deterministic finding on a card, in the order of the brief: facts, coverage, rules, the customer's policy. */
+/** The masking marks left in what the customer says. */
+function maskFindings(card: Card): CheckFinding[] {
+  const { writes, turn } = card.client;
+  return [...(maskedSpans(writes).length ? [{ check: 'masked-opening' } as const] : []), ...(turn && maskedSpans(turn.says).length ? [{ check: 'masked-turn' } as const] : [])];
+}
+
+/** Every deterministic finding on a card, in the order of the brief: what the customer says, facts, coverage, rules, the customer's policy. */
 export function cardFindings(card: Card, context: CheckContext): CheckFinding[] {
-  return [...factFindings(card, context.evidence), ...coverageFindings(card),
+  return [...maskFindings(card), ...factFindings(card, context.evidence), ...coverageFindings(card),
     ...(context.materials ? requirementFindings(card, context.materials) : []), ...controllerFindings(card, context.maxTurns)];
 }
 
@@ -185,6 +214,9 @@ export function cardFindings(card: Card, context: CheckContext): CheckFinding[] 
  */
 export const unusableFindings = (card: Card, context: CheckContext): CheckFinding[] =>
   cardFindings(card, context).filter(finding => finding.check !== 'coverage-refs');
+
+/** The fix of a masking mark left in a card: Lab's plausible values, or the owner's own. */
+const UNMASK_HINT = 'Lab подставит правдоподобные значения, если вы скажете, — или впишите свои.';
 
 /** What a finding means for the owner, in their words. */
 export function problemText(finding: CheckFinding, card: Card, requirements: readonly Pick<Requirement, 'id' | 'quote'>[] = []): string {
@@ -197,6 +229,9 @@ export function problemText(finding: CheckFinding, card: Card, requirements: rea
       : `«${label}» клиент называет, только если спросят, но это уже есть в первой реплике.`;
     case 'unknown-never-said': return `Клиент не знает «${label}», но это звучит в его словах.`;
     case 'plausible-value': return `«${label}» — правдоподобный факт, но в нём число или длинный текст: такое клиент знает только из записей, а их нет.`;
+    case 'masked-opening': return `В первой реплике клиента вместо значений знаки обезличивания: агент получил бы слова, которых не писал ни один клиент. ${UNMASK_HINT}`;
+    case 'masked-turn': return `В поздней реплике клиента вместо значений знаки обезличивания. ${UNMASK_HINT}`;
+    case 'masked-fact': return `«${label}» — вместо значения знаки обезличивания. ${UNMASK_HINT}`;
     case 'coverage-refs': return 'Поздние реплики клиента учтены с ошибкой.';
     case 'requirements-grounded': {
       const quote = requirements.find(item => item.id === finding.requirementId)?.quote;

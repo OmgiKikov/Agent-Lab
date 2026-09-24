@@ -4,8 +4,9 @@ import { text } from '../ids.js';
 import { MODEL_REQUEST_BYTES } from '../limits.js';
 import { requirementKindSchema, type RequirementKind } from '../scenario-contracts.js';
 import { verbatimSpan } from '../verbatim.js';
-import { cardFindings, PLAUSIBLE_VALUE_WORDS, type CardEvidence, type CheckFinding, type LoggedMessage } from './checks.js';
+import { cardFindings, filledMessage, PLAUSIBLE_VALUE_WORDS, type CardEvidence, type CheckFinding, type LoggedMessage } from './checks.js';
 import { cardSchema, disclosureSchema, turnSchema, type Card } from './schema.js';
+import { fillSlip, maskSlots, slotAnswersSchema, slotFills, slotPayload, type FillAnswer, type MaskSlot } from './unmask.js';
 
 /*
  * A card as the model proposes it and as the harness binds it (docs/design/card-v2-spec.md §2.1–2.3). The model returns content only;
@@ -40,6 +41,8 @@ export interface ProposalCall {
   tools?: string[];
   /** The run's limit on the customer's messages: the card's required way must fit it. */
   maxTurns: number;
+  /** The masking marks of the customer's messages (card/unmask.ts): the proposal answers each with a plausible value. */
+  masked: MaskSlot[];
 }
 
 export type CallSource = Pick<Source, 'id' | 'name' | 'content' | 'kind'>;
@@ -52,9 +55,12 @@ export function proposalCall(input: { source: ProposalCall['source']; messages: 
   const [first, ...rest] = input.sources.map(({ id, name, content, kind }): CallSource => ({ id, name, content, ...(kind ? { kind } : {}) }));
   if (first === undefined) throw new Error('Ситуация строится только на материалах владельца, а их для неё нет.');
   const customer = input.messages.filter(message => message.role === 'user').map(message => message.index);
-  return { source: input.source, messages: input.messages, customerEvents: customer, laterEvents: customer.slice(1),
+  const { source } = input;
+  const masked = source.kind === 'dialogue' ? maskSlots(input.messages.filter(message => message.role === 'user')
+    .map(message => ({ event: { batchId: source.batchId, dialogueId: source.dialogueId, eventIndex: message.index }, content: message.content }))) : [];
+  return { source, messages: input.messages, customerEvents: customer, laterEvents: customer.slice(1),
     sources: [first, ...rest], binds: input.binds ?? DEFAULT_BINDS, observations: ['reply', ...(input.confirmedObservations ?? [])],
-    ...(input.tools?.length ? { tools: [...input.tools] } : {}), maxTurns: input.maxTurns };
+    ...(input.tools?.length ? { tools: [...input.tools] } : {}), maxTurns: input.maxTurns, masked };
 }
 
 /** Plausible profile facts one card may add, and the card's facts in all: the brief stays one screen. */
@@ -93,6 +99,8 @@ function dialogueProposalSchema(call: ProposalCall) {
     agentMust: z.array(expectationProposal(call)).min(1).max(3),
     // One key per later customer message: the schema, not a check after the answer, makes the account complete.
     coverage: z.strictObject(Object.fromEntries(call.laterEvents.map(index => [String(index), coverageAnswer]))),
+    // One value per masking mark of the customer's messages, asked only when the dialogue has any.
+    ...(call.masked.length ? { masked: slotAnswersSchema(call.masked) } : {}),
   });
 }
 
@@ -102,17 +110,17 @@ function rulesProposalSchema(call: ProposalCall) {
     agentMust: z.array(expectationProposal(call)).min(1).max(3) });
 }
 
-export type DialogueProposal = z.infer<ReturnType<typeof dialogueProposalSchema>>;
+export type DialogueProposal = Omit<z.infer<ReturnType<typeof dialogueProposalSchema>>, 'masked'> & { masked?: Record<string, FillAnswer> };
 export type RulesProposal = z.infer<ReturnType<typeof rulesProposalSchema>>;
 export type CardProposal = DialogueProposal | RulesProposal;
 
 export function cardProposalSchema(call: ProposalCall): z.ZodType<CardProposal> {
-  return call.source.kind === 'rules' ? rulesProposalSchema(call) : dialogueProposalSchema(call);
+  return call.source.kind === 'rules' ? rulesProposalSchema(call) : dialogueProposalSchema(call) as z.ZodType<DialogueProposal>;
 }
 
 /** The answer and the whole request of one proposal call, in UTF-8 bytes: each later message adds one bounded coverage answer. */
 export const proposalBounds = (call: ProposalCall) => {
-  const outputBytes = 16_000 + 500 * call.laterEvents.length;
+  const outputBytes = 16_000 + 500 * call.laterEvents.length + 150 * call.masked.length;
   return { outputBytes, requestBytes: MODEL_REQUEST_BYTES + outputBytes };
 };
 
@@ -179,8 +187,8 @@ function basisSlips(proposal: CardProposal, call: ProposalCall): string[] {
  */
 function proposalIdentity(proposal: CardProposal): object {
   if (!('plausibleKnows' in proposal)) return proposal;
-  const { plausibleKnows, clarity, ...earlier } = proposal;
-  return { ...earlier, ...(plausibleKnows.length ? { plausibleKnows } : {}), ...(clarity === 'vague' ? { clarity } : {}) };
+  const { plausibleKnows, clarity, masked, ...earlier } = proposal;
+  return { ...earlier, ...(plausibleKnows.length ? { plausibleKnows } : {}), ...(clarity === 'vague' ? { clarity } : {}), ...(masked ? { masked } : {}) };
 }
 
 /**
@@ -202,13 +210,17 @@ export function bindProposal(proposal: CardProposal, call: ProposalCall, number:
   if (call.source.kind !== 'dialogue') throw new Error('Предложение по диалогу пришло на ситуацию из правил.');
   const { batchId, dialogueId } = call.source;
   const event = (eventIndex: number) => ({ batchId, dialogueId, eventIndex });
+  // The values written over the marks of the messages the card reads — its opening, its turn, its facts' — and those messages as they then read.
+  const read = new Set([proposal.writesEvent, ...(proposal.turn ? [proposal.turn.from] : []), ...proposal.knows.flatMap(fact => fact.from === null ? [] : [fact.from])]);
+  const filled = slotFills(call.masked.filter(slot => read.has(slot.event.eventIndex)), proposal.masked ?? {});
+  const says = (index: number) => filledMessage(said(call, index), filled, event(index));
   const logged = proposal.knows.map((fact, index) => ({ id: `f${index + 1}`, label: fact.label, ...(fact.value !== null ? { value: fact.value } : {}),
     disclosure: fact.disclosure, ...(fact.askedAs !== null ? { askedAs: fact.askedAs } : {}),
     source: fact.from === null ? { kind: 'unconfirmed' } : { kind: 'dialogue', event: event(fact.from) } }));
   const plausible = proposal.plausibleKnows.map((fact, index) => ({ id: `f${logged.length + index + 1}`, label: fact.label, ...(fact.value !== null ? { value: fact.value } : {}),
     disclosure: 'on_request', ...(fact.askedAs !== null ? { askedAs: fact.askedAs } : {}), source: { kind: 'plausible' } }));
   const knows = [...logged, ...plausible];
-  const turn = proposal.turn && { kind: proposal.turn.kind, after: proposal.turn.after, says: said(call, proposal.turn.from),
+  const turn = proposal.turn && { kind: proposal.turn.kind, after: proposal.turn.after, says: says(proposal.turn.from),
     source: { kind: 'dialogue', event: event(proposal.turn.from) } };
   const coverage = call.laterEvents.filter(index => index !== proposal.writesEvent).map(index => {
     const answer = proposal.coverage[String(index)];
@@ -216,8 +228,9 @@ export function bindProposal(proposal: CardProposal, call: ProposalCall, number:
     return { event: event(index), as: answer.as, ...(answer.reason !== null ? { reason: answer.reason } : {}) };
   });
   return cardSchema.parse({ ...common, origin: { kind: 'dialogue', batchId, dialogueId },
-    client: { wants: proposal.wants, writes: said(call, proposal.writesEvent), writesSource: { kind: 'dialogue', event: event(proposal.writesEvent) },
-      knows, leaves: proposal.leaves, ...(turn ? { turn } : {}) }, coverage, ...(proposal.clarity === 'vague' ? { clarity: 'vague' } : {}) });
+    client: { wants: proposal.wants, writes: says(proposal.writesEvent), writesSource: { kind: 'dialogue', event: event(proposal.writesEvent) },
+      knows, leaves: proposal.leaves, ...(turn ? { turn } : {}) }, coverage, ...(proposal.clarity === 'vague' ? { clarity: 'vague' } : {}),
+    ...(filled.length ? { filled } : {}) });
 }
 
 /** The call's own messages as the evidence of the checks. */
@@ -235,6 +248,10 @@ function bindingSlips(proposal: DialogueProposal, call: ProposalCall): string[] 
     const answer = proposal.coverage[String(index)];
     if (index !== proposal.writesEvent && answer?.as === 'ignored' && answer.reason === null) slips.push(`coverage["${index}"] is "ignored": give a short reason.`);
   }
+  for (const [id, fill] of Object.entries(proposal.masked ?? {})) {
+    const slip = fillSlip(`masked["${id}"]`, fill);
+    if (slip) slips.push(slip);
+  }
   return slips;
 }
 
@@ -250,6 +267,9 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
     return { name, value: JSON.stringify(item.value), from: item.source.kind === 'dialogue' ? item.source.event.eventIndex : null };
   };
   switch (finding.check) {
+    // The harness writes the masked values in; a mark is left only past the slots one call offers, which no repair changes.
+    case 'masked-opening': case 'masked-turn': return '';
+    case 'masked-fact': return `${fact(finding.factId).name}: the value ${fact(finding.factId).value} is a masking mark. Write the value you gave for its mark in "masked", as the message reads with it, or null.`;
     case 'fact-from-event': {
       const { name, value, from } = fact(finding.factId);
       return `${name}: the value ${value} is not in customer message ${from}. Copy the value exactly as the customer wrote it and point "from" at a message that contains it, or set "from" to null.`;
@@ -292,7 +312,8 @@ export function cardProposalProblem(proposal: CardProposal, call: ProposalCall):
   const slips = [...basisSlips(proposal, call), ...'writes' in proposal ? [] : bindingSlips(proposal, call)];
   if (slips.length) return slips.join(' ');
   const card = bindProposal(proposal, call, 1);
-  const findings = cardFindings(card, { evidence: callEvidence(call), maxTurns: call.maxTurns });
+  // A mark left past the call's slots is not the model's slip: the card's check shows it, and the owner or a later fill settles it.
+  const findings = cardFindings(card, { evidence: callEvidence(call), maxTurns: call.maxTurns }).filter(finding => finding.check !== 'masked-opening' && finding.check !== 'masked-turn');
   return findings.length ? findings.map(finding => repairText(finding, card, call)).join(' ') : undefined;
 }
 
@@ -314,6 +335,7 @@ export function proposalPayload(request: CardProposalRequest) {
   return {
     task: request.task, mode: call.source.kind,
     ...(call.source.kind === 'dialogue' ? { dialogue: { messages: call.messages } } : {}),
+    ...(call.masked.length ? { masked: slotPayload(call.masked) } : {}),
     // A source that is the agent's own prompt is labelled; the rulebook says which kinds of rule may back a duty.
     sources: call.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })),
     rulebook: { binds: call.binds.kinds },

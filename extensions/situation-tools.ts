@@ -5,11 +5,12 @@ import type { Experiment } from '../src/contracts.js';
 import { contains, type CardEvidence } from '../src/card/checks.js';
 import { hostGrant, requiredAuthority, wordsOf, type HostGrant, type Prepared } from '../src/card/commands.js';
 import { convertible } from '../src/card/legacy-v1.js';
-import type { CardCommand, LibraryV2 } from '../src/card/schema.js';
+import { cardChangeSchema, type CardCommand, type LibraryV2 } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules } from '../src/card/rulebook.js';
 import { briefRows, changeText, chip, countsText, detailRows, formatNote, listRows, situationViews, type SituationView } from '../src/card/view.js';
 import { CommandRefused, LibraryConflict, UnknownReference } from '../src/errors.js';
+import { countText } from '../src/plural.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { situationCoverage } from '../src/miner/cards.js';
 import { clip, safeText } from '../src/text.js';
@@ -103,17 +104,17 @@ const closed = { additionalProperties: false } as const;
 const runRef = Type.Optional(Type.String({ minLength: 1, maxLength: 100, description: 'The run or draft id from an earlier Agent Lab result. Omit for the one the project works on now.' }));
 const number = Type.Integer({ minimum: 1, maximum: 999, description: 'The situation number, as shown.' });
 const text = (max: number, description: string) => Type.Optional(Type.String({ minLength: 1, maxLength: max, description }));
-const factId = Type.String({ pattern: '^f[0-9]{1,3}$', description: 'A fact id shown by agent_lab_cards.' });
-const when = Type.Enum(['initial', 'on_request', 'unknown'], { description: 'initial: says it in the first message; on_request: only when the agent asks; unknown: does not know it.' });
-const turn = Type.Union([Type.Object({ kind: Type.Enum(['change_intent', 'report']), after: Type.String({ minLength: 1, maxLength: 300, description: 'After what the agent does.' }),
-  says: Type.String({ minLength: 1, maxLength: 1000, description: 'What the customer says then.' }) }, closed), Type.Null()], { description: 'The customer\'s late turn; null: none.' });
+const factId = Type.String({ pattern: '^f[0-9]{1,3}$', description: 'A fact id (f1…).' });
+const when = Type.Enum(['initial', 'on_request', 'unknown'], { description: 'initial: in the first message; on_request: when the agent asks; unknown: does not know it.' });
+const turn = Type.Union([Type.Object({ kind: Type.Enum(['change_intent', 'report']), after: Type.String({ minLength: 1, maxLength: 300 }),
+  says: Type.String({ minLength: 1, maxLength: 1000 }) }, closed), Type.Null()], { description: 'The customer\'s late turn: says it after the agent does `after`; null: none.' });
 
 const ruleIds = Type.Array(Type.String({ minLength: 1, maxLength: 80 }), { minItems: 1, maxItems: 20 });
 /** One change of one situation, or of the set's rulebook: what the model may ask the owner's draft to become. */
 const change = Type.Union([
   Type.Object({ kind: Type.Literal('fact'), fact: Type.Optional(factId), label: text(120, 'What the fact is, e.g. «Номер терминала»; without fact, a new one.'),
     value: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 120 }), Type.Number(), Type.Boolean()])), when: Type.Optional(when), remove: Type.Optional(Type.Literal(true)) }, closed),
-  Type.Object({ kind: Type.Literal('duty'), duty: Type.String({ pattern: '^e[0-9]{1,2}$', description: 'A duty id shown by agent_lab_cards.' }), text: text(300, 'What the agent must do, as an infinitive.'),
+  Type.Object({ kind: Type.Literal('duty'), duty: Type.String({ pattern: '^e[0-9]{1,2}$', description: 'A duty id (e1…).' }), text: text(300, 'What the agent must do, as an infinitive.'),
     rules: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 80 }), { minItems: 1, maxItems: 3, description: 'Requirement ids of the owner rules it rests on.' })),
     appliesWhen: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 300 }), Type.Null()], { description: 'When it applies; null: always.' })), remove: Type.Optional(Type.Literal(true)) }, closed),
   Type.Object({ kind: Type.Literal('client'), wants: text(300, 'What the customer wants.'), writes: text(3000, 'Their exact first message.'), leaves: text(300, 'When they leave.') }, closed),
@@ -122,13 +123,18 @@ const change = Type.Union([
     Type.Object({ kind: Type.Literal('when'), fact: factId, when, writes: text(3000, 'A new first message without the value.') }, closed),
     Type.Object({ kind: Type.Literal('opening'), writes: Type.String({ minLength: 1, maxLength: 3000 }) }, closed),
     Type.Object({ kind: Type.Literal('turn'), turn }, closed),
-  ], { description: 'The one difference; the original stays as it is.' }), title: text(160, 'By default the original\'s with the difference.') }, closed),
+  ], { description: 'The one difference; the original stays as it is.' }), title: Type.Optional(Type.String({ maxLength: 160 })) }, closed),
   Type.Object({ kind: Type.Literal('remove') }, closed),
+  Type.Object({ kind: Type.Literal('unmask') }, closed),
   Type.Object({ kind: Type.Literal('rules'), operatorInstructions: Type.Optional(Type.Boolean()), bind: Type.Optional(ruleIds), unbind: Type.Optional(ruleIds) },
     { ...closed, description: 'The set\'s rulebook; omit situation.' }),
 ]);
-const editParameters = Type.Object({ run: runRef, situation: Type.Optional(number), change, later: Type.Optional(Type.Literal(true, { description: 'Check after the last change of a series, not now.' })) }, closed);
+const editParameters = Type.Object({ run: runRef, situation: Type.Optional(number),
+  changes: Type.Array(change, { minItems: 1, maxItems: 12, description: 'One change, or several of ONE situation that fit only together.' }),
+  later: Type.Optional(Type.Literal(true, { description: 'Check after the next changes, not now.' })) }, closed);
 type ChangeRequest = Static<typeof change>;
+/** The changes that go together as one series of one situation: what the customer knows, the duties, the customer's words, the turn. */
+const SERIES = new Set<ChangeRequest['kind']>(['fact', 'duty', 'client', 'turn']);
 
 export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, host: SituationHost): void {
   pi.registerTool({
@@ -159,7 +165,7 @@ export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, h
   });
   pi.registerTool({
     ...displayFor(TOOL.edit), name: TOOL.edit, label: 'Change a situation',
-    description: 'Changes one situation of the draft, or the rulebook of the whole set; the owner confirms the exact change in a native dialog unless the new wording is verbatim from their own message. change.kind: rules — which rules bind the bot: operatorInstructions (instructions for human operators as a whole), bind/unbind (single requirement ids the bot must or no longer must follow), no situation; fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen; remove; one duty always stays); client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several changes in one message: later:true on every one but the last.',
+    description: 'Changes one situation of the draft, or the rulebook of the whole set; the owner confirms the exact change in a native dialog unless the new wording is verbatim from their own message. Each item of changes has a kind: rules — which rules bind the bot: operatorInstructions (instructions for human operators as a whole), bind/unbind (single requirement ids the bot must or no longer must follow), no situation; fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen; remove; one duty always stays); client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that; unmask — Lab writes plausible values where the de-identified log left marks (#, *): offer it when a situation is unusable for that reason. Fact, duty, client and turn changes of one situation that fit only together (a refusal says «передайте вместе с …») go in one call: checked once, confirmed once. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several situations changed in one message: later:true on every one but the last.',
     parameters: editParameters,
     executionMode: 'sequential',
     execute: (callId, params, signal, _onUpdate, ctx) => changeSituation(host, callId, ctx, signal, params),
@@ -284,12 +290,32 @@ function commandOf(request: ChangeRequest, view: SituationView, library: Library
     case 'turn': return { command: { kind: 'set_turn', cardId: view.id, turn: request.turn }, heading: `${title}: поворот` };
     case 'similar': {
       const { differs } = request;
-      return { heading: `Похожая на ситуацию ${view.number} «${view.brief.title}»`, command: { kind: 'add_similar', parentId: view.id, ...(request.title !== undefined ? { title: request.title } : {}),
+      return { heading: `Похожая на ситуацию ${view.number} «${view.brief.title}»`, command: { kind: 'add_similar', parentId: view.id, ...(request.title?.trim() ? { title: request.title } : {}),
         change: differs.kind === 'when' ? { kind: 'disclosure', factId: differs.fact, disclosure: differs.when, ...(differs.writes !== undefined ? { writes: differs.writes } : {}) } : differs } };
     }
     case 'remove': return { command: { kind: 'remove_card', cardId: view.id }, heading: `Убрать ситуацию ${view.number} «${view.brief.title}» из черновика?` };
     case 'rules': throw new Error('The rulebook is changed for the whole set, not through one situation.');
+    case 'unmask': throw new Error('Masked values are proposed by the lab, not built here.');
   }
+}
+
+/** Lab's values over the situation's masking marks: one model call, made only where the owner can then confirm them. */
+async function unmaskOf(ctx: ExtensionContext, lab: ExperimentLab, id: string, view: SituationView): Promise<{ command: CardCommand; heading: string }> {
+  requireInteractive(ctx, 'Подставленные значения подтверждает владелец в интерактивном терминале Pi.');
+  return { command: await lab.proposeFill(id, view.id), heading: `Ситуация ${view.number} «${view.brief.title}»: Lab подставит значения вместо обезличенных` };
+}
+
+/** Several changes of one situation as one series: checked together as they leave it, confirmed and recorded once. */
+function seriesOf(requests: readonly ChangeRequest[], view: SituationView, library: LibraryV2): { command: CardCommand; heading: string } {
+  if (requests.some(request => !SERIES.has(request.kind))) {
+    throw new CommandRefused('Вместе передаются только правки одной ситуации: что знает клиент, что должен агент, слова клиента и поворот. Похожую ситуацию, удаление, подстановку значений и свод правил — отдельно.');
+  }
+  const changes = requests.map(request => {
+    const { cardId: _card, ...change } = commandOf(request, view, library).command as Extract<CardCommand, { cardId: string }>;
+    return cardChangeSchema.parse(change);
+  });
+  return { command: { kind: 'edit_card', cardId: view.id, changes },
+    heading: `Ситуация ${view.number} «${view.brief.title}»: ${countText(changes.length, ['изменение', 'изменения', 'изменений'])} вместе` };
 }
 
 /**
@@ -297,18 +323,23 @@ function commandOf(request: ChangeRequest, view: SituationView, library: Library
  * «было → стало» and the situation's status now.
  */
 async function changeSituation(host: SituationHost, callId: string, ctx: ExtensionContext, signal: AbortSignal | undefined, params: Static<typeof editParameters>): Promise<AgentToolResult<unknown>> {
-  const { run, situation, change: request, later } = params;
+  const { run, situation, later } = params;
+  const requests = params.changes;
   const directory = resolve(ctx.cwd, '.agent-lab');
   let handedOver = false;
   try {
+    const [request] = requests;
+    if (!request) throw new CommandRefused('Скажите, что изменить.');
     const found = recordFor(await host.reading(directory).list(), run, 'situations');
-    if (request.kind === 'rules') return await changeRulebook(host, callId, ctx, found, request);
+    if (request.kind === 'rules' && requests.length === 1) return await changeRulebook(host, callId, ctx, found, request);
     if (situation === undefined) throw new CommandRefused('Скажите, какую ситуацию изменить: её номер.');
     const owned = await host.open(ctx.cwd);
     try {
       await owned.lab.init();
       const { target, context, view } = await draftSituation(owned.lab, found, situation);
-      const built = commandOf(request, view, context.library);
+      const built = requests.length > 1 ? seriesOf(requests, view, context.library)
+        : request.kind === 'unmask' ? await unmaskOf(ctx, owned.lab, target.id, view)
+        : commandOf(request, view, context.library);
       const decided = await decide(ctx, owned.lab, target.id, built.command, built.heading);
       if (!decided) return host.feedResult(callId, { applied: false, declined: true, instruction: 'The owner did not confirm. Nothing was written; do not ask again unless they do.' },
         { tone: 'warning', rows: [row('Не записано: вы не подтвердили.')] }, `Ситуация ${view.number} не изменена`);
