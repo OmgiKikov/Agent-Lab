@@ -3,9 +3,11 @@ import { test } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assessRepeated, hasCompleteJudgment, judgeInput, observableSources, scenarioSources, sealJudgeReceipt, JUDGE_PROTOCOL } from '../src/judge.js';
+import { assessRepeated, hasCompleteJudgment, judgeInput, judgmentFailure, observableSources, scenarioSources, sealJudgeReceipt, JUDGE_PROTOCOL, JUDGE_PROTOCOL_WITHOUT_RAG } from '../src/judge.js';
 import { emptyUsage, fingerprint, type Requirement, type Scenario, type Source, type Trial } from '../src/contracts.js';
-import { goalAttainment, RAG_METRIC_IDS, RAG_RUBRICS, ragEvidenceComplete, replyQuality, simulatorFidelity, validateAssessments, type JudgeAudit } from '../src/assessment.js';
+import { assessmentRubrics, goalAttainment, RAG_METRIC_IDS, RAG_RUBRICS, ragEvidenceComplete, replyQuality, simulatorFidelity, validateAssessments, type JudgeAudit } from '../src/assessment.js';
+import { Stopped } from '../src/errors.js';
+import { ProviderFailure } from '../src/llm/model-call.js';
 import { ExperimentStore } from '../src/store.js';
 
 const scenario: Scenario = { id: 'card', familyId: 'family', title: 'A fixed input', split: 'dev', provenance: 'synthetic', tier: 'regression', requirementIds: [],
@@ -17,7 +19,66 @@ const trial: Trial = { id: 'trial', revisionId: 'revision', scenarioId: 'card', 
   initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1 };
 const input = { scenario, sources: [], trial };
 const model = { provider: 'offline', id: 'test' };
+/** The rubric rule of JUDGE_PROTOCOL: the RAG diagnostics voted on wherever the trial reports retrieval, as stored judgments were made. */
+const legacyRag = { ragDiagnostics: true };
 const row = (passCondition: string, failCondition: string, evidence = [1]) => JSON.stringify({ assessments: [{ metricId: 'goal', passCondition, failCondition, rationale: 'Explicit evidence for both conditions.', evidence, citations: evidence.map(seq => ({ seq, quote: 'Do this.' })) }] });
+
+test('a new judgment never votes on the RAG diagnostics: a retrieval trial carries the protocol without them and verifies, one without keeps the old protocol', async () => {
+  const targetTrial = structuredClone(trial);
+  targetTrial.events.splice(1, 0, { seq: 2, type: 'retrieval', result: { chunks: [{ source: 'kb', content: 'Do this.' }], complete: true } });
+  const judged = { ...input, trial: targetTrial, sources: [{ id: 'kb', name: 'Knowledge', content: 'Do this.', hash: 'h' }] };
+  const asked: string[] = [];
+  let audit: JudgeAudit | undefined;
+  const assessments = await assessRepeated(judged, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, value) { audit = value; } },
+    async (_prompt, data) => {
+      const metricId = JSON.parse(data).scenario.metrics[0].id as string;
+      asked.push(metricId);
+      if (RAG_METRIC_IDS.has(metricId)) throw new Error('a RAG diagnostic is never asked, so its failure can never leave a judgment incomplete');
+      return row('met', 'not_met');
+    });
+  assert.deepEqual(asked, ['goal', 'goal'], 'six RAG votes are no longer spent on a dialogue with retrieval');
+  assert.ok(asked.length <= 2 * assessmentRubrics(scenario, { events: [] }).length, 'the run consent (extensions/conversation.ts) covers every vote asked');
+  assert.deepEqual(assessments.map(a => a.metricId), ['goal', 'user_fidelity']);
+  assert.equal(audit!.protocolHash, JUDGE_PROTOCOL_WITHOUT_RAG);
+  const recorded = { ...judged, trial: { ...targetTrial, assessments, judgeAudit: audit } };
+  assert.equal(hasCompleteJudgment(recorded), true);
+  const receipt = sealJudgeReceipt(audit!, true);
+  assert.equal(hasCompleteJudgment({ ...judged, trial: { ...targetTrial, assessments, judgeReceipt: receipt } }), true);
+  assert.equal(hasCompleteJudgment({ ...judged, trial: { ...targetTrial, assessments, judgeReceipt: { ...receipt, protocolHash: JUDGE_PROTOCOL } } }), false,
+    'read by the rule of the old protocol, the same votes lack their RAG votes');
+  let plain: JudgeAudit | undefined;
+  await assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, value) { plain = value; } },
+    async () => row('met', 'not_met'));
+  assert.equal(plain!.protocolHash, JUDGE_PROTOCOL, 'a trial without retrieval is judged as before and keeps the protocol of every stored receipt');
+});
+
+test('a vote the provider cut at the output cap is a malformed answer: kept, asked once more, and the judgment still verifies', async () => {
+  let calls = 0;
+  let audit: JudgeAudit | undefined;
+  const result = await assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, value) { audit = value; } },
+    async (_prompt, _data, recordPartial) => {
+      if (calls++ > 0) return row('met', 'not_met');
+      recordPartial('{"assessments":[');
+      throw new ProviderFailure('length', 'Pi provider response incomplete: length');
+    });
+  assert.equal(result[0]!.result, 'pass');
+  assert.equal(calls, 3);
+  assert.deepEqual(audit!.attempts.filter(a => a.superseded).map(a => [a.raw, a.error]), [['{"assessments":[', 'Pi provider response incomplete: length']]);
+  assert.equal(hasCompleteJudgment({ ...input, trial: { ...trial, assessments: result, judgeAudit: audit } }), true);
+  const refused = new ProviderFailure('rate limit', 'Pi provider response incomplete: rate limit');
+  await assert.rejects(assessRepeated(input, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, async () => { throw refused; }),
+    error => error === refused, 'a request the provider refused is not an answer: it stops the judgment');
+});
+
+test('a judgment failure is typed by what the error is, never by its words', () => {
+  const live = new AbortController().signal;
+  assert.equal(judgmentFailure(new ProviderFailure('rate limit', 'x'), live), 'unavailable');
+  assert.equal(judgmentFailure(new ProviderFailure('deadline', 'Pi request deadline exceeded'), live), 'unavailable', 'cut off: the judge did not answer');
+  assert.equal(judgmentFailure(new ProviderFailure('empty', 'Модель вернула пустой ответ.'), live), 'rejected', 'a whole answer that cannot be read is the judge\'s own');
+  assert.equal(judgmentFailure(new Error('Pi provider response incomplete: rate limit'), live), 'rejected', 'a label is not a type');
+  assert.equal(judgmentFailure(new Stopped('budget', 'Model call budget exhausted.'), live), 'stopped');
+  assert.equal(judgmentFailure(new ProviderFailure('rate limit', 'x'), AbortSignal.abort()), 'stopped', 'a stop is known by its signal');
+});
 
 test('retrieval citations accept exact decoded paragraphs but cannot invent text or join different chunks', () => {
   const content = 'Шаг 1.\nНажмите «Отозвать».\nВыберите причину.';
@@ -40,7 +101,7 @@ test('search-only evidence supports retrieval diagnostics but never proves the a
       calls.push(metricId); assert.match(data, /retrieved/);
       return JSON.stringify({ assessments: [{ metricId, passCondition: 'met', failCondition: 'not_met', rationale: 'Search returned the applicable text.',
         evidence: [0, 2], citations: [{ seq: 0, quote: 'Help' }, { seq: 2, quote: 'Do this.' }] }] });
-    });
+    }, legacyRag);
   assert.equal(calls.length, 4);
   assert.ok(!calls.includes('rag_context_faithfulness'));
   assert.equal(assessments.find(a => a.metricId === 'rag_context_faithfulness')!.result, 'unknown');
@@ -66,7 +127,7 @@ test('RAG judgment uses per-reply evidence, leaves missing context unknown and p
         const citations = [metricId === 'rag_context_faithfulness' ? { seq: 1, quote: 'Do this.' } : { seq: 0, quote: 'Help' },
           ...(mode === 'no_retrieval_quote' ? [] : [{ seq: 2, quote: '"chunks":' }])];
         return JSON.stringify({ assessments: [{ metricId, passCondition: mode === 'empty' ? 'not_met' : 'met', failCondition: mode === 'empty' ? 'met' : 'not_met', rationale: 'Cited evidence.', evidence: citations.map(c => c.seq), citations }] });
-      });
+      }, legacyRag);
     assert.equal(assessments.find(a => a.metricId === 'goal')!.result, 'pass');
     const diagnostics = assessments.filter(a => RAG_METRIC_IDS.has(a.metricId));
     assert.equal(diagnostics.length, 3);
@@ -106,7 +167,7 @@ test('each RAG vote excludes reference leaks through sources, expected answers, 
       const citations = [faithfulness ? { seq: 1, quote: 'Do this.' } : { seq: 0, quote: 'Help' }, { seq: 2, quote: 'Unrelated article.' }];
       return JSON.stringify({ assessments: [{ metricId, passCondition: faithfulness && !data.includes(secret) ? 'not_met' : 'met',
         failCondition: faithfulness && !data.includes(secret) ? 'met' : 'not_met', rationale: 'Deterministic boundary probe, not a semantic judge.', evidence: citations.map(c => c.seq), citations }] });
-    });
+    }, legacyRag);
   assert.match(seen.get('goal')!, new RegExp(secret));
   assert.match(seen.get('rag_context_recall')!, new RegExp(secret));
   for (const id of ['rag_context_faithfulness', 'rag_context_relevance']) {
@@ -145,7 +206,7 @@ test('faithfulness cannot pass by citing only a later answer or using a later co
         return JSON.stringify({ assessments: [{ metricId, passCondition: faithfulness ? 'met' : 'unclear', failCondition: faithfulness ? 'not_met' : 'unclear',
           rationale: 'Deterministic citation binding probe.', evidence: selected, citations: selected.map(seq => ({ seq,
             quote: seq === 0 ? 'First question' : seq === 1 || seq === 2 ? 'First fact.' : 'Second fact.' })) }] });
-      });
+      }, legacyRag);
     assert.equal(assessments.find(a => a.metricId === 'rag_context_faithfulness')!.result, expected);
   }
   assert.equal(ragEvidenceComplete({ events: [...events, { seq: 6, type: 'assistant', text: 'Another reply without its own context' }] }), false);
@@ -163,7 +224,7 @@ test('all 16 supported replies can carry their own context citations without exc
       const evidence = events.filter(event => event.type === 'retrieval' || event.type === (metricId === 'rag_context_faithfulness' ? 'assistant' : 'user'));
       return JSON.stringify({ assessments: [{ metricId, passCondition: 'met', failCondition: 'not_met', rationale: 'Evidence boundary probe.',
         evidence: evidence.map(event => event.seq), citations: evidence.map(event => ({ seq: event.seq, quote: event.type === 'user' ? 'Question' : 'Supported fact.' })) }] });
-    });
+    }, legacyRag);
   assert.equal(judgments.find(row => row.metricId === 'rag_context_faithfulness')!.result, 'pass');
   assert.equal(judgments.find(row => row.metricId === 'rag_context_faithfulness')!.evidence.length, 32);
 });
@@ -176,7 +237,7 @@ test('RAG votes cannot cite withheld tool results even when that quote exists in
   const assessments = await assessRepeated({ ...input, scenario: { ...scenario, metrics: [] }, trial: targetTrial }, model,
     { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, a) { audit = a; } },
     async (_prompt, data) => JSON.stringify({ assessments: [{ metricId: JSON.parse(data).scenario.metrics[0].id, passCondition: 'met', failCondition: 'not_met',
-      rationale: 'Forged evidence.', evidence: [2, 3], citations: [{ seq: 2, quote: '"chunks":' }, { seq: 3, quote: 'HIDDEN_TOOL_FACT' }] }] }));
+      rationale: 'Forged evidence.', evidence: [2, 3], citations: [{ seq: 2, quote: '"chunks":' }, { seq: 3, quote: 'HIDDEN_TOOL_FACT' }] }] }), legacyRag);
   assert.ok(assessments.every(a => a.result === 'unknown'));
   assert.ok(audit!.attempts.every(a => a.error?.includes('withheld')));
 });

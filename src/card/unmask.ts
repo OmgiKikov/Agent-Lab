@@ -4,7 +4,6 @@ import { text } from '../ids.js';
 import type { TaskRunner } from '../llm/structured.js';
 import { maskedSpans } from '../masking.js';
 import type { BuilderModel } from '../miner/topic-map.js';
-import { DATA_BOUNDARY } from '../prompts.js';
 import type { CallContext } from '../runtime.js';
 import { contains, filledMessage, messageAt, sameEvent, type CardEvidence } from './checks.js';
 import { fillKindSchema, type Card, type CardCommand, type EventRef, type Filled } from './schema.js';
@@ -168,7 +167,6 @@ export function applyFill(draft: Card, command: Extract<CardCommand, { kind: 'fi
 /* ───────────────────────────── the builder's call ───────────────────────────── */
 
 export const MASK_FILL_ROLE = `You fill the de-identified values of ONE test situation drawn from a real customer dialogue.
-${DATA_BOUNDARY}
 The export replaced values the customer wrote with marks (#, *, xxxx, <PHONE>, [скрыто]); a test customer cannot send such marks to the agent under test. Each listed slot is one mark in a customer message, with the text right before and after it.
 slots: answer every slot with kind and value: one plausible concrete value of the kind the mark hides, written as this customer would write it — a count as digits ("3"), an amount as customers write money ("1 500 ₽"), a date or a time ("12.03", "14:30"), a first name ("Ирина"), a phone, a card or an account number with plausible digits, an address, a code. The value must fit the words around the mark (grammar, case, number) and agree with the other slots and with what the customer wants; never a mark again, never real personal data, never the answer the agent must give.
 facts: each listed fact has a mark for its value; write its value exactly as its message reads with your values in place.

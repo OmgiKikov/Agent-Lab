@@ -68,7 +68,7 @@ export const TOPIC_MAP_PROMPT_VERSION = createHash('sha256').update(JSON.stringi
 /**
  * Model calls of a whole map over `dialogues` usable conversations: the proposal and one per batch, none
  * without a conversation. That is the spending when every answer passes; a rejected answer is repaired
- * within its step, up to REPAIR_ATTEMPTS calls, under the run's call budget.
+ * within its step, up to TASK_ATTEMPTS calls, under the run's call budget.
  */
 export const topicMapCalls = (dialogues: number): number => dialogues > 0 ? 1 + Math.ceil(dialogues / CLASSIFY_BATCH) : 0;
 
