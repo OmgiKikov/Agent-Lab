@@ -9,6 +9,8 @@ import { MATERIAL_EXTENSIONS } from './materials.js';
 import { countText, pluralForm } from './plural.js';
 import { importBatch } from './scenario-library.js';
 import { codeFacts, FACTORY, languageOf } from './source-facts.js';
+import { proposeTableBytes } from './spreadsheet/import.js';
+import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
 
 /*
  * What Lab can tell about a project folder before asking the owner anything: how to reach the agent,
@@ -29,8 +31,12 @@ export type AgentEvidence =
 export type Confidence = 'high' | 'medium' | 'low';
 /** A connection target ready for use (absolute paths) and why Lab believes it is the agent. */
 export interface AgentCandidate { target: RunnableTarget; confidence: Confidence; evidence: AgentEvidence[] }
-/** A file the import accepts as logged conversations; `complete: false` counted only the beginning of a file too big to import whole. */
-export interface LogFile { file: string; dialogues: number; rejected: number; complete: boolean }
+/**
+ * A file the import accepts as logged conversations; `complete: false` counted only the beginning of a file too big to import whole.
+ * A spreadsheet (`table`) is counted under the reading Lab proposes, which the owner confirms before the import; `question`: Lab
+ * sees the conversations but must ask one thing first (a marker or a role it does not know, the id column), so nothing is counted as rejected yet.
+ */
+export interface LogFile { file: string; dialogues: number; rejected: number; complete: boolean; table?: 'ready' | 'question' }
 export interface MaterialFolder { folder: string; documents: number }
 /** Paths are relative to `root`, except inside `target`. */
 export interface ProjectDetection {
@@ -87,6 +93,12 @@ class Reader {
     if (size > cap || !this.take(size)) return undefined;
     return readFile(path, 'utf8').catch(() => undefined);
   }
+  /** The bytes of a binary file within its cap. */
+  async binary(path: string, cap: number): Promise<Buffer | undefined> {
+    const size = await stat(path).then(info => info.size, () => Infinity);
+    if (size > cap || !this.take(size)) return undefined;
+    return readFile(path).catch(() => undefined);
+  }
   /** Whole lines from the beginning of a file too big to read whole. */
   async head(path: string): Promise<string | undefined> {
     if (!this.take(LIMITS.headBytes)) return undefined;
@@ -118,6 +130,15 @@ function dialogueCount(raw: unknown): { dialogues: number; rejected: number } | 
     }
   } catch { return undefined; } // the import refuses the file as a whole: not a log Lab can take
   return dialogues ? { dialogues, rejected } : undefined;
+}
+
+/** A spreadsheet of logs under the reading Lab would propose; a table without conversations, or one Lab cannot read, is not a log. */
+function tableLog(file: string, path: string, bytes: Buffer): LogFile | undefined {
+  let proposal: ReturnType<typeof proposeTableBytes>;
+  try { proposal = proposeTableBytes(path, bytes); } catch { return undefined; }
+  if (proposal.status === 'ready') return proposal.preview.usable || proposal.preview.dialogues
+    ? { file, dialogues: proposal.preview.usable, rejected: proposal.preview.dialogues - proposal.preview.usable, complete: true, table: 'ready' } : undefined;
+  return proposal.status === 'question' && proposal.found ? { file, dialogues: proposal.found, rejected: 0, complete: true, table: 'question' } : undefined;
 }
 
 /** An http(s) address on this machine, without credentials, query or fragment: those may carry secrets. */
@@ -199,6 +220,10 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
         if (basename(file.path) === 'package.json') scripts.push(...packageScripts(raw, file));
         addUrls(stringLeaves(raw), file);
       }
+    } else if (TABLE_EXTENSIONS.has(ext)) {
+      const bytes = await reader.binary(file.path, IMPORT_FILE_BYTES);
+      const log = bytes && tableLog(file.rel, file.path, bytes);
+      if (log) logs.push(log);
     } else if (CONFIGS.has(ext) && config && !basename(file.path).includes('-lock.')) {
       // YAML, TOML and INI are not parsed: a value is anything between spaces, quotes, `=` and commas, kept only if it is a local address.
       addUrls((await reader.text(file.path, LIMITS.textBytes))?.split(/[\s"'=,]+/) ?? [], file);
@@ -269,6 +294,14 @@ export function targetLabel(target: RunnableTarget, root: string): string {
   return target.kind === 'module' ? `модуль ${relative(root, target.path)}` : target.url;
 }
 
+/** One log in the proposal: how many conversations, how many rows did not fit, and for a table, that its reading is confirmed at import. */
+function logLine(log: LogFile): string {
+  const counted = `${log.complete ? '' : 'в начале файла '}${countText(log.dialogues, ['разговор', 'разговора', 'разговоров'])}`
+    + (log.rejected ? `, ${countText(log.rejected, ['запись', 'записи', 'записей'])} ${pluralForm(log.rejected, ['не подошла', 'не подошли', 'не подошли'])}` : '');
+  if (log.table) return `  ${log.file} — таблица, ${counted}; ${log.table === 'ready' ? 'как её читать, Lab покажет перед загрузкой' : 'перед загрузкой Lab спросит, как её читать'}`;
+  return `  ${log.file} — ${counted}${log.complete ? '' : `; дальше не читался: файл больше ${IMPORT_FILE_BYTES / 1_000_000} МБ`}`;
+}
+
 const CONFIDENCE_NOTE: Record<Confidence, string> = { high: '', medium: ' — похоже на агента; формат запросов Lab проверит при подключении', low: ' — возможно, агент; как он отвечает, не видно' };
 const SHOWN = 3;
 
@@ -283,10 +316,7 @@ export function detectionLines(detection: ProjectDetection): string[] {
       ...agent.evidence.map(item => `      ${evidenceText(item)}`)]) : ['  не нашёл — Lab спросит, как запускать агента'],
     ...more(agents.length), '',
     'Логи с разговорами',
-    ...logs.length ? logs.slice(0, SHOWN).map(log => `  ${log.file} — ${log.complete ? '' : 'в начале файла '}${countText(log.dialogues, ['разговор', 'разговора', 'разговоров'])}`
-      + (log.rejected ? `, ${countText(log.rejected, ['запись', 'записи', 'записей'])} ${pluralForm(log.rejected, ['не подошла', 'не подошли', 'не подошли'])}` : '')
-      + (log.complete ? '' : `; дальше не читался: файл больше ${IMPORT_FILE_BYTES / 1_000_000} МБ`))
-      : ['  не нашёл файлов JSON или JSONL с разговорами'],
+    ...logs.length ? logs.slice(0, SHOWN).map(logLine) : ['  не нашёл файлов с разговорами (JSON, JSONL, XLSX, CSV)'],
     ...more(logs.length), '',
     'Материалы',
     ...materials.length ? materials.slice(0, SHOWN).map(item => `  ${item.folder} — ${countText(item.documents, ['документ', 'документа', 'документов'])}`) : ['  не нашёл папок с документами'],

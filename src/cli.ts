@@ -27,6 +27,10 @@ import { actionRow, briefRows, changeText, countsText, detailRows, formatNote, l
 import { safeLine } from './text.js';
 import { countText } from './plural.js';
 import { logImports } from './card/calibration-scope.js';
+import { confirmTableImport, proposeTableImport } from './spreadsheet/import.js';
+import { importedLine, proposalLines } from './spreadsheet/lines.js';
+import { ROLES, ROLE_WORDS, tableChoicesSchema, type MarkerRole, type TableChoices } from './spreadsheet/mapping.js';
+import type { TableProposal } from './spreadsheet/proposal.js';
 
 /**
  * The rows of the result screen with every text made safe for a terminal before layout: titles, quotes
@@ -53,6 +57,48 @@ const writeStdout = (value: string): Promise<void> => new Promise((resolve, reje
   process.stdout.write(value, finish);
 });
 
+/** The owner's words for who writes a message, as `--markers` and `--roles` take them. */
+const ROLE_BY_WORD: Readonly<Record<string, MarkerRole>> = {
+  клиент: 'user', client: 'user', user: 'user', агент: 'assistant', agent: 'assistant', assistant: 'assistant',
+  служебное: 'system', system: 'system', текст: 'text', text: 'text',
+};
+/** `CLIENT=клиент,AGENT=агент` → pairs; a value may itself hold `=`, the role word is after the last one. */
+function rolePairs(text: string, flag: string, allowText: boolean): { label: string; role: MarkerRole }[] {
+  return text.split(',').map(pair => {
+    const at = pair.lastIndexOf('='), label = pair.slice(0, at).trim(), role = ROLE_BY_WORD[pair.slice(at + 1).trim().toLowerCase()];
+    if (at < 1 || !label || !role || role === 'text' && !allowText) throw new Error(`${flag}: ожидается ${allowText ? 'МЕТКА' : 'ЗНАЧЕНИЕ'}=клиент|агент|служебное${allowText ? '|текст' : ''}, через запятую.`);
+    return { label, role };
+  });
+}
+/** The owner's choices from the command line; each overrides what Lab would propose. */
+function tableChoicesOf(values: Record<string, string | boolean | string[] | undefined>): TableChoices {
+  const text = (key: string) => typeof values[key] === 'string' ? values[key] as string : undefined;
+  // A shell passes \n and \t literally; the owner means the characters.
+  const separator = text('separator')?.replace('\\n', '\n').replace('\\t', '\t');
+  return tableChoicesSchema.parse({
+    ...text('sheet') ? { sheet: text('sheet') } : {}, ...text('id-column') ? { id: text('id-column') } : {},
+    ...text('text-column') ? { text: text('text-column') } : {}, ...separator ? { separator } : {},
+    ...text('markers') ? { markers: rolePairs(text('markers')!, '--markers', true).map(({ label, role }) => ({ token: label, role })) } : {},
+    ...text('role-column') ? { role: text('role-column') } : {},
+    ...text('roles') ? { roles: rolePairs(text('roles')!, '--roles', false).map(({ label, role }) => ({ value: label, role })) } : {},
+    ...text('order-column') ? { order: text('order-column') } : values['row-order'] ? { order: null } : {},
+  });
+}
+/** How to answer the proposal from the command line. */
+function importHints(proposal: TableProposal): string[] {
+  const words = ROLES.map(role => ROLE_WORDS[role]).join('|');
+  if (proposal.status === 'refused') return ['Поправьте выбор и повторите команду.'];
+  if (proposal.status === 'ready') return ['Загрузить: та же команда с --yes.',
+    'Поправить: --sheet, --id-column, --text-column; метки — --markers CLIENT=клиент,AGENT=агент и --separator; сообщение в строке — --role-column, --roles, --order-column или --row-order.'];
+  const question = proposal.question;
+  switch (question.kind) {
+    case 'marker': return [`Ответ: та же команда с --markers ${question.token}=${words}|текст.`];
+    case 'role': return [`Ответ: та же команда с --roles "${question.value}=${words}".`];
+    case 'id': return ['Ответ: та же команда с --id-column КОЛОНКА.'];
+    case 'text': return ['Ответ: та же команда с --text-column КОЛОНКА.'];
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args[0] === 'chat' || (!args.length && process.stdin.isTTY)) {
@@ -74,10 +120,13 @@ async function main() {
     yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
     card: { type: 'string' }, choice: { type: 'string' }, text: { type: 'string' }, check: { type: 'boolean' }, resume: { type: 'boolean' }, accept: { type: 'boolean' }, convert: { type: 'boolean' },
     'agent-version': { type: 'string' }, unknown: { type: 'boolean' }, import: { type: 'string' },
+    file: { type: 'string' }, sheet: { type: 'string' }, 'id-column': { type: 'string' }, 'text-column': { type: 'string' }, separator: { type: 'string' },
+    markers: { type: 'string' }, 'role-column': { type: 'string' }, roles: { type: 'string' }, 'order-column': { type: 'string' }, 'row-order': { type: 'boolean' },
   } });
   const command = positionals[0];
   if (values.help || !command) {
     process.stdout.write('  agent-lab detect [--directory ПАПКА] [--json]  Что Lab нашёл в папке проекта: агента, логи, материалы, промпт\n');
+    process.stdout.write('  agent-lab import --file логи.xlsx [--yes] [--json]  Как Lab прочитает таблицу логов (.xlsx, .csv); --yes загружает её\n');
     process.stdout.write('  agent-lab summary --id RUN [--json]     Сколько ситуаций агент прошёл, что не измерено и почему\n');
     process.stdout.write('  agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--yes]   Какая версия агента записала логи: только тогда сверка с продом — калибровка\n');
     process.stdout.write('  agent-lab accept --id RUN [--yes]      Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания\n');
@@ -98,6 +147,25 @@ async function main() {
     return;
   }
   const directory = values['data-dir'] ?? resolve('.agent-lab');
+  if (command === 'import') {
+    if (!values.file) throw new Error('Укажите таблицу: agent-lab import --file логи.xlsx');
+    // Reads only, until the owner says --yes to a complete proposal; the answer to a question is a flag of the same command.
+    const proposal = await proposeTableImport(values.file, tableChoicesOf(values));
+    const lines = proposalLines(proposal);
+    if (proposal.status !== 'ready' || !values.yes) {
+      await writeStdout(values.json ? `${JSON.stringify(proposal, null, 2)}\n` : `${[...lines, '', ...importHints(proposal)].map(line => safeLine(line)).join('\n')}\n`);
+      if (proposal.status === 'refused' || values.yes) process.exitCode = 1;
+      return;
+    }
+    const lab = new ExperimentLab(directory);
+    await lab.init();
+    try {
+      const { batch } = await confirmTableImport(lab.store, values.file, proposal);
+      await writeStdout(values.json ? `${JSON.stringify({ importId: batch.id, dialogues: batch.dialogues.length, proposal }, null, 2)}\n`
+        : `${[...lines, '', importedLine(batch), `Дальше: agent-lab build --input задача.json --dialogues-file ${values.file}`].map(line => safeLine(line)).join('\n')}\n`);
+    } finally { await lab.close(); }
+    return;
+  }
   if (command === 'suites') { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); return; }
   if (command === 'cards') {
     if (!values.id) throw new Error('Укажите --id RUN.');
@@ -325,7 +393,7 @@ async function main() {
         raw = { ...task, materials: expanded.materials };
       }
       const connection = command === 'demo' ? undefined : values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
-      const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file']) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
+      const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file'], { directory }) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
       const input = createInputSchema.parse({ ...raw, ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
         ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}) });
       const prepared = await lab.create(input); id = prepared.id; await lab.waitForIdle();

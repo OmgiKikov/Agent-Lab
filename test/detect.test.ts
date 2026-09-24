@@ -6,9 +6,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectionLines, detectProject, evidenceText } from '../src/detect.js';
+import { xlsxFile } from './helpers/xlsx.js';
 
 /** A temporary project folder with the given files; removed after the test. */
-async function project(t: TestContext, files: Record<string, string>): Promise<string> {
+async function project(t: TestContext, files: Record<string, string | Buffer>): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'detect-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const [file, content] of Object.entries(files)) {
@@ -137,12 +138,37 @@ test('a log longer than one import is counted batch by batch; a file too big to 
   ]);
 });
 
+test('spreadsheet logs are found and counted under the reading Lab would propose; a table without conversations is not a log', async t => {
+  const talk = (...messages: string[]) => messages.join(' ` ');
+  const root = await project(t, {
+    'exports/logs.xlsx': xlsxFile([{ name: 'Данные', rows: [['Id диалога', 'Текст'],
+      ...Array.from({ length: 6 }, (_, i) => [`d${i + 1}`, talk(`CLIENT Вопрос ${i + 1}`, 'AGENT Отвечаю на вопрос')]), ['d7', 'без меток']] }]),
+    'exports/operator.xlsx': xlsxFile([{ name: 'Лист1', rows: [['id', 'dialog'],
+      ...Array.from({ length: 4 }, (_, i) => [`o${i + 1}`, talk('CLIENT Позовите человека', 'AGENT Перевожу', 'OPERATOR Слушаю вас')])] }]),
+    'exports/chats.csv': 'session,author,message\ns1,client,Добрый день\ns1,bot,Здравствуйте! Чем помочь?\ns2,client,Где мой заказ?\ns2,bot,Проверяю статус\n',
+    'data/prices.csv': 'товар,цена\nТерминал,12000\nРидер,3000\n',
+    'data/broken.xlsx': 'not really a workbook',
+  });
+  const detection = await detectProject(root);
+  assert.deepEqual(detection.logs, [
+    { file: join('exports', 'logs.xlsx'), dialogues: 6, rejected: 1, complete: true, table: 'ready' },
+    { file: join('exports', 'operator.xlsx'), dialogues: 4, rejected: 0, complete: true, table: 'question' },
+    { file: join('exports', 'chats.csv'), dialogues: 2, rejected: 0, complete: true, table: 'ready' },
+  ]);
+  const lines = detectionLines(detection);
+  for (const line of [
+    `  ${join('exports', 'logs.xlsx')} — таблица, 6 разговоров, 1 запись не подошла; как её читать, Lab покажет перед загрузкой`,
+    `  ${join('exports', 'operator.xlsx')} — таблица, 4 разговора; перед загрузкой Lab спросит, как её читать`,
+    `  ${join('exports', 'chats.csv')} — таблица, 2 разговора; как её читать, Lab покажет перед загрузкой`,
+  ]) assert.ok(lines.includes(line), `${line}\n---\n${lines.join('\n')}`);
+});
+
 test('an empty folder yields an empty proposal, and every section says what is missing', async t => {
   const root = await project(t, {});
   const detection = await detectProject(root);
   assert.deepEqual({ ...detection, root: '' }, { root: '', agents: [], logs: [], materials: [], prompts: [], env: { files: [], names: [] }, truncated: false });
   const lines = detectionLines(detection);
-  for (const line of ['  не нашёл — Lab спросит, как запускать агента', '  не нашёл файлов JSON или JSONL с разговорами', '  не нашёл папок с документами'])
+  for (const line of ['  не нашёл — Lab спросит, как запускать агента', '  не нашёл файлов с разговорами (JSON, JSONL, XLSX, CSV)', '  не нашёл папок с документами'])
     assert.ok(lines.includes(line), line);
   // A mistyped folder is an error, not an empty project.
   await assert.rejects(detectProject(join(root, 'missing')), { message: `Папка проекта не найдена: ${join(root, 'missing')}` });
