@@ -6,8 +6,10 @@ import { test } from 'node:test';
 import { initTheme, keyHint, ToolExecutionComponent, type ExtensionAPI, type ExtensionContext, type Theme, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, Text, visibleWidth, type Component } from '@earendil-works/pi-tui';
 import agentLab from '../extensions/agent-lab.ts';
-import { forgetViews, isVerdictDetails, rememberView, renderAgentLabResult, VERDICT_KIND, VerdictBlock, viewFor, type VerdictDetails } from '../extensions/render/verdict-block.ts';
+import { forgetViews, isVerdictDetails, MISSING_RESULT, rememberView, renderAgentLabResult, VERDICT_KIND, VerdictBlock, viewFor, type VerdictDetails } from '../extensions/render/verdict-block.ts';
 import type { PaintTheme } from '../extensions/render/theme.ts';
+import { forgetFeeds, rememberFeed } from '../extensions/render/feed.ts';
+import { messageBlock, RUN_MESSAGE } from '../extensions/background.ts';
 import { emptyUsage, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type MetricAssessment, type Trial } from '../src/contracts.js';
 import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { accuracyRow, chatBlock, fitRows, nextRows } from '../src/result-text.js';
@@ -86,9 +88,8 @@ test('после agent_lab_run Pi рисует блок-вердикт из deta
   assert.ok(run.resultLines.some((line: string) => line.trim() === accuracyRow(view).text), 'the model reads the same number');
   assert.equal(run.nextStep, nextRows(view, 'chat')[0]?.text);
   const { raw, lines } = toolRow(tools.get('agent_lab_run')!, result, 80);
-  assert.equal(lines[0], 'Готовлю запуск');
-  assert.equal(lines[1], fitRows(chatBlock(view, { expanded: false }), 80)[0]!.text.trim());
-  assert.ok(lines.includes(accuracyRow(view).text), 'the number is drawn in one piece');
+  assert.equal(lines[0], '● Запускаю прогон', 'the action\'s own row, Claude-Code-like');
+  assert.equal(lines[1], `└ ${accuracyRow(view).text}`, 'the number hangs under the action, in one piece');
   assert.ok(!lines.some(line => line.startsWith('Дальше: ')), 'the collapsed block leaves «Дальше» to the hint and the expanded block');
   assert.ok(lines.at(-1)!.endsWith(collapsedHint(view)), `the expand hint is under the block, got «${lines.at(-1)}»`);
   for (const line of raw) assert.ok(visibleWidth(line) <= 80, `wider than 80: «${stripTerminalSequences(line)}»`);
@@ -126,7 +127,8 @@ test('без запомненного вида строка инструмент
   forgetViews();
   assert.equal(viewFor(result.details as VerdictDetails), null);
   const { raw, lines } = toolRow(tools.get('agent_lab_run')!, result, 80);
-  assert.deepEqual(lines, ['Готовлю запуск', `Прогон ${run.id.slice(0, 8)} не найден в .agent-lab — блок нельзя показать.`]);
+  assert.deepEqual(lines, ['● Запускаю прогон', `└ ${MISSING_RESULT}`], 'no id on screen: the owner asks for the result again');
+  assert.ok(!lines.join(' ').includes(run.id.slice(0, 8)));
   for (const line of raw) assert.ok(visibleWidth(line) <= 80);
 });
 
@@ -218,20 +220,22 @@ test('legacy: old-session details, no details and non-JSON content are drawn by 
   assert.equal(calls.length, cases.length);
 });
 
-test('a view that throws while the rows are built ends as the escaped content text, never as an exception inside Pi', () => {
+test('a view that throws while the rows are built ends as one honest row, never as an exception inside Pi and never as the model\'s text', () => {
   initTheme('dark', false);
   const theme = realTheme();
   const broken = fixtureView();
   Object.defineProperty(broken, 'control', { get() { throw new Error('сломанный вид'); } });
   rememberView(`${HEX_ID}:broken`, broken);
   const content = '\x1b[2Jкраткий текст для модели\x1b]52;c;x\x07';
-  const rendered = renderAgentLabResult(verdictResult(`${HEX_ID}:broken`, content), { expanded: true, isPartial: false }, theme, () => { throw new Error('legacy must not be asked'); });
-  assert.ok(rendered instanceof Text, 'a pi-tui Text');
-  // pi-tui's Text pads its lines to the width; the visible words are the escaped content text and nothing else.
-  assert.deepEqual(rendered.render(200).map(line => line.trimEnd()), ['краткий текст для модели']);
+  let tone = '';
+  const rendered = renderAgentLabResult(verdictResult(`${HEX_ID}:broken`, content), { expanded: true, isPartial: false }, theme, () => { throw new Error('legacy must not be asked'); }, own => { tone = own; });
+  const shown = strip(rendered.render(200));
+  assert.deepEqual(shown, ['└ Этот результат не удалось показать — попросите показать его ещё раз.']);
+  assert.equal(tone, 'muted', 'the action\'s sign does not claim success');
+  assert.ok(!rendered.render(200).join('').includes('\x1b[2J'));
   // A legacy renderer that throws falls back the same way.
   const legacyThrows = renderAgentLabResult({ content: [{ type: 'text', text: 'старый текст' }], details: { id: 'x' } } as never, { expanded: false, isPartial: false }, theme, () => { throw new Error('boom'); });
-  assert.deepEqual(legacyThrows.render(200).map(line => line.trimEnd()), ['старый текст']);
+  assert.deepEqual(strip(legacyThrows.render(200)), ['└ Этот результат не удалось показать — попросите показать его ещё раз.']);
 });
 
 test('through Pi\'s real tool row in the dark and light themes, at 40–160 columns, collapsed and expanded, no line is wider than the width', () => {
@@ -255,8 +259,8 @@ test('through Pi\'s real tool row in the dark and light themes, at 40–160 colu
         const label = `${name} ${width} ${expanded ? 'развёрнуто' : 'свёрнуто'}`;
         for (const line of raw) assert.ok(visibleWidth(line) <= width, `${label}: «${stripTerminalSequences(line)}» is wider than ${width}`);
         assert.ok(!lines.some(line => line.includes('…')), `${label}: an ellipsis was produced`);
-        assert.equal(lines[0], 'Готовлю запуск', label);
-        if (width >= 80) assert.equal(lines[1], accuracyRow(view).text, label);
+        assert.equal(lines[0], '● Запускаю прогон', label);
+        if (width >= 80) assert.equal(lines[1], `└ ${accuracyRow(view).text}`, label);
         assert.ok(lines.join(' ').includes('Точность агента: 40% — справился в 2 из 5 ситуаций'), `${label}: the number is drawn`);
         assert.ok(!lines.some(line => line.includes('shownToOwner') || line.includes('скрытый текст')), `${label}: the model text stays hidden`);
         assert.ok(!raw.join('').includes('\x1b[31m'), `${label}: the escape sequence of the quote is gone`);
@@ -291,11 +295,12 @@ test('VerdictBlock takes the hint as a function and paints the rows with the the
     for (const expanded of [false, true]) {
       const lines = new VerdictBlock(view, expanded, fake, hint).render(width);
       for (const line of lines) assert.ok(visibleWidth(plain(line)) <= width, `${width}: «${plain(line)}»`);
-      assert.equal(lines.at(-1), expanded ? 'ПОДСКАЗКА-СВЕРНУТЬ' : 'ПОДСКАЗКА-ПОДРОБНЕЕ', 'the injected hint closes the block, unpainted and unescaped');
-      assert.ok(lines[0]!.startsWith('<error><b>'), `${width}: the number is bold error`);
-      assert.ok(plain(lines[0]!).trim().startsWith('Точность агента: 40%'), `${width}: «${plain(lines[0]!)}»`);
-      // The painted lines are exactly the laid-out rows: fitRows decides the layout, the theme only paints.
-      assert.deepEqual(lines.slice(0, -1).map(plain), fitRows(chatBlock(view, { expanded }), width).map(line => stripTerminalSequences(line.text)), `${width}: painting changed the layout`);
+      assert.equal(lines.at(-1)!.trim(), expanded ? 'ПОДСКАЗКА-СВЕРНУТЬ' : 'ПОДСКАЗКА-ПОДРОБНЕЕ', 'the injected hint closes the block, unpainted and unescaped');
+      assert.ok(lines[0]!.startsWith('  <muted>└</muted>') && lines[0]!.includes('<error><b>'), `${width}: the number is bold error under the branch sign`);
+      assert.ok(plain(lines[0]!).trim().startsWith('└ Точность агента: 40%'), `${width}: «${plain(lines[0]!)}»`);
+      // The painted lines are exactly the laid-out rows under the branch: fitRows decides the layout, the theme only paints.
+      const laid = fitRows(chatBlock(view, { expanded }).map(row => row.indent >= 2 ? { ...row, indent: row.indent - 2 } : row), width - 3).map(line => stripTerminalSequences(line.text));
+      assert.deepEqual(lines.slice(0, -1).map(plain), laid.map((line, index) => `${index ? '   ' : '  └'}${line}`), `${width}: painting changed the layout`);
       assert.equal(lines.some(line => plain(line).trim() === 'Не измерено'), expanded, `${width}: the unmeasured situations only when expanded`);
     }
   }
@@ -321,8 +326,26 @@ test('the host hint: the causes and the phrases to say when something failed, «
       assert.ok(rendered instanceof VerdictBlock, `${name}: the block is drawn`);
       const lines = strip(rendered.render(200));
       assert.equal(lines.at(-1), expanded ? key('свернуть') : collapsed, `${name} ${expanded ? 'развёрнуто' : 'свёрнуто'}`);
-      assert.equal(lines[0], accuracyRow(view).text, `${name}: the number comes first`);
+      assert.equal(lines[0], `└ ${accuracyRow(view).text}`, `${name}: the number comes first`);
     }
   }
   assert.equal(accuracyRow(cleanView()).text, 'Точность агента: 100% — справился в 2 из 2 ситуаций');
+});
+
+test('a result that arrives as a message is drawn like an action row: its head, its summary under the branch, and an honest row after a restart', () => {
+  initTheme('dark', false);
+  const plain = { fg: (_tone: string, text: string) => text, bold: (text: string) => text, bg: (_tone: string, text: string) => text } as unknown as Theme;
+  const stopped = { content: '{}', details: rememberFeed('message-stopped', { title: 'Прогон остановлен', tone: 'warning',
+    rows: [{ text: 'Прогон остановлен: сохранено 7 из 18 разговоров.' }, { text: 'С места остановки не продолжить: «повтори прогон» запустит все разговоры заново.', tone: 'muted' }] }, 'Прогон') };
+  const drawn = messageBlock(RUN_MESSAGE, stopped, false, plain).render(100).map(line => stripTerminalSequences(line).trimEnd());
+  assert.equal(drawn[0], '● Прогон остановлен');
+  assert.equal(drawn[1], '  └ Прогон остановлен: сохранено 7 из 18 разговоров.');
+  assert.ok(drawn.some(line => line.includes('«повтори прогон» запустит все разговоры заново')), drawn.join('\n'));
+  for (const width of [40, 70, 160]) for (const line of messageBlock(RUN_MESSAGE, stopped, true, plain).render(width)) assert.ok(visibleWidth(line) <= width, line);
+  // A reopened session holds only the note of the message: it says so in one row instead of drawing the old JSON.
+  forgetFeeds();
+  const reopened = messageBlock(RUN_MESSAGE, stopped, false, plain).render(100).map(line => stripTerminalSequences(line).trimEnd());
+  assert.equal(reopened[0], '● Прогон');
+  assert.equal(reopened[1], '  └ Сессия открыта заново — попросите показать это ещё раз.');
+  assert.doesNotMatch(reopened.join('\n'), /[{}]/);
 });

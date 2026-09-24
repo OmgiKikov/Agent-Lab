@@ -2,17 +2,20 @@ import { resolve } from 'node:path';
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import type { Experiment } from '../src/contracts.js';
-import { contains } from '../src/card/checks.js';
+import { contains, type CardEvidence } from '../src/card/checks.js';
 import { hostGrant, requiredAuthority, wordsOf, type HostGrant, type Prepared } from '../src/card/commands.js';
-import type { CardCommand } from '../src/card/schema.js';
+import type { CardCommand, LibraryV2 } from '../src/card/schema.js';
+import { cardStatuses } from '../src/card/status.js';
 import { briefRows, changeText, chip, countsText, detailRows, formatNote, listRows, situationData, situationEntry, situationViews, type SituationView } from '../src/card/view.js';
+import { situationCoverage } from '../src/miner/cards.js';
 import { CommandRefused, LibraryConflict, UnknownReference } from '../src/errors.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { libraryHash } from '../src/scenario-library.js';
-import { clip, safeText, shortId } from '../src/text.js';
-import { ownerMessages, row, type Feed } from './conversation.ts';
-import { displayFor, isInteractive, NeedsOwner, requireInteractive, returnToBoard } from './lab-ui.ts';
+import { clip, safeText } from '../src/text.js';
+import { ownerMessages, row, runStamp } from './conversation.ts';
+import { displayFor, isInteractive, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import type { LabLease, SessionOperations } from './operations.ts';
+import type { Feed } from './render/feed.ts';
 import { situationRows } from './render/situation.ts';
 
 /*
@@ -40,32 +43,57 @@ export interface CardToolHost {
 }
 
 /** The situations of a record with their status now; a card draft reads its imports for that. `running`: a check of them is going on. */
-export async function situationsNow(lab: ExperimentLab, record: Experiment, running = false): Promise<{ views: SituationView[]; running: boolean }> {
+export async function situationsNow(lab: ExperimentLab, record: Experiment, running = false): Promise<{ views: SituationView[]; running: boolean; topics?: CoverageSource }> {
   if (record.librarySnapshot?.formatVersion !== 2) return { views: situationViews(record, { maxTurns: record.settings.maxTurns }), running: false };
-  const { experiment, evidence, numbers } = await lab.cardContext(record.id);
-  return { views: situationViews(experiment, { evidence, numbers, maxTurns: experiment.settings.maxTurns }), running };
+  const { experiment, library, evidence, numbers } = await lab.cardContext(record.id);
+  return { views: situationViews(experiment, { evidence, numbers, maxTurns: experiment.settings.maxTurns }), running, topics: { library, evidence } };
 }
 
-/** The list in the chat (ui-spec §4.10): the counts and who waits for an answer; every situation in three lines on expand. */
-export function situationsFeed(record: Experiment, views: SituationView[], running = false): Feed {
+/** What the coverage of the logs' topics is read from: a card draft and the imports its cards cite. */
+export interface CoverageSource { library: LibraryV2; evidence: CardEvidence }
+
+/** «15 ситуаций покрывают 9 из 11 тем — 94% диалогов» and the topics without a ready situation; undefined without the logs' topics. */
+export function coverageOf(source: CoverageSource | undefined, maxTurns: number): { line: string; uncovered: string | undefined } | undefined {
+  if (!source) return undefined;
+  return situationCoverage(source.library, cardStatuses({ library: source.library, evidence: source.evidence, maxTurns }));
+}
+
+/** A situation's status as the answer of a change: «Ситуация 2 готова». */
+export function statusText(view: SituationView, running = false): string {
+  const status = view.status === 'checking' && running ? 'проверяется' : { ready: 'готова', needs_owner: 'ждёт вашего ответа', unusable: 'не подходит для теста', checking: 'ждёт проверки' }[view.status];
+  return `Ситуация ${view.number} ${status}${view.version && view.status === 'ready' ? ` · версия ${view.version}` : ''}`;
+}
+
+/**
+ * The situations in the chat (ui-spec §4.10): the counts, then who waits for an answer or how much of the logs'
+ * topics the ready ones cover; every situation in three lines on expand. `next` is the last summary row when the
+ * caller has a step to name.
+ */
+export function situationsFeed(record: Experiment, views: SituationView[], running = false, topics?: CoverageSource, next?: string): Feed {
   const waiting = views.filter(view => view.status === 'needs_owner');
   const note = formatNote(record);
+  const coverage = coverageOf(topics, record.settings.maxTurns);
+  const waitingLine = waiting.length ? `Ждут ответа: ${waiting.slice(0, 3).map(view => `${view.number} ${clip(view.brief.title, 60)}`).join(' · ')}${waiting.length > 3 ? ` · ещё ${waiting.length - 3}` : ''}` : undefined;
+  const lines = [waitingLine, coverage?.line, note].filter((line): line is string => !!line);
   return {
-    rows: [row(countsText(views), 'text', true),
-      ...(waiting.length ? [row(`Ждут ответа: ${waiting.slice(0, 3).map(view => `${view.number} ${clip(view.brief.title, 60)}`).join(' · ')}${waiting.length > 3 ? ` · ещё ${waiting.length - 3}` : ''}`, 'warning', false, 2)] : []),
-      ...(note ? [row(note, 'muted', false, 2)] : [])],
-    more: situationRows(views.flatMap(view => listRows(view, { running }))),
+    tone: waiting.length ? 'warning' : 'success',
+    rows: [row(countsText(views), 'text', true), ...lines.slice(0, next ? 1 : 2).map(line => row(line, 'muted')), ...(next ? [row(next, 'muted')] : [])],
+    // The coverage line may already stand in the summary; its uncovered topics are named on expand.
+    more: [...(coverage?.uncovered ? [row(coverage.uncovered, 'muted'), row('')] : []), ...situationRows(views.flatMap(view => listRows(view, { running })))],
+    expand: `все ${views.length}: что пишет клиент и что должен агент`,
   };
 }
 
-/** One situation in the chat: its title, chip and two lines; the whole brief — and «d» when asked — on expand. */
+/** One situation in the chat: its title and status, what the customer writes and the first duty, its question; the whole brief — and «d» when asked — on expand. */
 export function situationFeed(view: SituationView, options: { running?: boolean; details?: boolean } = {}): Feed {
   const { brief } = view;
   return {
+    tone: view.status === 'ready' ? 'success' : 'warning',
     rows: [row(`${view.number}  ${brief.title} · ${chip(view, options.running).text}`, 'text', true),
-      row(`Клиент: «${clip(brief.writes, 120)}» · Агент должен: ${clip(brief.must[0]?.text ?? '—', 120)}`, undefined, false, 4),
-      ...(view.question ? [row(`Вопрос: ${view.question.text}`, 'warning', false, 4)] : view.problems[0] ? [row(`Не подходит: ${view.problems[0]}`, 'muted', false, 4)] : [])],
+      row(`Клиент: «${clip(brief.writes, 120)}» · Агент должен: ${clip(brief.must[0]?.text ?? '—', 120)}`),
+      ...(view.question ? [row(`Вопрос: ${view.question.text}`, 'warning')] : view.problems[0] ? [row(`Не подходит: ${view.problems[0]}`, 'muted')] : [])],
     more: situationRows([...briefRows(view, { running: options.running }), ...(options.details ? [{ role: 'blank' as const, indent: 0, text: '' }, ...detailRows(view)] : [])]),
+    expand: 'вся ситуация',
   };
 }
 
@@ -86,19 +114,18 @@ export function registerCardTools(pi: ExtensionAPI, host: CardToolHost): void {
       try {
         const record = await host.findRun(directory, params.id, ctx);
         host.focus.set(directory, record.id);
-        returnToBoard(ctx, record.id);
         const job = host.operations.current(directory);
-        const { views, running } = await situationsNow(host.reading(directory), record, job?.kind === 'assessment' && job.id === record.id);
+        const { views, running, topics } = await situationsNow(host.reading(directory), record, job?.kind === 'assessment' && job.id === record.id);
         const readOnly = record.librarySnapshot?.formatVersion !== 2 || record.phase !== 'review';
-        const note = `Ситуации прогона ${shortId(record.id)}`;
+        const note = `Ситуации · ${runStamp(record)}`;
         if (params.card === undefined) {
           return host.feedResult(callId, { runId: record.id, readOnly, ...(formatNote(record) ? { note: formatNote(record) } : {}), counts: countsText(views), situations: views.map(situationEntry) },
-            situationsFeed(record, views, running), note);
+            situationsFeed(record, views, running, topics), note);
         }
         const view = views.find(item => item.number === params.card);
         if (!view) throw new NeedsOwner('unknown_reference', `Ситуации №${params.card} нет. Спросите владельца, какая нужна.`, views.map(item => `${item.number}. ${item.brief.title}`).slice(0, 15));
         return host.feedResult(callId, { runId: record.id, readOnly, situation: situationData(view), ...(params.details ? { details: view.details } : {}) },
-          situationFeed(view, { running, details: params.details }), `Ситуация №${view.number} · прогон ${shortId(record.id)}`);
+          situationFeed(view, { running, details: params.details }), `Ситуация ${view.number} · ${runStamp(record)}`);
       } catch (error) { return host.askOwner(callId, error); }
     },
   });
@@ -112,8 +139,6 @@ const CHECK_TEXT = (check: CheckState): string | undefined => check.status === '
   : check.status === 'needs_budget' ? `Чтобы проверить изменённую ситуацию, нужно вызовов модели: ${check.pendingJobs}, а в лимите осталось ${check.remainingCalls}. Скажите, если поднять лимит.`
   : check.status === 'failed' ? `Проверка не завершилась: ${check.message} Правка сохранена.` : undefined;
 
-/** The status of a situation in one line, as the chip says it. */
-const statusLine = (view: SituationView, running = false) => `Ситуация ${view.number}: ${chip(view, running).text}`;
 
 /** The situation the model named, in the draft a change goes to; a finished run is never changed, its edit goes into a fresh draft of the same set. */
 async function draftSituation(host: CardToolHost, lab: ExperimentLab, directory: string, record: Experiment, number: number) {
@@ -191,7 +216,7 @@ async function changeSituation(host: CardToolHost, callId: string, ctx: Extensio
       const built = await build(view, context);
       const decided = !built ? undefined : built.decided ? await chosen(owned.lab, target.id, built.command) : await decide(ctx, owned.lab, target.id, built.command, built.heading);
       if (!built || !decided) return host.feedResult(callId, { applied: false, declined: true, message: 'The owner did not confirm. Nothing was written; do not ask again unless they do.' },
-        { rows: [row('Не записано: вы не подтвердили.', 'warning')] }, `Ситуация №${view.number} не изменена`);
+        { tone: 'warning', rows: [row('Не записано: вы не подтвердили.')] }, `Ситуация ${view.number} не изменена`);
       const { command } = built;
       await owned.lab.applyCardCommand(target.id, decided.prepared, decided.grant);
       // A new situation (a similar one) is read by its id: its number is new.
@@ -203,25 +228,25 @@ async function changeSituation(host: CardToolHost, callId: string, ctx: Extensio
       const after = situationViews(fresh.experiment, { evidence: fresh.evidence, numbers: fresh.numbers, maxTurns: fresh.experiment.settings.maxTurns }).find(item => item.id === subject);
       const changes = decided.prepared.diff.flatMap(item => item.changes.map(changeText));
       const copied = target.copiedFrom && target.copiedFrom !== target.id;
-      returnToBoard(ctx, target.id);
-      const headline = removed ? `Ситуация ${view.number} убрана из черновика. Исходные разговоры и прошлые прогоны не тронуты.`
-        : after ? statusLine(after, check.status === 'running') : `Ситуация ${view.number} изменена.`;
-      const feed: Feed = { rows: [row(headline, after?.status === 'ready' ? 'success' : 'warning', true),
-        ...(copied ? [row('Прошлый прогон не меняется: правка сделана в черновике того же набора.', 'accent', false, 2)] : []),
-        ...changes.map(text => row(text, undefined, false, 2)),
-        ...(CHECK_TEXT(check) ? [row(CHECK_TEXT(check)!, 'muted', false, 2)] : [])],
-        ...(after ? { more: situationRows(briefRows(after, { running: check.status === 'running' })) } : {}) };
+      const headline = removed ? `Ситуация ${view.number} убрана из черновика; исходные разговоры и прошлые прогоны не тронуты.`
+        : after ? statusText(after, check.status === 'running') : `Ситуация ${view.number} изменена.`;
+      // The answer first, then what changed; the rest of what the owner may need to know shares the last line.
+      const tail = [copied ? 'прошлый прогон не меняется: правка — в черновике того же набора' : '', CHECK_TEXT(check) ?? ''].filter(Boolean).join('; ');
+      const feed: Feed = { tone: removed || after?.status === 'ready' ? 'success' : 'warning',
+        rows: [row(headline, 'text', true), ...changes.slice(0, 2).map(text => row(text)), ...(changes.length > 2 ? [row(`и ещё ${changes.length - 2}`, 'muted')] : []),
+          ...(tail ? [row(tail.charAt(0).toLocaleUpperCase('ru') + tail.slice(1), 'muted')] : [])],
+        ...(after ? { more: situationRows(briefRows(after, { running: check.status === 'running' })), expand: 'вся ситуация' } : {}) };
       return host.feedResult(callId, { applied: true, runId: target.id, ...(copied ? { unchangedRunId: target.copiedFrom,
         instruction: 'The finished run never changes, so the change went into a fresh draft of the same set. Say so in one phrase and keep working on runId.' } : {}),
         changes, check, ...(after ? { situation: situationData(after) } : {}),
         ...(check.status === 'running' ? { checkNote: 'The check continues in the background and reports back as a message. Do not wait for it or poll; further changes are fine.' } : {}) },
-        feed, `Ситуация №${after?.number ?? view.number} · прогон ${shortId(target.id)}`);
+        feed, `Ситуация ${after?.number ?? view.number} · ${runStamp(found)}`);
     } finally { if (!handedOver) await owned.close(); }
   } catch (error) {
     if (error instanceof CommandRefused) return host.feedResult(callId, { applied: false, refused: error.message, instruction: 'Nothing was written. Tell the owner why in one sentence; do not repeat the same call.' },
-      { rows: [row(safeText(error.message), 'warning')] }, 'Не записано');
+      { tone: 'warning', rows: [row(safeText(error.message))] }, 'Не записано');
     if (error instanceof LibraryConflict) return host.feedResult(callId, { applied: false, stale: true, message: error.message, instruction: 'The draft changed since it was read. Read it again with agent_lab_cards and decide on the fresh state.' },
-      { rows: [row(safeText(error.message), 'warning'), row('Ничего не записано.', 'muted', false, 2)] }, 'Ситуации изменились');
+      { tone: 'warning', rows: [row(safeText(error.message)), row('Ничего не записано.', 'muted')] }, 'Ситуации изменились');
     if (error instanceof UnknownReference) return host.askOwner(callId, new NeedsOwner('unknown_reference', `${error.message} Есть: ${error.allowed.slice(0, 12).join('; ')}.`, error.allowed.slice(0, 12)));
     return host.askOwner(callId, error);
   }
@@ -275,10 +300,10 @@ function registerCommandTools(pi: ExtensionAPI, host: CardToolHost): void {
           await owned.lab.resumePreparation(found.id, libraryHash(found.librarySnapshot));
           host.backgroundPreparation(ctx, owned, found.id); handedOver = true;
           return host.feedResult(callId, { id: found.id, background: true, instruction: 'The preparation continues in the background; its situations arrive as a message. Do not poll.' },
-            { rows: [row('Продолжаю подготовку с сохранённого места. Ситуации придут сюда отдельным сообщением.', 'success', true)] }, `Подготовка ${shortId(found.id)} продолжена`);
+            { rows: [row('Подготовка продолжается с сохранённого места; ситуации придут сюда отдельным сообщением.', 'text', true)] }, `Подготовка · ${runStamp(found)}`);
         } finally { if (!handedOver) await owned.close(); }
       } catch (error) {
-        if (error instanceof CommandRefused) return host.feedResult(callId, { refused: error.message }, { rows: [row(safeText(error.message), 'warning')] }, 'Продолжать нечего');
+        if (error instanceof CommandRefused) return host.feedResult(callId, { refused: error.message }, { tone: 'warning', rows: [row(safeText(error.message))] }, 'Продолжать нечего');
         return host.askOwner(callId, error);
       }
     },
@@ -301,12 +326,13 @@ function registerCommandTools(pi: ExtensionAPI, host: CardToolHost): void {
           handedOver = check.status === 'running';
           const fresh = await host.reading(directory).cardContext(found.id);
           const views = situationViews(fresh.experiment, { evidence: fresh.evidence, numbers: fresh.numbers, maxTurns: fresh.experiment.settings.maxTurns });
-          const feed = situationsFeed(fresh.experiment, views, handedOver);
-          feed.rows.unshift(row(check.status === 'none' ? 'Проверять нечего: все ситуации проверены.' : check.status === 'done' ? 'Проверка завершена.' : CHECK_TEXT(check) ?? '', check.status === 'failed' || check.status === 'needs_budget' ? 'warning' : 'success', true));
-          return host.feedResult(callId, { runId: found.id, check, counts: countsText(views), situations: views.map(situationEntry) }, feed, `Проверка ситуаций · прогон ${shortId(found.id)}`);
+          const said = check.status === 'none' ? 'Проверять нечего: все ситуации проверены.' : check.status === 'done' ? 'Проверка завершена.' : CHECK_TEXT(check) ?? '';
+          const feed = situationsFeed(fresh.experiment, views, handedOver, { library: fresh.library, evidence: fresh.evidence }, said);
+          if (check.status === 'failed' || check.status === 'needs_budget') feed.tone = 'warning';
+          return host.feedResult(callId, { runId: found.id, check, counts: countsText(views), situations: views.map(situationEntry) }, feed, `Проверка ситуаций · ${runStamp(found)}`);
         } finally { if (!handedOver) await owned.close(); }
       } catch (error) {
-        if (error instanceof CommandRefused) return host.feedResult(callId, { refused: error.message }, { rows: [row(safeText(error.message), 'warning')] }, 'Проверка не нужна');
+        if (error instanceof CommandRefused) return host.feedResult(callId, { refused: error.message }, { tone: 'warning', rows: [row(safeText(error.message))] }, 'Проверка не нужна');
         return host.askOwner(callId, error);
       }
     },

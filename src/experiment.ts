@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import {
-  SANDBOX_RETIRED, VERSION, addUsage, assessmentRubrics, createInputSchema, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, humanReviewInputSchema, isRunning, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation,
+  SANDBOX_RETIRED, VERSION, addUsage, assessmentRubrics, createInputSchema, isRunnable, draftPatchSchema, emptyUsage, experimentSchema, fingerprint, humanReviewInputSchema, isRunning, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation,
   reassessmentSchema, type ReassessmentInput, type CallContext, type CreateInput, type DraftPatch, type Experiment, type HumanReviewInput, type Revision, type Runtime, type Scenario, type UserMode } from './contracts.js';
 import { ExperimentStore } from './store.js';
 import { LibraryConflict, Stopped } from './errors.js';
@@ -920,7 +920,7 @@ export class ExperimentLab {
     }));
     try {
       const suppliedPrompt = record.sources.filter(source => source.kind === 'prompt').map(source => source.content).join('\n\n') || undefined;
-      const prompt = suppliedPrompt ?? (record.target.kind !== 'sandbox'
+      const prompt = suppliedPrompt ?? (isRunnable(record.target)
         ? (record.target.promptFile ? await readPrompt(record.target.promptFile) : undefined)
         : record.revisions.find(r => r.id === record.selectedRevisionId)?.spec.instructions);
       const modes = await runtime.failureModes({ task: record.task, failures, ...(prompt !== undefined ? { prompt } : {}) }, ctx);

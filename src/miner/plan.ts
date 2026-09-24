@@ -2,6 +2,7 @@ import type { CallContext, Runtime, Settings, ValidationExclusion } from '../con
 import type { CardPreparation, LibraryV2 } from '../card/schema.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import type { ExperimentStore } from '../store.js';
+import { countText } from '../plural.js';
 import { clip } from '../text.js';
 import { trafficSummary } from './coverage.js';
 import { representativeSample } from './sample.js';
@@ -78,6 +79,34 @@ export async function preparationConsent(store: ExperimentStore, input: { batch:
     topicMapCalls: reusableTopicMap(stored, batch, builder) ? 0 : planTopicMap(batch, builder, stored).calls,
     callCeiling: settings.maxCalls,
     excluded: leftOut(batch, excluded),
+  };
+}
+
+const CONVERSATIONS: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
+const CALLS: [string, string, string] = ['вызов', 'вызова', 'вызовов'];
+const SITUATIONS_ACC: [string, string, string] = ['ситуацию', 'ситуации', 'ситуаций'];
+/** Why a conversation makes no situation, in the owner's words. */
+const LEFT_OUT_TEXT: Record<LeftOut['kind'], string> = {
+  unreadable: 'запись не читается', length: 'нет реплик клиента или их больше 16', masked: 'реплика клиента скрыта обезличиванием',
+  customer_data: 'нужны данные клиента', unconfirmed: 'в правилах нет ожидаемого ответа',
+};
+
+/**
+ * The consent in the owner's words: one question and the lines under it — what is read, how many situations at
+ * most, what is left out and why, and the ceiling of the spending. Every surface asks it with these words.
+ */
+export function consentText(consent: PreparationConsent, source: string): { question: string; lines: string[] } {
+  const counts = new Map<LeftOut['kind'], number>();
+  for (const item of consent.excluded) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
+  // Sorting is stable: equal counts keep the order the conversations were left out in.
+  const reasons = [...counts].sort((a, b) => b[1] - a[1]).map(([kind, count]) => `${LEFT_OUT_TEXT[kind]} — ${count}`);
+  return {
+    question: `Собрать ${countText(consent.promised, SITUATIONS_ACC)} из ${source}?`,
+    lines: [
+      `В логах ${countText(consent.conversations, CONVERSATIONS)}, подходят ${consent.usable}. Ситуаций будет не больше ${consent.promised} — по одной на разговор, из всех тем логов.`,
+      ...(reasons.length ? [`Не войдут ${countText(consent.excluded.length, CONVERSATIONS)}: ${reasons.join(' · ')}.`] : []),
+      `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели на всю подготовку${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}. Это потолок, а не прогноз; агент не запускается.`,
+    ],
   };
 }
 

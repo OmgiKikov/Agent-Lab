@@ -1,24 +1,20 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
+import { visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { layoutRows } from '../../src/card/view.js';
+import type { ResultRole } from '../../src/result-text.js';
 import { safeText } from '../../src/text.js';
-import { wrapRows } from '../cards.ts';
 
 /*
- * The one place that paints (04-UI-SPEC «Theme Module», CTX-19/CTX-20). Every row of the chat
- * block, the board tabs and the progress rows goes through `renderRows`: escaping, word wrap and
- * colour happen here and nowhere else. Only the semantic tokens of Pi's `Theme` are used, and
- * width is never measured by hand: `wrapRows` works through `visibleWidth` / `wrapTextWithAnsi`.
- *
- * `safeText` and `wrapRows` still live in `cards.ts` (plan 04-02 moves them here and re-exports them).
+ * The one place that paints (ui-spec §6). Every row of the chat, the workspace and the progress row goes
+ * through `renderRows`: escaping, word wrap and colour happen here and nowhere else. Only the semantic
+ * tokens of Pi's `Theme` are used, and width is never measured by hand: wrapping works through pi-tui's
+ * `wrapTextWithAnsi`, a list line is laid out by the shared `layoutRows`.
  */
 
 /** The only foreground tokens a row may carry. */
 export type Tone = 'text' | 'muted' | 'dim' | 'accent' | 'success' | 'warning' | 'error' | 'borderMuted';
 
-/**
- * One row to paint: raw `text` (escaped inside `renderRows`), an explicit `tone`/`bold` or a `role`
- * that ROLE_TONE maps to them, and the indent of the phase-2 hanging-indent rule.
- */
+/** One row to paint: raw `text` (escaped inside `renderRows`), an explicit `tone`/`bold` or a `role` that ROLE_TONE maps to them. */
 export interface Row {
   text: string; tone?: Tone; bold?: boolean; indent?: number; role?: string;
   /** The column wrapped lines continue at, when it is not two past the indent: the value column of a brief. */
@@ -27,46 +23,33 @@ export interface Row {
   right?: { text: string; tone: Tone };
   /** One line cut with «…» instead of wrapped: a line of a list. */
   clip?: true;
+  /**
+   * A sign before the text in its own tone — GLYPH.action of an action, GLYPH.branch of its summary. The text hangs after it,
+   * so a wrapped line starts under the text, never under the sign.
+   */
+  mark?: { text: string; tone: Tone };
 }
 
 /** What a host theme must offer; the test fakes implement all three with distinct markers per token. */
 export type PaintTheme = Pick<Theme, 'fg' | 'bold' | 'bg'>;
 
 /**
- * The glyph registry of phases 2–4 (02/03/04-UI-SPEC). Every glyph comes with its word on the row,
- * so a row reads correctly with colours off; no literal glyph appears elsewhere in extensions/render.
+ * Every glyph a Lab row may draw (ui-spec §6, the chat of §4.10), each next to its word so a row reads
+ * with colours off. No literal glyph appears elsewhere in extensions/render.
  */
 export const GLYPH = {
-  fail: '✗', pass: '✓', unmeasured: '?', selected: '▸', waiting: '●', control: '◆',
-  dot: '·', dash: '—', quoteOpen: '«', quoteClose: '»',
-  agree: '=', disagree: '!', unsure: '~', arrow: '→',
+  pass: '✓', fail: '✗', unmeasured: '?', selected: '›', dot: '·', dash: '—', quoteOpen: '«', quoteClose: '»', arrow: '→', more: '↓',
+  /** The row of one Lab action in the chat, tinted by how it ended. */
+  action: '●',
+  /** Its summary lines hang from this. */
+  branch: '└',
   barFill: '━', barTrack: '─',
-  fixed: '+', broken: '-', unstable: '*', same: '.', incomparable: '/',
 } as const;
 
-/**
- * Row role to token (the UI-SPEC «Row role / token» table): the phase-2 result rows and cause rows, the
- * phase-3 agreement and disagreement rows, and the phase-4 verdict rows. A row without a role
- * and without a tone is printed in the terminal's own colour. No glyph is written here: the
- * lint test allows a literal glyph only inside GLYPH above.
- */
-export const ROLE_TONE: Record<string, { tone: Tone; bold: boolean }> = {
-  // phase 1–2 result rows (result-view.ts ResultRowRole)
-  lead: { tone: 'text', bold: true }, line: { tone: 'muted', bold: false },
-  detail: { tone: 'muted', bold: false }, situation: { tone: 'warning', bold: false },
-  alarm: { tone: 'error', bold: true },
-  // phase 3 agreement rows
-  agreement: { tone: 'text', bold: false }, 'agreement-tail': { tone: 'muted', bold: false },
-  // phase 2 cause section (result-view.ts SectionRow, explain.ts ExplanationRole)
-  cause: { tone: 'accent', bold: false }, example: { tone: 'text', bold: true }, title: { tone: 'error', bold: true },
-  expected: { tone: 'text', bold: false }, said: { tone: 'text', bold: false },
-  rule: { tone: 'muted', bold: false }, more: { tone: 'muted', bold: false }, violated: { tone: 'muted', bold: false },
-  unverified: { tone: 'warning', bold: false },
-  // phase 3 disagreement rows (result-view.ts DisagreementRole)
-  'dis-title': { tone: 'warning', bold: false }, 'dis-verdicts': { tone: 'text', bold: false }, 'dis-reason': { tone: 'text', bold: false },
-  // the result rows of result-text.ts (chat block, board, CLI): the answer coloured by level (ui-spec §6)
+/** Result rows (src/result-text.ts) by role: the answer coloured by level, the trust line muted, headings in accent (ui-spec §6). */
+export const ROLE_TONE: Record<Exclude<ResultRole, 'blank'>, { tone: Tone; bold: boolean }> = {
   'accuracy:good': { tone: 'success', bold: true }, 'accuracy:warn': { tone: 'warning', bold: true },
-  'accuracy:bad': { tone: 'error', bold: true }, 'accuracy:none': { tone: 'text', bold: true },
+  'accuracy:bad': { tone: 'error', bold: true }, 'accuracy:none': { tone: 'text', bold: true }, alarm: { tone: 'error', bold: true },
   trust: { tone: 'muted', bold: false }, 'trust:small': { tone: 'warning', bold: false }, reality: { tone: 'muted', bold: false },
   heading: { tone: 'accent', bold: true }, item: { tone: 'text', bold: false }, 'item:muted': { tone: 'muted', bold: false },
   failed: { tone: 'error', bold: true }, quote: { tone: 'text', bold: false }, muted: { tone: 'muted', bold: false },
@@ -75,7 +58,7 @@ export const ROLE_TONE: Record<string, { tone: Tone; bold: boolean }> = {
 
 /** Bold first, then the foreground token, so the weight sits inside the colour. */
 export function paint(row: Row, theme: PaintTheme): string {
-  const byRole = row.role === undefined ? undefined : ROLE_TONE[row.role];
+  const byRole = row.role === undefined ? undefined : (ROLE_TONE as Record<string, { tone: Tone; bold: boolean }>)[row.role];
   const tone = row.tone ?? byRole?.tone;
   const bold = row.bold ?? byRole?.bold ?? false;
   const value = bold ? theme.bold(row.text) : row.text;
@@ -83,13 +66,36 @@ export function paint(row: Row, theme: PaintTheme): string {
 }
 
 /**
- * Every host prints its rows through this one function: `safeText` on every text, word wrap with
- * the hanging indent, then paint. Nothing is cut and no `…` is produced; no line is wider than `width`.
+ * A row as plain lines of at most `width` columns: the first at its indent, the rest under its hanging
+ * column (two past the indent unless `hang` says otherwise). A terminal too narrow for the hang wraps flush.
+ */
+export function wrapRow(row: Pick<Row, 'text' | 'indent' | 'hang'>, width: number): string[] {
+  const room = Math.max(1, Math.floor(width));
+  const indent = row.indent ?? 0;
+  const hang = row.hang ?? (indent ? indent + 2 : 0);
+  if (!indent && !hang || room <= Math.max(indent, hang) + 1) return wrapTextWithAnsi(row.text, room);
+  const [first = '', ...rest] = wrapTextWithAnsi(row.text, room - indent);
+  const tail = rest.join(' ');
+  return [' '.repeat(indent) + first, ...(tail ? wrapTextWithAnsi(tail, room - hang).map(piece => ' '.repeat(hang) + piece) : [])];
+}
+
+/**
+ * Every host prints its rows through this one function: `safeText` on every text, word wrap with the
+ * hanging indent, then paint. A list line is cut with «…» by the shared layout; nothing else is cut, and
+ * no line is wider than `width`.
  */
 export function renderRows(rows: Row[], theme: PaintTheme, width: number): string[] {
   return rows.flatMap(raw => {
     const row = { ...raw, text: safeText(raw.text) };
-    if (!row.right && !row.clip) return (wrapRows([row], width) as Row[]).map(line => paint(line, theme));
+    if (row.mark) {
+      // The sign stands in the indent; the text wraps in the room after it and hangs under itself.
+      const mark = safeText(row.mark.text);
+      const lead = (row.indent ?? 0) + visibleWidth(mark) + 1;
+      const lines = wrapRow({ text: row.text, indent: 0, hang: 0 }, Math.max(1, width - lead));
+      return lines.map((line, index) => (index ? ' '.repeat(lead) : `${' '.repeat(row.indent ?? 0)}${paint({ text: mark, tone: row.mark!.tone }, theme)} `)
+        + paint({ ...row, text: line }, theme));
+    }
+    if (!row.right && !row.clip) return wrapRow(row, width).map(line => paint({ ...row, text: line }, theme));
     // A list line is laid out in src like every other surface's (cut with «…», the right part never cut); here it is only painted.
     const right = row.right && { role: 'right', text: safeText(row.right.text) };
     return layoutRows([{ role: 'row', indent: row.indent ?? 0, text: row.text, clip: true, ...(right ? { right } : {}) }], width, 0)

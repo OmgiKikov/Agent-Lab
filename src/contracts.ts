@@ -27,6 +27,8 @@ const TOOL_NAMES = ['search_materials', 'lookup_record', 'update_record'] as con
 const text = z.string().trim().min(1);
 const dialogueContent = z.string().min(1).max(8000).refine(v => !!v.trim(), 'Empty dialogue content');
 const unique = <T>(values: T[]) => new Set(values).size === values.length;
+/** A field of a retired feature: old records still parse, nothing reads it. */
+const retired = z.unknown().optional();
 /**
  * Value-like tokens: runs of letters/digits/`:./-` that contain a digit and are at least three
  * characters long after trailing punctuation is trimmed, lower-cased. `4321`, `A103`, `14:00`,
@@ -94,55 +96,8 @@ const settingsPatchSchema = z.strictObject({
   roles: z.strictObject({ builder: modelChoiceSchema.nullable().optional(), simulator: modelChoiceSchema.nullable().optional(), judge: modelChoiceSchema.nullable().optional() }),
 }).partial();
 
-/*
- * Who answers the simulated user: an external agent speaking a JSON contract (see targets.ts);
- * its secrets stay in environment variables. `sandbox` is a retired built-in agent: old records
- * still parse, nothing runs it.
- */
-const promptFile = z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute prompt path required').optional();
-const absolutePath = z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required');
-/** Deploys the version under test before a run. Identity still comes from the adapter's `version`; the hook only performs the rollout. */
-const releaseSchema = z.strictObject({
-  command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
-  cwd: absolutePath.optional(), timeoutMs: z.number().int().min(1000).max(600000).default(120000),
-}).optional();
-/** Substrings of a reply that mean the stand, not the agent, answered («нет ответа от смежной системы»): such a dialogue is not measured. */
-const serviceReplies = z.array(text.max(300)).max(20).optional();
-/** A field of a retired feature: old connections and records still parse, nothing reads it. */
-const retired = z.unknown().optional();
-const httpTargetSchema = z.strictObject({
-  kind: z.literal('http'), diagnosticCapabilities: retired, promptFile, serviceReplies, url: z.string().url().max(2000),
-  headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/, 'Header values must name environment variables')).default({}),
-  timeoutMs: z.number().int().min(1000).max(600000).default(60000),
-  release: releaseSchema,
-});
-const moduleTargetSchema = z.strictObject({
-  kind: z.literal('module'), diagnosticCapabilities: retired, promptFile, serviceReplies, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
-  exportName: z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{0,99}$/).default('createSession'),
-  timeoutMs: z.number().int().min(1000).max(600000).optional(),
-  release: releaseSchema,
-});
-/** A local process (for example `python3 agent.py`) speaking one JSON request/reply per line over stdin/stdout. */
-const commandTargetSchema = z.strictObject({
-  kind: z.literal('command'), diagnosticCapabilities: retired, promptFile, serviceReplies, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
-  cwd: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required').optional(),
-  timeoutMs: z.number().int().min(1000).max(600000).default(60000),
-  release: releaseSchema,
-});
-export const targetSchema = z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('sandbox') }), httpTargetSchema, moduleTargetSchema, commandTargetSchema]);
-export type Target = z.infer<typeof targetSchema>;
-export const SANDBOX_RETIRED = 'Встроенная учебная песочница больше не запускается: подключите своего агента (http, module или command). Сохранённые результаты песочницы по-прежнему открываются.';
-/** A target Lab can run today. A new draft or a changed connection takes only these. */
-export const runnableTargetSchema = z.discriminatedUnion('kind', [httpTargetSchema, moduleTargetSchema, commandTargetSchema], {
-  error: issue => issue.input === undefined ? 'Укажите подключение агента: http, module или command.'
-    : (issue.input as { kind?: unknown } | null)?.kind === 'sandbox' ? SANDBOX_RETIRED : undefined,
-});
-export type RunnableTarget = z.infer<typeof runnableTargetSchema>;
-/** The same message wherever a stored sandbox record would have to run again. */
-export function runnableTarget(target: Target): RunnableTarget {
-  if (target.kind === 'sandbox') throw new Error(SANDBOX_RETIRED);
-  return target;
-}
+import { draftTargetSchema, runnableTargetSchema, targetSchema, type Target } from './target-schema.js';
+export { draftTargetSchema, isRunnable, runnableTarget, runnableTargetSchema, SANDBOX_RETIRED, targetSchema, UNCONNECTED, type RunnableTarget, type Target } from './target-schema.js';
 export type ReleaseHook = NonNullable<Extract<Target, { kind: 'command' }>['release']>;
 export interface ReleaseLog { command: string; exitCode: number | null; signal: string | null; stdout: string; stderr: string; startedAt: string; durationMs: number }
 const releaseLogSchema = z.strictObject({ command: z.string().max(8000), exitCode: z.number().int().nullable(), signal: z.string().max(40).nullable(), stdout: z.string().max(4000), stderr: z.string().max(4000), startedAt: text, durationMs: z.number().nonnegative() });
@@ -414,7 +369,7 @@ export const createInputSchema = z.strictObject({
   workflow: z.literal('evaluate').default('evaluate'),
   /** Curated variants to propose from owner requirements when there are no dialogues; 0 means: dialogues only. */
   scenarioCount: z.number().int().min(0).max(SCENARIO_LIMIT).default(5),
-  target: runnableTargetSchema,
+  target: draftTargetSchema,
   targetVersion: text.max(200).optional(),
   /** Converted into `originalImport` when no import is supplied. */
   dialogues: z.array(dialogueSchema).max(200).default([]),

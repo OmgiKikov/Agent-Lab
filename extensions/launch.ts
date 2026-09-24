@@ -1,6 +1,7 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { describeCheck, type Experiment } from '../src/contracts.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
+import { detectProject, evidenceText, targetLabel, type AgentCandidate } from '../src/detect.js';
 import { draftHash, type ExperimentLab } from '../src/experiment.js';
 import { countText } from '../src/plural.js';
 import { expectationSheet } from '../src/quality.js';
@@ -10,10 +11,13 @@ import { launchLines, scenarioPlan, type LaunchPlan } from './conversation.ts';
 import { NeedsOwner } from './lab-ui.ts';
 
 /*
- * One dialog starts a run, the same from the chat and from the board (ui-spec §4.6, the owner's decision of
- * 23.09): a draft of cards is accepted with its ready situations in the very dialog that starts it; a repeat
- * of an accepted set just starts; a draft of a record made before libraries confirms its expectations with the
- * run. The acceptance and the start stay two facts in the record. Questions never block the ready situations.
+ * One dialog starts a run, the same from the chat and from the workspace (ui-spec §4.6, the owner's decision of
+ * 23.09): a draft of cards is accepted with its ready situations in the very dialog that starts it; a repeat of an
+ * accepted set just starts; a draft of a record made before libraries confirms its expectations with the run. The
+ * acceptance and the start stay two facts in the record. Questions never block the ready situations.
+ *
+ * Situations may be prepared before the agent is connected: then the connection is asked for right before this
+ * dialog — Lab proposes what it found in the project folder, the owner picks, nothing runs until the dialog.
  */
 
 /** The two answers of every run dialog. */
@@ -26,7 +30,7 @@ export function runParallel(record: Experiment): number {
 
 /**
  * What an older record's draft confirms with its run, in the owner's words. A set of more than one situation
- * leads with the compact expectation sheet (UI-D-04); a single test keeps its full definition. Confirming seals
+ * leads with the compact expectation sheet; a single test keeps its full definition. Confirming seals
  * `fingerprint(scenario)` for every card, so a set not built from logs also lists the opening request and the
  * exact checks: in a validation set those come from the logged dialogue itself.
  */
@@ -37,7 +41,7 @@ function runScope(record: Experiment): string[] {
     const sealed = fromLog ? [] : record.scenarios.flatMap(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
       ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)]);
     return [...(fromLog ? ['Клиента играет Lab: на уточнения агента он отвечает только фактами из лога.', ''] : []),
-      ...sheet.compactLines(record.id).map(item => safeText(item)),
+      ...sheet.compactLines().map(item => safeText(item)),
       ...(sealed.length ? ['', 'Что вы подтверждаете дословно:', ...sealed] : [])];
   }
   return record.scenarios.map(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
@@ -68,20 +72,49 @@ export function cardPlan(record: Experiment, views: readonly SituationView[]): L
 }
 
 const SITUATIONS: [string, string, string] = ['ситуацию', 'ситуации', 'ситуаций'];
+/** How many ways to start the agent the connection question offers. */
+const OFFERED = 3;
+const NO_AGENT = 'Агент ещё не подключён, а в папке проекта Lab не нашёл, как его запускать.';
+
+/** A way to start the agent as the owner picks it: how it starts, and what in the folder says so. */
+function candidateLabel(candidate: AgentCandidate, root: string): string {
+  return safeText(`${targetLabel(candidate.target, root)}${candidate.evidence[0] ? ` — ${evidenceText(candidate.evidence[0])}` : ''}`);
+}
+
+/**
+ * The connection of a draft whose situations were prepared before the agent was connected: Lab proposes the ways to
+ * start it that it found in the project folder (read-only: nothing is run or imported), the owner picks one, and the
+ * draft is connected — checked and fingerprinted — before the run dialog. Undefined when the owner stepped back.
+ */
+export async function connectAgent(ctx: ExtensionContext, lab: ExperimentLab, draft: Experiment, cwd = ctx.cwd): Promise<Experiment | undefined> {
+  const found = await detectProject(cwd).then(detection => detection.agents.slice(0, OFFERED), () => []);
+  if (!found.length) throw new NeedsOwner('needs_owner_input', `${NO_AGENT} Спросите владельца, как его запускать (команда, файл модуля или адрес), подключите через agent_lab_edit (target) и снова вызовите agent_lab_run.`, [],
+    `${NO_AGENT} Как его запускать — команда, файл модуля или адрес?`);
+  const labels = found.map(candidate => candidateLabel(candidate, cwd));
+  const picked = await ctx.ui.select(safeText(['Как запустить агента?', '', 'Ситуации готовы, а агент ещё не подключён. Lab нашёл в папке проекта — ничего не запускал и не менял:'].join('\n')),
+    [...labels, NOT_NOW]);
+  const chosen = found[labels.indexOf(picked ?? '')];
+  if (!chosen) return undefined;
+  return lab.updateDraft(draft.id, draftHash(draft), { target: chosen.target });
+}
 
 /**
  * Asks the owner and starts the run of a draft; undefined when they said «Не сейчас». A card draft is accepted in
- * the same dialog; its situations that are not ready stay out and wait for the owner.
+ * the same dialog; its situations that are not ready stay out and wait for the owner. A draft without a connected
+ * agent is connected first.
  */
-export async function launchRun(ctx: ExtensionContext, lab: ExperimentLab, draft: Experiment, cwd = ctx.cwd): Promise<Experiment | undefined> {
+export async function launchRun(ctx: ExtensionContext, lab: ExperimentLab, start: Experiment, cwd = ctx.cwd): Promise<Experiment | undefined> {
+  const draft = start.target.kind === 'unconnected' ? await connectAgent(ctx, lab, start, cwd) : start;
+  if (!draft) return undefined;
   const library = draft.librarySnapshot;
   if (library?.formatVersion === 2 && !library.acceptance) {
     const context = await lab.cardContext(draft.id);
     const views = situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns });
     const ready = views.filter(view => view.status === 'ready');
-    if (!ready.length) throw new NeedsOwner('needs_owner_input', 'Запускать нечего: ни одна ситуация не готова. Покажите владельцу вопросы по ситуациям — ответ делает ситуацию готовой.');
+    if (!ready.length) throw new NeedsOwner('needs_owner_input', 'Запускать нечего: ни одна ситуация не готова. Покажите владельцу вопросы по ситуациям — ответ делает ситуацию готовой.', [],
+      'Запускать нечего: ни одна ситуация ещё не готова — ответьте на их вопросы.');
     const lines = launchLines(context.experiment, cardPlan(context.experiment, views), cwd);
-    const picked = await ctx.ui.select(safeText([`Принять ${countText(ready.length, SITUATIONS)} и запустить?`, '', ...lines, '',
+    const picked = await ctx.ui.select(safeText([`Принять ${countText(ready.length, SITUATIONS)} и запустить?`, '', ...lines,
       'Вместе с запуском Lab утвердит эти ситуации — повтор пойдёт по ним же.'].join('\n')), [LAUNCH, NOT_NOW]);
     if (picked !== LAUNCH) return undefined;
     const { experiment } = await lab.acceptCards(draft.id, libraryHash(context.library), ready.map(view => view.id));

@@ -86,12 +86,18 @@ function terminal(cwd: string, said: string[], answers: boolean[] = [], session:
   const confirms: { title: string; body: string }[] = [];
   const selects: { title: string; options: string[] }[] = [];
   const widgets: (string[] | undefined)[] = [];
+  /** A widget is Pi's own component (the progress row): drawn once here as the owner would see it, then disposed. */
+  const drawWidget = (content: unknown): string[] | undefined => {
+    if (typeof content !== 'function') return content as string[] | undefined;
+    const component = (content as (tui: unknown, theme: unknown) => Component & { dispose?(): void })({ requestRender() {} }, plainTheme);
+    try { return component.render(120).map(line => stripTerminalSequences(line).trim()).filter(Boolean); } finally { component.dispose?.(); }
+  };
   const ctx = { cwd, hasUI: true, mode: 'tui',
     sessionManager: { getBranch: () => said.map((content, index) => ({ type: 'message', id: String(index), message: { role: 'user', content } })), getEntries: () => session.entries ?? [] },
     ui: { confirm: async (title: string, body: string) => { confirms.push({ title, body }); return answers.shift() ?? false; },
       select: async (title: string, options: string[]) => { selects.push({ title, options }); return session.picks?.shift(); },
       editor: async () => session.texts?.shift(),
-      setStatus() {}, notify() {}, setWidget: (_key: string, lines: string[] | undefined) => { widgets.push(lines); } },
+      setStatus() {}, notify() {}, setWidget: (_key: string, content: unknown) => { widgets.push(drawWidget(content)); } },
   } as unknown as ExtensionContext;
   return { ctx, confirms, selects, widgets };
 }
@@ -157,7 +163,8 @@ test('tool rows say what is being done and never print ids or arguments', () => 
   assert.equal(callText('agent_lab_cards', { card: 2 }), 'Открываю ситуацию 2');
   assert.equal(callText('agent_lab_card_fact', { card: 2, fact: 'f1', disclosure: 'unknown' }), 'Меняю ситуацию 2: что знает клиент');
   assert.equal(callText('agent_lab_card_similar', { card: 1, change: { kind: 'opening', writes: 'x' } }), 'Добавляю похожую на ситуацию 1');
-  assert.equal(callText('agent_lab_build', { mode: 'validate', dialoguesFile: '/Users/owner/выгрузка/logs.jsonl' }), 'Собираю ситуации из логов · logs.jsonl');
+  assert.equal(callText('agent_lab_build', { mode: 'validate', dialoguesFile: '/Users/owner/выгрузка/logs.jsonl' }), 'Собираю ситуации из logs.jsonl');
+  assert.equal(callText('agent_lab_run', {}), 'Запускаю прогон');
   assert.equal(callText('agent_lab_inspect', { failure: 2 }), 'Открываю ошибку 2');
 });
 
@@ -173,9 +180,10 @@ test('reading: the counts and who waits for an answer, three lines per situation
     assert.deepEqual(payload.situations.map((item: { number: number; status: string }) => [item.number, item.status]), [[1, 'needs_owner'], [2, 'ready']]);
     assert.deepEqual(Object.keys(payload.situations[0]), ['number', 'title', 'status', 'question'], 'a list stays small: the whole brief is read by number');
     assert.deepEqual(payload.situations[0].question.answers.map((answer: { number: number; label: string }) => `${answer.number} ${answer.label}`), ['1 Да', '2 Не знал', '3 Убрать']);
-    assert.deepEqual(drawn(cards, list, false).slice(0, 2), ['2 ситуации: 1 готова · 1 ждёт вашего ответа', '  Ждут ответа: 1 Возврат оплаты — номер по просьбе']);
+    // Claude-Code-like: the answer hangs under the action, one to three lines, the list behind ctrl+o.
+    assert.deepEqual(drawn(cards, list, false).slice(0, 2), ['  └ 2 ситуации: 1 готова · 1 ждёт вашего ответа', '    Ждут ответа: 1 Возврат оплаты — номер по просьбе']);
     const expanded = drawn(cards, list, true).join('\n');
-    assert.match(expanded, /^ {3}1 {2}Возврат оплаты — номер по просьбе +\? нужен ваш ответ$/m);
+    assert.match(expanded, /^ +1 {2}Возврат оплаты — номер по просьбе +\? нужен ваш ответ$/m);
     assert.match(expanded, /Клиент: «Номер терминала: 1234\. Помогите с возвратом\.»/);
     const one = await cards.execute('one', { card: 1, details: true }, undefined, undefined, ctx);
     assert.deepEqual(json(one).situation.knows, [{ id: 'f1', what: 'Номер терминала: 5678', when: 'если спросят' }], 'one situation gives the model the ids a command names');
@@ -206,7 +214,7 @@ test('what the customer knows is the owner\'s decision: the native dialog shows 
     const receipt = libraryOf(record).receipts.at(-1)!;
     assert.deepEqual([receipt.via, receipt.command.kind, receipt.ownerWords], ['pi-confirm', 'set_fact_disclosure', undefined]);
     const rows = drawn(fact, written, false).join('\n');
-    assert.match(rows, /^Ситуация 1: ✓ готова/m, 'the changed situation was checked again in the same row');
+    assert.match(rows, /^ {2}└ Ситуация 1 готова · версия 2$/m, 'the changed situation was checked again in the same row, and names its new version');
     assert.match(rows, /Знает: было «Номер терминала: 5678 — если спросят», стало «Номер терминала — не знает»/);
     assert.doesNotMatch(JSON.stringify(written.details), /терминал|5678/i);
     const missing = json(await fact.execute('missing', { card: 1, fact: 'f7', disclosure: 'unknown' }, undefined, undefined, ctx));
@@ -355,18 +363,20 @@ test('a long run leaves the conversation free: Esc does not stop it, progress is
     while ((await fixture.read()).phase !== 'evaluating') await new Promise(resolve => setTimeout(resolve, 20));
     escape.abort();
     const result = await started;
-    assert.equal(json(result).background, true); assert.match(drawn(run, result, false).join('\n'), /Прогон запущен и идёт в фоне/);
+    assert.equal(json(result).background, true); assert.match(drawn(run, result, false).join('\n'), /Прогон идёт: 2 разговора[\s\S]*Результат придёт сюда сообщением/);
     assert.equal((await fixture.read()).phase, 'evaluating', 'interrupting the action does not stop the run');
     const progress = json(await run.execute('progress', { action: 'progress' }, undefined, undefined, ctx));
     assert.deepEqual([progress.running, progress.finishedDialogues, progress.plannedDialogues], [true, 0, 2]);
     assert.equal(json(await tools.get('agent_lab_cards')!.execute('read', {}, undefined, undefined, ctx)).situations.length, 2, 'reading works while the run goes');
     const change = await tools.get('agent_lab_card_remove')!.execute('remove', { card: 1 }, undefined, undefined, ctx).catch(error => error as Error);
-    assert.match(change instanceof Error ? change.message : '', /Сейчас идёт прогон .* правки и новый запуск — после его завершения или остановки/);
+    assert.match(change instanceof Error ? change.message : '', /^Сейчас идёт прогон\. .* правки и новый запуск — после его завершения или остановки/);
     await release();
     while (!sent.length) await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(sent[0]!.message.customType, 'agent-lab-run'); assert.deepEqual(sent[0]!.options, { deliverAs: 'followUp', triggerTurn: true });
     assert.equal((sent[0]!.message.details as { kind: string }).kind, 'agent-lab/verdict'); assert.equal(JSON.parse(sent[0]!.message.content).trialCount, 2);
-    assert.match(widgets.find(lines => lines)!.join('\n'), /0 из 2 диалогов завершено/);
+    // One progress row above the input: Pi's spinner and the count from the stored record; once the run is handed over, how to stop it.
+    assert.match(widgets.find(lines => lines)!.join('\n'), /^⠋ Прогон: 0 из 2 разговоров/);
+    assert.ok(widgets.some(lines => lines?.length === 1 && lines[0]!.includes('Прогон: 0 из 2 разговоров') && lines[0]!.endsWith('остановить — напишите «стоп»')), JSON.stringify(widgets));
     while (widgets.at(-1) !== undefined) await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal((await fixture.read()).phase, 'results_review');
   } finally { await release(); await shutdown(); await fixture.cleanup(); }
@@ -388,7 +398,7 @@ test('stopping is its own request: only the run that is going is stopped, what i
     await release();
     const stopped = await pending;
     assert.equal(json(stopped).stopped, true); assert.equal(selects.length, 1, 'the owner\'s own request needs no second confirmation');
-    assert.match(drawn(run, stopped, false).join('\n'), /остановлен: сохранено \d из 2 диалогов[\s\S]*Продолжить этот прогон с места остановки нельзя/);
+    assert.match(drawn(run, stopped, false).join('\n'), /Прогон остановлен: сохранено \d из 2 разговоров[\s\S]*С места остановки не продолжить/);
     assert.equal(sent.length, 0, 'a stop the owner asked for is answered in its own row, not announced twice');
     assert.ok(['cancelled', 'results_review'].includes((await fixture.read()).phase));
   } finally { await release(); await shutdown(); await fixture.cleanup(); }
@@ -419,7 +429,7 @@ test('a long preparation leaves the conversation free: changes wait for it by na
     const progress = json(await run.execute('progress', { action: 'progress' }, undefined, undefined, ctx));
     assert.deepEqual([progress.running, progress.preparation, progress.ownedByThisSession], [true, true, true]);
     const second = await build.execute('build-2', buildRequest, undefined, undefined, ctx).catch(error => error as Error);
-    assert.match(second instanceof Error ? second.message : '', /Сейчас идёт подготовка сценариев .* правки и новый запуск — после её завершения или остановки/);
+    assert.match(second instanceof Error ? second.message : '', /^Сейчас идёт подготовка ситуаций\. .* правки и новый запуск — после её завершения или остановки/);
     release();
     while (!sent.length) await new Promise(resolve => setTimeout(resolve, 20));
     while (widgets.at(-1) !== undefined) await new Promise(resolve => setTimeout(resolve, 20));
@@ -431,7 +441,7 @@ test('a long preparation leaves the conversation free: changes wait for it by na
     assert.deepEqual([content.id, content.counts, content.situations.length], [finished.id, '2 ситуации: 1 готова · 1 ждёт вашего ответа', 2]);
     assert.doesNotMatch(JSON.stringify(sent[0]!.message.details), /Возврат|терминал/i, 'the session file gets ids only');
     const rows = drawn(build, { content: [{ type: 'text', text: '' }], details: sent[0]!.message.details }, false).join('\n');
-    assert.match(rows, /Ситуации собраны из логов\. Агент не запускался\./); assert.match(rows, /Готовые \(1\) можно запустить сразу/);
+    assert.match(rows, /└ 2 ситуации: 1 готова · 1 ждёт вашего ответа/); assert.match(rows, /Готовые можно запустить сразу — скажите «запусти»; вопросы подождут\./);
     // The lock went back with the message: the next change is taken.
     const { ctx: next } = terminal(fixture.cwd, ['Убери вторую ситуацию'], [], { picks: ['Записать'] });
     assert.equal(json(await tools.get('agent_lab_card_remove')!.execute('remove', { card: 2 }, undefined, undefined, next)).applied, true);
@@ -456,7 +466,7 @@ test('Esc during a preparation interrupts the action, not the work; stopping it 
     const pending = tools.get('agent_lab_run')!.execute('stop', { action: 'stop', id: built.id }, undefined, undefined, ctx);
     release();
     const stopped = json(await pending);
-    assert.equal(stopped.stopped, true); assert.match(stopped.message, /Подготовка [a-f0-9]{8} (остановлена|успела завершиться до остановки)\./);
+    assert.equal(stopped.stopped, true); assert.match(stopped.message, /^Подготовка (остановлена|успела завершиться до остановки)\./);
     const record = (await fixture.stored())[0]!;
     assert.equal(stopped.savedSituations, libraryOf(record)?.cards.length ?? 0, 'the answer counts what the stored record holds');
     assert.equal(sent.length, 0, 'a stop the owner asked for is answered in its own row, not announced twice');
@@ -472,7 +482,7 @@ test('a slow check of a changed situation does not hold the conversation: the ch
     checkGate = new Promise<void>(resolve => { release = resolve; });
     const changed = await tools.get('agent_lab_card_fact')!.execute('fact', { card: 1, fact: 'f1', disclosure: 'unknown' }, undefined, undefined, ctx);
     assert.equal(json(changed).check.status, 'running');
-    assert.match(drawn(tools.get('agent_lab_card_fact')!, changed, false).join('\n'), /Ситуация 1: ⠋ проверяю[\s\S]*Проверяю изменённую ситуацию в фоне/);
+    assert.match(drawn(tools.get('agent_lab_card_fact')!, changed, false).join('\n'), /Ситуация 1 проверяется[\s\S]*Проверяю изменённую ситуацию в фоне/);
     assert.equal(sent.length, 0);
     assert.equal(json(await tools.get('agent_lab_cards')!.execute('read', { card: 1 }, undefined, undefined, ctx)).situation.status, 'checking', 'reading works while the check runs');
     release();
@@ -503,13 +513,15 @@ test('results of a run recorded before the card format: a failure opens by its n
     const { ctx, selects } = terminal(cwd, ['Покажи первый провал'], [], { picks: ['Запустить'] });
     const inspect = tools.get('agent_lab_inspect')!;
     const status = await tools.get('agent_lab_status')!.execute('status', {}, undefined, undefined, ctx);
-    assert.equal(json(status).runs[0].id, source.id); assert.match(drawn(tools.get('agent_lab_status')!, status, false).join('\n'), /есть результат/);
+    assert.equal(json(status).runs[0].id, source.id); assert.match(drawn(tools.get('agent_lab_status')!, status, false).join('\n'), /1 прогон: последний — .*точность \d+%/);
     const failure = await inspect.execute('failure', { failure: 1 }, undefined, undefined, ctx);
     const payload = json(failure);
     assert.deepEqual(Object.keys(payload.failure), ['number', 'of', 'title', 'kind', 'lines']);
     const rows = drawn(inspect, failure, false);
-    assert.equal(rows[0], `✗ 1  ${payload.failure.title} · ошибка 1 из ${payload.failure.of}`);
-    for (const label of ['Ожидалось', 'Агент ответил', 'Правило']) assert.ok(rows.some(line => line.startsWith(`    ${label.padEnd(16)}`)), `${label}\n${rows.join('\n')}`);
+    assert.equal(rows[0], `  └ ✗ 1  ${payload.failure.title}`);
+    // Expected, the agent's words and the rule: the three lines the owner reads first; the conversation behind ctrl+o.
+    assert.match(rows.join(' '), /Ожидалось: .* · Агент: /); assert.match(rows.join(' '), /Правило: «|нет правила из ваших материалов/);
+    assert.match(drawn(inspect, failure, true).join('\n'), /Разговор\n {6}Клиент {3}/);
     assert.equal(json(await inspect.execute('missing', { failure: 99 }, undefined, undefined, ctx)).status, 'unknown_reference');
     const repeated = json(await tools.get('agent_lab_repeat')!.execute('repeat', { scenarios: [source.scenarios[0]!.title] }, undefined, undefined, ctx));
     assert.deepEqual([repeated.scenarioCount, repeated.parentRunId], [1, source.id]);
@@ -531,15 +543,16 @@ test('the owner marks the judge\'s decision from the conversation: the answer co
   runtime = createDemoRuntime();
   const { tools, shutdown } = registered();
   try {
-    const { ctx, selects } = terminal(cwd, ['Покажи первый провал. Да, согласен с судьёй'], [], { picks: [undefined, 'Согласен с судьёй'] });
+    const { ctx, selects } = terminal(cwd, ['Покажи первый провал. Да, согласен с судьёй'], [], { picks: [undefined, 'Да, судья прав'] });
     const agree = tools.get('agent_lab_agree')!;
     const skipped = json(await agree.execute('skip', { failure: 1 }, undefined, undefined, ctx));
     assert.equal(skipped.cancelled, true); assert.equal((await new ExperimentStore(join(cwd, '.agent-lab')).get(demo.record.id)).humanReviews?.length ?? 0, 0, 'no answer in the dialog, no mark');
     const marked = await agree.execute('mark', { failure: 1 }, undefined, undefined, ctx);
-    assert.match(selects[1]!.title, /судья решил: не справился\. Ваше мнение\?/);
+    assert.match(selects[1]!.title, /судья решил: не справился\. Судья прав\?/);
+    assert.deepEqual(selects[1]!.options, ['Да, судья прав', 'Нет, судья ошибся', 'Не знаю']);
     const reviews = (await new ExperimentStore(join(cwd, '.agent-lab')).get(demo.record.id)).humanReviews ?? [];
     assert.ok(reviews.length >= 1); assert.ok(reviews.every(item => item.source === 'quick' && item.verdict === 'fail' && item.judgeVerdict === 'fail'));
-    assert.match(drawn(agree, marked, false).join('\n'), /Отмечено вашим решением: согласен с судьёй/);
+    assert.match(drawn(agree, marked, false).join('\n'), /Отмечено: согласен с судьёй/);
   } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); await rm(demo.directory, { recursive: true, force: true }); }
 });
 

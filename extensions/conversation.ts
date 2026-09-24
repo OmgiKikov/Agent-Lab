@@ -3,24 +3,28 @@ import { assessmentRubrics } from '../src/contracts.js';
 import type { RunComparison } from '../src/comparison.js';
 import { plannedTrials } from '../src/run.js';
 import { judgedScenario } from '../src/card/legacy-v1.js';
-import type { ResultView } from '../src/result-view.js';
-import { failureRows } from '../src/result-text.js';
+import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
+import { buildResultView, type ResultView } from '../src/result-view.js';
+import { accuracyParts, whenText } from '../src/result-text.js';
+import { agentLine } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
-import { clip, shortId } from '../src/text.js';
+import { clip, oneLine } from '../src/text.js';
+import type { Feed } from './render/feed.ts';
 import { GLYPH, type Row } from './render/theme.ts';
-import { costText } from './flow.ts';
 
 /*
  * The conversational surface of Agent Lab: what a chat request needs before it reaches the same
- * ExperimentLab operations the board and the CLI use, all pure:
+ * ExperimentLab operations the workspace and the CLI use, all pure:
  *
  *   the owner's own messages of the session ──► the words a wording must be found in verbatim
- *   a human reference to a run («второй прогон», a short id, task words) ──► one stored run, or candidates
- *   a stored record ──► short rows for the chat feed, details on expand
+ *   a human reference to a run («второй прогон», task words) ──► one stored run, or candidates
+ *   a stored record ──► the summary rows of one action in the chat, details on expand
  *
- * Situations themselves are drawn by the shared projection (src/card/view.ts). Nothing here writes
- * state or keeps its own copy of it.
+ * Situations themselves are drawn by the shared projection (src/card/view.ts), results by result-text.ts.
+ * On screen a run is named by its date and its agent, never by an id (ui-spec §2).
  */
+
+export { agentLine, agentName } from '../src/workspace.js';
 
 const SPACED = new Set('«»"\'`.,;:!?()[]{}<>—–-'.split(''));
 const fold = (value: string): string => {
@@ -78,24 +82,23 @@ export function referenceProblem(what: string, ref: string, resolved: { kind: 'n
     : `${what} «${clip(ref, 80)}» подходит к нескольким: ${names.slice(0, 12).join('; ')}. Спросите владельца, какой из них нужен; не выбирайте сами.`;
 }
 
-/* ───────────────────────────── feed rows ───────────────────────────── */
+/* ───────────────────────────── names ───────────────────────────── */
 
 export const row = (text: string, tone?: Row['tone'], bold = false, indent = 0): Row => ({ text, ...(tone ? { tone } : {}), ...(bold ? { bold } : {}), ...(indent ? { indent } : {}) });
 const blank = (): Row => row('');
 const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
 const CONVERSATIONS: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
-const phaseWord: Record<string, string> = {
-  preparing: 'готовится', review: 'черновик', evaluating: 'идёт прогон', results_review: 'есть результат', complete: 'разбор завершён',
-  cancelled: 'остановлен', error: 'ошибка', interrupted: 'прерван', baseline: 'идёт прогон', improving: 'идёт прогон', control: 'идёт прогон',
-};
+const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
+const RUNS: [string, string, string] = ['прогон', 'прогона', 'прогонов'];
 
-export interface Feed { rows: Row[]; more?: Row[] }
+/** Long ago: measured from it, every date reads absolute («23 сент. в 14:05»), never «сегодня». */
+const EPOCH = new Date(0);
+/** «сегодня в 14:05»: how a run is named on screen. */
+export const runWhen = (record: Pick<Experiment, 'createdAt'>, now?: Date): string => whenText(record.createdAt, now);
+/** «23 сент. в 14:05»: how a run is named in a note the session keeps, which must not say «сегодня» tomorrow. */
+export const runStamp = (record: Pick<Experiment, 'createdAt'>): string => whenText(record.createdAt, EPOCH);
 
-export const targetText = (record: Experiment): string => record.target.kind === 'sandbox' ? 'учебная песочница' : record.target.kind === 'http' ? record.target.url
-  : record.target.kind === 'module' ? record.target.path : [record.target.command, ...record.target.args].join(' ');
-
-/** A path inside the project reads relative to it; anything else stays as written. */
-const projectPath = (text: string, cwd?: string): string => cwd && text.includes(`${cwd}/`) ? text.replaceAll(`${cwd}/`, '') : text;
+/* ───────────────────────────── the run: plan, progress, stop ───────────────────────────── */
 
 /** What a run will be: its situations and conversations, the judge's ceiling, what stays out of it. */
 export interface LaunchPlan { situations: number; conversations: number; judgePerAttempt: number; judgeCalls: number; outside: string | null }
@@ -112,95 +115,158 @@ export function scenarioPlan(record: Experiment): LaunchPlan {
     judgeCalls: record.scenarios.reduce((sum, scenario) => sum + votes(scenario) * attempts(scenario), 0), outside: null };
 }
 
-/** The confirmation of a run (ui-spec §4.6): what runs, the agent, the judge's ceiling and the limits, what stays out. */
+/** The run dialog (ui-spec §4.6): what runs, the agent, the judge's ceiling and the limits, what stays out. */
 export function launchLines(record: Experiment, plan: LaunchPlan, cwd?: string): string[] {
-  const left = Math.max(0, record.settings.maxCalls - record.usage.calls);
   return [
     `${countText(plan.situations, SITUATIONS)} · ${countText(plan.conversations, CONVERSATIONS)}: клиента играет Lab, ответы агента оценивает судья.`,
-    `Агент: ${projectPath(targetText(record), cwd)}${record.targetVersion ? ` · версия ${record.targetVersion}` : ''}`,
+    `Агент: ${agentLine(record, cwd)}`,
     ...(record.mode === 'demo' ? ['Учебный пример: без модели и оплаты.'] : [`Судья: по 2 голоса на каждое ожидание — до ${plan.judgePerAttempt} вызовов на попытку, всего до ${plan.judgeCalls}.`,
-      `Лимиты: осталось ${left} вызовов модели, до ${Math.round(record.settings.maxDurationMs / 60_000)} мин; стоимость заранее неизвестна.`]),
+      `Займёт не больше ${Math.max(1, Math.round(record.settings.maxDurationMs / 60_000))} мин; платите только за то, что потрачено.`]),
     ...(plan.outside ? [`Не войдут: ${plan.outside}`] : []),
   ];
 }
 
-/** Progress from the stored record only: finished, planned, unusable attempts and spending. Nothing is estimated. */
-export function progressLines(record: Experiment): string[] {
+/** Minutes since `iso`, from 1: «2 мин». */
+const minutesSince = (iso: string | null | undefined, now: number): string | undefined => {
+  const at = iso ? Date.parse(iso) : NaN;
+  return Number.isNaN(at) ? undefined : `${Math.max(1, Math.round((now - at) / 60_000))} мин`;
+};
+/** Spending so far, only when there is some: «$0.14». */
+const spent = (record: Experiment): string | undefined => record.mode !== 'demo' && record.usage.costUsd ? `$${record.usage.costUsd.toFixed(2)}` : undefined;
+
+/**
+ * The one progress row of long work (ui-spec §4.6), from the stored record only — finished and planned
+ * conversations, time, spending; nothing estimated. A preparation says how far it got: the topic map's step
+ * while the logs' topics are mapped, then the conversations turned into situations.
+ */
+export function progressText(record: Experiment, now = Date.now()): string {
+  if (record.phase === 'preparing') {
+    const progress = record.preparationProgress;
+    const total = progress ? progress.processed.length + progress.pending.length + progress.excluded.length : 0;
+    const done = progress ? progress.processed.length + progress.excluded.length : 0;
+    const step = total ? `разобрано ${done} из ${countText(total, CONVERSATIONS_OF)}` : oneLine(record.message);
+    return [`Готовлю ситуации: ${step}`, minutesSince(record.createdAt, now), spent(record)].filter(Boolean).join(' · ');
+  }
   const planned = plannedTrials(record), done = record.trials.length;
-  const unusable = record.trials.filter(trial => trial.outcome === 'invalid' || trial.outcome === 'cancelled').length;
-  const cost = costText(record);
-  if (record.phase === 'preparing') return [`Подготовка ${shortId(record.id)} · вызовов модели ${record.usage.calls} из ${record.settings.maxCalls}`, clip(record.message, 160)];
-  return [`Прогон ${shortId(record.id)} · ${done} из ${planned} диалогов завершено${unusable ? ` · непригодных ${unusable}` : ''} · вызовов ${record.usage.calls} из ${record.settings.maxCalls} · ${cost}`,
-    ...(record.message ? [clip(record.message, 160)] : [])];
+  return [`Прогон: ${done} из ${countText(planned, CONVERSATIONS_OF)}`, minutesSince(record.reviewedAt, now), spent(record)].filter(Boolean).join(' · ');
 }
 
 /** After a stop or an interruption: what is kept and what has to be run again. */
 export function stoppedLines(record: Experiment): string[] {
-  const planned = plannedTrials(record), done = record.trials.length;
-  return [`Прогон ${shortId(record.id)} остановлен: сохранено ${done} из ${planned} диалогов. Сохранённые диалоги и оценки можно смотреть.`,
-    'Продолжить этот прогон с места остановки нельзя. «Повтори набор» создаст новый черновик тех же карточек; в нём все попытки выполняются заново.'];
+  return [`Прогон остановлен: сохранено ${record.trials.length} из ${countText(plannedTrials(record), CONVERSATIONS_OF)}.`,
+    'С места остановки не продолжить: «повтори прогон» запустит все разговоры заново.'];
 }
 
-/** The run list of `agent_lab_status`: newest first, one row per run. */
-export function statusFeed(records: Experiment[], active?: { id: string }): Feed {
-  if (!records.length) return { rows: [row('Прогонов пока нет. Скажите, какого агента проверить и где лежат логи.', 'muted')] };
+/* ───────────────────────────── what exists ───────────────────────────── */
+
+/** A run in one phrase: its result, or where it stands. */
+function standing(record: Experiment, view?: ResultView): string {
+  if (record.trials.length && view) {
+    const { value, tail } = accuracyParts(view);
+    return value ? `точность ${value}` : tail;
+  }
+  if (record.phase === 'preparing') return 'ситуации готовятся';
+  if (record.phase === 'evaluating') return `идёт прогон: ${record.trials.length} из ${countText(plannedTrials(record), CONVERSATIONS_OF)}`;
+  const library = record.librarySnapshot;
+  const size = library?.formatVersion === 2 ? library.cards.length : library?.formatVersion === 1 ? library.variants.length : record.scenarios.length;
+  if (record.phase === 'review') return `ситуации: ${size}${library?.acceptance ? ', утверждены' : ''}`;
+  return record.phase === 'error' || record.phase === 'interrupted' || record.phase === 'cancelled' ? 'остановлен до результата' : `ситуации: ${size}`;
+}
+
+/** What `agent_lab_status` answers: the newest run in one phrase, every run on expand (newest first, by date and agent). */
+export function statusFeed(records: Experiment[], active?: { id: string }, now?: Date): Feed {
+  if (!records.length) return { rows: [row('Прогонов пока нет. Скажите, какого агента проверить и где лежат логи.', 'muted')], tone: 'success' };
   const sorted = [...records].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  const line = (record: Experiment): Row => {
-    const library = record.librarySnapshot;
-    const size = countText(library?.formatVersion === 2 ? library.cards.length : library?.formatVersion === 1 ? library.variants.length : record.scenarios.length, SITUATIONS);
-    const tail = record.trials.length ? ` · ${record.trials.length} из ${plannedTrials(record)} разговоров` : library?.acceptance ? ' · утверждены' : '';
-    // A repeat is named by the run it repeats, so a chain of reruns of one set does not print the same task five times.
-    const about = record.parentRunId ? `повтор ${shortId(record.parentRunId)}${record.targetVersion ? ` · версия ${clip(record.targetVersion, 30)}` : ''}` : clip(record.task, 70);
-    return row(`${shortId(record.id)} · ${phaseWord[record.phase] ?? record.phase}${record.id === active?.id ? ' (в этой сессии)' : ''} · ${size}${tail} · ${about}`,
-      record.id === active?.id ? 'accent' : record.phase === 'error' ? 'error' : undefined, false, 1);
+  const views = new Map(sorted.filter(record => record.trials.length).map(record => [record.id, buildResultView(record)]));
+  const was = (record: Experiment) => {
+    const parent = record.parentRunId && views.get(record.parentRunId);
+    const value = parent ? accuracyParts(parent).value : null;
+    return value ? ` (было ${value})` : '';
   };
-  return { rows: [row(`Прогонов: ${records.length}`, 'text', true), ...sorted.slice(0, 5).map(line), ...(sorted.length > 5 ? [row(`…и ещё ${sorted.length - 5}`, 'muted', false, 1)] : [])], more: sorted.slice(5, 40).map(line) };
+  const line = (record: Experiment): Row => row(`${runWhen(record, now)} · ${agentLine(record)} · ${standing(record, views.get(record.id))}${was(record)}${record.id === active?.id ? ' · идёт сейчас' : ''}`,
+    record.id === active?.id ? 'accent' : undefined);
+  const latest = sorted[0]!;
+  return { rows: [row(`${countText(records.length, RUNS)}: последний — ${runWhen(latest, now)}, ${agentLine(latest)}, ${standing(latest, views.get(latest.id))}${was(latest)}`, 'text', true)],
+    more: sorted.slice(0, 40).map(line), expand: 'все прогоны' };
 }
 
-const ROLE_WORD: Record<string, string> = { user: 'Клиент', assistant: 'Агент', simulator: 'Симулятор', observation: 'Наблюдение', retrieval: 'Контекст RAG', tool_call: 'Вызов', tool_result: 'Результат', error: 'Ошибка' };
-const OUTCOME_WORD: Record<string, string> = { pass: 'справился', fail: 'не справился', unknown: 'неясно', invalid: 'тест непригоден', cancelled: 'остановлен', ungraded: 'без итоговой оценки' };
+/* ───────────────────────────── one failure, one conversation ───────────────────────────── */
 
-/** One failure on one screen (E7): expected → the agent's words → the owner's rule → the conversation; tools, checks and the judge's reasons on expand. */
+const OUTCOME_WORD: Record<string, string> = { pass: 'справился', fail: 'не справился', unknown: 'не измерено', invalid: 'не измерено', cancelled: 'остановлен', ungraded: 'без итоговой оценки' };
+/** The judge's own reason: our fixed consensus sentence in front of it is bookkeeping, not the reason. */
+const judgeReason = (rationale: string): string => oneLine(rationale.startsWith(AGREED_RATIONALE_PREFIX) ? rationale.slice(AGREED_RATIONALE_PREFIX.length) : rationale);
+
+/** The turns of a recorded conversation, signed «Клиент» and «Агент» in one column; never the event numbers (ui-spec §2). */
+export function turnRows(trial: Trial, indent = 0): Row[] {
+  return trial.events.filter(event => (event.type === 'user' || event.type === 'assistant') && oneLine(event.text ?? ''))
+    .map(event => ({ text: `${(event.type === 'user' ? 'Клиент' : 'Агент').padEnd(9)}${oneLine(event.text)}`, indent, hang: indent + 9 }));
+}
+
+/** How a conversation was judged, the tools it called and the owner's marks: what ctrl+o opens under a conversation. */
+function judgedRows(record: Experiment, trial: Trial): Row[] {
+  const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
+  const metrics = scenario ? judgedScenario(scenario, trial).metrics ?? [] : [];
+  const judged = metrics.flatMap(metric => {
+    const assessment = trial.assessments?.find(item => item.metricId === metric.id);
+    return [row(`${metric.name}: ${assessment ? OUTCOME_WORD[assessment.result] ?? assessment.result : 'оценки нет'}`, assessment?.result === 'fail' ? 'error' : assessment?.result === 'pass' ? 'success' : 'warning'),
+      ...(assessment && judgeReason(assessment.rationale) ? [{ ...row(judgeReason(assessment.rationale), 'muted', false, 2) }] : [])];
+  });
+  const checks = trial.checks.map(check => row(`${check.passed ? 'выполнено' : 'не выполнено'}: ${check.description}`, check.passed ? 'success' : 'error'));
+  const tools = trial.events.filter(event => event.type === 'tool_call').map(event => row(`вызвал ${event.tool ?? 'инструмент'}`, 'muted'));
+  const human = (record.humanReviews ?? []).filter(item => item.trialId === trial.id).map(item => row(`${OUTCOME_WORD[item.verdict] ?? item.verdict}: ${oneLine(item.note)}`));
+  return [
+    ...(judged.length || checks.length ? [blank(), row('Как оценил судья', 'accent', true), ...judged, ...checks] : []),
+    ...(tools.length ? [blank(), row('Инструменты агента', 'accent', true), ...tools] : []),
+    ...(human.length ? [blank(), row('Ваши отметки', 'accent', true), ...human] : []),
+  ];
+}
+
+/**
+ * One failure (E7, ui-spec §4.10): the situation, what was expected and what the agent said, the owner's rule
+ * and whether the judge still waits for the owner's word; the whole conversation on expand.
+ */
 export function failureFeed(record: Experiment, view: ResultView, index: number): Feed | null {
   const failure = view.failures[index];
   if (!failure) return null;
-  const rows: Row[] = failureRows(view, record, index).map(item => ({ text: item.right ? `${item.text} · ${item.right}` : item.text, role: item.role, ...(item.indent ? { indent: item.indent } : {}) }));
+  const rule = failure.violated ?? failure.rules[0];
+  const unmarked = view.agreement.unmarked.includes(failure.trialId);
   const trial = record.trials.find(item => item.id === failure.trialId);
-  return trial ? { rows, more: dialogueFeed(record, trial).more } : { rows };
+  return {
+    tone: 'warning',
+    rows: [row(`${GLYPH.fail} ${index + 1}  ${oneLine(failure.title)}`, 'error', true),
+      row(`Ожидалось: ${failure.expected ?? 'не записано в ситуации'} · Агент: ${failure.said ? `«${failure.said.quote}»` : 'ответ не подтверждён цитатой'}`),
+      row(`${rule ? `Правило: «${rule.quote}»` : 'У ситуации нет правила из ваших материалов'}${unmarked ? ' · судья прав? да или нет' : ''}`, 'muted')],
+    ...(trial ? { more: [row('Разговор', 'accent', true), ...turnRows(trial, 2), ...judgedRows(record, trial)], expand: 'весь разговор' } : {}),
+  };
 }
 
-/** A recorded dialogue: client and agent turns in the feed; tool calls, checks and the judge's reasons on expand. */
+/** A recorded conversation: the situation and how it ended in the summary; the turns, the judge and the tools on expand. */
 export function dialogueFeed(record: Experiment, trial: Trial): Feed {
   const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
-  const rows: Row[] = [row(`${scenario?.title ?? trial.scenarioId} — ${OUTCOME_WORD[trial.outcome] ?? trial.outcome} · попытка ${trial.repeat + 1}`, trial.outcome === 'pass' ? 'success' : trial.outcome === 'fail' ? 'error' : 'warning', true)];
-  for (const event of trial.events) if (['user', 'assistant', 'error'].includes(event.type) && event.text !== undefined) {
-    rows.push(row(`#${event.seq} ${ROLE_WORD[event.type]}: ${event.text}`, event.type === 'user' ? 'accent' : event.type === 'error' ? 'error' : undefined, false, 1));
-  }
-  if (trial.outcome === 'invalid' || trial.outcome === 'cancelled') rows.push(row(`Почему не измерено: ${trial.reason}`, 'warning', false, 1));
-  const more: Row[] = [row('Решение судьи', 'accent', true)];
-  for (const metric of scenario?.metrics ?? []) {
-    const assessment = trial.assessments?.find(item => item.metricId === metric.id);
-    more.push(row(`${metric.name}: ${assessment ? OUTCOME_WORD[assessment.result] ?? assessment.result : 'оценки нет'}`, assessment?.result === 'fail' ? 'error' : assessment?.result === 'pass' ? 'success' : 'warning', false, 1),
-      ...(assessment ? [row(`${assessment.rationale}${assessment.evidence.length ? ` (реплики ${assessment.evidence.map(seq => `#${seq}`).join(', ')})` : ''}`, 'muted', false, 3)] : []));
-  }
-  for (const check of trial.checks) more.push(row(`${check.passed ? GLYPH.pass : GLYPH.fail} ${check.description}`, check.passed ? 'success' : 'error', false, 1), row(check.evidence, 'muted', false, 3));
-  const hidden = trial.events.filter(event => !['user', 'assistant', 'error'].includes(event.type));
-  if (hidden.length) more.push(blank(), row('Инструменты и наблюдения', 'accent', true), ...hidden.map(event =>
-    row(`#${event.seq} ${ROLE_WORD[event.type] ?? event.type}${event.tool ? ` ${event.tool}` : ''}: ${clip(event.text ?? JSON.stringify(event.args ?? event.result ?? event.state ?? ''), 400)}`, 'muted', false, 1)));
-  const human = (record.humanReviews ?? []).filter(item => item.trialId === trial.id);
-  if (human.length) more.push(blank(), row('Отметки человека', 'accent', true), ...human.map(item => row(`${OUTCOME_WORD[item.verdict] ?? item.verdict}: ${item.note}`, undefined, false, 1)));
-  return { rows, more };
+  const reply = trial.events.filter(event => event.type === 'assistant' && oneLine(event.text ?? '')).at(-1);
+  const measured = trial.outcome === 'pass' || trial.outcome === 'fail' || trial.outcome === 'ungraded';
+  return {
+    tone: measured ? 'success' : 'warning',
+    rows: [row(`${oneLine(scenario?.title ?? 'Ситуация')} — ${OUTCOME_WORD[trial.outcome] ?? trial.outcome}${record.settings.repeats > 1 ? ` · попытка ${trial.repeat + 1}` : ''}`, trial.outcome === 'fail' ? 'error' : undefined, true),
+      ...(measured ? [] : [row(`Почему не измерено: ${oneLine(trial.reason)}`, 'warning')]),
+      ...(reply ? [row(`Последний ответ агента: «${clip(oneLine(reply.text), 200)}»`, 'muted')] : [])],
+    more: [...turnRows(trial), ...judgedRows(record, trial)], expand: 'весь разговор',
+  };
 }
 
 /** Before/after of a repeat: what was fixed, what broke, and how much of the set could be compared at all. */
-export function comparisonFeed(comparison: RunComparison, beforeId: string): Feed {
+export function comparisonFeed(comparison: RunComparison, before: Pick<Experiment, 'createdAt'>, now?: Date): Feed {
   const coverage = comparison.coverage;
-  const rows: Row[] = [row(`Сравнение с прогоном ${shortId(beforeId)}: ${comparison.headline}`, comparison.comparable ? 'text' : 'warning', true),
-    row(`Сопоставлено пар: ${coverage.validPairs} из ${coverage.plannedPairs}${coverage.excludedPairs ? ` · исключено ${coverage.excludedPairs}` : ''}`, 'muted', false, 1),
-    ...comparison.fixed.map(item => row(`+ исправлено: ${item.title}`, 'success', false, 1)),
-    ...comparison.regressed.map(item => row(`- сломалось: ${item.title}`, 'error', false, 1)),
-    row(`Без изменений: проходят ${comparison.unchanged.passing}, не проходят ${comparison.unchanged.failing}`, 'muted', false, 1)];
-  const more = [...comparison.incomparable.map(item => row(`/ несравнимо: ${item.title} — ${item.reason}`, 'warning', false, 1)), ...comparison.notes.map(note => row(note, 'muted', false, 1))];
-  return { rows, ...(more.length ? { more } : {}) };
+  const more = [
+    ...comparison.fixed.map(item => row(`исправлено: ${oneLine(item.title)}`, 'success')),
+    ...comparison.regressed.map(item => row(`сломалось: ${oneLine(item.title)}`, 'error')),
+    ...comparison.incomparable.map(item => row(`несравнимо: ${oneLine(item.title)} — ${oneLine(item.reason)}`, 'warning')),
+    ...comparison.notes.map(note => row(note, 'muted')),
+  ];
+  return {
+    tone: comparison.comparable ? 'success' : 'warning',
+    rows: [row(`Сравнение с прогоном ${runWhen(before, now)}: ${comparison.headline}`, comparison.comparable ? 'text' : 'warning', true),
+      row(`Сравнимо ${coverage.validPairs} из ${countText(coverage.plannedPairs, CONVERSATIONS_OF)} · исправлено ${comparison.fixed.length} · сломалось ${comparison.regressed.length} · без изменений ${comparison.unchanged.passing + comparison.unchanged.failing}`, 'muted')],
+    ...(more.length ? { more, expand: 'что изменилось' } : {}),
+  };
 }
-

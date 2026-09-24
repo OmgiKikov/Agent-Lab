@@ -5,48 +5,21 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import { DefaultResourceLoader, initTheme, SettingsManager, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext, type ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { DefaultResourceLoader, initTheme, SettingsManager, type ExtensionContext, type ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 import { stripTerminalSequences, type Component } from '@earendil-works/pi-tui';
-import agentLab from '../extensions/agent-lab.ts';
-import { createDemoRuntime, demoInput, demoTarget } from '../src/demo.js';
-import type { LibraryV2 } from '../src/card/schema.js';
+import { REVIEW_DONE } from '../extensions/judge-review.ts';
+import { demoInput, demoTarget } from '../src/demo.js';
 import { ExperimentLab, draftHash } from '../src/experiment.js';
 import { spawn, spawnSync } from 'node:child_process';
-import { createInputSchema, goalAttainment, promptCompliance, type Experiment } from '../src/contracts.js';
-import { resultHash } from '../src/experiment.js';
-import { judgeAgreement } from '../src/agreement.js';
-import { assertPlainCopy } from './helpers/copy-check.js';
+import { createInputSchema, goalAttainment } from '../src/contracts.js';
 import { ExperimentStore } from '../src/store.js';
 import { buildResultView } from '../src/result-view.js';
 import { chatBlock, fitRows, MAX_WIDTH, plainText, resultScreen } from '../src/result-text.js';
-import { COUNTING_RULES, markTargets, measurementUsable, primaryMetricId } from '../src/outcomes.js';
+import { markTargets, primaryMetricId } from '../src/outcomes.js';
 import { demoEvaluateRecord, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 import { libraryHash } from '../src/scenario-library.js';
+import { CLOSE, KEY, legacyDraftIn, noticeOf, output, registered, renderContext, workspaceSession } from './helpers/pi-session.js';
 
-function registered(onUserMessage?: (message: unknown) => void) {
-  const tools = new Map<string, ToolDefinition>();
-  const contexts: { content: string; display: boolean }[] = [];
-  const userMessages: unknown[] = [];
-  let shutdown!: () => Promise<void>;
-  let command!: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
-  let beforeAgentStart!: (event: { systemPrompt: string }, ctx: ExtensionContext) => Promise<{ systemPrompt: string } | undefined>;
-  agentLab({
-    registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
-    registerCommand: (name: string, options: { handler: typeof command }) => { assert.equal(name, 'agent-lab'); command = options.handler; },
-    on: (name: string, handler: () => Promise<void>) => {
-      if (name === 'session_shutdown') shutdown = handler;
-      else if (name === 'before_agent_start') beforeAgentStart = handler as typeof beforeAgentStart;
-      else assert.equal(name, 'session_start');
-    },
-    sendMessage: (message: { content: string; display: boolean }, options: { deliverAs: string }) => { assert.equal(options.deliverAs, 'followUp'); contexts.push(message); },
-    sendUserMessage: (message: unknown, options: { deliverAs: string; expandPromptTemplates: boolean }) => { assert.equal(options.deliverAs, 'followUp'); assert.equal(options.expandPromptTemplates, false); userMessages.push(message); onUserMessage?.(message); },
-  } as unknown as ExtensionAPI);
-  assert.ok(shutdown); assert.ok(command); assert.ok(beforeAgentStart);
-  return { tools, shutdown, command, beforeAgentStart, contexts, userMessages };
-}
-function output(result: Awaited<ReturnType<ToolDefinition['execute']>>) {
-  return JSON.parse(result.content.filter(c => c.type === 'text').map(c => c.text).join('\n'));
-}
 test('the chat guidance and the shipped skill name only registered tools; the owner answers a situation\'s question through its own tool', async () => {
   const { tools, beforeAgentStart } = registered();
   const previous = process.env.AGENT_LAB_SESSION;
@@ -62,18 +35,6 @@ test('the chat guidance and the shipped skill name only registered tools; the ow
     assert.doesNotMatch(prompt, /operation resolve/);
   } finally { if (previous === undefined) delete process.env.AGENT_LAB_SESSION; else process.env.AGENT_LAB_SESSION = previous; }
 });
-/** A draft of old-format cards in `cwd/.agent-lab`, as a repeat of an old run leaves it; `mutate` shapes its cards before it is saved. */
-async function legacyDraftIn(cwd: string, options: Parameters<typeof legacyDraft>[1] = {}, mutate?: (record: Experiment) => void): Promise<Experiment> {
-  const lab = new ExperimentLab(join(cwd, '.agent-lab'), legacyDemoRuntime());
-  await lab.init();
-  try {
-    const draft = await legacyDraft(lab, options);
-    if (!mutate) return draft;
-    mutate(draft); await lab.store.save(draft);
-    return await lab.get(draft.id);
-  } finally { await lab.close(); }
-}
-
 test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-card set', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-validation-surface-'));
   // A draft of old-format cards is the base the stubbed preparation copies for every sampled dialogue.
@@ -117,11 +78,10 @@ test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-ca
 
   const { tools, shutdown } = registered();
   t.after(shutdown);
-  const confirmations: { title: string; body: string }[] = [];
-  const launches: { title: string; options: string[] }[] = [];
+  const asked: { title: string; options: string[] }[] = [];
   const ctx = { cwd: directory, mode: 'tui', hasUI: true, model: { provider: 'fixture', id: 'fixture' }, ui: {
-    confirm: async (title: string, body: string) => { confirmations.push({ title, body }); return true; },
-    select: async (title: string, options: string[]) => { launches.push({ title, options }); return 'Запустить'; },
+    // Scripted consent: the first answer of each native question — «Собрать ситуации», then «Запустить».
+    select: async (title: string, options: string[]) => { asked.push({ title, options }); return options[0]; },
   } } as unknown as ExtensionContext;
   const dialogues = Array.from({ length: 300 }, (_, index) => ({ id: `dialogue_${index}`, outcome: index % 2 ? 'success' : 'failure',
     messages: [{ role: 'user', content: `Вопрос ${index}` }, { role: 'assistant', content: `Старый ответ ${index}` }] }));
@@ -135,15 +95,15 @@ test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-ca
   assert.equal(captured?.settings.maxTurns, 6);
   assert.equal(captured?.settings.maxCalls, 385);
   assert.equal(captured?.settings.timeoutMs, 600000, 'grounding ten materials with a small model takes longer than the two-minute default');
-  assert.equal(result.validation.sourceDialogues, 300);
-  assert.equal(result.validation.candidateDialogues, 40);
-  assert.equal(result.validation.sampledDialogues, 15);
-  assert.equal(confirmations[0]!.title, 'Разобрать логи и собрать ситуации?');
-  assert.match(confirmations[0]!.body, /Диалогов в выгрузке: 300; к разбору подходят 40; ситуаций получится не больше 15/);
-  assert.match(confirmations[0]!.body, /не больше 385 вызовов/, 'the spending question names the limit the run will be saved with');
-  assert.doesNotMatch(confirmations[0]!.body, /validation set|outcome-blind/i, 'the owner is asked in plain words');
+  assert.deepEqual(result.validation, { sourceDialogues: 300, usable: 300, promised: 15 });
+  // One native question with Russian answers: what is read, how many situations at most, the spending ceiling.
+  const [consent] = asked;
+  assert.deepEqual(consent!.options, ['Собрать ситуации', 'Не сейчас']);
+  assert.match(consent!.title, /^Собрать 15 ситуаций из логов\?\n\nВ логах 300 разговоров, подходят 300\. Ситуаций будет не больше 15/);
+  assert.match(consent!.title, /не больше 385 вызовов модели/, 'the spending question names the limit the run will be saved with');
+  assert.doesNotMatch(consent!.title, /validation set|outcome-blind/i, 'the owner is asked in plain words');
   await tools.get('agent_lab_run')!.execute('run-validation', { id: result.id, expectedHash: result.draftHash }, undefined, undefined, ctx);
-  const [launch] = launches;
+  const launch = asked[1];
   assert.deepEqual(launch!.options, ['Запустить', 'Не сейчас'], 'one native dialog with Russian answers');
   assert.match(launch!.title, /^Подтвердить ожидания и запустить\?\n/);
   assert.match(launch!.title, /Что агент должен сделать: 15 ситуаций\. Номер правила — порядок в ваших материалах\./);
@@ -152,7 +112,7 @@ test('Pi validation takes a 40-dialogue outcome-blind pool for the default 15-ca
   assert.equal(acceptedHash, result.draftHash, 'the same dialogue confirmed the shown version');
   assert.match(launch!.title, /Клиента играет Lab: на уточнения агента он отвечает только фактами из лога\./);
   assert.equal(launch!.title.match(/Ситуация:/g)?.length, 15);
-  assert.match(launch!.title, /Все правила — \/agent-lab [a-zA-Z0-9_-]{1,8}, раздел 2\./);
+  assert.doesNotMatch(launch!.title, /\/agent-lab|Версия ожиданий|[a-f0-9]{12}/, 'the owner reads the expectations, never a pointer or a hash');
   assert.ok(launch!.title.endsWith('Запуск подтверждает ожидания ситуаций выше. Оценки судьи вы не проверяли.'));
 });
 
@@ -179,7 +139,7 @@ test('conversation runs only the confirmed plan, then saves and loads the same c
   await assert.rejects(call('agent_lab_run', { id: draft.id, expectedHash: '0'.repeat(64) }), /План изменился/);
   assert.equal(plans.length, 1);
   await assert.rejects(tools.get('agent_lab_run')!.execute('fixture', { id: draft.id, expectedHash: draft.draftHash }, undefined, undefined,
-    { ...ctx, hasUI: false, mode: 'print' } as unknown as ExtensionContext), /интерактивный терминал/);
+    { ...ctx, hasUI: false, mode: 'print' } as unknown as ExtensionContext), /интерактивном терминале Pi/);
   consent = true;
   const result = await call('agent_lab_run', { id: draft.id, expectedHash: draft.draftHash });
   assert.equal(result.phase, 'results_review'); assert.equal(result.trialCount, 1);
@@ -216,12 +176,15 @@ test('accept tool shows and records only the current one-test definition, while 
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-accept-'));
   const { tools, shutdown } = registered();
   t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
-  const shown: { question: string; body: string }[] = [];
+  const shown: { title: string; options: string[] }[] = [];
   let consent = false;
   const launches: string[] = [];
   const ctx = { cwd: directory, mode: 'tui', hasUI: true, ui: {
-    confirm: async (question: string, body: string) => { shown.push({ question, body }); return consent; },
-    select: async (title: string) => { launches.push(title); return 'Запустить'; },
+    // One native question with Russian answers: the definition under the question, «Подтвердить» or «Не сейчас».
+    select: async (title: string, options: string[]) => {
+      if (options.includes('Запустить')) { launches.push(title); return 'Запустить'; }
+      shown.push({ title, options }); return consent ? options[0] : options[1];
+    },
   } } as unknown as ExtensionContext;
   const call = async (name: string, params: unknown) => output(await tools.get(name)!.execute('fixture', params, undefined, undefined, ctx));
   // One old-format card, as a repeat of an old one-test run leaves it: the one-test definition is what the owner confirms.
@@ -237,12 +200,13 @@ test('accept tool shows and records only the current one-test definition, while 
   let current = await call('agent_lab_inspect', { id: built.id });
   assert.equal(current.acceptedDraftHash, undefined);
   assert.equal(current.trialCount, 0); assert.equal(current.usage.calls, prepared.usage.calls);
-  assert.equal(shown[0]!.question, 'Этот тест действительно проверяет нужное поведение?');
-  assert.match(shown[0]!.body, /^ТЕСТ\nСИТУАЦИЯ/m);
-  assert.match(shown[0]!.body, /НАБЛЮДЕНИЕ\n  ответ агента \(reply\)/);
-  assert.match(shown[0]!.body, new RegExp(`Версия: ${prepared.draftHash.slice(0, 12)}`));
-  assert.ok(shown[0]!.body.includes(draft.scenarios[0].user.opening.trimEnd().replace('\n', '\n  ')));
-  assert.ok(shown[0]!.body.includes(draft.scenarios[0].successCriteria.replace('\n', '\n  ')));
+  assert.deepEqual(shown[0]!.options, ['Подтвердить', 'Не сейчас']);
+  assert.match(shown[0]!.title, /^Этот тест действительно проверяет нужное поведение\?\n\nТест\nСитуация\n/);
+  assert.match(shown[0]!.title, /Наблюдение\n  ответ агента$/m);
+  // The confirmation is bound to the exact version by its hash, which the start checks; the owner reads the definition, never the hash.
+  assert.doesNotMatch(shown[0]!.title, /Версия|[a-f0-9]{12}/);
+  assert.ok(shown[0]!.title.includes(draft.scenarios[0].user.opening.trimEnd().replace('\n', '\n  ')));
+  assert.ok(shown[0]!.title.includes(draft.scenarios[0].successCriteria.replace('\n', '\n  ')));
 
   consent = true;
   const accepted = await call('agent_lab_accept', { id: built.id });
@@ -258,7 +222,7 @@ test('accept tool shows and records only the current one-test definition, while 
   assert.equal(edited.acceptedDraftHash, undefined, 'an edit clears the acceptance of the version it replaced');
   const acceptedAgain = await call('agent_lab_accept', { id: built.id });
   assert.equal(acceptedAgain.acceptedDraftHash, edited.draftHash);
-  assert.match(shown.at(-1)!.body, new RegExp(`Версия: ${edited.draftHash.slice(0, 12)}`));
+  assert.match(shown.at(-1)!.title, /\(всего ходов в разговоре: 5\)/, 'the confirmation shows the edited version');
   assert.equal((await call('agent_lab_inspect', { id: built.id })).trialCount, 0);
   const run = await call('agent_lab_run', { id: built.id, expectedHash: edited.draftHash });
   assert.match(launches[0]!, /^Запустить прогон\?/, 'confirmed expectations are not asked again with the run');
@@ -268,67 +232,55 @@ test('accept tool shows and records only the current one-test definition, while 
 
 test('Pi connects a new request, conversational correction, reviewed run, evidence discussion and repeat without UI JSON', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-journey-fixture-'));
+  const opened: string[] = [];
   const { tools, shutdown, command, contexts, userMessages } = registered(() => {
-    assert.equal(existsSync(join(directory, '.agent-lab', '.lock')), false, 'conversation starts only after the board releases its writer lock');
-  });
+    assert.equal(existsSync(join(directory, '.agent-lab', '.lock')), false, 'conversation starts only after the workspace releases its writer lock');
+  }, { openReport: async path => { opened.push(path); } });
+  const session = workspaceSession(directory);
+  const ctx = session.ctx;
   const errors: string[] = []; const editorCommands: string[] = [];
-  const ctx = { cwd: directory, model: undefined, mode: 'tui', hasUI: true } as ExtensionCommandContext;
-  let steps: string[][] = []; let request = ''; let awaitResults = false; let editorText = '';
-  ctx.ui = {
+  let editorText = '';
+  Object.assign(ctx.ui, {
     getEditorText: () => editorText,
     setEditorText: (text: string) => { editorText = text; editorCommands.push(text); },
-    editor: async () => request,
-    confirm: async () => true, // Explicit scripted test consent; never used for a live user or model.
-    select: async (_title: string, options: string[]) => options[0], // «Запустить»: the same scripted consent.
     notify: (message: string, type: string) => { if (type === 'error') errors.push(message); },
-    custom: (factory: (tui: unknown, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?(): void }) => new Promise((resolve, reject) => {
-      const component = factory({ terminal: { rows: 40 }, requestRender() {} }, { fg: (_: string, text: string) => text, bold: (text: string) => text }, {}, value => { component.dispose?.(); resolve(value); });
-      void (async () => {
-        const keys = steps.shift(); assert.ok(keys, 'unexpected board');
-        if (awaitResults && !keys.includes('r')) {
-          const deadline = Date.now() + 5000;
-          while (!component.render(120).join('\n').includes('ПРОВЕРЬТЕ РЕЗУЛЬТАТЫ')) {
-            if (Date.now() > deadline) throw new Error('fixture did not finish');
-            await new Promise(r => setTimeout(r, 100));
-          }
-          awaitResults = false;
-        }
-        for (const key of keys) {
-          if (key === 'x') assert.match(component.render(120).join('\n'), /Оценка выросла у 1, снизилась у 0/);
-          component.handleInput!(key);
-        }
-      })().catch(error => { component.dispose?.(); reject(error); });
-    }),
-  } as unknown as ExtensionContext['ui'];
+  });
   const call = async (name: string, params: object) => output(await tools.get(name)!.execute(name, params, undefined, undefined, ctx));
   try {
     await command('/fixture/agent', ctx);
     assert.equal(userMessages[0], 'Проверь агента в /fixture/agent'); assert.equal(contexts[0]!.display, false);
-    // The outer Pi model's actions are scripted here; real tools and the native board execute every state transition.
+    // The outer Pi model's actions are scripted here; real tools and the native workspace execute every state transition.
     const built = await call('agent_lab_build', { mode: 'demo' });
     assert.equal(built.phase, 'review', built.error ?? 'draft not ready');
     assert.equal(built.trialCount, 0); assert.equal(built.reviewMode, null); assert.equal(editorCommands.length, 0);
-    // The board opens a draft on its situations with the first one selected: «a» asks Lab about it.
-    steps = [['a']]; request = 'Одной попытки на ситуацию достаточно.';
-    await command(built.id, ctx); assert.equal(userMessages.at(-1), request);
+    // The workspace opens a draft on its situations with the first one selected: «a» asks Lab about it in one line.
+    session.state.steps = [['a']]; session.state.words = 'Одной попытки на ситуацию достаточно.';
+    await command(built.id, ctx); assert.equal(userMessages.at(-1), session.state.words);
+    assert.match(session.inputCalls.at(-1)!, /^Спросить Lab про ситуацию 1 «.+»$/);
     const selected = JSON.parse(contexts.at(-1)!.content); assert.equal(selected.experimentId, built.id); assert.equal(selected.situation, 1, JSON.stringify(selected));
     editorText = 'Ещё пишу уточнение';
     const draft = await call('agent_lab_inspect', { id: built.id });
     assert.equal(editorText, 'Ещё пишу уточнение', 'tool must preserve unfinished user input'); editorText = '';
     const edited = await call('agent_lab_edit', { id: built.id, expectedHash: draft.draftHash, patch: { settings: { repeats: 1 } } });
     assert.notEqual(edited.draftHash, draft.draftHash); assert.equal(edited.trialCount, 0);
-    // «r» from the situations: one dialog accepts the ready one and starts the run; results are section 4.
-    steps = [['r'], ['4', 'a']]; awaitResults = true; request = 'Почему этот диалог провалился и что нужно исправить?';
-    await command(built.id, ctx); assert.equal(userMessages.at(-1), request);
+    // → the plan, Enter: one dialog accepts the ready situation and starts the run; its result opens by itself.
+    // The run hands its lease back after its result is recorded; the conversation starts only once it is free.
+    const free = () => !existsSync(join(directory, '.agent-lab', '.lock'));
+    session.state.steps = [[KEY.right, KEY.enter], { until: 'Точность агента', ready: free, keys: [KEY.enter, 'a'] }];
+    session.state.words = 'Почему этот диалог провалился и что нужно исправить?';
+    await command(built.id, ctx); assert.equal(userMessages.at(-1), session.state.words);
+    assert.match(session.selectCalls.at(-1)!.title, /^Принять 1 ситуацию и запустить\?/);
     const discussion = JSON.parse(contexts.at(-1)!.content); assert.equal(discussion.experimentId, built.id); assert.ok(discussion.trialId);
     const evidence = await call('agent_lab_inspect', { id: built.id, trialId: discussion.trialId });
     assert.ok(evidence.events.length);
     assert.ok(evidence.assessments.some((a: { metricId: string; result: string }) => a.metricId === 'e1' && a.result === 'fail'), 'the agent asked again for the number it was given (duty e1)');
-    steps = [['4', 'y'], ['f'], ['q']];
+    // «1» — «да, судья прав» — on the one failure: the queue is answered, so the check of the judge ends by itself.
+    session.state.steps = [[KEY.enter, '1'], CLOSE];
     await command(built.id, ctx);
+    assert.ok(noticeOf(session.screens.at(-1)!).endsWith(REVIEW_DONE), session.screens.at(-1));
     const reviewed = await call('agent_lab_inspect', { id: built.id, export: true });
     assert.equal(reviewed.phase, 'complete');
-    // Одна клавиша отвечает на каждую оценку, решившую ситуацию, и закрывает её: здесь на каждое проваленное ожидание (UI-SPEC F13).
+    // One answer lands on every judgment that decided the situation: here on each failed expectation.
     const mark = reviewed.humanReviews[0];
     const marked = await call('agent_lab_inspect', { id: built.id, trialId: mark.trialId });
     const markedCard = reviewed.scenarios.find((card: { id: string }) => card.id === marked.scenarioId);
@@ -347,87 +299,61 @@ test('Pi connects a new request, conversational correction, reviewed run, eviden
     assert.equal(editorCommands.length, 0);
     // The fix is a new version of the agent: the corrected module no longer asks for a number it already has.
     await call('agent_lab_edit', { id: repeated.id, expectedHash: repeated.draftHash, patch: { target: demoTarget(true), targetVersion: 'fixture-fixed' } });
-    steps = [['r'], ['4', 'a']]; awaitResults = true; request = 'Покажи конкретное исправление до и после.';
-    await command(repeated.id, ctx);
+    // From the finished run: Esc to the runs, «2» runs the set again — the repeat; its result opens in «Прогоны».
+    session.state.steps = [[KEY.escape, '2'], { until: 'Точность агента: 100%', ready: free, keys: [KEY.enter, 'a'] }];
+    session.state.words = 'Покажи конкретное исправление до и после.';
+    await command(built.id, ctx);
+    assert.equal(userMessages.at(-1), session.state.words);
     const pairDiscussion = JSON.parse(contexts.at(-1)!.content);
     assert.deepEqual(pairDiscussion.comparisonSource, { kind: 'parent', beforeId: built.id, afterId: repeated.id });
     assert.equal(pairDiscussion.comparedPair.beforeTrialId, discussion.trialId);
     assert.equal(pairDiscussion.comparedPair.afterTrialId, pairDiscussion.trialId);
-    steps = [['3', 'x'], ['q']];
+    // «1» on the repeat: the report for the customer, with the comparison, saved and opened.
+    session.state.steps = [['1'], CLOSE];
     await command(repeated.id, ctx);
-    const exportDir = join(directory, '.agent-lab', 'exports');
-    const html = (await readdir(exportDir)).find(name => name.startsWith(repeated.id) && name.endsWith('.html'));
-    assert.ok(html); assert.match(await readFile(join(exportDir, html), 'utf8'), /Оценка выросла у 1, снизилась у 0/);
-    assert.deepEqual(errors, []); assert.equal(steps.length, 0);
+    assert.equal(opened.length, 1);
+    assert.match(noticeOf(session.screens.at(-1)!), /^Отчёт для заказчика открыт в браузере: /);
+    assert.match(await readFile(opened[0]!, 'utf8'), /Оценка выросла у 1, снизилась у 0/);
+    assert.deepEqual(errors, []); assert.equal(session.state.steps.length, 0);
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('native command demo fixture requires two separate confirmations and preserves human annotation separately', async () => {
+test('the built-in example runs from the workspace in one dialog, and the owner\'s answer about the judge is kept apart from the judge', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-human-ui-fixture-'));
   const { tools, shutdown, command } = registered();
-  const ctx = { cwd: directory, model: undefined, mode: 'tui', hasUI: true } as ExtensionCommandContext;
+  const session = workspaceSession(directory);
   try {
-    const report = output(await tools.get('agent_lab_build')!.execute('prepare', { mode: 'demo' }, undefined, undefined, ctx));
-    // The owner asked for one attempt; the ready situation is accepted in the dialog that starts the run on the board.
+    const report = output(await tools.get('agent_lab_build')!.execute('prepare', { mode: 'demo' }, undefined, undefined, session.ctx));
+    // The owner asked for one attempt; the ready situation is accepted in the dialog that starts the run.
     const seed = new ExperimentLab(join(directory, '.agent-lab'));
     await seed.init();
     try { await seed.updateDraft(report.id, draftHash(await seed.get(report.id)), { settings: { repeats: 1 } }); } finally { await seed.close(); }
-    const errors: string[] = [];
-    const confirmations: string[] = [];
-    const launches: string[] = [];
-    let annotations = 0;
-    let screen = 0;
-    // «r» on the situations opens the run dialog (declined once, then accepted); results are section 4.
-    const keys = [['r'], ['r'], ['4', 'v'], ['f'], ['f'], ['q']];
-    ctx.ui = {
-      custom: (factory: (tui: unknown, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?(): void }) => new Promise((resolve, reject) => {
-        let component: Component & { dispose?(): void };
-        const current = screen++;
-        const finish = (value: unknown) => { component.dispose?.(); resolve(value); };
-        component = factory({ terminal: { rows: 40 }, requestRender() {} }, { fg: (_: string, text: string) => text, bold: (text: string) => text }, {}, finish);
-        assert.match(component.render(100).join('\n'), /AGENT LAB/);
-        // Scripted integration fixture only: emulate native keyboard/confirm callbacks, never a live model or real user consent.
-        const drive = async () => {
-          if (current === 2) {
-            const deadline = Date.now() + 4000;
-            while (!component.render(100).join('\n').includes('ПРОВЕРЬТЕ РЕЗУЛЬТАТЫ')) {
-              if (Date.now() > deadline) throw new Error('Demo did not reach results review');
-              await new Promise(r => setTimeout(r, 100));
-            }
-          }
-          assert.ok(keys[current], `unexpected board ${current}`);
-          for (const key of keys[current]!) component.handleInput!(key);
-        };
-        void drive().catch(error => { component.dispose?.(); reject(error); });
-      }),
-      confirm: async (_title: string, message: string) => {
-        confirmations.push(message);
-        assert.match(message, /[a-f0-9]{12}/, 'a readable fingerprint identifies the exact results; finishing checks the full hash');
-        return confirmations.length === 2;
-      },
-      select: async (title: string, choices: string[]) => {
-        // The annotation asks twice: which assessment, then whose error it is.
-        if (!choices.includes('Запустить')) return ++annotations === 1 ? choices[0] : choices.find(c => c === 'Ошибся агент');
-        launches.push(title);
-        return launches.length === 1 ? 'Не сейчас' : 'Запустить';
-      },
-      editor: async () => 'Human fixture: disagreement with the model; see #1.',
-      notify: (message: string, type: string) => { if (type === 'error') errors.push(message); },
-    } as unknown as ExtensionContext['ui'];
-    await command(report.id, ctx);
-    assert.deepEqual(errors, []); assert.equal(launches.length, 2); assert.equal(confirmations.length, 2);
-    assert.match(launches[0]!, /^Принять 1 ситуацию и запустить\?/); assert.match(confirmations[0]!, /результатов/);
-    const evidence = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
-    // The run dialog accepted the situation, the results were confirmed separately: they are recorded apart.
-    assert.equal(evidence.phase, 'complete'); assert.equal(evidence.reviewMode, 'expectations');
-    assert.ok(evidence.resultsReviewedAt); assert.ok(evidence.resultsReviewHash);
-    assert.equal(evidence.trials.length, 1); assert.equal(evidence.humanReviews.length, 1);
-    assert.equal(evidence.humanReviews[0].verdict, 'fail'); assert.match(evidence.humanReviews[0].note, /fixture/);
-    assert.ok(evidence.trials[0].assessments.length, 'original rubric assessments remain present');
-    const trial = output(await tools.get('agent_lab_inspect')!.execute('inspect-trial', { id: report.id, trialId: evidence.trials[0].id }, undefined, undefined, ctx));
+    // The run dialog is declined once, then accepted; «2» on the failure is «нет, судья ошибся» — about every failed duty — with the owner's reason.
+    let launches = 0;
+    session.state.choice = (_title, options) => !options.includes('Запустить') ? options.at(-1) : ++launches === 1 ? 'Не сейчас' : options[0];
+    session.state.reason = 'Human fixture: disagreement with the model; see #1.';
+    session.state.steps = [[KEY.right, KEY.enter], [KEY.enter], { until: 'Точность агента', keys: [KEY.enter, '2'] }, CLOSE];
+    await command(report.id, session.ctx);
+    const plans = session.selectCalls.filter(item => item.options.includes('Запустить'));
+    assert.equal(plans.length, 2);
+    for (const plan of plans) assert.match(plan.title, /^Принять 1 ситуацию и запустить\?/);
+    assert.ok(!session.selectCalls.some(item => /результат/i.test(item.title)), 'nothing asks to confirm the results');
+    const exported = output(await tools.get('agent_lab_inspect')!.execute('export-reviewed', { id: report.id, export: true }, undefined, undefined, session.ctx));
+    const evidence = JSON.parse(await readFile(exported.artifacts.evidence, 'utf8'));
+    // The run dialog accepted the situation; the owner's answer about the judge is recorded apart from the judge's own.
+    assert.equal(evidence.reviewMode, 'expectations');
+    assert.equal(evidence.trials.length, 1);
+    assert.ok(evidence.humanReviews.length >= 1);
+    for (const mark of evidence.humanReviews) {
+      assert.deepEqual([mark.source, mark.judgeVerdict, mark.verdict], ['quick', 'fail', 'pass']);
+      assert.match(mark.note, /fixture/);
+    }
+    // The only answer the queue waited for is given, so the check of the judge ended by itself.
+    assert.equal(evidence.phase, 'complete'); assert.ok(evidence.resultsReviewedAt); assert.ok(evidence.resultsReviewHash);
+    assert.ok(evidence.trials[0].assessments.some((a: { result: string }) => a.result === 'fail'), 'the judge\'s own assessments remain as recorded');
+    const trial = output(await tools.get('agent_lab_inspect')!.execute('inspect-trial', { id: report.id, trialId: evidence.trials[0].id }, undefined, undefined, session.ctx));
     assert.deepEqual(trial.checks, evidence.trials[0].checks);
     assert.deepEqual(trial.assessments, evidence.trials[0].assessments);
-    const exported = output(await tools.get('agent_lab_inspect')!.execute('export-reviewed', { id: report.id, export: true }, undefined, undefined, ctx));
     const markdown = await readFile(exported.artifacts.report, 'utf8');
     // The demo's scripted estimate is labelled as the training example and never passed off as a model judgment.
     assert.match(markdown, / · учебный пример$/m); assert.doesNotMatch(markdown, /Оценка модели/);
@@ -556,456 +482,6 @@ test('Pi inspect of a repeat shows the same first block as the CLI summary, stab
   assert.deepEqual(head(cli.stdout.split('\n')), head(lines));
 });
 
-/** A finished demo evaluation copied into a fresh Pi working directory, ready for `/agent-lab`. */
-async function boardFixture(prefix: string, mutate?: (record: Experiment) => void) {
-  const demo = await demoEvaluateRecord(prefix);
-  const cwd = await mkdtemp(join(tmpdir(), `${prefix}cwd-`));
-  await demo.lab.close();
-  const record = structuredClone(demo.record);
-  mutate?.(record);
-  const store = new ExperimentStore(join(cwd, '.agent-lab'));
-  await store.init();
-  try { await store.save(record); } finally { await store.close(); }
-  return { cwd, record,
-    cleanup: async () => { await rm(cwd, { recursive: true, force: true }); await rm(demo.directory, { recursive: true, force: true }); } };
-}
-
-/** Situations the judge decided: exactly what a one-key answer can land on (UI-SPEC F10, 03.1 markTargets). */
-function judgedSituations(record: Experiment) {
-  const controls = new Set(record.positiveControlScenarioIds ?? []);
-  return record.trials.flatMap(trial => {
-    const scenario = record.scenarios.find(card => card.id === trial.scenarioId);
-    if (!scenario || controls.has(scenario.id) || !measurementUsable(scenario, trial, record.humanReviews)) return [];
-    const targets = markTargets(scenario, trial);
-    if (!targets) return [];
-    return [{ trial, scenario, metricIds: targets.metricIds, judgeVerdict: targets.verdict }];
-  });
-}
-
-/**
- * A scripted owner at the board: `steps` is one key list per board opening, `reason` is what the
- * native editor returns, `choice` what the native select returns, and `screens` keeps what each
- * board showed when it opened — that is where the notice of the previous answer is read from.
- */
-function boardSession(cwd: string) {
-  const screens: string[] = [];
-  const editorCalls: { title: string; initial: string }[] = [];
-  const selectCalls: { title: string; options: string[] }[] = [];
-  const confirmBodies: string[] = [];
-  // A step is either the keys the owner presses, or — for a board state that keys cannot reach
-  // twice in a row — the exact action the board would have emitted.
-  const state = { steps: [] as (string[] | (() => unknown))[], reason: undefined as string | undefined, choice: undefined as string | undefined };
-  const ctx = { cwd, hasUI: true, mode: 'tui', ui: {
-    editor: async (title: string, initial: string) => { editorCalls.push({ title, initial }); return state.reason; },
-    select: async (title: string, options: string[]) => { selectCalls.push({ title, options }); return state.choice; },
-    confirm: async (_title: string, body: string) => { confirmBodies.push(body); return true; },
-    notify: () => {},
-    custom: (factory: (tui: unknown, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?(): void }) => new Promise((resolve, reject) => {
-      const component = factory({ terminal: { rows: 40 }, requestRender() {} }, { fg: (_: string, text: string) => text, bold: (text: string) => text }, {}, value => { component.dispose?.(); resolve(value); });
-      void (async () => {
-        const step = state.steps.shift(); assert.ok(step, 'unexpected board');
-        screens.push(stripTerminalSequences(component.render(160).join('\n')));
-        if (typeof step === 'function') { component.dispose?.(); resolve(step()); return; }
-        for (const key of step) component.handleInput!(key);
-      })().catch(error => { component.dispose?.(); reject(error); });
-    }),
-  } } as unknown as ExtensionCommandContext;
-  return { ctx, screens, editorCalls, selectCalls, confirmBodies, state };
-}
-
-test('history remains readable while another instance owns the data directory', async () => {
-  const fixture = await boardFixture('agent-lab-read-only-history-');
-  const owner = new ExperimentStore(join(fixture.cwd, '.agent-lab'));
-  await owner.init();
-  const running = { ...fixture.record, phase: 'evaluating' as const };
-  await owner.save(running);
-  const before = await readFile(join(owner.directory, `${running.id}.json`), 'utf8');
-  const lock = await readFile(join(owner.directory, '.lock'), 'utf8');
-  const { command, shutdown, tools } = registered();
-  const session = boardSession(fixture.cwd);
-  try {
-    session.state.steps = [['q']];
-    await command(running.id.slice(0, 8), session.ctx);
-    const inspected = output(await tools.get('agent_lab_inspect')!.execute('read', { id: running.id }, undefined, undefined, session.ctx));
-    assert.equal(inspected.phase, 'evaluating');
-    assert.ok(session.screens[0]?.includes('ИДУТ ДИАЛОГИ'));
-    assert.equal(session.confirmBodies.length, 0, 'leaving a reader does not ask to cancel the owner');
-    assert.equal(await readFile(join(owner.directory, `${running.id}.json`), 'utf8'), before);
-    assert.equal(await readFile(join(owner.directory, '.lock'), 'utf8'), lock, 'reader never releases another instance lock');
-  } finally { await shutdown(); await owner.close(); await rm(fixture.cwd, { recursive: true, force: true }); }
-});
-
-test('a board-started run outlives the board and releases ownership after completion', { timeout: 20000 }, async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'agent-lab-board-background-'));
-  const script = join(cwd, 'target.cjs');
-  await writeFile(script, `process.stdin.once('data', () => setTimeout(() => process.stdout.write(JSON.stringify({reply:'Проверка завершена.', resetConfirmed:true})+'\\n'), 500));`);
-  const draft = await legacyDraftIn(cwd, { count: 1, target: { kind: 'command', command: process.execPath, args: [script], timeoutMs: 5000 },
-    settings: { userModes: ['static'], maxTurns: 2 } });
-  const { command, shutdown } = registered();
-  const session = boardSession(cwd);
-  const store = new ExperimentStore(join(cwd, '.agent-lab'));
-  try {
-    session.state.steps = [['r'], ['q']]; session.state.choice = 'Запустить';
-    await command(draft.id, session.ctx);
-    assert.equal((await store.get(draft.id)).phase, 'evaluating', 'closing the board must not cancel the run');
-    assert.deepEqual([session.selectCalls.length, session.confirmBodies.length], [1, 0], 'only the launch, not exit, asks the owner');
-    session.state.steps = [['q']];
-    await command('', session.ctx);
-    assert.ok(session.screens.at(-1)?.includes('ИДУТ ДИАЛОГИ'), 'history remains available during own background work');
-    const deadline = Date.now()+10000;
-    while ((await store.get(draft.id)).phase === 'evaluating' || existsSync(join(store.directory, '.lock'))) {
-      assert.ok(Date.now()<deadline, 'background run did not finish and release its lock');
-      await new Promise(resolve=>setTimeout(resolve, 20));
-    }
-    assert.equal((await store.get(draft.id)).phase, 'results_review');
-    assert.equal((await store.get(draft.id)).trials.length, 1);
-  } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); }
-});
-
-test('одна клавиша на доске сохраняет согласие, несогласие с причиной и сомнение', { timeout: 120000 }, async () => {
-  const fixture = await boardFixture('agent-lab-board-agree-');
-  const { tools, shutdown, command } = registered();
-  const session = boardSession(fixture.cwd);
-  const inspect = async () => output(await tools.get('agent_lab_inspect')!.execute('board', { id: fixture.record.id }, undefined, undefined,
-    { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext));
-  const titleOf = (report: { scenarios: { id: string; title: string }[]; trials: { id: string; scenarioId: string }[] }, trialId: string) =>
-    report.scenarios.find(card => card.id === report.trials.find(trial => trial.id === trialId)!.scenarioId)!.title;
-  try {
-    // «Не согласен» всегда спрашивает причину, и причина владельца сохраняется дословно.
-    session.state.reason = 'Проверка: судья не учёл уточнение клиента.';
-    session.state.steps = [['3', 'n'], ['q']];
-    await command(fixture.record.id, session.ctx);
-    const disagreed = await inspect();
-    assert.equal(disagreed.humanReviews.length, 1, JSON.stringify(disagreed.humanReviews));
-    const mark = disagreed.humanReviews[0];
-    assert.equal(mark.source, 'quick');
-    assert.equal(mark.note, 'Проверка: судья не учёл уточнение клиента.');
-    assert.ok(['pass', 'fail'].includes(mark.judgeVerdict));
-    assert.notEqual(mark.verdict, mark.judgeVerdict, 'несогласие пишет противоположный вердикт');
-    assert.equal(session.editorCalls.at(-1)!.title,
-      `Судья решил: ${mark.judgeVerdict === 'fail' ? 'не справился' : 'справился'}. Почему вы не согласны? Коротко, своими словами.`);
-    assert.equal(session.editorCalls.at(-1)!.initial, '');
-    // CTX-15: a legacy card has one target, so no «с чем именно» question; CR-02: the demo card's
-    // strict verdict also rests on failed checks, so the notice names what still fails instead of
-    // claiming the number moved.
-    assert.equal(session.selectCalls.length, 0, 'one failed metric is answered without a question');
-    assert.ok(session.screens.at(-1)!.includes(`Отмечено: не согласен · «${titleOf(disagreed, mark.trialId)}». Ситуация остаётся «не справился»: остальные провалы — через v.`),
-      session.screens.at(-1));
-
-    // «Не могу сказать» — сомнение: оценка судьи остаётся, ситуация ждёт решения.
-    session.state.steps = [['3', 's'], ['q']];
-    await command(fixture.record.id, session.ctx);
-    const unsure = await inspect();
-    assert.equal(unsure.humanReviews.length, 2);
-    const doubt = unsure.humanReviews.at(-1);
-    assert.equal(doubt.source, 'quick'); assert.equal(doubt.verdict, 'unknown');
-    assert.equal(doubt.note, 'Быстрая отметка: не могу сказать.');
-    assert.ok(session.screens.at(-1)!.includes(`Отмечено: не могу сказать · «${titleOf(unsure, doubt.trialId)}». В итоге остаётся оценка судьи; чтобы закрыть ситуацию, позже нажмите y или n.`),
-      session.screens.at(-1));
-
-    // Закрытый редактор ничего не пишет и ничего не говорит.
-    session.state.reason = undefined;
-    session.state.steps = [['3', 'n'], ['q']];
-    await command(fixture.record.id, session.ctx);
-    assert.equal((await inspect()).humanReviews.length, 2);
-    assert.doesNotMatch(session.screens.at(-1)!, /Отмечено:|Несогласие не сохранено|Отметка уже стоит/);
-
-    // Пустая причина — несогласия нет, и доска говорит, чего не хватает.
-    session.state.reason = '   \n  ';
-    session.state.steps = [['3', 'n'], ['q']];
-    await command(fixture.record.id, session.ctx);
-    assert.equal((await inspect()).humanReviews.length, 2);
-    assert.ok(session.screens.at(-1)!.includes('Несогласие не сохранено: напишите причину.'), session.screens.at(-1));
-  } finally {
-    await shutdown();
-    await fixture.cleanup();
-  }
-});
-
-test('повтор ответа, длинная причина и сменившаяся оценка судьи ничего не пишут и названы словами', { timeout: 120000 }, async () => {
-  const fixture = await boardFixture('agent-lab-board-edges-');
-  const { tools, shutdown, command } = registered();
-  const session = boardSession(fixture.cwd);
-  const notices: string[] = [];
-  const inspect = async () => output(await tools.get('agent_lab_inspect')!.execute('edges', { id: fixture.record.id }, undefined, undefined,
-    { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext));
-  const target = judgedSituations(fixture.record).find(item => item.judgeVerdict === 'fail');
-  assert.ok(target, 'у демо-прогона есть провал, с которым можно не согласиться');
-  const queued = judgeAgreement(fixture.record).queueFailures.length;
-  /** One board opening that answers the same situation, so a repeat can be pressed twice. */
-  const answer = async (over: Record<string, unknown>) => {
-    session.state.steps = [() => ({ type: 'agree', record: fixture.record, section: 'results', selected: 0,
-      trialId: target.trial.id, metricIds: target.metricIds, judgeVerdict: target.judgeVerdict, ...over }), ['q']];
-    await command(fixture.record.id, session.ctx);
-    const screen = session.screens.at(-1)!;
-    const notice = screen.split('\n').map(row => row.replace(/^[^\p{L}\p{N}]*/u, '').replace(/[^\p{L}\p{N}.»]*$/u, ''))
-      .find(row => /^(Отмечено:|Отметка уже стоит:|Несогласие не сохранено|Причина длиннее|Оценка судьи изменилась|Не разобрано)/.test(row)) ?? '';
-    if (notice) notices.push(notice);
-    return { screen, notice, reviews: (await inspect()).humanReviews as { verdict: string; note: string; durationMs?: number }[] };
-  };
-  try {
-    // CTX-05: время чтения доски доезжает до записанной отметки.
-    const agreed = await answer({ answer: 'agree', reviewMs: 900 });
-    assert.equal(agreed.reviews.length, 1);
-    assert.ok(agreed.reviews[0]!.durationMs! >= 900, JSON.stringify(agreed.reviews[0]));
-    assert.equal(agreed.notice, `Отмечено: согласен с судьёй · «${target.scenario.title}». Проверено провалов: 1 из ${queued}.`);
-
-    // UI-D-19: тот же ответ второй раз ничего не пишет.
-    const again = await answer({ answer: 'agree' });
-    assert.equal(again.notice, 'Отметка уже стоит: согласен.');
-    assert.equal(again.reviews.length, 1);
-
-    const doubt = await answer({ answer: 'unsure' });
-    assert.equal(doubt.reviews.length, 2);
-    const doubtAgain = await answer({ answer: 'unsure' });
-    assert.equal(doubtAgain.notice, 'Отметка уже стоит: не могу сказать.');
-    assert.equal(doubtAgain.reviews.length, 2);
-
-    // UI-D-28: `n` всегда открывает редактор — им же правится уже написанная причина.
-    session.state.reason = 'Клиент назвал время сам, судья это пропустил.';
-    const disagreed = await answer({ answer: 'disagree' });
-    assert.equal(disagreed.reviews.length, 3);
-    assert.equal(disagreed.reviews.at(-1)!.note, 'Клиент назвал время сам, судья это пропустил.');
-    // CR-02: the demo card is a legacy strict card whose checks also failed, so the number did not move and the notice says so.
-    assert.equal(disagreed.notice, `Отмечено: не согласен · «${target.scenario.title}». Ситуация остаётся «не справился»: остальные провалы — через v.`);
-
-    session.state.reason = '  Клиент назвал время сам, судья это пропустил.  ';
-    const same = await answer({ answer: 'disagree' });
-    assert.equal(session.editorCalls.at(-1)!.initial, 'Клиент назвал время сам, судья это пропустил.');
-    assert.equal(same.notice, 'Отметка уже стоит: не согласен.');
-    assert.equal(same.reviews.length, 3);
-
-    session.state.reason = 'я'.repeat(3001);
-    const long = await answer({ answer: 'disagree' });
-    assert.equal(long.notice, 'Причина длиннее 3000 знаков. Сократите и попробуйте снова.');
-    assert.equal(long.reviews.length, 3);
-
-    session.state.reason = 'Другая причина: судья не прочитал запись до конца.';
-    const rewritten = await answer({ answer: 'disagree' });
-    assert.equal(rewritten.reviews.length, 4);
-    assert.equal(rewritten.reviews.at(-1)!.note, 'Другая причина: судья не прочитал запись до конца.');
-
-    // Последний ответ побеждает: у ситуации остаётся одна действующая отметка.
-    const back = await answer({ answer: 'agree' });
-    assert.equal(back.reviews.length, 5);
-    const stored = await new ExperimentStore(join(fixture.cwd, '.agent-lab')).get(fixture.record.id);
-    const current = judgeAgreement(stored).marks.filter(mark => mark.trialId === target.trial.id && !mark.stale);
-    assert.equal(current.length, 1);
-    assert.equal(current[0]!.answer, 'agree');
-
-    // T-03-13: доска показывала другое решение судьи — лаборатория отказывает, и отказ назван.
-    // Ответ здесь новый: правило «отметка уже стоит» стоит раньше и иначе перехватило бы отказ.
-    const moved = await answer({ answer: 'unsure', judgeVerdict: target.judgeVerdict === 'fail' ? 'pass' : 'fail' });
-    assert.equal(moved.notice, 'Оценка судьи изменилась, пока вы смотрели. Проверьте ситуацию ещё раз.');
-    assert.equal(moved.reviews.length, 5);
-
-    for (const notice of notices) assertPlainCopy(notice.replace(/«[^»]*»/gu, ''), 'уведомление');
-  } finally {
-    await shutdown();
-    await fixture.cleanup();
-  }
-});
-
-/**
- * Every demo card becomes a goal card with prompt rules (CTX-01): the agent metrics are the goal and
- * the rules, the card's simulator metrics stay, and the judge is recorded as failing both on every
- * trial, citing an agent reply — a double failure on every situation.
- */
-function goalAndRules(record: Experiment) {
-  for (const card of record.scenarios) {
-    card.metrics = [structuredClone(goalAttainment), structuredClone(promptCompliance), ...(card.metrics ?? []).filter(m => m.subject === 'simulator')];
-  }
-  for (const trial of record.trials) {
-    const said = trial.events.find(event => event.type === 'assistant')!;
-    trial.assessments = [
-      { metricId: 'goal_attainment', result: 'fail', rationale: 'Агент не перенёс запись и отправил клиента в поддержку.', evidence: [said.seq], citations: [{ seq: said.seq, quote: said.text ?? '' }] },
-      { metricId: 'prompt_compliance', result: 'fail', rationale: 'Агент направил клиента в поддержку.', evidence: [said.seq], citations: [{ seq: said.seq, quote: said.text ?? '' }] },
-      ...(trial.assessments ?? []).filter(a => card(record, trial)?.metrics?.some(m => m.id === a.metricId && m.subject === 'simulator')),
-    ];
-  }
-}
-const card = (record: Experiment, trial: Experiment['trials'][number]) => record.scenarios.find(item => item.id === trial.scenarioId);
-const GOAL_AND_RULES_OPTIONS = ['Запрос выполнен — судья ошибся', 'Правила промпта соблюдены — судья ошибся', 'С обоими: запрос выполнен и правила соблюдены'];
-
-test('на двойном провале n спрашивает, с чем именно, и пишет отметку на каждую оценку', { timeout: 180000 }, async () => {
-  const fixture = await boardFixture('agent-lab-board-both-', goalAndRules);
-  const unchanged = await boardFixture('agent-lab-board-both-still-', record => { goalAndRules(record); record.settings.repeats = 2; });
-  const { tools, shutdown, command } = registered();
-  const session = boardSession(fixture.cwd);
-  const notices: string[] = [];
-  type Review = { trialId: string; metricId: string; verdict: string; note: string; countingRules?: string; durationMs?: number };
-  const inspect = async (of = fixture) => output(await tools.get('agent_lab_inspect')!.execute('both', { id: of.record.id }, undefined, undefined,
-    { cwd: of.cwd, hasUI: false, mode: 'print' } as ExtensionContext)).humanReviews as Review[];
-  const noticeOf = (screen: string) => screen.split('\n').map(row => row.replace(/^[^\p{L}\p{N}]*/u, '').replace(/[^\p{L}\p{N}.»]*$/u, ''))
-    .find(row => /^(Отмечено:|Отметка уже стоит:|Несогласие не сохранено|Причина длиннее|Оценка судьи изменилась)/.test(row)) ?? '';
-  const titleOf = (trialId: string) => fixture.record.scenarios.find(item => item.id === fixture.record.trials.find(trial => trial.id === trialId)!.scenarioId)!.title;
-  const situations = judgedSituations(fixture.record);
-  assert.equal(situations.length, 2);
-  for (const item of situations) assert.deepEqual([item.judgeVerdict, item.metricIds], ['fail', ['goal_attainment', 'prompt_compliance']]);
-  const store = new ExperimentStore(join(fixture.cwd, '.agent-lab'));
-  try {
-    // CTX-16: «не согласен» on a double failure asks which half; the rules alone → a disagreement on
-    // the rules and an agreement on the goal, both stamped by the lab, one situation checked.
-    session.state.choice = GOAL_AND_RULES_OPTIONS[1];
-    session.state.reason = 'Проверка: агент не отправлял клиента в поддержку.';
-    session.state.steps = [['3', 'n'], ['q']];
-    await command(fixture.record.id, session.ctx);
-    assert.deepEqual(session.selectCalls, [{ title: 'С чем вы не согласны?', options: GOAL_AND_RULES_OPTIONS }]);
-    assertPlainCopy('С чем вы не согласны?', 'вопрос');
-    for (const option of GOAL_AND_RULES_OPTIONS) assertPlainCopy(option, 'вариант');
-    assert.equal(session.editorCalls.at(-1)!.title, 'Судья решил: не справился. Почему вы не согласны? Коротко, своими словами.');
-    const first = await inspect();
-    assert.equal(first.length, 2, JSON.stringify(first));
-    const [goalMark, rulesMark] = first;
-    assert.equal(goalMark!.trialId, rulesMark!.trialId);
-    assert.deepEqual([goalMark!.metricId, goalMark!.verdict, goalMark!.note], ['goal_attainment', 'fail', 'Быстрая отметка: согласен с судьёй.']);
-    assert.deepEqual([rulesMark!.metricId, rulesMark!.verdict, rulesMark!.note], ['prompt_compliance', 'pass', 'Проверка: агент не отправлял клиента в поддержку.']);
-    assert.deepEqual(first.map(mark => mark.countingRules), [COUNTING_RULES, COUNTING_RULES]);
-    assert.equal(typeof goalMark!.durationMs, 'number');
-    const firstTrial = goalMark!.trialId;
-    notices.push(noticeOf(session.screens.at(-1)!));
-    assert.equal(notices.at(-1), `Отмечено: не согласен · «${titleOf(firstTrial)}». Ситуация остаётся «не справился»: запрос не выполнен.`);
-    const checked = judgeAgreement(await store.get(fixture.record.id));
-    assert.equal(checked.checked, 1);
-    assert.deepEqual(checked.disagreements.map(item => [item.trialId, item.overturned]), [[firstTrial, ['prompt_compliance']]]);
-
-    // Esc in the question: nothing is written, the editor never opens, the board says nothing.
-    const editors = session.editorCalls.length;
-    session.state.choice = undefined;
-    session.state.steps = [['3', 'n'], ['q']];
-    await command(fixture.record.id, session.ctx);
-    assert.equal((await inspect()).length, 2);
-    assert.equal(session.editorCalls.length, editors, 'a cancelled question opens no editor');
-    assert.doesNotMatch(session.screens.at(-1)!, /Отмечено:|Несогласие не сохранено|Отметка уже стоит/);
-
-    // «С обоими» on the other double failure: two overturned halves, and the situation's verdict moved.
-    session.state.choice = GOAL_AND_RULES_OPTIONS[2];
-    session.state.reason = 'Клиент получил перенос, правила соблюдены.';
-    session.state.steps = [['3', 'n'], ['q']];
-    await command(fixture.record.id, session.ctx);
-    const both = (await inspect()).slice(2);
-    assert.equal(both.length, 2);
-    assert.notEqual(both[0]!.trialId, firstTrial, 'the second answer lands on the next queued double failure');
-    assert.deepEqual(both.map(mark => [mark.metricId, mark.verdict, mark.note, mark.countingRules]),
-      [['goal_attainment', 'pass', 'Клиент получил перенос, правила соблюдены.', COUNTING_RULES], ['prompt_compliance', 'pass', 'Клиент получил перенос, правила соблюдены.', COUNTING_RULES]]);
-    notices.push(noticeOf(session.screens.at(-1)!));
-    assert.equal(notices.at(-1), `Отмечено: не согласен · «${titleOf(both[0]!.trialId)}». Итог пересчитан с учётом вашей отметки.`);
-
-    // CTX-17: «согласен» writes the same answer on both metrics without a question.
-    session.state.steps = [['3', 'y'], ['q']];
-    await command(fixture.record.id, session.ctx);
-    const agreed = (await inspect()).slice(4);
-    assert.deepEqual(agreed.map(mark => [mark.trialId, mark.metricId, mark.verdict, mark.note]),
-      [[firstTrial, 'goal_attainment', 'fail', 'Быстрая отметка: согласен с судьёй.'], [firstTrial, 'prompt_compliance', 'fail', 'Быстрая отметка: согласен с судьёй.']]);
-    assert.equal(session.selectCalls.length, 3, '«согласен» asks nothing');
-    notices.push(noticeOf(session.screens.at(-1)!));
-    assert.equal(notices.at(-1), `Отмечено: согласен с судьёй · «${titleOf(firstTrial)}». Проверено провалов: 2 из 2.`);
-
-    // UI-D-19 over every target: the same answer again writes nothing.
-    const again = () => ({ type: 'agree', answer: 'agree', record: fixture.record, section: 'results', selected: 0,
-      trialId: firstTrial, metricIds: ['goal_attainment', 'prompt_compliance'], judgeVerdict: 'fail' });
-    session.state.steps = [again, ['q']];
-    await command(fixture.record.id, session.ctx);
-    assert.equal((await inspect()).length, 6);
-    notices.push(noticeOf(session.screens.at(-1)!));
-    assert.equal(notices.at(-1), 'Отметка уже стоит: согласен.');
-
-    // «Не могу сказать» — doubt on both metrics, the judge's verdict stays.
-    session.state.steps = [() => ({ ...again(), answer: 'unsure' }), ['q']];
-    await command(fixture.record.id, session.ctx);
-    const unsure = (await inspect()).slice(6);
-    assert.deepEqual(unsure.map(mark => [mark.metricId, mark.verdict, mark.note]),
-      [['goal_attainment', 'unknown', 'Быстрая отметка: не могу сказать.'], ['prompt_compliance', 'unknown', 'Быстрая отметка: не могу сказать.']]);
-    notices.push(noticeOf(session.screens.at(-1)!));
-    assert.equal(notices.at(-1), `Отмечено: не могу сказать · «${titleOf(firstTrial)}». В итоге остаётся оценка судьи; чтобы закрыть ситуацию, позже нажмите y или n.`);
-    assert.equal(session.selectCalls.length, 3, '«не могу сказать» asks nothing');
-
-    // A situation whose card verdict cannot move (a planned attempt is missing) hears that the number did not change.
-    const still = boardSession(unchanged.cwd);
-    still.state.choice = GOAL_AND_RULES_OPTIONS[2];
-    still.state.reason = 'Клиент получил перенос.';
-    still.state.steps = [['3', 'n'], ['q']];
-    await command(unchanged.record.id, still.ctx);
-    const stillMarks = await inspect(unchanged);
-    assert.equal(stillMarks.length, 2);
-    notices.push(noticeOf(still.screens.at(-1)!));
-    assert.equal(notices.at(-1), `Отмечено: не согласен · «${unchanged.record.scenarios.find(item => item.id === unchanged.record.trials.find(trial => trial.id === stillMarks[0]!.trialId)!.scenarioId)!.title}». Итог не изменился.`);
-
-    for (const notice of notices) assertPlainCopy(notice.replace(/«[^»]*»/gu, ''), 'уведомление');
-  } finally {
-    await store.close();
-    await shutdown();
-    await fixture.cleanup();
-    await unchanged.cleanup();
-  }
-});
-
-test('отметка на завершённом прогоне снова открывает разбор, а прогон без провалов считает успехи', { timeout: 120000 }, async () => {
-  const finished = await boardFixture('agent-lab-board-complete-', record => {
-    record.resultsReviewHash = resultHash(record);
-    record.resultsReviewedAt = record.updatedAt;
-    record.phase = 'complete';
-  });
-  const passesOnly = await boardFixture('agent-lab-board-passes-', record => {
-    for (const trial of record.trials) for (const assessment of trial.assessments ?? []) assessment.result = 'pass';
-  });
-  const { tools, shutdown, command } = registered();
-  try {
-    for (const [fixture, expected] of [
-      [finished, ' Разбор снова открыт: f — завершить.'],
-      [passesOnly, `Проверено успехов: 1 из ${judgeAgreement(passesOnly.record).sampledPasses.length}.`],
-    ] as const) {
-      const session = boardSession(fixture.cwd);
-      const target = judgedSituations(fixture.record)[0]!;
-      session.state.steps = [() => ({ type: 'agree', answer: 'agree', record: fixture.record, section: 'results', selected: 0,
-        trialId: target.trial.id, metricIds: target.metricIds, judgeVerdict: target.judgeVerdict }), ['q']];
-      await command(fixture.record.id, session.ctx);
-      assert.ok(session.screens.at(-1)!.includes(expected), session.screens.at(-1));
-      const report = output(await tools.get('agent_lab_inspect')!.execute('reopen', { id: fixture.record.id }, undefined, undefined,
-        { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext));
-      assert.equal(report.phase, 'results_review');
-      assert.equal(report.humanReviews.length, 1);
-    }
-  } finally {
-    await shutdown();
-    await finished.cleanup();
-    await passesOnly.cleanup();
-  }
-});
-
-test('f называет, сколько ситуаций не разобрано, и подтверждение говорит, на что ставится отметка', { timeout: 120000 }, async () => {
-  const fixture = await boardFixture('agent-lab-board-finalize-');
-  const { tools, shutdown, command } = registered();
-  const session = boardSession(fixture.cwd);
-  const [doubted, ...rest] = judgedSituations(fixture.record);
-  assert.ok(doubted, 'у демо-прогона есть решённая судьёй ситуация');
-  const mark = (item: ReturnType<typeof judgedSituations>[number], answer: string) => () => ({ type: 'agree', answer,
-    record: fixture.record, section: 'results', selected: 0, trialId: item.trial.id, metricIds: item.metricIds, judgeVerdict: item.judgeVerdict });
-  try {
-    session.state.steps = [mark(doubted, 'unsure'), ...rest.map(item => mark(item, 'agree')), ['f'], ['q']];
-    await command(fixture.record.id, session.ctx);
-    const blocked = session.screens.at(-1)!;
-    assert.ok(blocked.includes('Не разобрано ситуаций: 1. y / n — согласие с судьёй · v — подробная оценка.'), blocked);
-    assert.ok(blocked.includes('● Только неразобранные'), blocked);
-    assertPlainCopy('Не разобрано ситуаций: 1. y / n — согласие с судьёй · v — подробная оценка.', 'уведомление');
-
-    session.state.steps = [mark(doubted, 'agree'), ['f'], ['q']];
-    await command(fixture.record.id, session.ctx);
-    const body = session.confirmBodies.at(-1)!.split('\n');
-    const notesAt = body.findIndex(row => row.startsWith('Отдельных заметок человека:'));
-    assert.ok(notesAt >= 0, session.confirmBodies.at(-1));
-    // CTX-21/CTX-28 (C-325 replaces C-65): the confirmation names the metrics a mark lands on under the new counting rule.
-    assert.equal(body[notesAt + 1], 'Отметка согласия ставится на оценки, из-за которых ситуация решена: запрос и правила промпта; остальные критерии — через v.');
-    assertPlainCopy(body[notesAt + 1]!, 'подтверждение');
-    const report = output(await tools.get('agent_lab_inspect')!.execute('finalized', { id: fixture.record.id }, undefined, undefined,
-      { cwd: fixture.cwd, hasUI: false, mode: 'print' } as ExtensionContext));
-    assert.equal(report.phase, 'complete');
-  } finally {
-    await shutdown();
-    await fixture.cleanup();
-  }
-});
-
 test('Pi inspect payload, its collapsed result and CLI summary open with the same ResultView block', { timeout: 60000 }, async () => {
   const demo = await demoEvaluateRecord('agent-lab-pi-view-');
   const cwd = await mkdtemp(join(tmpdir(), 'agent-lab-pi-view-cwd-'));
@@ -1027,13 +503,15 @@ test('Pi inspect payload, its collapsed result and CLI summary open with the sam
     // The collapsed chat block is drawn from that view: it opens with the same number and trust line as the board.
     initTheme('dark', false);
     const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
-    const rendered = inspect.renderResult!(result as never, { expanded: false, isPartial: false }, theme as never) as unknown as Component;
+    const rendered = inspect.renderResult!(result as never, { expanded: false, isPartial: false }, theme as never, renderContext()) as unknown as Component;
     const shown = rendered.render(MAX_WIDTH).map(line => stripTerminalSequences(line).trimEnd());
-    const block = fitRows(chatBlock(payload.view, { expanded: false }), MAX_WIDTH).map(line => line.text.trimEnd());
-    assert.deepEqual(shown.slice(0, block.length), block);
-    assert.equal(shown[0], payload.resultLines[0], 'the chat and the board open with the same number');
+    // The block hangs under the branch sign of its action: the same number, then the same trust line, as the result screen.
+    assert.equal(shown[0], `  └${payload.resultLines[0]}`, 'the chat and the board open with the same number');
+    assert.equal(shown[1]!.trim(), payload.resultLines[1]!.trim());
+    const block = fitRows(chatBlock(payload.view, { expanded: false }), MAX_WIDTH).filter(line => line.text.trim());
+    assert.ok(shown.filter(line => line.trim()).length > block.length, 'the rows of the block, then the hint for ctrl+o');
     assert.ok(!shown.join('\n').includes('"resultLines"'), 'the block is drawn, not the raw payload');
-    if (payload.view.failures.length) assert.ok(shown.slice(block.length).join(' ').includes('«покажи ошибку 1»'), shown.join('\n'));
+    if (payload.view.failures.length) assert.ok(shown.join(' ').includes('«покажи ошибку 1»'), shown.join('\n'));
     // The CLI summary prints the same screen: the same head, and every failure listed the same way.
     const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
     const child = spawn(process.execPath, [cli, 'summary', '--id', record.id, '--data-dir', join(cwd, '.agent-lab')]);
@@ -1090,7 +568,7 @@ test('the owner’s disagreement with the judge reads the same in the Pi payload
     // The collapsed chat block does not list the disagreement; its trust line counts it.
     initTheme('dark', false);
     const rendered = inspect.renderResult!(result as never, { expanded: false, isPartial: false },
-      { fg: (_color: string, text: string) => text, bold: (text: string) => text } as never) as unknown as Component;
+      { fg: (_color: string, text: string) => text, bold: (text: string) => text } as never, renderContext()) as unknown as Component;
     const shown = rendered.render(400).map(line => stripTerminalSequences(line).trimEnd());
     assert.ok(shown.some(line => line.includes('с судьёй согласны 0 из 1')), shown.join('\n'));
 
@@ -1125,142 +603,16 @@ test('the owner’s disagreement with the judge reads the same in the Pi payload
   }
 });
 
-test('на доске y подтверждает все ожидания черновика и доска возвращается с уведомлением', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-board-accept-'));
-  const { tools, shutdown, command } = registered();
-  t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
-  const ctx = { cwd: directory, model: undefined, mode: 'tui', hasUI: true } as ExtensionCommandContext;
-  // Two old-format cards, as a repeat of an old run leaves them: their expectations are confirmed on the sheet.
-  const report = await legacyDraftIn(directory, { count: 2 });
-  const screens: { text: string; notice?: { message: string; kind: string } }[] = [];
-  const keys = ['y', 'y', 'q'];
-  ctx.ui = {
-    custom: (factory: (tui: unknown, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?(): void },
-      options: unknown, boardOptions?: unknown) => new Promise(resolve => {
-      const current = screens.length;
-      let component: Component & { dispose?(): void };
-      component = factory({ terminal: { rows: 40 }, requestRender() {} }, { fg: (_: string, text: string) => text, bold: (text: string) => text }, {},
-        value => { component.dispose?.(); resolve(value); });
-      screens.push({ text: component.render(100).join('\n') });
-      void Promise.resolve().then(() => component.handleInput!(keys[current]!));
-      void boardOptions; void options;
-    }),
-    confirm: async () => false,
-    notify: () => {},
-  } as unknown as ExtensionContext['ui'];
-  await command(`${report.id}`, ctx);
-  assert.equal(screens.length, 3);
-  // Экран 1 — лист ожиданий без подтверждения; после y доска открыта снова и говорит, что подтверждено.
-  assert.match(screens[0]!.text, /ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ/);
-  assert.match(screens[0]!.text, /Проверьте ожидания: 2 ситуации\./);
-  assert.match(screens[1]!.text, /Ожидания подтверждены: 2 ситуации\. r — запуск\./);
-  assert.match(screens[1]!.text, /Ожидания подтверждены\. r — запуск\./, 'заголовок черновика тоже переключился');
-  assert.match(screens[2]!.text, /Ожидания уже подтверждены\. r — запуск\./);
-  const stored = output(await tools.get('agent_lab_inspect')!.execute('after', { id: report.id }, undefined, undefined, ctx));
-  assert.equal(stored.acceptedDraftHash, stored.draftHash, 'подтверждена именно показанная версия');
-  assert.equal(stored.trialCount, 0, 'подтверждение не запускает агента');
-});
-
-/** Drives the native board: renders each screen, then plays one scripted step on it. */
-function boardDriver(screens: string[], steps: ((component: Component & { handleInput?(data: string): void }) => void)[]) {
-  return (factory: (tui: unknown, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?(): void }) =>
-    new Promise(resolve => {
-      const current = screens.length;
-      let component: Component & { dispose?(): void };
-      component = factory({ terminal: { rows: 40 }, requestRender() {} },
-        { fg: (_: string, text: string) => text, bold: (text: string) => text }, {},
-        value => { component.dispose?.(); resolve(value); });
-      screens.push(component.render(100).join('\n'));
-      const step = steps[current];
-      assert.ok(step, `лишний экран доски ${current}`);
-      void Promise.resolve().then(() => step(component as Component & { handleInput?(data: string): void }));
-    });
-}
-
-test('r подтверждает ожидания и запускает одним диалогом, а отказ запуска назван', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-board-run-'));
-  const { tools, shutdown, command } = registered();
-  const originalStart = ExperimentLab.prototype.start;
-  const startCalls: Parameters<ExperimentLab['start']>[1][] = [];
-  let refuse = false;
-  ExperimentLab.prototype.start = async function(id, options) {
-    startCalls.push(options);
-    if (refuse) throw new Error('Сначала подтвердите ожидания ситуаций: они изменились или ещё не подтверждены.');
-    return originalStart.call(this, id, options);
-  };
-  t.after(async () => { ExperimentLab.prototype.start = originalStart; await shutdown(); await rm(directory, { recursive: true, force: true }); });
-  const ctx = { cwd: directory, model: undefined, mode: 'tui', hasUI: true } as ExtensionCommandContext;
-  const first = await legacyDraftIn(directory, { count: 2 });
-  const launches: string[] = [];
-  const screens: string[] = [];
-  ctx.ui = {
-    custom: boardDriver(screens, [c => c.handleInput!('r'), c => c.handleInput!('r'), c => c.handleInput!('q')]),
-    // The first dialog is declined, the second accepted.
-    select: async (title: string) => { launches.push(title); return launches.length === 1 ? 'Не сейчас' : 'Запустить'; },
-    editor: async () => undefined, notify: () => {},
-  } as unknown as ExtensionContext['ui'];
-  await command(first.id, ctx);
-
-  // Closing the board no longer cancels/waits for its run. Wait for completion explicitly
-  // before assertions about final trial counts and starting another write operation.
-  const completedStore = new ExperimentStore(join(directory, '.agent-lab'));
-  const deadline = Date.now() + 10000;
-  while ((await completedStore.get(first.id)).phase === 'evaluating' || existsSync(join(directory, '.agent-lab', '.lock'))) {
-    assert.ok(Date.now() < deadline, 'background fixture did not finish');
-    await new Promise(resolve => setTimeout(resolve, 20));
-  }
-
-  const [plan] = launches;
-  assert.match(plan!, /^Подтвердить ожидания и запустить\?\n/);
-  assert.match(plan!, /Что агент должен сделать: 2 ситуации\. Номер правила — порядок в ваших материалах\./);
-  assert.equal(plan!.match(/Ситуация:/g)?.length, 2);
-  assert.match(plan!, /Все правила — \/agent-lab [a-z0-9_-]{1,8}, раздел 2\./);
-  assert.match(plan!, /Версия ожиданий: [a-f0-9]{12}/, 'a readable fingerprint names the confirmed version; the start checks the full hash');
-  assert.ok(plan!.endsWith('Запуск подтверждает ожидания ситуаций выше. Оценки судьи вы не проверяли.'));
-  // Подтверждение запечатывает определение каждой карточки целиком, поэтому набор, собранный не
-  // из продакшн-логов, показывает и первую реплику, и точные проверки — их владелец замораживает.
-  const scope = output(await tools.get('agent_lab_inspect')!.execute('scope', { id: first.id }, undefined, undefined, ctx));
-  type ScopeCard = { user: { opening: string }; checks: unknown[]; provenance: string; title: string };
-  const cards = scope.scenarios as ScopeCard[];
-  assert.ok(cards.length > 1 && cards.every(s => s.provenance !== 'production'), 'демо-набор не из логов');
-  assert.match(plan!, /Что вы подтверждаете дословно:/);
-  for (const scenario of cards) assert.ok(plan!.includes(`Запрос: ${scenario.user.opening}`), scenario.title);
-  assert.equal(plan!.match(/ {2}Проверка: /g)?.length ?? 0, cards.reduce((n, s) => n + s.checks.length, 0));
-  assert.equal(startCalls.length, 1, 'отказ ничего не запускает');
-  assert.equal(startCalls[0]!.requireAccepted, true);
-  assert.equal(startCalls[0]!.reviewer, 'expectations', 'подтверждены ожидания, а не результаты');
-  const ran = output(await tools.get('agent_lab_inspect')!.execute('ran', { id: first.id }, undefined, undefined, ctx));
-  assert.equal(ran.acceptedDraftHash, ran.draftHash, 'подтверждение записано перед запуском');
-  assert.ok(ran.trialCount > 0);
-
-  // Подтверждённый черновик спрашивает как раньше; отказ старта называет следующий шаг.
-  const second = await legacyDraftIn(directory, { count: 2 });
-  const laterLaunches: string[] = [];
-  const laterScreens: string[] = [];
-  refuse = true;
-  ctx.ui = {
-    custom: boardDriver(laterScreens, [c => c.handleInput!('y'), c => c.handleInput!('r'), c => c.handleInput!('q')]),
-    select: async (title: string) => { laterLaunches.push(title); return 'Запустить'; },
-    editor: async () => undefined, notify: () => {},
-  } as unknown as ExtensionContext['ui'];
-  await command(second.id, ctx);
-  assert.match(laterLaunches[0]!, /^Запустить прогон\?\n/, 'confirmed expectations are not asked again');
-  assert.equal(startCalls.at(-1)!.requireAccepted, true);
-  assert.match(laterScreens[2]!, /Сначала подтвердите ожидания ситуаций: они изменились или ещё не подтверждены\. y — подтвердить\./);
-});
-
 test('в чате agent_lab_accept показывает лист ожиданий и даёт подтвердить все или не подтверждать', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-chat-accept-'));
   const { tools, shutdown } = registered();
   t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
-  const confirms: { title: string; body: string }[] = [];
-  const selects: { title: string; options: string[] }[] = [];
+  const asked: { title: string; options: string[] }[] = [];
   const editorCalls: { title: string; prefill: string }[] = [];
   const notices: { message: string; type: string }[] = [];
   let answers: boolean[] = [];
   const ctx = { cwd: directory, mode: 'tui', hasUI: true, ui: {
-    confirm: async (title: string, body: string) => { confirms.push({ title, body }); return answers[confirms.length - 1] ?? false; },
-    select: async (title: string, options: string[]) => { selects.push({ title, options }); return undefined; },
+    select: async (title: string, options: string[]) => { asked.push({ title, options }); return answers[asked.length - 1] ? options[0] : options[1]; },
     editor: async (title: string, prefill: string) => { editorCalls.push({ title, prefill }); return undefined; },
     notify: (message: string, type: string) => { notices.push({ message, type }); },
   } } as unknown as ExtensionContext;
@@ -1271,38 +623,39 @@ test('в чате agent_lab_accept показывает лист ожидани�
   assert.ok(Array.isArray(prepared.sheetLines) && prepared.sheetLines.length, 'inspect черновика несёт весь лист');
   assert.match(prepared.sheetLines.join('\n'), /Что агент должен сделать: 2 ситуации\./);
 
-  // Отказ: ничего не записано, и сказано, что прогон не начнётся и где меняется ожидание.
+  // Declined: nothing is written, and the run will not start until they are confirmed.
   answers = [false];
   const declined = await call('agent_lab_accept', { id: built.id });
   assert.equal(declined.accepted, false);
-  assert.equal(declined.message, 'Ожидания не подтверждены. Прогон не начнётся, пока они не подтверждены. Ожидание ситуации меняется правкой библиотеки сценариев.');
-  assert.equal(confirms[0]!.title, 'Подтвердить ожидания: 2 ситуации?');
-  assert.ok(confirms[0]!.body.endsWith('Да — подтвердить все. Нет — не подтверждать сейчас.'));
-  assert.match(confirms[0]!.body, /Что агент должен сделать: 2 ситуации\./);
+  assert.equal(declined.message, 'Ожидания не подтверждены. Прогон не начнётся, пока они не подтверждены.');
+  assert.deepEqual(asked[0]!.options, ['Подтвердить все', 'Не сейчас'], 'one native question with Russian answers');
+  assert.match(asked[0]!.title, /^Подтвердить ожидания: 2 ситуации\?\n\nЧто агент должен сделать: 2 ситуации\./);
+  assert.doesNotMatch(asked[0]!.title, /\/agent-lab|Версия ожиданий|[a-f0-9]{12}/);
   assert.equal((await call('agent_lab_inspect', { id: built.id })).acceptedDraftHash, undefined);
 
-  // Подтверждение всего листа одним «Да».
-  confirms.length = 0; answers = [true];
+  // The whole sheet is confirmed with one answer.
+  asked.length = 0; answers = [true];
   const accepted = await call('agent_lab_accept', { id: built.id });
-  assert.equal(confirms.length, 1);
+  assert.equal(asked.length, 1);
   assert.equal(accepted.accepted, true);
-  assert.equal(accepted.message, 'Ожидания подтверждены: 2 ситуации. Можно запускать.');
+  assert.equal(accepted.message, 'Ожидания подтверждены. Можно запускать.');
   const after = await call('agent_lab_inspect', { id: built.id });
   assert.equal(after.acceptedDraftHash, after.draftHash);
   assert.equal(after.trialCount, 0, 'подтверждение не запускает агента');
   assert.deepEqual(accepted.sheetLines, after.sheetLines, 'ответ инструмента несёт весь лист');
-  // Своих слов инструмент не просит: ожидание меняется только в библиотеке сценариев.
-  assert.deepEqual(selects, []); assert.deepEqual(editorCalls, []);
+  // The tool asks for no words: an expectation changes only in the scenario library.
+  assert.deepEqual(editorCalls, []);
 
-  // Схема инструмента по-прежнему принимает только id: согласие приходит только из диалога Pi.
+  // The schema still takes only the id: the consent comes from the native dialog alone.
   const parameters = tools.get('agent_lab_accept')!.parameters as { properties: Record<string, unknown>; required?: string[] };
   assert.deepEqual(Object.keys(parameters.properties), ['id']);
-  const rendered = tools.get('agent_lab_accept')!.renderResult!(
-    { content: [{ type: 'text', text: JSON.stringify(accepted) }] } as never,
-    { expanded: false, isPartial: false }, { fg: (_color: string, text: string) => text } as never) as unknown as Component;
-  const shown = rendered.render(100).join('\n');
-  assert.match(shown, /Ожидания подтверждены: 2 ситуации\. Можно запускать\./);
-  assert.match(shown, /Что агент должен сделать: 2 ситуации\./);
+  answers = [true, true];
+  const result = await tools.get('agent_lab_accept')!.execute('chat-row', { id: built.id }, undefined, undefined, ctx);
+  const rendered = tools.get('agent_lab_accept')!.renderResult!(result as never, { expanded: false, isPartial: false }, { fg: (_color: string, text: string) => text, bold: (text: string) => text } as never,
+    renderContext()) as unknown as Component;
+  const shown = stripTerminalSequences(rendered.render(100).join('\n'));
+  assert.match(shown, /Ожидания подтверждены: 2 ситуации; агент не запускался — скажите «запусти»\./);
+  assert.doesNotMatch(shown, /[{}"]|[a-f0-9]{12}/, 'the row is words, never the payload');
   assert.deepEqual(notices, []);
 });
 
@@ -1324,25 +677,6 @@ test('normal live ingress retains 300 original dialogues while bounding the lega
   } finally { ExperimentLab.prototype.create = originalCreate; await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('on the board a digit answers a situation\'s question: the owner\'s decision is stored with a receipt from the board', async () => {
-  const cwd = await mkdtemp(join(tmpdir(), 'agent-lab-board-answer-'));
-  const seed = new ExperimentLab(join(cwd, '.agent-lab'), createDemoRuntime());
-  await seed.init();
-  let id: string;
-  try { id = (await seed.create(demoInput(), { cards: true })).id; await seed.waitForIdle(); } finally { await seed.close(); }
-  const { command, shutdown } = registered(), session = boardSession(cwd);
-  // Situation 1 — the first of the sample, selected when the board opens — waits for an answer; «1» is its first answer, «Да».
-  session.state.steps = [['1'], ['q']];
-  try {
-    await command(id, session.ctx);
-    assert.match(session.screens[0]!, /1 {2}Возврат оплаты — номер только по просьбе +\? нужен ваш ответ/);
-    const library = (await new ExperimentStore(join(cwd, '.agent-lab')).get(id)).librarySnapshot as LibraryV2;
-    assert.deepEqual([library.receipts.at(-1)!.via, library.receipts.at(-1)!.command.kind], ['board', 'settle_claim']);
-    assert.match(session.screens[1]!, /Ситуация 1: записано\./);
-    assert.match(session.screens[1]!, /1 {2}Возврат оплаты — номер только по просьбе +✓ готова/);
-    assert.deepEqual([session.selectCalls.length, session.confirmBodies.length, session.editorCalls.length], [0, 0, 0], 'the key pressed on the shown answer is the decision');
-  } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); }
-});
 /** Every tool the extension registers, in order: preparing and reading, the situation commands, the draft, the run and the results. */
 const TOOL_NAMES = ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_status', 'agent_lab_cards', 'agent_lab_card_answer', 'agent_lab_resume_preparation', 'agent_lab_card_check',
   'agent_lab_card_fact', 'agent_lab_card_expectation', 'agent_lab_card_client', 'agent_lab_card_similar', 'agent_lab_card_remove', 'agent_lab_edit', 'agent_lab_accept',
@@ -1373,7 +707,7 @@ test('headless model tools prepare and edit only; approvals and human assessment
       'situations change only in the scenario library');
     await assert.rejects(tools.get('agent_lab_edit')!.execute('edit-stale', { id: report.id, expectedHash: report.draftHash, patch: { settings: { repeats: 2 } } }, undefined, undefined, ctx), /изменился/);
     await assert.rejects(tools.get('agent_lab_edit')!.execute('edit-approval', { id: report.id, expectedHash: edited.draftHash, patch: { approved: true, reviewMode: 'human' } }, undefined, undefined, ctx));
-    await assert.rejects(command(report.id, ctx as ExtensionCommandContext), /native Pi terminal/);
+    await assert.rejects(command(report.id, ctx as ExtensionCommandContext), /интерактивном терминале Pi/);
     const unchanged = JSON.parse(await readFile(report.artifacts.evidence, 'utf8'));
     assert.equal(unchanged.reviewMode, null); assert.equal(unchanged.phase, 'review');
     await assert.rejects(access(join(directory, '.agent-lab', '.lock')));

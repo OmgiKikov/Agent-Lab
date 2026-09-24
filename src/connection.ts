@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import { addUsage, checkSchema, emptyUsage, experimentSchema, fingerprint, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type Runtime, type Scenario, type Target } from './contracts.js';
+import { addUsage, checkSchema, emptyUsage, experimentSchema, fingerprint, isRunnable, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type Runtime, type Scenario, type Target } from './contracts.js';
 import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
 import { sourceIdentity } from './normalize.js';
@@ -41,8 +41,8 @@ export function resolveTarget(raw: unknown, base: string): Target {
 export function portableTarget(target: Target, base: string): unknown {
   const path = (file: string) => relative(base, file) || '.';
   const executable = (cwd: string, file: string) => { const value = relative(cwd, file); return value.includes('/') ? value : `./${value}`; };
-  const prompt = target.kind !== 'sandbox' && target.promptFile ? { promptFile: path(target.promptFile) } : {};
-  const release = target.kind !== 'sandbox' && target.release ? { release: { ...target.release, ...(target.release.cwd ? { cwd: path(target.release.cwd) } : {}),
+  const prompt = isRunnable(target) && target.promptFile ? { promptFile: path(target.promptFile) } : {};
+  const release = isRunnable(target) && target.release ? { release: { ...target.release, ...(target.release.cwd ? { cwd: path(target.release.cwd) } : {}),
     command: isAbsolute(target.release.command) ? executable(target.release.cwd ?? base, target.release.command) : target.release.command } } : {};
   if (target.kind === 'module') return { ...target, ...prompt, ...release, path: path(target.path) };
   if (target.kind !== 'command') return { ...target, ...prompt, ...release };

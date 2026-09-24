@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { emptyUsage, experimentSchema, goalAttainment, replyQuality, settingsSchema, simulatorFidelity, type Experiment, type MetricAssessment, type Trial } from '../src/contracts.js';
-import type { EvidenceBundle } from '../src/artifacts.js';
+import { evidenceBundle, type EvidenceBundle } from '../src/artifacts.js';
 import { toHtml, toMarkdown, type Block, type Report } from '../src/blocks.js';
 import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { htmlReport, jsonReport, markdownReport, runReport } from '../src/report.js';
@@ -415,4 +415,119 @@ test('the page is dark by default and prints on a light page', () => {
   assert.match(print, /color-scheme:light/);
   assert.ok(luminance(print, 'page') > 0.9 && luminance(print, 'text') < 0.2, 'dark text on a white page in print');
   assert.ok(htmlReport(libraryRun()).includes(`<style>${REPORT_CSS}</style>`), 'the style is inline');
+});
+
+/* ───────────── the stored first-format demo: what the exported report says about a confirmed draft and its results ───────────── */
+
+/** Two cards of the retired built-in demo (a stored draft of old-format cards), with its policy and requirements. */
+async function legacyDemoCards(): Promise<Experiment> {
+  const draft = experimentSchema.parse(JSON.parse(await readFile(new URL('./fixtures/legacy-demo-draft.json', import.meta.url), 'utf8')));
+  const agent = draft.revisions[0]!.spec;
+  return {
+    schemaVersion: '1', id: 'cards-test', task: draft.task, mode: 'demo', workflow: 'evaluate',
+    createdAt: '2026-09-08T00:00:00.000Z', updatedAt: '2026-09-08T00:00:00.000Z', phase: 'review', message: 'Карточки готовы.',
+    sources: draft.sources, settings: { ...draft.settings, repeats: 2 }, requirements: draft.requirements, questions: [],
+    scenarios: draft.scenarios.slice(0, 2),
+    revisions: [{ id: 'revision-1', spec: { ...agent, tools: [...agent.tools, 'update_record'] }, parentId: null, hypothesis: '', createdAt: '2026-09-08' }],
+    selectedRevisionId: 'revision-1', manifestHash: null, reviewedAt: null, reviewMode: null, controlConsumedAt: null,
+    trials: [], comparisons: [], iterations: [], usage: emptyUsage(), error: null, limitations: [], humanReviews: [], target: { kind: 'sandbox' }, goldenCases: [], dialogues: [], profiles: [],
+  } as unknown as Experiment;
+}
+const noTrace = (record: Experiment) => ({ get: async () => record, traceJournal: async () => '' });
+
+test('coincident replies with different scores are named in the exported reports, never counted as fixed', async () => {
+  const before = await legacyDemoCards();
+  before.id = 'before'; before.phase = 'results_review';
+  before.settings.userModes = ['reactive']; before.settings.repeats = 1;
+  before.scenarios = [before.scenarios[0]!];
+  const card = before.scenarios[0]!;
+  card.checks = [];
+  card.metrics = [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'd', passCriteria: 'p', failCriteria: 'f' }];
+  before.trials = [{ id: 'before_trial', revisionId: 'revision-1', scenarioId: card.id, familyId: card.familyId,
+    repeat: 0, userMode: 'reactive', split: 'dev', manifestHash: 'hash', outcome: 'ungraded', reason: '', checks: [],
+    events: [{ seq: 0, type: 'assistant', text: 'The same instruction.' }], initialState: card.initialState, finalState: card.initialState,
+    elapsedMs: 1, usage: emptyUsage(), assessments: [{ metricId: 'goal', result: 'fail', rationale: 'r', evidence: [0] }] }];
+  const after = structuredClone(before); after.id = 'after'; after.parentRunId = before.id;
+  after.trials[0]!.id = 'after_trial'; after.trials[0]!.assessments![0]!.result = 'pass';
+  const bundle = await evidenceBundle(after, noTrace(before));
+  for (const text of [htmlReport(bundle), markdownReport(bundle)]) {
+    assert.match(text, /совпавшими ответами и разными оценками: 1\. Нужна проверка\./);
+    assert.doesNotMatch(text, /Исправлено 1/);
+  }
+});
+
+test('a confirmed draft never claims in the report that a human checked the cards', async () => {
+  const record = await legacyDemoCards();
+  record.phase = 'results_review'; record.reviewedAt = '2026-09-17T00:00:00.000Z'; record.reviewMode = 'expectations';
+  const bundle = await evidenceBundle(record, noTrace(record));
+  assert.doesNotMatch(markdownReport(bundle), /Проверка карточек: человеком|подтверждены человеком/);
+  assert.doesNotMatch(htmlReport(bundle), /Проверка карточек: человеком|подтверждены человеком/);
+});
+
+test('an unverified reply is a status line in the exported report, never a quotation', async () => {
+  const record = await legacyDemoCards();
+  record.phase = 'results_review';
+  record.scenarios = [record.scenarios[0]!];
+  const card = record.scenarios[0]!;
+  card.checks = [];
+  card.metrics = [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'd', passCriteria: 'p', failCriteria: 'f' }];
+  // The judge cites words the stored reply does not contain, so the record cannot show what the agent said.
+  record.trials = [{ id: 'unverified_trial', revisionId: 'revision-1', scenarioId: card.id, familyId: card.familyId,
+    repeat: 0, userMode: 'reactive', split: 'dev', manifestHash: 'hash', outcome: 'ungraded', reason: '', checks: [],
+    events: [{ seq: 0, type: 'user', text: 'Вопрос' }, { seq: 1, type: 'assistant', text: 'Ответ агента.' }],
+    initialState: card.initialState, finalState: card.initialState, elapsedMs: 1, usage: emptyUsage(),
+    assessments: [{ metricId: 'goal', result: 'fail', rationale: 'Обоснование судьи.', evidence: [1],
+      citations: [{ seq: 1, quote: 'этих слов в ответе нет' }] }] }];
+  record.failureModes = [{ id: 'cluster', name: 'Причина', description: 'Описание.', trialIds: ['unverified_trial'] }];
+  record.settings.userModes = ['reactive']; record.settings.repeats = 1;
+
+  const bundle = await evidenceBundle(record, noTrace(record));
+  const html = htmlReport(record);
+  const markdown = markdownReport(bundle);
+  const whyHtml = html.match(/<h2>Почему ошибается<\/h2>[\s\S]*?<\/section>/)?.[0] ?? '';
+  const whyMarkdown = markdown.split('## Почему ошибается')[1]?.split('\n## ')[0] ?? '';
+  for (const why of [whyHtml, whyMarkdown]) {
+    assert.ok(why, 'the cause list is exported');
+    assert.match(why, /ответ не подтверждён цитатой/);
+    // The customer reads this list first: quoting the sentinel would say the agent uttered it.
+    assert.doesNotMatch(why, /«ответ не подтверждён цитатой»/);
+    assert.doesNotMatch(why, /Обоснование судьи/, 'the judge rationale is never the cause quote');
+  }
+  // The failure breakdown says it the same way, and nowhere is the sentinel quoted or the rationale shown.
+  for (const text of [html, markdown]) {
+    assert.doesNotMatch(text, /«ответ не подтверждён цитатой»|«этих слов в ответе нет»/);
+    assert.doesNotMatch(text, /Обоснование судьи/);
+  }
+});
+
+test('HTML reports escape untrusted text and remain self-contained with explicit evidence limits', async () => {
+  const record = await legacyDemoCards();
+  // The situation title is record text the report prints; the task itself is no longer on the page.
+  record.scenarios[0]!.title = '<script>alert(1)</script> & "тест"';
+  const html = htmlReport(record);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt; &amp; &quot;тест&quot;/);
+  assert.doesNotMatch(html, /<script>alert/);
+  assert.doesNotMatch(html, /<iframe|<img|<form/i);
+  // Self-contained: the one script runs by its hash, and the optional font stylesheet is the only thing fetched.
+  assert.match(html, /default-src 'none'/);
+  assert.equal(html.match(/<script\b/gi)?.length, 1);
+  assert.equal(html.match(/<link\b/gi)?.length, 1);
+  assert.match(html, /<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com\//);
+  assert.match(html, /lang="ru"/);
+  // Explicit limits: a draft says it never ran, the demo is labelled, and the full records stay with the owner.
+  assert.match(html, /прогон ещё не запускался/);
+  assert.match(html, /учебный пример/);
+  assert.match(html, /Полные записи разговоров и оценок судьи хранятся у владельца агента\./);
+  record.scenarios[0]!.user.opening = '<img src=x>';
+  const opening = htmlReport(record);
+  assert.match(opening, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(opening, /<img/i);
+  // A compare record keeps its control cards off the page until the control phase is over. Each state is
+  // its own snapshot, as surfaces receive records: the run derivation is remembered per snapshot.
+  const compare = structuredClone(record);
+  compare.workflow = 'compare'; compare.scenarios[1]!.split = 'control'; compare.scenarios[1]!.title = 'CONTROL_CARD_SENTINEL';
+  assert.doesNotMatch(htmlReport(compare), /CONTROL_CARD_SENTINEL/);
+  const control: Experiment = { ...structuredClone(compare), controlConsumedAt: 'now', phase: 'control' };
+  assert.doesNotMatch(htmlReport(control), /CONTROL_CARD_SENTINEL/);
+  assert.match(htmlReport({ ...structuredClone(control), phase: 'complete' }), /CONTROL_CARD_SENTINEL/);
 });

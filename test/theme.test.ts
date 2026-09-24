@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { visibleWidth } from '@earendil-works/pi-tui';
-import { GLYPH, paint, renderRows, ROLE_TONE, type PaintTheme, type Row, type Tone } from '../extensions/render/theme.ts';
+import { GLYPH, paint, renderRows, ROLE_TONE, wrapRow, type PaintTheme, type Row, type Tone } from '../extensions/render/theme.ts';
 
 /*
  * The theme module (04-UI-SPEC «Theme Module», «Render Matrix», CTX-19…CTX-21): one renderer for
@@ -84,21 +84,32 @@ test('paint puts the weight inside the colour and takes both from the role when 
   assert.equal(paint({ text: 'x', role: 'next:first', tone: 'dim' }, dark), '<fg:dim>x</fg>');
   assert.equal(paint({ text: 'пусто' }, dark), 'пусто');
   assert.equal(paint({ text: '', role: 'blank' }, dark), '');
-  const resultRoles = ['accuracy:good', 'accuracy:warn', 'accuracy:bad', 'accuracy:none', 'alarm', 'trust', 'trust:small', 'reality', 'heading', 'item', 'item:muted', 'failed', 'quote', 'muted', 'next', 'next:first', 'good'];
-  for (const role of [...resultRoles, 'lead', 'line', 'detail', 'situation', 'agreement', 'agreement-tail', 'cause', 'example', 'title', 'expected', 'said', 'rule', 'more', 'violated', 'unverified', 'dis-title', 'dis-verdicts', 'dis-reason']) {
-    assert.ok(ROLE_TONE[role], `role «${role}» has a token`);
-  }
-  // The phase-4 verdict roles are gone with src/verdict.ts; every tone of the table is one of the eight.
-  for (const role of ['verdict:good', 'verdict:warn', 'verdict:bad', 'headline', 'pointer', 'no-failures', 'blank']) assert.equal(ROLE_TONE[role], undefined, role);
+  const resultRoles = ['accuracy:good', 'accuracy:warn', 'accuracy:bad', 'accuracy:none', 'alarm', 'trust', 'trust:small', 'reality', 'heading', 'item', 'item:muted', 'failed', 'quote', 'muted', 'next', 'next:first', 'good'] as const;
+  for (const role of resultRoles) assert.ok(ROLE_TONE[role], `role «${role}» has a token`);
+  // Only the result rows of result-text.ts are painted by role now: the old board's roles are gone with it; every tone of the table is one of the eight.
+  const table = ROLE_TONE as Record<string, unknown>;
+  for (const role of ['verdict:good', 'headline', 'pointer', 'lead', 'agreement', 'dis-title', 'blank']) assert.equal(table[role], undefined, role);
   assert.equal(paint({ text: 'Плохо', role: 'verdict:bad' }, dark), 'Плохо');
   for (const [role, { tone }] of Object.entries(ROLE_TONE)) assert.ok(TONES.includes(tone), `${role}: «${tone}»`);
 });
 
-test('the glyph registry of phases 2–4 lives in one const', () => {
-  assert.deepEqual([GLYPH.fail, GLYPH.pass, GLYPH.unmeasured, GLYPH.selected, GLYPH.waiting, GLYPH.control], ['✗', '✓', '?', '▸', '●', '◆']);
-  assert.deepEqual([GLYPH.fixed, GLYPH.broken, GLYPH.unstable, GLYPH.same, GLYPH.incomparable], ['+', '-', '*', '.', '/']);
-  assert.deepEqual([GLYPH.barFill, GLYPH.barTrack, GLYPH.arrow], ['━', '─', '→']);
+test('the glyph registry holds the few signs of ui-spec §6 and the chat\'s ● and └, each one column wide', () => {
+  assert.deepEqual([GLYPH.pass, GLYPH.fail, GLYPH.unmeasured, GLYPH.selected, GLYPH.more], ['✓', '✗', '?', '›', '↓']);
+  assert.deepEqual([GLYPH.action, GLYPH.branch, GLYPH.barFill, GLYPH.barTrack, GLYPH.arrow], ['●', '└', '━', '─', '→']);
+  // The old board's signs are gone: selection is «›», a waiting or control mark is a word.
+  assert.ok(!Object.values(GLYPH).some(glyph => ['▸', '◆', '=', '!', '~', '+', '*', '/'].includes(glyph)));
   for (const glyph of Object.values(GLYPH)) assert.equal(visibleWidth(glyph), 1, `«${glyph}» is one column`);
+});
+
+test('a marked row hangs its text after the sign: ● and └ never have text under them', () => {
+  const lines = renderRows([{ text: 'Собираю ситуации из логов, которые лежат в папке выгрузки за прошлый месяц', mark: { text: GLYPH.action, tone: 'success' } },
+    { text: 'Двенадцать ситуаций: девять готовы, две ждут вашего ответа, одна не подходит для теста', indent: 2, mark: { text: GLYPH.branch, tone: 'muted' } }], dark, 40).map(plain);
+  assert.match(lines[0]!, /^● Собираю/);
+  assert.ok(lines.slice(1).some(line => /^ {2}└ Двенадцать/.test(line)), lines.join('\n'));
+  for (const line of lines) assert.ok(visibleWidth(line) <= 40, line);
+  const branch = lines.findIndex(line => line.includes('└'));
+  assert.ok(lines.slice(branch + 1).every(line => line.startsWith('    ')), 'the summary wraps under its text, after «└ »');
+  assert.deepEqual(wrapRow({ text: 'один два три четыре', indent: 2, hang: 4 }, 12), ['  один два', '    три', '    четыре']);
 });
 
 // ---- Lint (SCREEN-07): width is never measured or cut by hand in the render code. ----
@@ -108,7 +119,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const RENDER_DIR = join(here, '..', 'extensions', 'render');
 const BANNED_CALLS = /\.slice\(|\.substring\(|padStart\(|padEnd\(/g;
 const BANNED_LENGTH = /\b(?:text|line|title|label|message|quote)\.length\b/g;
-const GLYPHS = /[✗✓▸●◆━─→]/g;
+const GLYPHS = /[✗✓▸●◆━─→└›↓]/g;
 
 async function renderFiles(): Promise<string[]> {
   const walk = async (dir: string): Promise<string[]> => (await Promise.all((await readdir(dir, { withFileTypes: true })).map(entry =>

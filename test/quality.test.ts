@@ -59,22 +59,26 @@ test('one-test acceptance projection shows the complete current definition and o
   const projection = testPlanLines(current);
   assert.equal(projection.draftHash, draftHash(current));
   const text = projection.lines.join('\n');
-  assert.match(text, /^ТЕСТ\nСИТУАЦИЯ\n  Название: Карточка a/m);
+  assert.match(text, /^Тест\nСитуация\n  Название: Карточка a/m);
+  assert.ok(!text.includes(draftHash(current).slice(0, 12)), 'the hash seals the definition; the owner reads the definition');
   for (const expected of ['Цель: Получить точный ответ', 'Факты: Тариф известен владельцу', 'Поведение: Отвечает кратко',
     'Максимум продолжений: 2', 'Персона: Владелец магазина', 'Характеристики:', '- Не любит жаргон',
     'Известно пользователю:', '- Номер точки 42', 'Пользователь не знает:', '- Внутренний ID',
-    'Ответы на уточнения:', '«Какая точка?» → «42»', 'Требования:', '- [policy] Назвать точный тариф. · policy.md: «Тариф должен быть 1%.»', 'Допущения:',
-    'Исходное состояние:', 'Режимы: static', 'static · только начальная реплика',
-    'Точные проверки:', '[answer] Точный ответ', 'Последний ответ в точности: "Тариф 1%"',
-    'Рубрики судьи:', '[goal] Цель выполнена · agent', 'PASS: p', 'FAIL: f']) assert.ok(text.includes(expected), expected);
+    'Ответы на уточнения:', '«Какая точка?» → «42»', 'Требования:', '- Назвать точный тариф. · policy.md: «Тариф должен быть 1%.»', 'Допущения:',
+    'Только начальная реплика',
+    'Точные проверки:', '- Точный ответ', 'Последний ответ в точности: "Тариф 1%"',
+    'Что оценивает судья:', '- Цель выполнена · агент', 'Справился: p', 'Не справился: f']) assert.ok(text.includes(expected), expected);
+  // The owner reads the definition in words: no mode names, no settings keys, no JSON.
+  assert.doesNotMatch(text, /static|reactive|scripted|maxTurns|PASS|FAIL|\{"/);
+  assert.doesNotMatch(text, /\[(policy|answer|goal)\]/, 'no ids in the owner\'s dialog');
   assert.ok(text.includes(opening.replace('\n', '\n  ')));
   assert.ok(text.includes(success.replace('\n', '\n  ')));
   assert.doesNotMatch(text, /Уточнение один|Уточнение два/, 'script is not executed or shown in static mode');
-  assert.match(text, /НАБЛЮДЕНИЕ\n  ответ агента \(reply\)/);
+  assert.match(text, /Наблюдение\n  ответ агента$/m);
   assert.match(text, /Этот тест действительно проверяет нужное поведение\?$/);
 
   const scripted = testPlanLines({ ...current, settings: settingsSchema.parse({ userModes: ['scripted'], maxTurns: 6 }) });
-  assert.match(scripted.lines.join('\n'), /scripted · продолжения:\n  1\. Уточнение один\n  2\. Уточнение два/);
+  assert.match(scripted.lines.join('\n'), /Продолжения по сценарию:\n  1\. Уточнение один\n  2\. Уточнение два/);
 });
 
 test('acceptance projection rejects ambiguous drafts and names tool/state observations exactly', () => {
@@ -84,12 +88,12 @@ test('acceptance projection rejects ambiguous drafts and names tool/state observ
   assert.throws(() => testPlanLines({ ...base, workflow: 'compare' }), /evaluate/);
   assert.throws(() => testPlanLines({ ...base, phase: 'results_review' }), /незапущенный/);
   const tool = testPlanLines({ ...base, scenarios: [{ ...base.scenarios[0]!, goalObservation: 'tool' }] });
-  assert.match(tool.lines.join('\n'), /НАБЛЮДЕНИЕ\n  результат инструмента \(tool\)/);
+  assert.match(tool.lines.join('\n'), /Наблюдение\n  результат инструмента$/m);
   const stateRecord = { ...base, scenarios: [{ ...base.scenarios[0]!, goalObservation: 'state' as const,
     initialState: { records: { A: { status: 'new' } }, writableFields: ['status'], transientFailures: 0 } }] };
   const state = testPlanLines(stateRecord);
-  assert.match(state.lines.join('\n'), /Исходное состояние: \{"records":\{"A":\{"status":"new"\}\},"writableFields":\["status"\],"transientFailures":0\}/);
-  assert.match(state.lines.join('\n'), /НАБЛЮДЕНИЕ\n  итоговое состояние \(state\)/);
+  assert.match(state.lines.join('\n'), /Исходное состояние:\n  Записи:\n  - A: status = new\n  Агент может менять: status/);
+  assert.match(state.lines.join('\n'), /Наблюдение\n  итоговое состояние$/m);
 });
 
 const ruleSource = { id: 'src_rules', name: 'Правила возврата', content: 'Первая строка.\nВерните деньги через терминал.\nТретья строка.\nЧетвёртая строка.\nПятая строка.' };
@@ -115,10 +119,12 @@ test('the expectation sheet names every situation, its expectation and its owner
   assert.equal(sheet.count, 3);
   assert.equal(sheet.countText, '3 ситуации');
   assert.equal(sheet.labelWidth, 2);
-  assert.deepEqual(sheet.boardHead, ['ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ', '3 ситуации · номер правила — порядок в ваших материалах']);
   assert.equal(sheet.lines[0], 'Что агент должен сделать: 3 ситуации. Номер правила — порядок в ваших материалах.');
   assert.equal(sheet.lines[1], '');
-  assert.equal(sheet.lines.at(-1), `Версия ожиданий: ${draftHash(draft).slice(0, 12)}`);
+  // The confirmation is bound to the draft's hash; the owner reads the expectations, never the hash.
+  assert.equal(sheet.draftHash, draftHash(draft));
+  assert.ok(!sheet.lines.some(line => line.includes(draftHash(draft).slice(0, 12)) || line.includes('Версия ожиданий')), 'no hash on screen');
+  assert.equal(sheet.lines.at(-1), '   Правило: у ситуации нет правила из ваших материалов.', 'the sheet ends with its last situation');
   assert.equal(sheet.lines[2], '1. Ситуация: g');
   assert.deepEqual(sheet.cards[0]!.details, [
     { role: 'expected', text: 'Должен: Ожидание a' },
@@ -143,7 +149,7 @@ test('the expectation sheet names every situation, its expectation and its owner
   assert.throws(() => expectationSheet({ ...draft, phase: 'results_review' }), /незапущенного/);
 });
 
-test('the sheet marks a situation the owner changed and the compact form points at the full list', () => {
+test('the sheet marks a situation the owner changed and the compact form keeps two rules a situation and counts the rest', () => {
   const draft = rulesRecord({ id: 'run_1234567890', scenarios: [sheetCard('a'), sheetCard('b', { requirementIds: ['refund', 'polite', 'unknown_1', 'unknown_2'] })],
     ownerExpectationScenarioIds: ['a'] });
   const sheet = expectationSheet(draft);
@@ -153,20 +159,20 @@ test('the sheet marks a situation the owner changed and the compact form points 
   assert.equal(sheet.cards[1]!.details.some(detail => detail.role === 'marker'), false);
   assert.equal(sheet.lines.filter(line => line.includes('Ожидание изменено владельцем')).length, 1);
 
-  const compact = sheet.compactLines(draft.id);
+  const compact = sheet.compactLines();
   assert.equal(compact.filter(line => line.trim().startsWith('Правило')).length, 3, 'at most two rule rows per situation');
   assert.equal(compact.some(line => line.trim() === 'и ещё 2 правила'), true);
   assert.equal(compact.some(line => line.includes('Ожидание изменено владельцем')), true);
-  assert.equal(compact.at(-2), `Все правила — /agent-lab ${draft.id.slice(0, 8)}, раздел 2.`);
-  assert.equal(compact.at(-1), sheet.lines.at(-1));
+  assert.ok(!compact.some(line => line.includes(draft.id.slice(0, 8)) || line.includes('раздел') || line.includes('/agent-lab')), 'no id and no pointer to a screen that is gone');
+  assert.equal(compact.at(-1), '   и ещё 2 правила');
 });
 
 test('the sheet handles no situations, twelve situations and eleven rules in one situation', () => {
   const empty = expectationSheet(rulesRecord({ scenarios: [] }));
-  assert.deepEqual(empty.lines, ['Ситуаций пока нет.', 'Они появятся после подготовки. a — рассказать Pi, что проверить.']);
+  assert.deepEqual(empty.lines, ['Ситуаций пока нет.', 'Они появятся после подготовки: скажите в чате, что проверить.']);
   assert.deepEqual(empty.cards, []);
   assert.equal(empty.countText, '0 ситуаций');
-  assert.deepEqual(empty.compactLines('run_1234'), empty.lines);
+  assert.deepEqual(empty.compactLines(), empty.lines);
 
   const many = expectationSheet(rulesRecord({ scenarios: Array.from({ length: 12 }, (_, index) => sheetCard(`card_${index}`)) }));
   assert.equal(many.labelWidth, 3);
@@ -184,7 +190,7 @@ test('the sheet handles no situations, twelve situations and eleven rules in one
   const sheet = expectationSheet(eleven);
   assert.equal(sheet.cards[0]!.details.filter(detail => detail.role === 'rule').length, 11);
   assert.equal(sheet.cards[0]!.details.every(detail => detail.role !== 'unverified'), true);
-  assert.equal(sheet.compactLines(eleven.id).some(line => line.trim() === 'и ещё 9 правил'), true);
+  assert.equal(sheet.compactLines().some(line => line.trim() === 'и ещё 9 правил'), true);
 });
 
 test('trial proof preserves passing and failing dialogue evidence with exact citation ids', () => {

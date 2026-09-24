@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { lstat, readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { fingerprint, type Target } from './contracts.js';
+import { fingerprint, isRunnable, type Target } from './contracts.js';
 
 const exec = promisify(execFile);
 // ponytail: one cached repository snapshot; independent active repositories may recompute, never reuse stale data.
@@ -39,7 +39,7 @@ export function sameTargetVersion(a: string | undefined, b: string | undefined):
 /** Local code identity without persisting source code, diffs or environment secrets. */
 async function codeFingerprint(target: Target): Promise<string | undefined> {
   const path = targetEntryPath(target);
-  const prompt = target.kind !== 'sandbox' && target.promptFile ? await readFile(target.promptFile, 'utf8') : undefined;
+  const prompt = isRunnable(target) && target.promptFile ? await readFile(target.promptFile, 'utf8') : undefined;
   if (!path) return prompt === undefined ? undefined : fingerprint({ prompt });
   try {
     const entryStat = await stat(path);

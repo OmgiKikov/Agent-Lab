@@ -36,8 +36,8 @@ const PROPOSAL_ATTEMPTS = 5;
 const LATER_MESSAGES = 60;
 const CARD_LIMIT = 200;
 
-/** The agent a run evaluates when the owner names none: it runs outside Lab with its own instructions and tools. */
-const EXTERNAL_AGENT: AgentSpec = { name: 'External agent', instructions: 'The agent under evaluation runs outside Agent Lab and keeps its own instructions and tools.', tools: [] };
+/** The agent a run evaluates when the owner names none: it runs outside Lab with its own instructions and tools. Surfaces name it by how it is started. */
+export const EXTERNAL_AGENT: AgentSpec = { name: 'External agent', instructions: 'The agent under evaluation runs outside Agent Lab and keeps its own instructions and tools.', tools: [] };
 
 /** The agent label of a prepared draft: the owner's, or the external agent under test. Set once, by the first preparation. */
 export function ensureAgentRevision(record: Experiment, agent: AgentSpec | undefined): void {

@@ -2,7 +2,7 @@ import type { Experiment, Trial } from './contracts.js';
 import { assessmentEventContent, describeCheck, internalPromptRule } from './contracts.js';
 import { automaticTrialResult } from './outcomes.js';
 import { pluralForm } from './plural.js';
-import { oneLine, safeText, shortId } from './text.js';
+import { oneLine, safeText } from './text.js';
 import { ruleRegister, ruleText, UNVERIFIED } from './explain.js';
 import { draftHash } from './experiment.js';
 import { judgedScenario } from './card/legacy-v1.js';
@@ -34,11 +34,10 @@ export interface ExpectationSheet {
   /** `13 ситуаций` */
   countText: string;
   labelWidth: number;
-  boardHead: [string, string];
   cards: ExpectationCard[];
   lines: string[];
-  /** At most two rule rows per situation, then where to read all of them. */
-  compactLines(runId: string): string[];
+  /** At most two rule rows per situation, and how many more there are. */
+  compactLines(): string[];
 }
 
 interface TrialProofLines {
@@ -69,15 +68,14 @@ const SHEET_RULE_FORMS: [string, string, string] = ['правило', 'прав�
 export function expectationSheet(record: Experiment): ExpectationSheet {
   if (record.workflow !== 'evaluate') throw new Error('Показать ожидания можно только для теста workflow evaluate.');
   if (record.phase !== 'review') throw new Error('Показать ожидания можно только для незапущенного черновика.');
+  // The confirmation is bound to the draft's hash, which the start checks; the owner reads the expectations, never the hash.
   const hash = draftHash(record);
-  const version = `Версия ожиданий: ${hash.slice(0, 12)}`;
   const count = record.scenarios.length;
   const countText = `${count} ${pluralForm(count, SITUATION_FORMS)}`;
   const labelWidth = `${count}.`.length;
-  const boardHead: [string, string] = ['ЧТО АГЕНТ ДОЛЖЕН СДЕЛАТЬ', `${countText} · номер правила — порядок в ваших материалах`];
   if (!count) {
-    const empty = ['Ситуаций пока нет.', 'Они появятся после подготовки. a — рассказать Pi, что проверить.'];
-    return { draftHash: hash, count, countText, labelWidth, boardHead, cards: [], lines: empty, compactLines: () => [...empty] };
+    const empty = ['Ситуаций пока нет.', 'Они появятся после подготовки: скажите в чате, что проверить.'];
+    return { draftHash: hash, count, countText, labelWidth, cards: [], lines: empty, compactLines: () => [...empty] };
   }
   const register = ruleRegister(record);
   const requirements = new Map(record.requirements.map(item => [item.id, item]));
@@ -110,17 +108,27 @@ export function expectationSheet(record: Experiment): ExpectationSheet {
     ...details.map(detail => `${' '.repeat(labelWidth + 1)}${detail.text}`),
   ];
   const head = `Что агент должен сделать: ${countText}. Номер правила — порядок в ваших материалах.`;
-  const lines = [head, '', ...built.flatMap(item => [...block(item.card, item.card.details), '']), version];
-  const compactLines = (runId: string): string[] => {
-    const blocks = built.flatMap(item => {
-      const shown = item.ruleRows.slice(0, 2);
-      const hidden = item.ruleRows.length - shown.length;
-      const more = hidden ? [{ text: `и ещё ${hidden} ${pluralForm(hidden, SHEET_RULE_FORMS)}` }] : [];
-      return [...block(item.card, [item.must, ...shown, ...more, ...item.markerRows]), ''];
-    });
-    return [head, '', ...blocks, `Все правила — /agent-lab ${shortId(runId)}, раздел 2.`, version];
-  };
-  return { draftHash: hash, count, countText, labelWidth, boardHead, cards: built.map(item => item.card), lines, compactLines };
+  const lines = [head, '', ...built.flatMap(item => [...block(item.card, item.card.details), ''])].slice(0, -1);
+  const compactLines = (): string[] => [head, '', ...built.flatMap(item => {
+    const shown = item.ruleRows.slice(0, 2);
+    const hidden = item.ruleRows.length - shown.length;
+    const more = hidden ? [{ text: `и ещё ${hidden} ${pluralForm(hidden, SHEET_RULE_FORMS)}` }] : [];
+    return [...block(item.card, [item.must, ...shown, ...more, ...item.markerRows]), ''];
+  })].slice(0, -1);
+  return { draftHash: hash, count, countText, labelWidth, cards: built.map(item => item.card), lines, compactLines };
+}
+
+/**
+ * The starting state of a one-test definition in words: each record with its fields, what the agent may change, the
+ * tool failures it meets first; a value of the agent's own test environment as it is stored.
+ */
+function stateLines(state: Experiment['scenarios'][number]['initialState']): string[] {
+  const records = Object.entries(state.records).map(([id, fields]) => `- ${id}: ${Object.entries(fields).map(([name, value]) => `${name} = ${String(value)}`).join(', ')}`);
+  const external = Object.entries(state.external ?? {}).map(([name, value]) => `- ${name}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
+  return [...(records.length ? ['Записи:', ...records] : []),
+    ...(state.writableFields.length ? [`Агент может менять: ${state.writableFields.join(', ')}`] : []),
+    ...(state.transientFailures ? [`Сбоев инструмента в начале: ${state.transientFailures}`] : []),
+    ...(external.length ? ['Окружение агента:', ...external] : [])];
 }
 
 /** The exact one-test proposal shown before the owner accepts its definition. */
@@ -133,22 +141,22 @@ export function testPlanLines(record: Experiment): TestPlanLines {
     throw new Error('У теста должны быть непустые ситуация, вход и критерий успеха.');
   }
   if (!scenario.goalObservation) throw new Error('У теста не указан конкретный канал наблюдения.');
-  const observation = { reply: 'ответ агента (reply)', tool: 'результат инструмента (tool)', state: 'итоговое состояние (state)' }[scenario.goalObservation];
+  const observation = { reply: 'ответ агента', tool: 'результат инструмента', state: 'итоговое состояние' }[scenario.goalObservation];
   const hash = draftHash(record);
   const user = scenario.user;
   const maxFollowUps = Math.min(user.maxFollowUps ?? record.settings.maxTurns - 1, record.settings.maxTurns - 1);
   const requirements = scenario.requirementIds.map(id => {
     const requirement = record.requirements.find(item => item.id === id);
-    if (!requirement) return `- [${id}]`;
+    if (!requirement) return '- правило не найдено в материалах';
     const source = record.sources.find(item => item.id === requirement.sourceId);
-    return `- [${id}] ${requirement.text}${source ? ` · ${source.name}: «${requirement.quote}»` : ''}`;
+    return `- ${requirement.text}${source ? ` · ${source.name}: «${requirement.quote}»` : ''}`;
   });
   const situation = [
     `Название: ${scenario.title}`,
     `Цель: ${user.goal}`,
     `Факты: ${user.facts}`,
     `Поведение: ${user.behavior}`,
-    `Максимум продолжений: ${maxFollowUps} (общий maxTurns: ${record.settings.maxTurns})`,
+    `Максимум продолжений: ${maxFollowUps} (всего ходов в разговоре: ${record.settings.maxTurns})`,
     ...(user.persona ? [`Персона: ${user.persona}`] : []),
     ...(user.characteristics?.length ? [`Характеристики:\n${user.characteristics.map(item => `- ${item}`).join('\n')}`] : []),
     ...(user.knows?.length ? [`Известно пользователю:\n${user.knows.map(item => `- ${item}`).join('\n')}`] : []),
@@ -156,47 +164,43 @@ export function testPlanLines(record: Experiment): TestPlanLines {
     ...(user.answers?.length ? [`Ответы на уточнения:\n${user.answers.map(item => `- «${item.ifAsked}» → «${item.reply}»`).join('\n')}`] : []),
     ...(requirements.length ? [`Требования:\n${requirements.join('\n')}`] : []),
     ...(scenario.assumptions?.length ? [`Допущения:\n${scenario.assumptions.map(item => `- ${item}`).join('\n')}`] : []),
-    ...(Object.keys(scenario.initialState.records).length || scenario.initialState.writableFields.length
-      || scenario.initialState.transientFailures || scenario.initialState.external !== undefined
-      ? [`Исходное состояние: ${JSON.stringify(scenario.initialState)}`] : []),
+    ...(stateLines(scenario.initialState).length ? [`Исходное состояние:\n${stateLines(scenario.initialState).join('\n')}`] : []),
   ].join('\n');
   const input = [
-    `Режимы: ${record.settings.userModes.join(', ')}`,
     `Начальная реплика: ${user.opening}`,
     ...(record.settings.userModes.includes('scripted') ? [user.script?.length
-      ? `scripted · продолжения:\n${user.script.map((item, index) => `${index + 1}. ${item}`).join('\n')}`
-      : 'scripted · продолжений нет'] : []),
-    ...(record.settings.userModes.includes('reactive') ? ['reactive · продолжения генерируются из карточки в ответ на агента'] : []),
-    ...(record.settings.userModes.includes('static') ? ['static · только начальная реплика'] : []),
+      ? `Продолжения по сценарию:\n${user.script.map((item, index) => `${index + 1}. ${item}`).join('\n')}`
+      : 'Продолжений по сценарию нет'] : []),
+    ...(record.settings.userModes.includes('reactive') ? ['Клиента играет Lab: продолжения — его ответы агенту по этой карточке'] : []),
+    ...(record.settings.userModes.includes('static') ? ['Только начальная реплика'] : []),
   ].join('\n');
   const success = [
     `Критерий результата: ${scenario.successCriteria}`,
     scenario.checks.length ? `Точные проверки:\n${scenario.checks.map(check => [
-      `- [${check.id}] ${check.description}`,
+      `- ${check.description}`,
       `  Условие: ${describeCheck(check)}`,
       ...(check.stage ? [`  Этап: ${check.stage}`] : []),
     ].join('\n')).join('\n')}` : 'Точные проверки: нет',
-    scenario.metrics?.length ? `Рубрики судьи:\n${scenario.metrics.map(metric => [
-      `- [${metric.id}] ${metric.name} · ${metric.subject}`,
+    scenario.metrics?.length ? `Что оценивает судья:\n${scenario.metrics.map(metric => [
+      `- ${metric.name} · ${metric.subject === 'simulator' ? 'клиент в симуляции' : 'агент'}`,
       `  Описание: ${metric.description}`,
-      `  PASS: ${metric.passCriteria}`,
-      `  FAIL: ${metric.failCriteria}`,
+      `  Справился: ${metric.passCriteria}`,
+      `  Не справился: ${metric.failCriteria}`,
       ...(metric.stage ? [`  Этап: ${metric.stage}`] : []),
-    ].join('\n')).join('\n')}` : 'Рубрики судьи: нет',
+    ].join('\n')).join('\n')}` : 'Что оценивает судья: ничего',
   ].join('\n');
   return {
     draftHash: hash,
+    // The confirmation seals this exact definition by the draft's hash, which the start checks; the owner reads the definition.
     lines: [
-      'ТЕСТ',
-      ...field('СИТУАЦИЯ', situation),
+      'Тест',
+      ...field('Ситуация', situation),
       '',
-      ...field('ВХОД', input),
+      ...field('Вход', input),
       '',
-      ...field('УСПЕХ', success),
+      ...field('Успех', success),
       '',
-      ...field('НАБЛЮДЕНИЕ', observation),
-      '',
-      `Версия: ${hash.slice(0, 12)}`,
+      ...field('Наблюдение', observation),
       '',
       'Этот тест действительно проверяет нужное поведение?',
     ],

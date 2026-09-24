@@ -1,23 +1,23 @@
-import { keyHint, type Theme } from '@earendil-works/pi-coding-agent';
-import { Text, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
+import { type Theme } from '@earendil-works/pi-coding-agent';
+import { type Component } from '@earendil-works/pi-tui';
 import type { AgentToolResult, ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
-import { chatBlock, fitRows } from '../../src/result-text.js';
+import { chatBlock, fitRows, type ResultRow } from '../../src/result-text.js';
 import type { ResultView } from '../../src/result-view.js';
-import { safeText, shortId } from '../../src/text.js';
-import { renderRows, type PaintTheme } from './theme.ts';
+import { expandHint, hintLines, lineBody } from './feed.ts';
+import { GLYPH, paint, renderRows, type PaintTheme, type Tone } from './theme.ts';
 
 /*
- * The chat verdict block (04-UI-SPEC B1–B4) and its tool host. One component draws the block for
- * every host from the same `ResultView`; the session file (0644) holds only ids (REV-01): the view
- * is kept in memory while Pi runs and, from plan 04-03 on, rebuilt from the 0600 run record.
+ * The result of a run in the chat (ui-spec §4.10): the same rows the workspace and the CLI lay out, under the
+ * branch sign of the action that produced it. The session file (0644) holds only ids (REV-01): the view is kept in memory
+ * while Pi runs; a reopened session says so in one line and the owner asks for the result again.
  */
 
 export const VERDICT_KIND = 'agent-lab/verdict';
 
-/** What `agent_lab_run` stores in the session: a kind, a version and two ids — never a quote, a title or a number. */
+/** What a result stores in the session: a kind, a version and two ids — never a quote, a title or a number. */
 export interface VerdictDetails { kind: typeof VERDICT_KIND; version: 1; runId: string; resultKey: string }
 
-/** Only this exact shape is drawn as the block; every other `details` (old sessions, other tools) keeps the legacy look (T-04-02). */
+/** Only this exact shape is drawn as the block. */
 export function isVerdictDetails(value: unknown): value is VerdictDetails {
   if (!value || typeof value !== 'object') return false;
   const details = value as Partial<VerdictDetails>;
@@ -38,61 +38,74 @@ export function rememberView(resultKey: string, view: ResultView): void {
   }
 }
 
-/** Drop every remembered view (tests, and a reopened session before 04-03 starts with nothing here). */
+/** Drop every remembered view (tests; a reopened session starts with nothing here). */
 export function forgetViews(): void {
   views.clear();
 }
 
-/** The view for a stored result: the remembered one, or null when there is none to draw from (04-03 adds the record rebuild here). */
+/** The view for a stored result: the remembered one, or null when there is none to draw from. */
 export function viewFor(details: VerdictDetails): ResultView | null {
   return views.get(details.resultKey) ?? null;
 }
 
-/** C-190: the honest row when the block cannot be drawn from what the session holds. */
-const missingRunText = (runId: string): string => `Прогон ${shortId(runId)} не найден в .agent-lab — блок нельзя показать.`;
+/** The honest row when the block cannot be drawn from what the session holds. */
+export const MISSING_RESULT = 'Результат не хранится в сессии — попросите показать его ещё раз.';
 
 /**
- * The result block of the chat (ui-spec §4.10) as a pi-tui component: the same rows the board and
- * the CLI lay out, fitted to the width by `fitRows` and painted by role. The rows are built once,
- * in the constructor, so a failing view fails inside the host's try/catch and never inside Pi's
- * render loop. The hint is Pi's own styled `keyHint` text (or a fixed string in tests), so it is not
- * escaped again.
+ * The block under the branch sign: the answer first, the trust line and the causes in the column of its text. The chat's
+ * rows are shifted left by their own indent step, so every line after the first stands under the answer.
+ */
+function underBranch(rows: ResultRow[]): ResultRow[] {
+  return rows.map(row => row.indent >= 2 ? { ...row, indent: row.indent - 2 } : row);
+}
+
+/** Columns before the laid-out rows: two spaces and the branch sign on the first line, three spaces on the rest (each laid-out line keeps its own one-column margin). */
+const LEAD = 3;
+
+/**
+ * The result block of the chat as a pi-tui component: the rows of `chatBlock`, laid out by `fitRows` (so the
+ * trust line breaks only between its parts) and painted by role. The rows are built once, in the constructor,
+ * so a failing view fails inside the host's try/catch and never inside Pi's render loop.
  */
 export class VerdictBlock implements Component {
-  private readonly rows: ReturnType<typeof chatBlock>;
+  private readonly rows: ResultRow[];
   constructor(view: ResultView, private readonly expanded: boolean, private readonly theme: PaintTheme, private readonly hint: (expanded: boolean) => string) {
-    this.rows = chatBlock(view, { expanded });
+    this.rows = underBranch(chatBlock(view, { expanded }));
   }
   invalidate(): void {}
   render(width: number): string[] {
-    return [...renderRows(fitRows(this.rows, width), this.theme, width), ...wrapTextWithAnsi(this.hint(this.expanded), width)];
+    const room = Math.max(1, width - LEAD);
+    const lines = renderRows(fitRows(this.rows, room), this.theme, room);
+    return [...lines.map((line, index) => (index ? ' '.repeat(LEAD) : `  ${paint({ text: GLYPH.branch, tone: 'muted' }, this.theme)}`) + line),
+      ...hintLines(this.hint(this.expanded), width)];
   }
 }
 
 type LegacyRenderer = (result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme) => Component;
 
-/** The first text part of a tool result: what Pi itself would show if the renderer failed. */
-function contentText(result: AgentToolResult<unknown>): string {
-  return result.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
-}
+/** What ctrl+o opens under a result, and what to say next when something failed. */
+export const verdictHint = (view: ResultView) => (expanded: boolean): string => expanded ? expandHint(true, '')
+  : view.failures.length ? `${expandHint(false, 'причины с примерами')} · «покажи ошибку 1» · «отчёт для заказчика»`
+    : `${expandHint(false, 'подробнее')} · «отчёт для заказчика»`;
 
 /**
- * The tool host (B3, B4): verdict details with a remembered view give the block; verdict details
- * without one give the C-190 row; anything else goes to the unchanged legacy renderer. A throw anywhere
- * ends as the escaped content text, never as an exception inside Pi (T-04-05).
+ * The tool host: verdict details with a remembered view give the block; verdict details without one give the
+ * honest row; anything else goes to `legacy`. A throw anywhere ends as one muted row, never as an exception
+ * inside Pi. `onTone` learns the colour of the action's sign.
  */
-export function renderAgentLabResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme, legacy: LegacyRenderer): Component {
+export function renderAgentLabResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme, legacy: LegacyRenderer,
+  onTone: (tone: Tone) => void = () => {}): Component {
   try {
     const details: unknown = result.details;
     if (isVerdictDetails(details)) {
       const view = viewFor(details);
-      if (!view) return new Text(theme.fg('warning', safeText(missingRunText(details.runId))), 0, 0);
-      return new VerdictBlock(view, options.expanded, theme, expanded => expanded ? keyHint('app.tools.expand', 'свернуть')
-        : view.failures.length ? `${keyHint('app.tools.expand', 'причины с примерами')} · «покажи ошибку 1» · «отчёт для заказчика»`
-          : `${keyHint('app.tools.expand', 'подробнее')} · «отчёт для заказчика»`);
+      if (!view) { onTone('muted'); return lineBody(MISSING_RESULT, 'warning', theme); }
+      onTone('success');
+      return new VerdictBlock(view, options.expanded, theme, verdictHint(view));
     }
     return legacy(result, options, theme);
   } catch {
-    return new Text(safeText(contentText(result)), 0, 0);
+    onTone('muted');
+    return lineBody('Этот результат не удалось показать — попросите показать его ещё раз.', 'muted', theme);
   }
 }

@@ -5,7 +5,7 @@ import { delimiter, extname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { fingerprint, scalarSchema, usageSchema, type CallContext, type DialogueMessage, type ReleaseHook, type ReleaseLog, type Target, type TargetSession, type World } from './contracts.js';
+import { fingerprint, isRunnable, scalarSchema, usageSchema, type CallContext, type DialogueMessage, type ReleaseHook, type ReleaseLog, type RunnableTarget, type Target, type TargetSession, type World } from './contracts.js';
 import { targetEntryPath } from './target-version.js';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 
@@ -45,7 +45,8 @@ async function ensureExecutable(command: string, cwd: string, labels: { missing:
 
 /** Static readiness only: never imports, starts, or sends a request to the target. Actual execution still handles drift/errors. */
 export async function preflightTarget(target: Target): Promise<void> {
-  if (target.kind === 'sandbox') return;
+  // A retired sandbox runs nothing; a draft whose agent is not connected yet has nothing to check until it is.
+  if (!isRunnable(target)) return;
   if (target.promptFile) await readPrompt(target.promptFile);
   if (target.release) {
     const cwd = target.release.cwd ?? process.cwd();
@@ -149,7 +150,7 @@ export const externalReplySchema = z.union([
 ]);
 type ExternalReply = z.infer<typeof externalReplySchema>;
 interface ExternalTargetInput {
-  target: Exclude<Target, { kind: 'sandbox' }>; sessionId: string; scenarioId: string;
+  target: RunnableTarget; sessionId: string; scenarioId: string;
   state: World; history: () => DialogueMessage[]; ctx: CallContext;
   /** Called whenever the agent's harness reports records; the runner uses it to label reported state. */
   onRecords?: () => void;
