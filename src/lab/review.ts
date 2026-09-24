@@ -6,10 +6,10 @@ import { suiteEvidence } from '../connection.js';
 import { addUsage, emptyUsage, fingerprint, humanReviewInputSchema, reassessmentSchema, validatePreparation, type Experiment, type HumanReviewInput, type ReassessmentInput } from '../contracts.js';
 import { assessmentRubrics } from '../assessment.js';
 import { assessTrial, grade } from '../evaluation.js';
-import { scenarioSources } from '../judge.js';
+import { judgmentFailure, scenarioSources } from '../judge.js';
 import { countingRuleFor, markTargets, measurementUsable } from '../outcomes.js';
 import { evaluatorVersion } from '../pi.js';
-import { CODE_ONLY_ASSESSMENT, judgeFailure } from '../run.js';
+import { CODE_ONLY_ASSESSMENT } from '../run.js';
 import { verifyAcceptedRun } from '../scenario-library.js';
 import { simulatorChecks } from '../simulator.js';
 import type { Lab } from './context.js';
@@ -91,7 +91,7 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
             else if (judged.metrics?.length) { trial.assessmentError = CODE_ONLY_ASSESSMENT; trial.assessmentFailure = 'code_only'; }
           } catch (error) {
             trial.assessmentError = (error instanceof Error ? error.message : String(error)).slice(0, 4000);
-            trial.assessmentFailure = judgeFailure(error, ctx.signal);
+            trial.assessmentFailure = judgmentFailure(error, ctx.signal);
             if (!trial.checks.length || ctx.signal.aborted) trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';
             // The saved facts could not be graded again (a reset or a state the agent never confirmed): the agent's side, not the judge's.
             if (trial.outcome === 'invalid') trial.invalidCause = 'agent';

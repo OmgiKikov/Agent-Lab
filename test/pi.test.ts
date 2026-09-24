@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { test } from 'node:test';
 import { createPiRuntime, getPiStatus } from '../src/pi.js';
-import { REPAIR_ATTEMPTS } from '../src/llm/structured.js';
+import { TASK_ATTEMPTS } from '../src/llm/structured.js';
 import { CARD_ROLE } from '../src/prompts.js';
 import { judgeInput, JUDGE_RESPONSE_FORMAT, observableSources } from '../src/judge.js';
 import { createGigaProvider, GIGA_PROVIDER_ID } from '../src/giga-provider.js';
@@ -577,8 +577,8 @@ test('structural recovery never supplies a truncated string or a missing schema 
       ctx.onGeneratorValidation = value => rejections.push(value);
       ctx.onGeneratorOutput = value => outputs.push(value);
       await assert.rejects(f.adapter.userTurn!({ user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 }, ctx), /не проходит проверку/);
-      assert.equal(outputs.length, REPAIR_ATTEMPTS);
-      assert.equal(rejections.length, REPAIR_ATTEMPTS);
+      assert.equal(outputs.length, TASK_ATTEMPTS);
+      assert.equal(rejections.length, TASK_ATTEMPTS);
       assert.ok(rejections.every((r: any) => r.accepted === false && r.reason));
     } finally { await f.close(); }
   }

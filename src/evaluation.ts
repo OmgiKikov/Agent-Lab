@@ -1,4 +1,4 @@
-import { judgeFailure, SERVICE_REPLY_REASON } from './run.js';
+import { SERVICE_REPLY_REASON } from './run.js';
 import { judgedScenario } from './card/legacy-v1.js';
 import { directChecks } from './checkpoints.js';
 import { createUserState, allowedUserActions, advanceUser, requiredUserTurns, userDecisionSchema } from './user-controller.js';
@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto';
 import { addUsage, emptyUsage, isCardExecution, runnableTarget, scriptIssue, type CheckResult, type Requirement, type Revision, type Scenario, type Settings, type Source, type Target, type TraceEvent, type Trial, type UserMode } from './contracts.js';
 import { assessmentRubrics, judgeAuditSchema, metricApplies, RAG_METRIC_IDS, validateAssessments, type JudgeAudit, type MetricAssessment } from './assessment.js';
 import { userTurnSchema, type CallContext, type DialogueMessage, type Runtime, type TargetSession } from './runtime.js';
-import { hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
+import { hasCompleteJudgment, judgmentFailure, observableSources, sealJudgeReceipt } from './judge.js';
+import { ProviderFailure } from './llm/model-call.js';
 import { openExternalTarget } from './targets.js';
 import { simulatorChecks } from './simulator.js';
 
@@ -311,7 +312,7 @@ export async function evaluateTrial(input: {
     } catch (error) {
       if (persistenceFailed) throw persistenceError;
       trial.assessmentError = (ctx.signal.aborted ? 'Metric assessment cancelled' : error instanceof Error ? error.message : 'Metric assessment failed').slice(0, 4000);
-      trial.assessmentFailure = judgeFailure(error, ctx.signal);
+      trial.assessmentFailure = judgmentFailure(error, ctx.signal);
     }
     trial.elapsedMs = Math.round(performance.now() - started);
   }
@@ -328,7 +329,7 @@ export async function assessTrial(runtime: Runtime, stored: Scenario, sources: S
   const scenario = judgedScenario(stored, trial);
   const metrics = assessmentRubrics(scenario, trial);
   if (!metrics.length) return [];
-  if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');
+  if (!runtime.assess) throw new ProviderFailure('unavailable', 'Metric assessment is unavailable for this runtime');
   let latest: JudgeAudit | undefined;
   let mapped: MetricAssessment[] | undefined;
   try {
