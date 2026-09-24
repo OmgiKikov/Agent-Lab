@@ -64,18 +64,28 @@ export function countingRuleOf(scenario: Scenario | undefined, rule: HeadlineRul
 const stateObserved = (trial: Trial): boolean => !!trial.observation && trial.observation.state !== 'missing'
   && (trial.observation.state === 'sandbox' || trial.observation.resetConfirmed === true);
 
+/** The events of the agent's side of a dialogue: what it said and what its tool log shows. */
+const AGENT_SIDE: ReadonlySet<Trial['events'][number]['type']> = new Set(['assistant', 'tool_call', 'tool_result']);
+
 /**
- * The judge's own verdict on one expectation, read through the channel the expectation is observed on: a
- * pass or a fail stands only when the judge cited an event of that channel — an agent reply, a tool result
- * of a complete tool log, or an observed state. Otherwise it is unknown (`no_evidence`). The raw judgment
- * stays stored as it was; only its reading is gated here.
+ * The judge's own verdict on one expectation, read through the channel the expectation is observed on:
+ * - reply: a pass or a fail stands only when the judge cited an agent reply;
+ * - tool: only on a tool log the connection confirmed complete. A pass stands only when the judge cited a
+ *   tool result: the agent saying it acted is not the action. A fail stands when the judge cited any event
+ *   of the agent's side (a reply, a tool call or a tool result): on a complete log the missing call is proven
+ *   by the log itself, and a reply claiming the action is evidence of that failure. Citing only the customer
+ *   proves nothing; a partial log proves no absence.
+ * - state: a pass or a fail stands only on a cited observed state whose reset was confirmed.
+ * Otherwise it is unknown (`no_evidence`). The raw judgment stays stored as it was; only its reading is gated
+ * here. The compiled rubric's TOOL_LOG_RULE is unchanged: it is sealed into accepted definition hashes.
  */
 export function recordedExpectationResult(trial: Trial, expectation: Pick<Expectation, 'id' | 'observation'>): 'pass' | 'fail' | 'unknown' | undefined {
   const assessment = trial.assessments?.find(item => item.metricId === expectation.id);
   if (!assessment || assessment.result === 'unknown') return assessment?.result;
   const cited = trial.events.filter(event => assessment.evidence.includes(event.seq));
   const channel = expectation.observation === 'reply' ? cited.some(event => event.type === 'assistant')
-    : expectation.observation === 'tool' ? trial.observation?.tools === 'complete' && cited.some(event => event.type === 'tool_result')
+    : expectation.observation === 'tool' ? trial.observation?.tools === 'complete'
+      && cited.some(event => assessment.result === 'pass' ? event.type === 'tool_result' : AGENT_SIDE.has(event.type))
     : stateObserved(trial) && cited.some(event => event.state !== undefined);
   return channel ? assessment.result : 'unknown';
 }

@@ -12,9 +12,13 @@ import { agentMetricResult, automaticTrialResult, expectationResult, GOAL_METRIC
  * the CI exit code and the report — reads a run through `deriveRun`, so no two of them can count a
  * situation differently:
  *
- *   trials ──usable? human override──► attempt verdict ──every attempt, fail-first──► situation verdict
- *                                                        └─ undecided ──► one reason code (NOT_MEASURED_CODES)
+ *   trials of the card's own plan ──human override──► attempt verdict ──fail-first──► situation verdict
+ *     (family, split, manifest)                          │                              └─ undecided ──► one reason code (NOT_MEASURED_CODES)
+ *                                                        ├─ any usable attempt failed ──► fail (even beside a silent, missing or duplicated attempt)
+ *                                                        └─ pass ◄── the exact planned set, every attempt usable and passed
  *
+ * An attempt the agent did not answer (empty reply, timeout, 5xx) is not measured and never a fail (OD-1);
+ * it cannot hide a failure a usable attempt proved (OD-2).
  * Reasons are typed where the failure happened (`trial.invalidCause`, `trial.assessmentFailure`).
  * Records written before those fields carry only the harness's own fixed sentences; the decoders
  * below read them and nothing else reads text. Pure: no I/O, no wording.
@@ -135,7 +139,11 @@ export function runCompleteness(record: Experiment, allowPartial = false): strin
   return notes;
 }
 
-/** The strict card result of a legacy card without the goal rubric: the full card must be complete. */
+/**
+ * The strict card result of a legacy card without the goal rubric: the full card must be complete. Its frozen
+ * rule needs a complete run before any fail is read; it deliberately does not take the fail-first reading of
+ * `partOutcome`, so legacy records keep the verdicts they were shown with.
+ */
 export function cardOutcome(record: Experiment, scenario: Scenario, allowPartial = false): Verdict {
   const trials = record.trials.filter(t => t.scenarioId === scenario.id);
   if (!trials.length || runCompleteness({ ...record, scenarios: [scenario], trials }, allowPartial).length) return 'unknown';
@@ -143,30 +151,52 @@ export function cardOutcome(record: Experiment, scenario: Scenario, allowPartial
   return outcomes.includes('fail') ? 'fail' : outcomes.every(o => o === 'pass') ? 'pass' : 'unknown';
 }
 
-/**
- * The attempt gate every headline metric passes through: the expected `mode:repeat` set equals the
- * seen set and the counts (skipped when `partial`, which still requires at least one attempt), and
- * every attempt belongs to this card's family, split and plan. Usability is not part of it.
- */
-function attemptsMatch(record: Experiment, scenario: Scenario, trials: Trial[], partial = false): boolean {
-  if (!trials.length) return false;
-  const modes = record.settings.userModes.filter(mode => mode !== 'scripted' || scenario.user.script !== undefined);
-  const expected = new Set(modes.flatMap(mode => Array.from({ length: record.settings.repeats }, (_, repeat) => `${mode}:${repeat}`)));
-  const seen = new Set(trials.map(trial => `${trial.userMode}:${trial.repeat}`));
-  if (!partial && (!expected.size || trials.length !== expected.size || seen.size !== expected.size || [...expected].some(key => !seen.has(key)))) return false;
-  return !trials.some(trial => trial.familyId !== scenario.familyId || trial.split !== scenario.split
+/** At least one attempt, and every attempt belongs to this card's family, split and, where the record has one, plan. */
+function attemptsBelong(record: Experiment, scenario: Scenario, trials: Trial[]): boolean {
+  return !!trials.length && !trials.some(trial => trial.familyId !== scenario.familyId || trial.split !== scenario.split
     || record.manifestHash && trial.manifestHash !== record.manifestHash);
 }
 
+/** The seen `mode:repeat` set and count equal the planned ones; always true when `partial`. */
+function plannedSet(record: Experiment, scenario: Scenario, trials: Trial[], partial = false): boolean {
+  if (partial) return true;
+  const modes = record.settings.userModes.filter(mode => mode !== 'scripted' || scenario.user.script !== undefined);
+  const expected = new Set(modes.flatMap(mode => Array.from({ length: record.settings.repeats }, (_, repeat) => `${mode}:${repeat}`)));
+  const seen = new Set(trials.map(trial => `${trial.userMode}:${trial.repeat}`));
+  return !!expected.size && trials.length === expected.size && seen.size === expected.size && [...expected].every(key => seen.has(key));
+}
+
+/** The planned set of the card's own attempts: they belong and match the plan (skipped when `partial`). */
+function attemptsMatch(record: Experiment, scenario: Scenario, trials: Trial[], partial = false): boolean {
+  return attemptsBelong(record, scenario, trials) && plannedSet(record, scenario, trials, partial);
+}
+
+type PartOutcome = (result: (trial: Trial) => Verdict) => Verdict;
 /**
- * One headline metric over the card: unknown unless the attempts match and every one of them is a
- * usable measurement, then fail-first over the attempts. Both headline metrics go through this
- * same gate, so an unusable card is unknown before any fail is read.
+ * The fail-first decision of one part of a card (an expectation, the exact checks, a headline metric, the
+ * card itself) over its attempts (OD-2). Nothing is decided unless every attempt is of the card's own
+ * family, split and plan: an attempt of another one decides nothing, not even a fail. A usable attempt
+ * whose result is `fail` decides the part as failed, even when another planned attempt is unusable (the
+ * agent was silent, the judge failed), missing or duplicated: an attempt of the card's own plan can only
+ * add a failure, never undo one. A pass needs the exact planned set (or `partial`), every attempt usable
+ * and every result `pass`. Anything else is unknown. An unusable attempt never contributes a fail (OD-1).
  */
+function partOutcome(record: Experiment, scenario: Scenario, trials: Trial[], partial: boolean): PartOutcome {
+  const belong = attemptsBelong(record, scenario, trials);
+  const planned = belong && plannedSet(record, scenario, trials, partial);
+  const usable = trials.map(trial => measurementUsable(scenario, trial, record.humanReviews));
+  return result => {
+    if (!belong) return 'unknown';
+    const results = trials.map(result);
+    if (results.some((item, i) => usable[i] && item === 'fail')) return 'fail';
+    return planned && usable.every(Boolean) && results.every(item => item === 'pass') ? 'pass' : 'unknown';
+  };
+}
+
+/** One headline metric over the card, decided fail-first by `partOutcome`. */
 function metricCardOutcome(record: Experiment, scenario: Scenario, metricId: string, partial = false): Verdict {
   const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
-  if (!attemptsMatch(record, scenario, trials, partial) || trials.some(trial => !measurementUsable(scenario, trial, record.humanReviews))) return 'unknown';
-  return failFirst(trials.map(trial => agentMetricResult(trial, metricId, record.humanReviews) ?? 'unknown'));
+  return partOutcome(record, scenario, trials, partial)(trial => agentMetricResult(trial, metricId, record.humanReviews) ?? 'unknown');
 }
 
 /** One part of a card's verdict: an expectation (label А, Б, В…, with its words), a legacy card's goal or prompt rules, or a card's exact checks. */
@@ -175,13 +205,13 @@ type HeadlineOutcome = { outcome: Verdict; goal: Verdict | 'none'; rules: Verdic
 const failFirst = (results: Verdict[]): Verdict => results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
 
 /**
- * A card counted by its expectations: each expectation is fail-first over the attempts (its part), and the
- * card passes only when every expectation passed in every attempt. Its exact checks, where it has them, are
- * one more part of the same AND. The attempt and usability gate comes first, as for every headline card.
+ * A card counted by its expectations: each expectation is decided fail-first over the attempts (its part,
+ * `partOutcome`), and the card passes only when every expectation passed in every planned, usable attempt.
+ * Its exact checks, where it has them, are one more part of the same AND. A usable attempt's failure decides
+ * the part and the card even beside a silent or missing attempt (OD-2); a silent attempt is never a fail (OD-1).
  */
 function expectationsCardOutcome(record: Experiment, scenario: Scenario, trials: Trial[], expectations: CountedExpectation[], partial: boolean): HeadlineOutcome {
-  const gated = attemptsMatch(record, scenario, trials, partial) && trials.every(trial => measurementUsable(scenario, trial, record.humanReviews));
-  const over = (result: (trial: Trial) => Verdict): Verdict => gated ? failFirst(trials.map(result)) : 'unknown';
+  const over = partOutcome(record, scenario, trials, partial);
   const parts: CardPart[] = expectations.map(expectation => ({ id: expectation.id, label: expectation.letter, text: expectation.text,
     outcome: over(trial => expectationResult(trial, expectation, record.humanReviews) ?? 'unknown') }));
   if (scenario.checks.length) parts.push({ id: 'checks', label: 'Точные проверки', outcome: over(trial => trial.outcome === 'pass' ? 'pass' : trial.outcome === 'fail' ? 'fail' : 'unknown') });
@@ -192,10 +222,11 @@ function expectationsCardOutcome(record: Experiment, scenario: Scenario, trials:
  * The headline card result by the card's counting rule (card/expectations.ts headlineRule). A card counted
  * by its expectations passes only when every expectation passed in every attempt. An old generated card is
  * counted by goal attainment and, when it has it, prompt compliance: it passes only when both pass in every
- * attempt, fails when either fails in any attempt, and stays unknown otherwise. Every part passes the same
- * attempt and usability gate before any fail is read, so an unusable card is «не измерено» whatever its parts
- * say. A legacy card without the goal rubric keeps the strict card outcome, with no parts. Reply quality and
- * the RAG rubrics never enter. `parts` name the verdict's parts in the owner's words (А, Б, В; Цель, Правила промпта).
+ * attempt, fails when either fails in any usable attempt, and stays unknown otherwise. Every part is decided
+ * by `partOutcome`: only a usable attempt of the card's own plan can fail it (OD-2), a pass needs the whole
+ * planned set usable, and an unusable attempt alone never fails a card (OD-1). A legacy card without the goal
+ * rubric keeps the strict card outcome, with no parts. Reply quality and the RAG rubrics never enter. `parts`
+ * name the verdict's parts in the owner's words (А, Б, В; Цель, Правила промпта).
  */
 export function headlineCardOutcome(record: Experiment, scenario: Scenario, options: { partial?: boolean } = {}): HeadlineOutcome {
   const partial = options.partial ?? false;

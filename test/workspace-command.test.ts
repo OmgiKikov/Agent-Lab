@@ -240,7 +240,8 @@ const GOAL_AND_RULES_OPTIONS = ['Запрос выполнен — судья о
 
 test('на двойном провале «нет» спрашивает, с чем именно, и пишет ответ на каждую оценку', { timeout: 180000 }, async () => {
   const fixture = await boardFixture('agent-lab-board-both-', goalAndRules);
-  const unchanged = await boardFixture('agent-lab-board-both-still-', record => { goalAndRules(record); record.settings.repeats = 2; });
+  // Attempts of another plan decide nothing, not even a fail (run.ts attemptsBelong): the verdict stays «не измерено» whatever the owner says.
+  const unchanged = await boardFixture('agent-lab-board-both-still-', record => { goalAndRules(record); for (const trial of record.trials) trial.manifestHash = 'other'; });
   const { shutdown, command } = registered();
   const session = workspaceSession(fixture.cwd);
   const notices: string[] = [];
@@ -328,7 +329,8 @@ test('на двойном провале «нет» спрашивает, с ч�
     assert.equal(session.selectCalls.length, 3, '«не знаю» asks nothing');
     assert.equal((await store.get(fixture.record.id)).phase, 'results_review');
 
-    // A situation whose verdict cannot move (a planned attempt is missing) hears that the number did not change.
+    // A situation whose verdict cannot move (its attempt is of another plan) hears that the number did not change.
+    // A missing planned attempt no longer does it: a usable fail of the card's own plan decides the card (OD-2).
     const still = workspaceSession(unchanged.cwd);
     still.state.choice = GOAL_AND_RULES_OPTIONS[2];
     still.state.reason = 'Клиент получил перенос.';

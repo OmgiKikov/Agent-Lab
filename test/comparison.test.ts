@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { sourceIdentity } from '../src/normalize.js';
 import { awaitingVerdict, compareRuns, humanFindings, judgeModel, stabilityAfterReassess, stabilityBetweenRuns } from '../src/comparison.js';
-import { cardOutcome, cardVerdict, goalCardOutcome, headlineCardOutcome, plannedTrials } from '../src/run.js';
+import { readFile } from 'node:fs/promises';
+import { cardOutcome, cardVerdict, deriveRun, goalCardOutcome, headlineCardOutcome, plannedTrials } from '../src/run.js';
 import { buildResultView, exitCodeOf } from '../src/result-view.js';
 import { embeddedBefore } from '../src/artifacts.js';
 import { suiteEvidence } from '../src/connection.js';
 import { automaticTrialResult, COUNTING_RULES, isAgentFailure } from '../src/outcomes.js';
 import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources, sealJudgeReceipt, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
-import { emptyUsage, fingerprint, settingsSchema, type Experiment, type HumanReview, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
+import { emptyUsage, experimentSchema, fingerprint, settingsSchema, type Experiment, type HumanReview, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
 import { goalAttainment, promptCompliance, replyQuality, simulatorFidelity, type JudgeAudit, type MetricAssessment } from '../src/assessment.js';
 
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
@@ -827,7 +828,7 @@ test('an unusable measurement stays unknown with its reason whatever the rules s
   assert.deepEqual(unreset.verdict, { outcome: 'unknown', reason: 'reset_unconfirmed' });
 });
 
-test('two attempts: a rules failure in one of them fails the card; a missing attempt leaves it unknown', () => {
+test('two attempts: a rules failure in one of them fails the card; a missing attempt never undoes it, and still gates a pass', () => {
   const card = ruledCard('c');
   const two = { settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 2 }) };
   const mixed = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'pass')), ruledAttempt('t1', 'c', votes('pass', 'fail'), { repeat: 1 })], two);
@@ -835,12 +836,44 @@ test('two attempts: a rules failure in one of them fails the card; a missing att
   const clean = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'pass')), ruledAttempt('t1', 'c', votes('pass', 'pass'), { repeat: 1 })], two);
   assert.deepEqual(halves(headlineCardOutcome(clean, card)), { outcome: 'pass', goal: 'pass', rules: 'pass' });
   const missing = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'fail'))], two);
-  assert.deepEqual(halves(headlineCardOutcome(missing, card)), { outcome: 'unknown', goal: 'unknown', rules: 'unknown' });
-  assert.deepEqual(cardVerdict(missing, card), { outcome: 'unknown', reason: 'attempts_mismatch' });
+  assert.deepEqual(halves(headlineCardOutcome(missing, card)), { outcome: 'fail', goal: 'unknown', rules: 'fail' },
+    'a usable fail of the card\'s own plan decides; the goal\'s pass still needs the whole planned set');
+  assert.deepEqual(cardVerdict(missing, card), { outcome: 'fail' });
+  const missingPass = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'pass'))], two);
+  assert.deepEqual(cardVerdict(missingPass, card), { outcome: 'unknown', reason: 'attempts_mismatch' });
   assert.deepEqual(halves(headlineCardOutcome(missing, card, { partial: true })), { outcome: 'fail', goal: 'pass', rules: 'fail' }, 'the partial gate decides the matched attempts alone');
   const foreign = ruledRun([card], [ruledAttempt('t', 'c', votes('pass', 'fail'), { manifestHash: 'other' })]);
   assert.deepEqual(cardVerdict(foreign, card), { outcome: 'unknown', reason: 'attempts_mismatch' });
   assert.equal(headlineCardOutcome(foreign, card, { partial: true }).outcome, 'unknown', 'a foreign attempt is never decided, even partially');
+});
+
+test('OD-2: a goal failure in a usable attempt fails the card although the other attempt got no reply; the control verdict reads the same', () => {
+  const card = ruledCard('c');
+  const two = { settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 2 }) };
+  const silent = ruledAttempt('t1', 'c', [], { repeat: 1, outcome: 'invalid', invalidCause: 'agent', reason: 'Испытуемый вернул пустой ответ.' });
+  delete silent.assessments;
+  const run = ruledRun([card], [ruledAttempt('t0', 'c', votes('fail', 'pass')), silent], two);
+  assert.deepEqual(halves(headlineCardOutcome(run, card)), { outcome: 'fail', goal: 'fail', rules: 'unknown' });
+  assert.equal(cardVerdict(run, card, 'goal').outcome, 'fail');
+  assert.equal(goalCardOutcome(run, card), 'fail');
+});
+
+test('the explained failure is one the number counts: an attempt the owner took out is never explained', () => {
+  const card = ruledCard('c', [{ ...goalAttainment }, { ...simulatorFidelity }]);
+  const two = { settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 2 }) };
+  const goalFail = [judged('goal_attainment', 'fail'), judged('user_fidelity', 'pass')];
+  const run = ruledRun([card], [ruledAttempt('t0', 'c', goalFail), ruledAttempt('t1', 'c', goalFail, { repeat: 1 })],
+    { ...two, humanReviews: [review('h', 't0', 'invalid')] });
+  assert.deepEqual(deriveRun(run).failedAttempts.map(item => item.id), ['t1']);
+  assert.deepEqual(buildResultView(run).failures.map(failure => failure.trialId), ['t1']);
+});
+
+test('the frozen run fixtures parse and derive every situation as before', async () => {
+  const derived = async (file: string) => deriveRun(experimentSchema.parse(JSON.parse(await readFile(new URL(`./fixtures/${file}`, import.meta.url), 'utf8'))))
+    .situations.map(item => [item.scenario.id, item.outcome, item.reason ?? null]);
+  assert.deepEqual(await derived('recorded-run.json'), [['d0', 'unknown', 'attempts_mismatch'], ['d1', 'unknown', 'attempts_mismatch']]);
+  assert.deepEqual(await derived('legacy-demo-run.json'), [['a_direct', 'fail', null], ['i_preference', 'fail', null]]);
+  assert.deepEqual(await derived('library-v1/run.json'), [['known_number', 'fail', null], ['late_number', 'unknown', 'judge_unclear']]);
 });
 
 test('a card without the prompt-rule check is decided by its goal; reply quality never moves the headline', () => {
