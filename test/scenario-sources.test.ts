@@ -29,11 +29,11 @@ test('reference selection withholds old agent instructions and can replace the t
 });
 
 test('bounded review identifies unread whole articles and never truncates their text', async () => {
-  const large = [{ ...sources[0]!, content: 'я'.repeat(11900) }, { ...sources[1]!, content: 'ю'.repeat(2500) }];
-  const catalog = Array.from({ length: 240 }, (_, i) => ({ id: `extra-${i}`, name: 'Длинное название статьи '.repeat(3), chars: 100 }));
+  const large = [{ ...sources[0]!, content: 'я'.repeat(35700) }, { ...sources[1]!, content: 'ю'.repeat(7500) }];
+  const catalog = Array.from({ length: 1100 }, (_, i) => ({ id: `extra-${i}`, name: 'Длинное название статьи '.repeat(3), chars: 100 }));
   let review: SourceSelectionInput | undefined;
   const selected = await selectScenarioSources({ ...input, catalog: [...input.catalog, ...catalog] }, large, { selectSources: async request => {
-    assert.ok(serializedBytes(request) <= 64000);
+    assert.ok(serializedBytes(request) <= 240_000);
     if (request.reading) review = request;
     return { sourceIds: ['settings', 'connect'] };
   } }, ctx);
@@ -51,15 +51,15 @@ test('a reference revision cannot replace the article named first for the custom
 });
 
 test('unsupported revision remains empty and byte limits do not cut procedures to make them fit', async () => {
-  assert.deepEqual(fitScenarioSources(['settings', 'settings', 'unknown', 'connect'], [{ ...sources[0]!, content: 'я'.repeat(17000) }, sources[1]!]), [sources[1]]);
+  assert.deepEqual(fitScenarioSources(['settings', 'settings', 'unknown', 'connect'], [{ ...sources[0]!, content: 'я'.repeat(51000) }, sources[1]!]), [sources[1]]);
   const selected = await selectScenarioSources(input, sources, { selectSources: async request => ({ sourceIds: request.reading ? [] : ['settings'] }) }, ctx);
   assert.deepEqual(selected, []);
 });
 
 test('the agent\'s prompts are grounded in as few calls as fit, in order; a prompt too large for one call is left out with the reason', () => {
   const prompt = (index: number, chars: number): Source => ({ id: `p${index}`, name: `prompt ${index}`, content: 'п'.repeat(chars), hash: `h${index}`, kind: 'prompt' });
-  const prompts = Array.from({ length: 40 }, (_, index) => prompt(index + 1, 3000));
-  const huge = prompt(99, 70_000);
+  const prompts = Array.from({ length: 40 }, (_, index) => prompt(index + 1, 9000));
+  const huge = prompt(99, 130_000);
   const plan = promptGroundingPlan('Проверить', [sources[0]!, ...prompts.slice(0, 20), huge, ...prompts.slice(20)]);
   assert.deepEqual(plan.chunks.flat().map(source => source.id), prompts.map(source => source.id), 'every prompt once, in the record\'s order, no article');
   assert.ok(plan.chunks.length > 1 && plan.chunks.length < prompts.length, `${plan.chunks.length} chunks`);

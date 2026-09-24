@@ -258,8 +258,8 @@ test('an answer the harness cannot bind is never kept, whatever the runtime says
 
 /** A large knowledge base beside 40 of the agent's prompts: canned replies of about 3 KB each, far more than one call holds. */
 const promptMaterials = [{ name: 'Правила возвратов', content: policy },
-  { name: 'Доставка', content: 'Условия доставки по городу и области. '.repeat(1200) }, { name: 'Гарантия', content: 'Гарантийный ремонт и обслуживание. '.repeat(1200) },
-  ...Array.from({ length: 40 }, (_, index) => ({ name: `reply_${index + 1}`, content: `Ответ клиенту номер ${index + 1}. ${'Сообщите сроки. '.repeat(100)}`, kind: 'prompt' as const }))];
+  { name: 'Доставка', content: 'Условия доставки по городу и области. '.repeat(4800) }, { name: 'Гарантия', content: 'Гарантийный ремонт и обслуживание. '.repeat(4800) },
+  ...Array.from({ length: 40 }, (_, index) => ({ name: `reply_${index + 1}`, content: `Ответ клиенту номер ${index + 1}. ${'Сообщите сроки. '.repeat(400)}`, kind: 'prompt' as const }))];
 
 /**
  * The fixture runtime on the prompts: a chunk of prompts yields one rule per prompt, a dialogue's grounding finds the
@@ -381,7 +381,7 @@ test('a large knowledge base is read per dialogue: the articles and the rules ch
     return propose(request, ctx);
   };
   const materials = [{ name: 'Правила возвратов', content: policy },
-    { name: 'Доставка', content: 'Условия доставки по городу и области. '.repeat(1200) }, { name: 'Гарантия', content: 'Гарантийный ремонт и обслуживание. '.repeat(1200) }];
+    { name: 'Доставка', content: 'Условия доставки по городу и области. '.repeat(4800) }, { name: 'Гарантия', content: 'Гарантийный ремонт и обслуживание. '.repeat(4800) }];
   await withLab(runtime, async lab => {
     const draft = await lab.create(cardInput({ materials }));
     await lab.waitForIdle();

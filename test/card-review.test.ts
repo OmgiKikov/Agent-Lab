@@ -186,7 +186,7 @@ test('the reviewer reads the whole dialogue and every rule read for it; a review
   assert.deepEqual(request!.payload.card.knows[0], { id: 'f1', label: 'Номер терминала', value: '5678', disclosure: 'on_request', askedAs: 'номер терминала', from: 2, owner: null });
   assert.doesNotMatch(JSON.stringify(request!.payload), /card_|receipt|basisHash|fixture\/reviewer/, 'no ids, receipts or earlier answers');
 
-  const large = draft([['long', proposals.late]], `${policy} ${'Прочие условия возврата. '.repeat(900)}`);
+  const large = draft([['long', proposals.late]], `${policy} ${'Прочие условия возврата. '.repeat(4800)}`);
   const parts = reviewRequests(large.cards[0]!, pendingClaims(large.cards[0]!, { library: large, evidence }), { library: large, evidence });
   assert.deepEqual(parts.map(part => part.aliases), [['goal', 'fact_f1', 'coverage', 'leak'], ['expectation_e1', 'expectation_e2']]);
   assert.deepEqual(parts.map(part => [!!part.payload.dialogue, part.payload.articles.length]), [[true, 0], [false, 1]]);

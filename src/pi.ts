@@ -5,7 +5,7 @@ import { verbatimSpan } from './verbatim.js';
 import { requirementKindSchema } from './scenario-contracts.js';
 import { sourceSelectionSchema, userTurnSchema, type CallContext, type GroundingInput, type Runtime } from './runtime.js';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } from './judge.js';
-import { AGENT_RULES_PER_DIALOGUE, FOCUSED_REQUIREMENT_LIMIT, workInputIssue } from './limits.js';
+import { AGENT_RULES_PER_DIALOGUE, FOCUSED_REQUIREMENT_LIMIT, MODEL_REQUEST_BYTES, workInputIssue } from './limits.js';
 import { callModel, type Model } from './llm/model-call.js';
 import { AUTH_HELP, resolveModels } from './llm/models.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
@@ -106,7 +106,7 @@ const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, m
   .describe('To stop immediately, return done:true and omit message. A nonempty message is always delivered to the target. done:true with a nonempty message means deliver this final user message, receive the target response, then end. done:true with an empty message means stop now without another target response.');
 
 /** A review answer is one short verdict per claim; its repair starts afresh, like every task that carries a whole dialogue. */
-const reviewBounds = (claims: number) => ({ outputBytes: 1_000 + 700 * claims, requestBytes: 96_000 + 700 * claims });
+const reviewBounds = (claims: number) => ({ outputBytes: 1_000 + 700 * claims, requestBytes: MODEL_REQUEST_BYTES + 700 * claims });
 
 /** A catalog up to this many articles is an enum of the answer's schema; a larger one would outweigh the request, so its ids are checked instead. */
 const CATALOG_ENUM_LIMIT = 500;

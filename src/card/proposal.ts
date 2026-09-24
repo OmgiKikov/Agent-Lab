@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { fingerprint, type Requirement, type Source } from '../contracts.js';
 import { text } from '../ids.js';
+import { MODEL_REQUEST_BYTES } from '../limits.js';
 import { cardFindings, PLAUSIBLE_VALUE_WORDS, type CardEvidence, type CheckFinding, type LoggedMessage } from './checks.js';
 import { cardSchema, disclosureSchema, turnSchema, type Card } from './schema.js';
 
@@ -87,7 +88,7 @@ export function cardProposalSchema(call: ProposalCall): z.ZodType<CardProposal> 
 /** The answer and the whole request of one proposal call, in UTF-8 bytes: each later message adds one bounded coverage answer. */
 export const proposalBounds = (call: ProposalCall) => {
   const outputBytes = 16_000 + 500 * call.laterEvents.length;
-  return { outputBytes, requestBytes: 96_000 + outputBytes };
+  return { outputBytes, requestBytes: MODEL_REQUEST_BYTES + outputBytes };
 };
 
 const said = (call: ProposalCall, index: number): string => call.messages.find(message => message.index === index)?.content ?? '';
