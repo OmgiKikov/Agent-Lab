@@ -1,11 +1,12 @@
-import { EXPECTATIONS_PROTOCOL, isCardExecution, type CardExecution, type Scenario, type Trial, type VariantExecution } from '../contracts.js';
+import { EXPECTATIONS_PROTOCOL, isCardExecution, isRunning, type CardExecution, type Experiment, type Scenario, type Trial, type VariantExecution } from '../contracts.js';
 import type { LibraryV1, ScenarioVariant } from '../scenario-contracts.js';
 import { EXPECTATION_LETTERS, expectationRubric } from './compile.js';
 import type { ScenarioLibrary } from './schema.js';
 
 /*
  * The first library format: business groups of variants. Old libraries, drafts and runs are read as
- * they are, never migrated; the variant editor and the screens built on it know only this format.
+ * they are, never migrated and never edited: a draft of this format goes on in the card format
+ * (card/convert.ts), and a run of it opens, re-assesses and repeats with its accepted cards.
  *
  * Its runs were judged by a checkpoint judge plus one `library_required` rubric. Those judgments stay
  * readable and keep their frozen rule (checkpoints.ts). Every new judgment of a first-format card —
@@ -19,11 +20,9 @@ export function libraryV1Of(record: { librarySnapshot?: ScenarioLibrary }): Libr
   return record.librarySnapshot?.formatVersion === 1 ? record.librarySnapshot : undefined;
 }
 
-/** For a variant-editor operation: a card library is never changed by it. */
-export function requireLibraryV1(library: ScenarioLibrary): LibraryV1 {
-  if (library.formatVersion !== 1) throw new Error('Этот набор ситуаций в новом формате: старый редактор его не меняет.');
-  return library;
-}
+/** A draft of the first format that can go on as cards (card/convert.ts): nothing ran on it and nothing runs it now. */
+export const convertible = (record: Pick<Experiment, 'librarySnapshot' | 'phase' | 'trials'>): boolean =>
+  !!libraryV1Of(record) && !record.trials.length && !isRunning(record.phase);
 
 /** An attempt judged by the checkpoint judge: a first-format run made before the projection. Such a verdict keeps its frozen rule. */
 export const judgedByCheckpoints = (trial: Pick<Trial, 'checkpoints' | 'checkpointReceipt'>): boolean =>

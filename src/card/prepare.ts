@@ -1,6 +1,6 @@
 import { Stopped } from '../errors.js';
 import { fingerprint, internalPromptRule, type AgentSpec, type CallContext, type Experiment, type Grounding, type GroundingInput, type Requirement, type Runtime, type Source } from '../contracts.js';
-import { SOURCES_PER_DIALOGUE } from '../limits.js';
+import { SOURCES_PER_DIALOGUE, workInputIssue } from '../limits.js';
 import { StructuredTaskError } from '../llm/structured.js';
 import { withTrafficTopic } from '../miner/cards.js';
 import { replacementFor, unitTopic, type LogSample } from '../miner/plan.js';
@@ -8,7 +8,6 @@ import { countText } from '../plural.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import { libraryHash } from '../scenario-library.js';
 import { selectScenarioSources } from '../scenario-sources.js';
-import { workInputIssue } from '../scenario-work.js';
 import type { ExperimentStore } from '../store.js';
 import { clip } from '../text.js';
 import { importEvidence, loggedMessages, type CardEvidence } from './checks.js';
@@ -40,7 +39,7 @@ const CARD_LIMIT = 200;
 export const EXTERNAL_AGENT: AgentSpec = { name: 'External agent', instructions: 'The agent under evaluation runs outside Agent Lab and keeps its own instructions and tools.', tools: [] };
 
 /** The agent label of a prepared draft: the owner's, or the external agent under test. Set once, by the first preparation. */
-export function ensureAgentRevision(record: Experiment, agent: AgentSpec | undefined): void {
+function ensureAgentRevision(record: Experiment, agent: AgentSpec | undefined): void {
   if (record.revisions.length) return;
   const spec = agent ?? EXTERNAL_AGENT;
   const baseline = { id: fingerprint(spec), parentId: null, spec, hypothesis: 'Конфигурация агента для библиотеки сценариев.', createdAt: new Date().toISOString() };
@@ -58,7 +57,7 @@ export function preparationInputHash(record: Experiment, protocol: string): stri
  * Adds one dialogue's requirements to the record: a rule already known by its source, exact quote and meaning keeps its id,
  * a new rule whose id is taken gets a numbered one. Returns only this dialogue's requirements, with the ids a card must cite.
  */
-export function mergeRequirements(record: Experiment, extracted: Requirement[], sources: Source[]): Requirement[] {
+function mergeRequirements(record: Experiment, extracted: Requirement[], sources: Source[]): Requirement[] {
   const focused: Requirement[] = [];
   for (const requirement of extracted) {
     if (!sources.some(source => source.id === requirement.sourceId)) throw new Error('Требование ссылается на статью вне выбранных материалов.');

@@ -7,6 +7,8 @@ import { hostGrant, requiredAuthority, wordsOf, type HostGrant, type Prepared } 
 import type { CardCommand, LibraryV2 } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { briefRows, changeText, chip, countsText, detailRows, formatNote, listRows, situationData, situationEntry, situationViews, type SituationView } from '../src/card/view.js';
+import { conversionText } from '../src/card/convert.js';
+import { convertible, libraryV1Of } from '../src/card/legacy-v1.js';
 import { situationCoverage } from '../src/miner/cards.js';
 import { CommandRefused, LibraryConflict, UnknownReference } from '../src/errors.js';
 import type { ExperimentLab } from '../src/experiment.js';
@@ -142,7 +144,8 @@ const CHECK_TEXT = (check: CheckState): string | undefined => check.status === '
 
 /** The situation the model named, in the draft a change goes to; a finished run is never changed, its edit goes into a fresh draft of the same set. */
 async function draftSituation(host: CardToolHost, lab: ExperimentLab, directory: string, record: Experiment, number: number) {
-  if (record.librarySnapshot?.formatVersion !== 2) throw new CommandRefused(record.librarySnapshot ? 'Это ситуации старого формата: их можно посмотреть и повторить принятые, но не изменить.'
+  if (record.librarySnapshot?.formatVersion !== 2) throw new CommandRefused(convertible(record) ? 'Это черновик старого формата: его ситуации не меняются. Продолжите их в новом формате — там их можно менять, а старый черновик останется как есть.'
+    : record.librarySnapshot ? 'Это ситуации старого формата: их можно посмотреть и повторить принятые, но не изменить.'
     : 'Ситуации этого прогона записаны до наборов ситуаций: их можно посмотреть и повторить, но не изменить.');
   const target = await lab.editableCards(record.id);
   host.focus.set(directory, target.id);
@@ -333,6 +336,38 @@ function registerCommandTools(pi: ExtensionAPI, host: CardToolHost): void {
         } finally { if (!handedOver) await owned.close(); }
       } catch (error) {
         if (error instanceof CommandRefused) return host.feedResult(callId, { refused: error.message }, { tone: 'warning', rows: [row(safeText(error.message))] }, 'Проверка не нужна');
+        return host.askOwner(callId, error);
+      }
+    },
+  });
+  pi.registerTool({
+    ...displayFor('agent_lab_card_convert'), name: 'agent_lab_card_convert', label: 'Continue in the new format',
+    description: 'A draft of situations in the old format can be read, but neither changed nor accepted. This carries it over into a new draft of situations in the current format: each old situation becomes one by fixed rules, and one the current format cannot hold is named with the reason. The old draft stays as it was and nothing is paid. The new situations are not checked yet: offer agent_lab_card_check, which spends model calls within the limit.',
+    parameters: Type.Object({ id: run }, closed),
+    executionMode: 'sequential',
+    async execute(callId, params, _signal, _onUpdate, ctx) {
+      const directory = resolve(ctx.cwd, '.agent-lab');
+      try {
+        const found = await host.findRun(directory, params.id, ctx);
+        if (!convertible(found)) throw new CommandRefused(libraryV1Of(found) ? 'Прогон старого формата не переносится: его можно открыть, переоценить и повторить как есть.'
+          : 'Переносить нечего: это не черновик старого формата.');
+        const owned = await host.open(ctx.cwd);
+        try {
+          await owned.lab.init();
+          const converted = await owned.lab.convertV1Draft(found.id);
+          host.focus.set(directory, converted.experiment.id);
+          const { views } = await situationsNow(owned.lab, converted.experiment);
+          const text = conversionText(converted);
+          return host.feedResult(callId, { runId: converted.experiment.id, convertedFrom: found.id, counts: countsText(views), situations: views.map(situationEntry),
+            ...(converted.left.length ? { left: converted.left.map(({ title, reason }) => ({ title, reason })) } : {}), checkCalls: converted.calls,
+            instruction: 'The new situations are not checked yet. Say so in one sentence and offer agent_lab_card_check; do not start it without the owner\'s word.' },
+          { tone: converted.left.length ? 'warning' : 'success',
+            rows: [row(text.summary, 'text', true), ...(text.left.length ? [row(text.left.length > 1 ? `${text.left[0]} Ещё не перенесено: ${text.left.length - 1}.` : text.left[0]!, 'muted')] : []), row(text.check, 'muted')],
+            more: [...text.left.slice(1).map(line => row(line, 'muted')), ...(text.left.length > 1 ? [row('')] : []), ...situationRows(views.flatMap(view => listRows(view)))],
+            expand: `все ${views.length}: что пишет клиент и что должен агент` }, `Новый формат · ${runStamp(converted.experiment)}`);
+        } finally { await owned.close(); }
+      } catch (error) {
+        if (error instanceof CommandRefused) return host.feedResult(callId, { refused: error.message }, { tone: 'warning', rows: [row(safeText(error.message))] }, 'Переносить нечего');
         return host.askOwner(callId, error);
       }
     },

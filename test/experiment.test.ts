@@ -861,11 +861,6 @@ test('a record whose trials carry the legacy full audit reassesses without migra
   assert.deepEqual(await lab.get(legacy.id), saved, 'the legacy source record stays unchanged on disk');
 });
 
-test('a library edit always names its author: owner authority is never a default', () => {
-  // Function.length stops at the first defaulted parameter: an `author = 'owner'` default would make it 3.
-  assert.equal(ExperimentLab.prototype.editLibrary.length, 4);
-});
-
 test('a positive control rides on the record: hashes and card identity unchanged, inherited, and bad ids rejected before saving', async t => {
   const { lab, directory } = await setup(t, legacyDemoRuntime());
   const source = await runDraft(lab, await externalDraft(lab, { count: 2 }));

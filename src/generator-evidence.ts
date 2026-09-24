@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { addUsage, emptyUsage, fingerprint, type CallContext, type Runtime } from './contracts.js';
 
-/** `prepare` is how journals written before `groundRequirements` name the grounding call. */
+/**
+ * The calls a journal names. Stored journals are read as written: `prepare` is how journals written before
+ * `groundRequirements` name the grounding call, and `scenarioProposals` and `assessScenarioProposals` are the
+ * first format's preparation, which nothing makes any more.
+ */
 type Method = 'groundRequirements' | 'prepare' | 'selectSources' | 'scenarioProposals' | 'assessScenarioProposals' | 'proposeCard' | 'reviewCard' | 'topicMap';
 export type GeneratorEvidence = {
   workId: string;
@@ -48,8 +52,6 @@ export function captureGeneratorEvidence(runtime: Runtime, emit: (event: Generat
     ...(topicMap ? { topicMap } : {}),
     ...(runtime.groundRequirements ? { groundRequirements: capture('groundRequirements', runtime.groundRequirements.bind(runtime)) } : {}),
     ...(runtime.selectSources ? { selectSources: capture('selectSources', runtime.selectSources.bind(runtime)) } : {}),
-    ...(runtime.scenarioProposals ? { scenarioProposals: capture('scenarioProposals', runtime.scenarioProposals.bind(runtime)) } : {}),
-    ...(runtime.assessScenarioProposals ? { assessScenarioProposals: capture('assessScenarioProposals', runtime.assessScenarioProposals.bind(runtime)) } : {}),
     ...(runtime.proposeCard ? { proposeCard: capture('proposeCard', runtime.proposeCard.bind(runtime)) } : {}),
     ...(runtime.reviewCard ? { reviewCard: capture('reviewCard', runtime.reviewCard.bind(runtime)) } : {}),
   };

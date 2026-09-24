@@ -14,7 +14,7 @@ import { listSuites } from '../src/connection.js';
 import { awaitingVerdict, compareRuns } from '../src/comparison.js';
 import { automaticTrialResult } from '../src/outcomes.js';
 import { buildResultView, exitCodeOf } from '../src/result-view.js';
-import { acceptedDemoDraft } from './helpers/demo-record.js';
+import { acceptedDemoDraft, demoCard } from './helpers/demo-record.js';
 import { evaluateTrial } from '../src/evaluation.js';
 import { htmlReport } from '../src/report.js';
 import { trialProofLines } from '../src/quality.js';
@@ -33,7 +33,7 @@ test('a failed case becomes a reusable regression test without changing provenan
   draft = await lab.updateDraft(draft.id, draftHash(draft), patch);
   assert.deepEqual(draft.settings, originalSettings);
   // The teaching agent asks again for a number it was already given: this situation is the failed case.
-  const scenario = draft.scenarios.find(item => item.id === 'known_number')!;
+  const scenario = draft.scenarios.find(item => item.id === demoCard(draft, 'known'))!;
   // A situation changes only in the library; a draft edit cannot carry cards.
   await assert.rejects(lab.updateDraft(draft.id, draftHash(draft), { scenarios: [{ ...scenario, successCriteria: 'Now require 18:00' }] } as never), /scenarios/);
   // A script is checked before any call, whatever the card: an old-format card with the opening repeated in its script.
@@ -117,7 +117,10 @@ test('the report runs only its fixed CSP-authorized script and escapes recorded 
   t.after(async () => { await lab.close(); await rm(directory, { recursive: true, force: true }); });
   await lab.init();
   const record = await acceptedDemoDraft(lab);
-  record.scenarios[0]!.title = '<script>evil()</script>';
+  // A situation is named in the report by its card, as it was accepted.
+  const library = record.librarySnapshot;
+  assert.equal(library?.formatVersion, 2);
+  if (library?.formatVersion === 2) library.cards[0]!.title = '<script>evil()</script>';
   const html = htmlReport(record);
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
   assert.equal(scripts.length, 1);

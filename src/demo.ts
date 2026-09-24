@@ -3,15 +3,15 @@ import { createInputSchema, type CreateInput, type MetricAssessment, type Runnab
 import type { DialogueProposal } from './card/proposal.js';
 import type { ReviewVerdict } from './card/review.js';
 import { buildTopicMap, type TopicTaskRunner } from './miner/topic-map.js';
-import type { LibraryPatch, ScenarioProposal } from './scenario-contracts.js';
 
 /*
  * The built-in teaching example: two invented refund dialogues, one owner rule and a small module
  * agent with a deliberate defect (it asks again for a terminal number it was already given).
  * Preparation, the reviewer, the user controller and the judge are deterministic stand-ins, so the
  * example goes through the real card path — two situations, one question for the owner, acceptance,
- * run — without a model. It is never evidence of model quality. The first-format proposals below stay
- * for the old example's records, which still open and repeat.
+ * run — without a model. It is never evidence of model quality. Runs of the old example, made in the
+ * first library format, still open and repeat: the controller knows their `disclose` move and the
+ * judge their two checkpoints, which a repeat judges as expectations (card/legacy-v1.ts).
  */
 const demoPolicy = 'Если номер терминала уже указан, не запрашивайте его повторно; объясните возврат. Если номера нет, уточните номер терминала.';
 const demoDialogues = [
@@ -32,33 +32,6 @@ export function demoInput(): CreateInput {
     existingAgent: { name: 'Учебный агент возвратов', instructions: demoPolicy, tools: [] },
     settings: { repeats: 2, maxCalls: 60, maxTurns: 3, maxDurationMs: 300000, timeoutMs: 60000, userModes: ['reactive'] },
   });
-}
-
-/** The owner's answer to the example's one disputed fact: the customer knew the terminal number before the conversation. */
-export const DEMO_OWNER_EDIT: LibraryPatch = { kind: 'edit_fact', variantId: 'late_number', factId: 'terminal', statement: 'Номер терминала: 5678', value: '5678', availability: 'initial',
-  editId: 'demo_owner_confirmed', reason: 'Учебная явная правка: личный номер был известен до разговора' };
-
-function proposal(batchId: string, dialogue: typeof demoDialogues[number]): ScenarioProposal {
-  const known = dialogue.id === 'known', number = known ? '1234' : '5678';
-  return {
-    business: { key: 'refund', title: 'Возврат оплаты', goal: 'Получить инструкцию по возврату оплаты', conditions: [], requirementIds: ['refund_rule'], grouping: { status: 'confirmed', reason: 'Одинаковая цель и правило; номер отличается по способу раскрытия' } },
-    variant: { id: known ? 'known_number' : 'late_number', title: known ? 'Номер уже в первой реплике' : 'Номер раскрывается по просьбе', purpose: 'Проверить уместность запроса номера и получение инструкции по возврату', provenance: 'production', sourceDialogues: [{ batchId, dialogueId: dialogue.id }],
-      ...(known ? {} : { sourceCoverage: [{ batchId, dialogueId: dialogue.id, eventIndex: 2, disposition: 'initial_fact' as const, actionIds: [], factIds: ['terminal'], reason: 'Личный номер раскрыт по просьбе; его исходная доступность в этом учебном примере требует подтверждения владельца.' }] }),
-      userState: { goal: 'Получить инструкцию по возврату', opening: dialogue.messages[0]!.content, facts: [{ id: 'terminal', statement: `Номер терминала: ${number}`, value: number, availability: known ? 'initial' : 'uncertain', reason: known ? 'Личные данные в первой реплике' : 'Учебный спорный факт: подтвердите, что личный номер был известен до разговора', origin: { kind: 'dialogue', batchId, dialogueId: dialogue.id, eventIndex: known ? 0 : 2, quote: `Номер терминала: ${number}` } }], cannotKnow: [], missing: [] },
-      behaviorPolicy: { version: 1, initialState: 'waiting', states: known ? ['waiting', 'done'] : ['waiting', 'disclosed', 'done'], terminalStates: ['done'], maxFollowUps: 1, repetitionLimit: 1,
-        actions: [...(known ? [] : [{ id: 'disclose', kind: 'answer' as const, factIds: ['terminal'], ifAsked: 'Агент просит номер терминала' }]), { id: 'finish', kind: 'finish' as const, factIds: [] }],
-        transitions: known
-          ? [{ from: 'waiting', to: 'done', actionId: 'finish', when: 'После первого ответа: если есть инструкция, цель достигнута; если агент повторно просит уже указанный номер или не помогает, пользователь прекращает попытку без достижения цели' }]
-          : [{ from: 'waiting', to: 'disclosed', actionId: 'disclose', when: 'Агент просит номер терминала, ещё не сообщённый в этом разговоре' },
-            { from: 'waiting', to: 'done', actionId: 'finish', when: 'Агент не просит номер: дал инструкцию либо ответил иначе; пользователь завершает попытку' },
-            { from: 'disclosed', to: 'done', actionId: 'finish', when: 'После ответа на сообщённый номер: есть инструкция либо пользователь прекращает неудачную попытку; повторять номер не будет' }] },
-      environmentFixture: { mode: 'prompt', initialState: { records: {}, writableFields: [], transientFailures: 0 } },
-      evaluationSpec: { goalObservation: 'reply', successCriteria: 'Номер запрошен только до его раскрытия; после получения номера агент объяснил, как оформить возврат', checkpoints: [
-        { id: 'ask_once', requirementId: 'refund_rule', quote: demoPolicy, applicability: 'Вариант обращения за возвратом с номером в первой реплике или раскрываемым по просьбе', observation: 'reply', role: 'required', rule: 'Если номер уже сообщён, не запрашивать его повторно независимо от формулировки вопроса. Если в первой реплике номера нет, запросить его до инструкции.' },
-        { id: 'refund_explanation', requirementId: 'refund_rule', quote: demoPolicy, applicability: 'Пользователь обратился за возвратом и сообщил номер терминала', observation: 'reply', role: 'required', rule: 'Объяснить пользователю, как оформить возврат. Один запрос номера, подтверждение получения номера или обещание помочь без инструкции не выполняют требование.' },
-      ] },
-    },
-  };
 }
 
 /** What a careful model proposes for each example dialogue: the number named at once, and the number named only when asked. */
@@ -105,23 +78,6 @@ export function createDemoRuntime(): Runtime {
       const source = input.sources[0];
       if (!source || source.content !== demoPolicy) throw new Error(DEMO_ONLY);
       return { requirements: [{ id: 'refund_rule', sourceId: source.id, text: demoPolicy, quote: demoPolicy, critical: true }], questions: [] };
-    },
-    async scenarioProposals(input) {
-      return input.dialogues.map(d => {
-        const dialogue = demoDialogues.find(source => source.id === d.id);
-        if (!dialogue || !input.batchId) throw new Error(DEMO_ONLY);
-        return proposal(input.batchId, dialogue);
-      });
-    },
-    async assessScenarioProposals(input) {
-      return input.fields.flatMap(f => f.paths.map(path => {
-        const variant = input.library.variants.find(v => v.id === f.variantId);
-        const uncertain = path.startsWith('userState') && !!variant?.userState.facts.some(fact => fact.availability === 'uncertain');
-        const noDisclosure = path === 'behaviorPolicy' && variant?.id === 'late_number' && !variant.behaviorPolicy.actions.some(a => a.kind === 'answer' && a.factIds.includes('terminal'));
-        const noExplanation = path.startsWith('evaluationSpec') && !variant?.evaluationSpec.checkpoints.some(c => c.id === 'refund_explanation');
-        return { variantId: f.variantId, path, status: uncertain || noDisclosure || noExplanation ? 'needs_review' as const : 'ready' as const,
-          reason: uncertain ? 'Нужно явное уточнение исходного знания личного номера' : noDisclosure ? 'Нет действия раскрытия номера по просьбе' : noExplanation ? 'Нет проверки инструкции по возврату' : 'Проверка заранее заданного учебного примера; не модельная оценка' };
-      }));
     },
     async proposeCard(input) {
       const { source } = input.call;

@@ -165,7 +165,7 @@ async function withLab(runtime: Runtime, work: (lab: ExperimentLab) => Promise<v
 
 /** A card run of card-prep.ts accepted and started; the draft may first be changed by `before`. */
 async function finishedRun(lab: ExperimentLab, input = cardInput(), before?: (id: string) => Promise<void>): Promise<Experiment> {
-  const draft = await lab.create(input, { cards: true });
+  const draft = await lab.create(input);
   await lab.waitForIdle();
   await before?.(draft.id);
   const { library } = await lab.readCards(draft.id);

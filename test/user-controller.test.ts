@@ -2,8 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createUserState, allowedUserActions, advanceUser, requiredUserTurns, userDecisionSchema } from '../src/user-controller.js';
 import { behaviorPolicySchema } from '../src/scenario-contracts.js';
-import { acceptLibrary, compileLibrary, libraryHash } from '../src/scenario-library.js';
-import { libraryFixture, sources, requirements } from './helpers/scenario-library.js';
+import { storedRunV1 } from './helpers/library-v1.js';
 import { evaluateTrial } from '../src/evaluation.js';
 import { headlineTrialResult } from '../src/outcomes.js';
 import { settingsSchema, targetSchema, type Runtime, type Scenario } from '../src/contracts.js';
@@ -61,9 +60,13 @@ test('repetition and finite follow-up bounds cannot be evaded with repeated clar
   assert.equal(requiredUserTurns(p, []), 1, 'empty finish consumes no target turn');
 });
 
+const { sources, requirements } = storedRunV1();
+/** A stored first-format card, compiled when it was accepted; its customer opens the way these tests expect. */
 function compiled(): Scenario {
-  const l = libraryFixture();
-  return compileLibrary(acceptLibrary(l, libraryHash(l), ['variant_1']))[0]!;
+  const scenario = structuredClone(storedRunV1().scenarios.find(item => item.id === 'known_number')!);
+  scenario.user.opening = 'Помогите с возвратом';
+  scenario.execution!.userView.opening = 'Помогите с возвратом';
+  return scenario;
 }
 async function evaluate(scenario: Scenario, decisions: unknown[], options: { mode?: 'reactive' | 'static' | 'scripted'; maxTurns?: number; abort?: boolean } = {}) {
   const inputs: unknown[] = []; let calls = 0;

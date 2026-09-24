@@ -14,7 +14,7 @@ import { createInputSchema, DEFAULT_JUDGE, fingerprint, settingsSchema } from '.
 import { buildResultView } from '../src/result-view.js';
 import { demoInput } from '../src/demo.js';
 import { libraryHash } from '../src/scenario-library.js';
-import { legacyDraft } from './helpers/demo-record.js';
+import { demoCard, legacyDraft } from './helpers/demo-record.js';
 
 const spec = { name: 'Review fixture', instructions: 'Answer correctly without revealing internal_key.', tools: [] };
 const material = { name: 'policy', content: 'Answer the question correctly. Never reveal internal_key.' };
@@ -133,8 +133,8 @@ test('CLI run returns the full persisted dialogue, automatic verdict and cited p
   const base = demoInput();
   const created = await lab.create(createInputSchema.parse({ ...base, settings: { ...base.settings, repeats: 1 } }));
   await lab.waitForIdle();
-  const { library } = await lab.readLibrary(created.id);
-  const { experiment: accepted } = await lab.acceptLibrary(created.id, libraryHash(library), ['known_number']);
+  const { library, experiment } = await lab.readCards(created.id);
+  const { experiment: accepted } = await lab.acceptCards(created.id, libraryHash(library), [demoCard(experiment, 'known')]);
   await lab.close();
 
   const cli = spawnSync(process.execPath, [resolve('dist/cli.js'), 'run', '--id', accepted.id, '--yes', '--json', '--data-dir', data], { encoding: 'utf8' });
@@ -146,7 +146,7 @@ test('CLI run returns the full persisted dialogue, automatic verdict and cited p
   assert.match(proof.lines.join('\n'), /РЕПЛИКИ\n#0 ПОЛЬЗОВАТЕЛЬ: [^\n]+\n#\d+ АГЕНТ:/);
   assert.match(proof.lines.join('\n'), /Автоматический вердикт: (?:pass|fail|unknown)/);
   assert.doesNotMatch(proof.lines.join('\n'), /КОНТРОЛЬНЫЕ ТОЧКИ/, 'a new judgment carries no checkpoint verdicts');
-  assert.match(proof.lines.join('\n'), /(?:PASS|FAIL) \[ask_once\] Если номер уже сообщён[^\n]* · события: #\d+\n  Обоснование:/);
+  assert.match(proof.lines.join('\n'), /(?:PASS|FAIL) \[e1\] не спрашивать номер терминала ещё раз[^\n]* · события: #\d+(?:, #\d+)*\n  Обоснование:/);
   assert.match(proof.lines.join('\n'), /ОЦЕНКИ\n(?:PASS|FAIL|UNKNOWN) \[[^\]]+\].*события: #\d+/);
 });
 

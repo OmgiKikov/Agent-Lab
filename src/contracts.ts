@@ -1,6 +1,5 @@
 import { USER_CONTROLLER_PROTOCOL, userViewSchema, type UserDecision, type UserView, type AllowedUserAction } from './user-controller.js';
-import { checkpointSchema } from './scenario-contracts.js';
-import { importBatchSchema, type ImportBatch, type LibraryV1, type ScenarioProposal, type SemanticFinding } from './scenario-contracts.js';
+import { checkpointSchema, importBatchSchema } from './scenario-contracts.js';
 import { expectationSchema, preparationProgressSchema, scenarioLibrarySchema, type PreparationProgress, type ScenarioLibrary } from './card/schema.js';
 import { calibrationSchema, calibrationSettingSchema, type Calibration, type LogJudge } from './card/calibration.js';
 import type { CardProposal, CardProposalRequest } from './card/proposal.js';
@@ -368,7 +367,7 @@ export const createInputSchema = z.strictObject({
   /** A label for the agent under test; an external agent keeps its own instructions and tools. */
   existingAgent: agentSchema.optional(),
   workflow: z.literal('evaluate').default('evaluate'),
-  /** Curated variants to propose from owner requirements when there are no dialogues; 0 means: dialogues only. */
+  /** Situations written from the owner's rules alone when there are no logs; one when 0. */
   scenarioCount: z.number().int().min(0).max(SCENARIO_LIMIT).default(5),
   target: draftTargetSchema,
   targetVersion: text.max(200).optional(),
@@ -778,32 +777,10 @@ export interface SourceSelectionInput {
 }
 export const sourceSelectionSchema = z.strictObject({ sourceIds: z.array(identifier).max(40) });
 export type SourceSelection = z.infer<typeof sourceSelectionSchema>;
-export interface ScenarioProposalsInput {
-  preparationMode?: 'owner_requirements';
-  scenarioCount?: number;
-  businessCatalog?: Pick<LibraryV1['businessScenarios'][number], 'key' | 'title' | 'goal' | 'conditions' | 'requirementIds'>[];
-  feedback?: { proposals: ScenarioProposal[]; issues: { code: string; path: string; message: string }[] };
-  protocol: 'chronological-scenarios-v1'; task: string; sources: Source[]; requirements: Requirement[]; batchId?: string;
-  dialogues: { id: string; observation: ImportBatch['dialogues'][number]['observation']; events: ImportBatch['dialogues'][number]['events'];
-    messages: { index: number; role: 'user' | 'assistant' | 'tool' | 'system'; content: string }[] }[];
-}
-export interface ScenarioAssessmentInput {
-  protocol: 'chronological-scenarios-v1'; contentHash: string; scope: 'fields' | 'relations';
-  library: Pick<LibraryV1, 'sources' | 'requirements' | 'businessScenarios' | 'variants'> & {
-    imports: { id: string; dialogues: Pick<ImportBatch['dialogues'][number], 'id' | 'events' | 'observation'>[] }[];
-  };
-  ownerFactEvidence: { variantId: string; factId: string; editId: string; status: 'verified' | 'unverified' }[];
-  fields: { variantId: string; paths: string[] }[];
-  comparisonCandidates: (Omit<LibraryV1['variants'][number], 'quality' | 'issues' | 'ownerDecision'> & {
-    business: Pick<LibraryV1['businessScenarios'][number], 'goal' | 'conditions' | 'requirementIds'>;
-  })[];
-}
 export interface Runtime {
   generatorTransport?:'pi-model'|'deterministic-test';
   /** The controlled customer's next move: one of `actions`, the moves allowed right now. The harness renders the message. */
   selectUserAction?(input: { user: UserView; state: string; actions: AllowedUserAction[]; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserDecision>;
-  scenarioProposals?(input: ScenarioProposalsInput, ctx: CallContext): Promise<ScenarioProposal[]>;
-  assessScenarioProposals?(input: ScenarioAssessmentInput, ctx: CallContext): Promise<SemanticFinding[]>;
   /** One card from one dialogue or from the owner's rules alone; every reference in the answer is an enum of this call. */
   proposeCard?(input: CardProposalRequest, ctx: CallContext): Promise<CardProposal>;
   /** The independent reviewer's verdict on each listed claim of one card, and the model that gave it. */
@@ -888,7 +865,7 @@ export function fingerprint(value: unknown): string {
 /** Structural checks of an evaluate suite before it can run; every card gets the development split. */
 export function validatePreparation(raw: unknown, sources: Source[]): Preparation {
   const p = preparationSchema.parse(raw);
-  if (!p.scenarios.length) throw new Error('No cards to run: accept at least one scenario variant');
+  if (!p.scenarios.length) throw new Error('No cards to run: accept at least one situation');
   const requireUnique = (values: string[], name: string) => {
     if (!unique(values)) throw new Error(`Duplicate ${name}`);
   };

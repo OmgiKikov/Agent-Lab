@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { expectationSheet, testPlanLines, trialProofLines } from '../src/quality.js';
 import { countText } from '../src/plural.js';
-import { emptyUsage, RAG_RUBRICS, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial } from '../src/contracts.js';
+import { emptyUsage, RAG_RUBRICS, settingsSchema, type Experiment, type HumanReview, type Scenario, type Trial, type VariantExecution } from '../src/contracts.js';
 import { draftHash } from '../src/experiment.js';
 import { buildResultView, exitCodeOf } from '../src/result-view.js';
 import { accuracyRow, causeRows, plainText, resultScreen } from '../src/result-text.js';
@@ -395,32 +395,33 @@ test('a cause example keeps the whole agent reply; every surface wraps it', () =
 });
 
 test('required checkpoint decisions reach the headline while diagnostics remain explanatory', async () => {
-  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
-  const { libraryFixture } = await import('./helpers/scenario-library.js');
-  const library = libraryFixture();
-  const s = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  const { storedRunV1 } = await import('./helpers/library-v1.js');
+  // A stored first-format card, compiled when it was accepted; its attempt carries the checkpoint judge's verdicts.
+  const s = storedRunV1().scenarios.find(item => item.id === 'known_number')!;
   const t = trial('controlled', s.id, 'ungraded', 'pass'); t.familyId = s.familyId; t.checks = []; t.initialState = s.initialState; t.finalState = s.initialState;
   t.assessments = [{ metricId: 'library_required', result: 'pass', rationale: 'Корректный отказ', evidence: [1] }];
-  t.checkpoints = [{ checkpointId: 'ask_terminal', requirementId: 'terminal_rule', observation: 'reply', role: 'required', result: 'fail', evidence: [1], rationale: 'Обязательное уточнение пропущено' },
-    { checkpointId: 'diagnostic', requirementId: 'terminal_rule', observation: 'reply', role: 'diagnostic', result: 'fail', evidence: [1], rationale: 'Диагностика' }];
+  t.checkpoints = [{ checkpointId: 'ask_once', requirementId: 'refund_rule', observation: 'reply', role: 'required', result: 'fail', evidence: [1], rationale: 'Номер запрошен повторно' },
+    { checkpointId: 'refund_explanation', requirementId: 'refund_rule', observation: 'reply', role: 'required', result: 'pass', evidence: [1], rationale: 'Возврат объяснён' },
+    { checkpointId: 'diagnostic', requirementId: 'refund_rule', observation: 'reply', role: 'diagnostic', result: 'fail', evidence: [1], rationale: 'Диагностика' }];
   const r = record({ scenarios: [s], trials: [t] });
   // A derivation is remembered per record snapshot, so each reading takes a fresh copy of the mutated record.
   const accuracy = () => buildResultView({ ...r }).headline.accuracy;
   assert.equal(accuracy(), 0);
   t.checkpoints[0]!.result = 'pass';
-  assert.equal(accuracy(), 1);
+  assert.equal(accuracy(), 1, 'the failed diagnostic decides nothing');
   t.checkpoints[0]!.result = 'unknown';
   assert.equal(accuracy(), null);
   assert.match(trialProofLines(r, t.id).lines.join('\n'), /КОНТРОЛЬНЫЕ ТОЧКИ/);
-  assert.match(trialProofLines(r, t.id).lines.join('\n'), /terminal_rule/);
+  assert.match(trialProofLines(r, t.id).lines.join('\n'), /refund_rule/);
 });
 
 test('a first-format checkpoint with an exact check is a direct check of every newly judged attempt', async () => {
-  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
-  const { libraryFixture } = await import('./helpers/scenario-library.js');
-  const library = libraryFixture();
-  library.variants[0]!.evaluationSpec.checkpoints[0]!.check = { id: 'literal', kind: 'answer_equals', description: 'Точная инструкция', value: 'Инструкция' };
-  const s = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  const { storedRunV1 } = await import('./helpers/library-v1.js');
+  const s = structuredClone(storedRunV1().scenarios.find(item => item.id === 'known_number')!);
+  const execution = s.execution as VariantExecution;
+  const literal = { id: 'literal', kind: 'answer_equals' as const, description: 'Точная инструкция', value: 'Инструкция' };
+  execution.evaluatorView.checkpoints = [{ ...execution.evaluatorView.checkpoints[0]!, check: literal }];
+  s.checks = [literal];
   const t = trial('controlled_exact', s.id, 'pass', 'pass'); t.familyId = s.familyId; t.initialState = s.initialState; t.finalState = s.initialState; t.assessments = [];
   t.checks = [{ id: 'literal', description: 'Точная инструкция', passed: true, evidence: 'Последний ответ совпал' }];
   const r = record({ scenarios: [s], trials: [t] });

@@ -3,6 +3,7 @@ import type { Component } from '@earendil-works/pi-tui';
 import { safeText } from '../src/text.js';
 import { LibraryConflict, LockedError, StaleRevisionError } from '../src/errors.js';
 import type { Experiment } from '../src/contracts.js';
+import { convertible } from '../src/card/legacy-v1.js';
 import { ActionHead, contentText, lineBody, renderFeedResult, callText } from './render/feed.ts';
 import { renderAgentLabResult } from './render/verdict-block.ts';
 import type { Tone } from './render/theme.ts';
@@ -74,6 +75,6 @@ export function boardDiscussionContext(record: Experiment, situation?: { number:
   return { experimentId: record.id, phase: record.phase, ...(situation ? { situation: situation.number } : {}),
     task: record.librarySnapshot?.formatVersion === 2
       ? 'The user request concerns the selected Agent Lab run and, if named here, the situation by its number. Read it fresh with agent_lab_cards (card: the number). Change it with the situation tools (agent_lab_card_*), add a similar one with agent_lab_card_similar; the owner decides in native dialogs. Run with agent_lab_run. For results inspect actual dialogues and tell observations from suspected causes. Never invent human verdicts or alter the external agent without an explicit request.'
-      : 'The user request concerns this selected Agent Lab run. Read it with agent_lab_inspect and its situations with agent_lab_cards (read-only in an older format). Inspect actual dialogues for results; tell observations from suspected causes and never invent human verdicts. Run only with agent_lab_run and its native plan confirmation. Do not alter the external agent without an explicit request.',
+      : `The user request concerns this selected Agent Lab run. Read it with agent_lab_inspect and its situations with agent_lab_cards (read-only in an older format${convertible(record) ? '; this draft goes on in the current format with agent_lab_card_convert' : ''}). Inspect actual dialogues for results; tell observations from suspected causes and never invent human verdicts. Run only with agent_lab_run and its native plan confirmation. Do not alter the external agent without an explicit request.`,
   };
 }

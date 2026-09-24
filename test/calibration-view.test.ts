@@ -164,7 +164,7 @@ test('a run whose log disagrees reaches the CLI summary: the calibration line, t
   const lab = new ExperimentLab(directory, { ...cardRuntime(), logJudge: scriptedLogJudge(data => data.scenario.execution.expectations[0]!.id === 'e2' && refundReading(data) === 'pass' ? 'fail' : refundReading(data)) });
   try {
     await lab.init();
-    const draft = await lab.create(cardInput(), { cards: true });
+    const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const prepared = await lab.prepareLogVersion({ kind: 'declare_log_version', importId: (await lab.get(draft.id)).originalImport!.id, version: 'demo-baseline-v1' }, { via: 'cli-yes' });
     await lab.applyLogVersion(prepared, hostGrant(prepared, 'confirmed'));

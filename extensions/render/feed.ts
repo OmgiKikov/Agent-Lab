@@ -155,7 +155,7 @@ export function callText(tool: string, args: Record<string, unknown> | undefined
   const fixed: Record<string, string> = {
     agent_lab_status: 'Смотрю, что уже есть', agent_lab_card_fact: `Меняю ситуацию${card}: что знает клиент`, agent_lab_card_expectation: `Меняю ситуацию${card}: что должен агент`,
     agent_lab_card_client: `Меняю ситуацию${card}: клиент`, agent_lab_card_answer: `Записываю ваш ответ по ситуации${card}`, agent_lab_card_similar: `Добавляю похожую на ситуацию${card}`,
-    agent_lab_card_remove: `Убираю ситуацию${card}`, agent_lab_card_check: 'Проверяю ситуации', agent_lab_resume_preparation: 'Продолжаю подготовку ситуаций',
+    agent_lab_card_remove: `Убираю ситуацию${card}`, agent_lab_card_check: 'Проверяю ситуации', agent_lab_card_convert: 'Переношу ситуации в новый формат', agent_lab_resume_preparation: 'Продолжаю подготовку ситуаций',
     agent_lab_edit: 'Меняю настройки прогона', agent_lab_accept: 'Утверждаю ситуации', agent_lab_repeat: 'Готовлю повтор набора',
     agent_lab_suite: a.action === 'save' ? 'Сохраняю набор в файл' : a.action === 'load' ? 'Загружаю набор из файла' : 'Смотрю сохранённые наборы',
     agent_lab_connection: a.action === 'check' ? 'Проверяю подключение к агенту' : 'Смотрю подключение к агенту', agent_lab_reassess: 'Переоцениваю сохранённые разговоры',

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { fingerprint } from '../contracts.js';
 import { text } from '../ids.js';
-import { workInputIssue } from '../scenario-work.js';
+import { workInputIssue } from '../limits.js';
 import { messageAt, type CardEvidence, type LoggedMessage } from './checks.js';
 import type { Card, ClaimReceipt, EventRef, LibraryV2 } from './schema.js';
 

@@ -12,9 +12,9 @@ import { callModel, ProviderFailure, type ProviderFailureKind } from '../src/llm
 import { resolveModels } from '../src/llm/models.js';
 import { REPAIR_ATTEMPTS, runStructured, StructuredTaskError } from '../src/llm/structured.js';
 import { createPiRuntime, evaluatorVersion } from '../src/pi.js';
-import { planSemanticWork } from '../src/scenario-work.js';
 import { callContext, fixture, fixtureSettings, type Reply } from './helpers/pi-fixture.js';
-import { libraryFixture } from './helpers/scenario-library.js';
+import { cardDraft } from './helpers/card-library.js';
+import { pendingClaims, reviewRequests } from '../src/card/review.js';
 
 const storedFixture = async (name: string) => JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
 const text = (content: unknown): string => typeof content === 'string' ? content : (content as { text?: string }[]).map(part => part.text ?? '').join('');
@@ -175,17 +175,19 @@ test('the catalog is an enum of the source selection schema up to 500 articles; 
 });
 
 test('every judge-role task of an OpenRouter judge goes through the Chat Completions adapter pinned to its upstream', async () => {
-  const library = libraryFixture();
-  const job = planSemanticWork(library).jobs[0]!;
+  // The card reviewer is a judge-role task like the rubric votes.
+  const { library, evidence } = cardDraft({ review: false });
+  const card = library.cards[0]!, context = { library, evidence };
+  const request = reviewRequests(card, pendingClaims(card, context), context)[0]!;
   const wire = openRouter(data => {
-    const input = JSON.parse(data);
-    return JSON.stringify({ findings: input.fields.flatMap((field: any) => field.paths.map((path: string) => ({ variantId: field.variantId, path, status: 'ready', reason: 'Проверено' }))) });
+    const input = JSON.parse(data) as { claims: { alias: string }[] };
+    return JSON.stringify({ claims: Object.fromEntries(input.claims.map(claim => [claim.alias, { status: 'ready', reason: 'Проверено' }])) });
   });
   const f = await fixture(() => { throw new Error('The builder provider must not answer a judge-role task.'); });
   try {
     await f.runtime.setRuntimeApiKey('openrouter', 'offline-fixture-key');
     const adapter = await createPiRuntime(settingsSchema.parse({ ...fixtureSettings, judge: DEFAULT_JUDGE }), f.runtime);
-    await adapter.assessScenarioProposals!(job.input, callContext().ctx);
+    await adapter.reviewCard!(request, callContext().ctx);
     assert.equal(wire.bodies.length, 1);
     for (const body of wire.bodies) {
       assert.equal(body.model, DEFAULT_JUDGE.model);

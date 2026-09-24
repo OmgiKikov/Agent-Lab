@@ -108,7 +108,7 @@ async function draft(prefix: string, questions = false) {
   runtime = runtimeFixture(questions);
   const lab = new ExperimentLab(join(cwd, '.agent-lab'), runtime);
   await lab.init();
-  const seed = await lab.create(cardInput({ target: chatAgent }), { cards: true });
+  const seed = await lab.create(cardInput({ target: chatAgent }));
   await lab.waitForIdle();
   await lab.close();
   const read = async () => new ExperimentStore(join(cwd, '.agent-lab')).get(seed.id);
@@ -126,7 +126,7 @@ function drawn(tool: ToolDefinition, result: unknown, expanded: boolean, width =
 test('the situation tools have small closed schemas: every value is typed, and none takes an approval, a hash or a raw command', () => {
   const { tools } = registered();
   const cardTools = [...tools.values()].filter(tool => tool.name === 'agent_lab_cards' || tool.name.startsWith('agent_lab_card_'));
-  assert.deepEqual(cardTools.map(tool => tool.name), ['agent_lab_cards', 'agent_lab_card_answer', 'agent_lab_card_check', 'agent_lab_card_fact',
+  assert.deepEqual(cardTools.map(tool => tool.name), ['agent_lab_cards', 'agent_lab_card_answer', 'agent_lab_card_check', 'agent_lab_card_convert', 'agent_lab_card_fact',
     'agent_lab_card_expectation', 'agent_lab_card_client', 'agent_lab_card_similar', 'agent_lab_card_remove']);
   /** Type.Any, Type.Unknown or an open object would take a value the host cannot check. */
   const walk = (schema: unknown, path: string): void => {

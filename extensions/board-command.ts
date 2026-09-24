@@ -5,6 +5,8 @@ import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-c
 import { hostGrant } from '../src/card/commands.js';
 import type { CardCommand } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
+import { conversionText } from '../src/card/convert.js';
+import { convertible } from '../src/card/legacy-v1.js';
 import { pendingReviewCalls } from '../src/card/prepare.js';
 import { situationViews, type SituationAction, type SituationView } from '../src/card/view.js';
 import { isRunning, type Experiment } from '../src/contracts.js';
@@ -131,7 +133,8 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
     : planned ? active.trials.length / planned : 0;
   return {
     space, ...(set ? { set } : {}), runs, now,
-    decisions: decisions({ ...(set?.editable ? { draft: { record: set.record, views: set.views, pendingCalls } } : {}), ...(finished[0] ? { run: finished[0] } : {}), now }),
+    // A first-format draft is not editable, but it has one decision: to go on in the new format.
+    decisions: decisions({ ...(set && (set.editable || convertible(set.record)) ? { draft: { record: set.record, views: set.views, pendingCalls } } : {}), ...(finished[0] ? { run: finished[0] } : {}), now }),
     problems: recurringProblems(finished),
     ...(active ? { progress: { text: progressText(active, now.getTime()), share, stoppable: job?.id === active.id } } : {}),
   };
@@ -217,7 +220,7 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             break;
           }
           if (action.type === 'demo') {
-            await writing(async lab => { await lab.create(demoInput(), { cards: true }); await lab.waitForIdle(); });
+            await writing(async lab => { await lab.create(demoInput()); await lab.waitForIdle(); });
             Object.assign(state, newState('demo'));
             inform('Учебный пример готов: агент переспрашивает уже названный номер. Ответьте на вопрос ситуации 2 и запустите готовые — модель и ключи не нужны.');
             continue;
@@ -373,6 +376,11 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
               await lab.resumePreparation(draft.id, libraryHash(draft.librarySnapshot));
               handOver(lease => background.preparation(ctx, lease, draft.id));
               return 'Продолжаю подготовку с сохранённого места — ситуации придут в чат.';
+            });
+          case 'convert_draft':
+            return writing(async lab => {
+              const text = conversionText(await lab.convertV1Draft(action.runId));
+              return [text.summary, ...text.left.slice(0, 1), text.check].join(' ');
             });
           case 'reassess': {
             const run = data.runs.find(item => item.record.id === action.runId)?.record;

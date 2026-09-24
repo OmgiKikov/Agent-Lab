@@ -2,11 +2,16 @@ import { z } from 'zod';
 import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from './ids.js';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, RECORD_REQUIREMENT_LIMIT } from './limits.js';
 
+/*
+ * Stored shapes Lab reads: an import of logs, kept verbatim, and the first library format — business groups of variants —
+ * which is only ever read now: card/legacy-v1.ts reads it, and card/convert.ts carries a draft of it over into cards. The
+ * card format is card/schema.ts; the materials and rules of a library keep one shape in both formats.
+ */
+
 const json = z.json().refine(v => JSON.stringify(v).length <= 500_000, 'JSON exceeds 500000 characters');
 const timestamp = z.iso.datetime();
 
 const sourceDialogueSchema = z.strictObject({ batchId: id, dialogueId: id });
-export type SourceDialogue = z.infer<typeof sourceDialogueSchema>;
 const importedEventSchema = z.strictObject({
   index: z.number().int().nonnegative(), type: z.enum(['message', 'tool', 'retrieval', 'state']),
   role: z.enum(['user', 'assistant', 'tool', 'system']).optional(), content: z.string().min(1).max(8000).refine(v => !!v.trim(), 'Empty content').optional(), data: json,
@@ -41,26 +46,25 @@ export type BehaviorPolicy = z.infer<typeof behaviorPolicySchema>;
 export const checkpointSchema = z.strictObject({
   id, requirementId: id, quote: text(3000), applicability: text(1000),
   observation: z.enum(['reply', 'tool', 'state']), role: z.enum(['required', 'diagnostic']), rule: text(1000),
-  // Parsed with the real checkSchema at the compiler boundary, avoiding a contracts.ts runtime cycle.
+  // Parsed with the real checkSchema where it is read (checkpoints.ts), avoiding a contracts.ts runtime cycle.
   check: json.optional(),
 });
 export type Checkpoint = z.infer<typeof checkpointSchema>;
 
-const businessProposalSchema = z.strictObject({
+const businessDefinitionSchema = z.strictObject({
   key: text(200), title: text(200), goal: text(3000), conditions: z.array(text(1000)).max(20), requirementIds: ids(20),
   grouping: z.strictObject({ status: z.enum(['confirmed', 'uncertain']), reason: text(1000) }),
 });
-const businessScenarioSchema = businessProposalSchema.extend({ id, sourceDialogues: z.array(sourceDialogueSchema).max(300) });
-export type BusinessScenario = z.infer<typeof businessScenarioSchema>;
+const businessScenarioSchema = businessDefinitionSchema.extend({ id, sourceDialogues: z.array(sourceDialogueSchema).max(300) });
 const libraryQualityIssueSchema = z.strictObject({
   code: text(80), severity: z.enum(['needs_review', 'blocked']), path: text(400), message: text(2000), variantId: id.optional(),
 });
-export type LibraryQualityIssue = z.infer<typeof libraryQualityIssueSchema>;
 
-export const variantProposalSchema = z.strictObject({
+/** What a variant says, as the old preparation wrote it; a stored variant adds its group, review and history. */
+const variantDefinitionSchema = z.strictObject({
   id, title: text(200), purpose: text(1000), provenance: z.enum(['production', 'curated', 'synthetic']),
   sourceDialogues: z.array(sourceDialogueSchema).max(300), parentVariantId: id.optional(), mutationReason: text(1000).optional(),
-  // Optional for historical snapshots. New multi-turn extraction requires a disposition for every later customer turn.
+  // Set where the preparation required a disposition for every later customer turn; absent in older snapshots.
   sourceCoverageRequired: z.literal(true).optional(),
   // Stamped from the preparation request, never inferred from the model's editable sourceDialogues.
   sourceCoverageBasis: z.array(z.strictObject({ batchId: id, dialogueId: id, eventIndex: z.number().int().nonnegative() })).min(1).max(120).optional(),
@@ -83,9 +87,7 @@ export const variantProposalSchema = z.strictObject({
     successCriteria: text(3000), goalObservation: z.enum(['reply', 'tool', 'state']), checkpoints: z.array(checkpointSchema).min(1).max(12),
   }),
 });
-export const scenarioProposalSchema = z.strictObject({ business: businessProposalSchema, variant: variantProposalSchema });
-export type ScenarioProposal = z.infer<typeof scenarioProposalSchema>;
-export const scenarioVariantSchema = variantProposalSchema.extend({
+export const scenarioVariantSchema = variantDefinitionSchema.extend({
   businessScenarioId: id, familyId: id, revision: z.number().int().positive(),
   quality: z.enum(['ready', 'needs_review', 'blocked']), issues: z.array(libraryQualityIssueSchema).max(500),
   ownerDecision: z.enum(['pending', 'accepted', 'excluded']),
@@ -99,10 +101,10 @@ export const scenarioVariantSchema = variantProposalSchema.extend({
 });
 export type ScenarioVariant = z.infer<typeof scenarioVariantSchema>;
 
-export const semanticFindingSchema = z.strictObject({
+const semanticFindingSchema = z.strictObject({
   variantId: id, path: text(400), status: z.enum(['ready', 'needs_review', 'blocked']), reason: text(2000),
 });
-export type SemanticFinding = z.infer<typeof semanticFindingSchema>;
+/** A first-format preparation's checkpoint as it was stored; nothing continues one now. */
 export const preparationProgressSchema = z.strictObject({
   protocol: z.literal('chronological-scenarios-v1'),
   processed: ids(300), pending: ids(300),
@@ -120,12 +122,11 @@ export const preparationProgressSchema = z.strictObject({
   /** Large knowledge base: which articles the model chose for each dialogue from the table of contents. */
   sourceSelection: z.array(z.strictObject({ dialogueId: text(200), sourceIds: ids(40) })).max(300).optional(),
 });
-export type PreparationProgress = z.infer<typeof preparationProgressSchema>;
 /** A library's materials and requirements; both library formats keep them in this shape. */
 export const librarySourcesSchema = z.array(z.strictObject({ id, name: text(180), content: text(MATERIAL_CHARS), hash: text(200), kind: z.enum(['knowledge', 'prompt']).optional() })).max(MATERIAL_LIMIT);
 // The record's requirements, field for field (contracts.ts requirementSchema, which this module cannot import).
 export const libraryRequirementsSchema = z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean(), observable: z.boolean().optional() })).max(RECORD_REQUIREMENT_LIMIT);
-/** The first library format: business groups of variants, compiled into runnable cards at acceptance. The card format is card/schema.ts. */
+/** The first library format: business groups of variants, each compiled into a runnable card when it was accepted. Read only. */
 export const libraryV1Schema = z.strictObject({
   checkpointContext:z.literal('observed-tools-v1').optional(),
   formatVersion: z.literal(1), id, revision: z.number().int().positive(), createdAt: timestamp,
@@ -148,25 +149,3 @@ export const libraryV1Schema = z.strictObject({
   ownerResolutions: z.array(z.strictObject({ variantId: id, path: text(400), findingHash: hash, businessHash: hash.optional(), editId: id, reason: text(1000) })).max(400).optional(),
 });
 export type LibraryV1 = z.infer<typeof libraryV1Schema>;
-
-const reason = { reason: text(1000) };
-export const libraryPatchSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('edit_behavior'), variantId: id, behaviorPolicy: scenarioVariantSchema.shape.behaviorPolicy.optional(),
-    sourceCoverage: scenarioVariantSchema.shape.sourceCoverage, ...reason })
-    .refine(patch => patch.behaviorPolicy !== undefined || patch.sourceCoverage !== undefined, 'Choose behaviorPolicy or sourceCoverage'),
-  z.strictObject({ kind: z.literal('upsert_variant'), variant: scenarioVariantSchema, ...reason }),
-  z.strictObject({ kind: z.literal('remove_variant'), variantId: id, ...reason }),
-  z.strictObject({ kind: z.literal('edit_business'), businessScenarioId: id, title: text(200).optional(), goal: text(3000).optional(),
-    conditions: z.array(text(1000)).max(20).optional(), ...reason })
-    .refine(patch => patch.title !== undefined || patch.goal !== undefined || patch.conditions !== undefined, 'Choose a group field to edit'),
-  z.strictObject({ kind: z.literal('merge_business'), targetId: id, sourceIds: ids(200).min(1), ...reason }),
-  z.strictObject({ kind: z.literal('split_business'), businessScenarioId: id, newBusiness: businessProposalSchema, variantIds: ids(200).min(1), ...reason }),
-  z.strictObject({ kind: z.literal('edit_fact'), variantId: id, factId: id, statement: text(300), value: userFactSchema.shape.value, availability: userFactSchema.shape.availability, editId: id, ...reason }),
-  z.strictObject({ kind: z.literal('add_fact'), variantId: id, factId: id, statement: text(300), value: userFactSchema.shape.value, availability: userFactSchema.shape.availability, editId: id, ...reason }),
-  z.strictObject({ kind: z.literal('resolve_finding'), variantId: id, path: text(400), editId: id, ...reason }),
-  z.strictObject({ kind: z.literal('resolve_findings'), findings: z.array(z.strictObject({ variantId: id, path: text(400), findingHash: hash })).min(1).max(200)
-    .refine(items => new Set(items.map(item => `${item.variantId}/${item.path}`)).size === items.length, 'Duplicate findings'), editId: id, ...reason }),
-  z.strictObject({ kind: z.literal('edit_variant_text'), variantId: id, field: z.enum(['opening', 'goal', 'successCriteria', 'checkpointRule']),
-    checkpointId: id.optional(), value: text(3000), editId: id, ...reason }),
-]);
-export type LibraryPatch = z.infer<typeof libraryPatchSchema>;

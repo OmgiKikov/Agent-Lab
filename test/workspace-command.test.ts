@@ -461,7 +461,7 @@ test('in the workspace a digit answers a situation\'s question: the owner\'s dec
   const seed = new ExperimentLab(join(cwd, '.agent-lab'), createDemoRuntime());
   await seed.init();
   let id: string;
-  try { id = (await seed.create(demoInput(), { cards: true })).id; await seed.waitForIdle(); } finally { await seed.close(); }
+  try { id = (await seed.create(demoInput())).id; await seed.waitForIdle(); } finally { await seed.close(); }
   const { command, shutdown } = registered(), session = workspaceSession(cwd);
   // Before the first result the workspace opens on the situations; the first — selected — waits for an answer, «1» is its first answer, «Да».
   session.state.steps = [['1'], CLOSE];

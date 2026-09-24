@@ -1,8 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { chmod, cp, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { experimentSchema, type Runtime } from '../../src/contracts.js';
-import { createDemoRuntime } from '../../src/demo.js';
+import { emptyUsage, experimentSchema, type Experiment, type Runtime } from '../../src/contracts.js';
+import { createDemoRuntime, demoTarget } from '../../src/demo.js';
+import { libraryV1Schema, type LibraryV1 } from '../../src/scenario-contracts.js';
 import { ExperimentLab } from '../../src/experiment.js';
 import { assessRepeated } from '../../src/judge.js';
 
@@ -63,4 +65,34 @@ export async function libraryV1Run(runtime: Runtime = libraryV1Runtime()) {
   await chmod(trace, 0o600);
   await cp(new URL('run.judge/', FIXTURE), join(lab.store.directory, `${record.id}.judge`), { recursive: true });
   return { lab, directory, record: await lab.get(record.id) };
+}
+
+/** The fixture run as the store wrote it: its cards are the first format's compiled variants, as they were accepted. */
+export function storedRunV1(): Experiment {
+  return experimentSchema.parse(JSON.parse(readFileSync(new URL('run.json', FIXTURE), 'utf8')));
+}
+
+/** The accepted first-format library of the fixture, as the store wrote it. */
+export function storedLibraryV1(): LibraryV1 {
+  return libraryV1Schema.parse(JSON.parse(readFileSync(new URL('library.json', FIXTURE), 'utf8')));
+}
+
+/**
+ * A first-format draft as its preparation left it, never accepted or run: the fixture run's task, materials, rules and
+ * import with its library before acceptance, against the teaching agent. `data`: the store's directory (a fresh one by
+ * default). The caller owns cleanup.
+ */
+export async function firstFormatDraft(options: { runtime?: Runtime; data?: string } = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-first-format-draft-'));
+  const lab = new ExperimentLab(options.data ?? join(directory, 'runs'), options.runtime ?? libraryV1Runtime());
+  await lab.init();
+  const run = experimentSchema.parse(await libraryV1File('run.json'));
+  const library = storedLibraryV1();
+  delete library.acceptance;
+  for (const variant of library.variants) variant.ownerDecision = 'pending';
+  const draft: Experiment = { ...run, id: 'first_format_draft', phase: 'review', message: 'Библиотека подготовлена.', target: demoTarget(), librarySnapshot: library,
+    scenarios: [], acceptedTests: [], trials: [], comparisons: [], iterations: [], humanReviews: [], usage: emptyUsage(), reviewedAt: null, reviewMode: null, manifestHash: null, error: null };
+  delete draft.acceptedDraftHash; delete draft.targetRelease;
+  await lab.store.save(experimentSchema.parse(draft));
+  return { lab, directory, record: await lab.get(draft.id) };
 }

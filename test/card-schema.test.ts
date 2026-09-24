@@ -6,12 +6,11 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { experimentSchema, fingerprint, type Experiment } from '../src/contracts.js';
 import { cardSchema, disclosureSchema, expectationSchema, libraryV2Schema, scenarioLibrarySchema, turnSchema, type Card, type LibraryV2 } from '../src/card/schema.js';
-import { libraryV1Of, requireLibraryV1 } from '../src/card/legacy-v1.js';
+import { libraryV1Of } from '../src/card/legacy-v1.js';
 import { text } from '../src/ids.js';
 import { libraryHash, snapshotDigest, verifiedAcceptance, verifyAcceptedRun } from '../src/scenario-library.js';
 import { ExperimentStore } from '../src/store.js';
 import { libraryV1File } from './helpers/library-v1.js';
-import { libraryFixture } from './helpers/scenario-library.js';
 import { strictSchemaProblems } from './helpers/strict-schema.js';
 
 const event = (eventIndex: number) => ({ batchId: 'batch_1', dialogueId: 'late', eventIndex });
@@ -60,8 +59,6 @@ async function cardLibrary(): Promise<{ library: LibraryV2; record: Experiment }
 }
 
 test('stored libraries of both formats parse to themselves through one union', async () => {
-  const v1 = libraryFixture();
-  assert.equal(fingerprint(scenarioLibrarySchema.parse(v1)), fingerprint(v1));
   const stored = await libraryV1File('library.json');
   assert.equal(fingerprint(scenarioLibrarySchema.parse(stored)), fingerprint(stored));
   const { library, record } = await cardLibrary();
@@ -71,8 +68,7 @@ test('stored libraries of both formats parse to themselves through one union', a
   const run = JSON.parse(JSON.stringify(record));
   assert.equal(fingerprint(experimentSchema.parse(run)), fingerprint(run), 'a run carries a card library snapshot as it is');
   assert.equal(libraryV1Of(record), undefined);
-  assert.throws(() => requireLibraryV1(library), /новом формате/);
-  assert.equal(requireLibraryV1(stored as never).formatVersion, 1);
+  assert.equal(libraryV1Of({ librarySnapshot: scenarioLibrarySchema.parse(stored) })?.formatVersion, 1);
 });
 
 test('the store keeps a card library by its hash and reads it back unchanged', async () => {

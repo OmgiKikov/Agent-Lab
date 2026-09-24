@@ -119,7 +119,7 @@ export async function richFolder(): Promise<{ cwd: string; directory: string }> 
       existingAgent: { name: 'агент поддержки', instructions: 'Агент поддержки эквайринга.', tools: [] },
       materials: [{ name: 'Правила поддержки.docx', content: RULES }], originalImport: batch,
       settings: { provider: BUILDER.provider, model: BUILDER.id, repeats: 1, maxTurns: 3, maxCalls: 200, userModes: ['reactive'] } });
-    const draft = await lab.create(input, { cards: true, situations: 13 });
+    const draft = await lab.create(input, { situations: 13 });
     await lab.waitForIdle();
     const context = await lab.cardContext(draft.id);
     const statuses = cardStatuses({ library: context.library, evidence: context.evidence, maxTurns: 3 });
@@ -141,7 +141,7 @@ export async function demoFolder(): Promise<{ cwd: string; directory: string; id
   const lab = new ExperimentLab(directory);
   await lab.init();
   try {
-    const draft = await lab.create(demoInput(), { cards: true });
+    const draft = await lab.create(demoInput());
     await lab.waitForIdle();
     return { cwd, directory, id: draft.id };
   } finally { await lab.close(); }

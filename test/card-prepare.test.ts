@@ -42,7 +42,7 @@ async function raiseBudget(lab: ExperimentLab, id: string): Promise<LibraryV2> {
 test('from logs to the number: import → cards → review → acceptance → run → result', async () => {
   const seen = received();
   await withLab(cardRuntime(seen), async lab => {
-    const draft = await lab.create(cardInput(), { cards: true });
+    const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const { library, experiment } = await lab.readCards(draft.id);
     assert.equal(experiment.phase, 'review', experiment.error ?? '');
@@ -88,7 +88,7 @@ test('a resume continues every unit from its next step: a card made before the b
     return propose(request, ctx);
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput({ settings: { ...cardInput().settings, maxCalls: 5 } }), { cards: true });
+    const draft = await lab.create(cardInput({ settings: { ...cardInput().settings, maxCalls: 5 } }));
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
     assert.match(stopped.error ?? '', /budget exhausted/);
@@ -117,7 +117,7 @@ test('a paid call that died in flight is never repeated: its dialogue is left ou
     return propose(request, ctx);
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput(), { cards: true });
+    const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
     assert.equal(stopped.phase, 'review');
@@ -145,7 +145,7 @@ test('each dialogue has one allowance of proposal calls, repairs included, and a
     return propose(request, ctx);
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput({ settings: { ...cardInput().settings, maxCalls: 5 } }), { cards: true });
+    const draft = await lab.create(cardInput({ settings: { ...cardInput().settings, maxCalls: 5 } }));
     await lab.waitForIdle();
     assert.equal(spent, 4, 'the run\'s budget ran out first');
     await lab.resumePreparation(draft.id, libraryHash(await raiseBudget(lab, draft.id)));
@@ -162,7 +162,7 @@ test('each dialogue has one allowance of proposal calls, repairs included, and a
 test('without logs: situations from the owner\'s rules, each different, the opening written by the model', async () => {
   const seen = received();
   await withLab(cardRuntime(seen), async lab => {
-    const draft = await lab.create(cardInput({ dialogues: [], scenarioCount: 2 }), { cards: true });
+    const draft = await lab.create(cardInput({ dialogues: [], scenarioCount: 2 }));
     await lab.waitForIdle();
     const { library, experiment } = await lab.readCards(draft.id);
     assert.equal(experiment.error, null);
@@ -182,7 +182,7 @@ test('the grounding of the whole policy that died in flight cannot be continued:
   let grounding = 0;
   runtime.groundRequirements = async (_input, ctx) => { ctx.beforeCall(); grounding++; throw new Error('Provider disconnected after accepting the request'); };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput(), { cards: true });
+    const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
     assert.deepEqual([progressOf(stopped).activeStage, progressOf(stopped).activeDialogueId], ['ground', undefined]);
@@ -203,7 +203,7 @@ test('a review that died in flight keeps its card unchecked; only the owner\'s e
     return review(request, ctx);
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput(), { cards: true });
+    const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     await lab.resumePreparation(draft.id, libraryHash((await lab.readCards(draft.id)).library));
     await lab.waitForIdle();
@@ -226,7 +226,7 @@ test('an answer the harness cannot bind is never kept, whatever the runtime says
   runtime.proposeCard = async (request, ctx) => request.call.source.kind === 'dialogue' && request.call.source.dialogueId === 'late'
     ? (ctx.beforeCall(), { ...proposals.late, knows: [{ ...proposals.late.knows[0]!, value: '5679' }] }) : propose(request, ctx);
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput(), { cards: true });
+    const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const { library, experiment } = await lab.readCards(draft.id);
     assert.match(progressOf(experiment).excluded.find(item => item.dialogueId === 'late')?.reason ?? '', /не прошла проверку: knows\[0\] "Номер терминала": the value "5679"/);
@@ -249,7 +249,7 @@ test('a large knowledge base is read per dialogue: the articles and the rules ch
   const materials = [{ name: 'Правила возвратов', content: policy },
     { name: 'Доставка', content: 'Условия доставки по городу и области. '.repeat(1200) }, { name: 'Гарантия', content: 'Гарантийный ремонт и обслуживание. '.repeat(1200) }];
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput({ materials }), { cards: true });
+    const draft = await lab.create(cardInput({ materials }));
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
     assert.match(stopped.error ?? '', /Не удалось разобрать 1 источник — вызов модели не состоялся: Провайдер недоступен\./);

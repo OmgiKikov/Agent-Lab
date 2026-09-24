@@ -1,9 +1,8 @@
 import { chooseEditableDraft, draftIsBusy, recheckDecision } from './scenario-draft.js';
-import { semanticWorkStatus } from './scenario-work.js';
 import { captureGeneratorEvidence } from './generator-evidence.js';
-import { importBatch, acceptLibrary as acceptScenarioLibrary, editLibrary as editScenarioLibrary, libraryHash, verifyAcceptedRun } from './scenario-library.js';
-import type { LibraryPatch, LibraryV1 } from './scenario-contracts.js';
-import { judgedScenario, requireLibraryV1 } from './card/legacy-v1.js';
+import { importBatch, libraryHash, verifyAcceptedRun } from './scenario-library.js';
+import { convertible, judgedScenario, libraryV1Of } from './card/legacy-v1.js';
+import { convertedPreparation, convertV1Library, type Conversion } from './card/convert.js';
 import { acceptLibraryV2, requireLibraryV2 } from './card/library.js';
 import { pendingReviewCalls, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from './card/prepare.js';
 import type { CardCommand, LibraryV2 } from './card/schema.js';
@@ -12,8 +11,6 @@ import { calibrateRun } from './card/calibrate.js';
 import type { LogVersionCommand, LogVersionJournal } from './card/calibration.js';
 import { importEvidence, type CardEvidence } from './card/checks.js';
 import { dialogueNumbers, type DialogueNumbers } from './card/view.js';
-import { assessScenarioLibrary, compiledLibraryScenarios, prepareScenarioLibrary, resumeScenarioLibrary } from './scenario-preparation.js';
-import { proposeVariant as proposeScenarioVariant, type VariantProposalResult, type VariantRequest } from './scenario-variants.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -184,12 +181,11 @@ export class ExperimentLab {
     };
   }
   /**
-   * A new draft is always a scenario library: requirements grounded in the owner's materials, situations proposed from
-   * real dialogues or from the requirements alone. `cards` prepares them as cards (card/prepare.ts) — from logs, at most
-   * `situations` of them, the representative sample of the logs' topics (miner/plan.ts); otherwise they are the first
-   * format's variants.
+   * A new draft is always a card library (card/prepare.ts): requirements grounded in the owner's materials, situations
+   * proposed from real dialogues — at most `situations` of them, the representative sample of the logs' topics
+   * (miner/plan.ts) — or from the requirements alone.
    */
-  async create(raw: CreateInput, options: { cards?: boolean; situations?: number } = {}): Promise<Experiment> {
+  async create(raw: CreateInput, options: { situations?: number } = {}): Promise<Experiment> {
     this.ensureIdle();
     const situations = situationCount(options.situations);
     const originalImport = raw.originalImport ?? (raw.dialogues?.length ? importBatch(raw.dialogues) : undefined);
@@ -203,18 +199,12 @@ export class ExperimentLab {
       await preflightTarget(record.target);
       record.targetFingerprint = await targetFingerprint(record.target);
       const runtime = await this.runtime(record);
+      if (!runtime.proposeCard || !runtime.reviewCard) throw new Error('Эта среда не умеет готовить ситуации.');
       const batch = record.originalImport ? await this.store.readImport(record.originalImport.id) : undefined;
-      if (options.cards) {
-        if (!runtime.proposeCard || !runtime.reviewCard) throw new Error('Эта среда не умеет готовить ситуации.');
-        const plan: CardPlan = batch ? { kind: 'dialogues', batch, sample: await logSample(this.store, batch, runtime, ctx, situations, message => { record.message = message; }) }
-          : { kind: 'rules', count: input.scenarioCount || 1 };
-        await prepareCards(record, plan, input.existingAgent, runtime, ctx, this.store);
-        await this.checkpoint(record, 'review', 'Ситуации готовы. Проверьте их и утвердите для прогона.');
-        return;
-      }
-      if (!runtime.scenarioProposals) throw new Error('Эта среда не умеет готовить библиотеку сценариев.');
-      await prepareScenarioLibrary(record, input, batch, runtime, ctx, this.store);
-      await this.checkpoint(record, 'review', 'Библиотека подготовлена. Проверьте варианты и примите выбранные перед запуском.');
+      const plan: CardPlan = batch ? { kind: 'dialogues', batch, sample: await logSample(this.store, batch, runtime, ctx, situations, message => { record.message = message; }) }
+        : { kind: 'rules', count: input.scenarioCount || 1 };
+      await prepareCards(record, plan, input.existingAgent, runtime, ctx, this.store);
+      await this.checkpoint(record, 'review', 'Ситуации готовы. Проверьте их и утвердите для прогона.');
     });
     return structuredClone(record);
   }
@@ -317,122 +307,59 @@ export class ExperimentLab {
     await this.store.writeLogVersions(next, prepared.journalHash);
     return next;
   }
-  /** Detached variant library plus its current (empty until accepted) runnable draft: what the variant editor below works on. */
-  async readLibrary(id: string): Promise<{ library: LibraryV1; experiment: Experiment }> {
-    const experiment = await this.get(id);
-    if (!experiment.librarySnapshot) throw new Error('У эксперимента нет библиотеки сценариев.');
-    return { library: structuredClone(requireLibraryV1(experiment.librarySnapshot)), experiment };
-  }
-  /** `author` is always named by the caller: owner authority is never a default. */
-  async editLibrary(id: string, expectedHash: string, patch: LibraryPatch, author: 'owner' | 'assistant'): Promise<{ library: LibraryV1; experiment: Experiment }> {
-    return this.change(async () => {
-      const { experiment, library } = await this.readLibrary(id);
-      if (experiment.phase !== 'review') throw new Error('Править библиотеку можно только в черновике.');
-      const next = editScenarioLibrary(library, expectedHash, patch, author);
-      experiment.librarySnapshot = next; experiment.scenarios = []; experiment.acceptedTests = [];
-      delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
-      experiment.reviewedAt = null; experiment.reviewMode = null; experiment.manifestHash = null;
-      await this.store.publishLibrary(experiment, next, expectedHash);
-      return { library: next, experiment };
-    });
-  }
-  async proposeVariant(id: string, expectedHash: string, request: VariantRequest): Promise<VariantProposalResult & { experiment: Experiment }> {
-    return this.change(async () => {
-      const { experiment, library } = await this.readLibrary(id);
-      if (experiment.phase !== 'review') throw new Error('Добавить вариант можно только в черновике.');
-      const result = proposeScenarioVariant(library, request, expectedHash);
-      experiment.librarySnapshot = result.library; experiment.scenarios = []; experiment.acceptedTests = [];
-      delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
-      experiment.reviewedAt = null; experiment.reviewMode = null; experiment.manifestHash = null;
-      await this.store.publishLibrary(experiment, result.library, expectedHash);
-      return { ...result, experiment };
-    });
-  }
-  async acceptLibrary(id: string, expectedHash: string, variantIds: string[]): Promise<{ library: LibraryV1; experiment: Experiment }> {
-    return this.change(async () => {
-      const { experiment, library } = await this.readLibrary(id);
-      if (experiment.phase !== 'review') throw new Error('Принять библиотеку можно только в черновике.');
-      if (fingerprint(experiment.requirements) !== fingerprint(library.requirements) || fingerprint(experiment.sources) !== fingerprint(library.sources)) throw new Error('Требования библиотеки изменились.');
-      const next = acceptScenarioLibrary(library, expectedHash, variantIds);
-      experiment.librarySnapshot = next; experiment.scenarios = compiledLibraryScenarios(experiment, next);
-      delete experiment.selectedScenarioIds;
-      const acceptedAt = new Date().toISOString();
-      experiment.acceptedTests = experiment.scenarios.map(s => ({ testId: randomUUID(), scenarioId: s.id, definitionHash: fingerprint(s), acceptedAt }));
-      experiment.acceptedDraftHash = draftHash(experiment);
-      await this.store.publishLibrary(experiment, next, expectedHash);
-      return { library: next, experiment };
-    });
-  }
-  /** Continue a preparation from saved pending sources. A call that died in flight is not repeated. */
+  /**
+   * Continues a card preparation from its saved place (card/prepare.ts); a unit whose paid call died in flight is left
+   * out, because its cost is unknown. A first-format preparation is never continued: its draft is only read, and it goes
+   * on in the card format (convertV1Draft).
+   */
   async resumePreparation(id: string, expectedHash: string): Promise<Experiment> {
     return this.change(async () => {
       const experiment = await this.get(id);
       const progress = experiment.preparationProgress;
       if (!progress?.pending.length) throw new Error('Необработанных источников нет.');
-      // A card preparation leaves the unit of a call that died in flight out and goes on; the first format stops there.
-      const cards = progress.protocol === 'cards-v1';
-      if (!cards && progress.activeDialogueId) throw new Error(`Подготовка остановилась во время разбора «${progress.activeDialogueId}». Его стоимость неизвестна; этот источник не повторяется молча.`);
+      if (progress.protocol !== 'cards-v1') throw new Error('Это подготовка старого формата: её не продолжить. Продолжите черновик в новом формате.');
       if (!experiment.librarySnapshot) throw new Error('Черновик библиотеки не сохранён; продолжить нельзя.');
       if (libraryHash(experiment.librarySnapshot) !== expectedHash || libraryHash(await this.store.readLibrary(experiment.librarySnapshot.id)) !== expectedHash) throw new LibraryConflict('Библиотека изменилась: хеш устарел.');
       if (experiment.phase !== 'review' && experiment.phase !== 'interrupted') throw new Error('Продолжить можно только незавершённую подготовку.');
       if (experiment.librarySnapshot.acceptance || experiment.trials.length || experiment.acceptedTests?.length) throw new Error('Принятый или выполненный набор не меняется. Создайте новый черновик.');
       if ((progress.elapsedMs ?? 0) >= experiment.settings.maxDurationMs) throw new Error('Общий лимит времени подготовки исчерпан; сохранённый результат не меняется.');
       const batch = experiment.originalImport ? await this.store.readImport(experiment.originalImport.id) : undefined;
-      // The first format rebuilds its creation input; a card preparation reads everything from its saved plan.
-      const input = cards ? undefined : createInputSchema.parse({
-        task: experiment.task, mode: experiment.mode, materials: experiment.sources.map(source => ({ name: source.name, content: source.content, ...(source.kind ? { kind: source.kind } : {}) })),
-        settings: experiment.settings, scenarioCount: batch ? 0 : progress.requestedCount ?? 1, target: experiment.target,
-        ...(batch ? { originalImport: batch } : {}),
-        dialogues: [],
-        ...(experiment.revisions[0] ? { existingAgent: experiment.revisions[0].spec } : {}),
-      });
       experiment.phase = 'preparing'; experiment.error = null;
       await this.launch(experiment, async ctx => {
-        const runtime = await this.runtime(experiment);
-        if (!input) {
-          await resumeCards(experiment, batch, runtime, ctx, this.store);
-          await this.checkpoint(experiment, 'review', 'Подготовка продолжена с сохранённого места. Проверьте ситуации и утвердите для прогона.');
-          return;
-        }
-        await resumeScenarioLibrary(experiment, input, batch, runtime, ctx, this.store);
-        await this.checkpoint(experiment, 'review', 'Подготовка продолжена с сохранённых источников. Проверьте варианты перед принятием.');
+        await resumeCards(experiment, batch, await this.runtime(experiment), ctx, this.store);
+        await this.checkpoint(experiment, 'review', 'Подготовка продолжена с сохранённого места. Проверьте ситуации и утвердите для прогона.');
       }, true);
       return structuredClone(experiment);
     });
   }
-  /** Shared edit follow-up: defer, require more budget, or start the exact remaining semantic work. */
-  async recheckLibrary(id: string, options: { expectedHash?: string; defer?: boolean; explicit?: boolean } = {}) {
-    const { library, experiment } = await this.readLibrary(id);
-    const hash = libraryHash(library);
-    if (options.expectedHash && options.expectedHash !== hash) throw new LibraryConflict('Библиотека изменилась: хеш устарел.');
-    const work = semanticWorkStatus(library), remainingCalls = Math.max(0, experiment.settings.maxCalls - experiment.usage.calls);
-    if (options.explicit && work.pendingJobs && !remainingCalls) throw new Error('Модельный бюджет исчерпан. Увеличьте общий лимит; использованные вызовы не сбрасываются.');
-    const decision = recheckDecision({ ...work, remainingCalls, defer: !!options.defer,
-      askedHash: options.explicit ? hash : undefined, libraryHash: hash });
-    if (decision.action === 'run') await this.assessLibrary(id, decision.startHash);
-    return { decision, before: experiment };
-  }
-  /** Reassess edited facts/expectations under the same usage, timeout and cancellation budget. */
-  async assessLibrary(id: string, expectedHash: string): Promise<Experiment> {
+  /**
+   * «Продолжить в новом формате»: a first-format draft goes on as a new draft of cards (card/convert.ts). The old draft
+   * stays as it was and nothing is paid here: the new cards wait for the reviewer, whose check the owner agrees to.
+   */
+  async convertV1Draft(id: string): Promise<Pick<Conversion, 'library' | 'left' | 'calls'> & { experiment: Experiment }> {
     return this.change(async () => {
-      const { experiment, library } = await this.readLibrary(id);
-      if (experiment.phase !== 'review' || libraryHash(library) !== expectedHash) throw new LibraryConflict('Библиотека изменилась или уже запущена.');
-      experiment.phase = 'preparing'; experiment.error = null;
-      await this.launch(experiment, async ctx => {
-        const runtime = await this.runtime(experiment);
-        if (!runtime.assessScenarioProposals) throw new Error('Смысловая проверка недоступна.');
-        experiment.scenarios = []; experiment.acceptedTests = []; delete experiment.acceptedDraftHash; delete experiment.selectedScenarioIds;
-        let published = expectedHash;
-        const next = await assessScenarioLibrary(library, runtime, ctx, async partial => {
-          experiment.librarySnapshot = partial;
-          await this.store.publishLibrary(experiment, partial, published); published = libraryHash(partial);
-        });
-        next.revision++; experiment.librarySnapshot = next;
-        if (experiment.preparationProgress) experiment.preparationProgress.status = experiment.preparationProgress.pending.length ? 'partial' : 'complete';
-        await this.store.publishLibrary(experiment, next, published);
-        await this.checkpoint(experiment, 'review', 'Смысловая проверка завершена. Проверьте замечания и примите варианты.');
-      }, true);
-      return structuredClone(experiment);
+      const previous = await this.store.get(id);
+      const library = libraryV1Of(previous);
+      if (!library) throw new Error('Это не черновик старого формата: переносить нечего.');
+      if (!convertible(previous)) throw new Error('Прогон старого формата не переносится: его можно открыть, переоценить и повторить как есть.');
+      const now = new Date().toISOString();
+      const record: Experiment = { ...structuredClone(previous), id: randomUUID(), createdAt: now, updatedAt: now, phase: 'review',
+        message: 'Ситуации перенесены в новый формат. Lab проверит их, прежде чем их можно будет утвердить для прогона.',
+        scenarios: [], acceptedTests: [], trials: [], comparisons: [], iterations: [], humanReviews: [], usage: emptyUsage(),
+        reviewedAt: null, reviewMode: null, manifestHash: null, controlConsumedAt: null, error: null };
+      delete record.acceptedDraftHash; delete record.selectedScenarioIds; delete record.positiveControlScenarioIds; delete record.ownerExpectationScenarioIds;
+      delete record.parentRunId; delete record.executionRunId; delete record.sourceEvidence; delete record.resultsReviewedAt; delete record.resultsReviewHash;
+      delete record.failureModes; delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash;
+      delete record.releaseLog; delete record.calibration;
+      record.evaluatorVersion = evaluatorVersion(record.settings);
+      const conversion = convertV1Library(library, { id: `library_${record.id}`, createdAt: now, sources: record.sources, requirements: record.requirements });
+      if (!conversion.library.cards.length) throw new Error(`Ни одну ситуацию этого черновика не перенести: ${conversion.left[0]?.reason ?? 'в нём нет ситуаций'}. Подготовьте ситуации заново.`);
+      record.librarySnapshot = conversion.library;
+      record.preparationProgress = convertedPreparation(record, conversion, previous.preparationProgress);
+      // The cards cite the old library's dialogues; the store keeps them next to every other import.
+      for (const batch of library.imports) await this.store.writeImport(batch);
+      await this.store.publishLibrary(record, conversion.library);
+      return { experiment: structuredClone(record), library: conversion.library, left: conversion.left, calls: conversion.calls };
     });
   }
   /** Run settings, the connection, its version and the agent label; the situations themselves change only through the library. */

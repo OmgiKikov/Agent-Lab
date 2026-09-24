@@ -133,7 +133,7 @@ test('a first-format draft is marked as the old format, and its checker\'s quest
   variant.quality = 'needs_review';
   variant.issues = [{ code: 'semantic_finding', severity: 'needs_review', path: `variants.${variant.id}.userState.facts.terminal`, message: 'Классификация initial требует подтверждения.' }];
   const draft = { ...run, phase: 'review', trials: [], librarySnapshot: library } as Experiment;
-  assert.equal(formatNote(draft), 'Старый формат: эти ситуации можно посмотреть, но не изменить.');
+  assert.equal(formatNote(draft), 'Старый формат: эти ситуации можно посмотреть, но не изменить — их можно продолжить в новом формате.');
   assert.equal(formatNote(run), undefined, 'a finished run is not a draft');
   const view = situationViews(draft, { maxTurns: 3 })[1]!;
   assert.equal(view.status, 'needs_owner');

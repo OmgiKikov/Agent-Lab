@@ -514,113 +514,15 @@ test('a machine output-format instruction in the agent prompt is typed as unobse
   } finally { await f.close(); }
 });
 
-test('Pi chronological proposals and separate semantic assessment pass every event through real transport', async () => {
-  const { importBatch, createLibrary } = await import('../src/scenario-library.js');
-  const { chronologicalInput } = await import('../src/scenario-preparation.js');
-  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
-  const batch = importBatch(rawDialogues);
-  const f = await fixture(scripted([{ proposals: proposals(batch.id).slice(1) }, { findings: [] }]));
-  try {
-    assert.equal(typeof f.adapter.scenarioProposals, 'function', 'real Pi exposes chronological extraction');
-    const { ctx, usage } = callContext();
-    const extracted = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка', batchId: batch.id, sources, requirements, dialogues: chronologicalInput(batch) }, ctx);
-    const library = createLibrary({ batch, sources, requirements, proposals: extracted });
-    await f.adapter.assessScenarioProposals!({ protocol: 'chronological-scenarios-v1', library, fields: [] }, ctx);
-    const first = JSON.stringify(f.requests[0]);
-    assert.match(first, /Возврат займёт три дня/);
-    assert.match(first, /assistant/);
-    assert.match(first, /eventIndex/);
-    assert.equal(usage.calls, 2, 'semantic review has its own model budget call');
-    assert.match(JSON.stringify(f.requests[1]), /learned_in_source/);
-  } finally { await f.close(); }
-});
-
-test('real Pi extraction, semantic admission and library store form one chronological preparation path', async () => {
-  const { createInputSchema } = await import('../src/contracts.js');
-  const { demoTarget } = await import('../src/demo.js');
-  const { libraryHash } = await import('../src/scenario-library.js');
-  const { importDialogues } = await import('../src/imports.js');
-  const { coverageProposals: proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
-  const payloads: any[] = [];
-  const f = await fixture(request => {
-    const message = request.messages.find(message => message.role === 'user')!;
-    const content = message.content;
-    const text = typeof content === 'string' ? content : content.filter(block => block.type === 'text').map(block => block.text).join('');
-    const payload = JSON.parse(text); payloads.push(payload);
-    if (payload.batchId) return JSON.stringify({ proposals: proposals(payload.batchId).filter(p => payload.dialogues.some((d: any) => d.id === p.variant.sourceDialogues[0]!.dialogueId)) });
-    if (payload.library) return JSON.stringify({ findings: payload.fields.flatMap((field: any) => field.paths.map((path: string) => ({ variantId: field.variantId, path, status: 'ready', reason: 'Проверено по всей хронологии и требованиям' }))) });
-    if (payload.user) return JSON.stringify({ done: true, message: '' });
-    return JSON.stringify({ requirements: requirements.map(r => ({ ...r, sourceId: 'source-1', observable: true })), questions: [] });
-  });
-  const lab = new ExperimentLab(join(f.directory, 'store'), f.adapter);
-  try {
-    await lab.init();
-    const original = importDialogues(rawDialogues);
-    const seed = await lab.create(createInputSchema.parse({ task: 'Проверка', materials: sources.map(s => ({ name: s.name, content: s.content })),
-      mode: 'live', scenarioCount: 0, settings, target: demoTarget(),
-      existingAgent: { name: 'Агент', instructions: 'Уточните номер терминала', tools: [] },
-      originalImport: original.originalImport, dialogues: original.dialogues.slice(0, 1) }));
-    await lab.waitForIdle();
-    const result = await lab.readLibrary(seed.id);
-    assert.equal(result.experiment.phase, 'review', result.experiment.error ?? '');
-    assert.deepEqual(payloads.find(p => p.dialogues?.[0]?.id === 'repeated').dialogues[0].messages.map((m: any) => m.role), ['user', 'assistant', 'user']);
-    assert.equal(result.library.businessScenarios.length, 1);
-    assert.equal(result.experiment.scenarios.length, 0);
-    const accepted = await lab.acceptLibrary(seed.id, libraryHash(result.library), ['variant_2']);
-    await f.adapter.userTurn!({ user: accepted.experiment.scenarios[0]!.user, messages: [], turn: 0 }, callContext().ctx);
-    assert.doesNotMatch(JSON.stringify(payloads.find(p => p.user)), /три дня/);
-    assert.equal((await lab.store.readImport(original.originalImport.id)).dialogues.length, 2);
-  } finally { await lab.close(); await f.close(); }
-});
-
-test('scenario transport rejects malformed world arrays before library compilation and sends repair feedback', async () => {
-  const { importBatch } = await import('../src/scenario-library.js');
-  const { chronologicalInput } = await import('../src/scenario-preparation.js');
-  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
-  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
-  const bad = structuredClone(valid); bad.variant.environmentFixture.initialState.records = [] as any;
-  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
-  try {
-    const { ctx, usage } = callContext();
-    const output = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка возврата', batchId: batch.id,
-      sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, ctx);
-    assert.equal(usage.calls, 2);
-    assert.deepEqual(output[0]!.variant.environmentFixture.initialState.records, {});
-    assert.match(JSON.stringify(f.requests[1]), /initialState.records/);
-    assert.match(f.requests[0]!.systemPrompt!, /5678/);
-    assert.match(f.requests[0]!.systemPrompt!, /not already disclosed/i);
-  } finally { await f.close(); }
-});
-
-test('scenario proposal transport rejects a prose deterministic check and permits semantic checkpoints without one', async () => {
-  const { importBatch } = await import('../src/scenario-library.js');
-  const { chronologicalInput } = await import('../src/scenario-preparation.js');
-  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
-  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
-  delete valid.variant.evaluationSpec.checkpoints[0]!.check;
-  const bad = structuredClone(valid); bad.variant.evaluationSpec.checkpoints[0]!.check = 'Проверить смысл ответа';
-  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
-  try {
-    const { ctx, usage } = callContext();
-    const result = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка возврата', batchId: batch.id,
-      sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, ctx);
-    assert.equal(usage.calls, 2, 'prose check must fail SDK schema admission');
-    assert.equal(result[0]!.variant.evaluationSpec.checkpoints[0]!.check, undefined);
-    assert.match(JSON.stringify(f.requests[1]), /checkpoints.*check/);
-    assert.match(f.requests[0]!.systemPrompt!, /omit.*check.*semantic/i);
-  } finally { await f.close(); }
-});
-
 test('the controlled user answers with one allowed action id and the expectation judge reads what the customer never sees', async () => {
-  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
-  const { libraryFixture } = await import('./helpers/scenario-library.js');
   const { createUserState, allowedUserActions } = await import('../src/user-controller.js');
-  const library = libraryFixture();
-  const scenario = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  const { storedRunV1 } = await import('./helpers/library-v1.js');
+  // A stored first-format card, judged now through its projection: its one required checkpoint is one expectation.
+  const scenario = structuredClone(storedRunV1().scenarios.find(item => item.id === 'known_number')!);
   const view = scenario.execution!.evaluatorView;
   if (!('checkpoints' in view)) throw new Error('a first-format card');
-  view.checkpoints[0]!.rule += ' EVALUATOR_ONLY_MARKER';
-  const vote = { assessments: [{ metricId: 'ask_terminal', passCondition: 'met', failCondition: 'not_met', rationale: 'Уточнение соответствует правилу', evidence: [1], citations: [{ seq: 1, quote: 'Назовите терминал' }] }] };
+  view.checkpoints = [{ ...view.checkpoints[0]!, rule: `${view.checkpoints[0]!.rule} EVALUATOR_ONLY_MARKER` }];
+  const vote = { assessments: [{ metricId: 'ask_once', passCondition: 'met', failCondition: 'not_met', rationale: 'Уточнение соответствует правилу', evidence: [1], citations: [{ seq: 1, quote: 'Назовите терминал' }] }] };
   const f = await fixture((_request, index) => JSON.stringify(index === 0 ? { actionId: 'finish' } : vote), true);
   try {
     const adapter = await createPiRuntime(settingsSchema.parse({ ...settings, roles: { simulator: { provider: settings.provider, model: 'role-model' } }, judge: { provider: settings.provider, model: 'test-model' } }), f.runtime);
@@ -632,7 +534,7 @@ test('the controlled user answers with one allowed action id and the expectation
     assert.doesNotMatch(f.requests[0]!.systemPrompt!, /factIds/, 'fact references come from the chosen action');
     const trial: Trial = { id: 't', scenarioId: scenario.id, familyId: scenario.familyId, revisionId: 'r', userMode: 'reactive', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1, events: [{ seq: 0, type: 'user', text: 'Возврат' }, { seq: 1, type: 'assistant', text: 'Назовите терминал' }] };
     const judged = await adapter.assess!({ scenario, sources: [], trial }, ctx);
-    assert.deepEqual(judged.map(item => [item.metricId, item.result]), [['ask_terminal', 'pass']], 'the required checkpoint is judged as one expectation');
+    assert.deepEqual(judged.map(item => [item.metricId, item.result]), [['ask_once', 'pass']], 'the required checkpoint is judged as one expectation');
     assert.deepEqual(f.modelsUsed, ['role-model', 'test-model', 'test-model']);
     assert.equal(usage.calls, 3, 'one controller move and two votes on the one expectation');
     assert.doesNotMatch(JSON.stringify(f.requests[0]), /EVALUATOR_ONLY_MARKER|checkpoints|requirementId|environmentView|backend/);
@@ -641,21 +543,24 @@ test('the controlled user answers with one allowed action id and the expectation
   } finally { await f.close(); }
 });
 
-test('real compiler, Pi transport and evaluator: a move outside the policy is refused by the answer schema, the disclosure is exact and the refusal is judged', async () => {
+test('a stored first-format card through Pi transport and the evaluator: a move outside the policy is refused by the answer schema, the disclosure is exact and the refusal is judged', async () => {
   const { evaluateTrial } = await import('../src/evaluation.js');
   const { headlineTrialResult } = await import('../src/outcomes.js');
-  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
-  const { libraryFixture, sources, requirements } = await import('./helpers/scenario-library.js');
+  const { storedRunV1 } = await import('./helpers/library-v1.js');
   const { USER_CONTROLLER_ROLE, ASSESS_ROLE } = await import('../src/prompts.js');
+  const { sources, requirements } = storedRunV1();
   for (const verdict of ['pass', 'fail'] as const) {
-    const library = libraryFixture();
-    library.variants[0]!.behaviorPolicy = { version: 1, initialState: 'ask', states: ['ask', 'answered', 'done'], terminalStates: ['done'], maxFollowUps: 1, repetitionLimit: 1,
+    // The stored card with a first-format customer program: the number named on request, then the customer leaves.
+    const s = structuredClone(storedRunV1().scenarios.find(item => item.id === 'known_number')!);
+    const user = s.execution!.userView;
+    s.user.opening = 'Помогите с возвратом'; user.opening = 'Помогите с возвратом';
+    user.facts = [{ id: 'terminal_number', statement: 'Номер терминала: 1234', value: '1234' }];
+    user.policy = { version: 1, initialState: 'ask', states: ['ask', 'answered', 'done'], terminalStates: ['done'], maxFollowUps: 1, repetitionLimit: 1,
       actions: [{ id: 'number', kind: 'answer', factIds: ['terminal_number'], payload: 'Номер терминала: 1234', ifAsked: 'номер терминала' }, { id: 'finish', kind: 'finish', factIds: [] }],
       transitions: [{ from: 'ask', to: 'answered', actionId: 'number', when: 'Уточнение номера' }, { from: 'answered', to: 'done', actionId: 'finish', when: 'Получен отказ или инструкция' }] };
-    const s = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
     const view = s.execution!.evaluatorView;
     if (!('checkpoints' in view)) throw new Error('a first-format card');
-    view.checkpoints[0]!.rule += ' EVALUATOR_ONLY_MARKER';
+    view.checkpoints = [{ ...view.checkpoints[0]!, rule: `${view.checkpoints[0]!.rule} EVALUATOR_ONLY_MARKER` }];
     let selectorCalls = 0;
     const refusal = verdict === 'pass' ? 'Без дополнительных данных возврат невозможен' : 'Возврат запрещён всем';
     const agent = await httpAgent((_message, index) => index === 0 ? 'Назовите номер терминала' : refusal);
@@ -663,7 +568,7 @@ test('real compiler, Pi transport and evaluator: a move outside the policy is re
       const prompt = request.systemPrompt ?? '';
       // The first answer names a move the policy does not allow: the schema refuses it and the model is asked again.
       if (prompt.startsWith(USER_CONTROLLER_ROLE)) return JSON.stringify({ actionId: ++selectorCalls === 1 ? 'leave' : selectorCalls === 2 ? 'number' : 'finish' });
-      if (prompt.startsWith(ASSESS_ROLE)) return JSON.stringify({ assessments: [{ metricId: 'ask_terminal', passCondition: verdict === 'pass' ? 'met' : 'not_met', failCondition: verdict === 'pass' ? 'not_met' : 'met',
+      if (prompt.startsWith(ASSESS_ROLE)) return JSON.stringify({ assessments: [{ metricId: 'ask_once', passCondition: verdict === 'pass' ? 'met' : 'not_met', failCondition: verdict === 'pass' ? 'not_met' : 'met',
         rationale: verdict === 'pass' ? 'Корректно объяснён отказ' : 'Отказ противоречит правилу', evidence: [4], citations: [{ seq: 4, quote: refusal }] }] });
       throw new Error('The agent under test is external: no other model role is expected here.');
     });
@@ -686,19 +591,16 @@ test('real compiler, Pi transport and evaluator: a move outside the policy is re
 });
 
 test('a first-format checkpoint with an exact check is graded directly, never judged; a diagnostic checkpoint decides nothing', async () => {
-  const { acceptLibrary, compileLibrary, libraryHash } = await import('../src/scenario-library.js');
-  const { libraryFixture } = await import('./helpers/scenario-library.js');
   const { assessTrial, grade } = await import('../src/evaluation.js');
   const { headlineTrialResult } = await import('../src/outcomes.js');
-  const library = libraryFixture();
-  const scenario = compileLibrary(acceptLibrary(library, libraryHash(library), ['variant_1']))[0]!;
+  const { storedRunV1 } = await import('./helpers/library-v1.js');
+  const scenario = structuredClone(storedRunV1().scenarios.find(item => item.id === 'known_number')!);
   const view = scenario.execution!.evaluatorView;
   if (!('checkpoints' in view)) throw new Error('a first-format card');
   delete scenario.metrics;
-  const required = view.checkpoints[0]!;
-  required.check = { id: 'literal', kind: 'answer_contains', description: 'Уточнение', value: 'Назовите номер терминала' };
+  const required = { ...view.checkpoints[0]!, check: { id: 'literal', kind: 'answer_contains', description: 'Уточнение', value: 'Назовите номер терминала' } };
   scenario.checks = [required.check as never];
-  view.checkpoints.push({ ...required, id: 'diagnostic', role: 'diagnostic', check: undefined });
+  view.checkpoints = [required, { ...required, id: 'diagnostic', role: 'diagnostic', check: undefined }];
   for (const [reply, verdict] of [['Назовите номер терминала', 'pass'], ['Возврат оформлен', 'fail']] as const) {
     const trial: Trial = { id: 't', scenarioId: scenario.id, familyId: scenario.familyId, revisionId: 'r', userMode: 'reactive', repeat: 0, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '', checks: [], initialState: scenario.initialState, finalState: scenario.initialState, usage: emptyUsage(), elapsedMs: 1, events: [{ seq: 0, type: 'user', text: 'Возврат' }, { seq: 1, type: 'assistant', text: reply }] };
     trial.checks = grade(scenario, trial);
@@ -712,39 +614,6 @@ test('a first-format checkpoint with an exact check is graded directly, never ju
       assert.equal(headlineTrialResult(scenario, trial), verdict);
     } finally { await f.close(); }
   }
-});
-
-test('scenario proposal transport separates no-log owner requirements from real import identity before a model call', async () => {
-  const f = await fixture(() => JSON.stringify({ proposals: [] }));
-  try {
-    const base = { protocol: 'chronological-scenarios-v1' as const, task: 'Проверка', sources: [], requirements: [], dialogues: [] };
-    const { ctx } = callContext();
-    await assert.rejects(f.adapter.scenarioProposals!(base, ctx), /batchId|импорт/);
-    await assert.rejects(f.adapter.scenarioProposals!({ ...base, preparationMode: 'owner_requirements', batchId: 'imaginary' }, ctx), /лог|импорт/);
-    assert.equal(f.requests.length, 0);
-    assert.deepEqual(await f.adapter.scenarioProposals!({ ...base, preparationMode: 'owner_requirements' }, ctx), []);
-    assert.equal(f.requests.length, 1);
-  } finally { await f.close(); }
-});
-
-test('Pi semantic transport receives authenticated owner authority beside unchanged source chronology', async () => {
-  const { libraryFixture } = await import('./helpers/scenario-library.js');
-  const { editLibrary, libraryHash } = await import('../src/scenario-library.js');
-  const { planSemanticWork } = await import('../src/scenario-work.js');
-  const source = libraryFixture();
-  const edited = editLibrary(source, libraryHash(source), { kind: 'edit_fact', variantId: 'variant_1', factId: 'terminal_number', statement: 'Номер терминала: 4321', value: '4321', availability: 'initial', editId: 'owner_transport', reason: 'Личные данные известны заранее' });
-  const job = planSemanticWork(edited).jobs.find(j => j.input.scope === 'fields' && j.input.fields[0]!.variantId === 'variant_1')!;
-  const expected = job.input.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'ready', reason: 'Тест передачи контекста, не модельная оценка' })));
-  const f = await fixture(scripted([{ findings: expected }]));
-  try {
-    await f.adapter.assessScenarioProposals!(job.input, callContext().ctx);
-    const request = JSON.stringify(f.requests[0]);
-    assert.match(request, /ownerFactEvidence/);
-    assert.match(request, /verified/);
-    assert.match(request, /owner_transport/);
-    assert.match(request, /1234/, 'old chronology is retained independently of edited 4321');
-    assert.match(request, /4321/);
-  } finally { await f.close(); }
 });
 
 test('grounding for one dialogue asks for the rules that decide that dialogue only, with a smaller cap than a whole-policy grounding', () => {
@@ -761,21 +630,17 @@ test('grounding for one dialogue asks for the rules that decide that dialogue on
 });
 
 test('a missing JSON closer is a failed attempt; only the next complete response supplies fields', async () => {
-  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
-  const { importBatch, chronologicalInput } = { ...(await import('../src/scenario-library.js')), ...(await import('../src/scenario-preparation.js')) };
-  const batch = importBatch(rawDialogues), expected = proposals(batch.id).slice(0, 1);
-  expected[0]!.variant.environmentFixture.initialState = { records: {}, writableFields: [], transientFailures: 0 };
-  const raw = JSON.stringify({ proposals: expected }).replace(/}\]}$/, ']}');
+  const valid = JSON.stringify({ requirements: [{ id: 'req_1', text: 'The agent answers acquiring questions.', sourceId: 'source-1', quote: 'answers acquiring questions', critical: true, observable: true }], questions: [] });
+  const raw = valid.slice(0, -1);
   assert.throws(() => JSON.parse(raw));
-  const valid = JSON.stringify({ proposals: expected });
   const f = await fixture((_request, index) => index === 0 ? raw : valid);
   try {
     const seen: unknown[] = [], { ctx, usage } = callContext();
     ctx.onGeneratorOutput = response => seen.push(response);
-    const actual = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Возврат', sources, requirements, batchId: batch.id, dialogues: chronologicalInput(batch) }, ctx);
-    assert.deepEqual(actual, expected);
+    const grounded = await f.adapter.groundRequirements!({ task: 'Evaluate the owner agent', sources: [{ id: 'source-1', name: 'perimeter.md', content: 'The agent answers acquiring questions and nothing else.', hash: 'h' }] }, ctx);
+    assert.equal(grounded.requirements[0]!.quote, 'answers acquiring questions');
     assert.equal(usage.calls, 2);
-    assert.deepEqual(seen, [{ role: 'scenario-proposals', text: raw, attempt: 1 }, { role: 'scenario-proposals', text: valid, attempt: 2 }]);
+    assert.deepEqual(seen, [{ role: 'ground-requirements', text: raw, attempt: 1 }, { role: 'ground-requirements', text: valid, attempt: 2 }]);
   } finally { await f.close(); }
 });
 
@@ -794,106 +659,31 @@ test('structural recovery never supplies a truncated string or a missing schema 
   }
 });
 
-test('semantic admission honors the configured judge instead of silently reusing the builder', async () => {
-  const { libraryFixture } = await import('./helpers/scenario-library.js');
-  const { planSemanticWork } = await import('../src/scenario-work.js');
-  const job = planSemanticWork(libraryFixture()).jobs[0]!;
-  const findings = job.input.fields.flatMap(f => f.paths.map(path => ({ variantId: f.variantId, path, status: 'blocked', reason: 'Контрольный ответ транспортного теста' })));
-  const f = await fixture(() => JSON.stringify({ findings }), true);
+test('the card reviewer runs on the configured judge, named by its role or by the judge setting, never on the builder', async () => {
+  const verdict = { status: 'ready', reason: 'Подтверждено разговором.' };
+  const f = await fixture(() => JSON.stringify({ claims: { goal: verdict } }), true);
   try {
+    const payload = { card: {}, dialogue: null, requirements: [], articles: [], claims: [{ alias: 'goal', kind: 'goal', subject: '' }] };
     for (const overrides of [{ roles: { judge: { provider: settings.provider, model: 'role-model' } } }, { judge: { provider: settings.provider, model: 'role-model' } }]) {
       const adapter = await createPiRuntime(settingsSchema.parse({ ...settings, ...overrides }), f.runtime);
-      assert.deepEqual(await adapter.assessScenarioProposals!(job.input, callContext().ctx), findings);
+      assert.deepEqual((await adapter.reviewCard!({ aliases: ['goal'], payload: payload as never }, callContext().ctx)).verdicts, { goal: verdict });
     }
     assert.deepEqual(f.modelsUsed, ['role-model', 'role-model']);
   } finally { await f.close(); }
 });
 
 test('bounded schema retries retain the evidence and latest rejected draft without accumulating prior drafts', async () => {
-  const { importBatch } = await import('../src/scenario-library.js');
-  const { chronologicalInput } = await import('../src/scenario-preparation.js');
-  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
-  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
-  const f = await fixture((_request, index) => index < 3 ? JSON.stringify({ wrong: `rejected-draft-${index}` }) : JSON.stringify({ proposals: [valid] }));
+  // The card reviewer is bounded: its request carries a whole dialogue, so a repair starts afresh from the evidence.
+  const verdict = { status: 'ready', reason: 'Подтверждено разговором.' };
+  const f = await fixture((_request, index) => index < 3 ? JSON.stringify({ wrong: `rejected-draft-${index}` }) : JSON.stringify({ claims: { goal: verdict } }));
   try {
-    await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Исходные материалы остаются', batchId: batch.id,
-      sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, callContext().ctx);
+    const payload = { card: { title: 'Исходные материалы остаются' }, dialogue: null, requirements: [], articles: [], claims: [{ alias: 'goal', kind: 'goal', subject: '' }] };
+    assert.deepEqual((await f.adapter.reviewCard!({ aliases: ['goal'], payload: payload as never }, callContext().ctx)).verdicts, { goal: verdict });
     assert.equal(f.requests.length, 4);
     const last = JSON.stringify(f.requests[3]!.messages);
     assert.match(last, /Исходные материалы остаются/);
     assert.match(last, /rejected-draft-2/);
     assert.doesNotMatch(last, /rejected-draft-0|rejected-draft-1/);
-  } finally { await f.close(); }
-});
-
-test('semantic correction uses the configured judge model and preserves the builder for ordinary proposals', async () => {
-  const { importBatch } = await import('../src/scenario-library.js');
-  const { chronologicalInput } = await import('../src/scenario-preparation.js');
-  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
-  const batch = importBatch(rawDialogues), proposal = proposals(batch.id)[0]!;
-  const f = await fixture(() => JSON.stringify({ proposals: [proposal] }), true);
-  try {
-    const adapter = await createPiRuntime(settingsSchema.parse({ ...settings, judge: { provider: settings.provider, model: 'role-model' } }), f.runtime);
-    const input = { protocol: 'chronological-scenarios-v1' as const, task: 'Проверка', batchId: batch.id, sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) };
-    await adapter.scenarioProposals!(input, callContext().ctx);
-    await adapter.scenarioProposals!({ ...input, feedback: { proposals: [proposal], issues: [{ code: 'semantic_finding', path: 'userState', message: 'Сохранить исходную цель' }] } }, callContext().ctx);
-    assert.deepEqual(f.modelsUsed, ['test-model', 'role-model']);
-  } finally { await f.close(); }
-});
-
-test('an observed one-turn request without personal facts rejects invented customer follow-ups before publication', async () => {
-  const { importBatch } = await import('../src/scenario-library.js');
-  const { chronologicalInput } = await import('../src/scenario-preparation.js');
-  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
-  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
-  valid.variant.userState.facts = [];
-  valid.variant.behaviorPolicy = { version: 1, initialState: 'reply', states: ['reply', 'end'], terminalStates: ['end'], maxFollowUps: 0, repetitionLimit: 1,
-    actions: [{ id: 'finish', kind: 'finish', factIds: [] }], transitions: [{ from: 'reply', to: 'end', actionId: 'finish', when: 'Агент ответил' }] };
-  const bad = structuredClone(valid); bad.variant.behaviorPolicy.maxFollowUps = 1;
-  bad.variant.behaviorPolicy.actions.push({ id: 'invented', kind: 'clarify', factIds: [], payload: 'А если у меня другая проблема?' });
-  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
-  try {
-    const dialogues = chronologicalInput(batch, ['terminal']); dialogues[0]!.messages = dialogues[0]!.messages.slice(0, 1); dialogues[0]!.events = dialogues[0]!.events.slice(0, 1);
-    const result = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка', batchId: batch.id, sources, requirements, dialogues }, callContext().ctx);
-    assert.equal(f.requests.length, 2);
-    assert.equal(result[0]!.variant.behaviorPolicy.maxFollowUps, 0);
-    assert.match(JSON.stringify(f.requests[1]!.messages), /one-turn scope/);
-  } finally { await f.close(); }
-});
-
-test('proposal transport hides and rejects read-only source coverage authority fields', async () => {
-  const { importBatch } = await import('../src/scenario-library.js');
-  const { chronologicalInput } = await import('../src/scenario-preparation.js');
-  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
-  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
-  const bad = { ...structuredClone(valid), variant: { ...structuredClone(valid.variant), sourceCoverageRequired: true,
-    sourceCoverageBasis: [{ batchId: batch.id, dialogueId: 'terminal', eventIndex: 0 }] } };
-  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
-  try {
-    const { ctx, usage } = callContext();
-    const result = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка', batchId: batch.id, sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, ctx);
-    assert.equal(usage.calls, 2, 'generated authority fields are schema-rejected before the repaired proposal is returned');
-    assert.equal(result[0]!.variant.sourceCoverageRequired, undefined);
-    assert.equal(result[0]!.variant.sourceCoverageBasis, undefined);
-    assert.doesNotMatch(f.requests[0]!.systemPrompt!, /"sourceCoverageRequired":|"sourceCoverageBasis":/, 'the model output schema does not advertise harness-owned fields');
-    assert.match(JSON.stringify(f.requests[1]!.messages), /sourceCoverageRequired|sourceCoverageBasis/);
-  } finally { await f.close(); }
-});
-
-test('proposal transport rejects coverage of an opening even when the one-turn source has personal facts', async () => {
-  const { importBatch } = await import('../src/scenario-library.js');
-  const { chronologicalInput } = await import('../src/scenario-preparation.js');
-  const { proposals, rawDialogues, sources, requirements } = await import('./helpers/scenario-library.js');
-  const batch = importBatch(rawDialogues), valid = proposals(batch.id)[0]!;
-  const bad = { ...structuredClone(valid), variant: { ...structuredClone(valid.variant), sourceCoverage: [{ batchId: batch.id, dialogueId: 'terminal', eventIndex: 0,
-    disposition: 'initial_fact', actionIds: [], factIds: ['terminal_number'], reason: 'Номер назван в начале' }] } };
-  const f = await fixture((_request, index) => JSON.stringify({ proposals: [index ? valid : bad] }));
-  try {
-    const result = await f.adapter.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 'Проверка', batchId: batch.id, sources, requirements, dialogues: chronologicalInput(batch, ['terminal']) }, callContext().ctx);
-    assert.equal(f.requests.length, 2);
-    assert.equal(result[0]!.variant.sourceCoverage, undefined);
-    assert.equal(result[0]!.variant.userState.facts[0]!.value, '1234', 'personal knowledge is preserved');
-    assert.match(JSON.stringify(f.requests[1]!.messages), /opening is not a continuation/);
   } finally { await f.close(); }
 });
 

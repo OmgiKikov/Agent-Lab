@@ -16,7 +16,7 @@ import { ExperimentStore } from '../src/store.js';
 import { buildResultView } from '../src/result-view.js';
 import { chatBlock, fitRows, MAX_WIDTH, plainText, resultScreen } from '../src/result-text.js';
 import { markTargets, primaryMetricId } from '../src/outcomes.js';
-import { demoEvaluateRecord, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
+import { demoCard, demoEvaluateRecord, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 import { libraryHash } from '../src/scenario-library.js';
 import { CLOSE, KEY, legacyDraftIn, noticeOf, output, registered, renderContext, workspaceSession } from './helpers/pi-session.js';
 
@@ -125,12 +125,13 @@ test('conversation runs only the confirmed plan, then saves and loads the same c
   const ctx = { cwd: directory, mode: 'tui', hasUI: true,
     ui: { select: async (plan: string) => { plans.push(plan); return consent ? 'Запустить' : 'Не сейчас'; } } } as unknown as ExtensionContext;
   const call = async (name: string, params: unknown) => output(await tools.get(name)!.execute('fixture', params, undefined, undefined, ctx));
-  // The owner accepted one ready situation of the built-in example in its first-format library; the run is confirmed separately.
+  // The owner accepted one ready situation of the built-in example; the run is confirmed separately.
   const seed = new ExperimentLab(join(directory, '.agent-lab'));
   await seed.init();
   const base = demoInput();
   const created = await seed.create(createInputSchema.parse({ ...base, settings: { ...base.settings, repeats: 1, maxCalls: 20 } })); await seed.waitForIdle();
-  await seed.acceptLibrary(created.id, libraryHash((await seed.readLibrary(created.id)).library), ['known_number']);
+  const prepared = await seed.readCards(created.id);
+  await seed.acceptCards(created.id, libraryHash(prepared.library), [demoCard(prepared.experiment, 'known')]);
   await seed.close();
   const draft = await call('agent_lab_inspect', { id: created.id });
   const cancelled = await call('agent_lab_run', { id: draft.id, expectedHash: draft.draftHash });
@@ -156,9 +157,9 @@ test('conversation runs only the confirmed plan, then saves and loads the same c
   assert.match(proofText, /^ДОКАЗАТЕЛЬСТВО\nТест:/);
   assert.match(proofText, /Диалог: .*\nИсход: (pass|fail|unknown|invalid|ungraded|cancelled)/);
   assert.match(proofText, /РЕПЛИКИ\n#0 ПОЛЬЗОВАТЕЛЬ: [^\n]+\n#\d+ АГЕНТ:/);
-  // A first-format card is judged through its projection: each required checkpoint is an expectation with its own verdict.
+  // Each expectation of the card has its own verdict; no checkpoint judge.
   assert.doesNotMatch(proofText, /КОНТРОЛЬНЫЕ ТОЧКИ/);
-  assert.match(proofText, /ОЦЕНКИ\n(?:PASS|FAIL) \[ask_once\] Если номер уже сообщён, не запрашивать его повторно/);
+  assert.match(proofText, /ОЦЕНКИ\n(?:PASS|FAIL) \[e1\] не спрашивать номер терминала ещё раз, если клиент его уже назвал/);
   assert.match(proofText, /ОЦЕНКИ\n(?:PASS|FAIL|UNKNOWN) \[[^\]]+\].*события: #\d+/);
   // The set was accepted earlier, so the dialog only starts the run: the plan it shows is what «Запустить» runs.
   assert.match(plans[1]!, /^Запустить прогон\?\n\n1 ситуация · 1 разговор: клиента играет Lab, ответы агента оценивает судья\./);
@@ -678,7 +679,7 @@ test('normal live ingress retains 300 original dialogues while bounding the lega
 });
 
 /** Every tool the extension registers, in order: preparing and reading, the situation commands, the draft, the run and the results. */
-const TOOL_NAMES = ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_status', 'agent_lab_cards', 'agent_lab_card_answer', 'agent_lab_resume_preparation', 'agent_lab_card_check',
+const TOOL_NAMES = ['agent_lab_build', 'agent_lab_inspect', 'agent_lab_status', 'agent_lab_cards', 'agent_lab_card_answer', 'agent_lab_resume_preparation', 'agent_lab_card_check', 'agent_lab_card_convert',
   'agent_lab_card_fact', 'agent_lab_card_expectation', 'agent_lab_card_client', 'agent_lab_card_similar', 'agent_lab_card_remove', 'agent_lab_edit', 'agent_lab_accept',
   'agent_lab_repeat', 'agent_lab_run', 'agent_lab_suite', 'agent_lab_connection', 'agent_lab_reassess', 'agent_lab_review', 'agent_lab_agree'];
 

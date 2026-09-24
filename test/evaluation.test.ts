@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { assessTrial, evaluateTrial } from '../src/evaluation.js';
 import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
 import { createDemoRuntime } from '../src/demo.js';
+import { proposalCall } from '../src/card/proposal.js';
 import {
   checkSchema, experimentSchema, fingerprint, goalAttainment, replyQuality, SANDBOX_RETIRED, simulatorFidelity,
   type CallContext, type DialogueMessage, type JudgeAudit, type MetricAssessment, type Rubric, type Runtime, type Scenario, type Source, type Target, type Trial, type World,
@@ -76,8 +77,8 @@ test('a stored sandbox card cannot run again: the retired built-in agent is refu
 test('the built-in demo refuses foreign materials and dialogues instead of simulating a custom preparation', async () => {
   const runtime = createDemoRuntime();
   await assert.rejects(runtime.groundRequirements!({ task: 'An unrelated task', sources: [{ id: 'source-1', name: 'Other policy', content: 'Another rule.', hash: 'h' }] }, context()), /Учебный пример поддерживает только/);
-  await assert.rejects(runtime.scenarioProposals!({ protocol: 'chronological-scenarios-v1', task: 't', sources: [], requirements: [], batchId: 'batch',
-    dialogues: [{ id: 'foreign', observation: undefined as never, events: [], messages: [] }] }, context()), /Учебный пример поддерживает только/);
+  await assert.rejects(runtime.proposeCard!({ task: 't', requirements: [], articles: [], topics: [], written: [],
+    call: proposalCall({ source: { kind: 'dialogue', batchId: 'batch', dialogueId: 'foreign' }, messages: [], requirements: [{ id: 'rule' }], maxTurns: 3 }) }, context()), /Учебный пример поддерживает только/);
 });
 
 test('the free simulator of an old validation card answers the current clarification and sees only this conversation', async () => {

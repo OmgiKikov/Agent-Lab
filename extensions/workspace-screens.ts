@@ -1,6 +1,6 @@
 import { visibleWidth } from '@earendil-works/pi-tui';
 import type { Experiment } from '../src/contracts.js';
-import { actionRow, briefRows, countsText, detailRows, layoutRows, listRows, situationActions, situationBrief, type LayoutRow, type SituationRow, type SituationView } from '../src/card/view.js';
+import { actionRow, briefRows, countsText, detailRows, formatNote, layoutRows, listRows, situationActions, situationBrief, type LayoutRow, type SituationRow, type SituationView } from '../src/card/view.js';
 import type { Decision } from '../src/inbox.js';
 import { decisionsLine } from '../src/inbox.js';
 import { problemSize, problemsLine, type Problem } from '../src/problems.js';
@@ -180,7 +180,7 @@ export function situationsScreen(data: SpaceData, selected: number, width: numbe
   if (!set?.views.length) return { head: [], body: wsLines([ws('answer', 'Ситуаций пока нет.'),
     ws('muted', 'Скажите в чате, какого агента проверить и где лежат логи, — Lab соберёт ситуации сам.')], room(width)), foot: [{ key: 'a', text: 'спросить Lab' }, areas, { key: 'Esc', text: 'закрыть' }] };
   const waiting = set.views.some(view => view.status === 'needs_owner');
-  const note = !set.editable ? [ws('muted', 'Старый формат: эти ситуации можно посмотреть, но не изменить.')]
+  const note = !set.editable ? [ws('muted', formatNote(set.record) ?? 'Старый формат: эти ситуации можно посмотреть, но не изменить.')]
     : set.record.trials.length ? [ws('muted', `Ситуации прогона ${whenText(set.record.createdAt, data.now)}; изменения пойдут в новый черновик, прогон не меняется.`)] : [];
   const lead = set.coverage && !options.firstRun ? [ws('answer', set.coverage.line), ...(set.coverage.uncovered ? [ws('muted', set.coverage.uncovered, 3)] : []), ...note]
     : [ws('answer', countsText(set.views)), ...(waiting ? [ws('muted', 'Готовые можно запускать уже сейчас; остальные войдут, когда ответите.')] : note)];

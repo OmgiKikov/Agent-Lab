@@ -118,7 +118,7 @@ async function withLab(work: (lab: ExperimentLab) => Promise<void>): Promise<voi
 
 test('declaring the logs\' version after acceptance changes no library hash, no acceptance and no run', async () => {
   await withLab(async lab => {
-    const draft = await lab.create(cardInput(), { cards: true });
+    const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const { library } = await lab.readCards(draft.id);
     const accepted = await lab.acceptCards(draft.id, libraryHash(library), library.cards.map(card => card.id));
@@ -214,7 +214,7 @@ test('the launch dialog\'s consent line: the most judge calls calibration may ta
   const lab = new ExperimentLab(directory, cardRuntime());
   try {
     await lab.init();
-    const draft = await lab.create(cardInput(), { cards: true });
+    const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const { library, experiment } = await lab.readCards(draft.id);
     const ids = library.cards.map(card => card.id);
@@ -242,7 +242,7 @@ test('agent-lab logs: shows the version each import was declared with, previews 
   const lab = new ExperimentLab(directory, cardRuntime());
   try {
     await lab.init();
-    const draft = await lab.create(cardInput(), { cards: true });
+    const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const importId = (await lab.get(draft.id)).originalImport!.id;
     await lab.close();

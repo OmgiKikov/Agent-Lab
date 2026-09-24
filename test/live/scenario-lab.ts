@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { ExperimentLab, draftHash } from '../../src/experiment.js';
 import { libraryHash } from '../../src/scenario-library.js';
 import { createInputSchema } from '../../src/contracts.js';
+import { situationViews } from '../../src/card/view.js';
 
 if (!process.argv.includes('--run')) throw new Error('Для модельного учебного запуска явно укажите --run.');
 const directory = await mkdtemp(join(tmpdir(), 'scenario-lab-live-'));
@@ -21,15 +22,17 @@ try {
   }));
   await lab.waitForIdle();
   let record = await lab.get(seed.id);
-  const ready = record.librarySnapshot?.variants.filter(v => v.quality === 'ready').map(v => v.id) ?? [];
-  if (ready.length && !record.error) {
-    const accepted = await lab.acceptLibrary(seed.id, libraryHash(record.librarySnapshot!), ready);
+  const context = record.error ? undefined : await lab.cardContext(seed.id);
+  const views = context ? situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns }) : [];
+  const ready = views.filter(view => view.status === 'ready').map(view => view.id);
+  if (context && ready.length) {
+    const accepted = await lab.acceptCards(seed.id, libraryHash(context.library), ready);
     await lab.start(seed.id, { approved: true, expectedHash: draftHash(accepted.experiment) }); await lab.waitForIdle(); record = await lab.get(seed.id);
   }
   const report = { evidenceKind: 'actual-configured-model-roles-with-deterministic-target', directory, id: record.id, phase: record.phase, error: record.error,
     usage: record.usage, libraryRevision: record.librarySnapshot?.revision, acceptedIds: ready,
-    pending: record.librarySnapshot?.variants.filter(v => v.quality !== 'ready').map(v => ({ id: v.id, quality: v.quality, issues: v.issues })),
-    trials: record.trials.map(t => ({ id: t.id, outcome: t.outcome, reason: t.reason, checkpoints: t.checkpoints })),
+    pending: views.filter(view => view.status !== 'ready').map(view => ({ id: view.id, status: view.status, question: view.question?.text, problems: view.problems })),
+    trials: record.trials.map(t => ({ id: t.id, outcome: t.outcome, reason: t.reason, assessments: t.assessments })),
     limits: 'Synthetic smoke probe; no expert labels, model-quality guarantee or owner subjective acceptance. No automatic owner fact edits. A partial draft is retained for review.' };
   await writeFile(join(directory, 'report.json'), JSON.stringify(report, null, 2), { mode: 0o600 });
   console.log(JSON.stringify(report, null, 2));

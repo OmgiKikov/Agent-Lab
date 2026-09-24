@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { experimentSchema, fingerprint, settingsSchema, type CallContext, type Experiment, type MetricAssessment, type Rubric, type RunnableTarget, type Runtime, type Settings, type Target } from '../../src/contracts.js';
-import { DEMO_OWNER_EDIT, demoInput } from '../../src/demo.js';
+import { hostGrant } from '../../src/card/commands.js';
+import { situationViews } from '../../src/card/view.js';
+import { demoInput } from '../../src/demo.js';
 import { ExperimentLab } from '../../src/experiment.js';
 import { libraryHash } from '../../src/scenario-library.js';
 import { evaluatorVersion } from '../../src/pi.js';
@@ -113,16 +115,32 @@ export async function legacyDraft(lab: ExperimentLab, options: { count?: number;
   return lab.get(record.id);
 }
 
+/** The built-in example's situations with their status now. */
+async function demoSituations(lab: ExperimentLab, id: string) {
+  const context = await lab.cardContext(id);
+  return { library: context.library, views: situationViews(context.experiment, { evidence: context.evidence, maxTurns: context.experiment.settings.maxTurns }) };
+}
+
 /**
- * The built-in library demo up to an accepted draft, as the owner would take it: prepared from its two
- * dialogues, the disputed fact confirmed, every ready variant accepted. The lab needs the demo runtime
+ * The built-in example up to an accepted draft, as the owner takes it: two situations prepared from its two dialogues,
+ * its one question answered («клиент знал номер»), every ready situation accepted. The lab needs the demo runtime
  * (injected `createDemoRuntime()`, or none for a demo-mode record).
  */
 export async function acceptedDemoDraft(lab: ExperimentLab, input = demoInput()): Promise<Experiment> {
   const draft = await lab.create(input); await lab.waitForIdle();
-  const prepared = await lab.readLibrary(draft.id);
-  const edited = await lab.editLibrary(draft.id, libraryHash(prepared.library), DEMO_OWNER_EDIT, 'owner');
-  await lab.assessLibrary(draft.id, libraryHash(edited.library)); await lab.waitForIdle();
-  const reviewed = await lab.readLibrary(draft.id);
-  return (await lab.acceptLibrary(draft.id, libraryHash(reviewed.library), reviewed.library.variants.filter(v => v.quality === 'ready').map(v => v.id))).experiment;
+  for (const view of (await demoSituations(lab, draft.id)).views) if (view.question?.id) {
+    const answer = await lab.prepareCardCommand(draft.id, { kind: 'answer_question', cardId: view.id, questionId: view.question.id, choice: 'a' }, { via: 'cli-yes' });
+    await lab.applyCardCommand(draft.id, answer, hostGrant(answer, 'confirmed'));
+  }
+  const answered = await demoSituations(lab, draft.id);
+  const ready = answered.views.filter(view => view.status === 'ready').map(view => view.id);
+  return (await lab.acceptCards(draft.id, libraryHash(answered.library), ready)).experiment;
+}
+
+/** The example's situation made from one of its dialogues: `known` names the number at once, `late` only when asked. */
+export function demoCard(record: Experiment, dialogue: 'known' | 'late'): string {
+  const library = record.librarySnapshot;
+  const card = library?.formatVersion === 2 ? library.cards.find(item => item.origin.kind === 'dialogue' && item.origin.dialogueId === dialogue) : undefined;
+  if (!card) throw new Error(`В записи нет ситуации учебного примера из диалога «${dialogue}».`);
+  return card.id;
 }

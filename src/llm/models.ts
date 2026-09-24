@@ -10,8 +10,8 @@ import type { Model } from './model-call.js';
  *   judge     = roles.judge     ?? settings.judge ?? the run's model
  *
  * A judge on OpenRouter goes through the Chat Completions adapter, for every judge-role task (rubric votes,
- * checkpoints, semantic review): routing options such as a pinned upstream belong to that adapter, and the
- * catalog would otherwise pick a vendor-native endpoint that ignores them.
+ * votes on logged conversations, the card review): routing options such as a pinned upstream belong to that
+ * adapter, and the catalog would otherwise pick a vendor-native endpoint that ignores them.
  */
 
 export type ModelRole = 'builder' | 'judge' | 'simulator';

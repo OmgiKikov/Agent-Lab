@@ -248,7 +248,7 @@ test('situations can be prepared before the agent is connected; the connection i
   const lab = new ExperimentLab(join(cwd, '.agent-lab'), cardRuntime());
   await lab.init();
   try {
-    const draft = await lab.create(cardInput({ target: { kind: 'unconnected' } }), { cards: true });
+    const draft = await lab.create(cardInput({ target: { kind: 'unconnected' } }));
     await lab.waitForIdle();
     const prepared = await lab.get(draft.id);
     assert.equal(prepared.phase, 'review', prepared.error ?? '');

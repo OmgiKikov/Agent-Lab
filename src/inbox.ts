@@ -1,4 +1,5 @@
 import type { Experiment } from './contracts.js';
+import { convertible, libraryV1Of } from './card/legacy-v1.js';
 import type { QuestionChoice } from './card/status.js';
 import type { SituationView } from './card/view.js';
 import { countText, pluralForm } from './plural.js';
@@ -32,7 +33,9 @@ export type DecisionAction =
   | { kind: 'check_connection' }
   | { kind: 'raise_limit'; runId: string; to: number }
   | { kind: 'check_situations'; runId: string }
-  | { kind: 'resume_preparation'; runId: string };
+  | { kind: 'resume_preparation'; runId: string }
+  /** A draft of the first format goes on as a new draft of cards; the old one stays as it was. */
+  | { kind: 'convert_draft'; runId: string };
 
 export interface DecisionChoice {
   label: string; action: DecisionAction;
@@ -103,6 +106,12 @@ export function decisions(input: InboxInput): Decision[] {
   const measurement: Decision[] = [], questions: Decision[] = [], spending: Decision[] = [];
   const { draft, run } = input;
   if (draft) {
+    // A first-format draft that was never accepted can neither change nor run: its one way on is the card format.
+    const first = libraryV1Of(draft.record);
+    if (first && !first.acceptance && convertible(draft.record)) questions.push({ key: `convert:${draft.record.id}`, subject: 'Ситуации старого формата',
+      text: 'Их можно посмотреть, но не изменить и не утвердить для прогона. В новом формате — можно; старый черновик останется как есть.',
+      choices: [{ label: 'Продолжить в новом формате', action: { kind: 'convert_draft', runId: draft.record.id }, settles: true },
+        { label: 'Открыть ситуации', action: { kind: 'open_situations' }, settles: false }] });
     // A card set's questions stay decisions after a run of its ready situations: the answer goes into a fresh draft.
     const cards = draft.record.librarySnapshot?.formatVersion === 2;
     const editable = cards && draft.record.phase === 'review' && !draft.record.trials.length;

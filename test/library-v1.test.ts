@@ -1,17 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { experimentSchema, fingerprint, judgeAuditSchema, type Experiment, type JudgeAudit, type Runtime, type VariantExecution } from '../src/contracts.js';
 import { libraryV1Of, projectedExpectations } from '../src/card/legacy-v1.js';
 import { compareRuns } from '../src/comparison.js';
 import { scenarioLibrarySchema } from '../src/card/schema.js';
 import { demoTarget } from '../src/demo.js';
-import { draftHash } from '../src/experiment.js';
+import { draftHash, ExperimentLab } from '../src/experiment.js';
 import { hasCompleteJudgment, observableSources, scenarioSources } from '../src/judge.js';
 import { automaticTrialResult } from '../src/outcomes.js';
 import { buildResultView } from '../src/result-view.js';
 import { libraryHash, verifyAcceptedRun } from '../src/scenario-library.js';
-import { compiledLibraryScenarios } from '../src/scenario-preparation.js';
 import { libraryV1File, libraryV1Run, libraryV1Runtime } from './helpers/library-v1.js';
 
 /*
@@ -81,13 +81,13 @@ test('an accepted first-format run is verified by its stored hashes: the receipt
   const rules = structuredClone(record);
   rules.requirements[0]!.text = 'Другое правило';
   assert.throws(() => verifyAcceptedRun(rules), /Правила изменились/);
-  // Accepted under an older controller prompt: the stored card and its receipt agree, today's compiler would write another card.
+  // Accepted under an older controller prompt: the stored card and its receipt agree. No compiler of this format is left
+  // to write the card again — the stored hashes are the whole proof.
   const older = structuredClone(record);
   const accepted = older.scenarios[0]!;
   accepted.execution!.controllerHash = 'a'.repeat(64);
   older.acceptedTests = older.acceptedTests!.map(entry => entry.scenarioId === accepted.id ? { ...entry, definitionHash: fingerprint(accepted) } : entry);
   verifyAcceptedRun(older);
-  assert.notEqual(fingerprint(compiledLibraryScenarios(older, libraryV1Of(older)!).find(item => item.id === accepted.id)), fingerprint(accepted));
   const foreign = structuredClone(record);
   foreign.acceptedTests = foreign.acceptedTests!.map(entry => ({ ...entry, definitionHash: fingerprint(foreign.scenarios[0]) }));
   assert.throws(() => verifyAcceptedRun(foreign), /отличается от утверждённой/, 'an acceptance entry of another card proves nothing');
@@ -147,4 +147,28 @@ test('a repeat compares with the old run re-judged by today\'s judge, never with
   const rejudged = compareRuns(await lab.get(reassessed.id), run);
   assert.equal(rejudged.comparable, true, rejudged.notes.join(' | '));
   assert.deepEqual(rejudged.fixed.map(row => row.scenarioId), ['known_number'], 'the fixed agent no longer asks twice');
+});
+
+test('criteria of a re-assessment cannot change an accepted first-format card', async t => {
+  const { lab, directory, record } = await libraryV1Run();
+  t.after(async () => { await lab.close(); await rm(directory, { recursive: true, force: true }); });
+  await assert.rejects(() => lab.reassess(record.id, { criteria: [{ scenarioId: 'known_number', successCriteria: 'Другое ожидание' }], codeOnly: true }), /отличается от утверждённой/);
+  assert.deepEqual(await lab.get(record.id), record, 'the stored run is untouched');
+});
+
+test('a first-format run saved as a suite loads in another store with its library and import, and runs as accepted', async t => {
+  const { lab, directory, record } = await libraryV1Run();
+  const other = new ExperimentLab(join(directory, 'other'), libraryV1Runtime());
+  t.after(async () => { await lab.close(); await other.close(); await rm(directory, { recursive: true, force: true }); });
+  await other.init();
+  const file = await lab.saveSuite(record.id, join(directory, 'suite.json'), ['late_number']);
+  const loaded = await other.loadSuite(file, undefined, { format: 'agent-lab-connection-1', target: demoTarget(true) });
+  assert.equal(fingerprint(loaded.librarySnapshot), fingerprint(record.librarySnapshot));
+  assert.deepEqual(loaded.scenarios.map(scenario => scenario.id), ['late_number']);
+  assert.deepEqual(loaded.selectedScenarioIds, ['late_number']);
+  const library = libraryV1Of(loaded)!;
+  assert.equal(fingerprint(await other.store.readLibrary(library.id, libraryHash(library))), fingerprint(library), 'the library is kept in the new store');
+  assert.equal((await other.store.readImport(loaded.originalImport!.id)).dialogues.length, 2, 'so is its import');
+  await other.start(loaded.id, { approved: true, reviewer: 'automated', expectedHash: draftHash(loaded) }); await other.waitForIdle();
+  assert.deepEqual(verdicts(await other.get(loaded.id)), ['late_number:pass', 'late_number:pass']);
 });

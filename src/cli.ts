@@ -21,6 +21,7 @@ import { MAX_WIDTH, plainText, resultScreen, type ResultRow } from './result-tex
 import { evidenceBundle, exportArtifacts, importNumbers, resolveVerified } from './artifacts.js';
 import { libraryHash } from './scenario-library.js';
 import { hostGrant, requiredAuthority, wordsOf } from './card/commands.js';
+import { conversionText } from './card/convert.js';
 import { cardCommandSchema } from './card/schema.js';
 import { actionRow, briefRows, changeText, countsText, detailRows, formatNote, listRows, plainSituationText, situationActions, situationData, situationViews, type SituationView } from './card/view.js';
 import { safeLine } from './text.js';
@@ -71,7 +72,7 @@ async function main() {
     connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
     'dialogues-file': { type: 'string' }, trial: { type: 'string', multiple: true },
     yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
-    card: { type: 'string' }, choice: { type: 'string' }, text: { type: 'string' }, check: { type: 'boolean' }, resume: { type: 'boolean' }, accept: { type: 'boolean' },
+    card: { type: 'string' }, choice: { type: 'string' }, text: { type: 'string' }, check: { type: 'boolean' }, resume: { type: 'boolean' }, accept: { type: 'boolean' }, convert: { type: 'boolean' },
     'agent-version': { type: 'string' }, unknown: { type: 'boolean' }, import: { type: 'string' },
   } });
   const command = positionals[0];
@@ -85,7 +86,8 @@ async function main() {
     process.stdout.write('  agent-lab cards --id RUN [--card N] [--json]           Ситуации: что пишет и знает клиент, что должен агент, статус и вопрос\n'
       + '  agent-lab cards --id RUN --card N --choice a|b|c [--text «…»] --yes   Ответ на вопрос ситуации\n'
       + '  agent-lab cards --id RUN --input команда.json [--yes]   Команда владельца; без --yes — только «было → стало»\n'
-      + '  agent-lab cards --id RUN --check|--resume|--accept --yes   Проверить ситуации · продолжить подготовку · утвердить готовые\n');
+      + '  agent-lab cards --id RUN --check|--resume|--accept --yes   Проверить ситуации · продолжить подготовку · утвердить готовые\n'
+      + '  agent-lab cards --id RUN --convert     Черновик старого формата — продолжить в новом формате; старый останется как есть\n');
     process.stdout.write('Дополнительно: run --id RUN --yes [--parallel 4] · build --input task.json · repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID] · diff --before RUN --after RUN · export --id RUN --format html --output report.html · status.\n'); return;
   }
   if (command === 'status') { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); return; }
@@ -119,6 +121,18 @@ async function main() {
       const head = view ? [] : [countsText(views), ...(formatNote(record) ? [formatNote(record)!] : []), ''];
       await writeStdout(`${[...changes, ...(changes.length ? [''] : []), ...head.map(line => line && ` ${safeLine(line)}`), plainSituationText(rows.map(row => ({ ...row, text: safeLine(row.text) })), process.stdout.columns ?? 100)].join('\n')}\n`);
     };
+    if (values.convert) {
+      // Free and deterministic: the new draft's situations wait for a check the owner starts with --check --yes.
+      await lab.init();
+      try {
+        const converted = await lab.convertV1Draft(values.id);
+        const text = conversionText(converted);
+        if (values.json) { await writeStdout(`${JSON.stringify({ runId: converted.experiment.id, convertedFrom: values.id, left: converted.left, checkCalls: converted.calls }, null, 2)}\n`); return; }
+        await writeStdout(`${[text.summary, ...text.left, text.check, `Проверить: agent-lab cards --id ${converted.experiment.id} --check --yes`, ''].map(line => safeLine(line)).join('\n')}\n`);
+        await show(converted.experiment.id);
+      } finally { await lab.close(); }
+      return;
+    }
     if (!values.input && !values.choice && !values.check && !values.resume && !values.accept) { await show(values.id); return; }
     await lab.init();
     try {
@@ -314,7 +328,7 @@ async function main() {
       const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file']) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
       const input = createInputSchema.parse({ ...raw, ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
         ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}) });
-      const prepared = await lab.create(input, { cards: true }); id = prepared.id; await lab.waitForIdle();
+      const prepared = await lab.create(input); id = prepared.id; await lab.waitForIdle();
       const current = await lab.get(id);
       if (current.phase !== 'review') throw new Error(current.error ?? 'Preparation failed');
       if (command === 'prepare' || command === 'build') { process.stdout.write(`${JSON.stringify(current, null, 2)}\n`); return; }

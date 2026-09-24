@@ -137,7 +137,7 @@ test('the promise is what is prepared: the representative sample of every topic,
   await withLab(runtime, async (lab, directory) => {
     const consent = await preparationConsent(lab.store, { batch, settings: createInput(batch).settings, situations: 5 });
     assert.deepEqual([consent.promised, consent.topicMapCalls], [5, 2]);
-    const draft = await lab.create(createInput(batch), { cards: true, situations: 5 });
+    const draft = await lab.create(createInput(batch), { situations: 5 });
     await lab.waitForIdle();
     const { library, experiment } = await lab.readCards(draft.id);
     assert.equal(experiment.phase, 'review', experiment.error ?? '');
@@ -182,7 +182,7 @@ test('a pick that makes no situation gives its seat to the next conversation of 
     return true;
   } });
   await withLab(runtime, async lab => {
-    const draft = await lab.create(createInput(batch), { cards: true, situations: 5 });
+    const draft = await lab.create(createInput(batch), { situations: 5 });
     await lab.waitForIdle();
     const { library, experiment } = await lab.readCards(draft.id);
     const progress = experiment.preparationProgress as CardPreparation;
@@ -209,7 +209,7 @@ test('a pick whose paid call died in flight is never asked again: after the resu
     throw new Error('Provider disconnected after accepting the request');
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(createInput(batch), { cards: true, situations: 3 });
+    const draft = await lab.create(createInput(batch), { situations: 3 });
     await lab.waitForIdle();
     assert.match((await lab.get(draft.id)).error ?? '', /Provider disconnected/);
     await lab.resumePreparation(draft.id, libraryHash((await lab.readCards(draft.id)).library));
@@ -236,7 +236,7 @@ test('the topic map is paid for once: a build cut short continues from its last 
     const mapCalls = async (extra: Record<string, unknown> = {}) =>
       (await preparationConsent(lab.store, { batch, settings: createInput(batch, extra).settings, situations: 3 })).topicMapCalls;
     assert.equal(await mapCalls(), 4);
-    const failed = await lab.create(createInput(batch), { cards: true, situations: 3 });
+    const failed = await lab.create(createInput(batch), { situations: 3 });
     await lab.waitForIdle();
     const stopped = await lab.get(failed.id);
     assert.deepEqual([stopped.phase, stopped.librarySnapshot], ['error', undefined]);
@@ -245,13 +245,13 @@ test('the topic map is paid for once: a build cut short continues from its last 
     assert.equal(await mapCalls(), 2, 'the proposal and the first batch are stored: two calls are left');
 
     runtime.topicMap = working.runtime.topicMap;
-    const first = await lab.create(createInput(batch), { cards: true, situations: 3 });
+    const first = await lab.create(createInput(batch), { situations: 3 });
     await lab.waitForIdle();
     assert.deepEqual(working.seen.topicCalls, ['Темы разговоров, часть 2 из 3', 'Темы разговоров, часть 3 из 3'], 'the build goes on where it stopped');
     assert.equal(await mapCalls(), 0, 'a finished map of these logs costs nothing');
     assert.equal(await mapCalls({ roles: { builder: { provider: 'agent-lab-test', model: 'role-model' } } }), 4, 'another builder model maps the logs anew');
 
-    const again = await lab.create(createInput(batch), { cards: true, situations: 3 });
+    const again = await lab.create(createInput(batch), { situations: 3 });
     await lab.waitForIdle();
     assert.equal(working.seen.topicCalls.length, 2, 'the stored map is reused without a call');
     const [one, two] = await Promise.all([first.id, again.id].map(id => lab.readCards(id)));
@@ -266,14 +266,14 @@ test('topics on cards: a dialogue card takes its conversation\'s, a similar card
   const batch = batchOf(logged);
   await withLab(minerRuntime(logged).runtime, async lab => {
     const rules = await lab.create(createInputSchema.parse({ task: 'Проверить поддержку', mode: 'live', target: demoTarget(), scenarioCount: 2,
-      materials: [{ name: 'Правила поддержки', content: RULE }], settings: settings() }), { cards: true });
+      materials: [{ name: 'Правила поддержки', content: RULE }], settings: settings() }));
     await lab.waitForIdle();
     const written = await lab.readCards(rules.id);
     assert.deepEqual(written.library.cards.map(card => [card.origin.kind, card.topic, card.trafficTopic]), [['rules', 'Вопросы клиентов', undefined], ['rules', 'Вопросы клиентов', undefined]]);
     assert.deepEqual([written.library.traffic, (written.experiment.preparationProgress as CardPreparation).sample], [undefined, undefined]);
     assert.equal(situationCoverage(written.library, new Map(written.library.cards.map(card => [card.id, { status: 'ready' as const }]))), undefined, 'no logs, no coverage line');
 
-    const sampled = await lab.create(createInput(batch), { cards: true, situations: 2 });
+    const sampled = await lab.create(createInput(batch), { situations: 2 });
     await lab.waitForIdle();
     const { library } = await lab.readCards(sampled.id);
     const parent = library.cards[0]!;
@@ -297,7 +297,7 @@ test('a card run reads its topics from the record alone: rows by traffic share, 
   const { runtime } = minerRuntime(logged, { fails: title => title.startsWith('Статус заявки') });
   await withLab(runtime, async (lab, directory) => {
     // Three seats for four topics: the three largest get one each, «Другое» none.
-    const draft = await lab.create(createInput(batch), { cards: true, situations: 3 });
+    const draft = await lab.create(createInput(batch), { situations: 3 });
     await lab.waitForIdle();
     const { library } = await lab.readCards(draft.id);
     const accepted = await lab.acceptCards(draft.id, libraryHash(library), library.cards.map(card => card.id));
@@ -337,7 +337,7 @@ test('records without the logs\' topics read as before; the new stored fields pa
   assert.ok(!markdownReport(legacy).includes('покрыва'), 'a first-format run has no coverage sentence');
   // The card-preparation runtime of the earlier tests maps no topics: the first usable conversations, in import order, and no topic claimed.
   await withLab(cardRuntime(), async lab => {
-    const draft = await lab.create(cardInput(), { cards: true });
+    const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const { library, experiment } = await lab.readCards(draft.id);
     const progress = experiment.preparationProgress as CardPreparation;
@@ -346,7 +346,7 @@ test('records without the logs\' topics read as before; the new stored fields pa
     assert.equal(situationCoverage(library, new Map(library.cards.map(card => [card.id, { status: 'ready' as const }]))), undefined);
   });
   await withLab(minerRuntime(TEN()).runtime, async (lab, directory) => {
-    const draft = await lab.create(createInput(batchOf(TEN())), { cards: true, situations: 2 });
+    const draft = await lab.create(createInput(batchOf(TEN())), { situations: 2 });
     await lab.waitForIdle();
     const raw = JSON.parse(await readFile(join(directory, `${draft.id}.json`), 'utf8'));
     assert.ok(raw.librarySnapshot.traffic && raw.librarySnapshot.cards[0].trafficTopic && raw.preparationProgress.sample);

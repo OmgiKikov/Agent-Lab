@@ -120,7 +120,8 @@ export async function launchRun(ctx: ExtensionContext, lab: ExperimentLab, start
     const { experiment } = await lab.acceptCards(draft.id, libraryHash(context.library), ready.map(view => view.id));
     return lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: draftHash(experiment), parallel: runParallel(experiment), requireAccepted: true });
   }
-  if (library && !library.acceptance) throw new NeedsOwner('needs_owner_input', 'Это черновик старого формата: его ситуации можно посмотреть, но не утвердить. Подготовьте ситуации заново.');
+  if (library && !library.acceptance) throw new NeedsOwner('needs_owner_input', 'Это черновик старого формата: его ситуации можно посмотреть, но не утвердить. Предложите владельцу продолжить их в новом формате (agent_lab_card_convert).', [],
+    'Это черновик старого формата: его ситуации нельзя утвердить. Их можно продолжить в новом формате — старый черновик останется как есть.');
   const hash = draftHash(draft);
   const confirmed = draft.acceptedDraftHash === hash;
   const picked = await ctx.ui.select(safeText([library || confirmed ? 'Запустить прогон?' : 'Подтвердить ожидания и запустить?', '', runPlan(draft, cwd)].join('\n')), [LAUNCH, NOT_NOW]);

@@ -178,7 +178,7 @@ async function prepare(host: BuildHost, callId: string, ctx: ExtensionContext, s
       return { ...situations, output: { ...situations.output, ...output } };
     };
     if (interactive) signal.removeEventListener('abort', cancel);
-    id = (await lab.create(input, { cards: true, ...(options.situations ? { situations: options.situations } : {}) })).id;
+    id = (await lab.create(input, options.situations ? { situations: options.situations } : {})).id;
     if (signal.aborted && !interactive) cancel();
     await progress();
     timer = setInterval(() => { polling = polling.then(progress).catch(() => {}); }, 750);

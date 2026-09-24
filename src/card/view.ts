@@ -6,7 +6,7 @@ import type { ImportBatch, LibraryV1, ScenarioVariant } from '../scenario-contra
 import { oneLine } from '../text.js';
 import { contains, quotable, type CardEvidence } from './checks.js';
 import { compilePolicy, expectationLetter } from './compile.js';
-import { behaviorLines, libraryV1Of, orderedVariants, ownerQuestions, ownerRemarks, plainIssue } from './legacy-v1.js';
+import { behaviorLines, convertible, libraryV1Of, orderedVariants, ownerQuestions, ownerRemarks, plainIssue } from './legacy-v1.js';
 import type { Card, LibraryV2 } from './schema.js';
 import { cardStatuses, type CardStatus, type CardStatusKind, type QuestionChoice } from './status.js';
 
@@ -306,9 +306,9 @@ export function situationNumber(record: Experiment, scenarioId: string, position
   return library?.formatVersion === 2 ? library.cards.find(card => card.id === scenarioId)?.number ?? position : position;
 }
 
-/** A draft in the first library format is only read now; the surfaces say so above its list. */
+/** A draft in the first library format is only read now; the surfaces say so above its list, with the way on. */
 export function formatNote(record: Pick<Experiment, 'librarySnapshot' | 'phase' | 'trials'>): string | undefined {
-  return libraryV1Of(record) && record.phase === 'review' && !record.trials.length ? 'Старый формат: эти ситуации можно посмотреть, но не изменить.' : undefined;
+  return convertible(record) ? 'Старый формат: эти ситуации можно посмотреть, но не изменить — их можно продолжить в новом формате.' : undefined;
 }
 
 /** The open question with its numbered answers, the way the owner sees it. */

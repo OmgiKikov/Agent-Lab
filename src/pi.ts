@@ -1,24 +1,21 @@
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
 import {
-  checkSchema, EXPECTATIONS_PROTOCOL, failureModeSchema, fingerprint, requirementSchema, REQUIREMENT_LIMIT, SIMULATOR_PROTOCOL, sourceSelectionSchema, userTurnSchema, VERSION, verbatimSpan, worldSchema,
-  type CallContext, type FailureMode, type GroundingInput, type Requirement, type Runtime, type ScenarioProposalsInput, type Settings, type Source,
+  EXPECTATIONS_PROTOCOL, failureModeSchema, fingerprint, requirementSchema, REQUIREMENT_LIMIT, SIMULATOR_PROTOCOL, sourceSelectionSchema, userTurnSchema, VERSION, verbatimSpan,
+  type CallContext, type FailureMode, type GroundingInput, type Requirement, type Runtime, type Settings, type Source,
 } from './contracts.js';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } from './judge.js';
-import { FOCUSED_REQUIREMENT_LIMIT } from './limits.js';
+import { FOCUSED_REQUIREMENT_LIMIT, workInputIssue } from './limits.js';
 import { callModel, type Model } from './llm/model-call.js';
 import { AUTH_HELP, resolveModels } from './llm/models.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
 import {
-  CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, REQUIREMENTS_ROLE, SCENARIO_PROPOSALS_ROLE, SCENARIO_SEMANTIC_ROLE,
-  SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
+  CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
 } from './prompts.js';
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
 import { cardReviewSchema } from './card/review.js';
 import { judgeLogged, logProtocolHash } from './card/log-judge.js';
 import { buildTopicMap } from './miner/topic-map.js';
-import { scenarioProposalSchema, semanticFindingSchema } from './scenario-contracts.js';
-import { SCENARIO_OUTPUT_BYTES, SCENARIO_REQUEST_BYTES, SEMANTIC_BATCH_FIELDS, SEMANTIC_REASON_CHARS, workInputIssue } from './scenario-work.js';
 import { USER_CONTROLLER_PROTOCOL, userDecisionSchema } from './user-controller.js';
 
 /*
@@ -84,31 +81,6 @@ export function groundingRequest(input: GroundingInput) {
     },
   };
 }
-
-/** Scenario work carries full chronologies: its answers and requests are capped, and a repair starts afresh. */
-const SCENARIO_BOUNDS = { outputBytes: SCENARIO_OUTPUT_BYTES, requestBytes: SCENARIO_REQUEST_BYTES };
-const proposalVariant = scenarioProposalSchema.shape.variant;
-const proposalsOutput = z.strictObject({ proposals: z.array(scenarioProposalSchema.extend({ variant: proposalVariant.omit({ sourceCoverageRequired: true, sourceCoverageBasis: true }).extend({
-  environmentFixture: proposalVariant.shape.environmentFixture.extend({ initialState: worldSchema }),
-  evaluationSpec: proposalVariant.shape.evaluationSpec.extend({
-    checkpoints: z.array(proposalVariant.shape.evaluationSpec.shape.checkpoints.element.extend({ check: checkSchema.optional() })).min(1).max(12),
-  }),
-}) })).max(1) });
-function proposalProblem(value: z.infer<typeof proposalsOutput>, input: ScenarioProposalsInput): string | undefined {
-  for (const { variant } of value.proposals) {
-    const logs = input.dialogues.filter(d => variant.sourceDialogues.some(ref => ref.dialogueId === d.id));
-    const oneRequest = logs.length === 1 && logs[0]!.messages.filter(m => m.role === 'user').length === 1;
-    if (oneRequest && variant.sourceCoverage?.length) {
-      return 'sourceCoverage accounts only for customer turns AFTER the first customer message. This source has one customer message: omit sourceCoverage or return an empty array. The opening is not a continuation.';
-    }
-    if (variant.provenance !== 'production' || variant.userState.facts.length) continue;
-    if (oneRequest && (variant.behaviorPolicy.maxFollowUps !== 0 || variant.behaviorPolicy.actions.some(a => a.kind !== 'finish'))) {
-      return 'This observed dialogue has one customer request and no grounded personal facts. Preserve that one-turn scope: maxFollowUps:0 and finish-only policy after the first agent reply. Do not invent an obstacle, a factual answer or customer inability to extend the observed test. Additional conditions belong in a separately proposed variant.';
-    }
-  }
-  return undefined;
-}
-const findingsOutput = z.strictObject({ findings: z.array(semanticFindingSchema.extend({ reason: z.string().trim().min(1).max(SEMANTIC_REASON_CHARS) })).max(SEMANTIC_BATCH_FIELDS) });
 
 const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, message: userTurnSchema.shape.message.optional() })
   .refine(v => v.done || !!v.message?.trim(), 'A continuing user turn needs a message')
@@ -184,32 +156,6 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
           return unknown.length ? `Unknown source ids: ${unknown.join(', ')}. Return only ids from the catalog.` : undefined;
         },
       }, input, ctx);
-    },
-    async scenarioProposals(input, ctx) {
-      if (input.preparationMode === 'owner_requirements') {
-        if (input.batchId !== undefined || input.dialogues.length) throw new Error('Подготовка без логов не может ссылаться на импорт или диалоги.');
-      } else if (!input.batchId?.trim() || !input.dialogues.length) throw new Error('Для извлечения из импорта нужны batchId и исходные диалоги.');
-      const oversize = workInputIssue(input);
-      if (oversize) throw new Error(oversize);
-      // A correction of the judge's semantic findings is written by the judge's model; an ordinary proposal by the builder.
-      const semanticRepair = !!input.feedback?.issues.some(issue => issue.code === 'semantic_finding');
-      return (await run({
-        id: 'scenario-proposals', label: 'Варианты из полной хронологии', role: semanticRepair ? 'judge' : 'builder', instructions: SCENARIO_PROPOSALS_ROLE,
-        output: proposalsOutput, check: value => proposalProblem(value, input), bounded: SCENARIO_BOUNDS,
-      }, input, ctx)).proposals;
-    },
-    async assessScenarioProposals(input, ctx) {
-      const oversize = workInputIssue(input);
-      if (oversize) throw new Error(oversize);
-      const expected = input.fields.flatMap(f => f.paths.map(path => `${f.variantId}/${path}`));
-      return (await run({
-        id: 'semantic-review', label: 'Смысловая проверка вариантов', role: 'judge', instructions: SCENARIO_SEMANTIC_ROLE,
-        output: findingsOutput, bounded: SCENARIO_BOUNDS,
-        check: value => {
-          const actual = value.findings.map(f => `${f.variantId}/${f.path}`);
-          return expected.length !== actual.length || expected.some(id => actual.filter(other => other === id).length !== 1) ? 'Return exactly one finding for each requested field, and no other fields.' : undefined;
-        },
-      }, input, ctx)).findings;
     },
     async proposeCard(input, ctx) {
       const payload = proposalPayload(input);

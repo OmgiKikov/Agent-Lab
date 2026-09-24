@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { libraryHash } from '../src/scenario-library.js';
 import { chooseEditableDraft, draftIsBusy, recheckDecision, type DraftRecord } from '../src/scenario-draft.js';
-import { libraryFixture } from './helpers/scenario-library.js';
+import { cardDraft } from './helpers/card-library.js';
 
-const record = (id: string, library: ReturnType<typeof libraryFixture>, phase: DraftRecord['phase'], extra: Partial<DraftRecord> = {}): DraftRecord => ({
+const record = (id: string, library: ReturnType<typeof cardDraft>['library'], phase: DraftRecord['phase'], extra: Partial<DraftRecord> = {}): DraftRecord => ({
   id, phase, updatedAt: '2026-09-22T00:00:00.000Z', reviewedAt: null, trials: [], librarySnapshot: library, ...extra,
 });
 
 test('a finished run is not the editable draft, and a recheck is skipped only when the owner defers it', () => {
-  const library = libraryFixture();
+  const { library } = cardDraft();
   const head = libraryHash(library);
   const finished = record('done', library, 'results_review', { reviewedAt: '2026-09-22T00:00:00.000Z', trials: [{}] });
   assert.deepEqual(chooseEditableDraft({ settled: finished, holders: [finished], headHash: head, busy: draftIsBusy }), { action: 'copy', sourceId: 'done', newer: false });
