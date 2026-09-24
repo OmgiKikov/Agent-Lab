@@ -5,10 +5,10 @@ import { clip } from '../text.js';
 import type { Card, LibraryV2, Rulebook } from './schema.js';
 
 /*
- * «Свод правил» — which of the owner's rules bind the bot (card/schema.ts rulebookSchema). The grounding call types every
- * requirement (behaviour, knowledge, an operator procedure); the rulebook says which kinds, and which single rules of
+ * «Свод правил» — which of the owner's rules bind the bot (card/schema.ts rulebookSchema). The proposal types every
+ * sentence it cites (behaviour, knowledge, an operator procedure); the rulebook says which kinds, and which single rules of
  * another kind, may back what the agent must do. A rule outside it stays in the library, visible and counted, but a
- * preparation never offers it to the proposal and a card that cites it waits for the owner (status.ts). A requirement
+ * proposal citing it is repaired, and a card that cites it waits for the owner (status.ts). A requirement
  * grounded before kinds existed has none and binds exactly as it always did: a kind is never guessed for stored data.
  * Pure: no I/O, no model.
  */

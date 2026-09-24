@@ -36,18 +36,21 @@ export function demoInput(): CreateInput {
   });
 }
 
+/** Every duty of the example rests on the owner's one rule, cited whole from the example's one material (materialSources numbers it source-1). */
+const DEMO_BASIS: DialogueProposal['agentMust'][number]['basis'] = [{ sourceId: 'source-1', quote: demoPolicy,
+  rule: 'Номер терминала не запрашивается повторно; затем объясняется возврат.', kind: 'behavior' }];
 /** What a careful model proposes for each example dialogue: the number named at once, and the number named only when asked. */
 const DEMO_CARDS: Record<'known' | 'late', DialogueProposal> = {
   known: { title: 'Возврат оплаты — номер назван сразу', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', writesEvent: 0,
     knows: [{ label: 'Номер терминала', value: '1234', disclosure: 'initial', from: 0, askedAs: 'номер терминала' }], plausibleKnows: [],
     leaves: 'получил инструкцию по возврату или понял, что агент не поможет', turn: null, coverage: {},
-    agentMust: [{ text: 'не спрашивать номер терминала ещё раз, если клиент его уже назвал', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' },
-      { text: 'объяснить, как оформить возврат', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' }] },
+    agentMust: [{ text: 'не спрашивать номер терминала ещё раз, если клиент его уже назвал', basis: DEMO_BASIS, appliesWhen: null, observation: 'reply' },
+      { text: 'объяснить, как оформить возврат', basis: DEMO_BASIS, appliesWhen: null, observation: 'reply' }] },
   late: { title: 'Возврат оплаты — номер только по просьбе', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', writesEvent: 0,
     knows: [{ label: 'Номер терминала', value: '5678', disclosure: 'on_request', from: 2, askedAs: 'номер терминала' }], plausibleKnows: [],
     leaves: 'получил инструкцию по возврату или понял, что агент не поможет', turn: null, coverage: { 2: { as: 'fact', reason: null } },
-    agentMust: [{ text: 'спросить номер терминала один раз, до инструкции', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' },
-      { text: 'объяснить, как оформить возврат', requirementIds: ['refund_rule'], appliesWhen: 'клиент назвал номер терминала', observation: 'reply' }] },
+    agentMust: [{ text: 'спросить номер терминала один раз, до инструкции', basis: DEMO_BASIS, appliesWhen: null, observation: 'reply' },
+      { text: 'объяснить, как оформить возврат', basis: DEMO_BASIS, appliesWhen: 'клиент назвал номер терминала', observation: 'reply' }] },
 };
 /** The example's one question for the owner: the number the customer named only after the agent asked — did they know it before? */
 const DEMO_DOUBT: ReviewVerdict = { status: 'needs_owner', reason: 'В исходном разговоре клиент назвал номер только после вопроса агента.' };
@@ -80,14 +83,9 @@ const demoTopics: TopicTaskRunner = async (task, input) => {
 export function createDemoRuntime(): Runtime {
   return {
     topicMap: { builder: DEMO_BUILDER, build: (plan, ctx, onProgress) => buildTopicMap(plan, { builder: DEMO_BUILDER, run: demoTopics, ctx, onProgress }) },
-    async groundRequirements(input) {
-      const source = input.sources[0];
-      if (!source || source.content !== demoPolicy) throw new Error(DEMO_ONLY);
-      return { requirements: [{ id: 'refund_rule', sourceId: source.id, text: demoPolicy, quote: demoPolicy, critical: true, kind: 'behavior' }], questions: [] };
-    },
     async proposeCard(input) {
-      const { source } = input.call;
-      if (source.kind !== 'dialogue' || (source.dialogueId !== 'known' && source.dialogueId !== 'late')) throw new Error(DEMO_ONLY);
+      const { source, sources } = input.call;
+      if (sources.length !== 1 || sources[0].content !== demoPolicy || source.kind !== 'dialogue' || (source.dialogueId !== 'known' && source.dialogueId !== 'late')) throw new Error(DEMO_ONLY);
       return DEMO_CARDS[source.dialogueId];
     },
     /** Every claim holds except the one the example teaches with: a number named after the agent's question, while no one has vouched for it. */

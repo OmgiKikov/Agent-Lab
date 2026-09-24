@@ -3,17 +3,21 @@ import { createInputSchema, type CreateInput, type Requirement } from '../../src
 import type { MetricAssessment } from '../../src/assessment.js';
 import type { Runtime } from '../../src/runtime.js';
 import { demoTarget } from '../../src/demo.js';
-import type { CardProposal, CardProposalRequest, DialogueProposal, RulesProposal } from '../../src/card/proposal.js';
+import { citationId, type CardProposal, type CardProposalRequest, type DialogueProposal, type RulesProposal } from '../../src/card/proposal.js';
 import type { CardReviewRequest, ReviewVerdict } from '../../src/card/review.js';
 
 /*
- * Invented refund dialogues, one owner rule and a deterministic runtime for preparing cards: grounding, proposals,
+ * Invented refund dialogues, one owner rule and a deterministic runtime for preparing cards: proposals,
  * the reviewer, the controlled customer and the judge all answer by fixed rules. No model is called; no owner data.
  */
 
 export const policy = 'Если номер терминала уже указан, не запрашивайте его повторно; объясните, как оформить возврат. Если номера нет, уточните номер терминала.';
-export const refundRule: Omit<Requirement, 'sourceId'> = { id: 'refund_rule', text: 'Номер терминала запрашивается один раз, затем объясняется возврат.',
-  quote: 'Если номер терминала уже указан, не запрашивайте его повторно; объясните, как оформить возврат.', critical: true };
+const refundQuote = 'Если номер терминала уже указан, не запрашивайте его повторно; объясните, как оформить возврат.';
+/** The rule the careful proposals cite, exactly as the binding stores it: the fixture's one material is source-1. */
+export const refundRule: Omit<Requirement, 'sourceId'> = { id: citationId('source-1', refundQuote), text: 'Номер терминала запрашивается один раз, затем объясняется возврат.',
+  quote: refundQuote, critical: true, observable: true, kind: 'behavior' };
+/** A duty's basis: the refund rule, cited from source-1. */
+export const refundBasis: DialogueProposal['agentMust'][number]['basis'] = [{ sourceId: 'source-1', quote: refundQuote, rule: refundRule.text, kind: 'behavior' }];
 
 export const dialogues = [
   { id: 'late', messages: [
@@ -30,8 +34,8 @@ export const dialogues = [
 ];
 
 const duties = (appliesWhen: string | null): DialogueProposal['agentMust'] => [
-  { text: 'не запрашивать номер терминала повторно, если клиент его уже назвал', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' },
-  { text: 'объяснить, как оформить возврат', requirementIds: ['refund_rule'], appliesWhen, observation: 'reply' },
+  { text: 'не запрашивать номер терминала повторно, если клиент его уже назвал', basis: refundBasis, appliesWhen: null, observation: 'reply' },
+  { text: 'объяснить, как оформить возврат', basis: refundBasis, appliesWhen, observation: 'reply' },
 ];
 const leaves = 'получил инструкцию по возврату или понял, что агент не поможет';
 
@@ -60,18 +64,14 @@ export function cardInput(overrides: Partial<z.input<typeof createInputSchema>> 
 const ready: ReviewVerdict = { status: 'ready', reason: 'Подтверждено разговором и правилом владельца.' };
 
 /** The requests each role received, in order. */
-export interface Received { proposals: CardProposalRequest[]; reviews: CardReviewRequest[]; grounding: number }
+export interface Received { proposals: CardProposalRequest[]; reviews: CardReviewRequest[] }
 
 /**
- * Grounds the one rule, proposes the careful card of each dialogue (or of the rules), accepts every claim, plays a
+ * Proposes the careful card of each dialogue (or of the rules), citing the one rule, accepts every claim, plays a
  * customer who names what the agent asks for and leaves otherwise, and judges the two duties from the dialogue.
  */
-export function cardRuntime(received: Received = { proposals: [], reviews: [], grounding: 0 }): Runtime {
+export function cardRuntime(received: Received = { proposals: [], reviews: [] }): Runtime {
   return {
-    async groundRequirements(input, ctx) {
-      ctx.beforeCall(); received.grounding++;
-      return { requirements: [{ ...refundRule, sourceId: input.sources[0]!.id }], questions: [] };
-    },
     async proposeCard(request, ctx): Promise<CardProposal> {
       ctx.beforeCall(); received.proposals.push(structuredClone(request));
       const { source } = request.call;
