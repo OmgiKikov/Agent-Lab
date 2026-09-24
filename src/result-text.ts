@@ -1,5 +1,6 @@
 import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLine } from './card/calibration-view.js';
+import { ruleBarText } from './card/rulebook.js';
 import type { Experiment } from './contracts.js';
 import type { FailureExplanation } from './explain.js';
 import { sharePercent } from './miner/coverage.js';
@@ -364,6 +365,11 @@ export function runLine(view: ResultView, now?: Date): ResultRow {
   return { role: 'muted', indent: 0, text: parts.join(' · '), parts };
 }
 
+/** «Оценка по правилам: …» under the run line: the bar the number was measured against; nothing for rules grounded before kinds. */
+export function barRows(view: ResultView): ResultRow[] {
+  return view.bar ? [{ role: 'muted', indent: 0, text: ruleBarText(view.bar) }] : [];
+}
+
 /**
  * The result screen of the board and the CLI (docs/design/ui-spec.md §4.7, §8.5): the head, the topics, the causes,
  * then — on the CLI and under the board's details — every error, the unmeasured situations, the
@@ -374,7 +380,7 @@ export function resultScreen(view: ResultView, options: { surface: 'board' | 'cl
   // The board keeps its first screen short; its details and the CLI list every error, the unmeasured situations and the owner's disagreements once.
   const full = options.surface === 'cli' || !!options.details;
   const blocks = [headRows(view), topicRows(view), causeRows(view), ...(full ? [errorListRows(view), unmeasuredRows(view), disagreementRows(view), calibrationRows(view)] : []),
-    [runLine(view, options.now)], nextRows(view, options.surface)];
+    [runLine(view, options.now), ...barRows(view)], nextRows(view, options.surface)];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
 }
 

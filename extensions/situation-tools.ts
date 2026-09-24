@@ -7,6 +7,7 @@ import { hostGrant, requiredAuthority, wordsOf, type HostGrant, type Prepared } 
 import { convertible } from '../src/card/legacy-v1.js';
 import type { CardCommand, LibraryV2 } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
+import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules } from '../src/card/rulebook.js';
 import { briefRows, changeText, chip, countsText, detailRows, formatNote, listRows, situationViews, type SituationView } from '../src/card/view.js';
 import { CommandRefused, LibraryConflict, UnknownReference } from '../src/errors.js';
 import type { ExperimentLab } from '../src/experiment.js';
@@ -74,11 +75,13 @@ export function situationsFeed(record: Experiment, views: SituationView[], runni
   const coverage = coverageOf(topics, record.settings.maxTurns);
   const waitingLine = waiting.length ? `Ждут ответа: ${waiting.slice(0, 3).map(view => `${view.number} ${clip(view.brief.title, 60)}`).join(' · ')}${waiting.length > 3 ? ` · ещё ${waiting.length - 3}` : ''}` : undefined;
   const lines = [waitingLine, coverage?.line, note].filter((line): line is string => !!line);
+  const rulebook = topics && shownRulebook(topics.library);
   return {
     tone: waiting.length ? 'warning' : 'success',
     rows: [row(countsText(views), 'text', true), ...lines.slice(0, next ? 1 : 2).map(line => row(line, 'muted')), ...(next ? [row(next, 'muted')] : [])],
     // The coverage line may already stand in the summary; its uncovered topics are named on expand.
-    more: [...(coverage?.uncovered ? [row(coverage.uncovered, 'muted'), row('')] : []), ...situationRows(views.flatMap(view => listRows(view, { running })))],
+    more: [...(coverage?.uncovered ? [row(coverage.uncovered, 'muted'), row('')] : []), ...(rulebook ? [...rulebookLines(rulebook).map(line => row(line, 'muted')), row('')] : []),
+      ...situationRows(views.flatMap(view => listRows(view, { running })))],
     expand: `все ${views.length}: что пишет клиент и что должен агент`,
   };
 }
@@ -105,7 +108,8 @@ const when = Type.Enum(['initial', 'on_request', 'unknown'], { description: 'ini
 const turn = Type.Union([Type.Object({ kind: Type.Enum(['change_intent', 'report']), after: Type.String({ minLength: 1, maxLength: 300, description: 'After what the agent does.' }),
   says: Type.String({ minLength: 1, maxLength: 1000, description: 'What the customer says then.' }) }, closed), Type.Null()], { description: 'The customer\'s late turn; null: none.' });
 
-/** One change of one situation: what the model may ask the owner's draft to become. */
+const ruleIds = Type.Array(Type.String({ minLength: 1, maxLength: 80 }), { minItems: 1, maxItems: 20 });
+/** One change of one situation, or of the set's rulebook: what the model may ask the owner's draft to become. */
 const change = Type.Union([
   Type.Object({ kind: Type.Literal('fact'), fact: Type.Optional(factId), label: text(120, 'What the fact is, e.g. «Номер терминала»; without fact, a new one.'),
     value: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 120 }), Type.Number(), Type.Boolean()])), when: Type.Optional(when), remove: Type.Optional(Type.Literal(true)) }, closed),
@@ -120,8 +124,10 @@ const change = Type.Union([
     Type.Object({ kind: Type.Literal('turn'), turn }, closed),
   ], { description: 'The one difference; the original stays as it is.' }), title: text(160, 'By default the original\'s with the difference.') }, closed),
   Type.Object({ kind: Type.Literal('remove') }, closed),
+  Type.Object({ kind: Type.Literal('rules'), operatorInstructions: Type.Optional(Type.Boolean()), bind: Type.Optional(ruleIds), unbind: Type.Optional(ruleIds) },
+    { ...closed, description: 'The set\'s rulebook; omit situation.' }),
 ]);
-const editParameters = Type.Object({ run: runRef, situation: number, change, later: Type.Optional(Type.Literal(true, { description: 'Check after the last change of a series, not now.' })) }, closed);
+const editParameters = Type.Object({ run: runRef, situation: Type.Optional(number), change, later: Type.Optional(Type.Literal(true, { description: 'Check after the last change of a series, not now.' })) }, closed);
 type ChangeRequest = Static<typeof change>;
 
 export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, host: SituationHost): void {
@@ -140,7 +146,9 @@ export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, h
         const { record, views, running, topics } = await situationsNow(lab, found, job?.kind === 'assessment' && job.id === found.id);
         const readOnly = record.librarySnapshot?.formatVersion !== 2 || record.phase !== 'review' || record.trials.length > 0;
         if (params.situation === undefined) {
-          return host.feedResult(callId, situationsOutput(record, views, { readOnly }), situationsFeed(record, views, running, topics), `Ситуации · ${runStamp(record)}`);
+          const rulebook = topics && shownRulebook(topics.library);
+          return host.feedResult(callId, situationsOutput(record, views, { readOnly, ...(rulebook ? { rulebook: { lines: rulebookLines(rulebook), operatorInstructions: rulebook.kinds.find(item => item.kind === 'operator_procedure')!.binds } } : {}) }),
+            situationsFeed(record, views, running, topics), `Ситуации · ${runStamp(record)}`);
         }
         const view = views.find(item => item.number === params.situation);
         if (!view) throw new NeedsOwner('unknown_reference', `Ситуации №${params.situation} нет. Спросите владельца, какая нужна.`, views.map(item => `${item.number}. ${item.brief.title}`).slice(0, 15));
@@ -151,7 +159,7 @@ export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, h
   });
   pi.registerTool({
     ...displayFor(TOOL.edit), name: TOOL.edit, label: 'Change a situation',
-    description: 'Changes one situation of the draft; the owner confirms the exact change in a native dialog unless the new wording is verbatim from their own message. change.kind: fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen; remove; one duty always stays); client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several changes in one message: later:true on every one but the last.',
+    description: 'Changes one situation of the draft, or the rulebook of the whole set; the owner confirms the exact change in a native dialog unless the new wording is verbatim from their own message. change.kind: rules — which rules bind the bot: operatorInstructions (instructions for human operators as a whole), bind/unbind (single requirement ids the bot must or no longer must follow), no situation; fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen; remove; one duty always stays); client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several changes in one message: later:true on every one but the last.',
     parameters: editParameters,
     executionMode: 'sequential',
     execute: (callId, params, signal, _onUpdate, ctx) => changeSituation(host, callId, ctx, signal, params),
@@ -191,7 +199,8 @@ async function decide(ctx: ExtensionContext, lab: ExperimentLab, id: string, com
   const prepared = await lab.prepareCardCommand(id, command, { via: 'pi-confirm', ...(verbatim && joined.length <= 1000 ? { ownerWords: joined } : {}) });
   if (verbatim) return { prepared, grant: hostGrant(prepared, 'words') };
   requireInteractive(ctx, 'Это решение владельца: его подтверждают в интерактивном терминале Pi. Без него: agent-lab cards --id RUN --input команда.json --yes.');
-  const lines = prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`));
+  const lines = [...prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`)),
+    ...(prepared.rulebook ? rulebookChangeLines(prepared.rulebook.before, prepared.rulebook.after, prepared.next.requirements, prepared.rulebook.flagged) : [])];
   const picked = await ctx.ui.select(safeText([heading, ...(lines.length ? ['', ...lines] : []), '', 'Записать это от вашего имени?'].join('\n')), ['Записать', 'Не записывать']);
   return picked === 'Записать' ? { prepared, grant: hostGrant(prepared, 'confirmed') } : undefined;
 }
@@ -212,6 +221,34 @@ async function recheck(host: SituationHost, ctx: ExtensionContext, owned: LabLea
   if (!inline) { host.backgroundCheck(ctx, owned, id, number); return { status: 'running' }; }
   const after = await owned.lab.get(id);
   return after.phase === 'review' && !after.error ? { status: before.usage.calls === after.usage.calls ? 'none' : 'done' } : { status: 'failed', message: safeText(after.error ?? after.message) };
+}
+
+/**
+ * «Свод правил» of the set: which kinds of rules, and which single rules, bind the bot. The owner confirms the exact
+ * change natively; the situations whose expectations lose their rule come back to the owner with a question.
+ */
+async function changeRulebook(host: SituationHost, callId: string, ctx: ExtensionContext, found: Experiment, request: Extract<ChangeRequest, { kind: 'rules' }>): Promise<AgentToolResult<unknown>> {
+  if (found.librarySnapshot?.formatVersion !== 2) throw new CommandRefused('У ситуаций этого прогона нет свода правил: он есть у наборов нового формата.');
+  if (request.operatorInstructions === undefined && !request.bind && !request.unbind) throw new CommandRefused('Скажите, что изменить в своде правил: инструкции для операторов или отдельные правила.');
+  const owned = await host.open(ctx.cwd);
+  try {
+    await owned.lab.init();
+    const target = await owned.lab.editableCards(found.id);
+    const { library } = await owned.lab.cardContext(target.id);
+    const current = rulebookOf(library);
+    const kinds = request.operatorInstructions === undefined ? current : withKind(current, 'operator_procedure', request.operatorInstructions);
+    const command: CardCommand = { kind: 'set_rulebook', rulebook: withRules(kinds, { ...(request.bind ? { include: request.bind } : {}), ...(request.unbind ? { exclude: request.unbind } : {}) }) };
+    const decided = await decide(ctx, owned.lab, target.id, command, 'Свод правил — по каким правилам судить бота');
+    if (!decided) return host.feedResult(callId, { applied: false, declined: true, instruction: 'The owner did not confirm. Nothing was written; do not ask again unless they do.' },
+      { tone: 'warning', rows: [row('Не записано: вы не подтвердили.')] }, 'Свод правил не изменён');
+    const { library: next } = await owned.lab.applyCardCommand(target.id, decided.prepared, decided.grant);
+    const changes = rulebookChangeLines(decided.prepared.rulebook!.before, decided.prepared.rulebook!.after, next.requirements, decided.prepared.rulebook!.flagged);
+    const shown = shownRulebook(next);
+    return host.feedResult(callId, { run: target.id, applied: true, changes, ...(shown ? { rulebook: rulebookLines(shown) } : {}),
+      ...(decided.prepared.rulebook!.flagged.length ? { waiting: decided.prepared.rulebook!.flagged, instruction: 'These situations now ask the owner whether the bot must follow the rule their expectation rests on; the answers go through agent_lab_decide.' } : {}) },
+    { tone: 'success', rows: [row('Свод правил записан.', 'text', true), ...changes.slice(0, 3).map(line => row(line))],
+      ...(shown ? { more: rulebookLines(shown).map(line => row(line, 'muted')), expand: 'свод правил' } : {}) }, `Свод правил · ${runStamp(found)}`);
+  } finally { await owned.close(); }
 }
 
 /** The command a change stands for, with the heading of its dialog; refused with the reason when the change cannot be made as asked. */
@@ -251,6 +288,7 @@ function commandOf(request: ChangeRequest, view: SituationView, library: Library
         change: differs.kind === 'when' ? { kind: 'disclosure', factId: differs.fact, disclosure: differs.when, ...(differs.writes !== undefined ? { writes: differs.writes } : {}) } : differs } };
     }
     case 'remove': return { command: { kind: 'remove_card', cardId: view.id }, heading: `Убрать ситуацию ${view.number} «${view.brief.title}» из черновика?` };
+    case 'rules': throw new Error('The rulebook is changed for the whole set, not through one situation.');
   }
 }
 
@@ -264,6 +302,8 @@ async function changeSituation(host: SituationHost, callId: string, ctx: Extensi
   let handedOver = false;
   try {
     const found = recordFor(await host.reading(directory).list(), run, 'situations');
+    if (request.kind === 'rules') return await changeRulebook(host, callId, ctx, found, request);
+    if (situation === undefined) throw new CommandRefused('Скажите, какую ситуацию изменить: её номер.');
     const owned = await host.open(ctx.cwd);
     try {
       await owned.lab.init();

@@ -155,7 +155,7 @@ export function callText(tool: string, args: Record<string, unknown> | undefined
     case 'agent_lab_cards': return number ? `Открываю ситуацию${number}` : 'Показываю ситуации';
     case 'agent_lab_edit': {
       const kind = (a.change as { kind?: unknown } | undefined)?.kind;
-      return kind === 'similar' ? `Добавляю похожую на ситуацию${number}` : kind === 'remove' ? `Убираю ситуацию${number}`
+      return kind === 'rules' ? 'Меняю свод правил' : kind === 'similar' ? `Добавляю похожую на ситуацию${number}` : kind === 'remove' ? `Убираю ситуацию${number}`
         : `Меняю ситуацию${number}: ${kind === 'fact' ? 'что знает клиент' : kind === 'duty' ? 'что должен агент' : kind === 'turn' ? 'поворот' : 'клиент'}`;
     }
     case 'agent_lab_decide': return typeof a.decision === 'string' ? 'Записываю ваше решение' : 'Смотрю, что ждёт вашего решения';

@@ -8,6 +8,7 @@ import { countText } from './plural.js';
 import { accuracyParts, alarmRow, noErrorsText, realityParts, trustSegments } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
 import { situationBrief, situationNumber } from './card/view.js';
+import { ruleBarText } from './card/rulebook.js';
 import { oneLine } from './text.js';
 
 /*
@@ -79,6 +80,7 @@ function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
   const { agreement, breakdown, coverage, scope, stability } = view;
   const lines = [
     'Ситуация засчитана, если агент выполнил запрос клиента и не нарушил правил своего промпта во всех разговорах этой ситуации. Не измеренные ситуации в процент не входят; контрольные ситуации проверяют связь и судью и в процент не входят.',
+    ...(view.bar ? [`${ruleBarText(view.bar)}.`] : []),
     `${countText(scope.cards, SITUATIONS)} · ${countText(scope.dialogues, ['разговор', 'разговора', 'разговоров'])} · клиента играет Lab${scope.judgeModel ? ` · судья — ${scope.judgeModel}` : ''}${scope.target ? ` · версия агента ${scope.target}` : ''}${scope.costUsd ? ` · $${scope.costUsd.toFixed(2)}` : ''}`,
     ...coverageSentence(view),
     ...(breakdown.goal.decided ? [`Запрос выполнен: ${breakdown.goal.met} из ${breakdown.goal.decided}.${breakdown.rules.decided ? ` Правила промпта нарушены: ${breakdown.rules.broken} из ${breakdown.rules.decided}.` : ''}`] : []),

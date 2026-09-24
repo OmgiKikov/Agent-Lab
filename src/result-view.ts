@@ -11,6 +11,7 @@ import { deriveRun, NOT_MEASURED_CODES, type CardPart, type NotMeasuredCode, typ
 import { SMALL_SAMPLE, wilson } from './interval.js';
 import { buildCalibration, type CalibrationView } from './card/calibration-view.js';
 import type { DialogueNumbers } from './card/view.js';
+import { ruleBar, type RuleBar } from './card/rulebook.js';
 
 export { COUNTING_RULES } from './outcomes.js';
 
@@ -139,6 +140,8 @@ export interface ResultView {
    * the whole dialogue does not (counting rule), so a contradiction is named, never silently absorbed.
    */
   reviewed: { situations: number; contradicted: number };
+  /** The rules the counted situations were judged by, by source, and whether operator instructions bind; null for rules grounded before kinds. */
+  bar: RuleBar | null;
   /** `target` is the agent version the owner or the adapter named; null when none was named (a fingerprint is not a name). */
   scope: { cards: number; synthetic: number; dialogues: number; judgeModel?: string; costUsd: number | null; target: string | null };
   /** Ordered: the recommended step first, then what can always be done with a finished result. */
@@ -298,6 +301,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     topics: topicView(record, cards), topicCoverage: trafficCoverage(record, cards),
     agreement: judgeAgreement(input),
     reviewed: { situations: reviewed.situations, contradicted: reviewed.contradicted },
+    bar: ruleBar(run.situations.filter(item => !item.control).map(item => item.scenario), record.sources,
+      record.librarySnapshot?.formatVersion === 2 ? record.librarySnapshot.rulebook : undefined),
     scope: {
       cards: record.scenarios.length,
       synthetic: record.scenarios.filter(scenario => scenario.provenance === 'synthetic').length,

@@ -2,6 +2,7 @@ import { visibleWidth } from '@earendil-works/pi-tui';
 import type { Experiment } from '../src/contracts.js';
 import { actionRow, briefRows, countsText, detailRows, formatNote, layoutRows, listRows, situationActions, situationBrief, type LayoutRow, type SituationRow, type SituationView } from '../src/card/view.js';
 import type { Decision } from '../src/inbox.js';
+import { rulebookLines, type RulebookView } from '../src/card/rulebook.js';
 import { decisionsLine } from '../src/inbox.js';
 import { problemSize, problemsLine, type Problem } from '../src/problems.js';
 import { accuracyParts, causeRows, disagreementRows, errorListRows, failureRows, fitRows, headRows, MAX_WIDTH, nextStepText, runLine, topicRows, unmeasuredRows, whenText, type ResultRow } from '../src/result-text.js';
@@ -39,7 +40,9 @@ export interface Screen {
 export interface SpaceData {
   space: AgentSpace;
   /** The situations being worked on: the draft, else those of the newest run. */
-  set?: { record: Experiment; views: SituationView[]; editable: boolean; coverage?: { line: string; uncovered: string | undefined }; plan: LaunchPlan; running: boolean };
+  set?: { record: Experiment; views: SituationView[]; editable: boolean; coverage?: { line: string; uncovered: string | undefined }; plan: LaunchPlan; running: boolean;
+    /** «Свод правил» of a card set whose rules were typed; absent for rules grounded before kinds. */
+    rulebook?: RulebookView };
   /** Finished runs with their result, newest first. */
   runs: { record: Experiment; view: ResultView }[];
   decisions: Decision[];
@@ -49,7 +52,7 @@ export interface SpaceData {
   now: Date;
 }
 
-export type Area = 'inbox' | 'situations' | 'runs' | 'problems';
+export type Area = 'inbox' | 'situations' | 'rules' | 'runs' | 'problems';
 export type Step = 'situations' | 'run' | 'result';
 
 /* ───────────────────────────── lines ───────────────────────────── */
@@ -92,7 +95,7 @@ const room = (width: number) => Math.max(20, Math.min(width, MAX_WIDTH));
 
 /* ───────────────────────────── the header ───────────────────────────── */
 
-const AREA_LABEL: Record<Exclude<Area, 'inbox'>, string> = { situations: 'Ситуации', runs: 'Прогоны', problems: 'Проблемы' };
+const AREA_LABEL: Record<Exclude<Area, 'inbox' | 'rules'>, string> = { situations: 'Ситуации', runs: 'Прогоны', problems: 'Проблемы' };
 
 /** «Агент: агент поддержки» with the version on the right from 100 columns up (docs/design/ui-spec.md §6: narrower, the label goes). */
 function titleLine(title: string, right: string | null, width: number): Line[] {
@@ -101,18 +104,21 @@ function titleLine(title: string, right: string | null, width: number): Line[] {
 
 /** The areas of the workspace: the queue of decisions first while it has any, the current area in accent. */
 export function areasOf(data: SpaceData): Area[] {
-  return [...(data.decisions.length ? ['inbox' as const] : []), 'situations', 'runs', 'problems'];
+  return [...(data.decisions.length ? ['inbox' as const] : []), 'situations', ...(data.set?.rulebook ? ['rules' as const] : []), 'runs', 'problems'];
 }
 
 function areaLine(data: SpaceData, current: Area, width: number): Line {
-  const counts: Record<Exclude<Area, 'inbox'>, number> = { situations: data.set?.views.length ?? 0, runs: data.runs.length, problems: data.problems.length };
+  const counts: Record<Exclude<Area, 'inbox' | 'rules'>, number> = { situations: data.set?.views.length ?? 0, runs: data.runs.length, problems: data.problems.length };
   const parts: Segment[] = [{ text: ' ' }];
   const add = (text: string, area: Area, tone: Tone) => {
     if (parts.length > 1) parts.push({ text: '  ·  ', tone: 'muted' });
     parts.push(area === current ? { text, tone: 'accent', bold: true } : { text, tone });
   };
   if (data.decisions.length) add(`Нужно ваше решение: ${data.decisions.length}`, 'inbox', 'warning');
-  for (const area of ['situations', 'runs', 'problems'] as const) add(`${AREA_LABEL[area]} ${counts[area]}`, area, 'muted');
+  for (const area of ['situations', 'runs', 'problems'] as const) {
+    add(`${AREA_LABEL[area]} ${counts[area]}`, area, 'muted');
+    if (area === 'situations' && data.set?.rulebook) add('Свод правил', 'rules', 'muted');
+  }
   const used = parts.reduce((sum, part) => sum + visibleWidth(part.text), 0);
   // No decision waits: a calm mark on the right instead of the queue.
   const calm = `${GLYPH.pass} решений не ждёт`;
@@ -201,6 +207,28 @@ export function situationsScreen(data: SpaceData, selected: number, width: numbe
   const foot: Hint[] = options.firstRun ? [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, ...(set.editable ? [{ key: '1–3', text: 'действие' }] : []), areas, { key: '?', text: 'клавиши' }]
     : set.editable ? FOOT.area : [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, areas, { key: '?', text: 'клавиши' }];
   return { head: [], body, foot, ...(anchor !== undefined ? { anchor } : {}), items };
+}
+
+/** The one action of «Свод правил»: operator instructions in or out of it, as a whole. */
+export function rulebookAction(rulebook: RulebookView): string {
+  const operators = rulebook.kinds.find(item => item.kind === 'operator_procedure')!;
+  return operators.binds ? 'Не судить бота по инструкциям для операторов' : 'Судить бота и по инструкциям для операторов';
+}
+
+/**
+ * «Свод правил» (W1): which of the owner's rules bind the bot — each kind with its count, the sources, and the one key that
+ * lets operator instructions in or keeps them out. Single rules come in through the question of the situation that needs one.
+ */
+export function rulebookScreen(data: SpaceData, width: number): Screen {
+  const rulebook = data.set?.rulebook;
+  if (!rulebook) return { head: [], body: wsLines([ws('answer', 'Свода правил у этих ситуаций нет: их правила подготовлены до того, как Lab стал различать виды правил.')], room(width)),
+    foot: [{ key: '←→', text: 'области' }, { key: 'Esc', text: 'закрыть' }] };
+  const [first, ...rest] = rulebookLines(rulebook);
+  const editable = !!data.set?.editable;
+  const body = wsLines([ws('answer', first!), ...rest.map(line => ws(line.startsWith('  ') ? 'text' : 'muted', line.trimStart(), line.startsWith('  ') ? 3 : 1)),
+    ws('blank', ''), ws('muted', 'Отдельное правило становится обязательным для бота ответом на вопрос ситуации, которой оно нужно.'),
+    ...(editable ? [ws('blank', ''), ws('actions', `1  ${rulebookAction(rulebook)}`, 3)] : [ws('muted', 'Свод правил меняется в черновике ситуаций.')])], room(width));
+  return { head: [], body, foot: [...(editable ? [{ key: '1', text: 'изменить' }] : []), { key: '←→', text: 'области' }, { key: 'a', text: 'спросить Lab' }, { key: '?', text: 'клавиши' }] };
 }
 
 /** What the runs' screen offers besides its rows: the report, another run, every run. */

@@ -6,7 +6,8 @@ import { clip } from '../text.js';
 import { logVersionCommandSchema, logVersionJournalSchema, type LogVersionCommand, type LogVersionJournal } from './calibration.js';
 import { messageAt, problemText, unusableFindings, type CardEvidence, type CheckFinding } from './checks.js';
 import { pendingClaims } from './review.js';
-import { cardCommandSchema, cardSchema, libraryV2Schema, type Card, type CardCommand, type EventRef, type LibraryV2 } from './schema.js';
+import { bindsBot, KIND_WORDS, rulebookOf, unboundCitation } from './rulebook.js';
+import { cardCommandSchema, cardSchema, libraryV2Schema, type Card, type CardCommand, type EventRef, type LibraryV2, type Rulebook } from './schema.js';
 import { cardStatus } from './status.js';
 import { briefChanges, cardSituation, type BriefChange } from './view.js';
 
@@ -46,7 +47,8 @@ export function requiredAuthority(command: CardCommand | LogVersionCommand): Aut
     case 'add_similar': return command.change.kind === 'opening' || command.change.kind === 'turn' && command.change.turn !== null ? 'owner-words' : 'owner-confirm';
     // An answer in the owner's own words is a wording; picking an answer is a decision.
     case 'answer_question': return command.text !== undefined ? 'owner-words' : 'owner-confirm';
-    case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': return 'owner-confirm';
+    // Which rules bind the bot is the owner's decision about the whole set.
+    case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': case 'set_rulebook': return 'owner-confirm';
   }
 }
 
@@ -60,7 +62,7 @@ export function wordsOf(command: CardCommand | LogVersionCommand): string[] {
     case 'add_similar': return command.change.kind === 'opening' ? [command.change.writes] : command.change.kind === 'turn' ? texts(command.change.turn?.after, command.change.turn?.says)
       : texts(command.change.writes);
     case 'answer_question': return texts(command.text);
-    case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': case 'declare_log_version': return [];
+    case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': case 'set_rulebook': case 'declare_log_version': return [];
   }
 }
 
@@ -92,6 +94,8 @@ export interface Prepared {
   scope: string[];
   /** Claim keys of those cards that no receipt answers after the change: what the reviewer is asked again. */
   recheck: string[];
+  /** A change of the rulebook: what bound the bot before and after, and the situations whose expectations it leaves without a binding rule. */
+  rulebook?: { before: Rulebook; after: Rulebook; flagged: number[] };
   next: LibraryV2;
 }
 
@@ -129,6 +133,12 @@ function expectationOf(card: Card, expectationId: string): Card['agentMust'][num
 function requireRequirements(library: LibraryV2, ids: readonly string[]): void {
   const missing = ids.filter(id => !library.requirements.some(item => item.id === id));
   if (missing.length) throw new UnknownReference('requirement', library.requirements.map(item => `${item.id} «${clip(item.quote, 60)}»`), 'Такого правила в ваших материалах нет.');
+}
+/** An expectation may rest only on rules the rulebook binds: another kind has to enter the rulebook first. */
+function requireBinding(library: LibraryV2, ids: readonly string[]): void {
+  const rulebook = rulebookOf(library);
+  const outside = library.requirements.find(item => ids.includes(item.id) && !bindsBot(rulebook, item));
+  if (outside?.kind) throw new CommandRefused(`«${clip(outside.quote, 80)}» — ${KIND_WORDS[outside.kind].one}, а такие правила не входят в свод правил: сначала включите это правило в свод.`);
 }
 
 /**
@@ -187,7 +197,7 @@ function refuseNewFindings(before: Card | undefined, after: Card, library: Libra
   if (found) throw new CommandRefused(`Так нельзя: ${problemText(found, after, library.requirements)}${REMEDY[found.check] ? ` ${REMEDY[found.check]}` : ''}`);
 }
 
-interface Edited { cards: Card[]; scope: string[]; readingManifest?: LibraryV2['readingManifest']; nextNumber?: number }
+interface Edited { cards: Card[]; scope: string[]; readingManifest?: LibraryV2['readingManifest']; nextNumber?: number; rulebook?: Rulebook }
 const replace = (library: LibraryV2, card: Card): Edited => ({ cards: library.cards.map(item => item.id === card.id ? card : item), scope: [card.id] });
 
 /** The owner's words for a similar card's title: what differs from its parent. */
@@ -262,7 +272,7 @@ function edit(library: LibraryV2, command: CardCommand, receiptId: string, conte
       const card = cardOf(library, command.cardId);
       const expectation = expectationOf(card, command.expectationId);
       if (command.text === undefined && command.requirementIds === undefined && command.appliesWhen === undefined) throw new CommandRefused('Не сказано, что изменить в ожидании.');
-      if (command.requirementIds) requireRequirements(library, command.requirementIds);
+      if (command.requirementIds) { requireRequirements(library, command.requirementIds); requireBinding(library, command.requirementIds); }
       return change(card, 'Ожидание изменили вы.', draft => {
         const target = draft.agentMust.find(item => item.id === expectation.id)!;
         if (command.text !== undefined) target.text = command.text;
@@ -313,8 +323,22 @@ function edit(library: LibraryV2, command: CardCommand, receiptId: string, conte
       return { cards: library.cards.filter(item => item.id !== card.id), scope: [card.id],
         readingManifest: library.readingManifest.map(row => ({ ...row, cardIds: row.cardIds.filter(id => id !== card.id) })) };
     }
+    case 'set_rulebook': return rulebookChange(library, command.rulebook);
     case 'answer_question': throw new Error('An answer is resolved to its own command before it is applied.');
   }
+}
+
+/**
+ * A new rulebook changes no card: the cards whose expectations it leaves without a binding rule are its scope, and their
+ * status sends them back to the owner (status.ts). Only rules the library holds can be named.
+ */
+function rulebookChange(library: LibraryV2, rulebook: Rulebook): Edited {
+  requireRequirements(library, rulebook.included);
+  const before = rulebookOf(library);
+  const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every(item => b.includes(item));
+  if (same(before.kinds, rulebook.kinds) && same(before.included, rulebook.included)) throw new CommandRefused('Так уже записано.');
+  const flagged = library.cards.filter(card => unboundCitation(card, { ...library, rulebook })).map(card => card.id);
+  return { cards: library.cards, scope: flagged, rulebook };
 }
 
 /**
@@ -355,7 +379,8 @@ export function prepareCommand(library: LibraryV2, raw: CardCommand, context: Co
     ...(answer ? { basisHash: answer.basisHash } : {}), ...(ownerWords !== undefined ? { ownerWords } : {}) };
   const { acceptance: _accepted, ...draft } = library;
   const next = libraryV2Schema.parse({ ...draft, revision: library.revision + 1, cards: edited.cards, receipts: [...library.receipts, receipt],
-    ...(edited.readingManifest ? { readingManifest: edited.readingManifest } : {}), ...(edited.nextNumber ? { nextNumber: edited.nextNumber } : {}) });
+    ...(edited.readingManifest ? { readingManifest: edited.readingManifest } : {}), ...(edited.nextNumber ? { nextNumber: edited.nextNumber } : {}),
+    ...(edited.rulebook ? { rulebook: edited.rulebook } : {}) });
   const card = (source: LibraryV2, id: string) => source.cards.find(item => item.id === id);
   const diff = edited.scope.map(id => {
     const was = card(library, id), now = card(next, id);
@@ -365,8 +390,10 @@ export function prepareCommand(library: LibraryV2, raw: CardCommand, context: Co
     const now = card(next, id);
     return now ? pendingClaims(now, { library: next, evidence: context.evidence }).map(claim => claim.key) : [];
   });
+  const rulebook = edited.rulebook && { before: rulebookOf(library), after: edited.rulebook,
+    flagged: edited.scope.flatMap(id => card(next, id)?.number ?? []).sort((a, b) => a - b) };
   return { command, libraryHash: before, previewHash: fingerprint({ library: before, command, next: libraryHash(next) }),
-    authority: answer ? requiredAuthority(asked) : requiredAuthority(command), via: context.via, diff, scope: edited.scope, recheck, next };
+    authority: answer ? requiredAuthority(asked) : requiredAuthority(command), via: context.via, diff, scope: edited.scope, recheck, ...(rulebook ? { rulebook } : {}), next };
 }
 
 /**
