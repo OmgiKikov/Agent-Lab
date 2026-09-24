@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { addUsage, checkSchema, emptyUsage, experimentSchema, fingerprint, isRunnable, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type RunnableTarget, type Scenario, type Target, type ToolChannel } from './contracts.js';
@@ -6,7 +7,8 @@ import type { Runtime } from './runtime.js';
 import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
 import { sourceIdentity } from './normalize.js';
-import { preflightTarget } from './targets.js';
+import { preflightTarget, templateExchange, type TemplateTarget } from './targets.js';
+import { atPointer, replyStructure } from './http-template.js';
 import { writeFileAtomic } from './fs-atomic.js';
 import { SUITE_FORMAT } from './suite.js';
 
@@ -129,6 +131,42 @@ export async function doctor(connection: Connection, signal = new AbortControlle
 
 /** The customer's message of the tool probe when the preparation has no logged one: the agent answers it as it would anyone. */
 export const TOOL_PROBE_OPENING = 'Здравствуйте! Подскажите, пожалуйста, чем вы можете помочь?';
+const TEMPLATE_SECOND_MESSAGE = 'Спасибо! А что ещё вы можете подсказать?';
+
+/** What the check of an agent in its own format saw: the reply's structure, and — once the text's path is known — both turns. */
+export interface TemplateCheck {
+  /** Where the first reply's strings are and how long they are; never their values. */
+  structure: { pointer: string; length: number }[];
+  /** The path the check read; undefined while the owner has not picked one. */
+  reply?: string;
+  /** Characters of text at that path in each turn of the same conversation; null when there was none. */
+  turns: (number | null)[];
+  passed: boolean;
+}
+
+/**
+ * The connection check of an agent in its own format: one test message shows the reply's structure; with the
+ * text's path known, a second message in the same conversation must be answered too. There is no reset to check:
+ * every dialogue of a run is a new conversation id, and the agent is judged on its replies.
+ */
+export async function checkTemplate(target: TemplateTarget, reply: string | undefined, signal = new AbortController().signal): Promise<TemplateCheck> {
+  const conversation = randomUUID();
+  const first = await templateExchange(target, { message: TOOL_PROBE_OPENING, conversation }, signal);
+  const structure = replyStructure(first);
+  if (reply === undefined) return { structure, turns: [], passed: false };
+  const length = (document: unknown) => { const text = atPointer(document, reply); return typeof text === 'string' && text.trim() ? text.length : null; };
+  const turns = [length(first)];
+  if (turns[0] !== null) turns.push(length(await templateExchange(target, { message: TEMPLATE_SECOND_MESSAGE, conversation }, signal)));
+  return { structure, reply, turns, passed: turns.length === 2 && turns.every(turn => turn !== null) };
+}
+
+/** Saves a connection file the owner named; `replace` only for an explicit change of that same file. */
+export async function saveConnection(file: string, connection: Connection, replace: boolean): Promise<void> {
+  const checked = connectionSchema.parse(connection);
+  const text = JSON.stringify({ ...checked, target: portableTarget(checked.target, dirname(resolve(file))) }, null, 2) + '\n';
+  if (replace) await writeFileAtomic(file, text);
+  else await writeFile(file, text, { flag: 'wx', mode: 0o600 });
+}
 
 /**
  * Whether the agent's tool calls can be judged: one message through the real adapter path, no model call. The tool

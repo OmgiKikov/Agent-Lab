@@ -9,6 +9,7 @@ import { fingerprint, isRunnable, scalarSchema, usageSchema, type ReleaseHook, t
 import type { CallContext, DialogueMessage, TargetSession } from './runtime.js';
 import { targetEntryPath } from './target-version.js';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
+import { renderRequest, replyText, type RequestTemplate, type RequestValues } from './http-template.js';
 
 function httpHeaders(target: Extract<Target, { kind: 'http' }>): Record<string, string> {
   const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' };
@@ -55,7 +56,7 @@ export async function preflightTarget(target: Target): Promise<void> {
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`Не найдена рабочая папка хука выпуска: ${cwd}.`); throw error; }
     await ensureExecutable(target.release.command, cwd, { missing: 'Не найдена команда хука выпуска', denied: 'Нет права запуска команды хука выпуска' });
   }
-  if (target.kind === 'http') { httpHeaders(target); return; }
+  if (target.kind === 'http') { httpHeaders(target); if (target.request) replyPointer({ ...target, request: target.request }); return; }
   const entry = targetEntryPath(target);
   if (entry) {
     try {
@@ -180,43 +181,74 @@ function applyReply(raw: unknown, state: World, ctx: CallContext, onRecords?: ()
   return reply;
 }
 
+/** One POST with the cap and the deadline every HTTP agent gets; the parsed JSON body of its reply. */
+async function postJson(url: string, headers: Record<string, string>, body: unknown, timeoutMs: number, parent: AbortSignal): Promise<unknown> {
+  parent.throwIfAborted();
+  const signal = AbortSignal.any([parent, AbortSignal.timeout(timeoutMs)]);
+  let response: Response;
+  try { response = await fetch(url, { method: 'POST', headers, signal, body: JSON.stringify(body) }); }
+  catch (error) {
+    if (parent.aborted) throw parent.reason;
+    if (signal.aborted) throw new Error(`External agent request exceeded ${timeoutMs} ms`);
+    throw new Error(`External agent request failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!response.ok) { await response.body?.cancel(); throw new Error(`External agent responded ${response.status}`); }
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (reader) try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 200000) { await reader.cancel(); throw new Error('Ответ внешнего агента длиннее 200 000 байт.'); }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown; }
+  catch { throw new Error('Ответ внешнего агента не является корректным JSON.'); }
+}
+
+export type TemplateTarget = Extract<Target, { kind: 'http' }> & { request: RequestTemplate };
+
+/**
+ * One request of an agent in its own format: the template rendered for this message and conversation. The raw
+ * reply comes back as is — the session reads its text by pointer, the connection check shows its structure.
+ */
+export async function templateExchange(target: TemplateTarget, values: RequestValues, signal: AbortSignal): Promise<unknown> {
+  const rendered = renderRequest(target.request, values);
+  // Header names are case-insensitive: the template's own Content-Type replaces Lab's default; a secret read from the environment always wins.
+  const secret = new Set(Object.keys(target.headersEnv).map(name => name.toLowerCase()));
+  const headers = new Headers(httpHeaders(target));
+  for (const [name, value] of Object.entries(rendered.headers)) if (!secret.has(name.toLowerCase())) headers.set(name, value);
+  return postJson(target.url, Object.fromEntries(headers), rendered.body, target.timeoutMs, signal);
+}
+
+/** Where the connection says the agent's text is; unset until the owner picks it from the connection check. */
+function replyPointer(target: TemplateTarget): string {
+  if (target.request.reply === undefined) throw new Error('В подключении не выбран путь к тексту ответа агента: запустите agent-lab doctor --connection подключение.json --yes и укажите --reply.');
+  return target.request.reply;
+}
+
 async function httpSession(input: SessionInput<'http'>): Promise<TargetSession> {
   const { target, sessionId, scenarioId, state, history, ctx } = input;
   const headers = httpHeaders(target);
   const initialState = structuredClone(state);
+  const templated = target.request ? { ...target, request: target.request } : undefined;
+  if (templated) replyPointer(templated);
   let closed = false;
   return {
     async respond(message) {
       if (closed) throw new Error('Сессия с внешним агентом закрыта.');
       ctx.signal.throwIfAborted();
-      const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(target.timeoutMs)]);
-      let response: Response;
-      try {
-        response = await fetch(target.url, {
-          method: 'POST', headers, signal,
-          body: JSON.stringify({ sessionId, scenarioId, initialState, messages: history(), message, ...(input.prompt !== undefined ? { prompt: input.prompt, promptHash: fingerprint(input.prompt) } : {}) }),
-        });
-      } catch (error) {
-        if (ctx.signal.aborted) throw ctx.signal.reason;
-        if (signal.aborted) throw new Error(`External agent request exceeded ${target.timeoutMs} ms`);
-        throw new Error(`External agent request failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (templated) {
+        // The agent keeps its conversation by id: the trial's own id makes every dialogue a new conversation.
+        const body = await templateExchange(templated, { message, conversation: sessionId }, ctx.signal);
+        // Text only: such an agent shows neither its tools nor a reset, so the dialogue is judged on its replies.
+        return applyReply(replyText(body, replyPointer(templated)), state, ctx, input.onRecords, input.onReply);
       }
-      if (!response.ok) { await response.body?.cancel(); throw new Error(`External agent responded ${response.status}`); }
-      const reader = response.body?.getReader();
-      const chunks: Uint8Array[] = [];
-      let size = 0;
-      if (reader) try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          size += value.byteLength;
-          if (size > 200000) { await reader.cancel(); throw new Error('Ответ внешнего агента длиннее 200 000 байт.'); }
-          chunks.push(value);
-        }
-      } finally { reader.releaseLock(); }
-      const text = Buffer.concat(chunks).toString('utf8');
-      let body: unknown;
-      try { body = JSON.parse(text); } catch { throw new Error('Ответ внешнего агента не является корректным JSON.'); }
+      const body = await postJson(target.url, headers, { sessionId, scenarioId, initialState, messages: history(), message,
+        ...(input.prompt !== undefined ? { prompt: input.prompt, promptHash: fingerprint(input.prompt) } : {}) }, target.timeoutMs, ctx.signal);
       return applyReply(body, state, ctx, input.onRecords, input.onReply);
     },
     async close() { closed = true; },

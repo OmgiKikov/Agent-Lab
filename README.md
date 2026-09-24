@@ -161,7 +161,7 @@ Lab разговаривает с агентом одним из трёх спо
 |---|---|
 | `command` | Процесс на каждый разговор (например, `python3 agent.py`), по одному JSON в строке через stdin/stdout. Stdout отдан протоколу, отладочный вывод пишите в stderr. Пример: [`examples/echo-agent.py`](examples/echo-agent.py). |
 | `module` | JavaScript-модуль с `createSession(input)`, у сессии есть `respond(message)`. Запускается в отдельном процессе Node на каждый разговор. Пример: [`examples/echo-agent.mjs`](examples/echo-agent.mjs). |
-| `http` | `POST` с JSON `{sessionId, scenarioId, initialState, messages, message}`. Заголовки ссылаются на имена переменных окружения (`headersEnv`), значения секретов в записи не попадают. |
+| `http` | `POST` с JSON `{sessionId, scenarioId, initialState, messages, message}` — или в собственном формате агента (`request`, см. ниже). Заголовки ссылаются на имена переменных окружения (`headersEnv`), значения секретов в записи не попадают. |
 
 Ответ агента — строка JSON или объект:
 
@@ -174,6 +174,19 @@ Lab разговаривает с агентом одним из трёх спо
 | `version`, `promptHash` | Версия агента и хеш его промпта. По версии из ответов Lab понимает, что именно проверялось, и решает, калибровка ли сверка с продом. |
 | `retrievals`, `retrievalsComplete`, `retrievalStage` | Фрагменты, которые получила модель агента: до 20 фрагментов, по 12 000 символов, всего до 60 000. `retrievalsComplete: true` — если это весь контекст. `retrievalStage: "retrieved"` — если видна только выдача поиска. По ним судья отдельно оценивает достаточность, релевантность и обоснованность ответа; на точность эти оценки не влияют. Подробнее: [`docs/rag-evidence-audit-2026-09-22.md`](docs/rag-evidence-audit-2026-09-22.md). |
 | `measurementError` | Стенд не смог ответить: разговор не измерен, и агент не наказан. |
+
+### Продовый агент по HTTP в своём формате
+
+Если агент ждёт свой конверт запроса, а не формат Lab, подключение собирается из рабочей команды `curl`:
+
+```bash
+agent-lab connect --curl запрос.txt                                    # строковые поля тела запроса
+agent-lab connect --curl запрос.txt --message /message/content/user_input --yes   # записать connection.json
+agent-lab doctor --connection connection.json --yes                    # строение ответа, без значений
+agent-lab doctor --connection connection.json --reply /result/text --yes          # выбрать текст ответа и проверить
+```
+
+Каждый ход Lab отправляет тот же конверт, подставив новое сообщение клиента в поле `--message`. Историю агент держит сам по идентификатору разговора: поля с именами вроде `conversation_id`, `dialog_id`, `session_id` Lab находит сам (или `--conversation /путь`), и в каждой ситуации идентификатор новый — это и есть сброс. Заголовки со временем и id из `$(…)` становятся текущим временем и новым id на каждый запрос; `$ИМЯ` читается из переменной окружения; секретные заголовки (`Authorization`, токены, cookie) в файл не попадают — Lab назовёт переменную, которую нужно задать. В шаблоне `connection.json` доступны подстановки `{{message}}`, `{{conversation}}`, `{{uuid}}`, `{{now}}`, `{{env:ИМЯ}}`. Такой агент не показывает инструменты и состояние, поэтому оцениваются его ответы.
 
 Как запускать агента, Lab ищет в папке проекта сам: сохранённое подключение, модуль с `createSession`, цикл JSON-строк на Python или Node, скрипт `start` в `package.json`, локальный адрес в конфиге. Один уверенный кандидат сразу попадает в план запуска, из нескольких выбираете вы. `agent-lab detect` показывает найденное и ничего не запускает; из файлов `.env` берутся только имена переменных. `agent-lab doctor --connection подключение.json --yes` делает три пробных запроса — запись, чтение и сброс — и запоминает рабочее подключение ([`examples/connection.json`](examples/connection.json)). Необязательный хук `release` разворачивает проверяемую версию перед прогоном.
 
@@ -201,7 +214,8 @@ Lab разговаривает с агентом одним из трёх спо
 | `agent-lab save-suite --id RUN --output .evals/набор.json [--case ID]` | Сохранить утверждённый набор для CI. Набор из логов несёт с собой логи, на которые ссылается. |
 | `agent-lab evaluate --input .evals/набор.json --yes [--connection подключение.json] [--case ID] [--parallel N]` | Прогнать набор без диалогов. |
 | `agent-lab suites [--directory .evals]` | Сохранённые наборы. |
-| `agent-lab doctor --connection подключение.json --yes` | Пробные запросы к агенту. |
+| `agent-lab connect --curl запрос.txt\|- [--message /путь] [--conversation /путь] [--output connection.json] [--yes]` | Подключение агента в его собственном формате из команды `curl`. |
+| `agent-lab doctor --connection подключение.json [--reply /путь] --yes` | Пробные запросы к агенту; для агента в своём формате — строение ответа и выбор пути к тексту. |
 | `agent-lab status` | Какие модели доступны в Pi. |
 | `agent-lab demo` | Учебный пример целиком, без модели. |
 

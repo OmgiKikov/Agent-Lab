@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { requestTemplateSchema } from './http-template.js';
 
 /*
  * Who answers the simulated user: an external agent speaking a JSON contract (see targets.ts); its secrets stay
@@ -23,7 +24,9 @@ const httpTargetSchema = z.strictObject({
   headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/, 'Header values must name environment variables')).default({}),
   timeoutMs: z.number().int().min(1000).max(600000).default(60000),
   release: releaseSchema,
-});
+  /** The agent's own request format (http-template.ts); without it Lab speaks its own JSON contract. */
+  request: requestTemplateSchema.optional(),
+}).refine(target => !(target.request && target.promptFile), { message: 'Агент в своём формате запроса не получает промпт из файла: уберите promptFile или request.', path: ['promptFile'] });
 const moduleTargetSchema = z.strictObject({
   kind: z.literal('module'), diagnosticCapabilities: retired, promptFile, serviceReplies, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
   exportName: z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{0,99}$/).default('createSession'),

@@ -38,6 +38,7 @@ import type { TableProposal } from './spreadsheet/proposal.js';
 import { READING_CALLS } from './spreadsheet/reading-task.js';
 import { importedLine, proposalLines } from './spreadsheet/lines.js';
 import { importHints, tableChoicesOf } from './cli/import-flags.js';
+import { connectFromCurl, doctorTemplate } from './cli/connect.js';
 import { preparationCeiling } from './card/budget.js';
 import { builderOf, consentText, preparationConsent, rulesConsentText, situationCount } from './miner/plan.js';
 
@@ -67,6 +68,7 @@ const FLAGS = {
   where: { type: 'string' }, 'no-separator': { type: 'boolean' }, 'collapse-repeats': { type: 'boolean' }, 'keep-repeats': { type: 'boolean' },
   situations: { type: 'string' }, 'prompts-from': { type: 'string' }, prompt: { type: 'string', multiple: true }, prompts: { type: 'string' },
   planted: { type: 'string' }, controls: { type: 'string' },
+  curl: { type: 'string' }, message: { type: 'string' }, conversation: { type: 'string', multiple: true }, reply: { type: 'string' },
   'operator-rules': { type: 'string' }, 'bind-rule': { type: 'string', multiple: true }, 'unbind-rule': { type: 'string', multiple: true },
 } as const;
 type Flags = ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>['values'];
@@ -301,6 +303,11 @@ async function logs({ values, directory }: CommandInput): Promise<void> {
 
 async function checkConnection({ values, directory }: CommandInput): Promise<void> {
   const connection = values.connection ? await readConnection(values.connection) : await rememberedConnection(directory);
+  const target = connection?.target;
+  if (connection && target?.kind === 'http' && target.request) {
+    await doctorTemplate({ connection, target: { ...target, request: target.request }, directory, yes: values.yes, file: values.connection && resolve(values.connection), reply: values.reply });
+    return;
+  }
   if (!connection?.probe) throw new Error('Укажите --connection с probe.write/read/reset и initialState.');
   if (!values.yes) { process.stdout.write(JSON.stringify({ target: connection.target, probe: connection.probe, requests: 3 }, null, 2) + '\n'); throw new Error('Для трёх пробных запросов укажите --yes.'); }
   const result = await doctor(connection);
@@ -668,7 +675,10 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   'save-suite': { help: ['agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]   Сохранить набор ситуаций в файл'], run: saveSuite },
   evaluate: { help: ['agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4] [--connection подключение.json]   Прогнать сохранённый набор (CI)'], run: evaluate },
   suites: { help: ['agent-lab suites [--directory .evals]   Сохранённые наборы'], run: async ({ values }) => { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); } },
-  doctor: { help: ['agent-lab doctor --connection подключение.json --yes   Три пробных запроса к агенту: запись, чтение, сброс'], run: checkConnection },
+  connect: { help: ['agent-lab connect --curl запрос.txt|- [--message /путь] [--conversation /путь] [--output connection.json] [--yes]   Подключение агента в его собственном формате из команды curl'],
+    run: ({ values }) => connectFromCurl(values) },
+  doctor: { help: ['agent-lab doctor --connection подключение.json --yes   Три пробных запроса к агенту: запись, чтение, сброс',
+    'agent-lab doctor --connection подключение.json [--reply /путь] --yes   Агент в своём формате: строение ответа, затем два хода одного разговора'], run: checkConnection },
   status: { help: ['agent-lab status   Модели и ключи, которые видит Pi'], run: async () => { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); } },
 };
 
