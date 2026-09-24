@@ -5,8 +5,9 @@ import { createUserState, allowedUserActions, advanceUser, requiredUserTurns, us
 import { CARD_CUSTOMER_PROTOCOL, customerBrief, customerReplyProblem, customerReplySchema, deliveredMessage, type CustomerBrief } from './card-customer.js';
 import { randomUUID } from 'node:crypto';
 import { addUsage, emptyUsage, isCardExecution, runnableTarget, scriptIssue, type CheckResult, type InvalidCause, type Requirement, type Revision, type Scenario, type Settings, type Source, type Target, type TraceEvent, type Trial, type UserMode } from './contracts.js';
-import { assessmentRubrics, judgeAuditSchema, metricApplies, RAG_METRIC_IDS, validateAssessments, type JudgeAudit, type MetricAssessment } from './assessment.js';
+import { assessmentRubrics, judgeAuditSchema, metricApplies, RAG_METRIC_IDS, ragEvidenceComplete, validateAssessments, type JudgeAudit, type MetricAssessment } from './assessment.js';
 import { userTurnSchema, type CallContext, type DialogueMessage, type Runtime, type TargetSession } from './runtime.js';
+import { valueTokens } from './verbatim.js';
 import { hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
 import { openExternalTarget } from './targets.js';
 import { simulatorChecks } from './simulator.js';
@@ -94,6 +95,7 @@ export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
       throw new Error('Проверяемый инструмент не входит в заявленную полную область событий адаптера.');
     }
   }
+  const retrieved = retrievedChunks(trial.events);
   const answers = trial.events.filter(e => e.type === 'assistant').map(e => e.text ?? '').join('\n').toLocaleLowerCase();
   return scenario.checks.map(check => {
     let passed: boolean;
@@ -110,6 +112,16 @@ export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
       const present = answers.includes(check.value.toLocaleLowerCase());
       passed = check.kind === 'answer_contains' ? present : !present;
       evidence = `Assistant transcript ${present ? 'contains' : 'does not contain'} ${JSON.stringify(check.value)}. This is an exact text check, not a semantic judgment.`;
+    } else if (check.kind === 'source_retrieved') {
+      const found = retrieved.some(chunk => chunk.source === check.doc && (check.chunk === undefined || chunk.chunkId === check.chunk));
+      if (!found && !ragEvidenceComplete(trial, 'retrieval')) throw new Error('Адаптер не подтвердил полноту найденных фрагментов (retrievalsComplete). Проверка статьи не измерена.');
+      passed = found;
+      evidence = `${check.doc}${check.chunk ? `#${check.chunk}` : ''} ${found ? 'есть' : 'нет'} среди найденных фрагментов: ${[...new Set(retrieved.map(c => c.source))].join(', ') || 'ничего не найдено'}.`;
+    } else if (check.kind === 'answer_reference_tokens') {
+      const said = valueTokens(answers);
+      const missing = [...valueTokens(check.value)].filter(token => !said.has(token));
+      passed = !missing.length;
+      evidence = missing.length ? `В ответах нет значений эталона: ${missing.join(', ')}.` : 'Все значения эталона есть в ответах.';
     } else if (check.kind === 'fresh_read_before_update') {
       ({ passed, evidence } = freshReadEvidence(trial.events));
     } else {
@@ -393,4 +405,11 @@ export async function assessTrial(runtime: Runtime, stored: Scenario, sources: S
       trial.judgeReceipt = sealJudgeReceipt(latest, complete);
     }
   }
+}
+
+function retrievedChunks(events: TraceEvent[]): { source: string; chunkId?: string }[] {
+  return events.flatMap(event => {
+    const chunks = event.type === 'retrieval' ? (event.result as { chunks?: unknown } | undefined)?.chunks : undefined;
+    return Array.isArray(chunks) ? chunks.filter((c): c is { source: string; chunkId?: string } => typeof c?.source === 'string') : [];
+  });
 }
