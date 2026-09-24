@@ -1,6 +1,7 @@
 import { fingerprint } from '../contracts.js';
+import { countText } from '../plural.js';
 import { clip } from '../text.js';
-import { messageAt, problemText, quotable, unusableFindings, type CardEvidence } from './checks.js';
+import { messageAt, normalizeText, problemText, quotable, unusableFindings, type CardEvidence } from './checks.js';
 import { planClaims, type Claim, type ClaimKind } from './review.js';
 import type { Card, CardCommand, ClaimReceipt, LibraryV2 } from './schema.js';
 
@@ -11,7 +12,8 @@ import type { Card, CardCommand, ClaimReceipt, LibraryV2 } from './schema.js';
  * interpreted. The first open question is the only one shown: after the answer the next one, if any, appears.
  *
  *   deterministic finding ─► unusable      no receipt for a current claim ─► checking
- *   a claim blocked       ─► unusable      an unconfirmed fact, an open doubt, a twin ─► needs_owner (first one)
+ *   a claim blocked       ─► unusable      an unconfirmed fact, an open doubt, an undecided plausible label,
+ *                                          a twin ─► needs_owner (first one)
  *   otherwise             ─► ready
  */
 
@@ -60,6 +62,38 @@ function unconfirmedQuestion(card: Card, fact: Fact, claim: Claim): Question {
     { label: 'Да, скажет, если спросят', command: disclose('on_request') },
     { label: 'Нет, не знает', command: disclose('unknown') },
     { label: 'Убрать', command: { kind: 'remove_fact', cardId: card.id, factId: fact.id } },
+  ]);
+}
+
+/** A plausible fact the owner has not decided yet. */
+const undecidedPlausible = (fact: Fact): boolean => fact.source.kind === 'plausible' && fact.source.receiptId === undefined;
+
+/**
+ * The undecided plausible facts of the whole draft that share a label, the way the owner decides them: one word per
+ * label, compared after the one normalisation, so «Тип оборудования» on five cards is one decision.
+ */
+export function plausibleGroup(library: LibraryV2, label: string): { card: Card; fact: Fact }[] {
+  const key = normalizeText(label);
+  return [...library.cards].sort((a, b) => a.number - b.number)
+    .flatMap(card => card.client.knows.filter(fact => undecidedPlausible(fact) && normalizeText(fact.label) === key).map(fact => ({ card, fact })));
+}
+
+/**
+ * «Клиенты знают „Тип оборудования“?» — asked once for a label across the draft: every card holding it asks the same
+ * question (the same id), and either answer decides the label on all of them in one receipt. The basis is every
+ * such fact, so a new card with the label, or an edit of one, asks again.
+ */
+function plausibleQuestion(library: LibraryV2, fact: Fact): Question {
+  const group = plausibleGroup(library, fact.label);
+  const basisHash = fingerprint(group.map(item => ({ cardId: item.card.id, fact: { ...item.fact, source: { kind: 'plausible' } } })));
+  const id = fingerprint({ kind: 'plausible', subject: normalizeText(fact.label), basisHash });
+  const values = [...new Set(group.flatMap(item => item.fact.value === undefined ? [] : [quotable(item.fact.value) ? String(item.fact.value) : item.fact.value ? 'да' : 'нет']))];
+  const facts = group.map(item => ({ cardId: item.card.id, factId: item.fact.id }));
+  const decide = (known: boolean): CardCommand => ({ kind: 'decide_plausible', label: fact.label, known, facts });
+  const shown = values.length ? ` (${clip(values.join(', '), 120)})` : '';
+  return question(id, basisHash, `Клиенты знают «${clip(fact.label, 100)}»${shown}, если агент спросит? В логах этого нет — Lab предполагает; ответ относится ко всем ситуациям с этим фактом: ${countText(group.length, ['ситуация', 'ситуации', 'ситуаций'])}.`, [
+    { label: 'Да, скажут, если спросят', command: decide(true) },
+    { label: 'Нет, не знают', command: decide(false) },
   ]);
 }
 
@@ -131,11 +165,13 @@ function statusOf(card: Card, context: StatusContext, twin: Card | undefined): C
   const blocked = receipts.filter(item => item.receipt.status === 'blocked');
   if (blocked.length) return { status: 'unusable', problems: blocked.map(item => item.receipt.reason) };
   const unconfirmed = card.client.knows.find(fact => fact.source.kind === 'unconfirmed');
+  const plausible = card.client.knows.find(undecidedPlausible);
   const doubt = receipts.filter(item => item.receipt.status === 'needs_owner' && !settled(library, item.claim.key))
     .sort((a, b) => DOUBT_ORDER.indexOf(a.claim.kind) - DOUBT_ORDER.indexOf(b.claim.kind))[0];
   const duplicate = twin && duplicateQuestion(card, twin);
   const open = unconfirmed ? unconfirmedQuestion(card, unconfirmed, receipts.find(item => item.claim.kind === 'fact' && item.claim.subject === unconfirmed.id)!.claim)
     : doubt ? doubtQuestion(card, doubt.claim, doubt.receipt, evidence)
+    : plausible ? plausibleQuestion(library, plausible)
     : duplicate && !settled(library, duplicate.id) ? duplicate : undefined;
   return open ? { status: 'needs_owner', question: open, problems: [] } : { status: 'ready', problems: [] };
 }

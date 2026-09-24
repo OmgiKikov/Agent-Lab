@@ -95,9 +95,12 @@ export async function applySituationCommand(surface: DecisionSurface, record: Ex
     if (decided.command.kind === 'remove_card') return `Ситуация ${situation.number} убрана из черновика.${copied}`;
     const check = await lab.recheckCards(target.id);
     const where = surface.origin === 'board' ? 'здесь и в чате' : 'сюда отдельным сообщением';
-    if (check.decision.action === 'run') { handOver(lease => surface.background.check(surface.ctx, lease, target.id, situation.number)); return `Ситуация ${situation.number}: записано. Проверяю её — итог придёт ${where}.${copied}`; }
+    // One word on a plausible fact's label decides it on every situation that holds it: the notice names them all.
+    const numbers = prepared.diff.map(item => item.number);
+    const subject = numbers.length > 1 ? `Ситуации ${numbers.join(', ')}` : `Ситуация ${situation.number}`;
+    if (check.decision.action === 'run') { handOver(lease => surface.background.check(surface.ctx, lease, target.id, situation.number)); return `${subject}: записано. Проверяю ${numbers.length > 1 ? 'их' : 'её'} — итог придёт ${where}.${copied}`; }
     return check.decision.action === 'needs_budget' ? `Записано. На проверку не хватает лимита: нужно вызовов ${check.decision.pendingJobs}, осталось ${check.decision.remainingCalls}.${copied}`
-      : `Ситуация ${situation.number}: записано.${copied}`;
+      : `${subject}: записано.${copied}`;
   });
 }
 

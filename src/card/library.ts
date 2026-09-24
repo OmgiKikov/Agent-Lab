@@ -79,7 +79,8 @@ export function acceptLibraryV2(library: LibraryV2, expectedHash: string, cardId
     return card;
   });
   const compiled = cards.map(card => {
-    const { split: _split, ...scenario } = compileCard(card, { requirements: library.requirements, ...(context.environment ? { environment: context.environment } : {}) });
+    const { split: _split, ...scenario } = compileCard(card, { requirements: library.requirements, maxTurns: context.maxTurns,
+      ...(context.environment ? { environment: context.environment } : {}) });
     return scenario;
   });
   const scenarios = validatePreparation({ requirements: library.requirements, questions: [], scenarios: compiled }, library.sources).scenarios;

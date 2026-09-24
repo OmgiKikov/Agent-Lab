@@ -31,15 +31,34 @@ const statement = (fact: Fact): string => fact.value === undefined ? fact.label 
 
 interface CompiledPolicy { policy: BehaviorPolicy; facts: UserView['facts']; missing: string[] }
 
+/** The most messages a customer writes after the first one, whatever the source dialogue: a run stays bounded. */
+const FOLLOW_UP_CEILING = 15;
+
+/**
+ * How many messages the customer may write after the first one. The brief's own need — a message per fact, one for
+ * the turn and two to spare — and, for a card of a logged dialogue, as long as the real customer talked plus two:
+ * the account of the later messages holds one entry per later customer message, so its length is the real
+ * conversation's length without its opening (derived, not stored). The logged length is bounded by the ceiling and
+ * by the run's messages when they are known; the brief's own need never shrinks, so a card that fitted still fits.
+ */
+function followUps(card: Card, facts: number, maxTurns: number | undefined): number {
+  const own = Math.min(FOLLOW_UP_CEILING, facts + (card.client.turn ? 1 : 0) + 2);
+  const logged = Math.min(FOLLOW_UP_CEILING, card.coverage.length + 2, ...(maxTurns === undefined ? [] : [maxTurns - 1]));
+  return Math.max(own, logged);
+}
+
 /**
  * The customer's policy. A known fact is told only when asked (an `initial` one is already in the first
  * message and is repeated as it stands if the agent asks again); two or more facts named on request can be
  * told at once; an unknown fact and any other question get «не знаю» — a template, so an unknown value is in
- * no message at all. A `change_intent` turn must happen before the customer may leave (the controller's
- * finite search removes `leave` until then); a `report` turn may be skipped.
+ * no message at all. A plausible fact counts only once the owner decided its label; before that the customer
+ * does not know it. A `change_intent` turn must happen before the customer may leave (the controller's
+ * finite search removes `leave` until then); a `report` turn may be skipped. `maxTurns` is the run's limit on
+ * the customer's messages, when the caller knows it.
  */
-export function compilePolicy(card: Card): CompiledPolicy {
-  const { knows, turn, leaves } = card.client;
+export function compilePolicy(card: Card, maxTurns?: number): CompiledPolicy {
+  const { turn, leaves } = card.client;
+  const knows = card.client.knows.filter(fact => fact.source.kind !== 'plausible' || fact.source.receiptId !== undefined);
   const known = knows.filter(fact => fact.disclosure !== 'unknown');
   const unknown = knows.filter(fact => fact.disclosure === 'unknown');
   const onRequest = known.filter(fact => fact.disclosure === 'on_request');
@@ -62,7 +81,7 @@ export function compilePolicy(card: Card): CompiledPolicy {
   ];
   return {
     policy: { version: 1, initialState: TALK, states: [...talking, DONE], terminalStates: [DONE], repetitionLimit: 2,
-      maxFollowUps: Math.min(15, knows.length + (turn ? 1 : 0) + 2), actions, transitions },
+      maxFollowUps: followUps(card, knows.length, maxTurns), actions, transitions },
     facts: known.map(fact => ({ id: fact.id, statement: statement(fact), ...(fact.value !== undefined ? { value: fact.value } : {}) })),
     missing: unknown.map(fact => fact.label),
   };
@@ -104,6 +123,8 @@ export interface CompileContext {
   requirements: readonly Requirement[];
   /** The agent's environment as its connection declares it; an unmanaged agent judged on its replies by default. */
   environment?: CardExecution['environmentView'];
+  /** The run's limit on the customer's messages: a long logged conversation gives the customer no more than fit in it. */
+  maxTurns?: number;
 }
 
 /**
@@ -111,7 +132,7 @@ export interface CompileContext {
  * criteria and no card-wide goal rubric), so one expectation never colours the verdict of another.
  */
 export function compileCard(card: Card, context: CompileContext): Scenario {
-  const { policy, facts, missing } = compilePolicy(card);
+  const { policy, facts, missing } = compilePolicy(card, context.maxTurns);
   const cited = [...new Set(card.agentMust.flatMap(expectation => expectation.requirementIds))];
   const requirements = cited.map(id => context.requirements.find(requirement => requirement.id === id));
   if (requirements.some(requirement => !requirement)) throw new Error(`Ситуация №${card.number}: ожидание ссылается на правило, которого нет в наборе.`);

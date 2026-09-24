@@ -124,8 +124,27 @@ export function trustSegments(view: ResultView): { text: string; warn: boolean }
   if (view.reviewed.contradicted) add(`ваши отметки расходятся с итогом: ${view.reviewed.contradicted}`, true);
   const unstable = unstableCount(view);
   if (unstable) add(`нестабильно ${unstable}`);
+  // A customer who could not answer most questions played a thinner situation than the real one: worth a warning.
+  const dunno = dunnoText(view);
+  if (dunno) add(dunno, !!view.customer && view.customer.missing > view.customer.answer);
   return parts.map((part, i) => i ? part : { ...part, text: part.text.charAt(0).toLocaleUpperCase('ru') + part.text.slice(1) });
 }
+
+/**
+ * «Клиент не знал ответа на 40% вопросов агента»: the customer's «не знаю» among every reply to an agent's question
+ * (a fact named or «не знаю»); null when no controlled customer was asked anything. Said on every surface in these words.
+ */
+export function dunnoText(view: Pick<ResultView, 'customer'>): string | null {
+  const moves = view.customer;
+  const asked = moves ? moves.answer + moves.missing : 0;
+  return moves && asked ? `клиент не знал ответа на ${percent(moves.missing / asked)} вопросов агента` : null;
+}
+
+/** Next to a failed situation whose customer said «не знаю» and then left (customer-moves.ts): a mark to look at, not a verdict. */
+export const DUNNO_MARK = 'ответ клиента «не знаю» мог помешать';
+
+/** The mark of one situation, when its customer's «не знаю» may have blocked the goal. */
+export const dunnoMark = (view: Pick<ResultView, 'customer'>, scenarioId: string): string | null => view.customer?.blocked.includes(scenarioId) ? DUNNO_MARK : null;
 
 /** The trust line as plain parts, the way the terminal surfaces print it. */
 export const trustParts = (view: ResultView): string[] => trustSegments(view).map(part => part.text);
@@ -248,10 +267,14 @@ export function unmeasuredRows(view: ResultView): ResultRow[] {
 /** Every failed situation once, in record order, with what was expected, the agent's words and the rule (E7). */
 export function errorListRows(view: ResultView): ResultRow[] {
   if (!view.failures.length) return [];
-  return [{ role: 'heading', indent: 0, text: 'Все ошибки' }, ...view.failures.flatMap((failure, i) => [
-    { role: 'failed' as const, indent: 2, text: `✗ ${i + 1}  ${oneLine(failure.title)}` },
-    ...exampleRows(failure, 5).slice(1),
-  ])];
+  return [{ role: 'heading', indent: 0, text: 'Все ошибки' }, ...view.failures.flatMap((failure, i) => {
+    const mark = dunnoMark(view, failure.scenarioId);
+    return [
+      { role: 'failed' as const, indent: 2, text: `✗ ${i + 1}  ${oneLine(failure.title)}` },
+      ...exampleRows(failure, 5).slice(1),
+      ...(mark ? [{ role: 'muted' as const, indent: 5, text: mark }] : []),
+    ];
+  })];
 }
 
 const VERDICT_WORD = { pass: 'справился', fail: 'не справился' } as const;
@@ -409,12 +432,14 @@ export function failureRows(view: ResultView, record: Pick<Experiment, 'trials'>
   const trial = record.trials.find(item => item.id === failure.trialId);
   const turns = (trial?.events ?? []).filter(event => (event.type === 'user' || event.type === 'assistant') && oneLine(event.text ?? ''));
   const unmarked = view.agreement.unmarked.includes(failure.trialId);
+  const mark = dunnoMark(view, failure.scenarioId);
   return [
     { role: 'failed', indent: 0, text: `✗ ${index + 1}  ${oneLine(failure.title)}`, right: `ошибка ${index + 1} из ${view.failures.length}` },
     blank,
     label('Ожидалось', failure.expected ?? 'не записано в ситуации'),
     label('Агент ответил', failure.said ? `«${failure.said.quote}»` : 'ответ не подтверждён цитатой'),
     ...(rule ? [label('Правило', `«${rule.quote}»`), { role: 'muted' as const, indent: 20, text: oneLine(rule.sourceName) }] : [label('Правило', 'у ситуации нет правила из ваших материалов')]),
+    ...(mark ? [label('Клиент', mark)] : []),
     ...(turns.length ? [blank, { role: 'heading' as const, indent: 4, text: 'Разговор' },
       ...turns.map(event => ({ role: 'quote' as const, indent: 6, text: `${(event.type === 'user' ? 'Клиент' : 'Агент').padEnd(9)}${oneLine(event.text)}`, hang: 9 }))] : []),
     ...(unmarked ? [blank, { role: 'next:first' as const, indent: 0, text: 'Судья решил: не справился. Вы согласны?' }] : []),

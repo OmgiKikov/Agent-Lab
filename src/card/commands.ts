@@ -7,7 +7,7 @@ import { logVersionCommandSchema, logVersionJournalSchema, type LogVersionComman
 import { messageAt, problemText, unusableFindings, type CardEvidence, type CheckFinding } from './checks.js';
 import { pendingClaims } from './review.js';
 import { cardCommandSchema, cardSchema, libraryV2Schema, type Card, type CardCommand, type EventRef, type LibraryV2 } from './schema.js';
-import { cardStatus } from './status.js';
+import { cardStatus, plausibleGroup } from './status.js';
 import { briefChanges, cardSituation, type BriefChange } from './view.js';
 
 /*
@@ -46,7 +46,7 @@ export function requiredAuthority(command: CardCommand | LogVersionCommand): Aut
     case 'add_similar': return command.change.kind === 'opening' || command.change.kind === 'turn' && command.change.turn !== null ? 'owner-words' : 'owner-confirm';
     // An answer in the owner's own words is a wording; picking an answer is a decision.
     case 'answer_question': return command.text !== undefined ? 'owner-words' : 'owner-confirm';
-    case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': return 'owner-confirm';
+    case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': case 'decide_plausible': return 'owner-confirm';
   }
 }
 
@@ -60,7 +60,8 @@ export function wordsOf(command: CardCommand | LogVersionCommand): string[] {
     case 'add_similar': return command.change.kind === 'opening' ? [command.change.writes] : command.change.kind === 'turn' ? texts(command.change.turn?.after, command.change.turn?.says)
       : texts(command.change.writes);
     case 'answer_question': return texts(command.text);
-    case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': case 'declare_log_version': return [];
+    case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': case 'declare_log_version':
+    case 'decide_plausible': return [];
   }
 }
 
@@ -138,6 +139,7 @@ function requireRequirements(library: LibraryV2, ids: readonly string[]): void {
 function nextFactId(library: LibraryV2, card: Card): string {
   const named = library.receipts.flatMap(receipt => {
     const { command } = receipt;
+    if (command.kind === 'decide_plausible') return command.facts.flatMap(item => item.cardId === card.id ? [item.factId] : []);
     return (command.kind === 'set_fact' || command.kind === 'remove_fact' || command.kind === 'set_fact_disclosure') && command.cardId === card.id && command.factId ? [command.factId] : [];
   });
   const numbers = [...card.client.knows.map(fact => fact.id), ...named].map(id => id.startsWith('f') ? Number(id.slice(1)) : 0).filter(Number.isInteger);
@@ -225,6 +227,35 @@ function addSimilar(library: LibraryV2, command: Extract<CardCommand, { kind: 'a
   return { cards: [...library.cards, similar], scope: [similar.id], readingManifest, nextNumber: number + 1 };
 }
 
+/**
+ * The owner's word on a plausible label, on every card that holds it undecided: kept (named when asked, vouched by
+ * this receipt) or removed (the customer then says «не знаю»). The command lists the facts it decides; a draft whose
+ * facts under the label are no longer exactly those is refused as stale, so the owner never decides what they did not see.
+ */
+function decidePlausible(library: LibraryV2, command: Extract<CardCommand, { kind: 'decide_plausible' }>, receiptId: string, context: CommandContext): Edited {
+  const group = plausibleGroup(library, command.label);
+  const listed = (items: readonly { cardId: string; factId: string }[]) => fingerprint(items.map(item => `${item.cardId}/${item.factId}`).sort());
+  const current = group.map(item => ({ cardId: item.card.id, factId: item.fact.id }));
+  if (!group.length || listed(current) !== listed(command.facts)) {
+    throw new StaleRevisionError(listed(command.facts), listed(current), `Правдоподобные факты «${clip(command.label, 80)}» уже изменились: покажу, что осталось.`);
+  }
+  const decided = new Set(current.map(item => `${item.cardId}/${item.factId}`));
+  const reason = command.known ? `«${clip(command.label, 80)}» клиент знает — решили вы.` : `«${clip(command.label, 80)}» клиент не знает — решили вы.`;
+  let cards = library.cards;
+  const scope: string[] = [];
+  for (const card of new Set(group.map(item => item.card))) {
+    const after = revised(card, reason, draft => {
+      const mine = (fact: Card['client']['knows'][number]) => decided.has(`${card.id}/${fact.id}`);
+      draft.client.knows = command.known ? draft.client.knows.map(fact => mine(fact) ? { ...fact, source: { kind: 'plausible', receiptId } } : fact)
+        : draft.client.knows.filter(fact => !mine(fact));
+    });
+    refuseNewFindings(card, after, library, context);
+    cards = cards.map(item => item.id === card.id ? after : item);
+    scope.push(card.id);
+  }
+  return { cards, scope };
+}
+
 /** The change one command makes to the draft's cards. */
 function edit(library: LibraryV2, command: CardCommand, receiptId: string, context: CommandContext): Edited {
   const owner = { kind: 'owner' as const, receiptId };
@@ -308,6 +339,7 @@ function edit(library: LibraryV2, command: CardCommand, receiptId: string, conte
       return { cards: library.cards, scope: [card.id] };
     }
     case 'add_similar': return addSimilar(library, command, receiptId, context);
+    case 'decide_plausible': return decidePlausible(library, command, receiptId, context);
     case 'remove_card': {
       const card = cardOf(library, command.cardId);
       return { cards: library.cards.filter(item => item.id !== card.id), scope: [card.id],

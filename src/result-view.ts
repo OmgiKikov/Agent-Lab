@@ -10,6 +10,7 @@ import type { TopicCoverage } from './miner/coverage.js';
 import { deriveRun, NOT_MEASURED_CODES, type CardPart, type NotMeasuredCode, type RunDerivation, type Verdict } from './run.js';
 import { SMALL_SAMPLE, wilson } from './interval.js';
 import { buildCalibration, type CalibrationView } from './card/calibration-view.js';
+import { customerMoves, type CustomerMoves } from './customer-moves.js';
 import type { DialogueNumbers } from './card/view.js';
 
 export { COUNTING_RULES } from './outcomes.js';
@@ -132,6 +133,8 @@ export interface ResultView {
   agreement: JudgeAgreement;
   /** The same situations judged on their recorded conversations (card/calibration-view.ts); absent without a calibration. Never changes the headline. */
   calibration?: CalibrationView;
+  /** What the customer Lab played did (customer-moves.ts); absent when no conversation recorded a controlled move. Never changes the headline. */
+  customer?: CustomerMoves;
   /**
    * Counted situations the owner reviewed in full — a verdict on the whole dialogue or on a metric that
    * decides it, not a one-key mark — and among them those where the owner's verdict on the whole
@@ -309,7 +312,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     ...(stability ? { stability } : {}),
   };
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});
-  return { ...view, ...(calibration ? { calibration } : {}), next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
+  const customer = customerMoves(run);
+  return { ...view, ...(calibration ? { calibration } : {}), ...(customer ? { customer } : {}), next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
 }
 
 /**

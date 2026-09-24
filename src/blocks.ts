@@ -14,7 +14,9 @@ export type Tone = 'ok' | 'warn' | 'err' | 'accent';
 export interface Turn { who: 'Клиент' | 'Агент'; text: string }
 export interface Example { situation: string; expected: string; said: string | null; rule: string | null }
 export interface CardItem { number: number; brief: Brief; chip: { text: string; tone: Tone }; dialogue: Turn[] }
-export interface FailureItem { number: number; title: string; expected: string; said: string | null; rule: { quote: string; source: string } | null; dialogue: Turn[] }
+export interface FailureItem { number: number; title: string; expected: string; said: string | null; rule: { quote: string; source: string } | null; dialogue: Turn[];
+  /** What the customer's side may have done to the verdict («ответ клиента «не знаю» мог помешать»); absent when nothing. */
+  customer?: string }
 /** A situation where the synthetic customer and the logged one led to different verdicts; the logged conversation is named, never quoted. */
 export interface DisagreementItem { number: number; title: string; expectations: string[]; hint: string; conversations: string; dialogue: Turn[] }
 
@@ -70,7 +72,8 @@ function cardHtml(item: CardItem): string {
 function failureHtml(item: FailureItem): string {
   return `<article class="failure"><div class="ttl"><span class="mark">✗ ${item.number}</span>${e(item.title)}</div>`
     + dl([['Ожидалось', item.expected], ['Агент ответил', item.said === null ? 'ответ не подтверждён цитатой' : `«${item.said}»`, item.said === null ? undefined : 'bad-quote'],
-      ['Правило', item.rule ? `«${item.rule.quote}» — ${item.rule.source}` : 'у ситуации нет правила из ваших материалов']])
+      ['Правило', item.rule ? `«${item.rule.quote}» — ${item.rule.source}` : 'у ситуации нет правила из ваших материалов'],
+      ...(item.customer ? [['Клиент', item.customer] as [string, string]] : [])])
     + (item.dialogue.length ? `<details class="fold"><summary>Разговор</summary>${turnsHtml(item.dialogue)}</details>` : '') + `</article>`;
 }
 
@@ -136,7 +139,8 @@ function blockMarkdown(block: Block): string[] {
       ...(item.dialogue.length ? ['**Разговор в прогоне**', '', ...mdTurns(item.dialogue), ''] : [])]);
     case 'failures': return block.items.flatMap(item => [`### ✗ ${item.number}. ${md(item.title)}`, '',
       ...mdDl([['Ожидалось', item.expected], ['Агент ответил', item.said === null ? 'ответ не подтверждён цитатой' : `«${item.said}»`],
-        ['Правило', item.rule ? `«${item.rule.quote}» — ${item.rule.source}` : 'у ситуации нет правила из ваших материалов']]), '',
+        ['Правило', item.rule ? `«${item.rule.quote}» — ${item.rule.source}` : 'у ситуации нет правила из ваших материалов'],
+        ...(item.customer ? [['Клиент', item.customer] as [string, string]] : [])]), '',
       ...(item.dialogue.length ? [...mdTurns(item.dialogue), ''] : [])]);
     case 'disagreements': return block.items.flatMap(item => [`### ≠ ${item.number}. ${md(item.title)}`, '',
       ...mdDl([...item.expectations.map(text => ['Ожидание', text] as [string, string]), ['Подсказка', item.hint], ['Где смотреть', item.conversations]]), '',

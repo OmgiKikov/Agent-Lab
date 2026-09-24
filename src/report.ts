@@ -5,7 +5,7 @@ import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLin
 import type { FailureExplanation } from './explain.js';
 import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText } from './plural.js';
-import { accuracyParts, alarmRow, noErrorsText, realityParts, trustSegments } from './result-text.js';
+import { accuracyParts, alarmRow, DUNNO_MARK, dunnoMark, noErrorsText, realityParts, trustSegments } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
 import { situationBrief, situationNumber } from './card/view.js';
 import { oneLine } from './text.js';
@@ -150,7 +150,8 @@ export function runReport(bundle: EvidenceBundle): Report {
   const failures: FailureItem[] = view.failures.map(failure => {
     const rule = failure.violated ?? failure.rules[0];
     return { number: numbers.get(failure.scenarioId) ?? 0, title: oneLine(failure.title), expected: failure.expected ?? 'не записано в ситуации',
-      said: failure.said?.quote ?? null, rule: rule ? { quote: rule.quote, source: oneLine(rule.sourceName) } : null, dialogue: turnsOf(trials.get(failure.trialId)) };
+      said: failure.said?.quote ?? null, rule: rule ? { quote: rule.quote, source: oneLine(rule.sourceName) } : null, dialogue: turnsOf(trials.get(failure.trialId)),
+      ...(dunnoMark(view, failure.scenarioId) ? { customer: DUNNO_MARK } : {}) };
   });
   const unmeasured = view.notMeasured.reasons.flatMap(reason => reason.scenarioIds.map(id => `${oneLine(view.cards.find(card => card.scenarioId === id)?.title ?? id)}: ${reason.label}`));
   return {

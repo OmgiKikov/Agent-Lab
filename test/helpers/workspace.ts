@@ -78,7 +78,7 @@ function richRuntime(logged: Logged[]): Runtime {
       const must = topic === 'Статус заявки' ? [duty('назвать статус заявки и срок ответа', 'status_rule')]
         : topic === 'Смена тарифа' ? [duty('предложить тариф дешевле и назвать разницу в цене', 'tariff_rule')]
           : [duty('не спрашивать номер терминала ещё раз, если клиент его уже назвал', 'refund_rule'), duty('объяснить, как оформить возврат', 'refund_rule')];
-      return { title, topic: topic === OTHER ? 'Другое' : topic, wants: `Получить помощь: ${topic.toLocaleLowerCase('ru')}`, writesEvent: request.call.customerEvents[0]!, knows: [],
+      return { title, topic: topic === OTHER ? 'Другое' : topic, wants: `Получить помощь: ${topic.toLocaleLowerCase('ru')}`, writesEvent: request.call.customerEvents[0]!, knows: [], plausibleKnows: [],
         leaves: 'получил ответ или понял, что агент не поможет', turn: null, agentMust: must, coverage: {} };
     },
     async reviewCard(request, ctx) {

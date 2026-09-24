@@ -25,8 +25,11 @@ import { cardStatuses, type CardStatus, type CardStatusKind, type QuestionChoice
  * or calls a model; each surface paints the rows by role and escapes at its own boundary.
  */
 
-/** When the customer says a fact: at once, when asked, never, or «?» — nobody has confirmed it yet. */
-export type Said = 'сразу' | 'если спросят' | 'не знает' | '?';
+/**
+ * When the customer says a fact: at once, when asked, never, or «?» — nobody has confirmed it yet. A plausible fact
+ * is never shown as the log's: «? правдоподобно» until the owner decides its label, «правдоподобно, если спросят» after.
+ */
+export type Said = 'сразу' | 'если спросят' | 'не знает' | '?' | '? правдоподобно' | 'правдоподобно, если спросят';
 
 export interface Brief {
   title: string;
@@ -102,13 +105,21 @@ function cardSource(library: LibraryV2, card: Card, numbers?: DialogueNumbers): 
   }
 }
 
+/** When the brief says the customer names a fact, and who vouches for it being theirs. */
+function saidOf(fact: Fact): Said {
+  const { source } = fact;
+  if (source.kind === 'unconfirmed') return '?';
+  if (source.kind === 'plausible') return source.receiptId === undefined ? '? правдоподобно' : 'правдоподобно, если спросят';
+  return SAID[fact.disclosure];
+}
+
 /** A card read as it stands: its brief is the card itself. A fact no message vouches for is «?» until the owner says. */
 export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumbers): Brief {
   const quotes = new Map(library.requirements.map(item => [item.id, item.quote]));
   const { wants, writes, knows, leaves, turn } = card.client;
   return {
     title: oneLine(card.title), source: cardSource(library, card, numbers), wants: oneLine(wants), writes: oneLine(writes),
-    knows: knows.map(fact => ({ what: factText(fact), when: fact.source.kind === 'unconfirmed' ? '?' : SAID[fact.disclosure] })),
+    knows: knows.map(fact => ({ what: factText(fact), when: saidOf(fact) })),
     leaves: oneLine(leaves), turn: turn ? turnText(turn.after, turn.says) : null,
     must: card.agentMust.map(expectation => ({ text: oneLine(expectation.text), rule: firstQuote(expectation.requirementIds, quotes) })),
   };
@@ -118,11 +129,12 @@ const OBSERVED = { reply: 'по ответу агента', tool: 'по вызо
 const ACCOUNTED = { fact: 'факт', turn: 'поворот', stop: 'здесь клиент уходит', ignored: 'не влияет на проверку', changed: 'изменено' } as const;
 
 /** How a card is run and judged: the customer's program, where each fact comes from, the account of later messages, the duties. */
-function cardDetails(library: LibraryV2, card: Card): SituationView['details'] {
+function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefined): SituationView['details'] {
   const message = (index: number) => `реплика №${index + 1}`;
   const { knows, writesSource, turn, leaves } = card.client;
-  const vouched = (source: Fact['source']) => source.kind === 'dialogue' ? `${message(source.event.eventIndex)} диалога` : source.kind === 'owner' ? 'вы подтвердили' : 'не подтверждено';
-  const { policy, facts } = compilePolicy(card);
+  const vouched = (source: Fact['source']) => source.kind === 'dialogue' ? `${message(source.event.eventIndex)} диалога` : source.kind === 'owner' ? 'вы подтвердили'
+    : source.kind === 'plausible' ? source.receiptId === undefined ? 'в логах нет, Lab предполагает — ждёт вашего решения' : 'в логах нет, Lab предположил — вы подтвердили' : 'не подтверждено';
+  const { policy, facts } = compilePolicy(card, maxTurns);
   const told = new Map(facts.map(fact => [fact.id, fact.statement]));
   const program = policy.actions.map(action => action.kind === 'answer'
     ? action.id === 'tell_all' ? 'если попросят сразу несколько данных — называет всё, что знает' : `если спросят «${action.ifAsked}» — называет «${told.get(action.factIds[0] ?? '') ?? ''}»`
@@ -146,15 +158,15 @@ function cardDetails(library: LibraryV2, card: Card): SituationView['details'] {
   ];
 }
 
-/** One card as a situation; `status` is the card's status now, when the imports it cites are at hand. */
-export function cardSituation(library: LibraryV2, card: Card, status?: CardStatus, numbers?: DialogueNumbers): SituationView {
+/** One card as a situation; `status` is the card's status now, when the imports it cites are at hand; `maxTurns` the run's limit the customer's program is shown within. */
+export function cardSituation(library: LibraryV2, card: Card, status?: CardStatus, numbers?: DialogueNumbers, maxTurns?: number): SituationView {
   return {
     format: 'card', id: card.id, number: card.number, brief: cardBrief(library, card, numbers),
     refs: { knows: card.client.knows.map(fact => fact.id), must: card.agentMust.map(expectation => expectation.id) },
     // Without the imports at hand the status is not known; a card is read then as it was accepted: ready.
     status: status?.status ?? 'ready',
     ...(status?.question ? { question: { id: status.question.id, text: status.question.text, choices: status.question.choices } } : {}),
-    problems: status?.problems ?? [], ...(card.revision > 1 ? { version: card.revision } : {}), topic: card.topic, details: cardDetails(library, card),
+    problems: status?.problems ?? [], ...(card.revision > 1 ? { version: card.revision } : {}), topic: card.topic, details: cardDetails(library, card, maxTurns),
   };
 }
 
@@ -282,7 +294,7 @@ export function situationViews(record: Experiment, context: ViewContext): Situat
   const library = record.librarySnapshot;
   if (library?.formatVersion === 2) {
     const statuses = context.evidence ? cardStatuses({ library, evidence: context.evidence, maxTurns: context.maxTurns }) : undefined;
-    return [...library.cards].sort((a, b) => a.number - b.number).map(card => cardSituation(library, card, statuses?.get(card.id), context.numbers));
+    return [...library.cards].sort((a, b) => a.number - b.number).map(card => cardSituation(library, card, statuses?.get(card.id), context.numbers, context.maxTurns));
   }
   if (library?.formatVersion === 1) return orderedVariants(library).map((variant, index) => projectV1Variant(library, variant, index + 1));
   return record.scenarios.map((scenario, index) => scenarioView(record, scenario, index + 1));

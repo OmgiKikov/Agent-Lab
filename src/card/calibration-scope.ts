@@ -28,7 +28,8 @@ const inDialogue = (event: EventRef, origin: { batchId: string; dialogueId: stri
  * Why a card's situation is not the situation of its log; undefined when it is: a card of a dialogue whose first
  * message, turn and every fact come from that dialogue, and whose account of the later messages holds no change.
  * A similar card, one added by the owner or written from the rules has no log of its own; a card of a dialogue
- * that the owner changed stands for another situation now.
+ * that the owner changed stands for another situation now — and so does one whose customer holds a plausible fact,
+ * confirmed or not: it is in no message of the log, so the synthetic customer knows more than the logged one did.
  */
 export function cardExclusion(card: Card): Exclusion | undefined {
   const { origin } = card;

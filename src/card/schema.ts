@@ -25,8 +25,16 @@ export const disclosureSchema = z.enum(['initial', 'on_request', 'unknown']);
 const dialogueSource = z.strictObject({ kind: z.literal('dialogue'), event: eventRefSchema });
 const ownerSource = z.strictObject({ kind: z.literal('owner'), receiptId: id });
 
-/** Who vouches for a fact: a message of the source dialogue, an owner decision, or no one yet. */
-const factSourceSchema = z.discriminatedUnion('kind', [dialogueSource, ownerSource, z.strictObject({ kind: z.literal('unconfirmed') })]);
+/**
+ * A plausible profile fact: written in no message of the log — what this customer would plausibly know about their
+ * own business (the kind of equipment, the stage of an application, the kind of account, the channel). Never a
+ * secret or a value the agent must look up. The owner decides it by its label for every card at once
+ * (`decide_plausible`); `receiptId` names that decision, and until it exists the card waits for the owner.
+ */
+const plausibleSource = z.strictObject({ kind: z.literal('plausible'), receiptId: id.optional() });
+
+/** Who vouches for a fact: a message of the source dialogue, an owner decision, the owner's word on a plausible fact, or no one yet. */
+const factSourceSchema = z.discriminatedUnion('kind', [dialogueSource, ownerSource, z.strictObject({ kind: z.literal('unconfirmed') }), plausibleSource]);
 
 const factSchema = z.strictObject({
   id,                                                     // f1…; never reused within a card
@@ -118,6 +126,10 @@ export const cardCommandSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('answer_question'), cardId: id, questionId: hash, choice: z.enum(['a', 'b', 'c']), text: text(1000).optional() }),
   z.strictObject({ kind: z.literal('add_similar'), parentId: id, change: similarChangeSchema, title: text(160).optional() }),
   z.strictObject({ kind: z.literal('remove_card'), cardId: id }),
+  // The owner's one word on a plausible fact's label for the whole draft: `known` keeps every listed fact (the customer
+  // names it when asked), otherwise every one is removed. The facts are listed so the receipt says exactly what it decided.
+  z.strictObject({ kind: z.literal('decide_plausible'), label: text(120), known: z.boolean(),
+    facts: z.array(z.strictObject({ cardId: id, factId: id })).min(1).max(200) }),
 ]);
 export type CardCommand = z.infer<typeof cardCommandSchema>;
 

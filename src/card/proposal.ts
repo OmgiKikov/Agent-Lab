@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { fingerprint, type Requirement, type Source } from '../contracts.js';
 import { text } from '../ids.js';
-import { cardFindings, type CardEvidence, type CheckFinding, type LoggedMessage } from './checks.js';
+import { cardFindings, PLAUSIBLE_VALUE_WORDS, type CardEvidence, type CheckFinding, type LoggedMessage } from './checks.js';
 import { cardSchema, disclosureSchema, turnSchema, type Card } from './schema.js';
 
 /*
@@ -40,6 +40,10 @@ export function proposalCall(input: { source: ProposalCall['source']; messages: 
     requirementIds: [first, ...rest], observations: ['reply', ...(input.confirmedObservations ?? [])], maxTurns: input.maxTurns };
 }
 
+/** Plausible profile facts one card may add, and the card's facts in all: the brief stays one screen. */
+export const PLAUSIBLE_LIMIT = 4;
+export const KNOWS_LIMIT = 8;
+
 const coverageAnswer = z.strictObject({ as: z.enum(['fact', 'turn', 'stop', 'ignored']), reason: text(200).nullable() });
 
 function expectationProposal(call: ProposalCall) {
@@ -54,7 +58,10 @@ function dialogueProposalSchema(call: ProposalCall) {
     title: text(160), topic: text(120), wants: text(300),
     writesEvent: message,
     knows: z.array(z.strictObject({ label: text(120), value: z.union([text(120), z.number(), z.boolean()]).nullable(), disclosure: disclosureSchema,
-      from: message.nullable(), askedAs: text(200).nullable() })).max(8),
+      from: message.nullable(), askedAs: text(200).nullable() })).max(KNOWS_LIMIT),
+    // Kept apart from `knows`: a plausible fact points at no message and is always named on request, so its binding
+    // has no `from` and no disclosure to get wrong; a value is text or yes/no, never a number.
+    plausibleKnows: z.array(z.strictObject({ label: text(120), value: z.union([text(120), z.boolean()]).nullable(), askedAs: text(200).nullable() })).max(PLAUSIBLE_LIMIT),
     leaves: text(300),
     turn: call.laterEvents.length ? z.strictObject({ kind: turnSchema.shape.kind, after: text(300), from: z.literal(call.laterEvents) }).nullable() : z.null(),
     agentMust: z.array(expectationProposal(call)).min(1).max(3),
@@ -85,15 +92,23 @@ export const proposalBounds = (call: ProposalCall) => {
 
 const said = (call: ProposalCall, index: number): string => call.messages.find(message => message.index === index)?.content ?? '';
 
+/** What a card's id digests: a proposal without plausible facts reads as one written before they existed, so the same answer is the same card. */
+function proposalIdentity(proposal: CardProposal): object {
+  if (!('plausibleKnows' in proposal) || proposal.plausibleKnows.length) return proposal;
+  const { plausibleKnows: _none, ...earlier } = proposal;
+  return earlier;
+}
+
 /**
  * The card a proposal stands for: ids e1…, f1…; the opening and the turn copied from their messages; a fact with
- * no message behind it `unconfirmed` (the owner is asked); the account of every later customer message but the
+ * no message behind it `unconfirmed` (the owner is asked); the plausible profile facts after the logged ones, named on
+ * request and `plausible` until the owner decides their label; the account of every later customer message but the
  * opening itself. The id is a digest of the source and the proposal; the number is the library's next one.
  */
 export function bindProposal(proposal: CardProposal, call: ProposalCall, number: number): Card {
   const agentMust = proposal.agentMust.map((item, index) => ({ id: `e${index + 1}`, text: item.text, requirementIds: [...new Set(item.requirementIds)],
     ...(item.appliesWhen !== null ? { appliesWhen: item.appliesWhen } : {}), observation: item.observation }));
-  const common = { id: `card_${fingerprint({ source: call.source, proposal })}`, number, title: proposal.title, topic: proposal.topic, agentMust, revision: 1 };
+  const common = { id: `card_${fingerprint({ source: call.source, proposal: proposalIdentity(proposal) })}`, number, title: proposal.title, topic: proposal.topic, agentMust, revision: 1 };
   if ('writes' in proposal) {
     if (call.source.kind !== 'rules') throw new Error('Предложение без реплик клиента пришло на диалог.');
     return cardSchema.parse({ ...common, origin: { kind: 'rules', requirementIds: [...new Set(agentMust.flatMap(item => item.requirementIds))] },
@@ -102,9 +117,12 @@ export function bindProposal(proposal: CardProposal, call: ProposalCall, number:
   if (call.source.kind !== 'dialogue') throw new Error('Предложение по диалогу пришло на ситуацию из правил.');
   const { batchId, dialogueId } = call.source;
   const event = (eventIndex: number) => ({ batchId, dialogueId, eventIndex });
-  const knows = proposal.knows.map((fact, index) => ({ id: `f${index + 1}`, label: fact.label, ...(fact.value !== null ? { value: fact.value } : {}),
+  const logged = proposal.knows.map((fact, index) => ({ id: `f${index + 1}`, label: fact.label, ...(fact.value !== null ? { value: fact.value } : {}),
     disclosure: fact.disclosure, ...(fact.askedAs !== null ? { askedAs: fact.askedAs } : {}),
     source: fact.from === null ? { kind: 'unconfirmed' } : { kind: 'dialogue', event: event(fact.from) } }));
+  const plausible = proposal.plausibleKnows.map((fact, index) => ({ id: `f${logged.length + index + 1}`, label: fact.label, ...(fact.value !== null ? { value: fact.value } : {}),
+    disclosure: 'on_request', ...(fact.askedAs !== null ? { askedAs: fact.askedAs } : {}), source: { kind: 'plausible' } }));
+  const knows = [...logged, ...plausible];
   const turn = proposal.turn && { kind: proposal.turn.kind, after: proposal.turn.after, says: said(call, proposal.turn.from),
     source: { kind: 'dialogue', event: event(proposal.turn.from) } };
   const coverage = call.laterEvents.filter(index => index !== proposal.writesEvent).map(index => {
@@ -125,6 +143,7 @@ const callEvidence = (call: ProposalCall): CardEvidence => ({
 /** What the binding itself cannot hold: a message too long for its field, an ignored message without a reason. */
 function bindingSlips(proposal: DialogueProposal, call: ProposalCall): string[] {
   const slips: string[] = [];
+  if (proposal.knows.length + proposal.plausibleKnows.length > KNOWS_LIMIT) slips.push(`knows and plausibleKnows hold ${proposal.knows.length + proposal.plausibleKnows.length} facts together; at most ${KNOWS_LIMIT}: drop the least useful plausible ones.`);
   if (said(call, proposal.writesEvent).trim().length > 3000) slips.push(`Customer message ${proposal.writesEvent} is longer than 3000 characters and cannot be the opening: choose another writesEvent.`);
   if (proposal.turn && said(call, proposal.turn.from).trim().length > 1000) slips.push(`Customer message ${proposal.turn.from} is longer than 1000 characters and cannot be the turn: set "turn" to null or choose another message.`);
   for (const index of call.laterEvents) {
@@ -137,10 +156,13 @@ function bindingSlips(proposal: DialogueProposal, call: ProposalCall): string[] 
 /** A finding in the words of the proposal the model wrote: its fields, indexes and message numbers. */
 function repairText(finding: CheckFinding, card: Card, call: ProposalCall): string {
   const opening = card.client.writesSource.kind === 'dialogue' ? card.client.writesSource.event.eventIndex : undefined;
+  // Plausible facts are bound after the logged ones, so a card's fact index past `knows` is its place in `plausibleKnows`.
+  const logged = card.client.knows.filter(item => item.source.kind !== 'plausible').length;
   const fact = (factId: string) => {
     const index = card.client.knows.findIndex(item => item.id === factId);
     const item = card.client.knows[index]!;
-    return { name: `knows[${index}] "${item.label}"`, value: JSON.stringify(item.value), from: item.source.kind === 'dialogue' ? item.source.event.eventIndex : null };
+    const name = index < logged ? `knows[${index}] "${item.label}"` : `plausibleKnows[${index - logged}] "${item.label}"`;
+    return { name, value: JSON.stringify(item.value), from: item.source.kind === 'dialogue' ? item.source.event.eventIndex : null };
   };
   switch (finding.check) {
     case 'fact-from-event': {
@@ -155,6 +177,10 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
     case 'unknown-never-said': {
       const { name, value } = fact(finding.factId);
       return `${name} is "unknown", yet its value ${value} appears in ${finding.where === 'turn' ? 'the turn message' : '"leaves"'}: the customer never says a value they do not know.`;
+    }
+    case 'plausible-value': {
+      const { name, value } = fact(finding.factId);
+      return `${name}: the value ${value} is a number, a code or a long text. A plausible fact is a quality the customer knows about their own business, from a small closed set of at most ${PLAUSIBLE_VALUE_WORDS} words without digits ("POS-терминал", "заявка подана", true), or null; never a number, an amount, a date or an identifier the agent must look up.`;
     }
     case 'coverage-refs': {
       const key = `coverage["${finding.eventIndex}"]`;

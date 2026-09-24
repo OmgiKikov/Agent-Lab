@@ -56,6 +56,22 @@ type Fact = Card['client']['knows'][number];
 export const quotable = (value: Fact['value']): value is string | number => typeof value === 'string' || typeof value === 'number';
 const sameEvent = (a: EventRef, b: EventRef): boolean => a.batchId === b.batchId && a.dialogueId === b.dialogueId && a.eventIndex === b.eventIndex;
 
+/** The longest value a plausible fact may carry: a word or a short phrase from a small closed set («POS-терминал», «заявка подана»). */
+export const PLAUSIBLE_VALUE_WORDS = 4;
+
+/**
+ * Whether a plausible fact's value has the shape of a quality rather than a record: yes/no, or a short phrase with no
+ * digit in it. A number, a code, an amount or a date is a value the agent looks up, and no log vouches for it, so a
+ * customer who «knows» one would be invented data. The rule reads the value's shape (its characters and its words
+ * after the one normalisation), never its meaning.
+ */
+export function plausibleShape(value: Fact['value']): boolean {
+  if (value === undefined || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return false;
+  const normal = normalizeText(value);
+  return normal.length > 0 && normal.split(' ').length <= PLAUSIBLE_VALUE_WORDS && ![...normal].some(char => char >= '0' && char <= '9');
+}
+
 /** Why a card's account of the later customer messages does not add up. */
 export type CoverageProblem = 'no_fact' | 'no_turn' | 'turn_uncovered' | 'second_stop' | 'ignored_source' | 'before_opening';
 
@@ -68,6 +84,8 @@ export type CheckFinding =
   | { check: 'hidden-not-in-opening'; factId: string }
   /** A value the customer does not know is in their later words. */
   | { check: 'unknown-never-said'; factId: string; where: 'turn' | 'leaves' }
+  /** A plausible fact carries a number, a code or a long text: a value only a record could vouch for. */
+  | { check: 'plausible-value'; factId: string }
   | { check: 'coverage-refs'; eventIndex: number; problem: CoverageProblem }
   /** An expectation cites a rule that is not in the materials word for word. */
   | { check: 'requirements-grounded'; requirementId: string }
@@ -99,6 +117,7 @@ function factFindings(card: Card, evidence: CardEvidence): CheckFinding[] {
         : value === undefined || contains(writes, value);
       if (!said) found.push({ check: 'initial-in-opening', factId: fact.id });
     } else if (value !== undefined && contains(writes, value)) found.push({ check: 'hidden-not-in-opening', factId: fact.id });
+    if (source.kind === 'plausible' && !plausibleShape(fact.value)) found.push({ check: 'plausible-value', factId: fact.id });
     if (fact.disclosure === 'unknown' && value !== undefined) {
       if (turn && contains(turn.says, value)) found.push({ check: 'unknown-never-said', factId: fact.id, where: 'turn' });
       if (contains(leaves, value)) found.push({ check: 'unknown-never-said', factId: fact.id, where: 'leaves' });
@@ -148,7 +167,7 @@ function requirementFindings(card: Card, materials: NonNullable<CheckContext['ma
 function controllerFindings(card: Card, maxTurns: number): CheckFinding[] {
   let needed: number;
   try {
-    const { policy, facts } = compilePolicy(card);
+    const { policy, facts } = compilePolicy(card, maxTurns);
     needed = requiredUserTurns(policy, facts);
   } catch { return [{ check: 'controller-compiles', needed: null }]; } // the controller names what is wrong with a policy only by throwing
   return needed > maxTurns ? [{ check: 'controller-compiles', needed }] : [];
@@ -177,6 +196,7 @@ export function problemText(finding: CheckFinding, card: Card, requirements: rea
     case 'hidden-not-in-opening': return fact?.disclosure === 'unknown' ? `Клиент не знает «${label}», но это уже есть в первой реплике.`
       : `«${label}» клиент называет, только если спросят, но это уже есть в первой реплике.`;
     case 'unknown-never-said': return `Клиент не знает «${label}», но это звучит в его словах.`;
+    case 'plausible-value': return `«${label}» — правдоподобный факт, но в нём число или длинный текст: такое клиент знает только из записей, а их нет.`;
     case 'coverage-refs': return 'Поздние реплики клиента учтены с ошибкой.';
     case 'requirements-grounded': {
       const quote = requirements.find(item => item.id === finding.requirementId)?.quote;

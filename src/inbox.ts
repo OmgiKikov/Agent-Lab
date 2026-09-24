@@ -148,15 +148,25 @@ export function decisions(input: InboxInput): Decision[] {
     // A card set's questions stay decisions after a run of its ready situations: the answer goes into a fresh draft.
     const cards = draft.record.librarySnapshot?.formatVersion === 2;
     const editable = cards && draft.record.phase === 'review' && !draft.record.trials.length;
+    // A question several situations share (one word on a plausible fact's label) is one decision, named by all of them.
+    const sharing = new Map<string, number[]>();
+    for (const view of cards ? draft.views : []) if (view.format === 'card' && view.status === 'needs_owner' && view.question?.id) {
+      sharing.set(view.question.id, [...sharing.get(view.question.id) ?? [], view.number]);
+    }
+    const asked = new Set<string>();
     for (const view of cards ? draft.views : []) {
       if (view.format !== 'card') continue;
       if (view.status === 'unusable') measurement.push({ key: `unusable:${view.id}`, subject: subjectOf(view),
         text: oneLine(view.problems[0] ?? 'Ситуация не подходит для теста.'),
         choices: [{ label: 'Добавить правило', action: { kind: 'add_rule', situation: view.number }, settles: false },
           { label: 'Исключить из запуска', action: { kind: 'remove', cardId: view.id, situation: view.number }, settles: true }] });
-      else if (view.status === 'needs_owner' && view.question?.id && view.question.choices.length) questions.push({ key: questionKey(view.id, view.question.id), subject: subjectOf(view),
-        text: oneLine(view.question.text),
-        choices: view.question.choices.slice(0, 3).map(choice => ({ label: choice.label, action: { kind: 'answer', cardId: view.id, situation: view.number, choice }, settles: true })) });
+      else if (view.status === 'needs_owner' && view.question?.id && view.question.choices.length && !asked.has(view.question.id)) {
+        asked.add(view.question.id);
+        const numbers = sharing.get(view.question.id) ?? [];
+        questions.push({ key: questionKey(view.id, view.question.id), subject: numbers.length > 1 ? `Ситуации ${numbers.join(', ')}` : subjectOf(view),
+          text: oneLine(view.question.text),
+          choices: view.question.choices.slice(0, 3).map(choice => ({ label: choice.label, action: { kind: 'answer', cardId: view.id, situation: view.number, choice }, settles: true })) });
+      }
     }
     const checking = editable ? draft.views.filter(view => view.status === 'checking').length : 0;
     const left = Math.max(0, draft.record.settings.maxCalls - draft.record.usage.calls);

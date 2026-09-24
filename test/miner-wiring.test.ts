@@ -85,7 +85,7 @@ function minerRuntime(logged: readonly Logged[], options: { failTopicAt?: number
       if (source.kind === 'rules') return { title: `По правилам ${request.written.length + 1}`, topic: 'Вопросы клиентов', wants: 'Получить ответ',
         writes: request.written.length ? 'Подскажите, как у вас всё устроено?' : 'Подскажите, пожалуйста.', leaves: 'получил ответ', agentMust: must };
       const topic = request.topics[0] ?? 'Без темы';
-      return { title: `${topic} — ${source.dialogueId}`, topic, wants: 'Получить ответ на свой вопрос', writesEvent: request.call.customerEvents[0]!, knows: [],
+      return { title: `${topic} — ${source.dialogueId}`, topic, wants: 'Получить ответ на свой вопрос', writesEvent: request.call.customerEvents[0]!, knows: [], plausibleKnows: [],
         leaves: 'получил ответ или понял, что агент не поможет', turn: null, agentMust: must, coverage: {} };
     },
     async reviewCard(request, ctx) {

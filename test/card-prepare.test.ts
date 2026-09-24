@@ -61,7 +61,7 @@ test('from logs to the number: import → cards → review → acceptance → ru
     const definitions = accepted.library.acceptance!.definitions;
     assert.deepEqual(definitions.map(item => item.definitionHash), accepted.experiment.scenarios.map(scenario => fingerprint(scenario)));
     assert.deepEqual(accepted.experiment.acceptedTests!.map(item => item.definitionHash), definitions.map(item => item.definitionHash));
-    assert.equal(definitions[0]!.definitionHash, fingerprint(compileCard(library.cards[0]!, { requirements: library.requirements })), 'compiled once, at acceptance, by the card compiler');
+    assert.equal(definitions[0]!.definitionHash, fingerprint(compileCard(library.cards[0]!, { requirements: library.requirements, maxTurns: experiment.settings.maxTurns })), 'compiled once, at acceptance, by the card compiler');
     verifyAcceptedRun(accepted.experiment);
     await assert.rejects(lab.acceptCards(draft.id, libraryHash(library), [library.cards[0]!.id]), /хеш устарел/, 'an acceptance is made on the draft the owner saw');
 

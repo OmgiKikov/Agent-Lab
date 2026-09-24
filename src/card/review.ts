@@ -68,7 +68,8 @@ export function planClaims(card: Card, context: ReviewContext): Claim[] {
   };
   return [
     claim('goal', '', 'goal', { wants, writes, dialogue: dialogue ? { ...dialogue, messages: evidence.messages(dialogue.batchId, dialogue.dialogueId) ?? null } : null }),
-    ...knows.map(fact => claim('fact', fact.id, `fact_${fact.id}`, { fact, writes,
+    // The owner's word on a plausible fact's label vouches for it without changing what the reviewer checks: its receipt is not in the basis.
+    ...knows.map(fact => claim('fact', fact.id, `fact_${fact.id}`, { fact: fact.source.kind === 'plausible' ? { ...fact, source: { kind: 'plausible' } } : fact, writes,
       message: fact.source.kind === 'dialogue' ? said(fact.source.event) : null, owner: ownerReceipt(library, fact.source) ?? null })),
     // The duties are read with what the customer knows, not with who vouched for it: an owner's confirmation re-asks only its fact.
     ...card.agentMust.map(expectation => claim('expectation', expectation.id, `expectation_${expectation.id}`, { expectation, wants, writes,
@@ -102,7 +103,8 @@ function reviewedBrief(card: Card, library: LibraryV2) {
     knows: knows.map(fact => {
       const receipt = ownerReceipt(library, fact.source);
       return { id: fact.id, label: fact.label, value: fact.value ?? null, disclosure: fact.disclosure, askedAs: fact.askedAs ?? null,
-        from: from(fact.source), owner: receipt ? { confirmed: true, words: receipt.ownerWords ?? null } : null };
+        from: from(fact.source), owner: receipt ? { confirmed: true, words: receipt.ownerWords ?? null } : null,
+        ...(fact.source.kind === 'plausible' ? { plausible: true } : {}) };
     }),
     leaves, turn: turn ? { kind: turn.kind, after: turn.after, says: turn.says, from: from(turn.source) } : null,
     agentMust: card.agentMust.map(({ id, text, requirementIds, appliesWhen, observation }) => ({ id, text, requirementIds, appliesWhen: appliesWhen ?? null, observation })),
