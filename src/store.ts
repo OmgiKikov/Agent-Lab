@@ -15,6 +15,8 @@ import { LockedError } from './errors.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import type { ScenarioLibrary } from './card/schema.js';
 import { readTopicMapFile, writeTopicMapFile } from './miner/files.js';
+import { writeReadingFile } from './spreadsheet/files.js';
+import type { TableReading } from './spreadsheet/mapping.js';
 import type { TopicMap, TopicMapKey, TopicMapProgress } from './miner/topic-map.js';
 
 type LockOwner = { pid: number; token: string };
@@ -42,6 +44,14 @@ export class ExperimentStore {
   }
   readImport(id: string): Promise<ImportBatch> { return new ScenarioFiles(this.directory).readImport(id); }
   writeImport(batch: ImportBatch): Promise<ImportBatch> { return this.writeTransaction(() => new ScenarioFiles(this.directory).writeImport(batch)); }
+  /** A spreadsheet's import and the reading the owner confirmed for it, side by side (spreadsheet/files.ts). */
+  writeTableImport(batch: ImportBatch, reading: TableReading): Promise<ImportBatch> {
+    return this.writeTransaction(async () => {
+      const stored = await new ScenarioFiles(this.directory).writeImport(batch);
+      await writeReadingFile(this.directory, stored.id, stored.contentHash, reading);
+      return stored;
+    });
+  }
   /** The topic map of an import stored under `key`, finished or still being built (miner/files.ts); undefined when there is none. */
   readTopicMap(key: TopicMapKey): Promise<unknown> { return readTopicMapFile(this.directory, key); }
   /** Stores a topic map, or the progress of its build, next to its import. */

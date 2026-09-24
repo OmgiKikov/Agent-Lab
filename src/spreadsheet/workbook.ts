@@ -33,12 +33,16 @@ export function tableFormat(path: string): TableFormat {
   throw new Error(other ? `Lab читает таблицы .xlsx и .csv; ${other} сохраните как .xlsx или .csv.` : `Файл «${basename(path)}» — не таблица: Lab читает таблицы .xlsx и .csv.`);
 }
 
+/** What identifies a table file: its name, size, format and the hash of its bytes. */
+export const tableFileOf = (path: string, bytes: Buffer): TableFile =>
+  ({ name: basename(path), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), format: tableFormat(path) });
+
 /** The file's bytes within the import limit, and what identifies them. */
 export async function readTableFile(path: string): Promise<{ file: TableFile; bytes: Buffer }> {
-  const format = tableFormat(path);
+  tableFormat(path);
   if ((await stat(path)).size > IMPORT_FILE_BYTES) throw new Error(`Файл больше ${IMPORT_FILE_BYTES / 1_000_000} МБ. Выгрузите меньший период или оставьте в таблице только нужные колонки.`);
   const bytes = await readFile(path);
-  return { file: { name: basename(path), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), format }, bytes };
+  return { file: tableFileOf(path, bytes), bytes };
 }
 
 /** The sheets of a workbook; a CSV file is one sheet named after the file. A confirmed CSV dialect is used as given. */

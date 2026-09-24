@@ -1,0 +1,73 @@
+import { countText } from '../plural.js';
+import type { ImportBatch } from '../scenario-contracts.js';
+import type { TablePreview } from './dialogues.js';
+import { ROLE_WORDS, columnLabel, type TableMapping } from './mapping.js';
+import type { TableProposal, TableQuestion } from './proposal.js';
+
+/*
+ * The proposal in the owner's words: how Lab will read the table and what comes out, in counts — never
+ * a word of the conversations themselves. Markers and role values are the export's structure, not its
+ * content, and the owner needs to see them to confirm them. The caller makes every line safe to print.
+ */
+
+const CONVERSATIONS: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
+const ROWS: [string, string, string] = ['строка', 'строки', 'строк'];
+const MESSAGES: [string, string, string] = ['сообщение', 'сообщения', 'сообщений'];
+const ENCODING_NAMES = { 'utf-8': 'UTF-8', 'utf-16le': 'UTF-16', 'windows-1251': 'Windows-1251' } as const;
+const quoted = (text: string) => `«${text}»`;
+const shown = (separator: string) => separator === '\n' ? 'переносом строки' : separator === '\t' ? 'табуляцией' : `знаком ${quoted(separator.trim() || separator)}`;
+const delimiterName = (delimiter: string) => delimiter === '\t' ? 'табуляция' : quoted(delimiter);
+
+/** The first line: which file, which sheet, how big. */
+function headLine(proposal: TableProposal): string {
+  const where = proposal.csv ? `разделитель ${delimiterName(proposal.csv.delimiter)} · ${ENCODING_NAMES[proposal.csv.encoding]}` : `лист ${quoted(proposal.sheet)}`;
+  const rows = proposal.status === 'ready' ? proposal.preview.rows : undefined;
+  return [`Таблица ${proposal.file.name}`, where, ...rows === undefined ? [] : [countText(rows, ROWS)]].join(' · ');
+}
+
+/** The question in one sentence, with the answers the owner can give. */
+export function questionText(question: TableQuestion, found: number): string {
+  switch (question.kind) {
+    case 'text': return `Lab не нашёл разговоров: в какой колонке их текст? Колонки: ${question.columns.map(column => quoted(columnLabel(column))).join(', ')}.`;
+    case 'id': return `${found ? `Lab видит ${countText(found, CONVERSATIONS)}. ` : ''}В какой колонке id разговора? Подходят: ${question.columns.map(column => quoted(columnLabel(column))).join(', ')}.`;
+    case 'marker': return `Lab видит ${countText(found, CONVERSATIONS)}, но не знает, кто пишет сообщения с меткой ${question.token} в колонке ${quoted(columnLabel(question.column))} (${countText(question.messages, MESSAGES)}): клиент, агент, служебное — или это не метка, а слово в тексте?`;
+    case 'role': return `Lab видит ${countText(found, CONVERSATIONS)}, но не знает, кто пишет сообщения со значением ${quoted(question.value)} в колонке ${quoted(columnLabel(question.column))} (${countText(question.messages, MESSAGES)}): клиент, агент или служебное?`;
+  }
+}
+
+/** How the mapping reads the table, one line per choice. */
+function readingLines(mapping: TableMapping, preview: TablePreview): string[] {
+  const layout = mapping.layout;
+  const counted = (label: string) => countText(preview.messages.find(item => item.label === label)?.count ?? 0, MESSAGES);
+  const lines = layout.kind === 'dialogue_per_row'
+    ? [`  Один разговор — одна строка; id разговора — колонка ${quoted(columnLabel(mapping.id))}.`,
+      `  Текст — колонка ${quoted(columnLabel(mapping.text))}: сообщения отделены ${shown(layout.separator)}, каждое начинается с метки:`,
+      ...layout.markers.map(marker => `    ${marker.token} — ${ROLE_WORDS[marker.role]} · ${counted(marker.token)}`)]
+    : [`  Одно сообщение — одна строка; id разговора — колонка ${quoted(columnLabel(mapping.id))}.`,
+      `  Кто пишет — колонка ${quoted(columnLabel(layout.role))}:`,
+      ...layout.roles.map(item => `    ${quoted(item.value)} — ${ROLE_WORDS[item.role]} · ${counted(item.value)}`),
+      `  Текст — колонка ${quoted(columnLabel(mapping.text))}; порядок сообщений — ${layout.order ? `по колонке ${quoted(columnLabel(layout.order))}` : 'как строки в таблице'}.`];
+  if (preview.kept.length) lines.push(`  Колонки ${preview.kept.map(quoted).join(', ')} Lab сохранит при разговорах как есть; в оценке они не участвуют.`);
+  return lines;
+}
+
+/** What the import will hold: how many conversations, why the rest do not fit, and the sample when there are more than one import takes. */
+function outcomeLines(preview: TablePreview): string[] {
+  const rejected = preview.dialogues - preview.usable;
+  const reasons = preview.rejected.slice(0, 4).map(item => `${item.reason.charAt(0).toLowerCase()}${item.reason.slice(1)} — ${item.count}`);
+  const lines = [`  ${countText(preview.dialogues, CONVERSATIONS)}: подходят ${preview.usable}${rejected ? `, не подошли ${rejected} (${reasons.join(' · ')}${preview.rejected.length > 4 ? ' · …' : ''})` : ''}.`];
+  if (preview.taken < preview.usable) lines.push(`  В одну загрузку входит ${countText(preview.taken, CONVERSATIONS)}: Lab возьмёт ${preview.taken} из ${preview.usable} подходящих — по хешу содержимого, без отбора по исходу.`);
+  return lines;
+}
+
+/** The whole proposal as the terminal shows it; the caller adds how to answer. */
+export function proposalLines(proposal: TableProposal): string[] {
+  if (proposal.status === 'refused') return [headLine(proposal), '', proposal.reason];
+  if (proposal.status === 'question') return [headLine(proposal), '', questionText(proposal.question, proposal.found)];
+  return [headLine(proposal), '', 'Как Lab прочитает таблицу', ...readingLines(proposal.mapping, proposal.preview), '', 'Что получится', ...outcomeLines(proposal.preview)];
+}
+
+/** After the owner confirmed: what was stored. */
+export function importedLine(batch: ImportBatch): string {
+  return `Загружено: ${countText(batch.dialogues.length, CONVERSATIONS)}. Lab запомнил, как читать эту таблицу: тот же файл даст те же разговоры.`;
+}

@@ -34,8 +34,12 @@ function scalarValues(value: unknown): string[] {
   return typeof value === 'string' || typeof value === 'number' ? [String(value)] : [];
 }
 
-/** No inference: ingest source evidence verbatim and give every retained event a stable index. */
-export function importBatch(raw: unknown): ImportBatch {
+/**
+ * No inference: ingest source evidence verbatim and give every retained event a stable index.
+ * `known` holds reasons a reader of another format already found for rows (by index): a spreadsheet row
+ * whose text has no role marker. Such a row is refused with its reason and its events are not read.
+ */
+export function importBatch(raw: unknown, known: ReadonlyMap<number, string> = new Map()): ImportBatch {
   const serialized = JSON.stringify(raw);
   if (!serialized || serialized.length > 12_000_000) throw new Error('Импорт пуст или превышает 12000000 символов');
   const parsed = z.json().parse(raw);
@@ -55,7 +59,9 @@ export function importBatch(raw: unknown): ImportBatch {
     const rich = record(row) && Array.isArray(row.events);
     const events = record(row) ? (rich ? row.events : row.messages) : undefined;
     const retained: ImportBatch['dialogues'][number]['events'] = [];
-    if (!Array.isArray(events) || events.length === 0 || events.length > (rich ? 120 : 60)) reasons.push('Пустые события или превышен лимит событий');
+    const issue = known.get(index);
+    if (issue !== undefined) reasons.push(issue);
+    else if (!Array.isArray(events) || events.length === 0 || events.length > (rich ? 120 : 60)) reasons.push('Пустые события или превышен лимит событий');
     else events.forEach((event, eventIndex) => {
       if (!record(event)) { reasons.push(`Событие ${eventIndex}: ожидается объект`); return; }
       const type = rich ? event.type : 'message';
@@ -66,7 +72,7 @@ export function importBatch(raw: unknown): ImportBatch {
       else retained.push(validated.data);
     });
     const userEvents = retained.filter(event => event.type === 'message' && event.role === 'user');
-    if (!userEvents.length) reasons.push('Нет пользовательских реплик');
+    if (!userEvents.length && issue === undefined) reasons.push('Нет пользовательских реплик');
     if (userEvents.length && userEvents.every(event => /^(?:\s|\*|x|х|\[(?:redacted|masked|скрыто|удалено)\]|<[^>]+>)+$/i.test(event.content ?? ''))) reasons.push('Пользовательские реплики полностью замаскированы');
     const observation = record(row) ? row.observation ?? (rich ? 'unknown' : 'partial') : 'unknown';
     if (!['complete', 'partial', 'unknown'].includes(String(observation))) reasons.push('Некорректная полнота наблюдения');
