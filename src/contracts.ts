@@ -330,6 +330,12 @@ export interface Trial {
   invalidCause?: InvalidCause;
   /** Why the judge left the attempt without a judgment, typed where it failed. Records written before it carry only `assessmentError`. */
   assessmentFailure?: AssessmentFailure;
+  /**
+   * The edition of the counting rules this attempt is read by (card/expectations.ts COUNTING_VERSION), written when a
+   * run or a re-assessment records it. Absent in attempts recorded before editions existed: they keep edition 1, so a
+   * stored result never moves.
+   */
+  countingVersion?: 2;
 }
 /** Where a dialogue broke: the turn budget ran out, the simulated client failed, the agent or its connection failed, or a service text stood in for the agent's reply. */
 export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply'] as const;
@@ -480,6 +486,7 @@ export const trialSchema = z.strictObject({
   judgeReceipt: judgeReceiptSchema.optional(),
   invalidCause: z.enum(INVALID_CAUSES).optional(),
   assessmentFailure: z.enum(ASSESSMENT_FAILURES).optional(),
+  countingVersion: z.literal(2).optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),

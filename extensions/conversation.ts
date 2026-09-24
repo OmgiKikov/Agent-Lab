@@ -2,6 +2,7 @@ import type { Experiment, Trial } from '../src/contracts.js';
 import { assessmentRubrics } from '../src/assessment.js';
 import type { RunComparison } from '../src/comparison.js';
 import { plannedTrials } from '../src/run.js';
+import { headlineRule, recordedExpectationResult, type Expectation } from '../src/card/expectations.js';
 import { judgedScenario } from '../src/card/legacy-v1.js';
 import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
@@ -157,13 +158,27 @@ export function turnRows(trial: Trial, indent = 0): Row[] {
     .map(event => ({ text: `${(event.type === 'user' ? 'Клиент' : 'Агент').padEnd(9)}${oneLine(event.text)}`, indent, hang: indent + 9 }));
 }
 
-/** How a conversation was judged, the tools it called and the owner's marks: what ctrl+o opens under a conversation. */
+/** Why a verdict the judge gave does not stand: its evidence channel does not support it, in the owner's words. */
+const CHANNEL_GAP: Record<Expectation['observation'], string> = {
+  reply: 'нет подтверждения в ответе агента', tool: 'нет подтверждения в журнале инструментов', state: 'нет подтверждения в состоянии системы',
+};
+
+/**
+ * How a conversation was judged, the tools it called and the owner's marks: what ctrl+o opens under a conversation.
+ * An expectation shows its verdict read through its evidence channel — the one the result counts — and says so
+ * when that reading undid the judge's own word; the judge's reason stays beneath it.
+ */
 function judgedRows(record: Experiment, trial: Trial): Row[] {
   const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
   const metrics = scenario ? judgedScenario(scenario, trial).metrics ?? [] : [];
+  const rule = headlineRule(scenario, [trial]);
+  const counted = new Map(rule.kind === 'expectations' ? rule.expectations.map(expectation => [expectation.id, expectation]) : []);
   const judged = metrics.flatMap(metric => {
     const assessment = trial.assessments?.find(item => item.metricId === metric.id);
-    return [row(`${metric.name}: ${assessment ? OUTCOME_WORD[assessment.result] ?? assessment.result : 'оценки нет'}`, assessment?.result === 'fail' ? 'error' : assessment?.result === 'pass' ? 'success' : 'warning'),
+    const expectation = counted.get(metric.id);
+    const result = expectation ? recordedExpectationResult(trial, expectation) : assessment?.result;
+    const gap = assessment && expectation && assessment.result !== 'unknown' && result === 'unknown' ? ` — ${CHANNEL_GAP[expectation.observation]}` : '';
+    return [row(`${metric.name}: ${result ? `${OUTCOME_WORD[result] ?? result}${gap}` : 'оценки нет'}`, result === 'fail' ? 'error' : result === 'pass' ? 'success' : 'warning'),
       ...(assessment && judgeReason(assessment.rationale) ? [{ ...row(judgeReason(assessment.rationale), 'muted', false, 2) }] : [])];
   });
   const checks = trial.checks.map(check => row(`${check.passed ? 'выполнено' : 'не выполнено'}: ${check.description}`, check.passed ? 'success' : 'error'));

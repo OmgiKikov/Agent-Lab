@@ -298,7 +298,9 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     goal: item.goal, rules: item.rules, parts: item.parts, control: item.control, flaky: item.flaky, unstable: unstableIds.has(item.scenario.id), provenance: item.scenario.provenance,
   }));
   const counted = cards.filter(card => !card.control);
-  const countingRules = [...new Set(run.situations.filter(item => !item.control)
+  // A situation without an attempt is counted by no rule yet; only when nothing has run do the rules it will be counted by stand in.
+  const ruled = run.situations.filter(item => !item.control);
+  const countingRules = [...new Set((ruled.some(item => item.attempts.length) ? ruled.filter(item => item.attempts.length) : ruled)
     .map(item => countingRuleOf(item.scenario, headlineRule(item.scenario, item.attempts.map(attempt => attempt.trial)))))].join(', ') || COUNTING_RULES;
   const failures = counted.filter(card => card.outcome === 'fail')
     .flatMap(card => failureExplanation(record, run.situation(card.scenarioId)!.scenario) ?? []);

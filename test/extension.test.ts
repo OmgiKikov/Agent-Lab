@@ -401,7 +401,7 @@ test('the workspace and the chat share one project: a request, a question about 
     const markedCard = reviewed.scenarios.find(card => card.id === trial.scenarioId)!;
     assert.deepEqual(reviewed.humanReviews.map(each => each.metricId), markTargets(markedCard, trial)!.metricIds);
     for (const each of reviewed.humanReviews) {
-      assert.deepEqual([each.source, each.countingRules, each.note], ['quick', 'all-expectations-v1', 'Быстрая отметка: согласен с судьёй.']);
+      assert.deepEqual([each.source, each.countingRules, each.note], ['quick', 'all-expectations-v2', 'Быстрая отметка: согласен с судьёй.']);
       assert.equal(each.verdict, trial.assessments!.find(assessment => assessment.metricId === each.metricId)!.result);
     }
     // The fix is a new version of the agent: the owner names how to start it, and «запусти» runs the same set again.
