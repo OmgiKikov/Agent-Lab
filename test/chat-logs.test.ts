@@ -63,7 +63,7 @@ test('the table question is numbered answers the owner picks; each answer adds i
 test('«Какие разговоры оценивать?» is numbered answers too: each value of the chosen column, labelled as the preview counts it', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'agent-lab-answers-'));
   try {
-    const agents = ["['ACQUIRING_AGENT']", "['ACQUIRING_AGENT', 'AGENT_GIGACHAT']"];
+    const agents = ["['SUPPORT_AGENT']", "['SUPPORT_AGENT', 'AGENT_GIGACHAT']"];
     const rows: CellSpec[][] = [[...refundRows[0]!, 'agentCode'], ...refundRows.slice(1).map((row, i): CellSpec[] => [...row, agents[i % 2]!])];
     await writeFile(join(cwd, 'logs.xlsx'), xlsxFile([{ name: 'Данные', rows }]));
     const asked = await proposeTableImport(join(cwd, 'logs.xlsx'), { where: { column: 'agentCode' } });
@@ -100,7 +100,7 @@ test('a spreadsheet in the chat: Lab\'s question is one native numbered choice, 
 
 test('«Какие разговоры оценивать?» from the chat: the model names the column the owner meant, the host asks for the values natively, and only the owner confirms the reading', async t => {
   const cwd = await folder(t);
-  const agents = ["['ACQUIRING_AGENT']", "['ACQUIRING_AGENT', 'AGENT_GIGACHAT']"];
+  const agents = ["['SUPPORT_AGENT']", "['SUPPORT_AGENT', 'AGENT_GIGACHAT']"];
   const rows: CellSpec[][] = [[...refundRows[0]!, 'agentCode'], ...refundRows.slice(1).map((row, i): CellSpec[] => [...row, agents[i % 2]!])];
   await writeFile(join(cwd, 'export.xlsx'), xlsxFile([{ name: 'Данные', rows }]));
   const question = await proposeTableImport(join(cwd, 'export.xlsx'), { where: { column: 'agentCode' } });

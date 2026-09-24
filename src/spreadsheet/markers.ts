@@ -5,7 +5,7 @@
  * only ever where both meet — a separator followed by a confirmed marker — and a marker word inside a
  * message, or a separator inside a message not followed by a marker, stays text of that message. Other
  * exports only join the messages with spaces: a message then starts at every confirmed marker that opens
- * the text or follows a space, as a whole word — the AGENT of ACQUIRING_AGENT starts nothing.
+ * the text or follows a space, as a whole word — the AGENT of SUPPORT_AGENT starts nothing.
  *
  * Detection only proposes, and it compares readings: each character that stands before the markers taken
  * as the separator, and the markers alone. A reading is plausible when both sides of a conversation are in
@@ -143,7 +143,7 @@ export interface CandidateToken { token: string; occurrences: number; texts: num
 /**
  * The words a column's texts could mark messages with, for Lab's model to choose from: every uppercase word (CLIENT,
  * AGENT, БОТ) and every «Клиент:» label — a word right before a colon, the colon included — that starts at a word
- * boundary: the text's start, or after any character that is not part of a word, so the AGENT of ACQUIRING_AGENT is
+ * boundary: the text's start, or after any character that is not part of a word, so the AGENT of SUPPORT_AGENT is
  * none. Only words standing in two texts or more: structure repeats, a one-off word is content. The most frequent
  * first, at most `limit`.
  */

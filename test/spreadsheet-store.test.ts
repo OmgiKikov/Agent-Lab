@@ -167,7 +167,7 @@ test('agent-lab import shows the proposal in counts, answers questions through f
 });
 
 /** Conversations answered by one agent alone and by two: the export lists the agents in one cell, as written. */
-const SINGLE = "['ACQUIRING_AGENT']", PAIR = "['ACQUIRING_AGENT', 'AGENT_GIGACHAT']";
+const SINGLE = "['SUPPORT_AGENT']", PAIR = "['SUPPORT_AGENT', 'AGENT_GIGACHAT']";
 const agents = (): CellSpec[][] => [['Id диалога', 'Текст', 'agentCode'], ...Array.from({ length: 12 }, (_, k): CellSpec[] => [`d${k + 1}`, conversation(k + 1), (k + 1) % 3 ? SINGLE : PAIR])];
 
 test('the owner\'s choice of conversations is stored with the reading: the same file reads back to the same chosen conversations', async t => {
@@ -201,7 +201,7 @@ test('agent-lab import --where asks which values to keep, refuses a column that 
   assert.equal(asked.code, 1, 'a question is not a confirmation');
   const lines = asked.stdout.split('\n');
   for (const line of ['Какие разговоры оценивать? Lab видит 12 разговоров; в колонке «agentCode» у них 2 разных значения — выберите одно или несколько.',
-    "  1. «['ACQUIRING_AGENT']» — 8 разговоров", "  2. «['ACQUIRING_AGENT', 'AGENT_GIGACHAT']» — 4 разговора",
+    "  1. «['SUPPORT_AGENT']» — 8 разговоров", "  2. «['SUPPORT_AGENT', 'AGENT_GIGACHAT']» — 4 разговора",
     `Ответ: та же команда с --where "agentCode=${SINGLE}" — значение как написано в таблице; несколько — через |. Все разговоры — без --where.`]) assert.ok(lines.includes(line), `${line}\n---\n${asked.stdout}`);
   await assert.rejects(readdir(data), { code: 'ENOENT' }, 'nothing is written before a complete proposal is confirmed');
 

@@ -34,8 +34,8 @@ function conversation(i: number): string {
   const client = i % 3 === 0 ? `CLIENT Я ИП, пришло SMS с кодом ${i}` : `CLIENT Здравствуйте, вопрос ${i}`;
   return spoken(client, 'AGENT Добрый день! Чем помочь?', `CLIENT Нужен возврат по заказу ${i}`, 'AGENT Оформил возврат, деньги придут за 5 дней');
 }
-const SINGLE = "['ACQUIRING_AGENT']";
-const AGENTS = [SINGLE, "['ACQUIRING_AGENT', 'AGENT_GIGACHAT']", "['SERVICE_PACK_ADVISOR']"];
+const SINGLE = "['SUPPORT_AGENT']";
+const AGENTS = [SINGLE, "['SUPPORT_AGENT', 'AGENT_GIGACHAT']", "['SERVICE_PACK_ADVISOR']"];
 const ROWS: CellSpec[][] = [['Id диалога', 'Дата', 'Текст', 'agentCode'], ...Array.from({ length: 40 }, (_, k): CellSpec[] => [idOf(k + 1), '09.09.2026', conversation(k + 1), AGENTS[k % 3]!])];
 /** Words of the conversations: none may reach the model's answer or the owner's preview. */
 const SAID = ['Здравствуйте', 'возврат', 'терминала', 'Обращайтесь'];

@@ -20,7 +20,7 @@ const HEADER = ['Id диалога', 'Дата', 'Текст', 'agentCode', 'О�
 const idOf = (i: number) => `c${String(i).padStart(4, '0')}-4c70-bf14`;
 const conversation = (i: number) => talk(`CLIENT Здравствуйте, вопрос ${i}`, 'AGENT Добрый день! Чем помочь?', `CLIENT Нужен возврат по заказу ${i}`, 'AGENT Оформил возврат, деньги придут за 5 дней');
 function exportRows(count: number, special: Record<number, string> = {}): CellSpec[][] {
-  return [HEADER, ...Array.from({ length: count }, (_, k): CellSpec[] => [idOf(k + 1), '09.09.2026', special[k + 1] ?? conversation(k + 1), 'ACQUIRING_AGENT', (k + 1) % 3 ? 'FALSE' : 'TRUE'])];
+  return [HEADER, ...Array.from({ length: count }, (_, k): CellSpec[] => [idOf(k + 1), '09.09.2026', special[k + 1] ?? conversation(k + 1), 'SUPPORT_AGENT', (k + 1) % 3 ? 'FALSE' : 'TRUE'])];
 }
 function propose(rows: CellSpec[][], choices: TableChoices = {}): TableProposal {
   const bytes = xlsxFile([{ name: 'Данные', rows }]), file = tableFileOf('logs.xlsx', bytes);
@@ -54,7 +54,7 @@ test('one conversation per row: Lab proposes the text column, its separator and 
   assert.deepEqual(messagesOf(batch, idOf(3)), [['user', 'Здравствуйте, вопрос 3'], ['assistant', 'Добрый день! Чем помочь?'], ['user', 'Нужен возврат по заказу 3'], ['assistant', 'Оформил возврат, деньги придут за 5 дней']]);
   // The other columns travel with the conversation as written, like the extra fields of a JSON row.
   const original = batch.dialogues.find(item => item.id === idOf(3))!.original as Record<string, unknown>;
-  assert.deepEqual([original.row, original.columns], [4, { Дата: '09.09.2026', agentCode: 'ACQUIRING_AGENT', Оператор: 'TRUE' }]);
+  assert.deepEqual([original.row, original.columns], [4, { Дата: '09.09.2026', agentCode: 'SUPPORT_AGENT', Оператор: 'TRUE' }]);
   assert.deepEqual(batch.dialogues[0]!.events[0]!.data, { role: 'user', content: 'Здравствуйте, вопрос 1', marker: 'CLIENT' });
 });
 
@@ -96,8 +96,8 @@ test('a marker Lab does not know becomes one question; the answer completes the 
 test('a conversation the import cannot use is refused with the reason the sheet shows; notes under the table are not conversations', () => {
   const rows: CellSpec[][] = [
     ...exportRows(12, { 3: 'просто текст без меток', 5: talk('CLIENT Здравствуйте', 'AGENT'), 8: '', 10: talk('CLIENT ***', 'AGENT Слушаю вас'), 11: talk('AGENT Добрый день, чем помочь?') }),
-    [idOf(2), '10.09.2026', conversation(2), 'ACQUIRING_AGENT', 'FALSE'],
-    [null, '10.09.2026', conversation(99), 'ACQUIRING_AGENT', 'FALSE'],
+    [idOf(2), '10.09.2026', conversation(2), 'SUPPORT_AGENT', 'FALSE'],
+    [null, '10.09.2026', conversation(99), 'SUPPORT_AGENT', 'FALSE'],
     [null, 'Итого: 14', null, null, null],
   ];
   const { batch, preview } = batchOf(rows);
@@ -110,7 +110,7 @@ test('a conversation the import cannot use is refused with the reason the sheet 
     [2, 'Текст не начинается с метки роли'], [4, 'Пустое сообщение'], [7, 'Пустой текст разговора'], [9, 'Пользовательские реплики полностью замаскированы'],
     [10, 'Нет пользовательских реплик'], [12, 'Повторяющийся id диалога'], [13, 'Некорректный id диалога']]);
   // The refused row keeps its text as evidence; its messages are never guessed.
-  assert.deepEqual(batch.rejected[0]!.original, { id: idOf(3), row: 4, text: 'просто текст без меток', columns: { Дата: '09.09.2026', agentCode: 'ACQUIRING_AGENT', Оператор: 'TRUE' } });
+  assert.deepEqual(batch.rejected[0]!.original, { id: idOf(3), row: 4, text: 'просто текст без меток', columns: { Дата: '09.09.2026', agentCode: 'SUPPORT_AGENT', Оператор: 'TRUE' } });
 });
 
 /** One message per row, rows of different conversations interleaved; fields with the delimiter, quotes and a line break. */

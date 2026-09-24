@@ -28,10 +28,10 @@ const spoken = (...messages: string[]) => messages.join(' ');
 const idOf = (i: number) => `c${String(i).padStart(4, '0')}-4c70-bf14`;
 const FENCE = 'Проверьте настройки терминала:\n```json\n{"terminal": "T-100", "mode": "sbp"}\n```';
 
-/** A conversation of the export; a fifth end an agent's code fence right before the client's next message, some name abbreviations or ACQUIRING_AGENT. */
+/** A conversation of the export; a fifth end an agent's code fence right before the client's next message, some name abbreviations or SUPPORT_AGENT. */
 function plain(i: number): string {
   if (i % 5 === 0) return spoken(`CLIENT Не проходит оплата по QR ${i}`, `AGENT ${FENCE}`, 'CLIENT Сделал, теперь работает', 'AGENT Отлично! Обращайтесь.');
-  if (i % 4 === 0) return spoken(`CLIENT Где моя заявка ${i}?`, 'AGENT Заявку ведёт ACQUIRING_AGENT, срок — 2 дня', 'CLIENT Спасибо', 'AGENT Пожалуйста');
+  if (i % 4 === 0) return spoken(`CLIENT Где моя заявка ${i}?`, 'AGENT Заявку ведёт SUPPORT_AGENT, срок — 2 дня', 'CLIENT Спасибо', 'AGENT Пожалуйста');
   const client = i % 3 === 0 ? `CLIENT Я ИП, пришло SMS с кодом ${i}` : `CLIENT Здравствуйте, вопрос ${i}`;
   return spoken(client, 'AGENT Добрый день! Чем помочь?', `CLIENT Нужен возврат по заказу ${i}`, 'AGENT Оформил возврат, деньги придут за 5 дней');
 }
@@ -43,7 +43,7 @@ const lastTwice = (i: number) => spoken(`CLIENT Подключите СБП ${i}
 const saidTwice = spoken('CLIENT Алло', 'AGENT Слушаю вас', 'CLIENT Алло', 'AGENT Вас плохо слышно, напишите вопрос');
 
 function sheetOf(count: number, text: (i: number) => string): CellSpec[][] {
-  return [['Id диалога', 'Дата', 'Текст', 'agentCode'], ...Array.from({ length: count }, (_, k): CellSpec[] => [idOf(k + 1), '09.09.2026', text(k + 1), "['ACQUIRING_AGENT']"])];
+  return [['Id диалога', 'Дата', 'Текст', 'agentCode'], ...Array.from({ length: count }, (_, k): CellSpec[] => [idOf(k + 1), '09.09.2026', text(k + 1), "['SUPPORT_AGENT']"])];
 }
 /** 40 conversations, 14 of them with copies: 7 exchanges written four times, 7 last exchanges twice; conversation 3 is the real «Алло» twice. */
 const withCopies = (i: number) => i % 6 === 1 ? pairTimesFour(i) : i % 6 === 2 ? lastTwice(i) : i === 3 ? saidTwice : plain(i);
@@ -64,13 +64,13 @@ function read(rows: CellSpec[][], choices: TableChoices = {}) {
 }
 const messagesOf = (batch: ReturnType<typeof read>['batch'], id: string) => batch.dialogues.find(item => item.id === id)?.events.map(event => [event.role, event.content]);
 
-test('no separator: a message starts at every whole-word marker; backticks of code fences and the AGENT of ACQUIRING_AGENT start nothing', () => {
+test('no separator: a message starts at every whole-word marker; backticks of code fences and the AGENT of SUPPORT_AGENT start nothing', () => {
   const rows = sheetOf(40, plain);
   const { proposal, batch, preview } = read(rows);
   assert.deepEqual(proposal.mapping.layout, { kind: 'dialogue_per_row', markers: [{ token: 'AGENT', role: 'assistant' }, { token: 'CLIENT', role: 'user' }] }, 'no separator is stored');
   assert.deepEqual([preview.dialogues, preview.usable, preview.messages], [40, 40, [{ label: 'AGENT', role: 'assistant', count: 80 }, { label: 'CLIENT', role: 'user', count: 80 }]]);
   assert.deepEqual(messagesOf(batch, idOf(5)), [['user', 'Не проходит оплата по QR 5'], ['assistant', FENCE], ['user', 'Сделал, теперь работает'], ['assistant', 'Отлично! Обращайтесь.']]);
-  assert.deepEqual(messagesOf(batch, idOf(4))?.[1], ['assistant', 'Заявку ведёт ACQUIRING_AGENT, срок — 2 дня']);
+  assert.deepEqual(messagesOf(batch, idOf(4))?.[1], ['assistant', 'Заявку ведёт SUPPORT_AGENT, срок — 2 дня']);
   assert.deepEqual(messagesOf(batch, idOf(3))?.[0], ['user', 'Я ИП, пришло SMS с кодом 3'], 'an abbreviation in a third of the conversations is a word, not a marker');
   const lines = proposalLines(proposal);
   assert.ok(lines.includes('  Текст — колонка «Текст»: сообщения ничем не отделены — новое начинается с каждой метки:'), lines.join('\n'));
@@ -82,8 +82,8 @@ test('no separator: a message starts at every whole-word marker; backticks of co
 });
 
 test('a marker follows a space or opens the text; inside a word, after a bracket or as part of a longer word it is text', () => {
-  assert.deepEqual(splitMessages('  CLIENT: Мне нужен ACQUIRING_AGENT AGENT Слушаю вас (AGENT) AGENTS тоже\nCLIENT Спасибо', undefined, ['CLIENT', 'AGENT']), [
-    { marker: 'CLIENT', content: 'Мне нужен ACQUIRING_AGENT' },
+  assert.deepEqual(splitMessages('  CLIENT: Мне нужен SUPPORT_AGENT AGENT Слушаю вас (AGENT) AGENTS тоже\nCLIENT Спасибо', undefined, ['CLIENT', 'AGENT']), [
+    { marker: 'CLIENT', content: 'Мне нужен SUPPORT_AGENT' },
     { marker: 'AGENT', content: 'Слушаю вас (AGENT) AGENTS тоже' },
     { marker: 'CLIENT', content: 'Спасибо' },
   ]);

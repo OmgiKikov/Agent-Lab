@@ -16,10 +16,10 @@ import { xlsxFile, type CellSpec } from './helpers/xlsx.js';
 
 const talk = (...messages: string[]) => messages.join(' ` ');
 const conversation = (i: number) => talk(`CLIENT Здравствуйте, вопрос ${i}`, 'AGENT Добрый день! Чем помочь?', `CLIENT Нужен возврат по заказу ${i}`, 'AGENT Оформил возврат');
-const SINGLE = "['ACQUIRING_AGENT']";
-const PAIR = "['ACQUIRING_AGENT', 'AGENT_GIGACHAT']";
-const REVERSED = "['AGENT_GIGACHAT', 'ACQUIRING_AGENT']";
-const ADVISOR = "['ACQUIRING_AGENT', 'SERVICE_PACK_ADVISOR']";
+const SINGLE = "['SUPPORT_AGENT']";
+const PAIR = "['SUPPORT_AGENT', 'AGENT_GIGACHAT']";
+const REVERSED = "['AGENT_GIGACHAT', 'SUPPORT_AGENT']";
+const ADVISOR = "['SUPPORT_AGENT', 'SERVICE_PACK_ADVISOR']";
 const idOf = (i: number) => `c${String(i).padStart(4, '0')}-4c70-bf14`;
 const clock = (i: number) => `${String(10 + Math.floor(i / 3600)).padStart(2, '0')}:${String(Math.floor(i / 60) % 60).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}`;
 
@@ -51,10 +51,10 @@ test('which conversations to evaluate: the owner names a column of categories, L
   assert.deepEqual(lines, [
     'Таблица logs.xlsx · лист «Данные»', '',
     'Какие разговоры оценивать? Lab видит 866 разговоров; в колонке «agentCode» у них 4 разных значения — выберите одно или несколько.',
-    "  1. «['ACQUIRING_AGENT']» — 398 разговоров",
-    "  2. «['ACQUIRING_AGENT', 'AGENT_GIGACHAT']» — 300 разговоров",
-    "  3. «['ACQUIRING_AGENT', 'SERVICE_PACK_ADVISOR']» — 120 разговоров",
-    "  4. «['AGENT_GIGACHAT', 'ACQUIRING_AGENT']» — 48 разговоров",
+    "  1. «['SUPPORT_AGENT']» — 398 разговоров",
+    "  2. «['SUPPORT_AGENT', 'AGENT_GIGACHAT']» — 300 разговоров",
+    "  3. «['SUPPORT_AGENT', 'SERVICE_PACK_ADVISOR']» — 120 разговоров",
+    "  4. «['AGENT_GIGACHAT', 'SUPPORT_AGENT']» — 48 разговоров",
   ]);
   assert.deepEqual(asked.status === 'question' && asked.question.kind === 'where' && whereChoices(asked.question).length, 4, 'the chat numbers the same answers');
   for (const words of ['Здравствуйте', 'возврат', 'Добрый день']) assert.ok(!lines.join('\n').includes(words), words);
@@ -67,7 +67,7 @@ test('the filter keeps exactly the values as written, applies before the sample,
   const lines = proposalLines(single);
   const outcome = lines.slice(lines.indexOf('Что получится') + 1);
   assert.deepEqual(outcome, [
-    "  Отбор: «agentCode» = «['ACQUIRING_AGENT']» — 398 из 866 разговоров.",
+    "  Отбор: «agentCode» = «['SUPPORT_AGENT']» — 398 из 866 разговоров.",
     '  398 разговоров: подходят 398.',
     '  В одну загрузку входит 300 разговоров: Lab возьмёт 300 из 398 подходящих — по хешу содержимого, без отбора по исходу.',
   ]);
@@ -80,8 +80,8 @@ test('the filter keeps exactly the values as written, applies before the sample,
   const pair = ready(propose({ where: { column: 'agentCode', values: [PAIR] } }));
   assert.equal(pair.preview.selected, 300);
   assert.deepEqual(agentsOf(importTable(SHEET, pair.mapping).batch), new Set([PAIR]));
-  assert.deepEqual(refusal(propose({ where: { column: 'agentCode', values: ['ACQUIRING_AGENT'] } })), ['where', 'В колонке «agentCode» нет значения «ACQUIRING_AGENT».']);
-  assert.deepEqual(refusal(propose({ where: { column: 'agentCode', values: ["['acquiring_agent']"] } })), ['where', "В колонке «agentCode» нет значения «['acquiring_agent']»."]);
+  assert.deepEqual(refusal(propose({ where: { column: 'agentCode', values: ['SUPPORT_AGENT'] } })), ['where', 'В колонке «agentCode» нет значения «SUPPORT_AGENT».']);
+  assert.deepEqual(refusal(propose({ where: { column: 'agentCode', values: ["['support_agent']"] } })), ['where', "В колонке «agentCode» нет значения «['support_agent']»."]);
   assert.deepEqual(refusal(propose({ where: { column: 'agentCode', values: [''] } })), ['where', 'В колонке «agentCode» нет пустых ячеек.']);
 });
 
@@ -89,7 +89,7 @@ test('several values are kept together; one choice is one mapping, whatever orde
   const both = ready(propose({ where: { column: 'agentCode', values: [ADVISOR, SINGLE] } }));
   assert.deepEqual(both.mapping.filter?.values, [SINGLE, ADVISOR], 'in the order the question lists them');
   assert.equal(both.preview.selected, 518);
-  assert.ok(proposalLines(both).includes("  Отбор: «agentCode» = «['ACQUIRING_AGENT']» или «['ACQUIRING_AGENT', 'SERVICE_PACK_ADVISOR']» — 518 из 866 разговоров."));
+  assert.ok(proposalLines(both).includes("  Отбор: «agentCode» = «['SUPPORT_AGENT']» или «['SUPPORT_AGENT', 'SERVICE_PACK_ADVISOR']» — 518 из 866 разговоров."));
   assert.deepEqual(agentsOf(importTable(SHEET, both.mapping).batch), new Set([SINGLE, ADVISOR]));
   const again = ready(propose({ where: { column: 'agentCode', values: [SINGLE, ADVISOR] } }));
   assert.equal(fingerprint(again.mapping), fingerprint(both.mapping));
@@ -124,7 +124,7 @@ test('Lab offers the columns of categories; the same file and the same choice re
 
 /** The owner's real export: 57 combinations of agents in `agentCode`, the acquiring agent alone in 398 of 866 conversations. */
 function export57(): CellSpec[][] {
-  const others = Array.from({ length: 56 }, (_, j) => `['ACQUIRING_AGENT', 'AGENT_${String(j + 1).padStart(2, '0')}']`);
+  const others = Array.from({ length: 56 }, (_, j) => `['SUPPORT_AGENT', 'AGENT_${String(j + 1).padStart(2, '0')}']`);
   const agents = [...Array<string>(398).fill(SINGLE), ...others.flatMap((value, j) => Array<string>(j < 20 ? 9 : 8).fill(value))];
   return [['Id диалога', 'Текст', 'agentCode'], ...agents.map((_, k): CellSpec[] => [idOf(k + 1), conversation(k + 1), agents[(k * 7) % agents.length]!])];
 }
