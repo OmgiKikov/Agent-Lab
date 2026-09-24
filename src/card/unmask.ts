@@ -16,7 +16,7 @@ import { fillKindSchema, type Card, type CardCommand, type EventRef, type Filled
  * and the model answers every slot with a plausible value of the same kind — the slots are the keys of the answer's
  * schema, so none is skipped and none invented. The harness writes the values in and keeps the rest of the message
  * character for character; the card records each value (`filled`), its brief says «подставлено вместо обезличенного»,
- * and such a card is no longer the logged situation, so calibration leaves it out (calibration-scope.ts).
+ * and it stays the logged situation: calibration compares it with its log, whose judge reads the marks (calibration-scope.ts).
  *
  *   at proposal time   the slots of the dialogue's customer messages ride the proposal call (proposal.ts, CARD_ROLE)
  *   an existing card   one builder call (MASK_FILL_ROLE) makes a `fill_masked` command the owner confirms once

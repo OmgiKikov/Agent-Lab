@@ -57,7 +57,7 @@ test('the marks of a message are found by their shape and the values written in 
   assert.equal(withValues(OPENING, new Map([[0, '3'], [2, '1 200 ₽']])), 'С утра было 3 покупки, на * и 1 200 ₽, терминал пишет «нет связи».');
 });
 
-test('a masked opening is filled in the proposal call: one value per mark, the rest verbatim, the card marked and kept out of calibration', () => {
+test('a masked opening is filled in the proposal call: one value per mark, the rest verbatim, the card marked and still compared with its log', () => {
   const masked = call();
   assert.deepEqual(masked.masked.map(slot => slot.id), ['m0_0', 'm0_1', 'm0_2', 'm2_0'], 'every mark of the customer\'s messages, none of the agent\'s');
   const schema = cardProposalSchema(masked);
@@ -75,7 +75,7 @@ test('a masked opening is filled in the proposal call: one value per mark, the r
   assert.deepEqual(card.filled!.map(item => [item.event.eventIndex, item.span, item.mark, item.kind, item.value]),
     [[0, 0, '#', 'count', '3'], [0, 1, '*', 'amount', '500 ₽'], [0, 2, '*', 'amount', '1 200 ₽'], [2, 0, '###', 'code', '4471']]);
   assert.deepEqual(unusableFindings(card, { evidence, maxTurns: 6 }), [], 'the fact reads from its message with the value in place');
-  assert.equal(cardExclusion(card), 'situation_edited', 'the synthetic customer says what the log hid: not the logged situation');
+  assert.equal(cardExclusion(card), undefined, 'the logged customer, saying plausible values where the export hid the real ones: still the logged situation');
   const rows = briefRows(cardSituation(createLibraryV2({ id: 'library_x', imports: [], sources, requirements: [], createdAt: '2026-09-24T10:00:00.000Z' }), card)).map(row => row.text).join('\n');
   assert.match(rows, /подставлено вместо обезличенного: «3», «500 ₽», «1 200 ₽», «4471»/);
 });
@@ -135,7 +135,7 @@ test('an existing card is filled by one builder answer turned into one command t
   assert.deepEqual(next.receipts.map(receipt => receipt.command.kind), ['fill_masked'], 'one receipt for the whole fill');
   assert.equal(cardStatus(after, { library: next, evidence, maxTurns: 6 }).problems.length, 0, 'no masked finding is left');
   assert.equal(unmaskRequest(after, evidence), undefined, 'nothing is left to fill');
-  assert.equal(cardExclusion(after), 'situation_edited');
+  assert.equal(cardExclusion(after), undefined, 'the owner confirmed Lab\'s values, and changed nothing of the situation');
   assert.throws(() => prepareCommand(library, { ...command, spans: [{ ...command.spans[0]!, span: 7 }] }, context), /нет такого обезличенного значения/);
 });
 
