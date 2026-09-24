@@ -10,9 +10,9 @@ import { demoInput } from './demo.js';
 import { createInputSchema, materialSources, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Settings } from './contracts.js';
 import { compareRuns } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
-import { detectionLines, detectProject } from './detect.js';
+import { detectionLines, detectProject, promptLine } from './detect.js';
 import { readDialogueImport, importDialogues } from './imports.js';
-import { expandMaterials } from './materials.js';
+import { expandMaterials, promptMaterials } from './materials.js';
 import { createPiRuntime, getPiStatus } from './pi.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { expectationSheet, testPlanLines, trialProofLines } from './quality.js';
@@ -23,7 +23,8 @@ import { evidenceBundle, exportArtifacts, importNumbers, resolveVerified } from 
 import { libraryHash } from './scenario-library.js';
 import { hostGrant, requiredAuthority, wordsOf } from './card/commands.js';
 import { conversionText } from './card/convert.js';
-import { cardCommandSchema } from './card/schema.js';
+import { cardCommandSchema, type CardCommand, type LibraryV2 } from './card/schema.js';
+import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules } from './card/rulebook.js';
 import { actionRow, briefRows, changeText, countsText, detailRows, formatNote, listRows, plainSituationText, situationActions, situationData, situationViews, type SituationView } from './card/view.js';
 import { safeLine } from './text.js';
 import { countText } from './plural.js';
@@ -60,7 +61,8 @@ const FLAGS = {
   file: { type: 'string' }, sheet: { type: 'string' }, 'id-column': { type: 'string' }, 'text-column': { type: 'string' }, separator: { type: 'string' },
   markers: { type: 'string' }, 'role-column': { type: 'string' }, roles: { type: 'string' }, 'order-column': { type: 'string' }, 'row-order': { type: 'boolean' },
   where: { type: 'string' }, 'no-separator': { type: 'boolean' }, 'collapse-repeats': { type: 'boolean' }, 'keep-repeats': { type: 'boolean' },
-  situations: { type: 'string' },
+  situations: { type: 'string' }, 'prompts-from': { type: 'string' }, prompt: { type: 'string', multiple: true },
+  'operator-rules': { type: 'string' }, 'bind-rule': { type: 'string', multiple: true }, 'unbind-rule': { type: 'string', multiple: true },
 } as const;
 type Flags = ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>['values'];
 
@@ -191,19 +193,20 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     const record = await lab.get(id);
     if (record.librarySnapshot?.formatVersion !== 2) return { record, views: situationViews(record, { maxTurns: record.settings.maxTurns }) };
     const context = await lab.cardContext(id);
-    return { record: context.experiment, views: situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns }) };
+    return { record: context.experiment, views: situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns }),
+      rulebook: shownRulebook(context.library) };
   };
   /** The list, or one situation with its question and its actions — the same rows the chat and the board draw. JSON carries each situation's id: a command file names its card by it. */
   const show = async (id: string, changes: string[] = []) => {
-    const { record, views } = await situations(id);
+    const { record, views, rulebook } = await situations(id);
     const number = values.card === undefined ? undefined : Number(values.card);
     const view = number === undefined ? undefined : views.find(item => item.number === number);
     if (number !== undefined && !view) throw new Error(`Ситуации №${values.card} нет. Есть: ${views.map(item => item.number).join(', ')}.`);
-    if (values.json) { await writeStdout(`${JSON.stringify({ runId: id, counts: countsText(views), ...(changes.length ? { changes } : {}), ...(view ? { situation: { id: view.id, ...situationData(view), details: view.details } } : { situations: views.map(item => ({ id: item.id, ...situationData(item) })) }) }, null, 2)}\n`); return; }
+    if (values.json) { await writeStdout(`${JSON.stringify({ runId: id, counts: countsText(views), ...(changes.length ? { changes } : {}), ...(view ? { situation: { id: view.id, ...situationData(view), details: view.details } } : { situations: views.map(item => ({ id: item.id, ...situationData(item) })), ...(rulebook ? { rulebook } : {}) }) }, null, 2)}\n`); return; }
     const actions = view && !view.question ? situationActions(view) : [];
     const rows = view ? [...briefRows(view), ...(actions.length ? [{ role: 'blank' as const, indent: 0, text: '' }, actionRow(actions)] : []), { role: 'blank' as const, indent: 0, text: '' }, ...detailRows(view)]
       : views.flatMap(item => listRows(item));
-    const head = view ? [] : [countsText(views), ...(formatNote(record) ? [formatNote(record)!] : []), ''];
+    const head = view ? [] : [countsText(views), ...(formatNote(record) ? [formatNote(record)!] : []), '', ...(rulebook ? [...rulebookLines(rulebook), ''] : [])];
     await writeStdout(`${[...changes, ...(changes.length ? [''] : []), ...head.map(line => line && ` ${safeLine(line)}`), plainSituationText(rows.map(row => ({ ...row, text: safeLine(row.text) })), process.stdout.columns ?? 100)].join('\n')}\n`);
   };
   if (values.convert) {
@@ -218,7 +221,8 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     } finally { await lab.close(); }
     return;
   }
-  if (!values.input && !values.choice && !values.check && !values.resume && !values.accept) { await show(values.id); return; }
+  const rulebookFlags = values['operator-rules'] !== undefined || !!values['bind-rule']?.length || !!values['unbind-rule']?.length;
+  if (!values.input && !values.choice && !values.check && !values.resume && !values.accept && !rulebookFlags) { await show(values.id); return; }
   await lab.init();
   try {
     const target = values.check || values.resume || values.accept ? { id: values.id } : await lab.editableCards(values.id);
@@ -241,11 +245,13 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
       if (!view?.question?.id) throw new Error(`У ситуации ${values.card ?? '(укажите --card N)'} нет открытого вопроса.`);
       if (!['a', 'b', 'c'].includes(values.choice)) throw new Error('--choice: a, b или c — ответ из списка вопроса.');
       command = { kind: 'answer_question', cardId: view.id, questionId: view.question.id, choice: values.choice as 'a' | 'b' | 'c', ...(values.text ? { text: values.text } : {}) };
-    } else command = cardCommandSchema.parse(JSON.parse(await readFile(values.input!, 'utf8')));
+    } else if (rulebookFlags) command = rulebookCommand((await lab.cardContext(target.id)).library, values);
+    else command = cardCommandSchema.parse(JSON.parse(await readFile(values.input!, 'utf8')));
     // The command file and the text on the command line are the owner's own: their words, confirmed by --yes.
     const words = wordsOf(command).join('\n');
     const prepared = await lab.prepareCardCommand(target.id, command, { via: 'cli-yes', ...(words && words.length <= 1000 ? { ownerWords: words } : {}) });
-    const changes = prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`));
+    const changes = [...prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`)),
+      ...(prepared.rulebook ? rulebookChangeLines(prepared.rulebook.before, prepared.rulebook.after, prepared.next.requirements, prepared.rulebook.flagged) : [])];
     if (!values.yes) {
       await writeStdout(`${[...changes, '', ...(prepared.recheck.length ? ['После записи Lab проверит изменённое заново.'] : []), 'Записать: та же команда с --yes.'].map(line => safeLine(line)).join('\n')}\n`);
       return;
@@ -255,6 +261,15 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     if (check.decision.action === 'run') await lab.waitForIdle();
     await show(target.id, changes.map(line => safeLine(line)));
   } finally { await lab.close(); }
+}
+
+/** The rulebook command of `cards --operator-rules on|off --bind-rule ID --unbind-rule ID`: the current rulebook with the owner's changes. */
+function rulebookCommand(library: LibraryV2, values: Flags): CardCommand {
+  const operators = values['operator-rules'];
+  if (operators !== undefined && operators !== 'on' && operators !== 'off') throw new Error('--operator-rules: on — инструкции для операторов входят в свод правил, off — не входят.');
+  const current = rulebookOf(library);
+  const kinds = operators === undefined ? current : withKind(current, 'operator_procedure', operators === 'on');
+  return { kind: 'set_rulebook', rulebook: withRules(kinds, { include: values['bind-rule'] ?? [], exclude: values['unbind-rule'] ?? [] }) };
 }
 
 async function logs({ values, directory }: CommandInput): Promise<void> {
@@ -419,6 +434,12 @@ async function taskInput(values: Flags, directory: string): Promise<{ input: Cre
     process.stderr.write(`Прочитано материалов из файлов: ${expanded.read}.\n`);
     raw = { ...task, materials: expanded.materials };
   }
+  if (values.prompt?.length) {
+    // The prompts the owner picked among those Lab finds in the project folder: verbatim, as materials of the agent's prompt.
+    const chosen = await pickedPrompts(values['prompts-from'] ?? process.cwd(), values.prompt);
+    process.stderr.write(`Промпты агента: ${chosen.map(prompt => prompt.id).join(', ')}.\n`);
+    raw = { ...raw, materials: [...raw.materials ?? [], ...promptMaterials(chosen).map(({ name, content, kind }) => ({ name, content, kind }))] };
+  }
   const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
   const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file'], { directory }) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
   // From the rules alone, --situations is the number of situations the rules are written into.
@@ -428,6 +449,25 @@ async function taskInput(values: Flags, directory: string): Promise<{ input: Cre
     ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}),
     ...(rules !== undefined ? { scenarioCount: rules } : {}) });
   return { input, logs: basename(values['dialogues-file'] ?? values.input) };
+}
+
+/** The candidates named by `ids` among the prompts Lab finds in `folder`; an id it does not find is refused with those it does. */
+async function pickedPrompts(folder: string, ids: readonly string[]) {
+  const { prompts } = await detectProject(folder);
+  return ids.map(id => {
+    const found = prompts.find(prompt => prompt.id === id);
+    if (!found) throw new Error(`Промпта ${id} в ${folder} нет.${prompts.length ? ` Есть: ${prompts.slice(0, 10).map(prompt => prompt.id).join(', ')}${prompts.length > 10 ? ' …' : ''}.` : ' Lab не нашёл в этой папке ни одного промпта.'}`);
+    return found;
+  });
+}
+
+/** `build --prompts-from` without `--prompt`: the prompts Lab found, for the owner to pick; nothing is written or spent. */
+async function promptChoice(folder: string): Promise<string[]> {
+  const { prompts } = await detectProject(folder);
+  if (!prompts.length) return [`В ${folder} Lab не нашёл промптов агента: ни файлов с «prompt» в имени, ни строк-промптов в коде, ни полей промптов в JSON.`];
+  return ['Промпты агента в папке — какие из них задают, что и как бот отвечает клиенту, выбираете вы:', '',
+    ...prompts.map(prompt => `  ${promptLine(prompt)}`), '',
+    'Взять выбранные: та же команда с --prompt ФАЙЛ#ИМЯ (флаг повторяется). Они станут правилами поведения бота; ничего не записано и не потрачено.'];
 }
 
 /**
@@ -455,6 +495,7 @@ async function prepareDraft(lab: ExperimentLab, input: CreateInput, options: { s
 
 /** `build`: the consent in the owner's words; only --yes prepares, within the count and the ceiling it states. */
 async function prepare({ values, directory }: CommandInput): Promise<void> {
+  if (values['prompts-from'] && !values.prompt?.length) { await writeStdout(`${(await promptChoice(values['prompts-from'])).map(line => safeLine(line)).join('\n')}\n`); return; }
   const { input, logs } = await taskInput(values, directory);
   const consent = await buildConsent(input, logs, directory, values);
   if (!values.yes) {
@@ -521,13 +562,15 @@ async function repeat({ values, directory }: CommandInput): Promise<void> {
 const COMMANDS: Readonly<Record<string, Command>> = {
   detect: { help: ['agent-lab detect [--directory ПАПКА] [--json]   Что Lab нашёл в папке проекта: агента, логи, материалы, промпт'], run: detect },
   import: { help: ['agent-lab import --file логи.xlsx [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--yes] [--json]   Как читать таблицу логов (.xlsx, .csv): с --input разметку предлагает модель задачи, Lab проверяет каждую строку; --yes — сначала на вызов модели, затем на загрузку'], run: importTable },
-  build: { help: ['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--situations N] [--connection подключение.json] [--yes]   Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --yes готовит их'], run: prepare },
+  build: { help: ['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--situations N] [--connection подключение.json] [--yes]   Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --yes готовит их',
+    'agent-lab build --input задача.json --prompts-from ПАПКА [--prompt ФАЙЛ#ИМЯ ...] [--yes]   Промпты агента из его кода и JSON: без --prompt — список на выбор, с ним — выбранные станут правилами поведения бота'], run: prepare },
   prepare: { help: [], run: prepare },
   cards: { help: [
     'agent-lab cards --id RUN [--card N] [--json]   Ситуации: что пишет и знает клиент, что должен агент, статус и вопрос',
     'agent-lab cards --id RUN --card N --choice a|b|c [--text «…»] --yes   Ответ на вопрос ситуации',
     'agent-lab cards --id RUN --input команда.json [--yes]   Команда владельца; без --yes — только «было → стало»',
     'agent-lab cards --id RUN --check|--resume|--accept --yes   Проверить ситуации · продолжить подготовку · утвердить готовые',
+    'agent-lab cards --id RUN [--operator-rules on|off] [--bind-rule ID] [--unbind-rule ID] [--yes]   Свод правил: входят ли инструкции для операторов, отдельные правила, обязательные для бота',
     'agent-lab cards --id RUN --convert   Черновик старого формата — продолжить в новом формате; старый останется как есть'], run: cards },
   accept: { help: ['agent-lab accept --id RUN [--yes]   Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания'], run: accept },
   run: { help: ['agent-lab run --id RUN --yes [--parallel 4]   Прогнать утверждённые ситуации'], run },

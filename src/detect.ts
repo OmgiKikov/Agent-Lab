@@ -5,8 +5,9 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { CONNECTION_FORMAT, readConnection } from './connection.js';
 import { runnableTargetSchema, type RunnableTarget } from './contracts.js';
 import { parseImportText } from './imports.js';
-import { IMPORT_DIALOGUE_LIMIT, IMPORT_FILE_BYTES } from './limits.js';
-import { MATERIAL_EXTENSIONS } from './materials.js';
+import { IMPORT_DIALOGUE_LIMIT, IMPORT_FILE_BYTES, MATERIAL_CHARS } from './limits.js';
+import { MATERIAL_EXTENSIONS, materialText } from './materials.js';
+import { codePrompts, jsonPrompts, MIN_PROMPT_CHARS, type PromptCandidate } from './prompt-candidates.js';
 import { countText, pluralForm } from './plural.js';
 import { importBatch } from './scenario-library.js';
 import { codeFacts, FACTORY, languageOf } from './source-facts.js';
@@ -15,7 +16,8 @@ import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
 
 /*
  * What Lab can tell about a project folder before asking the owner anything: how to reach the agent,
- * which files hold logged conversations, where the knowledge base and the agent's prompt are. It only
+ * which files hold logged conversations, where the knowledge base and the agent's prompts are — files named so, string
+ * constants in its code and prompt fields of its JSON (prompt-candidates.ts), each offered for the owner to choose. It only
  * reads, within fixed caps: it never runs or imports a file, never follows a link out of the folder,
  * and never keeps a secret (a .env file yields variable names; a local address loses its credentials
  * and query). Every finding names the file it came from; the owner confirms before anything runs.
@@ -42,7 +44,9 @@ export interface LogFile { file: string; dialogues: number; rejected: number; co
 export interface MaterialFolder { folder: string; documents: number }
 /** Paths are relative to `root`, except inside `target`. */
 export interface ProjectDetection {
-  root: string; agents: AgentCandidate[]; logs: LogFile[]; materials: MaterialFolder[]; prompts: string[];
+  root: string; agents: AgentCandidate[]; logs: LogFile[]; materials: MaterialFolder[];
+  /** Texts that may be the agent's prompts, verbatim; which of them are the bot's rules the owner chooses. */
+  prompts: PromptCandidate[];
   /** Variable names from the .env files in the root; the values never enter the result. */
   env: { files: string[]; names: string[] };
   /** A cap stopped the walk or the reading early, so something may be missing. */
@@ -73,6 +77,12 @@ interface Script { evidence: Extract<AgentEvidence, { kind: 'script' }>; argv: s
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isEnvFile = (name: string): boolean => name === '.env' || name.startsWith('.env.');
 const extOf = (entry: Entry): string => extname(entry.path).toLowerCase();
+
+/** A file named as a prompt, or in a folder of prompts: `system_prompt.md`, `prompts/answer.txt`, `agent_doc_type_prompt.json`. */
+function namedPrompt(file: Entry): boolean {
+  const parts = file.rel.split(sep).map(part => part.toLowerCase()), title = basename(parts.at(-1)!, extname(parts.at(-1)!));
+  return title.includes('prompt') || title.includes('промпт') || parts.slice(0, -1).some(part => part === 'prompts' || part === 'промпты');
+}
 
 /** Breadth first, so a capped walk keeps the files nearest the root. Links are not followed: the walk cannot leave the folder or loop. */
 async function walk(root: string): Promise<{ files: Entry[]; truncated: boolean }> {
@@ -210,7 +220,7 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
   const addUrls = (values: string[], file: Entry) => {
     for (const url of new Set(values.flatMap(value => localUrl(value) ?? []))) add(`url:${url}`, { kind: 'http', url }, [{ kind: 'url', file: file.rel, url }]);
   };
-  const logs: LogFile[] = [], scripts: Script[] = [];
+  const logs: LogFile[] = [], scripts: Script[] = [], prompts: PromptCandidate[] = [];
 
   // Data first: logs and saved connections matter most when a cap cuts the reading short.
   for (const file of walked.files) {
@@ -228,9 +238,11 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
       }
       const count = dialogueCount(raw);
       if (count) logs.push({ file: file.rel, ...count, complete: whole !== undefined });
-      else if (ext === '.json' && config) {
-        if (basename(file.path) === 'package.json') scripts.push(...packageScripts(raw, file));
-        addUrls(stringLeaves(raw), file);
+      else if (ext === '.json') {
+        // A JSON of prompts (an MLS-style agent_prompt.json, or a config with a system field) is read whole, like any config.
+        if (whole !== undefined) prompts.push(...jsonPrompts(raw, file.rel, namedPrompt(file)));
+        if (config && basename(file.path) === 'package.json') scripts.push(...packageScripts(raw, file));
+        if (config) addUrls(stringLeaves(raw), file);
       }
     } else if (TABLE_EXTENSIONS.has(ext)) {
       const bytes = await reader.binary(file.path, IMPORT_FILE_BYTES);
@@ -246,11 +258,16 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
   const python = await projectPython(root);
   const interpreter = (command: string): { command: string; evidence: AgentEvidence[] } => python && PYTHONS.has(command)
     ? { command: join(root, python), evidence: [{ kind: 'interpreter', file: python }] } : { command, evidence: [] };
+  // Constants of every source file, so a system message naming a constant of another module finds it there.
+  const constants: { file: string; names: Map<string, string> }[] = [], systemNames = new Set<string>();
   for (const file of walked.files) {
     const language = languageOf(file.path), name = basename(file.path);
     if (!language || name.includes('.test.') || name.includes('.spec.')) continue;
     const source = await reader.text(file.path, LIMITS.textBytes);
     if (source === undefined) continue;
+    const found = codePrompts(source, language, file.rel);
+    prompts.push(...found.candidates); constants.push({ file: file.rel, names: found.constants });
+    for (const system of found.systemNames) systemNames.add(system);
     const facts = codeFacts(source, language), script = scripts.find(item => item.entry === file.path);
     if (!facts.factory && !facts.jsonLines) continue;
     const started = interpreter(script ? script.argv[0]! : language === 'python' ? 'python3' : 'node');
@@ -277,20 +294,36 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
     .sort((a, b) => RANK[a.confidence] - RANK[b.confidence] || has(a, 'connection') - has(b, 'connection') || has(a, 'script') - has(b, 'script')
       || depth(a) - depth(b) || a.evidence[0]!.file.localeCompare(b.evidence[0]!.file));
 
-  const folders = new Map<string, number>(), prompts: Entry[] = [];
+  for (const name of systemNames) for (const { file, names } of constants) {
+    const text = names.get(name);
+    const known = prompts.find(item => item.file === file && item.identifier === name);
+    if (known) known.system = true;
+    else if (text !== undefined && text.trim().length >= MIN_PROMPT_CHARS && text.length <= MATERIAL_CHARS) prompts.push({ id: `${file}#${name}`, file, identifier: name, origin: 'code', system: true, chars: text.length, text });
+  }
+
+  const folders = new Map<string, number>();
   for (const file of walked.files) {
     const ext = extOf(file);
     if (!MATERIAL_EXTENSIONS.has(ext)) continue;
-    const parts = file.rel.split(sep), lower = parts.map(part => part.toLowerCase()), title = basename(lower.at(-1)!, ext);
-    if (title.includes('prompt') || title.includes('промпт') || lower.slice(0, -1).some(part => part === 'prompts' || part === 'промпты')) { prompts.push(file); continue; }
+    const parts = file.rel.split(sep), lower = parts.map(part => part.toLowerCase());
+    if (namedPrompt(file)) {
+      const bytes = await reader.binary(file.path, LIMITS.headBytes);
+      const text = bytes && materialText(file.path, bytes);
+      // A file named as a prompt is one, however short: only an empty or unreadable one is not offered.
+      if (text && text.length <= MATERIAL_CHARS) prompts.push({ id: file.rel, file: file.rel, origin: 'file', chars: text.length, text });
+      continue;
+    }
     const at = lower.slice(0, -1).findIndex(part => KNOWLEDGE.has(part));
     if (at >= 0) { const folder = parts.slice(0, at + 1).join(sep); folders.set(folder, (folders.get(folder) ?? 0) + 1); }
   }
+  const depthOf = (file: string) => file.split(sep).length;
+  // Nearest the root first; within a file, in the order the file gives them (Array.prototype.sort is stable).
+  prompts.sort((a, b) => depthOf(a.file) - depthOf(b.file) || a.file.localeCompare(b.file));
   return {
     root, agents,
     logs: logs.sort((a, b) => b.dialogues - a.dialogues || a.file.localeCompare(b.file)),
     materials: [...folders].map(([folder, documents]) => ({ folder, documents })).sort((a, b) => b.documents - a.documents || a.folder.localeCompare(b.folder)),
-    prompts: prompts.sort((a, b) => a.depth - b.depth || a.rel.localeCompare(b.rel)).map(file => file.rel),
+    prompts,
     env, truncated: walked.truncated || reader.truncated,
   };
 }
@@ -331,6 +364,14 @@ function logLine(log: LogFile): string {
   return `  ${log.file} — ${counted}${log.complete ? '' : `; дальше не читался: файл больше ${IMPORT_FILE_BYTES / 1_000_000} МБ`}`;
 }
 
+const ORIGIN_TEXT: Record<PromptCandidate['origin'], string> = { file: 'файл', code: 'строка в коде', json: 'поле JSON' };
+/** One prompt candidate as the owner picks it: its id (the file, and the constant or field), what it is, its size. */
+export function promptLine(prompt: PromptCandidate): string {
+  return `${prompt.id} — ${ORIGIN_TEXT[prompt.origin]}${prompt.system ? ', задаёт роль system' : ''}, ${countText(prompt.chars, ['знак', 'знака', 'знаков'])}`;
+}
+/** Prompts are listed longer than the rest: the owner picks among them. */
+const PROMPTS_SHOWN = 20;
+
 const CONFIDENCE_NOTE: Record<Confidence, string> = { high: '', medium: ' — похоже на агента; формат запросов Lab проверит при подключении', low: ' — возможно, агент; как он отвечает, не видно' };
 const SHOWN = 3;
 
@@ -350,9 +391,9 @@ export function detectionLines(detection: ProjectDetection): string[] {
     'Материалы',
     ...materials.length ? materials.slice(0, SHOWN).map(item => `  ${item.folder} — ${countText(item.documents, ['документ', 'документа', 'документов'])}`) : ['  не нашёл папок с документами'],
     ...more(materials.length), '',
-    'Промпт агента',
-    ...prompts.length ? prompts.slice(0, SHOWN).map(file => `  ${file}`) : ['  не нашёл'],
-    ...more(prompts.length),
+    'Промпты агента',
+    ...prompts.length ? [...prompts.slice(0, PROMPTS_SHOWN).map(prompt => `  ${promptLine(prompt)}`), ...prompts.length > PROMPTS_SHOWN ? [`  … ещё ${prompts.length - PROMPTS_SHOWN}`] : [],
+      '  Какие из них задают, что и как бот отвечает клиенту, выбираете вы: они станут правилами поведения бота.'] : ['  не нашёл'],
     ...env.names.length ? ['', `Переменные из ${env.files.join(', ')}: ${env.names.join(', ')} — значения Lab не читает.`] : [],
     ...detection.truncated ? ['', 'Папка большая: просмотрена только часть файлов.'] : [],
   ];

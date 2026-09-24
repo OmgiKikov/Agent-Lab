@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import type { ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { promptOption } from '../extensions/prompt-choice.ts';
 import { TOOL } from '../extensions/steps.ts';
+import { detectProject } from '../src/detect.js';
 import { ExperimentLab } from '../src/experiment.js';
 import type { Runtime } from '../src/runtime.js';
 import { questionAnswers, withAnswer } from '../src/spreadsheet/answers.js';
@@ -213,9 +215,13 @@ test('the rules come from the project when none are named; a project without any
   assert.equal(asked.status, 'needs_owner_input'); assert.match(asked.message, /Нет правил, по которым судить агента/);
   await mkdir(join(cwd, 'prompts'));
   await writeFile(join(cwd, 'prompts', 'system.md'), `Ты — агент поддержки. ${policy}\n`);
-  const found = chat(t, cwd, ['Не сейчас']);
+  // Lab offers the prompt it found; nothing is ticked in advance, the owner ticks it and the consent names it.
+  const [candidate] = (await detectProject(cwd)).prompts;
+  const found = chat(t, cwd, [promptOption(candidate!, 0, false), 'Готово — взять отмеченные: 1', 'Не сейчас']);
   await found.prepare({ task: 'Проверить возвраты', logs: 'logs.jsonl' });
-  assert.match(found.asked[0]!.title, /\nПравила: prompts\/system\.md — 1 документ\.\n/);
+  assert.deepEqual(found.asked[0]!.options.slice(0, 2), ['Без промптов — только база знаний', promptOption(candidate!, 0, false)]);
+  assert.equal(found.asked[1]!.options[1], promptOption(candidate!, 0, true));
+  assert.match(found.asked[2]!.title, /\nПравила: prompts\/system\.md — 1 документ\.\n/);
 });
 
 test('Lab\'s model reads the spreadsheet in the chat: its consent is asked natively, the reading shows it, and a second look costs no call', async t => {

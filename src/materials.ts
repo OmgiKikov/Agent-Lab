@@ -3,6 +3,7 @@ import { basename, extname, join, resolve } from 'node:path';
 import type { SourceKind } from './contracts.js';
 import { docxText, htmlText } from './docx.js';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIAL_PART_CHARS } from './limits.js';
+import type { PromptCandidate } from './prompt-candidates.js';
 
 interface FileMaterial { name: string; content: string; kind: SourceKind; file: string }
 interface MaterialsReport { materials: FileMaterial[]; skipped: Array<{ file: string; reason: string }> }
@@ -16,6 +17,11 @@ const READERS: Record<string, (file: Buffer) => string> = {
 };
 /** The document types Lab reads as materials; project detection proposes only these. */
 export const MATERIAL_EXTENSIONS: ReadonlySet<string> = new Set(Object.keys(READERS));
+/** The text of a document Lab reads as a material, from its bytes; undefined for another type or a file it cannot read. */
+export function materialText(file: string, bytes: Buffer): string | undefined {
+  const read = READERS[extname(file).toLowerCase()];
+  try { return read?.(bytes).trim(); } catch { return undefined; }
+}
 const SUPPORTED = 'формат не поддерживается: только .docx, .md, .txt, .html';
 const MIN_CHARS = 40;
 
@@ -80,6 +86,21 @@ async function listFiles(path: string): Promise<string[]> {
     else if (entry.isFile()) files.push(full);
   }
   return files;
+}
+
+/**
+ * Prompts the owner chose among those found in the code and JSON of the project (prompt-candidates.ts): materials of kind
+ * `prompt`, verbatim, named by the file and the constant or field, a long one in parts like any other material.
+ */
+export function promptMaterials(chosen: readonly Pick<PromptCandidate, 'file' | 'identifier' | 'text'>[]): FileMaterial[] {
+  return chosen.flatMap(candidate => {
+    const whole = candidate.identifier ? `${candidate.file} · ${candidate.identifier}` : candidate.file;
+    // A material's name holds 180 characters; the end names the prompt, so a long path loses its beginning.
+    const name = whole.length > 160 ? `…${whole.slice(-159)}` : whole;
+    const content = candidate.text.trim();
+    const parts = splitParts(content, MATERIAL_PART_CHARS);
+    return parts.map((part, index) => ({ name: parts.length === 1 ? name : `${name} · часть ${index + 1}/${parts.length}`, content: part, kind: 'prompt' as const, file: candidate.file }));
+  });
 }
 
 interface MaterialPaths { materials?: Array<{ name: string; content: string; kind?: SourceKind }>; materialFiles?: string[]; promptFiles?: string[] }
