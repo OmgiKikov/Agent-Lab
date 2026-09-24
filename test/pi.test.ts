@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { test } from 'node:test';
 import { createPiRuntime, getPiStatus } from '../src/pi.js';
 import { REPAIR_ATTEMPTS } from '../src/llm/structured.js';
@@ -103,8 +104,13 @@ test('a model call reads no discovered resources and the simulator receives only
     assert.doesNotMatch(payload, /PRIVATE_CONTEXT_SENTINEL|HIDDEN_RUBRIC_SENTINEL|BACKEND_FAILURE_SCHEDULE_SENTINEL|Current working directory/);
     assert.ok(f.requests.every(r => !r.tools?.length), 'a model call offers no tools');
     assert.equal(process.env.AGENT_LAB_EXTENSION_LOADED, undefined);
+    // Providers the host's environment enables (a cloud key, an AWS profile) are the host's, not discovered from the project:
+    // a clean runtime in the same process shows them too, and only what the fixture registered may come on top.
     const status = await getPiStatus(f.runtime);
-    assert.deepEqual(status.models, [{ provider: 'agent-lab-test', id: 'test-model', name: 'Offline SDK fixture' }]);
+    const host = await ModelRuntime.create({ authPath: join(f.directory, 'host-auth.json'), modelsPath: null,
+      modelsStorePath: join(f.directory, 'host-models.json'), allowModelNetwork: false, refreshOnCreate: false });
+    const hosted = new Set((await host.getAvailable()).map(model => `${model.provider}/${model.id}`));
+    assert.deepEqual(status.models.filter(model => !hosted.has(`${model.provider}/${model.id}`)), [{ provider: 'agent-lab-test', id: 'test-model', name: 'Offline SDK fixture' }]);
   } finally { process.chdir(cwd); await f.close(); }
 });
 

@@ -123,6 +123,8 @@ function drawn(tool: ToolDefinition, result: unknown, expanded: boolean, width =
   const component = tool.renderResult!(result as never, { expanded, isPartial: false }, plainTheme as never, {} as never) as unknown as Component;
   return component.render(width).map(line => stripTerminalSequences(line).trimEnd());
 }
+/** Drawn rows read as one line: where the terminal wraps them depends on the width and on the paths they name. */
+const unwrapped = (lines: string[]) => lines.map(line => line.trim()).filter(Boolean).join(' ');
 
 test('owner words come only from user entries of the session', () => {
   const ctx = { sessionManager: { getBranch: () => [
@@ -355,7 +357,8 @@ test('a long run leaves the conversation free: Esc does not stop it, progress is
     while ((await fixture.read()).phase !== 'evaluating') await new Promise(resolve => setTimeout(resolve, 20));
     escape.abort();
     const result = await started;
-    assert.equal(json(result).background, true); assert.match(drawn(run, result, false).join('\n'), /Прогон идёт: 2 разговора[\s\S]*Результат придёт сюда сообщением/);
+    // The row wraps at the terminal width and names the agent by its path, so where it breaks depends on the checkout: read it as one line.
+    assert.equal(json(result).background, true); assert.match(unwrapped(drawn(run, result, false)), /Прогон идёт: 2 разговора .* Результат придёт сюда сообщением\./);
     assert.equal((await fixture.read()).phase, 'evaluating', 'interrupting the action does not stop the run');
     const progress = json(await run.execute('progress', { action: 'progress' }, undefined, undefined, ctx));
     assert.deepEqual([progress.running, progress.working, progress.finished, progress.planned], [true, 'run', 0, 2]);
@@ -392,7 +395,7 @@ test('stopping is its own request: only the run that is going is stopped, what i
     await release();
     const stopped = await pending;
     assert.equal(json(stopped).stopped, true); assert.equal(selects.length, 1, 'the owner\'s own request needs no second confirmation');
-    assert.match(drawn(run, stopped, false).join('\n'), /Прогон остановлен: сохранено \d из 2 разговоров[\s\S]*С места остановки не продолжить/);
+    assert.match(unwrapped(drawn(run, stopped, false)), /Прогон остановлен: сохранено \d из 2 разговоров.* С места остановки не продолжить/);
     assert.equal(sent.length, 0, 'a stop the owner asked for is answered in its own row, not announced twice');
     assert.ok(['cancelled', 'results_review'].includes((await fixture.read()).phase));
   } finally { await release(); await shutdown(); await fixture.cleanup(); }
@@ -478,7 +481,7 @@ test('a slow check of a changed situation does not hold the conversation: the ch
     const edit = tools.get('agent_lab_edit')!;
     const changed = await edit.execute('fact', { situation: 1, changes: [{ kind: 'fact', fact: 'f1', when: 'unknown' }] }, undefined, undefined, ctx);
     assert.equal(json(changed).check.status, 'running');
-    assert.match(drawn(edit, changed, false).join('\n'), /Ситуация 1 проверяется[\s\S]*Проверяю изменённую ситуацию в фоне/);
+    assert.match(unwrapped(drawn(edit, changed, false)), /Ситуация 1 проверяется.* Проверяю изменённую ситуацию в фоне/);
     assert.equal(sent.length, 0);
     assert.equal(json(await tools.get('agent_lab_cards')!.execute('read', { situation: 1 }, undefined, undefined, ctx)).situation.status, 'checking', 'reading works while the check runs');
     release();
