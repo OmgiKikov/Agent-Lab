@@ -1,12 +1,25 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { createServer as createHttpsServer } from 'node:https';
+import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
-import { missingGigaVariables, readGigaConfig, requestOptions, unreadableGigaFiles } from '../src/giga-transport.js';
-import { connectGateway, createGigaProvider, registerGigaProvider } from '../src/giga-provider.js';
+import {
+  createGigaTransport, GigaTransportError, missingGigaVariables, readGigaConfig, requestOptions, unreadableGigaFiles, type GigaConfig, type GigaRequestOptions,
+} from '../src/giga-transport.js';
+import { connectGateway, createGigaProvider, failureLabel, GigaRequestError, registerGigaProvider } from '../src/giga-provider.js';
 import type { GigaModel } from '../src/giga-protocol.js';
+
+const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
+// Test-only, loopback-only: the self-signed pair serves as the gateway, as its CA and as the owner's certificate.
+const loopbackCertPath = join(fixtures, 'tls-loopback-cert.pem');
+const loopbackKeyPath = join(fixtures, 'tls-loopback-key.pem');
+// Test-only: the key of a client certificate the loopback pair issued; it is not the loopback certificate's pair.
+const foreignKeyPath = join(fixtures, 'tls-client-expired-key.pem');
 
 const catalogBody = JSON.stringify({ data: [
   { id: 'GigaChat-3-Pro', type: 'chat' }, { id: 'glm-5.2', type: 'chat' }, { id: 'Embeddings', type: 'embeddings' },
@@ -86,9 +99,9 @@ test('loads an optional CA and disables certificate verification when insecure m
 });
 
 test('ignores the GigaChat variables that belong to the agent under test', () => {
-  // Проверяемый агент ходит в GigaChat своими сертификатами и держит их в GIGACHAT_*.
-  // Agent Lab запускает его дочерним процессом, поэтому обе пары живут в одном окружении:
-  // подхватить чужие значения означало бы пойти в свой шлюз не тем сертификатом.
+  // The agent under test reaches GigaChat with its own certificates and keeps them in GIGACHAT_*. Agent Lab starts it as
+  // a child process, so both pairs live in one environment: picking up the other's values would mean reaching Lab's own
+  // gateway with the wrong certificate.
   assert.equal(readGigaConfig({
     GIGACHAT_URL: 'https://other-service.example',
     GIGACHAT_CERT_PATH: '/agent/cert.pem',
@@ -98,8 +111,8 @@ test('ignores the GigaChat variables that belong to the agent under test', () =>
 });
 
 test('names the variables that keep the gateway unconfigured', () => {
-  // Без этого отсутствие провайдера выглядит как общий отказ авторизации Pi, и непонятно,
-  // чинить окружение или доступ к моделям.
+  // Without this list a missing provider looks like Pi's general refusal to authorize, and it is unclear whether to fix
+  // the environment or the access to the models.
   assert.deepEqual(missingGigaVariables({}), ['AGENT_LAB_GATEWAY_URL', 'AGENT_LAB_GATEWAY_CERT_PATH', 'AGENT_LAB_GATEWAY_KEY_PATH']);
   assert.deepEqual(missingGigaVariables({ AGENT_LAB_GATEWAY_URL: 'https://gateway.example', AGENT_LAB_GATEWAY_KEY_PATH: '/key.pem' }), ['AGENT_LAB_GATEWAY_CERT_PATH']);
   assert.deepEqual(missingGigaVariables({
@@ -108,8 +121,8 @@ test('names the variables that keep the gateway unconfigured', () => {
 });
 
 test('names the configured files it cannot read', async () => {
-  // Во внутренних проектах пути к сертификатам записаны относительно корня их репозитория;
-  // запущенный из другого каталога Agent Lab их не находит, и это нужно назвать прямо.
+  // Internal projects write certificate paths relative to their repository's root; Agent Lab started from another folder
+  // does not find them, and that has to be said plainly.
   const directory = await certDirectory();
   assert.deepEqual(unreadableGigaFiles({
     AGENT_LAB_GATEWAY_URL: 'https://gateway.example',
@@ -147,7 +160,7 @@ test('request options carry the client certificate and honour the verification s
   assert.equal(post.key?.toString(), 'test-key');
   assert.equal(post.ca?.toString(), 'test-ca');
   assert.equal((post.headers as Record<string, unknown> | undefined)?.['Content-Type'], 'application/json');
-  // Транспортная аутентификация: заголовка авторизации быть не должно.
+  // The transport authenticates: there must be no authorization header.
   assert.equal(Object.keys(post.headers ?? {}).some(name => name.toLowerCase() === 'authorization'), false);
 
   const get = requestOptions(config, '/v1/models', undefined, 60000);
@@ -160,7 +173,7 @@ test('the catalog of the gateway becomes the model list', async () => {
   const provider = await createGigaProvider({}, async path => { paths.push(path); return { status: 200, text: catalogBody }; });
   assert.deepEqual(paths, ['/v1/models']);
   assert.deepEqual(provider?.models?.map(model => model.id), ['GigaChat-3-Pro', 'glm-5.2']);
-  // Судья фиксирован на 16384 выходных токенах; меньший лимит молча обрезал бы вердикт.
+  // The judge is fixed at 16384 output tokens; a lower limit would cut a verdict silently.
   assert.ok((provider?.models?.[0]?.maxTokens ?? 0) >= 16384);
   assert.deepEqual(provider?.models?.[0]?.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 });
@@ -176,19 +189,19 @@ test('an unreadable certificate path degrades to no provider instead of crashing
   assert.equal(await createGigaProvider(env), undefined);
 });
 
-test('the catalog request carries a bounded deadline even without a run signal', async () => {
-  let capturedSignal: AbortSignal | undefined;
-  await createGigaProvider({}, async (_path, _body, signal) => { capturedSignal = signal; return { status: 200, text: catalogBody }; });
-  assert.ok(capturedSignal instanceof AbortSignal);
-  assert.equal(capturedSignal?.aborted, false);
+test('the catalog request carries a short deadline of its own even without a run signal', async () => {
+  let captured: GigaRequestOptions | undefined;
+  await createGigaProvider({}, async (_path, _body, options) => { captured = options; return { status: 200, text: catalogBody }; });
+  assert.equal(captured?.signal, undefined);
+  assert.ok((captured?.timeoutMs ?? Infinity) <= 10_000);
 });
 
 test('an already aborted run signal is honoured by the catalog request', async () => {
   const controller = new AbortController();
   controller.abort();
-  let capturedSignal: AbortSignal | undefined;
-  await createGigaProvider({}, async (_path, _body, signal) => { capturedSignal = signal; return { status: 200, text: catalogBody }; }, controller.signal);
-  assert.equal(capturedSignal?.aborted, true);
+  let captured: GigaRequestOptions | undefined;
+  await createGigaProvider({}, async (_path, _body, options) => { captured = options; return { status: 200, text: catalogBody }; }, controller.signal);
+  assert.equal(captured?.signal?.aborted, true);
 });
 
 test('without configuration or with an unusable catalog no provider is produced', async () => {
@@ -197,6 +210,97 @@ test('without configuration or with an unusable catalog no provider is produced'
   assert.equal(await createGigaProvider({}, async () => ({ status: 200, text: 'not json' })), undefined);
   assert.equal(await createGigaProvider({}, async () => ({ status: 200, text: '{"data":[]}' })), undefined);
   assert.equal(await createGigaProvider({}, async () => { throw new Error('network down'); }), undefined);
+});
+
+test('a refused connection says whose certificate failed, from the exact codes Node reports', async () => {
+  const failureOf = async (error: unknown) => {
+    const connection = await connectGateway({}, async () => { throw error; });
+    return 'failure' in connection ? connection.failure : undefined;
+  };
+  const coded = (code: string, message = 'x') => Object.assign(new Error(message), { code });
+  // A TLS 1.2 gateway's alert reaches Node only as EPROTO with OpenSSL's record of it.
+  const record = (packed: string, reason: string) => `write EPROTO C0CCA8EAF37F0000:error:${packed}:SSL routines:ssl3_read_bytes:${reason}:../deps/openssl/openssl/ssl/record/rec_layer_s3.c:918:\n`;
+  assert.deepEqual(await Promise.all([
+    failureOf(coded('DEPTH_ZERO_SELF_SIGNED_CERT')), failureOf(coded('CERT_HAS_EXPIRED')), failureOf(coded('ERR_TLS_CERT_ALTNAME_INVALID')),
+    failureOf(coded('ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED')), failureOf(coded('ERR_SSL_SSLV3_ALERT_CERTIFICATE_EXPIRED')),
+    failureOf(coded('ERR_SSL_TLSV1_ALERT_UNKNOWN_CA')), failureOf(coded('EPROTO', record('0A000415', 'ssl/tls alert certificate expired'))),
+    failureOf(coded('EPROTO', record('0A0000C6', 'packet length too long'))), failureOf(coded('ECONNREFUSED')),
+    failureOf(new GigaTransportError('timeout', 'late')), failureOf(new Error('no code')),
+  ]), [
+    { kind: 'gateway certificate', code: 'DEPTH_ZERO_SELF_SIGNED_CERT', problem: 'chain' },
+    { kind: 'gateway certificate', code: 'CERT_HAS_EXPIRED', problem: 'dates' },
+    { kind: 'gateway certificate', code: 'ERR_TLS_CERT_ALTNAME_INVALID', problem: 'name' },
+    // The owner's own certificate expired: an alert from the gateway, whatever words its code happens to contain.
+    { kind: 'client certificate', code: 'ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED', alert: 45 },
+    { kind: 'client certificate', code: 'ERR_SSL_SSLV3_ALERT_CERTIFICATE_EXPIRED', alert: 45 },
+    { kind: 'client certificate', code: 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA', alert: 48 },
+    { kind: 'client certificate', code: 'EPROTO', alert: 45 },
+    { kind: 'connection', code: 'EPROTO' }, { kind: 'connection', code: 'ECONNREFUSED' }, { kind: 'timeout' }, { kind: 'request failed' },
+  ]);
+});
+
+/** A loopback HTTPS gateway: the self-signed loopback pair, `respond` for every request. */
+function loopbackGateway(respond: Parameters<typeof createHttpsServer>[1]): Promise<{ url: string; close: () => Promise<void> }> {
+  return new Promise(resolve => {
+    const server = createHttpsServer({ cert: readFileSync(loopbackCertPath), key: readFileSync(loopbackKeyPath) }, respond);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      resolve({ url: `https://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`,
+        close: () => { server.closeAllConnections(); return new Promise(done => server.close(() => done())); } });
+    });
+  });
+}
+
+test('which of the owner\'s files is wrong is named from the files themselves', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-giga-files-'));
+  const garbage = join(directory, 'garbage.pem');
+  await writeFile(garbage, 'not a certificate');
+  const env = (paths: { cert?: string; key?: string; ca?: string }, url = 'https://127.0.0.1:9') => ({ AGENT_LAB_GATEWAY_URL: url,
+    AGENT_LAB_GATEWAY_CERT_PATH: paths.cert ?? loopbackCertPath, AGENT_LAB_GATEWAY_KEY_PATH: paths.key ?? loopbackKeyPath, AGENT_LAB_GATEWAY_CA_PATH: paths.ca });
+  const failureOf = async (environment: Record<string, string | undefined>) => {
+    const connection = await connectGateway(environment);
+    return 'failure' in connection ? connection.failure : undefined;
+  };
+  // A certificate or a key TLS cannot take fails before any request leaves.
+  assert.deepEqual(await failureOf(env({ cert: garbage })), { kind: 'unusable file', file: 'certificate' });
+  assert.deepEqual(await failureOf(env({ key: garbage })), { kind: 'unusable file', file: 'key' });
+  // A CA file that is not a certificate is ignored by TLS; the gateway's chain then fails, and the file is named, not the chain.
+  const selfSigned = await loopbackGateway((_request, response) => response.end());
+  try {
+    assert.deepEqual(await failureOf(env({ ca: garbage }, selfSigned.url)), { kind: 'unusable file', file: 'ca' });
+    assert.deepEqual(await failureOf(env({}, selfSigned.url)), { kind: 'gateway certificate', code: 'DEPTH_ZERO_SELF_SIGNED_CERT', problem: 'chain' });
+  } finally { await selfSigned.close(); }
+  // A key that is not the certificate's pair: Node sends no certificate, and the gateway says it got none (alert 116).
+  const alerting = createNetServer(socket => socket.once('data', () => socket.end(Buffer.from([21, 3, 3, 0, 2, 2, 116]))));
+  await new Promise<void>(resolve => alerting.listen(0, '127.0.0.1', resolve));
+  const address = alerting.address();
+  const alertingUrl = `https://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+  try {
+    assert.deepEqual(await failureOf(env({ key: foreignKeyPath }, alertingUrl)), { kind: 'key mismatch' });
+    assert.deepEqual(await failureOf(env({}, alertingUrl)), { kind: 'client certificate', code: 'EPROTO', alert: 116 });
+  } finally { alerting.close(); }
+});
+
+test('a chat answer slower than the transport\'s default arrives within the caller\'s deadline', { timeout: 30000 }, async () => {
+  // The gateway does not stream: nothing crosses the socket until the whole answer is ready, here after 1.5 s.
+  const gateway = await loopbackGateway((request, response) => {
+    if (request.url === '/v1/models') { response.writeHead(200).end(catalogBody); return; }
+    setTimeout(() => response.writeHead(200).end(answerBody), 1500);
+  });
+  try {
+    const config: GigaConfig = { baseUrl: gateway.url, cert: readFileSync(loopbackCertPath), key: readFileSync(loopbackKeyPath), ca: readFileSync(loopbackCertPath), rejectUnauthorized: true };
+    const provider = await createGigaProvider({}, createGigaTransport(config, { timeoutMs: 1000 }));
+    const model = { id: 'GigaChat-3-Pro', api: 'giga-v2', provider: 'giga' } as GigaModel;
+    const context = { messages: [{ role: 'user' as const, content: 'Hi', timestamp: 1 }] };
+    // Preparation allows a proposal minutes; the gateway's silence while it generates is not a failure.
+    const message = await provider!.streamSimple!(model, context, { timeoutMs: 10_000 }).result();
+    assert.deepEqual(message.content, [{ type: 'text', text: 'Hello' }]);
+    // And a caller's shorter deadline is kept: the call fails as a timeout, not later.
+    const lines = await capturedStderr(async () => {
+      await assert.rejects(provider!.streamSimple!(model, context, { timeoutMs: 300 }).result(), (error: unknown) => error instanceof GigaTransportError && error.kind === 'timeout');
+    });
+    assert.deepEqual(lines, ['giga: запрос к модели GigaChat-3-Pro не прошёл (timeout)\n']);
+  } finally { await gateway.close(); }
 });
 
 async function capturedStderr(run: () => Promise<unknown>): Promise<string[]> {
@@ -215,7 +319,11 @@ test('each catalog failure is reported to stderr by category only, never a path 
     { category: 'connection UNABLE_TO_VERIFY_LEAF_SIGNATURE', run: () => createGigaProvider({}, async () => {
       throw Object.assign(new Error('unable to verify the first certificate'), { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' });
     }) },
-    { category: 'timeout or aborted', run: () => createGigaProvider({}, async () => { throw new Error('Giga request timed out'); }) },
+    { category: 'connection ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED', run: () => createGigaProvider({}, async () => {
+      throw Object.assign(new Error('ssl/tls alert certificate expired'), { code: 'ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED' });
+    }) },
+    { category: 'timeout', run: () => createGigaProvider({}, async () => { throw new GigaTransportError('timeout', 'Giga gateway did not answer within 10 s'); }) },
+    { category: 'too large', run: () => createGigaProvider({}, async () => { throw new GigaTransportError('too large', 'Giga gateway response exceeds 2000000 bytes'); }) },
     { category: 'HTTP 403', run: () => createGigaProvider({}, async () => ({ status: 403, text: 'top secret denial body' })) },
     { category: 'bad JSON', run: () => createGigaProvider({}, async () => ({ status: 200, text: 'not json' })) },
     { category: 'empty catalog', run: () => createGigaProvider({}, async () => ({ status: 200, text: '{"data":[]}' })) },
@@ -224,7 +332,7 @@ test('each catalog failure is reported to stderr by category only, never a path 
     const lines = await capturedStderr(run);
     assert.equal(lines.length, 1, category);
     assert.match(lines[0]!, new RegExp(`\\(${category}\\)`), category);
-    assert.doesNotMatch(lines[0]!, /top secret|no\/such|cert\.pem|first certificate|Giga request/, category);
+    assert.doesNotMatch(lines[0]!, /top secret|no\/such|cert\.pem|first certificate|alert certificate|Giga gateway/, category);
   }
 });
 
@@ -276,7 +384,7 @@ test('a gateway error message carries the status but never the response body', a
   );
 });
 
-test('a failed model request names its category on stderr, because pi.ts sanitizes the error itself', async () => {
+test('a failed model request names its category on stderr, because src/llm/model-call.ts sanitizes the error itself', async () => {
   const model = { id: 'GigaChat-3-Pro', api: 'giga-v2', provider: 'giga' } as GigaModel;
   const statusLines = await capturedStderr(async () => {
     const { provider } = await providerWith([{ status: 200, text: catalogBody }, { status: 500, text: 'echo of the secret prompt' }]);
@@ -286,11 +394,25 @@ test('a failed model request names its category on stderr, because pi.ts sanitiz
 
   const timeoutLines = await capturedStderr(async () => {
     const provider = await createGigaProvider({}, async path =>
-      path === '/v1/models' ? { status: 200, text: catalogBody } : Promise.reject(new Error('Giga request timed out')));
+      path === '/v1/models' ? { status: 200, text: catalogBody } : Promise.reject(new GigaTransportError('timeout', 'Giga gateway did not answer within 120 s')));
     await provider!.streamSimple!(model, { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, {}).result().catch(() => {});
   });
-  // A timeout reads as "access revoked" through pi.ts's generic message; the category says otherwise.
+  // A timeout reads as "access revoked" through model-call.ts's generic message; the category says otherwise.
   assert.deepEqual(timeoutLines, ['giga: запрос к модели GigaChat-3-Pro не прошёл (timeout)\n']);
+});
+
+test('a request the gateway rejects as asked (422) is named as a rejected request, not as an outage', async () => {
+  const model = { id: 'glm-5.2', api: 'giga-v2', provider: 'giga' } as GigaModel;
+  let failure: unknown;
+  const lines = await capturedStderr(async () => {
+    const { provider } = await providerWith([{ status: 200, text: catalogBody }, { status: 422, text: '{"detail":"echo of the secret prompt"}' }]);
+    failure = await provider.streamSimple!(model, { messages: [{ role: 'user', content: 'Hi', timestamp: 1 }] }, {}).result().catch((error: unknown) => error);
+  });
+  assert.deepEqual(lines, ['giga: запрос к модели glm-5.2 не прошёл (HTTP 422: шлюз отверг параметры запроса)\n']);
+  assert.ok(failure instanceof GigaRequestError);
+  assert.deepEqual([failure.status, failure.rejected, /rejected the request with HTTP 422/.test(failure.message), /secret prompt/.test(failure.message)], [422, true, true, false]);
+  // A status of a gateway that failed to serve is not a rejection.
+  assert.deepEqual([new GigaRequestError(500).rejected, new GigaRequestError(429).rejected], [false, false]);
 });
 
 test('a successful status with a non-JSON body fails cleanly without echoing the body', async () => {
@@ -337,7 +459,9 @@ test('connecting names why the gateway is unavailable', async () => {
     connectGateway({}, async () => ({ status: 403, text: 'denied' })),
     connectGateway({}, async () => { throw Object.assign(new Error('x'), { code: 'ENOTFOUND' }); }),
   ]);
-  assert.deepEqual(outcomes.map(outcome => 'failure' in outcome ? outcome.failure : 'connected'), ['not configured', 'HTTP 403', 'connection ENOTFOUND']);
+  assert.deepEqual(outcomes.map(outcome => 'failure' in outcome ? outcome.failure : 'connected'),
+    [{ kind: 'not configured' }, { kind: 'http', status: 403 }, { kind: 'connection', code: 'ENOTFOUND' }]);
+  assert.deepEqual(outcomes.map(outcome => 'failure' in outcome ? failureLabel(outcome.failure) : 'connected'), ['not configured', 'HTTP 403', 'connection ENOTFOUND']);
 });
 
 test('a connected gateway lists its chat models', async () => {
