@@ -68,6 +68,31 @@ export function importBatch(raw: unknown, known: ReadonlyMap<number, string> = n
   return importBatchSchema.parse(batch);
 }
 
+/**
+ * A batch that arrives from outside the store (a saved suite carries its logs), checked rather than trusted: it
+ * parses, its content hash is the hash of the rows it was read from — every dialogue's and every refused row's
+ * original, each in its place — and its id follows from that hash. What was read from the rows is the reader's
+ * record, as it is in the store.
+ */
+export function verifiedImport(raw: unknown): ImportBatch {
+  const damaged = () => new Error('Логи повреждены: разговоры в них не совпадают с их хешем.');
+  const parsed = importBatchSchema.safeParse(raw);
+  if (!parsed.success) throw damaged();
+  const batch = parsed.data;
+  const refused = new Map(batch.rejected.map(row => [row.index, row.original] as const));
+  const count = batch.dialogues.length + batch.rejected.length;
+  const rows: unknown[] = [];
+  let read = 0;
+  for (let index = 0; index < count; index++) {
+    if (refused.has(index)) rows.push(refused.get(index));
+    else if (read < batch.dialogues.length) rows.push(batch.dialogues[read++]!.original);
+  }
+  // A refused row named twice, or placed beyond the rows, leaves the order of the rows unknown.
+  const contentHash = refused.size === batch.rejected.length && rows.length === count ? digest(rows) : undefined;
+  if (!contentHash || contentHash !== batch.contentHash || batch.id !== `import_${contentHash.slice(0, 32)}`) throw damaged();
+  return batch;
+}
+
 /** Includes all source evidence and drafts; acceptance is a receipt over this document. */
 export function libraryHash(library: ScenarioLibrary): string {
   const { acceptance: _acceptance, ...body } = library;

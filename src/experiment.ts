@@ -25,6 +25,7 @@ import { awaitingVerdict } from './comparison.js';
 import { CODE_ONLY_ASSESSMENT, deriveRun, judgeFailure, plannedTrials } from './run.js';
 import { sameTargetVersion, targetFingerprint } from './target-version.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from './connection.js';
+import { SUITE_FORMAT, carriedImports, suiteText } from './suite.js';
 import { preflightTarget, readPrompt, runRelease } from './targets.js';
 import { countingRuleFor, markTargets, measurementUsable } from './outcomes.js';
 import { simulatorChecks } from './simulator.js';
@@ -432,7 +433,7 @@ export class ExperimentLab {
       return structuredClone(record);
     });
   }
-  /** A versionable local definition: provenance survives, run results and approvals do not. */
+  /** A versionable local definition: provenance survives, run results and approvals do not; a card library's logs travel with it (suite.ts). */
   async saveSuite(id: string, file: string, scenarioIds?: string[]): Promise<string> {
     const previous = await this.get(id);
     if (previous.workflow !== 'evaluate' || !previous.scenarios.length || isRunning(previous.phase)) throw new Error('Сначала дождитесь готовых тестов.');
@@ -440,17 +441,20 @@ export class ExperimentLab {
     verifyAcceptedRun(definition);
     if (previous.trials.length) definition.sourceEvidence = suiteEvidence(previous, definition.scenarios.map(s => s.id));
     const path = resolve(file);
+    const text = await suiteText(this.store, definition, portableTarget(definition.target, dirname(path)));
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, JSON.stringify({ format: 'agent-lab-suite-1', definition: { ...definition, target: portableTarget(definition.target, dirname(path)) } }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    await writeFile(path, text, { flag: 'wx', mode: 0o600 });
     return path;
   }
   async loadSuite(file: string, scenarioIds?: string[], connection?: Connection): Promise<Experiment> {
     return this.change(async () => {
       const raw = JSON.parse(await readFile(file, 'utf8'));
-      if (raw.format !== 'agent-lab-suite-1') throw new Error('Нужен файл тестов Agent Lab, сохранённый через save-suite.');
+      if (raw.format !== SUITE_FORMAT) throw new Error('Нужен файл тестов Agent Lab, сохранённый через save-suite.');
       const previous = experimentSchema.parse({ ...raw.definition, target: connection?.target ?? resolveTarget(raw.definition.target, dirname(resolve(file))),
         ...(connection?.targetVersion ? { targetVersion: connection.targetVersion } : {}) });
       if (previous.workflow !== 'evaluate') throw new Error('Файл должен содержать обычные тесты evaluate.');
+      // Checked before anything is written: a damaged suite leaves the store as it was.
+      const imports = carriedImports(raw, previous);
       const record = freshDraft(previous, scenarioIds);
       // Keep the original run as the comparison source, not the exported draft's temporary ID.
       record.parentRunId = previous.parentRunId;
@@ -462,6 +466,8 @@ export class ExperimentLab {
       await preflightTarget(record.target);
       record.targetFingerprint = await targetFingerprint(record.target);
       verifyAcceptedRun(record);
+      // The logs its situations cite join this store's imports; one already here with the same content stays as it is.
+      for (const batch of imports) await this.store.writeImport(batch);
       await this.store.save(record);
       return structuredClone(record);
     });
