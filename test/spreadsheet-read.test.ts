@@ -120,6 +120,8 @@ test('CSV follows RFC 4180: quoted delimiters, doubled quotes and line breaks in
   assert.deepEqual(readCsv(Buffer.from('a,b\n1,2')).rows, [['a', 'b'], ['1', '2']]);
   assert.deepEqual(readCsv(Buffer.from('a,b\n1,""')).rows, [['a', 'b'], ['1', '']]);
   assert.throws(() => readCsv(Buffer.from('id,text\n1,"не закрыта\n2,x\n')), /в строке 2 не закрыта кавычка/);
+  // A sheet bigger than any export of conversations is refused, not read in part.
+  assert.throws(() => readCsv(Buffer.from(`id,text\n${'1,x\n'.repeat(100_000)}`)), /В листе больше 100\u00a0000 строк/);
 });
 
 test('CSV dialect: the delimiter and the encoding are detected, and a confirmed dialect is used as given', () => {

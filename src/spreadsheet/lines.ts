@@ -47,7 +47,8 @@ function readingLines(mapping: TableMapping, preview: TablePreview): string[] {
       `  Кто пишет — колонка ${quoted(columnLabel(layout.role))}:`,
       ...layout.roles.map(item => `    ${quoted(item.value)} — ${ROLE_WORDS[item.role]} · ${counted(item.value)}`),
       `  Текст — колонка ${quoted(columnLabel(mapping.text))}; порядок сообщений — ${layout.order ? `по колонке ${quoted(columnLabel(layout.order))}` : 'как строки в таблице'}.`];
-  if (preview.kept.length) lines.push(`  Колонки ${preview.kept.map(quoted).join(', ')} Lab сохранит при разговорах как есть; в оценке они не участвуют.`);
+  if (preview.kept.length === 1) lines.push(`  Колонку ${quoted(preview.kept[0]!)} Lab сохранит при разговорах как есть; в оценке она не участвует.`);
+  else if (preview.kept.length) lines.push(`  Колонки ${preview.kept.map(quoted).join(', ')} Lab сохранит при разговорах как есть; в оценке они не участвуют.`);
   return lines;
 }
 
