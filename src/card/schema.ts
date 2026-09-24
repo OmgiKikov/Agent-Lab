@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from '../ids.js';
-import { MATERIAL_LIMIT, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
+import { MATERIAL_LIMIT, MAX_PREPARATION_PARALLEL, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
 import { cardTopicSchema, sampleSchema, topicsKnown, trafficSchema } from '../miner/schema.js';
 import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema, preparationProgressSchema as variantPreparationSchema, requirementKindSchema } from '../scenario-contracts.js';
 
@@ -195,6 +195,9 @@ export type LibraryV2 = z.infer<typeof libraryV2Schema>;
 export const scenarioLibrarySchema = z.discriminatedUnion('formatVersion', [libraryV1Schema, libraryV2Schema]);
 export type ScenarioLibrary = z.infer<typeof scenarioLibrarySchema>;
 
+/** The paid step of a unit a call belongs to. */
+const preparationStageSchema = z.enum(['select', 'ground', 'propose', 'review']);
+
 /**
  * The checkpoint of a card preparation (card/prepare.ts), saved with the draft after every step. A unit of work
  * is one dialogue of the import (its id), or `rules_N` for a situation from the owner's rules alone. What a unit
@@ -231,9 +234,17 @@ const cardPreparationSchema = z.strictObject({
     requirementIds: ids(RECORD_REQUIREMENT_LIMIT),
     skipped: z.array(z.strictObject({ sourceId: id, reason: text(2000) })).max(MATERIAL_LIMIT).optional(),
   }).refine(value => value.done <= value.chunks, 'More prompt groundings done than planned').optional(),
-  /** A call in flight. `ground` is a `cards-v1` stage: without a unit, the grounding of the whole policy or of a chunk of the agent's prompts. */
+  /**
+   * A call in flight, as a checkpoint written before units were prepared at once names it; read only to settle such a
+   * record. `ground` is a `cards-v1` stage: without a unit, the grounding of the whole policy or of a chunk of the agent's prompts.
+   */
   activeDialogueId: id.optional(),
-  activeStage: z.enum(['select', 'ground', 'propose', 'review']).optional(),
+  activeStage: preparationStageSchema.optional(),
+  /**
+   * The calls in flight, one per unit worked on at once; a review without a unit is a step of the owner's explicit
+   * check of a card no unit names.
+   */
+  active: z.array(z.strictObject({ dialogueId: id.optional(), stage: preparationStageSchema })).min(1).max(MAX_PREPARATION_PARALLEL).optional(),
   elapsedMs: z.number().int().nonnegative().optional(),
   /** Proposal calls spent per unit, repairs included; the allowance survives a resume. */
   generationAttempts: z.array(z.strictObject({ dialogueId: id, calls: z.number().int().nonnegative() })).max(300).optional(),

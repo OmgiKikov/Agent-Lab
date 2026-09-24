@@ -60,7 +60,7 @@ function blockingRuntime(seen: Received, options: { always?: boolean } = {}): Ru
 test('a blocked card is revised once with the reviewer\'s reasons, keeps its number and becomes ready', async () => {
   const seen = received();
   await withLab(blockingRuntime(seen), async lab => {
-    const draft = await lab.create(cardInput());
+    const draft = await lab.create(cardInput(), { parallel: 1 });
     await lab.waitForIdle();
     const { library, experiment } = await lab.readCards(draft.id);
     assert.equal(experiment.error, null);
@@ -84,7 +84,7 @@ test('a blocked card is revised once with the reviewer\'s reasons, keeps its num
 test('a revision the reviewer still blocks leaves the card unusable, and it is not revised again', async () => {
   const seen = received();
   await withLab(blockingRuntime(seen, { always: true }), async lab => {
-    const draft = await lab.create(cardInput());
+    const draft = await lab.create(cardInput(), { parallel: 1 });
     await lab.waitForIdle();
     assert.equal(lateOf(seen).length, 2);
     assert.deepEqual(await statuses(lab, draft.id), ['unusable', 'ready']);
@@ -104,10 +104,10 @@ test('a revision that died in flight is never repeated on resume: the blocked ca
     return propose(request, ctx);
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput());
+    const draft = await lab.create(cardInput(), { parallel: 1 });
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
-    assert.deepEqual([progressOf(stopped).activeDialogueId, progressOf(stopped).activeStage], ['late', 'propose']);
+    assert.deepEqual(progressOf(stopped).active, [{ dialogueId: 'late', stage: 'propose' }]);
     await lab.resumePreparation(draft.id, libraryHash((await lab.readCards(draft.id)).library));
     await lab.waitForIdle();
     const progress = progressOf(await lab.get(draft.id));
@@ -143,7 +143,7 @@ test('a vague customer is a situation: its card is marked vague, its duty cites 
     return request.call.source.kind === 'dialogue' && request.call.source.dialogueId === 'late' ? vagueLate : answer;
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput());
+    const draft = await lab.create(cardInput(), { parallel: 1 });
     await lab.waitForIdle();
     const { library } = await lab.readCards(draft.id);
     assert.deepEqual(library.cards.map(card => [card.clarity, card.agentMust[0]!.requirementIds]),

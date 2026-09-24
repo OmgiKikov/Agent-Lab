@@ -14,6 +14,9 @@ export const SOURCES_PER_DIALOGUE = 5;
 export const SELECTED_SOURCE_CHARS = 90_000;
 /** UTF-8/JSON budget leaves room for the agent's prompts, the dialogue and repair feedback. */
 export const SELECTED_SOURCE_BYTES = 96_000;
+/** Units of a preparation worked on at once: the provider takes parallel calls, and a unit mostly waits on its model. */
+export const PREPARATION_PARALLEL = 4;
+export const MAX_PREPARATION_PARALLEL = 8;
 /** The largest dialogue file Lab reads whole; a bigger log needs a smaller sample first. */
 export const IMPORT_FILE_BYTES = 4_000_000;
 /** Dialogues one import batch takes. */

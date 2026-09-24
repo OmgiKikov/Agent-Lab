@@ -6,7 +6,7 @@ import { applyCommand, applyLogVersion as appendLogVersion, prepareCommand, prep
 import { convertedPreparation, convertV1Library, type Conversion } from '../card/convert.js';
 import { convertible, libraryV1Of } from '../card/legacy-v1.js';
 import { acceptLibraryV2, requireLibraryV2 } from '../card/library.js';
-import { notContinuable, pendingReviewCalls, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from '../card/prepare.js';
+import { notContinuable, pendingReviewCalls, preparationParallel, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from '../card/prepare.js';
 import type { CardCommand, LibraryV2 } from '../card/schema.js';
 import { dialogueNumbers, type DialogueNumbers } from '../card/view.js';
 import { createInputSchema, emptyUsage, fingerprint, type CreateInput, type Experiment } from '../contracts.js';
@@ -28,7 +28,15 @@ import { repeat } from './run.js';
  * fresh draft of the same library. The logs' declared agent version lives with their import, not with any draft.
  */
 
-export interface CreateOptions {
+/**
+ * How a preparation runs: `parallel` units at once, PREPARATION_PARALLEL when not named. An execution knob, like a run's:
+ * the draft does not depend on it (card/prepare.ts lands every unit's card step in plan order).
+ */
+export interface PreparationOptions {
+  parallel?: number;
+}
+
+export interface CreateOptions extends PreparationOptions {
   /** Situations at most, prepared from logs: DEFAULT_SITUATIONS when the owner names no number. */
   situations?: number;
   /** The ceiling of model calls the owner agreed to; without one it is computed the same way (card/budget.ts). */
@@ -43,6 +51,7 @@ export interface CreateOptions {
 export async function create(lab: Lab, raw: CreateInput, options: CreateOptions = {}): Promise<Experiment> {
   lab.operations.ensureIdle();
   const situations = situationCount(options.situations);
+  const parallel = preparationParallel(options.parallel);
   const originalImport = raw.originalImport ?? (raw.dialogues?.length ? importBatch(raw.dialogues) : undefined);
   const input = createInputSchema.parse({ ...raw, ...(originalImport ? { originalImport } : {}) });
   const record = newRecord(input);
@@ -66,7 +75,7 @@ export async function create(lab: Lab, raw: CreateInput, options: CreateOptions 
       : preparationCeiling({ task: record.task, sources: record.sources, situations: count, fromLogs: false }));
     const plan: CardPlan = batch ? { kind: 'dialogues', batch, sample: await logSample(lab.store, batch, runtime, ctx, situations, message => lab.operations.say(record, message)) }
       : { kind: 'rules', count };
-    await prepareCards(record, plan, input.existingAgent, runtime, ctx, lab.operations);
+    await prepareCards(record, plan, input.existingAgent, runtime, ctx, lab.operations, parallel);
     await lab.operations.checkpoint(record, 'review', 'Ситуации готовы. Проверьте их и утвердите для прогона.');
   });
   return structuredClone(record);
@@ -186,7 +195,8 @@ export async function applyLogVersion(lab: Lab, prepared: PreparedLogVersion, gr
  * out, because its cost is unknown. A first-format preparation is never continued: its draft is only read, and it goes
  * on in the card format (convertV1Draft). A resume is bounded by the draft's limit.
  */
-export function resumePreparation(lab: Lab, id: string, expectedHash: string): Promise<Experiment> {
+export function resumePreparation(lab: Lab, id: string, expectedHash: string, options: PreparationOptions = {}): Promise<Experiment> {
+  const parallel = preparationParallel(options.parallel);
   return lab.operations.change(async () => {
     const experiment = await lab.get(id);
     const progress = experiment.preparationProgress;
@@ -201,7 +211,7 @@ export function resumePreparation(lab: Lab, id: string, expectedHash: string): P
     const batch = experiment.originalImport ? await lab.store.readImport(experiment.originalImport.id) : undefined;
     moveTo(experiment, 'preparing'); experiment.error = null;
     await lab.operations.launch(experiment, async ctx => {
-      await resumeCards(experiment, batch, await lab.runtime(experiment), ctx, lab.operations);
+      await resumeCards(experiment, batch, await lab.runtime(experiment), ctx, lab.operations, parallel);
       await lab.operations.checkpoint(experiment, 'review', 'Подготовка продолжена с сохранённого места. Проверьте ситуации и утвердите для прогона.');
     }, { ownsMutation: true });
     return structuredClone(experiment);

@@ -80,7 +80,7 @@ export class ExperimentLab {
   recheckCards(id: string, options?: { defer?: boolean; expectedHash?: string; explicit?: boolean }) { return library.recheckCards(this.lab, id, options); }
   prepareLogVersion(command: LogVersionCommand, options: { via: Via; at?: string }): Promise<PreparedLogVersion> { return library.prepareLogVersion(this.lab, command, options); }
   applyLogVersion(prepared: PreparedLogVersion, grant: HostGrant): Promise<LogVersionJournal> { return library.applyLogVersion(this.lab, prepared, grant); }
-  resumePreparation(id: string, expectedHash: string): Promise<Experiment> { return library.resumePreparation(this.lab, id, expectedHash); }
+  resumePreparation(id: string, expectedHash: string, options?: library.PreparationOptions): Promise<Experiment> { return library.resumePreparation(this.lab, id, expectedHash, options); }
   convertV1Draft(id: string): Promise<Pick<Conversion, 'library' | 'left' | 'calls'> & { experiment: Experiment }> { return library.convertV1Draft(this.lab, id); }
 
   updateDraft(id: string, expectedHash: string, raw: DraftPatch): Promise<Experiment> { return run.updateDraft(this.lab, id, expectedHash, raw); }
