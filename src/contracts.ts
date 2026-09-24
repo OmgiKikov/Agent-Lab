@@ -99,15 +99,17 @@ export function materialSources(materials: readonly z.infer<typeof materialSchem
   return materials.map((material, index) => ({ id: `source-${index + 1}`, name: material.name, content: material.content, hash: fingerprint(material.content),
     ...(material.kind ? { kind: material.kind } : {}) }));
 }
-/** Requirements per run: the budget is stated to the model, and an overshoot is answered with what to do. */
-export const REQUIREMENT_LIMIT = 80;
 /** Generated cards per run; owner cards come on top. */
 export const SCENARIO_LIMIT = 20;
+/**
+ * A rule the agent is judged by: a sentence of the owner's materials, quoted verbatim. A card preparation makes one from
+ * each sentence a card cites (card/proposal.ts); older preparations grounded them first, in a call of their own.
+ */
 export const requirementSchema = z.strictObject({
   id: identifier, text: text.max(2000), sourceId: identifier, quote: text.max(3000), critical: z.boolean(),
-  /** Whether a user can see the rule kept or broken in a reply, as the grounding call typed it. Requirements stored before the field existed lack it. */
+  /** Whether a user can see the rule kept or broken in a reply, as the preparation typed it. Requirements stored before the field existed lack it. */
   observable: z.boolean().optional(),
-  /** Behaviour, knowledge or an operator procedure, as the grounding call typed it (scenario-contracts.ts). Requirements stored before the field existed lack it. */
+  /** Behaviour, knowledge or an operator procedure, as the preparation typed it (scenario-contracts.ts). Requirements stored before the field existed lack it. */
   kind: requirementKindSchema.optional(),
 });
 export type Requirement = z.infer<typeof requirementSchema>;
@@ -276,8 +278,8 @@ export const createInputSchema = z.strictObject({
 export type CreateInput = z.infer<typeof createInputSchema>;
 
 const preparationSchema = z.strictObject({
-  // A record keeps the union of what every dialogue's articles yielded (RECORD_REQUIREMENT_LIMIT); REQUIREMENT_LIMIT
-  // bounds one grounding call only. A large knowledge base makes more than one call's worth on a single record.
+  // A record keeps the union of what every dialogue's reading yielded (RECORD_REQUIREMENT_LIMIT): the sentences its
+  // cards cite, or what an older preparation grounded for each dialogue of a large knowledge base.
   requirements: z.array(requirementSchema).min(1).max(RECORD_REQUIREMENT_LIMIT),
   questions: z.array(text.max(2000)).max(12),
   scenarios: z.array(scenarioSchema).max(200),

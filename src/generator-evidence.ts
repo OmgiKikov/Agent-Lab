@@ -3,9 +3,9 @@ import { addUsage, emptyUsage, fingerprint } from './contracts.js';
 import type { CallContext, Runtime } from './runtime.js';
 
 /**
- * The calls a journal names. Stored journals are read as written: `prepare` is how journals written before
- * `groundRequirements` name the grounding call, and `scenarioProposals` and `assessScenarioProposals` are the
- * first format's preparation, which nothing makes any more.
+ * The calls a journal names. Stored journals are read as written: `groundRequirements` is the grounding call of
+ * preparations made before the proposal cited the materials itself, `prepare` how still older journals name it, and
+ * `scenarioProposals` and `assessScenarioProposals` are the first format's preparation; nothing makes any of them now.
  */
 type Method = 'groundRequirements' | 'prepare' | 'selectSources' | 'scenarioProposals' | 'assessScenarioProposals' | 'proposeCard' | 'reviewCard' | 'topicMap';
 export type GeneratorEvidence = {
@@ -51,7 +51,6 @@ export function captureGeneratorEvidence(runtime: Runtime, emit: (event: Generat
     build: (plan, ctx, onProgress) => capture('topicMap', (input: typeof plan, inner: CallContext) => mapper.build(input, inner, onProgress))(plan, ctx) };
   return { ...runtime,
     ...(topicMap ? { topicMap } : {}),
-    ...(runtime.groundRequirements ? { groundRequirements: capture('groundRequirements', runtime.groundRequirements.bind(runtime)) } : {}),
     ...(runtime.selectSources ? { selectSources: capture('selectSources', runtime.selectSources.bind(runtime)) } : {}),
     ...(runtime.proposeCard ? { proposeCard: capture('proposeCard', runtime.proposeCard.bind(runtime)) } : {}),
     ...(runtime.reviewCard ? { reviewCard: capture('reviewCard', runtime.reviewCard.bind(runtime)) } : {}),

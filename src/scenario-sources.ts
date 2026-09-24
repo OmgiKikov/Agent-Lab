@@ -2,25 +2,6 @@ import type { Source } from './contracts.js';
 import type { CallContext, Runtime, SourceSelectionInput } from './runtime.js';
 import { SELECTED_SOURCE_BYTES, SELECTED_SOURCE_CHARS, SOURCES_PER_DIALOGUE, serializedBytes, workInputIssue } from './limits.js';
 
-/**
- * The agent's prompts on the per-dialogue path (a knowledge base too large for one call): they are its general rules,
- * which every dialogue needs, so they are grounded once, before the dialogues, in as few calls as fit — greedy chunks
- * in the record's order. A prompt too large for a call alone is never read in part: it is left out with the reason.
- */
-export interface PromptGroundingPlan { chunks: Source[][]; skipped: { source: Source; reason: string }[] }
-
-export function promptGroundingPlan(task: string, sources: readonly Source[]): PromptGroundingPlan {
-  const plan: PromptGroundingPlan = { chunks: [], skipped: [] };
-  for (const prompt of sources.filter(source => source.kind === 'prompt')) {
-    const alone = workInputIssue({ task, sources: [prompt] });
-    if (alone) { plan.skipped.push({ source: prompt, reason: `Промпт «${prompt.name}» не помещается в один запрос: ${alone}` }); continue; }
-    const last = plan.chunks.at(-1);
-    if (last && !workInputIssue({ task, sources: [...last, prompt] })) last.push(prompt);
-    else plan.chunks.push([prompt]);
-  }
-  return plan;
-}
-
 /** Whole articles only: selection never silently truncates a procedure or exception. */
 export function fitScenarioSources(ids: string[], knowledge: Source[]): Source[] {
   const chosen: Source[] = [];

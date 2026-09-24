@@ -5,20 +5,15 @@
 export const MATERIAL_LIMIT = 1000;
 export const MATERIAL_CHARS = 400_000;
 export const MATERIALS_TOTAL_CHARS = 4_000_000;
-/** Requirements kept on one record: the union of what each dialogue's articles yielded. One grounding call still returns at most REQUIREMENT_LIMIT. */
+/** Requirements kept on one record: the sentences its cards cite (a preparation), or what older preparations grounded. */
 export const RECORD_REQUIREMENT_LIMIT = 800;
 /** A longer article is split into parts of at most this many characters, at paragraph boundaries, so any part fits one model call. */
 export const MATERIAL_PART_CHARS = 12_000;
 /** Articles the model may pick for one dialogue from the table of contents, and how much of them one dialogue's calls may carry. */
 export const SOURCES_PER_DIALOGUE = 5;
 export const SELECTED_SOURCE_CHARS = 90_000;
-/** UTF-8/JSON budget leaves room for the dialogue, focused requirements and repair feedback. */
+/** UTF-8/JSON budget leaves room for the agent's prompts, the dialogue and repair feedback. */
 export const SELECTED_SOURCE_BYTES = 96_000;
-/** Requirements one dialogue's grounding call may return: the rules that decide this dialogue, not the whole policy. */
-export const FOCUSED_REQUIREMENT_LIMIT = 12;
-/** The agent's own rules (grounded once from its prompts) one dialogue's grounding call may name as deciding it, and how much of each rule's text it is shown. */
-export const AGENT_RULES_PER_DIALOGUE = 8;
-export const AGENT_RULE_CHARS = 200;
 /** The largest dialogue file Lab reads whole; a bigger log needs a smaller sample first. */
 export const IMPORT_FILE_BYTES = 4_000_000;
 /** Dialogues one import batch takes. */
@@ -29,7 +24,7 @@ export const IMPORT_DIALOGUE_LIMIT = 300;
  * on the agent's prompts, its articles and a long dialogue must be proposed and reviewed whole, because dropping the
  * situations that do not fit would drop exactly the long conversations and bias the sample.
  */
-const MODEL_INPUT_BYTES = 240_000;
+export const MODEL_INPUT_BYTES = 240_000;
 /** The whole request of a bounded task: the data above plus the role prompt, the schema and a repair's feedback. */
 export const MODEL_REQUEST_BYTES = MODEL_INPUT_BYTES + 32_000;
 export const serializedBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');

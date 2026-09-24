@@ -6,7 +6,7 @@ import { clip } from '../text.js';
 import { contains, importEvidence, loggedMessages, normalizeText, quotable, type LoggedMessage } from './checks.js';
 import { orderedVariants } from './legacy-v1.js';
 import { addCard, createLibraryV2 } from './library.js';
-import { pendingReviewCalls, preparationInputHash } from './prepare.js';
+import { CARD_PROTOCOL, pendingReviewCalls, preparationInputHash } from './prepare.js';
 import { cardSchema, type Card, type CardPreparation, type LibraryV2, type PreparationProgress } from './schema.js';
 
 /*
@@ -164,9 +164,9 @@ export function convertV1Library(v1: LibraryV1, input: { id: string; createdAt: 
  */
 export function convertedPreparation(record: Experiment, conversion: Conversion, previous: PreparationProgress | undefined): CardPreparation {
   const selection = previous?.sourceSelection?.filter(row => isIdentifier(row.dialogueId));
-  return { protocol: 'cards-v1', inputHash: preparationInputHash(record, 'cards-v1'), status: 'complete', pending: [], processed: [...new Set(conversion.units.map(item => item.unit))],
+  return { protocol: CARD_PROTOCOL, inputHash: preparationInputHash(record, CARD_PROTOCOL), status: 'complete', pending: [], processed: [...new Set(conversion.units.map(item => item.unit))],
     excluded: conversion.left.map(item => ({ dialogueId: item.variantId, reason: `Ситуация «${clip(item.title, 160)}» не перенесена: ${item.reason}.` })),
-    groundingComplete: true, ...(selection ? { sourceSelection: selection } : {}),
+    ...(selection ? { sourceSelection: selection } : {}),
     cards: conversion.units.map(item => ({ dialogueId: item.unit, cardId: item.cardId })) };
 }
 

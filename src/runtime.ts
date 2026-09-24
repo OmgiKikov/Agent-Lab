@@ -3,7 +3,7 @@ import type { JudgeAudit, MetricAssessment } from './assessment.js';
 import type { LogJudge } from './card/calibration.js';
 import type { CardProposal, CardProposalRequest } from './card/proposal.js';
 import type { CardReview, CardReviewRequest } from './card/review.js';
-import type { FailureMode, Requirement, Scenario, Source, TraceEvent, Trial, Usage } from './contracts.js';
+import type { FailureMode, Scenario, Source, TraceEvent, Trial, Usage } from './contracts.js';
 import { identifierSchema as identifier } from './ids.js';
 import type { BuilderModel, TopicMap, TopicMapPlan, TopicMapProgress } from './miner/topic-map.js';
 import type { PurposeReader } from './prompt-purpose.js';
@@ -32,22 +32,9 @@ export interface DialogueMessage { role: 'user' | 'assistant'; content: string }
 export interface TargetSession { respond(message: string): Promise<string>; close(): Promise<void> }
 export const userTurnSchema = z.strictObject({ done: z.boolean(), message: z.string().max(6000) }).refine(v => v.done || v.message.trim().length > 0, 'Empty user message');
 export type UserTurn = z.infer<typeof userTurnSchema>;
-export interface GroundingInput {
-  task: string; sources: Source[];
-  /**
-   * Ground only the rules that decide one dialogue: the customer's own messages, never the old agent's replies. The
-   * agent's rules, grounded once from its prompts, are offered by id and a clipped text: the call names those that decide it.
-   */
-  focus?: { dialogueId: string; customerMessages: string[]; agentRules?: { id: string; text: string }[] };
-}
-export interface Grounding {
-  requirements: Requirement[]; questions: string[];
-  /** A focused call offered agent rules: the ones that decide this dialogue, each one of the offered ids. */
-  agentRuleIds?: string[];
-}
 export interface SourceSelectionInput {
   task: string;
-  /** Articles by title and size; the agent's prompts are never in it — they are grounded once for every dialogue (card/prepare.ts). */
+  /** Articles by title and size; the agent's prompts are never in it — every proposal reads them all (card/prepare.ts). */
   catalog: Array<{ id: string; name: string; chars: number }>;
   dialogue: { id: string; messages: DialogueMessage[] };
   limit: number;
@@ -64,8 +51,6 @@ export interface Runtime {
   proposeCard?(input: CardProposalRequest, ctx: CallContext): Promise<CardProposal>;
   /** The independent reviewer's verdict on each listed claim of one card, and the model that gave it. */
   reviewCard?(input: CardReviewRequest, ctx: CallContext): Promise<CardReview>;
-  /** Owner requirements with exact quotes from the supplied sources, and the business questions they leave open. */
-  groundRequirements?(input: GroundingInput, ctx: CallContext): Promise<Grounding>;
   /** The free LLM user of scenarios without an `execution` block: recorded runs made before the scenario library. */
   userTurn?(input: { user: Scenario['user']; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserTurn>;
   assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial }, ctx: CallContext): Promise<MetricAssessment[]>;

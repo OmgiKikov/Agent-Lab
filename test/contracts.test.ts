@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { REQUIREMENT_LIMIT, SANDBOX_RETIRED, runnableTargetSchema, createInputSchema, dialogueSchema, draftPatchSchema, emptyUsage, fingerprint, humanReviewInputSchema, internalPromptRule, observableRule, validateFailureModes, experimentSchema, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, worldSchema } from '../src/contracts.js';
+import { SANDBOX_RETIRED, runnableTargetSchema, createInputSchema, dialogueSchema, draftPatchSchema, emptyUsage, fingerprint, humanReviewInputSchema, internalPromptRule, observableRule, validateFailureModes, experimentSchema, scenarioSchema, settingsSchema, SIMULATOR_CHECK_IDS, targetSchema, trialSchema, validatePreparation, worldSchema } from '../src/contracts.js';
 import { RECORD_REQUIREMENT_LIMIT } from '../src/limits.js';
 import { valueTokens, verbatimSpan, verbatimSpanAt } from '../src/verbatim.js';
 import { validationDialogueIssue } from '../src/imports.js';
@@ -29,10 +29,10 @@ function card(overrides: Record<string, unknown> = {}) {
   };
 }
 const preparation = (scenarios: unknown[]) => ({ requirements: [requirement], questions: [], scenarios });
-test('a record keeps more requirements than one grounding call returns: a large knowledge base is accepted up to the record limit', () => {
-  // The owner's real knowledge base (272 articles) yielded more than REQUIREMENT_LIMIT rules over 30 dialogues.
-  const many = Array.from({ length: REQUIREMENT_LIMIT + 1 }, (_, i) => ({ ...requirement, id: i ? `rule_${i}` : requirement.id }));
-  assert.equal(validatePreparation({ requirements: many, questions: [], scenarios: [card()] }, [source]).requirements.length, REQUIREMENT_LIMIT + 1);
+test('a record keeps more requirements than one grounding call returned: a large knowledge base is accepted up to the record limit', () => {
+  // The owner's real knowledge base (272 articles) yielded more than the 80 rules one grounding call returned (cards-v1) over 30 dialogues.
+  const many = Array.from({ length: 81 }, (_, i) => ({ ...requirement, id: i ? `rule_${i}` : requirement.id }));
+  assert.equal(validatePreparation({ requirements: many, questions: [], scenarios: [card()] }, [source]).requirements.length, 81);
   const tooMany = Array.from({ length: RECORD_REQUIREMENT_LIMIT + 1 }, (_, i) => ({ ...requirement, id: i ? `rule_${i}` : requirement.id }));
   assert.throws(() => validatePreparation({ requirements: tooMany, questions: [], scenarios: [card()] }, [source]));
 });

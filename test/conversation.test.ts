@@ -52,7 +52,7 @@ const doubted = (alias: string, request: CardReviewRequest) => alias === 'fact_f
 function runtimeFixture(questions = false): Runtime {
   const base = cardRuntime();
   return { ...base,
-    async groundRequirements(input, ctx) { await buildGate; ctx.signal.throwIfAborted(); return base.groundRequirements!(input, ctx); },
+    async proposeCard(request, ctx) { await buildGate; ctx.signal.throwIfAborted(); return base.proposeCard!(request, ctx); },
     async reviewCard(request, ctx) {
       await checkGate; ctx.signal.throwIfAborted(); ctx.beforeCall();
       return { verdicts: Object.fromEntries(request.aliases.map(alias => [alias, questions && doubted(alias, request) ? DOUBT : READY])), model: 'fixture/reviewer' };
