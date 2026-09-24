@@ -258,7 +258,7 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
   const fingerprintCheck = async (message: string) => {
     if (record.targetFingerprint && !sameTargetVersion(record.targetFingerprint, await targetFingerprint(record.target))) throw new Error(message);
   };
-  let completed = 0, next = 0;
+  let completed = 0, next = 0, rerun = 0;
   let failed = false;
   const worker = async () => {
     while (next < attempts.length && !failed) {
@@ -269,7 +269,7 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
       await fingerprintCheck('Код внешнего агента изменился во время прогона. Создайте повтор с новой версией.');
       const progress = () => `${prefix}${scenario.title} · диалог ${completed + 1}/${planned}${running()}`;
       lab.operations.say(record, `${progress()} · открываем сессию`);
-      const trial = await evaluateTrial({ runtime, revision: agent, scenario, repeat, manifestHash: hash, sources: record.sources, judgeSources: scenarioSources(record, scenario), requirements: record.requirements, settings: record.settings,
+      const dialogue = () => evaluateTrial({ runtime, revision: agent, scenario, repeat, manifestHash: hash, sources: record.sources, judgeSources: scenarioSources(record, scenario), requirements: record.requirements, settings: record.settings,
         control: controls.has(scenario.id), onStage: stage => lab.operations.say(record, `${progress()} · ${{ target: 'ответ агента', user: 'реплика пользователя', assessment: 'оценка критериев' }[stage]}`),
         ctx: { ...ctx, onTrace: (trialId, event) => {
           ctx.onTrace?.(trialId, event);
@@ -278,6 +278,15 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
             : event.type === 'tool_result' ? 'инструмент завершён' : event.type === 'retrieval' ? 'RAG-контекст получен' : 'сбой диалога';
           lab.operations.say(record, `${progress()} · ${stage}`);
         } }, userMode, target: record.target });
+      let trial = await dialogue();
+      // A stand that failed once (a 500, a dropped connection) says nothing about the agent: the conversation is run
+      // again, once, from the start. The failed one stays in the trace journal and the record names how many were
+      // rerun; an empty reply is the agent's own answer and is never rerun.
+      if (standFailed(trial) && !ctx.signal.aborted) {
+        lab.operations.say(record, `${progress()} · сбой стенда, повторяю разговор`);
+        trial = await dialogue();
+        rerun++;
+      }
       record.trials.push(trial);
       if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) {
         const note = 'Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.';
@@ -299,8 +308,14 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
   const cardOrder = new Map(attempts.map((attempt, index) => [`${attempt.scenario.id}|${attempt.userMode}|${attempt.repeat}`, index]));
   const position = (trial: Experiment['trials'][number]) => cardOrder.get(`${trial.scenarioId}|${trial.userMode}|${trial.repeat}`) ?? attempts.length;
   record.trials.push(...record.trials.splice(firstTrial).sort((a, b) => position(a) - position(b)));
+  if (rerun) record.limitations.push(`Разговоров, повторённых после сбоя стенда: ${rerun}.`);
   const rejected = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
   if (rejected) throw rejected.reason;
+}
+
+/** The stand, not the agent, broke the conversation: the adapter or the agent's service threw (an `error` event), not an empty reply. */
+export function standFailed(trial: Experiment['trials'][number]): boolean {
+  return trial.outcome === 'invalid' && trial.invalidCause === 'agent' && trial.events.some(event => event.type === 'error');
 }
 
 /**
