@@ -91,15 +91,22 @@ export function compilePolicy(card: Card, maxTurns?: number): CompiledPolicy {
 const withoutStop = (text: string): string => text.endsWith('.') ? text.slice(0, -1) : text;
 
 /**
+ * How the judge decides an expectation observed on the agent's tools. Only in definitions compiled with it: an
+ * accepted definition is sealed as it was, and a first-format card's projection never carries it.
+ */
+const TOOL_LOG_RULE = 'Проверяется по журналу инструментов агента: решайте по событиям tool_call и tool_result и цитируйте tool_result; слова агента о том, что он что-то сделал, действие не доказывают.';
+
+/**
  * One expectation as a rubric of its own — the renderer of every expectation the judge reads, of a card
  * and of a first-format checkpoint alike. `card` names where it comes from («карточки №3»). A duty that
  * depends on the agent's path is not broken when that path never happened.
  */
-export function expectationRubric(expectation: Pick<Expectation, 'id' | 'text' | 'requirementIds' | 'appliesWhen'>, letter: string, card: string): Rubric {
+export function expectationRubric(expectation: Pick<Expectation, 'id' | 'text' | 'requirementIds' | 'appliesWhen'>, letter: string, card: string,
+  options: { toolLog?: boolean } = {}): Rubric {
   const duty = withoutStop(expectation.text);
   const when = expectation.appliesWhen === undefined ? undefined : withoutStop(expectation.appliesWhen);
   return { id: expectation.id, subject: 'agent', name: clip(expectation.text, 120),
-    description: `Ожидание ${letter} ${card}. Основание — требования ${expectation.requirementIds.join(', ')} (см. requirements).`,
+    description: `Ожидание ${letter} ${card}. Основание — требования ${expectation.requirementIds.join(', ')} (см. requirements).${options.toolLog ? ` ${TOOL_LOG_RULE}` : ''}`,
     passCriteria: when ? `Если ${when}: выполнено — ${duty}. Если этого в диалоге не было, ожидание не нарушено.` : `Выполнено: ${duty}.`,
     failCriteria: when ? `${when}, но не выполнено: ${duty}.` : `Не выполнено: ${duty}.` };
 }
@@ -148,7 +155,8 @@ export function compileCard(card: Card, context: CompileContext): Scenario {
       userView: { goal: wants, opening: writes, facts, policy, missing },
       environmentView: context.environment ?? { mode: 'prompt' },
       evaluatorView: { expectations: card.agentMust, requirements } },
-    metrics: card.agentMust.map(expectation => expectationRubric(expectation, expectationLetter(expectation.id), `карточки №${card.number}`)),
+    metrics: card.agentMust.map(expectation => expectationRubric(expectation, expectationLetter(expectation.id), `карточки №${card.number}`,
+      { toolLog: expectation.observation === 'tool' })),
   });
   return { ...parsed, split: 'dev' };
 }

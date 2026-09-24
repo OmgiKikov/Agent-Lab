@@ -28,17 +28,20 @@ export interface ProposalCall {
   requirementIds: [string, ...string[]];
   /** Always the reply; a tool log or the state only where the connection confirmed it can be observed. */
   observations: ['reply', ...Observation[]];
+  /** The agent's tools the connection named, offered with the tool channel: a tool expectation names one of them in plain words. */
+  tools?: string[];
   /** The run's limit on the customer's messages: the card's required way must fit it. */
   maxTurns: number;
 }
 
 export function proposalCall(input: { source: ProposalCall['source']; messages: LoggedMessage[]; requirements: readonly Pick<Requirement, 'id'>[];
-  confirmedObservations?: ('tool' | 'state')[]; maxTurns: number }): ProposalCall {
+  confirmedObservations?: ('tool' | 'state')[]; tools?: string[]; maxTurns: number }): ProposalCall {
   const [first, ...rest] = input.requirements.map(requirement => requirement.id);
   if (first === undefined) throw new Error('Ситуация строится только на правилах владельца, а их для неё нет.');
   const customer = input.messages.filter(message => message.role === 'user').map(message => message.index);
   return { source: input.source, messages: input.messages, customerEvents: customer, laterEvents: customer.slice(1),
-    requirementIds: [first, ...rest], observations: ['reply', ...(input.confirmedObservations ?? [])], maxTurns: input.maxTurns };
+    requirementIds: [first, ...rest], observations: ['reply', ...(input.confirmedObservations ?? [])],
+    ...(input.tools?.length ? { tools: [...input.tools] } : {}), maxTurns: input.maxTurns };
 }
 
 /** Plausible profile facts one card may add, and the card's facts in all: the brief stays one screen. */
@@ -237,6 +240,6 @@ export function proposalPayload(request: CardProposalRequest) {
     requirements: request.requirements,
     articles: request.articles.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })),
     topics: request.topics, ...(request.written.length ? { written: request.written } : {}),
-    target: { observations: call.observations },
+    target: { observations: call.observations, ...(call.tools ? { tools: call.tools } : {}) },
   };
 }

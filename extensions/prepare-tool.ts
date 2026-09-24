@@ -5,7 +5,7 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-
 import { Type } from 'typebox';
 import { z } from 'zod';
 import { preparationCeiling } from '../src/card/budget.js';
-import { createInputSchema, DEFAULT_JUDGE, materialSources, SCENARIO_LIMIT, settingsSchema, type Experiment } from '../src/contracts.js';
+import { createInputSchema, DEFAULT_JUDGE, isRunnable, materialSources, SCENARIO_LIMIT, settingsSchema, type Experiment } from '../src/contracts.js';
 import { rememberedConnection } from '../src/connection.js';
 import { demoInput } from '../src/demo.js';
 import { detectProject, targetLabel, type ProjectDetection } from '../src/detect.js';
@@ -246,7 +246,7 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   const consent = libraryImport ? await preparationConsent(host.reading(directory).store, { input, situations: count }) : undefined;
   // The ceiling the owner agrees to is the one the preparation stops at: it goes to the lab with the consent.
   const callCeiling = consent?.callCeiling ?? preparationCeiling({ task: input.task, sources: materialSources(input.materials), situations: count, fromLogs: false });
-  const plan = consent ? consentText(consent, basename(logs)) : rulesConsentText(count, callCeiling);
+  const plan = consent ? consentText(consent, basename(logs)) : rulesConsentText(count, callCeiling, isRunnable(input.target));
   const sources = [...(params.rules ? ['ваши слова из разговора'] : []), ...prompts.map(prompt => prompt.id),
     ...[...files.promptFiles, ...files.materialFiles].map(file => shownPath(file, ctx.cwd))];
   const agent = connection ? `Агент: ${targetLabel(connection.target, ctx.cwd)}.`

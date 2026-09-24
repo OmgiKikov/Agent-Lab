@@ -272,7 +272,9 @@ class Preparation {
     if (!rules.length) return { excluded: judged.length ? 'Этот разговор решают только правила вне свода правил (например, инструкции для операторов), а по ним бота не судят.'
       : 'Правила владельца не решают этот разговор, а ситуация без правила не строится.' };
     const call = proposalCall({ source: dialogue && batch ? { kind: 'dialogue', batchId: batch.id, dialogueId: unit } : { kind: 'rules', unit },
-      messages: dialogue ? loggedMessages(dialogue) : [], requirements: rules, maxTurns: record.settings.maxTurns });
+      messages: dialogue ? loggedMessages(dialogue) : [], requirements: rules, maxTurns: record.settings.maxTurns,
+      // The tool channel the probe before the preparation confirmed: its tools may be what a duty is observed on.
+      ...(record.toolChannel?.confirmed ? { confirmedObservations: ['tool' as const], tools: record.toolChannel.tools } : {}) });
     if (call.laterEvents.length > LATER_MESSAGES) return { excluded: `После первой реплики клиент пишет ещё больше ${LATER_MESSAGES} раз — для одной ситуации это слишком много.` };
     // A sampled conversation's topic is the map's: the model is offered it alone, and the card takes it as the map words it.
     const topic = dialogue && batch ? unitTopic(this.progress, this.library, batch.id, unit) : undefined;

@@ -146,7 +146,9 @@ export interface ResultView {
   /** The rules the counted situations were judged by, by source, and whether operator instructions bind; null for rules grounded before kinds. */
   bar: RuleBar | null;
   /** `target` is the agent version the owner or the adapter named; null when none was named (a fingerprint is not a name). */
-  scope: { cards: number; synthetic: number; dialogues: number; judgeModel?: string; costUsd: number | null; target: string | null };
+  scope: { cards: number; synthetic: number; dialogues: number; judgeModel?: string; costUsd: number | null; target: string | null;
+    /** Expectations of the counted situations observed on the agent's tool calls; absent when there are none. */
+    toolExpectations?: number };
   /** Ordered: the recommended step first, then what can always be done with a finished result. */
   next: NextStep[];
 }
@@ -292,6 +294,10 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const exclusions = record.validationExclusions ?? [];
   const model = judgeModel(record);
   const reviewed = fullyReviewed(run);
+  const toolExpectations = run.situations.filter(item => !item.control).reduce((n, item) => {
+    const rule = headlineRule(item.scenario, item.attempts.map(attempt => attempt.trial));
+    return n + (rule.kind === 'expectations' ? rule.expectations.filter(expectation => expectation.observation === 'tool').length : 0);
+  }, 0);
   const view: Omit<ResultView, 'next'> = {
     runId: record.id, phase: record.phase, mode: record.mode, createdAt: record.createdAt, countingRules,
     headline: { passed, decided, accuracy, range: wilson(passed, decided), smallSample: decided > 0 && decided < SMALL_SAMPLE },
@@ -313,6 +319,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
       ...(model ? { judgeModel: model } : {}),
       costUsd: record.usage.costUsd,
       target: record.targetVersion ?? record.targetRelease ?? null,
+      ...(toolExpectations ? { toolExpectations } : {}),
     },
     ...(stability ? { stability } : {}),
   };

@@ -131,6 +131,12 @@ export function trustSegments(view: ResultView): { text: string; warn: boolean }
   return parts.map((part, i) => i ? part : { ...part, text: part.text.charAt(0).toLocaleUpperCase('ru') + part.text.slice(1) });
 }
 
+/** «3 ожидания проверены по вызовам инструментов агента»: said under «Как считали»; null when every expectation was read from the replies. */
+export function toolExpectationsText(view: Pick<ResultView, 'scope'>): string | null {
+  const count = view.scope.toolExpectations;
+  return count ? `${countText(count, ['ожидание проверено', 'ожидания проверены', 'ожиданий проверены'])} по вызовам инструментов агента` : null;
+}
+
 /**
  * «Клиент не знал ответа на 40% вопросов агента»: the customer's «не знаю» among every reply to an agent's question
  * (a fact named or «не знаю»); null when no controlled customer was asked anything. Said on every surface in these words.

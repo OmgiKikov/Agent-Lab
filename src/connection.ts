@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import { addUsage, checkSchema, emptyUsage, experimentSchema, fingerprint, isRunnable, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type Scenario, type Target } from './contracts.js';
+import { addUsage, checkSchema, emptyUsage, experimentSchema, fingerprint, isRunnable, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type RunnableTarget, type Scenario, type Target, type ToolChannel } from './contracts.js';
 import type { Runtime } from './runtime.js';
 import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
@@ -125,6 +125,35 @@ export async function doctor(connection: Connection, signal = new AbortControlle
         : 'Проверьте ответы, итоговое состояние, resetConfirmed, eventsComplete и стабильную version.',
       limitation: 'Это проверка заданного поведения. Состояние и полноту событий сообщает адаптер; его реализацию нужно сверять с тестовой системой.' };
   } finally { clearTimeout(timer); }
+}
+
+/** The customer's message of the tool probe when the preparation has no logged one: the agent answers it as it would anyone. */
+export const TOOL_PROBE_OPENING = 'Здравствуйте! Подскажите, пожалуйста, чем вы можете помочь?';
+
+/**
+ * Whether the agent's tool calls can be judged: one message through the real adapter path, no model call. The tool
+ * channel is confirmed only when every reply declares its tool journal complete (eventsComplete) and names at least
+ * one tool — in its declared scope or in the calls it made; a wildcard scope names no tool. Anything else leaves the
+ * agent judged on its replies, and the reason says why in the owner's words. The probe is part of the preparation's
+ * consent («Lab один раз спросит агента…»), and its answer is stored on the record so a resume and the acceptance
+ * read the same channel.
+ */
+export async function probeToolChannel(target: RunnableTarget, opening: string, signal: AbortSignal): Promise<ToolChannel> {
+  const settings = settingsSchema.parse({ repeats: 1, maxTurns: 1, maxCalls: 1, userModes: ['static'], maxDurationMs: 180000 });
+  const spec = { name: 'Tool probe', instructions: 'Use the external connection.', tools: [] };
+  const revision = { id: fingerprint(spec), spec, parentId: null, hypothesis: 'Tool probe', createdAt: new Date().toISOString() };
+  const scenario: Scenario = { id: 'probe-tools', familyId: 'probe', split: 'dev', title: 'Какие инструменты показывает агент', tier: 'smoke', provenance: 'curated',
+    requirementIds: [], user: { goal: 'Узнать, чем агент может помочь', facts: 'Нет', behavior: 'Одно сообщение', opening, maxFollowUps: 0 },
+    initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [] };
+  const trial = await evaluateTrial({ runtime: {}, revision, scenario, sources: [], requirements: [], repeat: 0, manifestHash: fingerprint(scenario), settings,
+    userMode: 'static', target, ctx: { signal, timeoutMs: 60000, beforeCall() { signal.throwIfAborted(); }, addUsage() {} } });
+  const checkedAt = new Date().toISOString();
+  if (trial.outcome === 'invalid' || trial.outcome === 'cancelled') return { confirmed: false, tools: [], reason: 'агент не ответил на пробное сообщение — оцениваем только ответы', checkedAt };
+  if (trial.observation?.tools !== 'complete') return { confirmed: false, tools: [], reason: 'агент не подтвердил полный журнал инструментов — оцениваем только ответы', checkedAt };
+  const called = trial.events.flatMap(event => event.type === 'tool_call' && event.tool ? [event.tool] : []);
+  const tools = [...new Set([...(trial.observation.toolScope ?? []).filter(tool => !tool.endsWith('*')), ...called])].slice(0, 50);
+  return tools.length ? { confirmed: true, tools, checkedAt }
+    : { confirmed: false, tools: [], reason: 'агент не назвал ни одного инструмента — оцениваем только ответы', checkedAt };
 }
 
 /**

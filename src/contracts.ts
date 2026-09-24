@@ -389,6 +389,15 @@ export interface SourceIdentity {
   /** Scenario id → fingerprint of its normalized comparison identity. */
   scenarios: Record<string, string>;
 }
+/**
+ * What the connection showed of the agent's tools before a preparation (connection.ts probeToolChannel): confirmed
+ * when every reply declared its tool journal complete and named the tools; otherwise the reason the agent is judged
+ * on its replies alone. Absent in records prepared before it existed and in drafts without a connection.
+ */
+export interface ToolChannel { confirmed: boolean; tools: string[]; reason?: string; checkedAt: string }
+const toolChannelSchema = z.strictObject({ confirmed: z.boolean(), tools: z.array(z.string().min(1).max(200)).max(50),
+  reason: z.string().max(300).optional(), checkedAt: z.string() });
+
 export interface Experiment {
   generatorConfig?: unknown;
   generatorIdentity?: unknown;
@@ -396,6 +405,7 @@ export interface Experiment {
   librarySnapshot?: ScenarioLibrary;
   originalImport?: { id: string; contentHash: string };
   preparationProgress?: PreparationProgress;
+  toolChannel?: ToolChannel;
   schemaVersion: '1'; id: string; task: string; mode: 'demo' | 'live'; workflow: 'evaluate' | 'compare';
   createdAt: string; updatedAt: string; phase: Phase; message: string;
   sources: Source[]; settings: Settings; target: Target; requirements: Requirement[]; questions: string[];
@@ -506,6 +516,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   librarySnapshot: scenarioLibrarySchema.optional(),
   originalImport: z.strictObject({ id: identifier, contentHash: sha256Schema }).optional(),
   preparationProgress: preparationProgressSchema.optional(),
+  toolChannel: toolChannelSchema.optional(),
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
   phase: z.enum(PHASES), message: z.string(),

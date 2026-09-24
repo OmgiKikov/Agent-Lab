@@ -9,7 +9,8 @@ import { acceptLibraryV2, requireLibraryV2 } from '../card/library.js';
 import { pendingReviewCalls, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from '../card/prepare.js';
 import type { CardCommand, LibraryV2 } from '../card/schema.js';
 import { dialogueNumbers, type DialogueNumbers } from '../card/view.js';
-import { createInputSchema, emptyUsage, fingerprint, type CreateInput, type Experiment } from '../contracts.js';
+import { probeToolChannel, TOOL_PROBE_OPENING } from '../connection.js';
+import { createInputSchema, emptyUsage, fingerprint, isRunnable, type CardExecution, type CreateInput, type Experiment } from '../contracts.js';
 import { LibraryConflict } from '../errors.js';
 import { logSample, preparationConsent, situationCount } from '../miner/plan.js';
 import { evaluatorVersion } from '../pi.js';
@@ -53,6 +54,11 @@ export async function create(lab: Lab, raw: CreateInput, options: CreateOptions 
     }
     await preflightTarget(record.target);
     record.targetFingerprint = await targetFingerprint(record.target);
+    if (isRunnable(record.target)) {
+      lab.operations.say(record, 'Спрашиваю агента, какие инструменты он показывает');
+      record.toolChannel = await probeToolChannel(record.target, TOOL_PROBE_OPENING, ctx.signal);
+      if (record.toolChannel.reason) lab.operations.say(record, `Действия агента не проверяются: ${record.toolChannel.reason}.`);
+    }
     const runtime = await lab.runtime(record);
     if (!runtime.proposeCard || !runtime.reviewCard) throw new Error('Эта среда не умеет готовить ситуации.');
     const batch = record.originalImport ? await lab.store.readImport(record.originalImport.id) : undefined;
@@ -76,13 +82,25 @@ export async function readCards(lab: Lab, id: string): Promise<{ library: Librar
   return { library: structuredClone(requireLibraryV2(experiment.librarySnapshot)), experiment };
 }
 
+/**
+ * The agent's environment the cards are compiled with: its tool journal, when the probe before the preparation
+ * confirmed it and named the tools; otherwise none, and the agent is judged on its replies as before.
+ */
+function toolEnvironment(record: Experiment): CardExecution['environmentView'] | undefined {
+  const channel = record.toolChannel;
+  if (!channel?.confirmed) return undefined;
+  return { mode: 'prompt', contract: { operations: [...channel.tools], reset: false, observations: ['reply', 'tool'], confirmed: true } };
+}
+
 /** Accepts ready cards for a run: each is compiled here, once, and its definition hash sealed with the library (card/library.ts). */
 export function acceptCards(lab: Lab, id: string, expectedHash: string, cardIds: string[]): Promise<{ library: LibraryV2; experiment: Experiment }> {
   return lab.operations.change(async () => {
     const { experiment, library } = await readCards(lab, id);
     if (experiment.phase !== 'review') throw new Error('Утвердить ситуации можно только в черновике.');
     if (fingerprint(experiment.requirements) !== fingerprint(library.requirements) || fingerprint(experiment.sources) !== fingerprint(library.sources)) throw new Error('Правила изменились после подготовки ситуаций.');
-    const accepted = acceptLibraryV2(library, expectedHash, cardIds, { evidence: await storedEvidence(lab.store, library), maxTurns: experiment.settings.maxTurns });
+    const environment = toolEnvironment(experiment);
+    const accepted = acceptLibraryV2(library, expectedHash, cardIds, { evidence: await storedEvidence(lab.store, library), maxTurns: experiment.settings.maxTurns,
+      ...(environment ? { environment } : {}) });
     experiment.librarySnapshot = accepted.library; experiment.scenarios = accepted.scenarios;
     delete experiment.selectedScenarioIds;
     const acceptedAt = new Date().toISOString();
