@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { JudgeAudit, MetricAssessment } from './assessment.js';
 import type { LogJudge } from './card/calibration.js';
+import type { ErrorPlanter } from './judge-check-task.js';
 import type { CardProposal, CardProposalRequest } from './card/proposal.js';
 import type { CardReview, CardReviewRequest } from './card/review.js';
 import type { FailureMode, Requirement, Scenario, Source, TraceEvent, Trial, Usage } from './contracts.js';
@@ -71,6 +72,8 @@ export interface Runtime {
   assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial }, ctx: CallContext): Promise<MetricAssessment[]>;
   /** The same judge on a recorded conversation (card/log-judge.ts): one expectation, two votes, a receipt of its own. */
   logJudge?: LogJudge;
+  /** The builder's planted errors of a judge check (judge-check-task.ts): one agent reply rewritten so one expectation is broken. */
+  plantError?: ErrorPlanter;
   /** Which articles of a large knowledge base one dialogue needs: the model reads the table of contents, never the bodies. */
   selectSources?(input: SourceSelectionInput, ctx: CallContext): Promise<SourceSelection>;
   /** The topic map of an import (miner/topic-map.ts), built by `builder` from a plan made for it; each finished step reaches `onProgress` before the next call. */

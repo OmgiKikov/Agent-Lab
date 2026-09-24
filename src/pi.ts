@@ -9,6 +9,7 @@ import { AGENT_RULES_PER_DIALOGUE, FOCUSED_REQUIREMENT_LIMIT, MODEL_REQUEST_BYTE
 import { callModel, type Model } from './llm/model-call.js';
 import { AUTH_HELP, resolveModels } from './llm/models.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
+import { plantError } from './judge-check-task.js';
 import {
   CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, REQUIREMENTS_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
 } from './prompts.js';
@@ -220,6 +221,8 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
     },
     logJudge: { provider: judge.provider, model: judge.id, protocolHash: logProtocolHash(judgeModel.configurationHash),
       assess: (request, ctx) => judgeLogged(request, judgeModel, ctx, respond(ctx)) },
+    // The errors a judge check plants are the builder's work too; the run's own judge then reads them.
+    plantError: { builder, plant: (request, ctx) => plantError(request, { run, ctx }) },
     async selectUserAction(input, ctx) {
       // The answer is an enum of exactly the moves allowed now, so a move outside the policy cannot be returned.
       return run({ id: 'user-action', label: 'Действие пользователя', role: 'simulator', instructions: USER_CONTROLLER_ROLE, output: userDecisionSchema(input.actions) }, input, ctx);
