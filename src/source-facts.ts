@@ -17,7 +17,7 @@ export interface CodeFacts { factory: boolean; jsonLines: boolean; protocol: boo
 
 /** Keywords after which `/` opens a regular expression rather than divides. */
 const BEFORE_REGEX = new Set(['return', 'typeof', 'case', 'do', 'else', 'in', 'of', 'new', 'delete', 'void', 'throw', 'instanceof', 'yield', 'await']);
-const identifierChar = (char: string | undefined): boolean => char !== undefined && /[\p{L}\p{N}_$]/u.test(char);
+export const identifierChar = (char: string | undefined): boolean => char !== undefined && /[\p{L}\p{N}_$]/u.test(char);
 const until = (source: string, mark: string, from: number): number => { const at = source.indexOf(mark, from); return at < 0 ? source.length : at + mark.length; };
 
 /** The words (identifiers, single punctuation marks) and the string literals of a source file, comments dropped. */
@@ -40,9 +40,11 @@ function lex(source: string, language: Language): { words: string[]; strings: Se
   }
   return { words, strings };
 }
-const regexMayStart = (previous: string | undefined): boolean =>
+/** Whether `/` after `previous` (the last word) opens a regular expression rather than divides. */
+export const regexMayStart = (previous: string | undefined): boolean =>
   previous === undefined || BEFORE_REGEX.has(previous) || !identifierChar(previous[0]) && !')]}'.includes(previous);
-function regexEnd(source: string, start: number): number {
+/** Where the regular expression literal opened at `start` ends. */
+export function regexEnd(source: string, start: number): number {
   let inClass = false;
   for (let i = start + 1; i < source.length; i++) {
     const char = source[i];

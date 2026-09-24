@@ -1,5 +1,5 @@
 import { USER_CONTROLLER_PROTOCOL, userViewSchema } from './user-controller.js';
-import { checkpointSchema, importBatchSchema } from './scenario-contracts.js';
+import { checkpointSchema, importBatchSchema, requirementKindSchema } from './scenario-contracts.js';
 import { expectationSchema, preparationProgressSchema, scenarioLibrarySchema, type PreparationProgress, type ScenarioLibrary } from './card/schema.js';
 import { calibrationSchema, calibrationSettingSchema, type Calibration } from './card/calibration.js';
 import { judgeAuditSchema, judgeReceiptSchema, metricAssessmentSchema, rubricSchema, stage, type JudgeAudit, type JudgeReceipt, type MetricAssessment } from './assessment.js';
@@ -107,6 +107,8 @@ export const requirementSchema = z.strictObject({
   id: identifier, text: text.max(2000), sourceId: identifier, quote: text.max(3000), critical: z.boolean(),
   /** Whether a user can see the rule kept or broken in a reply, as the grounding call typed it. Requirements stored before the field existed lack it. */
   observable: z.boolean().optional(),
+  /** Behaviour, knowledge or an operator procedure, as the grounding call typed it (scenario-contracts.ts). Requirements stored before the field existed lack it. */
+  kind: requirementKindSchema.optional(),
 });
 export type Requirement = z.infer<typeof requirementSchema>;
 /**

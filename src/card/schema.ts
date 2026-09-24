@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from '../ids.js';
 import { FOCUSED_REQUIREMENT_LIMIT, MATERIAL_LIMIT } from '../limits.js';
 import { cardTopicSchema, sampleSchema, topicsKnown, trafficSchema } from '../miner/schema.js';
-import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema, preparationProgressSchema as variantPreparationSchema } from '../scenario-contracts.js';
+import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema, preparationProgressSchema as variantPreparationSchema, requirementKindSchema } from '../scenario-contracts.js';
 
 /*
  * The card: a brief of what the customer wants, writes, knows and when they leave, and what the agent
@@ -108,6 +108,17 @@ export const cardSchema = z.strictObject({
   .refine(card => card.client.writesSource.kind !== 'model' || card.origin.kind === 'rules', 'Model-written opening outside a rules card');
 export type Card = z.infer<typeof cardSchema>;
 
+/**
+ * «Свод правил»: which requirements may back what the agent must do. `kinds` bind as a whole; `included` are single rules
+ * of another kind the owner said the bot must follow («бот обязан так делать»). A library without it binds behaviour and
+ * knowledge (card/rulebook.ts); a requirement without a kind always binds, as it did before kinds existed.
+ */
+export const rulebookSchema = z.strictObject({
+  kinds: z.array(requirementKindSchema).min(1).max(3).refine(kinds => new Set(kinds).size === kinds.length, 'A kind repeats'),
+  included: ids(800),
+});
+export type Rulebook = z.infer<typeof rulebookSchema>;
+
 /** What the owner can do to a card. Every applied command is kept verbatim in an owner receipt, so this union is part of the stored format. */
 export const cardCommandSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('set_fact_disclosure'), cardId: id, factId: id, disclosure: disclosureSchema }),
@@ -130,6 +141,8 @@ export const cardCommandSchema = z.discriminatedUnion('kind', [
   // names it when asked), otherwise every one is removed. The facts are listed so the receipt says exactly what it decided.
   z.strictObject({ kind: z.literal('decide_plausible'), label: text(120), known: z.boolean(),
     facts: z.array(z.strictObject({ cardId: id, factId: id })).min(1).max(200) }),
+  // The whole rulebook as it will be: a library-wide change, whose receipt names no card.
+  z.strictObject({ kind: z.literal('set_rulebook'), rulebook: rulebookSchema }),
 ]);
 export type CardCommand = z.infer<typeof cardCommandSchema>;
 
@@ -168,6 +181,8 @@ export const libraryV2Schema = z.strictObject({
   acceptance: cardAcceptanceSchema.optional(),
   /** The topic traffic of each import whose logs the cards were sampled from: what a result reads of the logs' topics. */
   traffic: z.array(trafficSchema).max(30).optional(),
+  /** The owner's rulebook; absent until the owner changes it (card/rulebook.ts reads the default). */
+  rulebook: rulebookSchema.optional(),
 }).refine(library => new Set(library.cards.map(card => card.number)).size === library.cards.length
   && library.cards.every(card => card.number < library.nextNumber), 'A card number repeats or is not below nextNumber: a number is never given twice')
   .refine(topicsKnown, 'A card stands for a topic its library has no traffic of');

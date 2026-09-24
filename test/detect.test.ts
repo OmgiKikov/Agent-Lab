@@ -87,7 +87,7 @@ test('detectProject proposes the start script\'s agent, the logs, the knowledge 
     { file: join('data', 'export.json'), dialogues: 1, rejected: 0, complete: true },
   ]);
   assert.deepEqual(detection.materials, [{ folder: 'docs', documents: 3 }, { folder: 'knowledge', documents: 1 }]);
-  assert.deepEqual(detection.prompts, [join('prompts', 'system.md')]);
+  assert.deepEqual(detection.prompts, [{ id: join('prompts', 'system.md'), file: join('prompts', 'system.md'), origin: 'file', chars: 21, text: 'Ты — агент поддержки.' }]);
   assert.deepEqual(detection.env, { files: ['.env'], names: ['BOT_TOKEN', 'OPENAI_API_KEY'] });
   assert.equal(detection.truncated, false);
 
@@ -213,11 +213,90 @@ test('agent-lab detect prints the proposal in plain Russian; --json returns the 
     'Агент', '  ✓ python agent.py', '      package.json: scripts.start = python agent.py', '      agent.py: читает запросы из stdin построчно и отвечает JSON',
     '  ? http://localhost:8080/chat — возможно, агент; как он отвечает, не видно',
     `  ${join('logs', 'support.jsonl')} — 3 разговора, 1 запись не подошла`, `  ${join('data', 'export.json')} — 1 разговор`,
-    '  docs — 3 документа', '  knowledge — 1 документ', `  ${join('prompts', 'system.md')}`,
+    '  docs — 3 документа', '  knowledge — 1 документ', `  ${join('prompts', 'system.md')} — файл, 21 знак`,
     'Переменные из .env: BOT_TOKEN, OPENAI_API_KEY — значения Lab не читает.',
   ]) assert.ok(lines.includes(line), `${line}\n---\n${text.stdout}`);
   for (const secret of ['sk-live-secret', 'tg-secret']) assert.ok(!text.stdout.includes(secret), secret);
   const json = await call(['--json']);
   assert.equal(json.code, 0, json.stderr);
   assert.deepEqual(JSON.parse(json.stdout), await detectProject(root));
+});
+
+/** An agent the way a LangChain team keeps it: prompts as Python constants of its chains, an MLS cache of JSON prompts, a prompt file. */
+async function chainsAgent(t: TestContext): Promise<string> {
+  return project(t, {
+    'app/chains/answer_chain.py': [
+      'from langchain_core.prompts import ChatPromptTemplate',
+      'from app.prompts import SHARED_RULES',
+      'open("ran.txt", "w").write("ran")  # appears only if something runs this file',
+      '',
+      'SYSTEM_PROMPT = f"""Ты — ассистент эквайринга. Отвечай клиенту только по статьям: {articles}.',
+      'Не называй внутренние системы банка."""',
+      'PROMPT_VERSION = "v2"',
+      '',
+      'def chain():',
+      '    return ChatPromptTemplate.from_messages([("system", SYSTEM_PROMPT), ("system", SHARED_RULES), ("human", "{question}")])',
+      '',
+    ].join('\n'),
+    'app/prompts.py': 'SHARED_RULES = (\n    "Отвечай на «вы», коротко и по делу. "\n    "Никогда не обещай сроки подключения."\n)\n',
+    'app/classify.py': 'DOC_TYPE_PROMPT: str = \'Определи тип документа клиента и верни одно слово: счёт, договор или акт.\'\n',
+    'app/answer.ts': "export const answerPrompt = `Ты отвечаешь клиентам банка. Используй ${ctx} и не выдумывай тарифы.`;\nconst messages = [{ role: 'system', content: 'Ты проверяешь ответ ассистента перед отправкой клиенту: без внутренних систем.' }];\n",
+    'local/mls_cache/agent_doc_type_prompt_v2.json': JSON.stringify({ version: 3, prompt: 'Классифицируй обращение клиента по типу документа. Верни только код.' }),
+    'config/llm.json': JSON.stringify({ model: 'gigachat', system: 'Ты — вежливый ассистент банка, который отвечает клиентам эквайринга.', retries: 2 }),
+    'prompts/answer.md': 'Отвечай клиенту по статьям базы знаний.\n',
+    // Over the reading cap of a source file: not read at all, so nothing of it is proposed.
+    'app/huge.py': `HUGE_PROMPT = """${'а'.repeat(300_000)}"""\n`,
+  });
+}
+
+test('prompts are found where an agent keeps them: constants of its code, the system role of its chains, prompt fields of its JSON — verbatim, by stable ids, never run', async t => {
+  const root = await chainsAgent(t);
+  const detection = await detectProject(root);
+  const shown = detection.prompts.map(prompt => [prompt.id, prompt.origin, prompt.system ?? false]);
+  assert.deepEqual(shown, [
+    [join('app', 'answer.ts') + '#answerPrompt', 'code', false],
+    [join('app', 'answer.ts') + '#messages:system', 'code', true],
+    [join('app', 'classify.py') + '#DOC_TYPE_PROMPT', 'code', false],
+    [join('app', 'prompts.py') + '#SHARED_RULES', 'code', true],
+    [join('config', 'llm.json') + '#system', 'json', false],
+    [join('prompts', 'answer.md'), 'file', false],
+    [join('app', 'chains', 'answer_chain.py') + '#SYSTEM_PROMPT', 'code', true],
+    [join('local', 'mls_cache', 'agent_doc_type_prompt_v2.json') + '#prompt', 'json', false],
+  ]);
+  const text = (id: string) => detection.prompts.find(prompt => prompt.id === id)!.text;
+  assert.equal(text(join('app', 'chains', 'answer_chain.py') + '#SYSTEM_PROMPT'), 'Ты — ассистент эквайринга. Отвечай клиенту только по статьям: {articles}.\nНе называй внутренние системы банка.', 'an f-string keeps its placeholders');
+  assert.equal(text(join('app', 'prompts.py') + '#SHARED_RULES'), 'Отвечай на «вы», коротко и по делу. Никогда не обещай сроки подключения.', 'adjacent literals are one prompt');
+  assert.equal(text(join('app', 'answer.ts') + '#answerPrompt'), 'Ты отвечаешь клиентам банка. Используй ${ctx} и не выдумывай тарифы.');
+  assert.ok(!detection.prompts.some(prompt => prompt.id.includes('PROMPT_VERSION') || prompt.id.includes('HUGE')), 'a version tag and an unread file are not prompts');
+  assert.equal(await exists(join(root, 'ran.txt')), false, 'no code ran');
+  assert.deepEqual((await detectProject(root)).prompts.map(prompt => prompt.id), shown.map(([id]) => id), 'ids are stable');
+  const lines = detectionLines(detection);
+  assert.ok(lines.includes(`  ${join('app', 'chains', 'answer_chain.py')}#SYSTEM_PROMPT — строка в коде, задаёт роль system, 110 знаков`), lines.join('\n'));
+  assert.ok(lines.includes('  Какие из них задают, что и как бот отвечает клиенту, выбираете вы: они станут правилами поведения бота.'));
+});
+
+test('agent-lab build --prompts-from lists the prompts to pick; --prompt takes exactly the ones named and refuses an unknown one', { timeout: 30000 }, async t => {
+  const root = await chainsAgent(t);
+  const task = join(root, 'task.json');
+  await writeFile(task, JSON.stringify({ task: 'Проверить ответы эквайринга', mode: 'live', target: { kind: 'unconnected' }, materials: [], settings: { provider: 'p', model: 'm' } }));
+  const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+  const call = async (args: string[]) => {
+    const child = spawn(process.execPath, ['--import', 'tsx', cli, 'build', '--data-dir', join(root, '.agent-lab'), '--input', task, '--prompts-from', root, ...args]);
+    let stdout = '', stderr = '';
+    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+    const code = await new Promise<number | null>(resolve => child.on('close', resolve));
+    return { code, stdout, stderr };
+  };
+  const list = await call([]);
+  assert.equal(list.code, 0, list.stderr);
+  assert.ok(list.stdout.includes(`  ${join('app', 'prompts.py')}#SHARED_RULES — строка в коде, задаёт роль system, 72 знака`), list.stdout);
+  assert.match(list.stdout, /ничего не записано и не потрачено/);
+  const unknown = await call(['--prompt', 'app/missing.py#NOPE']);
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.stderr, /Промпта app\/missing\.py#NOPE в .* нет\. Есть: /);
+  const picked = await call(['--prompt', `${join('app', 'chains', 'answer_chain.py')}#SYSTEM_PROMPT`]);
+  assert.equal(picked.code, 0, picked.stderr);
+  assert.match(picked.stderr, /Промпты агента: app\/chains\/answer_chain\.py#SYSTEM_PROMPT\./);
+  assert.match(picked.stdout, /Собрать: та же команда с --yes/);
+  assert.equal(await exists(join(root, 'ran.txt')), false);
 });

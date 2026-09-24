@@ -124,8 +124,17 @@ export const preparationProgressSchema = z.strictObject({
 });
 /** A library's materials and requirements; both library formats keep them in this shape. */
 export const librarySourcesSchema = z.array(z.strictObject({ id, name: text(180), content: text(MATERIAL_CHARS), hash: text(200), kind: z.enum(['knowledge', 'prompt']).optional() })).max(MATERIAL_LIMIT);
+/**
+ * What kind of rule a requirement is, as the grounding call typed it: `behavior` — how the bot must act or speak, usually
+ * from its own prompts; `knowledge` — a fact about the product or its terms that the bot's answer must get right;
+ * `operator_procedure` — steps a human operator performs, or a script written for operators. Which kinds bind the bot
+ * is the owner's rulebook (card/rulebook.ts). Requirements grounded before the field existed lack it and bind as before.
+ */
+export const requirementKindSchema = z.enum(['behavior', 'knowledge', 'operator_procedure']);
+export type RequirementKind = z.infer<typeof requirementKindSchema>;
 // The record's requirements, field for field (contracts.ts requirementSchema, which this module cannot import).
-export const libraryRequirementsSchema = z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean(), observable: z.boolean().optional() })).max(RECORD_REQUIREMENT_LIMIT);
+export const libraryRequirementsSchema = z.array(z.strictObject({ id, text: text(2000), sourceId: id, quote: text(3000), critical: z.boolean(), observable: z.boolean().optional(),
+  kind: requirementKindSchema.optional() })).max(RECORD_REQUIREMENT_LIMIT);
 /** The first library format: business groups of variants, each compiled into a runnable card when it was accepted. Read only. */
 export const libraryV1Schema = z.strictObject({
   checkpointContext:z.literal('observed-tools-v1').optional(),

@@ -83,7 +83,7 @@ export function createDemoRuntime(): Runtime {
     async groundRequirements(input) {
       const source = input.sources[0];
       if (!source || source.content !== demoPolicy) throw new Error(DEMO_ONLY);
-      return { requirements: [{ id: 'refund_rule', sourceId: source.id, text: demoPolicy, quote: demoPolicy, critical: true }], questions: [] };
+      return { requirements: [{ id: 'refund_rule', sourceId: source.id, text: demoPolicy, quote: demoPolicy, critical: true, kind: 'behavior' }], questions: [] };
     },
     async proposeCard(input) {
       const { source } = input.call;

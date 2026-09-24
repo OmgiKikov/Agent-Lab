@@ -14,6 +14,7 @@ import { clip } from '../text.js';
 import { PROPOSAL_ATTEMPTS } from './budget.js';
 import { importEvidence, loggedMessages, type CardEvidence } from './checks.js';
 import { addCard, createLibraryV2, recordClaims, requireLibraryV2, withRequirements } from './library.js';
+import { bindsBot, rulebookOf } from './rulebook.js';
 import { bindProposal, cardProposalProblem, cardProposalSchema, proposalCall, proposalPayload, type CardProposalRequest } from './proposal.js';
 import { claimReceipts, pendingClaims, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
 import type { Card, CardPreparation, LibraryV2 } from './schema.js';
@@ -199,9 +200,13 @@ class Preparation {
   private async propose(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined, reading: Reading): Promise<Card | { excluded: string }> {
     const { record, batch } = this;
     if (this.library.cards.length >= CARD_LIMIT) return { excluded: `В наборе уже ${CARD_LIMIT} ситуаций.` };
-    // An internal rule of the agent's prompt (a machine output format) is recorded but never becomes an expectation.
-    const rules = reading.requirements.filter(requirement => !internalPromptRule(reading.sources, requirement));
-    if (!rules.length) return { excluded: 'Правила владельца не решают этот разговор, а ситуация без правила не строится.' };
+    // An internal rule of the agent's prompt (a machine output format) is recorded but never becomes an expectation; a rule
+    // outside the owner's rulebook (an operator instruction the owner did not include) stays in the library and is never offered.
+    const rulebook = rulebookOf(this.library);
+    const judged = reading.requirements.filter(requirement => !internalPromptRule(reading.sources, requirement));
+    const rules = judged.filter(requirement => bindsBot(rulebook, requirement));
+    if (!rules.length) return { excluded: judged.length ? 'Этот разговор решают только правила вне свода правил (например, инструкции для операторов), а по ним бота не судят.'
+      : 'Правила владельца не решают этот разговор, а ситуация без правила не строится.' };
     const call = proposalCall({ source: dialogue && batch ? { kind: 'dialogue', batchId: batch.id, dialogueId: unit } : { kind: 'rules', unit },
       messages: dialogue ? loggedMessages(dialogue) : [], requirements: rules, maxTurns: record.settings.maxTurns });
     if (call.laterEvents.length > LATER_MESSAGES) return { excluded: `После первой реплики клиент пишет ещё больше ${LATER_MESSAGES} раз — для одной ситуации это слишком много.` };

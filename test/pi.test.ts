@@ -139,7 +139,7 @@ test('a structured answer wrapped in a markdown fence is not repaired into JSON'
 test('grounding asks the model for requirements only: one request, no cards and no agent', async () => {
   // Nothing here may be invented by the model: the owner brought the agent, and the situations come from the library.
   const f = await fixture(() => JSON.stringify({
-    requirements: [{ id: 'req_1', text: 'The agent answers acquiring questions.', sourceId: 'source-1', quote: 'answers acquiring questions', critical: true, observable: true }],
+    requirements: [{ id: 'req_1', text: 'The agent answers acquiring questions.', sourceId: 'source-1', quote: 'answers acquiring questions', critical: true, observable: true, kind: 'behavior' }],
     questions: [],
   }));
   try {
@@ -155,7 +155,7 @@ test('grounding asks the model for requirements only: one request, no cards and 
 
 test('two requirements with one id go back to the model instead of failing the preparation', async () => {
   const content = 'Rule one: reply formally. Rule two: numbered steps.';
-  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'source_1', quote, critical: true, observable: true });
+  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'source_1', quote, critical: true, observable: true, kind: 'behavior' });
   const outputs = [
     { requirements: [req('req_1', 'reply formally'), req('req_1', 'numbered steps')], questions: [] },
     { requirements: [req('req_1', 'reply formally'), req('req_2', 'numbered steps')], questions: [] },
@@ -259,8 +259,8 @@ test('a rejected answer is repaired from the stated reason instead of losing the
   const source = { id: 'source_1', name: 'Policy', content: quote, hash: 'hash' };
   // First the model paraphrases the source, which is the most common real rejection.
   const outputs = [
-    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote: 'Support can be reached by email.', critical: true, observable: true }], questions: [] },
-    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true, observable: true }], questions: [] },
+    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote: 'Support can be reached by email.', critical: true, observable: true, kind: 'behavior' }], questions: [] },
+    { requirements: [{ id: 'req_1', text: quote, sourceId: 'source_1', quote, critical: true, observable: true, kind: 'behavior' }], questions: [] },
   ];
   const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
   try {
@@ -275,7 +275,7 @@ test('a rejected answer is repaired from the stated reason instead of losing the
 
 test('a source marked as the agent prompt reaches the builder and the judge labelled', async () => {
   const prompt = 'Отвечай только по эквайрингу. Всегда заканчивай ответ вопросом «Чем ещё помочь?». Никогда не называй внутренние системы.';
-  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'Every reply ends with «Чем ещё помочь?»', sourceId: 'prompt_1', quote: 'Всегда заканчивай ответ вопросом «Чем ещё помочь?»', critical: true, observable: true }], questions: [] }));
+  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'Every reply ends with «Чем ещё помочь?»', sourceId: 'prompt_1', quote: 'Всегда заканчивай ответ вопросом «Чем ещё помочь?»', critical: true, observable: true, kind: 'behavior' }], questions: [] }));
   try {
     const promptSource = { id: 'prompt_1', name: 'system.md', content: prompt, hash: 'hash', kind: 'prompt' as const };
     await f.adapter.groundRequirements!({ task: 'Проверить агента эквайринга', sources: [promptSource, { id: 'kb_1', name: 'Статья', content: 'Тариф виден в СберБизнес.', hash: 'h2' }] }, callContext().ctx);
@@ -387,7 +387,7 @@ test('failure clusters may quote only a supplied prompt, verbatim', async () => 
 
 test('requirements extraction states its budget and asks the model to merge when it overshoots', async () => {
   const quote = 'Reply in the formal register and never redirect the user to a phone line.';
-  const many = Array.from({ length: REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `req_${i}`, text: `Observable rule ${i}`, sourceId: 'prompt_1', quote, critical: false, observable: true }));
+  const many = Array.from({ length: REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `req_${i}`, text: `Observable rule ${i}`, sourceId: 'prompt_1', quote, critical: false, observable: true, kind: 'behavior' }));
   const outputs = [{ requirements: many, questions: [] }, { requirements: many.slice(0, 2), questions: [] }];
   const f = await fixture((_request, index) => JSON.stringify(outputs[index]));
   try {
@@ -407,7 +407,7 @@ test('requirements extraction states its budget and asks the model to merge when
 
 test('requirement quotes are matched through the typography a model normalises, then stored in the source\'s own characters', async () => {
   const content = 'Раздел «Эквайринг» → «Мои точки продаж» → карточка точки → «Тариф».';
-  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'Where the tariff is shown', sourceId: 'source_1', quote: 'Раздел "Эквайринг" -> "Мои точки продаж"', critical: true, observable: true }], questions: [] }));
+  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'Where the tariff is shown', sourceId: 'source_1', quote: 'Раздел "Эквайринг" -> "Мои точки продаж"', critical: true, observable: true, kind: 'behavior' }], questions: [] }));
   try {
     const grounded = await f.adapter.groundRequirements!({ task: 'Check tariff answers', sources: [{ id: 'source_1', name: 'idp/tariff_view.md', content, hash: 'h' }] }, callContext().ctx);
     assert.equal(f.requests.length, 1, 'normalised typography costs no repair attempt');
@@ -418,7 +418,7 @@ test('requirement quotes are matched through the typography a model normalises, 
 test('raw line breaks are rejected and a new valid provider reply preserves the exact source text', async () => {
   const quote = 'Rule one.\nRule two.';
   const sources = [{ id: 'source_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' as const }];
-  const valid = JSON.stringify({ requirements: [{ id: 'req_1', text: 'Two rules', sourceId: 'source_1', quote, critical: true, observable: true }], questions: [] });
+  const valid = JSON.stringify({ requirements: [{ id: 'req_1', text: 'Two rules', sourceId: 'source_1', quote, critical: true, observable: true, kind: 'behavior' }], questions: [] });
   const rawNewline = '{"requirements":[{"id":"req_1","text":"Two rules","sourceId":"source_1","quote":"Rule one.\nRule two.","critical":true}],"questions":[]}';
   const f = await fixture((_request, index) => index === 0 ? rawNewline : valid);
   try {
@@ -440,7 +440,7 @@ test('raw line breaks are rejected and a new valid provider reply preserves the 
 test('unescaped quotes require a new valid provider reply and are never rewritten locally', async () => {
   const quote = 'Удали данные из "СберДруг", "ДРУГ", "ЦКР" и не упоминай "историю вопросов".';
   const broken = '{"requirements":[{"id":"req_1","text":"No "СберДруг", "ДРУГ" data in a reply","sourceId":"source_1","quote":"Удали данные из "СберДруг", "ДРУГ", "ЦКР" и не упоминай "историю вопросов".","critical":true}],"questions":[]}';
-  const outputs = [broken, JSON.stringify({ requirements: [{ id: 'req_1', text: 'No \"СберДруг\", \"ДРУГ\" data in a reply', sourceId: 'source_1', quote, critical: true, observable: true }], questions: [] })];
+  const outputs = [broken, JSON.stringify({ requirements: [{ id: 'req_1', text: 'No \"СберДруг\", \"ДРУГ\" data in a reply', sourceId: 'source_1', quote, critical: true, observable: true, kind: 'behavior' }], questions: [] })];
   const f = await fixture((_request, index) => outputs[index]!);
   try {
     const grounded = await f.adapter.groundRequirements!({ task: 'Check internal names', sources: [{ id: 'source_1', name: 'prompt.md', content: quote, hash: 'h', kind: 'prompt' }] }, callContext().ctx);
@@ -454,7 +454,7 @@ test('unescaped quotes require a new valid provider reply and are never rewritte
 
 test('a rejection names every requirement whose quote is not in its source, so one repair fixes them all', async () => {
   const content = 'Rule one: reply formally. Rule two: never send the user to a phone line. Rule three: numbered steps.';
-  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'source_1', quote, critical: true, observable: true });
+  const req = (id: string, quote: string) => ({ id, text: id, sourceId: 'source_1', quote, critical: true, observable: true, kind: 'behavior' });
   const outputs = [
     { requirements: [req('req_1', 'reply formally'), req('req_2', 'never phone the user'), req('req_3', 'numbered lists')], questions: [] },
     { requirements: [req('req_1', 'reply formally'), req('req_2', 'never send the user to a phone line'), req('req_3', 'numbered steps')], questions: [] },
@@ -474,7 +474,7 @@ test('a rejection names every requirement whose quote is not in its source, so o
 test('a quote that lives in another supplied source is re-attributed to it instead of being rejected', async () => {
   const rules = 'Удали из ответа служебную информацию: данные из "СберДруг", "ЦКР".';
   const articles = 'Терминал блокируется по инициативе банка.';
-  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'No internal names', sourceId: 'article_1', quote: 'данные из "СберДруг", "ЦКР"', critical: true, observable: true }], questions: [] }));
+  const f = await fixture(() => JSON.stringify({ requirements: [{ id: 'req_1', text: 'No internal names', sourceId: 'article_1', quote: 'данные из "СберДруг", "ЦКР"', critical: true, observable: true, kind: 'behavior' }], questions: [] }));
   try {
     const grounded = await f.adapter.groundRequirements!({ task: 'Check internal names',
       sources: [{ id: 'article_1', name: 'block.md', content: articles, hash: 'a' }, { id: 'prompt_1', name: 'prompt.md', content: rules, hash: 'p', kind: 'prompt' }] }, callContext().ctx);
@@ -484,9 +484,26 @@ test('a quote that lives in another supplied source is re-attributed to it inste
   } finally { await f.close(); }
 });
 
+test('the grounding call types every rule — the bot\'s behaviour, knowledge, an operator\'s procedure — and a rule without a kind goes back for repair', async () => {
+  const kb = 'Тариф виден в разделе «Эквайринг». Оператор проверяет терминал в АС Мониторинг перед ответом.';
+  const req = (id: string, quote: string, kind?: string) => ({ id, text: id, sourceId: 'kb_1', quote, critical: true, observable: true, ...(kind ? { kind } : {}) });
+  const untyped = { requirements: [req('tariff', 'Тариф виден в разделе «Эквайринг».')], questions: [] };
+  const typed = { requirements: [req('tariff', 'Тариф виден в разделе «Эквайринг».', 'knowledge'), req('check', 'Оператор проверяет терминал в АС Мониторинг перед ответом.', 'operator_procedure')], questions: [] };
+  const outputs = [untyped, typed];
+  const f = await fixture(() => JSON.stringify(outputs.shift()));
+  try {
+    const grounded = await f.adapter.groundRequirements!({ task: 'Проверить агента эквайринга', sources: [{ id: 'kb_1', name: 'Статья', content: kb, hash: 'h' }] }, callContext().ctx);
+    assert.equal(f.requests.length, 2, 'a requirement without a kind is repaired, never guessed');
+    assert.deepEqual(grounded.requirements.map(r => [r.id, r.kind]), [['tariff', 'knowledge'], ['check', 'operator_procedure']]);
+    const system = f.requests[0]?.systemPrompt ?? '';
+    assert.match(system, /operator_procedure/);
+    assert.match(system, /Scripts for operators in a knowledge base are operator_procedure unless they state what the customer must be told/);
+  } finally { await f.close(); }
+});
+
 test('a machine output-format instruction in the agent prompt is typed as unobservable by the grounding call and never reaches the judge', async () => {
   const prompt = 'Отвечай на «вы». ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}. Никогда не направляй в поддержку.';
-  const req = (id: string, quote: string, observable: boolean) => ({ id, text: id, sourceId: 'prompt_1', quote, critical: true, observable });
+  const req = (id: string, quote: string, observable: boolean) => ({ id, text: id, sourceId: 'prompt_1', quote, critical: true, observable, kind: 'behavior' as const });
   const reply = { requirements: [req('formal', 'Отвечай на «вы»', true), req('json', 'ВСЕГДА возвращай валидный JSON в формате {"output": "*Финальный ответ*"}', false),
     req('no_support', 'Никогда не направляй в поддержку', true)], questions: [] };
   const f = await fixture(() => JSON.stringify(reply));
@@ -616,11 +633,11 @@ test('grounding for one dialogue asks for the rules that decide that dialogue on
   assert.deepEqual(focused.payload.customerMessages, ['Как вернуть деньги?']);
   assert.equal('customerMessages' in whole.payload, false);
   assert.equal('dialogues' in focused.payload, false, 'the old agent’s replies never reach the grounding call');
-  assert.ok(focused.task.output.safeParse({ requirements: Array.from({ length: FOCUSED_REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `r${i}`, text: 'x', sourceId: 's', quote: 'x', critical: true, observable: true })), questions: [] }).success === false);
+  assert.ok(focused.task.output.safeParse({ requirements: Array.from({ length: FOCUSED_REQUIREMENT_LIMIT + 1 }, (_, i) => ({ id: `r${i}`, text: 'x', sourceId: 's', quote: 'x', critical: true, observable: true, kind: 'behavior' })), questions: [] }).success === false);
 });
 
 test('a missing JSON closer is a failed attempt; only the next complete response supplies fields', async () => {
-  const valid = JSON.stringify({ requirements: [{ id: 'req_1', text: 'The agent answers acquiring questions.', sourceId: 'source-1', quote: 'answers acquiring questions', critical: true, observable: true }], questions: [] });
+  const valid = JSON.stringify({ requirements: [{ id: 'req_1', text: 'The agent answers acquiring questions.', sourceId: 'source-1', quote: 'answers acquiring questions', critical: true, observable: true, kind: 'behavior' }], questions: [] });
   const raw = valid.slice(0, -1);
   assert.throws(() => JSON.parse(raw));
   const f = await fixture((_request, index) => index === 0 ? raw : valid);

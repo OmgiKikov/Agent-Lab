@@ -2,6 +2,7 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
 import { EXPECTATIONS_PROTOCOL, failureModeSchema, fingerprint, requirementSchema, REQUIREMENT_LIMIT, SIMULATOR_PROTOCOL, VERSION, type FailureMode, type Requirement, type Settings, type Source } from './contracts.js';
 import { verbatimSpan } from './verbatim.js';
+import { requirementKindSchema } from './scenario-contracts.js';
 import { sourceSelectionSchema, userTurnSchema, type CallContext, type GroundingInput, type Runtime } from './runtime.js';
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } from './judge.js';
 import { FOCUSED_REQUIREMENT_LIMIT, workInputIssue } from './limits.js';
@@ -34,7 +35,8 @@ export const evaluatorVersion = (settings: Settings): string => fingerprint({ pr
   provider: settings.provider, model: settings.model, roles: settings.roles ?? {}, judgeModel: settings.judge });
 
 const OBSERVABLE = 'true when a user can see this rule kept or broken in the agent\'s reply; false only for an internal interface of the agent\'s prompt, such as its machine output format: recorded, never judged';
-const groundedRequirementSchema = requirementSchema.extend({ observable: z.boolean().describe(OBSERVABLE) });
+const KIND = 'behavior: how the bot must act or speak (usually from its prompts); knowledge: a fact about the product or its terms the bot\'s answer must get right; operator_procedure: steps a human operator performs, or a script written for operators';
+const groundedRequirementSchema = requirementSchema.extend({ observable: z.boolean().describe(OBSERVABLE), kind: requirementKindSchema.describe(KIND) });
 const groundingSchemaFor = (limit: number) => z.strictObject({
   requirements: z.array(groundedRequirementSchema).min(1).max(limit, { error: `Return at most ${limit} requirements: merge closely related rules into one requirement with one exact quote, and keep the rules a user can see violated in a reply` }),
   questions: z.array(z.string().trim().min(1).max(2000)).max(12),

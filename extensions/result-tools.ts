@@ -51,7 +51,7 @@ function foundOutput(found: ProjectDetection) {
   return {
     agents: found.agents.slice(0, 3).map(agent => ({ start: targetLabel(agent.target, found.root), sure: agent.confidence === 'high', why: agent.evidence.map(evidenceText) })),
     logs: found.logs.slice(0, 5).map(log => ({ file: log.file, conversations: log.dialogues, ...(log.table ? { table: true } : {}) })),
-    materials: found.materials.slice(0, 5).map(item => ({ folder: item.folder, documents: item.documents })), prompts: found.prompts.slice(0, 5),
+    materials: found.materials.slice(0, 5).map(item => ({ folder: item.folder, documents: item.documents })), prompts: found.prompts.slice(0, 20).map(prompt => ({ id: prompt.id, chars: prompt.chars, ...(prompt.system ? { system: true } : {}) })),
   };
 }
 
@@ -60,7 +60,7 @@ function foundRows(found: ProjectDetection): { rows: Feed['rows']; more: Feed['r
   const agent = found.agents[0], log = found.logs[0], material = found.materials[0];
   const parts = [agent ? `агент — ${targetLabel(agent.target, found.root)}` : 'как запускать агента, не видно',
     log ? `логи — ${log.file} (${countText(log.dialogues, CONVERSATIONS)})` : 'логов нет',
-    ...(material ? [`материалы — ${material.folder} (${countText(material.documents, DOCUMENTS)})`] : []), ...(found.prompts[0] ? [`промпт — ${found.prompts[0]}`] : [])];
+    ...(material ? [`материалы — ${material.folder} (${countText(material.documents, DOCUMENTS)})`] : []), ...(found.prompts.length ? [`промпты — ${found.prompts.length} на выбор`] : [])];
   return { rows: [row(`В папке: ${parts.join(' · ')}`, 'muted')], more: detectionLines(found).map(line => row(line, line && !line.startsWith(' ') ? 'accent' : undefined)) };
 }
 

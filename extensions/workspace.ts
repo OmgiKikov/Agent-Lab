@@ -7,7 +7,7 @@ import type { DecisionChoice } from '../src/inbox.js';
 import type { AgentSpace } from '../src/workspace.js';
 import { agreementTarget, type Answer } from './judge-review.ts';
 import type { Tone } from './render/theme.ts';
-import { agentsScreen, allRunsScreen, areasOf, header, helpScreen, inboxScreen, judgedScreen, problemScreen, problemsScreen, resultScreen, runActions, runStepScreen,
+import { agentsScreen, allRunsScreen, areasOf, header, helpScreen, inboxScreen, judgedScreen, problemScreen, problemsScreen, resultScreen, rulebookScreen, runActions, runStepScreen,
   situationScreen, situationsScreen, startScreen, type Area, type Hint, type Line, type ResultPick, type Screen, type SpaceData, type Step } from './workspace-screens.ts';
 
 /*
@@ -57,6 +57,8 @@ export type WorkspaceAction =
   | { type: 'space'; key: string }
   | { type: 'decide'; choice: DecisionChoice }
   | { type: 'situation'; action: SituationAction; view: SituationView; record: Experiment }
+  /** «Свод правил»: operator instructions bind the bot as a whole, or not; the command asks the owner natively. */
+  | { type: 'rulebook'; record: Experiment; operatorInstructions: boolean }
   /** Run the situations being worked on: the one run dialog; with no draft, a repeat of the newest run. */
   | { type: 'run' }
   | { type: 'stop' }
@@ -195,6 +197,7 @@ export class LabWorkspace implements Component {
     if (this.state.step === 'situations' || this.state.area === 'situations') return withHead(situationsScreen(data, this.cursor(), width, { firstRun: !!this.state.step }));
     if (this.state.step === 'run') return withHead(runStepScreen(data, width));
     if (this.state.area === 'inbox') return withHead(inboxScreen(data, this.cursor(), width));
+    if (this.state.area === 'rules') return withHead(rulebookScreen(data, width));
     if (this.state.area === 'problems') return withHead(problemsScreen(data, this.cursor(), width));
     const latest = data.runs[0];
     if (!latest) return withHead({ head: [], body: [[{ text: ' Прогонов с результатом пока нет: запустите готовые ситуации.', tone: 'text', bold: true }]],
@@ -350,6 +353,11 @@ export class LabWorkspace implements Component {
     if (this.state.area === 'problems') {
       const problem = data.problems[cursor];
       if (digit === 0 && problem?.trialId) this.open({ kind: 'judged', runId: problem.runId, trialId: problem.trialId });
+      return;
+    }
+    if (this.state.area === 'rules') {
+      const operators = data.set?.rulebook?.kinds.find(item => item.kind === 'operator_procedure');
+      if (digit === 0 && operators && data.set?.editable) this.finish({ type: 'rulebook', record: data.set.record, operatorInstructions: !operators.binds });
       return;
     }
     if (this.state.area === 'runs' && !this.state.step) {

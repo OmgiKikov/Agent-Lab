@@ -7,6 +7,8 @@ import { convertible } from '../src/card/legacy-v1.js';
 import { pendingReviewCalls } from '../src/card/prepare.js';
 import type { CardCommand } from '../src/card/schema.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
+import { rulebookChangeLines, rulebookOf, withKind } from '../src/card/rulebook.js';
+import { ask } from './lab-ui.ts';
 import type { Experiment } from '../src/contracts.js';
 import { isRunning } from '../src/phases.js';
 import type { ExperimentLab } from '../src/experiment.js';
@@ -101,6 +103,24 @@ export async function applySituationCommand(surface: DecisionSurface, record: Ex
     if (check.decision.action === 'run') { handOver(lease => surface.background.check(surface.ctx, lease, target.id, situation.number)); return `${subject}: записано. Проверяю ${numbers.length > 1 ? 'их' : 'её'} — итог придёт ${where}.${copied}`; }
     return check.decision.action === 'needs_budget' ? `Записано. На проверку не хватает лимита: нужно вызовов ${check.decision.pendingJobs}, осталось ${check.decision.remainingCalls}.${copied}`
       : `${subject}: записано.${copied}`;
+  });
+}
+
+/**
+ * «Свод правил» from the workspace: operator instructions bind the bot as a whole, or not. The owner confirms the exact
+ * change natively, with the situations it sends back to them; the draft gets a new revision like any owner command.
+ */
+export async function applyRulebookChange(surface: DecisionSurface, record: Experiment, operatorInstructions: boolean): Promise<string | undefined> {
+  return surface.writing(async lab => {
+    const target = await lab.editableCards(record.id);
+    const { library } = await lab.cardContext(target.id);
+    const command: CardCommand = { kind: 'set_rulebook', rulebook: withKind(rulebookOf(library), 'operator_procedure', operatorInstructions) };
+    const prepared = await lab.prepareCardCommand(target.id, command, { via: viaOf(surface) });
+    const lines = rulebookChangeLines(prepared.rulebook!.before, prepared.rulebook!.after, prepared.next.requirements, prepared.rulebook!.flagged);
+    if (!await ask(surface.ctx, 'Изменить свод правил?', lines, 'Записать', 'Не менять')) return undefined;
+    await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, 'confirmed'));
+    const copied = target.copiedFrom && target.copiedFrom !== target.id ? ' Правка — в новом черновике того же набора; прошлый прогон не меняется.' : '';
+    return `Свод правил записан: ${operatorInstructions ? 'инструкции для операторов входят' : 'инструкции для операторов не входят'}.${prepared.rulebook!.flagged.length ? ` Ситуации ${prepared.rulebook!.flagged.join(', ')} ждут вашего ответа.` : ''}${copied}`;
   });
 }
 

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 import type { CardCommand } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
+import { shownRulebook } from '../src/card/rulebook.js';
 import { convertible } from '../src/card/legacy-v1.js';
 import { pendingReviewCalls } from '../src/card/prepare.js';
 import { situationViews, type SituationAction, type SituationView } from '../src/card/view.js';
@@ -20,7 +21,7 @@ import { plannedTrials } from '../src/run.js';
 import { agentSpaces, type AgentSpace } from '../src/workspace.js';
 import { safeText } from '../src/text.js';
 import { progressText, scenarioPlan } from './conversation.ts';
-import { applySituationCommand, logsOf, settle, writer, type DecisionSurface } from './decisions.ts';
+import { applyRulebookChange, applySituationCommand, logsOf, settle, writer, type DecisionSurface } from './decisions.ts';
 import type { LabHost } from './host.ts';
 import { recordMark } from './judge-review.ts';
 import { ask, boardDiscussionContext, inputError, requireInteractive } from './lab-ui.ts';
@@ -118,7 +119,8 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
     const editable = !!context && !isRunning(setRecord.phase);
     const coverage = context ? situationCoverage(context.library, cardStatuses({ library: context.library, evidence: context.evidence, maxTurns })) : undefined;
     if (context && editable && setRecord.phase === 'review' && !setRecord.trials.length) pendingCalls = pendingReviewCalls(context.library, context.evidence);
-    set = { record: setRecord, views, editable, ...(coverage ? { coverage } : {}), running: job?.kind === 'assessment' && job.id === setRecord.id,
+    const rulebook = context && shownRulebook(context.library);
+    set = { record: setRecord, views, editable, ...(coverage ? { coverage } : {}), ...(rulebook ? { rulebook } : {}), running: job?.kind === 'assessment' && job.id === setRecord.id,
       plan: context && !context.library.acceptance ? cardPlan(setRecord, views) : scenarioPlan(setRecord) };
   }
   // The newest run is read with its source run, so its stability is checked; the older ones only need their number.
@@ -258,6 +260,11 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             const decided = await situationCommand(ctx, chosen, situation);
             if (!decided) continue;
             inform(await applySituationCommand(surface, record, situation, decided));
+            continue;
+          }
+          if (action.type === 'rulebook') {
+            const said = await applyRulebookChange(surface, action.record, action.operatorInstructions);
+            if (said) inform(said);
             continue;
           }
           if (action.type === 'decide') {

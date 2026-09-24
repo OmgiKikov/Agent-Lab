@@ -3,6 +3,7 @@ import { countText } from '../plural.js';
 import { clip } from '../text.js';
 import { messageAt, normalizeText, problemText, quotable, unusableFindings, type CardEvidence } from './checks.js';
 import { planClaims, type Claim, type ClaimKind } from './review.js';
+import { KIND_WORDS, rulebookOf, unboundCitation, withRules } from './rulebook.js';
 import type { Card, CardCommand, ClaimReceipt, LibraryV2 } from './schema.js';
 
 /*
@@ -11,7 +12,8 @@ import type { Card, CardCommand, ClaimReceipt, LibraryV2 } from './schema.js';
  * templates in the owner's words; every answer is a typed command built in advance, so a choice never has to be
  * interpreted. The first open question is the only one shown: after the answer the next one, if any, appears.
  *
- *   deterministic finding ─► unusable      no receipt for a current claim ─► checking
+ *   deterministic finding ─► unusable      an expectation on a rule outside the rulebook ─► needs_owner
+ *   no receipt for a current claim ─► checking
  *   a claim blocked       ─► unusable      an unconfirmed fact, an open doubt, an undecided plausible label,
  *                                          a twin ─► needs_owner (first one)
  *   otherwise             ─► ready
@@ -149,6 +151,23 @@ function duplicateQuestion(card: Card, twin: Card): Question {
   ]);
 }
 
+/**
+ * An expectation rests on a rule the owner's rulebook leaves out (an operator instruction, say): only the owner can say
+ * whether the bot must follow it. The question names the expectation and the rule; it goes stale when the rulebook changes.
+ */
+function rulebookQuestion(card: Card, library: LibraryV2, unbound: NonNullable<ReturnType<typeof unboundCitation>>): Question {
+  const { expectation, requirement } = unbound;
+  const rulebook = rulebookOf(library);
+  const basisHash = fingerprint({ requirement: requirement.id, rulebook });
+  const id = fingerprint({ kind: 'rulebook', subject: `${expectation.id}:${requirement.id}`, basisHash });
+  const what = requirement.kind ? KIND_WORDS[requirement.kind].one : 'правило';
+  return question(id, basisHash, `Агент должен «${clip(expectation.text, 100)}» — по правилу «${clip(requirement.quote, 120)}», а это ${what}: такие правила не входят в свод правил. Бот обязан так делать?`, [
+    { label: 'Да, бот обязан', command: { kind: 'set_rulebook', rulebook: withRules(rulebook, { include: [requirement.id] }) } },
+    ...(card.agentMust.length > 1 ? [{ label: 'Убрать это ожидание', command: { kind: 'remove_expectation', cardId: card.id, expectationId: expectation.id } } as const] : []),
+    { label: 'Убрать ситуацию', command: { kind: 'remove_card', cardId: card.id } },
+  ]);
+}
+
 /** The order doubts are asked in: what the customer wants, what the agent must do, what they know, the account, the leak. */
 const DOUBT_ORDER: readonly ClaimKind[] = ['goal', 'expectation', 'fact', 'coverage', 'leak'];
 
@@ -156,6 +175,8 @@ function statusOf(card: Card, context: StatusContext, twin: Card | undefined): C
   const { library, evidence, maxTurns } = context;
   const findings = unusableFindings(card, { evidence, maxTurns, materials: library });
   if (findings.length) return { status: 'unusable', problems: findings.map(finding => problemText(finding, card, library.requirements)) };
+  const unbound = unboundCitation(card, library);
+  if (unbound) return { status: 'needs_owner', question: rulebookQuestion(card, library, unbound), problems: [] };
   const claims = planClaims(card, context);
   const receipts = claims.flatMap(claim => {
     const receipt = library.claims.find(item => item.key === claim.key);

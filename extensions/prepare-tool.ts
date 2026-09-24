@@ -11,7 +11,8 @@ import { demoInput } from '../src/demo.js';
 import { detectProject, targetLabel, type ProjectDetection } from '../src/detect.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { readDialogueImport } from '../src/imports.js';
-import { expandMaterials } from '../src/materials.js';
+import { expandMaterials, promptMaterials } from '../src/materials.js';
+import type { PromptCandidate } from '../src/prompt-candidates.js';
 import { consentText, DEFAULT_SITUATIONS, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
 import { countText } from '../src/plural.js';
 import { TABLE_EXTENSIONS } from '../src/spreadsheet/workbook.js';
@@ -23,6 +24,7 @@ import { followRecord, type LabLease, type SessionOperations } from './operation
 import type { Feed } from './render/feed.ts';
 import { TOOL } from './steps.ts';
 import { confirmedBefore, importTable } from './table-import.ts';
+import { choosePrompts } from './prompt-choice.ts';
 
 /*
  * «Проверь агента, логи — выгрузка.xlsx» (docs/design/ui-spec.md §4.10): logs, the owner's rules and the agent become a draft of
@@ -55,7 +57,7 @@ export const prepareParameters = Type.Object({
   withoutLogs: Type.Optional(Type.Literal(true, { description: 'Only after the owner explicitly chose to start without logs: situations from their rules alone.' })),
   situations: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, description: `How many situations at most, when the owner named a number: ${DEFAULT_SITUATIONS} from logs, ${RULES_SITUATIONS} from rules by default.` })),
   materials: Type.Optional(Type.Array(path('A file or a folder.'), { minItems: 1, maxItems: 50, description: 'The owner\'s rules and knowledge base as files or folders (.docx, .md, .txt, .html), read whole by Lab. Omit to use what Lab finds in the project folder.' })),
-  prompts: Type.Optional(Type.Array(path('A file.'), { minItems: 1, maxItems: 20, description: 'Files holding the agent\'s own system prompt.' })),
+  prompts: Type.Optional(Type.Array(path('A file, or a prompt id Lab found (file#CONSTANT, file#field).'), { minItems: 1, maxItems: 20, description: 'Only the prompts the owner named as forming the bot\'s reply to the customer: files, or ids from what Lab found in the project. Omit to let the owner choose among what Lab finds.' })),
   rules: Type.Optional(Type.String({ minLength: 1, maxLength: 20000, description: 'Rules the owner wrote in this conversation, in their own words.' })),
   table: Type.Optional(Type.Object({
     sheet: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })), id: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })), text: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
@@ -138,6 +140,12 @@ async function logsOf(ctx: ExtensionContext, found: ProjectDetection | undefined
   return index < 0 ? undefined : join(found!.root, logs[index]!.file);
 }
 
+/** A prompt id the request named that Lab did not find: the model named it wrong, the owner is asked. */
+function unknownPrompt(id: string, found: ProjectDetection | undefined): never {
+  const known = (found?.prompts ?? []).slice(0, 12).map(prompt => prompt.id);
+  throw new NeedsOwner('unknown_reference', `Промпта ${id} Lab в проекте не нашёл.${known.length ? ` Есть: ${known.join('; ')}.` : ''} Спросите владельца, какой нужен.`, known);
+}
+
 const declined = (host: PrepareHost, callId: string, text: string) =>
   host.feedResult(callId, { cancelled: true, spent: 0, instruction: 'The owner stepped back: nothing was spent or written. Do not ask again unless they do.' },
     { tone: 'warning', rows: [row(text)] }, 'Сбор ситуаций отменён');
@@ -147,8 +155,10 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   params: PrepareParams): Promise<AgentToolResult<unknown>> {
   const directory = resolve(ctx.cwd, '.agent-lab');
   const named = !!(params.materials || params.prompts || params.rules);
+  // A prompt named by its id (file#CONSTANT) is one Lab finds in the project, verbatim.
+  const byId = (params.prompts ?? []).filter(item => item.includes('#'));
   // Lab looks through the project for what the request did not name: the logs, the rules, how the agent is started.
-  const found = params.logs && named ? undefined : await detectProject(ctx.cwd).catch(() => undefined);
+  const found = params.logs && named && !byId.length ? undefined : await detectProject(ctx.cwd).catch(() => undefined);
   const logs = params.withoutLogs ? 'rules' as const : params.logs ? projectPath(params.logs, ctx.cwd) : await logsOf(ctx, found);
   if (logs === undefined) return declined(host, callId, 'Не собираю: файл с логами не выбран. Ничего не потрачено.');
   if (logs !== 'rules' && !await stat(logs).then(info => info.isFile(), () => false)) {
@@ -156,10 +166,23 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   }
   // The model can say this itself from the project or the owner's words: a plain error it corrects, never a question to the owner.
   if (!params.task) throw new Error('Не хватает описания агента: одной-двумя фразами — что он делает и что проверить (task).');
-  // The rules: the files named, otherwise the knowledge folders and the prompt found in the project; the owner's own words on top.
-  const files = named ? { materialFiles: (params.materials ?? []).map(item => projectPath(item, ctx.cwd)), promptFiles: (params.prompts ?? []).map(item => projectPath(item, ctx.cwd)) }
-    : { materialFiles: (found?.materials ?? []).map(item => join(found!.root, item.folder)), promptFiles: (found?.prompts ?? []).map(file => join(found!.root, file)) };
-  const expanded = await expandMaterials({ ...(params.rules ? { materials: [{ name: 'Правила из разговора', content: params.rules }] } : {}), ...files }, ctx.cwd);
+  // The rules: the files named, otherwise the knowledge folders found in the project and the prompts the owner picks among
+  // those found; the owner's own words on top.
+  let prompts: PromptCandidate[];
+  if (named) {
+    prompts = byId.map(id => found?.prompts.find(prompt => prompt.id === id) ?? unknownPrompt(id, found));
+  } else {
+    if (found?.prompts.length) requireInteractive(ctx, 'Какие промпты — правила ответа бота, выбирает владелец в интерактивном терминале Pi. Без него: agent-lab build --prompts-from ПАПКА --prompt ФАЙЛ#ИМЯ.');
+    const picked = found?.prompts.length ? await choosePrompts(ctx, found.prompts) : [];
+    if (picked === 'declined') return declined(host, callId, 'Не собираю: промпты не выбраны. Ничего не потрачено.');
+    prompts = picked;
+  }
+  const files = named ? { materialFiles: (params.materials ?? []).map(item => projectPath(item, ctx.cwd)),
+    promptFiles: (params.prompts ?? []).filter(item => !item.includes('#')).map(item => projectPath(item, ctx.cwd)) }
+    : { materialFiles: (found?.materials ?? []).map(item => join(found!.root, item.folder)), promptFiles: [] };
+  const inline = [...(params.rules ? [{ name: 'Правила из разговора', content: params.rules }] : []),
+    ...promptMaterials(prompts).map(({ name, content, kind }) => ({ name, content, kind }))];
+  const expanded = await expandMaterials({ ...(inline.length ? { materials: inline } : {}), ...files }, ctx.cwd);
   if (!expanded.materials.length) throw new NeedsOwner('needs_owner_input', 'Нет правил, по которым судить агента: Lab не нашёл ни промпта, ни базы знаний. Спросите владельца, где они (файлы или папка: materials, prompts), или пусть напишет правила словами (rules).', [],
     'По каким правилам судить агента? Назовите файл с промптом или базой знаний — или напишите правила словами.');
   const notes = [...expanded.skipped.slice(0, 20).map(item => `Пропущен ${shownPath(item.file, ctx.cwd)}: ${item.reason}.`),
@@ -219,7 +242,8 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   // The ceiling the owner agrees to is the one the preparation stops at: it goes to the lab with the consent.
   const callCeiling = consent?.callCeiling ?? preparationCeiling({ task: input.task, sources: materialSources(input.materials), situations: count, fromLogs: false });
   const plan = consent ? consentText(consent, basename(logs)) : rulesConsentText(count, callCeiling);
-  const sources = [...(params.rules ? ['ваши слова из разговора'] : []), ...[...files.promptFiles, ...files.materialFiles].map(file => shownPath(file, ctx.cwd))];
+  const sources = [...(params.rules ? ['ваши слова из разговора'] : []), ...prompts.map(prompt => prompt.id),
+    ...[...files.promptFiles, ...files.materialFiles].map(file => shownPath(file, ctx.cwd))];
   const agent = connection ? `Агент: ${targetLabel(connection.target, ctx.cwd)}.`
     : found?.agents[0] ? `Агента Lab подключит перед прогоном — в папке нашёл: ${targetLabel(found.agents[0].target, found.root)}.` : 'Как запускать агента, Lab спросит перед прогоном.';
   const lines = [...plan.lines, `Правила: ${sources.slice(0, 4).join(', ')}${sources.length > 4 ? ` и ещё ${sources.length - 4}` : ''} — ${countText(expanded.materials.length, DOCUMENTS)}.`, agent];
