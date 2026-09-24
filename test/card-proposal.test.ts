@@ -75,7 +75,7 @@ test('binding copies the opening and the turn word for word, and gives ids, the 
 
   // A bare greeting first: the later message with the request is the opening, and the last question is the turn.
   const greeting = callFor('greeting');
-  const proposal: DialogueProposal = { title: 'Возврат без номера — клиент меняет решение', topic: 'Возврат оплаты', wants: 'Вернуть оплату', writesEvent: 2,
+  const proposal: DialogueProposal = { title: 'Возврат без номера — клиент меняет решение', topic: 'Возврат оплаты', wants: 'Вернуть оплату', clarity: 'clear', writesEvent: 2,
     knows: [{ label: 'Номер терминала', value: null, disclosure: 'unknown', from: 4, askedAs: 'номер терминала' }, { label: 'Покупка оплачена картой', value: true, disclosure: 'on_request', from: null, askedAs: null }], plausibleKnows: [],
     leaves: 'получил ответ про отмену покупки', turn: { kind: 'change_intent', after: 'агент попросил номер терминала', from: 4 },
     agentMust: [{ text: 'объяснить, как оформить возврат', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' }],

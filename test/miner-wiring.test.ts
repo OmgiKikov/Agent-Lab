@@ -85,7 +85,7 @@ function minerRuntime(logged: readonly Logged[], options: { failTopicAt?: number
       if (source.kind === 'rules') return { title: `По правилам ${request.written.length + 1}`, topic: 'Вопросы клиентов', wants: 'Получить ответ',
         writes: request.written.length ? 'Подскажите, как у вас всё устроено?' : 'Подскажите, пожалуйста.', leaves: 'получил ответ', agentMust: must };
       const topic = request.topics[0] ?? 'Без темы';
-      return { title: `${topic} — ${source.dialogueId}`, topic, wants: 'Получить ответ на свой вопрос', writesEvent: request.call.customerEvents[0]!, knows: [], plausibleKnows: [],
+      return { title: `${topic} — ${source.dialogueId}`, topic, wants: 'Получить ответ на свой вопрос', clarity: 'clear', writesEvent: request.call.customerEvents[0]!, knows: [], plausibleKnows: [],
         leaves: 'получил ответ или понял, что агент не поможет', turn: null, agentMust: must, coverage: {} };
     },
     async reviewCard(request, ctx) {
@@ -121,10 +121,10 @@ test('the consent names the topic map\'s calls, the ceiling, the promise and eve
   await withLab(minerRuntime(logged).runtime, async lab => {
     const consent = await preparationConsent(lab.store, { input: createInput(batch), situations: 15 });
     assert.deepEqual({ ...consent, excluded: consent.excluded.map(item => [item.dialogueId, item.kind]) }, {
-      conversations: 92, usable: 90, promised: 15, topicMapCalls: 4, promptCalls: 0, callCeiling: 110,
+      conversations: 92, usable: 90, promised: 15, topicMapCalls: 4, promptCalls: 0, callCeiling: 155,
       excluded: [['no id', 'unreadable'], ['masked1', 'masked']],
     }, 'one proposal and three batches of 30; the unreadable row and the masked conversation reach no model');
-    assert.equal(consent.callCeiling, 4 + 1 + 15 * (5 + 2), 'the ceiling is the preparation\'s own: the map, the rules read once, and per situation its proposal allowance and its review — not the draft\'s limit of 150');
+    assert.equal(consent.callCeiling, 4 + 1 + 15 * (6 + 2 * 2), 'the ceiling is the preparation\'s own: the map, the rules read once, and per situation its proposal allowance with its one revision and the reviews of the card and of that revision — not the draft\'s limit of 150');
     assert.match(consent.excluded[0]!.reason, /Некорректный id диалога/);
     assert.equal(consent.excluded[1]!.reason, 'реплика клиента целиком скрыта обезличиванием');
     const all = await preparationConsent(lab.store, { input: createInput(batch), situations: 200 });
@@ -142,7 +142,7 @@ test('a preparation stops at the ceiling its consent stated, not at the draft\'s
   runtime.proposeCard = async (_request, ctx) => { for (;;) ctx.beforeCall(); };
   await withLab(runtime, async lab => {
     const consent = await preparationConsent(lab.store, { input: createInput(batch), situations: 2 });
-    assert.equal(consent.callCeiling, 2 + 1 + 2 * (5 + 2));
+    assert.equal(consent.callCeiling, 2 + 1 + 2 * (6 + 2 * 2));
     const draft = await lab.create(createInput(batch), { situations: 2 });
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);

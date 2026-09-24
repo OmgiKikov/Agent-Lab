@@ -150,12 +150,19 @@ export const dunnoMark = (view: Pick<ResultView, 'customer'>, scenarioId: string
 /** The trust line as plain parts, the way the terminal surfaces print it. */
 export const trustParts = (view: ResultView): string[] => trustSegments(view).map(part => part.text);
 
-/** The second trust line: how close the number is to real traffic. Empty without topic shares. */
+/** «Внятные запросы: 7 из 9 · Невнятные: 1 из 3» — handled of decided; empty when no counted customer was vague. */
+export function clarityParts(view: Pick<ResultView, 'clarity'>): string[] {
+  const clarity = view.clarity;
+  return clarity ? [`Внятные запросы: ${clarity.clear.passed} из ${clarity.clear.decided}`, `Невнятные: ${clarity.vague.passed} из ${clarity.vague.decided}`] : [];
+}
+
+/** The second trust line: how close the number is to real traffic — the topics' shares, and clear requests apart from vague ones. */
 export function realityParts(view: ResultView): string[] {
   const topics = view.topics;
-  if (!topics || topics.weighted === null) return [];
+  const clarity = clarityParts(view);
+  if (!topics || topics.weighted === null) return clarity;
   const known = topics.labeled < topics.logged ? ` (темы известны у ${topics.labeled} из ${topics.logged} разговоров)` : '';
-  return [`С учётом частоты тем — около ${percent(topics.weighted)}${known}`];
+  return [`С учётом частоты тем — около ${percent(topics.weighted)}${known}`, ...clarity];
 }
 
 /** The first block of every surface: alarm, number, trust line, reality line, and how the synthetic customers compare with production. */

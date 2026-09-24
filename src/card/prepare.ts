@@ -13,10 +13,10 @@ import type { ExperimentStore } from '../store.js';
 import { clip } from '../text.js';
 import { PROPOSAL_ATTEMPTS } from './budget.js';
 import { importEvidence, loggedMessages, type CardEvidence } from './checks.js';
-import { addCard, createLibraryV2, recordClaims, requireLibraryV2, withRequirements } from './library.js';
+import { addCard, createLibraryV2, recordClaims, replaceCard, requireLibraryV2, withRequirements } from './library.js';
 import { bindsBot, rulebookOf } from './rulebook.js';
 import { bindProposal, cardProposalProblem, cardProposalSchema, proposalCall, proposalPayload, type CardProposalRequest } from './proposal.js';
-import { claimReceipts, pendingClaims, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
+import { blockedClaims, claimReceipts, pendingClaims, reviewedBrief, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
 import type { Card, CardPreparation, LibraryV2 } from './schema.js';
 
 /*
@@ -100,6 +100,8 @@ export function pendingReviewCalls(library: LibraryV2, evidence: CardEvidence): 
 
 type Stage = NonNullable<CardPreparation['activeStage']>;
 type Reading = { sources: Source[]; requirements: Requirement[] };
+/** A card the reviewer blocked and the reviewer's reason for each blocked claim. */
+type Revision = { card: Card; blocked: { claim: string; reason: string }[] };
 
 class Preparation {
   private readonly evidence: CardEvidence;
@@ -259,10 +261,13 @@ class Preparation {
     return { sources, requirements: record.requirements.filter(requirement => ids.has(requirement.id)) };
   }
 
-  /** The card of a unit: proposed, checked by the harness itself, bound and added — or the reason the unit makes none. */
-  private async propose(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined, reading: Reading): Promise<Card | { excluded: string }> {
+  /**
+   * The card of a unit: proposed, checked by the harness itself, bound and added — or the reason the unit makes none.
+   * With `revision`, the card the reviewer blocked is written again against the reviewer's reasons and replaces it.
+   */
+  private async propose(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined, reading: Reading, revision?: Revision): Promise<Card | { excluded: string }> {
     const { record, batch } = this;
-    if (this.library.cards.length >= CARD_LIMIT) return { excluded: `В наборе уже ${CARD_LIMIT} ситуаций.` };
+    if (!revision && this.library.cards.length >= CARD_LIMIT) return { excluded: `В наборе уже ${CARD_LIMIT} ситуаций.` };
     // An internal rule of the agent's prompt (a machine output format) is recorded but never becomes an expectation; a rule
     // outside the owner's rulebook (an operator instruction the owner did not include) stays in the library and is never offered.
     const rulebook = rulebookOf(this.library);
@@ -279,7 +284,8 @@ class Preparation {
     const request: CardProposalRequest = { task: record.task, call, requirements: rules.map(({ id, text, quote }) => ({ id, text, quote })),
       articles: reading.sources.map(({ id, name, content, kind }) => ({ id, name, content, ...(kind ? { kind } : {}) })),
       topics: topic ? [topic.title] : [...new Set(this.library.cards.map(card => card.topic))],
-      written: dialogue ? [] : this.library.cards.filter(card => card.origin.kind === 'rules').map(card => card.title) };
+      written: dialogue ? [] : this.library.cards.filter(card => card.origin.kind === 'rules' && card.id !== revision?.card.id).map(card => card.title),
+      ...(revision ? { revision: { previous: reviewedBrief(revision.card, this.library), blocked: revision.blocked } } : {}) };
     const oversize = workInputIssue(proposalPayload(request));
     if (oversize) return { excluded: oversize };
     if (!this.runtime.proposeCard) throw new Error('Эта среда не умеет готовить ситуации.');
@@ -288,16 +294,44 @@ class Preparation {
     const parsed = cardProposalSchema(call).safeParse(answer);
     const problem = parsed.success ? cardProposalProblem(parsed.data, call) : parsed.error.message;
     if (!parsed.success || problem) return { excluded: `Предложенная ситуация не прошла проверку: ${problem}` };
-    const card = withTrafficTopic(bindProposal(parsed.data, call, this.library.nextNumber), topic);
-    const next = addCard(this.library, card, dialogue && batch ? { dialogueId: unit, batchId: batch.id, sourceIds: reading.sources.map(source => source.id) } : undefined);
+    const card = withTrafficTopic(bindProposal(parsed.data, call, revision ? revision.card.number : this.library.nextNumber), topic);
+    const next = revision ? replaceCard(this.library, revision.card.id, card)
+      : addCard(this.library, card, dialogue && batch ? { dialogueId: unit, batchId: batch.id, sourceIds: reading.sources.map(source => source.id) } : undefined);
     // A card that could never be checked is not kept: its review is sized against the draft that holds its reading row.
     const context: ReviewContext = { library: next, evidence: this.evidence };
     try { reviewRequests(card, pendingClaims(card, context), context); }
     catch (error) { if (error instanceof ReviewTooLarge) return { excluded: error.message }; throw error; }
     this.library = next;
-    this.progress.cards = [...(this.progress.cards ?? []), { dialogueId: unit, cardId: card.id }];
+    const made = next.cards.find(item => item.number === card.number)!;
+    this.progress.cards = [...(this.progress.cards ?? []).filter(item => item.dialogueId !== unit), { dialogueId: unit, cardId: made.id }];
+    if (revision) this.progress.revised = [...this.progress.revised ?? [], unit];
     await this.publish();
-    return card;
+    return made;
+  }
+
+  /**
+   * A card the reviewer blocked goes back to the proposal once, with the reviewer's reason for each blocked claim; the
+   * revision is bound, checked and reviewed like a new card, and replaces it. A doubt only the owner can settle is the
+   * owner's, not a revision's. The revision is spent whatever it gives: a revision that fails its checks, or runs out of
+   * the unit's proposal allowance, leaves the blocked card as it was; a resume never revises again.
+   */
+  private async revise(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined, card: Card, whole: boolean): Promise<void> {
+    if (this.progress.revised?.includes(unit)) return;
+    const blocked = blockedClaims(card, { library: this.library, evidence: this.evidence });
+    if (!blocked.length) return;
+    const spent = async () => { this.progress.revised = [...this.progress.revised ?? [], unit]; await this.publish(); };
+    // The unit's reading is saved with the draft: reading it again sends no call.
+    const reading = whole || !dialogue ? { sources: this.record.sources, requirements: this.record.requirements } : await this.readFor(unit, dialogue);
+    if ('excluded' in reading) { await spent(); return; }
+    let revised: Card | { excluded: string };
+    try { revised = await this.propose(unit, dialogue, reading, { card, blocked }); }
+    catch (error) {
+      this.ctx.signal.throwIfAborted();
+      if (error instanceof StructuredTaskError) { await spent(); return; }
+      throw error;
+    }
+    if ('excluded' in revised) { await spent(); return; }
+    await this.review(revised, unit);
   }
 
   /** The reviewer answers every claim of the card no receipt answers yet; a similar claim already answered is not asked again. */
@@ -332,6 +366,7 @@ class Preparation {
       card = proposed;
     }
     await this.review(card, unit);
+    await this.revise(unit, dialogue, card, whole);
     this.finish(unit);
     await this.publish();
   }
@@ -345,7 +380,10 @@ class Preparation {
     const { activeDialogueId: unit, activeStage: stage } = this.progress;
     if (!stage) return;
     if (stage === 'ground' && unit === undefined) throw new Error('Подготовка остановилась во время чтения правил владельца. Стоимость этого вызова неизвестна, и он не повторяется молча: подготовьте новый черновик.');
-    if (unit !== undefined && stage === 'review') this.finish(unit);
+    // A proposal in flight for a unit that has its card was that card's revision: the blocked card stays, the revision is spent.
+    const revising = unit !== undefined && stage === 'propose' && !!this.progress.cards?.some(item => item.dialogueId === unit);
+    if (revising) this.progress.revised = [...this.progress.revised ?? [], unit!];
+    if (unit !== undefined && (stage === 'review' || revising)) this.finish(unit);
     else if (unit !== undefined) this.exclude(unit, 'Подготовка прервалась во время платного вызова: его стоимость неизвестна, поэтому этот источник не разбирается повторно.');
     delete this.progress.activeDialogueId; delete this.progress.activeStage;
   }

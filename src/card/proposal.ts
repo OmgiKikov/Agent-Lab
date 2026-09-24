@@ -57,6 +57,8 @@ function dialogueProposalSchema(call: ProposalCall) {
   const message = z.literal(call.customerEvents);
   return z.strictObject({
     title: text(160), topic: text(120), wants: text(300),
+    // Whether the customer's messages state a request; an answer written before the field existed reads as a clear one.
+    clarity: z.enum(['clear', 'vague']).default('clear'),
     writesEvent: message,
     knows: z.array(z.strictObject({ label: text(120), value: z.union([text(120), z.number(), z.boolean()]).nullable(), disclosure: disclosureSchema,
       from: message.nullable(), askedAs: text(200).nullable() })).max(KNOWS_LIMIT),
@@ -93,11 +95,14 @@ export const proposalBounds = (call: ProposalCall) => {
 
 const said = (call: ProposalCall, index: number): string => call.messages.find(message => message.index === index)?.content ?? '';
 
-/** What a card's id digests: a proposal without plausible facts reads as one written before they existed, so the same answer is the same card. */
+/**
+ * What a card's id digests: a proposal without plausible facts, or with a clear request, reads as one written before
+ * those fields existed, so the same answer is the same card.
+ */
 function proposalIdentity(proposal: CardProposal): object {
-  if (!('plausibleKnows' in proposal) || proposal.plausibleKnows.length) return proposal;
-  const { plausibleKnows: _none, ...earlier } = proposal;
-  return earlier;
+  if (!('plausibleKnows' in proposal)) return proposal;
+  const { plausibleKnows, clarity, ...earlier } = proposal;
+  return { ...earlier, ...(plausibleKnows.length ? { plausibleKnows } : {}), ...(clarity === 'vague' ? { clarity } : {}) };
 }
 
 /**
@@ -133,7 +138,7 @@ export function bindProposal(proposal: CardProposal, call: ProposalCall, number:
   });
   return cardSchema.parse({ ...common, origin: { kind: 'dialogue', batchId, dialogueId },
     client: { wants: proposal.wants, writes: said(call, proposal.writesEvent), writesSource: { kind: 'dialogue', event: event(proposal.writesEvent) },
-      knows, leaves: proposal.leaves, ...(turn ? { turn } : {}) }, coverage });
+      knows, leaves: proposal.leaves, ...(turn ? { turn } : {}) }, coverage, ...(proposal.clarity === 'vague' ? { clarity: 'vague' } : {}) });
 }
 
 /** The call's own messages as the evidence of the checks. */
@@ -226,6 +231,8 @@ export interface CardProposalRequest {
   topics: string[];
   /** Titles of the situations already written from the owner's rules: the next one is a different situation. */
   written: string[];
+  /** The one revision of a card the reviewer blocked: that card as the reviewer read it, and the reviewer's reason for each blocked claim. */
+  revision?: { previous: unknown; blocked: { claim: string; reason: string }[] };
 }
 
 /** What the model reads: the request without the harness's bookkeeping. */
@@ -238,5 +245,6 @@ export function proposalPayload(request: CardProposalRequest) {
     articles: request.articles.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })),
     topics: request.topics, ...(request.written.length ? { written: request.written } : {}),
     target: { observations: call.observations },
+    ...(request.revision ? { revise: request.revision } : {}),
   };
 }

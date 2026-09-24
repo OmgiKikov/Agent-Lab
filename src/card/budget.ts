@@ -8,14 +8,19 @@ import { promptGroundingPlan } from '../scenario-sources.js';
  * anything is paid and enforced as that preparation's budget, so the promise and the stop are the same number.
  */
 
-/** Proposal calls one unit may spend over all resumes, repairs included. */
-export const PROPOSAL_ATTEMPTS = 5;
+/**
+ * Proposal calls one unit may spend over all resumes, repairs included: five to write its card, and one more for the
+ * one revision of a card the reviewer blocked (card/prepare.ts).
+ */
+export const PROPOSAL_ATTEMPTS = 6;
 /** Calls that read the rules of the whole policy, once for every unit, when they fit one request. */
 const POLICY_CALLS = 1;
 /** Calls a conversation spends reading a knowledge base too large for one request: two choices of articles, then its rules. */
 const READING_CALLS = 3;
 /** Review requests one card makes at most: its story and its duties apart when together they do not fit one request. */
 const REVIEW_CALLS = 2;
+/** Reviews one unit may need: its card's, and its revision's. */
+const REVIEWS = 2;
 
 /**
  * Calls that read the agent's prompts alone, once for every conversation, when a knowledge base too large for one
@@ -28,7 +33,7 @@ export function promptGroundingCalls(task: string, sources: readonly Source[]): 
 /**
  * The most model calls a preparation makes: the topic map's calls, the policy read once when it fits one request (or
  * else, from logs, the agent's prompts read once in chunks), and for each situation promised the reading of a large
- * knowledge base for its conversation, its proposal allowance and the review of its card. Requests are counted as the
+ * knowledge base for its conversation, its proposal allowance and the review of its card and of that card's one revision. Requests are counted as the
  * topic map's are — each answer passing the first time — and only the proposal allowance holds its repairs; a
  * preparation whose repairs reach the ceiling stops there with what it made, and continues on the owner's word. A
  * conversation that makes no situation spends out of the same ceiling, so the preparation never spends more than it
@@ -38,5 +43,5 @@ export function preparationCeiling(input: { task: string; sources: readonly Sour
   const whole = !workInputIssue({ task: input.task, sources: input.sources });
   const reading = whole || !input.fromLogs ? 0 : READING_CALLS;
   const prompts = input.fromLogs ? promptGroundingCalls(input.task, input.sources) : 0;
-  return (input.topicMapCalls ?? 0) + (whole ? POLICY_CALLS : 0) + prompts + input.situations * (reading + PROPOSAL_ATTEMPTS + REVIEW_CALLS);
+  return (input.topicMapCalls ?? 0) + (whole ? POLICY_CALLS : 0) + prompts + input.situations * (reading + PROPOSAL_ATTEMPTS + REVIEWS * REVIEW_CALLS);
 }

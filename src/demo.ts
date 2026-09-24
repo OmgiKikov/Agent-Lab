@@ -38,12 +38,12 @@ export function demoInput(): CreateInput {
 
 /** What a careful model proposes for each example dialogue: the number named at once, and the number named only when asked. */
 const DEMO_CARDS: Record<'known' | 'late', DialogueProposal> = {
-  known: { title: 'Возврат оплаты — номер назван сразу', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', writesEvent: 0,
+  known: { title: 'Возврат оплаты — номер назван сразу', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', clarity: 'clear', writesEvent: 0,
     knows: [{ label: 'Номер терминала', value: '1234', disclosure: 'initial', from: 0, askedAs: 'номер терминала' }], plausibleKnows: [],
     leaves: 'получил инструкцию по возврату или понял, что агент не поможет', turn: null, coverage: {},
     agentMust: [{ text: 'не спрашивать номер терминала ещё раз, если клиент его уже назвал', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' },
       { text: 'объяснить, как оформить возврат', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' }] },
-  late: { title: 'Возврат оплаты — номер только по просьбе', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', writesEvent: 0,
+  late: { title: 'Возврат оплаты — номер только по просьбе', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', clarity: 'clear', writesEvent: 0,
     knows: [{ label: 'Номер терминала', value: '5678', disclosure: 'on_request', from: 2, askedAs: 'номер терминала' }], plausibleKnows: [],
     leaves: 'получил инструкцию по возврату или понял, что агент не поможет', turn: null, coverage: { 2: { as: 'fact', reason: null } },
     agentMust: [{ text: 'спросить номер терминала один раз, до инструкции', requirementIds: ['refund_rule'], appliesWhen: null, observation: 'reply' },

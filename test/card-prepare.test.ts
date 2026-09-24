@@ -173,10 +173,10 @@ test('each dialogue has one allowance of proposal calls, repairs included, and a
     await lab.resumePreparation(draft.id, libraryHash(await raiseBudget(lab, draft.id)));
     await lab.waitForIdle();
     const resumed = await lab.get(draft.id);
-    assert.equal(spent, 5, 'one call was left of the allowance');
+    assert.equal(spent, 6, 'two calls were left of the allowance');
     const progress = progressOf(resumed);
-    assert.deepEqual(progress.generationAttempts?.find(item => item.dialogueId === 'late'), { dialogueId: 'late', calls: 5 });
-    assert.match(progress.excluded.find(item => item.dialogueId === 'late')?.reason ?? '', /исчерпаны 5 попыток/);
+    assert.deepEqual(progress.generationAttempts?.find(item => item.dialogueId === 'late'), { dialogueId: 'late', calls: 6 });
+    assert.match(progress.excluded.find(item => item.dialogueId === 'late')?.reason ?? '', /исчерпаны 6 попыток/);
     assert.deepEqual((await lab.readCards(draft.id)).library.cards.length, 1, 'the other dialogue still becomes a card');
   });
 });
@@ -365,7 +365,7 @@ test('the consent\'s ceiling holds the calls that read the agent\'s prompts, and
   assert.equal(preparationCeiling({ task: 'Проверить', sources, situations: 2, fromLogs: false }), preparationCeiling({ task: 'Проверить', sources: articles, situations: 2, fromLogs: false }), 'without logs no dialogue is read, nor the prompts for one');
   assert.equal(promptGroundingCalls('Проверить', materialSources([{ name: 'Правила возвратов', content: policy }, { name: 'prompt', content: 'Отвечайте вежливо.', kind: 'prompt' }])), 0, 'materials that fit one call are read whole');
   const text = consentText({ conversations: 2, usable: 2, promised: 2, topicMapCalls: 2, promptCalls: calls, callCeiling: 30, excluded: [] }, 'logs.jsonl');
-  assert.equal(text.lines.at(-1), `Расход — не больше 30 вызовов модели на всю подготовку, из них 2 — на разметку тем, ${calls} — на правила из промптов агента. Это потолок, а не прогноз; агент не запускается.`);
+  assert.equal(text.lines.at(-1), `Расход — не больше 30 вызовов модели на всю подготовку, из них 2 — на разметку тем, ${calls} — на правила из промптов агента. Сюда входит одна переделка каждой ситуации, которую не пропустила проверка. Это потолок, а не прогноз; агент не запускается.`);
 });
 
 test('a large knowledge base is read per dialogue: the articles and the rules chosen for a dialogue are kept and never paid for twice', async () => {

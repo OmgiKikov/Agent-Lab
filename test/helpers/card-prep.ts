@@ -37,11 +37,11 @@ const leaves = 'получил инструкцию по возврату или
 
 /** What a careful model proposes for each dialogue. */
 export const proposals: Record<'late' | 'known', DialogueProposal> = {
-  late: { title: 'Возврат оплаты — номер по просьбе', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', writesEvent: 0,
+  late: { title: 'Возврат оплаты — номер по просьбе', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', clarity: 'clear', writesEvent: 0,
     knows: [{ label: 'Номер терминала', value: '5678', disclosure: 'on_request', from: 2, askedAs: 'номер терминала' }], plausibleKnows: [],
     leaves, turn: null, agentMust: duties('клиент назвал номер терминала'),
     coverage: { 2: { as: 'fact', reason: null }, 4: { as: 'stop', reason: null } } },
-  known: { title: 'Возврат оплаты — номер назван сразу', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', writesEvent: 0,
+  known: { title: 'Возврат оплаты — номер назван сразу', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', clarity: 'clear', writesEvent: 0,
     knows: [{ label: 'Номер терминала', value: '1234', disclosure: 'initial', from: 0, askedAs: 'номер терминала' }], plausibleKnows: [],
     leaves, turn: null, agentMust: duties(null), coverage: {} },
 };

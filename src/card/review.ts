@@ -95,7 +95,7 @@ export function cardReviewSchema(aliases: readonly string[]) {
 }
 
 /** The brief as the reviewer reads it: no receipts, message numbers instead of references, the owner's own words for the facts they vouched for. */
-function reviewedBrief(card: Card, library: LibraryV2) {
+export function reviewedBrief(card: Card, library: LibraryV2) {
   const { wants, writes, writesSource, knows, leaves, turn } = card.client;
   const from = (source: Sourced) => eventOf(source)?.eventIndex ?? null;
   return {
@@ -154,6 +154,14 @@ export function reviewRequests(card: Card, claims: readonly Claim[], context: Re
   const parts = [...(story.length ? [request(story, true, false)] : []), ...(duties.length ? [request(duties, false, true)] : [])];
   if (parts.some(part => workInputIssue(part.payload))) throw new ReviewTooLarge(`Ситуация «${card.title}» и её исходный разговор не помещаются в запрос проверки.`);
   return parts;
+}
+
+/** The claims of a card the reviewer blocked, by alias, with the reviewer's reason: what a revision must resolve. */
+export function blockedClaims(card: Card, context: ReviewContext): { claim: string; reason: string }[] {
+  return planClaims(card, context).flatMap(claim => {
+    const receipt = context.library.claims.find(item => item.key === claim.key);
+    return receipt?.status === 'blocked' ? [{ claim: claim.alias, reason: receipt.reason }] : [];
+  });
 }
 
 /** The reviewer's answers as receipts, one per claim, keyed by content. */

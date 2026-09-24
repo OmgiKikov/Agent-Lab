@@ -3,7 +3,7 @@ import { LibraryConflict } from '../errors.js';
 import type { Traffic } from '../miner/schema.js';
 import { libraryHash, snapshotDigest, verifiedAcceptance } from '../scenario-library.js';
 import { compileCard } from './compile.js';
-import { libraryV2Schema, type Card, type ClaimReceipt, type LibraryV2, type ScenarioLibrary } from './schema.js';
+import { cardSchema, libraryV2Schema, type Card, type ClaimReceipt, type LibraryV2, type ScenarioLibrary } from './schema.js';
 import { cardStatuses, type StatusContext } from './status.js';
 
 /*
@@ -49,6 +49,23 @@ export function addCard(library: LibraryV2, card: Card, reading?: { dialogueId: 
     : row ? library.readingManifest.map(item => item === row ? { ...item, cardIds: [...item.cardIds, card.id] } : item)
     : [...library.readingManifest, { ...reading, cardIds: [card.id] }];
   return libraryV2Schema.parse({ ...library, revision: library.revision + 1, cards: [...library.cards, card], nextNumber: card.number + 1, readingManifest });
+}
+
+/**
+ * A draft whose card is replaced by its revision: the revision keeps the card's number and place, takes its reading row,
+ * and counts one revision more. The receipts of the replaced card stay: they answer their content wherever it recurs.
+ */
+export function replaceCard(library: LibraryV2, previousId: string, card: Card): LibraryV2 {
+  draftOnly(library);
+  const previous = library.cards.find(item => item.id === previousId);
+  if (!previous) throw new Error('Ситуации, которую переделывают, уже нет в наборе.');
+  if (card.number !== previous.number) throw new Error('Переделанная ситуация сохраняет свой номер.');
+  if (card.id !== previousId && library.cards.some(item => item.id === card.id)) throw new Error('Такая ситуация уже есть в наборе.');
+  const replaced = cardSchema.parse({ ...card, revision: previous.revision + 1 });
+  const readingManifest = library.readingManifest.map(row => row.cardIds.includes(previousId)
+    ? { ...row, cardIds: row.cardIds.map(id => id === previousId ? replaced.id : id) } : row);
+  return libraryV2Schema.parse({ ...library, revision: library.revision + 1, readingManifest,
+    cards: library.cards.map(item => item.id === previousId ? replaced : item) });
 }
 
 /** The reviewer's receipts, once per key: an answered key keeps its answer, so a similar card reuses it. */

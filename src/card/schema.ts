@@ -103,6 +103,9 @@ export const cardSchema = z.strictObject({
   agentMust: z.array(expectationSchema).min(1).max(3), // АГЕНТ ДОЛЖЕН
   coverage: z.array(coverageEntrySchema).max(60),
   revision: z.number().int().positive(),
+  // The customer cannot say what is wrong («не работает»): the card tests that the agent clarifies instead of guessing, and
+  // the result counts such situations apart. Absent on a card whose customer states the request, as on every card before it.
+  clarity: z.literal('vague').optional(),
 }).refine(card => distinctIds(card.client.knows) && distinctIds(card.agentMust), 'Fact and expectation ids repeat')
   // Only a card written from the owner's rules, with no dialogue behind it, opens with the model's words.
   .refine(card => card.client.writesSource.kind !== 'model' || card.origin.kind === 'rules', 'Model-written opening outside a rules card');
@@ -234,6 +237,8 @@ const cardPreparationSchema = z.strictObject({
   focus: z.array(z.strictObject({ dialogueId: id, requirementIds: ids(FOCUSED_REQUIREMENT_LIMIT), agentRuleIds: ids(AGENT_RULES_PER_DIALOGUE).optional() })).max(300).optional(),
   /** The card each unit made. */
   cards: z.array(z.strictObject({ dialogueId: id, cardId: id })).max(300).optional(),
+  /** Units whose card the reviewer blocked and that spent their one revision, whatever it gave. */
+  revised: ids(300).optional(),
 });
 export type CardPreparation = z.infer<typeof cardPreparationSchema>;
 

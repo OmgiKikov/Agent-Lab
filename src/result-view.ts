@@ -117,6 +117,11 @@ export interface ResultView {
    * strict top count) and the counted situations without the prompt-rule check. Never changes the headline.
    */
   breakdown: { goal: { met: number; decided: number }; rules: { broken: number; decided: number; commonRule: number | null; commonRuleCount: number }; withoutRules: number };
+  /**
+   * Counted situations whose customer states the request and those who cannot (card `clarity`), each as handled of
+   * decided; absent when no counted situation has a vague customer. Never changes the headline.
+   */
+  clarity?: { clear: { passed: number; decided: number }; vague: { passed: number; decided: number } };
   /** Logged conversations left out of a validation set, with the kinds; never in the denominator. */
   coverage: { examined: number; included: number; excluded: { kind: ExclusionKind; label: string; count: number }[] };
   cards: ResultCard[];
@@ -258,6 +263,19 @@ function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted:
   return [...steps, ...(failed ? [{ kind: 'repeat' } as const, { kind: 'report' } as const] : [{ kind: 'report' } as const, { kind: 'repeat' } as const])];
 }
 
+/** Clear and vague requests apart, over the counted situations whose card is in the run's library. */
+function clarityOf(record: Experiment, counted: readonly ResultCard[]): ResultView['clarity'] {
+  const library = record.librarySnapshot;
+  if (library?.formatVersion !== 2) return undefined;
+  const vague = new Set(library.cards.filter(card => card.clarity === 'vague').map(card => card.id));
+  if (!counted.some(card => vague.has(card.scenarioId))) return undefined;
+  const tally = (cards: readonly ResultCard[]) => {
+    const passed = cards.filter(card => card.outcome === 'pass').length;
+    return { passed, decided: passed + cards.filter(card => card.outcome === 'fail').length };
+  };
+  return { clear: tally(counted.filter(card => !vague.has(card.scenarioId))), vague: tally(counted.filter(card => vague.has(card.scenarioId))) };
+}
+
 /** `numbers` places the logged dialogues of a card run in their imports («диалог №17»); without it a disagreement names the dialogue without its number. */
 export function buildResultView(input: Experiment, options: { before?: Experiment; numbers?: DialogueNumbers } = {}): ResultView {
   const run = deriveRun(input);
@@ -316,6 +334,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     },
     ...(stability ? { stability } : {}),
   };
+  const clarity = clarityOf(record, counted);
+  if (clarity) view.clarity = clarity;
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});
   const customer = customerMoves(run);
   return { ...view, ...(calibration ? { calibration } : {}), ...(customer ? { customer } : {}), next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };

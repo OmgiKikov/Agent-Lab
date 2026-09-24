@@ -98,6 +98,8 @@ const CONVERSATIONS: [string, string, string] = ['разговор', 'разго
 /** The count after «не больше»: «не больше 21 вызова», «не больше 115 вызовов». */
 const CALLS: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
 const SITUATIONS_ACC: [string, string, string] = ['ситуацию', 'ситуации', 'ситуаций'];
+/** The ceiling holds the one revision of a situation the check rejected (card/budget.ts). */
+const REVISION_TEXT = 'Сюда входит одна переделка каждой ситуации, которую не пропустила проверка.';
 /** Why a conversation makes no situation, in the owner's words. */
 const LEFT_OUT_TEXT: Record<LeftOut['kind'], string> = {
   unreadable: 'запись не читается', length: 'нет реплик клиента или их больше 16', masked: 'реплика клиента скрыта обезличиванием',
@@ -120,7 +122,7 @@ export function consentText(consent: PreparationConsent, source: string): { ques
     lines: [
       `В логах ${countText(consent.conversations, CONVERSATIONS)}, подходят ${consent.usable}. Ситуаций будет не больше ${consent.promised} — по одной на разговор, из всех тем логов.`,
       ...(reasons.length ? [`Не войдут ${countText(consent.excluded.length, CONVERSATIONS)}: ${reasons.join(' · ')}.`] : []),
-      `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели на всю подготовку${spentOn.length ? `, из них ${spentOn.join(', ')}` : ''}. Это потолок, а не прогноз; агент не запускается.`,
+      `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели на всю подготовку${spentOn.length ? `, из них ${spentOn.join(', ')}` : ''}. ${REVISION_TEXT} Это потолок, а не прогноз; агент не запускается.`,
     ],
   };
 }
@@ -130,7 +132,7 @@ export function rulesConsentText(situations: number, callCeiling: number): { que
   return {
     question: `Собрать ${countText(situations, SITUATIONS_ACC)} по вашим правилам?`,
     lines: ['Логов нет: ситуации строятся только по правилам — без выдуманных разговоров и личных данных клиента.',
-      `Расход — не больше ${countText(callCeiling, CALLS)} модели на всю подготовку. Это потолок, а не прогноз; агент не запускается.`],
+      `Расход — не больше ${countText(callCeiling, CALLS)} модели на всю подготовку. ${REVISION_TEXT} Это потолок, а не прогноз; агент не запускается.`],
   };
 }
 
