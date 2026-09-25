@@ -20,6 +20,7 @@ export const FLAGS = {
   file: { type: 'string' }, sheet: { type: 'string' }, 'id-column': { type: 'string' }, 'text-column': { type: 'string' }, separator: { type: 'string' },
   markers: { type: 'string' }, 'role-column': { type: 'string' }, roles: { type: 'string' }, 'order-column': { type: 'string' }, 'row-order': { type: 'boolean' },
   where: { type: 'string' }, 'no-separator': { type: 'boolean' }, 'collapse-repeats': { type: 'boolean' }, 'keep-repeats': { type: 'boolean' }, encoding: { type: 'string' },
+  'answer-column': { type: 'string' }, 'expected-column': { type: 'string' }, 'no-expected': { type: 'boolean' },
   situations: { type: 'string' }, 'prompts-from': { type: 'string' }, prompt: { type: 'string', multiple: true }, prompts: { type: 'string' },
   planted: { type: 'string' }, controls: { type: 'string' },
   curl: { type: 'string' }, message: { type: 'string' }, conversation: { type: 'string', multiple: true }, reply: { type: 'string' },

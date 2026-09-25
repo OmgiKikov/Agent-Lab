@@ -179,7 +179,9 @@ export const checkSchema = z.discriminatedUnion('kind', [
   /** Derived from a reference: the article (and chunk) is among the chunks retrieved for some reply. */
   z.strictObject({ ...checkBase, kind: z.literal('source_retrieved'), doc: text.max(500), chunk: text.max(500).optional() }),
   /** Derived from a reference: every value token of the expected fact appears in the assistant replies. */
-  z.strictObject({ ...checkBase, kind: z.literal('answer_reference_tokens'), value: text.max(400) }),
+  z.strictObject({ ...checkBase, kind: z.literal('answer_reference_tokens'), value: text.max(1000) }),
+  /** Derived from a reference: the agent ends with this code, as its adapter reports it in the state (any field, or `field`). */
+  z.strictObject({ ...checkBase, kind: z.literal('state_reported'), value: text.max(200), field: text.max(200).optional() }),
 ]);
 export type Check = z.infer<typeof checkSchema>;
 export function describeCheck(check: Check): string {
@@ -187,6 +189,7 @@ export function describeCheck(check: Check): string {
   if (check.kind === 'answer_equals') return `Последний ответ в точности: ${JSON.stringify(check.value)}`;
   if (check.kind === 'answer_contains') return `В ответах есть: ${JSON.stringify(check.value)} (без учёта регистра)`;
   if (check.kind === 'answer_omits') return `В ответах нет: ${JSON.stringify(check.value)} (без учёта регистра)`;
+  if (check.kind === 'state_reported') return `Агент сообщил код ${check.value}${check.field ? ` в поле ${check.field}` : ''}`;
   if (check.kind === 'source_retrieved') return `Найдена статья ${check.doc}${check.chunk ? `, фрагмент ${check.chunk}` : ''}`;
   if (check.kind === 'answer_reference_tokens') return `В ответах есть значения эталона: ${[...valueTokens(check.value)].join(', ')}`;
   if (check.kind === 'tool_called') return `Есть вызов ${check.tool}`;
@@ -195,7 +198,7 @@ export function describeCheck(check: Check): string {
   return 'Перед каждым изменением — успешное чтение той же записи';
 }
 export const REFERENCE_METRIC_ID = 'reference_match';
-const DERIVED_CHECK_KINDS: ReadonlySet<Check['kind']> = new Set(['source_retrieved', 'answer_reference_tokens']);
+const DERIVED_CHECK_KINDS: ReadonlySet<Check['kind']> = new Set(['source_retrieved', 'answer_reference_tokens', 'state_reported']);
 
 /**
  * The checks and the judge rubric a card's references imply. Rebuilt from the references on every
@@ -223,6 +226,9 @@ function referenceChecks(reference: Reference): Check[] {
     ...(reference.source.chunk ? { chunk: reference.source.chunk } : {}) });
   if (reference.text && valueTokens(reference.text).size) checks.push({ id: `ref_${reference.id}_tokens`, kind: 'answer_reference_tokens', stage: 'ответ',
     description: 'Ответ содержит значения из эталона', value: reference.text });
+  if (reference.outcome) checks.push({ id: `ref_${reference.id}_code`, kind: 'state_reported', stage: 'ответ',
+    description: `Агент завершает с кодом ${reference.outcome.value}`, value: reference.outcome.value,
+    ...(reference.outcome.field ? { field: reference.outcome.field } : {}) });
   return checks;
 }
 

@@ -1,4 +1,4 @@
-import { ROLE_WORDS, ROLES, columnLabel, type MarkerRole, type TableChoices } from './mapping.js';
+import { ROLE_WORDS, ROLES, columnLabel, type ExpectedKind, type MarkerRole, type TableChoices } from './mapping.js';
 import { whereChoices } from './lines.js';
 import type { TableQuestion } from './proposal.js';
 
@@ -15,11 +15,17 @@ export interface TableAnswer { label: string; choices: TableChoices }
 const MARKER_ROLES: readonly MarkerRole[] = [...ROLES, 'text'];
 const MARKER_WORDS: Readonly<Record<MarkerRole, string>> = { ...ROLE_WORDS, text: 'не метка — слово в тексте сообщения' };
 
+const EXPECTED_WORDS: Readonly<Record<ExpectedKind, string>> = { answer: 'ожидаемый ответ', article: 'id статьи базы знаний', code: 'код ответа', article_or_code: 'id статьи или код ответа' };
+
 /** The answers of `question`, in the order the dialog numbers them. */
 export function questionAnswers(question: TableQuestion): TableAnswer[] {
   switch (question.kind) {
     case 'text': return question.columns.map(column => ({ label: `колонка «${columnLabel(column)}»`, choices: { text: columnLabel(column) } }));
     case 'id': return question.columns.map(column => ({ label: `колонка «${columnLabel(column)}»`, choices: { id: columnLabel(column) } }));
+    // Each answer adds a column to those already chosen; the last one closes the list.
+    case 'expected': return [...question.columns.flatMap(({ column, kinds }) => kinds.map(kind => ({ label: `колонка «${columnLabel(column)}» — ${EXPECTED_WORDS[kind]}`,
+      choices: { expected: [...question.chosen, { column: columnLabel(column), kind }] } }))),
+      { label: question.chosen.length ? 'больше нет' : 'такой колонки нет', choices: { expected: question.chosen, expectedDone: true } }];
     case 'marker': return MARKER_ROLES.map(role => ({ label: MARKER_WORDS[role], choices: { markers: [{ token: question.token, role }] } }));
     case 'role': return ROLES.map(role => ({ label: ROLE_WORDS[role], choices: { roles: [{ value: question.value, role }] } }));
     // One value per answer, labelled as the preview counts it; several values are kept through the CLI's `--where A|B`.

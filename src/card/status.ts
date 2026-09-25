@@ -79,7 +79,7 @@ function proposalQuestion(card: Card, proposal: Reference): Question {
   const id = fingerprint({ kind: 'reference', subject: proposal.id, basisHash });
   const set = (next: Reference[]): CardCommand => ({ kind: 'set_references', cardId: card.id, references: next });
   const what = [proposal.source ? `статья ${proposal.source.doc}${proposal.source.chunk ? `, фрагмент ${proposal.source.chunk}` : ''}` : '',
-    proposal.text ? `«${clip(proposal.text, 160)}»` : ''].filter(Boolean).join(' · ');
+    proposal.text ? `«${clip(proposal.text, 160)}»` : '', proposal.outcome ? `код ${proposal.outcome.value}` : ''].filter(Boolean).join(' · ');
   return question(id, basisHash, `Lab предлагает эталон: ${what}. Проверять агента по нему?`, [
     { label: 'Да, это верный эталон', command: set(references.map(item => item.id === proposal.id ? { ...item, confirmed: true } : item)) },
     { label: 'Убрать эталон', command: set(references.filter(item => item.id !== proposal.id)) },

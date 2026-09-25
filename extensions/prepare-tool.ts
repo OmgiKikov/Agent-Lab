@@ -70,12 +70,16 @@ export const prepareParameters = Type.Object({
     collapseRepeats: Type.Optional(Type.Boolean({ description: 'Only after the owner said what to do with exchanges the export repeated: true — read each once, false — keep them as written.' })),
     encoding: Type.Optional(Type.Union([Type.Literal('utf-8'), Type.Literal('utf-16le'), Type.Literal('windows-1251'), Type.Literal('windows-1252')],
       { description: 'Only for a CSV file, when the owner said its text reads garbled or named its encoding: windows-1251 (Russian Excel), windows-1252 (Western Excel), utf-8, utf-16le.' })),
-  }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet or chose which of its conversations to evaluate: the sheet, the column of the conversation id, the column of the text, the conversations kept (where, or request in the owner\'s words), the repeated exchanges, the encoding of a CSV. A column is a header or a letter.' })),
+    answer: Type.Optional(Type.String({ maxLength: 200, description: 'One case per row: the column of the agent\'s logged reply; text is then the customer\'s question.' })),
+    expected: Type.Optional(Type.Array(Type.Object({ column: Type.String({ maxLength: 200 }), kind: Type.Union([Type.Literal('answer'), Type.Literal('article'), Type.Literal('code'), Type.Literal('article_or_code')]) }, closed),
+      { maxItems: 3, description: 'Columns of the assessor\'s expected result the owner named: answer text, article id or answer code.' })),
+  }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet: sheet, conversation id, text, selection, repeated exchanges, CSV encoding, logged answer or expected result. A column is a header or a letter.' })),
   suite: Type.Optional(path('A saved set of situations (.evals/*.json) to load into a fresh draft instead of preparing: free, nothing runs.')),
   demo: Type.Optional(Type.Literal(true, { description: 'The built-in teaching example: no model, no keys, one minute.' })),
 }, closed);
 type PrepareParams = { task?: string; logs?: string; withoutLogs?: true; situations?: number; materials?: string[]; prompts?: string[]; rules?: string;
-  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean; encoding?: Encoding }; suite?: string; demo?: true };
+  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean;
+    encoding?: Encoding; answer?: string; expected?: { column: string; kind: 'answer' | 'article' | 'code' | 'article_or_code' }[] }; suite?: string; demo?: true };
 
 /** A path the owner or the model named: `~/…` is the owner's home, anything else is relative to the project. */
 export function projectPath(named: string, cwd: string): string {
@@ -227,10 +231,10 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   let libraryImport: Awaited<ReturnType<typeof readDialogueImport>> | undefined;
   if (logs !== 'rules') {
     if (TABLE_EXTENSIONS.has(extname(logs).toLowerCase())) {
-      const { sheet, id, text, where, request: words, collapseRepeats, encoding } = params.table ?? {};
+      const { sheet, id, text, where, request: words, collapseRepeats, encoding, answer, expected } = params.table ?? {};
       // The owner's corrections, said in words; which conversations to keep is asked natively when no value was named.
       const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}), ...(collapseRepeats === undefined ? {} : { collapseRepeats }),
-        ...(encoding ? { encoding } : {}) };
+        ...(encoding ? { encoding } : {}), ...(answer ? { perRow: 'question' as const, answer } : {}), ...(expected?.length ? { expected } : {}) };
       if (Object.keys(choices).length || words || !await confirmedBefore(logs, directory)) {
         requireInteractive(ctx, 'Как читать таблицу, решаете вы в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не прочитано и не потрачено.');
         const owned = await host.open(ctx.cwd);

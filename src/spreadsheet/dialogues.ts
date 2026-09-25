@@ -71,7 +71,9 @@ export function importTable(sheet: Sheet, mapping: TableMapping): { batch: Impor
   const kept = keptColumns(sheet, mapping, rows);
   const conversations = conversationRows(sheet, mapping, rows);
   const chosen = mapping.filter ? selectedConversations(sheet, conversations, mapping.filter) : conversations;
-  const dialogues = mapping.layout.kind === 'dialogue_per_row' ? rowDialogues(sheet, mapping, chosen, kept) : messageDialogues(sheet, mapping, chosen, kept);
+  const read = mapping.layout.kind === 'dialogue_per_row' ? rowDialogues(sheet, mapping, chosen, kept)
+    : mapping.layout.kind === 'question_per_row' ? questionDialogues(sheet, mapping, chosen, kept) : messageDialogues(sheet, mapping, chosen, kept);
+  const dialogues = mapping.expected ? read.map((item, i) => withExpected(item, sheet, mapping.expected!, chosen[i]!)) : read;
   const { batch, verdicts } = logImport(dialogues.map(item => item.raw), { known: new Map(dialogues.flatMap((item, i) => item.issue ? [[i, item.issue] as const] : [])),
     maskVersion: mapping.maskVersion ?? 1, key: (_, i) => dialogues[i]!.key() });
   const usable = dialogues.flatMap((item, i) => verdicts[i] ? [] : [{ item, i }]);
@@ -96,7 +98,8 @@ interface KeptColumn { index: number; key: string }
 /** Columns the mapping does not read that hold anything, each under the name it has in the header (the letter when that is empty or repeated). */
 function keptColumns(sheet: Sheet, mapping: TableMapping, rows: number[]): KeptColumn[] {
   const layout = mapping.layout;
-  const used = new Set([mapping.id.index, mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : []]);
+  const used = new Set([...mapping.id ? [mapping.id.index] : [], mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : [],
+    ...layout.kind === 'question_per_row' && layout.answer ? [layout.answer.index] : [], ...(mapping.expected ?? []).map(item => item.column.index)]);
   const header = sheet.rows[mapping.headerRow - 1] ?? [];
   let width = header.length;
   for (const row of rows) width = Math.max(width, sheet.rows[row]!.length);
@@ -132,7 +135,7 @@ function rowDialogues(sheet: Sheet, mapping: TableMapping, conversations: readon
   const tokens = markers.map(item => item.token);
   const seen = new Set<string>();
   return conversations.map((rows): SheetDialogue => {
-    const row = rows[0]!, id = cellText(sheet, row, mapping.id).trim(), text = cellText(sheet, row, mapping.text);
+    const row = rows[0]!, id = cellText(sheet, row, mapping.id!).trim(), text = cellText(sheet, row, mapping.text);
     const columns = keptCells(sheet, row, kept);
     const base = { id, row: row + 1, ...columns ? { columns } : {} };
     const duplicate: LeftOutIssue | undefined = id !== '' && seen.has(id) ? { code: 'duplicate', value: id } : undefined;
@@ -154,7 +157,7 @@ function messageDialogues(sheet: Sheet, mapping: TableMapping, conversations: re
   const roleOf = new Map(layout.roles.map(item => [item.value, item.role]));
   const seen = new Set<string>();
   return conversations.map((group): SheetDialogue => {
-    const id = cellText(sheet, group[0]!, mapping.id).trim();
+    const id = cellText(sheet, group[0]!, mapping.id!).trim();
     // One id on a second conversation of the sheet (selection.ts conversationRows): refused as a JSON log refuses a repeated id.
     const shared: LeftOutIssue | undefined = id !== '' && seen.has(id) ? { code: 'shared', value: id } : undefined;
     seen.add(id);
@@ -173,4 +176,32 @@ function messageDialogues(sheet: Sheet, mapping: TableMapping, conversations: re
     const labels = messages.flatMap(message => message.role ? [{ label: message.value, role: message.role }] : []);
     return { raw: { id, rows: group.map(row => row + 1), messages, ...dropped }, ...issue ? { issue } : {}, labels, repeats, key: contentKey(id, messages, labels) };
   });
+}
+
+/**
+ * One case per row: the customer's message as written, and the agent's reply the log kept when there is a column of
+ * it. A row names its conversation by its id cell, or, with no id column, by its own row: two rows asking the same
+ * question are two cases, never one conversation.
+ */
+function questionDialogues(sheet: Sheet, mapping: TableMapping, conversations: readonly number[][], kept: readonly KeptColumn[]): SheetDialogue[] {
+  const layout = mapping.layout;
+  if (layout.kind !== 'question_per_row') return [];
+  return conversations.map((rows): SheetDialogue => {
+    const row = rows[0]!, id = mapping.id ? cellText(sheet, row, mapping.id).trim() : `row_${row + 1}`;
+    const question = cellText(sheet, row, mapping.text).trim(), answer = layout.answer ? cellText(sheet, row, layout.answer).trim() : '';
+    const columns = keptCells(sheet, row, kept);
+    const messages = [{ role: 'user' as const, content: question }, ...answer ? [{ role: 'assistant' as const, content: answer }] : []];
+    const labels = messages.map(message => ({ label: message.role === 'user' ? 'вопрос' : 'ответ', role: message.role }));
+    return { raw: { id, row: row + 1, ...columns ? { columns } : {}, messages }, ...question ? {} : { issue: ROW_ISSUES.noText }, labels, repeats: 0,
+      key: contentKey(id, messages, labels) };
+  });
+}
+
+/** The assessor's expected result of one conversation, as its rows write it: carried with the conversation to its situation. */
+function withExpected(dialogue: SheetDialogue, sheet: Sheet, expected: NonNullable<TableMapping['expected']>, rows: readonly number[]): SheetDialogue {
+  const values = expected.flatMap(item => {
+    const value = rows.map(row => cellText(sheet, row, item.column).trim()).find(Boolean);
+    return value ? [{ kind: item.kind, value }] : [];
+  });
+  return values.length ? { ...dialogue, raw: { ...dialogue.raw, expected: values } } : dialogue;
 }

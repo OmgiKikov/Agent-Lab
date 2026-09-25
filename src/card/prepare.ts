@@ -19,7 +19,8 @@ import { bindPlan, planProblem, planProposalSchema, scenarioOfTopic, type PlanCa
 import { rulebookOf } from './rulebook.js';
 import { bindProposal, cardProposalProblem, cardProposalSchema, namedVariation, proposalCall, proposalPayload, proposalRequirements, uncoveredOf, type CardProposalRequest, type ProposalCall } from './proposal.js';
 import { revisionClaims, claimReceipts, GAP_CLAIM, gapRequest, pendingClaims, REVIEW_PROTOCOL, reviewedBrief, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
-import type { Card, CardPreparation, LibraryV2, PreparationProgress } from './schema.js';
+import { cardSchema, type Card, type CardPreparation, type LibraryV2, type PreparationProgress } from './schema.js';
+import { assessorReference } from './assessor.js';
 
 /*
  * Preparing situations — from dialogues of an import, or from the owner's rules alone (docs/design/card-v2-spec.md §8, C9):
@@ -423,7 +424,10 @@ class Preparation {
     // plan, said as such. Without one, a gap in the owner's rules — once the reviewer confirms it (checkGap).
     const gap = uncoveredOf(parsed.data);
     if (gap) return plan ? { excluded: planMissText(gap, plan.scenario.question) } : { uncovered: gap, sources: [...sources] };
-    const card = withTrafficTopic(bindProposal(parsed.data, asked.call, revision?.card ? revision.card.number : this.library.nextNumber), topic);
+    const bound = withTrafficTopic(bindProposal(parsed.data, asked.call, revision?.card ? revision.card.number : this.library.nextNumber), topic);
+    // The assessor's markup of this conversation, carried by the import, is the situation's reference from the start.
+    const references = dialogue ? assessorReference(dialogue.original, record.sources) : undefined;
+    const card = references ? cardSchema.parse({ ...bound, references }) : bound;
     // A sentence another card already cites is already a rule of the library, by the same id: the first wording stays.
     const cited = proposalRequirements(parsed.data, asked.call).filter(requirement => !record.requirements.some(known => known.id === requirement.id));
     const requirements = [...record.requirements, ...cited];

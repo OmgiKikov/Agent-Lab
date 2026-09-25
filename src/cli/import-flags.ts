@@ -1,5 +1,5 @@
 import type { Encoding } from '../spreadsheet/csv.js';
-import { ROLES, ROLE_WORDS, columnLabel, tableChoicesSchema, type MarkerRole, type TableChoices } from '../spreadsheet/mapping.js';
+import { ROLES, ROLE_WORDS, columnLabel, tableChoicesSchema, type ExpectedKind, type MarkerRole, type TableChoices } from '../spreadsheet/mapping.js';
 import type { TableProposal } from '../spreadsheet/proposal.js';
 
 /*
@@ -56,6 +56,14 @@ function encodingOf(name: string): Encoding {
   return encoding;
 }
 
+const EXPECTED_BY_WORD: Readonly<Record<string, ExpectedKind>> = { ответ: 'answer', answer: 'answer', статья: 'article', article: 'article', код: 'code', code: 'code', 'статья-или-код': 'article_or_code' };
+/** `--expected-column "КОЛОНКА=ответ|статья|код"` → the assessor's column and what it holds; the column alone holds the expected answer. */
+function expectedChoice(text: string): { column: string; kind: ExpectedKind } {
+  const at = text.lastIndexOf('=');
+  const column = (at < 0 ? text : text.slice(0, at)).trim(), kind = at < 0 ? 'answer' : EXPECTED_BY_WORD[text.slice(at + 1).trim().toLowerCase()];
+  if (!column || !kind) throw new Error('--expected-column: ожидается КОЛОНКА=ответ|статья|код.');
+  return { column, kind };
+}
 /** The owner's choices from the command line; each overrides what Lab would propose. */
 export function tableChoicesOf(values: Record<string, string | boolean | string[] | undefined>): TableChoices {
   const text = (key: string) => typeof values[key] === 'string' ? values[key] as string : undefined;
@@ -73,6 +81,8 @@ export function tableChoicesOf(values: Record<string, string | boolean | string[
     ...text('where') ? { where: whereChoice(text('where')!) } : {},
     ...values['collapse-repeats'] ? { collapseRepeats: true } : values['keep-repeats'] ? { collapseRepeats: false } : {},
     ...text('encoding') ? { encoding: encodingOf(text('encoding')!) } : {},
+    ...text('answer-column') ? { perRow: 'question', answer: text('answer-column') } : {},
+    ...text('expected-column') ? { perRow: 'question', expected: [expectedChoice(text('expected-column')!)], expectedDone: true } : values['no-expected'] ? { expected: [], expectedDone: true } : {},
   });
 }
 /** How to answer the proposal from the command line. */
@@ -90,6 +100,7 @@ export function importHints(proposal: TableProposal): string[] {
     case 'role': return [`Ответ: та же команда с --roles "${question.value}=${words}".`];
     case 'id': return ['Ответ: та же команда с --id-column КОЛОНКА.'];
     case 'text': return ['Ответ: та же команда с --text-column КОЛОНКА.'];
+    case 'expected': return ['Ответ: та же команда с --expected-column "КОЛОНКА=ответ|статья|код" или с --no-expected, если такой колонки нет.'];
     case 'where': return [`Ответ: та же команда с --where "${columnLabel(question.column)}=${question.values[0]?.value ?? ''}" — значение как написано в таблице; несколько — через |. Все разговоры — без --where.`];
     case 'repeats': return ['Ответ: та же команда с --collapse-repeats — убрать повторы, или с --keep-repeats — оставить как написано.'];
   }

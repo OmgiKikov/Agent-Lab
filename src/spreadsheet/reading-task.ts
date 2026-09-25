@@ -6,7 +6,7 @@ import type { StructuredTask, TaskRunner } from '../llm/structured.js';
 import type { CallContext } from '../runtime.js';
 import { readExactly, type CompleteReading, type LayoutChoice } from './exact.js';
 import { EVIDENCE_VERSION, REQUEST_CHARS, type TableEvidence } from './evidence.js';
-import { FILTER_VALUES, LABEL_LIMIT, REPEAT_JUDGEMENTS, ROLES, tableChoicesSchema, type RepeatJudgement } from './mapping.js';
+import { EXPECTED_KINDS, FILTER_VALUES, LABEL_LIMIT, REPEAT_JUDGEMENTS, ROLES, tableChoicesSchema, type ExpectedKind, type RepeatJudgement } from './mapping.js';
 import type { TableFile, Workbook } from './workbook.js';
 
 /*
@@ -23,6 +23,8 @@ Decide how to read the conversations:
 - sheet: the sheet that holds them. id: the column that identifies a conversation; a row counter, a date or a category is never an id. text: the column with the text.
 - layout "dialogue_per_row" when one cell holds a whole conversation and each message starts with a marker of who writes it. markers: every candidate that starts messages, with role "user" for the customer, "assistant" for the agent or bot, "system" for messages of the platform itself; leave out a candidate that is only a word inside messages (an abbreviation, a product, a part of a longer word) or give it role "text". separator: the characters the export puts between messages, such as "\`", "|" or a line break; null when messages are only joined by spaces and each starts at its marker. Characters inside messages, such as the backticks of Markdown code fences in an agent's reply, are not a separator.
 - layout "message_per_row" when each row is one message: role is the column saying who writes it, roles gives each of its values a role, order is a column of message numbers or times when the rows are not already in order, else null.
+- layout "question_per_row" when each row is one case — a reviewed question, a test case — and no cell holds a conversation marked message by message: text is the column with the customer's question as written, answer is the column with the agent's reply as the log kept it, else null. id may then be null: each row is its own case. A table with no column that identifies conversations, or whose text cells open with a header rather than a marker of who writes, is read this way; id null needs this layout.
+- expected: the columns where a reviewer wrote the expected result of the case, each with its kind: "answer" for the expected reply text (it may hold a short answer code in some rows), "article" for the id of the knowledge-base article the reply must rest on, "code" for the expected answer code of the agent, "article_or_code" for a column that holds an article id in some rows and an answer code in others. Never the agent's actual reply, the reviewer's verdict or the error reason. null when the table has none.
 - repeats: "export_copies" when the export wrote exchanges again right after themselves — the same block of messages two or more times in a row, which the harness then reads once; "said_again" when customers really repeat themselves; "none" when no block stands again right after itself.
 - filter: only when ownerRequest says which conversations to evaluate: the category column and its values, exactly as listed, that select them; null when it names none.
 The harness applies your reading to every row and checks it with numbers; if it fails, you get the reason and answer again. Answer with names from the evidence only: never copy text of a conversation.`;
@@ -39,7 +41,8 @@ export interface TableReadingAnswer { reading: CompleteReading; repeats: RepeatJ
 /** A builder model that reads tables: the Pi runtime's, or a test's with scripted replies. */
 export interface TableReader { builder: BuilderModel; read(request: TableReadingRequest, ctx: CallContext): Promise<TableReadingAnswer> }
 
-interface Answer { sheet: string; id: string; text: string; layout: LayoutChoice; repeats: RepeatJudgement; filter?: { column: string; values: string[] } | null }
+interface Answer { sheet: string; id: string | null; text: string; layout: LayoutChoice; repeats: RepeatJudgement; filter?: { column: string; values: string[] } | null;
+  expected?: { column: string; kind: ExpectedKind }[] | null }
 
 const MARKER_ROLES = [...ROLES, 'text'] as const;
 const isSeparatorChar = (char: string) => char.toLowerCase() === char.toUpperCase() && !(char >= '0' && char <= '9');
@@ -65,9 +68,10 @@ function answerSchema(evidence: TableEvidence): z.ZodType<Answer> | undefined {
     roles: z.array(z.strictObject({ value: z.enum(values, { error: 'Not a listed value: use values of the role column as listed.' }), role: z.enum(ROLES) })).min(2).max(LABEL_LIMIT),
     order: column.nullable(),
   });
-  const layout = tokens.length && values.length >= 2 ? z.discriminatedUnion('kind', [dialogue, message]) : tokens.length ? dialogue : values.length >= 2 ? message : undefined;
-  if (!layout) return undefined;
-  const shape = { sheet: z.enum(evidence.sheets.map(sheet => sheet.name)), id: column, text: column, layout, repeats: z.enum(REPEAT_JUDGEMENTS) };
+  const question = z.strictObject({ kind: z.literal('question_per_row'), answer: column.nullable() });
+  const layout = z.discriminatedUnion('kind', [question, ...tokens.length ? [dialogue] : [], ...values.length >= 2 ? [message] : []] as [typeof question, ...(typeof dialogue | typeof message)[]]);
+  const expected = z.array(z.strictObject({ column, kind: z.enum(EXPECTED_KINDS) })).min(1).max(3).nullable().optional();
+  const shape = { sheet: z.enum(evidence.sheets.map(sheet => sheet.name)), id: column.nullable(), text: column, layout, repeats: z.enum(REPEAT_JUDGEMENTS), expected };
   // Which conversations to evaluate is the owner's choice: the model may name a filter only for the owner's own words.
   if (!evidence.ownerRequest || !categories.length) return z.strictObject(shape);
   return z.strictObject({ ...shape, filter: z.strictObject({
@@ -82,6 +86,7 @@ export const canPropose = (evidence: TableEvidence): boolean => answerSchema(evi
 const readingOf = (answer: Answer): CompleteReading => ({
   sheet: answer.sheet, id: answer.id, text: answer.text, layout: answer.layout, collapseRepeats: answer.repeats === 'export_copies',
   ...answer.filter ? { where: { column: answer.filter.column, values: answer.filter.values } } : {},
+  ...answer.expected?.length ? { expected: answer.expected } : {},
 });
 
 /** The task of one table: its answer's enums, and the reading applied to every row as the domain check. */
@@ -107,13 +112,15 @@ export async function readTableWithModel(request: TableReadingRequest, { run, ct
 
 const choice = tableChoicesSchema.shape;
 export const completeReadingSchema = z.strictObject({
-  sheet: choice.sheet.unwrap(), id: choice.id.unwrap(), text: choice.text.unwrap(),
+  sheet: choice.sheet.unwrap(), id: choice.id.unwrap().nullable(), text: choice.text.unwrap(),
   layout: z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('dialogue_per_row'), separator: choice.separator.unwrap(), markers: choice.markers.unwrap() }),
     z.strictObject({ kind: z.literal('message_per_row'), role: choice.role.unwrap(), roles: choice.roles.unwrap(), order: choice.order.unwrap() }),
+    z.strictObject({ kind: z.literal('question_per_row'), answer: choice.answer.unwrap() }),
   ]),
   collapseRepeats: z.boolean(),
   where: choice.where,
+  expected: choice.expected,
 });
 
 /**

@@ -172,6 +172,7 @@ export function referenceText(reference: Reference): string {
   const checks = [
     reference.source ? `находит статью ${reference.source.doc}${reference.source.chunk ? `, фрагмент ${reference.source.chunk}` : ''}` : '',
     reference.text ? `отвечает по эталону «${quoteText(oneLine(reference.text))}»` : '',
+    reference.outcome ? `завершает с кодом ${reference.outcome.value}` : '',
   ].filter(Boolean).join(' и ');
   const vouched = reference.origin === 'proposed' ? reference.confirmed ? 'предложил Lab, вы подтвердили' : 'предложил Lab — ждёт вашего решения' : VOUCHED[reference.origin];
   return `${checks} — ${vouched}`;
@@ -231,6 +232,7 @@ function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefine
     ...card.coverage.map(entry => ({ label: 'Поздние реплики', text: `${message(entry.event.eventIndex)} — ${ACCOUNTED[entry.as]}${entry.reason ? `: ${oneLine(entry.reason)}` : ''}` })),
     ...(card.references ?? []).flatMap(reference => [
       ...(reference.source ? [{ label: 'Эталон', text: `статья ${reference.source.doc}${reference.source.chunk ? `#${reference.source.chunk}` : ''} — код сверяет с найденными статьями (retrievals адаптера); не видно полного контекста — не измерено` }] : []),
+      ...(reference.outcome ? [{ label: 'Эталон', text: `код ${reference.outcome.value} — код сверяет с состоянием, которое сообщил адаптер${reference.outcome.field ? ` (поле ${reference.outcome.field})` : ''}; не сообщил — не измерено` }] : []),
       ...(reference.text ? [{ label: 'Эталон', text: `«${quoteText(oneLine(reference.text))}» — значения (суммы, сроки, коды) сверяет код, смысл — судья` }] : []),
     ]),
     ...card.agentMust.map(expectation => ({ label: 'Ожидание', text: `${expectationLetter(expectation.id)} — ${oneLine(expectation.text)}; ${observedText(expectation)}${expectation.appliesWhen ? `, если ${oneLine(expectation.appliesWhen)}` : ''}` })),
@@ -422,6 +424,7 @@ export function situationData(view: SituationView) {
     leaves: view.brief.leaves, turn: view.brief.turn, ...(view.brief.filled ? { filledOverMasks: view.brief.filled } : {}),
     must: view.brief.must.map((duty, index) => ({ ...(view.refs.must[index] ? { id: view.refs.must[index] } : {}), ...duty,
       ...(view.refs.plan?.[index] ? { plan: view.refs.plan[index] } : {}) })),
+    ...(view.brief.references ? { references: view.brief.references } : {}),
     ...questionData(view), ...(view.problems.length ? { problems: view.problems } : {}),
   };
 }

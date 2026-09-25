@@ -46,11 +46,12 @@ const DAY_MS = 86_400_000;
 export function conversationRows(sheet: Sheet, mapping: Reading, rows: readonly number[]): number[][] {
   const filled = (row: number, index: number) => cellOf(sheet, row, index).trim() !== '';
   const layout = mapping.layout;
-  if (layout.kind === 'dialogue_per_row') return rows.filter(row => filled(row, mapping.id.index) || filled(row, mapping.text.index)).map(row => [row]);
+  if (layout.kind === 'question_per_row') return rows.filter(row => filled(row, mapping.text.index)).map(row => [row]);
+  if (layout.kind === 'dialogue_per_row') return rows.filter(row => filled(row, mapping.id!.index) || filled(row, mapping.text.index)).map(row => [row]);
   const groups = new Map<string, number[]>();
   const position = new Map<number, number>();
   for (const row of rows) {
-    const id = cellOf(sheet, row, mapping.id.index).trim();
+    const id = cellOf(sheet, row, mapping.id!.index).trim();
     if (!id && !filled(row, layout.role.index) && !filled(row, mapping.text.index)) continue;
     position.set(row, position.size);
     const key = id || `\u0000${row}`, group = groups.get(key);
@@ -87,8 +88,10 @@ function conversationValue(sheet: Sheet, rows: readonly number[], column: number
 /** What the mapping already reads a column as; undefined for a column it keeps as written. */
 function partOf(mapping: Reading, index: number): string | undefined {
   const layout = mapping.layout;
-  if (index === mapping.id.index) return 'id разговора';
-  if (index === mapping.text.index) return layout.kind === 'dialogue_per_row' ? 'текст разговора' : 'текст сообщений';
+  if (index === mapping.id?.index) return 'id разговора';
+  if (index === mapping.text.index) return layout.kind === 'dialogue_per_row' ? 'текст разговора' : layout.kind === 'question_per_row' ? 'вопрос клиента' : 'текст сообщений';
+  if (layout.kind === 'question_per_row' && index === layout.answer?.index) return 'ответ агента';
+  if (mapping.expected?.some(item => item.column.index === index)) return 'ожидание асессора';
   if (layout.kind === 'message_per_row' && index === layout.role.index) return 'роль того, кто пишет';
   if (layout.kind === 'message_per_row' && index === layout.order?.index) return 'порядок сообщений';
   return undefined;
