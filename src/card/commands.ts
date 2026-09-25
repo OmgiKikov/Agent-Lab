@@ -36,13 +36,21 @@ import { briefChanges, cardSituation, type BriefChange } from './view.js';
 export type Authority = 'owner-confirm' | 'owner-words';
 export type Via = 'pi-confirm' | 'board' | 'cli-yes';
 
+/** The stricter of the authorities a command's parts need: a decision about the customer or the rules outranks a wording. */
+const strictest = (authorities: readonly Authority[]): Authority => authorities.includes('owner-confirm') || !authorities.length ? 'owner-confirm' : 'owner-words';
+
 /** The authority a command needs; the same in every adapter. */
 export function requiredAuthority(command: CardCommand | LogVersionCommand): Authority {
   switch (command.kind) {
     // Which agent wrote the logs decides whether agreement with them is a calibration: the owner's decision.
     case 'declare_log_version': return 'owner-confirm';
     case 'edit_client': return 'owner-words';
-    case 'edit_expectation': return command.text !== undefined || typeof command.appliesWhen === 'string' ? 'owner-words' : 'owner-confirm';
+    // Every field the command changes counts: new words for a duty never carry a new rule or a dropped condition along with them.
+    case 'edit_expectation': return strictest([
+      ...(command.text !== undefined ? ['owner-words' as const] : []),
+      ...(typeof command.appliesWhen === 'string' ? ['owner-words' as const] : command.appliesWhen === null ? ['owner-confirm' as const] : []),
+      ...(command.requirementIds !== undefined ? ['owner-confirm' as const] : []),
+    ]);
     case 'set_turn': return command.turn && !command.turn.event ? 'owner-words' : 'owner-confirm';
     // A similar card whose customer knows something else is a claim about the customer, whatever its words.
     case 'add_similar': return command.change.kind === 'opening' || command.change.kind === 'turn' && command.change.turn !== null ? 'owner-words' : 'owner-confirm';
@@ -50,7 +58,7 @@ export function requiredAuthority(command: CardCommand | LogVersionCommand): Aut
     case 'answer_question': return command.text !== undefined ? 'owner-words' : 'owner-confirm';
     // Which rules bind the bot, and whether customers know a plausible fact, are the owner's decisions about the whole set.
     // A series needs the owner's confirmation when any of its changes does; otherwise it is all wording.
-    case 'edit_card': return command.changes.some(change => requiredAuthority(withCard(change, command.cardId)) === 'owner-confirm') ? 'owner-confirm' : 'owner-words';
+    case 'edit_card': return strictest(command.changes.map(change => requiredAuthority(withCard(change, command.cardId))));
     // Lab's values over the log's masks speak for the customer: the owner confirms them as shown.
     case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card':
     case 'decide_plausible': case 'set_rulebook': case 'fill_masked': return 'owner-confirm';
@@ -152,18 +160,20 @@ function requireBinding(library: LibraryV2, ids: readonly string[]): void {
 }
 
 /**
- * The next fact id of a card: after every id it ever had — its facts and the facts named in its receipts, so a
- * removed fact's id is never given to another one.
+ * The next fact id of a card: after every id it ever had — its facts before the command and as the command has left
+ * them so far, the facts named in its receipts, and the ids the command already gave out — so a removed fact's id is
+ * never given to another one, not even later in the same series of changes.
  */
-function nextFactId(library: LibraryV2, card: Card): string {
+function nextFactId(library: LibraryV2, draft: Card, issued: ReadonlySet<string>): string {
   const named = library.receipts.flatMap(receipt => {
     const { command } = receipt;
-    if (command.kind === 'decide_plausible') return command.facts.flatMap(item => item.cardId === card.id ? [item.factId] : []);
-    if (!('cardId' in command) || command.cardId !== card.id) return [];
+    if (command.kind === 'decide_plausible') return command.facts.flatMap(item => item.cardId === draft.id ? [item.factId] : []);
+    if (!('cardId' in command) || command.cardId !== draft.id) return [];
     const changes: (CardCommand | CardChange)[] = command.kind === 'edit_card' ? command.changes : [command];
     return changes.flatMap(change => (change.kind === 'set_fact' || change.kind === 'remove_fact' || change.kind === 'set_fact_disclosure') && change.factId ? [change.factId] : []);
   });
-  const numbers = [...card.client.knows.map(fact => fact.id), ...named].map(id => id.startsWith('f') ? Number(id.slice(1)) : 0).filter(Number.isInteger);
+  const before = library.cards.find(item => item.id === draft.id)?.client.knows.map(fact => fact.id) ?? [];
+  const numbers = [...before, ...draft.client.knows.map(fact => fact.id), ...named, ...issued].map(id => id.startsWith('f') ? Number(id.slice(1)) : 0).filter(Number.isInteger);
   return `f${Math.max(0, ...numbers) + 1}`;
 }
 
@@ -283,9 +293,9 @@ function decidePlausible(library: LibraryV2, command: Extract<CardCommand, { kin
 
 /**
  * One change of one card, made on the draft of that card: references are read on the draft as the earlier changes of a
- * series left it. Returns why, for the account of the later messages.
+ * series left it. `issued`: the fact ids the command gave out so far. Returns why, for the account of the later messages.
  */
-function applyChange(draft: Card, change: CardChange, library: LibraryV2, context: CommandContext, owner: { kind: 'owner'; receiptId: string }): string {
+function applyChange(draft: Card, change: CardChange, library: LibraryV2, context: CommandContext, owner: { kind: 'owner'; receiptId: string }, issued: Set<string>): string {
   switch (change.kind) {
     case 'set_fact_disclosure': {
       const fact = factOf(draft, change.factId);
@@ -296,8 +306,12 @@ function applyChange(draft: Card, change: CardChange, library: LibraryV2, contex
     case 'set_fact': {
       const existing = change.factId === undefined ? undefined : factOf(draft, change.factId);
       if (!existing && draft.client.knows.length >= 8) throw new CommandRefused(`У ситуации №${draft.number} уже 8 фактов: уберите лишний, прежде чем добавлять.`);
-      const fact = { id: existing?.id ?? nextFactId(library, draft), label: change.label, ...(change.value !== undefined ? { value: change.value } : {}),
-        disclosure: change.disclosure, ...(change.askedAs !== undefined ? { askedAs: change.askedAs } : {}), source: owner };
+      const id = existing?.id ?? nextFactId(library, draft, issued);
+      issued.add(id);
+      // How the customer recognises the agent's question stays as it was unless the command says it anew.
+      const askedAs = change.askedAs ?? existing?.askedAs;
+      const fact = { id, label: change.label, ...(change.value !== undefined ? { value: change.value } : {}),
+        disclosure: change.disclosure, ...(askedAs !== undefined ? { askedAs } : {}), source: owner };
       draft.client.knows = existing ? draft.client.knows.map(item => item.id === fact.id ? fact : item) : [...draft.client.knows, fact];
       return `Факт «${clip(change.label, 80)}» записали вы.`;
     }
@@ -359,11 +373,12 @@ function edit(library: LibraryV2, command: CardCommand, receiptId: string, conte
   switch (command.kind) {
     case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'edit_expectation': case 'remove_expectation': case 'edit_client': case 'set_turn': {
       const { cardId, ...single } = command;
-      return change(cardOf(library, cardId), draft => applyChange(draft, single, library, context, owner));
+      return change(cardOf(library, cardId), draft => applyChange(draft, single, library, context, owner, new Set()));
     }
     // The whole series on one draft, checked once as it leaves the card: what is valid only together passes together.
     case 'edit_card': return change(cardOf(library, command.cardId), draft => {
-      const reasons = command.changes.map(item => applyChange(draft, item, library, context, owner));
+      const issued = new Set<string>();
+      const reasons = command.changes.map(item => applyChange(draft, item, library, context, owner, issued));
       return reasons.length === 1 ? reasons[0]! : 'Ситуацию изменили вы.';
     });
     case 'fill_masked': return change(cardOf(library, command.cardId), draft => {
@@ -407,7 +422,7 @@ function rulebookChange(library: LibraryV2, rulebook: Rulebook): Edited {
  * The command an answer stands for: the answer's ready-made command, with the owner's text where the answer
  * asks for their words. The question must still be the one the card asks now.
  */
-function answered(library: LibraryV2, command: Extract<CardCommand, { kind: 'answer_question' }>, context: CommandContext): { command: CardCommand; basisHash: string } {
+function answered(library: LibraryV2, command: Extract<CardCommand, { kind: 'answer_question' }>, context: CommandContext): { command: CardCommand; basisHash: string; worded: boolean } {
   const card = cardOf(library, command.cardId);
   const question = cardStatus(card, { library, evidence: context.evidence, maxTurns: context.maxTurns }).question;
   if (!question || question.id !== command.questionId) {
@@ -415,13 +430,13 @@ function answered(library: LibraryV2, command: Extract<CardCommand, { kind: 'ans
   }
   const choice = question.choices.find(item => item.id === command.choice);
   if (!choice) throw new UnknownReference('choice', question.choices.map(item => `${item.id} ${item.label}`), 'Такого ответа на этот вопрос нет.');
-  if (!choice.needsText) return { command: choice.command, basisHash: question.basisHash };
+  if (!choice.needsText) return { command: choice.command, basisHash: question.basisHash, worded: false };
   if (command.text === undefined) throw new CommandRefused('Для этого ответа нужны ваши слова.');
   const inner = choice.command;
   const worded: CardCommand = inner.kind === 'edit_client' ? { ...inner, ...(inner.wants !== undefined ? { wants: command.text } : {}), ...(inner.writes !== undefined ? { writes: command.text } : {}),
     ...(inner.leaves !== undefined ? { leaves: command.text } : {}) }
     : inner.kind === 'edit_expectation' ? { ...inner, text: command.text } : inner;
-  return { command: cardCommandSchema.parse(worded), basisHash: question.basisHash };
+  return { command: cardCommandSchema.parse(worded), basisHash: question.basisHash, worded: true };
 }
 
 /**
@@ -434,7 +449,8 @@ export function prepareCommand(library: LibraryV2, raw: CardCommand, context: Co
   const before = libraryHash(library);
   const answer = asked.kind === 'answer_question' ? answered(library, asked, context) : undefined;
   const command = answer?.command ?? asked;
-  const ownerWords = asked.kind === 'answer_question' ? asked.text : context.ownerWords;
+  // The receipt keeps the owner's words only where they became the wording: an answer that takes none keeps none.
+  const ownerWords = answer ? (answer.worded ? (asked as Extract<CardCommand, { kind: 'answer_question' }>).text : undefined) : context.ownerWords;
   const receiptId = `owner_${fingerprint({ library: before, command }).slice(0, 32)}`;
   const edited = edit(library, command, receiptId, context);
   const receipt = { id: receiptId, at: context.at ?? new Date().toISOString(), via: context.via, command,
@@ -454,8 +470,10 @@ export function prepareCommand(library: LibraryV2, raw: CardCommand, context: Co
   });
   const rulebook = edited.rulebook && { before: rulebookOf(library), after: edited.rulebook,
     flagged: edited.scope.flatMap(id => card(next, id)?.number ?? []).sort((a, b) => a - b) };
+  // An answer needs what the answer is and what it does: words for a choice that does not take them never make a decision a wording.
+  const authority = answer ? strictest([requiredAuthority(asked), requiredAuthority(command)]) : requiredAuthority(command);
   return { command, libraryHash: before, previewHash: fingerprint({ library: before, command, next: libraryHash(next) }),
-    authority: answer ? requiredAuthority(asked) : requiredAuthority(command), via: context.via, diff, scope: edited.scope, recheck, ...(rulebook ? { rulebook } : {}), next };
+    authority, via: context.via, diff, scope: edited.scope, recheck, ...(rulebook ? { rulebook } : {}), next };
 }
 
 /**

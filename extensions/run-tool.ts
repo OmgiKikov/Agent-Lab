@@ -13,7 +13,7 @@ import { libraryHash } from '../src/scenario-library.js';
 import { sameTargetVersion } from '../src/target-version.js';
 import { safeText } from '../src/text.js';
 import { agentLine } from '../src/workspace.js';
-import { ProgressRow, RUN_MESSAGE, STOP_HINT, type Background } from './background.ts';
+import { ProgressRow, RUN_MESSAGE, runAnswer, STOP_HINT, type Background, type VerdictOutput } from './background.ts';
 import { progressText, row, runStamp, runWhen, stoppedLines } from './conversation.ts';
 import { ask, displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import { cardPlan, launchRun, type LaunchAgent } from './launch.ts';
@@ -38,7 +38,7 @@ export interface RunHost {
   background: Background;
   feedResult: (callId: string, output: unknown, feed: Feed, note: string) => AgentToolResult<unknown>;
   askOwner: (callId: string, error: unknown) => AgentToolResult<unknown>;
-  verdictOutput: (record: Experiment, lab: ExperimentLab) => Promise<{ output: unknown; details: unknown }>;
+  verdictOutput: VerdictOutput;
 }
 
 const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
@@ -94,8 +94,8 @@ export function registerRunTool(pi: Pick<ExtensionAPI, 'registerTool'>, host: Ru
         const action = params.action ?? 'start';
         if (action === 'progress') return await progress(host, callId, ctx, params.run);
         if (action === 'stop') return await stop(host, callId, ctx, params.run);
-        requireInteractive(ctx, action === 'accept' ? 'Утвердить ситуации можно в интерактивном терминале Pi. В CLI: agent-lab cards --id RUN --accept --yes.'
-          : 'Запуск подтверждается в интерактивном терминале Pi. В CI: agent-lab evaluate --input suite.json --yes.');
+        requireInteractive(ctx, action === 'accept' ? 'Ситуации утверждаете вы — в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не утверждено.'
+          : 'Запуск подтверждаете вы — в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Агент не запускался, ничего не потрачено.');
         const found = recordFor(await host.reading(directory).list(), params.run, 'situations');
         if (action === 'accept') return await accept(host, callId, ctx, found);
         const signal = AbortSignal.any([toolSignal, ctx.signal].filter((item): item is AbortSignal => !!item));
@@ -159,7 +159,8 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
     if (draft.reviewedAt || draft.trials.length) {
       const ids = numbers?.map(number => {
         const scenario = draft.scenarios.find((item, index) => situationNumber(draft, item.id, index + 1) === number);
-        if (!scenario) throw new NeedsOwner('unknown_reference', `Ситуации №${number} в этом прогоне нет. Есть: ${draft.scenarios.map((item, index) => situationNumber(draft, item.id, index + 1)).join(', ')}.`, []);
+        if (!scenario) throw new NeedsOwner('unknown_reference', `Ситуации №${number} в этом прогоне нет. Есть: ${draft.scenarios.map((item, index) => situationNumber(draft, item.id, index + 1)).join(', ')}.`, [],
+          `Ситуации ${number} в этом прогоне нет — какие повторить?`);
         return scenario.id;
       });
       const source = draft;
@@ -201,8 +202,9 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
         { rows: [row(`Прогон идёт: ${countText(plannedTrials(record), CONVERSATIONS)} с агентом ${agentLine(record, ctx.cwd)}. Результат придёт сюда сообщением.`, 'text', true),
           row(`Разговор свободен; ${STOP_HINT}.`, 'muted')] }, `Прогон · ${runStamp(record)}`);
     }
-    // The session holds ids only (REV-01): the block is drawn from the remembered view.
-    const { output, details } = await host.verdictOutput(await owned.lab.get(draft.id), owned.lab);
+    // The same answer as a run that ends in the background: its result — drawn from the remembered view, the session
+    // holds ids only (REV-01) — or what cut it short and what was saved.
+    const { output, details } = await runAnswer(await owned.lab.get(draft.id), owned.lab, host.verdictOutput);
     return { content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details };
   } finally {
     unfollow?.();

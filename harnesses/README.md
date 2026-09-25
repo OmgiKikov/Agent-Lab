@@ -16,9 +16,10 @@ Lab читает и сам (`agent-lab import --file логи.xlsx`, или пр
 подтверждает, как читать колонки. Конвертер обвязки нужен, когда выгрузка несёт то, чего в таблице
 разговоров нет, — например, поверхность и полномочия по каждому диалогу. Он запускается руками:
 
-- `import-dialogues.py --input X.xlsx --output Y.jsonl [--limit N] [--multi-turn-only] [--sheet S]…`
-  пишет диалоги в схеме `dialogueSchema` (`src/contracts.ts`), по одному JSON в строке; дальше
-  `agent-lab build --input задача.json --dialogues-file Y.jsonl`.
+- `import-dialogues.py --input X.xlsx [--output Y.jsonl] [--multi-turn-only] [--sheet S]…`
+  пишет диалоги в схеме `dialogueSchema` (`src/contracts.ts`), по одному JSON в строке — по
+  умолчанию в `.agent-lab/agent-oc/`, с правами только владельца; путь в git-репозитории, который
+  git не игнорирует, отвергает. Дальше `agent-lab build --input задача.json --dialogues-file Y.jsonl`.
 
 ## Что сюда класть нельзя
 

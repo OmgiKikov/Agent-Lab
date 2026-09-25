@@ -50,7 +50,8 @@ import { builderOf, consentText, preparationConsent, rulesConsentText, situation
  *
  * Inside that chat the owner's word belongs to the chat: `agent-lab chat` gives Pi AGENT_LAB_SESSION, Pi's shell
  * passes its whole environment to every command it runs, and the chat asks each consent and decision in a native
- * dialog. A command run from the chat's shell — by the model or by the owner's `!` — therefore never takes --yes.
+ * dialog. A command run from the chat's shell — by the model or by the owner's `!` — therefore refuses --yes, unless
+ * that shell drops the variable, which nothing here can prevent (IN_CHAT).
  */
 
 const FLAGS = {
@@ -106,8 +107,13 @@ const writeStdout = (value: string): Promise<void> => new Promise((resolve, reje
   process.stdout.write(value, finish);
 });
 
-/** Set by `agent-lab chat` for Pi, and so present in every command Pi's shell runs in that chat. */
-const IN_CHAT = process.env.AGENT_LAB_SESSION === '1';
+/**
+ * Set by `agent-lab chat` for Pi, and so present in every command Pi's shell runs in that chat. Any value counts, an
+ * empty one too: `AGENT_LAB_SESSION= agent-lab run --yes` is still a command from the chat. This only keeps the chat's
+ * model from consenting for the owner by accident; a shell without limits can always drop the variable
+ * (`env -u AGENT_LAB_SESSION …`), so the real guard is Pi asking the owner before it runs a shell command.
+ */
+const IN_CHAT = process.env.AGENT_LAB_SESSION !== undefined;
 const CHAT_ASKS = 'Из чата Agent Lab команда с --yes не выполняется: в чате согласие на расход и решения спрашивает сам чат. '
   + 'Скажите обычными словами, что сделать, — Lab спросит вас. Ничего не записано и не потрачено.';
 
@@ -127,6 +133,10 @@ async function asWriter(directory: string, work: (lab: ExperimentLab) => Promise
 async function chat(args: string[]): Promise<void> {
   const root = fileURLToPath(new URL('../', import.meta.url));
   const piRoot = dirname(dirname(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'))));
+  // Pi's session files keep every tool result, and Lab's results quote the customers' messages word for word: whatever
+  // Pi writes in this chat is the owner's alone (0600 files, 0700 folders), as the records in .agent-lab are. The child
+  // inherits the mask; this process only waits for it.
+  process.umask(0o077);
   // The Agent Lab session gets the agent-builder skill's text as its instructions (extensions/agent-lab.ts); listed
   // as a skill as well, it would only invite the model to read the same text twice.
   const child = spawn(process.execPath, [resolve(piRoot, 'dist/bundle/cli.js'), '--no-extensions', '--no-skills', '-e', resolve(root, 'extensions/agent-lab.ts'), ...args],

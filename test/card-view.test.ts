@@ -164,6 +164,29 @@ test('a record made before libraries reads with the same brief, ready as it is',
   ].join('\n'));
 });
 
+test('the counts agree with their numbers: «2 не подходят для теста», «1 ещё не проверена»', () => {
+  const [one] = views(cardDraft());
+  const as = (status: SituationView['status'], count: number) => Array.from({ length: count }, (): SituationView => ({ ...one!, status }));
+  assert.equal(countsText([...as('ready', 1), ...as('unusable', 2), ...as('checking', 1)]), '4 ситуации: 1 готова · 2 не подходят для теста · 1 ещё не проверена');
+  assert.equal(countsText([...as('ready', 5), ...as('unusable', 1), ...as('checking', 3)]), '9 ситуаций: 5 готовы · 1 не подходит для теста · 3 ещё не проверены');
+  assert.equal(countsText([...as('unusable', 21)]), '21 ситуация: 0 готовы · 21 не подходит для теста');
+});
+
+test('what the brief does not print but a change moves is its own line: a duty\'s rule, its condition, how it is observed, the question about a fact', () => {
+  const [before] = views(cardDraft());
+  const terms = before!.terms!;
+  const after: SituationView = { ...before!, terms: { ...terms,
+    must: [{ ...terms.must[0]!, rules: [{ id: 'rule_other', quote: 'Другое правило владельца' }] }, { ...terms.must[1]!, when: null, observed: 'по вызовам инструментов' }],
+    knows: [{ askedAs: 'номер кассы' }] } };
+  assert.deepEqual(briefChanges(before, after).map(changeText), [
+    'Знает: Номер терминала: 5678 — если спросят: было «номер терминала», стало «номер кассы»',
+    `Агент должен: не запрашивать номер терминала повторно, если клиент его уже назвал — правило: было «${terms.must[0]!.rules[0]!.quote}», стало «Другое правило владельца»`,
+    'Агент должен: объяснить, как оформить возврат — когда: было «клиент назвал номер терминала», стало «всегда»',
+    'Агент должен: объяснить, как оформить возврат — проверяется: было «по ответу агента», стало «по вызовам инструментов»',
+  ]);
+  assert.deepEqual(briefChanges(before, { ...before!, terms: structuredClone(terms) }), [], 'the same terms: no line');
+});
+
 test('«было → стало» matches facts and duties by id, and names only what changed', () => {
   const [before] = views(cardDraft());
   const after: SituationView = { ...before!, brief: { ...before!.brief,

@@ -30,14 +30,30 @@ import type { LabLease, SessionOperations } from './operations.ts';
 /** Writes under the writer's lease; long work is handed to the session (`handOver`), which releases the lease when the work ends. */
 export type Writing = <T>(work: (lab: ExperimentLab, handOver: (start: (lease: LabLease) => void) => void) => Promise<T>, pendingCheck?: 'cancel' | 'wait') => Promise<T>;
 
+/** Long work of this session that has ended and is still handing over its result: a write waits for it instead of failing. */
+async function finishing(operations: SessionOperations, directory: string): Promise<{ done: Promise<void> } | undefined> {
+  const job = operations.current(directory);
+  return job && job.kind !== 'assessment' && !isRunning((await job.lab.get(job.id)).phase) ? job : undefined;
+}
+
+/**
+ * Why nothing can be written from this session now, asked before the owner is asked anything, so an answer is never
+ * lost to work that is going on; undefined when a write can go ahead — the lease is free, held by a check a write
+ * cancels, or by work that has just ended (the write waits for it).
+ */
+export async function busyFor(operations: SessionOperations, directory: string): Promise<string | undefined> {
+  const busy = operations.busy(directory);
+  return busy && !await finishing(operations, directory) ? busy : undefined;
+}
+
 /**
  * A surface's writes: the lease for one piece of work, given back at once unless long work took it over. A run that
  * has just ended is still handing over its result: a write waits for that instead of failing.
  */
 export function writer(operations: SessionOperations, open: (cwd: string, pendingCheck?: 'cancel' | 'wait') => Promise<LabLease>, cwd: string, directory: string): Writing {
   return async (work, pendingCheck = 'cancel') => {
-    const finishing = operations.current(directory);
-    if (finishing && finishing.kind !== 'assessment' && !isRunning((await finishing.lab.get(finishing.id)).phase)) await finishing.done;
+    const ended = await finishing(operations, directory);
+    if (ended) await ended.done;
     const lease = await open(cwd, pendingCheck);
     let kept = false;
     try {
@@ -93,7 +109,8 @@ export async function applySituationCommand(surface: DecisionSurface, record: Ex
     const target = await lab.editableCards(record.id);
     const copied = target.copiedFrom && target.copiedFrom !== target.id ? ' Правка — в новом черновике того же набора; прошлый прогон не меняется.' : '';
     const prepared = await lab.prepareCardCommand(target.id, decided.command, { via: viaOf(surface), ...(decided.words ? { ownerWords: decided.words } : {}) });
-    await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, decided.words ? 'words' : 'confirmed'));
+    // The owner picked the answer natively, so the grant is theirs either way; words mark it as their wording only where no decision rides along.
+    await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, decided.words && prepared.authority === 'owner-words' ? 'words' : 'confirmed'));
     if (decided.command.kind === 'remove_card') return `Ситуация ${situation.number} убрана из черновика.${copied}`;
     const check = await lab.recheckCards(target.id);
     const where = surface.origin === 'board' ? 'здесь и в чате' : 'сюда отдельным сообщением';

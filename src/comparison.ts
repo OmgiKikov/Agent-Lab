@@ -8,7 +8,7 @@ import { headlineMetricIds, headlineTrialResult, latestHumanReviews, measured, o
 import { attemptKey, expectedAttemptRows, headlineCardOutcome, plannedTrials, runCompleteness } from './run.js';
 import { judgeAgreement } from './agreement.js';
 import { countText, pluralForm } from './plural.js';
-import { sameTargetVersion } from './target-version.js';
+import { agentVersionRelation } from './target-version.js';
 
 /*
  * Two runs compared. The result of a single run — its number, reasons and causes — is derived in run.ts
@@ -85,6 +85,8 @@ type Decided = 'pass' | 'fail';
  */
 const reconstructedSources = new WeakSet<Experiment>();
 const SOURCE_UNAVAILABLE = 'исходный прогон недоступен';
+/** Neither the owner's name for the agent's version nor anything Lab saw of its code tells the two runs apart or together. */
+export const VERSION_UNKNOWN = 'версия агента неизвестна — назовите её при запуске, и повтор сравнится с исходным прогоном';
 /** Marks a run rebuilt from embedded evidence; stability then trusts only `sourceEvidence.identity`. */
 export function markReconstructedSource(run: Experiment): Experiment {
   reconstructedSources.add(run);
@@ -103,8 +105,9 @@ function sourceCardIdentity(source: Experiment, card: Scenario, identity: Source
 const isDecided = (outcome: 'pass' | 'fail' | 'unknown'): outcome is Decided => outcome !== 'unknown';
 
 /**
- * A repeat of the same set against its source run. Gated on comparability and on the same agent,
- * so a change of the agent, the judge or the criteria is never called instability. Uses the headline
+ * A repeat of the same set against its source run. Gated on comparability and on proof of the same agent
+ * version, so a change of the agent, the judge or the criteria is never called instability, and neither is a
+ * version nobody knows: an http agent redeployed at the same address may be fixed, not unstable. Uses the headline
  * verdict (goal and prompt rules, CTX-21), so «нестабильно» matches the number; reply quality and the
  * RAG rubrics never flip a card here.
  */
@@ -114,8 +117,10 @@ export function stabilityBetweenRuns(before: Experiment, after: Experiment): Sta
   if (identity === null) return { ...result, skipped: SOURCE_UNAVAILABLE };
   if (!compareRuns(before, after).comparable) return { ...result, skipped: 'прогоны несравнимы' };
   const agent = identity ?? { ...before, agent: agentIdentity(before) };
-  if (!sameTargetVersion(agent.targetFingerprint, after.targetFingerprint) || agent.targetVersion !== after.targetVersion
-    || agent.agent !== agentIdentity(after)) return { ...result, skipped: 'агент изменился между прогонами' };
+  // An embedded identity keeps no reported version: the fingerprint and the owner's name speak for the source there.
+  const version = agentVersionRelation({ targetFingerprint: agent.targetFingerprint, targetVersion: agent.targetVersion, targetRelease: identity ? undefined : before.targetRelease }, after);
+  if (version === 'changed' || agent.agent !== agentIdentity(after)) return { ...result, skipped: 'агент изменился между прогонами' };
+  if (version === 'unknown') return { ...result, skipped: VERSION_UNKNOWN };
   const source = observedRecord(before), repeat = observedRecord(after);
   for (const card of repeat.scenarios) {
     const sourceCard = source.scenarios.find(item => item.id === card.id);
@@ -372,6 +377,7 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   const smoke = result.regressed.filter(r => r.tier === 'smoke').length;
   if (smoke) notes.push(`${pluralForm(smoke, ['Сломалась', 'Сломались', 'Сломались'])} ${countText(smoke, ['базовая ситуация', 'базовые ситуации', 'базовых ситуаций'])}: сначала верните то, что должно работать всегда.`);
   if (compared && compared < TRUSTED_SAMPLE) notes.push(`Сравнение по ${countText(compared, ['ситуации', 'ситуациям', 'ситуациям'])}: разница может быть случайной, повторы новых ситуаций не добавляют.`);
-  if (before.target.kind !== 'sandbox' && (!(before.targetVersion || before.targetRelease) || !(after.targetVersion || after.targetRelease))) notes.push('Не все версии внешнего агента названы. Локальный отпечаток не учитывает удалённые сервисы и переменные окружения.');
+  if (before.target.kind !== 'sandbox' && agentVersionRelation(before, after) === 'unknown') notes.push('Версия агента неизвестна хотя бы в одном прогоне: «исправлено» и «сломалось» здесь — изменения ответов, а не доказанный эффект новой версии. Назовите версию при запуске.');
+  else if (before.target.kind !== 'sandbox' && (!(before.targetVersion || before.targetRelease) || !(after.targetVersion || after.targetRelease))) notes.push('Не все версии внешнего агента названы. Локальный отпечаток не учитывает удалённые сервисы и переменные окружения.');
   return result;
 }

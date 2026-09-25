@@ -6,7 +6,7 @@ import { resultHash } from '../src/lab/record.js';
 import { markTargets, measurementUsable } from '../src/outcomes.js';
 import { cardVerdict, headlineCardOutcome } from '../src/run.js';
 import { headlineRule } from '../src/card/expectations.js';
-import { clip, oneLine } from '../src/text.js';
+import { clip, oneLine, safeLine } from '../src/text.js';
 
 /*
  * «Проверить, прав ли судья» (docs/design/ui-spec.md §4.8): the owner's own word on the judge's decision about one situation — the
@@ -36,6 +36,16 @@ export function agreementTarget(record: Experiment, trial: Trial | undefined): A
   if (!targets) return { kind: 'undecided' };
   return { kind: 'ready', metricIds: targets.metricIds, judgeVerdict: targets.verdict, sampled: agreementSample(record).includes(trial.id) };
 }
+
+/** Why no answer about the judge can land on `target`, in the owner's words; undefined when one can. */
+export function markRefusal(target: AgreementTarget | undefined): string | undefined {
+  if (target?.kind === 'ready') return undefined;
+  return target?.kind === 'control' ? 'Контрольная ситуация — в согласие с судьёй не входит.'
+    : target?.kind === 'unmeasured' ? 'Ситуация не измерена — соглашаться не с чем.' : 'Судья не вынес решения по этой ситуации — соглашаться не с чем.';
+}
+
+/** The judge's own decision in the owner's words: what they are asked to agree with. */
+export const judgeWord = (verdict: 'pass' | 'fail'): string => verdict === 'fail' ? 'не справился' : 'справился';
 
 export type Answer = 'agree' | 'disagree' | 'unsure';
 const WORD: Record<Answer, string> = { agree: 'согласен с судьёй', disagree: 'не согласен с судьёй', unsure: 'не знаю' };
@@ -84,8 +94,7 @@ export async function recordMark(ctx: Pick<ExtensionContext, 'ui'>, lab: Experim
   const started = performance.now();
   const trial = record.trials.find(item => item.id === trialId);
   const target = agreementTarget(record, trial);
-  if (!trial || target?.kind !== 'ready') throw new Error(target?.kind === 'control' ? 'Контрольная ситуация — в согласие с судьёй не входит.'
-    : target?.kind === 'unmeasured' ? 'Ситуация не измерена — соглашаться не с чем.' : 'Судья не вынес решения по этой ситуации — соглашаться не с чем.');
+  if (!trial || target?.kind !== 'ready') throw new Error(markRefusal(target));
   const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
   const title = oneLine(scenario?.title ?? '');
   const current = judgeAgreement(record).marks.find(mark => mark.trialId === trialId && !mark.stale);
@@ -95,12 +104,14 @@ export async function recordMark(ctx: Pick<ExtensionContext, 'ui'>, lab: Experim
   if (answer === 'disagree') {
     if (target.metricIds.length > 1) {
       const parts = disputable(scenario, trial, target.metricIds, failed);
-      const picked = await ctx.ui.select('С чем вы не согласны?', parts.map(part => part.label));
-      const part = parts.find(item => item.label === picked);
+      // A duty's words come from the record: every answer crosses the terminal boundary, and the pick is matched as shown.
+      const labels = parts.map(part => safeLine(part.label));
+      const picked = await ctx.ui.select('С чем вы не согласны?', labels);
+      const part = parts[labels.indexOf(picked ?? '')];
       if (!part) return undefined;
       disputed = part.ids;
     }
-    const reason = await ctx.ui.editor(`Судья решил: ${failed ? 'не справился' : 'справился'}. Почему вы не согласны? Коротко, своими словами.`, current?.answer === 'disagree' ? current.note : '');
+    const reason = await ctx.ui.editor(`Судья решил: ${judgeWord(target.judgeVerdict)}. Почему вы не согласны? Коротко, своими словами.`, current?.answer === 'disagree' ? current.note : '');
     if (reason === undefined) return undefined;
     // Input validation, not display: a stored reason is capped at 3000 characters, so the owner is told to shorten it instead of losing the text.
     if (!reason.trim()) return 'Несогласие не сохранено: напишите причину.';
