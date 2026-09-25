@@ -100,11 +100,12 @@ export function accuracyParts(view: ResultView): { lead: string; value: string |
   if (value === null) {
     const { passed, decided } = view.headline;
     const unexamined = view.connection === 'absent' ? 'подключение агента не проверено экзаменом' : view.connection === 'failed' ? 'подключение агента не прошло экзамен' : null;
-    const tail = view.phase === 'review' || (view.phase === 'preparing' || view.phase === 'checking') && !view.pending ? 'прогон ещё не запускался'
+    const tail = view.integrity === 'altered' ? 'не считается: запись изменена после прогона'
+      : view.phase === 'review' || (view.phase === 'preparing' || view.phase === 'checking') && !view.pending ? 'прогон ещё не запускался'
       : view.pending ? `считается — ждут проверки ${countText(view.pending, SITUATIONS)}`
       : unexamined && decided ? `не считается: ${unexamined}. Справился в ${passed} из ${decided} ${pluralForm(decided, SITUATIONS_OF)}, ошибся в ${decided - passed}`
       : 'нет данных — ни одна ситуация не измерена';
-    return { lead, value: null, tail, level: unexamined && decided ? 'warn' : 'none' };
+    return { lead, value: null, tail, level: view.integrity === 'altered' ? 'bad' : unexamined && decided ? 'warn' : 'none' };
   }
   const { passed, decided } = view.headline;
   const unmeasured = view.notMeasured.total;
@@ -147,6 +148,8 @@ const unmeasuredAlarm = (view: Pick<ResultView, 'control' | 'notMeasured'>): boo
  * connection or the judge is broken; the unmeasured share then stays in the trust line.
  */
 export function alarmRow(view: ResultView, reader: Reader = 'owner'): ResultRow | null {
+  // A record changed after its run says so before anything else: nothing it holds is the run's own evidence.
+  if (view.integrity === 'altered') return { role: 'alarm', indent: 0, text: '✗ Числу не верить: запись изменена после прогона' };
   const { alarm, cards } = view.control;
   if (alarm) {
     const many = cards.length > 1;

@@ -34,7 +34,7 @@ interface Work { record: Experiment; runtime: Runtime & { assess: NonNullable<Ru
 /** The dialogue as the judge will read it again: the same facts, none of the earlier judgment. */
 function freshCopy(trial: Trial): Trial {
   const copy = structuredClone(trial);
-  delete copy.assessments; delete copy.assessmentError; delete copy.assessmentFailure; delete copy.judgeAudit; delete copy.judgeReceipt; delete copy.checkpoints; delete copy.checkpointReceipt;
+  delete copy.assessments; delete copy.assessmentError; delete copy.assessmentFailure; delete copy.judgeAudit; delete copy.judgeReceipt; delete copy.checkpoints; delete copy.checkpointReceipt; delete copy.seal;
   copy.usage = emptyUsage();
   return copy;
 }

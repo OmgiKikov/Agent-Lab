@@ -3,6 +3,7 @@ import { directChecks } from './checkpoints.js';
 import { fingerprint, type AssessmentFailure, type Experiment, type InvalidCause, type Scenario, type Trial } from './contracts.js';
 import type { MetricAssessment } from './assessment.js';
 import { isRunning } from './phases.js';
+import { recordIntegrity, type Integrity } from './seal.js';
 import { GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentMetricResult, automaticTrialResult, expectationResult, GOAL_METRIC_ID, headlineMetricIds, headlineTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, RULES_METRIC_ID, simulatorVerdicts } from './outcomes.js';
 
@@ -375,6 +376,8 @@ export interface RunDerivation {
   attempt(trialId: string): AttemptDerivation | undefined;
   /** Attempts whose headline verdict failed in counted situations, in record order: exactly what the number calls a failure. */
   failedAttempts: Trial[];
+  /** Whether the record's evidence still holds (seal.ts): `altered` — changed after the run — and no number may be shown. */
+  integrity: Integrity;
 }
 
 /*
@@ -414,7 +417,7 @@ export function deriveRun(input: Experiment): RunDerivation {
     const situation = byScenario.get(trial.scenarioId);
     return !!situation && !situation.control && situation.outcome === 'fail' && attempts.get(trial.id)?.verdict === 'fail';
   });
-  const run: RunDerivation = { record, situations, situation: id => byScenario.get(id), attempt: id => attempts.get(id), failedAttempts };
+  const run: RunDerivation = { record, situations, situation: id => byScenario.get(id), attempt: id => attempts.get(id), failedAttempts, integrity: recordIntegrity(input) };
   memo.set(input, { stamp, run });
   return run;
 }

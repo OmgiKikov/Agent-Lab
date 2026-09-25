@@ -408,6 +408,11 @@ export interface Trial {
    * stored result never moves.
    */
   countingVersion?: 2 | 3;
+  /**
+   * The attempt as the engine recorded it, sealed once (seal.ts sealTrial): the number is derived only while it still
+   * holds. Absent in attempts recorded before seals existed.
+   */
+  seal?: string;
 }
 /**
  * Where a dialogue broke: the turn budget ran out, the simulated client failed, the agent or its connection failed
@@ -612,6 +617,7 @@ export const trialSchema = z.strictObject({
   assessmentFailure: z.enum(ASSESSMENT_FAILURES).optional(),
   turnLimit: z.literal(true).optional(),
   countingVersion: z.union([z.literal(2), z.literal(3)]).optional(),
+  seal: sha256Schema.optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),

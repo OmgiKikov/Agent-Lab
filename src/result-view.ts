@@ -136,6 +136,11 @@ export interface ResultCard {
 
 export interface ResultView {
   /**
+   * Whether the record's evidence still holds (seal.ts recordIntegrity). `altered`: the record was changed after the run —
+   * no percent is shown anywhere, the alarm says so, and the CI exit code must treat the run as unmeasured.
+   */
+  integrity: 'sealed' | 'unsealed' | 'altered';
+  /**
    * The connection exam the run took before its first dialogue (exam.ts): unless it passed, no percent is shown — the
    * headline's, the topics' or the bounds' — while the counts stay. Absent for runs made before the exam existed.
    */
@@ -429,9 +434,11 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const causes = causesOf(run, failures);
   // A connection nobody has shown to work carries no percent: the counts stand, the number waits for the exam.
   const examined = record.connectionExam?.status;
-  const withheld = examined !== undefined && examined !== 'passed';
+  // Evidence changed after the run carries no percent either: the counts it would stand on are not the run's.
+  const withheld = examined !== undefined && examined !== 'passed' || run.integrity === 'altered';
   const view: Omit<ResultView, 'next'> = {
     ...(examined ? { connection: examined } : {}),
+    integrity: run.integrity,
     simulator: simulatorEvidence(record),
     runId: record.id, phase: record.phase, mode: record.mode, createdAt: record.createdAt, countingRules,
     // This is a curated/stratified set, not independent Bernoulli sampling from production.
