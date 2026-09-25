@@ -43,9 +43,6 @@ const LEFT_OUT_WORDS: Readonly<Record<LeftOutCode, string>> = {
   hidden: 'реплика клиента целиком скрыта обезличиванием',
 };
 
-/** A reason as a count of conversations reads: «id повторяется». */
-export const leftOutPhrase = (code: LeftOutCode): string => LEFT_OUT_WORDS[code];
-
 /** One conversation's reason, as its row of the import records it: the value in it when there is one. */
 export function issueText(issue: LeftOutIssue): string {
   const value = issue.value;
@@ -124,6 +121,10 @@ function examples(item: LeftOutCount): string {
   const shown = item.values.slice(0, 3).map(value => item.code === 'line' ? `строка ${value}` : quoted(value));
   return ` (${shown.join(', ')}${item.count > shown.length ? ' и др.' : ''})`;
 }
+
+/** A reason of many conversations with what shows it: «id повторяется («c1», «c4»)», «роли «client», «operator» Lab не знает». */
+export const leftOutReason = (item: LeftOutCount): string =>
+  `${item.code === 'roles' && item.values.length ? `роли ${item.values.map(quoted).join(', ')} Lab не знает` : LEFT_OUT_WORDS[item.code]}${examples(item)}`;
 
 /** Each reason with its count: «id повторяется — 1 («c1»)», «роли «client», «operator» Lab не знает — 50», the most frequent first. */
 export function leftOutWords(counts: readonly LeftOutCount[]): string[] {

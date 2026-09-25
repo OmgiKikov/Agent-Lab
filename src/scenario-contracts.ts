@@ -16,7 +16,7 @@ const timestamp = z.iso.datetime();
  * row the import could not read, or — `long`, `hidden` — a conversation it read that no situation can be made of.
  * `value` is what shows it: an id or a role name as written, a line. Codes are only ever appended, so a stored issue stays valid.
  */
-export const LEFT_OUT_CODES = ['line', 'large', 'shape', 'roles', 'id', 'duplicate', 'shared', 'empty', 'event', 'long_message', 'blank',
+export const LEFT_OUT_CODES = ['line', 'large', 'shape', 'roles', 'id', 'shared', 'duplicate', 'empty', 'event', 'long_message', 'blank',
   'observation', 'no_text', 'no_marker', 'unmapped', 'no_order', 'no_customer', 'masked', 'long', 'hidden'] as const;
 export const leftOutCodeSchema = z.enum(LEFT_OUT_CODES);
 export type LeftOutCode = z.infer<typeof leftOutCodeSchema>;

@@ -1,9 +1,10 @@
 import { fingerprint } from '../contracts.js';
-import { countLeftOut, leftOutPhrase } from '../log-issues.js';
+import { countLeftOut, leftOutReason } from '../log-issues.js';
 import type { ImportBatch, LeftOutCode, LeftOutIssue } from '../scenario-contracts.js';
 import { logImport } from '../scenario-library.js';
 import { columnLabel, type Column, type Role, type TableMapping } from './mapping.js';
 import { splitMessages } from './markers.js';
+import { parseOrder } from './order.js';
 import { withoutRepeats } from './repeats.js';
 import { conversationRows, selectedConversations } from './selection.js';
 import { cellOf, columnLetter, type Sheet } from './sheet.js';
@@ -84,7 +85,7 @@ export function importTable(sheet: Sheet, mapping: TableMapping): { batch: Impor
   const repeats = { dialogues: repeated.length, messages: repeated.reduce((total, item) => total + item.repeats, 0) };
   return { batch, preview: {
     rows: rows.length, dialogues: conversations.length, ...mapping.filter ? { selected: chosen.length } : {}, usable: usable.length, taken: batch.dialogues.length,
-    rejected: reasons.map(({ code, count }) => ({ code, reason: leftOutPhrase(code), count })),
+    rejected: reasons.map(item => ({ code: item.code, reason: leftOutReason(item), count: item.count })),
     messages: [...messages.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
     kept: kept.map(item => item.key), ...repeats.dialogues ? { repeats } : {},
   } };
@@ -151,8 +152,12 @@ function messageDialogues(sheet: Sheet, mapping: TableMapping, conversations: re
   const layout = mapping.layout;
   if (layout.kind !== 'message_per_row') return [];
   const roleOf = new Map(layout.roles.map(item => [item.value, item.role]));
+  const seen = new Set<string>();
   return conversations.map((group): SheetDialogue => {
     const id = cellText(sheet, group[0]!, mapping.id).trim();
+    // One id on a second conversation of the sheet (selection.ts conversationRows): refused as a JSON log refuses a repeated id.
+    const shared: LeftOutIssue | undefined = id !== '' && seen.has(id) ? { code: 'shared', value: id } : undefined;
+    seen.add(id);
     const ordered = layout.order ? group.map(row => ({ row, key: parseOrder(cellText(sheet, row, layout.order!)) })) : group.map(row => ({ row, key: undefined }));
     // A message without its place, or a column mixing numbers and dates, leaves the order unknown: never guessed.
     const unordered = layout.order !== undefined && (ordered.some(item => item.key === undefined) || new Set(ordered.map(item => item.key?.kind)).size > 1);
@@ -163,32 +168,9 @@ function messageDialogues(sheet: Sheet, mapping: TableMapping, conversations: re
         ...layout.order ? { order: cellText(sheet, row, layout.order) } : {}, ...columns ? { columns } : {} };
     }));
     const unmapped = messages.find(message => !message.role);
-    const issue: LeftOutIssue | undefined = unmapped ? { code: 'unmapped', value: unmapped.value.slice(0, 200) } : unordered ? ROW_ISSUES.noOrder
-      : messages.some(message => !message.content) ? ROW_ISSUES.emptyMessage : undefined;
+    const issue: LeftOutIssue | undefined = shared ?? (unmapped ? { code: 'unmapped', value: unmapped.value.slice(0, 200) } : unordered ? ROW_ISSUES.noOrder
+      : messages.some(message => !message.content) ? ROW_ISSUES.emptyMessage : undefined);
     const labels = messages.flatMap(message => message.role ? [{ label: message.value, role: message.role }] : []);
     return { raw: { id, rows: group.map(row => row + 1), messages, ...dropped }, ...issue ? { issue } : {}, labels, repeats, key: contentKey(id, messages, labels) };
   });
-}
-
-const NUMBER = /^[+-]?\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?$/;
-const DOTTED_DATE = /^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,3}))?)?)?$/;
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
-
-/**
- * The position a cell of an order column gives a message: a number (a sequence number, or Excel's day
- * count of a date cell) or a written date and time (ISO or DD.MM.YYYY). Undefined when it is neither.
- */
-export function parseOrder(text: string): { kind: 'number' | 'date'; value: number } | undefined {
-  const value = text.trim();
-  if (NUMBER.test(value)) return { kind: 'number', value: Number(value.replace(',', '.')) };
-  const dotted = DOTTED_DATE.exec(value);
-  if (dotted) {
-    const part = (group: number) => Number(dotted[group] ?? 0);
-    const time = Date.UTC(part(3), part(2) - 1, part(1), part(4), part(5), part(6), Number((dotted[7] ?? '0').padEnd(3, '0')));
-    const date = new Date(time);
-    // 31.02.2026 is not a date: Date.UTC would quietly make it March.
-    return date.getUTCDate() === part(1) && date.getUTCMonth() === part(2) - 1 ? { kind: 'date', value: time } : undefined;
-  }
-  const iso = ISO_DATE.test(value) ? Date.parse(value.replace(' ', 'T')) : NaN;
-  return Number.isFinite(iso) ? { kind: 'date', value: iso } : undefined;
 }

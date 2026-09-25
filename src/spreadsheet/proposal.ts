@@ -2,7 +2,8 @@ import { isIdentifier } from '../ids.js';
 import { countText } from '../plural.js';
 import { analyzeSheet, filledValues, isNumeric, type SheetAnalysis } from './analysis.js';
 import type { CsvDialect } from './csv.js';
-import { parseOrder, type TablePreview } from './dialogues.js';
+import type { TablePreview } from './dialogues.js';
+import { parseOrder } from './order.js';
 import { applyReading, proposalBase, sheetMapping } from './exact.js';
 import {
   LABEL_LIMIT, ROLE_CHARS, columnLabel, findColumn, tableChoicesSchema, tableMappingSchema, toColumn,
