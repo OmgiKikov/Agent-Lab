@@ -173,14 +173,50 @@ export function ragEvidenceComplete(trial: Pick<Trial, 'events'>, scope: 'retrie
   }
   return replies > 0;
 }
-/** Quotes may refer to decoded chunk text, including line breaks escaped by the JSON event envelope. */
-function eventContainsQuote(event: TraceEvent, quote: string): boolean {
-  if (assessmentEventContent(event).includes(quote)) return true;
-  if (event.type !== 'retrieval') return false;
+/** The text of an event a quote is taken from: its content, or the decoded text of a retrieved chunk, whose line breaks the JSON envelope escapes. */
+function quotedText(event: TraceEvent, quote: string): string | undefined {
+  const content = assessmentEventContent(event);
+  if (content.includes(quote)) return content;
+  if (event.type !== 'retrieval') return undefined;
   const chunks = (event.result as { chunks?: unknown } | undefined)?.chunks;
-  return Array.isArray(chunks) && chunks.some(chunk => typeof chunk?.content === 'string' && chunk.content.includes(quote));
+  const chunk = Array.isArray(chunks) ? chunks.find(item => typeof item?.content === 'string' && item.content.includes(quote)) : undefined;
+  return chunk?.content as string | undefined;
 }
-export function validateAssessments(metrics: Rubric[], events: TraceEvent[], raw: unknown): MetricAssessment[] {
+
+const WORDS = new Intl.Segmenter('ru', { granularity: 'word' });
+/** The letters and digits of a text, as its words hold them. */
+const wordLetters = (text: string): number => Array.from(WORDS.segment(text)).reduce((sum, part) => sum + (part.isWordLike ? part.segment.length : 0), 0);
+/** The fewest letters or digits a quote holds, unless it is every word of its text: a letter or a fragment of a word proves nothing. */
+export const QUOTE_MIN_LETTERS = 6;
+
+/**
+ * Whether a verbatim quote means something as evidence in `text`: it holds words, it starts and ends where words of the
+ * text start and end (never a letter or a fragment of a word), and it holds at least QUOTE_MIN_LETTERS letters or
+ * digits — or every word of the text, when the text itself is shorter («Да.» quoted «Да»). Punctuation alone is no quote.
+ */
+export function meaningfulQuote(text: string, quote: string): boolean {
+  const letters = wordLetters(quote);
+  if (!letters) return false;
+  const bounds = new Set([text.length, ...Array.from(WORDS.segment(text), part => part.index)]);
+  let whole = false;
+  for (let at = text.indexOf(quote); at >= 0 && !whole; at = text.indexOf(quote, at + 1)) whole = bounds.has(at) && bounds.has(at + quote.length);
+  return whole && (letters >= QUOTE_MIN_LETTERS || letters >= wordLetters(text));
+}
+
+/**
+ * The quotes of assessments are checked against the events they cite: verbatim always, and — for judgments made under
+ * a protocol that requires it (`meaningfulQuotes`) — meaningful (meaningfulQuote). Judgments stored before that rule
+ * are read by the rule they were made under, so they keep verifying.
+ */
+export function validateAssessments(metrics: Rubric[], events: TraceEvent[], raw: unknown, options: { meaningfulQuotes?: boolean } = {}): MetricAssessment[] {
+  const quoted = (citation: { seq: number; quote: string }): void => {
+    const event = events.find(e => e.seq === citation.seq);
+    const text = event && quotedText(event, citation.quote);
+    if (text === undefined) throw new Error(`Citation #${citation.seq} is not a verbatim quote from that event's content.`);
+    if (options.meaningfulQuotes && !meaningfulQuote(text, citation.quote)) {
+      throw new Error(`Citation #${citation.seq} is not meaningful: quote whole words, at least ${QUOTE_MIN_LETTERS} letters or digits unless the quote is every word of the event.`);
+    }
+  };
   const assessments = z.array(metricAssessmentSchema).parse(raw);
   const metricIds = new Set(metrics.map(metric => metric.id));
   if (metricIds.size !== metrics.length || assessments.length !== metricIds.size
@@ -194,10 +230,7 @@ export function validateAssessments(metrics: Rubric[], events: TraceEvent[], raw
     if (assessment.citations) {
       const cited = new Set(assessment.citations.map(c => c.seq));
       if (cited.size !== assessment.evidence.length || assessment.evidence.some(seq => !cited.has(seq))) throw new Error('Evidence must match quoted citations.');
-      for (const citation of assessment.citations) {
-        const event = events.find(e => e.seq === citation.seq);
-        if (!event || !eventContainsQuote(event, citation.quote)) throw new Error(`Citation #${citation.seq} is not a verbatim quote from that event's content.`);
-      }
+      for (const citation of assessment.citations) quoted(citation);
     }
     if (!assessment.findings) continue; // Historical assessments retain their original evidence format.
     const metric = metrics.find(m => m.id === assessment.metricId)!;
@@ -206,10 +239,7 @@ export function validateAssessments(metrics: Rubric[], events: TraceEvent[], raw
         throw new Error('Each criterion must be copied verbatim from the supplied rubric; do not invent requirements.');
       }
       if (finding.result !== 'unknown' && !finding.citations.length) throw new Error('Every pass/fail finding needs a quoted trace event.');
-      for (const citation of finding.citations) {
-        const event = events.find(e => e.seq === citation.seq);
-        if (!event || !eventContainsQuote(event, citation.quote)) throw new Error(`Citation #${citation.seq} is not a verbatim quote from that event's content.`);
-      }
+      for (const citation of finding.citations) quoted(citation);
     }
     const expected = assessment.findings.some(f => f.result === 'fail') ? 'fail' : assessment.findings.some(f => f.result === 'unknown') ? 'unknown' : 'pass';
     const cited = new Set(assessment.findings.flatMap(f => f.citations.map(c => c.seq)));
