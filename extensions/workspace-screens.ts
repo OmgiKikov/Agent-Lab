@@ -18,6 +18,8 @@ import type { LaunchPlan } from './conversation.ts';
 import { SITUATION_TONE } from './render/situation.ts';
 import { GLYPH, ROLE_TONE, type Tone } from './render/theme.ts';
 import { agreementTarget, type Answer } from './judge-review.ts';
+import type { PreparationView } from './preparation-progress.ts';
+import { preparationPanel } from './preparation-panel.ts';
 
 /*
  * The screens of the agent's workspace (docs/design/ui-spec.md §4, §8), as lines ready to paint: the header with the areas — or the
@@ -57,7 +59,8 @@ export interface SpaceData {
    * Work going on now: what it is — situations prepared, situations checked, a run —, its one progress line, how far it
    * got, whether this session can stop it; `frame` turns the spinner.
    */
-  progress?: { kind: WorkKind; text: string; share: number | null; stoppable: boolean; frame?: number; details?: string[] };
+  progress?: { kind: WorkKind; text: string; share: number | null; stoppable: boolean; frame?: number; preparation?: PreparationView };
+  preparation?: PreparationView;
   /** The logged conversations the newest calibrated run disagrees with, by `logKey`: read from their imports by the command. */
   logged?: ReadonlyMap<string, Turn[]>;
   now: Date;
@@ -193,7 +196,8 @@ export function header(data: SpaceData, place: { area: Area } | { step: Step }, 
   const version = space.demo ? 'учебный пример' : space.version ? `версия ${space.version}` : null;
   const places = 'step' in place ? stepLine(data, place.step, width) : areaLine(data, place.area, width);
   if (width < NARROW) return [places];
-  return [...titleLine('step' in place ? `Agent Lab · ${space.name}` : `Агент: ${space.name}`, version, width), places];
+  const name = /^(?:\/|.*\bAGENT_LAB_)/.test(space.name) ? 'Проверка агента' : space.name;
+  return [...titleLine('step' in place ? `Agent Lab · ${name}` : `Агент: ${name}`, version, width), [], places];
 }
 
 /* ───────────────────────────── the areas ───────────────────────────── */
@@ -239,7 +243,8 @@ export function situationsScreen(data: SpaceData, selected: number, width: numbe
   const progress = data.progress;
   const hint = progress && progress.kind !== 'run' ? HERE_HINT[progress.kind] : undefined;
   const work = hint ? progress : undefined;
-  const going = work && hint ? [...progressLines(work, room(width)), ...wsLines([ws('muted', hint, 3)], room(width))] : [];
+  const going = data.preparation ? preparationPanel(data.preparation, set?.views ?? [], width, work?.frame ?? 0)
+    : work && hint ? [...progressLines(work, room(width)), ...wsLines([ws('muted', hint, 3)], room(width))] : [];
   if (!set?.views.length) return { head: [], body: work ? going : wsLines([ws('answer', 'Ситуаций пока нет.'),
     ws('muted', 'Скажите в чате, какого агента проверить и где лежат логи, — Lab соберёт ситуации сам.')], room(width)),
   foot: [...(work ? [] : [{ key: 'a', text: 'спросить Lab' }]), areas, { key: 'Esc', text: 'закрыть' }] };
@@ -264,7 +269,7 @@ export function situationsScreen(data: SpaceData, selected: number, width: numbe
   });
   const foot: Hint[] = options.firstRun ? [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, ...(set.editable ? [{ key: '1–3', text: 'действие' }] : []), areas, { key: '?', text: 'клавиши' }]
     : set.editable ? FOOT.area : [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, areas, { key: '?', text: 'клавиши' }];
-  return { head: [], body, foot, ...(anchor !== undefined ? { anchor } : {}), items };
+  return { head: [], body, foot, ...(anchor !== undefined ? { anchor: data.preparation && selected === 0 ? 0 : anchor } : {}), items };
 }
 
 /** The one action of «Свод правил»: operator instructions in or out of it, as a whole. */
@@ -395,8 +400,7 @@ export function progressLines(progress: NonNullable<SpaceData['progress']>, widt
   const bar = progress.share === null ? 0 : Math.min(40, width - visibleWidth(text) - 6);
   const filled = Math.round(Math.max(0, bar) * Math.max(0, Math.min(1, progress.share ?? 0)));
   return [[{ text: ' ' }, { text: SPINNER[frame % SPINNER.length]!, tone: 'accent' }, { text, tone: 'text', bold: true },
-    ...(bar >= 10 ? [{ text: '  ' }, { text: GLYPH.barFill.repeat(filled), tone: 'accent' as const }, { text: GLYPH.barTrack.repeat(bar - filled), tone: 'muted' as const }] : [])],
-    ...wsLines((progress.details ?? []).map(detail => ws('muted', safeLine(detail), 3)), width)];
+    ...(bar >= 10 ? [{ text: '  ' }, { text: GLYPH.barFill.repeat(filled), tone: 'accent' as const }, { text: GLYPH.barTrack.repeat(bar - filled), tone: 'muted' as const }] : [])]];
 }
 
 /** «Проблемы» (docs/design/ui-spec.md §8.6): the repeating problems, in the agent first, then in the test. */

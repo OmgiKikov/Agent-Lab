@@ -4,7 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { preparationDetails } from '../extensions/preparation-progress.ts';
-import { progressLines } from '../extensions/workspace-screens.ts';
+import { preparationPanel } from '../extensions/preparation-panel.ts';
+import { visibleWidth } from '@earendil-works/pi-tui';
 import { ExperimentLab } from '../src/experiment.js';
 import { newRecord } from '../src/lab/record.js';
 import { demoInput } from '../src/demo.js';
@@ -26,18 +27,22 @@ test('preparation shows only its own valid topic checkpoint and real customer ex
     await lab.store.writeTopicMap(partial);
     const view = await preparationDetails(lab.store, record);
     assert.equal(view.share, 0.34);
-    const text = view.details.join('\n');
-    assert.match(text, /размечено 34 из 100/);
-    assert.match(text, /Не подходят для подготовки: 1/);
+    const text = preparationPanel(view.preparation, [], 120).map(line => line.map(span => span.text).join('')).join('\n');
+    assert.match(text, /34 из 100 диалогов размечено/);
+    assert.match(text, /Пропущено до генерации: 1/);
     assert.match(text, /Хочу вернуть деньги за покупку/);
-    assert.match(text, /→ Возврат оплаты/);
+    assert.match(text, /Возврат оплаты/);
     assert.doesNotMatch(text, /Понимаю, сейчас помогу/);
-    const lines = progressLines({ kind: 'preparation', text: 'Разметка', share: view.share!, stoppable: false, details: ['Пример\u001b[31m: возврат\nиз логов', ...view.details] }, 60);
-    assert.ok(lines.length > 4);
-    assert.ok(lines.every(line => line.every(span => !span.text.includes('\u001b') && !span.text.includes('\n'))));
+    view.preparation.examples[0]!.quote = 'Пример\u001b[31m: возврат\nиз логов';
+    for (const width of [24, 40, 60, 84, 100, 120, 140, 240]) {
+      const lines = preparationPanel(view.preparation, [], width);
+      assert.ok(lines.length > 4);
+      assert.ok(lines.every(line => line.every(span => !span.text.includes('\u001b') && !span.text.includes('\n'))));
+      assert.ok(lines.every(line => visibleWidth(line.map(span => span.text).join('')) <= width), `overflow at ${width}`);
+    }
     record.settings.roles.builder.model = 'another-model';
     const other = await preparationDetails(lab.store, record);
     assert.equal(other.share, 0);
-    assert.doesNotMatch(other.details.join('\n'), /Примеры разметки/);
+    assert.equal(other.preparation.examples.length, 0);
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });

@@ -1,6 +1,7 @@
 import type { ExtensionContext, Theme } from '@earendil-works/pi-coding-agent';
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 import { MAX_WIDTH } from '../src/result-text.js';
+import { WORKSPACE_WIDTH } from './preparation-panel.ts';
 import type { Experiment } from '../src/contracts.js';
 import { logTargets } from '../src/card/calibration-view.js';
 import { situationActions, type SituationAction, type SituationView } from '../src/card/view.js';
@@ -497,6 +498,9 @@ export class LabWorkspace implements Component {
 
   render(width: number): string[] {
     width = Math.max(1, Math.floor(width));
+    const terminalWidth = width;
+    width = Math.min(width, WORKSPACE_WIDTH);
+    const margin = ' '.repeat(Math.max(0, Math.floor((terminalWidth - width) / 2)));
     const height = Math.max(6, this.rows());
     const screen = this.screen(width);
     const top = this.top;
@@ -537,7 +541,7 @@ export class LabWorkspace implements Component {
     }
     const filler = Array.from({ length: Math.max(0, room - visible.length) }, () => '');
     const lines = [border, ...head.map(paint), '', ...visible.map(paint), ...filler, '', ...foot, border];
-    return lines.slice(0, height).map(line => visibleWidth(line) > width ? truncateToWidth(line, width, '…') : line);
+    return lines.slice(0, height).map(line => margin + (visibleWidth(line) > width ? truncateToWidth(line, width, '…') : line));
   }
 
   /**

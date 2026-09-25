@@ -4,9 +4,21 @@ import { roleChoices } from '../src/llm/models.js';
 import { planTopicMap, reusableTopicMap, topicMapKey } from '../src/miner/topic-map.js';
 import { clip, safeLine } from '../src/text.js';
 
-/** Read the preparation's durable checkpoints. Never infer completed work from elapsed time. */
-export async function preparationDetails(store: ExperimentStore, record: Experiment): Promise<{ details: string[]; share?: number }> {
-  const details: string[] = [];
+export interface PreparationView {
+  state: 'working' | 'paused' | 'complete';
+  logs?: { classified: number; total: number; excluded: number; topics: string[] };
+  examples: { quote: string; topic: string }[];
+  cards?: { completed: number; total: number; pending: number; failed: number; lastFailure?: string };
+  activities: { label: string; count: number }[];
+  elapsedMinutes: number;
+  costUsd: number | null;
+}
+
+/** Read durable checkpoints; the screen decides layout, never reconstructs numbers from prose. */
+export async function preparationDetails(store: ExperimentStore, record: Experiment, now = Date.now()): Promise<{ preparation: PreparationView; share?: number }> {
+  const state = record.phase === 'preparing' ? 'working' : record.preparationProgress?.pending.length ? 'paused' : 'complete';
+  const until = state === 'working' ? now : Date.parse(record.updatedAt);
+  const preparation: PreparationView = { state, examples: [], activities: [], elapsedMinutes: Math.max(0, Math.round((until - Date.parse(record.createdAt)) / 60_000)), costUsd: record.usage.costUsd };
   const unsuitable = new Set<string>();
   let share: number | undefined;
   const progress = record.preparationProgress;
@@ -20,34 +32,35 @@ export async function preparationDetails(store: ExperimentStore, record: Experim
     for (const item of plan.excluded) unsuitable.add(item.dialogueId);
     const map = reusableTopicMap(stored, batch, builder) ?? plan.resume;
     const classified = Object.keys(map?.assignments ?? {}).length;
-    details.push(`Темы: размечено ${classified} из ${plan.dialogues} диалогов${map ? ` · найдено тем: ${map.topics.length}` : ''}.`);
-    if (plan.excluded.length) details.push(`Не подходят для подготовки: ${plan.excluded.length} диалогов.`);
+    preparation.logs = { classified, total: plan.dialogues, excluded: plan.excluded.length, topics: map?.topics.map(topic => topic.title) ?? [] };
     if (!progress) share = classified / Math.max(1, plan.dialogues);
     if (map) {
-      details.push(`Найденные темы: ${map.topics.map(topic => topic.title).join(' · ')}.`);
-      details.push('Примеры разметки из логов:');
       const shown = new Set<string>();
       for (const dialogue of batch.dialogues) {
         const topicId = map.assignments[dialogue.id];
         if (!topicId || shown.has(topicId)) continue;
-        const title = map.topics.find(topic => topic.id === topicId)?.title ?? 'Другое';
+        const topic = map.topics.find(item => item.id === topicId)?.title ?? 'Другое';
         const words = dialogue.events.filter(event => event.type === 'message' && event.role === 'user').map(event => event.content).join(' ');
         if (!words.trim()) continue;
-        details.push(`«${clip(safeLine(words), 180)}» → ${title}`);
+        preparation.examples.push({ quote: clip(safeLine(words), 180), topic });
         shown.add(topicId);
         if (shown.size === 3) break;
       }
     }
   }
   if (progress) {
-    const count = progress.requestedCount ?? progress.processed.length + progress.pending.length;
-    share = progress.processed.length / Math.max(1, count);
-    details.push(`Подготовлено ситуаций: ${progress.processed.length} из ${count}. Осталось в очереди: ${progress.pending.length}.`);
-    const stages = { select: 'подбираю материалы', ground: 'проверяю основания', propose: 'составляю ситуацию', review: 'проверяю ситуацию', extract: 'извлекаю ситуацию', repair: 'исправляю ситуацию' };
-    const active = ('active' in progress ? progress.active : undefined) ?? (progress.activeStage ? [{ stage: progress.activeStage }] : []);
-    if (active.length) details.push(`Сейчас: ${active.map(item => stages[item.stage]).join(' · ')}.`);
+    const total = progress.requestedCount ?? progress.processed.length + progress.pending.length;
+    share = progress.processed.length / Math.max(1, total);
     const failed = progress.excluded.filter(item => !unsuitable.has(item.dialogueId));
-    if (failed.length) details.push(`Не составлены ситуации из ${failed.length} диалогов. Последняя причина: ${clip(safeLine(failed.at(-1)!.reason), 240)}`);
+    preparation.cards = { completed: progress.processed.length, total, pending: progress.pending.length, failed: failed.length,
+      ...(failed.length ? { lastFailure: clip(safeLine(failed.at(-1)!.reason), 240) } : {}) };
+    const stages = { select: 'Подбор материалов', ground: 'Проверка оснований', propose: 'Составление ситуаций', review: 'Проверка ситуаций', extract: 'Извлечение ситуаций', repair: 'Исправление ситуаций' };
+    const active = ('active' in progress ? progress.active : undefined) ?? (progress.activeStage ? [{ stage: progress.activeStage }] : []);
+    for (const item of state === 'working' ? active : []) {
+      const label = stages[item.stage];
+      const existing = preparation.activities.find(activity => activity.label === label);
+      if (existing) existing.count++; else preparation.activities.push({ label, count: 1 });
+    }
   }
-  return { details, ...(share === undefined ? {} : { share }) };
+  return { preparation, ...(share === undefined ? {} : { share }) };
 }

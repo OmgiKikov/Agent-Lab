@@ -140,7 +140,7 @@ const UNCONNECTED_NOTE = 'Как его запускать, Lab найдёт в 
 
 /** What the workspace shows about one agent, read from the store now; `cwd` names the agent the way the run dialog will. */
 async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionOperation | undefined, now: Date, cwd?: string): Promise<SpaceData> {
-  const setRecord = space.draft ?? space.runs[0];
+  const setRecord = space.active ?? space.draft ?? space.runs[0];
   const active = space.active;
   let set: SpaceData['set'];
   let pendingCalls = 0;
@@ -167,10 +167,12 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
   const runs = await Promise.all(space.runs.map(async (record, index) => ({ record, view: index ? buildResultView(record) : (await evidenceBundle(record, reader.store)).view })));
   const finished = runs.filter(run => run.record.phase === 'results_review' || run.record.phase === 'complete');
   const kind = active && workKind(active, job);
-  const preparation = active && kind === 'preparation' ? await preparationDetails(reader.store, active) : undefined;
+  const preparing = active ? kind === 'preparation' ? active : undefined
+    : setRecord && !setRecord.trials.length && setRecord.preparationProgress ? setRecord : undefined;
+  const preparation = preparing ? await preparationDetails(reader.store, preparing, now.getTime()) : undefined;
   const logged = await loggedConversations(reader, runs.find(run => run.view.calibration?.disagreements.length)?.view);
   return {
-    space, ...(set ? { set } : {}), runs, now, ...(logged.size ? { logged } : {}),
+    space, ...(set ? { set } : {}), runs, now, ...(logged.size ? { logged } : {}), ...(preparation ? { preparation: preparation.preparation } : {}),
     // A first-format draft is not editable, but it has one decision: to go on in the new format.
     decisions: decisions({ ...(set && (set.editable || convertible(set.record)) ? { draft: { record: set.record, views: set.views, pendingCalls } } : {}), ...(finished[0] ? { run: finished[0] } : {}),
       logs: finished[0] ? await logsOf(reader.store, finished[0].record) : [], now }),
