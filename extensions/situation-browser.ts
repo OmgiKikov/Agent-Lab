@@ -1,7 +1,7 @@
 import { situationActions, type SituationView } from '../src/card/view.js';
 import type { Line, Screen, SpaceData, Hint } from './workspace-screens.ts';
 import type { Tone } from './render/theme.ts';
-import { row, fit, wrap, box, beside } from './render/panels.ts';
+import { row, fit, wrap, box, beside, metrics } from './render/panels.ts';
 import { WORKSPACE_WIDTH } from './preparation-panel.ts';
 
 const STATUS: Record<SituationView['status'], { label: string; short: string; tone: Tone }> = {
@@ -56,12 +56,18 @@ export function situationBrowser(data: SpaceData, selected: number, available: n
   const ready = cards.filter(card => card.status === 'ready').length;
   const blocked = cards.filter(card => card.status === 'unusable').length;
   const questions = cards.filter(card => card.status === 'needs_owner').length;
-  const body: Line[] = [[], ...wrap(`Ситуаций: ${cards.length}   ·   Готовы: ${ready}   ·   Исправить: ${blocked}   ·   С вопросами: ${questions}`, width),
-    ...wrap('↑↓ Выберите ситуацию. Причина и основания показаны полностью.', width, 'muted'), []];
+  const checking = cards.length - ready - blocked - questions;
+  const body: Line[] = [row('Ситуации для проверки', 'accent', true),
+    ...wrap(`${cards.length} карточек из обращений клиентов · выберите любую, чтобы увидеть запрос и ожидания`, width, 'muted'), [],
+    ...metrics([
+      { label: 'ГОТОВЫ', value: String(ready), note: 'можно запускать', tone: 'success' },
+      { label: 'НУЖЕН ВАШ ОТВЕТ', value: String(questions), note: 'уточнения по карточкам', tone: questions ? 'warning' : 'muted' },
+      { label: 'НА ДОРАБОТКЕ', value: String(blocked + checking), note: `${blocked} ошибок · ${checking} на проверке`, tone: blocked ? 'error' : 'muted' },
+    ], width), []];
   if (width < 100) {
     body.push(row(`Ситуация ${chosen.number} · ${selected + 1} из ${cards.length}`, 'accent', true), [], ...situationExplanation(chosen, width, set.editable));
   } else {
-    const leftWidth = 42, rightWidth = width - leftWidth - 2;
+    const leftWidth = Math.floor(width * 0.38), rightWidth = width - leftWidth - 2;
     const start = Math.max(0, Math.min(selected - 4, cards.length - 10));
     const shown = cards.slice(start, start + 10);
     const list: Line[] = [];

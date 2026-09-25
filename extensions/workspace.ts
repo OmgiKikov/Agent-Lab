@@ -224,7 +224,7 @@ export class LabWorkspace implements Component {
       if (run) {
         const mark = run.view.agreement.marks.find(item => item.trialId === top.trialId && !item.stale);
         const at = top.queue ? top.queue.indexOf(top.trialId) : -1;
-        return withHead(judgedScreen(run, top.trialId, mark?.answer, at >= 0 && top.queue ? { at: at + 1, of: top.queue.length } : undefined, width));
+        return withHead(judgedScreen(run, top.trialId, mark?.answer, at >= 0 && top.queue ? { at: at + 1, of: top.queue.length } : undefined, width, this.state.details));
       }
     }
     if (top?.kind === 'log') {
@@ -250,7 +250,7 @@ export class LabWorkspace implements Component {
     if (!latest) return withHead({ head: [], body: [[{ text: ' Прогонов с результатом пока нет: запустите готовые ситуации.', tone: 'text', bold: true }]],
       foot: [{ key: '←→', text: 'области' }, { key: 'Esc', text: 'закрыть' }] });
     const screen = resultScreen(data, latest, { selected: this.cursor(), details: this.state.details, actions: this.state.step ? [] : runActions(data) }, width);
-    return withHead(this.state.step ? { ...screen, foot: [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, { key: '←', text: 'прогон' }, { key: '?', text: 'клавиши' }] } : screen);
+    return withHead(this.state.step ? { ...screen, foot: [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, { key: 'd', text: this.state.details ? 'к сводке' : 'подробности' }, { key: '←', text: 'прогон' }, { key: '?', text: 'клавиши' }] } : screen);
   }
 
   /** The run a result screen shows: the one opened from «Все прогоны», else the newest. */
@@ -293,7 +293,7 @@ export class LabWorkspace implements Component {
     if (this.state.help) return;
     const { data } = this.view;
     if (!data) return this.handleStart(input, key);
-    if (input === 'd') { this.state.details = !this.state.details; this.home(); this.redraw(); return; }
+    if (input === 'd') { this.state.details = !this.state.details; this.state.selected[this.listKey()] = 0; this.home(); this.redraw(); return; }
     if (input === 'a') return this.ask(data);
     const next = key('right') || key('tab') ? 1 : key('left') || key('shift+tab') ? -1 : 0;
     if (next && !this.top) return this.move(data, next);
@@ -381,7 +381,7 @@ export class LabWorkspace implements Component {
       case 'report': return this.finish({ type: 'report', runId: run.record.id });
       case 'repeat': return this.finish({ type: 'run' });
       // The unmeasured situations and their reasons are in the details of the same screen.
-      case 'unmeasured': this.state.details = true; this.redraw(); return;
+      case 'unmeasured': this.state.details = true; this.state.selected[this.listKey()] = 0; this.home(); this.redraw(); return;
       case 'connection': return this.finish({ type: 'decide', choice: { label: 'Проверить связь с агентом', action: { kind: 'check_connection' }, settles: false } });
     }
   }
@@ -526,7 +526,7 @@ export class LabWorkspace implements Component {
     if (!this.free && screen.anchor !== undefined && items.length) {
       // A list keeps the selected item whole in view — from its first line, when it is taller than the window.
       const anchor = screen.anchor;
-      const end = (items.find(start => start > anchor) ?? body.length) - 1;
+      const end = (items.find(start => start > anchor) ?? anchor + 1) - 1;
       if (anchor < this.scroll) this.scroll = anchor;
       if (end >= this.scroll + window) this.scroll = Math.min(anchor, end - window + 1);
     }
@@ -555,7 +555,7 @@ export class LabWorkspace implements Component {
     let shown = width < NARROW ? [...(this.state.help ? [] : [{ key: '?', text: 'клавиши' }]), out] : hints.slice(0, 5);
     const plain = (list: readonly Hint[]) => ` ${list.map(hint => `${hint.key} ${hint.text}`).join(' · ')}`;
     while (shown.length > 1 && visibleWidth(plain(shown)) > width) shown = [...shown.slice(0, -2), shown.at(-1)!];
-    const text = shown.map(hint => `${this.theme.fg('dim', hint.key)} ${this.theme.fg('muted', hint.text)}`).join(this.theme.fg('muted', ' · '));
+    const text = shown.map(hint => `${this.theme.bold(this.theme.fg('accent', hint.key))} ${this.theme.fg('muted', hint.text)}`).join(this.theme.fg('muted', ' · '));
     return [` ${text}`].map(line => visibleWidth(line) > width ? truncateToWidth(line, width, '…') : line);
   }
 }

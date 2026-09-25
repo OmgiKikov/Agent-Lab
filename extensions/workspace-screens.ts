@@ -7,7 +7,7 @@ import { rulebookLines, type RulebookView } from '../src/card/rulebook.js';
 import { decisionsLine } from '../src/inbox.js';
 import { problemSize, problemsLine, type Problem } from '../src/problems.js';
 import {
-  accuracyParts, ANSWER_TEXT, calibrationRows, causeRows, conversationRows, failureRows, fitRows, judgeQuestionText, logDisagreementRows, logQuestionText, MAX_WIDTH, nextRows,
+  accuracyParts, ANSWER_TEXT, calibrationRows, causeRows, failureRows, fitRows, judgeQuestionText, logDisagreementRows, logQuestionText, nextRows,
   resultScreen as resultRows, runLine, trialTurns, whenText, type ResultRow, type Turn,
 } from '../src/result-text.js';
 import type { NextStep, ResultView } from '../src/result-view.js';
@@ -22,6 +22,10 @@ import type { PreparationView } from './preparation-progress.ts';
 import { preparationPanel } from './preparation-panel.ts';
 import { situationBrowser, situationExplanation } from './situation-browser.ts';
 import { runPanel } from './run-panel.ts';
+import { trialTrace } from './trial-trace.ts';
+import { dashboardPicks, resultDashboard } from './result-dashboard.ts';
+import { WORKSPACE_WIDTH } from './preparation-panel.ts';
+import { box, beside, row as panelRow, wrap as panelWrap } from './render/panels.ts';
 
 /*
  * The screens of the agent's workspace (docs/design/ui-spec.md §4, §8), as lines ready to paint: the header with the areas — or the
@@ -112,19 +116,14 @@ function resultLines(rows: ResultRow[], width: number): Line[] {
   return fitRows(rows.map(safe), width).map(line => line.role === 'blank' ? blank : [segment(line.text, ROLE_TONE[line.role])]);
 }
 
-/** The width the workspace lays out at: the terminal's, never more than the 100 columns of the mockups. */
-const room = (width: number) => Math.max(20, Math.min(width, MAX_WIDTH));
+/** Shared content width for the workspace's panels and detailed screens. */
+const room = (width: number) => Math.max(20, Math.min(width, WORKSPACE_WIDTH));
 
 /* ───────────────────────────── the header ───────────────────────────── */
 
 const AREA_LABEL: Record<Exclude<Area, 'inbox' | 'rules'>, string> = { situations: 'Ситуации', runs: 'Прогоны', problems: 'Проблемы' };
 /** Narrower than this, a screen keeps only its place, its answer, its list and the way to the keys (docs/design/ui-spec.md §6). */
 export const NARROW = 50;
-
-/** «Агент: агент поддержки» with the version on the right from 100 columns up (docs/design/ui-spec.md §6: narrower, the label goes). */
-function titleLine(title: string, right: string | null, width: number): Line[] {
-  return wsLines([ws('answer', title, 1, { clip: true, ...(right && width >= MAX_WIDTH ? { right: { role: 'muted', text: right } } : {}) })], room(width));
-}
 
 /** The areas of the workspace: the queue of decisions first while it has any, the current area in accent. */
 export function areasOf(data: SpaceData): Area[] {
@@ -157,16 +156,16 @@ function fitTabs<Place extends string>(tabs: readonly Tab<Place>[], current: Pla
 /** The places in one line: the current one in accent and bold, the others in their own tone, the separators muted. */
 function tabLine<Place extends string>(shown: readonly Tab<Place>[], current: Place, gap: string): Segment[] {
   return [{ text: ' ' }, ...shown.flatMap((tab, index): Segment[] => [...(index ? [{ text: gap, tone: 'muted' as const }] : []),
-    tab.place === current ? { text: tab.text, tone: 'accent', bold: true } : { text: tab.text, tone: tab.tone }])];
+    tab.place === current ? { text: `[ ${tab.text} ]`, tone: 'accent', bold: true } : { text: tab.text, tone: tab.tone }])];
 }
 
 function areaLine(data: SpaceData, current: Area, width: number): Line {
   const counts: Record<Exclude<Area, 'inbox' | 'rules'>, number> = { situations: data.set?.views.length ?? 0, runs: data.runs.length, problems: data.problems.length };
-  const tabs: Tab<Area>[] = [...(data.decisions.length ? [{ place: 'inbox' as const, text: `Нужно ваше решение: ${data.decisions.length}`, tone: 'warning' as const }] : []),
+  const tabs: Tab<Area>[] = [...(data.decisions.length ? [{ place: 'inbox' as const, text: `Вопросы ${data.decisions.length}`, tone: 'warning' as const }] : []),
     ...(['situations', 'runs', 'problems'] as const).flatMap((area): Tab<Area>[] => [{ place: area, text: `${AREA_LABEL[area]} ${counts[area]}`, tone: 'muted' },
-      ...(area === 'situations' && data.set?.rulebook ? [{ place: 'rules' as const, text: 'Свод правил', tone: 'muted' as const }] : [])])];
+      ...(area === 'situations' && data.set?.rulebook ? [{ place: 'rules' as const, text: 'Правила', tone: 'muted' as const }] : [])])];
   const wide = '  ·  ';
-  const { shown, gap } = fitTabs(tabs, current, ['inbox'], wide, room(width) - 1);
+  const { shown, gap } = fitTabs(tabs, current, ['inbox'], wide, room(width) - 5);
   const parts = tabLine(shown, current, gap);
   const used = parts.reduce((sum, part) => sum + visibleWidth(part.text), 0);
   // No decision waits: a calm mark on the right instead of the queue, while every area fits beside it.
@@ -179,13 +178,14 @@ function areaLine(data: SpaceData, current: Area, width: number): Line {
 function stepLine(data: SpaceData, current: Step, width: number): Line {
   const views = data.set?.views ?? [];
   const ready = views.filter(view => view.status === 'ready').length;
-  const result = data.runs[0] ? accuracyParts(data.runs[0].view).value : null;
+  const latest = data.runs[0]?.view;
+  const result = latest && !latest.notMeasured.alarm && !latest.control.alarm ? accuracyParts(latest).value : null;
   const work = data.progress?.kind;
   const situations = work === 'preparation' ? 'Ситуации готовятся' : work === 'check' ? 'Ситуации проверяются' : `Ситуации ${views.length ? `${ready}/${views.length}` : ''}`.trim();
   const tabs: Tab<Step>[] = [{ place: 'situations', text: situations, short: 'Ситуации', tone: 'muted' },
     { place: 'run', text: work === 'run' ? 'Прогон идёт' : 'Прогон', short: 'Прогон', tone: 'muted' },
     { place: 'result', text: `Результат${result ? ` · точность ${result}` : ''}`, short: 'Результат', tone: 'muted' }];
-  const { shown, gap } = fitTabs(tabs, current, [], '  ›  ', room(width) - 1);
+  const { shown, gap } = fitTabs(tabs, current, [], '  ›  ', room(width) - 5);
   return tabLine(shown, current, gap);
 }
 
@@ -195,11 +195,10 @@ function stepLine(data: SpaceData, current: Step, width: number): Line {
  */
 export function header(data: SpaceData, place: { area: Area } | { step: Step }, width: number): Line[] {
   const { space } = data;
-  const version = space.demo ? 'учебный пример' : space.version ? `версия ${space.version}` : null;
   const places = 'step' in place ? stepLine(data, place.step, width) : areaLine(data, place.area, width);
   if (width < NARROW) return [places];
   const name = /^(?:\/|.*\bAGENT_LAB_)/.test(space.name) ? 'Проверка агента' : space.name;
-  return [...titleLine('step' in place ? `Agent Lab · ${name}` : `Агент: ${name}`, version, width), [], places];
+  return [[{ text: ' AGENT LAB', tone: 'accent', bold: true }, { text: `  /  ${safeLine(clip(name, Math.max(10, width - 22)))}`, tone: 'text' }], [], places, [], [{ text: '─'.repeat(width), tone: 'borderMuted' }]];
 }
 
 /* ───────────────────────────── the areas ───────────────────────────── */
@@ -360,15 +359,16 @@ export function pickedRows(view: ResultView, options: { details: boolean; now: D
 
 /** The rows of a result the cursor walks, in the order the screen shows them — with its details or without. */
 export const resultPicks = (view: ResultView, now: Date, details = false): ResultPick[] =>
-  pickedRows(view, { details, now }).picks.filter((pick): pick is ResultPick => pick !== null);
+  details ? pickedRows(view, { details, now }).picks.filter((pick): pick is ResultPick => pick !== null) : dashboardPicks(view);
 
 /**
  * One run's result (docs/design/ui-spec.md §4.7, §8.5): the rows of the CLI summary — the number and its trust, the topics, why
- * it errs, «Дальше» — with the cursor on the causes and the steps; `details` adds every error, what was not measured,
+ * it errs, «Дальше» — retained under details. The default dashboard shows status, counters and actionable rows. Details add what was not measured,
  * the owner's disagreements and the comparison with production. The board lays over them only what a screen of its
  * own knows: the work going on above, how the run before did on the run line, the numbered actions under it all.
  */
 export function resultScreen(data: SpaceData, run: { record: Experiment; view: ResultView }, options: { selected: number; details: boolean; actions?: string[] }, width: number): Screen & { picks: ResultPick[] } {
+  if (!options.details) return resultDashboard(data, run, options.selected, options.actions ?? [], room(width));
   const { view } = run;
   const w = room(width);
   const { rows, picks: laid } = pickedRows(view, { details: options.details, now: data.now });
@@ -394,7 +394,7 @@ export function resultScreen(data: SpaceData, run: { record: Experiment; view: R
   });
   const actions = options.actions ?? [];
   if (actions.length) body.push(blank, ...wsLines([ws('actions', actions.map((label, index) => `${index + 1} ${label}`).join('  ·  '), 1, { clip: true })], w));
-  return { head: [], body, picks, items, ...(anchor !== undefined ? { anchor } : {}), foot: FOOT.area };
+  return { head: [], body, picks, items, ...(anchor !== undefined ? { anchor } : {}), foot: [{ key: 'd', text: 'к сводке' }, { key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, { key: 'PgDn', text: 'ниже' }, { key: 'Esc', text: 'назад' }] };
 }
 
 /** The spinner of the progress row: the frames of Pi's own Loader; the workspace turns it while work goes on. */
@@ -495,11 +495,12 @@ const NOT_ASKED = { control: 'Контрольная ситуация: в про
  * One conversation the judge decided (docs/design/ui-spec.md §4.8): a failure as expected → the agent's words → the rule → the
  * conversation; a pass drawn for a double-check the same way. Then the question to the owner, or their answer.
  */
-export function judgedScreen(run: { record: Experiment; view: ResultView }, trialId: string, answer: Answer | undefined, place: { at: number; of: number } | undefined, width: number): Screen {
+export function judgedScreen(run: { record: Experiment; view: ResultView }, trialId: string, answer: Answer | undefined, place: { at: number; of: number } | undefined, width: number, details = false): Screen {
   const { record, view } = run;
   const w = room(width);
   const index = view.failures.findIndex(failure => failure.trialId === trialId);
   const trial = record.trials.find(item => item.id === trialId);
+  if (details && trial) return { head: [], body: trialTrace(trial, w), foot: [{ key: 'd', text: 'к оценке' }, { key: 'PgUp/PgDn', text: 'листать' }, { key: 'Esc', text: 'назад' }] };
   const scenario = trial && record.scenarios.find(item => item.id === trial.scenarioId);
   let rows: ResultRow[];
   if (index >= 0) {
@@ -512,21 +513,42 @@ export function judgedScreen(run: { record: Experiment; view: ResultView }, tria
     const brief = scenario ? situationBrief(record, scenario) : undefined;
     const said = trial?.events.filter(event => event.type === 'assistant' && oneLine(event.text ?? '')).at(-1);
     const label = (name: string, text: string): ResultRow => ({ role: 'item', indent: 4, text: `${name.padEnd(16)}${text}`, hang: 16 });
-    rows = [{ role: 'good', indent: 0, text: `${GLYPH.pass} ${oneLine(scenario?.title ?? '')}`, right: 'справился' }, { role: 'blank', indent: 0, text: '' },
+    const passed = view.cards.find(card => card.scenarioId === trial?.scenarioId)?.outcome === 'pass';
+    rows = [{ role: passed ? 'good' : 'muted', indent: 0, text: `${passed ? GLYPH.pass : '?'} ${oneLine(scenario?.title ?? '')}`, right: passed ? 'справился' : 'разговор' }, { role: 'blank', indent: 0, text: '' },
       label('Ожидалось', brief?.must.map(duty => duty.text).join('; ') || 'не записано в ситуации'),
       label('Агент ответил', said ? `«${oneLine(said.text)}»` : 'ответа нет'),
       ...(brief?.must[0]?.rule ? [label('Правило', `«${brief.must[0].rule}»`)] : [])];
   }
   // A failure's explanation holds its conversation already; a pass drawn for a double-check shows it in the same rows.
-  const conversation = index >= 0 ? [] : conversationRows(trialTurns(trial));
+  const conversationAt = rows.findIndex(row => row.role === 'heading' && row.text === 'Разговор');
+  if (conversationAt >= 0) rows = rows.slice(0, conversationAt);
   // The question is about the decision the judge recorded, never about a verdict the owner already changed.
   const target = agreementTarget(record, trial);
-  const question = target?.kind !== 'ready' ? NOT_ASKED[target?.kind ?? 'undecided']
+  const question = !target && !['results_review', 'complete'].includes(record.phase)
+    ? 'Прогон не завершён. Подтвердить оценку судьи можно после завершения прогона.'
+    : target?.kind !== 'ready' ? NOT_ASKED[target?.kind ?? 'undecided']
     : answer ? `Ваш ответ: ${ANSWER_TEXT[answer]}. Изменить: ${ANSWER_KEYS}` : `${judgeQuestionText(target.judgeVerdict)}   ${ANSWER_KEYS}`;
-  const body = [...resultLines([...rows, ...(conversation.length ? [{ role: 'blank' as const, indent: 0, text: '' }, ...conversation] : [])], w), blank,
-    ...wsLines([ws(answer || target?.kind !== 'ready' ? 'muted' : 'accent', question)], w)];
+  const wide = w >= 100;
+  const leftWidth = wide ? Math.floor(w * 0.42) : w;
+  const rightWidth = wide ? w - leftWidth - 2 : w;
+  const evidence: Line[] = [];
+  for (const item of rows.slice(1)) {
+    const label = ['Ожидалось', 'Агент ответил', 'Правило', 'Клиент'].find(label => item.text.startsWith(label.padEnd(16)));
+    if (label) evidence.push(panelRow(label.toLocaleUpperCase('ru'), 'muted', true), ...panelWrap(item.text.slice(16), leftWidth - 4), []);
+    else evidence.push(...resultLines([{ ...item, indent: 0 }], leftWidth - 4));
+  }
+  const messages: Line[] = [];
+  for (const [i, turn] of trialTurns(trial).entries()) messages.push(
+    panelRow(`${String(i + 1).padStart(2, '0')}  ${turn.who.toLocaleUpperCase('ru')}`, turn.who === 'Агент' ? 'accent' : 'muted', true),
+    ...panelWrap(turn.text, rightWidth - 4), []);
+  if (!messages.length) messages.push(...panelWrap('Реплики в этом разговоре не сохранены.', rightWidth - 4, 'muted'));
+  const left = box('ОЖИДАНИЯ И ОСНОВАНИЯ', evidence, leftWidth);
+  const right = box('РАЗГОВОР С АГЕНТОМ', messages, rightWidth);
+  const body: Line[] = [...resultLines(rows.slice(0, 1), w), [],
+    ...box('ПРОВЕРКА ОЦЕНКИ', panelWrap(question, w - 4, target?.kind === 'ready' ? 'accent' : 'muted'), w), [],
+    ...(wide ? beside(left, right, leftWidth) : [...left, [], ...right])];
   if (place) body.unshift(...wsLines([ws('muted', `Проверка судьи: ${place.at} из ${place.of}`)], w), blank);
-  return { head: [], body, foot: [...(target?.kind === 'ready' ? [{ key: '1–3', text: 'ответить' }] : []), { key: 'a', text: 'спросить Lab' }, { key: '↑↓', text: 'листать' }, { key: 'Esc', text: 'назад' }] };
+  return { head: [], body, foot: [...(target?.kind === 'ready' ? [{ key: '1–3', text: 'ответить' }] : []), { key: 'd', text: 'инструменты и источники' }, { key: 'a', text: 'спросить Lab' }, { key: '↑↓', text: 'листать' }, { key: 'Esc', text: 'назад' }] };
 }
 
 /**
