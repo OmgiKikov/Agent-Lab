@@ -243,26 +243,57 @@ async function projectPython(root: string): Promise<string | undefined> {
   return undefined;
 }
 
+const envNameStart = (char: string | undefined): boolean => char === '_' || !!char && (char >= 'A' && char <= 'Z' || char >= 'a' && char <= 'z');
+const envNameChar = (char: string | undefined): boolean => envNameStart(char) || !!char && char >= '0' && char <= '9';
+const base64Char = (char: string): boolean => envNameChar(char) || char === '+' || char === '/' || char === '-';
+/** The longest name a connection reads from the environment (http-template.ts envNameSchema). */
+const ENV_NAME_CHARS = 100;
+/** An unquoted value this long, all of base64, may be a key wrapped over several lines. */
+const WRAPPED_BASE64 = 16;
 /**
- * The variable names of a .env file, read the way dotenv reads it: `[export] NAME=value`, a value quoted with ', " or `
- * running over several lines, an unquoted PEM block (-----BEGIN … -----END) as one value, # comments. Every value is
- * skipped as it is read, so neither a secret nor a line inside one (the tail of a key) ever reaches the result; a
- * name is only a valid variable name.
+ * A line of nothing but base64 (standard or url-safe), `=` padding only at its end: `open` when more of it may follow,
+ * `closed` when padding ended it; undefined for anything else.
+ */
+function base64Run(line: string): 'open' | 'closed' | undefined {
+  let end = line.length;
+  while (end > 0 && line[end - 1] === '=') end--;
+  if (!end || line.length - end > 2 || ![...line.slice(0, end)].every(base64Char)) return undefined;
+  return end < line.length ? 'closed' : 'open';
+}
+
+/**
+ * The variable names of a .env file: only well-formed assignments, `NAME=value` from the very start of a line (`export `
+ * before it allowed), the way a shell and dotenv take them. A value quoted with ', " or ` may run over several lines,
+ * an unquoted PEM block (-----BEGIN … -----END) is one value, and a long unquoted base64 value may be wrapped over the
+ * lines after it, its last one ending in `=` padding: every such line belongs to the value, never to a name. Every value
+ * is skipped as it is read, so neither a secret nor a piece of one (the tail of a key) ever reaches the result.
  */
 export function envFileNames(text: string): string[] {
   const names = new Set<string>();
   const lineEnd = (from: number) => { const end = text.indexOf('\n', from); return end < 0 ? text.length : end; };
+  const blank = (at: number) => text[at] === ' ' || text[at] === '\t';
+  /** The line before continued an unquoted base64 value: a line of base64 now is more of it. */
+  let wrapped = false;
   let i = 0;
   while (i < text.length) {
     const end = lineEnd(i);
-    const line = text.slice(i, end).trim();
-    const statement = line.startsWith('export ') ? line.slice('export '.length).trimStart() : line;
-    const at = statement.indexOf('=');
-    const name = at < 0 ? '' : statement.slice(0, at).trim();
-    if (!line || line.startsWith('#') || at < 0 || !/^[A-Za-z_][A-Za-z0-9_]{0,99}$/.test(name)) { i = end + 1; continue; }
+    const line = text.slice(i, text[end - 1] === '\r' ? end - 1 : end);
+    if (wrapped) {
+      const run = base64Run(line);
+      wrapped = run === 'open';
+      if (run) { i = end + 1; continue; }
+    }
+    let j = i;
+    if (text.startsWith('export', j) && blank(j + 'export'.length)) { j += 'export'.length; while (blank(j)) j++; }
+    const start = j;
+    if (envNameStart(text[j])) { j++; while (envNameChar(text[j])) j++; }
+    const name = text.slice(start, j);
+    while (blank(j)) j++;
+    // `NAME==…`: a «value» of padding is the tail of a base64 value wrapped over lines, not an assignment.
+    if (!name || name.length > ENV_NAME_CHARS || text[j] !== '=' || text[j + 1] === '=') { i = end + 1; continue; }
     names.add(name);
-    let j = text.indexOf('=', i) + 1;
-    while (text[j] === ' ' || text[j] === '\t') j++;
+    j++;
+    while (blank(j)) j++;
     const quote = text[j];
     if (quote === '"' || quote === "'" || quote === '`') {
       // A quoted value may run over lines; inside double quotes a backslash escapes the next character.
@@ -272,7 +303,11 @@ export function envFileNames(text: string): string[] {
     } else if (text.startsWith('-----BEGIN', j)) {
       const close = text.indexOf('-----END', j);
       i = close < 0 ? text.length : lineEnd(close) + 1;
-    } else i = end + 1;
+    } else {
+      const value = text.slice(j, i + line.length);
+      wrapped = value.length >= WRAPPED_BASE64 && base64Run(value) === 'open';
+      i = end + 1;
+    }
   }
   return [...names];
 }
