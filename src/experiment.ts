@@ -114,7 +114,7 @@ export class ExperimentLab {
   acceptDraft(id: string, expectedHash: string): Promise<Experiment> { return run.acceptDraft(this.lab, id, expectedHash); }
   /** A fresh draft of a run's accepted set; `preview`: shown before anything is written, written by its first change (Lab.preview). */
   repeat(id: string, scenarioIds?: string[], controlScenarioIds?: string[], options?: run.RepeatOptions): Promise<Experiment> { return run.repeat(this.lab, id, scenarioIds, controlScenarioIds, options); }
-  saveSuite(id: string, file: string, scenarioIds?: string[]): Promise<string> { return run.saveSuite(this.lab, id, file, scenarioIds); }
+  saveSuite(id: string, file: string, scenarioIds?: string[], options?: { replace?: boolean }): Promise<string> { return run.saveSuite(this.lab, id, file, scenarioIds, options); }
   loadSuite(file: string, scenarioIds?: string[], connection?: Connection): Promise<Experiment> { return run.loadSuite(this.lab, file, scenarioIds, connection); }
   start(id: string, options: run.StartOptions): Promise<Experiment> { return run.start(this.lab, id, options); }
 

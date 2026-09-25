@@ -9,7 +9,7 @@ import type { ExperimentLab } from '../src/experiment.js';
 import { safeLine, safeText } from '../src/text.js';
 import type { Background } from './background.ts';
 import { row } from './conversation.ts';
-import { applySituationCommand, busyFor, chatQueue, settle, writer, type DecisionSurface } from './decisions.ts';
+import { applySituationCommand, busyFor, chatQueue, settle, settledHere, writer, type DecisionSurface } from './decisions.ts';
 import { displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import { decisionsOutput } from './model-output.ts';
 import type { LabLease, SessionOperations } from './operations.ts';
@@ -81,8 +81,8 @@ export function registerDecideTool(pi: Pick<ExtensionAPI, 'registerTool'>, host:
           { tone: 'warning', rows: [row('Не решено: вы не выбрали ответ.')] }, 'Решение');
         const surface: DecisionSurface = { ctx, origin: 'chat', writing: writer(host.operations, host.open, ctx.cwd, directory), background: host.background };
         const notice = await resolveChoice(surface, choice, queue.draft, params.text, await host.reading(directory).list());
-        if (notice === undefined) return host.feedResult(callId, { decided: false, declined: true, instruction: 'The owner stepped back in the editor. Nothing was written.' },
-          { tone: 'warning', rows: [row('Не решено: ответ без слов не записан.')] }, 'Решение');
+        if (notice === undefined) return host.feedResult(callId, { decided: false, declined: true, instruction: 'The owner stepped back in a dialog. Nothing was written or spent; do not ask again unless they do.' },
+          { tone: 'warning', rows: [row('Не решено: ничего не записано и не потрачено.')] }, 'Решение');
         const left = (await chatQueue(host.reading(directory))).decisions;
         return host.feedResult(callId, { decided: true, notice, left: decisionsOutput(left) },
           { rows: [row(safeText(notice), 'text', true), row(decisionsLine(left.length), 'muted')] }, 'Решение');
@@ -94,7 +94,8 @@ export function registerDecideTool(pi: Pick<ExtensionAPI, 'registerTool'>, host:
 /**
  * What the owner's pick does. An answer to a situation's question is its ready-made command, with the owner's words
  * when it needs them (typed in the native editor, prefilled with what they said); a version of the logs named in words
- * the same. Undefined when the owner closed the editor.
+ * the same. What it spends is asked in the dialogs the workspace asks too (decisions.ts). Undefined when the owner
+ * closed the editor or declined a dialog: nothing was written.
  */
 async function resolveChoice(surface: DecisionSurface, choice: DecisionChoice, draft: Awaited<ReturnType<typeof chatQueue>>['draft'], said: string | undefined,
   records: Parameters<typeof settle>[2]): Promise<string | undefined> {
@@ -119,7 +120,6 @@ async function resolveChoice(surface: DecisionSurface, choice: DecisionChoice, d
     if (!version) return undefined;
     return settle(surface, { kind: 'declare_log_version', importId: action.importId, version }, records);
   }
-  const notice = await settle(surface, action, records);
-  if (notice === undefined) throw new Error('Это решение нельзя принять из разговора: откройте /agent-lab.');
-  return notice;
+  if (!settledHere(action)) throw new Error('Это решение нельзя принять из разговора: откройте /agent-lab.');
+  return settle(surface, action, records);
 }

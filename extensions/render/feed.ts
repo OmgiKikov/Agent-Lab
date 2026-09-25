@@ -167,7 +167,7 @@ export function callText(tool: string, args: Record<string, unknown> | undefined
     }
     case TOOL.decide: return typeof a.decision === 'string' ? 'Записываю ваше решение' : 'Смотрю, что ждёт вашего решения';
     case TOOL.run: return a.action === 'stop' ? 'Останавливаю' : a.action === 'progress' ? 'Смотрю, как идёт работа' : a.action === 'accept' ? 'Утверждаю ситуации' : 'Запускаю прогон';
-    case TOOL.results: return a.compare === true ? 'Сравниваю с прошлым прогоном' : a.report === true ? 'Сохраняю отчёт для заказчика' : typeof a.save === 'string' ? 'Сохраняю набор в файл' : 'Показываю результат';
+    case TOOL.results: return a.compare === true ? 'Сравниваю с прошлым прогоном' : a.report === true ? 'Сохраняю отчёт для заказчика' : a.save === true || typeof a.save === 'string' ? 'Сохраняю набор в файл' : 'Показываю результат';
     case TOOL.explain: return `Разбираю ситуацию${number}`;
     case TOOL.connect: return 'Подключаю агента';
     case TOOL.agree: return `Записываю вашу отметку о решении судьи${number ? ` по ситуации${number}` : ''}`;

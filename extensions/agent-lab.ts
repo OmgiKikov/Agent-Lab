@@ -1,10 +1,9 @@
-import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { stripFrontmatter, type AgentToolResult, type ExtensionAPI, type ToolDefinition } from '@earendil-works/pi-coding-agent';
+import type { AgentToolResult, ExtensionAPI, ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { Text } from '@earendil-works/pi-tui';
 import type { TSchema } from 'typebox';
 import { ExperimentLab } from '../src/experiment.js';
+import { agentLabInstructions } from '../src/instructions.js';
 import { safeText } from '../src/text.js';
 import { rememberFeed, type Feed } from './render/feed.ts';
 import { row } from './conversation.ts';
@@ -26,35 +25,14 @@ import { createGateway, type GatewayOptions } from './gateway.ts';
 /*
  * Agent Lab inside Pi: ten tools, of which the model sees only those of the step the project is at (steps.ts), the
  * /agent-lab workspace, and the messages long work reports back with. What the model is told comes from one source,
- * the agent-builder skill (skills/agent-builder/SKILL.md): its body joins the system prompt of an Agent Lab session;
+ * the agent-builder skill (skills/agent-builder/SKILL.md): `agent-lab chat` makes its body part of the session's own
+ * system prompt (src/instructions.ts), so the turns Pi starts for a message of Lab carry it as much as the owner's;
  * everything a tool itself can say is in that tool's description. The owner's personal model gateway (provider giga)
  * is registered here too and connected with `/agent-lab gateway` (gateway.ts).
  *
  * Whatever goes wrong in a tool reaches the owner and the model once, in the owner's words (lab-ui.ts inputError); long
  * work outlives a session Pi replaces and reports to the next one (operations.ts).
  */
-
-/** The one instruction source, read once: the skill without its frontmatter. */
-const GUIDE = new URL('../skills/agent-builder/SKILL.md', import.meta.url);
-let guide: Promise<string> | undefined;
-const guideText = (): Promise<string> => guide ??= readFile(GUIDE, 'utf8').then(text => absoluteLinks(stripFrontmatter(text).trim(), GUIDE));
-
-/**
- * The skill's relative links made absolute. In the system prompt a relative path is read from the owner's project,
- * where `../../examples/…` names nothing; the files it links ship with this package, beside the skill.
- */
-function absoluteLinks(text: string, base: URL): string {
-  let out = '', at = 0;
-  for (let open = text.indexOf('](', at); open >= 0; open = text.indexOf('](', at)) {
-    const close = text.indexOf(')', open + 2);
-    if (close < 0) break;
-    const target = text.slice(open + 2, close);
-    const relative = target.length > 0 && !target.includes(':') && !target.startsWith('/') && !target.startsWith('#');
-    out += `${text.slice(at, open + 2)}${relative ? fileURLToPath(new URL(target, base)) : target})`;
-    at = close + 1;
-  }
-  return out + text.slice(at);
-}
 
 /** Pi replaces the session on these: the work going on moves to the next session instead of stopping. Quitting ends it. */
 const REPLACED: ReadonlySet<string> = new Set(['new', 'resume', 'fork', 'reload']);
@@ -131,7 +109,11 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     await step(resolve(ctx.cwd, '.agent-lab'));
     if (process.env.AGENT_LAB_SESSION !== '1') return;
     ctx.ui?.setWidget?.('agent-lab-start', undefined);
-    return { systemPrompt: `${event.systemPrompt}\n\n${await guideText()}` };
+    // `agent-lab chat` gave Pi the instructions as the session's own, and every turn carries them. A session started
+    // some other way gets them here — for the owner's prompts only: a turn Pi starts itself never passes this hook.
+    const instructions = await agentLabInstructions();
+    if (event.systemPrompt.includes(instructions)) return;
+    return { systemPrompt: `${event.systemPrompt}\n\n${instructions}` };
   });
   registerPrepareTool(tools, host);
   registerSituationTools(tools, host);
