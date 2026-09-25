@@ -525,7 +525,7 @@ export function briefRows(view: SituationView, options: RowOptions = {}): Situat
     ...(duty.rule && duty.rule !== brief.must[index - 1]?.rule ? [{ role: 'rule' as const, indent: 6, text: `правило: «${quoteText(duty.rule)}»`, hang: 10 }] : []),
   ]);
   return [
-    { role: 'title', indent: 0, text: `${String(view.number).padEnd(2)} ${brief.title}`, right: chip(view, !!options.running, options.narrow), clip: true },
+    { role: 'title', indent: 0, text: `${String(view.number).padEnd(2)} ${brief.title}`, right: chip(view, !!options.running, options.narrow), hang: 3 },
     { role: 'source', indent: 3, text: brief.source },
     ...(brief.variation ? [{ role: 'source' as const, indent: 3, text: `вариант: ${brief.variation}` }] : []),
     blank,
@@ -650,12 +650,23 @@ export type LayoutRow<Role extends string> = Omit<SituationRow, 'role' | 'right'
 export interface LaidOut<Role extends string> { role: Role; text: string; right?: { role: Role; text: string } }
 export type SituationLine = LaidOut<SituationRole>;
 
-// truncateToWidth closes its ellipsis with style resets for a live terminal; these lines are plain text, painted later by role.
-const clipTo = (text: string, width: number) => stripTerminalSequences(truncateToWidth(text, Math.max(1, width), '…'));
+/**
+ * A list line cut to `width` columns with «…» between words, never inside one — unless what the last whole word
+ * keeps is less than half the line. truncateToWidth would close its ellipsis with style resets for a live terminal:
+ * these lines are plain text, painted later by role.
+ */
+function clipTo(text: string, width: number): string {
+  const room = Math.max(1, width);
+  if (visibleWidth(text) <= room) return text;
+  const head = stripTerminalSequences(truncateToWidth(text, room - 1, ''));
+  const space = head.lastIndexOf(' ');
+  return `${(space >= room / 2 ? head.slice(0, space) : head).trimEnd()}…`;
+}
 
 /**
  * The rows as lines of at most `width` columns (capped at MAX_WIDTH, like the result screen): a chip aligned
- * to the right edge and never cut, a list line cut with «…», everything else wrapped under its hanging column.
+ * to the right edge and never cut — beside a list line cut with «…», or beside the first line of a text that wraps
+ * under its hanging column —, a list line cut with «…», everything else wrapped under its hanging column.
  * `margin` is the left margin before every indent: one column in a terminal of its own, none inside a host
  * that already frames the rows.
  */
@@ -664,14 +675,16 @@ export function layoutRows<Role extends string = SituationRole>(rows: readonly L
   return rows.flatMap((row): LaidOut<Role>[] => {
     const pad = ' '.repeat(row.indent + margin);
     const room = edge - pad.length;
+    const hang = row.hang ?? 0;
     if (row.right || row.clip) {
       const reserve = row.right ? visibleWidth(row.right.text) + 2 : 0;
-      const text = clipTo(row.text, room - reserve);
+      // A text that wraps keeps its chip on its first line; the rest hangs under it.
+      const [text = '', ...rest] = row.clip ? [clipTo(row.text, room - reserve)] : wrapHanging(row.text, room - reserve, room - hang);
       if (!row.right) return [{ role: row.role, text: pad + text }];
-      return [{ role: row.role, text: pad + text + ' '.repeat(Math.max(2, room - visibleWidth(text) - visibleWidth(row.right.text))), right: row.right }];
+      return [{ role: row.role, text: pad + text + ' '.repeat(Math.max(2, room - visibleWidth(text) - visibleWidth(row.right.text))), right: row.right },
+        ...rest.map(piece => ({ role: row.role, text: pad + ' '.repeat(hang) + piece }))];
     }
     if (!row.text) return [{ role: row.role, text: '' }];
-    const hang = row.hang ?? 0;
     // The text never changes on its way into lines: its line breaks stay, and a long word breaks with nothing inserted.
     const [first = '', ...rest] = wrapHanging(row.text, room, room - hang);
     return [{ role: row.role, text: pad + first }, ...rest.map(piece => ({ role: row.role, text: pad + ' '.repeat(hang) + piece }))];
