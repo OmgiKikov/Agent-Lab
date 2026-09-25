@@ -8,7 +8,15 @@ export const row = (text: string, tone: Tone = 'text', bold = false): Line => [s
 const size = (line: Line) => line.reduce((sum, part) => sum + visibleWidth(part.text), 0);
 const pad = (line: Line, width: number): Line => [...line, span(' '.repeat(Math.max(0, width - size(line))))];
 export const fit = (text: string, width: number) => safeLine(truncateToWidth(safeLine(text), Math.max(1, width), '…'));
-export const wrap = (text: string, width: number, tone: Tone = 'text'): Line[] => wrapTextWithAnsi(safeLine(text), Math.max(1, width)).map(value => row(value, tone));
+/** A text in lines of `width`; one that starts with spaces stands at that column, its wrapped lines hanging under it. */
+export function wrap(text: string, width: number, tone: Tone = 'text'): Line[] {
+  const safe = safeLine(text);
+  let lead = 0;
+  while (safe[lead] === ' ') lead++;
+  if (!lead || lead >= safe.length || lead + 3 >= width) return wrapTextWithAnsi(safe, Math.max(1, width)).map(value => row(value, tone));
+  const [first = '', ...rest] = wrapHanging(safe.slice(lead), width - lead, width - lead - 2);
+  return [row(' '.repeat(lead) + first, tone), ...rest.map(piece => row(' '.repeat(lead + 2) + piece, tone))];
+}
 
 /** A quoted customer message, visually distinct from instructions and reviewer comments. */
 export function quote(text: string, width: number): Line[] {

@@ -83,12 +83,20 @@ export function wrapRow(row: Pick<Row, 'text' | 'indent' | 'hang'>, width: numbe
 
 /**
  * Every host prints its rows through this one function: `safeText` on every text, word wrap with the
- * hanging indent, then paint. A list line is cut with «…» by the shared layout; nothing else is cut, and
- * no line is wider than `width`.
+ * hanging indent, then paint. A list line is cut with «…» by the shared layout, between words; nothing else
+ * is cut, and no line is wider than `width`. A text that starts with spaces — a line of a list laid out as text
+ * (what Lab found in the folder, a plan) — stands at that column, and its wrapped lines hang under it, never
+ * back at the row's edge.
  */
 export function renderRows(rows: Row[], theme: PaintTheme, width: number): string[] {
   return rows.flatMap(raw => {
     const row = { ...raw, text: safeText(raw.text) };
+    let lead = 0;
+    while (row.text[lead] === ' ') lead++;
+    if (lead && lead < row.text.length && row.hang === undefined && !row.mark && !row.right && !row.clip) {
+      row.indent = (row.indent ?? 0) + lead;
+      row.text = row.text.slice(lead);
+    }
     if (row.mark) {
       // The sign stands in the indent; the text wraps in the room after it and hangs under itself.
       const mark = safeText(row.mark.text);
@@ -98,9 +106,11 @@ export function renderRows(rows: Row[], theme: PaintTheme, width: number): strin
         + paint({ ...row, text: line }, theme));
     }
     if (!row.right && !row.clip) return wrapRow(row, width).map(line => paint({ ...row, text: line }, theme));
-    // A list line is laid out in src like every other surface's (cut with «…», the right part never cut); here it is only painted.
+    // A list line is laid out in src like every other surface's (cut with «…», or wrapped beside a right part that is
+    // never cut); here it is only painted.
     const right = row.right && { role: 'right', text: safeText(row.right.text) };
-    return layoutRows([{ role: 'row', indent: row.indent ?? 0, text: row.text, clip: true, ...(right ? { right } : {}) }], width, 0)
+    const indent = row.indent ?? 0;
+    return layoutRows([{ role: 'row', indent, text: row.text, ...(row.clip ? { clip: true } : { hang: (row.hang ?? indent + 2) - indent }), ...(right ? { right } : {}) }], width, 0)
       .map(line => paint({ ...row, text: line.text }, theme) + (row.right && line.right ? paint({ text: line.right.text, tone: row.right.tone }, theme) : ''));
   });
 }
