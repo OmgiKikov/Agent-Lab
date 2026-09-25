@@ -28,9 +28,8 @@ export interface DisagreementItem { number: number; title: string; expectations:
 
 export type Block =
   | { kind: 'alarm'; text: string }
-  | { kind: 'accuracy'; lead: string; value: string | null; tail: string; level: Level;
-      /** The 95% interval under the number; `point` and the range are shares 0..1. */
-      band: { point: number; range: [number, number] } | null }
+  /** The number alone, with no interval under it: the situations are a curated set, not a sample of production (interval.ts). */
+  | { kind: 'accuracy'; lead: string; value: string | null; tail: string; level: Level }
   | { kind: 'trust'; parts: { text: string; warn: boolean }[] }
   | { kind: 'section'; title: string; blocks: Block[] }
   | { kind: 'table'; head: string[]; rows: { cells: string[]; muted: boolean }[] }
@@ -46,48 +45,37 @@ export interface Report { title: string; meta: string[]; head: Block[]; blocks: 
 
 const plain = (value: unknown) => stripVTControlCharacters(String(value ?? '')).replace(/[\u202a-\u202e\u2066-\u2069]/g, '');
 export const escapeHtml = (value: unknown) => plain(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-export const escapeMarkdown = (value: unknown) => plain(value).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!).replace(/[\\`*_{}\[\]()#|]/g, '\\$&');
+/**
+ * Text of a record as Markdown shows it, escaped only where a character would change the rendering: a backslash before
+ * punctuation, `*`, a `_` at the edge of a word, a backtick, `[` (no link or image can open), `~`, a `<` that would open a
+ * tag or an autolink, an `&` that would open an entity. Everything else stays as written — «(4 разговора…)» keeps its
+ * brackets. Where the text starts a line, `atLineStart` escapes what would open a block; a table cell escapes `|`
+ * (`mdCell`), a heading its closing `#` (`closeHeading`).
+ */
+export const escapeMarkdown = (value: unknown): string => plain(value)
+  .replace(/\\(?=[!-/:-@[-`{-~])/g, '\\\\')
+  .replace(/[`*[~]/g, '\\$&')
+  .replace(/_(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])_/gu, '\\_')
+  .replace(/<(?=[A-Za-z/!?])/g, '\\<')
+  .replace(/&(?=#?[A-Za-z0-9]+;)/g, '\\&');
+/**
+ * An escaped line as the start of a Markdown line: what would open a block there — a heading, a quote, a list item, a
+ * rule or a setext underline — is escaped, the rest left as it is.
+ */
+const atLineStart = (line: string): string => line
+  .replace(/^(\s*)(#{1,6})(?=\s|$)/, '$1\\$2')
+  .replace(/^(\s*)([>])/, '$1\\$2')
+  .replace(/^(\s*)([-+])(?=\s|$)/, '$1\\$2')
+  .replace(/^(\s*\d{1,9})([.)])(?=\s|$)/, '$1\\$2')
+  .replace(/^(\s*)([-=])(?=(?:\s*\2)*\s*$)/, '$1\\$2');
+/** An escaped heading's text: a closing run of `#` would be dropped from the heading, so it is escaped. */
+const closeHeading = (text: string): string => text.replace(/(\s)(#+)(\s*)$/, '$1\\$2$3');
+/** A table cell: `|` would end it. */
+const mdCell = (value: unknown): string => escapeMarkdown(value).replace(/\|/g, '\\|');
 const e = escapeHtml;
 const md = escapeMarkdown;
-const pct = (share: number) => Math.round(share * 100);
 /** « · » between the parts of a line, glued to the part before it: a wrapped line never starts with the dot. */
 const SEPARATOR = '\u00a0· ';
-
-/*
- * The labels under the interval band: its two ends, and the axis ends 0% and 100% where they leave room. A label is
- * placed by its left edge, kept inside the band, and never overlaps another: the two ends too close to each other read
- * as one «91–100%», and an axis label that would touch one is left out. Widths are judged at a band of `px` pixels with
- * a 11.5px monospace digit of LABEL_PX, so the labels hold on the narrowest band they are drawn for.
- */
-const LABEL_PX = 7.2;
-/** The band on a 320px phone, and from a 700px window up (report-style.ts shows the wide set there). */
-const NARROW_BAND = 250, WIDE_BAND = 600;
-/** Room left between two labels, in percent of the band. */
-const LABEL_GAP = 2;
-interface BandLabel { text: string; left: number; kind: 'end' | 'axis' }
-function bandLabels(lo: number, hi: number, px: number): BandLabel[] {
-  const widthOf = (text: string) => text.length * LABEL_PX / px * 100;
-  const at = (text: string, centre: number, kind: BandLabel['kind']): BandLabel & { right: number } => {
-    const width = widthOf(text);
-    const left = Math.min(Math.max(0, centre - width / 2), 100 - width);
-    return { text, left, right: left + width, kind };
-  };
-  const low = at(`${lo}%`, lo, 'end'), high = at(`${hi}%`, hi, 'end');
-  const ends = lo === hi ? [low] : low.right + LABEL_GAP <= high.left ? [low, high] : [at(`${lo}–${hi}%`, (lo + hi) / 2, 'end')];
-  const clear = (label: { left: number; right: number }) => ends.every(end => label.right + LABEL_GAP <= end.left || end.right + LABEL_GAP <= label.left);
-  const zero = at('0%', 0, 'axis'), full = at('100%', 100, 'axis');
-  return [...(clear(zero) ? [zero] : []), ...ends, ...(clear(full) ? [full] : [])].map(({ text, left, kind }) => ({ text, left, kind }));
-}
-
-function bandHtml(band: NonNullable<Extract<Block, { kind: 'accuracy' }>['band']>): string {
-  const [lo, hi] = band.range.map(pct) as [number, number];
-  const label = (item: BandLabel, set: string) => `<span class="lb${item.kind === 'axis' ? ' ax' : ''}${set}" style="left:${item.left.toFixed(1)}%">${item.text}</span>`;
-  const narrow = bandLabels(lo, hi, NARROW_BAND), wide = bandLabels(lo, hi, WIDE_BAND);
-  const same = JSON.stringify(narrow) === JSON.stringify(wide);
-  const labels = same ? narrow.map(item => label(item, '')) : [...narrow.map(item => label(item, ' n')), ...wide.map(item => label(item, ' w'))];
-  return `<div class="band" aria-hidden="true"><span class="track"></span><span class="range" style="left:${lo}%;width:${Math.max(hi - lo, 1)}%"></span>`
-    + `<span class="dot" style="left:${pct(band.point)}%"></span>${labels.join('')}</div>`;
-}
 
 const dl = (rows: [string, string, string?][]) => `<dl>${rows.map(([term, value, cls]) => `<div><dt>${e(term)}</dt><dd${cls ? ` class="${cls}"` : ''}>${e(value)}</dd></div>`).join('')}</dl>`;
 const turnsHtml = (turns: Turn[]) => `<div class="turns">${turns.map(turn => `<div class="turn${turn.who === 'Клиент' ? ' client' : ''}"><span class="who">${e(turn.who)}</span><span>${e(turn.text)}</span></div>`).join('')}</div>`;
@@ -104,13 +92,13 @@ function cardHtml(item: CardItem): string {
 }
 
 function failureHtml(item: FailureItem): string {
-  return `<article class="failure"><div class="ttl"><span class="mark">✗ ${item.number}</span>${e(item.title)}</div>`
+  return `<article class="failure"><div class="ttl"><span class="mark">✗ №${item.number}</span>${e(item.title)}</div>`
     + dl([['Ожидалось', item.expected], saidRow(item.said), ['Правило', item.rule], ...(item.customer ? [['Клиент', item.customer] as [string, string]] : [])])
     + (item.dialogue.length ? `<details class="fold"><summary>Разговор</summary>${turnsHtml(item.dialogue)}</details>` : '') + `</article>`;
 }
 
 function disagreementHtml(item: DisagreementItem): string {
-  return `<article class="failure"><div class="ttl"><span class="mark">≠ ${item.number}</span>${e(item.title)}</div>`
+  return `<article class="failure"><div class="ttl"><span class="mark">≠ №${item.number}</span>${e(item.title)}</div>`
     + dl([...item.expectations.map(text => ['Ожидание', text] as [string, string]), ['Подсказка', item.hint], ['Где смотреть', item.conversations]])
     + (item.dialogue.length ? `<details class="fold"><summary>Разговор в прогоне</summary>${turnsHtml(item.dialogue)}</details>` : '') + `</article>`;
 }
@@ -118,11 +106,10 @@ function disagreementHtml(item: DisagreementItem): string {
 function blockHtml(block: Block): string {
   switch (block.kind) {
     case 'alarm': return `<p class="alarm">${e(block.text)}</p>`;
-    case 'accuracy': return `<div class="acc ${block.level}"><span>${e(block.lead)}</span>${block.value ? `<span class="pct">${e(block.value)}</span>` : ''}<span>${e(block.tail)}</span></div>`
-      + (block.band ? `<div class="${block.level}">${bandHtml(block.band)}</div>` : '');
+    case 'accuracy': return `<div class="acc ${block.level}"><span>${e(block.lead)}</span>${block.value ? `<span class="pct">${e(block.value)}</span>` : ''}<span>${e(block.tail)}</span></div>`;
     case 'trust': return `<div class="trust">${block.parts.map(part => `<span${part.warn ? ' class="warn"' : ''}>${e(part.text)}</span>`).join('')}</div>`;
     case 'section': return `<section><h2>${e(block.title)}</h2>${block.blocks.map(blockHtml).join('')}</section>`;
-    case 'table': return `<table><thead><tr>${block.head.map(cell => `<th>${e(cell)}</th>`).join('')}</tr></thead><tbody>${block.rows.map(row => `<tr${row.muted ? ' class="muted"' : ''}>${row.cells.map(cell => `<td>${e(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    case 'table': return `<div class="tbl"><table><thead><tr>${block.head.map(cell => `<th>${e(cell)}</th>`).join('')}</tr></thead><tbody>${block.rows.map(row => `<tr${row.muted ? ' class="muted"' : ''}>${row.cells.map(cell => `<td>${e(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
     case 'causes': return `<div class="why">${block.items.map((cause, i) => `<details class="cause"${i ? '' : ' open'}><summary><span class="i">${i + 1}.</span><span class="t">${e(cause.title)}</span><span class="n">${e(cause.count)}</span><span class="chev">›</span></summary>`
       + `<div class="exs">${cause.examples.map(example => `<div class="ex"><span class="st">${e(example.situation)}</span>${dl([['Ожидалось', example.expected],
         saidRow(example.said), ...(example.rule ? [['Правило', example.rule] as [string, string]] : [])])}</div>`).join('')}</div></details>`).join('')}</div>`;
@@ -152,36 +139,38 @@ export function toHtml(report: Report): string {
 }
 
 /** Label and value lines as a list; a line without a label (it continues the one above) is its own item. */
-const mdDl = (rows: [string, string][]) => rows.map(([term, value]) => term ? `- ${md(term)}: ${md(value)}` : `- ${md(value)}`);
-const mdTurns = (turns: Turn[]) => turns.map(turn => `> **${md(turn.who)}:** ${md(turn.text)}`);
+const mdDl = (rows: [string, string][]) => rows.map(([term, value]) => term ? `- ${atLineStart(md(term))}: ${md(value)}` : `- ${atLineStart(md(value))}`);
+/** A conversation as one quote, a paragraph a turn: consecutive quoted lines would run together into one. */
+const mdTurns = (turns: Turn[]) => turns.flatMap((turn, i) => [...(i ? ['>'] : []), `> **${md(turn.who)}:** ${md(turn.text)}`]);
 
 function blockMarkdown(block: Block): string[] {
   switch (block.kind) {
     case 'alarm': return [`> **${md(block.text)}**`, ''];
     case 'accuracy': return [`**${md([block.lead, block.value].filter(Boolean).join(' '))}** ${md(block.tail)}`, ''];
-    case 'trust': return [block.parts.map(part => md(part.text)).join(SEPARATOR), ''];
-    case 'section': return [`## ${md(block.title)}`, '', ...block.blocks.flatMap(blockMarkdown)];
-    case 'table': return [`| ${block.head.map(md).join(' | ')} |`, `| ${block.head.map((_, i) => i ? '---:' : '---').join(' | ')} |`,
-      ...block.rows.map(row => `| ${row.cells.map(md).join(' | ')} |`), ''];
+    case 'trust': return [atLineStart(block.parts.map(part => md(part.text)).join(SEPARATOR)), ''];
+    case 'section': return [`## ${closeHeading(md(block.title))}`, '', ...block.blocks.flatMap(blockMarkdown)];
+    case 'table': return [`| ${block.head.map(mdCell).join(' | ')} |`, `| ${block.head.map((_, i) => i ? '---:' : '---').join(' | ')} |`,
+      ...block.rows.map(row => `| ${row.cells.map(mdCell).join(' | ')} |`), ''];
     case 'causes': return block.items.flatMap((cause, i) => [`${i + 1}. **${md(cause.title)}** — ${md(cause.count)}`,
-      ...cause.examples.flatMap(example => [`   - ${md(example.situation)}`, `     - Ожидалось: ${md(example.expected)}`,
+      ...cause.examples.flatMap(example => [`   - ${atLineStart(md(example.situation))}`, `     - Ожидалось: ${md(example.expected)}`,
         `     - Агент ответил: ${md(example.said.text)}`, ...(example.rule ? [`     - Правило: ${md(example.rule)}`] : [])])]).concat('');
-    case 'cards': return block.items.flatMap(item => [`### ${item.number}. ${md(item.brief.title)} — ${md(item.chip.text)}`, '', md(item.brief.source), '', '**Клиент**', '',
+    case 'cards': return block.items.flatMap(item => [`### ${item.number}. ${closeHeading(`${md(item.brief.title)} — ${md(item.chip.text)}`)}`, '', atLineStart(md(item.brief.source)), '', '**Клиент**', '',
       ...mdDl(item.client), '', ...dutySections(item.brief.must).flatMap(({ heading, items }) => [`**${heading}**`, '',
-        ...items.map(({ number, duty: must }) => `${number}. ${md(must.text)}${[...dutyNotes(must), ...(must.rule ? [`правило: «${must.rule}»`] : [])].map(note => ` — ${md(note)}`).join('')}`), '']),
+        ...items.map(({ number, duty: must }) => `${number}. ${atLineStart(md(must.text))}${[...dutyNotes(must), ...(must.rule ? [`правило: «${must.rule}»`] : [])].map(note => ` — ${md(note)}`).join('')}`), '']),
       ...(item.dialogue.length ? ['**Разговор в прогоне**', '', ...mdTurns(item.dialogue), ''] : [])]);
-    case 'failures': return block.items.flatMap(item => [`### ✗ ${item.number}. ${md(item.title)}`, '',
+    case 'failures': return block.items.flatMap(item => [`### ✗ №${item.number} ${closeHeading(md(item.title))}`, '',
       ...mdDl([['Ожидалось', item.expected], ['Агент ответил', item.said.text], ['Правило', item.rule], ...(item.customer ? [['Клиент', item.customer] as [string, string]] : [])]), '',
       ...(item.dialogue.length ? [...mdTurns(item.dialogue), ''] : [])]);
-    case 'disagreements': return block.items.flatMap(item => [`### ≠ ${item.number}. ${md(item.title)}`, '',
+    case 'disagreements': return block.items.flatMap(item => [`### ≠ №${item.number} ${closeHeading(md(item.title))}`, '',
       ...mdDl([...item.expectations.map(text => ['Ожидание', text] as [string, string]), ['Подсказка', item.hint], ['Где смотреть', item.conversations]]), '',
       ...(item.dialogue.length ? ['**Разговор в прогоне**', '', ...mdTurns(item.dialogue), ''] : [])]);
-    case 'list': return [...block.items.map(item => `- ${md(item)}`), ''];
-    case 'paragraph': return [md(block.text), ''];
+    case 'list': return [...block.items.map(item => `- ${atLineStart(md(item))}`), ''];
+    case 'paragraph': return [atLineStart(md(block.text)), ''];
   }
 }
 
-/** The plain twin of the HTML report: the same blocks, in the same order, as Markdown. */
+/** The plain twin of the HTML report: the same blocks, in the same order, as Markdown; each line of the footer its own paragraph. */
 export function toMarkdown(report: Report): string {
-  return [`# ${md(report.title)}`, '', report.meta.map(md).join(SEPARATOR), '', ...[...report.head, ...report.blocks].flatMap(blockMarkdown), '---', '', ...report.footer.map(md)].join('\n');
+  return [`# ${closeHeading(md(report.title))}`, '', atLineStart(report.meta.map(md).join(SEPARATOR)), '', ...[...report.head, ...report.blocks].flatMap(blockMarkdown), '---', '',
+    ...report.footer.flatMap((line, i) => [...(i ? [''] : []), atLineStart(md(line))])].join('\n');
 }

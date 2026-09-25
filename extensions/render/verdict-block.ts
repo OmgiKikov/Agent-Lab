@@ -106,15 +106,18 @@ export function storedLines(result: Pick<AgentToolResult<unknown>, 'content'>): 
   return lines;
 }
 
+/** The stored lines a reopened result shows folded: the alarm or the number and the trust line under it, not the fine print. */
+const STORED_HEAD = 3;
+
 /**
- * A result drawn from its stored lines: the head of the screen — the number, its trust — under the branch sign, the
- * rest on ctrl+o. The lines keep the one-column margin they were laid out with, as the block's own rows do.
+ * A result drawn from its stored lines: the start of the screen's head — the number and its trust — under the branch
+ * sign, the rest on ctrl+o. The lines keep the one-column margin they were laid out with, as the block's own rows do.
  */
 export class StoredVerdict implements Component {
   private readonly head: string[];
   constructor(private readonly lines: string[], private readonly expanded: boolean, private readonly theme: PaintTheme, private readonly hint: (expanded: boolean) => string) {
     const end = lines.findIndex(line => !line.trim());
-    this.head = end < 0 ? lines : lines.filter((_, index) => index < end);
+    this.head = (end < 0 ? lines : lines.filter((_, index) => index < end)).slice(0, STORED_HEAD);
   }
   invalidate(): void {}
   render(width: number): string[] {
@@ -131,8 +134,13 @@ type LegacyRenderer = (result: AgentToolResult<unknown>, options: ToolRenderResu
 
 /** What ctrl+o opens under a result, and what to say next when something failed. */
 export const verdictHint = (view: ResultView) => (expanded: boolean): string => expanded ? expandHint(true, '')
-  : view.failures.length ? `${expandHint(false, 'причины с примерами')} · «покажи ошибку 1» · «отчёт для заказчика»`
-    : `${expandHint(false, 'подробнее')} · «отчёт для заказчика»`;
+  : view.failures.length ? `${expandHint(false, 'причины с примерами')}${explain(view)}${report(view)}`
+    : `${expandHint(false, 'подробнее')}${report(view)}`;
+/** The first failure to open by its situation's number — unless the step «Дальше» already names it, one row above. */
+const explain = (view: ResultView): string => view.next[0]?.kind === 'review_judge' ? ''
+  : ` · «разбери ситуацию ${view.cards.find(card => card.scenarioId === view.failures[0]!.scenarioId)?.number ?? 1}»`;
+/** The customer report is suggested only where «Дальше» offers it: never for a number withheld or not to be trusted. */
+const report = (view: ResultView): string => view.next.some(step => step.kind === 'report') ? ' · «отчёт для заказчика»' : '';
 
 /**
  * The tool host: verdict details with a remembered view give the block; without one, the result's stored lines give

@@ -12,7 +12,7 @@ import type { ExperimentLab } from '../src/experiment.js';
 import { resultHash } from '../src/lab/record.js';
 import { countText } from '../src/plural.js';
 import { suiteHoldsLogs, suiteSavedText } from '../src/suite.js';
-import { accuracyRow, loggedTurns, logDisagreementRows, logQuestionText, saidText, trialTurns } from '../src/result-text.js';
+import { accuracyRow, loggedTurns, logDisagreementRows, logQuestionText, saidText, situationOutcomeText, trialTurns } from '../src/result-text.js';
 import { buildResultView } from '../src/result-view.js';
 import { clip, oneLine, safeText } from '../src/text.js';
 import { comparisonFeed, dialogueFeed, failureFeed, feedRows, progressText, row, runStamp, statusFeed } from './conversation.ts';
@@ -182,7 +182,7 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
         const compared = differs && record.trials.find(item => item.id === differs.trialIds[0]);
         const trial = failure ? attemptOf(record, scenario.id, failure.trialId) : compared ?? attemptOf(record, scenario.id);
         if (!trial) throw new NeedsOwner('unknown_reference', `По ситуации №${params.situation} ещё нет записанного разговора.`, [], `По ситуации ${params.situation} ещё нет записанного разговора.`);
-        const feed = failure ? failureFeed(record, view, index)! : dialogueFeed(record, trial);
+        const feed = failure ? failureFeed(record, view, index)! : dialogueFeed(record, view, trial);
         const other = compared && compared.id !== trial.id ? compared : undefined;
         if (differs) {
           feed.rows.push(row(`С продом не совпало${differs.attempt === undefined ? '' : ` (попытка ${differs.attempt})`}: ${oneLine(disagreementText(differs.expectations[0]!))}`, 'warning'));
@@ -192,7 +192,10 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
             ...feedRows(logDisagreementRows(differs, { ...(other ? { attempt: trialTurns(other) } : {}), log: loggedTurns(logged) }), 2)];
         }
         const talk = (attempt: typeof trial) => trialTurns(attempt).slice(0, 40).map(turn => ({ who: turn.who === 'Клиент' ? 'клиент' : 'агент', text: clip(turn.text, 600) }));
-        return host.feedResult(callId, { run: record.id, situation: params.situation, title: oneLine(scenario.title), outcome: trial.outcome,
+        // The situation's verdict as the result counts it, never the shown attempt's own outcome.
+        const card = view.cards.find(item => item.scenarioId === scenario.id);
+        return host.feedResult(callId, { run: record.id, situation: params.situation, title: oneLine(scenario.title), outcome: card?.outcome ?? 'unknown',
+          ...(card && card.outcome === 'unknown' ? { notMeasured: situationOutcomeText(card) } : {}),
           ...(failure ? { expected: failure.expected, said: saidText(failure), rule: (failure.violated ?? failure.rules[0])?.quote ?? null } : {}),
           conversation: talk(trial), ...(differs ? { production: { expectations: differs.expectations.map(item => disagreementText(item)), hint: differs.hint,
             ...(differs.attempt === undefined ? {} : { attempt: differs.attempt }), ...(other ? { comparedConversation: talk(other) } : {}),

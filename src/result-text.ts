@@ -1,4 +1,3 @@
-import { stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
 import { caveatLines } from './caveats.js';
 import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLine, logVerdictsText, type CalibrationDisagreement, type LogTarget } from './card/calibration-view.js';
 import { countingRuleText } from './card/expectations.js';
@@ -10,43 +9,34 @@ import { realismDifference } from './realism.js';
 import type { JudgeCheckSummary } from './judge-check.js';
 import { sharePercent } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
-import { NOT_MEASURED_ABOUT_OWNER, type NextStep, type ResultView } from './result-view.js';
+import { NOT_MEASURED_ABOUT_OWNER, NOT_MEASURED_TEXT, type BrokenPart, type ExamWithheld, type NextStep, type ResultCard, type ResultView, type TrustIssue } from './result-view.js';
 import type { NotMeasuredCode } from './run.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import { oneLine } from './text.js';
+import { blank, type ResultRow } from './result-layout.js';
+
+export { fitRows, MAX_WIDTH, plainText, wrapText, type ResultRole, type ResultRow } from './result-layout.js';
 
 /*
  * The words of a result, the only copy. The chat block, the board, the CLI summary and the report
  * all say the same lines in the same order (docs/design/ui-spec.md §4.7, §4.10, §8.5):
  *
  *   ✗ Числу пока не верить: …                                    ← a failed control, or too much unmeasured
- *   Точность агента: 72% — справился в 18 из 25 ситуаций          ← the answer, coloured by level
- *   Вероятно, от 52% до 86% (95%) · не измерено 2 из 25 — … · …    ← one trust line
- *   С учётом частоты тем — около 70% (измерены темы 90% диалогов)  ← only when topics are known
+ *   Точность агента: 72% — справился в 18 из 25 ситуаций          ← the answer, coloured by level; no interval
+ *   По выбранным ситуациям; не прогноз… · мало данных · не измерено 2 из 25 — …   ← one trust line
  *   По темам / Почему ошибается / Дальше                          ← rows with a right-hand counter
  *
+ * The number carries no interval, here or anywhere: its situations are a curated set drawn from the logs, not customers
+ * sampled independently from production (interval.ts). «мало данных» says what a small count does to it.
+ *
  * Rows are semantic (a role, an indent, a text, an optional right-hand counter or « · » parts);
- * `fitRows` lays them out as plain lines of a given width, so every surface wraps identically and
+ * `fitRows` (result-layout.ts) lays them out as plain lines of a given width, so every surface wraps identically and
  * Pi only paints. The owner is spoken to («вы»); a page the owner sends on speaks about the owner
  * (`Reader`). Here too: a conversation's turns, the question about the judge, the comparison of two
  * runs and what a result does not prove (its caveats). Pure: no I/O, no escaping — each surface
  * escapes at its own boundary.
  */
 
-export type ResultRole =
-  | 'accuracy:good' | 'accuracy:warn' | 'accuracy:bad' | 'accuracy:none' | 'alarm'
-  /** `trust:small` is the trust line with a warning in it — a small sample, unmeasured situations, a judge that built the situations. */
-  | 'trust' | 'trust:small' | 'reality' | 'calibration' | 'heading' | 'item' | 'item:muted' | 'failed' | 'quote' | 'muted'
-  | 'next' | 'next:first' | 'good' | 'blank';
-export interface ResultRow {
-  role: ResultRole; indent: number; text: string;
-  /** A right-aligned counter that is never cut; `short` replaces it on a narrow screen as « — short» after the text. */
-  right?: string; short?: string;
-  /** Parts joined by « · »; a long row breaks only between parts, each broken line ending with «·». */
-  parts?: string[];
-  /** Extra indent of wrapped lines under a label column («Агент ответил   «…»»). */
-  hang?: number;
-}
 export type Surface = 'chat' | 'board' | 'cli';
 /**
  * Who reads the words: the owner of the agent in Pi and on the command line, spoken to («вы проверили»), or whoever the
@@ -62,8 +52,6 @@ export const MIXED_FROM = 50;
  * a measurement is thin: the number is never «good» and the headline names how many were not measured (OD-3).
  */
 export const NOT_MEASURED_WARN_ABOVE = 10;
-/** Wider terminals keep the 100-column layout with margins (docs/design/ui-spec.md §6). */
-export const MAX_WIDTH = 100;
 
 const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
 /** The participle agrees with the count: «проверена 1 ситуация», «проверены 3 ситуации», «проверено 5 ситуаций». */
@@ -77,12 +65,15 @@ export const noErrorsText = (decided: number, unmeasured = 0): string => unmeasu
   : `Ошибок нет. Это не гарантия для живых клиентов: ${pluralForm(decided, CHECKED)} ${countText(decided, SITUATIONS)}.`;
 /** Genitive after «из»: «1 из 1 ситуации», «9 из 13 ситуаций». */
 const SITUATIONS_OF: [string, string, string] = ['ситуации', 'ситуаций', 'ситуаций'];
+/** Genitive after «из»: «из 1 разговора», «из 5 разговоров». */
+const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
+/** A conversation «до» and the same one «после», after «из»: «из 1 пары разговоров», «из 5 пар разговоров». */
+const PAIRS_OF: [string, string, string] = ['пары разговоров', 'пар разговоров', 'пар разговоров'];
 const ERRORS: [string, string, string] = ['ошибка', 'ошибки', 'ошибок'];
 const PASSES: [string, string, string] = ['успех', 'успеха', 'успехов'];
 const TOPICS: [string, string, string] = ['тема', 'темы', 'тем'];
 const CAUSES: [string, string, string] = ['причина', 'причины', 'причин'];
 const percent = (value: number) => `${Math.round(value * 100)}%`;
-const blank: ResultRow = { role: 'blank', indent: 0, text: '' };
 
 /** The rounded percent the headline prints; the colour thresholds apply to it, never to the raw share. */
 function percentOf(view: ResultView): number | null {
@@ -90,6 +81,11 @@ function percentOf(view: ResultView): number | null {
 }
 
 export type Level = 'good' | 'warn' | 'bad' | 'none';
+/** Why the percent waits, by how the connection's exam ended (ResultView.connection). */
+const EXAM_WITHHELD: Readonly<Record<ExamWithheld, string>> = {
+  absent: 'подключение агента не проверено экзаменом', failed: 'подключение агента не прошло экзамен',
+  simple: 'экзамен подключения слишком простой — нет проверки памяти разговора',
+};
 /**
  * The answer of every result surface in three pieces, so the report can set the number large:
  * «Точность агента:» · «72%» · «— справился в 18 из 25 ситуаций». Without a decided situation the
@@ -100,8 +96,7 @@ export function accuracyParts(view: ResultView): { lead: string; value: string |
   const value = percentOf(view);
   if (value === null) {
     const { passed, decided } = view.headline;
-    const unexamined = view.connection === 'absent' ? 'подключение агента не проверено экзаменом' : view.connection === 'failed' ? 'подключение агента не прошло экзамен'
-      : view.connection === 'simple' ? 'экзамен подключения слишком простой — нет проверки памяти разговора' : null;
+    const unexamined = view.connection !== undefined && view.connection !== 'passed' ? EXAM_WITHHELD[view.connection] : null;
     const tail = view.integrity === 'altered' ? 'не считается: запись изменена после прогона'
       : view.phase === 'review' || (view.phase === 'preparing' || view.phase === 'checking') && !view.pending ? 'прогон ещё не запускался'
       : view.pending ? `считается — ждут проверки ${countText(view.pending, SITUATIONS)}`
@@ -124,6 +119,16 @@ export function accuracyRow(view: ResultView): ResultRow {
   return { role: `accuracy:${level}`, indent: 0, text: [lead, value, tail].filter(Boolean).join(' ') };
 }
 
+/**
+ * A situation's verdict as the result counts it (deriveRun → ResultView.cards), in words: «справился», «не справился»,
+ * «не измерено — агент не ответил», «ещё проверяется». Every surface that names one situation's outcome — the report's
+ * chip, the chat's conversation of a situation — says these words, never the outcome of one of its attempts.
+ */
+export function situationOutcomeText(card: Pick<ResultCard, 'outcome' | 'reason'>, reader: Reader = 'owner'): string {
+  if (card.outcome === 'pass' || card.outcome === 'fail') return VERDICT_WORD[card.outcome];
+  return card.reason && card.reason !== 'in_progress' ? `не измерено — ${reasonLabel({ code: card.reason, label: NOT_MEASURED_TEXT[card.reason] }, reader)}` : 'ещё проверяется';
+}
+
 /** Why a situation was not measured, for its reader: the reasons that name the owner are said about the owner on a page for others. */
 export function reasonLabel(reason: { code: NotMeasuredCode; label: string }, reader: Reader = 'owner'): string {
   return reader === 'others' ? NOT_MEASURED_ABOUT_OWNER[reason.code] ?? reason.label : reason.label;
@@ -141,26 +146,44 @@ function unmeasuredText(view: Pick<ResultView, 'notMeasured'>, reader: Reader, s
   return `не измерено ${total} из ${of}${situations ? ` ${pluralForm(of, SITUATIONS_OF)}` : ''} — ${reasons.length === 1 ? label : `чаще всего ${label} (${main.count})`}`;
 }
 
-/** The unmeasured share stands above the number: it raised the alarm, and no failed control took the alarm's one row. */
-const unmeasuredAlarm = (view: Pick<ResultView, 'control' | 'notMeasured'>): boolean => !view.control.alarm && view.notMeasured.alarm;
+/**
+ * What the alarm above the number names: the most serious issue that leaves the number shown (ResultView.trustIssues);
+ * a withheld percent says its own reason in the number's row.
+ */
+const alarmIssue = (view: Pick<ResultView, 'trustIssues'>): Exclude<TrustIssue, 'connection'> | undefined =>
+  view.trustIssues.find((issue): issue is Exclude<TrustIssue, 'connection'> => issue !== 'connection');
+
+/** The unmeasured share stands above the number: it raised the alarm, and nothing more serious took the alarm's one row. */
+const unmeasuredAlarm = (view: Pick<ResultView, 'trustIssues'>): boolean => alarmIssue(view) === 'unmeasured';
+
+/** Where the judge failed its check, as the alarm says it; each reader is told what to do or what is to be done. */
+const JUDGE_ALARM: Readonly<Record<NonNullable<JudgeCheckSummary['distrust']>, (owner: boolean) => string>> = {
+  misses: owner => `судья пропускает подброшенные ошибки — ${owner ? 'проверьте его решения' : 'его решения нужно проверить'}`,
+  false_alarms: owner => `судья не засчитывает верные ответы — ${owner ? 'проверьте его решения' : 'его решения нужно проверить'}`,
+  incomplete: owner => `проверка судьи неполная — ${owner ? 'повторите её' : 'её нужно повторить'}`,
+};
 
 /**
- * Above the number when the number is not to be trusted yet: a positive control failed or was not measured, or too many
- * counted situations were not measured (ResultView.notMeasured.alarm). A failed control comes first: it says the
- * connection or the judge is broken; the unmeasured share then stays in the trust line.
+ * Above the number when the number is not to be trusted yet (ResultView.trustIssues): a positive control failed or was
+ * not measured, the judge failed its check, or too many counted situations were not measured — the most serious one.
+ * A failed control comes first: it says the connection or the judge is broken; the unmeasured share then stays in the
+ * trust line.
  */
 export function alarmRow(view: ResultView, reader: Reader = 'owner'): ResultRow | null {
-  // A record changed after its run says so before anything else: nothing it holds is the run's own evidence.
-  if (view.integrity === 'altered') return { role: 'alarm', indent: 0, text: '✗ Числу не верить: запись изменена после прогона' };
+  const owner = reader === 'owner';
+  const issue = alarmIssue(view);
+  // A changed record invalidates the evidence before any other trust issue is considered.
+  if (issue === 'record') return { role: 'alarm', indent: 0, text: '✗ Числу не верить: запись изменена после прогона' };
   const { alarm, cards } = view.control;
-  if (alarm) {
+  if (issue === 'control' && alarm) {
     const many = cards.length > 1;
     const what = alarm === 'failed' ? (many ? 'контрольные ситуации не прошли' : 'контрольная ситуация не прошла')
       : alarm === 'unmeasured' ? (many ? 'контрольные ситуации не измерены' : 'контрольная ситуация не измерена')
         : 'контрольные ситуации не прошли или не измерены';
-    return { role: 'alarm', indent: 0, text: `✗ Числу пока не верить: ${what} — ${reader === 'owner' ? 'проверьте' : 'нужно проверить'} связь с агентом` };
+    return { role: 'alarm', indent: 0, text: `✗ Числу пока не верить: ${what} — ${owner ? 'проверьте' : 'нужно проверить'} связь с агентом` };
   }
-  const unmeasured = unmeasuredAlarm(view) ? unmeasuredText(view, reader, true) : null;
+  if (issue === 'judge' && view.judgeCheck?.distrust) return { role: 'alarm', indent: 0, text: `✗ Числу пока не верить: ${JUDGE_ALARM[view.judgeCheck.distrust](owner)}` };
+  const unmeasured = issue === 'unmeasured' ? unmeasuredText(view, reader, true) : null;
   return unmeasured ? { role: 'alarm', indent: 0, text: `✗ Числу пока не верить: ${unmeasured}` } : null;
 }
 
@@ -168,7 +191,7 @@ export function alarmRow(view: ResultView, reader: Reader = 'owner'): ResultRow 
 export const unstableCount = (view: ResultView) => view.cards.filter(card => !card.control && (card.flaky || card.unstable)).length;
 
 /**
- * The one trust line under the number, in segments: the 95% interval and a small-sample warning, what was not measured
+ * The one trust line under the number, in segments: what the number is read over and a small-sample warning, what was not measured
  * and the main reason (a warning; above the number instead when it raised the alarm), what is still being checked, the
  * owner's agreement with the judge, the unstable situations. `warn` marks the segments a surface colours as a warning.
  * A segment with nothing to say is left out; the first one starts the sentence.
@@ -241,17 +264,26 @@ export function clarityParts(view: Pick<ResultView, 'clarity'>): string[] {
 }
 
 /**
- * The second trust line: how close the number is to real traffic — the topics' shares, and clear requests apart from
- * vague ones. The weighted estimate says which share of the conversations its measured topics hold (coverage.ts gives
- * none below half), and how many conversations have a known topic at all.
+ * The second trust line: clear requests apart from vague ones. The result has one number: how the topics' shares of the
+ * traffic weigh it is said under «По темам» (topicsNote), never beside the headline.
  */
 export function realityParts(view: ResultView): string[] {
+  return clarityParts(view);
+}
+
+/**
+ * Under «По темам», how far the topics reach into the logged traffic: with the weighted accuracy (coverage.ts gives one
+ * only from WEIGHTED_MIN_DECIDED decided situations in every topic it weighs), that accuracy as a rough orientation,
+ * never a second result; without it, the share of the conversations whose topics have a decided situation, and no
+ * percent of accuracy. Null without the topics' shares.
+ */
+export function topicsNote(view: Pick<ResultView, 'topics'>): string | null {
   const topics = view.topics;
-  const clarity = clarityParts(view);
-  if (!topics || topics.weighted === null) return clarity;
-  const notes = [...(topics.measuredShare < 1 ? [`измерены темы ${sharePercent(topics.measuredShare)} диалогов`] : []),
-    ...(topics.labeled < topics.logged ? [`темы известны у ${topics.labeled} из ${topics.logged} разговоров`] : [])];
-  return [`С учётом частоты тем — около ${percent(topics.weighted)}${notes.length ? ` (${notes.join('; ')})` : ''}`, ...clarity];
+  if (!topics?.rows.some(row => row.share !== null)) return null;
+  const reach = `${sharePercent(topics.measuredShare)} разговоров${topics.labeled < topics.logged
+    ? ` с известной темой (она известна у ${topics.labeled} из ${countText(topics.logged, CONVERSATIONS_OF)})` : ' из логов'}`;
+  return topics.weighted === null ? `Темы с оценёнными ситуациями — ${reach}.`
+    : `Грубый ориентир для трафика из логов — около ${percent(topics.weighted)}: точность по темам с учётом их доли в разговорах (эти темы — ${reach}). Это ориентир, а не результат проверки: в каждой теме лишь несколько ситуаций.`;
 }
 
 /** Where a judge check leaves the judge untrusted: the warning after its counts. */
@@ -270,7 +302,7 @@ export function judgeCheckText(view: Pick<ResultView, 'judgeCheck'>): { text: st
   const check = view.judgeCheck;
   if (!check) return null;
   const parts = [`Судья поймал ${check.detected} из ${check.planted} ${pluralForm(check.planted, PLANTED)}`,
-    ...(check.controls ? [`изменил pass на fail у ${check.falseAlarms} из ${check.controls} неизменённых копий`] : []),
+    ...(check.controls ? [`ложных тревог ${check.falseAlarms} из ${countText(check.controls, ['неизменённой копии', 'неизменённых копий', 'неизменённых копий'])}`] : []),
     ...(check.unjudged ? [`без вердикта ${check.unjudged}`] : [])];
   const text = `${parts.join(', ')}${check.distrust ? ` — ${DISTRUST_TEXT[check.distrust]}` : ''}. Это диагностика, а не проверка на независимых эталонах.`;
   return { text, warn: check.distrust !== null };
@@ -280,20 +312,32 @@ export function judgeCheckText(view: Pick<ResultView, 'judgeCheck'>): { text: st
 export function evaluationEvidenceLines(view: ResultView): string[] {
   const { agreement, simulator, headline, notMeasured } = view;
   const judge = blindText(view) ?? (agreement.checked
-    ? `Судья: человек согласился в ${agreement.agreed} из ${agreement.checked} проверенных разговоров; это сверка после показа оценки, не слепая калибровка.`
+    ? `Судья: человек согласился в ${agreement.agreed} из ${countText(agreement.checked, ['проверенного разговора', 'проверенных разговоров', 'проверенных разговоров'])}; это сверка после показа оценки, не слепая калибровка.`
     : 'Судья: ручной сверки оценок этого прогона пока нет.');
-  const customer = simulator?.conversations
-    ? `Клиент: соблюдение карточки подтверждено моделью в ${simulator.passed} из ${simulator.conversations} разговоров; нарушений ${simulator.failed}, без вывода ${simulator.unknown}, без проверки ${simulator.notChecked}.${simulator.heuristicFlags ? ` Отдельно эвристики отметили ${simulator.heuristicFlags} разговоров для разбора.` : ''}`
-    : 'Клиент: реактивное поведение в этом прогоне не измерено.';
+  const customer = simulator?.conversations ? customerText(simulator) : 'Клиент: реактивное поведение в этом прогоне не измерено.';
   const remaining = Math.max(0, notMeasured.of - headline.decided);
-  const metric = `Метрика: оценено ${headline.decided} из ${notMeasured.of} ситуаций. Процент относится только к оценённым ситуациям.`;
+  const metric = `Метрика: оценено ${headline.decided} из ${countText(notMeasured.of, SITUATIONS_OF)}. Процент относится только к оценённым ситуациям.`;
   const bounds = view.integrity === 'altered' ? 'Процент и его границы не считаются: запись изменена после прогона.'
     : view.connection && view.connection !== 'passed' ? 'Процент и его границы появятся, когда подключение агента пройдёт экзамен.'
     : notMeasured.of > 0 && remaining > 0
-    ? `По полному набору возможны ${percent(headline.passed / notMeasured.of)}–${percent((headline.passed + remaining) / notMeasured.of)} успеха, в зависимости от ${remaining} оставшихся ситуаций. Это границы, не прогноз.`
+    ? `По полному набору возможны ${percent(headline.passed / notMeasured.of)}–${percent((headline.passed + remaining) / notMeasured.of)} успеха, в зависимости от ${countText(remaining, ['оставшейся ситуации', 'оставшихся ситуаций', 'оставшихся ситуаций'])}. Это границы, не прогноз.`
     : 'Повторы одной ситуации не являются независимыми клиентами; этот набор не доказывает качество на всём трафике.';
   const realism = realismText(view);
   return [judge, customer, ...(realism ? [realism.text] : []), metric, bounds];
+}
+
+/**
+ * «Клиент: …» — whether the customer Lab played kept to its situation, as the judge read it, over the reactive
+ * conversations: the confirmed ones of all, then only the counts that are not zero; the conversations its heuristic
+ * checks marked for review, apart. A model's verdict is recorded evidence, not proof the customer behaved like a person.
+ */
+function customerText(simulator: NonNullable<ResultView['simulator']>): string {
+  // A run whose situations carry no check of the customer said nothing of it: that, not «0 из N».
+  if (simulator.notChecked === simulator.conversations) return `Клиент: держался ли он своей ситуации, судья не проверял (${countText(simulator.conversations, ['разговор', 'разговора', 'разговоров'])}).`;
+  const tail = [...(simulator.failed ? [`отошёл от ситуации — ${simulator.failed}`] : []), ...(simulator.unknown ? [`судья не уверен — ${simulator.unknown}`] : []),
+    ...(simulator.notChecked ? [`не проверялось — ${simulator.notChecked}`] : [])];
+  const flags = simulator.heuristicFlags ? ` Ещё в ${countText(simulator.heuristicFlags, ['разговоре', 'разговорах', 'разговорах'])} есть подозрения к клиенту — пометки на разбор.` : '';
+  return `Клиент: судья подтвердил, что клиент держался своей ситуации, в ${simulator.passed} из ${countText(simulator.conversations, CONVERSATIONS_OF)}${tail.length ? `; ${tail.join(', ')}` : ''}.${flags}`;
 }
 
 /**
@@ -345,16 +389,21 @@ export function operabilityText(view: Pick<ResultView, 'operability'>): string |
   const found = view.operability;
   if (!found) return null;
   const parts = [...(found.noReply ? [`агент не дал ответа — ${found.noReply}`] : []), ...(found.serviceReply ? [`вместо агента ответил стенд — ${found.serviceReply}`] : []),
-    ...(found.broken ? [`сбой агента — ${found.broken}`] : [])];
-  const total = found.noReply + found.serviceReply + found.broken;
-  return `Работоспособность: в ${total} из ${countText(found.conversations, ['разговора', 'разговоров', 'разговоров'])} клиент не получил ответа агента (${parts.join(', ')}). Эти разговоры не считаются ошибками агента по существу и не входят в процент.`;
+    ...(found.broken ? [`сбой агента — ${found.broken}`] : []), ...(found.retried ? [`сбой стенда, разговор начат заново — ${found.retried}`] : [])];
+  const total = found.noReply + found.serviceReply + found.broken + found.retried;
+  return `Работоспособность: в ${total} из ${countText(found.conversations, CONVERSATIONS_OF)} клиент не получил ответа агента (${parts.join(', ')}). Эти разговоры не считаются ошибками агента по существу и не входят в процент.`;
 }
 
-/** The first block of every surface: alarm, number, trust line, reality line, the judge check, and how the synthetic customers compare with production. */
-export function headRows(view: ResultView): ResultRow[] {
+/**
+ * The first block of every surface: alarm, number, trust line, whether the agent answered at all, reality line, the judge
+ * check, how the synthetic customers compare with production, and the evidence lines. `brief`: without the reality and
+ * the evidence lines — the board's first screen, which keeps them under its details.
+ */
+export function headRows(view: ResultView, options: { brief?: boolean } = {}): ResultRow[] {
   const segments = trustSegments(view);
   const trust = segments.map(part => part.text);
-  const reality = realityParts(view);
+  // The brief head — the board's first screen — leaves the fine print to the details: the reality line and the evidence lines.
+  const reality = options.brief ? [] : realityParts(view);
   const checked = judgeCheckText(view);
   const operability = operabilityText(view);
   return [
@@ -365,11 +414,12 @@ export function headRows(view: ResultView): ResultRow[] {
     // Whether the agent answered at all stands apart from how well: a conversation without its reply is its working state.
     ...(operability ? [{ role: 'trust:small', indent: 0, text: operability } as ResultRow] : []),
     ...(reality.length ? [{ role: 'reality', indent: 0, text: reality.join(' · '), parts: reality } as ResultRow] : []),
-    // How far the judge itself can be trusted, measured without a person: a warning is an alarm, like a failed control.
-    ...(checked ? [{ role: checked.warn ? 'alarm' : 'calibration', indent: 0, text: checked.text } as ResultRow] : []),
+    // How far the judge itself can be trusted, measured without a person: a failed check raised the alarm above the
+    // number, and here its counts say why, as a warning.
+    ...(checked ? [{ role: checked.warn ? 'trust:small' : 'calibration', indent: 0, text: checked.text } as ResultRow] : []),
     // The answer to «can the number be trusted against production»: it stays under the number even where the reality line folds away.
     ...(view.calibration ? [{ role: 'calibration', indent: 0, text: view.calibration.text } as ResultRow] : []),
-    ...evaluationEvidenceLines(view).map(text => ({ role: 'trust' as const, indent: 0, text })),
+    ...(options.brief ? [] : evaluationEvidenceLines(view).map(text => ({ role: 'trust' as const, indent: 0, text }))),
   ];
 }
 
@@ -449,26 +499,36 @@ export const judgeQuestionText = (verdict: 'pass' | 'fail'): string => `Судь
 /** The same about the judge's reading of a logged conversation, expectation by expectation. */
 export const logQuestionText = (targets: readonly Pick<LogTarget, 'letter' | 'judge'>[]): string => `Судья по логу решил: ${logVerdictsText(targets)}. Вы согласны?`;
 
-/** «1 из 2», with the situations not measured beside it: a scenario is never read as handled on what was not measured. */
-const handledCell = (item: { passed: number; decided: number; unmeasured: number }): string =>
-  `${item.decided ? `${item.passed} из ${item.decided}` : '—'}${item.unmeasured ? ` · не измерено ${item.unmeasured}` : ''}`;
+/**
+ * «1 из 2», with the situations not measured and those still being checked beside it: a scenario is never read as
+ * handled on what was not measured, nor what is still on its way read as not measured.
+ */
+const handledCell = (item: { passed: number; decided: number; unmeasured: number; pending: number }): string =>
+  `${item.decided ? `${item.passed} из ${item.decided}` : '—'}${item.unmeasured ? ` · не измерено ${item.unmeasured}` : ''}${item.pending ? ` · ещё проверяется ${item.pending}` : ''}`;
 
 /**
  * «По сценариям» — the owner's business question answered in the plan's words (card/plan.ts): each scenario of the run,
  * the customers' question and how many of its situations the agent handled; under it each variation, when there are
  * several, and the expectations it broke most often, of the situations they were judged in. Shown once a situation of
- * a scenario is decided or left unmeasured.
+ * a scenario is decided or left unmeasured; a variation whose situations are still being checked says so.
  */
 export function scenarioRows(view: Pick<ResultView, 'scenarios'>): ResultRow[] {
   const scenarios = view.scenarios?.filter(scenario => scenario.decided || scenario.unmeasured) ?? [];
   if (!scenarios.length) return [];
+  // What the run did not check is said beside what it did: the expectations of a scenario no situation carries, and the
+  // scenarios of the plan with no situation in the run at all.
+  const unchecked = (items: readonly { text: string; mustNot: boolean }[]) => items.map(item => `${item.mustNot ? 'нельзя — ' : ''}${oneLine(item.text)}`).join('; ');
+  const absent = view.scenarios!.filter(scenario => !scenario.situations);
   return [{ role: 'heading', indent: 0, text: 'По сценариям', right: 'справился' }, ...scenarios.flatMap((scenario): ResultRow[] => [
     { role: 'item', indent: 2, text: `«${oneLine(scenario.question)}»`, right: handledCell(scenario) },
-    ...(scenario.variations.length > 1 ? scenario.variations.filter(variation => variation.decided || variation.unmeasured)
+    ...(scenario.variations.length > 1 ? scenario.variations.filter(variation => variation.decided || variation.unmeasured || variation.pending)
       .map((variation): ResultRow => ({ role: 'item:muted', indent: 4, text: `${oneLine(variation.title)}${variation.origin !== 'logs' ? ' — не из логов' : ''}`, right: handledCell(variation) })) : []),
     ...scenario.broken.slice(0, 2).map((item): ResultRow => ({ role: 'muted', indent: 4,
       text: `Нарушено: ${item.mustNot ? 'нельзя — ' : ''}${oneLine(item.text)} — в ${item.count} из ${countText(item.of, SITUATIONS_OF)}` })),
-  ])];
+    ...(scenario.unchecked.length ? [{ role: 'muted' as const, indent: 4, text: `Не проверяет ни одна ситуация: ${unchecked(scenario.unchecked)}` }] : []),
+  ]), ...(absent.length ? [{ role: 'item:muted' as const, indent: 2,
+    text: `${pluralForm(absent.length, ['Не проверялся сценарий', 'Не проверялись сценарии', 'Не проверялись сценарии'])} — в прогоне нет ${pluralForm(absent.length, ['его', 'их', 'их'])} ситуаций: ${
+      absent.map(scenario => `«${oneLine(scenario.question)}»`).join('; ')}` }] : [])];
 }
 
 const MAX_TOPICS = 5;
@@ -493,7 +553,8 @@ export function topicRows(view: ResultView): ResultRow[] {
       right: cells(sum('passed'), sum('decided'), shares ? rest.reduce((n, row) => n + (row.share ?? 0), 0) : null) });
   }
   if (topics.uncovered) rows.push({ role: 'item:muted', indent: 2, text: 'Не покрыто ситуациями', right: cells(0, 0, topics.uncovered.share) });
-  return rows;
+  const note = topicsNote(view);
+  return [...rows, ...(note ? [{ role: 'muted' as const, indent: 2, text: note }] : [])];
 }
 
 /**
@@ -522,32 +583,74 @@ function exampleRows(example: FailureExplanation, indent: number): ResultRow[] {
 /** «и ещё 2 причины»: the recorded causes past the three «Почему ошибается» names. */
 export const moreCausesText = (count: number): string => `и ещё ${countText(count, CAUSES)}`;
 
+/** A failed part of a verdict as a cause says it: «Нарушено: объяснить, как оформить возврат», «Не выполнен запрос клиента». */
+export function brokenText(part: BrokenPart): string {
+  switch (part.kind) {
+    case 'expectation': return `Нарушено: ${part.mustNot ? 'нельзя — ' : ''}${part.text}`;
+    case 'checks': return 'Не пройдены точные проверки';
+    case 'goal': return 'Не выполнен запрос клиента';
+    case 'rules': return 'Нарушены правила промпта';
+  }
+}
+
+/** «Почему ошибается» names this many causes; the rest are only counted. */
+const TOP_CAUSES = 3;
+
+/** One cause of «Почему ошибается»: its words, the situations it failed, the failure that shows it. */
+export interface CauseItem { text: string; count: number; scenarioIds: string[]; example: FailureExplanation;
+  /** A cause named by the failure itself — the situation's title, where nothing else says why —: its example needs no title row. */
+  titled?: true }
+
 /**
- * «Почему ошибается»: up to three causes with their size, largest first, each with its example when
- * `examples`, and how many more causes there are; without recorded causes, the failed situations by title.
- * When something was decided and nothing failed, the one honest sentence about what that does not prove —
- * and that only the measured situations had no error when some were not measured.
+ * The causes «Почему ошибается» names, largest first — the causes the run named; where it named none, what the failed
+ * situations broke, in the card's own words; only where not even that is known (a legacy card decided by its strict
+ * result), the failed situations by title — at most three, and how many more there are (`more`, counted in causes, or in
+ * errors for titles). Every surface lists these, and a cursor opens a cause by its first situation.
+ */
+export function causeItems(view: Pick<ResultView, 'topCauses' | 'moreCauses' | 'broken' | 'failures'>): { items: CauseItem[]; more: number; moreText: string } {
+  if (view.topCauses.length) return { items: view.topCauses.map(cause => ({ text: oneLine(cause.name), count: cause.count, scenarioIds: cause.scenarioIds, example: cause.example })),
+    more: view.moreCauses, moreText: moreCausesText(view.moreCauses) };
+  const failed = new Map(view.failures.map(failure => [failure.scenarioId, failure]));
+  const broken = view.broken.flatMap(item => {
+    const example = item.scenarioIds.map(id => failed.get(id)).find(failure => failure !== undefined);
+    return example ? [{ text: brokenText(item.part), count: item.count, scenarioIds: item.scenarioIds, example }] : [];
+  });
+  const more = (total: number) => Math.max(0, total - TOP_CAUSES);
+  if (broken.length) return { items: broken.slice(0, TOP_CAUSES), more: more(broken.length), moreText: moreCausesText(more(broken.length)) };
+  return { items: view.failures.slice(0, TOP_CAUSES).map(failure => ({ text: oneLine(failure.title), count: 1, scenarioIds: [failure.scenarioId], example: failure, titled: true as const })),
+    more: more(view.failures.length), moreText: `и ещё ${countText(more(view.failures.length), ERRORS)}` };
+}
+
+/**
+ * The two halves of the headline where the situations are counted by the client's request and the prompt's rules
+ * (ResultView.breakdown): how many requests were met, how many situations broke a rule — and which rule most often,
+ * when one stands out. Null where no situation has the prompt-rule half.
+ */
+export function breakdownText(view: Pick<ResultView, 'breakdown'>): string | null {
+  const { goal, rules, withoutRules } = view.breakdown;
+  if (!rules.decided) return null;
+  const common = rules.commonRule === null ? '' : `, чаще всего — правило ${rules.commonRule}${rules.commonRuleQuote ? ` «${oneLine(rules.commonRuleQuote)}»` : ''} (${rules.commonRuleCount})`;
+  return `Запрос клиента выполнен в ${goal.met} из ${countText(goal.decided, SITUATIONS_OF)}; правила промпта нарушены в ${rules.broken} из ${countText(rules.decided, SITUATIONS_OF)}${common}${
+    withoutRules ? `; без проверки правил промпта — ${withoutRules}` : ''}.`;
+}
+
+/**
+ * «Почему ошибается»: up to three causes with their size, largest first (causeItems), each with its example when
+ * `examples`, and how many more there are; where the situations are counted by the request and the prompt's rules, how
+ * the failures split between them first (breakdownText). When something was decided and nothing failed, the one honest sentence
+ * about what that does not prove — and that only the measured situations had no error when some were not measured.
  */
 export function causeRows(view: ResultView, options: { examples?: boolean } = {}): ResultRow[] {
   if (!view.failures.length) {
     const unmeasured = view.notMeasured.total;
     return view.headline.decided ? [{ role: unmeasured ? 'muted' : 'good', indent: 0, text: noErrorsText(view.headline.decided, unmeasured) }] : [];
   }
-  const rows: ResultRow[] = [{ role: 'heading', indent: 0, text: 'Почему ошибается' }];
-  if (view.topCauses.length) {
-    view.topCauses.forEach((cause, i) => {
-      rows.push({ role: 'item', indent: 2, text: `${i + 1}  ${oneLine(cause.name)}`, right: countText(cause.count, SITUATIONS), short: String(cause.count) });
-      if (options.examples) rows.push(...exampleRows(cause.example, 5));
-    });
-    if (view.moreCauses) rows.push({ role: 'muted', indent: 2, text: moreCausesText(view.moreCauses) });
-    return rows;
-  }
-  view.failures.slice(0, 3).forEach((failure, i) => {
-    rows.push({ role: 'item', indent: 2, text: `${i + 1}  ${oneLine(failure.title)}` });
-    if (options.examples) rows.push(...exampleRows(failure, 5).slice(1));
-  });
-  if (view.failures.length > 3) rows.push({ role: 'muted', indent: 2, text: `и ещё ${countText(view.failures.length - 3, ERRORS)}` });
-  return rows;
+  const { items, more, moreText } = causeItems(view);
+  const split = breakdownText(view);
+  return [{ role: 'heading', indent: 0, text: 'Почему ошибается' }, ...(split ? [{ role: 'muted' as const, indent: 2, text: split }] : []), ...items.flatMap((cause, i): ResultRow[] => [
+    { role: 'item', indent: 2, text: `${i + 1}  ${cause.text}`, right: countText(cause.count, SITUATIONS), short: String(cause.count) },
+    ...(options.examples ? exampleRows(cause.example, 5).slice(cause.titled ? 1 : 0) : []),
+  ]), ...(more ? [{ role: 'muted' as const, indent: 2, text: moreText }] : [])];
 }
 
 /**
@@ -559,6 +662,20 @@ export function caveatRows(view: Pick<ResultView, 'notes'>, reader: Reader = 'ow
   return lines.length ? [{ role: 'heading', indent: 0, text: 'Оговорки' }, ...lines.map(text => ({ role: 'muted' as const, indent: 2, text }))] : [];
 }
 
+/**
+ * «Пробелы в правилах»: the customers' requests from the logs no rule of the owner speaks to (ResultView.rulesGaps) — the
+ * number says nothing about them. The owner is told how to close them; a page for others says only what was not checked.
+ */
+export function rulesGapRows(view: Pick<ResultView, 'rulesGaps'>, reader: Reader = 'owner'): ResultRow[] {
+  const gaps = view.rulesGaps ?? [];
+  if (!gaps.length) return [];
+  const requests = countText(gaps.length, ['запроса', 'запросов', 'запросов']);
+  const lead = reader === 'owner' ? `Правил нет для ${requests} из логов — такие запросы не проверяются. Добавьте правила в материалы, и Lab сделает для них ситуации.`
+    : `У владельца агента нет правил для ${requests} из логов — такие запросы не проверялись.`;
+  return [{ role: 'heading', indent: 0, text: 'Пробелы в правилах' }, { role: 'muted', indent: 2, text: lead },
+    ...gaps.map(gap => ({ role: 'item:muted' as const, indent: 4, text: `«${oneLine(gap)}»` }))];
+}
+
 /** «Не измерено»: every unmeasured situation with its reason, grouped in the order of the reasons. */
 export function unmeasuredRows(view: ResultView): ResultRow[] {
   if (!view.notMeasured.total) return [];
@@ -567,13 +684,19 @@ export function unmeasuredRows(view: ResultView): ResultRow[] {
     ...view.notMeasured.reasons.flatMap(reason => reason.scenarioIds.map(id => ({ role: 'item:muted' as const, indent: 2, text: `${titles.get(id) ?? id}: ${reason.label}` })))];
 }
 
+/** «№2»: a situation as every surface names it, by the number the owner knows it by (ResultCard.number). */
+export const situationLabel = (view: Pick<ResultView, 'cards'>, scenarioId: string): string => {
+  const number = view.cards.find(card => card.scenarioId === scenarioId)?.number;
+  return number === undefined ? '' : `№${number}`;
+};
+
 /** Every failed situation once, in record order, with what was expected, the agent's words and the rule (E7). */
 export function errorListRows(view: ResultView): ResultRow[] {
   if (!view.failures.length) return [];
   return [{ role: 'heading', indent: 0, text: 'Все ошибки' }, ...view.failures.flatMap((failure, i) => {
     const mark = dunnoMark(view, failure.scenarioId);
     return [
-      { role: 'failed' as const, indent: 2, text: `✗ ${i + 1}  ${oneLine(failure.title)}` },
+      { role: 'failed' as const, indent: 2, text: `✗ ${situationLabel(view, failure.scenarioId)}  ${oneLine(failure.title)}` },
       ...exampleRows(failure, 5).slice(1),
       ...(mark ? [{ role: 'muted' as const, indent: 5, text: mark }] : []),
     ];
@@ -620,9 +743,23 @@ export function disagreementRows(view: ResultView): ResultRow[] {
   ])];
 }
 
+/** The fix a connection's exam asks for, by how it ended: every surface says it first while the percent waits. */
+const EXAM_STEP: Readonly<Record<ExamWithheld, { board: string; chat: string; cli: string }>> = {
+  absent: { board: 'Добавить экзамен подключения — без него процент не считается',
+    chat: 'Дальше: добавьте экзамен подключения — скажите «составь экзамен».',
+    cli: 'Добавьте экзамен подключения: раздел exam в файле подключения, затем agent-lab doctor --connection подключение.json --yes' },
+  failed: { board: 'Исправить подключение: экзамен не пройден — без него процент не считается',
+    chat: 'Дальше: исправьте подключение — скажите «проверь подключение».',
+    cli: 'Исправьте подключение и сдайте экзамен: agent-lab doctor --connection подключение.json --yes' },
+  simple: { board: 'Добавить в экзамен проверку памяти разговора — без неё процент не считается',
+    chat: 'Дальше: добавьте в экзамен проверку памяти разговора.',
+    cli: 'Дополните раздел exam проверкой памяти разговора, затем agent-lab doctor --connection подключение.json --yes' },
+};
+
 /** One next step as a row of the «Дальше» list on the board and in the report. */
 export function nextStepText(step: NextStep): string {
   switch (step.kind) {
+    case 'exam': return EXAM_STEP[step.status].board;
     case 'check_connection': return 'Проверить связь с агентом и судью — пока это не сделано, числу не верить';
     case 'wait': return 'Дождаться конца прогона — результат появится сам';
     case 'review_judge': {
@@ -633,8 +770,7 @@ export function nextStepText(step: NextStep): string {
       ];
       return `Проверить, прав ли судья — ${parts.join(', ')}`;
     }
-    case 'blind_check': return `Проверить судью вслепую — ${countText(step.left, ['оценка', 'оценки', 'оценок'])} без его вердиктов`;
-    case 'why_unmeasured': return `Посмотреть, почему не измерено ${countText(step.count, SITUATIONS)}`;
+    case 'why_unmeasured': return `Посмотреть, почему ${pluralForm(step.count, ['не измерена', 'не измерены', 'не измерено'])} ${countText(step.count, SITUATIONS)}`;
     case 'repeat': return 'Повторить прогон на новой версии агента';
     case 'report': return 'Отчёт для заказчика';
   }
@@ -643,10 +779,10 @@ export function nextStepText(step: NextStep): string {
 /** The same step said in the conversation: what to ask for, in the owner's words. */
 function chatNextText(step: NextStep): string {
   switch (step.kind) {
+    case 'exam': return EXAM_STEP[step.status].chat;
     case 'check_connection': return 'Дальше: проверьте связь с агентом — скажите «проверь подключение».';
     case 'wait': return 'Дальше: дождитесь конца прогона — результат придёт сюда.';
-    case 'review_judge': return 'Дальше: проверьте, прав ли судья, — скажите «покажи ошибку 1».';
-    case 'blind_check': return 'Дальше: проверьте судью вслепую — скажите «проверь судью вслепую»: вы оцените ответы агента, не видя его вердиктов.';
+    case 'review_judge': return `Дальше: проверьте, прав ли судья, — скажите ${step.situation === null ? '«покажи ошибки»' : `«разбери ситуацию ${step.situation}»`}.`;
     case 'why_unmeasured': return 'Дальше: спросите, почему ситуации не измерены.';
     case 'repeat': return 'Дальше: исправьте агента и скажите «повтори прогон».';
     case 'report': return 'Дальше: скажите «отчёт для заказчика».';
@@ -656,10 +792,10 @@ function chatNextText(step: NextStep): string {
 /** The same step on the command line: the command that does it, with the full run id a command needs. */
 function cliNextText(step: NextStep, runId: string): string {
   switch (step.kind) {
+    case 'exam': return EXAM_STEP[step.status].cli;
     case 'check_connection': return 'Проверьте подключение: agent-lab doctor --yes';
     case 'wait': return 'Дождитесь конца прогона';
     case 'review_judge': return 'Проверьте, прав ли судья: откройте прогон в Pi (/agent-lab)';
-    case 'blind_check': return 'Проверьте судью вслепую: откройте прогон в Pi (/agent-lab)';
     case 'why_unmeasured': return 'Причины — в списке «Не измерено» выше';
     case 'repeat': return `Повторите прогон: agent-lab repeat --id ${runId}`;
     case 'report': return `Отчёт для заказчика: agent-lab export --id ${runId} --format html`;
@@ -708,38 +844,58 @@ export function resultScreen(view: ResultView, options: { surface: 'board' | 'cl
   // The board keeps its first screen short; its details and the CLI list every error, the unmeasured situations and the owner's disagreements once.
   const full = options.surface === 'cli' || !!options.details;
   const blocks = [headRows(view), scenarioRows(view), topicRows(view), causeRows(view),
-    ...(full ? [errorListRows(view), unmeasuredRows(view), disagreementRows(view), calibrationRows(view), caveatRows(view)] : []),
+    ...(full ? [errorListRows(view), unmeasuredRows(view), rulesGapRows(view), disagreementRows(view), calibrationRows(view), caveatRows(view)] : []),
     [runLine(view, options.now), ...barRows(view)], nextRows(view, options.surface)];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
 }
 
 /**
- * The chat block (docs/design/ui-spec.md §4.10). Collapsed: the number, the trust line, the calibration line and the causes in one row.
- * Expanded: the number, the trust and reality lines, every cause with its example, the unmeasured
- * situations, what the result does not prove and «Дальше». The host adds the ctrl+o hint under the last row.
+ * Whether to believe the number, in one line of the collapsed chat block: the alarm when there is one; otherwise the trust
+ * line without its reading note (what the number is read over stays in the full line), with whether the agent answered
+ * at all. Null when there is nothing to say.
+ */
+function believeRow(view: ResultView): ResultRow | null {
+  const alarm = alarmRow(view);
+  if (alarm) return alarm;
+  const segments = trustSegments(view);
+  const said = [...(segments.length > 1 ? segments.slice(1) : segments), ...(operabilityShort(view) ? [{ text: operabilityShort(view)!, warn: true }] : [])];
+  if (!said.length) return null;
+  const parts = said.map((part, i) => i ? part.text : part.text.charAt(0).toLocaleUpperCase('ru') + part.text.slice(1));
+  return { role: said.some(part => part.warn) ? 'trust:small' : 'trust', indent: 2, text: parts.join(' · '), parts };
+}
+
+/** «без ответа агента — 2 из 20 разговоров»: the operability line in a few words, for the collapsed chat block. */
+function operabilityShort(view: Pick<ResultView, 'operability'>): string | null {
+  const found = view.operability;
+  const total = found ? found.noReply + found.serviceReply + found.broken + found.retried : 0;
+  return found && total ? `без ответа агента — ${total} из ${countText(found.conversations, CONVERSATIONS_OF)}` : null;
+}
+
+/**
+ * The chat block (docs/design/ui-spec.md §4.10). Collapsed, a few lines at 80 columns and no fine print: the number (with
+ * the alarm above it when there is one), whether to believe it, the main cause of failure — the cause, never a
+ * situation's title — and what to do next. Expanded: the whole head with its evidence, the scenarios,
+ * every cause with its example, the unmeasured situations, what the result does not prove and «Дальше». The host adds
+ * the ctrl+o hint under the last row.
  */
 export function chatBlock(view: ResultView, options: { expanded: boolean }): ResultRow[] {
-  const head = headRows(view).map(row => row.role.startsWith('accuracy') || row.role === 'alarm' ? row : { ...row, indent: 2 });
   if (!options.expanded) {
-    const causes = view.topCauses.length
-      ? view.topCauses.map(cause => `${oneLine(cause.name)} (${cause.count})`)
-      : view.failures.slice(0, 3).map(failure => oneLine(failure.title));
-    // More causes than named are counted as causes; without recorded causes, the failures past the three named.
-    const more = view.topCauses.length ? view.moreCauses : Math.max(0, view.failures.length - 3);
-    const causeParts = [...causes, ...(more ? [`ещё ${countText(more, view.topCauses.length ? CAUSES : ERRORS)}`] : [])];
-    const noErrors = view.failures.length ? [] : causeRows(view).map(row => ({ ...row, indent: 2 }));
-    return [...head.filter(row => row.role !== 'reality'), ...noErrors,
-      ...(causeParts.length ? [{ role: 'muted' as const, indent: 2, text: `Чаще всего: ${causeParts.join(' · ')}`, parts: [`Чаще всего: ${causeParts[0]}`, ...causeParts.slice(1)] }] : [])];
+    const believe = believeRow(view);
+    const [top] = causeItems(view).items;
+    const cause: ResultRow[] = top ? [{ role: 'muted', indent: 2, text: `Чаще всего — ${top.text}`, right: countText(top.count, SITUATIONS), short: String(top.count) }]
+      : causeRows(view).map(row => ({ ...row, indent: 2 }));
+    const next = nextRows(view, 'chat').map(row => ({ ...row, indent: 2 }));
+    // The alarm stands above the number, as on every surface; it then says whether to believe it.
+    const head = believe?.role === 'alarm' ? [believe, accuracyRow(view)] : [accuracyRow(view), ...(believe ? [believe] : [])];
+    return [...head, ...cause, ...next];
   }
+  const head = headRows(view).map(row => row.role.startsWith('accuracy') || row.role === 'alarm' ? row : { ...row, indent: 2 });
   const indent = (rows: ResultRow[]) => rows.map(row => ({ ...row, indent: row.indent + 2 }));
   const blocks = [head, indent(scenarioRows(view)), indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)), indent(nextRows(view, 'chat'))];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
 }
 
 /* ───────────────────────────── two runs compared ───────────────────────────── */
-
-/** Genitive after «из»: «из 1 разговора», «из 5 разговоров». */
-const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
 
 /**
  * Two runs compared (comparison.ts), the only copy of its words: the run compared with and the answer, how much could be
@@ -754,22 +910,28 @@ export function comparisonRows(comparison: RunComparison, before: Pick<Experimen
   options: { reader?: Reader; selected?: boolean; now?: Date } = {}): ResultRow[] {
   const owner = (options.reader ?? 'owner') === 'owner';
   const version = before.targetVersion ?? before.targetRelease;
-  const base = options.selected ? 'База выбрана вручную' : owner ? `Сравнение с прогоном ${whenText(before.createdAt, options.now)}` : 'Сравнение с прошлым прогоном';
-  const { coverage, fixed, regressed, unchanged, incomparable } = comparison;
-  const counts = [`Сравнимо ${coverage.validPairs} из ${countText(coverage.plannedPairs, CONVERSATIONS_OF)}`, `исправлено ${fixed.length}`, `сломалось ${regressed.length}`,
-    `без изменений ${unchanged.passing + unchanged.failing}`];
+  const base = options.selected ? 'Сравнение с прогоном, выбранным вручную' : owner ? `Сравнение с прогоном ${whenText(before.createdAt, options.now)}` : 'Сравнение с прошлым прогоном';
+  const { coverage, fixed, regressed, incomparable } = comparison;
+  // The answer speaks in situations; how much could be compared, in pairs of conversations — each unit named where it is
+  // used. A pair measured in both runs whose verdict nobody decided is not compared either: it is listed below.
+  const compared = comparison.pairs.filter(pair => pair.change !== 'unknown').length;
+  const pairs = `Сравнимо ${compared} из ${countText(coverage.plannedPairs, PAIRS_OF)} «до» и «после»`;
   const rows: ResultRow[] = [
-    { role: comparison.comparable ? 'item' : 'trust:small', indent: 0, text: `${base}${version ? ` — версия ${version}` : ''}. ${comparison.headline}` },
-    { role: 'muted', indent: 0, text: counts.join(' · '), parts: counts },
+    // What is compared: the same situations, run again — said only where the runs can be compared at all.
+    { role: comparison.comparable ? 'item' : 'trust:small', indent: 0, text: `${base}${version ? ` (версия ${version})` : ''}${comparison.comparable ? ' на тех же ситуациях' : ''}. ${comparison.headline}` },
+    { role: 'muted', indent: 0, text: pairs },
     ...regressed.map(item => ({ role: 'failed' as const, indent: 2, text: `Сломалось: ${oneLine(item.title)}` })),
     ...fixed.map(item => ({ role: 'good' as const, indent: 2, text: `Исправлено: ${oneLine(item.title)}` })),
   ];
   if (!owner) return comparison.versionUnknown ? [...rows, { role: 'muted', indent: 0, text: VERSION_UNKNOWN_NOTE }] : rows;
-  // Runs that could not be compared at all share one reason — the notes below —, so their situations are named once, without it.
+  // A pair that could not be compared is said in pairs, with its reason; runs that could not be compared at all share
+  // one reason — the notes below —, so their situations are named once, in situations, without it.
   const repeats = incomparable.some(item => item.repeat > 0);
-  const pairs = (comparison.comparable ? incomparable.map(item => `${oneLine(item.title)}${repeats ? ` (попытка ${item.repeat + 1})` : ''} — ${oneLine(item.reason)}`)
-    : [...new Set(incomparable.map(item => oneLine(item.title)))]).map(text => ({ role: 'item:muted' as const, indent: 2, text: `Несравнимо: ${text}` }));
-  return [...rows, ...pairs,
+  const lower = (text: string) => text.charAt(0).toLocaleLowerCase('ru') + text.slice(1);
+  const unpaired = comparison.comparable
+    ? incomparable.map(item => `Не сравнить пару разговоров «${oneLine(item.title)}»${repeats ? `, попытка ${item.repeat + 1}` : ''}: ${lower(oneLine(item.reason))}`)
+    : [...new Set(incomparable.map(item => `Не сравнивалась ситуация «${oneLine(item.title)}»`))];
+  return [...rows, ...unpaired.map(text => ({ role: 'item:muted' as const, indent: 2, text })),
     ...(comparison.notes.length ? [{ role: 'heading' as const, indent: 0, text: 'Оговорки' }, ...comparison.notes.map(note => ({ role: 'muted' as const, indent: 2, text: note }))] : []),
     ...(comparison.versionUnknown ? [{ role: 'next:first' as const, indent: 0, text: 'Дальше: назовите версию агента при запуске — тогда повтор покажет, что изменила новая версия.' }] : [])];
 }
@@ -784,7 +946,7 @@ export function failureRows(view: ResultView, record: Pick<Experiment, 'trials'>
   const unmarked = view.agreement.unmarked.includes(failure.trialId);
   const mark = dunnoMark(view, failure.scenarioId);
   return [
-    { role: 'failed', indent: 0, text: `✗ ${index + 1}  ${oneLine(failure.title)}`, right: `ошибка ${index + 1} из ${view.failures.length}` },
+    { role: 'failed', indent: 0, text: `✗ ${situationLabel(view, failure.scenarioId)}  ${oneLine(failure.title)}`, right: `ошибка ${index + 1} из ${view.failures.length}` },
     blank,
     label('Ожидалось', failure.expected ?? 'не записано в ситуации'),
     label('Агент ответил', saidText(failure)),
@@ -794,127 +956,3 @@ export function failureRows(view: ResultView, record: Pick<Experiment, 'trials'>
     ...(unmarked ? [blank, { role: 'next:first' as const, indent: 0, text: judgeQuestionText('fail') }] : []),
   ];
 }
-
-/* ───────────────────────────── layout ───────────────────────────── */
-
-const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-
-/** The runs of spaces and the words between them, in order; only a plain space separates words. */
-function tokens(text: string): string[] {
-  const out: string[] = [];
-  for (const char of text) {
-    const last = out.at(-1);
-    if (last !== undefined && (last[0] === ' ') === (char === ' ')) out[out.length - 1] = last + char;
-    else out.push(char);
-  }
-  return out;
-}
-
-/** The longest head of `word` that fits in `room` columns, at least one grapheme, and the rest; nothing is added or lost. */
-function splitWord(word: string, room: number): [string, string] {
-  let head = '', used = 0;
-  for (const { segment } of graphemes.segment(word)) {
-    const width = visibleWidth(segment);
-    if (head && used + width > room) break;
-    head += segment; used += width;
-  }
-  return [head, word.slice(head.length)];
-}
-
-/**
- * Word-wrap in terminal columns (wide characters count double) without changing the text: lines break only at spaces
- * — the spaces at a break are dropped, the others kept —, a line break of the text stays one, and a word wider than
- * its line is split between its characters with nothing inserted. `width(i)` is the room of the i-th line, so a
- * hanging indent narrows every line after the first.
- */
-export function wrapText(text: string, width: (line: number) => number): string[] {
-  const lines: string[] = [];
-  const room = () => Math.max(1, width(lines.length));
-  for (const paragraph of text.split('\n')) {
-    let line = '', pending = '';
-    for (const token of tokens(paragraph)) {
-      if (token[0] === ' ') { pending += token; continue; }
-      if (visibleWidth(line + pending + token) <= room()) { line += pending + token; pending = ''; continue; }
-      if (line) lines.push(line);
-      line = ''; pending = '';
-      let rest = token;
-      while (visibleWidth(rest) > room()) {
-        const [head, tail] = splitWord(rest, room());
-        lines.push(head);
-        rest = tail;
-      }
-      line = rest;
-    }
-    lines.push(line);
-  }
-  return lines;
-}
-
-// truncateToWidth closes its ellipsis with style resets for a live terminal; these rows are plain text, painted later by role.
-const clipTo = (text: string, width: number) => stripTerminalSequences(truncateToWidth(text, Math.max(1, width), '…'));
-
-/** The « ·» after a part, and the same separator glued to the part's last word by a no-break space while the part wraps. */
-const SEPARATOR = ' ·';
-const GLUED = '\u00a0·';
-
-/**
- * The parts of a « · » row packed into lines of `room` columns (continuation lines two narrower): a part goes whole to
- * the next line when it does not fit, and a part longer than a line wraps inside itself. The separator belongs to the
- * part before it, so a broken line ends with «·» and none starts with it; the parts' own text is never changed.
- */
-function packParts(parts: readonly string[], room: number): string[] {
-  const lines: string[] = [];
-  const roomAt = (line: number) => line ? room - 2 : room;
-  let current = '';
-  for (const [i, part] of parts.entries()) {
-    const tail = i < parts.length - 1 ? SEPARATOR : '';
-    const joined = current ? `${current} ${part}${tail}` : `${part}${tail}`;
-    if (visibleWidth(joined) <= roomAt(lines.length)) { current = joined; continue; }
-    if (current) lines.push(current);
-    // Wrapped, the part keeps its separator glued to its last word, so the dot never goes down alone.
-    const pieces = wrapText(tail ? `${part}${GLUED}` : part, line => roomAt(lines.length + line));
-    // A word longer than its line may be split right before the glued separator: its last character goes down with it.
-    const last = pieces.at(-1)!;
-    if (tail && pieces.length > 1 && (last === '·' || last === GLUED)) {
-      const before = pieces[pieces.length - 2]!;
-      const glue = last === '·' && before.endsWith('\u00a0') ? '\u00a0' : '';
-      const core = before.slice(0, before.length - glue.length);
-      const [head, moved] = splitWord(core, Math.max(1, visibleWidth(core) - 1));
-      pieces.splice(-2, 2, head, moved + glue + last);
-    }
-    // The glue was the layout's own: the separator is printed with its plain space, as on an unbroken line.
-    const end = pieces.at(-1)!;
-    if (tail && end.endsWith(GLUED)) pieces[pieces.length - 1] = end.slice(0, -GLUED.length) + SEPARATOR;
-    lines.push(...pieces.slice(0, -1));
-    current = pieces.at(-1) ?? '';
-  }
-  if (current) lines.push(current);
-  return lines;
-}
-
-/**
- * Plain lines of at most `width` (capped at MAX_WIDTH) terminal columns: a right counter aligned to
- * the edge (its text clipped with «…», the counter never), « · » parts packed per line, everything
- * else word-wrapped under its hanging indent without a character added or lost. One layout for the
- * board, the chat and the CLI, so the three never wrap differently; widths are measured in columns,
- * never in string length.
- */
-export function fitRows(rows: ResultRow[], width: number): { role: ResultRole; text: string }[] {
-  const edge = Math.max(20, Math.min(width, MAX_WIDTH));
-  return rows.flatMap(row => {
-    const pad = ' '.repeat(row.indent + 1);
-    const room = edge - pad.length;
-    if (row.right !== undefined) {
-      if (row.short !== undefined && edge < 80) return [{ role: row.role, text: pad + clipTo(row.text, room - visibleWidth(row.short) - 3) + ` — ${row.short}` }];
-      const text = clipTo(row.text, room - visibleWidth(row.right) - 2);
-      return [{ role: row.role, text: pad + text + ' '.repeat(Math.max(2, room - visibleWidth(text) - visibleWidth(row.right))) + row.right }];
-    }
-    if (row.parts) return packParts(row.parts, room).map((line, i) => ({ role: row.role, text: (i ? `${pad}  ` : pad) + line }));
-    if (!row.text) return [{ role: row.role, text: '' }];
-    const hang = row.hang ?? 0;
-    return wrapText(row.text, line => line ? room - hang : room).map((piece, i) => ({ role: row.role, text: pad + (i ? ' '.repeat(hang) : '') + piece }));
-  });
-}
-
-/** The rows as plain text: the CLI prints this, and the saved text renders are made with it. */
-export const plainText = (rows: ResultRow[], width: number) => fitRows(rows, width).map(line => line.text.trimEnd()).join('\n');

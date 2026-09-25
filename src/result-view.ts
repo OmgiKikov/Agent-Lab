@@ -1,11 +1,11 @@
 import { countingRuleOf, headlineRule } from './card/expectations.js';
-import type { Experiment, Realism, Scenario, Trial, ValidationExclusion } from './contracts.js';
+import type { ExamResult, Experiment, Realism, Scenario, Trial, ValidationExclusion } from './contracts.js';
 import { isRunning } from './phases.js';
-import { agentMetricResult, COUNTING_RULES, expectationsFoundWrong, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
+import { agentMetricResult, COUNTING_RULES, expectationsFoundWrong, GOAL_METRIC_ID, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
 import { judgeModel, stabilityAfterReassess, stabilityBetweenRuns, type Stability } from './comparison.js';
 import { topicView, trafficCoverage, type TopicView } from './coverage.js';
-import { failureExplanation, violatedRuleNumber, type FailureExplanation } from './explain.js';
+import { failureExplanation, ruleRegister, violatedRuleNumber, type FailureExplanation } from './explain.js';
 import type { TopicCoverage } from './miner/coverage.js';
 import { deriveRun, NOT_MEASURED_CODES, type CardPart, type NotMeasuredCode, type RunDerivation, type Verdict } from './run.js';
 import { SMALL_SAMPLE } from './interval.js';
@@ -18,6 +18,7 @@ import { roleChoices } from './llm/models.js';
 import { simulatorEvidence, type SimulatorEvidence } from './simulator-evidence.js';
 import { planOutcomes, type ScenarioOutcome } from './card/plan.js';
 import { blindAgreement, type BlindAgreement } from './blind.js';
+import { oneLine } from './text.js';
 
 export { COUNTING_RULES } from './outcomes.js';
 
@@ -28,7 +29,7 @@ export { COUNTING_RULES } from './outcomes.js';
  * the owner's own quotes; the words around them live in result-text.ts. Pure: no I/O, no escaping.
  */
 
-export { SMALL_SAMPLE, wilson } from './interval.js';
+export { SMALL_SAMPLE } from './interval.js';
 
 /** Why a situation was not measured, in the owner's words: the tail of «не измерено N — …». */
 export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
@@ -104,15 +105,26 @@ export function exclusionCounts(exclusions: ValidationExclusion[]): { kind: Excl
     .sort((a, b) => b.count - a.count || EXCLUSION_ORDER.indexOf(a.kind) - EXCLUSION_ORDER.indexOf(b.kind));
 }
 
+/** How a connection's exam ended, when it did not pass: without one (`absent`) or failed; the percent waits for a pass. */
+export type ExamWithheld = Exclude<ExamResult['status'], 'passed'>;
+
+/**
+ * One part of a situation's verdict that failed, as the causes read it: an expectation in the card's own words (`mustNot`
+ * when the agent must not do it), the card's exact checks, or the goal and the prompt rules of an old generated card.
+ */
+export type BrokenPart = { kind: 'expectation'; text: string; mustNot?: true } | { kind: 'checks' } | { kind: 'goal' } | { kind: 'rules' };
+
 /** What to do next, typed; each surface words it (chat asks in words, the board has a row, the CLI names a command). */
 export type NextStep =
+  /** The connection's exam did not pass: the percent is withheld until it does, so its fix comes before anything else. */
+  | { kind: 'exam'; status: ExamWithheld }
   /** A positive control failed or was not measured: the number cannot be trusted until the connection and the judge are checked. */
   | { kind: 'check_connection' }
   | { kind: 'wait' }
   /** The judge's failures and sampled passes still wait for the owner's «да» or «нет». */
-  | { kind: 'review_judge'; failures: number; passes: number; unsure: number }
-  /** The judge was never checked blind: `left` expectations wait for the owner's labels, given without its verdicts (blind.ts). */
-  | { kind: 'blind_check'; left: number }
+  | { kind: 'review_judge'; failures: number; passes: number; unsure: number;
+    /** The number of the situation the queue starts with — a failure first —, as the owner names it in the chat; null when none is known. */
+    situation: number | null }
   /** Nothing was decided: the reasons of the unmeasured situations are the next thing to read. */
   | { kind: 'why_unmeasured'; count: number }
   | { kind: 'repeat' }
@@ -120,6 +132,11 @@ export type NextStep =
 
 export interface ResultCard {
   scenarioId: string; title: string;
+  /**
+   * The number the owner knows the situation by on every surface — a card's own number, its place among the record's
+   * situations for older formats (card/view.ts situationNumber) —, so a failure is named by it everywhere.
+   */
+  number: number;
   /** The headline verdict; a control is decided by its goal alone. */
   outcome: Verdict; reason?: NotMeasuredCode;
   /** The goal and the prompt-rule halves of an old generated card's verdict; 'none' when the card has no such check. */
@@ -137,6 +154,15 @@ export interface ResultCard {
   provenance: Scenario['provenance'];
 }
 
+/**
+ * What stands between the owner and the number, most serious first. `connection`: the connection's exam did not pass,
+ * so the percent is withheld while the counts stay. The others leave the number shown under «✗ Числу пока не верить»:
+ * a positive control failed or was not measured (`control`), the judge failed its check with planted errors (`judge`),
+ * too many counted situations were not measured (`unmeasured`). One more reason — a record that fails its integrity
+ * check — takes its place here and every reader follows.
+ */
+export type TrustIssue = 'record' | 'connection' | 'control' | 'judge' | 'unmeasured';
+
 export interface ResultView {
   /**
    * Whether the record's evidence still holds (seal.ts recordIntegrity). `altered`: the record was changed after the run —
@@ -147,7 +173,13 @@ export interface ResultView {
    * The connection exam the run took before its first dialogue (exam.ts): unless it passed, no percent is shown — the
    * headline's, the topics' or the bounds' — while the counts stay. Absent for runs made before the exam existed.
    */
-  connection?: 'passed' | 'failed' | 'absent' | 'simple';
+  connection?: ExamResult['status'];
+  /**
+   * Why the number is withheld or not to be trusted yet (TrustIssue), most serious first; empty when nothing stands
+   * against it. The one reading of it: the alarm above the number, «Дальше» — the fix first, the customer report only
+   * while it is empty — and the CI exit code, «untrustworthy» (2) while any stands. Never changes the counts.
+   */
+  trustIssues: TrustIssue[];
   /** How many reactive conversations actually had a semantic customer assessment. */
   simulator?: SimulatorEvidence;
   runId: string;
@@ -156,8 +188,12 @@ export interface ResultView {
   createdAt: string;
   /** The counting rules the counted situations are decided by (card/expectations.ts), in record order; the default rule on a run without them. */
   countingRules: string;
-  /** Situations handled out of those decided, over the counted (non-control) situations. */
-  headline: { passed: number; decided: number; accuracy: number | null; range: [number, number] | null; smallSample: boolean };
+  /**
+   * Situations handled out of those decided, over the counted (non-control) situations. The number has no interval: the
+   * situations are a curated, stratified set, not independent draws from production, so `range` is always null — a field
+   * kept only for readers of the stored JSON, never a place for a confidence claim. `smallSample` is «мало данных».
+   */
+  headline: { passed: number; decided: number; accuracy: number | null; range: null; smallSample: boolean };
   /** Situations still waiting in a running phase; never part of notMeasured. */
   pending: number;
   notMeasured: {
@@ -175,9 +211,11 @@ export interface ResultView {
   /**
    * The two halves of the headline over the counted situations: requests met of those decided, situations that broke a
    * prompt rule of those where the rules were decided, the rule broken more often than any other (named only with a
-   * strict top count) and the counted situations without the prompt-rule check. Never changes the headline.
+   * strict top count; `commonRuleQuote`, its words in the owner's material) and the counted situations without the
+   * prompt-rule check. Never changes the headline.
    */
-  breakdown: { goal: { met: number; decided: number }; rules: { broken: number; decided: number; commonRule: number | null; commonRuleCount: number }; withoutRules: number };
+  breakdown: { goal: { met: number; decided: number };
+    rules: { broken: number; decided: number; commonRule: number | null; commonRuleCount: number; commonRuleQuote: string | null }; withoutRules: number };
   /**
    * Counted situations whose customer states the request and those who cannot (card `clarity`), each as handled of
    * decided; absent when no counted situation has a vague customer. Never changes the headline.
@@ -192,6 +230,13 @@ export interface ResultView {
   topCauses: { name: string; count: number; scenarioIds: string[]; example: FailureExplanation }[];
   /** Recorded causes of failed situations beyond the three in `topCauses`. */
   moreCauses: number;
+  /**
+   * What the failed counted situations broke, most often first (equal counts in record order): each failed part of their
+   * verdict with the situations that failed it. Where no cause was named (`topCauses` empty), it is the cause in the
+   * owner's own words — never a situation's title. A legacy card decided by its strict result adds nothing. Never
+   * changes the headline.
+   */
+  broken: { part: BrokenPart; count: number; scenarioIds: string[] }[];
   /** Per-topic rows and the traffic-weighted estimate, when the run's situations come from at least two topics. */
   topics: TopicView | null;
   /**
@@ -200,12 +245,19 @@ export interface ResultView {
    */
   scenarios?: ScenarioOutcome[];
   /**
-   * Whether the agent answered its customers at all, over every conversation of the run: those it left without a reply
-   * (`no_reply`), answered with a stand's service text, or broke on (an error, a timeout). Such a conversation is never
-   * the agent's error of substance, and it never quietly drops out either: it is the agent's working state, told apart
-   * from its quality. Absent when every conversation got the agent's reply. Never changes the headline.
+   * The customers' requests from the logs the owner's rules leave open, as the preparation found them (in the builder's
+   * words): no situation checks them, so the number says nothing about them. Absent when the preparation found none.
    */
-  operability?: { conversations: number; noReply: number; serviceReply: number; broken: number };
+  rulesGaps?: string[];
+  /**
+   * Whether the agent answered its customers at all, over every conversation the run started — the ones it counts and
+   * the ones the stand broke and the run started again (`retried`, whose broken attempts it no longer keeps): those the
+   * agent left without a reply (`no_reply`), answered with a stand's service text, or broke on (an error, a timeout). Such
+   * a conversation is never the agent's error of substance, and it never quietly drops out either: it is the agent's
+   * working state, told apart from its quality. Absent when every conversation got the agent's reply. Never changes the
+   * headline.
+   */
+  operability?: { conversations: number; noReply: number; serviceReply: number; broken: number; retried: number };
   /**
    * The customers Lab played against the logged ones of the same situations (realism.ts): the customer's second
    * assessment, apart from its fidelity to the situation. Absent without a situation from a log. Never changes the headline.
@@ -290,6 +342,29 @@ function causesOf(run: RunDerivation, failures: FailureExplanation[]): ResultVie
     .sort((a, b) => b.count - a.count);
 }
 
+/** What the failed counted situations broke (ResultView.broken): every failed part of each, tallied by what it is. */
+function brokenOf(run: RunDerivation, counted: readonly ResultCard[]): ResultView['broken'] {
+  const tally = new Map<string, ResultView['broken'][number]>();
+  for (const card of counted.filter(item => item.outcome === 'fail')) {
+    const situation = run.situation(card.scenarioId)!;
+    const rule = headlineRule(situation.scenario, situation.attempts.map(attempt => attempt.trial));
+    const mustNot = new Set(rule.kind === 'expectations' ? rule.expectations.filter(item => item.strength === 'must_not').map(item => item.id) : []);
+    for (const part of card.parts.filter(item => item.outcome === 'fail')) {
+      const broken: BrokenPart | null = rule.kind === 'goal_rules' ? (part.id === GOAL_METRIC_ID ? { kind: 'goal' } : part.id === RULES_METRIC_ID ? { kind: 'rules' } : null)
+        : part.id === 'checks' ? { kind: 'checks' }
+        : part.text ? { kind: 'expectation', text: oneLine(part.text), ...(mustNot.has(part.id) ? { mustNot: true as const } : {}) } : null;
+      if (!broken) continue;
+      const key = JSON.stringify(broken);
+      const item = tally.get(key) ?? { part: broken, count: 0, scenarioIds: [] };
+      if (item.scenarioIds.includes(card.scenarioId)) continue;
+      item.count++; item.scenarioIds.push(card.scenarioId);
+      tally.set(key, item);
+    }
+  }
+  // Array.prototype.sort is stable: equal counts keep the order they were first broken in.
+  return [...tally.values()].sort((a, b) => b.count - a.count);
+}
+
 /**
  * The breakdown over the counted situations. The most frequent rule is read the way the explanation
  * names it — the first attempt of each rule-breaking situation whose rules the judge failed — and
@@ -306,10 +381,11 @@ function breakdownOf(run: RunDerivation, counted: ResultCard[]): ResultView['bre
   }
   const [top, next] = [...tally.entries()].sort((a, b) => b[1] - a[1]);
   const commonRule = top && (!next || top[1] > next[1]) ? top[0] : null;
+  const quote = commonRule === null ? null : [...ruleRegister(record).values()].find(rule => rule.number === commonRule)?.quote ?? null;
   return {
     goal,
     rules: { broken: counted.filter(card => card.rules === 'fail').length, decided: counted.filter(card => card.rules === 'pass' || card.rules === 'fail').length,
-      commonRule, commonRuleCount: top && commonRule !== null ? top[1] : 0 },
+      commonRule, commonRuleCount: top && commonRule !== null ? top[1] : 0, commonRuleQuote: quote },
     withoutRules: counted.filter(card => card.goal !== 'none' && card.rules === 'none').length,
   };
 }
@@ -346,16 +422,19 @@ export function unmeasuredControl(card: Pick<ResultCard, 'outcome' | 'reason'>):
 }
 
 /**
- * The recommended step first — a control alarm, a run still going, the reasons of too many unmeasured situations,
- * the judge's review queue, then fixing the agent when it failed — followed by what a finished result always offers:
- * a repeat and, while no alarm stands (a control, the unmeasured share, a judge that failed its check), the customer
- * report. Whenever a situation was not measured, why is always among the steps: first under the alarm, last below it.
- * A draft that never ran offers nothing.
+ * The recommended step first — the connection's exam when it did not pass, a control alarm, a run still going, the
+ * reasons of too many unmeasured situations, the judge's review queue, then fixing the agent when it failed — followed by
+ * what a finished result always offers: a repeat and, while nothing stands against the number (ResultView.trustIssues),
+ * the customer report. The judge's blind check is an optional audit off the main path: «Дальше» never offers it (the
+ * owner's decision). Whenever a situation was not measured, why is always among the steps:
+ * first under the alarm, last below it. A draft that never ran offers nothing.
  */
-function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted: boolean, reviewedTrials: Set<string>): NextStep[] {
+function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted: boolean, reviewedTrials: Set<string>, numberOf: (trialId: string) => number | undefined): NextStep[] {
   if (notStarted) return [];
-  if (view.control.alarm) return [{ kind: 'check_connection' }];
-  if (running) return [{ kind: 'wait' }];
+  // The percent waits for the exam: its fix leads, before anything that reads the number.
+  const exam: NextStep[] = view.connection !== undefined && view.connection !== 'passed' ? [{ kind: 'exam', status: view.connection }] : [];
+  if (view.control.alarm) return [...exam, { kind: 'check_connection' }];
+  if (running) return [...exam, { kind: 'wait' }];
   const { queueFailures, sampledPasses, marks } = view.agreement;
   // A situation the owner reviewed in full has been decided by the owner: it no longer waits for a one-key answer.
   const unmarked = view.agreement.unmarked.filter(id => !reviewedTrials.has(id));
@@ -366,15 +445,36 @@ function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted:
   const { alarm, total } = view.notMeasured;
   const why: NextStep[] = total ? [{ kind: 'why_unmeasured', count: total }] : [];
   // Too many situations unmeasured: why is the first thing to read, before any verdict of the judge.
-  // The judge is checked blind first, before any of its verdicts is shown: an owner who saw them would only agree.
-  const blind: NextStep[] = view.blind && view.blind.labelled < view.blind.drawn ? [{ kind: 'blind_check', left: view.blind.drawn - view.blind.labelled }] : [];
-  const steps: NextStep[] = [...(alarm ? why : []), ...blind, ...(failures + passes + unsure > 0 ? [{ kind: 'review_judge' as const, failures, passes, unsure }] : [])];
+  const first = unmarked.find(id => queueFailures.includes(id)) ?? unmarked[0];
+  const review: NextStep[] = failures + passes + unsure > 0 ? [{ kind: 'review_judge', failures, passes, unsure, situation: first === undefined ? null : numberOf(first) ?? null }] : [];
+  const steps: NextStep[] = [...exam, ...(alarm ? why : []), ...review];
   const after = alarm ? [] : why;
   if (!view.headline.decided) return [...steps, ...after];
   const failed = view.headline.decided > view.headline.passed;
-  // A report is offered only for a number that can be trusted.
-  const report: NextStep[] = alarm || view.judgeCheck?.distrust ? [] : [{ kind: 'report' }];
+  // A report is offered only for a number that is shown and can be trusted.
+  const report: NextStep[] = view.trustIssues.length ? [] : [{ kind: 'report' }];
   return [...steps, ...(failed ? [{ kind: 'repeat' } as const, ...report] : [...report, { kind: 'repeat' } as const]), ...after];
+}
+
+/** Why the number is withheld or not to be trusted yet, most serious first (TrustIssue). */
+function trustIssuesOf(view: Omit<ResultView, 'next' | 'trustIssues'>): TrustIssue[] {
+  return [
+    ...(view.integrity === 'altered' ? ['record' as const] : []),
+    ...(view.connection !== undefined && view.connection !== 'passed' ? ['connection' as const] : []),
+    ...(view.control.alarm ? ['control' as const] : []),
+    ...(view.judgeCheck?.distrust ? ['judge' as const] : []),
+    ...(view.notMeasured.alarm ? ['unmeasured' as const] : []),
+  ];
+}
+
+/**
+ * The number a situation is known by, the rule of card/view.ts situationNumber: a card's own number, else its place
+ * among the stored record's situations — every split of a comparison run, the way the chat's tools look it up.
+ */
+function situationNumberOf(record: Experiment, scenarioId: string): number {
+  const position = record.scenarios.findIndex(scenario => scenario.id === scenarioId) + 1;
+  const library = record.librarySnapshot;
+  return library?.formatVersion === 2 ? library.cards.find(card => card.id === scenarioId)?.number ?? position : position;
 }
 
 /** Clear and vague requests apart, over the counted situations whose card is in the run's library. */
@@ -401,7 +501,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const unstableIds = new Set(found?.unstable.map(row => row.scenarioId) ?? []);
   const stability = found && { ...found, unstable: found.unstable.filter(row => !run.situation(row.scenarioId)?.control) };
   const cards: ResultCard[] = run.situations.map(item => ({
-    scenarioId: item.scenario.id, title: item.scenario.title, outcome: item.outcome, ...(item.reason ? { reason: item.reason } : {}),
+    scenarioId: item.scenario.id, title: item.scenario.title, number: situationNumberOf(input, item.scenario.id), outcome: item.outcome, ...(item.reason ? { reason: item.reason } : {}),
     goal: item.goal, rules: item.rules, parts: item.parts, control: item.control, flaky: item.flaky, unstable: unstableIds.has(item.scenario.id), provenance: item.scenario.provenance,
   }));
   const counted = cards.filter(card => !card.control);
@@ -439,13 +539,11 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const examined = record.connectionExam?.status;
   // Evidence changed after the run carries no percent either: the counts it would stand on are not the run's.
   const withheld = examined !== undefined && examined !== 'passed' || run.integrity === 'altered';
-  const view: Omit<ResultView, 'next'> = {
+  const view: Omit<ResultView, 'next' | 'trustIssues'> = {
     ...(examined ? { connection: examined } : {}),
     integrity: run.integrity,
     simulator: simulatorEvidence(record),
     runId: record.id, phase: record.phase, mode: record.mode, createdAt: record.createdAt, countingRules,
-    // This is a curated/stratified set, not independent Bernoulli sampling from production.
-    // Keep the compatibility field empty rather than attach a population confidence claim.
     headline: { passed, decided, accuracy: withheld ? null : accuracy, range: null, smallSample: decided > 0 && decided < SMALL_SAMPLE },
     pending: notStarted ? 0 : counted.filter(card => card.reason === 'in_progress').length,
     notMeasured: { total: unmeasured, reasons, of: counted.length,
@@ -453,7 +551,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     control: { cards: controls, alarm },
     breakdown: breakdownOf(run, counted),
     coverage: { examined: record.dialogues.length + exclusions.length, included: record.dialogues.length, excluded: exclusionCounts(exclusions) },
-    cards, failures, topCauses: causes.slice(0, TOP_CAUSES), moreCauses: Math.max(0, causes.length - TOP_CAUSES),
+    cards, failures, topCauses: causes.slice(0, TOP_CAUSES), moreCauses: Math.max(0, causes.length - TOP_CAUSES), broken: brokenOf(run, counted),
     topics: topicView(record, cards), topicCoverage: trafficCoverage(record, cards),
     agreement: judgeAgreement(input),
     reviewed: { situations: reviewed.situations, contradicted: reviewed.contradicted },
@@ -475,6 +573,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const library = record.librarySnapshot?.formatVersion === 2 ? record.librarySnapshot : undefined;
   const scenarios = library?.plan ? planOutcomes(library, counted) : [];
   if (scenarios.length) view.scenarios = scenarios;
+  const gaps = rulesGapsOf(input);
+  if (gaps.length) view.rulesGaps = gaps;
   const operability = operabilityOf(record);
   if (operability) view.operability = operability;
   if (record.realism) view.realism = structuredClone(record.realism);
@@ -491,14 +591,44 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const judgeCheck = judgeCheckSummary(options.judgeCheck, record);
   if (judgeCheck) view.judgeCheck = judgeCheck;
   if (judgedByBuilder(record)) view.sameModelJudge = true;
-  return { ...view, next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
+  const trusted = { ...view, trustIssues: trustIssuesOf(view) };
+  const numberOf = (trialId: string) => cards.find(card => card.scenarioId === run.attempt(trialId)?.trial.scenarioId)?.number;
+  return { ...trusted, next: nextSteps(trusted, isRunning(record.phase), notStarted, reviewed.trialIds, numberOf) };
 }
 
-/** The conversations the agent left without its reply, by how; undefined when it answered in every one (the typed causes only). */
+/**
+ * The conversations the agent left without its reply, by how, over every conversation the run started — the retried
+ * ones too; undefined when it answered in every one (the typed causes only).
+ */
 function operabilityOf(record: Experiment): ResultView['operability'] {
   const count = (cause: Trial['invalidCause']) => record.trials.filter(trial => trial.invalidCause === cause).length;
-  const operability = { conversations: record.trials.length, noReply: count('no_reply'), serviceReply: count('service_reply'), broken: count('agent') };
-  return operability.noReply + operability.serviceReply + operability.broken ? operability : undefined;
+  const retried = standRetries(record);
+  const operability = { conversations: record.trials.length + retried, noReply: count('no_reply'), serviceReply: count('service_reply'), broken: count('agent'), retried };
+  return operability.noReply + operability.serviceReply + operability.broken + operability.retried ? operability : undefined;
+}
+
+/**
+ * The requests of the logs the owner's rules leave open: the conversations a card preparation made no situation of
+ * because no rule speaks to what the customer asks (card/schema.ts `excluded[].uncovered`), each once. The run keeps the
+ * preparation it was made from; this is the one place the result reads it.
+ */
+function rulesGapsOf(record: Pick<Experiment, 'preparationProgress'>): string[] {
+  const progress = record.preparationProgress;
+  if (progress?.protocol !== 'cards-v1' && progress?.protocol !== 'cards-v2') return [];
+  return [...new Set(progress.excluded.flatMap(item => item.uncovered ? [oneLine(item.uncovered)] : []))];
+}
+
+/** The fixed sentence lab/run.ts writes into `limitations` for the conversations it ran again after the stand broke. */
+const RERUN_NOTE = 'Разговоров, повторённых после сбоя стенда: ';
+/**
+ * The conversations the stand broke and the run started again from the start: their broken attempts are not among the
+ * trials, only counted in the one fixed sentence the harness writes (lab/run.ts) — decoded here and nowhere else, as
+ * run.ts decodes the harness's older reasons. A typed count kept with the record takes its place when there is one.
+ */
+function standRetries(record: Pick<Experiment, 'limitations'>): number {
+  const note = record.limitations.find(item => item.startsWith(RERUN_NOTE));
+  const count = note ? Number.parseInt(note.slice(RERUN_NOTE.length), 10) : 0;
+  return Number.isSafeInteger(count) && count > 0 ? count : 0;
 }
 
 /**
@@ -518,13 +648,15 @@ function judgedByBuilder(record: Experiment): boolean {
 }
 
 /**
- * The CI exit status, read from the same view the owner reads: 2 when the measurement is incomplete
- * (the run did not finish, a situation was not measured or is still pending, or a control raised the
- * alarm) — it takes precedence over an agent failure; 1 when the agent failed a counted situation;
- * 0 when every counted situation was decided and handled.
+ * The CI exit status, read from the same view the owner reads: 2 — «untrustworthy» — when the measurement is incomplete
+ * (the run did not finish, nothing was decided, a situation was not measured or is still pending) or the number cannot
+ * be trusted (ResultView.trustIssues: the connection's exam did not pass and the percent is withheld, a control raised
+ * the alarm, the judge failed its check); it takes precedence over an agent failure. 1 when the agent failed a counted
+ * situation; 0 when every counted situation was decided, handled and nothing stands against the number.
  */
 export function exitCodeOf(view: ResultView): 0 | 1 | 2 {
   const finished = view.phase === 'results_review' || view.phase === 'complete';
-  if (!finished || view.notMeasured.total > 0 || view.pending > 0 || view.control.alarm || !view.headline.decided) return 2;
+  const measured = finished && view.headline.decided > 0 && !view.notMeasured.total && !view.pending;
+  if (!measured || view.trustIssues.length) return 2;
   return view.headline.passed < view.headline.decided ? 1 : 0;
 }

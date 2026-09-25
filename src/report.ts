@@ -4,21 +4,23 @@ import { toHtml, toMarkdown, type Block, type CardItem, type DisagreementItem, t
 import { calibrationCaveats, conversationsText, disagreementText, exclusionsLine, hintText } from './card/calibration-view.js';
 import type { FailureExplanation } from './explain.js';
 import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
-import { countText } from './plural.js';
+import { countText, pluralForm } from './plural.js';
 import {
-  accuracyParts, alarmRow, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, moreCausesText, noErrorsText, noRuleText, realityParts, reasonLabel,
-  operabilityText, saidText, scenarioRows, toolExpectationsText, trialTurns, trustSegments, type ResultRow,
+  accuracyParts, alarmRow, breakdownText, causeItems, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, noErrorsText, noRuleText, realityParts, reasonLabel,
+  operabilityText, rulesGapRows, saidText, scenarioRows, situationOutcomeText, toolExpectationsText, topicsNote, trialTurns, trustSegments, type ResultRow,
 } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
-import { briefFields, situationBrief, situationNumber } from './card/view.js';
+import { briefFields, situationBrief } from './card/view.js';
 import { ruleBarText } from './card/rulebook.js';
 import { oneLine } from './text.js';
 
 /*
  * The customer report: the result the owner reads in Pi, as one page for someone who never opened
  * Pi. It is built only from the ResultView of the run (plus the stored dialogues it quotes), in the
- * order a reader asks: how good is the agent, can I trust the number, where does it fail and why,
- * what was checked, each failure with its evidence, and what the result does not prove. Its words
+ * order a reader asks: how good is the agent and can the number be trusted (the head, on the first
+ * screen of a phone), where does it fail and why, each failure with its evidence, what was not
+ * checked, the situations themselves, and the fine print — what the trust stands on, how the number
+ * was made and what the result does not prove. Its words
  * are result-text.ts's, for this reader. Its reader did none of the owner's work, so
  * the page speaks about the owner of the agent, never to «вы», and asks its reader to do nothing: the
  * owner's next steps stay in the owner's tools. A situation made from a logged conversation opens
@@ -62,25 +64,21 @@ const example = (failure: FailureExplanation): Example => {
   return { situation: oneLine(failure.title), expected: failure.expected ?? 'не записано в ситуации', said: saidOf(failure), rule: rule ? `«${rule.quote}»` : null };
 };
 
-function chipOf(card: ResultCard, view: ResultView): CardItem['chip'] {
+function chipOf(card: ResultCard): CardItem['chip'] {
   if (card.control) return card.outcome === 'pass' ? { text: 'контроль ✓', tone: 'accent' } : { text: card.outcome === 'fail' ? 'контроль ✗' : 'контроль ?', tone: 'err' };
-  if (card.outcome === 'pass') return { text: '✓ справился', tone: 'ok' };
-  if (card.outcome === 'fail') return { text: '✗ не справился', tone: 'err' };
-  const reason = view.notMeasured.reasons.find(item => item.scenarioIds.includes(card.scenarioId));
-  return { text: reason ? `? не измерено — ${reasonLabel(reason, READER)}` : '? ещё проверяется', tone: 'warn' };
+  const text = situationOutcomeText(card, READER);
+  return card.outcome === 'pass' ? { text: `✓ ${text}`, tone: 'ok' } : card.outcome === 'fail' ? { text: `✗ ${text}`, tone: 'err' } : { text: `? ${text}`, tone: 'warn' };
 }
 
-/** «Почему ошибается»: each cause with up to three of its failures quoted, and how many more causes there are; without causes, the failures themselves. */
+/** «Почему ошибается»: the causes every surface names (causeItems), each with up to three of its failures quoted, and how many more there are. */
 function causesBlock(view: ResultView): Block[] {
   if (!view.failures.length) {
     return view.headline.decided ? [{ kind: 'paragraph', muted: false, text: noErrorsText(view.headline.decided, view.notMeasured.total) }] : [];
   }
-  const items = view.topCauses.length
-    ? view.topCauses.map(cause => ({ title: oneLine(cause.name), count: countText(cause.count, SITUATIONS),
-      examples: view.failures.filter(failure => cause.scenarioIds.includes(failure.scenarioId)).slice(0, 3).map(example) }))
-    : view.failures.slice(0, 3).map(failure => ({ title: oneLine(failure.title), count: countText(1, SITUATIONS), examples: [example(failure)] }));
-  const more = view.topCauses.length && view.moreCauses ? [{ kind: 'paragraph' as const, muted: true, text: moreCausesText(view.moreCauses) }] : [];
-  return [{ kind: 'section', title: 'Почему ошибается', blocks: [{ kind: 'causes', items }, ...more] }];
+  const { items, more, moreText } = causeItems(view);
+  const shown = items.map(cause => ({ title: cause.text, count: countText(cause.count, SITUATIONS),
+    examples: view.failures.filter(failure => cause.scenarioIds.includes(failure.scenarioId)).slice(0, 3).map(example) }));
+  return [{ kind: 'section', title: 'Почему ошибается', blocks: [{ kind: 'causes', items: shown }, ...(more ? [{ kind: 'paragraph' as const, muted: true, text: moreText }] : [])] }];
 }
 
 /**
@@ -100,7 +98,15 @@ function topicsBlock(view: ResultView): Block[] {
   const shares = topics.rows.some(row => row.share !== null);
   const rows = topics.rows.map(row => ({ muted: false, cells: [row.title, row.decided ? `${row.passed} из ${row.decided}` : '—', ...(shares ? [row.share === null ? '—' : sharePercent(row.share)] : [])] }));
   if (topics.uncovered) rows.push({ muted: true, cells: ['Не покрыто ситуациями', '—', sharePercent(topics.uncovered.share)] });
-  return [{ kind: 'section', title: 'По темам', blocks: [{ kind: 'table', head: ['Тема', 'справился', ...(shares ? ['доля диалогов'] : [])], rows }] }];
+  const note = topicsNote(view);
+  return [{ kind: 'section', title: 'По темам', blocks: [{ kind: 'table', head: ['Тема', 'справился', ...(shares ? ['доля диалогов'] : [])], rows },
+    ...(note ? [{ kind: 'paragraph' as const, muted: true, text: note }] : [])] }];
+}
+
+/** «Пробелы в правилах»: what result-text.ts says of them as a paragraph, the requests themselves as a list. */
+function gapsBlock(view: ResultView): Block[] {
+  const [heading, lead, ...gaps] = rulesGapRows(view, READER);
+  return heading && lead ? [{ kind: 'section', title: heading.text, blocks: [{ kind: 'paragraph', muted: true, text: lead.text }, { kind: 'list', items: gaps.map(row => row.text) }] }] : [];
 }
 
 /** How much of the logs the situations stand for: «15 ситуаций покрывают 9 из 11 тем — 94% диалогов. Не покрыты: …». */
@@ -119,20 +125,20 @@ function judgeCheckBasis(check: NonNullable<ResultView['judgeCheck']>): string {
 
 /** How the number was made and what it rests on, in plain sentences for the fine print; the owner's own checks are said about the owner. */
 function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
-  const { agreement, breakdown, coverage, scope, stability } = view;
+  const { agreement, coverage, scope, stability } = view;
   const lines = [
     ...countingLines(view),
     ...(view.bar ? [`${ruleBarText(view.bar, READER)}.`] : []),
     `${countText(scope.cards, SITUATIONS)} · ${countText(scope.dialogues, ['разговор', 'разговора', 'разговоров'])} · клиента играет Lab${scope.judgeModel ? ` · судья — ${scope.judgeModel}` : ''}${scope.target ? ` · версия агента ${scope.target}` : ''}${scope.costUsd ? ` · $${scope.costUsd.toFixed(2)}` : ''}`,
     ...coverageSentence(view),
     ...(toolExpectationsText(view) ? [`${toolExpectationsText(view)}.`] : []),
-    ...(breakdown.goal.decided ? [`Запрос выполнен: ${breakdown.goal.met} из ${breakdown.goal.decided}.${breakdown.rules.decided ? ` Правила промпта нарушены: ${breakdown.rules.broken} из ${breakdown.rules.decided}.` : ''}`] : []),
-    agreement.checked ? `Владелец агента согласился с решениями судьи в ${agreement.agreed} из ${agreement.checked} проверенных случаев.`
+    ...(breakdownText(view) ? [breakdownText(view)!] : []),
+    agreement.checked ? `Владелец агента согласился с решениями судьи в ${agreement.agreed} из ${countText(agreement.checked, ['проверенного случая', 'проверенных случаев', 'проверенных случаев'])}.`
       : view.reviewed.situations ? `Владелец агента сам проверил ${countText(view.reviewed.situations, ['ситуацию', 'ситуации', 'ситуаций'])}.`
       : agreement.queueFailures.length + agreement.sampledPasses.length ? 'Решения судьи ещё не проверялись человеком.' : '',
     ...(view.judgeCheck ? [judgeCheckBasis(view.judgeCheck)] : []),
     ...(view.reviewed.contradicted ? [`В ${countText(view.reviewed.contradicted, ['ситуации', 'ситуациях', 'ситуациях'])} отметка владельца агента по всему разговору расходится с итогом: итог считается по ожиданиям ситуации, отметка по всему разговору в число не входит.`] : []),
-    ...(coverage.excluded.length ? [`Из ${coverage.examined} разговоров в набор вошли ${coverage.included}; не вошли: ${coverage.excluded.map(item => `${item.label} — ${item.count}`).join(', ')}.`] : []),
+    ...(coverage.excluded.length ? [`Из ${countText(coverage.examined, ['разговора', 'разговоров', 'разговоров'])} в набор ${pluralForm(coverage.included, ['вошёл', 'вошли', 'вошли'])} ${coverage.included}; не вошли: ${coverage.excluded.map(item => `${item.label} — ${item.count}`).join(', ')}.`] : []),
     ...(stability?.skipped ? [`Стабильность не проверена: ${stability.skipped}.`] : stability?.unstable.length
       ? [`Нестабильны при повторе: ${stability.unstable.map(row => oneLine(row.title)).join(', ')}.`] : []),
     ...bundle.warnings,
@@ -194,14 +200,14 @@ export function runReport(bundle: EvidenceBundle): Report {
   const byScenario = (id: string) => record.trials.filter(trial => trial.scenarioId === id);
   const failed = new Map(view.failures.map(failure => [failure.scenarioId, failure]));
   // A situation keeps the number the owner knows it by in Pi: a card's own, the place in the run for older formats.
-  const numbers = new Map(view.cards.map((card, index) => [card.scenarioId, situationNumber(record, card.scenarioId, index + 1)]));
+  const numbers = new Map(view.cards.map(card => [card.scenarioId, card.number]));
   const cards: CardItem[] = view.cards.flatMap(card => {
     const scenario = record.scenarios.find(item => item.id === card.scenarioId);
     if (!scenario) return [];
     const failure = failed.get(card.scenarioId);
     // The same projection every surface reads the situation from (card/view.ts), its lines in the same order.
     const brief = situationBrief(record, scenario, bundle.dialogueNumbers, READER);
-    return [{ number: numbers.get(card.scenarioId)!, brief, client: briefFields(brief), chip: chipOf(card, view),
+    return [{ number: numbers.get(card.scenarioId)!, brief, client: briefFields(brief), chip: chipOf(card),
       dialogue: trialTurns(failure ? trials.get(failure.trialId) : byScenario(card.scenarioId)[0]) }];
   });
   const failures: FailureItem[] = view.failures.map(failure => {
@@ -216,24 +222,26 @@ export function runReport(bundle: EvidenceBundle): Report {
     meta: [dateText(view.createdAt), ...(view.scope.target ? [`версия ${view.scope.target}`] : []), ...(view.mode === 'demo' ? ['учебный пример'] : [])],
     head: [
       ...(alarm ? [{ kind: 'alarm' as const, text: alarm.text }] : []),
-      { kind: 'accuracy', lead: accuracy.lead, value: accuracy.value, tail: accuracy.tail, level: accuracy.level,
-        band: null },
+      { kind: 'accuracy', lead: accuracy.lead, value: accuracy.value, tail: accuracy.tail, level: accuracy.level },
       ...(trust.length ? [{ kind: 'trust' as const, parts: trust }] : []),
       ...(operabilityText(view) ? [{ kind: 'trust' as const, parts: [{ text: operabilityText(view)!, warn: true }] }] : []),
       ...(reality.length ? [{ kind: 'trust' as const, parts: reality.map(text => ({ text, warn: false })) }] : []),
       ...(judgeChecked ? [{ kind: 'trust' as const, parts: [judgeChecked] }] : []),
       ...(view.calibration ? [{ kind: 'trust' as const, parts: [{ text: view.calibration.text, warn: false }] }] : []),
     ],
+    // The first screen answers how good the agent is and whether to believe it (the head), then where and why it fails;
+    // the evidence behind the trust line and how the number was made are the fine print at the end.
     blocks: [
-      { kind: 'section', title: 'Основания доверия', blocks: [{ kind: 'list', items: evaluationEvidenceLines(view) }] },
       ...scenariosBlock(view),
       ...topicsBlock(view),
       ...causesBlock(view),
-      ...(cards.length ? [{ kind: 'section' as const, title: 'Ситуации', blocks: [{ kind: 'cards' as const, items: cards }] }] : []),
       ...(failures.length ? [{ kind: 'section' as const, title: 'Разбор ошибок', blocks: [{ kind: 'failures' as const, items: failures }] }] : []),
       ...(unmeasured.length ? [{ kind: 'section' as const, title: 'Не измерено', blocks: [{ kind: 'list' as const, items: unmeasured }] }] : []),
+      ...gapsBlock(view),
       ...calibrationBlock(bundle),
       ...comparisonBlock(bundle),
+      ...(cards.length ? [{ kind: 'section' as const, title: 'Ситуации', blocks: [{ kind: 'cards' as const, items: cards }] }] : []),
+      { kind: 'section', title: 'Основания доверия', blocks: [{ kind: 'list', items: evaluationEvidenceLines(view) }] },
       basisBlock(bundle, view),
       ...rowSection(caveatRows(view, READER)),
     ],

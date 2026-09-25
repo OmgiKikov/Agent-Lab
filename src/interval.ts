@@ -1,6 +1,9 @@
 /*
- * The one interval every rate on a result screen is read with — the accuracy of the headline and the agreement
- * of the synthetic customers with production — so the two never disagree about what «мало данных» means.
+ * What «мало данных» means on a result screen, and the one interval a rate there is read with. The interval belongs to
+ * the agreement of the synthetic customers with production (card/calibration-view.ts). The headline's accuracy carries
+ * none: its situations are a curated, stratified set drawn from the logs, not customers sampled independently from
+ * production, so an interval around it would claim a confidence about the whole traffic that the set cannot give
+ * (ResultView.headline). Below SMALL_SAMPLE both only say «мало данных».
  */
 
 /** Below this many decided situations a rate is a rough estimate: the line under it says so. */

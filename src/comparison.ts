@@ -20,10 +20,12 @@ import { agentVersionRelation } from './target-version.js';
  *   stability*         which decided situations flipped against the source run
  */
 const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
-/** «3 пары попыток»: an attempt before and the same attempt after. */
-const PAIRS: [string, string, string] = ['пара попыток', 'пары попыток', 'пар попыток'];
-/** Genitive after «из»: «из 1 пары попыток», «из 5 пар попыток». */
-const PAIRS_OF: [string, string, string] = ['пары попыток', 'пар попыток', 'пар попыток'];
+/**
+ * The two units a comparison speaks in, each named in every statement: situations — what was fixed or broke — and pairs
+ * of conversations, a conversation «до» and the same one «после», which is what could or could not be compared.
+ * Genitive after «из» and «у»: «из 1 пары разговоров», «у 5 пар разговоров».
+ */
+const PAIRS_OF: [string, string, string] = ['пары разговоров', 'пар разговоров', 'пар разговоров'];
 
 function rubricReviewNote(scenario: Scenario | undefined, before: Trial, after: Trial): string | undefined {
   const replies = before.events.filter(e => e.type === 'assistant').map(e => e.text);
@@ -183,7 +185,7 @@ export function stabilityAfterReassess(record: Experiment, source: Experiment): 
   return result;
 }
 
-const JUDGE_INCOMPLETE = 'Судья не завершил оценку этой попытки.';
+const JUDGE_INCOMPLETE = 'Судья не завершил оценку этого разговора.';
 /** The note of a comparison whose agent's version is unknown in either run (`versionUnknown`): what that means, for any reader. */
 export const VERSION_UNKNOWN_NOTE = 'Версия агента неизвестна хотя бы в одном прогоне: «исправлено» и «сломалось» здесь — изменения ответов, а не доказанный эффект новой версии.';
 
@@ -303,7 +305,7 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
     for (const row of expectedRows) addIncomparable(row, notes.join(' '),
       before.trials.find(t => attemptKey(t) === `${row.scenarioId}|${row.userMode}|${row.repeat}`)?.id,
       after.trials.find(t => attemptKey(t) === `${row.scenarioId}|${row.userMode}|${row.repeat}`)?.id);
-    result.headline = `Прогоны несравнимы (${countText(result.incomparable.length, PAIRS)}): исправления и поломки не подсчитаны.`;
+    result.headline = 'Прогоны несравнимы: исправления и поломки не подсчитаны.';
     return result;
   }
   // The judge saw observable sources (evaluation.ts), so its receipt is checked against the same input, one pair at a time.
@@ -319,10 +321,10 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   for (const row of expectedRows) {
     const key = `${row.scenarioId}|${row.userMode}|${row.repeat}`;
     const a = beforeAttempts.get(key) ?? [], b = afterAttemptGroups.get(key) ?? [];
-    if (a.length !== 1) { if (!a.length) excludedBy.missingBefore++; addIncomparable(row, a.length ? 'Попытка «до» записана несколько раз.' : 'Нет попытки «до».', a[0]?.id, b[0]?.id); }
-    else if (!validBefore(a[0]!)) { excludedBy.invalidBefore++; addIncomparable(row, 'Попытка «до» не измерена.', a[0]!.id, b[0]?.id); }
-    else if (b.length !== 1) { if (!b.length) excludedBy.missingAfter++; addIncomparable(row, b.length ? 'Попытка «после» записана несколько раз.' : 'Нет попытки «после».', a[0]!.id, b[0]?.id); }
-    else if (!validAfter(b[0]!)) { excludedBy.invalidAfter++; addIncomparable(row, 'Попытка «после» не измерена.', a[0]!.id, b[0]!.id); }
+    if (a.length !== 1) { if (!a.length) excludedBy.missingBefore++; addIncomparable(row, a.length ? 'разговор «до» записан несколько раз' : 'нет разговора «до»', a[0]?.id, b[0]?.id); }
+    else if (!validBefore(a[0]!)) { excludedBy.invalidBefore++; addIncomparable(row, 'разговор «до» не измерен', a[0]!.id, b[0]?.id); }
+    else if (b.length !== 1) { if (!b.length) excludedBy.missingAfter++; addIncomparable(row, b.length ? 'разговор «после» записан несколько раз' : 'нет разговора «после»', a[0]!.id, b[0]?.id); }
+    else if (!validAfter(b[0]!)) { excludedBy.invalidAfter++; addIncomparable(row, 'разговор «после» не измерен', a[0]!.id, b[0]!.id); }
     else if (auditRequired && (!judged(before, a[0]!) || !judged(after, b[0]!))) { excludedBy.judgeIncomplete++; addIncomparable(row, JUDGE_INCOMPLETE, a[0]!.id, b[0]!.id); }
   }
   const afterAttempts = new Map([...afterAttemptGroups].flatMap(([key, trials]) => trials.length === 1 ? [[key, trials[0]!] as const] : []));
@@ -337,10 +339,10 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   excludedBy.other = Math.max(0, result.coverage.excludedPairs - named);
   result.coverage.excludedBy = excludedBy;
   if (result.coverage.excludedPairs) notes.push(`Сопоставлено ${pairs.length} из ${countText(result.coverage.plannedPairs, PAIRS_OF)}. Не сопоставлено ${result.coverage.excludedPairs}: `
-    + `«до» — не измерено ${excludedBy.invalidBefore}, нет попытки ${excludedBy.missingBefore}; «после» — не измерено ${excludedBy.invalidAfter}, нет попытки ${excludedBy.missingAfter}`
-    + `${excludedBy.judgeIncomplete ? `; без завершённой оценки судьи — ${excludedBy.judgeIncomplete}` : ''}${excludedBy.other ? `; повторённые или лишние попытки — ${excludedBy.other}` : ''}. `
-    + 'За несопоставленными попытками может скрываться поломка: вывод относится только к сопоставленным.');
-  if (!pairs.length) { result.headline = 'Нет попыток, измеренных в обоих прогонах: сравнивать нечего.'; return result; }
+    + `«до» — не измерено ${excludedBy.invalidBefore}, нет разговора ${excludedBy.missingBefore}; «после» — не измерено ${excludedBy.invalidAfter}, нет разговора ${excludedBy.missingAfter}`
+    + `${excludedBy.judgeIncomplete ? `; без завершённой оценки судьи — ${excludedBy.judgeIncomplete}` : ''}${excludedBy.other ? `; повторённые или лишние разговоры — ${excludedBy.other}` : ''}. `
+    + 'За несопоставленными разговорами может скрываться поломка: вывод относится только к сопоставленным.');
+  if (!pairs.length) { result.headline = 'Нет разговоров, измеренных в обоих прогонах: сравнивать нечего.'; return result; }
   result.pairs = pairs.map(trial => {
     const scenario = shared.find(s => s.id === trial.scenarioId);
     // The headline rule per attempt (goal and prompt rules); a legacy card falls back to the strict trial result.
@@ -353,7 +355,7 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
     if (reviewNote) change = 'unknown';
     if (reviewNote) notes.push(`${scenario!.title} · попытка ${trial.repeat + 1}: ${reviewNote}`);
     if (change === 'unknown') addIncomparable({ scenarioId: trial.scenarioId, userMode: trial.userMode, repeat: trial.repeat },
-      reviewNote ?? 'Ни судья, ни человек не решили, справился ли агент в этой паре попыток.', trial.id, following.id);
+      reviewNote ?? 'ни судья, ни человек не решили, справился ли агент в этой паре разговоров', trial.id, following.id);
     return { scenarioId: trial.scenarioId, userMode: trial.userMode, repeat: trial.repeat,
       beforeTrialId: trial.id, afterTrialId: following.id, change, ...(reviewNote ? { reviewNote } : {}) };
   });
@@ -380,8 +382,9 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   // Older runs judged by rubrics keep their words: a rubric's score rising was never a confirmed fix.
   const preliminary = result.includesRubrics && !shared.every(s => headlineRule(s, after.trials.filter(t => t.scenarioId === s.id)).kind === 'expectations');
   result.headline = compared ? `${preliminary ? `Оценка выросла у ${result.fixed.length}, снизилась у ${result.regressed.length}` : `Исправлено ${result.fixed.length}, сломалось ${result.regressed.length}`}, без изменений ${result.unchanged.passing + result.unchanged.failing} из ${compared} ${pluralForm(compared, ['ситуации', 'ситуаций', 'ситуаций'])}.` : 'Общих оценённых ситуаций нет, сравнивать нечего.';
-  if (result.coverage.excludedPairs) result.headline = `Частичное сравнение: ${pairs.length} из ${countText(result.coverage.plannedPairs, PAIRS_OF)}. ${result.headline}`;
-  if (preliminary) result.headline = `Предварительно: ${result.headline}`;
+  // How many pairs of conversations could be compared is said apart (result-text.ts comparisonRows), in its own unit.
+  if (result.coverage.excludedPairs) result.headline = `Частичное сравнение: ${result.headline.charAt(0).toLocaleLowerCase('ru')}${result.headline.slice(1)}`;
+  if (preliminary) result.headline = `Предварительно: ${result.headline.charAt(0).toLocaleLowerCase('ru')}${result.headline.slice(1)}`;
   const disputed = result.pairs.filter(p => p.reviewNote).length;
   if (disputed) result.headline += ` У ${countText(disputed, PAIRS_OF)} ответы агента совпали, а оценки судьи разные: судью нужно проверить.`;
   if (result.ungraded) notes.push(`${countText(result.ungraded, SITUATIONS)} без решающей оценки не ${pluralForm(result.ungraded, ['вошла', 'вошли', 'вошли'])} в сравнение.`);

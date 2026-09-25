@@ -236,7 +236,7 @@ export class LabWorkspace implements Component {
     if (top?.kind === 'allRuns') return withHead(allRunsScreen(data, this.cursor(), width));
     if (top?.kind === 'run') {
       const run = this.runOf(top.runId);
-      if (run) return withHead(resultScreen(data, run, { selected: this.cursor(), details: this.state.details, actions: ['Отчёт для заказчика'] }, width));
+      if (run) return withHead(resultScreen(data, run, { selected: this.cursor(), details: this.state.details, actions: ['Отчёт для заказчика'], back: true }, width));
     }
     if (top?.kind === 'problem') {
       const index = data.problems.findIndex(problem => problem.key === top.key);
