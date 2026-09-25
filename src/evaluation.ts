@@ -6,12 +6,14 @@ import { CARD_CUSTOMER_PROTOCOL, customerBrief, customerReplyProblem, customerRe
 import { randomUUID } from 'node:crypto';
 import { addUsage, emptyUsage, isCardExecution, runnableTarget, scriptIssue, type CheckResult, type InvalidCause, type Requirement, type Revision, type Scenario, type Settings, type Source, type Target, type TraceEvent, type Trial, type UserMode } from './contracts.js';
 import { assessmentRubrics, judgeAuditSchema, metricApplies, RAG_METRIC_IDS, ragEvidenceComplete, validateAssessments, type JudgeAudit, type MetricAssessment } from './assessment.js';
-import { userTurnSchema, type CallContext, type DialogueMessage, type Runtime, type TargetSession } from './runtime.js';
+import { userTurnSchema, type ButtonChoice, type CallContext, type DialogueMessage, type Runtime, type TargetSession } from './runtime.js';
 import { valueTokens } from './verbatim.js';
 import { hasCompleteJudgment, judgmentEvidenceEvents, judgmentFailure, observableSources, sealJudgeReceipt } from './judge.js';
 import { ProviderFailure } from './llm/model-call.js';
-import { openExternalTarget } from './targets.js';
+import { openExternalTarget, type AgentButton, type TurnOutcome } from './targets.js';
 import { simulatorChecks } from './simulator.js';
+import { normalizeText } from './card/checks.js';
+import { clip } from './text.js';
 
 /*
  * One trial = one fresh world, one target session, one user side.
@@ -63,6 +65,22 @@ function freshReadEvidence(events: TraceEvent[]): { passed: boolean; evidence: s
       : 'No update attempts; the read-before-update constraint was not exercised.',
   };
 }
+
+/** What the adapter said a turn gave the customer beside its text; an adapter that says nothing gave a plain reply. */
+interface TurnFacts { outcome: TurnOutcome; status?: string; buttons: AgentButton[] }
+const PLAIN_REPLY: TurnFacts = { outcome: 'reply', buttons: [] };
+
+/** The button the customer pressed: a message that is one offered button's text, up to case and spacing. */
+function pressOf(offered: readonly AgentButton[], message: string): ButtonChoice | undefined {
+  const said = normalizeText(message);
+  const index = offered.findIndex(button => normalizeText(button.text) === said);
+  const button = offered[index];
+  return button ? { index, text: button.text, ...(button.value !== undefined ? { value: button.value } : {}) } : undefined;
+}
+
+/** Why a turn that gave the customer nothing leaves the dialogue unmeasured; the agent's status is named as the adapter wrote it. */
+const noReplyReason = (status: string | undefined) =>
+  `Агент не дал ответа клиенту${status ? ` (статус ${clip(status, 200)})` : ''}: ход не дошёл до клиента, разговор не измерен.`;
 
 /** Where a failed dialogue broke, in the owner's words. */
 const stages: Record<string, string> = {
@@ -173,9 +191,10 @@ export async function evaluateTrial(input: {
   };
   localCtx.onTargetEvent = emit;
   const userCtx = { ...localCtx, onTargetEvent: undefined };
-  const append = (role: 'user' | 'assistant', content: string) => {
+  // `facts`: what the adapter said of the turn beside its text — a handoff, the agent's status, the buttons offered or pressed.
+  const append = (role: 'user' | 'assistant', content: string, facts?: Record<string, unknown>) => {
     messages.push({ role, content });
-    emit({ type: role, text: content });
+    emit({ type: role, text: content, ...(facts && Object.keys(facts).length ? { result: facts } : {}) });
   };
   let session: TargetSession | undefined;
   let stage = 'target session';
@@ -187,6 +206,10 @@ export async function evaluateTrial(input: {
   let finalUserReply = false;
   let reportedState = false;
   let controlled: ReturnType<typeof createUserState> | undefined;
+  // What the adapter said the latest turn gave the customer (onReply sees it before the text comes back), and the buttons
+  // the agent's last reply offered: a customer message that is one of them goes to the agent as that button's press.
+  let latest: TurnFacts = PLAIN_REPLY;
+  let offered: AgentButton[] = [];
   // A card's customer in their own words (card-customer.ts), when the runtime can play one; otherwise the move controller.
   let free: { brief: CustomerBrief; turned: boolean; said: number } | undefined;
   // A card judged on tools or state needs the observed state recorded after every agent reply.
@@ -220,6 +243,8 @@ export async function evaluateTrial(input: {
       onRecords: () => { reportedState = true; },
       onReply(reply) {
         responseCount++;
+        latest = typeof reply === 'string' ? PLAIN_REPLY
+          : { outcome: reply.outcome ?? 'reply', ...(reply.status ? { status: reply.status } : {}), buttons: reply.buttons ?? [] };
         const observation = trial.observation!;
         observation.state = typeof reply !== 'string' && reply.records !== undefined ? 'reported' : 'missing';
         if (typeof reply === 'string' || reply.eventsComplete !== true) observation.tools = 'partial';
@@ -246,20 +271,37 @@ export async function evaluateTrial(input: {
     let turn = 0;
     for (; turn < settings.maxTurns; turn += 1) {
       ctx.signal.throwIfAborted();
-      append('user', userMessage);
+      // A press goes to the agent as the button's own text, whatever case or spacing the customer wrote it in.
+      const choice = pressOf(offered, userMessage);
+      if (choice) userMessage = choice.text;
+      append('user', userMessage, choice ? { choice } : undefined);
       stage = 'target response';
       onStage?.('target');
-      const response = await session.respond(userMessage);
+      latest = PLAIN_REPLY;
+      const response = await session.respond(userMessage, choice ? { choice } : undefined);
+      const facts = latest;
       if (persistenceFailed) throw persistenceError;
       ctx.signal.throwIfAborted();
       if (typeof response !== 'string') throw new Error('Target returned a non-text response');
       if (observesBeyondReply) {
         emit({ type: 'observation', result: structuredClone(trial.observation), ...(trial.observation?.state !== 'missing' ? { state: structuredClone(state) } : {}) });
       }
-      append('assistant', response);
-      if (!response.trim()) { trial.reason = 'Испытуемый вернул пустой ответ.'; trial.invalidCause = 'agent'; break; }
+      if (facts.outcome === 'no_reply') {
+        // The customer got nothing: what the adapter wrote is its diagnostic, never a message of the agent, and the customer
+        // Lab plays never sees it. The agent's operability, counted apart — neither the Lab's error nor a failed duty.
+        trial.reason = noReplyReason(facts.status);
+        trial.invalidCause = 'no_reply';
+        emit({ type: 'error', text: trial.reason, result: { outcome: 'no_reply', ...(facts.status ? { status: facts.status } : {}), ...(response.trim() ? { detail: clip(response, 2000) } : {}) } });
+        break;
+      }
+      append('assistant', response, { ...(facts.outcome === 'handoff' ? { outcome: facts.outcome } : {}), ...(facts.status ? { status: facts.status } : {}),
+        ...(facts.buttons.length ? { buttons: facts.buttons } : {}) });
+      offered = facts.buttons;
+      if (!response.trim() && facts.outcome !== 'handoff') { trial.reason = 'Испытуемый вернул пустой ответ.'; trial.invalidCause = 'agent'; break; }
       const serviceMarker = target.serviceReplies?.find(marker => response.includes(marker));
       if (serviceMarker !== undefined) { trial.reason = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента, ситуация не измерена.`; trial.invalidCause = 'service_reply'; break; }
+      // The agent passed the conversation to a person: it ends here, and it is judged as it went.
+      if (facts.outcome === 'handoff') { stopped = true; break; }
       if (control || controlled && (finalUserReply || controlled.policy.terminalStates.includes(controlled.position))) { stopped = true; break; }
       if (!controlled && !free && (userMode === 'static' || finalUserReply || (scenario.user.maxFollowUps !== undefined && turn >= scenario.user.maxFollowUps))) { stopped = true; break; }
       if (userMode === 'scripted') {
@@ -329,7 +371,8 @@ export async function evaluateTrial(input: {
     stage = 'проверка наблюдений';
     trial.checks = grade(scenario, trial);
     const allPassed = trial.checks.length > 0 && trial.checks.every(check => check.passed);
-    // Only an empty or a service reply leaves the loop unstopped, and each has already named its cause.
+    // Only an empty reply, a service reply or a turn that gave the customer nothing leaves the loop unstopped, and each
+    // has already named its cause.
     trial.outcome = !stopped ? 'invalid' : trial.checks.length === 0 ? 'ungraded' : allPassed ? 'pass' : 'fail';
     trial.reason ||= trial.checks.length === 0
       ? 'Диалог дошёл до конца, но объективных проверок в карточке нет: оценки по рубрикам считаются отдельно.'
@@ -340,7 +383,7 @@ export async function evaluateTrial(input: {
       : ' Состояние внешний агент не сообщил.';
   } catch (error) {
     if (persistenceFailed) throw persistenceError;
-    // A dialogue that already broke on the agent's side (an empty or a service reply) keeps its own reason and cause
+    // A dialogue that already broke on the agent's side (an empty or a service reply, no reply at all) keeps its own reason and cause
     // when grading then refuses its facts: the agent's silence is what happened (OD-1), not the missing observation.
     const brokeFirst = !ctx.signal.aborted && stage === 'проверка наблюдений' && trial.invalidCause !== undefined;
     trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';

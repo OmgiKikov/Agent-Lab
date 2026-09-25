@@ -33,7 +33,10 @@ export interface CallContext {
   onJudgment?(trialId: string, audit: JudgeAudit, final?: boolean): void;
 }
 export interface DialogueMessage { role: 'user' | 'assistant'; content: string }
-export interface TargetSession { respond(message: string): Promise<string>; close(): Promise<void> }
+/** A button of the agent's last reply the customer pressed: its place in that reply, its text as shown, the value the adapter gave it. */
+export interface ButtonChoice { index: number; text: string; value?: string }
+/** `choice` is set when the message is a press of one of the buttons the agent's last reply offered. */
+export interface TargetSession { respond(message: string, options?: { choice?: ButtonChoice }): Promise<string>; close(): Promise<void> }
 export const userTurnSchema = z.strictObject({ done: z.boolean(), message: z.string().max(6000) }).refine(v => v.done || v.message.trim().length > 0, 'Empty user message');
 export type UserTurn = z.infer<typeof userTurnSchema>;
 export interface SourceSelectionInput {

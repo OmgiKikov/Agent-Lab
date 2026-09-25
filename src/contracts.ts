@@ -413,10 +413,11 @@ export interface Trial {
  * Where a dialogue broke: the turn budget ran out, the simulated client failed, the agent or its connection failed
  * to answer, a service text stood in for the agent's reply, or `measurement`: the agent's side answered but the
  * measurement could not be made — the adapter reported a measurementError, or the connection did not show the
- * state, tool log, reset or observed field the checks need. Values are only ever appended, never renamed or
- * reordered, so every stored cause stays valid.
+ * state, tool log, reset or observed field the checks need; `no_reply`: the adapter said the turn gave the customer
+ * nothing (a service status, a failed generation) — the agent's operability, never the Lab's error nor a failed duty.
+ * Values are only ever appended, never renamed or reordered, so every stored cause stays valid.
  */
-export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply', 'measurement'] as const;
+export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply', 'measurement', 'no_reply'] as const;
 export type InvalidCause = typeof INVALID_CAUSES[number];
 /** Why an attempt has no judgment: only code checks were re-run, the run was stopped, the model provider did not answer, or the judge's answers were rejected. */
 export const ASSESSMENT_FAILURES = ['code_only', 'stopped', 'unavailable', 'rejected'] as const;
