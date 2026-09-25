@@ -386,13 +386,13 @@ test('one dialog runs the ready situations: «Принять 1 ситуацию 
     const record = await fixture.read();
     assert.deepEqual(libraryOf(record).acceptance!.cardIds, [cardNumbered(record, 2).id], 'the situation that waits for the owner stays out');
     assert.deepEqual([record.trials.length, record.phase], [1, 'results_review']);
-    // «Запусти ещё раз»: the finished run never runs again in place; its accepted set goes into a repeat, which just starts.
+    // «Запусти ещё раз»: the finished run never runs again in place; its accepted set goes into a repeat, which just
+    // starts — and a repeat the owner declines in its dialog is never written.
     const again = json(await run.execute('again', {}, undefined, undefined, ctx));
-    assert.equal(again.cancelled, true);
+    assert.deepEqual([again.cancelled, again.run], [true, fixture.id], 'the answer names the run that exists');
     assert.match(selects[2]!.title, /^Запустить прогон\?\n/);
     assert.equal(fingerprint(await fixture.read()), fingerprint(record), 'the finished run is untouched');
-    const repeat = (await fixture.list()).find(item => item.id !== fixture.id)!;
-    assert.deepEqual([repeat.parentRunId, repeat.phase, repeat.trials.length], [fixture.id, 'review', 0]);
+    assert.deepEqual((await fixture.list()).map(item => item.id), [fixture.id], '«Не сейчас» leaves no draft behind');
   } finally { await shutdown(); await fixture.cleanup(); }
 });
 

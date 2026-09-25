@@ -280,8 +280,8 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
           if (action.type === 'run') {
             const draft = data.space.draft;
             const started = await writing(async (lab, handOver) => {
-              // No draft: the newest run's set is repeated — the same situations, the agent as it is now.
-              const target = draft ?? (data.space.runs[0] ? await lab.repeat(data.space.runs[0].id) : undefined);
+              // No draft: the newest run's set is repeated — the same situations, the agent as it is now — written only when the owner starts it.
+              const target = draft ?? (data.space.runs[0] ? await lab.repeat(data.space.runs[0].id, undefined, undefined, { preview: true }) : undefined);
               if (!target) throw new Error('Запускать нечего: сначала соберите ситуации.');
               const run = await launchRun(ctx, lab, target);
               if (run) handOver(lease => background.detach(ctx, lease, target.id, 'board'));

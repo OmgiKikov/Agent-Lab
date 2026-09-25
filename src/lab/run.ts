@@ -43,7 +43,7 @@ const MAX_PARALLEL = 16;
 /** Run settings, the connection, its version and the agent label; the situations themselves change only through the library. */
 export function updateDraft(lab: Lab, id: string, expectedHash: string, raw: DraftPatch): Promise<Experiment> {
   return lab.operations.change(async () => {
-    const record = await lab.store.get(id);
+    const record = await lab.get(id);
     if (record.phase !== 'review') throw new Error('Править можно только незапущенный черновик. Готовые доказательства остаются как есть, для изменений создайте новый эксперимент.');
     if (draftHash(record) !== expectedHash) throw new Error('Черновик изменился. Откройте карточки заново, прежде чем править.');
     const patch = draftPatchSchema.parse(raw);
@@ -65,7 +65,7 @@ export function updateDraft(lab: Lab, id: string, expectedHash: string, raw: Dra
 /** Confirms the expectations of a draft made before libraries: one confirmation covers every situation of it. */
 export function acceptDraft(lab: Lab, id: string, expectedHash: string): Promise<Experiment> {
   return lab.operations.change(async () => {
-    const record = await lab.store.get(id);
+    const record = await lab.get(id);
     verifyAcceptedRun(record);
     if (record.workflow !== 'evaluate') throw new Error('Принять тест можно только в workflow evaluate.');
     if (record.phase !== 'review') throw new Error('Принять можно только незапущенный черновик.');
@@ -89,8 +89,14 @@ export function acceptDraft(lab: Lab, id: string, expectedHash: string): Promise
   });
 }
 
+/**
+ * How a repeat is made: `preview` — the fresh draft is kept in the lab for the owner to see, and written only by its
+ * first change (Lab.preview): a run dialog or an owner command over a finished run the owner declines writes nothing.
+ */
+export interface RepeatOptions { preview?: boolean }
+
 /** Reuse the exact reviewed materials and cards; only evidence and approvals start afresh. */
-export function repeat(lab: Lab, id: string, scenarioIds?: string[], controlScenarioIds?: string[]): Promise<Experiment> {
+export function repeat(lab: Lab, id: string, scenarioIds?: string[], controlScenarioIds?: string[], options: RepeatOptions = {}): Promise<Experiment> {
   return lab.operations.change(async () => {
     const previous = await lab.store.get(id);
     if (previous.workflow !== 'evaluate' || !previous.reviewedAt || isRunning(previous.phase)) {
@@ -109,7 +115,7 @@ export function repeat(lab: Lab, id: string, scenarioIds?: string[], controlScen
     // A control keeps its accepted card: the one-turn rule is applied when it runs (evaluateTrial).
     record.targetFingerprint = await targetFingerprint(record.target);
     verifyAcceptedRun(record);
-    await lab.store.save(record);
+    if (options.preview) lab.preview(record); else await lab.store.save(record);
     return structuredClone(record);
   });
 }

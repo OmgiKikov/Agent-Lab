@@ -242,8 +242,10 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
   if (!values.input && !values.choice && !values.check && !values.resume && !values.accept && !rulebookFlags) { await show(values.id); return; }
   await lab.init();
   try {
-    const target = values.check || values.resume || values.accept ? { id: values.id } : await lab.editableCards(values.id);
-    if (target.id !== values.id) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка идёт в черновик ${target.id}.\n`);
+    const target: { id: string; preview?: true } = values.check || values.resume || values.accept ? { id: values.id } : await lab.editableCards(values.id);
+    // A fresh copy of a finished run is only previewed: without --yes nothing is written, so it has no id to name yet.
+    if (target.preview) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка пойдёт в новый черновик того же набора.\n`);
+    else if (target.id !== values.id) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка идёт в черновик ${target.id}.\n`);
     if (values.resume || values.check || values.accept) {
       // The ceiling the owner agreed to covers the whole preparation: continuing past it is their word too, the number stated.
       const budget = values.resume ? preparationBudget(await lab.get(target.id)) : undefined;
@@ -282,6 +284,7 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
       return;
     }
     await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, requiredAuthority(prepared.command) === 'owner-words' && words ? 'words' : 'confirmed'));
+    if (target.preview) process.stderr.write(`Правка записана в новый черновик ${target.id}.\n`);
     const check = await lab.recheckCards(target.id);
     if (check.decision.action === 'run') await lab.waitForIdle();
     await show(target.id, changes.map(line => safeLine(line)));

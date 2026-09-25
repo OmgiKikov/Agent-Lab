@@ -164,9 +164,11 @@ export async function cardContext(lab: Lab, id: string): Promise<{ experiment: E
 
 /**
  * The draft an owner command goes to: this draft, the draft that holds the newest revision of its cards, or — when
- * only finished runs hold it — a fresh copy of the newest of them: a run that happened never changes.
+ * only finished runs hold it — a fresh copy of the newest of them: a run that happened never changes. The fresh copy
+ * is only previewed (Lab.preview): the owner sees the change on it, and it is written with the change they apply —
+ * a preview they decline writes nothing.
  */
-export async function editableCards(lab: Lab, id: string): Promise<{ id: string; copiedFrom?: string }> {
+export async function editableCards(lab: Lab, id: string): Promise<{ id: string; copiedFrom?: string; preview?: true }> {
   const settled = await lab.get(id);
   if (!settled.librarySnapshot) throw new Error('У этого прогона нет ситуаций нового формата.');
   const library = requireLibraryV2(settled.librarySnapshot);
@@ -174,7 +176,7 @@ export async function editableCards(lab: Lab, id: string): Promise<{ id: string;
   const choice = chooseEditableDraft({ settled, holders: await lab.list(), headHash, busy: draftIsBusy });
   if (choice.action === 'busy') throw new Error('Этот прогон сейчас идёт: ситуации можно смотреть, изменить — после него.');
   if (choice.action === 'edit') return { id };
-  return choice.action === 'use' ? { id: choice.id, copiedFrom: id } : { id: (await repeat(lab, choice.sourceId)).id, copiedFrom: id };
+  return choice.action === 'use' ? { id: choice.id, copiedFrom: id } : { id: (await repeat(lab, choice.sourceId, undefined, undefined, { preview: true })).id, copiedFrom: id, preview: true };
 }
 
 /** Previews an owner command on a card draft (card/commands.ts); nothing is written. */

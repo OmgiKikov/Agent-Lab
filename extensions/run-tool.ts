@@ -155,7 +155,8 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
     let draft = await owned.lab.get(found.id);
     if (isRunning(draft.phase)) throw new Error(draft.phase === 'preparing' ? 'Ситуации ещё готовятся: запуск — после подготовки.' : 'Этот прогон уже идёт.');
     let note = `Запуск · ${runStamp(draft)}`;
-    // A run that started is never run again in place: its accepted set goes into a fresh draft, the agent as it is now.
+    // A run that started is never run again in place: its accepted set goes into a fresh draft, the agent as it is now —
+    // previewed, and written only when the owner says «Запустить».
     if (draft.reviewedAt || draft.trials.length) {
       const ids = numbers?.map(number => {
         const scenario = draft.scenarios.find((item, index) => situationNumber(draft, item.id, index + 1) === number);
@@ -164,7 +165,7 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
         return scenario.id;
       });
       const source = draft;
-      draft = await owned.lab.repeat(source.id, ids);
+      draft = await owned.lab.repeat(source.id, ids, undefined, { preview: true });
       note = `Повтор · ${runStamp(draft)}`;
       const moved = !!source.targetFingerprint && !!draft.targetFingerprint && !sameTargetVersion(source.targetFingerprint, draft.targetFingerprint);
       if (moved) agent = { ...agent, note: agent.note ?? 'Код агента изменился с прошлого прогона — проверяется новая версия.' };
@@ -175,7 +176,7 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
     // Nothing has started yet: an Esc before the dialog ends the action.
     signal.throwIfAborted();
     const started = await launchRun(ctx, owned.lab, draft, agent, agent.folder ?? ctx.cwd);
-    if (!started) return host.feedResult(callId, { run: draft.id, cancelled: true, instruction: 'The owner did not start the run. The situations are kept; do not ask to start again unless the owner does.' },
+    if (!started) return host.feedResult(callId, { run: found.id, cancelled: true, instruction: 'The owner did not start the run. Nothing was written: the situations are kept as they were; do not ask to start again unless the owner does.' },
       { tone: 'warning', rows: [row('Не запускаю: вы отказались. Ситуации сохранены, агент не запускался.')] }, note);
     // The run has started: from here an Esc, even one pressed while it was starting, hands it to the session.
     // Its row and the row above the input are redrawn from the live record at each change the run reports.

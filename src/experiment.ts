@@ -38,10 +38,13 @@ export class ExperimentLab {
   private readonly operations: OperationRunner;
   private readonly lab: Lab;
   private initializing: Promise<void> | undefined;
+  /** Fresh drafts the owner sees before anything is written (Lab.preview): gone with this lab, written by their first change. */
+  private readonly previews = new Map<string, Experiment>();
   constructor(directory: string, private readonly injectedRuntime?: Runtime) {
     this.store = new ExperimentStore(directory);
     this.operations = new OperationRunner(this.store);
-    this.lab = { store: this.store, operations: this.operations, get: id => this.get(id), list: () => this.list(), runtime: record => this.runtime(record) };
+    this.lab = { store: this.store, operations: this.operations, get: id => this.get(id), list: () => this.list(), runtime: record => this.runtime(record),
+      preview: record => { this.previews.set(record.id, structuredClone(record)); } };
   }
 
   /**
@@ -69,7 +72,21 @@ export class ExperimentLab {
     } catch (error) { await this.store.close(); throw error; }
   }
 
-  async get(id: string): Promise<Experiment> { return this.operations.snapshot(id) ?? this.store.get(id); }
+  /** A record as it is now: the running one's live copy, the stored file, or — until a change writes it — a fresh draft this lab previews. */
+  async get(id: string): Promise<Experiment> {
+    const running = this.operations.snapshot(id);
+    if (running) return running;
+    const preview = this.previews.get(id);
+    if (!preview) return this.store.get(id);
+    try {
+      const written = await this.store.get(id);
+      this.previews.delete(id);
+      return written;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return structuredClone(preview);
+    }
+  }
   async list(): Promise<Experiment[]> {
     const records = await this.store.list();
     return records.map(record => this.operations.snapshot(record.id) ?? record);
@@ -82,7 +99,8 @@ export class ExperimentLab {
   acceptCards(id: string, expectedHash: string, cardIds: string[]): Promise<{ library: LibraryV2; experiment: Experiment }> { return library.acceptCards(this.lab, id, expectedHash, cardIds); }
   checkCards(id: string, expectedHash: string): Promise<Experiment> { return library.checkCards(this.lab, id, expectedHash); }
   cardContext(id: string): Promise<{ experiment: Experiment; library: LibraryV2; evidence: CardEvidence; numbers: DialogueNumbers }> { return library.cardContext(this.lab, id); }
-  editableCards(id: string): Promise<{ id: string; copiedFrom?: string }> { return library.editableCards(this.lab, id); }
+  /** The draft an owner command goes to; `preview`: a fresh copy of a finished run, written only with the change applied to it. */
+  editableCards(id: string): Promise<{ id: string; copiedFrom?: string; preview?: true }> { return library.editableCards(this.lab, id); }
   prepareCardCommand(id: string, command: CardCommand, options: { via: Via; ownerWords?: string }): Promise<Prepared> { return library.prepareCardCommand(this.lab, id, command, options); }
   applyCardCommand(id: string, prepared: Prepared, grant: HostGrant): Promise<{ library: LibraryV2; experiment: Experiment }> { return library.applyCardCommand(this.lab, id, prepared, grant); }
   /** Lab's plausible values over one card's masking marks, as the command the owner confirms; one model call, nothing written to the draft. */
@@ -95,7 +113,8 @@ export class ExperimentLab {
 
   updateDraft(id: string, expectedHash: string, raw: DraftPatch): Promise<Experiment> { return run.updateDraft(this.lab, id, expectedHash, raw); }
   acceptDraft(id: string, expectedHash: string): Promise<Experiment> { return run.acceptDraft(this.lab, id, expectedHash); }
-  repeat(id: string, scenarioIds?: string[], controlScenarioIds?: string[]): Promise<Experiment> { return run.repeat(this.lab, id, scenarioIds, controlScenarioIds); }
+  /** A fresh draft of a run's accepted set; `preview`: shown before anything is written, written by its first change (Lab.preview). */
+  repeat(id: string, scenarioIds?: string[], controlScenarioIds?: string[], options?: run.RepeatOptions): Promise<Experiment> { return run.repeat(this.lab, id, scenarioIds, controlScenarioIds, options); }
   saveSuite(id: string, file: string, scenarioIds?: string[]): Promise<string> { return run.saveSuite(this.lab, id, file, scenarioIds); }
   loadSuite(file: string, scenarioIds?: string[], connection?: Connection): Promise<Experiment> { return run.loadSuite(this.lab, file, scenarioIds, connection); }
   start(id: string, options: run.StartOptions): Promise<Experiment> { return run.start(this.lab, id, options); }
