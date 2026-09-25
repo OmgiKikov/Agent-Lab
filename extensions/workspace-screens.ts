@@ -57,7 +57,7 @@ export interface SpaceData {
    * Work going on now: what it is — situations prepared, situations checked, a run —, its one progress line, how far it
    * got, whether this session can stop it; `frame` turns the spinner.
    */
-  progress?: { kind: WorkKind; text: string; share: number | null; stoppable: boolean; frame?: number };
+  progress?: { kind: WorkKind; text: string; share: number | null; stoppable: boolean; frame?: number; details?: string[] };
   /** The logged conversations the newest calibrated run disagrees with, by `logKey`: read from their imports by the command. */
   logged?: ReadonlyMap<string, Turn[]>;
   now: Date;
@@ -395,7 +395,8 @@ export function progressLines(progress: NonNullable<SpaceData['progress']>, widt
   const bar = progress.share === null ? 0 : Math.min(40, width - visibleWidth(text) - 6);
   const filled = Math.round(Math.max(0, bar) * Math.max(0, Math.min(1, progress.share ?? 0)));
   return [[{ text: ' ' }, { text: SPINNER[frame % SPINNER.length]!, tone: 'accent' }, { text, tone: 'text', bold: true },
-    ...(bar >= 10 ? [{ text: '  ' }, { text: GLYPH.barFill.repeat(filled), tone: 'accent' as const }, { text: GLYPH.barTrack.repeat(bar - filled), tone: 'muted' as const }] : [])]];
+    ...(bar >= 10 ? [{ text: '  ' }, { text: GLYPH.barFill.repeat(filled), tone: 'accent' as const }, { text: GLYPH.barTrack.repeat(bar - filled), tone: 'muted' as const }] : [])],
+    ...wsLines((progress.details ?? []).map(detail => ws('muted', safeLine(detail), 3)), width)];
 }
 
 /** «Проблемы» (docs/design/ui-spec.md §8.6): the repeating problems, in the agent first, then in the test. */

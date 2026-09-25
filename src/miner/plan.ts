@@ -168,15 +168,15 @@ export interface LogSample {
  * otherwise a stored build in progress is continued, and every finished step is stored before the next call, so
  * a build cut short by a crash, a stop or the budget costs nothing it already paid for.
  */
-async function topicMapOf(store: ExperimentStore, batch: ImportBatch, mapper: NonNullable<Runtime['topicMap']>, ctx: CallContext, onStep: (message: string) => void): Promise<TopicMap> {
+async function topicMapOf(store: ExperimentStore, batch: ImportBatch, mapper: NonNullable<Runtime['topicMap']>, ctx: CallContext, onStep: (message: string) => void | Promise<void>): Promise<TopicMap> {
   const stored = await store.readTopicMap(topicMapKey(batch, mapper.builder));
   const reused = reusableTopicMap(stored, batch, mapper.builder);
   if (reused) return reused;
   const plan = planTopicMap(batch, mapper.builder, stored);
   let done = 0;
-  const step = () => { if (done < plan.calls) onStep(`Размечаю темы разговоров: шаг ${done + 1} из ${plan.calls}`); };
-  step();
-  const map = await mapper.build(plan, ctx, async progress => { await store.writeTopicMap(progress); done++; step(); });
+  const step = async () => { if (done < plan.calls) await onStep(`Размечаю темы разговоров: шаг ${done + 1} из ${plan.calls}`); };
+  await step();
+  const map = await mapper.build(plan, ctx, async progress => { await store.writeTopicMap(progress); done++; await step(); });
   await store.writeTopicMap(map);
   return map;
 }
@@ -187,7 +187,7 @@ async function topicMapOf(store: ExperimentStore, batch: ImportBatch, mapper: No
  * import's order and claims no topic. Either way the unusable conversations are left out before anything is spent.
  */
 export async function logSample(store: ExperimentStore, batch: ImportBatch, runtime: Runtime, ctx: CallContext, count: number,
-  onStep: (message: string) => void = () => {}): Promise<LogSample> {
+  onStep: (message: string) => void | Promise<void> = () => {}): Promise<LogSample> {
   const { dialogueIds: usable, excluded: unusable } = usableConversations(batch);
   const excluded = leftOut(batch, unusable);
   // Nothing to sample: fail before the policy is read, instead of paying for a preparation with no unit.
@@ -196,7 +196,7 @@ export async function logSample(store: ExperimentStore, batch: ImportBatch, runt
   const map = await topicMapOf(store, batch, runtime.topicMap, ctx, onStep);
   const sample = representativeSample(map, count);
   const traffic = trafficSummary(map);
-  onStep('Темы разговоров размечены. Готовлю ситуации.');
+  await onStep('Темы разговоров размечены. Готовлю ситуации.');
   return { count, picked: sample.picked, strata: sampleSchema.parse(sample.strata.map(({ topicId, dialogueIds }) => ({ topicId, dialogueIds }))), excluded,
     ...(traffic ? { traffic } : {}) };
 }

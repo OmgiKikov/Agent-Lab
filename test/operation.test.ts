@@ -53,10 +53,39 @@ test('a preparation is followed step by step, and a follower that fails or stopp
     await lab.waitForIdle();
     const prepared = await lab.get(draft.id);
     assert.equal(prepared.phase, 'review', prepared.error ?? '');
-    assert.ok(heard.some(item => item.message.startsWith('Размечаю темы разговоров: шаг 1 из')), 'the topic map\'s steps are said before anything is saved');
+    assert.ok(heard.some(item => item.message.startsWith('Размечаю темы разговоров: шаг 1 из')), 'the topic map\'s steps are announced');
     assert.deepEqual([...new Set(heard.map(item => item.processed))], [0, 1, 2], 'each conversation as its situation was saved');
     assert.deepEqual([failing, stopped], [heard.length, 0]);
   });
+});
+
+test('a separate reader sees topic preparation before the first card exists', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-topic-progress-'));
+  const runtime = createDemoRuntime();
+  const build = runtime.topicMap!.build;
+  const reader = new ExperimentStore(directory);
+  let checked = 0;
+  runtime.topicMap!.build = async (plan, ctx, onProgress) => {
+    const [before] = await reader.list();
+    assert.ok(before?.originalImport, 'the import is already saved when mapping begins');
+    assert.match(before.message, /Размечаю темы разговоров/);
+    assert.equal(before.librarySnapshot, undefined);
+    return build(plan, ctx, async value => {
+      await onProgress?.(value);
+      const [record] = await reader.list();
+      assert.match(record!.message, /Размечаю темы разговоров/);
+      assert.ok(await reader.readTopicMap(plan.key));
+      checked++;
+    });
+  };
+  const lab = new ExperimentLab(directory, runtime);
+  try {
+    await lab.init();
+    const draft = await lab.create(demoInput());
+    await lab.waitForIdle();
+    assert.equal((await lab.get(draft.id)).phase, 'review');
+    assert.ok(checked > 0);
+  } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
 test('a reader hears a record the writer saves without asking the disk again', { timeout: 20000 }, async () => {

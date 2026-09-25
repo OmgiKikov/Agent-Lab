@@ -259,6 +259,15 @@ export class OperationRunner {
     this.announce(record);
   }
 
+  /** Publish progress within the current phase so a workspace in another process can follow it. */
+  async checkpointProgress(record: Experiment, message: string): Promise<void> {
+    this.account(record);
+    record.message = message;
+    record.updatedAt = new Date().toISOString();
+    await this.store.save(record);
+    this.announce(record);
+  }
+
   /** Stops the operation running `id`; what it recorded is kept. The running record as it is now, when the operation owns one. */
   cancel(id: string): Experiment | undefined {
     const active = this.active;

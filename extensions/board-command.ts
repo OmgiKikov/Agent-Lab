@@ -31,6 +31,7 @@ import { cardPlan, launchRun } from './launch.ts';
 import type { SessionOperation } from './operations.ts';
 import { newState, showWorkspace, type WorkspaceAction, type WorkspaceChanges, type WorkspaceState, type WorkspaceView } from './workspace.ts';
 import { logKey, type SpaceData, type WorkKind } from './workspace-screens.ts';
+import { preparationDetails } from './preparation-progress.ts';
 
 /*
  * /agent-lab: the loop that loads the agent's workspace from the store, shows it, takes the owner's action and does
@@ -166,6 +167,7 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
   const runs = await Promise.all(space.runs.map(async (record, index) => ({ record, view: index ? buildResultView(record) : (await evidenceBundle(record, reader.store)).view })));
   const finished = runs.filter(run => run.record.phase === 'results_review' || run.record.phase === 'complete');
   const kind = active && workKind(active, job);
+  const preparation = active && kind === 'preparation' ? await preparationDetails(reader.store, active) : undefined;
   const logged = await loggedConversations(reader, runs.find(run => run.view.calibration?.disagreements.length)?.view);
   return {
     space, ...(set ? { set } : {}), runs, now, ...(logged.size ? { logged } : {}),
@@ -173,7 +175,7 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
     decisions: decisions({ ...(set && (set.editable || convertible(set.record)) ? { draft: { record: set.record, views: set.views, pendingCalls } } : {}), ...(finished[0] ? { run: finished[0] } : {}),
       logs: finished[0] ? await logsOf(reader.store, finished[0].record) : [], now }),
     problems: recurringProblems(finished),
-    ...(active && kind ? { progress: { kind, ...workProgress(active, kind, now), stoppable: job?.id === active.id } } : {}),
+    ...(active && kind ? { progress: { kind, ...workProgress(active, kind, now), ...preparation, stoppable: job?.id === active.id } } : {}),
   };
 }
 

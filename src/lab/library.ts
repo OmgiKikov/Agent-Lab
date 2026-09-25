@@ -85,14 +85,14 @@ export async function create(lab: Lab, raw: CreateInput, options: CreateOptions 
     await preflightTarget(record.target);
     record.targetFingerprint = await targetFingerprint(record.target);
     if (isRunnable(record.target)) {
-      lab.operations.say(record, 'Спрашиваю агента, какие инструменты он показывает');
+      await lab.operations.checkpointProgress(record, 'Спрашиваю агента, какие инструменты он показывает');
       record.toolChannel = await probeToolChannel(record.target, TOOL_PROBE_OPENING, ctx.signal);
       if (record.toolChannel.reason) lab.operations.say(record, `Действия агента не проверяются: ${record.toolChannel.reason}.`);
     }
     const runtime = await lab.runtime(record);
     if (!runtime.proposeCard || !runtime.reviewCard) throw new Error('Эта среда не умеет готовить ситуации.');
     const batch = record.originalImport ? await lab.store.readImport(record.originalImport.id) : undefined;
-    const plan: CardPlan = batch ? { kind: 'dialogues', batch, sample: await logSample(lab.store, batch, runtime, ctx, situations, message => lab.operations.say(record, message)) }
+    const plan: CardPlan = batch ? { kind: 'dialogues', batch, sample: await logSample(lab.store, batch, runtime, ctx, situations, message => lab.operations.checkpointProgress(record, message)) }
       : { kind: 'rules', count };
     await prepareCards(record, plan, input.existingAgent, runtime, ctx, lab.operations, parallel);
     await lab.operations.checkpoint(record, 'review', 'Ситуации готовы. Проверьте их и утвердите для прогона.');
