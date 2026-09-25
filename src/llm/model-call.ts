@@ -40,7 +40,7 @@ export interface ModelRequest {
  * judge audits ('Pi provider response incomplete: rate limit', 'Pi request deadline exceeded', …), so they stay
  * word for word; callers branch on the typed fields, never on the text.
  */
-export type ProviderFailureKind = 'rate limit' | 'overloaded' | 'insufficient credit' | 'access denied' | 'context limit'
+export type ProviderFailureKind = 'rate limit' | 'overloaded' | 'insufficient credit' | 'access denied' | 'context limit' | 'bad request'
   | 'connection failure' | 'timeout' | 'deadline' | 'length' | 'empty' | 'incomplete' | 'unavailable';
 
 /**
@@ -68,6 +68,9 @@ const KIND_DEFAULTS: Readonly<Record<ProviderFailureKind, { delivery: ProviderDe
   'insufficient credit': { delivery: 'refused', retryable: false },
   'access denied': { delivery: 'refused', retryable: false },
   'context limit': { delivery: 'refused', retryable: false },
+  // The provider refused the request as it was made (a parameter, a schema, a tool the model does not take): the same
+  // request fails the same way.
+  'bad request': { delivery: 'refused', retryable: false },
   unavailable: { delivery: 'refused', retryable: false },
   timeout: { delivery: 'cut', retryable: true },
   deadline: { delivery: 'cut', retryable: true },
@@ -181,6 +184,14 @@ function kindOfStatus(status: number): ProviderFailureKind | undefined {
   if (status === 408) return 'timeout';
   return status >= 500 ? 'overloaded' : undefined;
 }
+/**
+ * The kind of a status whose own words did not name one: a request refused as it was made (400, 422 — its words may still
+ * say the context was too long, which then decides), a model or an endpoint the provider does not have (404).
+ */
+function kindAfterWords(status: number | undefined): ProviderFailureKind | undefined {
+  if (status === 400 || status === 422) return 'bad request';
+  return status === 404 ? 'unavailable' : undefined;
+}
 
 /** What a request showed of itself besides its reply: whether its answer began, and a refused response the adapter reported. */
 export interface Observed { started: boolean; status?: number; retryAfterMs?: number }
@@ -201,7 +212,7 @@ export function providerFailureOf(reply: ModelReply, observed: Observed): Provid
   const kind = CREDIT.some(phrase => contains(words, phrase)) ? 'insufficient credit'
     : (status === undefined ? undefined : kindOfStatus(status))
       ?? PHRASES.find(([candidate, phrases]) => (candidate !== 'connection failure' || status === undefined) && phrases.some(phrase => contains(words, phrase)))?.[0]
-      ?? 'incomplete';
+      ?? kindAfterWords(status) ?? 'incomplete';
   const began = observed.started || (reply.usage?.output ?? 0) > 0;
   // No stream event does not prove non-delivery: a reset can happen after the provider accepted the request.
   const uncertain = kind === 'timeout' || kind === 'connection failure' || kind === 'incomplete' && status === undefined;

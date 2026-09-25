@@ -1,8 +1,10 @@
 import type { ModelRuntime, ProviderConfig } from '@earendil-works/pi-coding-agent';
-import { buildChatRequest, normalizeResponseFormat, parseCatalog, parseChatResponse, type GigaAssistantMessage, type GigaResponse } from './giga-protocol.js';
+import {
+  buildChatRequest, normalizeResponseFormat, parseCatalog, parseChatResponse, type GigaAssistantMessage, type GigaContext, type GigaModel, type GigaOptions, type GigaResponse,
+} from './giga-protocol.js';
 import {
   CLIENT_CERTIFICATE_ALERT, clientCertificateAlert, createGigaTransport, gatewayCertificateProblem, gatewayEnvironment, GigaTransportError,
-  keyMatchesCertificate, readGigaConfig, unusableFile, type Environment, type GatewayCertificateProblem, type GigaConfig, type GigaTransport,
+  keyMatchesCertificate, readGigaConfig, unusableFile, type Environment, type GatewayCertificateProblem, type GigaConfig, type GigaResponseText, type GigaTransport,
 } from './giga-transport.js';
 
 /*
@@ -144,19 +146,15 @@ function reportCatalogFailure(failure: GatewayFailure): void {
   process.stderr.write(`giga: каталог моделей недоступен (${failureLabel(failure)})\n`);
 }
 
-/*
- * src/llm/model-call.ts deliberately replaces a provider's error with the general «Проверьте доступ, права на модель и
- * доступность провайдера», because raw provider text may carry headers and secrets. A timeout or a 500 would then look
- * like revoked access, so the provider writes the category itself: a status or an error code, never the response body.
+/**
+ * What a chat request that got no answer says of itself: the transport's own kind or the network's code, never a path, a
+ * response body or a certificate. The words are the ones src/llm/model-call.ts reads a provider's failure by («timeout»,
+ * «connection»), so a timeout or a reset reads as one, and not as missing access.
  */
-function reportRequestFailure(modelId: string, category: string): void {
-  process.stderr.write(`giga: запрос к модели ${modelId} не прошёл (${category})\n`);
-}
-
-function failureCategory(error: unknown): string {
-  if (error instanceof GigaTransportError) return error.kind;
+function transportFailureText(error: unknown): string {
+  if (error instanceof GigaTransportError) return error.kind === 'timeout' ? 'Giga gateway request failed: timeout' : 'Giga gateway response is too large to be an answer';
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code ? `connection ${code}` : 'request failed';
+  return code ? `Giga gateway connection failed: ${code}` : 'Giga gateway request failed';
 }
 
 /**
@@ -165,18 +163,11 @@ function failureCategory(error: unknown): string {
  */
 const REJECTED_STATUSES: ReadonlySet<number> = new Set([400, 422]);
 
-/** A chat request the gateway answered with an error status. The message names the status, never the response body. */
-export class GigaRequestError extends Error {
-  constructor(readonly status: number) {
-    super(REJECTED_STATUSES.has(status)
-      ? `Giga gateway rejected the request with HTTP ${status}: it does not accept a parameter or a tool description of this request`
-      : `Giga gateway request failed with HTTP ${status}`);
-    this.name = 'GigaRequestError';
-  }
-  /** The gateway refused what was asked, not the service. */
-  get rejected(): boolean { return REJECTED_STATUSES.has(this.status); }
-  /** The label of the diagnostic line. */
-  get category(): string { return this.rejected ? `HTTP ${this.status}: шлюз отверг параметры запроса` : `HTTP ${this.status}`; }
+/** A chat request the gateway answered with an error status, in the words a reply carries: the status, never the response body. */
+function refusalText(status: number): string {
+  return REJECTED_STATUSES.has(status)
+    ? `Giga gateway rejected the request with HTTP ${status}: it does not accept a parameter or a tool description of this request`
+    : `Giga gateway request failed with HTTP ${status}`;
 }
 
 export async function createGigaProvider(
@@ -236,34 +227,57 @@ function gatewayProvider(config: GigaConfig | undefined, transport: GigaTranspor
       const finished = (async (): Promise<GigaAssistantMessage> => {
         const base = buildChatRequest(model.id, context, options ?? {}) as unknown as Record<string, unknown>;
         const hooked = (await options?.onPayload?.(base, model)) ?? base;
-        const payload = normalizeResponseFormat(hooked as Record<string, unknown>);
-        let response: { status: number; text: string };
-        // The caller's deadline bounds the whole exchange, since the gateway does not stream; its signal stops it sooner.
-        try { response = await transport('/v2/chat/completions', payload, { signal: options?.signal, timeoutMs: options?.timeoutMs }); }
-        catch (error) { reportRequestFailure(model.id, failureCategory(error)); throw error; }
-        // The response body never enters an error: it may echo the prompt or be a proxy's page.
-        if (response.status !== 200) {
-          const refused = new GigaRequestError(response.status);
-          reportRequestFailure(model.id, refused.category);
-          throw refused;
-        }
-        let body: GigaResponse;
-        try { body = JSON.parse(response.text) as GigaResponse; }
-        catch { reportRequestFailure(model.id, 'bad JSON'); throw new Error('Giga gateway returned a non-JSON response'); }
-        return parseChatResponse(model, body, context.tools);
+        return exchange(transport, model, context, options ?? {}, normalizeResponseFormat(hooked as Record<string, unknown>));
       })();
       // AssistantMessageEventStream is a pi-ai class with private fields that cannot be imported here directly; the
-      // object below implements its public contract (result and an async iterator), hence the cast through unknown.
+      // object below implements its public contract (result and an async iterator), hence the cast through unknown. As in
+      // pi-ai's own providers, a request that got no answer never emits `start`: nothing of an answer began.
       return {
         result: () => finished,
         async *[Symbol.asyncIterator]() {
           const message = await finished;
+          if (message.stopReason === 'error' || message.stopReason === 'aborted') { yield { type: 'error', reason: message.stopReason, error: message }; return; }
           yield { type: 'start', partial: message };
           yield { type: 'done', reason: message.stopReason, message };
         },
       } as unknown as ReturnType<NonNullable<ProviderConfig['streamSimple']>>;
     },
   };
+}
+
+/** A reply that carries no answer, the way pi-ai's providers report one: no content, nothing used, the reason in its text. */
+function failed(model: GigaModel, stopReason: 'error' | 'aborted', errorMessage: string): GigaAssistantMessage {
+  return { role: 'assistant', content: [], api: model.api, provider: model.provider, model: model.id,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason, errorMessage, timestamp: Date.now() };
+}
+
+/**
+ * One chat exchange, reported the way the stream protocol reports every provider's: an answer, or a reply with stopReason
+ * `error` — never a throw, which the caller counts as Lab's own defect. A refused request tells its status and headers
+ * through `onResponse`, as pi-ai's adapters do for theirs, so a 429 or a 5xx meets the same retry policy (and the
+ * gateway's retry-after) as OpenRouter's, and a 401 or 403 alone reads as missing access. The response body never enters
+ * a reply's text: it may echo the prompt or be a proxy's page.
+ */
+async function exchange(transport: GigaTransport, model: GigaModel, context: GigaContext, options: GigaOptions, payload: Record<string, unknown>): Promise<GigaAssistantMessage> {
+  let response: GigaResponseText;
+  // The caller's deadline bounds the whole exchange, since the gateway does not stream; its signal stops it sooner.
+  try { response = await transport('/v2/chat/completions', payload, { signal: options.signal, timeoutMs: options.timeoutMs }); }
+  catch (error) {
+    if (options.signal?.aborted || error instanceof GigaTransportError && error.kind === 'aborted') return failed(model, 'aborted', 'Giga request aborted');
+    return failed(model, 'error', transportFailureText(error));
+  }
+  if (response.status !== 200) {
+    await options.onResponse?.({ status: response.status, headers: response.headers ?? {} }, model);
+    return failed(model, 'error', refusalText(response.status));
+  }
+  let body: GigaResponse;
+  try { body = JSON.parse(response.text) as GigaResponse; }
+  catch { return failed(model, 'error', 'Giga gateway returned a response that is not JSON'); }
+  // An answer Lab cannot read — an unrecognized finish reason (a content filter's block), a body of another shape — is the
+  // gateway's, not a defect of Lab: it is reported like a provider's broken answer.
+  try { return parseChatResponse(model, body, context.tools); }
+  catch (error) { return failed(model, 'error', error instanceof Error ? `Giga gateway answer unreadable: ${error.message}` : 'Giga gateway answer unreadable'); }
 }
 
 export const GIGA_PROVIDER_ID = 'giga';

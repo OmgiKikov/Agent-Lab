@@ -170,7 +170,9 @@ export function gatewayStatus(env: Environment = process.env): GatewayStatus {
  * `signal` is the caller's stop.
  */
 export interface GigaRequestOptions { signal?: AbortSignal | undefined; timeoutMs?: number | undefined }
-export type GigaTransport = (path: string, body?: unknown, options?: GigaRequestOptions) => Promise<{ status: number; text: string }>;
+/** A response read whole: its status, its body and — lower-cased, repeated ones joined — its headers (a refusal's retry-after). */
+export interface GigaResponseText { status: number; text: string; headers?: Record<string, string> }
+export type GigaTransport = (path: string, body?: unknown, options?: GigaRequestOptions) => Promise<GigaResponseText>;
 
 /** A request whose caller names no deadline gets as long as Pi's own providers give one by default. */
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -245,7 +247,8 @@ export function createGigaTransport(config: GigaConfig, defaults: { timeoutMs?: 
         if (size > maxBytes) fail(tooLarge());
         else chunks.push(chunk);
       });
-      response.on('end', () => settle(() => resolve({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') })));
+      response.on('end', () => settle(() => resolve({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8'),
+        headers: Object.fromEntries(Object.entries(response.headers).flatMap(([name, value]) => value === undefined ? [] : [[name, Array.isArray(value) ? value.join(', ') : value]])) })));
       // Without this, a connection cut mid-body (proxy reset, truncated gateway response) leaves the promise pending
       // forever: 'end' never fires and 'req' has already succeeded.
       response.on('error', error => settle(() => reject(error)));
