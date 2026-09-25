@@ -44,7 +44,33 @@ export interface Report { title: string; meta: string[]; head: Block[]; blocks: 
 
 const plain = (value: unknown) => stripVTControlCharacters(String(value ?? '')).replace(/[\u202a-\u202e\u2066-\u2069]/g, '');
 export const escapeHtml = (value: unknown) => plain(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-export const escapeMarkdown = (value: unknown) => plain(value).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!).replace(/[\\`*_{}\[\]()#|]/g, '\\$&');
+/**
+ * Text of a record as Markdown shows it, escaped only where a character would change the rendering: a backslash before
+ * punctuation, `*`, a `_` at the edge of a word, a backtick, `[` (no link or image can open), `~`, a `<` that would open a
+ * tag or an autolink, an `&` that would open an entity. Everything else stays as written — «(4 разговора…)» keeps its
+ * brackets. Where the text starts a line, `atLineStart` escapes what would open a block; a table cell escapes `|`
+ * (`mdCell`), a heading its closing `#` (`closeHeading`).
+ */
+export const escapeMarkdown = (value: unknown): string => plain(value)
+  .replace(/\\(?=[!-/:-@[-`{-~])/g, '\\\\')
+  .replace(/[`*[~]/g, '\\$&')
+  .replace(/_(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])_/gu, '\\_')
+  .replace(/<(?=[A-Za-z/!?])/g, '\\<')
+  .replace(/&(?=#?[A-Za-z0-9]+;)/g, '\\&');
+/**
+ * An escaped line as the start of a Markdown line: what would open a block there — a heading, a quote, a list item, a
+ * rule or a setext underline — is escaped, the rest left as it is.
+ */
+const atLineStart = (line: string): string => line
+  .replace(/^(\s*)(#{1,6})(?=\s|$)/, '$1\\$2')
+  .replace(/^(\s*)([>])/, '$1\\$2')
+  .replace(/^(\s*)([-+])(?=\s|$)/, '$1\\$2')
+  .replace(/^(\s*\d{1,9})([.)])(?=\s|$)/, '$1\\$2')
+  .replace(/^(\s*)([-=])(?=(?:\s*\2)*\s*$)/, '$1\\$2');
+/** An escaped heading's text: a closing run of `#` would be dropped from the heading, so it is escaped. */
+const closeHeading = (text: string): string => text.replace(/(\s)(#+)(\s*)$/, '$1\\$2$3');
+/** A table cell: `|` would end it. */
+const mdCell = (value: unknown): string => escapeMarkdown(value).replace(/\|/g, '\\|');
 const e = escapeHtml;
 const md = escapeMarkdown;
 /** « · » between the parts of a line, glued to the part before it: a wrapped line never starts with the dot. */
@@ -112,36 +138,38 @@ export function toHtml(report: Report): string {
 }
 
 /** Label and value lines as a list; a line without a label (it continues the one above) is its own item. */
-const mdDl = (rows: [string, string][]) => rows.map(([term, value]) => term ? `- ${md(term)}: ${md(value)}` : `- ${md(value)}`);
-const mdTurns = (turns: Turn[]) => turns.map(turn => `> **${md(turn.who)}:** ${md(turn.text)}`);
+const mdDl = (rows: [string, string][]) => rows.map(([term, value]) => term ? `- ${atLineStart(md(term))}: ${md(value)}` : `- ${atLineStart(md(value))}`);
+/** A conversation as one quote, a paragraph a turn: consecutive quoted lines would run together into one. */
+const mdTurns = (turns: Turn[]) => turns.flatMap((turn, i) => [...(i ? ['>'] : []), `> **${md(turn.who)}:** ${md(turn.text)}`]);
 
 function blockMarkdown(block: Block): string[] {
   switch (block.kind) {
     case 'alarm': return [`> **${md(block.text)}**`, ''];
     case 'accuracy': return [`**${md([block.lead, block.value].filter(Boolean).join(' '))}** ${md(block.tail)}`, ''];
-    case 'trust': return [block.parts.map(part => md(part.text)).join(SEPARATOR), ''];
-    case 'section': return [`## ${md(block.title)}`, '', ...block.blocks.flatMap(blockMarkdown)];
-    case 'table': return [`| ${block.head.map(md).join(' | ')} |`, `| ${block.head.map((_, i) => i ? '---:' : '---').join(' | ')} |`,
-      ...block.rows.map(row => `| ${row.cells.map(md).join(' | ')} |`), ''];
+    case 'trust': return [atLineStart(block.parts.map(part => md(part.text)).join(SEPARATOR)), ''];
+    case 'section': return [`## ${closeHeading(md(block.title))}`, '', ...block.blocks.flatMap(blockMarkdown)];
+    case 'table': return [`| ${block.head.map(mdCell).join(' | ')} |`, `| ${block.head.map((_, i) => i ? '---:' : '---').join(' | ')} |`,
+      ...block.rows.map(row => `| ${row.cells.map(mdCell).join(' | ')} |`), ''];
     case 'causes': return block.items.flatMap((cause, i) => [`${i + 1}. **${md(cause.title)}** — ${md(cause.count)}`,
-      ...cause.examples.flatMap(example => [`   - ${md(example.situation)}`, `     - Ожидалось: ${md(example.expected)}`,
+      ...cause.examples.flatMap(example => [`   - ${atLineStart(md(example.situation))}`, `     - Ожидалось: ${md(example.expected)}`,
         `     - Агент ответил: ${md(example.said.text)}`, ...(example.rule ? [`     - Правило: ${md(example.rule)}`] : [])])]).concat('');
-    case 'cards': return block.items.flatMap(item => [`### ${item.number}. ${md(item.brief.title)} — ${md(item.chip.text)}`, '', md(item.brief.source), '', '**Клиент**', '',
+    case 'cards': return block.items.flatMap(item => [`### ${item.number}. ${closeHeading(`${md(item.brief.title)} — ${md(item.chip.text)}`)}`, '', atLineStart(md(item.brief.source)), '', '**Клиент**', '',
       ...mdDl(item.client), '', '**Агент должен**', '',
-      ...item.brief.must.map((must, i) => `${i + 1}. ${md(must.text)}${must.rule ? ` — правило: «${md(must.rule)}»` : ''}`), '',
+      ...item.brief.must.map((must, i) => `${i + 1}. ${atLineStart(md(must.text))}${must.rule ? ` — правило: «${md(must.rule)}»` : ''}`), '',
       ...(item.dialogue.length ? ['**Разговор в прогоне**', '', ...mdTurns(item.dialogue), ''] : [])]);
-    case 'failures': return block.items.flatMap(item => [`### ✗ №${item.number} ${md(item.title)}`, '',
+    case 'failures': return block.items.flatMap(item => [`### ✗ №${item.number} ${closeHeading(md(item.title))}`, '',
       ...mdDl([['Ожидалось', item.expected], ['Агент ответил', item.said.text], ['Правило', item.rule], ...(item.customer ? [['Клиент', item.customer] as [string, string]] : [])]), '',
       ...(item.dialogue.length ? [...mdTurns(item.dialogue), ''] : [])]);
-    case 'disagreements': return block.items.flatMap(item => [`### ≠ №${item.number} ${md(item.title)}`, '',
+    case 'disagreements': return block.items.flatMap(item => [`### ≠ №${item.number} ${closeHeading(md(item.title))}`, '',
       ...mdDl([...item.expectations.map(text => ['Ожидание', text] as [string, string]), ['Подсказка', item.hint], ['Где смотреть', item.conversations]]), '',
       ...(item.dialogue.length ? ['**Разговор в прогоне**', '', ...mdTurns(item.dialogue), ''] : [])]);
-    case 'list': return [...block.items.map(item => `- ${md(item)}`), ''];
-    case 'paragraph': return [md(block.text), ''];
+    case 'list': return [...block.items.map(item => `- ${atLineStart(md(item))}`), ''];
+    case 'paragraph': return [atLineStart(md(block.text)), ''];
   }
 }
 
-/** The plain twin of the HTML report: the same blocks, in the same order, as Markdown. */
+/** The plain twin of the HTML report: the same blocks, in the same order, as Markdown; each line of the footer its own paragraph. */
 export function toMarkdown(report: Report): string {
-  return [`# ${md(report.title)}`, '', report.meta.map(md).join(SEPARATOR), '', ...[...report.head, ...report.blocks].flatMap(blockMarkdown), '---', '', ...report.footer.map(md)].join('\n');
+  return [`# ${closeHeading(md(report.title))}`, '', atLineStart(report.meta.map(md).join(SEPARATOR)), '', ...[...report.head, ...report.blocks].flatMap(blockMarkdown), '---', '',
+    ...report.footer.flatMap((line, i) => [...(i ? [''] : []), atLineStart(md(line))])].join('\n');
 }
