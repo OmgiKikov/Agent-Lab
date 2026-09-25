@@ -2,8 +2,9 @@ import { z } from 'zod';
 import { fingerprint, type Requirement } from '../contracts.js';
 import { text } from '../ids.js';
 import type { CardTopic } from '../miner/schema.js';
+import { countText } from '../plural.js';
 import { basisProposal, citationId, located, type CallSource, type ProposalCall } from './proposal.js';
-import type { BusinessScenario } from './schema.js';
+import type { BusinessScenario, LibraryV2 } from './schema.js';
 
 /*
  * The business scenario of one topic of the logs: what a preparation checks before any card is written. Cards made
@@ -116,3 +117,34 @@ export const scenarioOfTopic = (plan: readonly BusinessScenario[] | undefined, t
 /** The expectations of a scenario that apply to one of its variations. */
 export const variationExpectations = (scenario: BusinessScenario, variationId: string): BusinessScenario['expectations'] =>
   scenario.expectations.filter(expectation => !expectation.variationIds || expectation.variationIds.includes(variationId));
+
+/**
+ * The plan in the owner's words: each scenario's question, its variations — from the logs with their conversations, or
+ * added from the rules and never traffic — and the expectations every card of it shares, with where they apply and the
+ * ways and the violation the judge reads. Pure: each surface makes the lines safe and lays them out.
+ */
+export function planLines(library: Pick<LibraryV2, 'plan' | 'cards'>): string[] {
+  const plan = library.plan ?? [];
+  if (!plan.length) return [];
+  const conversations = ['разговор', 'разговора', 'разговоров'] as const;
+  return [`Что проверяем — ${countText(plan.length, ['сценарий', 'сценария', 'сценариев'])}:`, ...plan.flatMap(scenario => {
+    const place = (id: string) => scenario.variations.findIndex(variation => variation.id === id) + 1;
+    const cards = (variationId: string) => library.cards.filter(card => card.scenarioRef?.scenarioId === scenario.id && card.scenarioRef.variationId === variationId).length;
+    return [
+      `«${scenario.question}» — тема «${scenario.topic}»`,
+      '  Варианты:',
+      ...scenario.variations.map((variation, index) => `    ${index + 1}) ${variation.title} — ${variation.origin === 'logs'
+        ? `из логов, ${countText(variation.examples.length, [...conversations])}` : 'добавлен по правилам, не из трафика'}${cards(variation.id) ? `; ситуаций: ${cards(variation.id)}` : ''}`),
+      '  Ожидания:',
+      ...scenario.expectations.map((expectation, index) => `    ${index + 1}. ${expectation.strength === 'must_not' ? 'нельзя: ' : ''}${expectation.text} — ${expectation.variationIds
+        ? `для ${expectation.variationIds.length === 1 ? 'варианта' : 'вариантов'} ${expectation.variationIds.map(place).join(', ')}` : 'для всех вариантов'}${
+        expectation.acceptable ? `; допустимо: ${expectation.acceptable}` : ''}${expectation.violation ? `; нарушение: ${expectation.violation}` : ''}`),
+    ];
+  })];
+}
+
+/** The title of the variation a card is an example of, or undefined for a card of no plan. */
+export function variationOf(library: Pick<LibraryV2, 'plan'>, card: { scenarioRef?: { scenarioId: string; variationId: string } }): string | undefined {
+  const ref = card.scenarioRef;
+  return ref && library.plan?.find(scenario => scenario.id === ref.scenarioId)?.variations.find(variation => variation.id === ref.variationId)?.title;
+}

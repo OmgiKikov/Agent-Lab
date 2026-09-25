@@ -6,6 +6,7 @@ import type { ImportBatch, LibraryV1, ScenarioVariant } from '../scenario-contra
 import { oneLine, wrapHanging } from '../text.js';
 import { contains, quotable, type CardEvidence } from './checks.js';
 import { compilePolicy, expectationLetter } from './compile.js';
+import { variationOf } from './plan.js';
 import { behaviorLines, convertible, libraryV1Of, orderedVariants, ownerQuestions, ownerRemarks, plainIssue } from './legacy-v1.js';
 import type { Card, LibraryV2 } from './schema.js';
 import type { Reference } from '../reference.js';
@@ -44,6 +45,8 @@ export interface Brief {
   turn: string | null;
   /** What the agent must do; `forbidden` — what it must not; `acceptable` and `violation` where the card says them. */
   must: { text: string; rule: string | null; forbidden?: true; acceptable?: string; violation?: string }[];
+  /** The variation of the business scenario the situation is an example of (card/plan.ts); absent for a card of no plan. */
+  variation?: string;
   /** The values Lab wrote over the log's masking marks, when it did: «подставлено вместо обезличенного». */
   filled?: string[];
   /** What code checks besides the judge (reference.ts): «находит статью 24 — разметка асессора». */
@@ -148,6 +151,7 @@ export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumb
       ...(expectation.strength === 'must_not' ? { forbidden: true as const } : {}),
       ...(expectation.acceptable !== undefined ? { acceptable: oneLine(expectation.acceptable) } : {}),
       ...(expectation.violation !== undefined ? { violation: oneLine(expectation.violation) } : {}) })),
+    ...(variationOf(library, card) ? { variation: oneLine(variationOf(library, card)!) } : {}),
     ...(card.filled ? { filled: card.filled.map(item => oneLine(item.value)) } : {}),
     ...(card.clarity === 'vague' ? { vague: true } : {}),
     ...(card.references ? { references: card.references.map(reference => ({ id: reference.id, text: referenceText(reference) })) } : {}),
@@ -518,6 +522,7 @@ export function briefRows(view: SituationView, options: RowOptions = {}): Situat
   return [
     { role: 'title', indent: 0, text: `${String(view.number).padEnd(2)} ${brief.title}`, right: chip(view, !!options.running, options.narrow), clip: true },
     { role: 'source', indent: 3, text: brief.source },
+    ...(brief.variation ? [{ role: 'source' as const, indent: 3, text: `вариант: ${brief.variation}` }] : []),
     blank,
     { role: 'heading', indent: 0, text: 'Клиент' },
     ...fields.map(([label, value]): SituationRow => ({ role: 'field', indent: 3, text: `${label.padEnd(column)}${value}`, hang: column })),

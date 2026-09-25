@@ -12,6 +12,7 @@ import { createInputSchema, isRunnable, materialSources, runnableTarget, SCENARI
 import { compareRuns } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection, type Connection } from './connection.js';
 import { examConnection, examLines } from './exam.js';
+import { planLines } from './card/plan.js';
 import { detectionLines, detectProject, promptLine } from './detect.js';
 import { readDialogueImport, importDialogues } from './imports.js';
 import { expandMaterials, promptMaterials } from './materials.js';
@@ -218,7 +219,8 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     if (number !== undefined && !view) throw new Error(`Ситуации №${values.card} нет. Есть: ${views.map(item => item.number).join(', ')}.`);
     if (values.json) { await writeStdout(`${JSON.stringify({ runId: id, counts: countsText(views), ...(changes.length ? { changes } : {}), ...(view ? { situation: { id: view.id, ...situationData(view), details: view.details } } : { situations: views.map(item => ({ id: item.id, ...situationData(item) })), ...(rulebook ? { rulebook } : {}) }) }, null, 2)}\n`); return; }
     const rows = view ? [...briefRows(view), { role: 'blank' as const, indent: 0, text: '' }, ...detailRows(view)] : views.flatMap(item => listRows(item));
-    const head = view ? [] : [countsText(views), ...(formatNote(record) ? [formatNote(record)!] : []), '', ...(rulebook ? [...rulebookLines(rulebook), ''] : [])];
+    const plan = record.librarySnapshot?.formatVersion === 2 ? planLines(record.librarySnapshot) : [];
+    const head = view ? [] : [countsText(views), ...(formatNote(record) ? [formatNote(record)!] : []), '', ...(plan.length ? [...plan, ''] : []), ...(rulebook ? [...rulebookLines(rulebook), ''] : [])];
     const choices = view?.format === 'card' ? view.question?.choices ?? [] : [];
     const next = !view || view.format !== 'card' ? [] : choices.length
       ? [`Ответить: agent-lab cards --id ${id} --card ${view.number} --choice ${choices.map(choice => choice.id).join('|')} --yes — ${choices.map((choice, index) => `${choice.id} — ответ ${index + 1}${choice.needsText ? ' со своими словами в --text «…»' : ''}`).join(', ')}.`]

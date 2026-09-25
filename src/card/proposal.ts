@@ -4,8 +4,8 @@ import { text } from '../ids.js';
 import { MODEL_REQUEST_BYTES } from '../limits.js';
 import { requirementKindSchema, type RequirementKind } from '../scenario-contracts.js';
 import { verbatimSpan } from '../verbatim.js';
-import { cardFindings, filledMessage, PLAUSIBLE_VALUE_WORDS, type CardEvidence, type CheckFinding, type LoggedMessage } from './checks.js';
-import { cardSchema, disclosureSchema, toolNameSchema, turnSchema, type Card, type EventRef } from './schema.js';
+import { cardFindings, filledMessage, normalizeText, PLAUSIBLE_VALUE_WORDS, type CardEvidence, type CheckFinding, type LoggedMessage } from './checks.js';
+import { cardSchema, disclosureSchema, toolNameSchema, turnSchema, type BusinessScenario, type Card, type EventRef } from './schema.js';
 import { fillSlip, maskSlots, slotAnswersSchema, slotFills, slotPayload, type FillAnswer, type MaskSlot } from './unmask.js';
 
 /*
@@ -43,6 +43,11 @@ export interface ProposalCall {
   maxTurns: number;
   /** The masking marks of the customer's messages (card/unmask.ts): the proposal answers each with a plausible value. */
   masked: MaskSlot[];
+  /**
+   * The business scenario of the unit's topic (card/plan.ts), when the preparation planned one: the card is an example of
+   * one of its variations, and its duties are the plan's expectations for it — its words, rules, strength and ways.
+   */
+  plan?: { scenario: BusinessScenario; requirements: Requirement[] };
 }
 
 export type CallSource = Pick<Source, 'id' | 'name' | 'content' | 'kind'>;
@@ -51,7 +56,7 @@ export type CallSource = Pick<Source, 'id' | 'name' | 'content' | 'kind'>;
 const DEFAULT_BINDS: ProposalCall['binds'] = { kinds: ['behavior', 'knowledge'], rules: [] };
 
 export function proposalCall(input: { source: ProposalCall['source']; messages: LoggedMessage[]; sources: readonly CallSource[];
-  binds?: ProposalCall['binds']; confirmedObservations?: ('tool' | 'state')[]; tools?: string[]; maxTurns: number }): ProposalCall {
+  binds?: ProposalCall['binds']; confirmedObservations?: ('tool' | 'state')[]; tools?: string[]; maxTurns: number; plan?: ProposalCall['plan'] }): ProposalCall {
   const [first, ...rest] = input.sources.map(({ id, name, content, kind }): CallSource => ({ id, name, content, ...(kind ? { kind } : {}) }));
   if (first === undefined) throw new Error('Ситуация строится только на материалах владельца, а их для неё нет.');
   const customer = input.messages.filter(message => message.role === 'user').map(message => message.index);
@@ -60,7 +65,7 @@ export function proposalCall(input: { source: ProposalCall['source']; messages: 
     .map(message => ({ event: { batchId: source.batchId, dialogueId: source.dialogueId, eventIndex: message.index }, content: message.content }))) : [];
   return { source, messages: input.messages, customerEvents: customer, laterEvents: customer.slice(1),
     sources: [first, ...rest], binds: input.binds ?? DEFAULT_BINDS, observations: ['reply', ...(input.confirmedObservations ?? [])],
-    ...(input.tools?.length ? { tools: [...input.tools] } : {}), maxTurns: input.maxTurns, masked };
+    ...(input.tools?.length ? { tools: [...input.tools] } : {}), maxTurns: input.maxTurns, masked, ...(input.plan ? { plan: input.plan } : {}) };
 }
 
 /** Plausible profile facts one card may add, and the card's facts in all: the brief stays one screen. */
@@ -120,7 +125,15 @@ function dialogueProposalSchema(call: ProposalCall) {
     coverage: z.strictObject(Object.fromEntries(call.laterEvents.map(index => [String(index), coverageAnswer]))),
     // One value per masking mark of the customer's messages, asked only when the dialogue has any.
     ...(call.masked.length ? { masked: slotAnswersSchema(call.masked) } : {}),
+    // The variation of the business scenario this conversation is, asked only where the preparation planned one.
+    ...(call.plan ? { variation: variationProposal(call.plan.scenario) } : {}),
   });
+}
+
+/** The variation of the scenario a card is an example of: an enum of the plan's own. */
+function variationProposal(scenario: BusinessScenario) {
+  const ids = scenario.variations.map(variation => variation.id) as [string, ...string[]];
+  return z.enum(ids, { error: 'Not a variation of the plan: name one of plan.variations by id.' });
 }
 
 /** A card from the owner's rules alone: the model writes a typical opening; no personal facts, no turn, no logged messages. */
@@ -164,16 +177,45 @@ export function located(basis: Pick<Basis, 'sourceId' | 'quote'>, call: Pick<Pro
 /** The id of the rule one cited sentence stands for: the same sentence of the same source is the same rule in every card. */
 export const citationId = (sourceId: string, quote: string): string => `rule_${fingerprint({ sourceId, quote }).slice(0, 24)}`;
 
+/** The plan's expectation a duty is, by its words up to case and spacing; undefined without a plan or when it is none of them. */
+function plannedOf(duty: Pick<DutyProposal, 'text'>, call: ProposalCall): BusinessScenario['expectations'][number] | undefined {
+  const said = normalizeText(duty.text);
+  return call.plan?.scenario.expectations.find(expectation => normalizeText(expectation.text) === said);
+}
+
+/** Why the duties of a card of a planned scenario are not the plan's expectations of its variation. */
+function planSlips(proposal: CardProposal, call: ProposalCall): string[] {
+  const plan = call.plan;
+  if (!plan) return [];
+  const variation = 'variation' in proposal && typeof proposal.variation === 'string' ? proposal.variation : undefined;
+  const slips: string[] = [];
+  const seen = new Set<string>();
+  proposal.agentMust.forEach((duty, i) => {
+    const expectation = plannedOf(duty, call);
+    if (!expectation) slips.push(`agentMust[${i}] is not an expectation of the plan: copy the text of one of plan.expectations exactly; never write a duty of your own.`);
+    else if (variation && expectation.variationIds && !expectation.variationIds.includes(variation)) slips.push(`agentMust[${i}] is expectation ${expectation.id}, which applies to ${expectation.variationIds.join(', ')}, not to variation ${variation}: choose the expectations of this variation.`);
+    else if (seen.has(expectation.id)) slips.push(`agentMust[${i}] repeats expectation ${expectation.id}: each expectation once.`);
+    if (expectation) seen.add(expectation.id);
+  });
+  return slips;
+}
+
 /**
  * The rules each duty of a proposal rests on, as the library stores them. A cited sentence is a rule a user can see kept
- * or broken in a reply — the proposal may cite nothing else (CARD_ROLE) — so `observable` is stated, never guessed.
+ * or broken in a reply — the proposal may cite nothing else (CARD_ROLE) — so `observable` is stated, never guessed. A
+ * duty that is an expectation of the plan rests on the plan's rules, already in the library.
  */
 function dutyRequirements(proposal: CardProposal, call: ProposalCall): Requirement[][] {
-  return proposal.agentMust.map(duty => duty.basis.map(basis => {
+  return proposal.agentMust.map(duty => {
+    const planned = plannedOf(duty, call);
+    if (planned) return planned.requirementIds.map(id => call.plan!.requirements.find(requirement => requirement.id === id)
+      ?? (() => { throw new Error(`Правило ${id} плана сценария не найдено в наборе.`); })());
+    return duty.basis.map(basis => {
     const at = located(basis, call);
     if (!at) throw new Error('Основание ожидания не найдено дословно в материалах.');
     return { id: citationId(at.sourceId, at.quote), text: basis.rule, sourceId: at.sourceId, quote: at.quote, critical: true, observable: true, kind: basis.kind };
-  }));
+    });
+  });
 }
 
 /** The rules a proposal cites, once each: what a preparation adds to the library beside its card. */
@@ -186,7 +228,8 @@ export function proposalRequirements(proposal: CardProposal, call: ProposalCall)
 /** Why a basis cannot back a duty: its quote is not in the sources, or its kind of rule is outside the owner's rulebook. */
 function basisSlips(proposal: CardProposal, call: ProposalCall): string[] {
   const slips: string[] = [];
-  proposal.agentMust.forEach((duty, i) => duty.basis.forEach((basis, j) => {
+  // A duty that is an expectation of the plan rests on the plan's rules: its own citations are not read.
+  proposal.agentMust.forEach((duty, i) => plannedOf(duty, call) ? undefined : duty.basis.forEach((basis, j) => {
     const at = located(basis, call);
     const name = `agentMust[${i}].basis[${j}]`;
     if (!at) {
@@ -221,12 +264,21 @@ function readMessages(proposal: DialogueProposal, call: ProposalCall) {
  */
 export function bindProposal(proposal: CardProposal, call: ProposalCall, number: number): Card {
   const cited = dutyRequirements(proposal, call);
-  const agentMust = proposal.agentMust.map((item, index) => ({ id: `e${index + 1}`, text: item.text, requirementIds: [...new Set(cited[index]!.map(requirement => requirement.id))],
-    ...(item.appliesWhen !== null ? { appliesWhen: item.appliesWhen } : {}), observation: item.observation,
-    ...(item.observation === 'tool' && typeof item.tool === 'string' ? { tool: item.tool } : {}),
-    ...(item.strength === 'must_not' ? { strength: 'must_not' as const } : {}),
-    ...(item.acceptable !== null ? { acceptable: item.acceptable } : {}), ...(item.violation !== null ? { violation: item.violation } : {}) }));
-  const common = { id: `card_${fingerprint({ source: call.source, proposal })}`, number, title: proposal.title, topic: proposal.topic, agentMust, revision: 1 };
+  const agentMust = proposal.agentMust.map((item, index) => {
+    // A duty of the plan takes the plan's words, strength and ways; the card keeps only where it applies and how it is seen.
+    const planned = plannedOf(item, call);
+    const own = planned ?? { text: item.text, ...(item.strength === 'must_not' ? { strength: 'must_not' as const } : {}),
+      ...(item.acceptable !== null ? { acceptable: item.acceptable } : {}), ...(item.violation !== null ? { violation: item.violation } : {}) };
+    return { id: `e${index + 1}`, text: own.text, requirementIds: [...new Set(cited[index]!.map(requirement => requirement.id))],
+      ...(item.appliesWhen !== null ? { appliesWhen: item.appliesWhen } : {}), observation: item.observation,
+      ...(item.observation === 'tool' && typeof item.tool === 'string' ? { tool: item.tool } : {}),
+      ...(own.strength === 'must_not' ? { strength: 'must_not' as const } : {}),
+      ...(own.acceptable !== undefined ? { acceptable: own.acceptable } : {}), ...(own.violation !== undefined ? { violation: own.violation } : {}),
+      ...(planned ? { planExpectationId: planned.id } : {}) };
+  });
+  const variation = 'variation' in proposal && typeof proposal.variation === 'string' ? proposal.variation : undefined;
+  const common = { id: `card_${fingerprint({ source: call.source, proposal })}`, number, title: proposal.title, topic: proposal.topic, agentMust, revision: 1,
+    ...(call.plan && variation ? { scenarioRef: { scenarioId: call.plan.scenario.id, variationId: variation } } : {}) };
   if ('writes' in proposal) {
     if (call.source.kind !== 'rules') throw new Error('Предложение без реплик клиента пришло на диалог.');
     return cardSchema.parse({ ...common, origin: { kind: 'rules', requirementIds: [...new Set(agentMust.flatMap(item => item.requirementIds))] },
@@ -353,7 +405,7 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
  * deterministic check, otherwise every reason at once, so one repair fixes them all.
  */
 export function cardProposalProblem(proposal: CardProposal, call: ProposalCall): string | undefined {
-  const slips = [...basisSlips(proposal, call), ...toolSlips(proposal), ...'writes' in proposal ? [] : bindingSlips(proposal, call)];
+  const slips = [...planSlips(proposal, call), ...basisSlips(proposal, call), ...toolSlips(proposal), ...'writes' in proposal ? [] : bindingSlips(proposal, call)];
   if (slips.length) return slips.join(' ');
   // Every bound of the stored card an answer can break is a slip above: binding never stops the step with a schema error.
   const card = bindProposal(proposal, call, 1);
@@ -387,5 +439,15 @@ export function proposalPayload(request: CardProposalRequest) {
     topics: request.topics, ...(request.written.length ? { written: request.written } : {}),
     target: { observations: call.observations, ...(call.tools ? { tools: call.tools } : {}) },
     ...(request.revision ? { revise: request.revision } : {}),
+    ...(call.plan ? { plan: planView(call.plan) } : {}),
   };
+}
+
+/** The plan as the card writer reads it: the scenario's variations and its expectations with their rules, quoted. */
+function planView(plan: NonNullable<ProposalCall['plan']>) {
+  const { scenario, requirements } = plan;
+  return { question: scenario.question, variations: scenario.variations.map(({ id, title }) => ({ id, title })),
+    expectations: scenario.expectations.map(expectation => ({ id: expectation.id, text: expectation.text, strength: expectation.strength ?? 'must',
+      acceptable: expectation.acceptable ?? null, violation: expectation.violation ?? null, variations: expectation.variationIds ?? null,
+      rules: expectation.requirementIds.flatMap(id => requirements.filter(requirement => requirement.id === id).map(({ quote, text }) => ({ quote, rule: text }))) })) };
 }

@@ -15,7 +15,7 @@ import { clip } from '../text.js';
 import { PROPOSAL_ATTEMPTS, promptsOversize } from './budget.js';
 import { importEvidence, loggedMessages, type CardEvidence } from './checks.js';
 import { addCard, createLibraryV2, recordClaims, replaceCard, requireLibraryV2, withRequirements, withScenario } from './library.js';
-import { bindPlan, planProblem, planProposalSchema, type PlanCall } from './plan.js';
+import { bindPlan, planProblem, planProposalSchema, scenarioOfTopic, type PlanCall } from './plan.js';
 import { rulebookOf } from './rulebook.js';
 import { bindProposal, cardProposalProblem, cardProposalSchema, proposalCall, proposalPayload, proposalRequirements, type CardProposalRequest, type ProposalCall } from './proposal.js';
 import { revisionClaims, claimReceipts, pendingClaims, reviewedBrief, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
@@ -361,8 +361,11 @@ class Preparation {
     const binds: ProposalCall['binds'] = { kinds: rulebook.kinds,
       rules: this.library.requirements.filter(requirement => rulebook.included.includes(requirement.id)).map(({ sourceId, quote }) => ({ sourceId, quote })) };
     const messages = dialogue ? loggedMessages(dialogue) : [];
+    // The business scenario of the unit's topic, when the preparation planned one: the card is an example of it.
+    const planned = dialogue && batch ? scenarioOfTopic(this.library.plan, unitTopic(progress, this.library, batch.id, unit)?.title ?? '') : undefined;
+    const plan = planned && { scenario: planned, requirements: this.library.requirements.filter(requirement => planned.expectations.some(expectation => expectation.requirementIds.includes(requirement.id))) };
     const call = (sources: readonly Source[]) => proposalCall({ source: dialogue && batch ? { kind: 'dialogue', batchId: batch.id, dialogueId: unit } : { kind: 'rules', unit },
-      messages, sources, binds, maxTurns: record.settings.maxTurns,
+      messages, sources, binds, maxTurns: record.settings.maxTurns, ...(plan ? { plan } : {}),
       // The tool channel the probe before the preparation confirmed: its tools may be what a duty is observed on.
       ...(record.toolChannel?.confirmed ? { confirmedObservations: ['tool' as const], tools: record.toolChannel.tools } : {}) });
     if (!read.length) return { excluded: 'Для этой ситуации нет материалов владельца.' };

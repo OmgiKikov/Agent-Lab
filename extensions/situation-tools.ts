@@ -10,6 +10,7 @@ import { cardChangeSchema, type Card, type CardCommand, type LibraryV2 } from '.
 import type { Reference } from '../src/reference.js';
 import { cardStatuses } from '../src/card/status.js';
 import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules } from '../src/card/rulebook.js';
+import { planLines } from '../src/card/plan.js';
 import { briefRows, changeText, chip, countsText, detailRows, formatNote, listRows, situationViews, type SituationView } from '../src/card/view.js';
 import { CommandRefused, LibraryConflict, UnknownReference } from '../src/errors.js';
 import { countText } from '../src/plural.js';
@@ -80,11 +81,13 @@ export function situationsFeed(record: Experiment, views: SituationView[], runni
   const waitingLine = waiting.length ? `Ждут ответа: ${waiting.slice(0, 3).map(view => `${view.number} ${clip(view.brief.title, 60)}`).join(' · ')}${waiting.length > 3 ? ` · ещё ${waiting.length - 3}` : ''}` : undefined;
   const lines = [waitingLine, coverage?.line, note].filter((line): line is string => !!line);
   const rulebook = topics && shownRulebook(topics.library);
+  const plan = topics ? planLines(topics.library) : [];
   return {
     tone: waiting.length ? 'warning' : 'success',
     rows: [row(countsText(views), 'text', true), ...lines.slice(0, next ? 1 : 2).map(line => row(line, 'muted')), ...(next ? [row(next, 'muted')] : [])],
     // The coverage line may already stand in the summary; its uncovered topics are named on expand.
-    more: [...(coverage?.uncovered ? [row(coverage.uncovered, 'muted'), row('')] : []), ...(rulebook ? [...rulebookLines(rulebook).map(line => row(line, 'muted')), row('')] : []),
+    more: [...(coverage?.uncovered ? [row(coverage.uncovered, 'muted'), row('')] : []), ...(plan.length ? [...plan.map(line => row(line, 'muted')), row('')] : []),
+      ...(rulebook ? [...rulebookLines(rulebook).map(line => row(line, 'muted')), row('')] : []),
       ...situationRows(views.flatMap(view => listRows(view, { running })))],
     expand: `все ${views.length}: что пишет клиент и что должен агент`,
   };
@@ -160,7 +163,10 @@ export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, h
         const readOnly = record.librarySnapshot?.formatVersion !== 2 || record.phase !== 'review' || record.trials.length > 0;
         if (params.situation === undefined) {
           const rulebook = topics && shownRulebook(topics.library);
-          return host.feedResult(callId, situationsOutput(record, views, { readOnly, ...(rulebook ? { rulebook: { lines: rulebookLines(rulebook), operatorInstructions: rulebook.kinds.find(item => item.kind === 'operator_procedure')!.binds } } : {}) }),
+          // What the situations are examples of: the plan the copilot tells the owner in words (card/plan.ts).
+          const plan = topics ? planLines(topics.library) : [];
+          return host.feedResult(callId, situationsOutput(record, views, { readOnly, ...(plan.length ? { plan } : {}),
+            ...(rulebook ? { rulebook: { lines: rulebookLines(rulebook), operatorInstructions: rulebook.kinds.find(item => item.kind === 'operator_procedure')!.binds } } : {}) }),
             situationsFeed(record, views, running, topics), `Ситуации · ${runStamp(record)}`);
         }
         const view = views.find(item => item.number === params.situation);
