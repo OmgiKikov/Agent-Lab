@@ -406,8 +406,14 @@ test('в рабочем пространстве запуск старого ч�
   session.state.choice = (_title, options) => ++launches === 1 ? 'Не сейчас' : options[0];
   session.state.steps = [[KEY.right, KEY.enter], [KEY.enter], CLOSE];
   await command(first.id, session.ctx);
-  assert.match(session.frames[1]!, /Готово к запуску: 2 ситуации, 2 разговора/);
+  assert.match(session.frames[1]!, /^ Готово к запуску$/m);
+  assert.match(session.frames[1]!, /^ 2 ситуации · 2 разговора: клиента играет Lab, ответы агента оценивает судья\.$/m);
   assert.match(session.frames[1]!, /Enter запустить · ← ситуации · Esc закрыть/);
+  // One description of the plan: the lines the board showed are the lines of the dialog Enter opened, word for word.
+  const board = session.frames[1]!.split('\n');
+  const shown = board.slice(board.indexOf(' Готово к запуску') + 1, board.indexOf('', board.indexOf(' Готово к запуску'))).map(line => line.trim());
+  assert.ok(shown.length >= 3, board.join('\n'));
+  for (const line of shown) assert.ok(session.selectCalls[0]!.title.split('\n').includes(line), `«${line}» is not in the dialog:\n${session.selectCalls[0]!.title}`);
 
   // Closing the workspace does not cancel its run: wait for it before reading the final record.
   const completedStore = new ExperimentStore(join(directory, '.agent-lab'));
