@@ -3,7 +3,7 @@ import { fingerprint, type Requirement } from '../contracts.js';
 import { text } from '../ids.js';
 import type { CardTopic } from '../miner/schema.js';
 import { countText } from '../plural.js';
-import { basisProposal, citationId, located, type CallSource, type ProposalCall } from './proposal.js';
+import { basisProposal, citationId, groundingSlip, located, type CallSource, type ProposalCall } from './proposal.js';
 import type { BusinessScenario, Card, LibraryV2 } from './schema.js';
 
 /*
@@ -15,8 +15,9 @@ import type { BusinessScenario, Card, LibraryV2 } from './schema.js';
  *
  *   topic ─► its sampled conversations' openings + every prompt + the articles ──one call──► question · variations ·
  *            expectations, each resting on a sentence of the sources, copied verbatim
- *        ─► harness: every quote found verbatim, every kind of rule in the owner's rulebook, every example one of the
- *            topic's own conversations, each at most once ─► library.plan, the rules it cites ─► library.requirements
+ *        ─► harness: every quote found verbatim as a whole clause, every kind of rule in the owner's rulebook, every
+ *            example one of the topic's own conversations, each at most once ─► library.plan, the rules it cites (each
+ *            the sentence its quote stands in) ─► library.requirements
  *
  * The logs give the examples: a variation names the conversations it stands for. A variation no conversation shows is
  * the builder's addition from the rules (`rules`), never presented as traffic. The builder proposes; the owner reads the
@@ -78,7 +79,9 @@ export function planProblem(proposal: PlanProposal, call: PlanCall): string | un
     expectation.basis.forEach((basis, j) => {
       const name = `expectations[${i}].basis[${j}]`;
       const at = located(basis, call);
-      if (!at) slips.push(`${name}: the quote is not a verbatim substring of its source. Copy the exact characters instead of paraphrasing; a shorter contiguous fragment is safer.`);
+      const grounding = at && groundingSlip(name, at);
+      if (!at) slips.push(`${name}: the quote is not a verbatim substring of its source. Copy the exact characters of a whole sentence or clause instead of paraphrasing.`);
+      else if (grounding) slips.push(grounding);
       else if (!call.binds.kinds.includes(basis.kind) && !call.binds.rules.some(rule => rule.sourceId === at.sourceId && rule.quote === at.quote)) {
         slips.push(`${name} is a rule of kind ${basis.kind}, and the owner's rulebook binds the agent only by ${call.binds.kinds.join(', ')}: cite a rule of those kinds, or drop this expectation.`);
       }
@@ -97,7 +100,8 @@ export function bindPlan(proposal: PlanProposal, call: PlanCall): { scenario: Bu
       const at = located(basis, call);
       if (!at) throw new Error('Основание ожидания сценария не найдено дословно в материалах.');
       const id = citationId(at.sourceId, at.quote);
-      if (!rules.has(id)) rules.set(id, { id, text: basis.rule, sourceId: at.sourceId, quote: at.quote, critical: true, observable: true, kind: basis.kind });
+      // What the judge reads as the rule is the sentence the quote stands in, as the owner wrote it (card/proposal.ts).
+      if (!rules.has(id)) rules.set(id, { id, text: at.clause.sentence, sourceId: at.sourceId, quote: at.quote, critical: true, observable: true, kind: basis.kind });
       return id;
     });
     return { id: `s${index + 1}`, text: expectation.text, requirementIds: [...new Set(requirementIds)],

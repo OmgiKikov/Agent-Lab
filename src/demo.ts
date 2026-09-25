@@ -48,8 +48,7 @@ export function demoInput(): CreateInput {
 }
 
 /** Every duty of the example rests on the owner's one rule, cited whole from the example's one material (materialSources numbers it source-1). */
-const DEMO_BASIS: DialogueProposal['agentMust'][number]['basis'] = [{ sourceId: 'source-1', quote: demoPolicy,
-  rule: 'Номер терминала не запрашивается повторно; затем объясняется возврат.', kind: 'behavior' }];
+const DEMO_BASIS: DialogueProposal['agentMust'][number]['basis'] = [{ sourceId: 'source-1', quote: demoPolicy, kind: 'behavior' }];
 /** What a careful model proposes for each example dialogue: the number named at once, and the number named only when asked. */
 const DEMO_CARDS: Record<'known' | 'late', DialogueProposal> = {
   known: { title: 'Возврат оплаты — номер назван сразу', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', clarity: 'clear', writesEvent: 0, variation: 'v1',
