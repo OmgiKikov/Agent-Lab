@@ -1,11 +1,12 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, watch } from 'node:fs';
-import { mkdir, open, readFile, readdir, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, readlink, unlink, utimes } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { judgeAuditSchema, type JudgeAudit } from './assessment.js';
 import { judgeCheckSchema, type JudgeCheck } from './judge-check.js';
 import { experimentSchema, fingerprint, type Experiment, type TraceEvent } from './contracts.js';
-import { writeFileAtomic, writeFileAtomicSync } from './fs-atomic.js';
+import { createFileExclusive, writeFileAtomic, writeFileAtomicSync } from './fs-atomic.js';
 import type { GeneratorEvidence } from './generator-evidence.js';
 import { libraryHash } from './scenario-library.js';
 import { ScenarioFiles } from './scenario-store.js';
@@ -31,7 +32,6 @@ import type { LogVersionJournal } from './card/calibration.js';
  * lab/, never here.
  */
 
-type LockOwner = { pid: number; token: string };
 type AuditFolder = 'judge' | 'calibration' | 'judge-check';
 function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
@@ -42,10 +42,115 @@ function alive(pid: number): boolean {
   }
 }
 
+/*
+ * The writer's lock (`.lock`) and the gate of its recovery (`.recovery`) name the process that holds them: its PID and
+ * token, the machine it runs on — the host name and, where the system tells them, the boot and the PID namespace — and
+ * when the process started. A lock is taken from its holder only when the holder's death is proved:
+ *
+ *   an empty file ─────────────────────── older than EMPTY_GRACE_MS: its writer died between creating and writing it
+ *   written on this machine (same host, boot and PID namespace; or by a Lab before machines were recorded)
+ *     with our own PID ────────────────── no store of this process holds it (a restarted container gives PID 1 again)
+ *     with another PID ────────────────── that process is gone, or the PID now belongs to a process started at another time
+ *   written elsewhere (another machine, container or PID namespace, where its PID means nothing here)
+ *                     ─────────────────── its heartbeat is older than STALE_MS
+ *
+ * The holder renews the heartbeat — the lock file's modification time — every HEARTBEAT_MS, and stops writing once the
+ * lock is no longer its own. A file no Lab wrote is never taken: it waits for a person.
+ */
+/** How often the writer renews its lock's heartbeat. */
+const HEARTBEAT_MS = 10_000;
+/** A lock written elsewhere is dead once its heartbeat is this old: well past a missed beat or two, and clock skew between machines. */
+const STALE_MS = 60_000;
+/** An empty lock or gate: a Lab creates it and writes its holder at once, so an empty one this old was left by a dead process. */
+const EMPTY_GRACE_MS = 5_000;
+
+/** The process a lock or a recovery gate names. A lock of an earlier Lab names only its PID and token. */
+interface Holder { pid: number; token: string; host?: string; boot?: string; pidNamespace?: string; started?: number }
+/** A lock or gate as found: its holder — undefined while the file is empty, null when no Lab wrote it — its heartbeat and its file. */
+interface Found { holder: Holder | null | undefined; beatMs: number; file: number }
+
+/** When a process started, in clock ticks since boot (field 22 of /proc/<pid>/stat); undefined where the system does not tell. */
+async function startOf(pid: number): Promise<number | undefined> {
+  const stat = await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => undefined);
+  // The command name (field 2) is in parentheses and may hold spaces and parentheses: the fields after it follow the last ')'.
+  const field = stat?.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+  const started = field ? Number(field) : NaN;
+  return Number.isSafeInteger(started) ? started : undefined;
+}
+
+/** This process as a lock names it: read once. */
+let self: Promise<Omit<Holder, 'token'>> | undefined;
+const thisProcess = () => self ??= (async () => {
+  const boot = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8').catch(() => '')).trim();
+  const pidNamespace = await readlink('/proc/self/ns/pid').catch(() => '');
+  const started = await startOf(process.pid);
+  return { pid: process.pid, host: hostname(), ...(boot ? { boot } : {}), ...(pidNamespace ? { pidNamespace } : {}), ...(started === undefined ? {} : { started }) };
+})();
+
+/** Tokens of the locks and gates this process holds, shared by every copy of this module loaded in it (Pi loads the extension through jiti). */
+const held = ((globalThis as Record<symbol, unknown>)[Symbol.for('agent-lab.store.held')] ??= new Set<string>()) as Set<string>;
+
+function holderIn(text: string): Holder | null {
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch { return null; }
+  if (!raw || typeof raw !== 'object') return null;
+  const { pid, token, host, boot, pidNamespace, started } = raw as Record<string, unknown>;
+  const named = (value: unknown): value is string | undefined => value === undefined || typeof value === 'string' && value.length > 0;
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || typeof token !== 'string' || !token || !named(host) || !named(boot) || !named(pidNamespace)
+    || started !== undefined && (typeof started !== 'number' || !Number.isSafeInteger(started) || started < 0)) return null;
+  return { pid, token, ...(host ? { host } : {}), ...(boot ? { boot } : {}), ...(pidNamespace ? { pidNamespace } : {}), ...(started === undefined ? {} : { started }) };
+}
+
+/** A lock or gate as it is now; null when there is none. */
+async function find(path: string): Promise<Found | null> {
+  let file;
+  try { file = await open(path, 'r'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
+  try {
+    const info = await file.stat();
+    const text = await file.readFile('utf8');
+    return { holder: text ? holderIn(text) : undefined, beatMs: info.mtimeMs, file: info.ino };
+  } finally { await file.close(); }
+}
+
+const sameFound = (a: Found, b: Found): boolean => a.holder && b.holder ? a.holder.pid === b.holder.pid && a.holder.token === b.holder.token
+  : a.holder === b.holder && a.file === b.file;
+
+/** Whether the holder of a lock or gate is proved dead (the diagram above). */
+async function provedDead(found: Found): Promise<boolean> {
+  const { holder } = found;
+  if (holder === null) return false;
+  const age = Date.now() - found.beatMs;
+  if (holder === undefined) return age > EMPTY_GRACE_MS;
+  const here = await thisProcess();
+  const local = holder.host === undefined || holder.host === here.host && holder.boot === here.boot && holder.pidNamespace === here.pidNamespace;
+  if (!local) return age > STALE_MS;
+  if (holder.pid === process.pid) return !held.has(holder.token);
+  if (!alive(holder.pid)) return true;
+  if (holder.started === undefined) return false;
+  const started = await startOf(holder.pid);
+  return started !== undefined && started !== holder.started;
+}
+
+/**
+ * Removes a gate whose holder is proved dead, if it is still the gate found. Only the process that marks that gate
+ * first may: two processes clearing it at once could otherwise each remove the gate the other has just made.
+ */
+async function clearGate(path: string, gate: Found): Promise<boolean> {
+  const marker = `${path}.${createHash('sha256').update(gate.holder ? gate.holder.token : `empty:${gate.file}`).digest('hex').slice(0, 16)}.clearing`;
+  if (!await createFileExclusive(marker, '')) return false;
+  try {
+    const current = await find(path);
+    if (current && sameFound(current, gate)) await unlink(path);
+    return true;
+  } finally { await unlink(marker).catch(() => {}); }
+}
+
 export class ExperimentStore {
   readonly directory: string;
   diagnostics: { id: string; message: string }[] = [];
   private lockToken: string | null = null;
+  private heartbeat: ReturnType<typeof setInterval> | undefined;
   private writerQueue: Promise<unknown> = Promise.resolve();
   constructor(directory: string) { this.directory = resolve(directory); }
   private path(id: string): string {
@@ -54,65 +159,84 @@ export class ExperimentStore {
   }
 
   /* ── the writer: the lock and the queue every write goes through ── */
-  private async owner(): Promise<LockOwner | null> {
+  /** The lock as it is now; a lock no Lab wrote is refused and kept for a person to inspect. */
+  private async lock(): Promise<Found | null> {
     const lockPath = join(this.directory, '.lock');
-    let raw: unknown;
-    try { raw = JSON.parse(await readFile(lockPath, 'utf8')); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      if (!(error instanceof SyntaxError)) throw error;
-    }
-    if (!raw || typeof raw !== 'object' || !('pid' in raw) || typeof raw.pid !== 'number' || !Number.isInteger(raw.pid) || raw.pid <= 0
-      || !('token' in raw) || typeof raw.token !== 'string' || !raw.token) {
-      throw new Error(`Некорректный lock: ${lockPath}. Исходный файл сохранён; проверьте владельца перед восстановлением.`);
-    }
-    return { pid: raw.pid, token: raw.token };
+    const found = await find(lockPath);
+    if (found?.holder === null) throw new Error(`Некорректный lock: ${lockPath}. Исходный файл сохранён; проверьте владельца перед восстановлением.`);
+    return found;
   }
   private async acquire(): Promise<void> {
-    const path = join(this.directory, '.lock');
-    let lock;
-    try { lock = await open(path, 'wx', 0o600); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new LockedError(); throw error; }
     const token = randomUUID();
-    try { await lock.writeFile(JSON.stringify({ pid: process.pid, token })); this.lockToken = token; }
-    catch (error) { await unlink(path); throw error; }
-    finally { await lock.close(); }
+    if (!await createFileExclusive(join(this.directory, '.lock'), JSON.stringify({ ...await thisProcess(), token }))) throw new LockedError();
+    this.lockToken = token; held.add(token);
+    this.heartbeat = setInterval(() => { void this.beat(); }, HEARTBEAT_MS);
+    this.heartbeat.unref();
+  }
+  /** Renews the lock's heartbeat. A lock that is no longer this writer's — removed, or taken as dead — ends its writing. */
+  private async beat(): Promise<void> {
+    const token = this.lockToken;
+    if (!token) return;
+    const lockPath = join(this.directory, '.lock');
+    let current: Found | null;
+    // A beat that cannot read the lock is tried again at the next one.
+    try { current = await find(lockPath); } catch { return; }
+    if (this.lockToken !== token) return;
+    if (current?.holder?.token !== token) { this.release(token); return; }
+    const now = new Date();
+    await utimes(lockPath, now, now).catch(() => {});
+  }
+  private release(token: string): void {
+    if (this.lockToken === token) this.lockToken = null;
+    clearInterval(this.heartbeat); this.heartbeat = undefined;
+    held.delete(token);
+  }
+  /**
+   * Passes the one recovery gate of the folder, clearing once a gate its dead holder left. A gate held by a process
+   * that may be alive, or that no Lab wrote, refuses: it needs manual inspection, not recursive recovery.
+   */
+  private async throughGate(work: () => Promise<void>): Promise<void> {
+    const path = join(this.directory, '.recovery');
+    const token = randomUUID();
+    const text = JSON.stringify({ ...await thisProcess(), token });
+    for (let attempt = 0; !await createFileExclusive(path, text); attempt++) {
+      const gate = await find(path);
+      if (attempt === 0 && (!gate || await provedDead(gate) && await clearGate(path, gate))) continue;
+      throw new Error(`Восстановление уже занято: ${path}. Если предыдущий процесс завершился, проверьте этот файл; действующий lock не изменён.`);
+    }
+    held.add(token);
+    try { await work(); }
+    finally { try { await unlink(path); } finally { held.delete(token); } }
   }
   /** Only writers initialize; atomic records and the journal can be read without owning the lock. */
   async init(): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    const observed = await this.owner();
-    if (!observed) { await this.acquire(); try { await this.recoverPublications(); } catch (error) { await this.close(); throw error; } return; }
-    if (alive(observed.pid)) throw new LockedError();
-    // ponytail: one recovery gate per local directory; ambiguous gates need manual inspection, not recursive lock recovery.
-    const recoveryPath = join(this.directory, '.recovery');
-    let recovery;
-    try { recovery = await open(recoveryPath, 'wx', 0o600); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`Восстановление уже занято: ${recoveryPath}. Если предыдущий процесс завершился, проверьте этот файл; действующий lock не изменён.`);
-      throw error;
+    const observed = await this.lock();
+    if (!observed) await this.acquire();
+    else {
+      if (!await provedDead(observed)) throw new LockedError();
+      await this.throughGate(async () => {
+        // Under the gate: the lock is still the one found dead, or someone took the folder meanwhile.
+        const current = await this.lock();
+        if (current) {
+          if (!sameFound(current, observed) || !await provedDead(current)) throw new LockedError();
+          await unlink(join(this.directory, '.lock'));
+        }
+        await this.acquire();
+      });
     }
-    try {
-      await recovery.writeFile(JSON.stringify({ pid: process.pid, token: randomUUID() }));
-      const current = await this.owner();
-      if (current) {
-        if (current.pid !== observed.pid || current.token !== observed.token || alive(current.pid)) throw new LockedError();
-        await unlink(join(this.directory, '.lock'));
-      }
-      await this.acquire();
-      await this.recoverPublications();
-    } finally {
-      try { await recovery.close(); } finally { await unlink(recoveryPath); }
-    }
+    try { await this.recoverPublications(); } catch (error) { await this.close(); throw error; }
   }
   async close(): Promise<void> {
     await this.writerQueue;
-    if (!this.lockToken) return;
     const token = this.lockToken;
+    if (!token) return;
     this.lockToken = null;
-    const lockPath = join(this.directory, '.lock');
-    const owner = await this.owner();
-    if (owner?.token === token) await unlink(lockPath);
+    clearInterval(this.heartbeat); this.heartbeat = undefined;
+    try {
+      const owner = await this.lock();
+      if (owner?.holder?.token === token) await unlink(join(this.directory, '.lock'));
+    } finally { held.delete(token); }
   }
   private async writeTransaction<T>(work: () => Promise<T>): Promise<T> {
     const pending = this.writerQueue.then(async () => {

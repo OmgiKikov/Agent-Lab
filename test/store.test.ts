@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,10 +9,11 @@ import { createInterface } from 'node:readline';
 import test, { type TestContext } from 'node:test';
 import { ExperimentStore } from '../src/store.js';
 import { ExperimentLab } from '../src/experiment.js';
-import { draftHash } from '../src/lab/record.js';
+import { draftHash, newRecord } from '../src/lab/record.js';
 import { demoInput } from '../src/demo.js';
 import type { JudgeAudit } from '../src/assessment.js';
 import { acceptedDemoDraft, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
+import { cardInput } from './helpers/card-prep.js';
 
 async function directory(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'agent-lab-store-'));
@@ -186,4 +188,105 @@ test('a quick agreement mark survives a reload with its judge verdict and judge 
   await reopened.init();
   t.after(() => reopened.close());
   assert.deepEqual((await reopened.get(record.id)).humanReviews, [mark], 'every new field reads back unchanged');
+});
+
+/* ── the writer's lock: taken only from a holder proved dead ── */
+
+const lockOf = async (dir: string) => JSON.parse(await readFile(join(dir, '.lock'), 'utf8'));
+/** This process as its own lock names it: its PID, host, boot, PID namespace and start. */
+async function ownLock(t: TestContext): Promise<Record<string, unknown>> {
+  const dir = await directory(t);
+  const probe = new ExperimentStore(dir);
+  await probe.init();
+  try { return await lockOf(dir); } finally { await probe.close(); }
+}
+const ago = (ms: number) => new Date(Date.now() - ms);
+
+test('a lock naming this process with a token none of its stores holds is dead: a restarted container gets the same PID again', async t => {
+  const dir = await directory(t);
+  const own = await ownLock(t);
+  // Written by the previous Lab (PID and token only), and by this Lab on this machine.
+  for (const left of [{ pid: process.pid, token: 'before-restart' }, { ...own, token: 'before-restart' }]) {
+    await writeFile(join(dir, '.lock'), JSON.stringify(left));
+    const store = new ExperimentStore(dir);
+    await store.init();
+    const lock = await lockOf(dir);
+    assert.deepEqual([lock.pid, lock.token === 'before-restart'], [process.pid, false]);
+    await assert.rejects(new ExperimentStore(dir).init(), /already open/, 'a store of this very process holding the lock is alive');
+    await store.close();
+    await assert.rejects(readFile(join(dir, '.lock')), { code: 'ENOENT' });
+  }
+});
+
+test('a recovery gate its dead holder left is cleared once; a gate someone may still hold is not', async t => {
+  const dir = await directory(t);
+  await writeFile(join(dir, '.lock'), JSON.stringify({ pid: 2147483647, token: 'dead' }));
+  await writeFile(join(dir, '.recovery'), JSON.stringify({ pid: 1, token: 'recovering', host: 'another-machine' }));
+  await assert.rejects(new ExperimentStore(dir).init(), /Восстановление уже занято/, 'a recovery on another machine, its heartbeat fresh');
+  await writeFile(join(dir, '.recovery'), JSON.stringify({ pid: 2147483647, token: 'dead-recovery' }));
+  const store = new ExperimentStore(dir);
+  await store.init();
+  t.after(() => store.close());
+  assert.equal((await lockOf(dir)).pid, process.pid);
+  assert.deepEqual((await readdir(dir)).filter(name => name.startsWith('.recovery') || name.endsWith('.tmp')), [], 'no gate, mark or temporary file is left');
+});
+
+test('an empty lock is a writer caught between creating and writing it: taken only once it is older than a moment', async t => {
+  const dir = await directory(t);
+  await writeFile(join(dir, '.lock'), '');
+  await assert.rejects(new ExperimentStore(dir).init(), /already open/, 'a lock being written right now is not taken');
+  await utimes(join(dir, '.lock'), ago(60_000), ago(60_000));
+  const store = new ExperimentStore(dir);
+  await store.init();
+  t.after(() => store.close());
+  assert.equal((await lockOf(dir)).pid, process.pid);
+});
+
+test('a lock written on another machine or in another PID namespace is taken only once its heartbeat is stale', async t => {
+  const dir = await directory(t);
+  const own = await ownLock(t);
+  for (const elsewhere of [{ ...own, host: 'another-machine' }, ...own.pidNamespace ? [{ ...own, pidNamespace: 'pid:[1]' }] : []]) {
+    // Its PID means nothing here: neither a live process of this machine nor a dead one proves anything.
+    for (const pid of [process.pid, 2147483647]) {
+      await writeFile(join(dir, '.lock'), JSON.stringify({ ...elsewhere, pid, token: 'elsewhere' }));
+      await assert.rejects(new ExperimentStore(dir).init(), /already open/);
+    }
+    await utimes(join(dir, '.lock'), ago(5 * 60_000), ago(5 * 60_000));
+    const store = new ExperimentStore(dir);
+    await store.init();
+    assert.equal((await lockOf(dir)).token === 'elsewhere', false);
+    await store.close();
+  }
+});
+
+test('a PID of this machine now held by a process started at another time is not the lock\'s writer', { skip: !existsSync('/proc/self/stat') }, async t => {
+  const dir = await directory(t);
+  const own = await ownLock(t);
+  const stat = await readFile(`/proc/${process.ppid}/stat`, 'utf8');
+  const started = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+  await writeFile(join(dir, '.lock'), JSON.stringify({ ...own, pid: process.ppid, started, token: 'parent' }));
+  await assert.rejects(new ExperimentStore(dir).init(), /already open/, 'the process that wrote it is alive');
+  await writeFile(join(dir, '.lock'), JSON.stringify({ ...own, pid: process.ppid, started: started + 1, token: 'parent' }));
+  const store = new ExperimentStore(dir);
+  await store.init();
+  t.after(() => store.close());
+  assert.equal((await lockOf(dir)).pid, process.pid);
+});
+
+test('the writer renews its heartbeat and writes no more once the lock is not its own', async t => {
+  const dir = await directory(t);
+  const store = new ExperimentStore(dir);
+  await store.init();
+  t.after(() => store.close());
+  const lockPath = join(dir, '.lock');
+  const beat = () => (store as unknown as { beat(): Promise<void> }).beat();
+  await utimes(lockPath, ago(5 * 60_000), ago(5 * 60_000));
+  await beat();
+  assert.ok(Date.now() - (await stat(lockPath)).mtimeMs < 60_000, 'the heartbeat is fresh again');
+  // Another process took the folder, as it may once this writer's heartbeat went stale: this one stops writing.
+  await writeFile(lockPath, JSON.stringify({ ...await lockOf(dir), token: 'another-writer' }));
+  await beat();
+  await assert.rejects(store.save(newRecord(cardInput())), /как писатель/);
+  await store.close();
+  assert.equal((await lockOf(dir)).token, 'another-writer', 'the other writer\'s lock stays');
 });
