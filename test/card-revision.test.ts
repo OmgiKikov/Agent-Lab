@@ -12,6 +12,7 @@ import { cardSchema, preparationProgressSchema, type CardPreparation } from '../
 import { cardStatuses } from '../src/card/status.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { draftHash } from '../src/lab/record.js';
+import { StructuredTaskError } from '../src/llm/structured.js';
 import { consentText, rulesConsentText } from '../src/miner/plan.js';
 import { buildResultView } from '../src/result-view.js';
 import { realityParts } from '../src/result-text.js';
@@ -114,6 +115,54 @@ test('a revision that died in flight is never repeated on resume: the blocked ca
     assert.equal(died, 1, 'the revision is not sent again');
     assert.deepEqual([progress.status, progress.processed, progress.excluded, progress.revised], ['complete', ['late', 'known'], [], ['late']]);
     assert.deepEqual(await statuses(lab, draft.id), ['unusable', 'ready'], 'the blocked card keeps its place and its reason');
+  });
+});
+
+/** The blocking reviewer, whose first answer inside the preparation never passes: the card waits for the owner's check. */
+function failingFirstReview(seen: Received): Runtime {
+  const runtime = blockingRuntime(seen);
+  const review = runtime.reviewCard!;
+  let first = true;
+  runtime.reviewCard = async (request, ctx) => {
+    if (first) { first = false; ctx.beforeCall(); throw new StructuredTaskError('Проверка ситуации: the reviewer\'s answer did not pass its schema'); }
+    return review(request, ctx);
+  };
+  return runtime;
+}
+
+test('a card whose review did not happen inside the preparation gets its one revision from the owner\'s check', async () => {
+  const seen = received();
+  await withLab(failingFirstReview(seen), async lab => {
+    const draft = await lab.create(cardInput(), { parallel: 1 });
+    await lab.waitForIdle();
+    assert.deepEqual([await statuses(lab, draft.id), lateOf(seen).length], [['checking', 'ready'], 1], 'the first card waits for a check, not revised');
+    await lab.checkCards(draft.id, libraryHash((await lab.readCards(draft.id)).library));
+    await lab.waitForIdle();
+    const checked = await lab.get(draft.id);
+    assert.equal(checked.error, null);
+    const late = lateOf(seen);
+    assert.deepEqual([late.length, late[1]!.revision?.blocked], [2, [{ claim: 'expectation_e2', reason: BLOCKED }]], 'the check revised the blocked card with the reviewer\'s reason');
+    assert.deepEqual([await statuses(lab, draft.id), progressOf(checked).revised], [['ready', 'ready'], ['late']]);
+    // The revision was the one promised: another check asks nothing again.
+    const calls = checked.usage.calls;
+    await lab.checkCards(draft.id, libraryHash((await lab.readCards(draft.id)).library));
+    await lab.waitForIdle();
+    assert.deepEqual([lateOf(seen).length, (await lab.get(draft.id)).usage.calls], [2, calls]);
+  });
+});
+
+test('the check revises only what a preparation of this Lab proposed: a card with no proposal allowance keeps its verdict', async () => {
+  const seen = received();
+  await withLab(failingFirstReview(seen), async lab => {
+    const draft = await lab.create(cardInput(), { parallel: 1 });
+    await lab.waitForIdle();
+    // As a draft converted from the first format: its cards were never proposed here, so they are owed no revision.
+    const made = await lab.get(draft.id);
+    const { generationAttempts: _attempts, ...converted } = progressOf(made);
+    await lab.store.save({ ...made, preparationProgress: converted });
+    await lab.checkCards(draft.id, libraryHash((await lab.readCards(draft.id)).library));
+    await lab.waitForIdle();
+    assert.deepEqual([lateOf(seen).length, await statuses(lab, draft.id)], [1, ['unusable', 'ready']]);
   });
 });
 

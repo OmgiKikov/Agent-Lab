@@ -158,7 +158,8 @@ test('a paid call that died in flight is never repeated: its dialogue is left ou
     const resumed = await lab.get(draft.id);
     const progress = progressOf(resumed);
     assert.equal(died, 1, 'the dialogue is not asked again');
-    assert.deepEqual([progress.status, progress.pending, progress.processed], ['complete', [], ['late', 'known']]);
+    assert.deepEqual([progress.status, progress.pending, progress.processed, progress.excluded.map(item => item.dialogueId)], ['complete', [], ['known'], ['late']],
+      'a dialogue left out counts once, as left out, never also as processed');
     assert.match(progress.excluded.find(item => item.dialogueId === 'late')?.reason ?? '', /стоимость неизвестна/);
     assert.deepEqual((await lab.readCards(draft.id)).library.cards.map(card => [card.number, card.origin]), [[1, { kind: 'dialogue', batchId: resumed.originalImport!.id, dialogueId: 'known' }]]);
   });
@@ -270,7 +271,8 @@ test('an answer the harness cannot bind is never kept, whatever the runtime says
     const draft = await lab.create(cardInput());
     await lab.waitForIdle();
     const { library, experiment } = await lab.readCards(draft.id);
-    assert.match(progressOf(experiment).excluded.find(item => item.dialogueId === 'late')?.reason ?? '', /не прошла проверку: knows\[0\] "Номер терминала": the value "5679"/);
+    // The harness's reason is the model's, in English: the owner reads that the situation did not pass.
+    assert.equal(progressOf(experiment).excluded.find(item => item.dialogueId === 'late')?.reason, 'Предложенная ситуация не прошла проверку Lab и не сохранена.');
     assert.deepEqual(library.cards.map(card => card.number), [1]);
   });
 });
