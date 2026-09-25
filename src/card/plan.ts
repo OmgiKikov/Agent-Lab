@@ -142,7 +142,14 @@ export function expectationLine(scenario: BusinessScenario, expectation: Busines
 const examplesOf = (library: Pick<LibraryV2, 'cards'>, scenarioId: string, variationId?: string) =>
   library.cards.filter(card => card.scenarioRef?.scenarioId === scenarioId && (variationId === undefined || card.scenarioRef.variationId === variationId));
 
+/** The cards that check an expectation of a scenario — whose duty it is —, among `running` when named. */
+const checking = (library: Pick<LibraryV2, 'cards'>, scenario: BusinessScenario, expectation: BusinessScenario['expectations'][number], running?: ReadonlySet<string>) =>
+  examplesOf(library, scenario.id).filter(card => (!running || running.has(card.id)) && card.agentMust.some(duty => duty.planExpectationId === expectation.id));
+
 const SCENARIOS = ['сценарий', 'сценария', 'сценариев'] as const;
+const SITUATIONS = ['ситуация', 'ситуации', 'ситуаций'] as const;
+/** How many situations check an expectation, as the plan says it: «проверяют 2 ситуации», or that none does. */
+const checkedText = (count: number): string => count ? `${count === 1 ? 'проверяет' : 'проверяют'} ${countText(count, [...SITUATIONS])}` : 'ни одна ситуация не проверяет';
 /** Where a variation no conversation shows comes from: never presented as traffic. */
 const ORIGIN_TEXT = { rules: 'добавлен по правилам, не из трафика', owner: 'добавлен вами, не из трафика' } as const;
 
@@ -160,8 +167,9 @@ export function variationsWithout(library: Pick<LibraryV2, 'plan' | 'cards'>): {
 
 /**
  * The plan in the owner's words: each scenario's question, its variations — from the logs with their conversations, or
- * added from the rules and never traffic — and the expectations every card of it shares, with where they apply and the
- * ways and the violation the judge reads. Pure: each surface makes the lines safe and lays them out.
+ * added from the rules and never traffic — and the expectations every card of it shares, with where they apply, the
+ * ways and the violation the judge reads, and how many situations check each: an expectation none checks says so, so it
+ * never reads as checked. Pure: each surface makes the lines safe and lays them out.
  */
 export function planLines(library: Pick<LibraryV2, 'plan' | 'cards'>): string[] {
   const plan = library.plan ?? [];
@@ -175,25 +183,31 @@ export function planLines(library: Pick<LibraryV2, 'plan' | 'cards'>): string[] 
       ...scenario.variations.map((variation, index) => `    ${index + 1}) ${variation.title} — ${variation.origin === 'logs'
         ? `из логов, ${countText(variation.examples.length, [...conversations])}` : ORIGIN_TEXT[variation.origin]}${cards(variation.id) ? `; ситуаций: ${cards(variation.id)}` : '; ситуаций нет'}`),
       '  Ожидания:',
-      ...scenario.expectations.map((expectation, index) => `    ${index + 1}. ${expectationLine(scenario, expectation)}`),
+      ...scenario.expectations.map((expectation, index) => `    ${index + 1}. ${expectationLine(scenario, expectation)}; ${checkedText(checking(library, scenario, expectation).length)}`),
     ];
   })];
 }
 
 /**
- * What a run of `cardIds` checks, one line a scenario, for the dialog that starts it: the question, how many variations
- * and shared expectations, how many of the situations are its examples; the ones of no scenario counted apart. Empty
- * for a library without a plan.
+ * What a run of `cardIds` checks, for the dialog that starts it: a line a scenario — the question, how many variations,
+ * how many of the situations are its examples, and how many of its shared expectations they check —, then the shared
+ * expectations no situation of the run checks, by name; the situations of no scenario counted apart. Empty for a
+ * library without a plan.
  */
 export function planSummary(library: Pick<LibraryV2, 'plan' | 'cards'>, cardIds: readonly string[]): string[] {
   const plan = library.plan ?? [];
   if (!plan.length) return [];
   const running = new Set(cardIds);
-  const situations = ['ситуация', 'ситуации', 'ситуаций'] as const;
   const outside = library.cards.filter(card => running.has(card.id) && !plan.some(scenario => scenario.id === card.scenarioRef?.scenarioId)).length;
-  return [`Что проверяем — ${countText(plan.length, [...SCENARIOS])}:`, ...plan.map(scenario => `  «${scenario.question}» — ${countText(scenario.variations.length, ['вариант', 'варианта', 'вариантов'])}, ${
-    countText(scenario.expectations.length, ['общее ожидание', 'общих ожидания', 'общих ожиданий'])}; в прогоне ${countText(examplesOf(library, scenario.id).filter(card => running.has(card.id)).length, [...situations])}`),
-  ...(outside ? [`  Вне плана: ${countText(outside, [...situations])}.`] : [])];
+  return [`Что проверяем — ${countText(plan.length, [...SCENARIOS])}:`, ...plan.flatMap(scenario => {
+    const unchecked = scenario.expectations.filter(expectation => !checking(library, scenario, expectation, running).length);
+    const checked = scenario.expectations.length - unchecked.length;
+    return [`  «${scenario.question}» — ${countText(scenario.variations.length, ['вариант', 'варианта', 'вариантов'])}; в прогоне ${
+      countText(examplesOf(library, scenario.id).filter(card => running.has(card.id)).length, [...SITUATIONS])}; проверяется ${checked} из ${
+      countText(scenario.expectations.length, ['общего ожидания', 'общих ожиданий', 'общих ожиданий'])}`,
+    ...(unchecked.length ? [`    ни одна ситуация не проверяет: ${unchecked.map(expectation => `«${dutyLine(listed(expectation))}»`).join('; ')}`] : [])];
+  }),
+  ...(outside ? [`  Вне плана: ${countText(outside, [...SITUATIONS])}.`] : [])];
 }
 
 /**
@@ -207,8 +221,7 @@ export function planData(library: Pick<LibraryV2, 'plan' | 'cards'>) {
       situations: examplesOf(library, scenario.id, variation.id).length })),
     expectations: scenario.expectations.map(expectation => ({ id: expectation.id, text: expectation.text, ...(expectation.strength ? { mustNot: true } : {}),
       ...(expectation.acceptable ? { acceptable: expectation.acceptable } : {}), ...(expectation.violation ? { violation: expectation.violation } : {}),
-      ...(expectation.variationIds ? { variations: expectation.variationIds } : {}), situations: library.cards.filter(card => card.scenarioRef?.scenarioId === scenario.id
-        && card.agentMust.some(duty => duty.planExpectationId === expectation.id)).length })),
+      ...(expectation.variationIds ? { variations: expectation.variationIds } : {}), situations: checking(library, scenario, expectation).length })),
   }));
 }
 
