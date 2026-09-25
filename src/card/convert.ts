@@ -1,5 +1,6 @@
 import { fingerprint, worldSchema, type Experiment, type Requirement, type Source } from '../contracts.js';
 import { isIdentifier } from '../ids.js';
+import { CARD_LATER_MESSAGES } from '../limits.js';
 import { countText, pluralForm } from '../plural.js';
 import type { ImportBatch, LibraryV1, ScenarioVariant } from '../scenario-contracts.js';
 import { clip } from '../text.js';
@@ -37,11 +38,6 @@ const SITUATIONS: [string, string, string] = ['ситуация', 'ситуац�
 const CALLS: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
 const MOVED: [string, string, string] = ['перенесена', 'перенесены', 'перенесено'];
 const FACTS: [string, string, string] = ['факт', 'факта', 'фактов'];
-/**
- * Later customer messages one card accounts for (schema.ts `coverage`). A conversation sampled for a preparation has at
- * most 16 customer messages (imports.ts validationDialogueIssue); a first-format draft may cite a longer one.
- */
-const LATER_MESSAGES = 60;
 const UNACCOUNTED = 'Старая подготовка не отнесла эту реплику ни к фактам клиента, ни к повороту.';
 
 type Built = { card: Omit<Card, 'number'>; reading?: { dialogueId: string; batchId: string; sourceIds: string[] } };
@@ -113,7 +109,7 @@ function convertVariant(library: LibraryV1, variant: ScenarioVariant): Built | s
         : fact.availability === 'uncertain' || cited === undefined ? { kind: 'unconfirmed' } : { kind: 'dialogue', event: event(cited) } });
   }
   const later = customer.slice(1).filter(message => message.index !== opening.index);
-  if (later.length > LATER_MESSAGES) return `после первой реплики клиент пишет больше ${LATER_MESSAGES} раз`;
+  if (later.length > CARD_LATER_MESSAGES) return `после первой реплики клиент пишет больше ${CARD_LATER_MESSAGES} раз`;
   const accounted = (index: number) => variant.sourceCoverage?.find(entry => entry.batchId === batch.id && entry.dialogueId === dialogue.id && entry.eventIndex === index);
   let turn: Card['client']['turn'];
   const [move] = moves;

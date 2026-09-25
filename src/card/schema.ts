@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from '../ids.js';
-import { MATERIAL_LIMIT, MAX_PREPARATION_PARALLEL, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
+import { CARD_LATER_MESSAGES, MATERIAL_LIMIT, MAX_PREPARATION_PARALLEL, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
 import { cardTopicSchema, sampleSchema, topicsKnown, trafficSchema } from '../miner/schema.js';
 import { referencesSchema } from '../reference.js';
 import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema, preparationProgressSchema as variantPreparationSchema, requirementKindSchema } from '../scenario-contracts.js';
@@ -130,7 +130,7 @@ export const cardSchema = z.strictObject({
     turn: turnSchema.optional(),
   }),
   agentMust: z.array(expectationSchema).min(1).max(3), // АГЕНТ ДОЛЖЕН
-  coverage: z.array(coverageEntrySchema).max(60),
+  coverage: z.array(coverageEntrySchema).max(CARD_LATER_MESSAGES),
   revision: z.number().int().positive(),
   // The customer cannot say what is wrong («не работает»): the card tests that the agent clarifies instead of guessing, and
   // the result counts such situations apart. Absent on a card whose customer states the request, as on every card before it.
